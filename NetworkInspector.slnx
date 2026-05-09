@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="NetworkInspector.Values/NetworkInspector.Values.csproj" />
+  <Project Path="NetworkInspector.Generators/NetworkInspector.Generators.csproj" />
+  <Project Path="NetworkInspector.Core/NetworkInspector.Core.csproj" />
+  <Project Path="NetworkInspector.Protocols/NetworkInspector.Protocols.csproj" />
+</Solution>

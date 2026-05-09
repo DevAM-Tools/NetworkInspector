@@ -1,0 +1,30 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>NetworkInspector.Protocols</RootNamespace>
+    <EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>
+    <CompilerGeneratedFilesOutputPath>$(BaseIntermediateOutputPath)\GeneratedFiles</CompilerGeneratedFilesOutputPath>
+    <Description>Built-in protocol dissectors for NetworkInspector including Ethernet, IPv4, IPv6, TCP, UDP, DNS, DHCPv4, DHCPv6, HTTP/1.x, HTTP/2, TLS, DTLS, WebSocket, ARP, ICMP, ICMPv6, CAN, CAN XL, FlexRay, LIN, SOME/IP, PDU Transport, and more.</Description>
+    <PackageTags>network;protocol;dissector;ethernet;ipv4;ipv6;tcp;udp;dns;http;tls;can;someip</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <!-- CS1570/CS1584/CS1658: the ZeroAlloc NuGet source generator emits cref attributes
+         with unescaped angle brackets (e.g. Formatted<double>) which are invalid XML in doc
+         comments. These warnings only affect the generated ZA.ZeroAlloc.g.cs file and cannot
+         be fixed without patching the upstream package. -->
+    <NoWarn>$(NoWarn);1570;1584;1658</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\NetworkInspector.Core\NetworkInspector.Core.csproj" />
+    <ProjectReference Include="..\NetworkInspector.Generators\NetworkInspector.Generators.csproj"
+                      OutputItemType="Analyzer"
+                      ReferenceOutputAssembly="false" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="ZeroAlloc" />
+  </ItemGroup>
+
+  <!-- Include README in the NuGet package -->
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="" />
+  </ItemGroup>
+</Project>

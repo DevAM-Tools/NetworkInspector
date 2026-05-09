@@ -1,0 +1,43 @@
+<Project>
+  <PropertyGroup>
+    <!-- Language & Framework -->
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+
+    <Version>0.1.0</Version>
+
+    <!-- Quality -->
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <AnalysisLevel>latest-all</AnalysisLevel>
+
+    <!-- Performance -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <IsAotCompatible>true</IsAotCompatible>
+    <IsTrimmable>true</IsTrimmable>
+    <EnableTrimAnalyzer>true</EnableTrimAnalyzer>
+
+    <!-- NativeAOT / WASM readiness -->
+    <JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
+
+    <!-- Package metadata -->
+    <Authors>DevAM and Network Inspector Contributors</Authors>
+    <Company>DevAM and Network Inspector Contributors</Company>
+    <Copyright>Copyright (c) DevAM and Network Inspector Contributors</Copyright>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageRequireLicenseAcceptance>true</PackageRequireLicenseAcceptance>
+    <PackageProjectUrl>https://github.com/DevAM-Tools/NetworkInspector</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/DevAM-Tools/NetworkInspector</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+
+    <!-- Documentation & symbols -->
+    <!-- Suppress XML doc generation for test projects — they have no public API to document -->
+    <GenerateDocumentationFile Condition="!$(MSBuildProjectName.Contains('.Tests'))">true</GenerateDocumentationFile>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+  </PropertyGroup>
+
+</Project>
