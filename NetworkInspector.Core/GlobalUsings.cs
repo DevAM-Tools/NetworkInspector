@@ -1,5 +1,4 @@
-// Copyright (c) DevAM and Network Inspector Contributors
-// Licensed under the MIT license.
+// Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root.
 
 #region System
 global using System;
@@ -44,4 +43,3 @@ global using NetworkInspector.Values;
 #region External Dependencies
 global using ZeroAlloc;
 #endregion
-

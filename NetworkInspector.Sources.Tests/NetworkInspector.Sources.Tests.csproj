@@ -1,0 +1,18 @@
+﻿<!-- Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root. -->
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>NetworkInspector.Sources.Tests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="TUnit" />
+    <PackageReference Include="ZeroAlloc" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\NetworkInspector.Sources\NetworkInspector.Sources.csproj" />
+    <ProjectReference Include="..\NetworkInspector.Core\NetworkInspector.Core.csproj" />
+    <ProjectReference Include="..\NetworkInspector.Protocols\NetworkInspector.Protocols.csproj" />
+  </ItemGroup>
+</Project>

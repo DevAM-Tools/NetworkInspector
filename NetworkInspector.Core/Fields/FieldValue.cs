@@ -1,5 +1,4 @@
-// Copyright (c) DevAM and Network Inspector Contributors
-// Licensed under the MIT license.
+// Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root.
 
 namespace NetworkInspector.Core.Fields;
 
@@ -139,9 +138,11 @@ public readonly struct FieldValue : IEquatable<FieldValue>, IComparable<FieldVal
     /// <inheritdoc/>
     public override int GetHashCode() => _Data.GetHashCode();
 
-    /// <summary>Returns <see langword="true"/> if <paramref name="left"/> and <paramref name="right"/> are equal (data only; custom representation ignored).</summary>
+    /// <summary>Returns <see langword="true"/> if <paramref name="left"/> and <paramref name="right"/>
+    /// are equal (data only; custom representation ignored).</summary>
     public static bool operator ==(FieldValue left, FieldValue right) => left.Equals(right);
-    /// <summary>Returns <see langword="true"/> if <paramref name="left"/> and <paramref name="right"/> are not equal (data only; custom representation ignored).</summary>
+    /// <summary>Returns <see langword="true"/> if <paramref name="left"/> and <paramref name="right"/>
+    /// are not equal (data only; custom representation ignored).</summary>
     public static bool operator !=(FieldValue left, FieldValue right) => !left.Equals(right);
 
     #endregion

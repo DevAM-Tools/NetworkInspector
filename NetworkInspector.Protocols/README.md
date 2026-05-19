@@ -1,6 +1,6 @@
-# NetworkInspector.Protocols
+<!-- Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root. -->
 
-<!-- Copyright (c) DevAM and Network Inspector Contributors. Licensed under the MIT license. -->
+# NetworkInspector.Protocols
 
 [![NuGet](https://img.shields.io/nuget/v/NetworkInspector.Protocols)](https://www.nuget.org/packages/NetworkInspector.Protocols)
 
@@ -61,4 +61,4 @@ error handling, and the complete checklist for new protocols.
 
 ## License
 
-[MIT License](../LICENSE) — © DevAM and Network Inspector Contributors
+[MIT License](../LICENSE) — © DevAM

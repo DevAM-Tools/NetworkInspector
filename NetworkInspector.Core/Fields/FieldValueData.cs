@@ -1,5 +1,4 @@
-// Copyright (c) DevAM and Network Inspector Contributors
-// Licensed under the MIT license.
+// Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root.
 
 using static NetworkInspector.Core.Fields.FieldTypeMarkers;
 
@@ -92,7 +91,8 @@ public readonly struct FieldValueData : IEquatable<FieldValueData>, IComparable<
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static FieldValueData NewString(ReadOnlyMemory<char> value) => new(0, new string(value.Span));
 
-    /// <summary>Creates a <see cref="FieldType.Bytes"/> field value from a <see cref="ReadOnlyMemory{T}"/> of bytes. Attempts zero-copy via ArraySegment; falls back to a copy if the memory is not array-backed.</summary>
+    /// <summary>Creates a <see cref="FieldType.Bytes"/> field value from a <see cref="ReadOnlyMemory{T}"/> of bytes.
+    /// Attempts zero-copy via ArraySegment; falls back to a copy if the memory is not array-backed.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static FieldValueData NewBytes(ReadOnlyMemory<byte> value)
     {

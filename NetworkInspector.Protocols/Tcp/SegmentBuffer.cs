@@ -1,5 +1,4 @@
-// Copyright (c) DevAM and Network Inspector Contributors
-// Licensed under the MIT license.
+﻿// Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root.
 
 using System.Buffers;
 
@@ -267,6 +266,14 @@ internal sealed class SegmentBuffer
             ResyncResult result = _ResyncHeuristic.Resync(_Segments[0].Span);
             if (result.IsSuccess)
             {
+                // Guard against a buggy heuristic returning SkipBytes beyond the buffered data,
+                // which would drive _TotalLength negative in DiscardBytes.
+                if (result.SkipBytes > _TotalLength)
+                {
+                    _State = SegmentBufferState.Error;
+                    return;
+                }
+
                 DiscardBytes(result.SkipBytes);
                 _State = SegmentBufferState.Synchronized;
             }
@@ -291,6 +298,14 @@ internal sealed class SegmentBuffer
             ResyncResult result = _ResyncHeuristic.Resync(rented.AsSpan(0, _TotalLength));
             if (result.IsSuccess)
             {
+                // Guard against a buggy heuristic returning SkipBytes beyond the buffered data,
+                // which would drive _TotalLength negative in DiscardBytes.
+                if (result.SkipBytes > _TotalLength)
+                {
+                    _State = SegmentBufferState.Error;
+                    return;
+                }
+
                 DiscardBytes(result.SkipBytes);
                 _State = SegmentBufferState.Synchronized;
             }
@@ -325,7 +340,12 @@ internal sealed class SegmentBuffer
             }
         }
 
-        _TotalLength -= count;
-        _TotalDiscarded += count;
+        // Decrement by the number of bytes actually removed, not by the requested count.
+        // If remaining > 0 the segment list was exhausted before count bytes were consumed
+        // (which should not happen when callers pre-validate against _TotalLength, but
+        // using actualRemoved keeps counters consistent regardless).
+        int actualRemoved = count - remaining;
+        _TotalLength -= actualRemoved;
+        _TotalDiscarded += actualRemoved;
     }
 }

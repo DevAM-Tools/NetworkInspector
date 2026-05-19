@@ -1,6 +1,6 @@
-# NetworkInspector.Generators
+<!-- Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root. -->
 
-<!-- Copyright (c) DevAM and Network Inspector Contributors. Licensed under the MIT license. -->
+# NetworkInspector.Generators
 
 > **Note:** This generator is bundled with `NetworkInspector.Core`. It activates automatically
 > when you add the `NetworkInspector.Core` NuGet package — no separate installation required.
@@ -432,4 +432,4 @@ The generator emits the following diagnostics. All are errors unless noted.
 
 ## License
 
-[MIT License](../LICENSE) — © DevAM and Network Inspector Contributors
+[MIT License](../LICENSE) — © DevAM

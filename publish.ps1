@@ -1,5 +1,4 @@
-# Copyright (c) DevAM and Network Inspector Contributors
-# Licensed under the MIT license.
+# Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root.
 
 <#
 .SYNOPSIS
@@ -8,14 +7,22 @@
 .DESCRIPTION
     1. Resolves the package version from Directory.Build.props (or -Version).
     2. Cleans all build outputs to ensure a reproducible, artifact-free build.
-    3. Packs all three publishable projects in a single dotnet pack invocation:
+    3. Empties (or creates) the output directory so no stale artefacts can
+       be pushed by accident.
+    4. Packs every project in the explicit release allowlist:
          NetworkInspector.Values
          NetworkInspector.Core      (includes the bundled Generators analyzer)
          NetworkInspector.Protocols
-    4. Optionally pushes the resulting .nupkg and .snupkg files to nuget.org.
+         NetworkInspector.FrameBuilder
+         NetworkInspector.Sources
+         NetworkInspector.Exporters
+         NetworkInspector.CLI       (published as the 'ni' dotnet tool)
+    5. Optionally pushes the resulting .nupkg and .snupkg files to nuget.org.
 
     NetworkInspector.Generators is marked IsPackable=false and is intentionally
     not packed -- its analyzer DLL is embedded inside NetworkInspector.Core.
+    NetworkInspector.Playground and NetworkInspector.Profiling are developer-only
+    tools; they are not part of the public release surface.
 
 .PARAMETER Version
     Overrides the version string from Directory.Build.props.
@@ -107,7 +114,13 @@ if (-not $OutputDir) {
     $OutputDir = Join-Path $RepoRoot 'artifacts'
 }
 
-New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
+# Clear the output directory so no stale artefacts from a previous run can
+# slip into the push. Create it if it does not exist yet.
+if (Test-Path $OutputDir) {
+    Get-ChildItem -Path $OutputDir -File | Remove-Item -Force
+} else {
+    New-Item -ItemType Directory -Path $OutputDir | Out-Null
+}
 
 Write-Host ''
 Write-Host "Version  : $Version"       -ForegroundColor Green
@@ -134,20 +147,37 @@ Invoke-Dotnet @(
 # ---------------------------------------------------------------------------
 # Step 2 -- Pack
 #
-# dotnet pack builds and packs in one pass. Projects with IsPackable=false
-# (NetworkInspector.Generators) are automatically skipped.
-# Using a single solution-level pack ensures the project build graph is
-# evaluated once in dependency order: Values -> Generators -> Core -> Protocols.
+# Each project in the release allowlist is packed individually so that only
+# the intended packages land in the output directory. Solution-level pack is
+# intentionally avoided here: it would include developer-only executables
+# (Playground, Profiling) and could pull in stale artefacts from previous
+# version runs.
+# NetworkInspector.Core is packed last so that the Generators DLL (built
+# during the Values/Core graph walk) is already present when the
+# analyzers/dotnet/cs path is resolved.
 # ---------------------------------------------------------------------------
+
+$ProjectsToPack = @(
+    'NetworkInspector.Values/NetworkInspector.Values.csproj',
+    'NetworkInspector.Core/NetworkInspector.Core.csproj',
+    'NetworkInspector.Protocols/NetworkInspector.Protocols.csproj',
+    'NetworkInspector.FrameBuilder/NetworkInspector.FrameBuilder.csproj',
+    'NetworkInspector.Sources/NetworkInspector.Sources.csproj',
+    'NetworkInspector.Exporters/NetworkInspector.Exporters.csproj',
+    'NetworkInspector.CLI/NetworkInspector.CLI.csproj'
+)
 
 Write-Header 'Packing'
 
-Invoke-Dotnet @(
-    'pack', $SlnFile,
-    '--configuration',  $Configuration,
-    '--output',         $OutputDir,
-    "/p:Version=$Version"
-)
+foreach ($Project in $ProjectsToPack) {
+    $ProjectPath = Join-Path $RepoRoot $Project
+    Invoke-Dotnet @(
+        'pack', $ProjectPath,
+        '--configuration',  $Configuration,
+        '--output',         $OutputDir,
+        "/p:Version=$Version"
+    )
+}
 
 # ---------------------------------------------------------------------------
 # Step 3 -- Push (optional)

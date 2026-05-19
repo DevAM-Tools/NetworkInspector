@@ -1,5 +1,4 @@
-// Copyright (c) DevAM and Network Inspector Contributors
-// Licensed under the MIT license.
+// Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root.
 
 namespace NetworkInspector.Core.Index.ValueCache;
 
@@ -19,46 +18,50 @@ public sealed partial class ValueCacheSeries
     /// Handles type-specific value extraction and storage via internal switch on
     /// (<see cref="OriginalFieldType"/>, <see cref="StorageMode"/>).
     ///
-    /// <para>On success: writes data at <c>_Count</c>, then publishes via
-    /// <c>Volatile.Write(ref _Count, _Count + 1)</c>.</para>
+    /// <para>On success: captures <c>writeIndex = Volatile.Read(_Count)</c>, writes data at <c>writeIndex</c>,
+    /// then publishes via <c>Volatile.Write(ref _Count, writeIndex + 1)</c>.</para>
     /// <para>On capacity overflow: calls <see cref="Grow"/> first (allocates new arrays, copies data).</para>
     /// </summary>
     internal bool TryAppend(long timestampNanos, int packetId, in FieldValueData value)
     {
+        // Capture current count once via Volatile.Read (acquire fence) — satisfies the volatile-only contract
+        // for _Count. Single-writer semantics (ParseLock) guarantee this value cannot change during this call.
+        int writeIndex = Volatile.Read(ref Unsafe.AsRef(in _Count));
+
         // Monotonic enforcement: skip out-of-order timestamps
-        if (_Count > 0 && timestampNanos < _LastTimestamp)
+        if (writeIndex > 0 && timestampNanos < _LastTimestamp)
         {
             // Use Interlocked.Or to ensure the flag write is visible to reader threads
-            // even though no Volatile.Write(_Count) follows this early-return path (BUG-VC-01).
+            // even though no Volatile.Write(_Count) follows this early-return path.
             Interlocked.Or(ref _CompletenessRaw, (int)ValueCacheCompleteness.HasTimestampSkips);
             return false;
         }
         _LastTimestamp = timestampNanos;
 
-        // Grow if needed
-        if (_Count >= _Capacity)
+        // Grow if needed — pass writeIndex so Grow does not re-read _Count directly
+        if (writeIndex >= _Capacity)
         {
-            Grow();
+            Grow(writeIndex);
         }
 
-        // Write common arrays at position _Count
-        _Timestamps[_Count] = timestampNanos;
-        _PacketIds[_Count] = packetId;
+        // Write common arrays at position writeIndex
+        _Timestamps[writeIndex] = timestampNanos;
+        _PacketIds[writeIndex] = packetId;
 
-        // Write type-specific value — may set overflow flag
-        if (!AppendValue(value))
+        // Write type-specific value — may set overflow flag; pass writeIndex to avoid re-reading _Count
+        if (!AppendValue(writeIndex, value))
         {
             return false;
         }
 
-        // Publish: release fence ensures all prior writes are visible to readers
-        Volatile.Write(ref _Count, _Count + 1);
+        // Publish: release fence ensures all prior writes are visible to readers before count increment
+        Volatile.Write(ref _Count, writeIndex + 1);
         return true;
     }
 
     /// <summary>Marks that a duplicate value was dropped for the current packet.
     /// Uses <see cref="System.Threading.Interlocked"/> Or to guarantee the flag is visible to reader threads
-    /// even when no subsequent <see cref="System.Threading.Volatile"/> Write on <c>_Count</c> follows (BUG-VC-01).</summary>
+    /// even when no subsequent <see cref="System.Threading.Volatile"/> Write on <c>_Count</c> follows.</summary>
     internal void MarkDuplicateDrop() =>
         Interlocked.Or(ref _CompletenessRaw, (int)ValueCacheCompleteness.HasDuplicateDrops);
     #endregion
@@ -71,23 +74,27 @@ public sealed partial class ValueCacheSeries
     /// Allocates new arrays, copies existing data, replaces references.
     /// Old readers with former array refs are safe — data persists until GC.
     /// </summary>
-    private void Grow()
+    /// <param name="currentCount">
+    /// The number of valid entries already written (caller's writeIndex snapshot),
+    /// passed in to avoid re-reading <c>_Count</c> directly inside this method.
+    /// </param>
+    private void Grow(int currentCount)
     {
         int newCapacity = Math.Max(_Capacity * 2, 256);
 
         // Grow timestamps and packetIds
         long[] newTimestamps = new long[newCapacity];
         int[] newPacketIds = new int[newCapacity];
-        if (_Count > 0)
+        if (currentCount > 0)
         {
-            Array.Copy(_Timestamps, newTimestamps, _Count);
-            Array.Copy(_PacketIds, newPacketIds, _Count);
+            Array.Copy(_Timestamps, newTimestamps, currentCount);
+            Array.Copy(_PacketIds, newPacketIds, currentCount);
         }
         _Timestamps = newTimestamps;
         _PacketIds = newPacketIds;
 
         // Grow type-specific value arrays
-        GrowValues(newCapacity);
+        GrowValues(newCapacity, currentCount);
         _Capacity = newCapacity;
     }
 
@@ -95,7 +102,12 @@ public sealed partial class ValueCacheSeries
     /// Type-specific grow for the value arrays in <see cref="ValueCacheData"/>.
     /// Switches on (<see cref="OriginalFieldType"/>, <see cref="StorageMode"/>) to cast and copy typed arrays.
     /// </summary>
-    private void GrowValues(int newCapacity)
+    /// <param name="newCapacity">New array capacity to allocate.</param>
+    /// <param name="currentCount">
+    /// Number of valid entries to copy from old to new arrays,
+    /// passed in to avoid re-reading <c>_Count</c> directly.
+    /// </param>
+    private void GrowValues(int newCapacity, int currentCount)
     {
         // Bool uses bit-packed byte array: 1 bit per entry, 8 entries per byte.
         if (_OriginalFieldType == FieldType.Bool)
@@ -117,10 +129,10 @@ public sealed partial class ValueCacheSeries
             (ulong[] oldLow, ulong[] oldHigh) = _Data.AsDualUlong();
             ulong[] newLow = new ulong[newCapacity];
             ulong[] newHigh = new ulong[newCapacity];
-            if (_Count > 0)
+            if (currentCount > 0)
             {
-                Array.Copy(oldLow, newLow, _Count);
-                Array.Copy(oldHigh, newHigh, _Count);
+                Array.Copy(oldLow, newLow, currentCount);
+                Array.Copy(oldHigh, newHigh, currentCount);
             }
             _Data = new ValueCacheData(newLow, newHigh);
             return;
@@ -129,41 +141,45 @@ public sealed partial class ValueCacheSeries
         // All other types: single typed array
         _Data = (_OriginalFieldType, _StorageMode) switch
         {
-            (FieldType.U64, ValueCacheStorageMode.Native) => GrowSingleArray<ulong>(newCapacity),
-            (FieldType.I64, ValueCacheStorageMode.Native) => GrowSingleArray<long>(newCapacity),
-            (FieldType.F64, ValueCacheStorageMode.Native) => GrowSingleArray<double>(newCapacity),
-            (FieldType.Timestamp, ValueCacheStorageMode.Native) => GrowSingleArray<long>(newCapacity),
-            (FieldType.IPv4Address, ValueCacheStorageMode.Native) => GrowSingleArray<uint>(newCapacity),
-            (FieldType.MacAddress, ValueCacheStorageMode.Native) => GrowSingleArray<ulong>(newCapacity),
-            (FieldType.Eui64, ValueCacheStorageMode.Native) => GrowSingleArray<ulong>(newCapacity),
-            (_, ValueCacheStorageMode.CompactFloat) => GrowSingleArray<float>(newCapacity),
-            (_, ValueCacheStorageMode.CompactInt8) => GrowSingleArray<sbyte>(newCapacity),
-            (_, ValueCacheStorageMode.CompactInt16) => GrowSingleArray<short>(newCapacity),
-            (_, ValueCacheStorageMode.CompactInt32) => GrowSingleArray<int>(newCapacity),
-            (_, ValueCacheStorageMode.CompactUInt8) => GrowSingleArray<byte>(newCapacity),
-            (_, ValueCacheStorageMode.CompactUInt16) => GrowSingleArray<ushort>(newCapacity),
-            (_, ValueCacheStorageMode.CompactUInt32) => GrowSingleArray<uint>(newCapacity),
+            (FieldType.U64, ValueCacheStorageMode.Native) => GrowSingleArray<ulong>(newCapacity, currentCount),
+            (FieldType.I64, ValueCacheStorageMode.Native) => GrowSingleArray<long>(newCapacity, currentCount),
+            (FieldType.F64, ValueCacheStorageMode.Native) => GrowSingleArray<double>(newCapacity, currentCount),
+            (FieldType.Timestamp, ValueCacheStorageMode.Native) => GrowSingleArray<long>(newCapacity, currentCount),
+            (FieldType.IPv4Address, ValueCacheStorageMode.Native) => GrowSingleArray<uint>(newCapacity, currentCount),
+            (FieldType.MacAddress, ValueCacheStorageMode.Native) => GrowSingleArray<ulong>(newCapacity, currentCount),
+            (FieldType.Eui64, ValueCacheStorageMode.Native) => GrowSingleArray<ulong>(newCapacity, currentCount),
+            (_, ValueCacheStorageMode.CompactFloat) => GrowSingleArray<float>(newCapacity, currentCount),
+            (_, ValueCacheStorageMode.CompactInt8) => GrowSingleArray<sbyte>(newCapacity, currentCount),
+            (_, ValueCacheStorageMode.CompactInt16) => GrowSingleArray<short>(newCapacity, currentCount),
+            (_, ValueCacheStorageMode.CompactInt32) => GrowSingleArray<int>(newCapacity, currentCount),
+            (_, ValueCacheStorageMode.CompactUInt8) => GrowSingleArray<byte>(newCapacity, currentCount),
+            (_, ValueCacheStorageMode.CompactUInt16) => GrowSingleArray<ushort>(newCapacity, currentCount),
+            (_, ValueCacheStorageMode.CompactUInt32) => GrowSingleArray<uint>(newCapacity, currentCount),
             _ => throw new InvalidOperationException(
                 $"Cannot grow value data: unsupported type/mode combination ({_OriginalFieldType}, {_StorageMode})."),
         };
     }
 
     /// <summary>Grows a single typed value array, preserving existing data.</summary>
-    private ValueCacheData GrowSingleArray<T>(int newCapacity) where T : unmanaged
+    /// <param name="newCapacity">New array capacity to allocate.</param>
+    /// <param name="currentCount">Number of valid entries to copy, passed in to avoid re-reading <c>_Count</c>.</param>
+    private ValueCacheData GrowSingleArray<T>(int newCapacity, int currentCount) where T : unmanaged
     {
         T[] oldArray = _Data.AsArray<T>();
         T[] newArray = new T[newCapacity];
-        if (_Count > 0)
+        if (currentCount > 0)
         {
-            Array.Copy(oldArray, newArray, _Count);
+            Array.Copy(oldArray, newArray, currentCount);
         }
         return new ValueCacheData(newArray);
     }
 
     /// <summary>
-    /// Type-specific value extraction and storage at position <c>_Count</c>.
+    /// Type-specific value extraction and storage at position <paramref name="writeIndex"/>.
     /// </summary>
-    private bool AppendValue(in FieldValueData value)
+    /// <param name="writeIndex">The array index at which to store the new value (caller's <c>_Count</c> snapshot).</param>
+    /// <param name="value">The field value to extract and store.</param>
+    private bool AppendValue(int writeIndex, in FieldValueData value)
     {
         switch (_OriginalFieldType, _StorageMode)
         {
@@ -172,33 +188,33 @@ public sealed partial class ValueCacheSeries
                 {
                     return false;
                 }
-                _Data.AsArray<ulong>()[_Count] = nativeU64;
+                _Data.AsArray<ulong>()[writeIndex] = nativeU64;
                 break;
             case (FieldType.I64, ValueCacheStorageMode.Native):
                 if (!value.TryGetAsI64(out long nativeI64))
                 {
                     return false;
                 }
-                _Data.AsArray<long>()[_Count] = nativeI64;
+                _Data.AsArray<long>()[writeIndex] = nativeI64;
                 break;
             case (FieldType.F64, ValueCacheStorageMode.Native):
                 if (!value.TryGetAsF64(out double nativeF64))
                 {
                     return false;
                 }
-                _Data.AsArray<double>()[_Count] = nativeF64;
+                _Data.AsArray<double>()[writeIndex] = nativeF64;
                 break;
             case (FieldType.Timestamp, ValueCacheStorageMode.Native):
                 if (!value.TryGetAsTimestamp(out Timestamp nativeTs))
                 {
                     return false;
                 }
-                _Data.AsArray<long>()[_Count] = nativeTs.AsNanos;
+                _Data.AsArray<long>()[writeIndex] = nativeTs.AsNanos;
                 break;
             case (FieldType.Bool, ValueCacheStorageMode.Native):
                 if (value.TryGetAsBool(out bool boolVal) && boolVal)
                 {
-                    _Data.AsBoolBits()[_Count >> 3] |= (byte)(1 << (_Count & 7));
+                    _Data.AsBoolBits()[writeIndex >> 3] |= (byte)(1 << (_Count & 7));
                 }
                 break;
             case (FieldType.IPv4Address, ValueCacheStorageMode.Native):
@@ -206,21 +222,21 @@ public sealed partial class ValueCacheSeries
                 {
                     return false;
                 }
-                _Data.AsArray<uint>()[_Count] = ipv4.RawValue;
+                _Data.AsArray<uint>()[writeIndex] = ipv4.RawValue;
                 break;
             case (FieldType.MacAddress, ValueCacheStorageMode.Native):
                 if (!value.TryGetAsMacAddress(out MacAddress mac))
                 {
                     return false;
                 }
-                _Data.AsArray<ulong>()[_Count] = mac.RawValue;
+                _Data.AsArray<ulong>()[writeIndex] = mac.RawValue;
                 break;
             case (FieldType.Eui64, ValueCacheStorageMode.Native):
                 if (!value.TryGetAsEui64(out Eui64 eui64))
                 {
                     return false;
                 }
-                _Data.AsArray<ulong>()[_Count] = eui64.RawValue;
+                _Data.AsArray<ulong>()[writeIndex] = eui64.RawValue;
                 break;
             case (FieldType.IPv6Address, ValueCacheStorageMode.Native):
                 {
@@ -229,8 +245,8 @@ public sealed partial class ValueCacheSeries
                         return false;
                     }
                     (ulong[] low, ulong[] high) = _Data.AsDualUlong();
-                    low[_Count] = addr.Low;
-                    high[_Count] = addr.High;
+                    low[writeIndex] = addr.Low;
+                    high[writeIndex] = addr.High;
                     break;
                 }
             case (FieldType.Uuid, ValueCacheStorageMode.Native):
@@ -240,8 +256,8 @@ public sealed partial class ValueCacheSeries
                         return false;
                     }
                     (ulong[] low, ulong[] high) = _Data.AsDualUlong();
-                    low[_Count] = uuid.Low;
-                    high[_Count] = uuid.High;
+                    low[writeIndex] = uuid.Low;
+                    high[writeIndex] = uuid.High;
                     break;
                 }
             case (FieldType.U64, ValueCacheStorageMode.CompactFloat):
@@ -249,21 +265,21 @@ public sealed partial class ValueCacheSeries
                 {
                     return false;
                 }
-                _Data.AsArray<float>()[_Count] = (float)compactU64;
+                _Data.AsArray<float>()[writeIndex] = (float)compactU64;
                 break;
             case (FieldType.I64, ValueCacheStorageMode.CompactFloat):
                 if (!value.TryGetAsI64(out long compactI64))
                 {
                     return false;
                 }
-                _Data.AsArray<float>()[_Count] = (float)compactI64;
+                _Data.AsArray<float>()[writeIndex] = (float)compactI64;
                 break;
             case (FieldType.F64, ValueCacheStorageMode.CompactFloat):
                 if (!value.TryGetAsF64(out double compactF64))
                 {
                     return false;
                 }
-                _Data.AsArray<float>()[_Count] = (float)compactF64;
+                _Data.AsArray<float>()[writeIndex] = (float)compactF64;
                 break;
             case (FieldType.Timestamp, ValueCacheStorageMode.CompactFloat):
                 {
@@ -280,7 +296,7 @@ public sealed partial class ValueCacheSeries
                         // under ParseLock. No cross-thread visibility issue (BUG-VC-02).
                         _BaseTimestampSet = true;
                     }
-                    _Data.AsArray<float>()[_Count] = (float)(seconds - _BaseTimestamp);
+                    _Data.AsArray<float>()[writeIndex] = (float)(seconds - _BaseTimestamp);
                     break;
                 }
             case (FieldType.I64, ValueCacheStorageMode.CompactInt8):
@@ -291,17 +307,17 @@ public sealed partial class ValueCacheSeries
                     }
                     if (val > sbyte.MaxValue)
                     {
-                        _Data.AsArray<sbyte>()[_Count] = sbyte.MaxValue;
+                        _Data.AsArray<sbyte>()[writeIndex] = sbyte.MaxValue;
                         Interlocked.Or(ref _CompletenessRaw, (int)ValueCacheCompleteness.HasOverflow); // use Interlocked for consistent ARM64 visibility
                     }
                     else if (val < sbyte.MinValue)
                     {
-                        _Data.AsArray<sbyte>()[_Count] = sbyte.MinValue;
+                        _Data.AsArray<sbyte>()[writeIndex] = sbyte.MinValue;
                         Interlocked.Or(ref _CompletenessRaw, (int)ValueCacheCompleteness.HasOverflow); // use Interlocked for consistent ARM64 visibility
                     }
                     else
                     {
-                        _Data.AsArray<sbyte>()[_Count] = (sbyte)val;
+                        _Data.AsArray<sbyte>()[writeIndex] = (sbyte)val;
                     }
                     break;
                 }
@@ -313,17 +329,17 @@ public sealed partial class ValueCacheSeries
                     }
                     if (val > short.MaxValue)
                     {
-                        _Data.AsArray<short>()[_Count] = short.MaxValue;
+                        _Data.AsArray<short>()[writeIndex] = short.MaxValue;
                         Interlocked.Or(ref _CompletenessRaw, (int)ValueCacheCompleteness.HasOverflow); // use Interlocked for consistent ARM64 visibility
                     }
                     else if (val < short.MinValue)
                     {
-                        _Data.AsArray<short>()[_Count] = short.MinValue;
+                        _Data.AsArray<short>()[writeIndex] = short.MinValue;
                         Interlocked.Or(ref _CompletenessRaw, (int)ValueCacheCompleteness.HasOverflow); // use Interlocked for consistent ARM64 visibility
                     }
                     else
                     {
-                        _Data.AsArray<short>()[_Count] = (short)val;
+                        _Data.AsArray<short>()[writeIndex] = (short)val;
                     }
                     break;
                 }
@@ -335,17 +351,17 @@ public sealed partial class ValueCacheSeries
                     }
                     if (val > int.MaxValue)
                     {
-                        _Data.AsArray<int>()[_Count] = int.MaxValue;
+                        _Data.AsArray<int>()[writeIndex] = int.MaxValue;
                         Interlocked.Or(ref _CompletenessRaw, (int)ValueCacheCompleteness.HasOverflow); // use Interlocked for consistent ARM64 visibility
                     }
                     else if (val < int.MinValue)
                     {
-                        _Data.AsArray<int>()[_Count] = int.MinValue;
+                        _Data.AsArray<int>()[writeIndex] = int.MinValue;
                         Interlocked.Or(ref _CompletenessRaw, (int)ValueCacheCompleteness.HasOverflow); // use Interlocked for consistent ARM64 visibility
                     }
                     else
                     {
-                        _Data.AsArray<int>()[_Count] = (int)val;
+                        _Data.AsArray<int>()[writeIndex] = (int)val;
                     }
                     break;
                 }
@@ -357,12 +373,12 @@ public sealed partial class ValueCacheSeries
                     }
                     if (val > byte.MaxValue)
                     {
-                        _Data.AsArray<byte>()[_Count] = byte.MaxValue;
+                        _Data.AsArray<byte>()[writeIndex] = byte.MaxValue;
                         Interlocked.Or(ref _CompletenessRaw, (int)ValueCacheCompleteness.HasOverflow); // use Interlocked for consistent ARM64 visibility
                     }
                     else
                     {
-                        _Data.AsArray<byte>()[_Count] = (byte)val;
+                        _Data.AsArray<byte>()[writeIndex] = (byte)val;
                     }
                     break;
                 }
@@ -374,12 +390,12 @@ public sealed partial class ValueCacheSeries
                     }
                     if (val > ushort.MaxValue)
                     {
-                        _Data.AsArray<ushort>()[_Count] = ushort.MaxValue;
+                        _Data.AsArray<ushort>()[writeIndex] = ushort.MaxValue;
                         Interlocked.Or(ref _CompletenessRaw, (int)ValueCacheCompleteness.HasOverflow); // use Interlocked for consistent ARM64 visibility
                     }
                     else
                     {
-                        _Data.AsArray<ushort>()[_Count] = (ushort)val;
+                        _Data.AsArray<ushort>()[writeIndex] = (ushort)val;
                     }
                     break;
                 }
@@ -391,12 +407,12 @@ public sealed partial class ValueCacheSeries
                     }
                     if (val > uint.MaxValue)
                     {
-                        _Data.AsArray<uint>()[_Count] = uint.MaxValue;
+                        _Data.AsArray<uint>()[writeIndex] = uint.MaxValue;
                         Interlocked.Or(ref _CompletenessRaw, (int)ValueCacheCompleteness.HasOverflow); // use Interlocked for consistent ARM64 visibility
                     }
                     else
                     {
-                        _Data.AsArray<uint>()[_Count] = (uint)val;
+                        _Data.AsArray<uint>()[writeIndex] = (uint)val;
                     }
                     break;
                 }

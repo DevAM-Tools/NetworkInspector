@@ -1,5 +1,4 @@
-// Copyright (c) DevAM and Network Inspector Contributors
-// Licensed under the MIT license.
+﻿// Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root.
 
 using System.Collections.Frozen;
 using NetworkInspector.Protocols.PduTransport;
@@ -168,7 +167,8 @@ public sealed partial class PduTransportProtocol : IProtocol
                 SettingsLoadWarningKind.OutOfRange,
                 "pdu_transport",
                 "pdu_transport.id_field_size",
-                $"Unsupported ID field size {_IdFieldSize.ToString(System.Globalization.CultureInfo.InvariantCulture)} \u2014 only 1, 2, or 4 are valid; clamped to default 4.");
+                $"Unsupported ID field size {_IdFieldSize.ToString(System.Globalization.CultureInfo.InvariantCulture)}"
+                + " \u2014 only 1, 2, or 4 are valid; clamped to default 4.");
             _IdFieldSize = 4;
         }
         if (_LengthFieldSize is not (1 or 2 or 4))
@@ -177,7 +177,8 @@ public sealed partial class PduTransportProtocol : IProtocol
                 SettingsLoadWarningKind.OutOfRange,
                 "pdu_transport",
                 "pdu_transport.length_field_size",
-                $"Unsupported length field size {_LengthFieldSize.ToString(System.Globalization.CultureInfo.InvariantCulture)} \u2014 only 1, 2, or 4 are valid; clamped to default 4.");
+                $"Unsupported length field size {_LengthFieldSize.ToString(System.Globalization.CultureInfo.InvariantCulture)}"
+                + " \u2014 only 1, 2, or 4 are valid; clamped to default 4.");
             _LengthFieldSize = 4;
         }
 

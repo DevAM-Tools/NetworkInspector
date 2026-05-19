@@ -1,5 +1,4 @@
-// Copyright (c) DevAM and Network Inspector contributors
-// Licensed under the MIT license.
+﻿// Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root.
 
 using NetworkInspector.Protocols.WebSocket;
 
@@ -189,6 +188,14 @@ public sealed partial class WebSocketProtocol
                         context.RecordGroupPresence(_WebsocketPayloadDecompressedGroupId);
                         frameContainer.Append(_DecompressedPayloadFieldId,
                             FieldValue.NewBytes(effectivePayload), in context);
+                    }
+                    else if (payloadData.Length > 0)
+                    {
+                        // Decompression failed on a non-empty compressed payload — surface the error
+                        // so callers can detect the failure rather than silently receiving no field.
+                        context.RecordGroupPresence(_WebsocketPayloadDecompressedGroupId);
+                        frameContainer.Append(_DecompressedPayloadErrorFieldId,
+                            FieldValue.NewString("Decompression failed"), in context);
                     }
                 }
 

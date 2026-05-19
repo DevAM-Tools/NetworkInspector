@@ -1,5 +1,4 @@
-// Copyright (c) DevAM and Network Inspector Contributors
-// Licensed under the MIT license.
+// Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root.
 
 namespace NetworkInspector.Core.Settings;
 
@@ -40,7 +39,8 @@ public sealed class Setting : IReadOnlySetting
     private SettingSnapshot _Snapshot;
 
     /// <summary>Creates a setting with the specified metadata and value constraints (used by factory methods).</summary>
-    /// <exception cref="InvalidNameRegistrationException">Thrown when <paramref name="name"/> is not a valid dot-separated C-style identifier, or <paramref name="groupName"/> is not a valid lowercase dot-separated identifier.</exception>
+    /// <exception cref="InvalidNameRegistrationException">Thrown when <paramref name="name"/> is not a valid dot-separated
+    /// C-style identifier, or <paramref name="groupName"/> is not a valid lowercase dot-separated identifier.</exception>
     /// <exception cref="InvalidUiNameRegistrationException">Thrown when <paramref name="uiName"/> is empty or contains control characters.</exception>
     private Setting(
         string name,
@@ -316,7 +316,8 @@ public sealed class Setting : IReadOnlySetting
     #region Factory Methods
 
     /// <summary>Creates a new boolean setting.</summary>
-    /// <exception cref="InvalidNameRegistrationException">Thrown when <paramref name="name"/> or <paramref name="groupName"/> is not a valid dot-separated C-style identifier.</exception>
+    /// <exception cref="InvalidNameRegistrationException">Thrown when <paramref name="name"/> or <paramref name="groupName"/>
+    /// is not a valid dot-separated C-style identifier.</exception>
     /// <exception cref="InvalidUiNameRegistrationException">Thrown when <paramref name="uiName"/> is empty or contains control characters.</exception>
     public static Setting Bool(
         string name, string uiName, string groupName,
@@ -328,7 +329,8 @@ public sealed class Setting : IReadOnlySetting
     }
 
     /// <summary>Creates a new string setting.</summary>
-    /// <exception cref="InvalidNameRegistrationException">Thrown when <paramref name="name"/> or <paramref name="groupName"/> is not a valid dot-separated C-style identifier.</exception>
+    /// <exception cref="InvalidNameRegistrationException">Thrown when <paramref name="name"/> or <paramref name="groupName"/>
+    /// is not a valid dot-separated C-style identifier.</exception>
     /// <exception cref="InvalidUiNameRegistrationException">Thrown when <paramref name="uiName"/> is empty or contains control characters.</exception>
     public static Setting String(
         string name, string uiName, string groupName,
@@ -340,7 +342,8 @@ public sealed class Setting : IReadOnlySetting
     }
 
     /// <summary>Creates a new f64 setting with optional min/max constraints.</summary>
-    /// <exception cref="InvalidNameRegistrationException">Thrown when <paramref name="name"/> or <paramref name="groupName"/> is not a valid dot-separated C-style identifier.</exception>
+    /// <exception cref="InvalidNameRegistrationException">Thrown when <paramref name="name"/> or <paramref name="groupName"/>
+    /// is not a valid dot-separated C-style identifier.</exception>
     /// <exception cref="InvalidUiNameRegistrationException">Thrown when <paramref name="uiName"/> is empty or contains control characters.</exception>
     /// <exception cref="ValidationSettingsException">Thrown when constraints are invalid.</exception>
     public static Setting F64(
@@ -381,7 +384,8 @@ public sealed class Setting : IReadOnlySetting
     }
 
     /// <summary>Creates a new u64 setting with optional min/max constraints.</summary>
-    /// <exception cref="InvalidNameRegistrationException">Thrown when <paramref name="name"/> or <paramref name="groupName"/> is not a valid dot-separated C-style identifier.</exception>
+    /// <exception cref="InvalidNameRegistrationException">Thrown when <paramref name="name"/> or <paramref name="groupName"/>
+    /// is not a valid dot-separated C-style identifier.</exception>
     /// <exception cref="InvalidUiNameRegistrationException">Thrown when <paramref name="uiName"/> is empty or contains control characters.</exception>
     /// <exception cref="ValidationSettingsException">Thrown when constraints are invalid.</exception>
     public static Setting U64(
@@ -410,7 +414,8 @@ public sealed class Setting : IReadOnlySetting
     }
 
     /// <summary>Creates a new i64 setting with optional min/max constraints.</summary>
-    /// <exception cref="InvalidNameRegistrationException">Thrown when <paramref name="name"/> or <paramref name="groupName"/> is not a valid dot-separated C-style identifier.</exception>
+    /// <exception cref="InvalidNameRegistrationException">Thrown when <paramref name="name"/> or <paramref name="groupName"/>
+    /// is not a valid dot-separated C-style identifier.</exception>
     /// <exception cref="InvalidUiNameRegistrationException">Thrown when <paramref name="uiName"/> is empty or contains control characters.</exception>
     /// <exception cref="ValidationSettingsException">Thrown when constraints are invalid.</exception>
     public static Setting I64(
@@ -439,7 +444,8 @@ public sealed class Setting : IReadOnlySetting
     }
 
     /// <summary>Creates a new byte array setting.</summary>
-    /// <exception cref="InvalidNameRegistrationException">Thrown when <paramref name="name"/> or <paramref name="groupName"/> is not a valid dot-separated C-style identifier.</exception>
+    /// <exception cref="InvalidNameRegistrationException">Thrown when <paramref name="name"/> or <paramref name="groupName"/>
+    /// is not a valid dot-separated C-style identifier.</exception>
     /// <exception cref="InvalidUiNameRegistrationException">Thrown when <paramref name="uiName"/> is empty or contains control characters.</exception>
     public static Setting Bytes(
         string name, string uiName, string groupName,
@@ -451,7 +457,8 @@ public sealed class Setting : IReadOnlySetting
     }
 
     /// <summary>Creates a new enum setting from allowed value pairs.</summary>
-    /// <exception cref="InvalidNameRegistrationException">Thrown when <paramref name="name"/> or <paramref name="groupName"/> is not a valid dot-separated C-style identifier.</exception>
+    /// <exception cref="InvalidNameRegistrationException">Thrown when <paramref name="name"/> or <paramref name="groupName"/>
+    /// is not a valid dot-separated C-style identifier.</exception>
     /// <exception cref="InvalidUiNameRegistrationException">Thrown when <paramref name="uiName"/> is empty or contains control characters.</exception>
     /// <exception cref="ValidationSettingsException">Thrown when constraints are invalid.</exception>
     public static Setting Enum(
@@ -464,7 +471,8 @@ public sealed class Setting : IReadOnlySetting
     }
 
     /// <summary>Creates a new enum setting with pre-built metadata.</summary>
-    /// <exception cref="InvalidNameRegistrationException">Thrown when <paramref name="name"/> or <paramref name="groupName"/> is not a valid dot-separated C-style identifier.</exception>
+    /// <exception cref="InvalidNameRegistrationException">Thrown when <paramref name="name"/> or <paramref name="groupName"/>
+    /// is not a valid dot-separated C-style identifier.</exception>
     /// <exception cref="InvalidUiNameRegistrationException">Thrown when <paramref name="uiName"/> is empty or contains control characters.</exception>
     /// <exception cref="ValidationSettingsException">Thrown when constraints are invalid.</exception>
     public static Setting EnumWithMetadata(
@@ -477,7 +485,8 @@ public sealed class Setting : IReadOnlySetting
             throw ValidationSettingsException.For("Enum setting requires at least one allowed value");
         }
 
-        EnumSettingValue? defaultEntry = metadata.GetByNumeric(defaultValue) ?? throw ValidationSettingsException.For($"Default value ({defaultValue}) must be one of the allowed enum values");
+        EnumSettingValue? defaultEntry = metadata.GetByNumeric(defaultValue)
+            ?? throw ValidationSettingsException.For($"Default value ({defaultValue}) must be one of the allowed enum values");
 
         SettingValue def = SettingValue.Enum(defaultEntry.Value.Name, defaultValue);
         return new Setting(name, uiName, description, groupName,

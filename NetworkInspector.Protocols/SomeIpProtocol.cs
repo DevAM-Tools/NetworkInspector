@@ -1,5 +1,4 @@
-// Copyright (c) DevAM and Network Inspector Contributors
-// Licensed under the MIT license.
+﻿// Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root.
 
 using System.Collections.Frozen;
 using NetworkInspector.Protocols.SomeIp;
@@ -9,6 +8,8 @@ namespace NetworkInspector.Protocols;
 /// <summary>
 /// SOME/IP (Scalable service-Oriented MiddlewarE over IP) protocol parser.
 /// Automotive middleware protocol (AUTOSAR) for service-oriented communication.
+/// <para><b>Thread safety:</b> Not thread-safe; designed for single-threaded use within a
+/// protocol stack. See remarks for details.</para>
 /// <para>Field tree structure:</para>
 /// <code>
 /// someip: SOME/IP, Service: 0x0123, Method: 0x4567, REQUEST
@@ -155,6 +156,9 @@ public sealed partial class SomeIpProtocol : IProtocol
 
     [U64Field("someip.tp.reserved", "Reserved", IndexGroup = TpIndexGroup)]
     private FieldId _TpReservedFieldId;
+
+    [StringField("someip.tp.dropped", "TP Reassembly Dropped", IndexGroup = TpIndexGroup)]
+    private FieldId _TpDroppedFieldId;
 
     #endregion
 
@@ -402,8 +406,20 @@ public sealed partial class SomeIpProtocol : IProtocol
         context.RecordProtocolPresence(_ProtocolId);
         context.RecordGroupPresence(_SomeipGroupId);
 
-        // Calculate total SOME/IP message size (8-byte header prefix + length)
-        int totalLen = Math.Min((int)(8 + header.Length), data.Length);
+        // SOME/IP spec: Length counts from ClientId onwards
+        // (ClientId[2] + SessionId[2] + ProtocolVersion[1] + InterfaceVersion[1] + MessageType[1] + ReturnCode[1] = 8 bytes minimum, with no payload).
+        // Values below 8 are structurally invalid.
+        if (header.Length < 8)
+        {
+            return ParseError.InvalidData(ProtocolName, "SOME/IP length field below minimum (8)");
+        }
+
+        // Guard against integer overflow when adding the 8-byte fixed prefix to produce the declared total.
+        // header.Length is uint; if it exceeds int.MaxValue - 8 the addition overflows when cast to int.
+        // In that case the declared size exceeds any representable buffer, so clamp directly to available data.
+        int totalLen = header.Length > (uint)(int.MaxValue - 8)
+            ? data.Length
+            : Math.Min(8 + (int)header.Length, data.Length);
 
         // Determine TP flag and SD message to record index presence eagerly
         bool isTp = (header.MessageType & 0x20) != 0;
@@ -552,13 +568,13 @@ public sealed partial class SomeIpProtocol : IProtocol
                 // The fragment payload follows immediately after the 4-byte TP header.
                 ReadOnlySpan<byte> fragmentPayload = someipData.Span[(payloadStart + SomeIpTpHeader.Size)..];
                 SomeIpTpReassemblyKey tpKey = new(header.ServiceId, header.MethodId, header.ClientId, header.SessionId);
-                byte[]? reassembled = _TpReassembler.AddSegment(in tpKey, tpHeader.ByteOffset, fragmentPayload, tpHeader.MoreSegments);
+                SomeIpTpReassemblyResult tpResult = _TpReassembler.AddSegment(in tpKey, tpHeader.ByteOffset, fragmentPayload, tpHeader.MoreSegments);
 
-                if (reassembled is not null)
+                if (tpResult.Outcome == SomeIpTpOutcome.Complete && tpResult.Payload is not null)
                 {
                     // All TP segments received — dispatch the reassembled payload to any
                     // registered sub-protocol, or fall back to raw bytes.
-                    ReadOnlyMemory<byte> reassembledMemory = reassembled;
+                    ReadOnlyMemory<byte> reassembledMemory = tpResult.Payload;
                     if (header.MessageId != SomeIpSdParser.SdMessageId)
                     {
                         ParseResult dispatchResult = container.TryCallNextProtocolU64(
@@ -573,6 +589,24 @@ public sealed partial class SomeIpProtocol : IProtocol
                         }
                     }
                 }
+                else if (tpResult.Outcome == SomeIpTpOutcome.Dropped)
+                {
+                    // Session was evicted (cap hit or size overflow) — surface a diagnostic so
+                    // callers can detect the failure rather than silently receiving no output.
+                    tpField.Append(_TpDroppedFieldId,
+                        FieldValue.NewString("Reassembly session dropped (cap or size limit exceeded)"), in context);
+                }
+
+                // When an LRU eviction displaced an older session to make room for this one,
+                // always emit a diagnostic regardless of this session's own outcome, so callers
+                // can detect the silent loss of the evicted session.
+                if (tpResult.LruEvicted)
+                {
+                    tpField.Append(_TpDroppedFieldId,
+                        FieldValue.NewString("Reassembly session limit reached; an older session was evicted"), in context);
+                }
+
+                // Outcome == InProgress: more fragments are expected; nothing to emit yet.
 
                 // TP reassembly has taken ownership of this packet's payload.
                 tpHandled = true;

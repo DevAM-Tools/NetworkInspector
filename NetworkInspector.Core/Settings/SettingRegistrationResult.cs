@@ -1,5 +1,4 @@
-// Copyright (c) DevAM and Network Inspector Contributors
-// Licensed under the MIT license.
+// Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root.
 
 namespace NetworkInspector.Core.Settings;
 
@@ -45,10 +44,12 @@ public readonly struct SettingRegistrationResult(SettingLoadResult loadResult, S
     /// <summary>Returns <see langword="true"/> if the value is an <see cref="SettingType.I64"/> and writes it into <paramref name="value"/>.</summary>
     public bool TryGetAsI64(out long value) => Value.TryGetAsI64(out value);
 
-    /// <summary>Returns <see langword="true"/> if the value is a <see cref="SettingType.Bytes"/> and writes a defensive copy into <paramref name="value"/>.</summary>
+    /// <summary>Returns <see langword="true"/> if the value is a <see cref="SettingType.Bytes"/>
+    /// and writes a defensive copy into <paramref name="value"/>.</summary>
     public bool TryGetAsBytes(out byte[] value) => Value.TryGetAsBytes(out value);
 
-    /// <summary>Returns <see langword="true"/> if the value is an <see cref="SettingType.Enum"/> and writes the name and numeric value into <paramref name="value"/>.</summary>
+    /// <summary>Returns <see langword="true"/> if the value is an <see cref="SettingType.Enum"/>
+    /// and writes the name and numeric value into <paramref name="value"/>.</summary>
     public bool TryGetAsEnum(out (string Name, ulong Value) value) => Value.TryGetAsEnum(out value);
 
     #endregion

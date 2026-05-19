@@ -1,0 +1,20 @@
+<!-- Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root. -->
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>NetworkInspector.Playground</RootNamespace>
+    <AssemblyName>ni-playground</AssemblyName>
+    <!-- Developer-only sandbox — not published to NuGet. -->
+    <IsPackable>false</IsPackable>
+    <!-- Playground uses APIs that are not trim/AOT-clean -->
+    <IsAotCompatible>false</IsAotCompatible>
+    <IsTrimmable>false</IsTrimmable>
+    <EnableTrimAnalyzer>false</EnableTrimAnalyzer>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\NetworkInspector.Core\NetworkInspector.Core.csproj" />
+    <ProjectReference Include="..\NetworkInspector.Protocols\NetworkInspector.Protocols.csproj" />
+    <ProjectReference Include="..\NetworkInspector.Sources\NetworkInspector.Sources.csproj" />
+    <ProjectReference Include="..\NetworkInspector.Exporters\NetworkInspector.Exporters.csproj" />
+  </ItemGroup>
+</Project>

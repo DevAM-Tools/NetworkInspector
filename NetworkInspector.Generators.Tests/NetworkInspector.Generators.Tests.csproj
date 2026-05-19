@@ -1,0 +1,19 @@
+﻿<!-- Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root. -->
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>NetworkInspector.Generators.Tests</RootNamespace>
+    <!-- Roslyn testing APIs (CSharpGeneratorDriver, CSharpCompilation) are not AOT-compatible. -->
+    <IsAotCompatible>false</IsAotCompatible>
+    <IsTrimmable>false</IsTrimmable>
+    <EnableTrimAnalyzer>false</EnableTrimAnalyzer>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="TUnit" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Regular project reference (not Analyzer) so ProtocolGenerator can be instantiated directly. -->
+    <ProjectReference Include="..\NetworkInspector.Generators\NetworkInspector.Generators.csproj" />
+  </ItemGroup>
+</Project>

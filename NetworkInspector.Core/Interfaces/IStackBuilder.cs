@@ -1,5 +1,4 @@
-// Copyright (c) DevAM and Network Inspector Contributors
-// Licensed under the MIT license.
+// Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root.
 
 namespace NetworkInspector.Core.Interfaces;
 
@@ -74,7 +73,8 @@ public interface IStackBuilder : IStack
     /// </param>
     /// <param name="description">Optional description text.</param>
     /// <exception cref="InvalidNameRegistrationException">Thrown when <paramref name="name"/> is not a valid dot-separated C-style identifier.</exception>
-    /// <exception cref="InvalidNameRegistrationException">Thrown when <paramref name="indexGroup"/> is not a valid dot-separated C-style identifier.</exception>
+    /// <exception cref="InvalidNameRegistrationException">Thrown when <paramref name="indexGroup"/>
+    /// is not a valid dot-separated C-style identifier.</exception>
     /// <exception cref="InvalidUiNameRegistrationException">Thrown when <paramref name="uiName"/> is empty or contains control characters.</exception>
     /// <exception cref="DuplicateNameRegistrationException">Thrown when the field name is already registered.</exception>
     FieldId RegisterFieldInGroup(

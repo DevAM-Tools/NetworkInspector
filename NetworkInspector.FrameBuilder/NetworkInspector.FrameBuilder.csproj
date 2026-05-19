@@ -1,0 +1,26 @@
+<!-- Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root. -->
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>NetworkInspector.FrameBuilder</RootNamespace>
+    <EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>
+    <CompilerGeneratedFilesOutputPath>$(BaseIntermediateOutputPath)\GeneratedFiles</CompilerGeneratedFilesOutputPath>
+    <Description>Typed, allocation-free frame-builder library for NetworkInspector. Compose protocol stacks (Ethernet, VLAN, IPv4, IPv6, UDP, TCP, WebSocket, SOME/IP, CAN, …) using a generic cons-list API and emit RFC-conformant wire frames with zero heap allocations on the hot path.</Description>
+    <PackageTags>network;framebuilder;ethernet;ipv4;ipv6;tcp;udp;websocket;someip;can;pcap</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="NetworkInspector.FrameBuilder.Tests" />
+    <InternalsVisibleTo Include="NetworkInspector.FrameBuilder.NegativeSnippets" />
+    <InternalsVisibleTo Include="NetworkInspector.Protocols.Tests" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="ZeroAlloc" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\NetworkInspector.Values\NetworkInspector.Values.csproj" />
+  </ItemGroup>
+</Project>

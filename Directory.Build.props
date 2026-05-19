@@ -1,3 +1,4 @@
+<!-- Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root. -->
 <Project>
   <PropertyGroup>
     <!-- Language & Framework -->
@@ -7,10 +8,9 @@
     <ImplicitUsings>disable</ImplicitUsings>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
 
-    <Version>0.1.0</Version>
+    <Version>0.2.0</Version>
 
     <!-- Quality -->
-    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
     <AnalysisLevel>latest-all</AnalysisLevel>
 
@@ -24,9 +24,9 @@
     <JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
 
     <!-- Package metadata -->
-    <Authors>DevAM and Network Inspector Contributors</Authors>
-    <Company>DevAM and Network Inspector Contributors</Company>
-    <Copyright>Copyright (c) DevAM and Network Inspector Contributors</Copyright>
+    <Authors>DevAM</Authors>
+    <Company>DevAM</Company>
+    <Copyright>Copyright (c) DevAM 2026</Copyright>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageRequireLicenseAcceptance>true</PackageRequireLicenseAcceptance>
     <PackageProjectUrl>https://github.com/DevAM-Tools/NetworkInspector</PackageProjectUrl>

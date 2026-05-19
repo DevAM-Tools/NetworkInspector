@@ -1,5 +1,4 @@
-// Copyright (c) DevAM and Network Inspector Contributors
-// Licensed under the MIT license.
+// Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root.
 
 namespace NetworkInspector.Core;
 
@@ -429,7 +428,7 @@ public static class LinkTypeExtensions
     {
         // Core Link Types
         LinkType.Null => "Null/Loopback",
-        LinkType.Ethernet => "Ethernet",
+        LinkType.Ethernet => "Ethernet (IEEE 802.3)",
         LinkType.ExpEthernet => "Experimental Ethernet (3Mb)",
         LinkType.Ax25 => "AX.25",
         LinkType.Pronet => "ProNET Token Ring",

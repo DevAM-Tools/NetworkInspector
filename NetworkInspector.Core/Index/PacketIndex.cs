@@ -1,5 +1,4 @@
-// Copyright (c) DevAM and Network Inspector Contributors
-// Licensed under the MIT license.
+// Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root.
 
 namespace NetworkInspector.Core.Index;
 
@@ -444,7 +443,9 @@ public sealed class PacketIndex : IPacketIndexReader
     /// A list of validated configs. Empty if <paramref name="settingValue"/> is null/empty
     /// or no entries are valid.
     /// </returns>
-    public static IReadOnlyList<ValueCacheFieldConfig> ParseValueCacheSettingValue(string? settingValue, Stack stack) => ParseValueCacheSettingValue(settingValue, stack, out _);
+    public static IReadOnlyList<ValueCacheFieldConfig> ParseValueCacheSettingValue(
+        string? settingValue, Stack stack)
+        => ParseValueCacheSettingValue(settingValue, stack, out _);
 
     /// <summary>
     /// Parses a comma-separated value-cache setting string and returns the valid field configs.

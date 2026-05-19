@@ -1,0 +1,11 @@
+// Cannot stack any layer onto a terminal payload layer (IPayloadLayer).
+// SomeIpLayer is a payload-only application layer and is intentionally not
+// IInteriorLayer, so no `Then(...)` overload accepts it as the outer
+// operand.  This guards against accidentally extending the stack past the
+// designated payload terminus.
+var bad = FrameStack
+    .Start(new EthernetLayer(_Dst, _Src))
+    .Then(new IPv4Layer(_SrcIp, _DstIp))
+    .Then(new UdpLayer(30490, 30490))
+    .Then(new SomeIpLayer(serviceId: 1, methodId: 1))
+    .Then(new UdpLayer(53, 53));

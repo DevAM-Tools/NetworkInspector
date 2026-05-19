@@ -1,6 +1,6 @@
-# NetworkInspector.Core
+<!-- Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root. -->
 
-<!-- Copyright (c) DevAM and Network Inspector Contributors. Licensed under the MIT license. -->
+# NetworkInspector.Core
 
 [![NuGet](https://img.shields.io/nuget/v/NetworkInspector.Core)](https://www.nuget.org/packages/NetworkInspector.Core)
 
@@ -666,4 +666,4 @@ this package. It processes `[Protocol]` attributes and generates:
 
 ## License
 
-[MIT License](../LICENSE) — © DevAM and Network Inspector Contributors
+[MIT License](../LICENSE) — © DevAM

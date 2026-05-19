@@ -1,7 +1,5 @@
+<!-- Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root. -->
 <!--
-  Copyright (c) DevAM and Network Inspector Contributors
-  SPDX-License-Identifier: MIT
-
   Central Package Management (CPM) — all NuGet package versions are defined here.
   Do NOT specify Version attributes in individual .csproj files.
 -->
@@ -12,6 +10,7 @@
   <ItemGroup>
     <PackageVersion Include="Microsoft.CodeAnalysis.Analyzers" Version="5.3.0" />
     <PackageVersion Include="Microsoft.CodeAnalysis.CSharp" Version="5.3.0" />
+    <PackageVersion Include="TUnit" Version="1.45.8" />
     <PackageVersion Include="ZeroAlloc" Version="0.2.0" />
   </ItemGroup>
 </Project>

@@ -1,5 +1,4 @@
-// Copyright (c) DevAM and Network Inspector contributors
-// Licensed under the MIT license.
+// Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root.
 
 namespace NetworkInspector.Core.Reassembly;
 

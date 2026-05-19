@@ -1,0 +1,110 @@
+﻿// Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root.
+
+using NetworkInspector.Protocols.Tests.Infrastructure.Bridges;
+using NetworkInspector.Protocols.Tests.Infrastructure.TsharkUat;
+
+namespace NetworkInspector.Protocols.Tests.PduTransport;
+
+/// <summary>
+/// Nested PDU-Transport → Signal-PDU symmetry against tshark with generated UAT profile.
+/// </summary>
+internal sealed class PduTransportSignalNestedTsharkTests
+{
+    [Test]
+    public async Task Tshark_Nested_PduTransportAndSignalPduFieldsMatchNi()
+    {
+        if (TsharkAvailability.ShouldSkip())
+        {
+            return;
+        }
+
+        SignalPduLayout layout = AutomotivePduBench.TwoSequentialUint16LeLayout;
+
+        SignalValueSet vals = SignalValueSet.For(layout).Set("EngineRpm", 125.0).Set("Thr", 555);
+
+        SignalPduLayer inner = new(layout, vals);
+
+        byte[] frame = AutomotiveEthUdpFrames.EncapsulatePduTransportSignal(
+            udpSrcPort: 18002,
+            udpDstPort: AutomotivePduBench.UdpPduTransportDestinationPort,
+            pduFb: AutomotivePduBench.PduTransportRegistry,
+            pduWireId: AutomotivePduBench.PduTransportWireId,
+            signalPdu: inner);
+
+        string work = Path.Combine(Path.GetTempPath(), "ni_pt_nested_" + Guid.NewGuid().ToString("N"));
+        _ = Directory.CreateDirectory(work);
+        string pduJson = Path.Combine(work, "pdutr.json");
+        string sigJson = Path.Combine(work, "signal_pdu.json");
+
+        string personalRoot = Path.Combine(Path.GetTempPath(), "ni_ws_personal_nested_" + Guid.NewGuid().ToString("N"));
+        _ = Directory.CreateDirectory(personalRoot);
+
+        try
+        {
+            await File.WriteAllTextAsync(pduJson, PduTransportConfigBridge.SerializeJson(AutomotivePduBench.PduTransportRegistry))
+                .ConfigureAwait(false);
+
+            await File.WriteAllTextAsync(sigJson, SignalPduConfigBridge.SerializeJson(layout)).ConfigureAwait(false);
+
+            (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(
+                frame,
+                sm =>
+                {
+                    sm.PreloadValue("pdu_transport.config_file", pduJson);
+                    sm.PreloadValue("pdu_transport.udp_dispatch_port", (ulong)AutomotivePduBench.UdpPduTransportDestinationPort);
+                    sm.PreloadValue("signal_pdu.config_file", sigJson);
+                });
+
+            using (stack)
+            {
+                string decodeAs =
+                    $"udp.port=={AutomotivePduBench.UdpPduTransportDestinationPort.ToString(System.Globalization.CultureInfo.InvariantCulture)},pdu_transport";
+
+                string profileDir = TsharkPduTransportSignalUatProfile.CreateProfileDirectoryUnderEphemeralPersonalDir(personalRoot, "nested");
+                TsharkPduTransportSignalUatProfile.EmitPduTransportOverUdpWithSignalPdu(
+                    profileDir,
+                    AutomotivePduBench.UdpPduTransportDestinationPort,
+                    AutomotivePduBench.PduTransportRegistry,
+                    AutomotivePduBench.PduTransportWireId,
+                    layout);
+
+                await TsharkAssert.AssertEquivalentMany(
+                    stack,
+                    packet,
+                    frame,
+                    1,
+                    profileDir,
+                    decodeAs,
+                    ("pdu_transport.id", "pdu_transport.id"),
+                    ("pdu_transport.length", "pdu_transport.length"),
+                    ("signal_pdu.signal.raw", "signal_pdu.signals.enginerpm_raw")).ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(work, recursive: true);
+            }
+            catch (Exception ex)
+            {
+                if (TestContext.Current?.OutputWriter is TextWriter tw)
+                {
+                    await tw.WriteLineAsync($"Warning: failed to delete temp directory '{work}': {ex.Message}").ConfigureAwait(false);
+                }
+            }
+
+            try
+            {
+                Directory.Delete(personalRoot, recursive: true);
+            }
+            catch (Exception ex)
+            {
+                if (TestContext.Current?.OutputWriter is TextWriter tw)
+                {
+                    await tw.WriteLineAsync($"Warning: failed to delete temp directory '{personalRoot}': {ex.Message}").ConfigureAwait(false);
+                }
+            }
+        }
+    }
+}

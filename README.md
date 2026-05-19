@@ -1,4 +1,4 @@
-<!-- Copyright (c) DevAM and Network Inspector Contributors. Licensed under the MIT license. -->
+<!-- Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root. -->
 
 # NetworkInspector
 
@@ -7,6 +7,9 @@ High-performance, zero-allocation network packet analysis framework for .NET 10.
 [![NuGet](https://img.shields.io/nuget/v/NetworkInspector.Core?label=NetworkInspector.Core)](https://www.nuget.org/packages/NetworkInspector.Core)
 [![NuGet](https://img.shields.io/nuget/v/NetworkInspector.Protocols?label=NetworkInspector.Protocols)](https://www.nuget.org/packages/NetworkInspector.Protocols)
 [![NuGet](https://img.shields.io/nuget/v/NetworkInspector.Values?label=NetworkInspector.Values)](https://www.nuget.org/packages/NetworkInspector.Values)
+[![NuGet](https://img.shields.io/nuget/v/NetworkInspector.FrameBuilder?label=NetworkInspector.FrameBuilder)](https://www.nuget.org/packages/NetworkInspector.FrameBuilder)
+[![NuGet](https://img.shields.io/nuget/v/NetworkInspector.Sources?label=NetworkInspector.Sources)](https://www.nuget.org/packages/NetworkInspector.Sources)
+[![NuGet](https://img.shields.io/nuget/v/NetworkInspector.Exporters?label=NetworkInspector.Exporters)](https://www.nuget.org/packages/NetworkInspector.Exporters)
 
 ## Packages
 
@@ -16,6 +19,23 @@ High-performance, zero-allocation network packet analysis framework for .NET 10.
 | [`NetworkInspector.Protocols`](NetworkInspector.Protocols/README.md) | 30 built-in dissectors: Ethernet, IPv4/6, TCP, UDP, DNS, HTTP/1.x, HTTP/2, TLS, DTLS, WebSocket, CAN, FlexRay, SOME/IP, and more. |
 | [`NetworkInspector.Values`](NetworkInspector.Values/README.md) | Strongly-typed value types: `MacAddress`, `IPv4Address`, `IPv6Address`, `Eui64`, `Uuid`, `Timestamp`. |
 | [`NetworkInspector.Generators`](NetworkInspector.Generators/README.md) | Roslyn source generator — bundled with `NetworkInspector.Core`, no separate installation needed. |
+| [`NetworkInspector.FrameBuilder`](NetworkInspector.FrameBuilder/README.md) | Typed, allocation-free frame builder. Compose protocol stacks (Ethernet, IPv4/6, UDP, TCP, SOME/IP, CAN, …) and emit RFC-conformant wire frames with zero heap allocations on the hot path. |
+| [`NetworkInspector.Sources`](NetworkInspector.Sources/README.md) | Frame source readers for PCAP, PCAPNG, Vector BLF, and Vector ASC capture files with streaming, random-access, error tolerance, and memory-mapped I/O. |
+| `NetworkInspector.Exporters` | Frame and packet exporters to PCAPNG, BLF, ASC, CSV, JSON, PBF, and plain-text formats. |
+
+## CLI Tool
+
+`NetworkInspector.CLI` provides the `ni` command-line tool for converting and exporting capture files.
+
+```
+ni convert <sources...> -o <output> [options]   # Frame-level format conversion
+ni export  <sources...> [options]               # Parse and export to JSON/PBF/text
+```
+
+Install from source:
+```
+dotnet run --project NetworkInspector.CLI -- convert --help
+```
 
 ---
 
@@ -114,4 +134,4 @@ attribute reference and generated member documentation.
 
 ## License
 
-[MIT License](LICENSE) — © DevAM and Network Inspector Contributors
+[MIT License](LICENSE) — © DevAM

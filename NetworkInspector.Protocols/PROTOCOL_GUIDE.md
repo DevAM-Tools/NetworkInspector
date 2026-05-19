@@ -1,4 +1,6 @@
-﻿# C# Protocol Implementation Guide
+﻿<!-- Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root. -->
+
+# C# Protocol Implementation Guide
 
 > Comprehensive reference for implementing protocol parsers in **NetworkInspector**.
 > Based on the production patterns in `FrameProtocol.cs`, `EthernetProtocol.cs`,

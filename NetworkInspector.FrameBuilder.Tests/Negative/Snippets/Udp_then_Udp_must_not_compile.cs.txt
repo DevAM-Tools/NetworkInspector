@@ -1,0 +1,8 @@
+// Cannot stack two UdpLayers: the inner UDP requires a pseudo-header from
+// its outer (IRequiresPseudoHeader), but the outer UDP does not provide one
+// (it is not IProvidesPseudoHeader).  No `Then(...)` overload is applicable.
+var bad = FrameStack
+    .Start(new EthernetLayer(_Dst, _Src))
+    .Then(new IPv4Layer(_SrcIp, _DstIp))
+    .Then(new UdpLayer(53, 53))
+    .Then(new UdpLayer(53, 53));

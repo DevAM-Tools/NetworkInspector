@@ -1,5 +1,4 @@
-// Copyright (c) DevAM and Network Inspector Contributors
-// Licensed under the MIT license.
+// Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root.
 
 namespace NetworkInspector.Core.Fields;
 
@@ -157,7 +156,8 @@ public readonly ref struct MutField
         return new(_Packet, _Packet.InsertAfter(_Index, fieldId, value), fieldId);
     }
 
-    /// <summary>Inserts a field after the current field (as sibling) with custom display text. Throws <see cref="Errors.FieldAppendException"/> on failure.</summary>
+    /// <summary>Inserts a field after the current field (as sibling) with custom display text.
+    /// Throws <see cref="Errors.FieldAppendException"/> on failure.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public readonly MutField InsertAfterWithCustomText(FieldId fieldId, FieldValue value, LazyString customText, in ParseContext context)
     {

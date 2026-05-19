@@ -1,5 +1,4 @@
-// Copyright (c) DevAM and Network Inspector Contributors
-// Licensed under the MIT license.
+// Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root.
 
 namespace NetworkInspector.Protocols.Attributes;
 
@@ -131,7 +130,8 @@ public sealed class U64SettingAttribute(string name, string uiName, string group
         get; set;
     }
 
-    /// <summary>Whether <see cref="Min"/> is set. Set this to <see langword="true"/> together with <see cref="Min"/> to enable lower-bound validation.</summary>
+    /// <summary>Whether <see cref="Min"/> is set. Set this to <see langword="true"/> together with <see cref="Min"/>
+    /// to enable lower-bound validation.</summary>
     public bool HasMin
     {
         get; set;
@@ -143,7 +143,8 @@ public sealed class U64SettingAttribute(string name, string uiName, string group
         get; set;
     }
 
-    /// <summary>Whether <see cref="Max"/> is set. Set this to <see langword="true"/> together with <see cref="Max"/> to enable upper-bound validation.</summary>
+    /// <summary>Whether <see cref="Max"/> is set. Set this to <see langword="true"/> together with <see cref="Max"/>
+    /// to enable upper-bound validation.</summary>
     public bool HasMax
     {
         get; set;
@@ -188,7 +189,8 @@ public sealed class I64SettingAttribute(string name, string uiName, string group
         get; set;
     }
 
-    /// <summary>Whether <see cref="Min"/> is set. Set this to <see langword="true"/> together with <see cref="Min"/> to enable lower-bound validation.</summary>
+    /// <summary>Whether <see cref="Min"/> is set. Set this to <see langword="true"/> together with <see cref="Min"/>
+    /// to enable lower-bound validation.</summary>
     public bool HasMin
     {
         get; set;
@@ -200,7 +202,8 @@ public sealed class I64SettingAttribute(string name, string uiName, string group
         get; set;
     }
 
-    /// <summary>Whether <see cref="Max"/> is set. Set this to <see langword="true"/> together with <see cref="Max"/> to enable upper-bound validation.</summary>
+    /// <summary>Whether <see cref="Max"/> is set. Set this to <see langword="true"/> together with <see cref="Max"/>
+    /// to enable upper-bound validation.</summary>
     public bool HasMax
     {
         get; set;

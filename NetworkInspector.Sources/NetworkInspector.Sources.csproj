@@ -1,0 +1,26 @@
+﻿<!-- Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root. -->
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>NetworkInspector.Sources</RootNamespace>
+    <Description>Frame source implementations for NetworkInspector. Reads PCAP, PCAPNG, Vector BLF, and Vector ASC capture files with streaming and random-access support, error tolerance, and memory-mapped I/O.</Description>
+    <PackageTags>network;pcap;pcapng;blf;asc;capture;frame-source;packet-capture</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="NetworkInspector.Sources.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="ZeroAlloc" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\NetworkInspector.Core\NetworkInspector.Core.csproj" />
+  </ItemGroup>
+
+  <!-- Include README in the NuGet package -->
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="" />
+  </ItemGroup>
+</Project>

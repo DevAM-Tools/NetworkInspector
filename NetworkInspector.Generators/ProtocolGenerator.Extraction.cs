@@ -1,5 +1,4 @@
-// Copyright (c) DevAM and Network Inspector Contributors
-// Licensed under the MIT license.
+// Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root.
 
 using System;
 using System.Collections.Generic;
@@ -166,8 +165,13 @@ public sealed partial class ProtocolGenerator
                 }
                 registrations.Add(new TableRegistration(table, key));
             }
-            else if (fqn == _FqnRegisterAtBoolTableAttribute && attr.ConstructorArguments.Length >= 2)
+            else if (fqn == _FqnRegisterAtBoolTableAttribute)
             {
+                if (attr.ConstructorArguments.Length < 2)
+                {
+                    diagnostics.Add(new DiagnosticInfo(_DiagAttributePayloadIncomplete, "RegisterAtBoolTable", className, className));
+                    continue;
+                }
                 string? tableMaybe = attr.ConstructorArguments[0].Value as string;
                 object? keyObj = attr.ConstructorArguments[1].Value;
                 if (keyObj is not bool boolKey)
@@ -387,7 +391,8 @@ public sealed partial class ProtocolGenerator
     }
 
     /// <summary>Extracts a single field's metadata from a recognized <c>[*Field]</c> attribute.</summary>
-    private static FieldInfo? ExtractFieldInfo(IFieldSymbol fieldSymbol, AttributeData attr, string attrShortName, string className, List<DiagnosticInfo> diagnostics)
+    private static FieldInfo? ExtractFieldInfo(
+        IFieldSymbol fieldSymbol, AttributeData attr, string attrShortName, string className, List<DiagnosticInfo> diagnostics)
     {
         if (attr.ConstructorArguments.Length < 2)
         {
@@ -461,7 +466,8 @@ public sealed partial class ProtocolGenerator
     }
 
     /// <summary>Extracts a protocol-table descriptor for the given key type.</summary>
-    private static ProtocolTableInfo? ExtractProtocolTableInfo(IFieldSymbol fieldSymbol, AttributeData attr, string keyType, string className, List<DiagnosticInfo> diagnostics)
+    private static ProtocolTableInfo? ExtractProtocolTableInfo(
+        IFieldSymbol fieldSymbol, AttributeData attr, string keyType, string className, List<DiagnosticInfo> diagnostics)
     {
         string attrShortName = $"ProtocolTable{keyType}Attribute";
         if (attr.ConstructorArguments.Length < 2)

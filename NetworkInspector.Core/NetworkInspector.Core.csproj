@@ -1,4 +1,5 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+﻿<!-- Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root. -->
+<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <RootNamespace>NetworkInspector.Core</RootNamespace>
     <Description>High-performance protocol analysis stack for network packet dissection. Provides the core framework for protocol registration, field trees, packet parsing, and cross-packet indexing. Includes a Roslyn source generator for declarative protocol definitions.</Description>
@@ -7,6 +8,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="NetworkInspector.Core.Tests" />
     <InternalsVisibleTo Include="NetworkInspector.Protocols" />
   </ItemGroup>
 

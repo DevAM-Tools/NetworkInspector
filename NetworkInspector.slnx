@@ -1,6 +1,21 @@
+<!-- Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root. -->
 <Solution>
   <Project Path="NetworkInspector.Values/NetworkInspector.Values.csproj" />
+  <Project Path="NetworkInspector.Generators.Tests/NetworkInspector.Generators.Tests.csproj" />
   <Project Path="NetworkInspector.Generators/NetworkInspector.Generators.csproj" />
   <Project Path="NetworkInspector.Core/NetworkInspector.Core.csproj" />
   <Project Path="NetworkInspector.Protocols/NetworkInspector.Protocols.csproj" />
+  <Project Path="NetworkInspector.FrameBuilder/NetworkInspector.FrameBuilder.csproj" />
+  <Project Path="NetworkInspector.Sources/NetworkInspector.Sources.csproj" />
+  <Project Path="NetworkInspector.Exporters/NetworkInspector.Exporters.csproj" />
+  <Project Path="NetworkInspector.CLI.Tests/NetworkInspector.CLI.Tests.csproj" />
+  <Project Path="NetworkInspector.CLI/NetworkInspector.CLI.csproj" />
+  <Project Path="NetworkInspector.Playground/NetworkInspector.Playground.csproj" />
+  <Project Path="NetworkInspector.Profiling/NetworkInspector.Profiling.csproj" />
+  <Project Path="NetworkInspector.Testing.Tshark/NetworkInspector.Testing.Tshark.csproj" />
+  <Project Path="NetworkInspector.Core.Tests/NetworkInspector.Core.Tests.csproj" />
+  <Project Path="NetworkInspector.Protocols.Tests/NetworkInspector.Protocols.Tests.csproj" />
+  <Project Path="NetworkInspector.FrameBuilder.Tests/NetworkInspector.FrameBuilder.Tests.csproj" />
+  <Project Path="NetworkInspector.Sources.Tests/NetworkInspector.Sources.Tests.csproj" />
+  <Project Path="NetworkInspector.Exporters.Tests/NetworkInspector.Exporters.Tests.csproj" />
 </Solution>

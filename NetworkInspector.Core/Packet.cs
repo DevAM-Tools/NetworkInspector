@@ -1,5 +1,4 @@
-// Copyright (c) DevAM and Network Inspector Contributors
-// Licensed under the MIT license.
+// Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root.
 
 namespace NetworkInspector.Core;
 
@@ -110,8 +109,10 @@ public sealed class Packet
     // Actual range is [0, MaxFieldCount].
     private int _FieldCount;
 
-    // Uses int (not bool) for Volatile.Read/Write compatibility — .NET has no Volatile.Write(ref bool).
     // 0 = not finalized, 1 = finalized.
+    // int sentinel retained for Interlocked pattern consistency — mixing Volatile and Interlocked
+    // access styles on the same field is a contract violation; all finalization writes use
+    // Interlocked.CompareExchange/Exchange, so the int type keeps all accesses in one contract.
     private int _Finalized;
 
     // Side-channel info LazyString set by sub-protocols during Parse().
@@ -618,12 +619,12 @@ public sealed class Packet
             finally
             {
                 // Decrement pending count AFTER the populator has finished appending all
-                // child fields. Post-Seal: Volatile.Write ensures cross-thread visibility
-                // so concurrent MaterializeAll callers see the updated count. Pre-Seal:
-                // plain write is sufficient — single-threaded, no visibility requirement.
+                // child fields. Post-Seal: Interlocked.Decrement provides both atomicity and
+                // the cross-thread visibility needed by concurrent MaterializeAll callers.
+                // Pre-Seal: plain write is sufficient — single-threaded, no visibility requirement.
                 if (needsGuard)
                 {
-                    Volatile.Write(ref _PendingLazyCount, _PendingLazyCount - 1);
+                    Interlocked.Decrement(ref _PendingLazyCount);
                 }
                 else
                 {
@@ -1767,7 +1768,8 @@ public sealed class Packet
     /// <see cref="RecycleError"/> code instead of throwing.
     /// </para>
     /// </summary>
-    /// <exception cref="ArgumentException">When <paramref name="stack"/> does not match the recycle packet's stack, or when the frame's registry does not match.</exception>
+    /// <exception cref="ArgumentException">When <paramref name="stack"/> does not match the recycle packet's stack,
+    /// or when the frame's registry does not match.</exception>
     /// <exception cref="InvalidOperationException">When the recycle packet is not yet finalized or a materializer is active.</exception>
     public static Packet ParseFrame(Packet recycle, PacketId id, Stack stack, Frame frame)
     {

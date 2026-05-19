@@ -1,9 +1,56 @@
-# Changelog
+<!-- Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root. -->
 
-<!-- Copyright (c) DevAM and Network Inspector Contributors. Licensed under the MIT license. -->
+# Changelog
 
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+
+---
+
+## [0.2.0] — FrameBuilder, Sources, Exporters, CLI and Test Projects
+
+### Added
+
+**`NetworkInspector.FrameBuilder`** — Typed, allocation-free frame builder library:
+- Generic cons-list API for composing protocol stacks at compile time with full type safety.
+- Layers: Ethernet, VLAN, Linux SLL/SLL2, LLC/SNAP, IPv4, IPv6 (with extension headers), TCP, UDP, ICMP, ICMPv6, ARP, DHCP/DHCPv6, DNS, TLS, DTLS, HTTP/1.x, WebSocket, SOME/IP, PDU Transport, Signal PDU, CAN (classic/FD/XL), FlexRay, LIN.
+- Automatic checksum calculation, IP fragmentation, TCP segmentation, and pseudo-header computation.
+- Stateful builder for multi-frame streams (TCP sessions, fragmented IP, etc.).
+
+**`NetworkInspector.Sources`** — Frame source readers for capture file formats:
+- PCAPNG reader with streaming, random-access, error-tolerance, and memory-mapped I/O.
+- Vector BLF reader with LZ4 container decompression, multi-channel demux, and configurable cache budget.
+- Vector ASC reader with timestamp normalization and channel filtering.
+- Random frame source for synthetic test data generation.
+- `CachedFrameSource` — in-memory caching wrapper for repeated random-access reads.
+
+**`NetworkInspector.Exporters`** — Frame and packet exporters:
+- PCAPNG exporter with optional LZ4 compression and SHB/IDB metadata.
+- BLF exporter with configurable compression (off / fast / best).
+- CSV exporter with configurable column definitions and delimiter.
+- JSON exporter (compact, pretty, array styles).
+- PBF exporter (row-oriented and columnar with optional LZ4 compression).
+- ASC exporter for Vector CANalyzer ASCII log files (CAN classic, CAN FD, LIN, FlexRay).
+- Plain-text exporter with configurable verbosity levels (summary / standard / full) and value truncation.
+
+**`NetworkInspector.CLI`** — Command-line tool (`ni`):
+- `ni convert` — Frame-level format conversion between PCAPNG, BLF, and more. Supports file splitting, progress reporting, error tolerance, and BLF cache budgets.
+- `ni export` — Parse and export packets to JSON, PBF, or plain-text with full protocol stack dissection. Supports settings profiles.
+
+**Test Projects:**
+- `NetworkInspector.Core.Tests` — 100% coverage of Core internals (roaring bitmap, slab allocator, LargeBuffer, etc.).
+- `NetworkInspector.Protocols.Tests` — Per-dissector tests for all 30 protocols including tshark UAT integration tests.
+- `NetworkInspector.FrameBuilder.Tests` — Smoke tests, integration tests, and negative compilation tests for FrameBuilder.
+- `NetworkInspector.Sources.Tests` — Reader tests for PCAPNG, BLF, ASC, random, and cached sources.
+- `NetworkInspector.Exporters.Tests` — Exporter tests for all formats including round-trip verification with tshark.
+- `NetworkInspector.Testing.Tshark` — Shared tshark test helper library used by Protocols.Tests, FrameBuilder.Tests, and Exporters.Tests.
+
+### Changed
+- Version bumped to `0.2.0`.
+- `NetworkInspector.Core.csproj`: added `InternalsVisibleTo` for `NetworkInspector.Core.Tests` and `NetworkInspector.Exporters.Tests`.
+- `NetworkInspector.Protocols.csproj`: added `InternalsVisibleTo` for `NetworkInspector.Protocols.Tests`.
+- `NetworkInspector.Exporters` — fixed CA2014: moved `stackalloc` for timestamp formatting buffer outside the column loop in `CsvExporter`.
+- `Directory.Packages.props`: added `TUnit` package version entry.
 
 ---
 

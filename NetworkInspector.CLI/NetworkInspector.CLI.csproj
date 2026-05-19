@@ -1,0 +1,29 @@
+﻿<!-- Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root. -->
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>NetworkInspector.CLI</RootNamespace>
+    <AssemblyName>ni</AssemblyName>
+    <!-- Dotnet global / local tool packaging -->
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>ni</ToolCommandName>
+    <PackageId>NetworkInspector.CLI</PackageId>
+    <Description>Command-line interface for the Network Inspector stack. Provides ni convert, ni export, and ni mcp commands for working with network captures.</Description>
+    <PackageTags>network;pcap;pcapng;blf;capture;cli;tool</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <!-- CLI uses Process and other APIs that are not trim/AOT-clean -->
+    <IsAotCompatible>false</IsAotCompatible>
+    <IsTrimmable>false</IsTrimmable>
+    <EnableTrimAnalyzer>false</EnableTrimAnalyzer>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="NetworkInspector.CLI.Tests" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="/" />
+    <ProjectReference Include="..\NetworkInspector.Core\NetworkInspector.Core.csproj" />
+    <ProjectReference Include="..\NetworkInspector.Protocols\NetworkInspector.Protocols.csproj" />
+    <ProjectReference Include="..\NetworkInspector.Sources\NetworkInspector.Sources.csproj" />
+    <ProjectReference Include="..\NetworkInspector.Exporters\NetworkInspector.Exporters.csproj" />
+  </ItemGroup>
+</Project>

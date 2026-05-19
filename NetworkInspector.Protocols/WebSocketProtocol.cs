@@ -1,5 +1,4 @@
-// Copyright (c) DevAM and Network Inspector Contributors
-// Licensed under the MIT license.
+﻿// Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root.
 
 using NetworkInspector.Protocols.WebSocket;
 
@@ -9,6 +8,8 @@ namespace NetworkInspector.Protocols;
 /// WebSocket protocol parser (RFC 6455).
 /// Parses WebSocket frame headers including FIN, opcode, mask, payload length, and masking key.
 /// Performs XOR unmasking for masked frames (client → server).
+/// <para><b>Thread safety:</b> Instances are immutable after registration; <see cref="Parse"/> may
+/// be called concurrently from multiple threads without external synchronisation. See remarks.</para>
 /// <para>WebSocket is established via HTTP Upgrade. Registered in the <c>http.upgrade</c>
 /// dispatch table with key "websocket". When HTTP parses a <c>101 Switching Protocols</c>
 /// response with <c>Upgrade: websocket</c>, it dispatches subsequent data to this protocol.</para>
@@ -154,6 +155,10 @@ public sealed partial class WebSocketProtocol : IProtocol
     [BytesField("websocket.payload.decompressed", "Decompressed Payload", IndexGroup = "websocket.payload.decompressed")]
     private FieldId _DecompressedPayloadFieldId;
 
+    /// <summary>Reported when per-message DEFLATE decompression fails on a non-empty compressed payload.</summary>
+    [StringField("websocket.payload.decompressed.error", "Decompression Error", IndexGroup = "websocket.payload.decompressed")]
+    private FieldId _DecompressedPayloadErrorFieldId;
+
     #endregion
 
     #region Continuation frame info
@@ -164,10 +169,12 @@ public sealed partial class WebSocketProtocol : IProtocol
     #endregion
 
     #region Cached protocol references for payload dispatch
+    /// <summary>Protocol ID for the <c>text</c> protocol used for UTF-8 text payload dispatch.</summary>
     private ProtocolId _TextProtocolId;
+    /// <summary>Protocol ID for the <c>data</c> protocol used for binary payload dispatch.</summary>
     private ProtocolId _DataProtocolId;
 
-    // Pre-allocated populator
+    /// <summary>Pre-allocated populator delegate to avoid per-frame closure allocation.</summary>
     private LazyPopulator _Populator = null!;
 
     partial void OnStartCustom(Stack stack)

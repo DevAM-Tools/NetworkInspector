@@ -1,9 +1,44 @@
-// Copyright (c) DevAM and Network Inspector Contributors
-// Licensed under the MIT license.
+﻿// Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root.
 
 using System.Collections.Generic;
 
 namespace NetworkInspector.Protocols.SomeIp;
+
+/// <summary>
+/// Outcome of a <see cref="SomeIpTpReassembler.AddSegment"/> call, allowing callers to
+/// distinguish in-progress accumulation from completion and from silent drops.
+/// </summary>
+internal enum SomeIpTpOutcome
+{
+    /// <summary>More fragments are still needed; no action required.</summary>
+    InProgress,
+
+    /// <summary>All fragments received; <see cref="SomeIpTpReassemblyResult.Payload"/> holds the reassembled bytes.</summary>
+    Complete,
+
+    /// <summary>Session was rejected or evicted (cap limit, size overflow, or LRU eviction);
+    /// the caller should emit a diagnostic.</summary>
+    Dropped
+}
+
+/// <summary>
+/// Result of a single <see cref="SomeIpTpReassembler.AddSegment"/> call.
+/// </summary>
+internal readonly struct SomeIpTpReassemblyResult
+{
+    /// <summary>Outcome of this fragment addition.</summary>
+    internal SomeIpTpOutcome Outcome { get; init; }
+
+    /// <summary>Reassembled payload; non-null only when <see cref="Outcome"/> is <see cref="SomeIpTpOutcome.Complete"/>.</summary>
+    internal byte[]? Payload { get; init; }
+
+    /// <summary>
+    /// True when a separate (LRU-evicted) session was silently removed to make room for this one.
+    /// The caller should emit a diagnostic for the evicted session even if this session itself
+    /// is still in progress.
+    /// </summary>
+    internal bool LruEvicted { get; init; }
+}
 
 /// <summary>
 /// Key for identifying a SOME/IP-TP reassembly session.
@@ -98,38 +133,85 @@ internal sealed class SomeIpTpReassembler
     private readonly Dictionary<SomeIpTpReassemblyKey, ReassemblyState> _Sessions = new();
 
     /// <summary>
-    /// Adds a TP segment for reassembly.
-    /// Returns the fully reassembled payload when all fragments have been received,
-    /// or null if more fragments are still needed.
+    /// Monotonically increasing counter, incremented on each <see cref="AddSegment"/> call.
+    /// Used to identify the least-recently-used session for eviction when the session cap is reached.
+    /// </summary>
+    private uint _PacketSerial;
+
+    /// <summary>
+    /// Adds a TP segment for reassembly and returns an explicit result indicating completion,
+    /// in-progress accumulation, or that the session was dropped.
     /// </summary>
     /// <param name="key">Reassembly session identifier.</param>
     /// <param name="byteOffset">Byte offset from the TP header.</param>
     /// <param name="data">Fragment payload data.</param>
     /// <param name="moreSegments">True if more segments follow.</param>
-    /// <returns>Reassembled payload or null if incomplete.</returns>
-    internal byte[]? AddSegment(in SomeIpTpReassemblyKey key, uint byteOffset, ReadOnlySpan<byte> data, bool moreSegments)
+    /// <returns>
+    /// A <see cref="SomeIpTpReassemblyResult"/> indicating whether reassembly is complete
+    /// (<see cref="SomeIpTpOutcome.Complete"/> with <see cref="SomeIpTpReassemblyResult.Payload"/>),
+    /// still in progress (<see cref="SomeIpTpOutcome.InProgress"/>), or the session was dropped
+    /// (<see cref="SomeIpTpOutcome.Dropped"/>).
+    /// </returns>
+    internal SomeIpTpReassemblyResult AddSegment(in SomeIpTpReassemblyKey key, uint byteOffset, ReadOnlySpan<byte> data, bool moreSegments)
     {
-        // Enforce session limit — reject new sessions when at capacity
-        if (!_Sessions.ContainsKey(key) && _Sessions.Count >= MaxSessions)
-        {
-            return null;
-        }
+        uint serial = ++_PacketSerial;
+        bool lruEvicted = false;
 
         if (!_Sessions.TryGetValue(key, out ReassemblyState? state))
         {
-            state = new ReassemblyState();
+            // At capacity: evict the least-recently-used session before accepting the new one.
+            if (_Sessions.Count >= MaxSessions)
+            {
+                lruEvicted = EvictLru();
+            }
+
+            state = new ReassemblyState(serial);
             _Sessions[key] = state;
         }
-
-        if (state.AddFragment(byteOffset, data, moreSegments))
+        else
         {
-            // Reassembly complete — extract the assembled payload and remove session
-            byte[] assembled = state.Assemble();
-            _Sessions.Remove(key);
-            return assembled;
+            state.LastSeenSerial = serial;
         }
 
-        return null;
+        if (state.AddFragment(byteOffset, data, moreSegments, MaxReassembledSize))
+        {
+            // Reassembly complete — extract the assembled payload and remove session.
+            byte[] assembled = state.Assemble();
+            _Sessions.Remove(key);
+            return new SomeIpTpReassemblyResult { Outcome = SomeIpTpOutcome.Complete, Payload = assembled, LruEvicted = lruEvicted };
+        }
+
+        if (state.IsDropped)
+        {
+            _Sessions.Remove(key);
+            return new SomeIpTpReassemblyResult { Outcome = SomeIpTpOutcome.Dropped, LruEvicted = lruEvicted };
+        }
+
+        return new SomeIpTpReassemblyResult { Outcome = SomeIpTpOutcome.InProgress, LruEvicted = lruEvicted };
+    }
+
+    /// <summary>
+    /// Evicts the session that was last updated the longest time ago (lowest serial).
+    /// Returns true if a session was actually evicted.
+    /// </summary>
+    private bool EvictLru()
+    {
+        SomeIpTpReassemblyKey? victim = null;
+        uint lowestSerial = uint.MaxValue;
+        foreach (KeyValuePair<SomeIpTpReassemblyKey, ReassemblyState> pair in _Sessions)
+        {
+            if (pair.Value.LastSeenSerial < lowestSerial)
+            {
+                lowestSerial = pair.Value.LastSeenSerial;
+                victim = pair.Key;
+            }
+        }
+        if (victim.HasValue)
+        {
+            _Sessions.Remove(victim.Value);
+            return true;
+        }
+        return false;
     }
 
     /// <summary>Returns the number of active reassembly sessions.</summary>
@@ -154,21 +236,45 @@ internal sealed class SomeIpTpReassembler
         private uint _ReceivedBytes; // bytes
 
         /// <summary>
-        /// Adds a fragment. Returns true if the message is now complete.
+        /// Serial value from the last <see cref="SomeIpTpReassembler.AddSegment"/> call that touched this session.
+        /// Used by the LRU eviction policy.
         /// </summary>
-        internal bool AddFragment(uint offset, ReadOnlySpan<byte> data, bool moreSegments)
+        internal uint LastSeenSerial { get; set; }
+
+        /// <summary>True if this session should be removed without emitting a complete payload (overflow, etc.).</summary>
+        internal bool IsDropped { get; private set; }
+
+        /// <summary>Creates a new session, recording the serial at creation time.</summary>
+        internal ReassemblyState(uint initialSerial)
+        {
+            LastSeenSerial = initialSerial;
+        }
+
+        /// <summary>
+        /// Adds a fragment.  Returns true if the message is now complete.
+        /// Sets <see cref="IsDropped"/> if the fragment would exceed <paramref name="maxSize"/>.
+        /// </summary>
+        internal bool AddFragment(uint offset, ReadOnlySpan<byte> data, bool moreSegments, int maxSize)
         {
             uint fragLen = (uint)data.Length;
 
-            // Record total size when we see the last segment
+            // Record total size when we see the last segment; guard against offset+fragLen overflow.
             if (!moreSegments)
             {
+                if (fragLen > uint.MaxValue - offset)
+                {
+                    // Malformed: offset + length wraps uint32 — treat as a dropped session.
+                    IsDropped = true;
+                    return false;
+                }
                 _TotalSize = offset + fragLen;
             }
 
-            // Overflow protection — reject if would exceed size limit
-            if (_ReceivedBytes + fragLen > MaxReassembledSize)
+            // Overflow protection — mark dropped if received bytes would exceed size limit.
+            // Guard uint addition to prevent wrap-around on crafted data.
+            if (fragLen > uint.MaxValue - _ReceivedBytes || _ReceivedBytes + fragLen > (uint)maxSize)
             {
+                IsDropped = true;
                 return false;
             }
 
@@ -200,8 +306,16 @@ internal sealed class SomeIpTpReassembler
                     return false; // Gap detected
                 }
 
+                // Guard against uint overflow from crafted fragment length.
+                uint dataLen = (uint)frag.Data.Length;
+                if (dataLen > uint.MaxValue - frag.Offset)
+                {
+                    // Malformed fragment: offset+length overflows; treat session as incomplete.
+                    return false;
+                }
+
                 // Handle overlapping fragments
-                uint fragEnd = frag.Offset + (uint)frag.Data.Length;
+                uint fragEnd = frag.Offset + dataLen;
                 if (fragEnd > covered)
                 {
                     covered = fragEnd;

@@ -1,0 +1,2 @@
+// Cannot start a FrameStack with a TcpLayer: TcpLayer is not IRootLayer.
+var bad = FrameStack.Start(new TcpLayer(1234, 5678));

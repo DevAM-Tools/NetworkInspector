@@ -1,6 +1,6 @@
-# NetworkInspector.Values
+<!-- Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root. -->
 
-<!-- Copyright (c) DevAM and Network Inspector Contributors. Licensed under the MIT license. -->
+# NetworkInspector.Values
 
 [![NuGet](https://img.shields.io/nuget/v/NetworkInspector.Values)](https://www.nuget.org/packages/NetworkInspector.Values)
 
@@ -45,4 +45,4 @@ dotnet add package NetworkInspector.Values
 
 ## License
 
-[MIT License](../LICENSE) — © DevAM and Network Inspector Contributors
+[MIT License](../LICENSE) — © DevAM
