@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root.
+﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 #region System
 global using System;
@@ -7,10 +7,18 @@ global using System.Buffers.Binary;
 global using System.Collections.Generic;
 global using System.Collections.Immutable;
 global using System.Globalization;
+global using System.IO;
 global using System.Linq;
+global using System.Reflection;
 global using System.Runtime.CompilerServices;
 global using System.Threading;
 global using System.Threading.Tasks;
+#endregion
+
+#region Microsoft.CodeAnalysis
+global using Microsoft.CodeAnalysis;
+global using Microsoft.CodeAnalysis.CSharp;
+global using Microsoft.CodeAnalysis.Emit;
 #endregion
 
 #region NetworkInspector.FrameBuilder

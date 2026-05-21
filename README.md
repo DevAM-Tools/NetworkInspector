@@ -1,8 +1,8 @@
-<!-- Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root. -->
+<!-- Copyright © 2026 DevAM. All rights reserved. -->
 
 # NetworkInspector
 
-High-performance, zero-allocation network packet analysis framework for .NET 10.
+High-performance packet analysis for .NET 10 with a modular package ecosystem for parsing, capture I/O, export pipelines, and frame construction.
 
 [![NuGet](https://img.shields.io/nuget/v/NetworkInspector.Core?label=NetworkInspector.Core)](https://www.nuget.org/packages/NetworkInspector.Core)
 [![NuGet](https://img.shields.io/nuget/v/NetworkInspector.Protocols?label=NetworkInspector.Protocols)](https://www.nuget.org/packages/NetworkInspector.Protocols)
@@ -11,40 +11,44 @@ High-performance, zero-allocation network packet analysis framework for .NET 10.
 [![NuGet](https://img.shields.io/nuget/v/NetworkInspector.Sources?label=NetworkInspector.Sources)](https://www.nuget.org/packages/NetworkInspector.Sources)
 [![NuGet](https://img.shields.io/nuget/v/NetworkInspector.Exporters?label=NetworkInspector.Exporters)](https://www.nuget.org/packages/NetworkInspector.Exporters)
 
-## Packages
+## What This Is
 
-| Package | Description |
-|---------|-------------|
-| [`NetworkInspector.Core`](NetworkInspector.Core/README.md) | Core engine: protocol stack, field tree, packet index, slab allocator, reassembly. Includes the Roslyn source generator. |
-| [`NetworkInspector.Protocols`](NetworkInspector.Protocols/README.md) | 30 built-in dissectors: Ethernet, IPv4/6, TCP, UDP, DNS, HTTP/1.x, HTTP/2, TLS, DTLS, WebSocket, CAN, FlexRay, SOME/IP, and more. |
-| [`NetworkInspector.Values`](NetworkInspector.Values/README.md) | Strongly-typed value types: `MacAddress`, `IPv4Address`, `IPv6Address`, `Eui64`, `Uuid`, `Timestamp`. |
-| [`NetworkInspector.Generators`](NetworkInspector.Generators/README.md) | Roslyn source generator — bundled with `NetworkInspector.Core`, no separate installation needed. |
-| [`NetworkInspector.FrameBuilder`](NetworkInspector.FrameBuilder/README.md) | Typed, allocation-free frame builder. Compose protocol stacks (Ethernet, IPv4/6, UDP, TCP, SOME/IP, CAN, …) and emit RFC-conformant wire frames with zero heap allocations on the hot path. |
-| [`NetworkInspector.Sources`](NetworkInspector.Sources/README.md) | Frame source readers for PCAP, PCAPNG, Vector BLF, and Vector ASC capture files with streaming, random-access, error tolerance, and memory-mapped I/O. |
-| `NetworkInspector.Exporters` | Frame and packet exporters to PCAPNG, BLF, ASC, CSV, JSON, PBF, and plain-text formats. |
+NetworkInspector is a .NET toolkit for teams that need to process network captures end-to-end:
 
-## CLI Tool
+- ingest frame data from common capture formats,
+- parse protocol stacks into structured packet fields,
+- export results into operational or analytics-friendly outputs.
 
-`NetworkInspector.CLI` provides the `ni` command-line tool for converting and exporting capture files.
+The project is intentionally modular. You can adopt only the packages needed for your scenario.
 
-```
-ni convert <sources...> -o <output> [options]   # Frame-level format conversion
-ni export  <sources...> [options]               # Parse and export to JSON/PBF/text
-```
+## Why It Stands Out
 
-Install from source:
-```
-dotnet run --project NetworkInspector.CLI -- convert --help
-```
+- **Composable package architecture**: parse-only, source-only, export-only, or full pipeline.
+- **Broad built-in protocol coverage**: enterprise and automotive traffic in one stack.
+- **Production workflow support**: conversion, streaming, cancellation, and tolerant modes.
+- **Practical developer ergonomics**: quick stack setup, typed values, and CLI tooling.
 
----
+## Install
 
-## Quick Start
+Start with parser essentials:
 
-```
+```bash
 dotnet add package NetworkInspector.Core
 dotnet add package NetworkInspector.Protocols
 ```
+
+Add workflow packages as required:
+
+```bash
+dotnet add package NetworkInspector.Sources
+dotnet add package NetworkInspector.Exporters
+dotnet add package NetworkInspector.Values
+dotnet add package NetworkInspector.FrameBuilder
+```
+
+## Quick Start
+
+### Parse One Frame
 
 ```csharp
 using NetworkInspector.Core;
@@ -55,13 +59,14 @@ ProtocolRegistration.RegisterStandardProtocols(builder);
 Stack stack = builder.Build();
 
 Frame frame = Frame.Create(
-    new FrameId(0), Timestamp.FromSecs(0), rawBytes,
-    LinkType.Ethernet, FrameInterfaceId.Invalid,
+    new FrameId(0),
+    Timestamp.FromSecs(0),
+    rawBytes,
+    LinkType.Ethernet,
+    FrameInterfaceId.Invalid,
     stack.FrameInterfaceRegistry).Value;
 
 Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame);
-
-// Iterate all fields (triggers lazy materialization)
 foreach (Field field in packet)
 {
     Console.WriteLine($"{field.Info.UiName}: {field.Value}");
@@ -70,68 +75,105 @@ foreach (Field field in packet)
 stack.Dispose();
 ```
 
----
+## Recommended Adoption Paths
 
-## Protocols
+### Path 1: Parse And Inspect Packets In Code
 
-30 built-in dissectors across all network layers:
+Use Core + Protocols to build a parser stack and inspect packet fields programmatically.
 
-| Layer | Protocols |
-|-------|-----------|
-| Link | Ethernet, VLAN (802.1Q), Linux SLL, Linux SLL2, LLC/SNAP, Frame |
-| Network | IPv4 (with fragmentation reassembly), IPv6 (with extension headers), ARP, ICMPv4, ICMPv6 |
-| Transport | TCP, UDP |
-| Application | DNS, DHCPv4, DHCPv6, HTTP/1.x, HTTP/2, TLS (1.0–1.3), DTLS, WebSocket, JSON, Text |
-| Automotive | CAN (classic / FD / XL), FlexRay, LIN, SOME/IP, PDU Transport, Signal PDU |
-| Fallback | Data |
+Best for:
 
----
+- custom observability tools,
+- packet validation,
+- protocol-aware data extraction.
 
-## Source Generator
+### Path 2: Convert Capture Files
 
-`NetworkInspector.Core` bundles a Roslyn source generator that processes
-`[Protocol]`-annotated classes and emits all field registration boilerplate:
-field IDs, dispatch tables, settings, index groups, and lifecycle hooks.
+Use `NetworkInspector.CLI` for frame-level conversion without full packet export:
 
-```csharp
-[Protocol("eth", "Ethernet")]
-public partial class EthernetProtocol : IProtocol
-{
-    [MacField("eth.src",  "Source")]      private FieldId _SrcFieldId;
-    [MacField("eth.dst",  "Destination")] private FieldId _DstFieldId;
-    [U16Field("eth.type", "EtherType")]   private FieldId _TypeFieldId;
-
-    [ProtocolTableU16("eth.type", "EtherType dispatch")]
-    public ProtocolTableId EtherTypeTableId { get; private set; }
-
-    // Parse() implementation — registration code is generated automatically.
-}
+```bash
+ni convert input.blf --output output.pcapng
+ni convert input.pcapng --output split/ --split-size 100
 ```
 
-See [NetworkInspector.Generators/README.md](NetworkInspector.Generators/README.md) for the full
-attribute reference and generated member documentation.
+Best for:
 
----
+- capture normalization,
+- archive conversion,
+- frame-level operational workflows.
 
-## Key Features
+### Path 3: Export Parsed Data
 
-- **Zero allocations** in the parsing hot path via thread-local slab allocators and `ZeroAlloc` string formatting.
-- **AOT and trim compatible** — all packages target `net10.0` with `IsAotCompatible=true` and `IsTrimmable=true`.
-- **Cross-platform** — Windows, Linux, macOS — x64 and ARM64.
-- **Flat field tree** — fields stored as a contiguous array of structs; navigation via `ushort` indices, no heap pointers.
-- **Cross-packet index** — roaring bitmap index for constant-time presence queries across packet captures.
-- **Typed dispatch tables** — protocol routing via `U8`, `U16`, `U32`, `U64`, `String`, and heuristic tables built at stack-construction time.
-- **IP reassembly** — built-in IPv4 fragment reassembly with FIFO eviction.
-- **Roslyn source generator** — eliminates all protocol registration boilerplate.
+Use CLI export or packet exporters for analysis outputs:
 
----
+```bash
+ni export input.pcapng --format json --output packets.json
+ni export input.pcapng --format pbf:format=columnar,compressed --output packets.pbf
+```
 
-## Requirements
+Best for:
 
-- .NET 10 SDK
+- analytics pipelines,
+- report generation,
+- downstream BI/data tooling.
 
----
+## Package Map
+
+| Package | What You Use It For | Guide |
+|---------|---------------------|-------|
+| NetworkInspector.Core | Build parser stack and parse frames to packets | [NetworkInspector.Core/README.md](NetworkInspector.Core/README.md) |
+| NetworkInspector.Protocols | Register built-in dissectors | [NetworkInspector.Protocols/README.md](NetworkInspector.Protocols/README.md) |
+| NetworkInspector.Sources | Read captures from PCAP/PCAPNG/BLF/ASC | [NetworkInspector.Sources/README.md](NetworkInspector.Sources/README.md) |
+| NetworkInspector.Exporters | Write PCAPNG/BLF/ASC/JSON/PBF/CSV/Text | [NetworkInspector.Exporters/README.md](NetworkInspector.Exporters/README.md) |
+| NetworkInspector.Values | Use typed addresses and timestamps | [NetworkInspector.Values/README.md](NetworkInspector.Values/README.md) |
+| NetworkInspector.FrameBuilder | Construct protocol stacks into wire frames | [NetworkInspector.FrameBuilder/README.md](NetworkInspector.FrameBuilder/README.md) |
+| NetworkInspector.CLI | Convert/export from the command line (`ni`) | [NetworkInspector.CLI/README.md](NetworkInspector.CLI/README.md) |
+| NetworkInspector.Generators | Source generation bundled with Core | [NetworkInspector.Generators/README.md](NetworkInspector.Generators/README.md) |
+
+## Protocol Coverage Snapshot
+
+Built-in dissectors include link, network, transport, application, and automotive layers, including:
+
+- Ethernet, VLAN, Linux SLL/SLL2,
+- IPv4, IPv6, ARP, ICMPv4, ICMPv6,
+- TCP, UDP,
+- DNS, DHCPv4/v6, HTTP/1.x, HTTP/2, TLS, DTLS, WebSocket,
+- CAN (classic/FD/XL), FlexRay, LIN, SOME/IP.
+
+For full and current protocol list, see [NetworkInspector.Protocols/README.md](NetworkInspector.Protocols/README.md).
+
+## Limits And Thread-Safety Notes
+
+- Treat parser stack construction and exporter/listener workflows as single-threaded unless a package README states otherwise.
+- Dispose stacks and exporter instances promptly to release resources predictably.
+- Prefer streaming pipelines and explicit cancellation for large capture workloads.
+
+## Safe Usage (STRIDE)
+
+- **Spoofing**: Treat captures as untrusted input and validate source provenance where possible.
+- **Tampering**: Expect malformed records from third-party data and use tolerant/error-aware processing.
+- **Repudiation**: Retain source metadata and command settings when reproducibility is required.
+- **Information disclosure**: Assume exports can contain sensitive payload data and control access accordingly.
+- **Denial of service**: Apply split/target-count/cancellation controls on large jobs.
+- **Elevation of privilege**: Run processing with least-privilege filesystem and process rights.
+
+## Links
+
+- [GitHub repository](https://github.com/DevAM-Tools/NetworkInspector)
+- [Issue tracker](https://github.com/DevAM-Tools/NetworkInspector/issues)
+
+### NuGet Package Pages
+
+| Package | NuGet |
+|---------|-------|
+| NetworkInspector.Core | <https://www.nuget.org/packages/NetworkInspector.Core> |
+| NetworkInspector.Protocols | <https://www.nuget.org/packages/NetworkInspector.Protocols> |
+| NetworkInspector.Values | <https://www.nuget.org/packages/NetworkInspector.Values> |
+| NetworkInspector.FrameBuilder | <https://www.nuget.org/packages/NetworkInspector.FrameBuilder> |
+| NetworkInspector.Sources | <https://www.nuget.org/packages/NetworkInspector.Sources> |
+| NetworkInspector.Exporters | <https://www.nuget.org/packages/NetworkInspector.Exporters> |
+| NetworkInspector.CLI | <https://www.nuget.org/packages/NetworkInspector.CLI> |
 
 ## License
 
-[MIT License](LICENSE) — © DevAM
+[MIT License](LICENSE)

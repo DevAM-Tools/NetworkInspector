@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root.
+﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Exporters.Asc;
 
@@ -47,6 +47,13 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
 
     /// <summary>SocketCAN frame header size: id(4) + dlc(1) + flags(1) + reserved(2) = 8 bytes.</summary>
     private const int SocketCanHeaderSize = 8;
+
+    /// <summary>
+    /// CAN XL frame discriminator: byte 4, bit 7. CAN XL frames always set this bit;
+    /// classic CAN DLC (0–8) and CAN FD DLC code (0–15) never reach 0x80, so this bit
+    /// is a reliable variant indicator shared by both the protocol parser and the exporter.
+    /// </summary>
+    private const byte SocketCanXlfFlag = 0x80;
 
     /// <summary>
     /// DLC-code-to-byte-count mapping for CAN FD (ISO 11898-1 Table 6).
@@ -398,10 +405,27 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
     /// <see cref="LinkType.Can20B"/>). Parses the binary SocketCAN header and
     /// dispatches to <see cref="AscWriter.WriteCanMessage"/> or
     /// <see cref="AscWriter.WriteCanFdMessage"/> based on the FDF flag.
+    /// <para>
+    /// CAN XL frames share the same link type but are distinguished by the XLF bit
+    /// (byte 4, bit 7). The ASC format has no CAN XL line syntax, so CAN XL frames
+    /// are rejected as <see cref="ExportErrorKind.UnsupportedType"/> before any
+    /// classic/FD interpretation can occur.
+    /// </para>
     /// </summary>
     private bool HandleCanFrame(
         ReadOnlySpan<byte> data, long timestampNs, long currentIndex, Frame frame)
     {
+        // CAN XL frames share LinkType.CanSocketcan with classic/FD but are identified by
+        // the XLF bit (byte 4, bit 7). The ASC format cannot represent CAN XL, so skip early
+        // before TryParseCanFrame interprets the 12-byte XL header as a classic/FD header.
+        if (data.Length >= SocketCanHeaderSize && (data[4] & SocketCanXlfFlag) != 0)
+        {
+            return HandleSkip(
+                ExportErrorKind.UnsupportedType,
+                "CAN XL frames are not supported by the ASC format",
+                currentIndex);
+        }
+
         if (!TryParseCanFrame(data,
             out uint rawCanId, out bool isExtended, out bool isRemote,
             out bool isFd, out bool brs, out bool esi, out byte dlc,

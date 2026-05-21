@@ -4,6 +4,7 @@
     <RootNamespace>NetworkInspector.Exporters</RootNamespace>
     <Description>Frame exporter implementations for NetworkInspector. Writes captured frames and parsed packets to PCAPNG, BLF, CSV, JSON, PBF, and plain-text formats with streaming and memory-efficient output.</Description>
     <PackageTags>network;pcapng;blf;csv;json;pbf;exporter;packet-export;capture</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
 
   <ItemGroup>
@@ -40,5 +41,10 @@
     <Compile Include="..\NetworkInspector.Sources\Blf\Format\Headers\BlfLogObjectHeaderV3.cs" Link="Shared\Blf\Headers\BlfLogObjectHeaderV3.cs" />
     <Compile Include="..\NetworkInspector.Sources\Blf\Format\Headers\BlfContainerHeader.cs" Link="Shared\Blf\Headers\BlfContainerHeader.cs" />
     <Compile Include="..\NetworkInspector.Sources\Blf\Format\Headers\BlfDate.cs" Link="Shared\Blf\Headers\BlfDate.cs" />
+  </ItemGroup>
+
+  <!-- Include README in the NuGet package -->
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="" />
   </ItemGroup>
 </Project>

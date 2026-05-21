@@ -1,4 +1,4 @@
-// Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root.
+﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Core.Interfaces;
 
@@ -134,7 +134,25 @@ public interface IStack
 
     #region Post-Parser Access
 
-    /// <summary>All registered post-parsers, sorted by priority.</summary>
+    /// <summary>
+    /// All registered post-parsers, sorted in the order they will be executed at runtime.
+    /// <para>
+    /// Sort key: <see cref="PostParserInfo.Priority"/> ascending (lower values first),
+    /// then <see cref="PostParserInfo.Id"/> ascending (registration order) as a stable
+    /// tie-breaker. The sort is performed once at build time in <see cref="StackBuilder.Build"/>;
+    /// no runtime sorting occurs in the parse hot path.
+    /// </para>
+    /// <para>
+    /// Execution lifecycle: post-parsers run after the main protocol dispatch on every packet,
+    /// before <c>packet.info</c> is appended and before the packet is sealed. Each post-parser
+    /// receives the packet root field as its parent, identical to how <see cref="PacketProtocol"/>
+    /// calls top-level sub-protocols.
+    /// </para>
+    /// <para>
+    /// Error policy: a <see cref="ParseResult"/> error or exception from any post-parser is
+    /// recorded as a packet-level error; the remaining post-parsers always continue executing.
+    /// </para>
+    /// </summary>
     ReadOnlyMemory<PostParserInfo> PostParsers
     {
         get;

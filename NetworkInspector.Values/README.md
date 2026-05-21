@@ -1,48 +1,78 @@
-<!-- Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root. -->
+<!-- Copyright © 2026 DevAM. All rights reserved. -->
 
 # NetworkInspector.Values
 
 [![NuGet](https://img.shields.io/nuget/v/NetworkInspector.Values)](https://www.nuget.org/packages/NetworkInspector.Values)
 
-Strongly-typed network address and timestamp value types for the NetworkInspector framework.
-All types are `readonly struct` and designed for zero-allocation use in hot paths.
-They integrate with [ZeroAlloc](https://www.nuget.org/packages/ZeroAlloc) for
-heap-free string formatting.
+Typed address and timestamp primitives for NetworkInspector and related .NET networking workflows.
 
-## Value Types
+## What This Is
 
-| Type | Size | Description |
-|------|------|-------------|
-| `MacAddress` | 6 bytes | 48-bit IEEE 802 MAC address (EUI-48). Formatted as `00:1a:2b:3c:4d:5e`. |
-| `IPv4Address` | 4 bytes | 32-bit IPv4 address. Formatted in dotted-decimal notation (`192.168.1.1`). |
-| `IPv6Address` | 16 bytes | 128-bit IPv6 address. Formatted per RFC 5952 with `::` compression. |
-| `Eui64` | 8 bytes | 64-bit EUI-64 identifier. Used in IPv6 interface IDs and IEEE 802.15.4. |
-| `Uuid` | 16 bytes | 128-bit UUID. Formatted as `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`. |
-| `Timestamp` | 8 bytes | Nanosecond-precision UNIX timestamp. Formatted as ISO 8601 with nanosecond resolution. |
+`NetworkInspector.Values` provides lightweight value types commonly needed in packet pipelines:
 
-## Usage
+- `MacAddress`
+- `IPv4Address`
+- `IPv6Address`
+- `Eui64`
+- `Uuid`
+- `Timestamp`
 
-```csharp
-MacAddress mac  = new MacAddress(0x00, 0x1A, 0x2B, 0x3C, 0x4D, 0x5E);
-IPv4Address ip4 = new IPv4Address(192, 168, 1, 1);
-IPv6Address ip6 = IPv6Address.Parse("2001:db8::1");
-Timestamp   ts  = Timestamp.FromSecs(1_700_000_000);
+These types are designed for predictable formatting and comparison behavior in parsing and export code.
 
-Console.WriteLine(mac);  // 00:1a:2b:3c:4d:5e
-Console.WriteLine(ip4);  // 192.168.1.1
-Console.WriteLine(ip6);  // 2001:db8::1
-Console.WriteLine(ts);   // ISO 8601 with nanosecond precision
-```
+## Why It Stands Out
 
-All types implement `IEquatable<T>`, `IComparable<T>`, and `IFormattable`.
-`Timestamp` supports arithmetic operators for duration math.
+- Strong typing for common network identifiers.
+- Consistent formatting output for logs and exports.
+- Easy to reuse outside of the full NetworkInspector stack.
 
-## Installation
+## Install
 
-```
+```bash
 dotnet add package NetworkInspector.Values
 ```
 
+## Quick Start
+
+```csharp
+using NetworkInspector.Values;
+
+MacAddress mac = new(0x00, 0x1A, 0x2B, 0x3C, 0x4D, 0x5E);
+IPv4Address ip4 = new(192, 168, 1, 10);
+IPv6Address ip6 = IPv6Address.Parse("2001:db8::1");
+Timestamp ts = Timestamp.FromSecs(1_700_000_000);
+
+Console.WriteLine(mac); // 00:1a:2b:3c:4d:5e
+Console.WriteLine(ip4); // 192.168.1.10
+Console.WriteLine(ip6); // 2001:db8::1
+Console.WriteLine(ts);
+```
+
+## Common Tasks
+
+### Store Typed Addresses
+
+Use value types in domain objects instead of raw strings to reduce parsing/formatting ambiguity.
+
+### Compare And Sort
+
+`IEquatable<T>` and comparison support make these values practical for indexing and reporting workflows.
+
+### Export Stable Text
+
+Use built-in string formatting for CSV/JSON/text output without custom converters for each primitive.
+
+## Limits And Thread-Safety Notes
+
+- These structs are value-centric and suitable for concurrent read usage.
+- Validate external input before parsing string representations.
+
+## Links
+
+- [GitHub repository](https://github.com/DevAM-Tools/NetworkInspector)
+- [NuGet package](https://www.nuget.org/packages/NetworkInspector.Values)
+- [Source folder](https://github.com/DevAM-Tools/NetworkInspector/tree/main/NetworkInspector.Values)
+- [Issue tracker](https://github.com/DevAM-Tools/NetworkInspector/issues)
+
 ## License
 
-[MIT License](../LICENSE) — © DevAM
+[MIT License](../LICENSE)

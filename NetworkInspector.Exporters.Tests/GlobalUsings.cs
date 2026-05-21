@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root.
+﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 #region System
 global using System;
@@ -43,6 +43,15 @@ global using NetworkInspector.Exporters.Text;
 
 #region NetworkInspector.Protocols
 global using NetworkInspector.Protocols;
+#endregion
+
+#region NetworkInspector.Sources
+global using NetworkInspector.Sources.Blf;
+global using NetworkInspector.Sources.Pcapng;
+#endregion
+
+#region NetworkInspector.Exporters (internal)
+global using NetworkInspector.Exporters.Pbf.Columnar;
 #endregion
 
 #region Test Framework

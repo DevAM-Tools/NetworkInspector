@@ -1,10 +1,8 @@
-﻿// Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 // CA2007: in-process test methods awaiting helper Tasks — ConfigureAwait
 // adds noise without effect.  Disabled file-wide.
 #pragma warning disable CA2007
-
-using Microsoft.CodeAnalysis;
 
 namespace NetworkInspector.FrameBuilder.Tests.Negative;
 

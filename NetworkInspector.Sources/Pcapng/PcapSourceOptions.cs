@@ -1,6 +1,4 @@
-﻿// Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root.
-
-using NetworkInspector.Core;
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Sources.Pcapng;
 
@@ -26,8 +24,6 @@ public sealed class PcapSourceOptions : IFileSourceOptions
         }
     }
     private readonly int _MaxHandles = Math.Clamp(Environment.ProcessorCount, 1, 256);
-
-
 
     /// <summary>Optional override for the UI display name.</summary>
     public string? UiName

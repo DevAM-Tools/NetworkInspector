@@ -1,111 +1,107 @@
-<!-- Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root. -->
+<!-- Copyright © 2026 DevAM. All rights reserved. -->
 
 # NetworkInspector.Sources
 
-File format readers for the NetworkInspector packet analysis framework.
-Supports reading captured network data from standard file formats
-and generating synthetic frames for testing.
+[![NuGet](https://img.shields.io/nuget/v/NetworkInspector.Sources)](https://www.nuget.org/packages/NetworkInspector.Sources)
 
-## Supported Formats
+Capture reader package for NetworkInspector with random-access and streaming source options.
 
-| Source | Format | Description |
-|--------|--------|-------------|
-| `PcapSource` | PCAP / PCAP-NG | Standard packet capture files (libpcap, Wireshark) |
-| `PcapStreamSource` | PCAP / PCAP-NG | Streaming reader for large files |
-| `BlfSource` | BLF | Binary Logging Format (Vector automotive tools) |
-| `BlfStreamSource` | BLF | Streaming BLF reader |
-| `AscSource` | ASC | Vector ASCII trace files with random access |
-| `AscStreamSource` | ASC | Streaming ASC reader |
-| `RandomFrameSource` | — | Synthetic frame generator for testing and benchmarking |
-| `CachedFrameSource` | — | In-memory cached frame source |
+## What This Is
 
-## Features
+`NetworkInspector.Sources` opens and reads capture files so you can parse them through Core/Protocols pipelines.
 
-- **Memory-mapped I/O** — efficient access to large capture files via `MmapPool`
-- **Incremental scanning** — parse file structure without loading all frames into memory
-- **Frame indexing** — fast random access to any frame by index
-- **Streaming** — process frames sequentially without full file scan
-- **Multiple link types** — Ethernet, Linux SLL/SLL2, SocketCAN, FlexRay, LIN, and more
-- **Dual-backend ASC reading** — small ASC files are loaded into memory; large files use a
-  buffered disk reader so the allocation stays proportional to the configured `PreloadBudget`
+Supported families include:
 
-## Memory management — ASC sources
+- PCAP and PCAPNG,
+- BLF,
+- ASC,
+- synthetic and cached sources for testing and benchmarking.
 
-`AscSource` (random-access) chooses between two internal backends at open time:
+## Why It Stands Out
 
-| Condition | Backend | Behaviour |
-|-----------|---------|-----------|
-| `fileSize ≤ PreloadBudget` (default 256 MiB) | **In-memory** | All lines are kept in a `string[]`; frames are served entirely from RAM. |
-| `fileSize > PreloadBudget` | **Disk** | Only a frame-index is kept in memory. Individual lines are read on-demand via a new `FileStream` seek per `FrameById` call. |
+- Covers both random-access and stream-first workflows.
+- Supports large-file handling with memory-budget-oriented options.
+- Integrates directly into parser and exporter pipelines.
 
-The initial index scan always uses a 4 MiB read buffer (`AscSourceOptions.DiskReadBufferSize`)
-regardless of which backend is used. This avoids small-read stalls on spinning disks and
-reduces system-call overhead for network shares.
+## Install
 
-```csharp
-// Default — 256 MiB budget, tolerant error mode
-AscSource source = AscSource.Open("trace.asc");
-
-// Custom budget — forces disk backend for files larger than 64 MiB
-AscSourceOptions opts = new() { PreloadBudget = 64 * 1024 * 1024 };
-AscSource source = AscSource.Open("large_trace.asc", opts);
+```bash
+dotnet add package NetworkInspector.Sources
+dotnet add package NetworkInspector.Core
 ```
 
-`AscStreamSource` (forward-only) always uses a single 4 MiB buffered `StreamReader`.
-Interface registration is deferred per `(busType, channel)` pair as frames arrive,
-keeping `Start()` allocation-free.
+## Choose The Right Source Type
 
-## Usage
+| Need | Recommended Source |
+|------|--------------------|
+| Random access by frame id | `PcapSource`, `BlfSource`, `AscSource` |
+| Sequential processing with low memory pressure | `PcapStreamSource`, `BlfStreamSource`, `AscStreamSource` |
+| Test data generation | `RandomFrameSource` |
+| In-memory replay | `CachedFrameSource` |
 
-### PCAP-NG File
+## Quick Start
+
+### Open From File
 
 ```csharp
 using NetworkInspector.Sources.Pcapng;
 
-// Open a PCAP-NG file
 PcapSource source = PcapSource.Open("capture.pcapng");
-
-// Read frames
 foreach (RawFrame rawFrame in source)
 {
-    Frame frame = Frame.Create(
-        new FrameId(rawFrame.Index),
-        rawFrame.Timestamp,
-        rawFrame.Data,
-        rawFrame.LinkType,
-        rawFrame.InterfaceId,
-        stack.FrameInterfaceRegistry).Value;
-
-    Packet packet = Packet.ParseFrame(new PacketId(rawFrame.Index), stack, frame);
+    // Parse with Core/Protocols pipeline
 }
 ```
 
-### Vector ASC File
+### Open From Stream
 
 ```csharp
 using NetworkInspector.Sources.Asc;
 
-// Random-access: open an ASC file and access any frame by ID
-AscSource source = AscSource.Open("trace.asc");
-
-// Streaming: process frames sequentially from a stream
-AscStreamSource streamSource = AscStreamSource.FromStream(fileStream, "CAN trace");
+AscStreamSource source = AscStreamSource.FromStream(fileStream, "ASC stream");
+foreach (RawFrame rawFrame in source)
+{
+    // Parse with Core/Protocols pipeline
+}
 ```
 
-Supported ASC bus types: CAN classic, CAN FD, LIN, FlexRay, Ethernet/AFDX.
+## Common Tasks
 
-### PCAP-NG lazy scan and random access
+### Handle Large ASC Files
 
-When a PCAP-NG file is opened from disk with lazy scanning (`PcapSourceOptions.ScanMode.Lazy`),
-sequential reads obtain payloads through `DataBackend.ReadFrameData`, matching the random-access
-path. In-memory captures avoid an extra copy per frame; memory-mapped captures copy through
-`MmapPool` (`ReadInto` uses an uninitialized buffer and clears any unread tail, preserving the
-same observable bytes as `new byte[length]`).
+Use `AscSourceOptions.PreloadBudget` to control in-memory vs disk-backed behavior.
 
-`FrameById` on `PcapSource` and `BlfSource` is safe to call concurrently once the index is fully
-built (see `SOURCE_GUIDE.md` for lifecycle details). Stress coverage lives in
-`NetworkInspector.Sources.Tests.Stress.FrameByIdStressTests`.
+### Combine With Parser Stack
+
+Read `RawFrame` instances from sources, then convert them to `Frame` and parse into `Packet` via Core.
+
+### Use Random Access
+
+Use random-access source variants where frame-id lookups are required for replay, indexing, or test cases.
+
+## Limits And Thread-Safety Notes
+
+- Choose streaming sources for very large captures to bound memory usage.
+- Validate source format and assumptions before automated ingestion.
+- Use cancellation and external execution limits in long-running jobs.
+
+## Safe Usage (STRIDE)
+
+- **Spoofing**: Assume file names/extensions may be misleading; validate expected source format before processing.
+- **Tampering**: Handle malformed headers and partial records as expected external-input failure modes.
+- **Repudiation**: Preserve source metadata if downstream workflows require traceability.
+- **Information disclosure**: Treat raw captures as sensitive data and apply access controls.
+- **Denial of service**: Use streaming modes, budgets, and cancellation to guard against oversized inputs.
+- **Elevation of privilege**: Run source readers with least-required filesystem permissions.
+
+## Links
+
+- [GitHub repository](https://github.com/DevAM-Tools/NetworkInspector)
+- [NuGet package](https://www.nuget.org/packages/NetworkInspector.Sources)
+- [Source folder](https://github.com/DevAM-Tools/NetworkInspector/tree/main/NetworkInspector.Sources)
+- [Issue tracker](https://github.com/DevAM-Tools/NetworkInspector/issues)
+- [SOURCE_GUIDE.md](SOURCE_GUIDE.md)
 
 ## License
 
-[MIT License](../LICENSE) — © DevAM
+[MIT License](../LICENSE)

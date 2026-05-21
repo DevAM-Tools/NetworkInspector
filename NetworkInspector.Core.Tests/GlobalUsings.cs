@@ -1,7 +1,8 @@
-// Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root.
+﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 #region System
 global using System;
+global using System.Buffers.Binary;
 global using System.Collections.Generic;
 global using System.IO;
 global using System.Linq;
@@ -14,6 +15,7 @@ global using System.Threading.Tasks;
 
 #region NetworkInspector.Core
 global using NetworkInspector.Core;
+global using NetworkInspector.Core.Cache;
 global using NetworkInspector.Core.Errors;
 global using NetworkInspector.Core.Fields;
 global using NetworkInspector.Core.Ids;
@@ -21,9 +23,15 @@ global using NetworkInspector.Core.Index;
 global using NetworkInspector.Core.Index.ValueCache;
 global using NetworkInspector.Core.Infos;
 global using NetworkInspector.Core.Interfaces;
+global using NetworkInspector.Core.Protocols;
 global using NetworkInspector.Core.Reassembly;
 global using NetworkInspector.Core.Settings;
+global using NetworkInspector.Core.Tables;
 global using NetworkInspector.Values;
+#endregion
+
+#region NetworkInspector.Protocols
+global using NetworkInspector.Protocols;
 #endregion
 
 #region Test Framework

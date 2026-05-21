@@ -1,6 +1,4 @@
-﻿// Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root.
-
-using System.Runtime.CompilerServices;
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Protocols.Udp;
 
@@ -112,7 +110,6 @@ internal sealed class UdpStreamTracker
 
     /// <summary>Number of tracked UDP streams.</summary>
     internal int Count => _Streams.Count;
-
 
 }
 

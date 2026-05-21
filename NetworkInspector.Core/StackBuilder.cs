@@ -1,4 +1,4 @@
-// Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root.
+﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Core;
 
@@ -218,6 +218,10 @@ public sealed class StackBuilder : IStackBuilder
     #region Post-Parser Access
 
     /// <inheritdoc/>
+    /// <remarks>Returns post-parsers in the same deterministic sort order as <see cref="IStack.PostParsers"/>:
+    /// ascending by <see cref="PostParserInfo.Priority"/>, then ascending by <see cref="PostParserInfo.Id"/>
+    /// (registration order) as a stable tie-breaker. The list is re-sorted after every
+    /// <see cref="RegisterPostParser"/> call so the order is always up to date.</remarks>
     public ReadOnlyMemory<PostParserInfo> PostParsers => _PostParsers.ToArray();
 
     /// <inheritdoc/>
@@ -534,6 +538,14 @@ public sealed class StackBuilder : IStackBuilder
         PostParserId id = new(_PostParsers.Count);
         PostParserInfo info = new(id, priority, protocolId, description);
         _PostParsers.Add(info);
+        // Re-sort after every registration to keep the list in the order defined by
+        // IStack.PostParsers (Priority asc, then Id asc as tie-breaker). Registration
+        // lists are small so the O(n log n) cost per call is negligible.
+        _PostParsers.Sort(static (a, b) =>
+        {
+            int cmp = a.Priority.CompareTo(b.Priority);
+            return cmp != 0 ? cmp : a.Id.Value.CompareTo(b.Id.Value);
+        });
         return id;
     }
 
@@ -697,7 +709,15 @@ public sealed class StackBuilder : IStackBuilder
         ProtocolTableInfo[] tableInfos = [.. _ProtocolTableInfos];
         HeuristicProtocolTable[] heuristicTables = [.. _HeuristicTables];
         HeuristicProtocolTableInfo[] heuristicTableInfos = [.. _HeuristicTableInfos];
+        // Sort post-parsers deterministically: ascending by Priority, then ascending by Id
+        // (registration order) as a stable tie-breaker. Sorting at build time means zero
+        // overhead in the per-packet parse hot path.
         PostParserInfo[] postParsers = [.. _PostParsers];
+        Array.Sort(postParsers, static (a, b) =>
+        {
+            int cmp = a.Priority.CompareTo(b.Priority);
+            return cmp != 0 ? cmp : a.Id.Value.CompareTo(b.Id.Value);
+        });
 
         // Freeze name maps using FrozenDictionary
         FrozenDictionary<string, ProtocolId> protocolNameMap = _ProtocolNameMap.ToFrozenDictionary(StringComparer.Ordinal);

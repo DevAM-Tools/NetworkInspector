@@ -27,15 +27,20 @@
                       ReferenceOutputAssembly="false" />
   </ItemGroup>
 
-  <!-- Pack the generator DLL into the standard Roslyn analyzers folder -->
-  <!-- The ProjectReference above ensures the generator is built before packing,
-       so no Exists() condition is needed here. -->
-  <ItemGroup>
-    <None Include="..\NetworkInspector.Generators\bin\$(Configuration)\netstandard2.0\NetworkInspector.Generators.dll"
-          Pack="true"
-          PackagePath="analyzers/dotnet/cs/netstandard2.0"
-          Visible="false" />
-  </ItemGroup>
+  <!-- Automatically resolve the generator DLL path and pack it into the standard Roslyn analyzers
+       folder. GetTargetPath returns the output path without rebuilding; the ProjectReference above
+       guarantees the generator is built before packing, so the DLL will exist at pack time.
+       Passing Configuration ensures the correct Debug/Release artifact is selected. -->
+  <Target Name="_PackGenerator" BeforeTargets="_GetPackageFiles">
+    <MSBuild Projects="$(MSBuildProjectDirectory)\..\NetworkInspector.Generators\NetworkInspector.Generators.csproj"
+             Targets="GetTargetPath"
+             Properties="Configuration=$(Configuration)">
+      <Output TaskParameter="TargetOutputs" ItemName="_GeneratorDll" />
+    </MSBuild>
+    <ItemGroup>
+      <None Include="@(_GeneratorDll)" Pack="true" PackagePath="analyzers/dotnet/cs" Visible="false" />
+    </ItemGroup>
+  </Target>
 
   <!-- Include README in the NuGet package -->
   <ItemGroup>

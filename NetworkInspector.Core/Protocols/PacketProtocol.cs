@@ -1,4 +1,4 @@
-// Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root.
+﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Core.Protocols;
 
@@ -98,6 +98,7 @@ internal sealed class PacketProtocol : IProtocol
     public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
     {
         Packet packet = parentField.Packet;
+        Stack stack = context.Stack!;
 
         // Record protocol and index group presence for cross-packet indexing
         context.RecordGroupPresence(_PacketGroupId);
@@ -116,18 +117,52 @@ internal sealed class PacketProtocol : IProtocol
         // - Falls back to the stack's auto-discovered frame protocol
         ProtocolId dispatchTarget = packet.FirstProtocolOverride.IsValid
             ? packet.FirstProtocolOverride
-            : context.Stack!.FrameProtocolId;
+            : stack.FrameProtocolId;
 
         if (dispatchTarget.IsValid)
         {
-            ParseResult dispatchResult = parentField.CallProtocol(dispatchTarget, data, in context);
-            if (dispatchResult.IsError)
+            // Capture main-dispatch errors and exceptions without aborting; post-parsers
+            // must run regardless of the main dispatch outcome.
+            try
             {
-                return dispatchResult;
+                ParseResult dispatchResult = parentField.CallProtocol(dispatchTarget, data, in context);
+                if (dispatchResult.TryGetError(out ParseError dispatchError))
+                {
+                    // Record as a packet-level error and continue to post-parsers.
+                    packet.SetError(dispatchError.ToString());
+                }
+            }
+            catch (Exception ex)
+            {
+                // Record main-dispatch exception as a packet error using the same
+                // IncludeExceptionStackTrace policy as ParseAndSeal for consistency.
+                packet.SetError(BuildExceptionMessage(ex, stack.IncludeExceptionStackTrace));
             }
         }
 
-        // After dispatch: append packet.info as a lazy string value.
+        // Run post-parsers after main dispatch, before packet.info is appended.
+        // Post-parsers receive parentField (root) as their parent so their fields appear
+        // as root-level siblings — identical to top-level protocol fields.
+        // Errors and exceptions from individual post-parsers are recorded as packet-level
+        // errors without suppressing the remaining post-parsers.
+        ReadOnlySpan<PostParserInfo> postParsers = stack.PostParsers.Span;
+        for (int i = 0; i < postParsers.Length; i++)
+        {
+            try
+            {
+                ParseResult postResult = parentField.CallProtocol(postParsers[i].ProtocolId, data, in context);
+                if (postResult.TryGetError(out ParseError postError))
+                {
+                    packet.SetError(postError.ToString());
+                }
+            }
+            catch (Exception ex)
+            {
+                packet.SetError(BuildExceptionMessage(ex, stack.IncludeExceptionStackTrace));
+            }
+        }
+
+        // After dispatch and post-parsers: append packet.info as a lazy string value.
         // Sub-protocols set Packet._Info (a LazyString) via SetPacketInfo during parsing.
         // By wrapping it in a LazyStringValue (heap-resident reference type), the factory
         // is not evaluated here — evaluation is deferred to first access via Packet.Info,
@@ -139,5 +174,24 @@ internal sealed class PacketProtocol : IProtocol
 
         return data.Length;
     }
+
+    /// <summary>
+    /// Builds an error message for a caught exception, optionally appending the full stack
+    /// trace. Mirrors the policy used by <see cref="Packet"/> parse helpers so that
+    /// post-parser exceptions are formatted identically to main-parse exceptions.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static string BuildExceptionMessage(Exception ex, bool includeStackTrace)
+    {
+        if (!includeStackTrace || ex.StackTrace is null)
+        {
+            return ex.Message;
+        }
+
+        // ZeroAlloc: concatenate message + newline + stack trace without intermediate allocations.
+        using TempString temp = ZA.String(ex.Message, "\n", ex.StackTrace);
+        return temp.ToString();
+    }
+
     #endregion
 }

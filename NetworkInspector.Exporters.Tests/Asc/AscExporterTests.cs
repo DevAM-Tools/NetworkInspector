@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root.
+﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Exporters.Tests.Asc;
 
@@ -533,6 +533,50 @@ internal sealed class AscExporterTests
 
         await Assert.That(exporter.SkippedCount).IsEqualTo(1L);
         await Assert.That(skippedRaised).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task CanXlFrame_TolerantMode_Skipped()
+    {
+        // CAN XL shares LinkType.CanSocketcan with classic/FD but sets XLF (byte 4, bit 7).
+        // The ASC format has no CAN XL representation; the exporter must count it as skipped.
+        using MemoryStream ms = new();
+        using AscExporter exporter = AscExporter.CreateBuilder().ToStream(ms).Build();
+        exporter.ErrorTolerance = ErrorToleranceMode.Tolerant;
+
+        ExportErrorKind? reportedKind = null;
+        exporter.ItemSkipped += (_, e) => reportedKind = e.Kind;
+
+        byte[] xlData = SocketCanGenerators.BuildCanXl(0x01, [0xAA, 0xBB, 0xCC, 0xDD]);
+        bool accepted = exporter.OnFrame(
+            TestHarness.CreateFrame(new FrameId(0), 1_000_000L, xlData, LinkType.CanSocketcan));
+        exporter.OnFinish();
+
+        // Tolerant mode: caller is told to continue, frame is counted as skipped, not written.
+        await Assert.That(accepted).IsTrue();
+        await Assert.That(reportedKind).IsEqualTo(ExportErrorKind.UnsupportedType);
+        await Assert.That(exporter.SkippedCount).IsEqualTo(1L);
+        await Assert.That(exporter.WrittenCount).IsEqualTo(0L);
+        await Assert.That(exporter.HasErrors).IsTrue();
+    }
+
+    [Test]
+    public async Task CanXlFrame_StrictMode_AbortsExport()
+    {
+        // In Strict mode the exporter must immediately abort when a CAN XL frame arrives.
+        using MemoryStream ms = new();
+        using AscExporter exporter = AscExporter.CreateBuilder().ToStream(ms).Build();
+        exporter.ErrorTolerance = ErrorToleranceMode.Strict;
+
+        byte[] xlData = SocketCanGenerators.BuildCanXl(0x01, [0xAA, 0xBB, 0xCC, 0xDD]);
+        bool accepted = exporter.OnFrame(
+            TestHarness.CreateFrame(new FrameId(0), 1_000_000L, xlData, LinkType.CanSocketcan));
+        exporter.OnFinish();
+
+        // Strict mode: OnFrame returns false, export is finished in error state.
+        await Assert.That(accepted).IsFalse();
+        await Assert.That(exporter.HasErrors).IsTrue();
+        await Assert.That(exporter.IsFinished).IsTrue();
     }
 
     // ========================================================================

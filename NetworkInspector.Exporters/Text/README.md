@@ -1,54 +1,88 @@
-<!-- Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root. -->
+<!-- Copyright © 2026 DevAM. All rights reserved. -->
 
 # Text Exporter
 
-The Text exporter serializes parsed packets to a human-readable plain-text file. It implements `IPacketListener` and outputs a protocol field tree similar to Wireshark's packet details view.
+Human-readable packet tree exporter for debugging and operational inspection.
 
-## Output Format
+## What This Is
 
-Each packet begins with a header line showing the packet number and timestamp, followed by the protocol field tree with two-space indentation per nesting level, and then a blank separator line after the tree.
+The `TextExporter` serializes parsed packets through `IPacketListener` into readable text output similar to protocol tree views.
 
-**Example output (Standard detail level):**
+## Why Use It
 
-```
-Packet 1  [2024-01-01T12:00:00.000000000Z]
-Frame
-  Arrival Time: 2024-01-01T12:00:00.000000000Z
-Ethernet II
-  Destination: aa:bb:cc:dd:ee:ff
-  Source: 11:22:33:44:55:66
-  Type: IPv4 (0x0800)
-  Internet Protocol Version 4
-    Source Address: 192.168.1.1
-    Destination Address: 10.0.0.1
-    User Datagram Protocol
-      Source Port: 53
-      Destination Port: 12345
-
-```
+- Fast way to inspect parse results without custom viewers.
+- Adjustable detail level for summary vs deep inspection.
+- Useful for CI artifacts and triage logs.
 
 ## Detail Levels
 
-| Level | Description |
-|-------|-------------|
-| `Summary` | Top-level protocol layer names only; no field values. |
-| `Standard` | All fields with their display values (default). |
-| `Full` | All fields with display values plus raw hex for bytes fields. |
+| Level | Output |
+| --- | --- |
+| `TextDetailLevel.Summary` | Protocol containers only |
+| `TextDetailLevel.Standard` | Default field tree with values |
+| `TextDetailLevel.Full` | Adds full bytes-heavy detail |
 
-## Configuration
+## Quick Start
 
-| Builder Method | Default | Description |
-|----------------|---------|-------------|
-| `ToFile(path)` | — | Write to a file (buffered, 4 MiB). |
-| `ToStream(stream)` | — | Write to an existing stream. |
-| `ToStdout()` | — | Write to standard output. |
-| `WithUiName(name)` | `"Text Exporter"` | Display name for UI and logging. |
-| `WithDescription(desc)` | `null` | Optional human-readable description. |
-| `WithCancellationToken(token)` | none | Stop export when the token is cancelled. |
-| `WithTargetPacketCount(n)` | `0` (unlimited) | Stop after `n` packets. |
-| `DetailLevel(level)` | `Standard` | Controls how much field detail is written. |
-| `MaxTextLength(n)` | `256` | Truncate string and bytes values to `n` characters. `0` disables truncation. |
+```csharp
+using NetworkInspector.Exporters.Text;
 
-## Thread Safety
+using TextExporter exporter = TextExporter.CreateBuilder()
+    .ToFile("packets.txt")
+    .WithDetailLevel(TextDetailLevel.Standard)
+    .WithMaxTextLength(256)
+    .Build();
 
-Not thread-safe. `OnPacket()` and `OnFinish()` must be called sequentially from a single thread. Callers are responsible for synchronization if used from multiple threads. Statistics are valid to read after `OnFinish()` returns.
+foreach (Packet packet in packets)
+{
+    if (!exporter.OnPacket(packet))
+    {
+        break;
+    }
+}
+
+exporter.OnFinish();
+```
+
+## Common Tasks
+
+### Create Compact Triage Logs
+
+Use `WithDetailLevel(TextDetailLevel.Summary)` for high-level packet overviews.
+
+### Disable Value Truncation
+
+Use `WithMaxTextLength(0)` when you need complete string/bytes values.
+
+### Stream To Console Pipelines
+
+Use `ToStdout()` for command chaining and live inspection.
+
+## Builder Options
+
+| Method | Purpose |
+| --- | --- |
+| `ToFile(path)` / `ToStream(stream)` / `ToStdout()` | Select output target |
+| `WithUiName(name)` / `WithDescription(text)` | Set user-facing metadata |
+| `WithDetailLevel(level)` | Select summary/standard/full output |
+| `WithMaxTextLength(maxLength)` | Truncate long text/bytes values (`0` = unlimited) |
+| `WithTargetPacketCount(count)` | Stop after N packets (`0` = unlimited) |
+| `WithCancellationToken(token)` | Enable cooperative cancellation |
+
+## Limits And Thread-Safety Notes
+
+- Not thread-safe; call `OnPacket()`/`OnFinish()` sequentially.
+- Full detail can produce very large outputs on byte-heavy traffic.
+- Use packet count limits and cancellation in unattended runs.
+
+## Links
+
+- [Exporters hub](../README.md)
+- [Text source folder](https://github.com/DevAM-Tools/NetworkInspector/tree/main/NetworkInspector.Exporters/Text)
+- [GitHub repository](https://github.com/DevAM-Tools/NetworkInspector)
+- [NuGet package](https://www.nuget.org/packages/NetworkInspector.Exporters)
+- [Issue tracker](https://github.com/DevAM-Tools/NetworkInspector/issues)
+
+## License
+
+[MIT License](../../LICENSE)

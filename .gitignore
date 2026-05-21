@@ -56,5 +56,7 @@ CodeCoverage/
 TestResult.xml
 nunit-*.xml
 
+.vs
+
 # Local working notes
 commit_message.md

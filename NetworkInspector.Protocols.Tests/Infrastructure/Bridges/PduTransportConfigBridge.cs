@@ -1,9 +1,4 @@
-﻿// Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root.
-
-using System.Collections.Immutable;
-using System.Text.Json;
-using NetworkInspector.FrameBuilder;
-using NetworkInspector.Protocols.PduTransport;
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Protocols.Tests.Infrastructure.Bridges;
 

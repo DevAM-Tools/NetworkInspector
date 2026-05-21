@@ -1,64 +1,106 @@
-<!-- Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root. -->
+<!-- Copyright © 2026 DevAM. All rights reserved. -->
 
 # NetworkInspector.Protocols
 
 [![NuGet](https://img.shields.io/nuget/v/NetworkInspector.Protocols)](https://www.nuget.org/packages/NetworkInspector.Protocols)
 
-30 built-in protocol dissectors for the NetworkInspector packet analysis framework.
-Each protocol is a self-contained parser that registers fields, parses binary data,
-and dispatches to sub-protocols via typed dispatch tables.
+Built-in dissector package for NetworkInspector parser stacks.
 
-## Supported Protocols
+## What This Is
 
-| # | Protocol | Name | Layer |
-|---|----------|------|-------|
-| 1 | `ArpProtocol` | ARP | Network |
-| 2 | `CanProtocol` | CAN (classic / FD / XL) | Link (Automotive) |
-| 3 | `DataProtocol` | Data | Fallback |
-| 4 | `DhcpProtocol` | DHCPv4 | Application |
-| 5 | `Dhcpv6Protocol` | DHCPv6 | Application |
-| 6 | `DnsProtocol` | DNS | Application |
-| 7 | `DtlsProtocol` | DTLS | Application |
-| 8 | `EthernetProtocol` | Ethernet | Link |
-| 9 | `FlexRayProtocol` | FlexRay | Link (Automotive) |
-| 10 | `FrameProtocol` | Frame | Meta |
-| 11 | `Http2Protocol` | HTTP/2 | Application |
-| 12 | `HttpProtocol` | HTTP/1.x | Application |
-| 13 | `IcmpProtocol` | ICMPv4 | Network |
-| 14 | `Icmpv6Protocol` | ICMPv6 | Network |
-| 15 | `IPv4Protocol` | IPv4 | Network |
-| 16 | `IPv6Protocol` | IPv6 | Network |
-| 17 | `JsonProtocol` | JSON | Application |
-| 18 | `LinProtocol` | LIN | Link (Automotive) |
-| 19 | `LlcProtocol` | LLC/SNAP | Link |
-| 20 | `PduTransportProtocol` | PDU Transport | Automotive |
-| 21 | `SignalPduProtocol` | Signal PDU | Automotive |
-| 22 | `Sll2Protocol` | Linux SLL2 | Link |
-| 23 | `SllProtocol` | Linux SLL | Link |
-| 24 | `SomeIpProtocol` | SOME/IP | Application |
-| 25 | `TcpProtocol` | TCP | Transport |
-| 26 | `TextProtocol` | Text | Application |
-| 27 | `TlsProtocol` | TLS | Application |
-| 28 | `UdpProtocol` | UDP | Transport |
-| 29 | `VlanProtocol` | VLAN (802.1Q) | Link |
-| 30 | `WebSocketProtocol` | WebSocket | Application |
+`NetworkInspector.Protocols` provides the ready-to-use protocol dissectors that plug into `NetworkInspector.Core`.
 
-## Registration
+Use this package when you want standard protocol parsing without writing custom dissectors first.
 
-All protocols are registered via `ProtocolRegistration.RegisterStandardProtocols()`:
+## Why It Stands Out
+
+- Broad built-in coverage across enterprise and automotive traffic.
+- Works out of the box with one registration call.
+- Keeps protocol parsing consistent across code and CLI workflows.
+
+## Install
+
+```bash
+dotnet add package NetworkInspector.Core
+dotnet add package NetworkInspector.Protocols
+```
+
+## Quick Start
 
 ```csharp
+using NetworkInspector.Core;
+using NetworkInspector.Protocols;
+
 StackBuilder builder = new(new SettingsManager(), new FrameInterfaceRegistry());
 ProtocolRegistration.RegisterStandardProtocols(builder);
 Stack stack = builder.Build();
 ```
 
-## Adding New Protocols
+## Protocol Coverage
 
-See [PROTOCOL_GUIDE.md](PROTOCOL_GUIDE.md) for a comprehensive implementation guide
-covering source generator attributes, field types, dispatch tables, index groups,
-error handling, and the complete checklist for new protocols.
+Current built-ins include:
+
+- Link and framing: Ethernet, VLAN (802.1Q), Linux SLL/SLL2, LLC/SNAP, Frame.
+- Network: IPv4, IPv6, ARP, ICMPv4, ICMPv6.
+- Transport: TCP, UDP.
+- Application: DNS, DHCPv4, DHCPv6, HTTP/1.x, HTTP/2, TLS, DTLS, WebSocket, JSON, Text.
+- Automotive and bus: CAN (classic/FD/XL), FlexRay, LIN, SOME/IP, PDU Transport, Signal PDU.
+- Fallback: Data.
+
+## Full Built-In Protocol List
+
+| # | Protocol | Layer |
+|---|----------|-------|
+| 1 | ArpProtocol | Network |
+| 2 | CanProtocol | Link (Automotive) |
+| 3 | DataProtocol | Fallback |
+| 4 | DhcpProtocol | Application |
+| 5 | Dhcpv6Protocol | Application |
+| 6 | DnsProtocol | Application |
+| 7 | DtlsProtocol | Application |
+| 8 | EthernetProtocol | Link |
+| 9 | FlexRayProtocol | Link (Automotive) |
+| 10 | FrameProtocol | Meta |
+| 11 | Http2Protocol | Application |
+| 12 | HttpProtocol | Application |
+| 13 | IcmpProtocol | Network |
+| 14 | Icmpv6Protocol | Network |
+| 15 | IPv4Protocol | Network |
+| 16 | IPv6Protocol | Network |
+| 17 | JsonProtocol | Application |
+| 18 | LinProtocol | Link (Automotive) |
+| 19 | LlcProtocol | Link |
+| 20 | PduTransportProtocol | Automotive |
+| 21 | SignalPduProtocol | Automotive |
+| 22 | Sll2Protocol | Link |
+| 23 | SllProtocol | Link |
+| 24 | SomeIpProtocol | Application |
+| 25 | TcpProtocol | Transport |
+| 26 | TextProtocol | Application |
+| 27 | TlsProtocol | Application |
+| 28 | UdpProtocol | Transport |
+| 29 | VlanProtocol | Link |
+| 30 | WebSocketProtocol | Application |
+
+## Adding Custom Protocols
+
+For custom dissectors, use the implementation guide:
+
+- [PROTOCOL_GUIDE.md](PROTOCOL_GUIDE.md)
+
+## Limits And Thread-Safety Notes
+
+- Keep protocol registration deterministic during stack construction.
+- Validate assumptions at trust boundaries when parsing third-party captures.
+- Use versioned release processes when introducing custom protocol behavior in shared systems.
+
+## Links
+
+- [GitHub repository](https://github.com/DevAM-Tools/NetworkInspector)
+- [NuGet package](https://www.nuget.org/packages/NetworkInspector.Protocols)
+- [Source folder](https://github.com/DevAM-Tools/NetworkInspector/tree/main/NetworkInspector.Protocols)
+- [Issue tracker](https://github.com/DevAM-Tools/NetworkInspector/issues)
 
 ## License
 
-[MIT License](../LICENSE) — © DevAM
+[MIT License](../LICENSE)

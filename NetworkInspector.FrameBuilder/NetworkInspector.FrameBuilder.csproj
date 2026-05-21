@@ -8,14 +8,17 @@
     <PackageTags>network;framebuilder;ethernet;ipv4;ipv6;tcp;udp;websocket;someip;can;pcap</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
+  
   <ItemGroup>
     <None Include="README.md" Pack="true" PackagePath="" />
   </ItemGroup>
+
   <ItemGroup>
     <InternalsVisibleTo Include="NetworkInspector.FrameBuilder.Tests" />
     <InternalsVisibleTo Include="NetworkInspector.FrameBuilder.NegativeSnippets" />
     <InternalsVisibleTo Include="NetworkInspector.Protocols.Tests" />
   </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="ZeroAlloc" />
   </ItemGroup>

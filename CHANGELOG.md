@@ -1,9 +1,34 @@
-<!-- Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root. -->
+<!-- Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information. -->
 
 # Changelog
 
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+
+---
+
+## [0.3.0] — Bug fixes, copyright update, dependency cleanup
+
+### Fixed
+
+- **`AscExporter` — CAN XL frames misidentified as CAN classic/FD:** CAN XL frames share `LinkType.CanSocketcan` with classic CAN and CAN FD but are distinguished by the XLF bit (bit 7 of byte 4 in the SocketCAN header). Previously the exporter forwarded CAN XL frames into `TryParseCanFrame`, which interpreted the 12-byte CAN XL header as a malformed classic/FD frame. An early XLF-bit guard now rejects CAN XL frames as `ExportErrorKind.UnsupportedType` before any CAN parsing occurs.
+- **`StackBuilder` — post-parser execution order not deterministic:** `RegisterPostParser` appended post-parsers in registration order without sorting, and `Build()` copied the list unsorted. The documented contract (ascending `Priority`, then ascending `Id` as a stable tie-breaker) was not honoured. `RegisterPostParser` now re-sorts the list after every call, and `Build()` sorts the final snapshot before freezing it into the `Stack`.
+
+### Added
+
+- `NetworkInspector.Core.Tests/PostParserTests.cs` — 884-line test file covering sort order with mixed, equal, and negative priorities; full lifecycle (all post-parsers execute, correct protocol context, root-level parent); indexed-parse and value-cache integration; exception isolation (one failing post-parser does not suppress subsequent ones); and `StackBuilder` round-trips.
+- `NetworkInspector.Exporters/README.md` — top-level package readme added to the Exporters project; now included in the NuGet package via `PackageReadmeFile`.
+
+### Changed
+
+- **Copyright notices** — all source files updated to the canonical form `Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.` The `COPYRIGHT` root file now includes the licence statement.
+- **`CUSTOM_INSTRUCTIONS.md`** — added an "Implementation Guides" table listing the four mandatory per-component guides (protocol dissectors, frame source readers, exporters, FrameBuilder layers) with their applicability conditions.
+- **`NetworkInspector.Core.csproj`** — replaced the hard-coded generator DLL pack path with a dynamic `_PackGenerator` MSBuild target that calls `GetTargetPath` on the generator project, ensuring the correct Debug/Release artifact is always selected.
+- **`NetworkInspector.Exporters.csproj`** — added `PackageReadmeFile` and the corresponding `<None Include="README.md" />` pack item so the readme appears on NuGet.org.
+- **`Directory.Packages.props`** — `Microsoft.CodeAnalysis.Analyzers` updated from `5.3.0` to `5.3.0-2.25625.1`.
+- **`NetworkInspector.Generators.csproj`** — package reference order corrected: `Microsoft.CodeAnalysis.Analyzers` now precedes `Microsoft.CodeAnalysis.CSharp`.
+- **`.gitignore`** — added `.vs` directory exclusion.
+- Version bumped to `0.3.0`.
 
 ---
 

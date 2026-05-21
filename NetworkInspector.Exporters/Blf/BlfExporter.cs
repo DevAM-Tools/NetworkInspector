@@ -1,6 +1,4 @@
-﻿// Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root.
-
-using NetworkInspector.Sources.Blf.Format;
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Exporters.Blf;
 
@@ -8,7 +6,8 @@ namespace NetworkInspector.Exporters.Blf;
 /// BLF frame exporter. Writes captured frames to a BLF file.
 /// <para>
 /// Implements <see cref="IFrameListener"/> for integration with the capture pipeline.
-/// Supports Ethernet, CAN classic, and CAN FD frames. Unsupported link types are
+/// Supports Ethernet, CAN classic (<see cref="LinkType.CanSocketcan"/>, <see cref="LinkType.Can20B"/>),
+/// CAN FD, FlexRay, and LIN frames. Unsupported link types are
 /// skipped (counted in <see cref="IExporterStatistics.SkippedCount"/>).
 /// Lazy initialization defers file creation until the first frame.
 /// </para>

@@ -1,4 +1,4 @@
-// Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root.
+﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Core.Interfaces;
 
@@ -160,9 +160,41 @@ public interface IStackBuilder : IStack
 
     #region Post-Parser Registration
 
-    /// <summary>Registers a post-parser that runs after the main protocol parse completes.</summary>
+    /// <summary>
+    /// Registers a post-parser that runs after the main protocol parse completes on every packet.
+    /// <para>
+    /// <b>Lifecycle:</b> Post-parsers execute after the main protocol dispatch, before
+    /// <c>packet.info</c> is appended, and before the packet is sealed. They receive the packet
+    /// root field as their parent, which means their fields appear as root-level siblings —
+    /// identical to top-level protocol fields. In the indexed parse path, post-parsers run before
+    /// <see cref="PacketIndex"/> <c>EndPacket</c>, so their index and value-cache contributions
+    /// are treated identically to normal parsers.
+    /// </para>
+    /// <para>
+    /// <b>Sort order:</b> Post-parsers are sorted once at build time: ascending by
+    /// <paramref name="priority"/>, then ascending by registration order as a stable tie-breaker.
+    /// A lower <paramref name="priority"/> value therefore executes earlier.
+    /// </para>
+    /// <para>
+    /// <b>Error policy:</b> A <see cref="ParseResult"/> error or an exception thrown by a
+    /// post-parser is recorded as a packet-level error visible in <c>packet.error</c>.
+    /// The remaining post-parsers always continue executing regardless of earlier failures.
+    /// Stack traces are included in the error message when
+    /// <see cref="StackBuilder.IncludeExceptionStackTrace"/> is <see langword="true"/>.
+    /// </para>
+    /// <para>
+    /// <b>STRIDE / security:</b> Post-parsers operate within the same trust boundary as normal
+    /// parsers — they receive already-validated frame data. No new external input surface is
+    /// opened. Errors are surfaced as visible packet errors (no silent failures). The execution
+    /// loop is deterministic and finite (one iteration per registered post-parser).
+    /// </para>
+    /// <para>
+    /// <b>Concurrency:</b> Post-parsers execute within the single-writer parse path.
+    /// No new locks or mutable shared state are introduced.
+    /// </para>
+    /// </summary>
     /// <param name="protocolId">The protocol this post-parser is associated with.</param>
-    /// <param name="priority">Execution priority (lower values run first).</param>
+    /// <param name="priority">Execution priority. Lower values run first; default is 0. Equal-priority post-parsers run in registration order.</param>
     /// <param name="description">Optional description text.</param>
     PostParserId RegisterPostParser(
         ProtocolId protocolId,

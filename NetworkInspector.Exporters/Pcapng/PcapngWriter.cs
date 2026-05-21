@@ -1,7 +1,4 @@
-﻿// Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root.
-
-using NetworkInspector.Sources.Pcapng.Format;
-using NetworkInspector.Sources.Pcapng.Format.Blocks;
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Exporters.Pcapng;
 
