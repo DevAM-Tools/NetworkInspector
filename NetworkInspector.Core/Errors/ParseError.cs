@@ -67,8 +67,15 @@ public readonly struct ParseError
     /// <para>
     /// <b>Thread-safety:</b> Error details are stored in thread-local storage. This property
     /// must be read on the <b>same thread</b> that produced the <see cref="ParseResult"/>.
-    /// Reading across an <c>await</c>, a <c>Task.Run</c> boundary, or any other
-    /// thread-context switch yields a default (empty) <see cref="ParseError"/>.
+    /// <b>Thread-crossing hazards (any of the following yields an empty <see cref="ParseError"/>):</b>
+    /// <list type="bullet">
+    ///   <item><c>await</c> of an async method that internally produces a <see cref="ParseResult"/></item>
+    ///   <item><c>Task.Run()</c> / <c>ThreadPool.QueueUserWorkItem()</c></item>
+    ///   <item>Resumption of an async state machine on a different thread-pool thread</item>
+    ///   <item>Any explicit context switch (<c>SynchronizationContext.Post()</c>)</item>
+    /// </list>
+    /// <b>Safe pattern:</b> Read <see cref="LastError"/> synchronously, on the same stack frame
+    /// where the <see cref="ParseResult"/> was produced, before any <c>await</c>.
     /// </para>
     /// </summary>
     internal static ParseError LastError

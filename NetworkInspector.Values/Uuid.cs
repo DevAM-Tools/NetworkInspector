@@ -3,12 +3,11 @@
 namespace NetworkInspector.Values;
 
 /// <summary>128-bit UUID stored as two <see cref="ulong"/> fields.</summary>
-/// <remarks>Creates a UUID from two 64-bit halves.</remarks>
 [StructLayout(LayoutKind.Sequential)]
-[method: MethodImpl(MethodImplOptions.AggressiveInlining)]
-public readonly struct Uuid(ulong high, ulong low)
-        : IEquatable<Uuid>, IComparable<Uuid>,
-      ISpanFormattable, IUtf8SpanFormattable, IStringSize, IBinarySerializable
+public readonly record struct Uuid
+        : IEquatable<Uuid>, IComparable<Uuid>, IComparable,
+      ISpanFormattable, IUtf8SpanFormattable, IStringSize, IBinarySerializable,
+      ISpanParsable<Uuid>, IParsable<Uuid>
 {
     #region Constants
 
@@ -17,10 +16,22 @@ public readonly struct Uuid(ulong high, ulong low)
 
     #endregion
 
+    #region Constructor
+
+    /// <summary>Creates a <see cref="Uuid"/> from two 64-bit halves.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public Uuid(ulong high, ulong low)
+    {
+        _High = high;
+        _Low = low;
+    }
+
+    #endregion
+
     #region Fields
 
-    private readonly ulong _High = high;
-    private readonly ulong _Low = low;
+    private readonly ulong _High;
+    private readonly ulong _Low;
 
     #endregion
 
@@ -53,6 +64,102 @@ public readonly struct Uuid(ulong high, ulong low)
         ulong high = BinaryPrimitives.ReadUInt64BigEndian(bytes);
         ulong low = BinaryPrimitives.ReadUInt64BigEndian(bytes[8..]);
         return new Uuid(high, low);
+    }
+
+    /// <summary>
+    /// Parses a UUID from canonical form "XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX" (case-insensitive).
+    /// </summary>
+    /// <param name="text">Input to parse; must be exactly 36 characters.</param>
+    /// <param name="result">The parsed UUID when this method returns <see langword="true"/>.</param>
+    /// <returns><see langword="true"/> if parsing succeeded; <see langword="false"/> for any malformed input.</returns>
+    public static bool TryParse(ReadOnlySpan<char> text, out Uuid result)
+    {
+        result = default;
+        if (text.Length != FormattedLength) { return false; }
+        // Validate dash positions: 8, 13, 18, 23
+        if (text[8] != '-' || text[13] != '-' || text[18] != '-' || text[23] != '-')
+        {
+            return false;
+        }
+        ulong high = 0;
+        ulong low = 0;
+        // Parse 8 hex chars (bytes 0-3 of high)
+        for (int i = 0; i < 8; i++)
+        {
+            int d = HexDigitValue(text[i]);
+            if (d < 0) { return false; }
+            high = (high << 4) | (uint)d;
+        }
+        // Parse 4 hex chars (bytes 4-5 of high), skip dash at 8
+        for (int i = 9; i < 13; i++)
+        {
+            int d = HexDigitValue(text[i]);
+            if (d < 0) { return false; }
+            high = (high << 4) | (uint)d;
+        }
+        // Parse 4 hex chars (bytes 6-7 of high), skip dash at 13
+        for (int i = 14; i < 18; i++)
+        {
+            int d = HexDigitValue(text[i]);
+            if (d < 0) { return false; }
+            high = (high << 4) | (uint)d;
+        }
+        // Parse 4 hex chars (bytes 0-1 of low), skip dash at 18
+        for (int i = 19; i < 23; i++)
+        {
+            int d = HexDigitValue(text[i]);
+            if (d < 0) { return false; }
+            low = (low << 4) | (uint)d;
+        }
+        // Parse 12 hex chars (bytes 2-7 of low), skip dash at 23
+        for (int i = 24; i < 36; i++)
+        {
+            int d = HexDigitValue(text[i]);
+            if (d < 0) { return false; }
+            low = (low << 4) | (uint)d;
+        }
+        result = new Uuid(high, low);
+        return true;
+    }
+
+    #endregion
+
+    #region ISpanParsable / IParsable
+
+    /// <inheritdoc/>
+    static bool ISpanParsable<Uuid>.TryParse(
+        ReadOnlySpan<char> s, IFormatProvider? provider, out Uuid result)
+        => TryParse(s, out result);
+
+    /// <inheritdoc/>
+    static Uuid ISpanParsable<Uuid>.Parse(
+        ReadOnlySpan<char> s, IFormatProvider? provider)
+    {
+        if (!TryParse(s, out Uuid result))
+        {
+            throw new FormatException($"Input '{s}' is not a valid UUID.");
+        }
+        return result;
+    }
+
+    /// <inheritdoc/>
+    static bool IParsable<Uuid>.TryParse(
+        string? s, IFormatProvider? provider, out Uuid result)
+    {
+        if (s is null) { result = default; return false; }
+        return TryParse(s.AsSpan(), out result);
+    }
+
+    /// <inheritdoc/>
+    static Uuid IParsable<Uuid>.Parse(
+        string s, IFormatProvider? provider)
+    {
+        ArgumentNullException.ThrowIfNull(s);
+        if (!TryParse(s.AsSpan(), out Uuid result))
+        {
+            throw new FormatException($"Input '{s}' is not a valid UUID.");
+        }
+        return result;
     }
 
     #endregion
@@ -191,7 +298,12 @@ public readonly struct Uuid(ulong high, ulong low)
         return written;
     }
 
-    /// <summary>Returns a <see cref="TempString"/> backed by a thread-static buffer.</summary>
+    /// <summary>Returns a <see cref="TempString"/> backed by a thread-static or pooled buffer.</summary>
+    /// <remarks>
+    /// The underlying buffer is thread-local or pooled. The caller must dispose the returned <see cref="TempString"/>
+    /// before making another <see cref="FormatTemp"/> call on the same thread to avoid overwriting the buffer.
+    /// Do not retain references to the underlying span after disposal.
+    /// </remarks>
     public TempString FormatTemp()
     {
         char[] buffer = ZeroAllocHelper.AcquireCharBuffer(FormattedLength, out bool isThreadStatic);
@@ -200,11 +312,12 @@ public readonly struct Uuid(ulong high, ulong low)
     }
 
     /// <summary>Returns the formatted UUID as a new string.</summary>
+    /// <remarks>Allocates a new string on every call. Use <see cref="FormatInto"/> or <see cref="FormatTemp"/> for allocation-free hot paths.</remarks>
     public string Format()
     {
         Span<char> buf = stackalloc char[FormattedLength];
-        TryFormat(buf, out _, default, null);
-        return new string(buf);
+        TryFormat(buf, out int written, default, null);
+        return new string(buf[..written]);
     }
 
     /// <inheritdoc/>
@@ -219,35 +332,24 @@ public readonly struct Uuid(ulong high, ulong low)
 
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public bool Equals(Uuid other) => _High == other._High && _Low == other._Low;
-    /// <inheritdoc/>
-    public override bool Equals(object? obj) => obj is Uuid other && Equals(other);
-    /// <inheritdoc/>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public override int GetHashCode() => HashCode.Combine(_High, _Low);
-    /// <inheritdoc/>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public int CompareTo(Uuid other)
     {
         int c = _High.CompareTo(other._High);
         return c != 0 ? c : _Low.CompareTo(other._Low);
     }
 
+    /// <inheritdoc/>
+    int IComparable.CompareTo(object? obj)
+    {
+        if (obj is null) { return 1; }
+        if (obj is Uuid other) { return CompareTo(other); }
+        throw new ArgumentException($"Object must be of type {nameof(Uuid)}.", nameof(obj));
+    }
+
     #endregion
 
     #region Operators
 
-    /// <summary>Returns <see langword="true"/> if <paramref name="left"/> and <paramref name="right"/> are equal.</summary>
-    /// <param name="left">The left operand.</param>
-    /// <param name="right">The right operand.</param>
-    /// <returns><see langword="true"/> if the condition holds; otherwise <see langword="false"/>.</returns>
-    public static bool operator ==(Uuid left, Uuid right) =>
-        left._High == right._High && left._Low == right._Low;
-    /// <summary>Returns <see langword="true"/> if <paramref name="left"/> and <paramref name="right"/> are not equal.</summary>
-    /// <param name="left">The left operand.</param>
-    /// <param name="right">The right operand.</param>
-    /// <returns><see langword="true"/> if the condition holds; otherwise <see langword="false"/>.</returns>
-    public static bool operator !=(Uuid left, Uuid right) => !(left == right);
     /// <summary>Returns <see langword="true"/> if <paramref name="left"/> is less than <paramref name="right"/>.</summary>
     /// <param name="left">The left operand.</param>
     /// <param name="right">The right operand.</param>
@@ -281,6 +383,15 @@ public readonly struct Uuid(ulong high, ulong low)
     {
         dest[offset] = HexChars[(value >> 4) & 0xF];
         dest[offset + 1] = HexChars[value & 0xF];
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static int HexDigitValue(char c)
+    {
+        if (c >= '0' && c <= '9') { return c - '0'; }
+        if (c >= 'a' && c <= 'f') { return c - 'a' + 10; }
+        if (c >= 'A' && c <= 'F') { return c - 'A' + 10; }
+        return -1;
     }
     #endregion
 }

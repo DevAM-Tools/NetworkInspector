@@ -1,13 +1,14 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
-namespace NetworkInspector.Protocols.Helpers;
+namespace NetworkInspector.Core;
 
 /// <summary>
 /// Extension methods on <see cref="Stack"/> for building pre-computed protocol dispatch
 /// caches.
 /// <para>
-/// Call these methods once from <see cref="IProtocol.OnStart"/>; never call them per packet.
-/// The cache eliminates per-packet protocol table lookups in the normal dispatch path.
+/// Call these methods once from <see cref="IProtocol.OnStart"/>; never call them
+/// per packet. The cache eliminates per-packet protocol table lookups in the normal dispatch
+/// path.
 /// </para>
 /// <para>
 /// <b>Delegate caches</b> (<see cref="BuildU64DelegateCache"/>,
@@ -20,23 +21,23 @@ namespace NetworkInspector.Protocols.Helpers;
 /// store <see cref="ProtocolId"/> values for contexts that need IDs rather than delegates.
 /// </para>
 /// </summary>
-internal static class DispatchCacheHelper
+public static class DispatchCacheHelper
 {
     #region Delegate Caches
 
     /// <summary>
     /// Builds a dense <see cref="ParseDelegate"/>[] cache for a u64 dispatch table over the
     /// key domain <c>[0, <paramref name="domainSize"/>)</c>.
-    /// For each key with exactly one registered protocol, the resolved <see cref="ParseDelegate"/>
-    /// is stored at <c>cache[key]</c>; keys with zero or multiple protocols get
-    /// <see langword="null"/> so the caller falls back to full table dispatch.
+    /// For each key with exactly one registered protocol, the resolved
+    /// <see cref="ParseDelegate"/> is stored at <c>cache[key]</c>; keys with zero or multiple
+    /// protocols get <see langword="null"/> so the caller falls back to full table dispatch.
     /// <para>
     /// Intended for 8-bit key domains (e.g., IP protocol byte, IPv6 next-header byte)
     /// where the full 256-entry array costs only ~2 kB.
     /// At dispatch time: <c>cache[protocolByte]?.Invoke()</c> — one array load + direct call.
     /// </para>
     /// </summary>
-    internal static ParseDelegate?[] BuildU64DelegateCache(
+    public static ParseDelegate?[] BuildU64DelegateCache(
         this Stack stack, ProtocolTableId tableId, int domainSize)
     {
         ParseDelegate?[] cache = new ParseDelegate?[domainSize];
@@ -63,7 +64,8 @@ internal static class DispatchCacheHelper
 
     /// <summary>
     /// Builds a sparse <c>(<see cref="ulong"/>, <see cref="ParseDelegate"/>)[]</c> cache for
-    /// a u64 dispatch table, containing one entry per key where exactly one protocol is registered.
+    /// a u64 dispatch table, containing one entry per key where exactly one protocol is
+    /// registered.
     /// <para>
     /// Suitable for tables with few registered protocols (e.g., EtherType → 4–6 entries,
     /// link type → 1–3 entries). A linear scan over the returned array is faster than
@@ -71,7 +73,7 @@ internal static class DispatchCacheHelper
     /// At dispatch time: direct delegate call, no ID resolution or vtable lookup.
     /// </para>
     /// </summary>
-    internal static (ulong Key, ParseDelegate Parse)[] BuildU64SparseDelegateCache(
+    public static (ulong Key, ParseDelegate Parse)[] BuildU64SparseDelegateCache(
         this Stack stack, ProtocolTableId tableId)
     {
         IEnumerable<KeyValuePair<ulong, ReadOnlyMemory<ProtocolId>>>? entries =
@@ -114,7 +116,7 @@ internal static class DispatchCacheHelper
     /// bucket array.
     /// </para>
     /// </summary>
-    internal static ProtocolId?[] BuildU64IdCache(
+    public static ProtocolId?[] BuildU64IdCache(
         this Stack stack, ProtocolTableId tableId, int domainSize)
     {
         ProtocolId?[] cache = new ProtocolId?[domainSize];
@@ -147,7 +149,7 @@ internal static class DispatchCacheHelper
     /// hashing for small entry counts.
     /// </para>
     /// </summary>
-    internal static (ulong Key, ProtocolId Id)[] BuildU64SparseIdCache(
+    public static (ulong Key, ProtocolId Id)[] BuildU64SparseIdCache(
         this Stack stack, ProtocolTableId tableId)
     {
         IEnumerable<KeyValuePair<ulong, ReadOnlyMemory<ProtocolId>>>? entries =
@@ -168,5 +170,6 @@ internal static class DispatchCacheHelper
 
         return [.. result];
     }
+
     #endregion
 }

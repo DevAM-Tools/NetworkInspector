@@ -14,33 +14,34 @@ namespace NetworkInspector.Profiling.Scenarios;
 /// without per-build allocation overhead.
 /// </para>
 /// </summary>
-internal sealed class FrameBuilderValueReuseScenario : IProfilingScenario
+[SuppressMessage("Performance", "CA1812:AvoidUninstantiatedInternalClasses", Justification = "Instantiated via reflection in ScenarioDiscovery.Discover.")]
+internal sealed class FrameBuilderValueReuseScenario : FrameBuilderScenarioBase
 {
     private const int StackCount = 100;
     private const int FramesPerStack = 10_000;
-    private const int PayloadSize = 32;
 
-    private readonly byte[] _Payload = new byte[PayloadSize];
-    private byte[] _Buffer = [];
+    /// <inheritdoc/>
+    protected override int PayloadSize => 32;
     private EthernetLayer _Eth;
     private IPv4Layer _Ip;
 
     /// <inheritdoc/>
-    public string Name => "framebuilder-value-reuse";
+    public override string Name => "framebuilder-value-reuse";
 
     /// <inheritdoc/>
-    public string Description =>
+    public override string Description =>
         $"Build {StackCount:N0} × {FramesPerStack:N0} = {(long)StackCount * FramesPerStack:N0} frames reusing the same Eth/IPv4 layer values across distinct UDP stacks.";
 
     /// <inheritdoc/>
-    public long WorkUnitsPerIteration => (long)StackCount * FramesPerStack;
+    public override long WorkUnitsPerIteration => (long)StackCount * FramesPerStack;
 
     /// <inheritdoc/>
-    public string WorkUnitName => "frames";
+    public override string WorkUnitName => "frames";
 
     /// <inheritdoc/>
-    public void Setup()
+    public override void Setup()
     {
+        InitializeBuffers();
         _Eth = new EthernetLayer(
             MacAddress.FromBytes([0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF]),
             MacAddress.FromBytes([0x00, 0x11, 0x22, 0x33, 0x44, 0x55]));
@@ -51,7 +52,7 @@ internal sealed class FrameBuilderValueReuseScenario : IProfilingScenario
     }
 
     /// <inheritdoc/>
-    public void Run()
+    public override void Run()
     {
         Span<byte> dst = _Buffer;
         for (int s = 0; s < StackCount; s++)
@@ -73,7 +74,7 @@ internal sealed class FrameBuilderValueReuseScenario : IProfilingScenario
     }
 
     /// <inheritdoc/>
-    public void Cleanup()
+    public override void Cleanup()
     {
     }
 }

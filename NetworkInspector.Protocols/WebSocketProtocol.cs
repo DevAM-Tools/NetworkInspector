@@ -177,7 +177,7 @@ public sealed partial class WebSocketProtocol : IProtocol
 
     partial void OnStartCustom(Stack stack)
     {
-        _Populator = (in MutField container) => PopulateWebSocketFields(in container);
+        _Populator = PopulateWebSocketFields;
 
         // Resolve Text and Data protocol IDs for payload dispatch fallback
         ProtocolId? textId = stack.GetProtocolId("text");
@@ -266,8 +266,18 @@ public sealed partial class WebSocketProtocol : IProtocol
             context.RecordGroupPresence(_WebsocketCloseGroupId);
         }
 
-        parentField.AppendLazyWithCustomText(
+        MutField container = parentField.AppendLazyWithCustomText(
             _ProtocolFieldId, FieldValue.NewBytes(data), summary, _Populator);
+
+        // Eagerly dispatch text/binary frame payloads to sub-protocols with the real context so
+        // dispatched sub-protocols record their index groups during the index phase (Q6: the
+        // index must be complete when the packet is finalized). The lazy populator builds the
+        // descriptive frame tree but no longer dispatches.
+        ParseResult dispatchResult = DispatchWebSocketPayloads(in container, data, in context);
+        if (dispatchResult.IsError)
+        {
+            return dispatchResult;
+        }
 
         return data.Length;
     }

@@ -25,13 +25,7 @@ internal sealed class ErrorToleranceTests
     private static BlfStreamSource CreateBlfSource(byte[] data) =>
         BlfStreamSource.FromStream(new MemoryStream(data), "truncated.blf");
 
-    /// <summary>Starts a frame source with a fresh registry.</summary>
-    private static void StartSource(IFrameSource source)
-    {
-        FrameInterfaceRegistry registry = new();
-        FrameSourceId sourceId = registry.RegisterSource(source);
-        source.Start(sourceId, registry);
-    }
+
 
     /// <summary>
     /// Builds a valid PCAPNG byte array containing the given number of Ethernet frames,
@@ -114,7 +108,7 @@ internal sealed class ErrorToleranceTests
         List<FrameReadErrorEventArgs> errors = [];
         source.FrameSkipped += (_, e) => errors.Add(e);
 
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
         int readCount = DrainFrames(source);
 
         // Should have read the 2 valid frames
@@ -156,7 +150,7 @@ internal sealed class ErrorToleranceTests
         List<FrameReadErrorEventArgs> errors = [];
         source.FrameSkipped += (_, e) => errors.Add(e);
 
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
         int readCount = DrainFrames(source);
 
         // Should still read the 2 valid frames before hitting truncation
@@ -197,7 +191,7 @@ internal sealed class ErrorToleranceTests
         List<FrameReadErrorEventArgs> errors = [];
         source.FrameSkipped += (_, e) => errors.Add(e);
 
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
         int readCount = DrainFrames(source);
 
         await Assert.That(readCount).IsEqualTo(2);
@@ -229,7 +223,7 @@ internal sealed class ErrorToleranceTests
         using PcapStreamSource source = CreatePcapSource(truncated);
         source.ErrorTolerance = ErrorToleranceMode.Tolerant;
 
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
         int readCount = DrainFrames(source);
 
         await Assert.That(readCount).IsEqualTo(0);
@@ -260,7 +254,7 @@ internal sealed class ErrorToleranceTests
         List<FrameReadErrorEventArgs> errors = [];
         source.FrameSkipped += (_, e) => errors.Add(e);
 
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
         int readCount = DrainFrames(source);
 
         // Should have read the 2 valid frames
@@ -301,7 +295,7 @@ internal sealed class ErrorToleranceTests
         List<FrameReadErrorEventArgs> errors = [];
         source.FrameSkipped += (_, e) => errors.Add(e);
 
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
         int readCount = DrainFrames(source);
 
         // Should still read the 2 valid frames before truncation
@@ -340,7 +334,7 @@ internal sealed class ErrorToleranceTests
         List<FrameReadErrorEventArgs> errors = [];
         source.FrameSkipped += (_, e) => errors.Add(e);
 
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
         int readCount = DrainFrames(source);
 
         await Assert.That(readCount).IsEqualTo(2);
@@ -371,7 +365,7 @@ internal sealed class ErrorToleranceTests
         using PcapStreamSource source = CreatePcapSource(pcapData);
         source.ErrorTolerance = ErrorToleranceMode.Tolerant;
 
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         // Read first frame in Tolerant mode
         Frame? frame1 = source.NextFrame();
@@ -412,7 +406,7 @@ internal sealed class ErrorToleranceTests
         using BlfStreamSource source = CreateBlfSource(truncated);
         source.ErrorTolerance = ErrorToleranceMode.Tolerant;
 
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         // Read all available frames
         int readCount = DrainFrames(source);

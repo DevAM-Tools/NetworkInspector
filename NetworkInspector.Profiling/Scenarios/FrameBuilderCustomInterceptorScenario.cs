@@ -13,21 +13,33 @@ namespace NetworkInspector.Profiling.Scenarios;
 /// PS-1's <see cref="NoInterceptor"/> baseline.
 /// </para>
 /// </summary>
-internal sealed class FrameBuilderCustomInterceptorScenario : IProfilingScenario
+[SuppressMessage("Performance", "CA1812:AvoidUninstantiatedInternalClasses", Justification = "Instantiated via reflection in ScenarioDiscovery.Discover.")]
+internal sealed class FrameBuilderCustomInterceptorScenario : FrameBuilderScenarioBase
 {
     private const int FrameCount = 1_000_000;
-    private const int PayloadSize = 64;
+
+    /// <inheritdoc/>
+    protected override int PayloadSize => 64;
 
     /// <summary>
     /// Counting interceptor — exercises the per-header and per-frame callback
     /// hot paths without doing meaningful work.  All counters live in shared
     /// volatile statics so the JIT cannot eliminate the call.
     /// </summary>
+    /// <remarks>
+    /// Thread-safety: <see cref="HeaderCalls"/>, <see cref="FrameCalls"/>, and
+    /// <see cref="ByteSum"/> are declared volatile — every read/write must go through
+    /// <see cref="Interlocked"/>. Plain field access (e.g. <c>++HeaderCalls</c>) is a
+    /// data-race defect.
+    /// </remarks>
     private readonly struct CountingInterceptor : IFrameInterceptor
     {
-        internal static long HeaderCalls;
-        internal static long FrameCalls;
-        internal static long ByteSum;
+        /// <summary>Volatile — every read/write must use <see cref="Interlocked"/>. Counts header callbacks.</summary>
+        internal static long HeaderCalls;  // volatile
+        /// <summary>Volatile — every read/write must use <see cref="Interlocked"/>. Counts frame-complete callbacks.</summary>
+        internal static long FrameCalls;   // volatile
+        /// <summary>Volatile — every read/write must use <see cref="Interlocked"/>. Accumulates first-byte values to prevent dead-code elimination.</summary>
+        internal static long ByteSum;      // volatile
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void OnHeaderWritten<TLayer>(in TLayer layer, scoped Span<byte> headerSlice)
@@ -45,8 +57,6 @@ internal sealed class FrameBuilderCustomInterceptorScenario : IProfilingScenario
         public void OnFrameComplete(scoped Span<byte> frame) => Interlocked.Increment(ref FrameCalls);
     }
 
-    private readonly byte[] _Payload = new byte[PayloadSize];
-    private byte[] _Buffer = [];
     private CreatedStack<
         StatelessStack<UdpLayer,
             StatelessStack<IPv4Layer,
@@ -55,21 +65,22 @@ internal sealed class FrameBuilderCustomInterceptorScenario : IProfilingScenario
         CountingInterceptor> _Stack;
 
     /// <inheritdoc/>
-    public string Name => "framebuilder-custom-interceptor";
+    public override string Name => "framebuilder-custom-interceptor";
 
     /// <inheritdoc/>
-    public string Description =>
+    public override string Description =>
         $"Build {FrameCount:N0} Eth/IPv4/UDP frames with a custom IFrameInterceptor.";
 
     /// <inheritdoc/>
-    public long WorkUnitsPerIteration => FrameCount;
+    public override long WorkUnitsPerIteration => FrameCount;
 
     /// <inheritdoc/>
-    public string WorkUnitName => "frames";
+    public override string WorkUnitName => "frames";
 
     /// <inheritdoc/>
-    public void Setup()
+    public override void Setup()
     {
+        InitializeBuffers();
         EthernetLayer eth = new(
             MacAddress.FromBytes([0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF]),
             MacAddress.FromBytes([0x00, 0x11, 0x22, 0x33, 0x44, 0x55]));
@@ -87,7 +98,7 @@ internal sealed class FrameBuilderCustomInterceptorScenario : IProfilingScenario
     }
 
     /// <inheritdoc/>
-    public void Run()
+    public override void Run()
     {
         Span<byte> dst = _Buffer;
         for (int i = 0; i < FrameCount; i++)
@@ -97,7 +108,7 @@ internal sealed class FrameBuilderCustomInterceptorScenario : IProfilingScenario
     }
 
     /// <inheritdoc/>
-    public void Cleanup()
+    public override void Cleanup()
     {
     }
 }

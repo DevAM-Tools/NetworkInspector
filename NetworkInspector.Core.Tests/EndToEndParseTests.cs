@@ -426,7 +426,7 @@ internal sealed class EndToEndParseTests
         {
         }
         /// <inheritdoc/>
-        public Frame? NextFrame() => null;
+        public Frame? NextFrame(CancellationToken cancellationToken = default) => null;
         /// <inheritdoc/>
         public void Dispose()
         {
@@ -482,13 +482,14 @@ internal sealed class EndToEndParseTests
 
             parentField.AppendLazy(_ContainerFieldId, FieldValue.None, (in container) =>
             {
-                ParseContext context = default;
-                container.Append(dstFieldId, FieldValue.NewMacAddress(dst), in context);
-                container.Append(srcFieldId, FieldValue.NewMacAddress(src), in context);
-                container.Append(typeFieldId, FieldValue.NewU64(ethertype), in context);
+                container.Append(dstFieldId, FieldValue.NewMacAddress(dst));
+                container.Append(srcFieldId, FieldValue.NewMacAddress(src));
+                container.Append(typeFieldId, FieldValue.NewU64(ethertype));
                 return 0;
             });
             return 14;
         }
     }
 }
+
+

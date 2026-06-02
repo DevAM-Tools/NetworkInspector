@@ -87,6 +87,45 @@ public interface IStackBuilder : IStack
 
     #endregion
 
+    #region Field Alias Group Registration
+
+    /// <summary>
+    /// Registers a field alias group that exposes an "any-match" name for a set of canonical
+    /// member fields. Returns the assigned <see cref="FieldAliasGroupId"/>.
+    /// <para>
+    /// Alias groups are metadata-only: the parsing hot path does not consult them, and the
+    /// alias name remains invisible to <see cref="IStack.GetFieldId(string)"/>. Alias names
+    /// occupy a namespace independent from field names and protocol-table names; an alias name
+    /// can therefore coexist with a protocol-table name of the same string (e.g., <c>"udp.port"</c>)
+    /// without collision.
+    /// </para>
+    /// <para>
+    /// Member fields may carry heterogeneous <see cref="FieldType"/> values; the registry
+    /// performs no same-type validation. Order of <paramref name="fieldIds"/> is preserved
+    /// in <see cref="FieldAliasGroupInfo.Members"/>.
+    /// </para>
+    /// </summary>
+    /// <param name="protocolId">The protocol that owns this alias group.</param>
+    /// <param name="name">Machine-readable alias name (e.g., "eth.addr"). Must be unique inside the alias namespace.</param>
+    /// <param name="description">Optional description text.</param>
+    /// <param name="fieldIds">
+    /// The canonical member field IDs the alias resolves to. Must be non-empty and free of duplicates.
+    /// Every ID must refer to a field already registered on this builder.
+    /// </param>
+    /// <exception cref="InvalidNameRegistrationException">Thrown when <paramref name="name"/> is not a valid dot-separated C-style identifier.</exception>
+    /// <exception cref="DuplicateNameRegistrationException">Thrown when an alias group with the same name is already registered.</exception>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="fieldIds"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">Thrown when <paramref name="fieldIds"/> is empty or contains duplicate field IDs.</exception>
+    /// <exception cref="NotFoundRegistrationException">Thrown when any element of <paramref name="fieldIds"/> references a field ID not registered on this builder.</exception>
+    /// <exception cref="ArgumentException">Thrown when any element of <paramref name="fieldIds"/> belongs to a different protocol than <paramref name="protocolId"/>.</exception>
+    FieldAliasGroupId RegisterFieldAliasGroup(
+        ProtocolId protocolId,
+        string name,
+        string? description,
+        FieldId[] fieldIds);
+
+    #endregion
+
     #region Index Group Registration
 
     /// <summary>

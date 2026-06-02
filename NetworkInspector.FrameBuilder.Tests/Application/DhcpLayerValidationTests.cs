@@ -11,19 +11,8 @@ internal sealed class DhcpLayerValidationTests
     #region DhcpV4Layer — null options
 
     [Test]
-    public async Task DhcpV4Layer_NullOptions_Throws()
-    {
-        bool threw = false;
-        try
-        {
-            _ = new DhcpV4Layer(1, 0x12345678, null!);
-        }
-        catch (ArgumentNullException)
-        {
-            threw = true;
-        }
-        await Assert.That(threw).IsTrue();
-    }
+    public async Task DhcpV4Layer_NullOptions_Throws() =>
+        await Assert.That(() => new DhcpV4Layer(1, 0x12345678, null!)).Throws<ArgumentNullException>();
 
     #endregion
 
@@ -33,16 +22,7 @@ internal sealed class DhcpLayerValidationTests
     public async Task DhcpV4Layer_OptionDataExceeds255_Throws()
     {
         DhcpV4Option oversized = new(53, new byte[256]);
-        bool threw = false;
-        try
-        {
-            _ = new DhcpV4Layer(1, 0, [oversized]);
-        }
-        catch (ArgumentOutOfRangeException)
-        {
-            threw = true;
-        }
-        await Assert.That(threw).IsTrue();
+        await Assert.That(() => new DhcpV4Layer(1, 0, [oversized])).Throws<ArgumentOutOfRangeException>();
     }
 
     [Test]
@@ -58,19 +38,8 @@ internal sealed class DhcpLayerValidationTests
     #region DhcpV6Layer — null options
 
     [Test]
-    public async Task DhcpV6Layer_NullOptions_Throws()
-    {
-        bool threw = false;
-        try
-        {
-            _ = new DhcpV6Layer(1, 0, null!);
-        }
-        catch (ArgumentNullException)
-        {
-            threw = true;
-        }
-        await Assert.That(threw).IsTrue();
-    }
+    public async Task DhcpV6Layer_NullOptions_Throws() =>
+        await Assert.That(() => new DhcpV6Layer(1, 0, null!)).Throws<ArgumentNullException>();
 
     #endregion
 
@@ -80,16 +49,7 @@ internal sealed class DhcpLayerValidationTests
     public async Task DhcpV6Layer_OptionDataExceeds65535_Throws()
     {
         DhcpV6Option oversized = new(1, new byte[65536]);
-        bool threw = false;
-        try
-        {
-            _ = new DhcpV6Layer(1, 0, [oversized]);
-        }
-        catch (ArgumentOutOfRangeException)
-        {
-            threw = true;
-        }
-        await Assert.That(threw).IsTrue();
+        await Assert.That(() => new DhcpV6Layer(1, 0, [oversized])).Throws<ArgumentOutOfRangeException>();
     }
 
     [Test]

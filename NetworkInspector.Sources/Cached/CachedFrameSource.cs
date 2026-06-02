@@ -186,7 +186,7 @@ public sealed class CachedFrameSource : IRandomAccessFrameSource, IErrorTolerant
     /// random access via <see cref="FrameById"/>. The frame is stored in a
     /// lock-free chunked array indexed by <see cref="FrameId"/>.
     /// </remarks>
-    public Frame? NextFrame()
+    public Frame? NextFrame(CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _Disposed), this);
 
@@ -195,7 +195,9 @@ public sealed class CachedFrameSource : IRandomAccessFrameSource, IErrorTolerant
             throw new InvalidOperationException("CachedFrameSource.Start() must be called before NextFrame().");
         }
 
-        Frame? frame = _Inner.NextFrame();
+        cancellationToken.ThrowIfCancellationRequested();
+
+        Frame? frame = _Inner.NextFrame(cancellationToken);
 
         if (frame is not null)
         {
@@ -298,7 +300,7 @@ public sealed class CachedFrameSource : IRandomAccessFrameSource, IErrorTolerant
     /// Returns <see langword="null"/> if the frame was never read through
     /// <see cref="NextFrame"/> or the ID is invalid.
     /// </remarks>
-    public Frame? FrameById(FrameId id)
+    public Frame? FrameById(FrameId id, CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _Disposed), this);
 
@@ -306,6 +308,8 @@ public sealed class CachedFrameSource : IRandomAccessFrameSource, IErrorTolerant
         {
             return null;
         }
+
+        cancellationToken.ThrowIfCancellationRequested();
 
         int chunkIdx = id.Value >> ChunkShift;
         int slotIdx = id.Value & ChunkMask;

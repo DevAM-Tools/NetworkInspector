@@ -22,16 +22,7 @@ internal sealed class TlsRecordLayerValidationTests
     public async Task BuildRecord_BodyExceedsUInt16_Throws()
     {
         byte[] body = new byte[65536];
-        bool threw = false;
-        try
-        {
-            TlsRecordLayer.BuildRecord(TlsContentType.ApplicationData, TlsRecordLayer.Tls12, body);
-        }
-        catch (ArgumentOutOfRangeException)
-        {
-            threw = true;
-        }
-        await Assert.That(threw).IsTrue();
+        await Assert.That(() => TlsRecordLayer.BuildRecord(TlsContentType.ApplicationData, TlsRecordLayer.Tls12, body)).Throws<ArgumentOutOfRangeException>();
     }
 
     #endregion
@@ -50,16 +41,7 @@ internal sealed class TlsRecordLayerValidationTests
     public async Task BuildHandshakeMessage_BodyExceeds24Bit_Throws()
     {
         byte[] body = new byte[0x01000000];
-        bool threw = false;
-        try
-        {
-            TlsRecordLayer.BuildHandshakeMessage(0x01, body);
-        }
-        catch (ArgumentOutOfRangeException)
-        {
-            threw = true;
-        }
-        await Assert.That(threw).IsTrue();
+        await Assert.That(() => TlsRecordLayer.BuildHandshakeMessage(0x01, body)).Throws<ArgumentOutOfRangeException>();
     }
 
     #endregion
@@ -71,18 +53,9 @@ internal sealed class TlsRecordLayerValidationTests
     {
         byte[] random = new byte[32];
         ushort[] ciphers = new ushort[32768]; // 32768 × 2 = 65536 bytes > 65535
-        bool threw = false;
-        try
-        {
-            TlsRecordLayer.BuildClientHelloBody(
-                TlsRecordLayer.Tls12, random, ReadOnlySpan<byte>.Empty,
-                ciphers, [0], ReadOnlySpan<byte>.Empty);
-        }
-        catch (ArgumentOutOfRangeException)
-        {
-            threw = true;
-        }
-        await Assert.That(threw).IsTrue();
+        await Assert.That(() => TlsRecordLayer.BuildClientHelloBody(
+            TlsRecordLayer.Tls12, random, ReadOnlySpan<byte>.Empty,
+            ciphers, [0], ReadOnlySpan<byte>.Empty)).Throws<ArgumentOutOfRangeException>();
     }
 
     [Test]
@@ -90,18 +63,9 @@ internal sealed class TlsRecordLayerValidationTests
     {
         byte[] random = new byte[32];
         byte[] exts = new byte[65536];
-        bool threw = false;
-        try
-        {
-            TlsRecordLayer.BuildClientHelloBody(
-                TlsRecordLayer.Tls12, random, ReadOnlySpan<byte>.Empty,
-                [0x002F], [0], exts);
-        }
-        catch (ArgumentOutOfRangeException)
-        {
-            threw = true;
-        }
-        await Assert.That(threw).IsTrue();
+        await Assert.That(() => TlsRecordLayer.BuildClientHelloBody(
+            TlsRecordLayer.Tls12, random, ReadOnlySpan<byte>.Empty,
+            [0x002F], [0], exts)).Throws<ArgumentOutOfRangeException>();
     }
 
     #endregion
@@ -113,18 +77,9 @@ internal sealed class TlsRecordLayerValidationTests
     {
         byte[] random = new byte[32];
         byte[] exts = new byte[65536];
-        bool threw = false;
-        try
-        {
-            TlsRecordLayer.BuildServerHelloBody(
-                TlsRecordLayer.Tls12, random, ReadOnlySpan<byte>.Empty,
-                0x002F, 0, exts);
-        }
-        catch (ArgumentOutOfRangeException)
-        {
-            threw = true;
-        }
-        await Assert.That(threw).IsTrue();
+        await Assert.That(() => TlsRecordLayer.BuildServerHelloBody(
+            TlsRecordLayer.Tls12, random, ReadOnlySpan<byte>.Empty,
+            0x002F, 0, exts)).Throws<ArgumentOutOfRangeException>();
     }
 
     #endregion
@@ -135,16 +90,7 @@ internal sealed class TlsRecordLayerValidationTests
     public async Task BuildExtension_DataTooLong_Throws()
     {
         byte[] data = new byte[65536];
-        bool threw = false;
-        try
-        {
-            TlsRecordLayer.BuildExtension(0x0000, data);
-        }
-        catch (ArgumentOutOfRangeException)
-        {
-            threw = true;
-        }
-        await Assert.That(threw).IsTrue();
+        await Assert.That(() => TlsRecordLayer.BuildExtension(0x0000, data)).Throws<ArgumentOutOfRangeException>();
     }
 
     [Test]
@@ -163,16 +109,7 @@ internal sealed class TlsRecordLayerValidationTests
     public async Task BuildAlpnExtensionBody_ProtocolNameTooLong_Throws()
     {
         string longName = new('a', 256);
-        bool threw = false;
-        try
-        {
-            TlsRecordLayer.BuildAlpnExtensionBody(longName);
-        }
-        catch (ArgumentOutOfRangeException)
-        {
-            threw = true;
-        }
-        await Assert.That(threw).IsTrue();
+        await Assert.That(() => TlsRecordLayer.BuildAlpnExtensionBody(longName)).Throws<ArgumentOutOfRangeException>();
     }
 
     [Test]
@@ -192,16 +129,7 @@ internal sealed class TlsRecordLayerValidationTests
     public async Task BuildSupportedVersionsExtensionBody_TooManyVersions_Throws()
     {
         ushort[] versions = new ushort[128]; // 128 × 2 = 256 > 255
-        bool threw = false;
-        try
-        {
-            TlsRecordLayer.BuildSupportedVersionsExtensionBody(versions);
-        }
-        catch (ArgumentOutOfRangeException)
-        {
-            threw = true;
-        }
-        await Assert.That(threw).IsTrue();
+        await Assert.That(() => TlsRecordLayer.BuildSupportedVersionsExtensionBody(versions)).Throws<ArgumentOutOfRangeException>();
     }
 
     [Test]
@@ -229,16 +157,7 @@ internal sealed class TlsRecordLayerValidationTests
     public async Task DtlsBuildRecord_BodyExceedsUInt16_Throws()
     {
         byte[] body = new byte[65536];
-        bool threw = false;
-        try
-        {
-            DtlsRecordLayer.BuildRecord(TlsContentType.ApplicationData, DtlsRecordLayer.Dtls12, 0, 0, body);
-        }
-        catch (ArgumentOutOfRangeException)
-        {
-            threw = true;
-        }
-        await Assert.That(threw).IsTrue();
+        await Assert.That(() => DtlsRecordLayer.BuildRecord(TlsContentType.ApplicationData, DtlsRecordLayer.Dtls12, 0, 0, body)).Throws<ArgumentOutOfRangeException>();
     }
 
     [Test]
@@ -254,17 +173,8 @@ internal sealed class TlsRecordLayerValidationTests
     public async Task DtlsBuildRecord_SequenceNumberExceeds48Bit_Throws()
     {
         byte[] body = [0x01];
-        bool threw = false;
-        try
-        {
-            DtlsRecordLayer.BuildRecord(
-                TlsContentType.ApplicationData, DtlsRecordLayer.Dtls12, 0, 0x0001_0000_0000_0000ul, body);
-        }
-        catch (ArgumentOutOfRangeException)
-        {
-            threw = true;
-        }
-        await Assert.That(threw).IsTrue();
+        await Assert.That(() => DtlsRecordLayer.BuildRecord(
+            TlsContentType.ApplicationData, DtlsRecordLayer.Dtls12, 0, 0x0001_0000_0000_0000ul, body)).Throws<ArgumentOutOfRangeException>();
     }
 
     #endregion
@@ -275,16 +185,7 @@ internal sealed class TlsRecordLayerValidationTests
     public async Task DtlsBuildHandshakeMessage_BodyExceeds24Bit_Throws()
     {
         byte[] body = new byte[0x01000000];
-        bool threw = false;
-        try
-        {
-            DtlsRecordLayer.BuildHandshakeMessage(0x01, 0, body);
-        }
-        catch (ArgumentOutOfRangeException)
-        {
-            threw = true;
-        }
-        await Assert.That(threw).IsTrue();
+        await Assert.That(() => DtlsRecordLayer.BuildHandshakeMessage(0x01, 0, body)).Throws<ArgumentOutOfRangeException>();
     }
 
     #endregion

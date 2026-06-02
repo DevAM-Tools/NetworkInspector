@@ -15,13 +15,7 @@ internal sealed class PcapStreamSourceTests
     private static PcapStreamSource CreateSource(byte[] data, string uiName = "test.pcapng", bool leaveOpen = false) =>
         PcapStreamSource.FromStream(new MemoryStream(data), uiName, leaveOpen);
 
-    /// <summary>Starts the source with a fresh registry.</summary>
-    private static void StartSource(PcapStreamSource source)
-    {
-        FrameInterfaceRegistry registry = new();
-        FrameSourceId sourceId = registry.RegisterSource(source);
-        source.Start(sourceId, registry);
-    }
+
 
     // ========================================================================
     // Single frame
@@ -41,7 +35,7 @@ internal sealed class PcapStreamSourceTests
         // Stream sources always return null for EstimatedFrameCount
         await Assert.That(source.EstimatedFrameCount).IsNull();
 
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
         Frame? frame = source.NextFrame();
 
         await Assert.That(frame).IsNotNull();
@@ -72,7 +66,7 @@ internal sealed class PcapStreamSourceTests
         }
 
         using PcapStreamSource source = CreateSource(writer.Build());
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         for (int i = 0; i < 5; i++)
         {
@@ -104,7 +98,7 @@ internal sealed class PcapStreamSourceTests
         }
 
         using PcapStreamSource source = CreateSource(writer.Build());
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         long prevTs = long.MinValue;
         for (int i = 0; i < 5; i++)
@@ -133,7 +127,7 @@ internal sealed class PcapStreamSourceTests
         writer.WriteFrame(0, 1_500_000_000, eth);
 
         using PcapStreamSource source = CreateSource(writer.Build());
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         Frame? frame = source.NextFrame();
         await Assert.That(frame).IsNotNull();
@@ -193,7 +187,7 @@ internal sealed class PcapStreamSourceTests
         byte[] pcapData = writer.Build();
 
         using PcapStreamSource source = CreateSource(pcapData);
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         await Assert.That(source.NextFrame()).IsNull();
     }
@@ -271,7 +265,7 @@ internal sealed class PcapStreamSourceTests
         byte[] pcapData = writer.Build();
 
         PcapStreamSource source = CreateSource(pcapData);
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         source.Dispose();
 
@@ -303,7 +297,7 @@ internal sealed class PcapStreamSourceTests
         byte[] pcapData = writer.Build();
 
         PcapStreamSource source = CreateSource(pcapData);
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
         source.Dispose();
 
         await Assert.That(() => source.NextFrame()).Throws<ObjectDisposedException>();
@@ -328,7 +322,7 @@ internal sealed class PcapStreamSourceTests
         byte[] pcapData = writer.Build();
 
         PcapStreamSource source = CreateSource(pcapData);
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         await Assert.That(source.IsRunning).IsTrue();
 
@@ -430,7 +424,7 @@ internal sealed class PcapStreamSourceTests
         List<FrameReadErrorEventArgs> errors = [];
         source.FrameSkipped += (_, e) => errors.Add(e);
 
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
         Frame? frame = source.NextFrame();
 
         // Source must exhaust — no frame returned
@@ -460,7 +454,7 @@ internal sealed class PcapStreamSourceTests
         List<FrameReadErrorEventArgs> errors = [];
         source.FrameSkipped += (_, e) => errors.Add(e);
 
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
         Frame? frame = source.NextFrame();
 
         await Assert.That(frame).IsNull();
@@ -486,7 +480,7 @@ internal sealed class PcapStreamSourceTests
         List<FrameReadErrorEventArgs> errors = [];
         source.FrameSkipped += (_, e) => errors.Add(e);
 
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
         Frame? frame = source.NextFrame();
 
         // Initialization failed — source exhausted, no frame, no FrameSkipped event
@@ -526,7 +520,7 @@ internal sealed class PcapStreamSourceTests
         byte[] data = BuildLegacyPcap(eth);
 
         using PcapStreamSource source = CreateSource(data, "test.pcap");
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         Frame? frame = source.NextFrame();
 
@@ -555,7 +549,7 @@ internal sealed class PcapStreamSourceTests
         List<FrameReadErrorEventArgs> errors = [];
         source.FrameSkipped += (_, e) => errors.Add(e);
 
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
         Frame? frame = source.NextFrame();
 
         // Source must exhaust — no frame returned
@@ -585,7 +579,7 @@ internal sealed class PcapStreamSourceTests
         List<FrameReadErrorEventArgs> errors = [];
         source.FrameSkipped += (_, e) => errors.Add(e);
 
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
         Frame? frame = source.NextFrame();
 
         await Assert.That(frame).IsNull();

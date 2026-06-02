@@ -75,18 +75,35 @@ internal abstract class ExportFormatConfig
     /// </summary>
     internal static ExportFormatConfig FromExtension(string extension)
     {
-        return extension.ToUpperInvariant() switch
+        if (extension.Equals(".json", StringComparison.OrdinalIgnoreCase))
         {
-            ".JSON" => new JsonFormatConfig(JsonExportFormat.Compact),
-            ".PBF" => new PbfFormatConfig(PbfExportFormat.Standard, true),
-            ".TXT" => new TextFormatConfig(TextDetailLevel.Standard, 256),
-            _ => throw new ArgumentException(
-                $"Cannot auto-detect export format from extension '{extension}'. " +
-                "Use -f to specify the format explicitly."),
-        };
+            return new JsonFormatConfig(JsonExportFormat.Compact);
+        }
+
+        if (extension.Equals(".pbf", StringComparison.OrdinalIgnoreCase))
+        {
+            return new PbfFormatConfig(PbfExportFormat.Standard, true);
+        }
+
+        if (extension.Equals(".txt", StringComparison.OrdinalIgnoreCase))
+        {
+            return new TextFormatConfig(TextDetailLevel.Standard, 256);
+        }
+
+        throw new ArgumentException(
+            $"Cannot auto-detect export format from extension '{extension}'. " +
+            "Use -f to specify the format explicitly.");
     }
 
-    /// <summary>Parses comma-separated key=value parameters, or bare flags.</summary>
+    /// <summary>
+    /// Parses comma-separated key=value parameters, or bare flag tokens.
+    /// </summary>
+    /// <remarks>
+    /// A bare token without an <c>=</c> sign (e.g., <c>compressed</c>) is treated as a
+    /// boolean flag set to <c>"true"</c>; it is exactly equivalent to writing
+    /// <c>compressed=true</c>.  This allows shorthands like
+    /// <c>pbf:format=columnar,compressed</c>.
+    /// </remarks>
     private static Dictionary<string, string> ParseParameters(string paramString)
     {
         Dictionary<string, string> result = new(StringComparer.OrdinalIgnoreCase);

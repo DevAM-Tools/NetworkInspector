@@ -82,7 +82,8 @@ internal static class SampleFileHelper
         }
         catch (IOException)
         {
-            // Best-effort cleanup
+            // Best-effort cleanup — the OS will reclaim the temp directory on the next
+            // boot or session restart, so a locked file here does not affect correctness.
         }
     }
 }

@@ -247,7 +247,7 @@ internal sealed class ParseContextDispatchTests
             ReceivedCallerProtocolId = context.Dispatch.CallerProtocolId;
             ReceivedHasDispatch = context.Dispatch.HasDispatch;
 
-            MutField container = parentField.Append(_ContainerFieldId, FieldValue.None, in context);
+            MutField container = parentField.Append(_ContainerFieldId, FieldValue.None);
 
             if (_HasDispatchTable && data.Length >= 1)
             {

@@ -486,10 +486,9 @@ internal sealed class FieldIteratorTests
             parentField.AppendLazy(_ContainerFieldId, FieldValue.None, (in container) =>
             {
                 System.Threading.Interlocked.Increment(ref _PopulateCallCount);
-                ParseContext context = default;
-                container.Append(dstFieldId, FieldValue.NewMacAddress(dst), in context);
-                container.Append(srcFieldId, FieldValue.NewMacAddress(src), in context);
-                container.Append(typeFieldId, FieldValue.NewU64(ethertype), in context);
+                container.Append(dstFieldId, FieldValue.NewMacAddress(dst));
+                container.Append(srcFieldId, FieldValue.NewMacAddress(src));
+                container.Append(typeFieldId, FieldValue.NewU64(ethertype));
                 return 0;
             });
 
@@ -497,3 +496,5 @@ internal sealed class FieldIteratorTests
         }
     }
 }
+
+

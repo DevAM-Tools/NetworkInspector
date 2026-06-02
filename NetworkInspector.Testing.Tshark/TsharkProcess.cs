@@ -62,9 +62,13 @@ internal static class TsharkProcess
             // raw subtree fields (-T fields) match Network Inspector asserts.
             const string hideRawPref = "-o \"signal_pdu.payload_dissector_hide_raw_values:false\"";
 
+            // Escape the profile name so that a name containing backslashes or double-quotes
+            // cannot break out of the surrounding quotes and inject additional tshark options.
+            string escapedProfileName = EscapeArgumentValue(profileName);
+
             // -C must come BEFORE -r/-T/-e so tshark applies the profile while parsing
             // the rest of the args.
-            finalArguments = $"{hideRawPref} -C \"{profileName}\" {arguments}";
+            finalArguments = $"{hideRawPref} -C \"{escapedProfileName}\" {arguments}";
             configDir = personalDir;
         }
 
@@ -118,9 +122,15 @@ internal static class TsharkProcess
             {
                 process.Kill(entireProcessTree: true);
             }
-            catch
+            catch (InvalidOperationException)
             {
-                // Best effort — process may already have exited between WaitForExit and Kill.
+                // Process exited between WaitForExit and Kill — not an error.
+            }
+            catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or UnauthorizedAccessException)
+            {
+                // Kill failed due to OS-level denial; log and continue so the caller still
+                // receives a timeout result rather than an unhandled exception.
+                Debug.WriteLine($"[TsharkProcess] Failed to kill tshark process: {ex.Message}");
             }
             // Drain whatever was written before the kill so the tasks complete.
             string partialStdout = stdoutTask.GetAwaiter().GetResult();
@@ -129,4 +139,15 @@ internal static class TsharkProcess
         }
         return (process.ExitCode, stdoutTask.GetAwaiter().GetResult(), stderrTask.GetAwaiter().GetResult(), false);
     }
+
+    /// <summary>
+    /// Escapes a value intended to appear inside double-quoted tshark CLI argument text.
+    /// Backslashes are doubled and double-quote characters are preceded by a backslash so
+    /// that an attacker-controlled value cannot break out of the surrounding quotes and
+    /// inject additional tshark options (CWE-78).
+    /// </summary>
+    private static string EscapeArgumentValue(string value)
+        => value
+            .Replace("\\", "\\\\", StringComparison.Ordinal)
+            .Replace("\"", "\\\"", StringComparison.Ordinal);
 }

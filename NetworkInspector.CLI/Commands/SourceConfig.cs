@@ -14,6 +14,14 @@ internal abstract class SourceConfig
     internal abstract IFrameSource CreateSource();
 
     /// <summary>
+    /// Validates that the source is accessible before attempting to open it.
+    /// File-based subclasses check that the file exists and is readable.
+    /// The default implementation performs no checks (e.g., synthetic sources).
+    /// </summary>
+    /// <exception cref="ArgumentException">Thrown when validation fails.</exception>
+    internal virtual void ValidateBeforeStart() { }
+
+    /// <summary>
     /// Parses a source specification string.
     /// </summary>
     /// <remarks>
@@ -31,6 +39,7 @@ internal abstract class SourceConfig
     internal static SourceConfig Parse(string spec)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(spec);
+        ValidateSourceSpec(spec);
 
         // Check for typed spec (type:key=value)
         // Must not start with a drive letter pattern (e.g., "C:\...")
@@ -42,6 +51,26 @@ internal abstract class SourceConfig
 
         // Bare file path — auto-detect by extension
         return ParseBarePath(spec);
+    }
+
+    /// <summary>
+    /// Validates that <paramref name="spec"/> does not contain shell metacharacters
+    /// that could cause injection if the path were ever forwarded to a shell process.
+    /// Defence-in-depth check at the CLI trust boundary (OWASP A06 / CWE-78).
+    /// </summary>
+    /// <exception cref="ArgumentException">Thrown when a forbidden character is detected.</exception>
+    private static void ValidateSourceSpec(string spec)
+    {
+        ReadOnlySpan<char> forbidden = ['|', '&', '>', '<', ';', '`', '(', ')', '{', '}'];
+        foreach (char ch in forbidden)
+        {
+            if (spec.Contains(ch, StringComparison.Ordinal))
+            {
+                throw new ArgumentException(
+                    $"Source spec contains forbidden character '{ch}': '{spec}'. " +
+                    "Shell metacharacters are not permitted in source specifications.");
+            }
+        }
     }
 
     /// <summary>
@@ -71,9 +100,14 @@ internal abstract class SourceConfig
             return new BlfSourceConfig(path);
         }
 
+        if (path.EndsWith(".asc", StringComparison.OrdinalIgnoreCase))
+        {
+            return new AscSourceConfig(path);
+        }
+
         throw new ArgumentException(
             $"Cannot auto-detect source type for '{path}'. " +
-            "Use an explicit type prefix (e.g., 'pcap:path=file') or a known extension (.pcap, .pcapng, .blf).");
+            "Use an explicit type prefix (e.g., 'pcap:path=file') or a known extension (.pcap, .pcapng, .blf, .asc).");
     }
 
     /// <summary>Parses a typed specification like <c>pcap:path=file.pcap</c>.</summary>
@@ -87,6 +121,7 @@ internal abstract class SourceConfig
         {
             "PCAP" or "PCAPNG" => CreatePcapConfig(parameters),
             "BLF" => CreateBlfConfig(parameters),
+            "ASC" => CreateAscConfig(parameters),
             "RANDOM" => CreateRandomConfig(parameters),
             _ => throw new ArgumentException($"Unknown source type: '{type}'."),
         };
@@ -135,6 +170,17 @@ internal abstract class SourceConfig
         }
 
         return new BlfSourceConfig(path);
+    }
+
+    /// <summary>Creates an <see cref="AscSourceConfig"/> from typed parameters.</summary>
+    private static AscSourceConfig CreateAscConfig(Dictionary<string, string> parameters)
+    {
+        if (!parameters.TryGetValue("path", out string? path) || string.IsNullOrWhiteSpace(path))
+        {
+            throw new ArgumentException("ASC source requires 'path' parameter (e.g., asc:path=file.asc).");
+        }
+
+        return new AscSourceConfig(path);
     }
 
     /// <summary>Creates a <see cref="RandomSourceConfig"/> from typed parameters.</summary>
@@ -199,6 +245,15 @@ internal sealed class PcapSourceConfig(string path) : SourceConfig
     internal string Path { get; } = path;
 
     /// <inheritdoc/>
+    internal override void ValidateBeforeStart()
+    {
+        if (!File.Exists(Path))
+        {
+            throw new ArgumentException($"PCAP source file not found: '{Path}'.");
+        }
+    }
+
+    /// <inheritdoc/>
     internal override IFrameSource CreateSource() =>
         PcapSource.Open(Path);
 }
@@ -224,6 +279,15 @@ internal sealed class BlfSourceConfig : SourceConfig
     internal BlfSourceConfig(string path)
     {
         Path = path;
+    }
+
+    /// <inheritdoc/>
+    internal override void ValidateBeforeStart()
+    {
+        if (!File.Exists(Path))
+        {
+            throw new ArgumentException($"BLF source file not found: '{Path}'.");
+        }
     }
 
     /// <inheritdoc/>
@@ -254,4 +318,24 @@ internal sealed class RandomSourceConfig(
     /// <inheritdoc/>
     internal override IFrameSource CreateSource() =>
         new RandomFrameSource(Count, Seed, Mode);
+}
+
+/// <summary>Source config for CANalyzer ASCII log files (.asc).</summary>
+internal sealed class AscSourceConfig(string path) : SourceConfig
+{
+    /// <summary>Path to the ASC file.</summary>
+    internal string Path { get; } = path;
+
+    /// <inheritdoc/>
+    internal override void ValidateBeforeStart()
+    {
+        if (!File.Exists(Path))
+        {
+            throw new ArgumentException($"ASC source file not found: '{Path}'.");
+        }
+    }
+
+    /// <inheritdoc/>
+    internal override IFrameSource CreateSource() =>
+        AscSource.Open(Path);
 }

@@ -73,6 +73,9 @@ public sealed partial class BlfSource : IRandomAccessFrameSource, IErrorTolerant
     /// <summary>Tracks scanner corrupted-container-header errors already reported via HandleSkip.</summary>
     private long _LastReportedCorruptedContainerCount;
 
+    /// <summary>Tracks scanner tail-truncation events already reported via HandleSkip.</summary>
+    private long _LastReportedTruncatedObjectCount;
+
     /// <summary>
     /// Guards the lifetime of the mmap-backed <see cref="_Backend"/> against a Dispose/read race.
     /// <see cref="FrameById"/> acquires the read lock for the duration of <see cref="TryBuildFrame"/>
@@ -302,7 +305,7 @@ public sealed partial class BlfSource : IRandomAccessFrameSource, IErrorTolerant
     /// This method is <b>not</b> thread-safe. It must be called from a single thread only.
     /// For thread-safe random access, use <see cref="FrameById"/> instead.
     /// </remarks>
-    public Frame? NextFrame()
+    public Frame? NextFrame(CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _Disposed), this);
 
@@ -325,7 +328,8 @@ public sealed partial class BlfSource : IRandomAccessFrameSource, IErrorTolerant
         {
             while (_NextFrameIndex >= _Index.Count && !scanner.IsExhausted)
             {
-                scanner.ScanNext();
+                cancellationToken.ThrowIfCancellationRequested();
+                scanner.ScanNext(cancellationToken);
 
                 // Report any new decompression failures from the scanner
                 long failures = scanner.DecompressionFailures;
@@ -364,6 +368,25 @@ public sealed partial class BlfSource : IRandomAccessFrameSource, IErrorTolerant
                         return null;
                     }
                 }
+
+                // Report any new tail-truncation events from the scanner.
+                long truncated = scanner.TruncatedObjectCount;
+                while (_LastReportedTruncatedObjectCount < truncated)
+                {
+                    _LastReportedTruncatedObjectCount++;
+                    HandleSkip(new FrameReadErrorEventArgs
+                    {
+                        FrameIndex = _NextFrameIndex,
+                        FileOffset = -1,
+                        Kind = FrameReadErrorKind.CorruptedBlock,
+                        Message = $"Truncated BLF object at container boundary (dropped #{_LastReportedTruncatedObjectCount})."
+                    });
+
+                    if (Volatile.Read(ref _Aborted))
+                    {
+                        return null;
+                    }
+                }
             }
 
             if (scanner.IsExhausted && !Volatile.Read(ref _FullyScanned))
@@ -377,8 +400,9 @@ public sealed partial class BlfSource : IRandomAccessFrameSource, IErrorTolerant
         // Loop to skip over errored frames in tolerant mode
         while (_NextFrameIndex < _Index.Count)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             int frameIndex = _NextFrameIndex++;
-            Frame? frame = BuildFrame(frameIndex);
+            Frame? frame = BuildFrame(frameIndex, cancellationToken);
             if (frame is not null)
             {
                 Interlocked.Increment(ref _ReadFrameCount);
@@ -415,7 +439,7 @@ public sealed partial class BlfSource : IRandomAccessFrameSource, IErrorTolerant
     /// released by a concurrent <see cref="Dispose"/> call while a span read is in progress.
     /// </para>
     /// </remarks>
-    public Frame? FrameById(FrameId id)
+    public Frame? FrameById(FrameId id, CancellationToken cancellationToken = default)
     {
         _LifetimeLock.EnterReadLock();
         try
@@ -438,13 +462,15 @@ public sealed partial class BlfSource : IRandomAccessFrameSource, IErrorTolerant
                 return null;
             }
 
+            cancellationToken.ThrowIfCancellationRequested();
+
             int index = id.Value;
             if (index < 0 || index >= _Index.Count)
             {
                 return null;
             }
 
-            return TryBuildFrame(index);
+            return TryBuildFrame(index, cancellationToken);
         }
         finally
         {
@@ -544,24 +570,33 @@ public sealed partial class BlfSource : IRandomAccessFrameSource, IErrorTolerant
     /// Not thread-safe. All field accesses must be performed under <see cref="_ContainerCacheLock"/>,
     /// except <see cref="Ready"/>.Wait() (called outside the lock by waiters).
     /// </remarks>
+    // CA1001 is suppressed because eager disposal of Ready is unsafe: a winner thread may call
+    // Ready.Set() after BlfSource.Dispose() has already cleared _PendingDecompressions under
+    // _ContainerCacheLock, which would cause an ObjectDisposedException. ManualResetEventSlim
+    // uses only managed resources (spin + Monitor wait) under normal concurrency; a kernel
+    // handle is allocated only under extreme thread contention, and the GC finalizer reclaims it.
+    [SuppressMessage(
+        "Reliability",
+        "CA1001:TypesThatOwnDisposableFieldsShouldBeDisposable",
+        Justification = "Eager disposal is unsafe; see comment above. ManualResetEventSlim lifetime is bounded by GC reachability.")]
     private sealed class ContainerDecompressionWork
     {
         /// <summary>
-        /// Completed by the winner once <see cref="Error"/> and the cache entry are committed.
-        /// Uses <see cref="TaskCreationOptions.RunContinuationsAsynchronously"/> to prevent
-        /// inline continuation execution on the winner thread while it still holds
-        /// <see cref="_ContainerCacheLock"/>.
+        /// Signalled by the winner once <see cref="Error"/> and the cache entry are committed.
+        /// <see cref="ManualResetEventSlim"/> is used instead of <see cref="System.Threading.Tasks.TaskCompletionSource{TResult}"/>
+        /// to avoid blocking thread-pool threads and to support cooperative cancellation via
+        /// <see cref="ManualResetEventSlim.Wait(CancellationToken)"/>.
         /// <para>
-        /// <see cref="TaskCompletionSource{TResult}"/> is not <see cref="IDisposable"/>, so it is
-        /// safe to let the GC collect it once all threads have dropped their references — no
-        /// OS handle is involved.
+        /// <see cref="ManualResetEventSlim"/> uses only managed resources (spin + Monitor wait) under
+        /// normal concurrency. The GC finalizer reclaims any kernel handle allocated under extreme
+        /// contention. Eager disposal is intentionally avoided — see the CA1001 suppression above.
         /// </para>
         /// </summary>
-        internal readonly TaskCompletionSource<bool> Ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal readonly ManualResetEventSlim Ready = new(false);
 
         /// <summary>
         /// Populated by the winner with the decompression exception when the operation fails;
-        /// <c>null</c> on success. Read by waiters only after <see cref="Ready"/>.Task.Wait() returns,
+        /// <c>null</c> on success. Read by waiters only after <see cref="Ready"/>.Wait() returns,
         /// which guarantees visibility (the signal and this write happen under the same lock).
         /// </summary>
         internal Exception? Error;

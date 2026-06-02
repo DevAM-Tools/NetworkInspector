@@ -67,6 +67,12 @@ internal sealed class SlabAllocator<T>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal bool TryAllocate(int count, out T[] buffer, out int offset)
     {
+        if (count < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(count), count,
+                "Allocation count must be non-negative.");
+        }
+
         int used = _Used;
         if (used + count <= _Buffer.Length)
         {

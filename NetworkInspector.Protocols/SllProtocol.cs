@@ -109,19 +109,19 @@ public sealed partial class SllProtocol : IProtocol
 
         // Append all fields eagerly (only 5 fields, no lazy needed)
         FieldValue headerValue = FieldValue.NewBytes(data[..HeaderSize]);
-        MutField container = parentField.AppendWithCustomText(_ProtocolFieldId, headerValue, summary, in context);
+        MutField container = parentField.AppendWithCustomText(_ProtocolFieldId, headerValue, summary);
 
         string pktTypeText = DisplayTables.GetSllPacketTypeDisplayText(pktType);
-        container.AppendWithCustomText(_PktTypeFieldId, FieldValue.NewU64(pktType), pktTypeText, in context);
+        container.AppendWithCustomText(_PktTypeFieldId, FieldValue.NewU64(pktType), pktTypeText);
 
         string haTypeText = DisplayTables.GetArpHwTypeDisplayText(haType);
-        container.AppendWithCustomText(_HaTypeFieldId, FieldValue.NewU64(haType), haTypeText, in context);
+        container.AppendWithCustomText(_HaTypeFieldId, FieldValue.NewU64(haType), haTypeText);
 
-        container.Append(_HaLenFieldId, FieldValue.NewU64(haLen), in context);
-        container.Append(_SrcEthFieldId, FieldValue.NewMacAddress(srcMac), in context);
+        container.Append(_HaLenFieldId, FieldValue.NewU64(haLen));
+        container.Append(_SrcEthFieldId, FieldValue.NewMacAddress(srcMac));
 
         string etypeText = DisplayTables.GetEtherTypeDisplayText(etherType);
-        container.AppendWithCustomText(_EtypeFieldId, FieldValue.NewU64(etherType), etypeText, in context);
+        container.AppendWithCustomText(_EtypeFieldId, FieldValue.NewU64(etherType), etypeText);
 
         // Dispatch to next protocol via EtherType.
         // Per man 7 packet / linux/if_ether.h, ETH_P_802_3 = 0x0001 and ETH_P_802_2 = 0x0004

@@ -228,6 +228,17 @@ public ref struct FrameSequence<TStack, TTrailer, TInterceptor>
         _Values.ApplyPostFix(FixPhase.Length, dst, offsets, dataLength, ref ctx);
         _Values.ApplyPostFix(FixPhase.PublishPseudoHeader, dst, offsets, dataLength, ref ctx);
         _Values.ApplyPostFix(FixPhase.InnerChecksum, dst, offsets, dataLength, ref ctx);
+
+        // A layer may surface a conformance / state violation (e.g. UDP over
+        // IPv6 with a pinned zero checksum, RFC 8200 §8.1) through the context
+        // status instead of throwing. Abort before any bytes are committed.
+        if (ctx.Status != BuildStatus.Success)
+        {
+            Status = ctx.Status;
+            _State = SequenceState.Done;
+            return false;
+        }
+
         _Values.ApplyPostFix(FixPhase.OuterChecksum, dst, offsets, dataLength, ref ctx);
         _Values.ApplyPostFix(FixPhase.Trailer, dst, offsets, dataLength, ref ctx);
 
@@ -313,6 +324,15 @@ public ref struct FrameSequence<TStack, TTrailer, TInterceptor>
             _Values.ApplyPostFix(FixPhase.Length, scratch, offsets, dataLength, ref ctx);
             _Values.ApplyPostFix(FixPhase.PublishPseudoHeader, scratch, offsets, dataLength, ref ctx);
             _Values.ApplyPostFix(FixPhase.InnerChecksum, scratch, offsets, dataLength, ref ctx);
+
+            // Surface any layer-reported conformance / state violation
+            // (status-based, never via exception) before emitting fragment 0.
+            if (ctx.Status != BuildStatus.Success)
+            {
+                Status = ctx.Status;
+                FinishFragmenting();
+                return false;
+            }
         }
         // OuterChecksum / Trailer for the unfragmented build are intentionally
         // skipped — they are recomputed per fragment in EmitNextFragment.
@@ -413,6 +433,16 @@ public ref struct FrameSequence<TStack, TTrailer, TInterceptor>
             // network-layer datagram with a per-segment transport checksum.
             _Values.ApplyPostFix(FixPhase.PublishPseudoHeader, dst, offsets, dataLength, ref ctx);
             _Values.ApplyPostFix(FixPhase.InnerChecksum, dst, offsets, dataLength, ref ctx);
+
+            // Abort on a layer-reported conformance / state violation
+            // (status-based, never via exception) before committing the segment.
+            if (ctx.Status != BuildStatus.Success)
+            {
+                Status = ctx.Status;
+                FinishFragmenting();
+                return false;
+            }
+
             _Values.ApplyPostFix(FixPhase.OuterChecksum, dst, offsets, dataLength, ref ctx);
         }
         else

@@ -22,12 +22,7 @@ internal sealed class TcpStreamTests
     private const int IPv4HeaderSize = 20;
     private const int TcpOffset = EthHeaderSize + IPv4HeaderSize;
 
-    private static void StartSource(RandomFrameSource source, out FrameInterfaceRegistry registry)
-    {
-        registry = new FrameInterfaceRegistry();
-        FrameSourceId sourceId = registry.RegisterSource(source);
-        source.Start(sourceId, registry);
-    }
+
 
     /// <summary>
     /// Extracts TCP flags byte from a frame's raw data at the standard
@@ -557,7 +552,7 @@ internal sealed class TcpStreamTests
                 InterleaveStreams = false,
             },
         });
-        StartSource(source, out _);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         // 3 + 3 + 4 = 10 frames
         await Assert.That(source.EstimatedFrameCount).IsEqualTo(10);
@@ -607,7 +602,7 @@ internal sealed class TcpStreamTests
             Mode = RandomFrameMode.TcpStreamIPv4,
             TcpStreamOptions = tcpOptions,
         });
-        StartSource(source1, out _);
+        SourceTestFixture.InitializeAndStartSource(source1);
 
         using RandomFrameSource source2 = new(new RandomSourceOptions
         {
@@ -615,7 +610,7 @@ internal sealed class TcpStreamTests
             Mode = RandomFrameMode.TcpStreamIPv4,
             TcpStreamOptions = tcpOptions,
         });
-        StartSource(source2, out _);
+        SourceTestFixture.InitializeAndStartSource(source2);
 
         Frame? f1;
         while ((f1 = source1.NextFrame()) is not null)
@@ -641,7 +636,7 @@ internal sealed class TcpStreamTests
                 IncludeTeardown = true,
             },
         });
-        StartSource(source, out _);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         // 3 + 2 + 4 = 9 frames
         int count = 0;
@@ -673,7 +668,7 @@ internal sealed class TcpStreamTests
                 IncludeTeardown = true,
             },
         });
-        StartSource(source, out _);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         int count = 0;
         while (source.NextFrame() is not null)

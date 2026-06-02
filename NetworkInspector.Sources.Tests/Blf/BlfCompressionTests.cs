@@ -39,28 +39,19 @@ internal sealed class BlfCompressionTests
         return gen;
     }
 
+    /// <summary>Creates a full-scan <see cref="BlfSource"/> from raw BLF data.</summary>
     private static BlfSource CreateFullSource(byte[] data, string name = "test.blf") =>
         BlfSource.FromData(data, name, new BlfSourceOptions { ScanMode = ScanMode.Full });
 
+    /// <summary>Creates a lazy-scan <see cref="BlfSource"/> from raw BLF data.</summary>
     private static BlfSource CreateLazySource(byte[] data, string name = "test.blf") =>
         BlfSource.FromData(data, name, new BlfSourceOptions { ScanMode = ScanMode.Lazy });
 
-    private static void StartSource(BlfSource source)
-    {
-        FrameInterfaceRegistry registry = new();
-        FrameSourceId sourceId = registry.RegisterSource(source);
-        source.Start(sourceId, registry);
-    }
-
+    /// <summary>Creates a <see cref="BlfStreamSource"/> from raw BLF data.</summary>
     private static BlfStreamSource CreateStreamSource(byte[] data, string name = "test.blf") =>
         BlfStreamSource.FromStream(new MemoryStream(data), name);
 
-    private static void StartStreamSource(BlfStreamSource source)
-    {
-        FrameInterfaceRegistry registry = new();
-        FrameSourceId sourceId = registry.RegisterSource(source);
-        source.Start(sourceId, registry);
-    }
+
 
     /// <summary>Reads all frames from a started <see cref="BlfSource"/>.</summary>
     private static List<Frame> ReadAll(BlfSource source)
@@ -268,7 +259,7 @@ internal sealed class BlfCompressionTests
             .Build();
 
         using BlfSource source = CreateFullSource(blfData);
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         await Assert.That(source.EstimatedFrameCount).IsEqualTo(5);
         await Assert.That(source.FrameById(new FrameId(0))).IsNotNull();
@@ -288,7 +279,7 @@ internal sealed class BlfCompressionTests
             .Build();
 
         using BlfSource source = CreateFullSource(blfData);
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         await Assert.That(source.EstimatedFrameCount).IsEqualTo(10);
         Frame? first = source.FrameById(new FrameId(0));
@@ -309,7 +300,7 @@ internal sealed class BlfCompressionTests
             .Build();
 
         using BlfSource source = CreateFullSource(blfData);
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         await Assert.That(source.EstimatedFrameCount).IsEqualTo(10);
         Frame? first = source.FrameById(new FrameId(0));
@@ -332,7 +323,7 @@ internal sealed class BlfCompressionTests
             .Build();
 
         using BlfSource source = CreateFullSource(blfData);
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         await Assert.That(source.EstimatedFrameCount).IsEqualTo(20);
     }
@@ -353,7 +344,7 @@ internal sealed class BlfCompressionTests
             .Build();
 
         using BlfSource source = CreateLazySource(blfData);
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         List<Frame> frames = ReadAll(source);
 
@@ -380,7 +371,7 @@ internal sealed class BlfCompressionTests
             .Build();
 
         using BlfSource source = CreateLazySource(blfData);
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         List<Frame> frames = ReadAll(source);
 
@@ -404,7 +395,7 @@ internal sealed class BlfCompressionTests
             .Build();
 
         using BlfStreamSource source = CreateStreamSource(blfData);
-        StartStreamSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         List<Frame> frames = ReadAll(source);
 
@@ -424,7 +415,7 @@ internal sealed class BlfCompressionTests
             .Build();
 
         using BlfStreamSource source = CreateStreamSource(blfData);
-        StartStreamSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         List<Frame> frames = ReadAll(source);
 
@@ -444,7 +435,7 @@ internal sealed class BlfCompressionTests
             .Build();
 
         using BlfStreamSource source = CreateStreamSource(blfData);
-        StartStreamSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         List<Frame> frames = ReadAll(source);
 
@@ -469,7 +460,7 @@ internal sealed class BlfCompressionTests
             .Build();
 
         using BlfStreamSource source = CreateStreamSource(blfData);
-        StartStreamSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         List<Frame> frames = ReadAll(source);
 
@@ -491,7 +482,7 @@ internal sealed class BlfCompressionTests
             .Build();
 
         using BlfStreamSource source = CreateStreamSource(blfData);
-        StartStreamSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         List<Frame> frames = ReadAll(source);
 
@@ -616,7 +607,7 @@ internal sealed class BlfCompressionTests
         };
 
         using BlfSource source = BlfSource.FromData(blfData, "test.blf", options);
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         await Assert.That(() => ReadAll(source)).Throws<BlfDecompressionLimitExceededException>();
     }
@@ -642,7 +633,7 @@ internal sealed class BlfCompressionTests
         await Assert.That(() =>
         {
             using BlfSource source = BlfSource.FromData(blfData, "test.blf", options);
-            StartSource(source);
+            SourceTestFixture.InitializeAndStartSource(source);
         }).Throws<BlfDecompressionLimitExceededException>();
     }
 
@@ -672,7 +663,7 @@ internal sealed class BlfCompressionTests
         await Assert.That(() =>
         {
             using BlfSource source = BlfSource.FromData(blfData, "test.blf", options);
-            StartSource(source);
+            SourceTestFixture.InitializeAndStartSource(source);
         }).Throws<BlfDecompressionLimitExceededException>();
     }
 
@@ -694,7 +685,7 @@ internal sealed class BlfCompressionTests
         };
 
         using BlfSource source = BlfSource.FromData(blfData, "test.blf", options);
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         List<Frame> frames = ReadAll(source);
         await Assert.That(frames.Count).IsEqualTo(5);
@@ -714,7 +705,7 @@ internal sealed class BlfCompressionTests
 
         using BlfStreamSource source = CreateStreamSource(blfData);
         source.MaxUncompressedContainerSize = 10;   // far below actual container size
-        StartStreamSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         await Assert.That(() => ReadAll(source)).Throws<BlfDecompressionLimitExceededException>();
     }
@@ -732,7 +723,7 @@ internal sealed class BlfCompressionTests
 
         using BlfStreamSource source = CreateStreamSource(blfData);
         source.MaxUncompressedContainerSize = 1024 * 1024;
-        StartStreamSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         List<Frame> frames = ReadAll(source);
         await Assert.That(frames.Count).IsEqualTo(5);

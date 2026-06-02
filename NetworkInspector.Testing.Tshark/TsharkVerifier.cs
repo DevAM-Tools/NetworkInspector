@@ -156,6 +156,11 @@ public static class TsharkVerifier
         string? decodeAs = null,
         string? profileDir = null)
     {
+        foreach (string name in tsharkFieldNames)
+        {
+            ValidateTsharkFieldName(name);
+        }
+
         if (!EnsureAvailableOrAllowed())
         {
             return new string?[tsharkFieldNames.Length];
@@ -211,6 +216,8 @@ public static class TsharkVerifier
         string? profileDir)
     {
         List<PdmlField> matched = GetPdmlFields(frameData, tsharkFieldNames, dlt, decodeAs, profileDir);
+        // StringComparer.Ordinal is correct — field names are validated lowercase-only by
+        // ValidateTsharkFieldName, and PDML output from tshark uses lowercase names.
         Dictionary<string, PdmlField> byName = new(StringComparer.Ordinal);
         foreach (PdmlField f in matched)
         {
@@ -350,16 +357,72 @@ public static class TsharkVerifier
         }
     }
 
+    /// <summary>
+    /// Validates that a tshark field name contains only lowercase ASCII letters, ASCII digits,
+    /// dots, and underscores. This whitelist prevents command-line injection (CWE-78) by
+    /// ensuring a caller-supplied name cannot inject additional tshark options via -e arguments.
+    /// </summary>
+    /// <exception cref="ArgumentException">Thrown when <paramref name="fieldName"/> is empty or
+    /// contains characters outside the allowed set.</exception>
+    private static void ValidateTsharkFieldName(string fieldName)
+    {
+        if (string.IsNullOrWhiteSpace(fieldName))
+        {
+            throw new ArgumentException("tshark field name cannot be empty or whitespace.", nameof(fieldName));
+        }
+
+        foreach (char c in fieldName)
+        {
+            if (!char.IsAsciiLetterLower(c) && !char.IsAsciiDigit(c) && c != '.' && c != '_')
+            {
+                throw new ArgumentException(
+                    $"Invalid tshark field name '{fieldName}': character '{c}' is not allowed. " +
+                    "Only lowercase ASCII letters, digits, dots, and underscores are permitted.",
+                    nameof(fieldName));
+            }
+        }
+    }
+
     /// <summary>Best-effort temp file removal that swallows IO errors.</summary>
     private static void TryDelete(string path)
     {
-        try
+        for (int attempt = 0; attempt < 3; attempt++)
         {
-            File.Delete(path);
-        }
-        catch
-        {
-            // Cleanup best effort.
+            try
+            {
+                File.Delete(path);
+                return;
+            }
+            catch (FileNotFoundException)
+            {
+                // File already gone — nothing to do.
+                return;
+            }
+            catch (IOException ex)
+            {
+                if (attempt < 2)
+                {
+                    // Windows can hold a file open briefly after async stream draining.
+                    // Retry with a short delay before giving up.
+                    Debug.WriteLine(
+                        $"[TsharkVerifier] Temp file '{path}' still locked (attempt {attempt + 1}/3): {ex.Message}. Retrying...");
+                    Thread.Sleep(50);
+                }
+                else
+                {
+                    // All three attempts exhausted — log and abandon cleanup.
+                    Debug.WriteLine(
+                        $"[TsharkVerifier] Failed to delete temp file '{path}' after 3 attempts: {ex.Message}");
+                    return;
+                }
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                // Log to debug output so permissions issues are visible during development
+                // without surfacing as test failures.
+                Debug.WriteLine($"[TsharkVerifier] Failed to delete temp file '{path}': {ex.Message}");
+                return;
+            }
         }
     }
 
@@ -369,136 +432,10 @@ public static class TsharkVerifier
     /// recursively through all nested <c>&lt;field&gt;</c> elements.
     /// </summary>
     private static List<PdmlField> ParsePdmlFields(string pdmlXml, string[] fieldNames)
-    {
-        List<PdmlField> result = [];
-        HashSet<string> requested = new(fieldNames, StringComparer.Ordinal);
+        => PdmlParser.ParseFields(pdmlXml, fieldNames);
 
-        try
-        {
-            XDocument doc = XDocument.Parse(pdmlXml);
-            XElement? packet = ChildByLocalName(doc.Root, "packet");
-            if (packet is null)
-            {
-                return result;
-            }
-
-            foreach (XElement fieldElement in DescendantsWithLocalName(packet, "field"))
-            {
-                string? name = fieldElement.Attribute("name")?.Value;
-                if (name is not null && requested.Contains(name))
-                {
-                    result.Add(ParseFieldElement(fieldElement));
-                    if (result.Count >= fieldNames.Length)
-                    {
-                        // Found everything the caller asked for.
-                        break;
-                    }
-                }
-            }
-        }
-        catch (System.Xml.XmlException)
-        {
-            // Malformed XML — return what we have.
-        }
-
-        return result;
-    }
-
-    /// <summary>
-    /// Parses PDML XML and extracts every <c>&lt;field&gt;</c> belonging to the
-    /// <c>&lt;proto&gt;</c> element with the given name.
-    /// </summary>
     private static List<PdmlField> ParsePdmlProtocolFields(string pdmlXml, string protocolName)
-    {
-        List<PdmlField> result = [];
-
-        try
-        {
-            XDocument doc = XDocument.Parse(pdmlXml);
-            XElement? packet = ChildByLocalName(doc.Root, "packet");
-            if (packet is null)
-            {
-                return result;
-            }
-
-            foreach (XElement proto in DescendantsWithLocalName(packet, "proto"))
-            {
-                string? name = proto.Attribute("name")?.Value;
-                if (!string.Equals(name, protocolName, StringComparison.Ordinal))
-                {
-                    continue;
-                }
-
-                foreach (XElement fieldElement in DescendantsWithLocalName(proto, "field"))
-                {
-                    if (fieldElement.Attribute("name")?.Value is not null)
-                    {
-                        result.Add(ParseFieldElement(fieldElement));
-                    }
-                }
-            }
-        }
-        catch (System.Xml.XmlException)
-        {
-            // Malformed XML — return what we have.
-        }
-
-        return result;
-    }
-
-    /// <summary>Wireshark PDML nests elements under a default XML namespace starting with ~4.x;
-    /// unqualified <c>Element("packet")</c> lookups miss. Match on <see cref="XName.LocalName"/> only.</summary>
-    private static XElement? ChildByLocalName(XElement? parent, string localName)
-    {
-        if (parent is null)
-        {
-            return null;
-        }
-
-        foreach (XElement c in parent.Elements())
-        {
-            if (string.Equals(c.Name.LocalName, localName, StringComparison.Ordinal))
-            {
-                return c;
-            }
-        }
-
-        return null;
-    }
-
-    private static IEnumerable<XElement> ChildrenWithLocalName(XElement parent, string localName)
-    {
-        foreach (XElement c in parent.Elements())
-        {
-            if (string.Equals(c.Name.LocalName, localName, StringComparison.Ordinal))
-            {
-                yield return c;
-            }
-        }
-    }
-
-    private static IEnumerable<XElement> DescendantsWithLocalName(XElement root, string localName)
-    {
-        foreach (XElement e in root.Descendants())
-        {
-            if (string.Equals(e.Name.LocalName, localName, StringComparison.Ordinal))
-            {
-                yield return e;
-            }
-        }
-    }
-
-    /// <summary>Builds a <see cref="PdmlField"/> from a single PDML <c>&lt;field&gt;</c> element.</summary>
-    private static PdmlField ParseFieldElement(XElement fieldElement)
-    {
-        string name = fieldElement.Attribute("name")?.Value ?? string.Empty;
-        string? value = fieldElement.Attribute("value")?.Value;
-        string? show = fieldElement.Attribute("show")?.Value;
-        string? showName = fieldElement.Attribute("showname")?.Value;
-        _ = int.TryParse(fieldElement.Attribute("pos")?.Value, out int pos);
-        _ = int.TryParse(fieldElement.Attribute("size")?.Value, out int size);
-        return new PdmlField(name, value, show, showName, pos, size);
-    }
+        => PdmlParser.ParseProtocolFields(pdmlXml, protocolName);
 
     #endregion
 
@@ -528,6 +465,11 @@ public static class TsharkVerifier
         string? decodeAs = null,
         string? profileDir = null)
     {
+        foreach (string name in tsharkFieldNames)
+        {
+            ValidateTsharkFieldName(name);
+        }
+
         if (!EnsureAvailableOrAllowed())
         {
             return [];
@@ -686,23 +628,27 @@ public static class TsharkVerifier
         }
 
         List<TsharkRecord> records = [];
+        // Pre-allocate the Range buffer once; MemoryExtensions.Split writes results in-place.
+        Span<Range> ranges = stackalloc Range[8];
         foreach (string line in stdout.Split('\n'))
         {
-            string trimmed = line.TrimEnd('\r');
-            if (trimmed.Length == 0)
+            // Use a span-based tab split (stackalloc ranges) to eliminate per-line
+            // string array + per-field string allocations from string.Split('\t').
+            ReadOnlySpan<char> trimmed = line.AsSpan().TrimEnd('\r');
+            if (trimmed.IsEmpty)
             {
                 continue;
             }
 
-            string[] parts = trimmed.Split('\t');
-            if (parts.Length < 6)
+            int fieldCount = MemoryExtensions.Split(trimmed, ranges, '\t');
+            if (fieldCount < 6)
             {
                 throw new InvalidOperationException(
-                    $"Unexpected tshark output line (need >= 6 tab-separated fields): '{trimmed}'.\n" +
+                    $"Unexpected tshark output line (need >= 6 tab-separated fields): '{new string(trimmed)}'.\n" +
                     $"stderr: {stderr}");
             }
 
-            if (!int.TryParse(parts[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out int frameNumber))
+            if (!int.TryParse(trimmed[ranges[0]], NumberStyles.Integer, CultureInfo.InvariantCulture, out int frameNumber))
             {
                 // Non-numeric leading field → not a packet row (defensive: Lua plugins).
                 continue;
@@ -714,26 +660,26 @@ public static class TsharkVerifier
             int encapType;
             try
             {
-                timeNanos = ParseEpochNanos(parts[1]);
-                frameLen = int.Parse(parts[2], CultureInfo.InvariantCulture);
-                interfaceId = parts[4].Length == 0
-                    ? 0
-                    : int.Parse(parts[4], CultureInfo.InvariantCulture);
-                encapType = parts[5].Length == 0
-                    ? 0
-                    : int.Parse(parts[5], CultureInfo.InvariantCulture);
+                timeNanos = ParseEpochNanos(trimmed[ranges[1]]);
+                frameLen = int.Parse(trimmed[ranges[2]], CultureInfo.InvariantCulture);
+                ReadOnlySpan<char> field4 = trimmed[ranges[4]];
+                ReadOnlySpan<char> field5 = trimmed[ranges[5]];
+                interfaceId = field4.IsEmpty ? 0 : int.Parse(field4, CultureInfo.InvariantCulture);
+                encapType = field5.IsEmpty ? 0 : int.Parse(field5, CultureInfo.InvariantCulture);
             }
             catch (Exception ex) when (ex is FormatException or InvalidOperationException)
             {
+                string rowText = new string(trimmed).Replace("\t", "\\t", StringComparison.Ordinal);
                 string copyPath = PreserveCaptureForDiagnostics(filePath);
                 throw new InvalidOperationException(
                     $"Failed to parse tshark output row #{frameNumber} from '{filePath}': {ex.Message}\n" +
-                    $"Row (tab-escaped): '{trimmed.Replace("\t", "\\t", StringComparison.Ordinal)}'\n" +
+                    $"Row (tab-escaped): '{rowText}'\n" +
                     $"Capture preserved at: {copyPath}\n" +
                     $"tshark stderr: {stderr.Trim()}", ex);
             }
 
-            records.Add(new TsharkRecord(frameNumber, timeNanos, frameLen, parts[3], interfaceId, encapType));
+            string interfaceName = new string(trimmed[ranges[3]]);
+            records.Add(new TsharkRecord(frameNumber, timeNanos, frameLen, interfaceName, interfaceId, encapType));
         }
 
         return records;
@@ -820,16 +766,16 @@ public static class TsharkVerifier
     /// fractional digits are zero-padded; extra digits are truncated to nanosecond
     /// precision. Throws with the offending value on empty/unparseable input.
     /// </summary>
-    private static long ParseEpochNanos(string value)
+    private static long ParseEpochNanos(ReadOnlySpan<char> value)
     {
-        if (string.IsNullOrEmpty(value))
+        if (value.IsEmpty)
         {
             throw new InvalidOperationException(
                 "tshark returned an empty 'frame.time_epoch' value. " +
                 "This usually means the capture has frames without a usable timestamp.");
         }
 
-        int dot = value.IndexOf('.', StringComparison.Ordinal);
+        int dot = value.IndexOf('.');
         long secs;
         long nanos;
         if (dot < 0)
@@ -839,17 +785,43 @@ public static class TsharkVerifier
         }
         else
         {
-            secs = long.Parse(value.AsSpan(0, dot), NumberStyles.Integer, CultureInfo.InvariantCulture);
-            string frac = value[(dot + 1)..];
+            secs = long.Parse(value[..dot], NumberStyles.Integer, CultureInfo.InvariantCulture);
+            ReadOnlySpan<char> frac = value[(dot + 1)..];
+
+            // Validate that every fractional character is an ASCII digit.
+            for (int i = 0; i < frac.Length; i++)
+            {
+                if (!char.IsAsciiDigit(frac[i]))
+                {
+                    throw new InvalidOperationException(
+                        $"Malformed fractional seconds in '{new string(value)}': unexpected character '{frac[i]}' at position {i}.");
+                }
+            }
+
+            // Parse exactly 9 digits (nanosecond precision).
+            // Extra digits are truncated; shorter fractions are right-padded with zeros
+            // using a stack-allocated char buffer to avoid heap allocation on this hot path.
             if (frac.Length > 9)
             {
-                frac = frac[..9];
+                nanos = long.Parse(frac[..9], NumberStyles.Integer, CultureInfo.InvariantCulture);
             }
             else if (frac.Length < 9)
             {
-                frac = frac.PadRight(9, '0');
+                Span<char> padded = stackalloc char[9];
+                frac.CopyTo(padded);
+                padded[frac.Length..].Fill('0');
+                nanos = long.Parse(padded, NumberStyles.Integer, CultureInfo.InvariantCulture);
             }
-            nanos = long.Parse(frac, NumberStyles.Integer, CultureInfo.InvariantCulture);
+            else
+            {
+                nanos = long.Parse(frac, NumberStyles.Integer, CultureInfo.InvariantCulture);
+            }
+
+            if (nanos < 0 || nanos >= 1_000_000_000L)
+            {
+                throw new InvalidOperationException(
+                    $"Parsed nanoseconds value {nanos} is out of range [0, 999999999] for '{new string(value)}'.");
+            }
         }
 
         return (secs * 1_000_000_000L) + nanos;

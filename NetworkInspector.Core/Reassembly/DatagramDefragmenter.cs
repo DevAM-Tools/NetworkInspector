@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Core.Reassembly;
 
@@ -15,12 +15,20 @@ namespace NetworkInspector.Core.Reassembly;
 /// with intersecting byte ranges) cause the entire datagram to be silently discarded,
 /// implementing the RFC 5722 requirement for IPv6 fragment reassembly.
 /// </para>
+/// <para>
+/// <b>Thread-safety:</b> Not thread-safe. Designed for single-threaded use during
+/// packet parsing. Each protocol instance manages its own <see cref="DatagramDefragmenter{TKey}"/>.
+/// <see cref="ReassembledCount"/> and <see cref="EvictedCount"/> may be read from a monitoring
+/// thread only after all packet parsing on the owning thread has completed (i.e., with a
+/// happens-before edge established by the caller). For live diagnostic sampling across threads,
+/// use <c>Volatile.Read</c> on the backing field or synchronize externally.
+/// </para>
 /// </summary>
 /// <typeparam name="TKey">
 /// The fragment identification key type (e.g. <see cref="DatagramFragmentKey"/> for IPv4,
 /// <see cref="IPv6DatagramFragmentKey"/> for IPv6).
 /// </typeparam>
-internal sealed class DatagramDefragmenter<TKey> where TKey : struct, IEquatable<TKey>
+public sealed class DatagramDefragmenter<TKey> where TKey : struct, IEquatable<TKey>
 {
     #region Constants
 
@@ -57,17 +65,17 @@ internal sealed class DatagramDefragmenter<TKey> where TKey : struct, IEquatable
     private long _EvictedCount;
 
     /// <summary>Total number of datagrams successfully reassembled.</summary>
-    internal long ReassembledCount => _ReassembledCount;
+    public long ReassembledCount => Interlocked.Read(ref _ReassembledCount);
 
     /// <summary>
     /// Total number of in-progress reassembly entries that were dropped because the
     /// pending-entry limit (<see cref="DefaultMaxEntries"/>) was reached. Useful as a
     /// diagnostic counter to detect lost reassembly results upstream.
     /// </summary>
-    internal long EvictedCount => _EvictedCount;
+    public long EvictedCount => Interlocked.Read(ref _EvictedCount);
 
     /// <summary>Number of in-progress reassembly entries.</summary>
-    internal int PendingCount => _Buffers.Count;
+    public int PendingCount => _Buffers.Count;
 
     #endregion
 
@@ -85,7 +93,7 @@ internal sealed class DatagramDefragmenter<TKey> where TKey : struct, IEquatable
     /// Maximum number of concurrent in-progress reassembly buffers.
     /// Excess entries are evicted oldest-first to prevent unbounded memory growth.
     /// </param>
-    internal DatagramDefragmenter(bool dropOnOverlap = false, int maxEntries = DefaultMaxEntries)
+    public DatagramDefragmenter(bool dropOnOverlap = false, int maxEntries = DefaultMaxEntries)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxEntries);
         _DropOnOverlap = dropOnOverlap;
@@ -113,7 +121,7 @@ internal sealed class DatagramDefragmenter<TKey> where TKey : struct, IEquatable
     /// The complete reassembled payload when all fragments are received,
     /// <c>null</c> if reassembly is still in progress or the datagram was discarded.
     /// </returns>
-    internal byte[]? ProcessFragment(
+    public byte[]? ProcessFragment(
         TKey key,
         int offset,
         bool moreFragments,
@@ -182,7 +190,7 @@ internal sealed class DatagramDefragmenter<TKey> where TKey : struct, IEquatable
 
         if (reassembled is not null)
         {
-            _ReassembledCount++;
+            Interlocked.Increment(ref _ReassembledCount);
         }
 
         return reassembled;
@@ -192,12 +200,12 @@ internal sealed class DatagramDefragmenter<TKey> where TKey : struct, IEquatable
     /// Clears all in-progress reassembly buffers.
     /// Call this when the session ends or the stack is reset.
     /// </summary>
-    internal void Clear()
+    public void Clear()
     {
         _Buffers.Clear();
         _InsertionOrder.Clear();
-        _ReassembledCount = 0;
-        _EvictedCount = 0;
+        Interlocked.Exchange(ref _ReassembledCount, 0);
+        Interlocked.Exchange(ref _EvictedCount, 0);
     }
 
     #endregion
@@ -218,7 +226,7 @@ internal sealed class DatagramDefragmenter<TKey> where TKey : struct, IEquatable
             TKey oldest = _InsertionOrder.Dequeue();
             if (_Buffers.Remove(oldest))
             {
-                _EvictedCount++;
+                Interlocked.Increment(ref _EvictedCount);
                 return;
             }
         }

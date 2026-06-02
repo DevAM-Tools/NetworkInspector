@@ -16,19 +16,17 @@ namespace NetworkInspector.Profiling.Scenarios;
 /// <c>ApplyPostFixUpTo</c>).
 /// </para>
 /// </summary>
-internal sealed class FrameBuilderFragmentedScenario : IProfilingScenario
+[SuppressMessage("Performance", "CA1812:AvoidUninstantiatedInternalClasses", Justification = "Instantiated via reflection in ScenarioDiscovery.Discover.")]
+internal sealed class FrameBuilderFragmentedScenario : FrameBuilderScenarioBase
 {
     /// <summary>Number of full datagrams to build per timed run.</summary>
     private const int DatagramCount = 250_000;
 
-    /// <summary>UDP payload per datagram. /* bytes */</summary>
-    private const int PayloadSize = 8000;
-
     /// <summary>Frame buffer size (link MTU).</summary>
     private const int FrameBufferSize = 1500;
 
-    private readonly byte[] _Payload = new byte[PayloadSize];
-    private byte[] _Buffer = [];
+    /// <inheritdoc/>
+    protected override int PayloadSize => 8000;
 
     private CreatedStack<
         StatelessStack<UdpLayer,
@@ -38,22 +36,24 @@ internal sealed class FrameBuilderFragmentedScenario : IProfilingScenario
         NoInterceptor> _Stack;
 
     /// <inheritdoc/>
-    public string Name => "framebuilder-fragmented";
+    public override string Name => "framebuilder-fragmented";
 
     /// <inheritdoc/>
-    public string Description =>
+    public override string Description =>
         $"Build {DatagramCount:N0} Eth/IPv4/UDP datagrams with a {PayloadSize}-byte payload, "
         + $"emitting six IP fragments per datagram via the new FrameStack fragmentation API.";
 
     /// <inheritdoc/>
-    public long WorkUnitsPerIteration => DatagramCount;
+    public override long WorkUnitsPerIteration => DatagramCount;
 
     /// <inheritdoc/>
-    public string WorkUnitName => "datagrams";
+    public override string WorkUnitName => "datagrams";
 
     /// <inheritdoc/>
-    public void Setup()
+    public override void Setup()
     {
+        InitializeBuffers();
+
         // Cache layer values + frame buffer once; the stack is reused across
         // all builds (R12).  DF cleared so the IPv4 layer can fragment.
         EthernetLayer eth = new(
@@ -71,7 +71,7 @@ internal sealed class FrameBuilderFragmentedScenario : IProfilingScenario
     }
 
     /// <inheritdoc/>
-    public void Run()
+    public override void Run()
     {
         Span<byte> dst = _Buffer;
         for (int i = 0; i < DatagramCount; i++)
@@ -87,7 +87,7 @@ internal sealed class FrameBuilderFragmentedScenario : IProfilingScenario
     }
 
     /// <inheritdoc/>
-    public void Cleanup()
+    public override void Cleanup()
     {
     }
 }

@@ -125,14 +125,13 @@ public sealed partial class IcmpProtocol : IProtocol
     private LazyPopulator _Populator = null!;
 
     partial void OnStartCustom(Stack stack) =>
-        _Populator = (in MutField container) => PopulateIcmpFields(in container);
+        _Populator = PopulateIcmpFields;
 
     /// <summary>
     /// Populates ICMP child fields lazily from stored datagram bytes.
     /// </summary>
     private ParseResult PopulateIcmpFields(in MutField container)
     {
-        ParseContext context = new ParseContext(container.Packet.Stack);
         if (!container.Value.Data.TryGetAsBytes(out ReadOnlyMemory<byte> icmpData))
         {
             return ParseError.InvalidData(ProtocolName, "Container value is not of type Bytes");
@@ -149,15 +148,15 @@ public sealed partial class IcmpProtocol : IProtocol
 
         // Type with display text
         string typeText = DisplayTables.GetIcmpTypeDisplayText(type);
-        container.AppendWithCustomText(_TypeFieldId, FieldValue.NewU64(type), typeText, in context);
+        container.AppendWithCustomText(_TypeFieldId, FieldValue.NewU64(type), typeText);
 
         // Code with display text (per type)
         string codeText = DisplayTables.GetIcmpCodeDisplayText(type, code);
-        container.AppendWithCustomText(_CodeFieldId, FieldValue.NewU64(code), codeText, in context);
+        container.AppendWithCustomText(_CodeFieldId, FieldValue.NewU64(code), codeText);
 
         // Checksum
         string csumText = DisplayTables.FormatHexU16(checksum);
-        container.AppendWithCustomText(_ChecksumFieldId, FieldValue.NewU64(checksum), csumText, in context);
+        container.AppendWithCustomText(_ChecksumFieldId, FieldValue.NewU64(checksum), csumText);
 
         // Checksum validation
         if (_VerifyChecksum)
@@ -166,7 +165,7 @@ public sealed partial class IcmpProtocol : IProtocol
             ushort computed = InternetChecksum.Compute(icmpData.Span);
             bool valid = computed == 0;
             string statusText = valid ? "[Good]" : "[Bad]";
-            container.Append(_ChecksumStatusFieldId, FieldValue.NewString(statusText), in context);
+            container.Append(_ChecksumStatusFieldId, FieldValue.NewString(statusText));
         }
 
         // Echo Request/Reply: identifier and sequence number
@@ -178,16 +177,16 @@ public sealed partial class IcmpProtocol : IProtocol
             ushort seqLe = BinaryPrimitives.ReadUInt16LittleEndian(span[6..8]);
 
             string identHex = DisplayTables.FormatHexU16(ident);
-            container.AppendWithCustomText(_IdentFieldId, FieldValue.NewU64(ident), identHex, in context);
-            container.Append(_SeqFieldId, FieldValue.NewU64(seqBe), in context);
-            container.Append(_SeqLeFieldId, FieldValue.NewU64(seqLe), in context);
+            container.AppendWithCustomText(_IdentFieldId, FieldValue.NewU64(ident), identHex);
+            container.Append(_SeqFieldId, FieldValue.NewU64(seqBe));
+            container.Append(_SeqLeFieldId, FieldValue.NewU64(seqLe));
         }
 
         // Redirect (type 5): Gateway IP address at bytes 4-7
         if (type == TypeRedirect)
         {
             IPv4Address gateway = new(BinaryPrimitives.ReadUInt32BigEndian(span[4..8]));
-            container.Append(_RedirectGwFieldId, FieldValue.NewIPv4(gateway), in context);
+            container.Append(_RedirectGwFieldId, FieldValue.NewIPv4(gateway));
         }
 
         // Error messages (types 3, 5, 11, 12): parse embedded IP header after 8-byte ICMP header
@@ -195,14 +194,14 @@ public sealed partial class IcmpProtocol : IProtocol
             || type == TypeTimeExceeded || type == TypeParamProblem;
         if (isErrorType && icmpData.Length > HeaderSize)
         {
-            AppendEmbeddedIpHeader(in container, span[HeaderSize..], in context);
+            AppendEmbeddedIpHeader(in container, span[HeaderSize..]);
         }
 
         // Payload data (bytes after the 8-byte header, for non-error types)
         if (!isErrorType && icmpData.Length > HeaderSize)
         {
             ReadOnlyMemory<byte> payloadData = icmpData[HeaderSize..];
-            container.Append(_DataFieldId, FieldValue.NewBytes(payloadData), in context);
+            container.Append(_DataFieldId, FieldValue.NewBytes(payloadData));
         }
 
         return 0;
@@ -213,7 +212,7 @@ public sealed partial class IcmpProtocol : IProtocol
     /// ICMP error types (3, 5, 11, 12) include the original IP header + 8 bytes of the
     /// original datagram payload after the ICMP header.
     /// </summary>
-    private void AppendEmbeddedIpHeader(in MutField container, ReadOnlySpan<byte> embeddedData, in ParseContext context)
+    private void AppendEmbeddedIpHeader(in MutField container, ReadOnlySpan<byte> embeddedData)
     {
         // Minimum IPv4 header is 20 bytes
         const int MinIpHeaderSize = 20;
@@ -237,13 +236,13 @@ public sealed partial class IcmpProtocol : IProtocol
         string protoText = DisplayTables.GetIpProtocolDisplayText(protocol);
         MutField ipContainer = container.AppendWithCustomText(
             _RespInIpFieldId, FieldValue.None,
-            ZA.Lazy("Internet Protocol, Src: ", srcAddr, ", Dst: ", dstAddr), in context);
+            ZA.Lazy("Internet Protocol, Src: ", srcAddr, ", Dst: ", dstAddr));
 
-        ipContainer.Append(_RespInIpSrcFieldId, FieldValue.NewIPv4(srcAddr), in context);
-        ipContainer.Append(_RespInIpDstFieldId, FieldValue.NewIPv4(dstAddr), in context);
+        ipContainer.Append(_RespInIpSrcFieldId, FieldValue.NewIPv4(srcAddr));
+        ipContainer.Append(_RespInIpDstFieldId, FieldValue.NewIPv4(dstAddr));
         ipContainer.AppendWithCustomText(_RespInIpProtoFieldId,
-            FieldValue.NewU64(protocol), protoText, in context);
-        ipContainer.Append(_RespInIpTtlFieldId, FieldValue.NewU64(ttl), in context);
+            FieldValue.NewU64(protocol), protoText);
+        ipContainer.Append(_RespInIpTtlFieldId, FieldValue.NewU64(ttl));
     }
 
     /// <summary>

@@ -18,8 +18,6 @@ namespace NetworkInspector.Protocols;
 /// ├── ipv6.hlim: 64
 /// ├── ipv6.src: 2001:db8::1                  [eager]
 /// ├── ipv6.dst: 2001:db8::2                  [eager]
-/// ├── ipv6.addr: 2001:db8::1                [any-match, lazy]
-/// ├── ipv6.addr: 2001:db8::2                [any-match, lazy]
 /// ├── ipv6.hopopts: Hop-by-Hop Options Header (16 bytes)  [optional]
 /// │   ├── ipv6.hopopts.nxt: 43 (IPv6-Route)
 /// │   ├── ipv6.hopopts.len: 1
@@ -128,11 +126,10 @@ public sealed partial class IPv6Protocol : IProtocol
     [IPv6Field("ipv6.dst", "Destination", IndexGroup = Ipv6IndexGroup)]
     private FieldId _DstFieldId;
 
-    // Combined address field (Wireshark ipv6.addr compatibility).
-    // Appended twice (once for src, once for dst) to enable any-match filter semantics:
-    // `ipv6.addr == ::1` matches either source or destination.
-    [IPv6Field("ipv6.addr", "Address", IndexGroup = Ipv6IndexGroup)]
-    private FieldId _AddrFieldId;
+    // Field alias group ID assigned in RegisterFieldsCustom for "ipv6.addr" -> { ipv6.src, ipv6.dst }.
+    // Alias is metadata-only; GetFieldId("ipv6.addr") never resolves and no ipv6.addr node
+    // is appended to the parse tree.
+    private FieldAliasGroupId _AddrAliasGroupId;
 
     #endregion
 
@@ -341,7 +338,7 @@ public sealed partial class IPv6Protocol : IProtocol
     /// </summary>
     partial void OnStartCustom(Stack stack)
     {
-        _Populator = (in MutField container) => PopulateIPv6Fields(in container);
+        _Populator = PopulateIPv6;
         _ExtHeaderFieldIds = BuildExtHeaderFieldIds();
         // IPv6 next-header is also an 8-bit IP protocol number; share the same ip.proto table.
         // Delegate cache stores pre-bound ParseDelegate for direct invocation.
@@ -349,13 +346,29 @@ public sealed partial class IPv6Protocol : IProtocol
     }
 
     /// <summary>
-    /// Populates IPv6 child fields at materialisation time.
-    /// Re-parses the fixed 40-byte header and walks extension headers from the stored bytes
-    /// to avoid per-packet closure allocations.
+    /// Registers protocol-owned alias groups. Adds "ipv6.addr" -> { ipv6.src, ipv6.dst }
+    /// as metadata; the alias is reachable only via the alias-group APIs on IStack.
     /// </summary>
-    private ParseResult PopulateIPv6Fields(in MutField container)
+    partial void RegisterFieldsCustom(IStackBuilder builder, ProtocolId protocolId)
     {
-        ParseContext context = new ParseContext(container.Packet.Stack);
+        _AddrAliasGroupId = builder.RegisterFieldAliasGroup(
+            protocolId,
+            "ipv6.addr",
+            "Any-match alias for source/destination IPv6 addresses.",
+            [_SrcFieldId, _DstFieldId]);
+    }
+
+    /// <summary>
+    /// Lazy populator: version, traffic class, DSCP, ECN, flow label, payload length,
+    /// next header, hop limit, and extension headers. The identifying ipv6.src and
+    /// ipv6.dst fields are appended eagerly by <see cref="Parse"/> so downstream
+    /// transport protocols (UDP/TCP) can read them without triggering materialisation.
+    /// Re-parses the fixed 40-byte header and walks extension headers from the stored
+    /// bytes to avoid per-packet closure allocations. Called on first access of the
+    /// IPv6 container's children.
+    /// </summary>
+    private ParseResult PopulateIPv6(in MutField container)
+    {
         if (!container.Value.Data.TryGetAsBytes(out ReadOnlyMemory<byte> data))
         {
             return ParseError.InvalidData(ProtocolName, "Container value is not of type Bytes");
@@ -374,22 +387,20 @@ public sealed partial class IPv6Protocol : IProtocol
         byte nextHeader = header.NextHeader;
         byte hopLimit = header.HopLimit;
 
-        container.Append(_VersionFieldId, FieldValue.NewU64(header.Version), in context);
-        container.Append(_TclassFieldId, FieldValue.NewU64(trafficClass), in context);
+        container.Append(_VersionFieldId, FieldValue.NewU64(header.Version));
+        container.Append(_TclassFieldId, FieldValue.NewU64(trafficClass));
 
         string dscpText = DisplayTables.GetDscpDisplayText(dscp);
-        container.AppendWithCustomText(_DscpFieldId, FieldValue.NewU64(dscp), dscpText, in context);
+        container.AppendWithCustomText(_DscpFieldId, FieldValue.NewU64(dscp), dscpText);
 
         string ecnText = DisplayTables.GetEcnDisplayText(ecn);
-        container.AppendWithCustomText(_EcnFieldId, FieldValue.NewU64(ecn), ecnText, in context);
+        container.AppendWithCustomText(_EcnFieldId, FieldValue.NewU64(ecn), ecnText);
 
-        container.Append(_FlowFieldId, FieldValue.NewU64(flowLabel), in context);
-        container.Append(_PayloadLenFieldId, FieldValue.NewU64(payloadLength), in context);
+        container.Append(_FlowFieldId, FieldValue.NewU64(flowLabel));
+        container.Append(_PayloadLenFieldId, FieldValue.NewU64(payloadLength));
 
-        string nxtText = DisplayTables.GetIpProtocolDisplayText(nextHeader);
-        container.AppendWithCustomText(_NextHeaderFieldId, FieldValue.NewU64(nextHeader), nxtText, in context);
-
-        container.Append(_HopLimitFieldId, FieldValue.NewU64(hopLimit), in context);
+        // ipv6.nxt (fixed-header Next Header) is appended eagerly in Parse(); not here.
+        container.Append(_HopLimitFieldId, FieldValue.NewU64(hopLimit));
 
         // Parse extension headers into individual sub-fields if present.
         // The stored data includes the full fixed header + extension header region so
@@ -397,16 +408,11 @@ public sealed partial class IPv6Protocol : IProtocol
         if (data.Length > IPv6Header.HeaderSize && IsExtensionHeader(nextHeader))
         {
             ReadOnlySpan<byte> extData = span[IPv6Header.HeaderSize..];
-            IPv6ExtensionHeaderParser.Parse(container, extData, nextHeader, in _ExtHeaderFieldIds, in context);
+            IPv6ExtensionHeaderParser.Parse(container, extData, nextHeader, in _ExtHeaderFieldIds);
         }
 
-        // ipv6.addr any-match fields — deferred to the lazy populator to avoid
-        // 2 boxing allocations (NewIPv6) per packet on the hot parse path.
-        // Re-extract src/dst from the stored header bytes.
-        IPv6Address populatorSrc = IPv6Header.GetSrc(span);
-        IPv6Address populatorDst = IPv6Header.GetDst(span);
-        container.Append(_AddrFieldId, FieldValue.NewIPv6(populatorSrc), in context);
-        container.Append(_AddrFieldId, FieldValue.NewIPv6(populatorDst), in context);
+        // ipv6.addr is exposed as an alias group registered in RegisterFieldsCustom;
+        // no duplicate ipv6.addr field node is appended to the parse tree.
 
         return 0;
     }
@@ -446,7 +452,7 @@ public sealed partial class IPv6Protocol : IProtocol
         }
 
         // Only extract fields needed for: version check, extension-header walk, dispatch, index recording,
-        // summary closure, and eager src/dst append. All other fields are deferred to PopulateIPv6Fields.
+        // summary closure, and eager src/dst append. All other fields are deferred to the lazy populator.
         ushort payloadLength = header.PayloadLength.Value;
         byte nextHeader = header.NextHeader;
         IPv6Address src = IPv6Header.GetSrc(span);
@@ -465,6 +471,21 @@ public sealed partial class IPv6Protocol : IProtocol
         bool moreFragments = false;
         uint fragIdentification = 0;
         byte fragInnerNextHeader = 0; // next header from fragment header (transport protocol)
+
+        // Security header tracking — the index decision for ipv6.ah / ipv6.esp must be made
+        // eagerly here so the presence index is complete without lazy materialization. The
+        // emission guards below mirror IPv6ExtensionHeaderParser.ParseAhHeader/ParseEspHeader
+        // exactly so a recorded group is always backed by an emitted field (no false positives).
+        bool hasAh = false;
+        bool hasEsp = false;
+
+        // Whether the chain contains at least one option-bearing extension header (Hop-by-Hop,
+        // Routing or Destination Options). Only these headers materialize fields in the "ipv6.ext"
+        // index group; Fragment, AH and ESP carry their own groups (ipv6.fraghdr / ipv6.ah / ipv6.esp).
+        // Tracking this separately keeps the presence index free of false positives for fragment-only,
+        // AH-only or ESP-only chains, while extTotalLen still accounts for every header's bytes so the
+        // stored slice covers the whole chain for lazy materialization.
+        bool hasExtGroupHeader = false;
 
         while (depthCount < MaxExtensionHeaders && IsExtensionHeader(finalNextHeader))
         {
@@ -496,8 +517,36 @@ public sealed partial class IPv6Protocol : IProtocol
             }
             else if (finalNextHeader == NhEsp)
             {
-                // ESP terminates extension header chain — payload is encrypted
+                // ESP terminates extension header chain — payload is encrypted. The lazy parser
+                // emits the esp field only when at least the fixed 8-byte SPI+Seq header fits.
+                if (remaining >= 8)
+                {
+                    hasEsp = true;
+                }
                 break;
+            }
+            else if (finalNextHeader == NhAh)
+            {
+                // Authentication Header uses 4-octet length units: total = (payload_len + 2) * 4,
+                // minimum 12 bytes. This differs from the standard 8-octet encoding below, so it
+                // must be handled explicitly to match the lazy parser's emission and advance the
+                // chain correctly.
+                if (remaining < 12)
+                {
+                    break;
+                }
+
+                byte ahPayloadLen = span[extOffset + 1];
+                int ahTotalLen = (ahPayloadLen + 2) * 4;
+                if (remaining < ahTotalLen)
+                {
+                    break;
+                }
+
+                hasAh = true;
+                finalNextHeader = span[extOffset]; // next header at offset 0
+                extOffset += ahTotalLen;
+                extTotalLen += ahTotalLen;
             }
             else
             {
@@ -509,6 +558,7 @@ public sealed partial class IPv6Protocol : IProtocol
                 {
                     break;
                 }
+                hasExtGroupHeader = true;
                 finalNextHeader = span[extOffset]; // next header at offset 0
                 extOffset += extLen;
                 extTotalLen += extLen;
@@ -519,7 +569,7 @@ public sealed partial class IPv6Protocol : IProtocol
 
         // Determine whether extension headers were found
         bool hasExtHeaders = extTotalLen > 0;
-        if (hasExtHeaders)
+        if (hasExtGroupHeader)
         {
             context.RecordGroupPresence(_Ipv6ExtGroupId);
         }
@@ -527,12 +577,20 @@ public sealed partial class IPv6Protocol : IProtocol
         {
             context.RecordGroupPresence(_Ipv6FraghdrGroupId);
         }
+        if (hasAh)
+        {
+            context.RecordGroupPresence(_Ipv6AhGroupId);
+        }
+        if (hasEsp)
+        {
+            context.RecordGroupPresence(_Ipv6EspGroupId);
+        }
 
         // Summary closure captures only src + dst (2 × 16-byte structs) — smaller than the full header.
         LazyString summary = ZA.Lazy(
             "Internet Protocol Version 6, Src: ", src, ", Dst: ", dst);
 
-        // Store the full IPv6 data (fixed header + extension headers) so PopulateIPv6Fields
+        // Store the full IPv6 data (fixed header + extension headers) so the lazy populator
         // can reconstruct all fields including extension header sub-fields.
         int storedLen = hasExtHeaders
             ? Math.Min(IPv6Header.HeaderSize + extTotalLen, data.Length)
@@ -545,10 +603,15 @@ public sealed partial class IPv6Protocol : IProtocol
 
         // Eagerly append src/dst as non-lazy children so downstream protocols
         // (e.g., UDP/TCP) can read IPv6 addresses from the tree without materializing.
-        // ipv6.addr any-match fields are deferred to the lazy populator to avoid
-        // 2 boxing allocations (NewIPv6) per packet on the hot parse path.
-        protoField.Append(_SrcFieldId, FieldValue.NewIPv6(src), in context);
-        protoField.Append(_DstFieldId, FieldValue.NewIPv6(dst), in context);
+        // The any-match name "ipv6.addr" is exposed via the alias group registered in
+        // RegisterFieldsCustom; no duplicate field node is appended.
+        protoField.Append(_SrcFieldId, FieldValue.NewIPv6(src));
+        protoField.Append(_DstFieldId, FieldValue.NewIPv6(dst));
+
+        // Eagerly append ipv6.nxt (fixed-header Next Header) so that the common
+        // protocol-selector field is present without triggering the lazy populator.
+        string nxtTextEager = DisplayTables.GetIpProtocolDisplayText(nextHeader);
+        protoField.AppendWithCustomText(_NextHeaderFieldId, FieldValue.NewU64(nextHeader), nxtTextEager);
 
         // Cache IPv6 addresses in the thread-local field directly on this protocol
         // so downstream transport protocols (TCP, UDP) can read them without

@@ -208,15 +208,18 @@ public sealed partial class TlsProtocol : IProtocol
     [U64Field("tls.alert.description", "Description", IndexGroup = "tls.alert")]
     private FieldId _AlertDescFieldId;
 
-    // Pre-allocated populator
+    #endregion
+
+    #region Populators
+
+    // Pre-allocated delegate; wired once in OnStartCustom (build phase, not per packet).
     private LazyPopulator _Populator = null!;
 
-    partial void OnStartCustom(Stack stack) =>
-        _Populator = (in MutField container) => PopulateTlsFields(in container);
+    partial void OnStartCustom(Stack stack) => _Populator = PopulateTls;
 
     /// <summary>
     /// Parses TLS records from the given data. Supports multiple records per segment.
-    /// Record-level summary is eager; content details are lazy.
+    /// Record-level summary is eager; handshake/alert content is lazy via the protocol container.
     /// </summary>
     public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
     {
@@ -234,10 +237,59 @@ public sealed partial class TlsProtocol : IProtocol
             return ParseError.InsufficientDataWithInfo(ProtocolName, TlsRecordHeader.Size, (ulong)data.Length);
         }
 
-        // Record conditional index groups based on content type
-        if (firstRecord.ContentType == 22)
+        // Eagerly walk every TLS record (and, for handshake records, every handshake message and
+        // extension) to record exactly the content-dependent index groups whose fields the lazy
+        // populator will emit. The decision depends on record content types, handshake message
+        // types and extension types/lengths spread across the whole segment — not just the first
+        // record — so a first-record check would both miss groups in later records and falsely
+        // record handshake groups for truncated messages. This repeats the record walk to keep the
+        // presence index content-consistent with materialization and free of false positives.
+        TlsGroupFlags flags = default;
+        DetectTlsGroups(data.Span, ref flags);
+
+        if (flags.Handshake)
         {
             context.RecordGroupPresence(_TlsHandshakeGroupId);
+        }
+        if (flags.CipherSuite)
+        {
+            context.RecordGroupPresence(_TlsHandshakeCiphersuiteGroupId);
+        }
+        if (flags.Ext)
+        {
+            context.RecordGroupPresence(_TlsHandshakeExtGroupId);
+        }
+        if (flags.Sni)
+        {
+            context.RecordGroupPresence(_TlsSniGroupId);
+        }
+        if (flags.Alpn)
+        {
+            context.RecordGroupPresence(_TlsAlpnGroupId);
+        }
+        if (flags.SupportedGroups)
+        {
+            context.RecordGroupPresence(_TlsSupported_groupsGroupId);
+        }
+        if (flags.SigAlgs)
+        {
+            context.RecordGroupPresence(_TlsSig_algsGroupId);
+        }
+        if (flags.SupportedVersions)
+        {
+            context.RecordGroupPresence(_TlsSupported_versionsGroupId);
+        }
+        if (flags.KeyShare)
+        {
+            context.RecordGroupPresence(_TlsKey_shareGroupId);
+        }
+        if (flags.Cert)
+        {
+            context.RecordGroupPresence(_TlsCertGroupId);
+        }
+        if (flags.Alert)
+        {
+            context.RecordGroupPresence(_TlsAlertGroupId);
         }
 
         // Build summary text from first record
@@ -255,19 +307,21 @@ public sealed partial class TlsProtocol : IProtocol
     }
 
     /// <summary>
-    /// Populates all TLS fields lazily. Handles multiple TLS records per segment.
+    /// Lazy populator: per-record containers with record-header fields, plus handshake
+    /// messages, extensions, and alerts for all TLS records in the segment. Fires on
+    /// first access of the TLS container's children. The <c>tls.record</c> containers
+    /// and the handshake/alert sub-fields are siblings under the <c>tls</c> container.
     /// </summary>
-    private ParseResult PopulateTlsFields(in MutField container)
+    private ParseResult PopulateTls(in MutField container)
     {
-        ParseContext context = new ParseContext(container.Packet.Stack);
         if (!container.Value.Data.TryGetAsBytes(out ReadOnlyMemory<byte> tlsData))
         {
             return ParseError.InvalidData(ProtocolName, "Container value is not of type Bytes");
         }
+
         ReadOnlySpan<byte> span = tlsData.Span;
         int offset = 0;
 
-        // Loop over TLS records in this segment
         while (offset + TlsRecordHeader.Size <= span.Length)
         {
             if (!TlsRecordHeader.TryParse(span[offset..], out TlsRecordHeader record))
@@ -281,30 +335,28 @@ public sealed partial class TlsProtocol : IProtocol
                 break; // Incomplete record — stop parsing
             }
 
-            // Create record container
             string ctText = TlsDisplayTables.GetContentTypeDisplayText(record.ContentType);
             string versionText = TlsDisplayTables.GetVersionDisplayText(record.Version);
             MutField recordField = container.AppendWithCustomText(
                 _RecordFieldId, FieldValue.None,
-                ZA.Lazy("TLS Record Layer: ", ctText), in context);
+                ZA.Lazy("TLS Record Layer: ", ctText));
 
             recordField.AppendWithCustomText(_ContentTypeFieldId,
-                FieldValue.NewU64(record.ContentType), ctText, in context);
+                FieldValue.NewU64(record.ContentType), ctText);
             recordField.AppendWithCustomText(_RecordVersionFieldId,
-                FieldValue.NewU64(record.Version), versionText, in context);
-            recordField.Append(_RecordLengthFieldId, FieldValue.NewU64(record.Length), in context);
+                FieldValue.NewU64(record.Version), versionText);
+            recordField.Append(_RecordLengthFieldId, FieldValue.NewU64(record.Length));
 
-            // Parse record content based on content type
             int payloadOffset = offset + TlsRecordHeader.Size;
             ReadOnlySpan<byte> payload = span[payloadOffset..recordPayloadEnd];
 
             switch (record.ContentType)
             {
                 case 22: // Handshake
-                    ParseHandshakeRecords(in recordField, payload, tlsData, payloadOffset, in context);
+                    ParseHandshakeRecords(in container, payload, tlsData, payloadOffset);
                     break;
                 case 21: // Alert
-                    ParseAlert(in recordField, payload, in context);
+                    ParseAlert(in container, payload);
                     break;
             }
 
@@ -319,7 +371,7 @@ public sealed partial class TlsProtocol : IProtocol
     /// </summary>
     private void ParseHandshakeRecords(
         in MutField recordField, ReadOnlySpan<byte> payload,
-        ReadOnlyMemory<byte> fullData, int payloadBaseOffset, in ParseContext context)
+        ReadOnlyMemory<byte> fullData, int payloadBaseOffset)
     {
         int offset = 0;
 
@@ -339,12 +391,12 @@ public sealed partial class TlsProtocol : IProtocol
             string hsTypeName = TlsDisplayTables.GetHandshakeTypeName(hsType);
             MutField hsField = recordField.AppendWithCustomText(
                 _HandshakeFieldId, FieldValue.None,
-                ZA.Lazy("Handshake Protocol: ", hsTypeName), in context);
+                ZA.Lazy("Handshake Protocol: ", hsTypeName));
 
             hsField.AppendWithCustomText(_HandshakeTypeFieldId,
                 FieldValue.NewU64(hsType),
-                TlsDisplayTables.GetHandshakeTypeDisplayText(hsType), in context);
-            hsField.Append(_HandshakeLengthFieldId, FieldValue.NewU64((ulong)hsLength), in context);
+                TlsDisplayTables.GetHandshakeTypeDisplayText(hsType));
+            hsField.Append(_HandshakeLengthFieldId, FieldValue.NewU64((ulong)hsLength));
 
             ReadOnlySpan<byte> hsBody = payload[offset..(offset + hsLength)];
 
@@ -352,13 +404,13 @@ public sealed partial class TlsProtocol : IProtocol
             switch (hsType)
             {
                 case 1: // Client Hello
-                    ParseClientHello(in hsField, hsBody, fullData, payloadBaseOffset + offset, in context);
+                    ParseClientHello(in hsField, hsBody, fullData, payloadBaseOffset + offset);
                     break;
                 case 2: // Server Hello
-                    ParseServerHello(in hsField, hsBody, fullData, payloadBaseOffset + offset, in context);
+                    ParseServerHello(in hsField, hsBody, fullData, payloadBaseOffset + offset);
                     break;
                 case 11: // Certificate
-                    ParseCertificate(in hsField, hsBody, fullData, payloadBaseOffset + offset, in context);
+                    ParseCertificate(in hsField, hsBody, fullData, payloadBaseOffset + offset);
                     break;
             }
 
@@ -371,7 +423,7 @@ public sealed partial class TlsProtocol : IProtocol
     /// </summary>
     private void ParseClientHello(
         in MutField hsField, ReadOnlySpan<byte> body,
-        ReadOnlyMemory<byte> fullData, int bodyBaseOffset, in ParseContext context)
+        ReadOnlyMemory<byte> fullData, int bodyBaseOffset)
     {
         int pos = 0;
 
@@ -382,7 +434,7 @@ public sealed partial class TlsProtocol : IProtocol
         }
         ushort version = BinaryPrimitives.ReadUInt16BigEndian(body[pos..]);
         hsField.AppendWithCustomText(_HandshakeVersionFieldId,
-            FieldValue.NewU64(version), TlsDisplayTables.GetVersionDisplayText(version), in context);
+            FieldValue.NewU64(version), TlsDisplayTables.GetVersionDisplayText(version));
         pos += 2;
 
         // Random (32 bytes)
@@ -390,7 +442,7 @@ public sealed partial class TlsProtocol : IProtocol
         {
             return;
         }
-        hsField.Append(_HandshakeRandomFieldId, FieldValue.NewBytes(fullData.Slice(bodyBaseOffset + pos, 32)), in context);
+        hsField.Append(_HandshakeRandomFieldId, FieldValue.NewBytes(fullData.Slice(bodyBaseOffset + pos, 32)));
         pos += 32;
 
         // Session ID
@@ -399,7 +451,7 @@ public sealed partial class TlsProtocol : IProtocol
             return;
         }
         byte sessionIdLen = body[pos++];
-        hsField.Append(_SessionIdLengthFieldId, FieldValue.NewU64(sessionIdLen), in context);
+        hsField.Append(_SessionIdLengthFieldId, FieldValue.NewU64(sessionIdLen));
 
         if (pos + sessionIdLen > body.Length)
         {
@@ -407,7 +459,7 @@ public sealed partial class TlsProtocol : IProtocol
         }
         if (sessionIdLen > 0)
         {
-            hsField.Append(_SessionIdFieldId, FieldValue.NewBytes(fullData.Slice(bodyBaseOffset + pos, sessionIdLen)), in context);
+            hsField.Append(_SessionIdFieldId, FieldValue.NewBytes(fullData.Slice(bodyBaseOffset + pos, sessionIdLen)));
         }
         pos += sessionIdLen;
 
@@ -417,7 +469,7 @@ public sealed partial class TlsProtocol : IProtocol
             return;
         }
         ushort cipherSuitesLen = BinaryPrimitives.ReadUInt16BigEndian(body[pos..]);
-        hsField.Append(_CipherSuitesLengthFieldId, FieldValue.NewU64(cipherSuitesLen), in context);
+        hsField.Append(_CipherSuitesLengthFieldId, FieldValue.NewU64(cipherSuitesLen));
         pos += 2;
 
         if (pos + cipherSuitesLen > body.Length)
@@ -430,7 +482,7 @@ public sealed partial class TlsProtocol : IProtocol
             ushort suite = BinaryPrimitives.ReadUInt16BigEndian(body[pos..]);
             hsField.AppendWithCustomText(_CipherSuiteFieldId,
                 FieldValue.NewU64(suite),
-                TlsDisplayTables.GetCipherSuiteDisplayText(suite), in context);
+                TlsDisplayTables.GetCipherSuiteDisplayText(suite));
             pos += 2;
         }
         pos = cipherSuitesEnd;
@@ -441,7 +493,7 @@ public sealed partial class TlsProtocol : IProtocol
             return;
         }
         byte compMethodsLen = body[pos++];
-        hsField.Append(_CompMethodsLengthFieldId, FieldValue.NewU64(compMethodsLen), in context);
+        hsField.Append(_CompMethodsLengthFieldId, FieldValue.NewU64(compMethodsLen));
 
         int compMethodsEnd = pos + compMethodsLen;
         if (compMethodsEnd > body.Length)
@@ -453,7 +505,7 @@ public sealed partial class TlsProtocol : IProtocol
             byte method = body[pos++];
             string methodText = TlsDisplayTables.GetCompressionMethodDisplayText(method);
             hsField.AppendWithCustomText(_CompMethodFieldId,
-                FieldValue.NewU64(method), methodText, in context);
+                FieldValue.NewU64(method), methodText);
         }
 
         // Extensions
@@ -462,10 +514,10 @@ public sealed partial class TlsProtocol : IProtocol
             return;
         }
         ushort extensionsLen = BinaryPrimitives.ReadUInt16BigEndian(body[pos..]);
-        hsField.Append(_ExtensionsLengthFieldId, FieldValue.NewU64(extensionsLen), in context);
+        hsField.Append(_ExtensionsLengthFieldId, FieldValue.NewU64(extensionsLen));
         pos += 2;
 
-        ParseExtensions(in hsField, body, ref pos, extensionsLen, fullData, bodyBaseOffset, in context);
+        ParseExtensions(in hsField, body, ref pos, extensionsLen, fullData, bodyBaseOffset);
     }
 
     /// <summary>
@@ -473,7 +525,7 @@ public sealed partial class TlsProtocol : IProtocol
     /// </summary>
     private void ParseServerHello(
         in MutField hsField, ReadOnlySpan<byte> body,
-        ReadOnlyMemory<byte> fullData, int bodyBaseOffset, in ParseContext context)
+        ReadOnlyMemory<byte> fullData, int bodyBaseOffset)
     {
         int pos = 0;
 
@@ -484,7 +536,7 @@ public sealed partial class TlsProtocol : IProtocol
         }
         ushort version = BinaryPrimitives.ReadUInt16BigEndian(body[pos..]);
         hsField.AppendWithCustomText(_HandshakeVersionFieldId,
-            FieldValue.NewU64(version), TlsDisplayTables.GetVersionDisplayText(version), in context);
+            FieldValue.NewU64(version), TlsDisplayTables.GetVersionDisplayText(version));
         pos += 2;
 
         // Random (32 bytes)
@@ -492,7 +544,7 @@ public sealed partial class TlsProtocol : IProtocol
         {
             return;
         }
-        hsField.Append(_HandshakeRandomFieldId, FieldValue.NewBytes(fullData.Slice(bodyBaseOffset + pos, 32)), in context);
+        hsField.Append(_HandshakeRandomFieldId, FieldValue.NewBytes(fullData.Slice(bodyBaseOffset + pos, 32)));
         pos += 32;
 
         // Session ID
@@ -501,7 +553,7 @@ public sealed partial class TlsProtocol : IProtocol
             return;
         }
         byte sessionIdLen = body[pos++];
-        hsField.Append(_SessionIdLengthFieldId, FieldValue.NewU64(sessionIdLen), in context);
+        hsField.Append(_SessionIdLengthFieldId, FieldValue.NewU64(sessionIdLen));
 
         if (pos + sessionIdLen > body.Length)
         {
@@ -509,7 +561,7 @@ public sealed partial class TlsProtocol : IProtocol
         }
         if (sessionIdLen > 0)
         {
-            hsField.Append(_SessionIdFieldId, FieldValue.NewBytes(fullData.Slice(bodyBaseOffset + pos, sessionIdLen)), in context);
+            hsField.Append(_SessionIdFieldId, FieldValue.NewBytes(fullData.Slice(bodyBaseOffset + pos, sessionIdLen)));
         }
         pos += sessionIdLen;
 
@@ -521,7 +573,7 @@ public sealed partial class TlsProtocol : IProtocol
         ushort suite = BinaryPrimitives.ReadUInt16BigEndian(body[pos..]);
         hsField.AppendWithCustomText(_CipherSuiteFieldId,
             FieldValue.NewU64(suite),
-            TlsDisplayTables.GetCipherSuiteDisplayText(suite), in context);
+            TlsDisplayTables.GetCipherSuiteDisplayText(suite));
         pos += 2;
 
         // Compression Method (1 byte — single method)
@@ -532,16 +584,16 @@ public sealed partial class TlsProtocol : IProtocol
         byte compMethod = body[pos++];
         string methodText = TlsDisplayTables.GetCompressionMethodDisplayText(compMethod);
         hsField.AppendWithCustomText(_CompMethodFieldId,
-            FieldValue.NewU64(compMethod), methodText, in context);
+            FieldValue.NewU64(compMethod), methodText);
 
         // Extensions (if remaining data)
         if (pos + 2 <= body.Length)
         {
             ushort extensionsLen = BinaryPrimitives.ReadUInt16BigEndian(body[pos..]);
-            hsField.Append(_ExtensionsLengthFieldId, FieldValue.NewU64(extensionsLen), in context);
+            hsField.Append(_ExtensionsLengthFieldId, FieldValue.NewU64(extensionsLen));
             pos += 2;
 
-            ParseExtensions(in hsField, body, ref pos, extensionsLen, fullData, bodyBaseOffset, in context);
+            ParseExtensions(in hsField, body, ref pos, extensionsLen, fullData, bodyBaseOffset);
         }
     }
 
@@ -551,7 +603,7 @@ public sealed partial class TlsProtocol : IProtocol
     /// </summary>
     private void ParseCertificate(
         in MutField hsField, ReadOnlySpan<byte> body,
-        ReadOnlyMemory<byte> fullData, int bodyBaseOffset, in ParseContext context)
+        ReadOnlyMemory<byte> fullData, int bodyBaseOffset)
     {
         if (body.Length < 3)
         {
@@ -560,7 +612,7 @@ public sealed partial class TlsProtocol : IProtocol
 
         // Total certificates length (3 bytes big-endian)
         int certsLength = (body[0] << 16) | (body[1] << 8) | body[2];
-        hsField.Append(_CertificatesLengthFieldId, FieldValue.NewU64((ulong)certsLength), in context);
+        hsField.Append(_CertificatesLengthFieldId, FieldValue.NewU64((ulong)certsLength));
 
         int pos = 3;
         int end = Math.Min(pos + certsLength, body.Length);
@@ -579,14 +631,14 @@ public sealed partial class TlsProtocol : IProtocol
 
             MutField certField = hsField.AppendWithCustomText(
                 _CertificateFieldId, FieldValue.None,
-                ZA.Lazy("Certificate [", certIndex, "] (", certLen, " bytes)"), in context);
+                ZA.Lazy("Certificate [", certIndex, "] (", certLen, " bytes)"));
 
-            certField.Append(_CertificateLengthFieldId, FieldValue.NewU64((ulong)certLen), in context);
+            certField.Append(_CertificateLengthFieldId, FieldValue.NewU64((ulong)certLen));
 
             if (certLen > 0)
             {
                 certField.Append(_CertificateDataFieldId,
-                    FieldValue.NewBytes(fullData.Slice(bodyBaseOffset + pos, certLen)), in context);
+                    FieldValue.NewBytes(fullData.Slice(bodyBaseOffset + pos, certLen)));
             }
 
             pos += certLen;
@@ -599,7 +651,7 @@ public sealed partial class TlsProtocol : IProtocol
     /// </summary>
     private void ParseExtensions(
         in MutField parent, ReadOnlySpan<byte> body, ref int pos, ushort extensionsLen,
-        ReadOnlyMemory<byte> fullData, int bodyBaseOffset, in ParseContext context)
+        ReadOnlyMemory<byte> fullData, int bodyBaseOffset)
     {
         int extensionsEnd = pos + extensionsLen;
         if (extensionsEnd > body.Length)
@@ -621,18 +673,18 @@ public sealed partial class TlsProtocol : IProtocol
             string extName = TlsDisplayTables.GetExtensionTypeName(extType);
             MutField extField = parent.AppendWithCustomText(
                 _ExtensionFieldId, FieldValue.None,
-                ZA.Lazy("Extension: ", extName), in context);
+                ZA.Lazy("Extension: ", extName));
 
             extField.AppendWithCustomText(_ExtensionTypeFieldId,
                 FieldValue.NewU64(extType),
-                TlsDisplayTables.GetExtensionTypeDisplayText(extType), in context);
-            extField.Append(_ExtensionLenFieldId, FieldValue.NewU64(extLen), in context);
+                TlsDisplayTables.GetExtensionTypeDisplayText(extType));
+            extField.Append(_ExtensionLenFieldId, FieldValue.NewU64(extLen));
 
             if (extLen > 0)
             {
                 // Parse known extension types
                 ReadOnlySpan<byte> extData = body[pos..(pos + extLen)];
-                ParseExtensionData(in extField, extType, extData, fullData, bodyBaseOffset + pos, in context);
+                ParseExtensionData(in extField, extType, extData, fullData, bodyBaseOffset + pos);
             }
 
             pos += extLen;
@@ -644,34 +696,34 @@ public sealed partial class TlsProtocol : IProtocol
     /// </summary>
     private void ParseExtensionData(
         in MutField extField, ushort extType, ReadOnlySpan<byte> extData,
-        ReadOnlyMemory<byte> fullData, int dataBaseOffset, in ParseContext context)
+        ReadOnlyMemory<byte> fullData, int dataBaseOffset)
     {
         switch (extType)
         {
             case 0: // server_name (SNI)
-                ParseSni(in extField, extData, in context);
+                ParseSni(in extField, extData);
                 break;
             case 10: // supported_groups
-                ParseSupportedGroups(in extField, extData, in context);
+                ParseSupportedGroups(in extField, extData);
                 break;
             case 13: // signature_algorithms
-                ParseSignatureAlgorithms(in extField, extData, in context);
+                ParseSignatureAlgorithms(in extField, extData);
                 break;
             case 16: // ALPN
-                ParseAlpn(in extField, extData, in context);
+                ParseAlpn(in extField, extData);
                 break;
             case 43: // supported_versions
-                ParseSupportedVersions(in extField, extData, in context);
+                ParseSupportedVersions(in extField, extData);
                 break;
             case 51: // key_share
-                ParseKeyShare(in extField, extData, fullData, dataBaseOffset, in context);
+                ParseKeyShare(in extField, extData, fullData, dataBaseOffset);
                 break;
             default:
                 // Store raw extension data for unknown types
                 if (extData.Length > 0)
                 {
                     extField.Append(_ExtensionDataFieldId,
-                        FieldValue.NewBytes(fullData.Slice(dataBaseOffset, extData.Length)), in context);
+                        FieldValue.NewBytes(fullData.Slice(dataBaseOffset, extData.Length)));
                 }
                 break;
         }
@@ -681,7 +733,7 @@ public sealed partial class TlsProtocol : IProtocol
     /// Parses the Server Name Indication (SNI) extension.
     /// Format: ServerNameList(2) → [ NameType(1) HostNameLength(2) HostName(N) ]*
     /// </summary>
-    private void ParseSni(in MutField extField, ReadOnlySpan<byte> data, in ParseContext context)
+    private void ParseSni(in MutField extField, ReadOnlySpan<byte> data)
     {
         if (data.Length < 5)
         {
@@ -705,7 +757,7 @@ public sealed partial class TlsProtocol : IProtocol
             if (nameType == 0)
             {
                 string serverName = Encoding.ASCII.GetString(data[pos..(pos + nameLen)]);
-                extField.Append(_SniFieldId, FieldValue.NewString(serverName), in context);
+                extField.Append(_SniFieldId, FieldValue.NewString(serverName));
             }
 
             pos += nameLen;
@@ -716,7 +768,7 @@ public sealed partial class TlsProtocol : IProtocol
     /// Parses the Application-Layer Protocol Negotiation (ALPN) extension.
     /// Format: ALPNProtocolList(2) → [ StringLength(1) ProtocolName(N) ]*
     /// </summary>
-    private void ParseAlpn(in MutField extField, ReadOnlySpan<byte> data, in ParseContext context)
+    private void ParseAlpn(in MutField extField, ReadOnlySpan<byte> data)
     {
         if (data.Length < 2)
         {
@@ -734,13 +786,13 @@ public sealed partial class TlsProtocol : IProtocol
             }
 
             string protocol = Encoding.ASCII.GetString(data[pos..(pos + protoLen)]);
-            extField.Append(_AlpnFieldId, FieldValue.NewString(protocol), in context);
+            extField.Append(_AlpnFieldId, FieldValue.NewString(protocol));
             pos += protoLen;
         }
     }
 
     /// <summary>Parses a TLS Alert record (2 bytes: level + description).</summary>
-    private void ParseAlert(in MutField recordField, ReadOnlySpan<byte> payload, in ParseContext context)
+    private void ParseAlert(in MutField recordField, ReadOnlySpan<byte> payload)
     {
         if (payload.Length < 2)
         {
@@ -752,17 +804,17 @@ public sealed partial class TlsProtocol : IProtocol
 
         recordField.AppendWithCustomText(_AlertLevelFieldId,
             FieldValue.NewU64(level),
-            TlsDisplayTables.GetAlertLevelDisplayText(level), in context);
+            TlsDisplayTables.GetAlertLevelDisplayText(level));
         recordField.AppendWithCustomText(_AlertDescFieldId,
             FieldValue.NewU64(description),
-            TlsDisplayTables.GetAlertDescriptionDisplayText(description), in context);
+            TlsDisplayTables.GetAlertDescriptionDisplayText(description));
     }
 
     /// <summary>
     /// Parses the supported_groups extension (type 10, RFC 8422).
     /// Format: NamedGroupList(2) → [ NamedGroup(2) ]*
     /// </summary>
-    private void ParseSupportedGroups(in MutField extField, ReadOnlySpan<byte> data, in ParseContext context)
+    private void ParseSupportedGroups(in MutField extField, ReadOnlySpan<byte> data)
     {
         if (data.Length < 2)
         {
@@ -778,7 +830,7 @@ public sealed partial class TlsProtocol : IProtocol
             ushort group = BinaryPrimitives.ReadUInt16BigEndian(data[pos..]);
             extField.AppendWithCustomText(_SupportedGroupFieldId,
                 FieldValue.NewU64(group),
-                TlsDisplayTables.GetSupportedGroupDisplayText(group), in context);
+                TlsDisplayTables.GetSupportedGroupDisplayText(group));
             pos += 2;
         }
     }
@@ -787,7 +839,7 @@ public sealed partial class TlsProtocol : IProtocol
     /// Parses the signature_algorithms extension (type 13, RFC 8446).
     /// Format: SignatureSchemeList(2) → [ SignatureScheme(2) ]*
     /// </summary>
-    private void ParseSignatureAlgorithms(in MutField extField, ReadOnlySpan<byte> data, in ParseContext context)
+    private void ParseSignatureAlgorithms(in MutField extField, ReadOnlySpan<byte> data)
     {
         if (data.Length < 2)
         {
@@ -803,7 +855,7 @@ public sealed partial class TlsProtocol : IProtocol
             ushort algo = BinaryPrimitives.ReadUInt16BigEndian(data[pos..]);
             extField.AppendWithCustomText(_SigAlgFieldId,
                 FieldValue.NewU64(algo),
-                TlsDisplayTables.GetSignatureAlgorithmDisplayText(algo), in context);
+                TlsDisplayTables.GetSignatureAlgorithmDisplayText(algo));
             pos += 2;
         }
     }
@@ -813,7 +865,7 @@ public sealed partial class TlsProtocol : IProtocol
     /// Client Hello format: ListLength(1) → [ ProtocolVersion(2) ]*
     /// Server Hello format: ProtocolVersion(2)
     /// </summary>
-    private void ParseSupportedVersions(in MutField extField, ReadOnlySpan<byte> data, in ParseContext context)
+    private void ParseSupportedVersions(in MutField extField, ReadOnlySpan<byte> data)
     {
         if (data.Length == 2)
         {
@@ -821,7 +873,7 @@ public sealed partial class TlsProtocol : IProtocol
             ushort version = BinaryPrimitives.ReadUInt16BigEndian(data);
             extField.AppendWithCustomText(_SupportedVersionFieldId,
                 FieldValue.NewU64(version),
-                TlsDisplayTables.GetVersionDisplayText(version), in context);
+                TlsDisplayTables.GetVersionDisplayText(version));
             return;
         }
 
@@ -840,7 +892,7 @@ public sealed partial class TlsProtocol : IProtocol
             ushort version = BinaryPrimitives.ReadUInt16BigEndian(data[pos..]);
             extField.AppendWithCustomText(_SupportedVersionFieldId,
                 FieldValue.NewU64(version),
-                TlsDisplayTables.GetVersionDisplayText(version), in context);
+                TlsDisplayTables.GetVersionDisplayText(version));
             pos += 2;
         }
     }
@@ -852,7 +904,7 @@ public sealed partial class TlsProtocol : IProtocol
     /// </summary>
     private void ParseKeyShare(
         in MutField extField, ReadOnlySpan<byte> data,
-        ReadOnlyMemory<byte> fullData, int dataBaseOffset, in ParseContext context)
+        ReadOnlyMemory<byte> fullData, int dataBaseOffset)
     {
         int pos = 0;
 
@@ -882,20 +934,428 @@ public sealed partial class TlsProtocol : IProtocol
             string groupName = TlsDisplayTables.GetSupportedGroupDisplayText(group);
             MutField entry = extField.AppendWithCustomText(
                 _KeyShareEntryFieldId, FieldValue.None,
-                ZA.Lazy("Key Share Entry: Group: ", groupName, ", Key Exchange length: ", keyExLen), in context);
+                ZA.Lazy("Key Share Entry: Group: ", groupName, ", Key Exchange length: ", keyExLen));
 
             entry.AppendWithCustomText(_KeyShareGroupFieldId,
-                FieldValue.NewU64(group), groupName, in context);
-            entry.Append(_KeyShareKeyExchangeLenFieldId, FieldValue.NewU64(keyExLen), in context);
+                FieldValue.NewU64(group), groupName);
+            entry.Append(_KeyShareKeyExchangeLenFieldId, FieldValue.NewU64(keyExLen));
 
             if (keyExLen > 0)
             {
                 entry.Append(_KeyShareKeyExchangeFieldId,
-                    FieldValue.NewBytes(fullData.Slice(dataBaseOffset + pos, keyExLen)), in context);
+                    FieldValue.NewBytes(fullData.Slice(dataBaseOffset + pos, keyExLen)));
             }
 
             pos += keyExLen;
         }
     }
+    #endregion
+
+    #region Eager index-group detection
+
+    /// <summary>
+    /// Flags for the content-dependent TLS index groups discovered during the eager detection walk.
+    /// Each flag mirrors the emission guard of the corresponding field in the lazy populator so the
+    /// presence index records a group if and only if materialization would emit a field for it.
+    /// </summary>
+    private struct TlsGroupFlags
+    {
+        public bool Handshake;
+        public bool CipherSuite;
+        public bool Ext;
+        public bool Sni;
+        public bool Alpn;
+        public bool SupportedGroups;
+        public bool SigAlgs;
+        public bool SupportedVersions;
+        public bool KeyShare;
+        public bool Cert;
+        public bool Alert;
+    }
+
+    /// <summary>
+    /// Eagerly walks all TLS records, mirroring <see cref="PopulateTls"/>'s record loop, and sets the
+    /// content-dependent group flags. Duplicates the record/handshake/extension walk so the index is
+    /// complete and content-consistent without forcing field materialization.
+    /// </summary>
+    private static void DetectTlsGroups(ReadOnlySpan<byte> span, ref TlsGroupFlags flags)
+    {
+        int offset = 0;
+
+        while (offset + TlsRecordHeader.Size <= span.Length)
+        {
+            if (!TlsRecordHeader.TryParse(span[offset..], out TlsRecordHeader record))
+            {
+                break;
+            }
+
+            int recordPayloadEnd = offset + TlsRecordHeader.Size + record.Length;
+            if (recordPayloadEnd > span.Length)
+            {
+                break;
+            }
+
+            int payloadOffset = offset + TlsRecordHeader.Size;
+            ReadOnlySpan<byte> payload = span[payloadOffset..recordPayloadEnd];
+
+            switch (record.ContentType)
+            {
+                case 22: // Handshake
+                    DetectHandshakeRecords(payload, ref flags);
+                    break;
+                case 21: // Alert — ParseAlert emits when payload has level + description.
+                    if (payload.Length >= 2)
+                    {
+                        flags.Alert = true;
+                    }
+                    break;
+            }
+
+            offset = recordPayloadEnd;
+        }
+    }
+
+    /// <summary>Mirrors <see cref="ParseHandshakeRecords"/> to flag handshake-dependent groups.</summary>
+    private static void DetectHandshakeRecords(ReadOnlySpan<byte> payload, ref TlsGroupFlags flags)
+    {
+        int offset = 0;
+
+        while (offset + 4 <= payload.Length)
+        {
+            byte hsType = payload[offset];
+            int hsLength = (payload[offset + 1] << 16) | (payload[offset + 2] << 8) | payload[offset + 3];
+            offset += 4;
+
+            if (offset + hsLength > payload.Length)
+            {
+                break;
+            }
+
+            // A handshake message field is emitted for every complete message.
+            flags.Handshake = true;
+
+            ReadOnlySpan<byte> hsBody = payload[offset..(offset + hsLength)];
+
+            switch (hsType)
+            {
+                case 1: // Client Hello
+                    DetectClientHello(hsBody, ref flags);
+                    break;
+                case 2: // Server Hello
+                    DetectServerHello(hsBody, ref flags);
+                    break;
+                case 11: // Certificate — ParseCertificate emits the certificates-length field when body >= 3.
+                    if (hsBody.Length >= 3)
+                    {
+                        flags.Cert = true;
+                    }
+                    break;
+            }
+
+            offset += hsLength;
+        }
+    }
+
+    /// <summary>Mirrors <see cref="ParseClientHello"/> through the cipher-suite list and extensions.</summary>
+    private static void DetectClientHello(ReadOnlySpan<byte> body, ref TlsGroupFlags flags)
+    {
+        int pos = 0;
+
+        if (pos + 2 > body.Length)
+        {
+            return;
+        }
+        pos += 2; // version
+
+        if (pos + 32 > body.Length)
+        {
+            return;
+        }
+        pos += 32; // random
+
+        if (pos + 1 > body.Length)
+        {
+            return;
+        }
+        byte sessionIdLen = body[pos++];
+        if (pos + sessionIdLen > body.Length)
+        {
+            return;
+        }
+        pos += sessionIdLen;
+
+        if (pos + 2 > body.Length)
+        {
+            return;
+        }
+        ushort cipherSuitesLen = BinaryPrimitives.ReadUInt16BigEndian(body[pos..]);
+        pos += 2;
+        if (pos + cipherSuitesLen > body.Length)
+        {
+            return;
+        }
+        int cipherSuitesEnd = pos + cipherSuitesLen;
+
+        // At least one cipher suite is emitted when the list holds a full 2-byte entry.
+        if (pos + 2 <= cipherSuitesEnd)
+        {
+            flags.CipherSuite = true;
+        }
+        pos = cipherSuitesEnd;
+
+        if (pos + 1 > body.Length)
+        {
+            return;
+        }
+        byte compMethodsLen = body[pos++];
+        int compMethodsEnd = pos + compMethodsLen;
+        if (compMethodsEnd > body.Length)
+        {
+            return;
+        }
+        pos = compMethodsEnd;
+
+        if (pos + 2 > body.Length)
+        {
+            return;
+        }
+        ushort extensionsLen = BinaryPrimitives.ReadUInt16BigEndian(body[pos..]);
+
+        // The extensions-length field (tls.handshake.ext) is emitted once extensions are reached.
+        flags.Ext = true;
+        pos += 2;
+
+        DetectExtensions(body, ref pos, extensionsLen, ref flags);
+    }
+
+    /// <summary>Mirrors <see cref="ParseServerHello"/> through the selected cipher suite and extensions.</summary>
+    private static void DetectServerHello(ReadOnlySpan<byte> body, ref TlsGroupFlags flags)
+    {
+        int pos = 0;
+
+        if (pos + 2 > body.Length)
+        {
+            return;
+        }
+        pos += 2; // version
+
+        if (pos + 32 > body.Length)
+        {
+            return;
+        }
+        pos += 32; // random
+
+        if (pos + 1 > body.Length)
+        {
+            return;
+        }
+        byte sessionIdLen = body[pos++];
+        if (pos + sessionIdLen > body.Length)
+        {
+            return;
+        }
+        pos += sessionIdLen;
+
+        if (pos + 2 > body.Length)
+        {
+            return;
+        }
+        // A single selected cipher suite is emitted.
+        flags.CipherSuite = true;
+        pos += 2;
+
+        if (pos + 1 > body.Length)
+        {
+            return;
+        }
+        pos += 1; // compression method
+
+        if (pos + 2 <= body.Length)
+        {
+            ushort extensionsLen = BinaryPrimitives.ReadUInt16BigEndian(body[pos..]);
+            flags.Ext = true;
+            pos += 2;
+
+            DetectExtensions(body, ref pos, extensionsLen, ref flags);
+        }
+    }
+
+    /// <summary>Mirrors <see cref="ParseExtensions"/>, flagging the extension group and per-extension groups.</summary>
+    private static void DetectExtensions(
+        ReadOnlySpan<byte> body, ref int pos, ushort extensionsLen, ref TlsGroupFlags flags)
+    {
+        int extensionsEnd = pos + extensionsLen;
+        if (extensionsEnd > body.Length)
+        {
+            return;
+        }
+
+        while (pos + 4 <= extensionsEnd)
+        {
+            ushort extType = BinaryPrimitives.ReadUInt16BigEndian(body[pos..]);
+            ushort extLen = BinaryPrimitives.ReadUInt16BigEndian(body[(pos + 2)..]);
+            pos += 4;
+
+            if (pos + extLen > extensionsEnd)
+            {
+                break;
+            }
+
+            // Every complete extension emits an extension field (tls.handshake.ext).
+            flags.Ext = true;
+
+            if (extLen > 0)
+            {
+                DetectExtensionData(extType, body[pos..(pos + extLen)], ref flags);
+            }
+
+            pos += extLen;
+        }
+    }
+
+    /// <summary>Mirrors <see cref="ParseExtensionData"/>, flagging the group of each known extension.</summary>
+    private static void DetectExtensionData(ushort extType, ReadOnlySpan<byte> extData, ref TlsGroupFlags flags)
+    {
+        switch (extType)
+        {
+            case 0 when DetectSni(extData): // server_name (SNI)
+                flags.Sni = true;
+                break;
+            case 10 when DetectListHasEntry(extData): // supported_groups
+                flags.SupportedGroups = true;
+                break;
+            case 13 when DetectListHasEntry(extData): // signature_algorithms
+                flags.SigAlgs = true;
+                break;
+            case 16 when DetectAlpn(extData): // ALPN
+                flags.Alpn = true;
+                break;
+            case 43 when DetectSupportedVersions(extData): // supported_versions
+                flags.SupportedVersions = true;
+                break;
+            case 51 when DetectKeyShare(extData): // key_share
+                flags.KeyShare = true;
+                break;
+        }
+    }
+
+    /// <summary>Mirrors <see cref="ParseSni"/>: true when at least one host_name entry would be emitted.</summary>
+    private static bool DetectSni(ReadOnlySpan<byte> data)
+    {
+        if (data.Length < 5)
+        {
+            return false;
+        }
+
+        int pos = 2;
+        while (pos + 3 <= data.Length)
+        {
+            byte nameType = data[pos++];
+            ushort nameLen = BinaryPrimitives.ReadUInt16BigEndian(data[pos..]);
+            pos += 2;
+
+            if (pos + nameLen > data.Length)
+            {
+                break;
+            }
+
+            if (nameType == 0)
+            {
+                return true;
+            }
+
+            pos += nameLen;
+        }
+
+        return false;
+    }
+
+    /// <summary>Mirrors <see cref="ParseAlpn"/>: true when at least one protocol name would be emitted.</summary>
+    private static bool DetectAlpn(ReadOnlySpan<byte> data)
+    {
+        if (data.Length < 2)
+        {
+            return false;
+        }
+
+        int pos = 2;
+        while (pos + 1 <= data.Length)
+        {
+            byte protoLen = data[pos++];
+            if (pos + protoLen > data.Length)
+            {
+                break;
+            }
+
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Mirrors the 2-byte-list parsers (<see cref="ParseSupportedGroups"/>, <see cref="ParseSignatureAlgorithms"/>):
+    /// true when the length-prefixed list holds at least one full 2-byte entry.
+    /// </summary>
+    private static bool DetectListHasEntry(ReadOnlySpan<byte> data)
+    {
+        if (data.Length < 2)
+        {
+            return false;
+        }
+
+        int listLen = BinaryPrimitives.ReadUInt16BigEndian(data);
+        int end = Math.Min(2 + listLen, data.Length);
+        return 2 + 2 <= end;
+    }
+
+    /// <summary>Mirrors <see cref="ParseSupportedVersions"/>: true when at least one version would be emitted.</summary>
+    private static bool DetectSupportedVersions(ReadOnlySpan<byte> data)
+    {
+        if (data.Length == 2)
+        {
+            return true;
+        }
+
+        if (data.Length < 1)
+        {
+            return false;
+        }
+
+        byte listLen = data[0];
+        int end = Math.Min(1 + listLen, data.Length);
+        return 1 + 2 <= end;
+    }
+
+    /// <summary>Mirrors <see cref="ParseKeyShare"/>: true when at least one key-share entry would be emitted.</summary>
+    private static bool DetectKeyShare(ReadOnlySpan<byte> data)
+    {
+        int pos = 0;
+
+        if (data.Length >= 2)
+        {
+            ushort potentialListLen = BinaryPrimitives.ReadUInt16BigEndian(data);
+            if (potentialListLen == data.Length - 2)
+            {
+                pos = 2;
+            }
+        }
+
+        while (pos + 4 <= data.Length)
+        {
+            ushort keyExLen = BinaryPrimitives.ReadUInt16BigEndian(data[(pos + 2)..]);
+            pos += 4;
+
+            if (pos + keyExLen > data.Length)
+            {
+                break;
+            }
+
+            return true;
+        }
+
+        return false;
+    }
+
     #endregion
 }

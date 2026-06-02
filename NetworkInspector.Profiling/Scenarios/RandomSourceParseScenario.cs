@@ -11,6 +11,7 @@ namespace NetworkInspector.Profiling.Scenarios;
 /// Single-threaded, no session or listener overhead.
 /// </para>
 /// </summary>
+[SuppressMessage("Performance", "CA1812:AvoidUninstantiatedInternalClasses", Justification = "Instantiated via reflection in ScenarioDiscovery.Discover.")]
 internal sealed class RandomSourceParseScenario : IProfilingScenario
 {
     /// <summary>Number of frames generated and parsed per <see cref="Run"/> call.</summary>

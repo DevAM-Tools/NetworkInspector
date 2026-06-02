@@ -5,7 +5,7 @@ namespace NetworkInspector.Core.Reassembly;
 /// <summary>
 /// Result returned by <see cref="DatagramFragmentBuffer.AddFragment"/>.
 /// </summary>
-internal enum FragmentAddResult
+public enum FragmentAddResult
 {
     /// <summary>Fragment was accepted; datagram is still incomplete.</summary>
     Incomplete,

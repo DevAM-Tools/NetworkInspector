@@ -15,10 +15,18 @@ public abstract class ExportOutput : IDisposable
     /// The file is not created until the first write; if no data is ever written,
     /// no file is created on disk.
     /// </summary>
-    /// <param name="path">Absolute or relative path to the output file.</param>
+    /// <param name="path">Absolute or relative path to the output file. Must not be null or empty.</param>
     /// <returns>A new <see cref="ExportOutput"/> that writes to the specified file.</returns>
-    public static ExportOutput File(string path) =>
-        new LazyFileExportOutput(path, DefaultFileBufferSize);
+    /// <exception cref="ArgumentException"><paramref name="path"/> is null, empty, or contains invalid path characters.</exception>
+    public static ExportOutput File(string path)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(path);
+        // Validate path structure early (GetFullPath normalises separators and throws on
+        // illegal characters, but does not touch the filesystem). This surfaces bad paths
+        // at construction time rather than at the first Write call.
+        string _ = Path.GetFullPath(path);
+        return new LazyFileExportOutput(path, DefaultFileBufferSize);
+    }
 
     /// <summary>Creates an output that writes to an existing stream.</summary>
     /// <param name="stream">The target stream. Caller retains ownership.</param>

@@ -75,6 +75,13 @@ public static class ChecksumUtils
     /// <param name="protocol">IP protocol number (6 for TCP, 17 for UDP).</param>
     /// <param name="segment">The complete transport segment (header + payload).</param>
     /// <returns>The 16-bit checksum, ready to write to the transport checksum field.</returns>
+    /// <remarks>
+    /// External-input boundary: <paramref name="srcIp"/> and <paramref name="dstIp"/>
+    /// must each be at least 4 bytes. Both lengths are validated at entry via
+    /// <see cref="ArgumentOutOfRangeException"/>; callers must not bypass these
+    /// checks. This is the trust boundary for the address spans — do not move the
+    /// validation downstream.
+    /// </remarks>
     public static ushort PseudoHeaderIPv4(
         ReadOnlySpan<byte> srcIp,
         ReadOnlySpan<byte> dstIp,
@@ -118,6 +125,13 @@ public static class ChecksumUtils
     /// <param name="nextHeader">Next header value (6 for TCP, 17 for UDP, 58 for ICMPv6).</param>
     /// <param name="segment">The complete upper-layer segment (header + payload).</param>
     /// <returns>The 16-bit checksum.</returns>
+    /// <remarks>
+    /// External-input boundary: <paramref name="srcIp"/> and <paramref name="dstIp"/>
+    /// must each be at least 16 bytes. Both lengths are validated at entry via
+    /// <see cref="ArgumentOutOfRangeException"/>; callers must not bypass these
+    /// checks. This is the trust boundary for the address spans — do not move the
+    /// validation downstream.
+    /// </remarks>
     public static ushort PseudoHeaderIPv6(
         ReadOnlySpan<byte> srcIp,
         ReadOnlySpan<byte> dstIp,
@@ -131,17 +145,26 @@ public static class ChecksumUtils
         // Layout: srcIP(16) + dstIP(16) + upperLayerLen(4) + zeros(3) + nextHdr(1) = 40 bytes.
         uint sum = 0;
 
-        // Source IPv6 address: 8 × 16-bit big-endian words
-        for (int i = 0; i < 16; i += 2)
-        {
-            sum += (uint)(srcIp[i] << 8 | srcIp[i + 1]);
-        }
+        // Source IPv6 address: 8 × 16-bit big-endian words (manually unrolled so
+        // the JIT emits a straight-line accumulation on this per-frame hot path).
+        sum += (uint)(srcIp[0] << 8 | srcIp[1]);
+        sum += (uint)(srcIp[2] << 8 | srcIp[3]);
+        sum += (uint)(srcIp[4] << 8 | srcIp[5]);
+        sum += (uint)(srcIp[6] << 8 | srcIp[7]);
+        sum += (uint)(srcIp[8] << 8 | srcIp[9]);
+        sum += (uint)(srcIp[10] << 8 | srcIp[11]);
+        sum += (uint)(srcIp[12] << 8 | srcIp[13]);
+        sum += (uint)(srcIp[14] << 8 | srcIp[15]);
 
-        // Destination IPv6 address: 8 × 16-bit big-endian words
-        for (int i = 0; i < 16; i += 2)
-        {
-            sum += (uint)(dstIp[i] << 8 | dstIp[i + 1]);
-        }
+        // Destination IPv6 address: 8 × 16-bit big-endian words (unrolled).
+        sum += (uint)(dstIp[0] << 8 | dstIp[1]);
+        sum += (uint)(dstIp[2] << 8 | dstIp[3]);
+        sum += (uint)(dstIp[4] << 8 | dstIp[5]);
+        sum += (uint)(dstIp[6] << 8 | dstIp[7]);
+        sum += (uint)(dstIp[8] << 8 | dstIp[9]);
+        sum += (uint)(dstIp[10] << 8 | dstIp[11]);
+        sum += (uint)(dstIp[12] << 8 | dstIp[13]);
+        sum += (uint)(dstIp[14] << 8 | dstIp[15]);
 
         // Upper-layer length as 32-bit value split into 2 × 16-bit words.
         // For standard frames (< 64KB) the high word is always 0.

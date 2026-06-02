@@ -255,19 +255,19 @@ public sealed partial class FlexRayProtocol : IProtocol
             MutField symbolContainer = parentField.AppendWithCustomText(
                 _ProtocolFieldId,
                 FieldValue.NewBytes(data[..2]),
-                ZA.Lazy("FlexRay Symbol, Channel: ", isChannelB ? "B" : "A"), in context);
+                ZA.Lazy("FlexRay Symbol, Channel: ", isChannelB ? "B" : "A"));
 
-            symbolContainer.Append(_ChannelFieldId, FieldValue.NewString(isChannelB ? "Channel B" : "Channel A"), in context);
+            symbolContainer.Append(_ChannelFieldId, FieldValue.NewString(isChannelB ? "Channel B" : "Channel A"));
 
             // Error flags container — precomputed display text lists active error flag abbreviations.
             MutField symbolErrFlags = symbolContainer.AppendWithCustomText(
                 _ErrFlagsFieldId, FieldValue.None,
-                FlexRayFlagsFormatter.FormatErrors(fcrcErr, hcrcErr, fesErr, codErr, tssViol), in context);
-            symbolErrFlags.AppendWithCustomText(_FcrcErrFieldId, FieldValue.NewBool(fcrcErr), fcrcErr ? "Error" : "No error", in context);
-            symbolErrFlags.AppendWithCustomText(_HcrcErrFieldId, FieldValue.NewBool(hcrcErr), hcrcErr ? "Error" : "No error", in context);
-            symbolErrFlags.AppendWithCustomText(_FesErrFieldId, FieldValue.NewBool(fesErr), fesErr ? "Error" : "No error", in context);
-            symbolErrFlags.AppendWithCustomText(_CodErrFieldId, FieldValue.NewBool(codErr), codErr ? "Error" : "No error", in context);
-            symbolErrFlags.AppendWithCustomText(_TssViolFieldId, FieldValue.NewBool(tssViol), tssViol ? "Violation" : "No violation", in context);
+                FlexRayFlagsFormatter.FormatErrors(fcrcErr, hcrcErr, fesErr, codErr, tssViol));
+            symbolErrFlags.AppendWithCustomText(_FcrcErrFieldId, FieldValue.NewBool(fcrcErr), fcrcErr ? "Error" : "No error");
+            symbolErrFlags.AppendWithCustomText(_HcrcErrFieldId, FieldValue.NewBool(hcrcErr), hcrcErr ? "Error" : "No error");
+            symbolErrFlags.AppendWithCustomText(_FesErrFieldId, FieldValue.NewBool(fesErr), fesErr ? "Error" : "No error");
+            symbolErrFlags.AppendWithCustomText(_CodErrFieldId, FieldValue.NewBool(codErr), codErr ? "Error" : "No error");
+            symbolErrFlags.AppendWithCustomText(_TssViolFieldId, FieldValue.NewBool(tssViol), tssViol ? "Violation" : "No violation");
 
             return 2;
         }
@@ -310,61 +310,61 @@ public sealed partial class FlexRayProtocol : IProtocol
         MutField container = parentField.AppendWithCustomText(
             _ProtocolFieldId,
             FieldValue.NewBytes(data[..totalConsumed]),
-            ZA.Lazy("FlexRay, Slot: ", frameId, ", Cycle: ", cycle), in context);
+            ZA.Lazy("FlexRay, Slot: ", frameId, ", Cycle: ", cycle));
 
         // Channel
-        container.Append(_ChannelFieldId, FieldValue.NewString(isChannelB ? "Channel B" : "Channel A"), in context);
+        container.Append(_ChannelFieldId, FieldValue.NewString(isChannelB ? "Channel B" : "Channel A"));
 
         // Frame ID (11-bit slot number)
-        container.Append(_FrameIdFieldId, FieldValue.NewU64(frameId), in context);
+        container.Append(_FrameIdFieldId, FieldValue.NewU64(frameId));
 
         // Payload length (display in bytes)
         container.AppendWithCustomText(_PayloadLengthFieldId,
             FieldValue.NewU64((ulong)payloadSize),
-            ZA.Lazy(payloadSize, " bytes"), in context);
+            ZA.Lazy(payloadSize, " bytes"));
 
         // Cycle count (6-bit)
-        container.Append(_CycleFieldId, FieldValue.NewU64(cycle), in context);
+        container.Append(_CycleFieldId, FieldValue.NewU64(cycle));
 
         // Indicator flags container — precomputed display text lists active indicator abbreviations.
         MutField flagsContainer = container.AppendWithCustomText(
             _FlagsFieldId, FieldValue.None,
-            FlexRayFlagsFormatter.FormatIndicators(ppi, nfi, sfi, stfi), in context);
+            FlexRayFlagsFormatter.FormatIndicators(ppi, nfi, sfi, stfi));
         flagsContainer.AppendWithCustomText(_NfiFieldId,
             FieldValue.NewBool(nfi),
-            nfi ? "Not Null" : "Null Frame", in context);
+            nfi ? "Not Null" : "Null Frame");
         flagsContainer.AppendWithCustomText(_SfiFieldId,
             FieldValue.NewBool(sfi),
-            sfi ? "Sync Frame" : "Not set", in context);
+            sfi ? "Sync Frame" : "Not set");
         flagsContainer.AppendWithCustomText(_StfiFieldId,
             FieldValue.NewBool(stfi),
-            stfi ? "Startup Frame" : "Not set", in context);
+            stfi ? "Startup Frame" : "Not set");
         flagsContainer.AppendWithCustomText(_PpiFieldId,
             FieldValue.NewBool(ppi),
-            ppi ? "Set" : "Not set", in context);
+            ppi ? "Set" : "Not set");
 
         // Header CRC (11-bit)
-        container.Append(_HeaderCrcFieldId, FieldValue.NewU64(headerCrc), in context);
+        container.Append(_HeaderCrcFieldId, FieldValue.NewU64(headerCrc));
 
         // Error flags container — precomputed display text lists active error flag abbreviations.
         MutField errFlagsContainer = container.AppendWithCustomText(
             _ErrFlagsFieldId, FieldValue.None,
-            FlexRayFlagsFormatter.FormatErrors(fcrcErr, hcrcErr, fesErr, codErr, tssViol), in context);
+            FlexRayFlagsFormatter.FormatErrors(fcrcErr, hcrcErr, fesErr, codErr, tssViol));
         errFlagsContainer.AppendWithCustomText(_FcrcErrFieldId,
             FieldValue.NewBool(fcrcErr),
-            fcrcErr ? "Error" : "No error", in context);
+            fcrcErr ? "Error" : "No error");
         errFlagsContainer.AppendWithCustomText(_HcrcErrFieldId,
             FieldValue.NewBool(hcrcErr),
-            hcrcErr ? "Error" : "No error", in context);
+            hcrcErr ? "Error" : "No error");
         errFlagsContainer.AppendWithCustomText(_FesErrFieldId,
             FieldValue.NewBool(fesErr),
-            fesErr ? "Error" : "No error", in context);
+            fesErr ? "Error" : "No error");
         errFlagsContainer.AppendWithCustomText(_CodErrFieldId,
             FieldValue.NewBool(codErr),
-            codErr ? "Error" : "No error", in context);
+            codErr ? "Error" : "No error");
         errFlagsContainer.AppendWithCustomText(_TssViolFieldId,
             FieldValue.NewBool(tssViol),
-            tssViol ? "Violation" : "No violation", in context);
+            tssViol ? "Violation" : "No violation");
 
         // Payload data (optional); dispatch to sub-protocols (e.g. Signal PDU) when present.
         // Key encodes both the 11-bit slot number and the channel: bits [10:0] = Frame ID, bit 11 = Channel B.
@@ -372,7 +372,7 @@ public sealed partial class FlexRayProtocol : IProtocol
         {
             context.RecordGroupPresence(_FlexrayDataGroupId);
             ReadOnlyMemory<byte> payload = data[MinHeaderSize..totalConsumed];
-            container.Append(_DataFieldId, FieldValue.NewBytes(payload), in context);
+            container.Append(_DataFieldId, FieldValue.NewBytes(payload));
 
             ulong dispatchKey = (ulong)frameId | (isChannelB ? ChannelBKeyBit : 0UL);
             ParseResult dispatchResult = container.TryCallNextProtocolU64(_IdTableId, dispatchKey, payload, in context);

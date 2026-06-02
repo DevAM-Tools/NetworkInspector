@@ -46,6 +46,45 @@ dotnet add package NetworkInspector.Values
 dotnet add package NetworkInspector.FrameBuilder
 ```
 
+## Build Baseline
+
+NetworkInspector is validated for .NET SDK 10.0.100 and newer.
+
+## Local Development
+
+### Prerequisites
+
+The full test suite includes protocol cross-validation tests that require
+[tshark 4.6.x](https://www.wireshark.org/download/) (part of the Wireshark distribution) to be
+available on `PATH`.
+
+| Platform | Install |
+|---|---|
+| Windows | [Wireshark installer](https://www.wireshark.org/download/) (includes tshark) or `choco install wireshark` |
+| Ubuntu / Debian | `sudo add-apt-repository ppa:wireshark-dev/wireshark && sudo apt-get install tshark` |
+| macOS | `brew install wireshark` |
+
+### Running Tests
+
+```bash
+dotnet test NetworkInspector.slnx
+```
+
+### Skipping Cross-Validation Locally
+
+If Wireshark is not installed, set `NETWORKINSPECTOR_ALLOW_MISSING_TSHARK=1` to skip
+tshark-dependent tests. Tests that opt into this escape hatch via
+`TsharkAvailability.ShouldSkip()` will be skipped; the remaining tests run normally.
+
+Do not set this variable in CI or release runs — tshark must be present so that
+cross-validation evidence is never silently discarded.
+
+## Transitive Dependency And Generator Behavior
+
+- `NetworkInspector.Core` bundles `NetworkInspector.Generators` in the package analyzer assets.
+- NetworkInspector library packages keep `ZeroAlloc` as a transitive dependency, including analyzer/source-generator assets.
+- Consumers that reference NetworkInspector packages do not need extra package references to activate generator support.
+
 ## Quick Start
 
 ### Parse One Frame

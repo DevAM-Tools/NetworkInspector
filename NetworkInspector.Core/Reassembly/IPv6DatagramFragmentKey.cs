@@ -13,7 +13,7 @@ namespace NetworkInspector.Core.Reassembly;
 /// <param name="DestinationHigh">Destination IPv6 address high 64 bits.</param>
 /// <param name="DestinationLow">Destination IPv6 address low 64 bits.</param>
 /// <param name="Identification">32-bit identification field from Fragment Header.</param>
-internal readonly record struct IPv6DatagramFragmentKey(
+public readonly record struct IPv6DatagramFragmentKey(
     ulong SourceHigh,
     ulong SourceLow,
     ulong DestinationHigh,

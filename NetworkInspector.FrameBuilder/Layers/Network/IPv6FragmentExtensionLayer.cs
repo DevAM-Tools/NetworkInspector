@@ -141,11 +141,24 @@ public readonly struct IPv6FragmentExtensionLayer :
     /// <remarks>
     /// Patches the FragmentOffset (in 8-octet units) and the M flag.  The
     /// Identification field stays at its initial value across all fragments.
+    /// <para>
+    /// RFC 8200 §4.5 encodes the fragment offset in 8-octet units, so
+    /// <paramref name="fragmentPayloadOffset"/> must be a multiple of 8. The
+    /// iterator guarantees this because every per-fragment slice length is an
+    /// integer multiple of <see cref="IFragmentable.FragmentAlignment"/> (8) except possibly
+    /// the final slice, whose starting offset is still the sum of aligned
+    /// predecessors. The assertion documents and enforces that invariant in
+    /// debug builds; a misaligned offset would silently encode the wrong
+    /// fragment position.
+    /// </para>
     /// </remarks>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void PatchFragmentHeader(scoped Span<byte> frame, int myOffset, int myLength, int fragmentPayloadOffset, bool moreFragments)
     {
         _ = myLength;
+        Debug.Assert(
+            (fragmentPayloadOffset & 0x7) == 0,
+            "IPv6 fragment offset must be 8-octet aligned (RFC 8200 §4.5); the iterator advances in FragmentAlignment-sized steps.");
         // FragmentOffset occupies the high 13 bits of the 16-bit word; the M
         // flag is the LSB.  RFC 8200 §4.5: fragment offset is in 8-octet units.
         ushort word = (ushort)(((fragmentPayloadOffset >> 3) & 0x1FFF) << 3);

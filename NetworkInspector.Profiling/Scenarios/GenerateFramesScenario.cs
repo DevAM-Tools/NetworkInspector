@@ -12,6 +12,7 @@ namespace NetworkInspector.Profiling.Scenarios;
 /// No stack or parsing is involved.
 /// </para>
 /// </summary>
+[SuppressMessage("Performance", "CA1812:AvoidUninstantiatedInternalClasses", Justification = "Instantiated via reflection in ScenarioDiscovery.Discover.")]
 internal sealed class GenerateFramesScenario : IProfilingScenario
 {
     /// <summary>Number of frames generated per iteration.</summary>

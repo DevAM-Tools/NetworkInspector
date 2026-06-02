@@ -12,13 +12,13 @@ namespace NetworkInspector.Profiling.Scenarios;
 /// new <see cref="FrameStack"/> API on the steady-state path.
 /// </para>
 /// </summary>
-internal sealed class FrameBuilderSingleFrameScenario : IProfilingScenario
+[SuppressMessage("Performance", "CA1812:AvoidUninstantiatedInternalClasses", Justification = "Instantiated via reflection in ScenarioDiscovery.Discover.")]
+internal sealed class FrameBuilderSingleFrameScenario : FrameBuilderScenarioBase
 {
     private const int FrameCount = 1_000_000;
-    private const int PayloadSize = 64;
 
-    private readonly byte[] _Payload = new byte[PayloadSize];
-    private byte[] _Buffer = [];
+    /// <inheritdoc/>
+    protected override int PayloadSize => 64;
     private CreatedStack<
         StatelessStack<UdpLayer,
             StatelessStack<IPv4Layer,
@@ -27,21 +27,22 @@ internal sealed class FrameBuilderSingleFrameScenario : IProfilingScenario
         NoInterceptor> _Stack;
 
     /// <inheritdoc/>
-    public string Name => "framebuilder-single-frame";
+    public override string Name => "framebuilder-single-frame";
 
     /// <inheritdoc/>
-    public string Description =>
+    public override string Description =>
         $"Build {FrameCount:N0} Eth/IPv4/UDP frames with a {PayloadSize}-byte payload via the new FrameStack API.";
 
     /// <inheritdoc/>
-    public long WorkUnitsPerIteration => FrameCount;
+    public override long WorkUnitsPerIteration => FrameCount;
 
     /// <inheritdoc/>
-    public string WorkUnitName => "frames";
+    public override string WorkUnitName => "frames";
 
     /// <inheritdoc/>
-    public void Setup()
+    public override void Setup()
     {
+        InitializeBuffers();
         // Cache layer values + buffer once; the stack is reused across all builds (R12).
         EthernetLayer eth = new(
             MacAddress.FromBytes([0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF]),
@@ -54,7 +55,7 @@ internal sealed class FrameBuilderSingleFrameScenario : IProfilingScenario
     }
 
     /// <inheritdoc/>
-    public void Run()
+    public override void Run()
     {
         Span<byte> dst = _Buffer;
         for (int i = 0; i < FrameCount; i++)
@@ -66,7 +67,7 @@ internal sealed class FrameBuilderSingleFrameScenario : IProfilingScenario
     }
 
     /// <inheritdoc/>
-    public void Cleanup()
+    public override void Cleanup()
     {
     }
 }

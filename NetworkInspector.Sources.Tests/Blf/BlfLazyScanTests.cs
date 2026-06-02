@@ -20,13 +20,7 @@ internal sealed class BlfLazyScanTests
     private static BlfSource CreateFullSource(byte[] data) =>
         BlfSource.FromData(data, "full-test.blf", new BlfSourceOptions { ScanMode = ScanMode.Full });
 
-    /// <summary>Starts the source with a fresh registry.</summary>
-    private static void StartSource(BlfSource source)
-    {
-        FrameInterfaceRegistry registry = new();
-        FrameSourceId sourceId = registry.RegisterSource(source);
-        source.Start(sourceId, registry);
-    }
+
 
     // ========================================================================
     // EstimatedFrameCount is null initially in lazy mode
@@ -86,7 +80,7 @@ internal sealed class BlfLazyScanTests
             .Build();
 
         using BlfSource source = CreateLazySource(blfData);
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         int count = 0;
         while (source.NextFrame() is not null)
@@ -115,7 +109,7 @@ internal sealed class BlfLazyScanTests
 
         // Read all frames in lazy mode
         using BlfSource lazySource = CreateLazySource(blfData);
-        StartSource(lazySource);
+        SourceTestFixture.InitializeAndStartSource(lazySource);
         int lazyCount = 0;
         while (lazySource.NextFrame() is not null)
         {
@@ -124,7 +118,7 @@ internal sealed class BlfLazyScanTests
 
         // Read all frames in full mode
         using BlfSource fullSource = CreateFullSource(blfData);
-        StartSource(fullSource);
+        SourceTestFixture.InitializeAndStartSource(fullSource);
         int fullCount = 0;
         while (fullSource.NextFrame() is not null)
         {
@@ -153,7 +147,7 @@ internal sealed class BlfLazyScanTests
             .Build();
 
         using BlfSource source = CreateLazySource(blfData);
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         // Read all sequentially to populate the index
         while (source.NextFrame() is not null)
@@ -189,7 +183,7 @@ internal sealed class BlfLazyScanTests
             .Build();
 
         using BlfSource source = CreateLazySource(blfData);
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         // Without reading, random access to an out-of-range ID should be null
         Frame? invalid = source.FrameById(new FrameId(999));
@@ -207,7 +201,7 @@ internal sealed class BlfLazyScanTests
         byte[] blfData = new BlfTestGenerator().Build();
 
         using BlfSource source = CreateLazySource(blfData);
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         await Assert.That(source.NextFrame()).IsNull();
         await Assert.That(source.ReadFrameCount).IsEqualTo(0);

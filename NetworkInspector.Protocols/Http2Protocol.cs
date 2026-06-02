@@ -150,8 +150,7 @@ public sealed partial class Http2Protocol : IProtocol
     // Pre-allocated populator
     private LazyPopulator _Populator = null!;
 
-    partial void OnStartCustom(Stack stack) =>
-        _Populator = (in MutField container) => PopulateHttp2Fields(in container);
+    partial void OnStartCustom(Stack stack) => _Populator = PopulateHttp2Fields;
 
     /// <summary>
     /// Parses HTTP/2 frames from the TCP segment payload. Uses lazy population.
@@ -179,10 +178,49 @@ public sealed partial class Http2Protocol : IProtocol
 
         parentField.SetPacketInfo(ZA.Lazy("HTTP/2 ", typeText));
 
-        // Check if any frame has payload
-        if (firstFrame.Length > 0)
+        // Eagerly scan every frame in the segment to record exactly the index groups whose fields
+        // the lazy populator will emit. The relevant groups depend on each frame's type and payload
+        // length (and, for HEADERS/CONTINUATION, on the decoded HPACK header count), and a segment
+        // may carry several frames — so the decision requires walking all frames and mirroring the
+        // populator's per-frame emission guards. This keeps the presence index content-consistent
+        // with materialization and free of false positives, at the deliberate cost of repeating the
+        // frame walk (and HPACK decode) that the populator performs lazily.
+        DetectFrameGroups(
+            data.Span,
+            out bool hasFlags, out bool hasPayload, out bool hasSettings, out bool hasGoaway,
+            out bool hasPing, out bool hasWindowUpdate, out bool hasRstStream, out bool hasHeader);
+
+        if (hasFlags)
+        {
+            context.RecordGroupPresence(_Http2FlagsGroupId);
+        }
+        if (hasPayload)
         {
             context.RecordGroupPresence(_Http2PayloadGroupId);
+        }
+        if (hasSettings)
+        {
+            context.RecordGroupPresence(_Http2SettingsGroupId);
+        }
+        if (hasGoaway)
+        {
+            context.RecordGroupPresence(_Http2GoawayGroupId);
+        }
+        if (hasPing)
+        {
+            context.RecordGroupPresence(_Http2PingGroupId);
+        }
+        if (hasWindowUpdate)
+        {
+            context.RecordGroupPresence(_Http2Window_updateGroupId);
+        }
+        if (hasRstStream)
+        {
+            context.RecordGroupPresence(_Http2Rst_streamGroupId);
+        }
+        if (hasHeader)
+        {
+            context.RecordGroupPresence(_Http2HeaderGroupId);
         }
 
         parentField.AppendLazyWithCustomText(
@@ -192,12 +230,145 @@ public sealed partial class Http2Protocol : IProtocol
     }
 
     /// <summary>
+    /// Eagerly walks every HTTP/2 frame in the segment and reports which optional index groups
+    /// apply, mirroring the populator's per-frame emission guards exactly (including HPACK decode
+    /// for HEADERS/CONTINUATION) so the presence index never reports a group whose field would not
+    /// be emitted. This duplicates the populator's frame walk; that is the accepted cost of keeping
+    /// the field materialization lazy while the index stays content-consistent.
+    /// </summary>
+    private static void DetectFrameGroups(
+        ReadOnlySpan<byte> span,
+        out bool hasFlags, out bool hasPayload, out bool hasSettings, out bool hasGoaway,
+        out bool hasPing, out bool hasWindowUpdate, out bool hasRstStream, out bool hasHeader)
+    {
+        hasFlags = false;
+        hasPayload = false;
+        hasSettings = false;
+        hasGoaway = false;
+        hasPing = false;
+        hasWindowUpdate = false;
+        hasRstStream = false;
+        hasHeader = false;
+
+        int offset = 0;
+        while (offset + Http2FrameHeader.Size <= span.Length)
+        {
+            if (!Http2FrameHeader.TryParse(span[offset..], out Http2FrameHeader frame))
+            {
+                break;
+            }
+
+            // AppendFrameFlags emits flag fields for these types regardless of payload length.
+            if (frame.Type is 0 or 1 or 4 or 5 or 6 or 9)
+            {
+                hasFlags = true;
+            }
+
+            int payloadStart = offset + Http2FrameHeader.Size;
+            int payloadEnd = Math.Min(payloadStart + frame.Length, span.Length);
+            if (payloadEnd > payloadStart)
+            {
+                ReadOnlySpan<byte> payload = span[payloadStart..payloadEnd];
+
+                // structured == ParseFramePayload's return value: true when the payload is parsed
+                // into structured fields (so no raw http2.payload field), false otherwise.
+                bool structured;
+                switch (frame.Type)
+                {
+                    case 3 when payload.Length >= 4: // RST_STREAM
+                        hasRstStream = true;
+                        structured = true;
+                        break;
+                    case 4 when payload.Length >= 6: // SETTINGS
+                        hasSettings = true;
+                        structured = true;
+                        break;
+                    case 6 when payload.Length == 8: // PING
+                        hasPing = true;
+                        structured = true;
+                        break;
+                    case 7 when payload.Length >= 8: // GOAWAY
+                        hasGoaway = true;
+                        structured = true;
+                        break;
+                    case 8 when payload.Length >= 4: // WINDOW_UPDATE
+                        hasWindowUpdate = true;
+                        structured = true;
+                        break;
+                    case 1: // HEADERS
+                    case 9: // CONTINUATION
+                        structured = DetectHpackHeaders(frame.Type, frame.Flags, payload, ref hasHeader);
+                        break;
+                    default:
+                        structured = false;
+                        break;
+                }
+
+                // The populator emits the raw http2.payload field only when the payload is present
+                // and was not parsed into structured fields.
+                if (!structured)
+                {
+                    hasPayload = true;
+                }
+            }
+
+            offset = payloadEnd;
+        }
+    }
+
+    /// <summary>
+    /// Mirrors the HEADERS/CONTINUATION branch of <see cref="ParseFramePayload"/> for detection
+    /// only: returns the same structured/raw decision and sets <paramref name="hasHeader"/> when the
+    /// HPACK block decodes to at least one header (the exact condition under which the populator
+    /// appends http2.header fields).
+    /// </summary>
+    private static bool DetectHpackHeaders(byte frameType, byte flags, ReadOnlySpan<byte> payload, ref bool hasHeader)
+    {
+        int hpackOffset = 0;
+        int padLength = 0;
+
+        if (frameType == 1)
+        {
+            bool padded = (flags & 0x08) != 0;
+            bool priority = (flags & 0x20) != 0;
+
+            if (padded)
+            {
+                if (payload.Length < 1)
+                {
+                    return false;
+                }
+                padLength = payload[0];
+                hpackOffset += 1;
+            }
+            if (priority)
+            {
+                if (payload.Length < hpackOffset + 5)
+                {
+                    return false;
+                }
+                hpackOffset += 5;
+            }
+            if (padLength > 0 && payload.Length - hpackOffset < padLength)
+            {
+                return false;
+            }
+        }
+
+        int hpackEnd = payload.Length - padLength;
+        if (hpackOffset < hpackEnd && HpackDecoder.Decode(payload[hpackOffset..hpackEnd]).Count > 0)
+        {
+            hasHeader = true;
+        }
+        return true;
+    }
+
+    /// <summary>
     /// Populates all HTTP/2 frame fields from the stored data.
     /// Processes multiple frames in the same segment if present.
     /// </summary>
     private ParseResult PopulateHttp2Fields(in MutField container)
     {
-        ParseContext context = new ParseContext(container.Packet.Stack);
         if (!container.Value.Data.TryGetAsBytes(out ReadOnlyMemory<byte> http2Data))
         {
             return ParseError.InvalidData(ProtocolName, "Container value is not of type Bytes");
@@ -219,25 +390,25 @@ public sealed partial class Http2Protocol : IProtocol
             // Frame container
             MutField frameContainer = container.AppendWithCustomText(
                 _FrameFieldId, FieldValue.None,
-                ZA.Lazy(typeText, ", Stream: ", frame.StreamId, ", Length: ", frame.Length), in context);
+                ZA.Lazy(typeText, ", Stream: ", frame.StreamId, ", Length: ", frame.Length));
 
             // Length (24-bit)
-            frameContainer.Append(_FrameLengthFieldId, FieldValue.NewU64((ulong)frame.Length), in context);
+            frameContainer.Append(_FrameLengthFieldId, FieldValue.NewU64((ulong)frame.Length));
 
             // Type
             frameContainer.AppendWithCustomText(_FrameTypeFieldId,
-                FieldValue.NewU64(frame.Type), typeText, in context);
+                FieldValue.NewU64(frame.Type), typeText);
 
             // Flags — precomputed display text includes hex value and active flag names.
             frameContainer.AppendWithCustomText(_FrameFlagsFieldId,
                 FieldValue.NewU64(frame.Flags),
-                Http2FlagsFormatter.Format(frame.Flags), in context);
+                Http2FlagsFormatter.Format(frame.Flags));
 
             // Stream ID
-            frameContainer.Append(_FrameStreamIdFieldId, FieldValue.NewU64(frame.StreamId), in context);
+            frameContainer.Append(_FrameStreamIdFieldId, FieldValue.NewU64(frame.StreamId));
 
             // Interpret per-type flags
-            AppendFrameFlags(in frameContainer, frame.Type, frame.Flags, in context);
+            AppendFrameFlags(in frameContainer, frame.Type, frame.Flags);
 
             // Payload (if any) — parse type-specific content for known frame types
             int payloadStart = offset + Http2FrameHeader.Size;
@@ -248,12 +419,12 @@ public sealed partial class Http2Protocol : IProtocol
                 ReadOnlySpan<byte> payloadSpan = span[payloadStart..payloadEnd];
 
                 // Parse type-specific payloads
-                bool parsed = ParseFramePayload(in frameContainer, frame.Type, frame.Flags, payloadSpan, payloadData, in context);
+                bool parsed = ParseFramePayload(in frameContainer, frame.Type, frame.Flags, payloadSpan, payloadData);
 
                 // If not parsed as structured data, show raw payload
                 if (!parsed)
                 {
-                    frameContainer.Append(_FramePayloadFieldId, FieldValue.NewBytes(payloadData), in context);
+                    frameContainer.Append(_FramePayloadFieldId, FieldValue.NewBytes(payloadData));
                 }
             }
 
@@ -267,37 +438,37 @@ public sealed partial class Http2Protocol : IProtocol
     /// Appends per-type flag sub-fields based on the frame type.
     /// RFC 7540 Section 6 defines which flags are valid for each frame type.
     /// </summary>
-    private void AppendFrameFlags(in MutField frameContainer, byte frameType, byte flags, in ParseContext context)
+    private void AppendFrameFlags(in MutField frameContainer, byte frameType, byte flags)
     {
         switch (frameType)
         {
             case 0: // DATA: END_STREAM (0x1), PADDED (0x8)
-                frameContainer.Append(_FlagEndStreamFieldId, FieldValue.NewBool((flags & 0x01) != 0), in context);
-                frameContainer.Append(_FlagPaddedFieldId, FieldValue.NewBool((flags & 0x08) != 0), in context);
+                frameContainer.Append(_FlagEndStreamFieldId, FieldValue.NewBool((flags & 0x01) != 0));
+                frameContainer.Append(_FlagPaddedFieldId, FieldValue.NewBool((flags & 0x08) != 0));
                 break;
 
             case 1: // HEADERS: END_STREAM (0x1), END_HEADERS (0x4), PADDED (0x8), PRIORITY (0x20)
-                frameContainer.Append(_FlagEndStreamFieldId, FieldValue.NewBool((flags & 0x01) != 0), in context);
-                frameContainer.Append(_FlagEndHeadersFieldId, FieldValue.NewBool((flags & 0x04) != 0), in context);
-                frameContainer.Append(_FlagPaddedFieldId, FieldValue.NewBool((flags & 0x08) != 0), in context);
-                frameContainer.Append(_FlagPriorityFieldId, FieldValue.NewBool((flags & 0x20) != 0), in context);
+                frameContainer.Append(_FlagEndStreamFieldId, FieldValue.NewBool((flags & 0x01) != 0));
+                frameContainer.Append(_FlagEndHeadersFieldId, FieldValue.NewBool((flags & 0x04) != 0));
+                frameContainer.Append(_FlagPaddedFieldId, FieldValue.NewBool((flags & 0x08) != 0));
+                frameContainer.Append(_FlagPriorityFieldId, FieldValue.NewBool((flags & 0x20) != 0));
                 break;
 
             case 4: // SETTINGS: ACK (0x1)
-                frameContainer.Append(_FlagAckFieldId, FieldValue.NewBool((flags & 0x01) != 0), in context);
+                frameContainer.Append(_FlagAckFieldId, FieldValue.NewBool((flags & 0x01) != 0));
                 break;
 
             case 5: // PUSH_PROMISE: END_HEADERS (0x4), PADDED (0x8)
-                frameContainer.Append(_FlagEndHeadersFieldId, FieldValue.NewBool((flags & 0x04) != 0), in context);
-                frameContainer.Append(_FlagPaddedFieldId, FieldValue.NewBool((flags & 0x08) != 0), in context);
+                frameContainer.Append(_FlagEndHeadersFieldId, FieldValue.NewBool((flags & 0x04) != 0));
+                frameContainer.Append(_FlagPaddedFieldId, FieldValue.NewBool((flags & 0x08) != 0));
                 break;
 
             case 6: // PING: ACK (0x1)
-                frameContainer.Append(_FlagAckFieldId, FieldValue.NewBool((flags & 0x01) != 0), in context);
+                frameContainer.Append(_FlagAckFieldId, FieldValue.NewBool((flags & 0x01) != 0));
                 break;
 
             case 9: // CONTINUATION: END_HEADERS (0x4)
-                frameContainer.Append(_FlagEndHeadersFieldId, FieldValue.NewBool((flags & 0x04) != 0), in context);
+                frameContainer.Append(_FlagEndHeadersFieldId, FieldValue.NewBool((flags & 0x04) != 0));
                 break;
         }
     }
@@ -308,7 +479,7 @@ public sealed partial class Http2Protocol : IProtocol
     /// </summary>
     private bool ParseFramePayload(
         in MutField frameContainer, byte frameType, byte flags,
-        ReadOnlySpan<byte> payload, ReadOnlyMemory<byte> payloadMemory, in ParseContext context)
+        ReadOnlySpan<byte> payload, ReadOnlyMemory<byte> payloadMemory)
     {
         switch (frameType)
         {
@@ -317,7 +488,7 @@ public sealed partial class Http2Protocol : IProtocol
                     uint errorCode = BinaryPrimitives.ReadUInt32BigEndian(payload);
                     frameContainer.AppendWithCustomText(_RstStreamErrorCodeFieldId,
                         FieldValue.NewU64(errorCode),
-                        Http2DisplayTables.GetErrorCodeDisplayText(errorCode), in context);
+                        Http2DisplayTables.GetErrorCodeDisplayText(errorCode));
                     return true;
                 }
 
@@ -332,11 +503,11 @@ public sealed partial class Http2Protocol : IProtocol
                         string settingName = Http2DisplayTables.GetSettingsDisplayText(settingId);
                         MutField settingField = frameContainer.AppendWithCustomText(
                             _SettingsFieldId, FieldValue.None,
-                            ZA.Lazy(settingName, ": ", settingValue), in context);
+                            ZA.Lazy(settingName, ": ", settingValue));
 
                         settingField.AppendWithCustomText(_SettingsIdFieldId,
-                            FieldValue.NewU64(settingId), settingName, in context);
-                        settingField.Append(_SettingsValueFieldId, FieldValue.NewU64(settingValue), in context);
+                            FieldValue.NewU64(settingId), settingName);
+                        settingField.Append(_SettingsValueFieldId, FieldValue.NewU64(settingValue));
 
                         pos += 6;
                     }
@@ -345,7 +516,7 @@ public sealed partial class Http2Protocol : IProtocol
 
             case 6 when payload.Length == 8: // PING: 8 bytes opaque data
                 {
-                    frameContainer.Append(_PingOpaqueFieldId, FieldValue.NewBytes(payloadMemory), in context);
+                    frameContainer.Append(_PingOpaqueFieldId, FieldValue.NewBytes(payloadMemory));
                     return true;
                 }
 
@@ -354,15 +525,15 @@ public sealed partial class Http2Protocol : IProtocol
                     uint lastStreamId = BinaryPrimitives.ReadUInt32BigEndian(payload) & 0x7FFFFFFFU;
                     uint errorCode = BinaryPrimitives.ReadUInt32BigEndian(payload[4..]);
 
-                    frameContainer.Append(_GoawayLastStreamIdFieldId, FieldValue.NewU64(lastStreamId), in context);
+                    frameContainer.Append(_GoawayLastStreamIdFieldId, FieldValue.NewU64(lastStreamId));
                     frameContainer.AppendWithCustomText(_GoawayErrorCodeFieldId,
                         FieldValue.NewU64(errorCode),
-                        Http2DisplayTables.GetErrorCodeDisplayText(errorCode), in context);
+                        Http2DisplayTables.GetErrorCodeDisplayText(errorCode));
 
                     if (payload.Length > 8)
                     {
                         frameContainer.Append(_GoawayDebugDataFieldId,
-                            FieldValue.NewBytes(payloadMemory[8..]), in context);
+                            FieldValue.NewBytes(payloadMemory[8..]));
                     }
                     return true;
                 }
@@ -370,7 +541,7 @@ public sealed partial class Http2Protocol : IProtocol
             case 8 when payload.Length >= 4: // WINDOW_UPDATE: 4-byte increment (31-bit)
                 {
                     uint increment = BinaryPrimitives.ReadUInt32BigEndian(payload) & 0x7FFFFFFFU;
-                    frameContainer.Append(_WindowUpdateIncrementFieldId, FieldValue.NewU64(increment), in context);
+                    frameContainer.Append(_WindowUpdateIncrementFieldId, FieldValue.NewU64(increment));
                     return true;
                 }
 
@@ -424,7 +595,7 @@ public sealed partial class Http2Protocol : IProtocol
                     int hpackEnd = payload.Length - padLength;
                     if (hpackOffset < hpackEnd)
                     {
-                        DecodeHpackHeaders(in frameContainer, payload[hpackOffset..hpackEnd], in context);
+                        DecodeHpackHeaders(in frameContainer, payload[hpackOffset..hpackEnd]);
                     }
                     return true;
                 }
@@ -438,7 +609,7 @@ public sealed partial class Http2Protocol : IProtocol
     /// Decodes HPACK-encoded headers from a HEADERS or CONTINUATION frame payload
     /// and appends each decoded header as a field to the frame container.
     /// </summary>
-    private void DecodeHpackHeaders(in MutField frameContainer, ReadOnlySpan<byte> hpackBlock, in ParseContext context)
+    private void DecodeHpackHeaders(in MutField frameContainer, ReadOnlySpan<byte> hpackBlock)
     {
         List<HpackDecoder.Header> headers = HpackDecoder.Decode(hpackBlock);
 
@@ -447,16 +618,14 @@ public sealed partial class Http2Protocol : IProtocol
             return;
         }
 
-        context.RecordGroupPresence(_Http2HeaderGroupId);
-
         foreach (HpackDecoder.Header header in headers)
         {
             MutField headerField = frameContainer.AppendWithCustomText(
                 _HeaderFieldId, FieldValue.None,
-                ZA.Lazy(header.Name, ": ", header.Value), in context);
+                ZA.Lazy(header.Name, ": ", header.Value));
 
-            headerField.Append(_HeaderNameFieldId, FieldValue.NewString(header.Name), in context);
-            headerField.Append(_HeaderValueFieldId, FieldValue.NewString(header.Value), in context);
+            headerField.Append(_HeaderNameFieldId, FieldValue.NewString(header.Name));
+            headerField.Append(_HeaderValueFieldId, FieldValue.NewString(header.Value));
         }
     }
     #endregion

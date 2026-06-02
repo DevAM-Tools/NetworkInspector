@@ -92,6 +92,14 @@ internal sealed class BlfIncrementalScanner
     /// </summary>
     private long _CorruptedContainerCount;
 
+    /// <summary>
+    /// Number of containers that had trailing bytes insufficient for a valid LOBJ header.
+    /// Incremented inside <see cref="DrainPendingContainer"/> when the container tail is
+    /// too short to hold a complete object header. BlfSource polls this and forwards each
+    /// new truncation through the error-tolerance pipeline.
+    /// </summary>
+    private long _TruncatedObjectCount;
+
     #endregion
 
     #region Constructors
@@ -143,6 +151,13 @@ internal sealed class BlfIncrementalScanner
     /// </summary>
     internal long CorruptedContainerCount => _CorruptedContainerCount;
 
+    /// <summary>
+    /// Number of containers whose trailing bytes were too few for a valid LOBJ header and were
+    /// therefore silently discarded. Callers can poll this after <see cref="ScanNext"/> to
+    /// report truncation diagnostics through the error tolerance mechanism.
+    /// </summary>
+    internal long TruncatedObjectCount => _TruncatedObjectCount;
+
     #endregion
 
     #region Internal API
@@ -154,7 +169,7 @@ internal sealed class BlfIncrementalScanner
     /// Uses windowed reads via <see cref="BlfDataBackend.GetSpan"/> so that
     /// files larger than 2 GiB are handled correctly.
     /// </summary>
-    internal bool ScanNext()
+    internal bool ScanNext(CancellationToken cancellationToken = default)
     {
         // First: drain any pending container objects
         if (_PendingContainer is not null)
@@ -170,6 +185,8 @@ internal sealed class BlfIncrementalScanner
         // 2 GiB are handled correctly without any int.MaxValue cap.
         while (_FileOffset + BlfConstants.BlockHeaderSize <= _Backend.FileSize && !_Exhausted)
         {
+            cancellationToken.ThrowIfCancellationRequested();
+
             // Fetch just enough bytes for the block header.
             int headerFetchSize = (int)Math.Min(BlfConstants.BlockHeaderSize, _Backend.FileSize - _FileOffset);
             ReadOnlySpan<byte> blockData = _Backend.GetSpan(_FileOffset, headerFetchSize);
@@ -276,9 +293,9 @@ internal sealed class BlfIncrementalScanner
     /// <summary>
     /// Scans all remaining data to exhaustion, populating the index.
     /// </summary>
-    internal void ScanToEnd()
+    internal void ScanToEnd(CancellationToken cancellationToken = default)
     {
-        while (ScanNext())
+        while (ScanNext(cancellationToken))
         {
             // Keep scanning
         }
@@ -422,10 +439,16 @@ internal sealed class BlfIncrementalScanner
         }
 
         // Container fully consumed.
-        // NOTE: Any remaining bytes (containerSpan.Length - _ContainerOffset) that are too
-        // few for a valid LOBJ header are discarded here. In a correctly written BLF file
-        // this never happens. In a defective file, the truncated object is lost and reported
-        // via the error tolerance mechanism. See class remarks for carry-over buffer rationale.
+        // Detect trailing bytes too short for a valid LOBJ header: these are silently
+        // discarded because a partial object cannot be reconstructed. In a correctly
+        // written BLF file this never happens; in a defective file the truncated object
+        // is lost. Increment _TruncatedObjectCount so BlfSource can surface the diagnostic.
+        // See class remarks for carry-over buffer rationale.
+        if (_ContainerOffset < containerSpan.Length)
+        {
+            _TruncatedObjectCount++;
+        }
+
         _PendingContainer = null;
         _ContainerOffset = 0;
         return foundFrame;

@@ -1,5 +1,6 @@
 <!-- Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root. -->
 <Solution>
+  <Project Path="NetworkInspector.Values.Tests/NetworkInspector.Values.Tests.csproj" />
   <Project Path="NetworkInspector.Values/NetworkInspector.Values.csproj" />
   <Project Path="NetworkInspector.Generators.Tests/NetworkInspector.Generators.Tests.csproj" />
   <Project Path="NetworkInspector.Generators/NetworkInspector.Generators.csproj" />

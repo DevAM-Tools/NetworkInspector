@@ -81,7 +81,7 @@ public sealed partial class JsonProtocol : IProtocol
     private LazyPopulator _Populator = null!;
 
     partial void OnStartCustom(Stack stack) =>
-        _Populator = (in MutField container) => PopulateJsonFields(in container);
+        _Populator = PopulateJsonFields;
 
     /// <summary>
     /// Parses a JSON payload. Uses lazy population to defer recursive parsing.
@@ -96,6 +96,15 @@ public sealed partial class JsonProtocol : IProtocol
         context.RecordProtocolPresence(_ProtocolId);
         context.RecordGroupPresence(_JsonGroupId);
 
+        // The lazy populator emits json.value.null (index group "json.null") only when the
+        // document contains a null value token. Per the index-is-authoritative contract the
+        // group must be recorded eagerly here, so the presence is decided up front by scanning
+        // the raw bytes. This intentionally duplicates the scan the populator performs later.
+        if (JsonContainsNull(data.Span))
+        {
+            context.RecordGroupPresence(_JsonNullGroupId);
+        }
+
         parentField.SetPacketInfo(new LazyString("JSON"));
 
         FieldValue containerValue = FieldValue.NewBytes(data);
@@ -106,11 +115,61 @@ public sealed partial class JsonProtocol : IProtocol
     }
 
     /// <summary>
+    /// Eagerly scans a raw JSON document for a top-level or nested null value token without
+    /// building the field tree. Quoted strings (object keys and string values) are skipped so a
+    /// literal "null" appearing inside a string does not produce a false positive. The detection
+    /// mirrors the populator, which emits json.value.null whenever a value position begins with
+    /// the bytes 'n','u','l','l'. Returns true as soon as such a token is found.
+    /// </summary>
+    private static bool JsonContainsNull(ReadOnlySpan<byte> span)
+    {
+        int offset = 0;
+        while (offset < span.Length)
+        {
+            byte ch = span[offset];
+            if (ch == (byte)'"')
+            {
+                // Skip the quoted string, honouring backslash escapes, so its contents
+                // (including a literal "null") are never matched as a value token.
+                offset++;
+                while (offset < span.Length)
+                {
+                    byte sc = span[offset];
+                    if (sc == (byte)'\\')
+                    {
+                        offset += 2;
+                        continue;
+                    }
+                    if (sc == (byte)'"')
+                    {
+                        offset++;
+                        break;
+                    }
+                    offset++;
+                }
+                continue;
+            }
+
+            if (ch == (byte)'n'
+                && offset + 4 <= span.Length
+                && span[offset + 1] == (byte)'u'
+                && span[offset + 2] == (byte)'l'
+                && span[offset + 3] == (byte)'l')
+            {
+                return true;
+            }
+
+            offset++;
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// Populates JSON fields by parsing the stored JSON bytes into a field tree.
     /// </summary>
     private ParseResult PopulateJsonFields(in MutField container)
     {
-        ParseContext context = new ParseContext(container.Packet.Stack);
         if (!container.Value.Data.TryGetAsBytes(out ReadOnlyMemory<byte> jsonData))
         {
             return ParseError.InvalidData(ProtocolName, "Container value is not of type Bytes");
@@ -124,7 +183,7 @@ public sealed partial class JsonProtocol : IProtocol
         }
 
         // Parse the root value
-        ParseJsonValue(in container, span, ref offset, 0, in context);
+        ParseJsonValue(in container, span, ref offset, 0);
 
         return 0;
     }
@@ -133,7 +192,7 @@ public sealed partial class JsonProtocol : IProtocol
     /// Parses a single JSON value (object, array, string, number, boolean, null) and
     /// appends appropriate fields to the parent. Recurses for nested structures.
     /// </summary>
-    private void ParseJsonValue(in MutField parent, ReadOnlySpan<byte> span, ref int offset, int depth, in ParseContext context)
+    private void ParseJsonValue(in MutField parent, ReadOnlySpan<byte> span, ref int offset, int depth)
     {
         offset = SkipWhitespace(span, offset);
         if (offset >= span.Length || depth > MaxDepth)
@@ -146,20 +205,20 @@ public sealed partial class JsonProtocol : IProtocol
         switch (ch)
         {
             case (byte)'{':
-                ParseObject(in parent, span, ref offset, depth, in context);
+                ParseObject(in parent, span, ref offset, depth);
                 break;
             case (byte)'[':
-                ParseArray(in parent, span, ref offset, depth, in context);
+                ParseArray(in parent, span, ref offset, depth);
                 break;
             case (byte)'"':
                 string strVal = ParseString(span, ref offset);
-                parent.Append(_ValueStringFieldId, FieldValue.NewString(strVal), in context);
+                parent.Append(_ValueStringFieldId, FieldValue.NewString(strVal));
                 break;
             case (byte)'t': // true
                 if (offset + 4 <= span.Length
                     && span[offset + 1] == 'r' && span[offset + 2] == 'u' && span[offset + 3] == 'e')
                 {
-                    parent.Append(_ValueTrueFieldId, FieldValue.NewBool(true), in context);
+                    parent.Append(_ValueTrueFieldId, FieldValue.NewBool(true));
                     offset += 4;
                 }
                 else
@@ -172,7 +231,7 @@ public sealed partial class JsonProtocol : IProtocol
                     && span[offset + 1] == 'a' && span[offset + 2] == 'l'
                     && span[offset + 3] == 's' && span[offset + 4] == 'e')
                 {
-                    parent.Append(_ValueFalseFieldId, FieldValue.NewBool(false), in context);
+                    parent.Append(_ValueFalseFieldId, FieldValue.NewBool(false));
                     offset += 5;
                 }
                 else
@@ -184,8 +243,7 @@ public sealed partial class JsonProtocol : IProtocol
                 if (offset + 4 <= span.Length
                     && span[offset + 1] == 'u' && span[offset + 2] == 'l' && span[offset + 3] == 'l')
                 {
-                    context.RecordGroupPresence(_JsonNullGroupId);
-                    parent.Append(_ValueNullFieldId, FieldValue.NewBool(true), in context);
+                    parent.Append(_ValueNullFieldId, FieldValue.NewBool(true));
                     offset += 4;
                 }
                 else
@@ -198,7 +256,7 @@ public sealed partial class JsonProtocol : IProtocol
                 if (ch == '-' || (ch >= '0' && ch <= '9'))
                 {
                     string numStr = ParseNumber(span, ref offset);
-                    parent.Append(_ValueNumberFieldId, FieldValue.NewString(numStr), in context);
+                    parent.Append(_ValueNumberFieldId, FieldValue.NewString(numStr));
                 }
                 else
                 {
@@ -211,11 +269,11 @@ public sealed partial class JsonProtocol : IProtocol
     /// <summary>
     /// Parses a JSON object and appends member fields.
     /// </summary>
-    private void ParseObject(in MutField parent, ReadOnlySpan<byte> span, ref int offset, int depth, in ParseContext context)
+    private void ParseObject(in MutField parent, ReadOnlySpan<byte> span, ref int offset, int depth)
     {
         offset++; // Skip '{'
         MutField objField = parent.AppendWithCustomText(
-            _ObjectFieldId, FieldValue.None, new LazyString("Object"), in context);
+            _ObjectFieldId, FieldValue.None, new LazyString("Object"));
 
         bool first = true;
         while (offset < span.Length)
@@ -264,23 +322,23 @@ public sealed partial class JsonProtocol : IProtocol
             // Member container — display text shows "key": value summary
             MutField memberField = objField.AppendWithCustomText(
                 _MemberFieldId, FieldValue.None,
-                ZA.Lazy("Member: ", key), in context);
+                ZA.Lazy("Member: ", key));
 
-            memberField.Append(_KeyFieldId, FieldValue.NewString(key), in context);
+            memberField.Append(_KeyFieldId, FieldValue.NewString(key));
 
             // Parse value recursively
-            ParseJsonValue(in memberField, span, ref offset, depth + 1, in context);
+            ParseJsonValue(in memberField, span, ref offset, depth + 1);
         }
     }
 
     /// <summary>
     /// Parses a JSON array and appends element fields.
     /// </summary>
-    private void ParseArray(in MutField parent, ReadOnlySpan<byte> span, ref int offset, int depth, in ParseContext context)
+    private void ParseArray(in MutField parent, ReadOnlySpan<byte> span, ref int offset, int depth)
     {
         offset++; // Skip '['
         MutField arrField = parent.AppendWithCustomText(
-            _ArrayFieldId, FieldValue.None, new LazyString("Array"), in context);
+            _ArrayFieldId, FieldValue.None, new LazyString("Array"));
 
         bool first = true;
         while (offset < span.Length)
@@ -310,7 +368,7 @@ public sealed partial class JsonProtocol : IProtocol
             }
             first = false;
 
-            ParseJsonValue(in arrField, span, ref offset, depth + 1, in context);
+            ParseJsonValue(in arrField, span, ref offset, depth + 1);
         }
     }
 

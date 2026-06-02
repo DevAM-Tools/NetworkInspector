@@ -26,6 +26,7 @@ internal sealed class StandardBlockBuilder
     private PooledBuffer _Buffer;
     private readonly FieldPresence _FieldPresence;
     private readonly PreviousFieldStore _PreviousFields;
+    private readonly int _MaxFieldId;
     private string? _PreviousPacketInfo;
     private int _PacketCount;
     private ulong _MinPacketId;
@@ -62,6 +63,7 @@ internal sealed class StandardBlockBuilder
     /// <param name="maxBlockSize">Maximum serialized block size in bytes before flush.</param>
     internal StandardBlockBuilder(int maxFieldId, int maxPacketsPerBlock = 50000, long maxBlockSize = 16 * 1024 * 1024)
     {
+        _MaxFieldId = maxFieldId;
         _Buffer = new PooledBuffer(64 * 1024);
         _FieldPresence = new FieldPresence(maxFieldId);
         _PreviousFields = new PreviousFieldStore(maxFieldId);
@@ -296,6 +298,15 @@ internal sealed class StandardBlockBuilder
         buffer.Reset();
 
         int fieldIdValue = field.FieldId.Value;
+
+        // Guard against field IDs outside the configured range. Field IDs >= _MaxFieldId
+        // would corrupt the presence bitmap (silently missing from metadata deduplication);
+        // throwing here lets the caller's error-tolerance mechanism skip only this field.
+        if ((uint)fieldIdValue >= (uint)_MaxFieldId)
+        {
+            throw new ArgumentOutOfRangeException(nameof(field),
+                $"Field ID {fieldIdValue} is outside the PBF field ID range [0, {_MaxFieldId}).");
+        }
 
         // Field ID — always present
         ProtobufEncoder.WriteVarintField(ref buffer, PbfFieldNumbers.FieldFieldId, (ulong)fieldIdValue);

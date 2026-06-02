@@ -12,13 +12,13 @@ namespace NetworkInspector.Profiling.Scenarios;
 /// auto-advance per frame; the same session and buffer are reused.
 /// </para>
 /// </summary>
-internal sealed class FrameBuilderTcpIPv6SessionScenario : IProfilingScenario
+[SuppressMessage("Performance", "CA1812:AvoidUninstantiatedInternalClasses", Justification = "Instantiated via reflection in ScenarioDiscovery.Discover.")]
+internal sealed class FrameBuilderTcpIPv6SessionScenario : FrameBuilderScenarioBase
 {
     private const int FrameCount = 500_000;
-    private const int PayloadSize = 64;
 
-    private readonly byte[] _Payload = new byte[PayloadSize];
-    private byte[] _Buffer = [];
+    /// <inheritdoc/>
+    protected override int PayloadSize => 64;
     private StatefulCreatedStack<
         Stack<TcpLayerWithAutoSequence,
             StatelessStack<IPv6Layer,
@@ -27,21 +27,22 @@ internal sealed class FrameBuilderTcpIPv6SessionScenario : IProfilingScenario
         NoInterceptor> _Stack;
 
     /// <inheritdoc/>
-    public string Name => "framebuilder-tcp-ipv6-session";
+    public override string Name => "framebuilder-tcp-ipv6-session";
 
     /// <inheritdoc/>
-    public string Description =>
+    public override string Description =>
         $"Stream {FrameCount:N0} TCP/IPv6 segments through a stateful Session with auto-sequence.";
 
     /// <inheritdoc/>
-    public long WorkUnitsPerIteration => FrameCount;
+    public override long WorkUnitsPerIteration => FrameCount;
 
     /// <inheritdoc/>
-    public string WorkUnitName => "frames";
+    public override string WorkUnitName => "frames";
 
     /// <inheritdoc/>
-    public void Setup()
+    public override void Setup()
     {
+        InitializeBuffers();
         EthernetLayer eth = new(
             MacAddress.FromBytes([0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF]),
             MacAddress.FromBytes([0x00, 0x11, 0x22, 0x33, 0x44, 0x55]));
@@ -59,7 +60,7 @@ internal sealed class FrameBuilderTcpIPv6SessionScenario : IProfilingScenario
     }
 
     /// <inheritdoc/>
-    public void Run()
+    public override void Run()
     {
         Span<byte> dst = _Buffer;
         using Session<Stack<TcpLayerWithAutoSequence, StatelessStack<IPv6Layer, StatelessStack<EthernetLayer, StackEnd>>>, NoTrailer, NoInterceptor> session
@@ -72,7 +73,7 @@ internal sealed class FrameBuilderTcpIPv6SessionScenario : IProfilingScenario
     }
 
     /// <inheritdoc/>
-    public void Cleanup()
+    public override void Cleanup()
     {
     }
 }

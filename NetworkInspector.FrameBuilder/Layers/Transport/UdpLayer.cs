@@ -23,6 +23,12 @@ namespace NetworkInspector.FrameBuilder;
 ///   using the IPv4 / IPv6 pseudo-header from <see cref="PostFixContext"/>
 ///   when <c>computeChecksum</c> is enabled.</item>
 /// </list>
+/// <para>
+/// RFC 8200 §8.1 forbids a pinned zero UDP checksum over IPv6. Because post-fix
+/// phases must not throw, that violation is surfaced through
+/// <see cref="BuildStatus.InvalidLayerState"/> on the build status rather than
+/// by raising an exception.
+/// </para>
 /// </remarks>
 public readonly struct UdpLayer : IStatelessLayer, IInteriorLayer, IProvidesProtocolType, IProvidesNextProtocolValue<IpNextProtocolKind>, IRequiresPseudoHeader
 {
@@ -115,12 +121,14 @@ public readonly struct UdpLayer : IStatelessLayer, IInteriorLayer, IProvidesProt
                     // (unless the upper-layer protocol explicitly opts in via
                     // a separate spec — we do not here). A pinned 0x0000 over
                     // an IPv6 pseudo-header would silently produce a
-                    // non-conformant packet, so we throw instead of writing it.
+                    // non-conformant packet. Post-fix phases must never throw
+                    // (an escaping exception would corrupt the FrameSequence
+                    // iterator state), so we surface the violation through the
+                    // build status and leave the frame bytes untouched.
                     if (_ExplicitChecksum == 0 && ctx.PseudoIsIPv6)
                     {
-                        throw new InvalidOperationException(
-                            "UDP over IPv6 with an explicit zero checksum is forbidden by RFC 8200 §8.1. "
-                            + "Use Auto.Compute or supply a non-zero checksum.");
+                        ctx.Status = BuildStatus.InvalidLayerState;
+                        break;
                     }
                     // Caller pinned the checksum; write verbatim.
                     BinaryPrimitives.WriteUInt16BigEndian(frame.Slice(myOffset + ChecksumOffset, 2), _ExplicitChecksum);

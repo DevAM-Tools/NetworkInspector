@@ -44,11 +44,11 @@ public sealed partial class BlfSource
     /// <see cref="GetOrRegisterInterface"/>; callers must never re-read <c>_Registry</c>
     /// inside the same logical operation.</para>
     /// </remarks>
-    private Frame? TryBuildFrame(int frameIndex)
+    private Frame? TryBuildFrame(int frameIndex, CancellationToken cancellationToken = default)
     {
         ref readonly BlfFrameEntry entry = ref _Index.GetEntry(frameIndex);
 
-        byte[]? frameData = TryExtractFrameData(in entry);
+        byte[]? frameData = TryExtractFrameData(in entry, cancellationToken);
         if (frameData is null)
         {
             return null;
@@ -80,13 +80,13 @@ public sealed partial class BlfSource
     /// Pure (read-only) variant of <see cref="ExtractFrameData"/> for random-access callers.
     /// Returns <c>null</c> on any failure without invoking <see cref="HandleSkip"/>.
     /// </summary>
-    private byte[]? TryExtractFrameData(in BlfFrameEntry entry)
+    private byte[]? TryExtractFrameData(in BlfFrameEntry entry, CancellationToken cancellationToken = default)
     {
         ReadOnlySpan<byte> objectData;
 
         if (entry.ObjectOffset >= 0)
         {
-            byte[] containerData = TryGetContainerData(entry.ContainerOffset);
+            byte[] containerData = TryGetContainerData(entry.ContainerOffset, cancellationToken);
             if (containerData.Length == 0)
             {
                 return null;
@@ -127,12 +127,12 @@ public sealed partial class BlfSource
     /// Re-parses the object from the file or cached container data.
     /// Reports errors via <see cref="HandleSkip"/> when frame construction fails.
     /// </summary>
-    private Frame? BuildFrame(int frameIndex)
+    private Frame? BuildFrame(int frameIndex, CancellationToken cancellationToken = default)
     {
         ref readonly BlfFrameEntry entry = ref _Index.GetEntry(frameIndex);
 
         // Get or decompress the container data
-        byte[]? frameData = ExtractFrameData(in entry, frameIndex);
+        byte[]? frameData = ExtractFrameData(in entry, frameIndex, cancellationToken);
         if (frameData is null)
         {
             // Error already reported in ExtractFrameData
@@ -185,14 +185,14 @@ public sealed partial class BlfSource
     /// For raw objects: reads directly from file data.
     /// Reports errors via <see cref="HandleSkip"/> on failure.
     /// </summary>
-    private byte[]? ExtractFrameData(in BlfFrameEntry entry, int frameIndex)
+    private byte[]? ExtractFrameData(in BlfFrameEntry entry, int frameIndex, CancellationToken cancellationToken = default)
     {
         ReadOnlySpan<byte> objectData;
 
         if (entry.ObjectOffset >= 0)
         {
             // Container object: get decompressed container data
-            byte[] containerData = GetContainerData(entry.ContainerOffset, frameIndex);
+            byte[] containerData = GetContainerData(entry.ContainerOffset, frameIndex, cancellationToken);
             if (containerData.Length == 0)
             {
                 // Error already reported in GetContainerData
@@ -287,7 +287,7 @@ public sealed partial class BlfSource
     /// time across all container offsets. Waiting threads do not hold a semaphore slot.
     /// </para>
     /// </remarks>
-    private byte[] TryGetContainerData(long containerFileOffset)
+    private byte[] TryGetContainerData(long containerFileOffset, CancellationToken cancellationToken = default)
     {
         ContainerDecompressionWork work;
         bool isWinner;
@@ -314,7 +314,7 @@ public sealed partial class BlfSource
         if (!isWinner)
         {
             // Another thread is already decompressing this container. Wait for it to finish.
-            work.Ready.Task.Wait();
+            work.Ready.Wait(cancellationToken);
 
             lock (_ContainerCacheLock)
             {
@@ -342,7 +342,11 @@ public sealed partial class BlfSource
         }
         else
         {
-            _DecompressionSemaphore.Wait();
+            // CancellationToken.None is intentional: forwarding the caller token would leave the
+            // work entry dangling in _PendingDecompressions if the winner is cancelled while
+            // holding the semaphore, deadlocking all waiters for this container. The token is
+            // already checked at the FrameById entry point before this code is reached.
+            _DecompressionSemaphore.Wait(CancellationToken.None);
             try
             {
                 // BlfDecompressionLimitExceededException is intentionally not caught here
@@ -378,11 +382,11 @@ public sealed partial class BlfSource
             }
 
             _PendingDecompressions.Remove(containerFileOffset);
-            work.Ready.SetResult(true);
+            work.Ready.Set();
         }
 
         // The semaphore counting the failure happens outside the lock to keep the critical
-        // section as short as possible. Waiters that woke up on Ready.SetResult() above have not
+        // section as short as possible. Waiters that woke up on Ready.Set() above have not
         // yet observed _RandomAccessFailureCount; the increment is logically associated with
         // this specific decompression attempt and is safe to do outside the lock because
         // Interlocked guarantees atomic visibility.
@@ -412,7 +416,7 @@ public sealed partial class BlfSource
     /// this path waits and then calls <see cref="HandleSkip"/> if the other thread failed.
     /// </para>
     /// </remarks>
-    private byte[] GetContainerData(long containerFileOffset, int frameIndex)
+    private byte[] GetContainerData(long containerFileOffset, int frameIndex, CancellationToken cancellationToken = default)
     {
         ContainerDecompressionWork work;
         bool isWinner;
@@ -439,7 +443,7 @@ public sealed partial class BlfSource
         if (!isWinner)
         {
             // A random-access thread is already decompressing this container. Wait for it.
-            work.Ready.Task.Wait();
+            work.Ready.Wait(cancellationToken);
 
             lock (_ContainerCacheLock)
             {
@@ -481,7 +485,11 @@ public sealed partial class BlfSource
         }
         else
         {
-            _DecompressionSemaphore.Wait();
+            // CancellationToken.None is intentional: forwarding the caller token would leave the
+            // work entry dangling in _PendingDecompressions if the winner is cancelled while
+            // holding the semaphore, deadlocking all waiters for this container. The token is
+            // already checked at the NextFrame call chain entry point before this code is reached.
+            _DecompressionSemaphore.Wait(CancellationToken.None);
             try
             {
                 // BlfDecompressionLimitExceededException is intentionally not caught here
@@ -523,7 +531,7 @@ public sealed partial class BlfSource
             }
 
             _PendingDecompressions.Remove(containerFileOffset);
-            work.Ready.SetResult(true);
+            work.Ready.Set();
         }
 
         // Report errors outside the lock to keep the critical section short.

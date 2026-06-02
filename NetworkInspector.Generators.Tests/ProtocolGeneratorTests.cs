@@ -1,310 +1,16 @@
 // Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
+using static NetworkInspector.Generators.Tests.TestInfrastructure;
+
 namespace NetworkInspector.Generators.Tests;
 
 /// <summary>
 /// Roslyn <see cref="CSharpGeneratorDriver"/> tests for <see cref="ProtocolGenerator"/>.
 /// Each test covers one NIGEN diagnostic (001–013) or the happy-path source-emission contract.
+/// Shared driver scaffolding lives in <see cref="TestInfrastructure"/>.
 /// </summary>
 internal sealed class ProtocolGeneratorTests
 {
-    #region Attribute stubs
-
-    // Minimal stub definitions for every attribute consumed by ProtocolGenerator.
-    // They live in the exact FQN namespace the generator uses so that
-    // ForAttributeWithMetadataName and fqn-equality checks both fire correctly.
-    //
-    // RegisterAtBoolTableAttribute intentionally exposes extra overloads:
-    //   (string, string)  — used by the NIGEN009 test to supply a non-bool key value.
-    //   (string)          — used by the NIGEN013 test to supply an incomplete payload.
-    //
-    // UnknownFieldAttribute is a field attribute whose short name is absent from the
-    // generator's switch expression, deliberately triggering NIGEN010 (warning).
-    private const string AttributeStubs = """
-        using System;
-        namespace NetworkInspector.Protocols.Attributes
-        {
-            [AttributeUsage(AttributeTargets.Class, Inherited = false)]
-            public sealed class ProtocolAttribute : Attribute
-            {
-                public ProtocolAttribute(string name, string uiName) { }
-                public string Description { get; set; } = "";
-            }
-
-            [AttributeUsage(AttributeTargets.Class, AllowMultiple = true, Inherited = false)]
-            public sealed class RegisterAtTableAttribute : Attribute
-            {
-                public RegisterAtTableAttribute(string table, ulong key) { }
-            }
-
-            [AttributeUsage(AttributeTargets.Class, AllowMultiple = true, Inherited = false)]
-            public sealed class RegisterAtStringTableAttribute : Attribute
-            {
-                public RegisterAtStringTableAttribute(string table, string key) { }
-            }
-
-            [AttributeUsage(AttributeTargets.Class, AllowMultiple = true, Inherited = false)]
-            public sealed class RegisterAtBoolTableAttribute : Attribute
-            {
-                public RegisterAtBoolTableAttribute(string table, bool key) { }
-                public RegisterAtBoolTableAttribute(string table, string key) { }
-                public RegisterAtBoolTableAttribute(string table) { }
-            }
-
-            [AttributeUsage(AttributeTargets.Class, AllowMultiple = true, Inherited = false)]
-            public sealed class RegisterAtBytesTableAttribute : Attribute
-            {
-                public RegisterAtBytesTableAttribute(string table, byte[] key) { }
-            }
-
-            [AttributeUsage(AttributeTargets.Class, AllowMultiple = true, Inherited = false)]
-            public sealed class RegisterAtAnyTableAttribute : Attribute
-            {
-                public RegisterAtAnyTableAttribute(string table) { }
-            }
-
-            [AttributeUsage(AttributeTargets.Field)]
-            public sealed class UsesTableAttribute : Attribute
-            {
-                public UsesTableAttribute(string table) { }
-            }
-
-            [AttributeUsage(AttributeTargets.Field)]
-            public sealed class ProtocolTableU64Attribute : Attribute
-            {
-                public ProtocolTableU64Attribute(string name, string uiName) { }
-            }
-
-            [AttributeUsage(AttributeTargets.Field)]
-            public sealed class ProtocolTableStringAttribute : Attribute
-            {
-                public ProtocolTableStringAttribute(string name, string uiName) { }
-            }
-
-            [AttributeUsage(AttributeTargets.Field)]
-            public sealed class ProtocolTableBytesAttribute : Attribute
-            {
-                public ProtocolTableBytesAttribute(string name, string uiName) { }
-            }
-
-            [AttributeUsage(AttributeTargets.Field)]
-            public sealed class ProtocolTableBoolAttribute : Attribute
-            {
-                public ProtocolTableBoolAttribute(string name, string uiName) { }
-            }
-
-            [AttributeUsage(AttributeTargets.Field)]
-            public sealed class ProtocolTableAnyAttribute : Attribute
-            {
-                public ProtocolTableAnyAttribute(string name, string uiName) { }
-            }
-
-            [AttributeUsage(AttributeTargets.Field)]
-            public sealed class BoolSettingAttribute : Attribute
-            {
-                public BoolSettingAttribute(string name, string uiName, string groupName) { }
-                public bool Default { get; set; }
-                public string Description { get; set; } = "";
-            }
-
-            [AttributeUsage(AttributeTargets.Field)]
-            public sealed class StringSettingAttribute : Attribute
-            {
-                public StringSettingAttribute(string name, string uiName, string groupName) { }
-                public string Default { get; set; } = "";
-                public string Description { get; set; } = "";
-            }
-
-            [AttributeUsage(AttributeTargets.Field)]
-            public sealed class F64SettingAttribute : Attribute
-            {
-                public F64SettingAttribute(string name, string uiName, string groupName) { }
-                public double Default { get; set; }
-                public string Description { get; set; } = "";
-            }
-
-            [AttributeUsage(AttributeTargets.Field)]
-            public sealed class U64SettingAttribute : Attribute
-            {
-                public U64SettingAttribute(string name, string uiName, string groupName) { }
-                public ulong Default { get; set; }
-                public string Description { get; set; } = "";
-            }
-
-            [AttributeUsage(AttributeTargets.Field)]
-            public sealed class I64SettingAttribute : Attribute
-            {
-                public I64SettingAttribute(string name, string uiName, string groupName) { }
-                public long Default { get; set; }
-                public string Description { get; set; } = "";
-            }
-
-            [AttributeUsage(AttributeTargets.Field)]
-            public sealed class BytesSettingAttribute : Attribute
-            {
-                public BytesSettingAttribute(string name, string uiName, string groupName) { }
-                public string DefaultHex { get; set; } = "";
-                public string Description { get; set; } = "";
-            }
-
-            [AttributeUsage(AttributeTargets.Field)]
-            public sealed class EnumSettingAttribute : Attribute
-            {
-                public EnumSettingAttribute(string name, string uiName, string groupName) { }
-                public ulong Default { get; set; }
-                public string AllowedValues { get; set; } = "";
-                public string Description { get; set; } = "";
-            }
-
-            public abstract class FieldRegistrationAttribute : Attribute
-            {
-                protected FieldRegistrationAttribute(string name, string uiName) { }
-                public string IndexGroup { get; set; } = "";
-                public string Description { get; set; } = "";
-            }
-
-            [AttributeUsage(AttributeTargets.Field)]
-            public sealed class NoneFieldAttribute : FieldRegistrationAttribute
-            {
-                public NoneFieldAttribute(string name, string uiName) : base(name, uiName) { }
-            }
-
-            [AttributeUsage(AttributeTargets.Field)]
-            public sealed class U64FieldAttribute : FieldRegistrationAttribute
-            {
-                public U64FieldAttribute(string name, string uiName) : base(name, uiName) { }
-            }
-
-            [AttributeUsage(AttributeTargets.Field)]
-            public sealed class I64FieldAttribute : FieldRegistrationAttribute
-            {
-                public I64FieldAttribute(string name, string uiName) : base(name, uiName) { }
-            }
-
-            [AttributeUsage(AttributeTargets.Field)]
-            public sealed class F64FieldAttribute : FieldRegistrationAttribute
-            {
-                public F64FieldAttribute(string name, string uiName) : base(name, uiName) { }
-            }
-
-            [AttributeUsage(AttributeTargets.Field)]
-            public sealed class StringFieldAttribute : FieldRegistrationAttribute
-            {
-                public StringFieldAttribute(string name, string uiName) : base(name, uiName) { }
-            }
-
-            [AttributeUsage(AttributeTargets.Field)]
-            public sealed class BytesFieldAttribute : FieldRegistrationAttribute
-            {
-                public BytesFieldAttribute(string name, string uiName) : base(name, uiName) { }
-            }
-
-            [AttributeUsage(AttributeTargets.Field)]
-            public sealed class BoolFieldAttribute : FieldRegistrationAttribute
-            {
-                public BoolFieldAttribute(string name, string uiName) : base(name, uiName) { }
-            }
-
-            [AttributeUsage(AttributeTargets.Field)]
-            public sealed class TimestampFieldAttribute : FieldRegistrationAttribute
-            {
-                public TimestampFieldAttribute(string name, string uiName) : base(name, uiName) { }
-            }
-
-            [AttributeUsage(AttributeTargets.Field)]
-            public sealed class MacFieldAttribute : FieldRegistrationAttribute
-            {
-                public MacFieldAttribute(string name, string uiName) : base(name, uiName) { }
-            }
-
-            [AttributeUsage(AttributeTargets.Field)]
-            public sealed class IPv4FieldAttribute : FieldRegistrationAttribute
-            {
-                public IPv4FieldAttribute(string name, string uiName) : base(name, uiName) { }
-            }
-
-            [AttributeUsage(AttributeTargets.Field)]
-            public sealed class IPv6FieldAttribute : FieldRegistrationAttribute
-            {
-                public IPv6FieldAttribute(string name, string uiName) : base(name, uiName) { }
-            }
-
-            [AttributeUsage(AttributeTargets.Field)]
-            public sealed class Eui64FieldAttribute : FieldRegistrationAttribute
-            {
-                public Eui64FieldAttribute(string name, string uiName) : base(name, uiName) { }
-            }
-
-            [AttributeUsage(AttributeTargets.Field)]
-            public sealed class UuidFieldAttribute : FieldRegistrationAttribute
-            {
-                public UuidFieldAttribute(string name, string uiName) : base(name, uiName) { }
-            }
-
-            // Not in the generator's known attribute switch — triggers NIGEN010 (warning).
-            [AttributeUsage(AttributeTargets.Field)]
-            public sealed class UnknownFieldAttribute : FieldRegistrationAttribute
-            {
-                public UnknownFieldAttribute(string name, string uiName) : base(name, uiName) { }
-            }
-        }
-        """;
-
-    #endregion
-
-    #region Test infrastructure
-
-    // References built once per test run from the trusted platform assembly list.
-    private static readonly MetadataReference[] DefaultReferences = BuildDefaultReferences();
-
-    private static MetadataReference[] BuildDefaultReferences()
-    {
-        string? platformAssemblies = AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") as string;
-        if (string.IsNullOrEmpty(platformAssemblies))
-        {
-            return [];
-        }
-
-        string[] paths = platformAssemblies.Split(Path.PathSeparator);
-        MetadataReference[] refs = new MetadataReference[paths.Length];
-        for (int i = 0; i < paths.Length; i++)
-        {
-            refs[i] = MetadataReference.CreateFromFile(paths[i]);
-        }
-
-        return refs;
-    }
-
-    // Combines the attribute stubs and the caller-supplied test source into a single
-    // CSharpCompilation, runs ProtocolGenerator against it, and returns the driver result.
-    private static GeneratorDriverRunResult RunGenerator(string source)
-    {
-        SyntaxTree[] trees =
-        [
-            CSharpSyntaxTree.ParseText(AttributeStubs),
-            CSharpSyntaxTree.ParseText(source),
-        ];
-
-        CSharpCompilation compilation = CSharpCompilation.Create(
-            "TestAssembly",
-            trees,
-            DefaultReferences,
-            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
-
-        ProtocolGenerator generator = new();
-        GeneratorDriver driver = CSharpGeneratorDriver.Create(generator);
-        driver = driver.RunGeneratorsAndUpdateCompilation(compilation, out _, out _);
-        return driver.GetRunResult();
-    }
-
-    private static bool HasDiagnostic(GeneratorDriverRunResult result, string id) =>
-        result.Diagnostics.Any(d => d.Id == id);
-
-    private static bool HasGeneratedSource(GeneratorDriverRunResult result) =>
-        result.Results.Length > 0 && result.Results[0].GeneratedSources.Length > 0;
-
-    #endregion
-
     #region Happy path — valid protocol produces generated source
 
     [Test]
@@ -830,30 +536,6 @@ internal sealed class ProtocolGeneratorTests
         }
         """;
 
-    /// <summary>
-    /// Builds a compilation from raw source strings (without the shared <see cref="AttributeStubs"/>)
-    /// and runs <see cref="ProtocolGenerator"/> against it.
-    /// </summary>
-    private static GeneratorDriverRunResult RunGeneratorFromRawSources(params string[] sources)
-    {
-        SyntaxTree[] trees = sources.Select(s => CSharpSyntaxTree.ParseText(s)).ToArray();
-        CSharpCompilation compilation = CSharpCompilation.Create(
-            "TestAssembly",
-            trees,
-            DefaultReferences,
-            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
-
-        ProtocolGenerator generator = new();
-        GeneratorDriver driver = CSharpGeneratorDriver.Create(generator);
-        driver = driver.RunGeneratorsAndUpdateCompilation(compilation, out _, out _);
-        return driver.GetRunResult();
-    }
-
-    private static string GetFirstGeneratedSource(GeneratorDriverRunResult result) =>
-        result.Results.Length > 0 && result.Results[0].GeneratedSources.Length > 0
-            ? result.Results[0].GeneratedSources[0].SourceText.ToString()
-            : string.Empty;
-
     [Test]
     public async Task Run_WhenF64SettingWithDefault_GeneratedSourceContainsInvariantFormattedValue()
     {
@@ -993,6 +675,85 @@ internal sealed class ProtocolGeneratorTests
             .Because("I64 negative min must be preserved in emission");
         await Assert.That(generatedSource.Contains("min:", StringComparison.Ordinal)).IsTrue()
             .Because("min: named arg must appear when HasMin=true");
+    }
+
+    #endregion
+
+    #region Incremental caching — pipeline reuses cached ProtocolInfo across unrelated edits
+
+    [Test]
+    public async Task Generator_WhenUnrelatedSyntaxTreeAdded_ReusesCachedProtocolInfoStep()
+    {
+        // Incremental-generator contract: an edit that does not touch any [Protocol] type must
+        // not re-run the extraction transform. This only holds if ProtocolInfo has correct
+        // value equality, so this test also guards the DTO's equatability.
+        const string source = """
+            using NetworkInspector.Protocols.Attributes;
+            namespace TestProtocols;
+            [Protocol("inc.test", "Incremental Test")]
+            public partial class IncrementalProto
+            {
+                [U64Field("inc.field", "Inc Field")]
+                private int _field;
+            }
+            """;
+
+        Compilation compilation = CreateCompilation(source);
+        GeneratorDriver driver = CreateTrackingDriver();
+
+        // First run populates the cache.
+        driver = driver.RunGenerators(compilation);
+
+        // Add a syntax tree with no [Protocol] type — an edit unrelated to the generator inputs.
+        Compilation modified = compilation.AddSyntaxTrees(
+            CSharpSyntaxTree.ParseText("namespace Unrelated { internal sealed class Bystander { } }"));
+        driver = driver.RunGenerators(modified);
+
+        GeneratorRunResult runResult = driver.GetRunResult().Results[0];
+
+        bool extractionCached = runResult.TrackedSteps[ProtocolGenerator.TrackingNames.ProtocolInfo]
+            .SelectMany(static step => step.Outputs)
+            .All(static output => output.Reason is IncrementalStepRunReason.Cached or IncrementalStepRunReason.Unchanged);
+
+        bool filteredCached = runResult.TrackedSteps[ProtocolGenerator.TrackingNames.FilteredProtocolInfo]
+            .SelectMany(static step => step.Outputs)
+            .All(static output => output.Reason is IncrementalStepRunReason.Cached or IncrementalStepRunReason.Unchanged);
+
+        await Assert.That(extractionCached).IsTrue()
+            .Because("ProtocolInfo extraction must be cached when no [Protocol] type changes");
+        await Assert.That(filteredCached).IsTrue()
+            .Because("filtered ProtocolInfo step must be cached when no [Protocol] type changes");
+    }
+
+    [Test]
+    public async Task Generator_WhenRunTwiceOnEquivalentCompilation_ProducesCachedOutputs()
+    {
+        // Re-running against a structurally identical compilation must reuse every cached step.
+        const string source = """
+            using NetworkInspector.Protocols.Attributes;
+            namespace TestProtocols;
+            [Protocol("inc.equal", "Incremental Equal")]
+            public partial class IncrementalEqualProto
+            {
+                [U64Field("inc.equal.field", "Field")]
+                private int _field;
+            }
+            """;
+
+        GeneratorDriver driver = CreateTrackingDriver();
+        driver = driver.RunGenerators(CreateCompilation(source));
+
+        // A second, independently-built compilation with identical content.
+        driver = driver.RunGenerators(CreateCompilation(source));
+
+        GeneratorRunResult runResult = driver.GetRunResult().Results[0];
+
+        bool extractionCached = runResult.TrackedSteps[ProtocolGenerator.TrackingNames.ProtocolInfo]
+            .SelectMany(static step => step.Outputs)
+            .All(static output => output.Reason is IncrementalStepRunReason.Cached or IncrementalStepRunReason.Unchanged);
+
+        await Assert.That(extractionCached).IsTrue()
+            .Because("equivalent compilations must yield cached extraction outputs");
     }
 
     #endregion

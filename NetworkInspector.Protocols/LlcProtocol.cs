@@ -162,23 +162,23 @@ public sealed partial class LlcProtocol : IProtocol
 
         // Append protocol container and fields
         FieldValue headerValue = FieldValue.NewBytes(data[..headerSize]);
-        MutField container = parentField.AppendWithCustomText(_ProtocolFieldId, headerValue, summary, in context);
+        MutField container = parentField.AppendWithCustomText(_ProtocolFieldId, headerValue, summary);
 
         string dsapText = DisplayTables.GetLlcSapDisplayText(dsap);
-        container.AppendWithCustomText(_DsapFieldId, FieldValue.NewU64(dsap), dsapText, in context);
+        container.AppendWithCustomText(_DsapFieldId, FieldValue.NewU64(dsap), dsapText);
 
         string ssapText = DisplayTables.GetLlcSapDisplayText(ssap);
-        container.AppendWithCustomText(_SsapFieldId, FieldValue.NewU64(ssap), ssapText, in context);
+        container.AppendWithCustomText(_SsapFieldId, FieldValue.NewU64(ssap), ssapText);
 
-        container.Append(_ControlFieldId, FieldValue.NewU64(controlValue), in context);
+        container.Append(_ControlFieldId, FieldValue.NewU64(controlValue));
 
         if (isSnap)
         {
             // OUI: 3 bytes at offset 3
-            container.Append(_OuiFieldId, FieldValue.NewBytes(data[3..6]), in context);
+            container.Append(_OuiFieldId, FieldValue.NewBytes(data[3..6]));
 
             string etypeText = DisplayTables.GetEtherTypeDisplayText(snapType);
-            container.AppendWithCustomText(_TypeFieldId, FieldValue.NewU64(snapType), etypeText, in context);
+            container.AppendWithCustomText(_TypeFieldId, FieldValue.NewU64(snapType), etypeText);
         }
 
         // Dispatch to next protocol

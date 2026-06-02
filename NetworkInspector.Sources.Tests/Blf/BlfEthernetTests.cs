@@ -18,14 +18,7 @@ internal sealed class BlfEthernetTests
     private static BlfSource CreateSource(byte[] blfData) =>
         BlfSource.FromData(blfData, "test.blf", new BlfSourceOptions { ScanMode = ScanMode.Full });
 
-    /// <summary>Starts the source with a fresh registry.</summary>
-    private static FrameInterfaceRegistry StartSource(BlfSource source)
-    {
-        FrameInterfaceRegistry registry = new();
-        FrameSourceId sourceId = registry.RegisterSource(source);
-        source.Start(sourceId, registry);
-        return registry;
-    }
+
 
     // ========================================================================
     // Single frame
@@ -43,7 +36,7 @@ internal sealed class BlfEthernetTests
         using BlfSource source = CreateSource(blfData);
         await Assert.That(source.EstimatedFrameCount).IsEqualTo(1);
 
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
         Frame? frame = source.NextFrame();
 
         await Assert.That(frame).IsNotNull();
@@ -77,7 +70,7 @@ internal sealed class BlfEthernetTests
         using BlfSource source = CreateSource(gen.Build());
         await Assert.That(source.EstimatedFrameCount).IsEqualTo(10);
 
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
         for (int i = 0; i < 10; i++)
         {
             Frame? frame = source.NextFrame();
@@ -107,7 +100,7 @@ internal sealed class BlfEthernetTests
         }
 
         using BlfSource source = CreateSource(gen.Build());
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         long prevTs = long.MinValue;
         for (int i = 0; i < 5; i++)
@@ -150,7 +143,7 @@ internal sealed class BlfEthernetTests
                 .Build();
 
             using BlfSource source = CreateSource(blfData);
-            StartSource(source);
+            SourceTestFixture.InitializeAndStartSource(source);
             Frame? frame = source.NextFrame();
 
             await Assert.That(frame).IsNotNull();
@@ -173,7 +166,7 @@ internal sealed class BlfEthernetTests
             .Build();
 
         using BlfSource source = CreateSource(blfData);
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
         Frame? frame = source.NextFrame();
 
         await Assert.That(frame).IsNotNull();

@@ -8,13 +8,13 @@ namespace NetworkInspector.Protocols.Tests;
 /// <para>
 /// Tests reach the protocol via a WebSocket binary-opcode (2) frame. When WebSocket parses a
 /// binary payload with no matching sub-protocol in the ws.port table, it forwards the payload
-/// to <c>DataProtocol</c> via <c>DispatchBinaryPayload</c>.
+/// to <c>DataProtocol</c> via <c>DispatchBinaryPayload</c>. This dispatch runs eagerly during
+/// parsing, so <c>DataProtocol</c> presence is recorded in the index without materialization.
 /// </para>
 /// <para>
-/// <b>Lazy-tree ordering:</b> HTTP's lazy populator must be triggered first (by accessing
-/// <c>http.response.code</c>) to add the WebSocket container to the flat field array.
-/// Then the WebSocket lazy populator must be triggered (by accessing any WebSocket field)
-/// to run <c>DispatchBinaryPayload</c>, which populates the <c>data.*</c> fields.
+/// <b>Lazy-tree ordering:</b> the descriptive field values asserted below (<c>http.response.code</c>,
+/// <c>websocket.opcode</c>, <c>data.*</c>) live in lazy populators; reading any field value
+/// materializes the carrying protocol's deferred field tree on demand.
 /// </para>
 /// </summary>
 internal sealed class DataProtocolTests
@@ -74,7 +74,7 @@ internal sealed class DataProtocolTests
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
-            // Trigger HTTP lazy populator first, then WS lazy populator
+            // Read carrying-protocol field values, materializing their lazy field trees on demand.
             await ProtocolTestHelper.AssertU64Field(stack, packet, "http.response.code", 101).ConfigureAwait(false);
             await ProtocolTestHelper.AssertU64Field(stack, packet, "websocket.opcode", WebSocketOpcode.Binary).ConfigureAwait(false);
 

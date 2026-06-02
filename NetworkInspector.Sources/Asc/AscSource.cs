@@ -274,7 +274,7 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
     }
 
     /// <inheritdoc/>
-    public Frame? NextFrame()
+    public Frame? NextFrame(CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _Disposed), this);
 
@@ -291,6 +291,7 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
         // Loop to skip over errored frames in tolerant mode
         while (_NextFrameIndex < _FrameIndex.Length)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             int frameIndex = _NextFrameIndex++;
             Frame? frame = BuildFrame(frameIndex, reportErrors: true);
             if (frame.HasValue)
@@ -319,7 +320,7 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
     /// return value (<c>null</c>) only, so a UI thread inspecting an unrelated
     /// frame cannot poison sequential consumption.
     /// </remarks>
-    public Frame? FrameById(FrameId id)
+    public Frame? FrameById(FrameId id, CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _Disposed), this);
 
@@ -327,6 +328,8 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
         {
             throw new InvalidOperationException("AscSource has not been started. Call Start() first.");
         }
+
+        cancellationToken.ThrowIfCancellationRequested();
 
         int index = id.Value;
         if (index < 0 || index >= _FrameIndex.Length)

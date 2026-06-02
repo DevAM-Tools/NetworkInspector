@@ -13,16 +13,7 @@ internal sealed class DnsLayerValidationTests
     public async Task BuildResponseSingleRR_RdataExceedsUInt16_Throws()
     {
         byte[] rdata = new byte[65536];
-        bool threw = false;
-        try
-        {
-            DnsLayer.BuildResponseSingleRR(1, "example.com", 1, rdata, 300);
-        }
-        catch (ArgumentOutOfRangeException)
-        {
-            threw = true;
-        }
-        await Assert.That(threw).IsTrue();
+        await Assert.That(() => DnsLayer.BuildResponseSingleRR(1, "example.com", 1, rdata, 300)).Throws<ArgumentOutOfRangeException>();
     }
 
     [Test]
@@ -43,16 +34,7 @@ internal sealed class DnsLayerValidationTests
         // Build a layer directly with an oversized pre-built message.
         byte[] oversized = new byte[65536];
         DnsLayer layer = new(oversized);
-        bool threw = false;
-        try
-        {
-            layer.ToTcpPayload();
-        }
-        catch (InvalidOperationException)
-        {
-            threw = true;
-        }
-        await Assert.That(threw).IsTrue();
+        await Assert.That(() => layer.ToTcpPayload()).Throws<InvalidOperationException>();
     }
 
     #endregion
@@ -63,16 +45,7 @@ internal sealed class DnsLayerValidationTests
     public async Task BuildTxtRdata_StringExceeds255Bytes_Throws()
     {
         string s = new('a', 256);
-        bool threw = false;
-        try
-        {
-            DnsLayer.BuildTxtRdata(s);
-        }
-        catch (ArgumentOutOfRangeException)
-        {
-            threw = true;
-        }
-        await Assert.That(threw).IsTrue();
+        await Assert.That(() => DnsLayer.BuildTxtRdata(s)).Throws<ArgumentOutOfRangeException>();
     }
 
     [Test]
@@ -89,19 +62,8 @@ internal sealed class DnsLayerValidationTests
     #region EncodeNamePointer — offset range
 
     [Test]
-    public async Task EncodeNamePointer_OffsetExceeds0x3FFF_Throws()
-    {
-        bool threw = false;
-        try
-        {
-            DnsLayer.EncodeNamePointer(0x4000);
-        }
-        catch (ArgumentOutOfRangeException)
-        {
-            threw = true;
-        }
-        await Assert.That(threw).IsTrue();
-    }
+    public async Task EncodeNamePointer_OffsetExceeds0x3FFF_Throws() =>
+        await Assert.That(() => DnsLayer.EncodeNamePointer(0x4000)).Throws<ArgumentOutOfRangeException>();
 
     [Test]
     public async Task EncodeNamePointer_MaxOffset_Succeeds()
@@ -117,19 +79,8 @@ internal sealed class DnsLayerValidationTests
     #region EncodeName — non-ASCII rejection
 
     [Test]
-    public async Task EncodeName_NonAsciiCharacter_Throws()
-    {
-        bool threw = false;
-        try
-        {
-            DnsLayer.EncodeName("exämple.com");
-        }
-        catch (ArgumentException)
-        {
-            threw = true;
-        }
-        await Assert.That(threw).IsTrue();
-    }
+    public async Task EncodeName_NonAsciiCharacter_Throws() =>
+        await Assert.That(() => DnsLayer.EncodeName("exämple.com")).Throws<ArgumentException>();
 
     [Test]
     public async Task EncodeName_PureAscii_Succeeds()

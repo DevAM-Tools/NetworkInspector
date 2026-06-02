@@ -9,42 +9,32 @@ namespace NetworkInspector.Profiling.Scenarios;
 /// <para>
 /// <b>Hot path:</b> <see cref="PcapSource.NextFrame"/> — block parsing, section/interface
 /// tracking, and frame materialisation from the PCAPNG binary format.
-/// The sample file is generated once in <see cref="Setup"/>.
+/// The sample file is generated once in <see cref="IProfilingScenario.Setup"/>.
 /// </para>
 /// </summary>
-internal sealed class ReadPcapngScenario : IProfilingScenario
+[SuppressMessage("Performance", "CA1812:AvoidUninstantiatedInternalClasses", Justification = "Instantiated via reflection in ScenarioDiscovery.Discover.")]
+internal sealed class ReadPcapngScenario : ReadScenarioBase
 {
-    /// <summary>Number of frames in the sample file.</summary>
-    private const int FrameCount = 50_000;
-
-    private Stack? _Stack;
-    private string? _FilePath;
+    private const int Count = 50_000;
 
     /// <inheritdoc/>
-    public string Name => "read-pcapng";
+    protected override int FrameCount => Count;
 
     /// <inheritdoc/>
-    public string Description =>
-        $"Read {FrameCount:N0} frames from a PCAPNG file per iteration.";
+    protected override string CreateSampleFile(Frame[] frames)
+        => SampleFileHelper.CreatePcapngFile(frames);
 
     /// <inheritdoc/>
-    public long WorkUnitsPerIteration => FrameCount;
+    public override string Name => "read-pcapng";
 
     /// <inheritdoc/>
-    public string WorkUnitName => "frames";
+    public override string Description =>
+        $"Read {Count:N0} frames from a PCAPNG file per iteration.";
 
     /// <inheritdoc/>
-    public void Setup()
+    protected override void RunIteration(string filePath)
     {
-        _Stack = StackHelper.CreateStack();
-        Frame[] frames = FrameHelper.CreateSharedFrames(FrameCount, _Stack);
-        _FilePath = SampleFileHelper.CreatePcapngFile(frames);
-    }
-
-    /// <inheritdoc/>
-    public void Run()
-    {
-        using PcapSource source = PcapSource.Open(_FilePath!);
+        using PcapSource source = PcapSource.Open(filePath);
 
         FrameInterfaceRegistry registry = new();
         FrameSourceId sourceId = registry.RegisterSource(source);
@@ -54,14 +44,5 @@ internal sealed class ReadPcapngScenario : IProfilingScenario
         {
             // Consume frames — measure read/parse throughput only.
         }
-    }
-
-    /// <inheritdoc/>
-    public void Cleanup()
-    {
-        SampleFileHelper.Cleanup();
-        _Stack?.Dispose();
-        _Stack = null;
-        _FilePath = null;
     }
 }

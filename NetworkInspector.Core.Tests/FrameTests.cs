@@ -96,7 +96,7 @@ internal sealed class FrameTests
         public void Start(FrameSourceId sourceId, FrameInterfaceRegistry registry)
         {
         }
-        public Frame? NextFrame() => null;
+        public Frame? NextFrame(CancellationToken cancellationToken = default) => null;
         public void Stop() => _ = UiName;
         public void Dispose()
         {

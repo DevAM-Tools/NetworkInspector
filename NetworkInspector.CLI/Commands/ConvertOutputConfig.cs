@@ -26,6 +26,7 @@ internal abstract class ConvertOutputConfig
     ///   <item><c>blf:compression=fast</c> — BLF, fastest compression</item>
     ///   <item><c>blf:compression=default</c> — BLF, default compression</item>
     ///   <item><c>blf:compression=best|high</c> — BLF, best compression</item>
+    ///   <item><c>asc</c> — CANalyzer ASCII log (CAN, CAN FD, LIN, FlexRay)</item>
     /// </list>
     /// </remarks>
     internal static ConvertOutputConfig Parse(string spec)
@@ -53,7 +54,8 @@ internal abstract class ConvertOutputConfig
         {
             "PCAPNG" or "PCAP" => new PcapngOutputConfig(),
             "BLF" => CreateBlfOutputConfig(parameters),
-            _ => throw new ArgumentException($"Unknown output format: '{type}'. Supported: pcapng, blf."),
+            "ASC" => new AscOutputConfig(),
+            _ => throw new ArgumentException($"Unknown output format: '{type}'. Supported: pcapng, blf, asc."),
         };
     }
 
@@ -62,11 +64,25 @@ internal abstract class ConvertOutputConfig
     /// </summary>
     internal static ConvertOutputConfig FromExtension(string extension)
     {
-        return extension.ToUpperInvariant() switch
+        if (extension.Equals(".pcapng", StringComparison.OrdinalIgnoreCase)
+            || extension.Equals(".pcap", StringComparison.OrdinalIgnoreCase))
         {
-            ".BLF" => new BlfOutputConfig(BlfCompressionLevel.Default),
-            _ => new PcapngOutputConfig(),
-        };
+            return new PcapngOutputConfig();
+        }
+
+        if (extension.Equals(".blf", StringComparison.OrdinalIgnoreCase))
+        {
+            return new BlfOutputConfig(BlfCompressionLevel.Default);
+        }
+
+        if (extension.Equals(".asc", StringComparison.OrdinalIgnoreCase))
+        {
+            return new AscOutputConfig();
+        }
+
+        throw new ArgumentException(
+            $"Cannot auto-detect output format from extension '{extension}'. " +
+            "Use --output-format to specify the format explicitly (pcapng, blf, asc).");
     }
 
     /// <summary>Parses comma-separated key=value parameters.</summary>
@@ -151,5 +167,20 @@ internal sealed class BlfOutputConfig(BlfCompressionLevel compression) : Convert
             .ToFile(path)
             .WithCompressionLevel(_Compression)
             .Build();
+    }
+}
+
+/// <summary>ASC (CANalyzer ASCII log) output format configuration.</summary>
+internal sealed class AscOutputConfig : ConvertOutputConfig
+{
+    /// <inheritdoc/>
+    internal override IFrameListener CreateExporter(string path, bool isStdout)
+    {
+        if (isStdout)
+        {
+            return AscExporter.CreateBuilder().ToStdout().Build();
+        }
+
+        return AscExporter.CreateBuilder().ToFile(path).Build();
     }
 }

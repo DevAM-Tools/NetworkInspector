@@ -38,6 +38,15 @@ public sealed partial class Icmpv6Protocol : IProtocol
     /// <summary>ICMPv6 header size in bytes (always 8).</summary>
     private const int HeaderSize = 8;
 
+    /// <summary>
+    /// Size of the fixed ICMPv6 message header (type + code + checksum) that precedes an NDP
+    /// message body. NDP messages (types 133–137) place their body immediately after these 4 bytes,
+    /// unlike Echo which carries an additional 4-byte identifier/sequence pair (<see cref="HeaderSize"/>).
+    /// The eager NDP detector below must slice the body at this offset so it observes exactly the same
+    /// bytes the lazy populator passes to <see cref="Icmpv6NdpParser"/> (<c>span[4..]</c>).
+    /// </summary>
+    private const int NdpHeaderSize = 4;
+
     /// <summary>Index group for always-present ICMPv6 fields.</summary>
     private const string Icmpv6IndexGroup = "icmpv6";
 
@@ -204,7 +213,7 @@ public sealed partial class Icmpv6Protocol : IProtocol
     {
         _Ipv6SrcFieldId = stack.GetFieldId("ipv6.src") ?? default;
         _Ipv6DstFieldId = stack.GetFieldId("ipv6.dst") ?? default;
-        _Populator = (in MutField container) => PopulateIcmpv6Fields(in container);
+        _Populator = PopulateIcmpv6Fields;
 
         // Populate NDP field IDs struct
         _NdpFieldIds = new Icmpv6NdpFieldIds
@@ -243,7 +252,6 @@ public sealed partial class Icmpv6Protocol : IProtocol
     /// </summary>
     private ParseResult PopulateIcmpv6Fields(in MutField container)
     {
-        ParseContext context = new ParseContext(container.Packet.Stack);
         if (!container.Value.Data.TryGetAsBytes(out ReadOnlyMemory<byte> icmpData))
         {
             return ParseError.InvalidData(ProtocolName, "Container value is not of type Bytes");
@@ -261,21 +269,21 @@ public sealed partial class Icmpv6Protocol : IProtocol
 
         // Type with display text
         string typeText = DisplayTables.GetIcmpv6TypeDisplayText(type);
-        container.AppendWithCustomText(_TypeFieldId, FieldValue.NewU64(type), typeText, in context);
+        container.AppendWithCustomText(_TypeFieldId, FieldValue.NewU64(type), typeText);
 
         // Code
-        container.Append(_CodeFieldId, FieldValue.NewU64(code), in context);
+        container.Append(_CodeFieldId, FieldValue.NewU64(code));
 
         // Checksum
         string csumText = DisplayTables.FormatHexU16(checksum);
-        container.AppendWithCustomText(_ChecksumFieldId, FieldValue.NewU64(checksum), csumText, in context);
+        container.AppendWithCustomText(_ChecksumFieldId, FieldValue.NewU64(checksum), csumText);
 
         // Checksum validation (uses IPv6 pseudo-header)
         if (_VerifyChecksum)
         {
-            bool valid = ValidateChecksum(in container, icmpData.Span, in context);
+            bool valid = ValidateChecksum(in container, icmpData.Span);
             string statusText = valid ? "[Good]" : "[Bad]";
-            container.Append(_ChecksumStatusFieldId, FieldValue.NewString(statusText), in context);
+            container.Append(_ChecksumStatusFieldId, FieldValue.NewString(statusText));
         }
 
         // Echo Request/Reply: identifier and sequence number
@@ -286,8 +294,8 @@ public sealed partial class Icmpv6Protocol : IProtocol
             ushort seq = BinaryPrimitives.ReadUInt16BigEndian(span[6..8]);
 
             string identHex = DisplayTables.FormatHexU16(ident);
-            container.AppendWithCustomText(_EchoIdentFieldId, FieldValue.NewU64(ident), identHex, in context);
-            container.Append(_EchoSeqFieldId, FieldValue.NewU64(seq), in context);
+            container.AppendWithCustomText(_EchoIdentFieldId, FieldValue.NewU64(ident), identHex);
+            container.Append(_EchoSeqFieldId, FieldValue.NewU64(seq));
         }
 
         // MLD messages (types 130-132): parse multicast listener fields
@@ -296,25 +304,25 @@ public sealed partial class Icmpv6Protocol : IProtocol
         {
             // MLD message body starts at byte 4: MaxResponseDelay(2) + Reserved(2) + MulticastAddress(16)
             ushort maxResponseDelay = BinaryPrimitives.ReadUInt16BigEndian(span[4..6]);
-            container.Append(_MldMaxResponseDelayFieldId, FieldValue.NewU64(maxResponseDelay), in context);
+            container.Append(_MldMaxResponseDelayFieldId, FieldValue.NewU64(maxResponseDelay));
 
             // Multicast address at bytes 8-23
             ulong high = BinaryPrimitives.ReadUInt64BigEndian(span[8..16]);
             ulong low = BinaryPrimitives.ReadUInt64BigEndian(span[16..24]);
-            container.Append(_MldMulticastAddressFieldId, FieldValue.NewIPv6(new IPv6Address(high, low)), in context);
+            container.Append(_MldMulticastAddressFieldId, FieldValue.NewIPv6(new IPv6Address(high, low)));
         }
 
         // NDP messages (types 133-137): parse after the 4-byte ICMPv6 header
         if (Icmpv6NdpParser.IsNdpType(type) && icmpData.Length > 4)
         {
-            Icmpv6NdpParser.Parse(in container, span[4..], type, in _NdpFieldIds, in context);
+            Icmpv6NdpParser.Parse(in container, span[4..], type, in _NdpFieldIds);
         }
 
         // Payload data (bytes after the 8-byte header, only for non-NDP/non-Echo/non-MLD messages)
         if (!isEcho && !isMld && !Icmpv6NdpParser.IsNdpType(type) && icmpData.Length > HeaderSize)
         {
             ReadOnlyMemory<byte> payloadData = icmpData[HeaderSize..];
-            container.Append(_DataFieldId, FieldValue.NewBytes(payloadData), in context);
+            container.Append(_DataFieldId, FieldValue.NewBytes(payloadData));
         }
 
         return 0;
@@ -342,41 +350,70 @@ public sealed partial class Icmpv6Protocol : IProtocol
         ReadOnlySpan<byte> span = data.Span;
         byte type = span[0];
 
-        // Record optional index groups
+        // Record optional index groups. Each group is gated on the exact same condition under
+        // which the lazy populator emits a field in that group, so the presence index never
+        // contains a false positive (a recorded group with no emitted field).
         bool isEcho = type == TypeEchoRequest || type == TypeEchoReply;
-        if (isEcho)
+        if (isEcho && data.Length >= 8)
         {
+            // The populator reads the 8-byte echo header (identifier + sequence) eagerly.
             context.RecordGroupPresence(_Icmpv6EchoGroupId);
         }
 
-        // Record NDP index groups based on message type
-        if (Icmpv6NdpParser.IsNdpType(type))
+        // Record NDP index groups. The populator only dispatches NDP parsing when there is at
+        // least one body byte after the 4-byte ICMPv6 header, and each NDP message type emits
+        // its fields only when its fixed header is fully present. The option-specific groups
+        // (nd.opt / prefix / mtu / rdnss) require an eager option scan to avoid false positives.
+        if (Icmpv6NdpParser.IsNdpType(type) && data.Length > NdpHeaderSize)
         {
-            context.RecordGroupPresence(_Icmpv6NdOptGroupId);
-            switch (type)
+            ReadOnlySpan<byte> ndpBody = span[NdpHeaderSize..];
+
+            if (type == 134 && ndpBody.Length >= 12) // Router Advertisement
             {
-                case 134: // Router Advertisement
-                    context.RecordGroupPresence(_Icmpv6NdRaGroupId);
-                    break;
-                case 135: // Neighbor Solicitation
-                case 136: // Neighbor Advertisement
-                case 137: // Redirect
-                    context.RecordGroupPresence(_Icmpv6NdTargetGroupId);
-                    break;
+                context.RecordGroupPresence(_Icmpv6NdRaGroupId);
             }
-            if (type == 136)
+            if ((type == 135 || type == 136) && ndpBody.Length >= 20) // NS / NA target address
+            {
+                context.RecordGroupPresence(_Icmpv6NdTargetGroupId);
+            }
+            if (type == 137 && ndpBody.Length >= 36) // Redirect target address
+            {
+                context.RecordGroupPresence(_Icmpv6NdTargetGroupId);
+            }
+            if (type == 136 && ndpBody.Length >= 20) // Neighbor Advertisement flags
             {
                 context.RecordGroupPresence(_Icmpv6NdNaGroupId);
             }
-            if (type == 137)
+            if (type == 137 && ndpBody.Length >= 36) // Redirect destination address
             {
                 context.RecordGroupPresence(_Icmpv6NdRedirectGroupId);
             }
+
+            Icmpv6NdpParser.DetectGroups(
+                ndpBody, type,
+                out bool hasAnyOption, out bool hasPrefix, out bool hasMtu, out bool hasRdnss);
+            if (hasAnyOption)
+            {
+                context.RecordGroupPresence(_Icmpv6NdOptGroupId);
+            }
+            if (hasPrefix)
+            {
+                context.RecordGroupPresence(_Icmpv6NdOptPrefixGroupId);
+            }
+            if (hasMtu)
+            {
+                context.RecordGroupPresence(_Icmpv6NdOptMtuGroupId);
+            }
+            if (hasRdnss)
+            {
+                context.RecordGroupPresence(_Icmpv6NdOptRdnssGroupId);
+            }
         }
 
-        // Record MLD index group
+        // Record MLD index group. The populator emits MLD fields only when the full 24-byte
+        // MLD message (header + max-response-delay + multicast address) is present.
         bool isMld = type is >= TypeMldQuery and <= TypeMldDone;
-        if (isMld)
+        if (isMld && data.Length >= 24)
         {
             context.RecordGroupPresence(_Icmpv6MldGroupId);
         }
@@ -412,7 +449,7 @@ public sealed partial class Icmpv6Protocol : IProtocol
     /// Validates the ICMPv6 checksum using IPv6 pseudo-header.
     /// ICMPv6 checksum is mandatory and uses the IPv6 pseudo-header (src, dst, length, next header).
     /// </summary>
-    private bool ValidateChecksum(in MutField container, ReadOnlySpan<byte> icmpSpan, in ParseContext context)
+    private bool ValidateChecksum(in MutField container, ReadOnlySpan<byte> icmpSpan)
     {
         Packet packet = container.Packet;
 

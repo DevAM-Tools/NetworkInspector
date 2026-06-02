@@ -3,12 +3,11 @@
 namespace NetworkInspector.Values;
 
 /// <summary>32-bit IPv4 address stored in network byte order.</summary>
-/// <remarks>Creates an IPv4 address from a raw 32-bit value in network byte order.</remarks>
 [StructLayout(LayoutKind.Sequential)]
-[method: MethodImpl(MethodImplOptions.AggressiveInlining)]
-public readonly struct IPv4Address(uint value)
-        : IEquatable<IPv4Address>, IComparable<IPv4Address>,
-      ISpanFormattable, IUtf8SpanFormattable, IStringSize, IBinarySerializable
+public readonly record struct IPv4Address
+        : IEquatable<IPv4Address>, IComparable<IPv4Address>, IComparable,
+      ISpanFormattable, IUtf8SpanFormattable, IStringSize, IBinarySerializable,
+      ISpanParsable<IPv4Address>, IParsable<IPv4Address>
 {
     #region Constants
 
@@ -17,9 +16,20 @@ public readonly struct IPv4Address(uint value)
 
     #endregion
 
+    #region Constructor
+
+    /// <summary>Creates an <see cref="IPv4Address"/> from a raw 32-bit value in network byte order.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public IPv4Address(uint value)
+    {
+        _Value = value;
+    }
+
+    #endregion
+
     #region Fields
 
-    private readonly uint _Value = value;
+    private readonly uint _Value;
 
     #endregion
 
@@ -37,6 +47,7 @@ public readonly struct IPv4Address(uint value)
     #region Classification
 
     /// <summary>True if the address is in a private range (10/8, 172.16/12, 192.168/16).</summary>
+    /// <remarks>Result is bit-pattern based; assumes a validly constructed IPv4 address.</remarks>
     public bool IsPrivate
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -46,24 +57,28 @@ public readonly struct IPv4Address(uint value)
         ((_Value & 0xFFFF0000) == 0xC0A80000);   // 192.168.0.0/16
     }
     /// <summary>True if the address is in the loopback range (127.0.0.0/8).</summary>
+    /// <remarks>Result is bit-pattern based; assumes a validly constructed IPv4 address.</remarks>
     public bool IsLoopback
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         get => (_Value & 0xFF000000) == 0x7F000000;
     }
     /// <summary>True if the address is in the multicast range (224.0.0.0/4).</summary>
+    /// <remarks>Result is bit-pattern based; assumes a validly constructed IPv4 address.</remarks>
     public bool IsMulticast
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         get => (_Value & 0xF0000000) == 0xE0000000;
     }
     /// <summary>True if the address is in the link-local range (169.254.0.0/16).</summary>
+    /// <remarks>Result is bit-pattern based; assumes a validly constructed IPv4 address.</remarks>
     public bool IsLinkLocal
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         get => (_Value & 0xFFFF0000) == 0xA9FE0000;
     }
     /// <summary>True if the address is the broadcast address (255.255.255.255).</summary>
+    /// <remarks>Result is bit-pattern based; assumes a validly constructed IPv4 address.</remarks>
     public bool IsBroadcast
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -88,9 +103,7 @@ public readonly struct IPv4Address(uint value)
         {
             return default;
         }
-        uint value = ((uint)bytes[0] << 24) | ((uint)bytes[1] << 16) |
-                     ((uint)bytes[2] << 8) | bytes[3];
-        return new IPv4Address(value);
+        return new IPv4Address(BinaryPrimitives.ReadUInt32BigEndian(bytes));
     }
 
     /// <summary>Parses an IPv4 address from dotted-decimal notation.</summary>
@@ -138,6 +151,46 @@ public readonly struct IPv4Address(uint value)
         value = (value << 8) | (uint)octetValue;
         result = new IPv4Address(value);
         return true;
+    }
+
+    #endregion
+
+    #region ISpanParsable / IParsable
+
+    /// <inheritdoc/>
+    static bool ISpanParsable<IPv4Address>.TryParse(
+        ReadOnlySpan<char> s, IFormatProvider? provider, out IPv4Address result)
+        => TryParse(s, out result);
+
+    /// <inheritdoc/>
+    static IPv4Address ISpanParsable<IPv4Address>.Parse(
+        ReadOnlySpan<char> s, IFormatProvider? provider)
+    {
+        if (!TryParse(s, out IPv4Address result))
+        {
+            throw new FormatException($"Input '{s}' is not a valid IPv4 address.");
+        }
+        return result;
+    }
+
+    /// <inheritdoc/>
+    static bool IParsable<IPv4Address>.TryParse(
+        string? s, IFormatProvider? provider, out IPv4Address result)
+    {
+        if (s is null) { result = default; return false; }
+        return TryParse(s.AsSpan(), out result);
+    }
+
+    /// <inheritdoc/>
+    static IPv4Address IParsable<IPv4Address>.Parse(
+        string s, IFormatProvider? provider)
+    {
+        ArgumentNullException.ThrowIfNull(s);
+        if (!TryParse(s.AsSpan(), out IPv4Address result))
+        {
+            throw new FormatException($"Input '{s}' is not a valid IPv4 address.");
+        }
+        return result;
     }
 
     #endregion
@@ -274,7 +327,12 @@ public readonly struct IPv4Address(uint value)
         return written;
     }
 
-    /// <summary>Returns a <see cref="TempString"/> backed by a thread-static buffer.</summary>
+    /// <summary>Returns a <see cref="TempString"/> backed by a thread-static or pooled buffer.</summary>
+    /// <remarks>
+    /// The underlying buffer is thread-local or pooled. The caller must dispose the returned <see cref="TempString"/>
+    /// before making another <see cref="FormatTemp"/> call on the same thread to avoid overwriting the buffer.
+    /// Do not retain references to the underlying span after disposal.
+    /// </remarks>
     public TempString FormatTemp()
     {
         char[] buffer = ZeroAllocHelper.AcquireCharBuffer(MaxFormattedLength, out bool isThreadStatic);
@@ -283,6 +341,7 @@ public readonly struct IPv4Address(uint value)
     }
 
     /// <summary>Returns the formatted IPv4 address as a new string.</summary>
+    /// <remarks>Allocates a new string on every call. Use <see cref="FormatInto"/> or <see cref="FormatTemp"/> for allocation-free hot paths.</remarks>
     public string Format()
     {
         Span<char> buf = stackalloc char[MaxFormattedLength];
@@ -302,30 +361,20 @@ public readonly struct IPv4Address(uint value)
 
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public bool Equals(IPv4Address other) => _Value == other._Value;
-    /// <inheritdoc/>
-    public override bool Equals(object? obj) => obj is IPv4Address other && Equals(other);
-    /// <inheritdoc/>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public override int GetHashCode() => (int)_Value;
-    /// <inheritdoc/>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public int CompareTo(IPv4Address other) => _Value.CompareTo(other._Value);
+
+    /// <inheritdoc/>
+    int IComparable.CompareTo(object? obj)
+    {
+        if (obj is null) { return 1; }
+        if (obj is IPv4Address other) { return CompareTo(other); }
+        throw new ArgumentException($"Object must be of type {nameof(IPv4Address)}.", nameof(obj));
+    }
 
     #endregion
 
     #region Operators
 
-    /// <summary>Returns <see langword="true"/> if <paramref name="left"/> and <paramref name="right"/> are equal.</summary>
-    /// <param name="left">The left operand.</param>
-    /// <param name="right">The right operand.</param>
-    /// <returns><see langword="true"/> if the condition holds; otherwise <see langword="false"/>.</returns>
-    public static bool operator ==(IPv4Address left, IPv4Address right) => left._Value == right._Value;
-    /// <summary>Returns <see langword="true"/> if <paramref name="left"/> and <paramref name="right"/> are not equal.</summary>
-    /// <param name="left">The left operand.</param>
-    /// <param name="right">The right operand.</param>
-    /// <returns><see langword="true"/> if the condition holds; otherwise <see langword="false"/>.</returns>
-    public static bool operator !=(IPv4Address left, IPv4Address right) => left._Value != right._Value;
     /// <summary>Returns <see langword="true"/> if <paramref name="left"/> is less than <paramref name="right"/>.</summary>
     /// <param name="left">The left operand.</param>
     /// <param name="right">The right operand.</param>

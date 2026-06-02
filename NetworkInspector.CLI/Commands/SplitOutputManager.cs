@@ -5,6 +5,8 @@ namespace NetworkInspector.CLI.Commands;
 /// <summary>
 /// Manages output file splitting by size or frame count.
 /// Generates sequentially numbered output paths.
+/// <para>This type is <b>not thread-safe</b>; all members must be called from a single thread.
+/// The internal file-index counter is not synchronized.</para>
 /// </summary>
 internal sealed class SplitOutputManager
 {

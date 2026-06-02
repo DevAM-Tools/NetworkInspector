@@ -400,9 +400,15 @@ public sealed class PcapngExporter : IFrameListener, IErrorTolerantExporter, IDi
             return this;
         }
 
-        /// <summary>Sets the maximum captured packet length in bytes (must be ≤ <see cref="int.MaxValue"/>).</summary>
+        /// <summary>Sets the maximum captured packet length in bytes (must be &gt; 0 and ≤ <see cref="int.MaxValue"/>).</summary>
         public Builder WithSnapLength(uint length)
         {
+            // Zero snap length would truncate every captured payload to empty,
+            // producing a PCAPNG file where no packet data is preserved.
+            if (length == 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(length), "Snap length must be greater than 0.");
+            }
             // The slicing path uses (int)_SnapLength; reject values that would
             // overflow to a negative int and produce a corrupt slice / exception.
             if (length > int.MaxValue)

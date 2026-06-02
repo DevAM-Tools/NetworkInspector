@@ -418,6 +418,12 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
         // skipped frame in Tolerant mode rather than tearing down the pipeline.
         try
         {
+            // The early-timestamp clamp notification fires at most once per export
+            // (contract: consumers see a single advisory event, not one per skipped frame).
+            // SkippedCount and FrameCount still reflect every affected frame.
+            // The _EarlyTsClampNotified flag suppresses the repeated event deliberately
+            // to avoid flooding consumers with identical messages. If per-frame events
+            // are needed, a cumulative count is available via SkippedCount.
             if (timestampNs < _Writer!.AnchorStartNanos && _Writer.ObjectCount > 0 && !_EarlyTsClampNotified)
             {
                 _EarlyTsClampNotified = true;

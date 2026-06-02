@@ -11,16 +11,11 @@ internal sealed class PcapSourceMultiInterfaceTests
     private static readonly byte[] SrcMac = [0x00, 0x11, 0x22, 0x33, 0x44, 0x55];
     private static readonly byte[] DstMac = [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
 
+    /// <summary>Creates a <see cref="PcapSource"/> from raw PcapNG data.</summary>
     private static PcapSource CreateSource(byte[] pcapData) =>
         PcapSource.FromData(pcapData, "test.pcapng");
 
-    private static FrameInterfaceRegistry StartSource(PcapSource source)
-    {
-        FrameInterfaceRegistry registry = new();
-        FrameSourceId sourceId = registry.RegisterSource(source);
-        source.Start(sourceId, registry);
-        return registry;
-    }
+
 
     // ========================================================================
     // Two Ethernet interfaces
@@ -40,7 +35,7 @@ internal sealed class PcapSourceMultiInterfaceTests
         writer.WriteFrame(iface1, 2_000_000_000, eth1);
 
         using PcapSource source = CreateSource(writer.Build());
-        FrameInterfaceRegistry registry = StartSource(source);
+        FrameInterfaceRegistry registry = SourceTestFixture.InitializeAndStartSource(source);
 
         Frame? f0 = source.NextFrame();
         Frame? f1 = source.NextFrame();
@@ -81,7 +76,7 @@ internal sealed class PcapSourceMultiInterfaceTests
         }
 
         using PcapSource source = CreateSource(writer.Build());
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         int count = 0;
         while (source.NextFrame() is { } frame)
@@ -116,7 +111,7 @@ internal sealed class PcapSourceMultiInterfaceTests
         }
 
         using PcapSource source = CreateSource(writer.Build());
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         // Access frames from both interfaces out of order
         int[] accessOrder = [15, 3, 19, 0, 7, 11];

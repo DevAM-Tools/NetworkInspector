@@ -64,12 +64,12 @@ public readonly struct IPv4Layer :
     private readonly bool _ProtocolIsExplicit;
 
     /// <summary>
-    /// Don't Fragment flag (RFC 791 §3.1).  Stored as the negation so the
-    /// struct's <c>default</c> instance still emits DF=1 (the conventional
-    /// safe default — the layer is normally constructed via the explicit
-    /// constructor below).
+    /// Don't Fragment flag (RFC 791 §3.1).  Stored as <c>!DontFragment</c>
+    /// ("fragmentation allowed") so the struct's <c>default</c> instance still
+    /// emits DF=1 (the conventional safe default — the layer is normally
+    /// constructed via the explicit constructor below).
     /// </summary>
-    private readonly bool _ClearDontFragment;
+    private readonly bool _AllowFragmentation;
 
     /// <summary>
     /// Creates an IPv4 layer.  TotalLength and HeaderChecksum are always
@@ -102,8 +102,8 @@ public readonly struct IPv4Layer :
         _Identification = identification;
         _ProtocolIsExplicit = protocol.TryGetExplicit(out byte p);
         _ExplicitProtocol = p;
-        // Store the negation so the struct's default(IPv4Layer) emits DF=1.
-        _ClearDontFragment = !dontFragment;
+        // Store "fragmentation allowed" so the struct's default(IPv4Layer) emits DF=1.
+        _AllowFragmentation = !dontFragment;
     }
 
     /// <inheritdoc />
@@ -126,7 +126,7 @@ public readonly struct IPv4Layer :
     {
         IPv4Header hdr = IPv4Header.Create(
             _SrcAddr, _DstAddr, _ExplicitProtocol, _Ttl, _Identification,
-            dontFragment: !_ClearDontFragment);
+            dontFragment: !_AllowFragmentation);
         _ = ((IBinarySerializable)hdr).TryWrite(dst, out _);
     }
 
@@ -196,7 +196,7 @@ public readonly struct IPv4Layer :
     public bool CanFragment
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _ClearDontFragment; // i.e. !DontFragment
+        get => _AllowFragmentation; // i.e. !DontFragment
     }
 
     /// <inheritdoc />

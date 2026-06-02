@@ -165,6 +165,7 @@ internal sealed class PcapNgTestWriter : IDisposable
         _Stream.Write(block);
     }
 
+    /// <summary>Returns 10 raised to <paramref name="exponent"/>; used to convert the pcapng timestamp resolution option to a divisor.</summary>
     private static ulong Pow10(byte exponent)
     {
         ulong result = 1;

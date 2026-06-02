@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Core.Reassembly;
 
@@ -10,7 +10,7 @@ namespace NetworkInspector.Core.Reassembly;
 /// <param name="Destination">Destination IPv4 address.</param>
 /// <param name="Identification">16-bit identification field from IP header.</param>
 /// <param name="Protocol">IP protocol number of the encapsulated payload.</param>
-internal readonly record struct DatagramFragmentKey(
+public readonly record struct DatagramFragmentKey(
     uint Source,
     uint Destination,
     ushort Identification,

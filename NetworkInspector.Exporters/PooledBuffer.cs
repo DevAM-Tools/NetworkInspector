@@ -10,9 +10,11 @@ namespace NetworkInspector.Exporters;
 /// <para>
 /// <b>Lifecycle:</b> <see cref="Return"/> must be called when the buffer is no
 /// longer needed (typically from the owner's <c>OnFinish</c> / <c>Dispose</c>).
-/// After <see cref="Return"/> the buffer is empty and may be reused — the next
-/// write will rent a fresh array from the pool. <see cref="Return"/> is
-/// idempotent.
+/// <see cref="Return"/> returns the rented array to the pool and resets the buffer
+/// to empty; it does <em>not</em> immediately rent a new array.
+/// The next call to <see cref="Write"/>, <see cref="WriteByte"/>, or
+/// <see cref="Reserve"/> will lazily rent a fresh array at that point.
+/// <see cref="Return"/> is idempotent.
 /// </para>
 /// <para>
 /// <b>Thread safety:</b> Not thread-safe. Callers must serialize access.
@@ -107,9 +109,11 @@ internal sealed class PooledBuffer
     internal void Reset() => _Length = 0;
 
     /// <summary>
-    /// Returns the underlying array to the pool. Idempotent — may be called
-    /// multiple times. After <see cref="Return"/> the buffer is empty; a
-    /// subsequent write will rent a fresh array.
+    /// Returns the underlying array to the pool and resets the buffer to empty.
+    /// Idempotent — may be called multiple times without error.
+    /// The rented array is returned immediately; a subsequent
+    /// <see cref="Write"/>, <see cref="WriteByte"/>, or <see cref="Reserve"/> call
+    /// will lazily rent a fresh array from the pool at that point.
     /// </summary>
     internal void Return()
     {

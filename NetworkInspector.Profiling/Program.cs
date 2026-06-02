@@ -26,6 +26,13 @@ namespace NetworkInspector.Profiling;
 ///
 /// <para><b>Profiling with Visual Studio:</b></para>
 /// Set as startup project → Debug → Performance Profiler.
+///
+/// <para><b>Prerequisites:</b></para>
+/// <para>Run the profiling tool with elevated (administrator) privileges for accurate
+/// measurements. Without elevation the process priority cannot be raised to
+/// <c>High</c> and the OS may migrate the process across CPU cores, causing
+/// L1/L2 cache evictions and TSC skew. A console warning is emitted when
+/// elevation fails, but the profiling run continues with potentially skewed results.</para>
 /// </summary>
 internal static class Program
 {
@@ -63,67 +70,57 @@ internal static class Program
         }
 
         // ── Scenario registry ────────────────────────────────────────────────────
-        // Each scenario is independent and can be run individually via the CLI
-        // filter argument or the interactive menu.
+        // Scenarios with parameterless constructors are auto-discovered via reflection
+        // (ScenarioDiscovery.Discover). Scenarios that require constructor arguments are
+        // registered here manually and prepended to the discovered list.
         //
-        // Disposable scenarios are declared individually so the using-declaration
-        // pattern guarantees safe disposal even when scenarios are filtered out.
-        using ExportPcapngScenario exportPcapng = new();
-        using ExportBlfScenario exportBlf = new();
-        using ExportJsonScenario exportJson = new();
-        using ExportPbfScenario exportPbf = new();
-        using ExportColumnarPbfScenario exportColumnarPbf = new();
-
-        IProfilingScenario[] scenarios =
+        // To add a new auto-discovered scenario: create a class that implements
+        // IProfilingScenario with a parameterless (public or internal) constructor.
+        // No change to Program.cs is required.
+        IProfilingScenario[] manual =
         [
             // ── Parsing ──────────────────────────────────────────────────────────
+            // These require a bool constructor argument and cannot be auto-discovered.
             new ParseRandomFramesScenario(materialize: false),        // parse-random-frames
             new ParseRandomFramesScenario(materialize: true),         // parse-random-frames-materialized
 
             // ── Parsing (recycled — zero Packet heap allocations) ─────────────────
             new ParseRandomFramesRecycledScenario(materialize: false), // parse-random-frames-recycled
             new ParseRandomFramesRecycledScenario(materialize: true),  // parse-random-frames-materialized-recycled
-
-            // ── Exporters ────────────────────────────────────────────────────────
-            exportPcapng,                                              // export-pcapng
-            exportBlf,                                                 // export-blf
-            exportJson,                                                // export-json
-            exportPbf,                                                 // export-pbf
-            exportColumnarPbf,                                         // export-columnar-pbf
-
-            // ── Frame generation ─────────────────────────────────────────────────
-            new GenerateFramesScenario(),                              // generate-frames
-
-            // ── Direct source parse (no session overhead) ─────────────────────────
-            new RandomSourceParseScenario(),                           // random-source-parse
-
-            // ── FrameBuilder (Eth/IPv4/IPv6/UDP/TCP, fragmentation, interceptors) ──
-            new FrameBuilderSingleFrameScenario(),                     // framebuilder-single-frame
-            new FrameBuilderFragmentedScenario(),                      // framebuilder-fragmented
-            new FrameBuilderTcpIPv6SessionScenario(),                  // framebuilder-tcp-ipv6-session
-            new FrameBuilderCustomInterceptorScenario(),               // framebuilder-custom-interceptor
-            new FrameBuilderValueReuseScenario(),                      // framebuilder-value-reuse
-
-            // ── File reading ─────────────────────────────────────────────────────
-            new ReadPcapngScenario(),                                  // read-pcapng
-            new ReadBlfScenario(),                                     // read-blf
         ];
 
-        // ── --list: print all scenarios and exit ─────────────────────────────────
-        if (listOnly)
-        {
-            PrintScenarioList(scenarios);
-            return 0;
-        }
+        IProfilingScenario[] discovered = ScenarioDiscovery.Discover();
+        IProfilingScenario[] scenarios = [..manual, ..discovered];
 
-        // ── No filter: interactive numbered menu ─────────────────────────────────
-        if (filter is null)
+        try
         {
-            return RunInteractiveMenu(scenarios, manualStart);
-        }
+            // ── --list: print all scenarios and exit ─────────────────────────────────
+            if (listOnly)
+            {
+                PrintScenarioList(scenarios);
+                return 0;
+            }
 
-        // ── Filter mode: run matching scenarios (for dotnet-trace or scripted use)
-        return RunFilteredScenarios(scenarios, filter, manualStart);
+            // ── No filter: interactive numbered menu ─────────────────────────────────
+            if (filter is null)
+            {
+                return RunInteractiveMenu(scenarios, manualStart);
+            }
+
+            // ── Filter mode: run matching scenarios (for dotnet-trace or scripted use)
+            return RunFilteredScenarios(scenarios, filter, manualStart);
+        }
+        finally
+        {
+            // Dispose all IDisposable scenarios regardless of which code path was taken.
+            foreach (IProfilingScenario s in discovered)
+            {
+                if (s is IDisposable d)
+                {
+                    d.Dispose();
+                }
+            }
+        }
     }
 
     /// <summary>Prints a numbered list of all available scenarios.</summary>
@@ -270,7 +267,10 @@ internal static class Program
 
         PauseBeforeTimedPhase(manualStart);
 
-        // Capture GC baseline before the timed phase
+        // Capture GC baseline before the timed phase.
+        // GC.GetTotalAllocatedBytes(precise: true) performs a full heap walk (~10–50 ms);
+        // this overhead is amortized across the 7-second timed phase and does not skew
+        // in-loop measurements because it is taken outside the hot loop.
         long allocBefore = GC.GetTotalAllocatedBytes(precise: true);
         int gen0Before = GC.CollectionCount(0);
         int gen1Before = GC.CollectionCount(1);
@@ -282,7 +282,8 @@ internal static class Program
         long timedIterations = RunForDuration(scenario, scenario.Duration);
         sw.Stop();
 
-        // Capture GC counters after the timed phase
+        // Capture GC counters after the timed phase.
+        // The precise: true heap walk overhead (same as above) is again outside the hot loop.
         long allocAfter = GC.GetTotalAllocatedBytes(precise: true);
         int gen0After = GC.CollectionCount(0);
         int gen1After = GC.CollectionCount(1);
@@ -415,8 +416,9 @@ internal static class Program
         }
         catch (Exception ex)
         {
-            Console.ForegroundColor = ConsoleColor.DarkYellow;
-            Console.WriteLine($"Could not elevate process priority: {ex.Message}");
+            Console.ForegroundColor = ConsoleColor.Yellow;
+            Console.WriteLine($"WARNING: could not elevate process priority/affinity: {ex.Message}");
+            Console.WriteLine("Measurements may be skewed by OS scheduling jitter. Run elevated for best results.");
             Console.ResetColor();
         }
     }
@@ -431,10 +433,11 @@ internal static class Program
         long iterations = 0;
         Stopwatch timer = Stopwatch.StartNew();
 
-        // The tight loop checks elapsed time after each iteration.
-        // Stopwatch.Elapsed is cheap compared to the work inside Run(),
-        // so overhead from the time check is negligible.
-        while (timer.Elapsed < duration)
+        // Cache the target tick count so the hot loop compares two longs instead of
+        // allocating a TimeSpan struct via Stopwatch.Elapsed on every iteration.
+        long endTicks = (long)(duration.TotalSeconds * Stopwatch.Frequency);
+
+        while (timer.ElapsedTicks < endTicks)
         {
             scenario.Run();
             iterations++;

@@ -322,16 +322,6 @@ public readonly struct BytesKey : IEquatable<BytesKey>
 
     #region Constructors
 
-    /// <summary>
-    /// Creates a bytes key from an existing byte array (takes ownership).
-    /// The caller must NOT modify the array after construction — doing so
-    /// breaks equality and hash-code semantics.
-    /// </summary>
-    public BytesKey(byte[] data)
-    {
-        _Data = data;
-    }
-
     /// <summary>Creates a bytes key by copying the given span.</summary>
     public BytesKey(ReadOnlySpan<byte> data)
     {

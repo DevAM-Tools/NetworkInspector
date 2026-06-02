@@ -42,12 +42,11 @@ internal static class IPv6ExtensionHeaderParser
     /// <param name="data">Extension header data (starting after the 40-byte fixed header).</param>
     /// <param name="firstNextHeader">The next-header value from the IPv6 fixed header.</param>
     /// <param name="fields">Field IDs for extension header sub-fields.</param>
-    /// <param name="context">The parse context providing dispatch resolution and stack access.</param>
     internal static void Parse(
         MutField protoField,
         ReadOnlySpan<byte> data,
         byte firstNextHeader,
-        in IPv6Protocol.ExtHeaderFieldIds fields, in ParseContext context)
+        in IPv6Protocol.ExtHeaderFieldIds fields)
     {
         int offset = 0;
         byte currentNh = firstNextHeader;
@@ -65,7 +64,7 @@ internal static class IPv6ExtensionHeaderParser
             {
                 case IPv6Protocol.NhHopByHop:
                     {
-                        (byte nextHdr, int consumed) = ParseHopByHopOptions(protoField, data, offset, remaining, in fields, in context);
+                        (byte nextHdr, int consumed) = ParseHopByHopOptions(protoField, data, offset, remaining, in fields);
                         if (consumed == 0)
                         {
                             return;
@@ -76,7 +75,7 @@ internal static class IPv6ExtensionHeaderParser
                     }
                 case IPv6Protocol.NhDestination:
                     {
-                        (byte nextHdr, int consumed) = ParseDestinationOptions(protoField, data, offset, remaining, in fields, in context);
+                        (byte nextHdr, int consumed) = ParseDestinationOptions(protoField, data, offset, remaining, in fields);
                         if (consumed == 0)
                         {
                             return;
@@ -87,7 +86,7 @@ internal static class IPv6ExtensionHeaderParser
                     }
                 case IPv6Protocol.NhRouting:
                     {
-                        (byte nextHdr, int consumed) = ParseRoutingHeader(protoField, data, offset, remaining, in fields, in context);
+                        (byte nextHdr, int consumed) = ParseRoutingHeader(protoField, data, offset, remaining, in fields);
                         if (consumed == 0)
                         {
                             return;
@@ -98,7 +97,7 @@ internal static class IPv6ExtensionHeaderParser
                     }
                 case IPv6Protocol.NhFragment:
                     {
-                        (byte nextHdr, int consumed) = ParseFragmentHeader(protoField, data, offset, remaining, in fields, in context);
+                        (byte nextHdr, int consumed) = ParseFragmentHeader(protoField, data, offset, remaining, in fields);
                         if (consumed == 0)
                         {
                             return;
@@ -109,7 +108,7 @@ internal static class IPv6ExtensionHeaderParser
                     }
                 case IPv6Protocol.NhAh:
                     {
-                        (byte nextHdr, int consumed) = ParseAhHeader(protoField, data, offset, remaining, in fields, in context);
+                        (byte nextHdr, int consumed) = ParseAhHeader(protoField, data, offset, remaining, in fields);
                         if (consumed == 0)
                         {
                             return;
@@ -121,7 +120,7 @@ internal static class IPv6ExtensionHeaderParser
                 case IPv6Protocol.NhEsp:
                     {
                         // ESP terminates the chain — payload is encrypted
-                        int consumed = ParseEspHeader(protoField, data, offset, remaining, in fields, in context);
+                        int consumed = ParseEspHeader(protoField, data, offset, remaining, in fields);
                         return; // ESP terminates extension header chain
                     }
                 default:
@@ -137,7 +136,7 @@ internal static class IPv6ExtensionHeaderParser
     /// <summary>Parses a Hop-by-Hop Options Header. Returns (nextHeader, consumed) or (0, 0) on failure.</summary>
     private static (byte NextHeader, int Consumed) ParseHopByHopOptions(
         MutField protoField, ReadOnlySpan<byte> data, int offset, int remaining,
-        in IPv6Protocol.ExtHeaderFieldIds fields, in ParseContext context)
+        in IPv6Protocol.ExtHeaderFieldIds fields)
     {
         if (remaining < 8)
         {
@@ -156,14 +155,14 @@ internal static class IPv6ExtensionHeaderParser
 
         MutField hopoptsField = protoField.AppendWithCustomText(
             fields.HopoptsFieldId, FieldValue.None,
-            (string)ZA.String("Hop-by-Hop Options Header (", totalLen, " bytes)"), in context);
+            (string)ZA.String("Hop-by-Hop Options Header (", totalLen, " bytes)"));
 
-        hopoptsField.AppendWithCustomText(fields.HopoptsNxtFieldId, FieldValue.NewU64(nextHeader), nxtText, in context);
-        hopoptsField.Append(fields.HopoptsLenFieldId, FieldValue.NewU64(hdrExtLen), in context);
-        hopoptsField.Append(fields.HopoptsLenOctFieldId, FieldValue.NewU64((ulong)totalLen), in context);
+        hopoptsField.AppendWithCustomText(fields.HopoptsNxtFieldId, FieldValue.NewU64(nextHeader), nxtText);
+        hopoptsField.Append(fields.HopoptsLenFieldId, FieldValue.NewU64(hdrExtLen));
+        hopoptsField.Append(fields.HopoptsLenOctFieldId, FieldValue.NewU64((ulong)totalLen));
 
         // Parse TLV options (bytes 2..totalLen relative to offset)
-        ParseTlvOptions(hopoptsField, data, offset + 2, offset + totalLen, in fields, in context);
+        ParseTlvOptions(hopoptsField, data, offset + 2, offset + totalLen, in fields);
 
         return (nextHeader, totalLen);
     }
@@ -175,7 +174,7 @@ internal static class IPv6ExtensionHeaderParser
     /// <summary>Parses a Destination Options Header. Returns (nextHeader, consumed) or (0, 0) on failure.</summary>
     private static (byte NextHeader, int Consumed) ParseDestinationOptions(
         MutField protoField, ReadOnlySpan<byte> data, int offset, int remaining,
-        in IPv6Protocol.ExtHeaderFieldIds fields, in ParseContext context)
+        in IPv6Protocol.ExtHeaderFieldIds fields)
     {
         if (remaining < 8)
         {
@@ -194,14 +193,14 @@ internal static class IPv6ExtensionHeaderParser
 
         MutField dstoptsField = protoField.AppendWithCustomText(
             fields.DstoptsFieldId, FieldValue.None,
-            (string)ZA.String("Destination Options Header (", totalLen, " bytes)"), in context);
+            (string)ZA.String("Destination Options Header (", totalLen, " bytes)"));
 
-        dstoptsField.AppendWithCustomText(fields.DstoptsNxtFieldId, FieldValue.NewU64(nextHeader), nxtText, in context);
-        dstoptsField.Append(fields.DstoptsLenFieldId, FieldValue.NewU64(hdrExtLen), in context);
-        dstoptsField.Append(fields.DstoptsLenOctFieldId, FieldValue.NewU64((ulong)totalLen), in context);
+        dstoptsField.AppendWithCustomText(fields.DstoptsNxtFieldId, FieldValue.NewU64(nextHeader), nxtText);
+        dstoptsField.Append(fields.DstoptsLenFieldId, FieldValue.NewU64(hdrExtLen));
+        dstoptsField.Append(fields.DstoptsLenOctFieldId, FieldValue.NewU64((ulong)totalLen));
 
         // Parse TLV options (bytes 2..totalLen relative to offset)
-        ParseTlvOptions(dstoptsField, data, offset + 2, offset + totalLen, in fields, in context);
+        ParseTlvOptions(dstoptsField, data, offset + 2, offset + totalLen, in fields);
 
         return (nextHeader, totalLen);
     }
@@ -213,7 +212,7 @@ internal static class IPv6ExtensionHeaderParser
     /// <summary>Parses a Routing Header. Returns (nextHeader, consumed) or (0, 0) on failure.</summary>
     private static (byte NextHeader, int Consumed) ParseRoutingHeader(
         MutField protoField, ReadOnlySpan<byte> data, int offset, int remaining,
-        in IPv6Protocol.ExtHeaderFieldIds fields, in ParseContext context)
+        in IPv6Protocol.ExtHeaderFieldIds fields)
     {
         if (remaining < 8)
         {
@@ -239,29 +238,29 @@ internal static class IPv6ExtensionHeaderParser
         MutField routingField = protoField.AppendWithCustomText(
             fields.RoutingFieldId, FieldValue.None,
             (string)ZA.String("Routing Header (Type ", routingType, ": ", rtDisplay,
-                ", Segments Left: ", segmentsLeft, ")"), in context);
+                ", Segments Left: ", segmentsLeft, ")"));
 
-        routingField.AppendWithCustomText(fields.RoutingNxtFieldId, FieldValue.NewU64(nextHeader), nxtText, in context);
-        routingField.Append(fields.RoutingLenFieldId, FieldValue.NewU64(hdrExtLen), in context);
-        routingField.Append(fields.RoutingLenOctFieldId, FieldValue.NewU64((ulong)totalLen), in context);
-        routingField.AppendWithCustomText(fields.RoutingTypeFieldId, FieldValue.NewU64(routingType), rtDisplayText, in context);
-        routingField.Append(fields.RoutingSegleftFieldId, FieldValue.NewU64(segmentsLeft), in context);
+        routingField.AppendWithCustomText(fields.RoutingNxtFieldId, FieldValue.NewU64(nextHeader), nxtText);
+        routingField.Append(fields.RoutingLenFieldId, FieldValue.NewU64(hdrExtLen));
+        routingField.Append(fields.RoutingLenOctFieldId, FieldValue.NewU64((ulong)totalLen));
+        routingField.AppendWithCustomText(fields.RoutingTypeFieldId, FieldValue.NewU64(routingType), rtDisplayText);
+        routingField.Append(fields.RoutingSegleftFieldId, FieldValue.NewU64(segmentsLeft));
 
         // Parse type-specific data (bytes 4..totalLen relative to offset)
         switch (routingType)
         {
             case 2:
-                ParseRoutingType2(routingField, data, offset, totalLen, in fields, in context);
+                ParseRoutingType2(routingField, data, offset, totalLen, in fields);
                 break;
             case 4:
-                ParseRoutingSrh(routingField, data, offset, totalLen, in fields, in context);
+                ParseRoutingSrh(routingField, data, offset, totalLen, in fields);
                 break;
             default:
                 // Unknown routing type — store raw type-specific data
                 if (totalLen > 4)
                 {
                     ReadOnlyMemory<byte> typeData = data.Slice(offset + 4, totalLen - 4).ToArray();
-                    routingField.Append(fields.RoutingUnknownDataFieldId, FieldValue.NewBytes(typeData), in context);
+                    routingField.Append(fields.RoutingUnknownDataFieldId, FieldValue.NewBytes(typeData));
                 }
                 break;
         }
@@ -272,7 +271,7 @@ internal static class IPv6ExtensionHeaderParser
     /// <summary>Parses Routing Header Type 2 (Mobile IPv6): 4 bytes reserved + 16 bytes home address.</summary>
     private static void ParseRoutingType2(
         MutField routingField, ReadOnlySpan<byte> data, int offset, int totalLen,
-        in IPv6Protocol.ExtHeaderFieldIds fields, in ParseContext context)
+        in IPv6Protocol.ExtHeaderFieldIds fields)
     {
         // Need at least 24 bytes total (4 common + 4 reserved + 16 address)
         if (totalLen < 24)
@@ -281,10 +280,10 @@ internal static class IPv6ExtensionHeaderParser
         }
 
         ReadOnlyMemory<byte> reserved = data.Slice(offset + 4, 4).ToArray();
-        routingField.Append(fields.RoutingMipv6ReservedFieldId, FieldValue.NewBytes(reserved), in context);
+        routingField.Append(fields.RoutingMipv6ReservedFieldId, FieldValue.NewBytes(reserved));
 
         IPv6Address addr = IPv6Address.FromBytes(data.Slice(offset + 8, 16));
-        routingField.Append(fields.RoutingMipv6HomeAddressFieldId, FieldValue.NewIPv6(addr), in context);
+        routingField.Append(fields.RoutingMipv6HomeAddressFieldId, FieldValue.NewIPv6(addr));
     }
 
     /// <summary>
@@ -293,7 +292,7 @@ internal static class IPv6ExtensionHeaderParser
     /// </summary>
     private static void ParseRoutingSrh(
         MutField routingField, ReadOnlySpan<byte> data, int offset, int totalLen,
-        in IPv6Protocol.ExtHeaderFieldIds fields, in ParseContext context)
+        in IPv6Protocol.ExtHeaderFieldIds fields)
     {
         // Need at least 8 bytes for fixed part (4 common + last_entry + flags + tag)
         if (totalLen < 8)
@@ -304,16 +303,16 @@ internal static class IPv6ExtensionHeaderParser
         byte lastEntry = data[offset + 4];
         byte flags = data[offset + 5];
 
-        routingField.Append(fields.RoutingSrhLastEntryFieldId, FieldValue.NewU64(lastEntry), in context);
+        routingField.Append(fields.RoutingSrhLastEntryFieldId, FieldValue.NewU64(lastEntry));
         routingField.AppendWithCustomText(
             fields.RoutingSrhFlagsFieldId, FieldValue.NewU64(flags),
-            Helpers.DisplayTables.FormatHexU8(flags), in context);
+            Helpers.DisplayTables.FormatHexU8(flags));
 
         ReadOnlyMemory<byte> tag = data.Slice(offset + 6, 2).ToArray();
         ushort tagValue = BinaryPrimitives.ReadUInt16BigEndian(data.Slice(offset + 6, 2));
         routingField.AppendWithCustomText(
             fields.RoutingSrhTagFieldId, FieldValue.NewBytes(tag),
-            Helpers.DisplayTables.FormatHexU16(tagValue), in context);
+            Helpers.DisplayTables.FormatHexU16(tagValue));
 
         // Parse segment list addresses (each 16 bytes, starting at offset+8)
         int addrStart = offset + 8;
@@ -326,7 +325,7 @@ internal static class IPv6ExtensionHeaderParser
                 break;
             }
             IPv6Address addr = IPv6Address.FromBytes(data.Slice(addrOffset, 16));
-            routingField.Append(fields.RoutingSrhAddrFieldId, FieldValue.NewIPv6(addr), in context);
+            routingField.Append(fields.RoutingSrhAddrFieldId, FieldValue.NewIPv6(addr));
         }
     }
 
@@ -337,7 +336,7 @@ internal static class IPv6ExtensionHeaderParser
     /// <summary>Parses a Fragment Header (fixed 8 bytes). Returns (nextHeader, 8) or (0, 0) on failure.</summary>
     private static (byte NextHeader, int Consumed) ParseFragmentHeader(
         MutField protoField, ReadOnlySpan<byte> data, int offset, int remaining,
-        in IPv6Protocol.ExtHeaderFieldIds fields, in ParseContext context)
+        in IPv6Protocol.ExtHeaderFieldIds fields)
     {
         if (remaining < FragmentHeaderSize)
         {
@@ -358,16 +357,16 @@ internal static class IPv6ExtensionHeaderParser
         MutField fragField = protoField.AppendWithCustomText(
             fields.FraghdrFieldId, FieldValue.None,
             (string)ZA.String("Fragment Header (Offset: ", fragOffset,
-                ", More: ", moreStr, ", ID: 0x", new Hex8(identification), ")"), in context);
+                ", More: ", moreStr, ", ID: 0x", new Hex8(identification), ")"));
 
-        fragField.AppendWithCustomText(fields.FraghdrNxtFieldId, FieldValue.NewU64(nextHeader), nxtText, in context);
-        fragField.Append(fields.FraghdrReservedOctetFieldId, FieldValue.NewU64(reservedOctet), in context);
-        fragField.Append(fields.FraghdrOffsetFieldId, FieldValue.NewU64(fragOffset), in context);
-        fragField.Append(fields.FraghdrReservedBitsFieldId, FieldValue.NewU64(reservedBits), in context);
-        fragField.Append(fields.FraghdrMoreFieldId, FieldValue.NewBool(moreFragments), in context);
+        fragField.AppendWithCustomText(fields.FraghdrNxtFieldId, FieldValue.NewU64(nextHeader), nxtText);
+        fragField.Append(fields.FraghdrReservedOctetFieldId, FieldValue.NewU64(reservedOctet));
+        fragField.Append(fields.FraghdrOffsetFieldId, FieldValue.NewU64(fragOffset));
+        fragField.Append(fields.FraghdrReservedBitsFieldId, FieldValue.NewU64(reservedBits));
+        fragField.Append(fields.FraghdrMoreFieldId, FieldValue.NewBool(moreFragments));
         fragField.AppendWithCustomText(
             fields.FraghdrIdentFieldId, FieldValue.NewU64(identification),
-            (string)ZA.String("0x", new Hex8(identification)), in context);
+            (string)ZA.String("0x", new Hex8(identification)));
 
         return (nextHeader, FragmentHeaderSize);
     }
@@ -379,7 +378,7 @@ internal static class IPv6ExtensionHeaderParser
     /// <summary>Parses an AH. Returns (nextHeader, consumed) or (0, 0) on failure.</summary>
     private static (byte NextHeader, int Consumed) ParseAhHeader(
         MutField protoField, ReadOnlySpan<byte> data, int offset, int remaining,
-        in IPv6Protocol.ExtHeaderFieldIds fields, in ParseContext context)
+        in IPv6Protocol.ExtHeaderFieldIds fields)
     {
         if (remaining < AhMinSize)
         {
@@ -403,22 +402,22 @@ internal static class IPv6ExtensionHeaderParser
 
         MutField ahField = protoField.AppendWithCustomText(
             fields.AhFieldId, FieldValue.None,
-            (string)ZA.String("Authentication Header (SPI: 0x", new Hex8(spi), ", Seq: ", seq, ")"), in context);
+            (string)ZA.String("Authentication Header (SPI: 0x", new Hex8(spi), ", Seq: ", seq, ")"));
 
-        ahField.AppendWithCustomText(fields.AhNxtFieldId, FieldValue.NewU64(nextHeader), nxtText, in context);
-        ahField.Append(fields.AhLengthFieldId, FieldValue.NewU64(payloadLen), in context);
-        ahField.Append(fields.AhReservedFieldId, FieldValue.NewU64(reserved), in context);
+        ahField.AppendWithCustomText(fields.AhNxtFieldId, FieldValue.NewU64(nextHeader), nxtText);
+        ahField.Append(fields.AhLengthFieldId, FieldValue.NewU64(payloadLen));
+        ahField.Append(fields.AhReservedFieldId, FieldValue.NewU64(reserved));
         ahField.AppendWithCustomText(
             fields.AhSpiFieldId, FieldValue.NewU64(spi),
-            (string)ZA.String("0x", new Hex8(spi)), in context);
-        ahField.Append(fields.AhSeqFieldId, FieldValue.NewU64(seq), in context);
+            (string)ZA.String("0x", new Hex8(spi)));
+        ahField.Append(fields.AhSeqFieldId, FieldValue.NewU64(seq));
 
         // ICV — remaining bytes after fixed 12 bytes
         int icvLen = totalLen - AhMinSize;
         if (icvLen > 0)
         {
             ReadOnlyMemory<byte> icv = data.Slice(offset + AhMinSize, icvLen).ToArray();
-            ahField.Append(fields.AhIcvFieldId, FieldValue.NewBytes(icv), in context);
+            ahField.Append(fields.AhIcvFieldId, FieldValue.NewBytes(icv));
         }
 
         return (nextHeader, totalLen);
@@ -431,7 +430,7 @@ internal static class IPv6ExtensionHeaderParser
     /// <summary>Parses an ESP header (SPI + Seq only). Returns consumed bytes (all remaining, since ESP is encrypted).</summary>
     private static int ParseEspHeader(
         MutField protoField, ReadOnlySpan<byte> data, int offset, int remaining,
-        in IPv6Protocol.ExtHeaderFieldIds fields, in ParseContext context)
+        in IPv6Protocol.ExtHeaderFieldIds fields)
     {
         if (remaining < EspHeaderSize)
         {
@@ -444,12 +443,12 @@ internal static class IPv6ExtensionHeaderParser
         MutField espField = protoField.AppendWithCustomText(
             fields.EspFieldId, FieldValue.None,
             (string)ZA.String("Encapsulating Security Payload (SPI: 0x", new Hex8(spi),
-                ", Seq: ", seq, ")"), in context);
+                ", Seq: ", seq, ")"));
 
         espField.AppendWithCustomText(
             fields.EspSpiFieldId, FieldValue.NewU64(spi),
-            (string)ZA.String("0x", new Hex8(spi)), in context);
-        espField.Append(fields.EspSeqFieldId, FieldValue.NewU64(seq), in context);
+            (string)ZA.String("0x", new Hex8(spi)));
+        espField.Append(fields.EspSeqFieldId, FieldValue.NewU64(seq));
 
         // ESP payload is opaque/encrypted — return all remaining bytes as consumed
         return remaining;
@@ -467,10 +466,9 @@ internal static class IPv6ExtensionHeaderParser
     /// <param name="start">Start offset of TLV options data.</param>
     /// <param name="end">End offset of TLV options data.</param>
     /// <param name="fields">Field IDs for option sub-fields.</param>
-    /// <param name="context">The parse context providing dispatch resolution and stack access.</param>
     private static void ParseTlvOptions(
         MutField parentField, ReadOnlySpan<byte> data, int start, int end,
-        in IPv6Protocol.ExtHeaderFieldIds fields, in ParseContext context)
+        in IPv6Protocol.ExtHeaderFieldIds fields)
     {
         int pos = start;
 
@@ -481,7 +479,7 @@ internal static class IPv6ExtensionHeaderParser
             if (optType == Pad1)
             {
                 // Pad1: single byte, no length field
-                parentField.AppendWithCustomText(fields.OptPad1FieldId, FieldValue.None, "Pad1", in context);
+                parentField.AppendWithCustomText(fields.OptPad1FieldId, FieldValue.None, "Pad1");
                 pos += 1;
                 continue;
             }
@@ -503,12 +501,12 @@ internal static class IPv6ExtensionHeaderParser
             {
                 parentField.AppendWithCustomText(
                     fields.OptPadnFieldId, FieldValue.None,
-                    (string)ZA.String("PadN (", optTotal, " bytes)"), in context);
+                    (string)ZA.String("PadN (", optTotal, " bytes)"));
             }
             else
             {
                 // Typed option with full decomposition
-                ParseTypedOption(parentField, data, pos, optType, optLen, in fields, in context);
+                ParseTypedOption(parentField, data, pos, optType, optLen, in fields);
             }
 
             pos += optTotal;
@@ -518,32 +516,32 @@ internal static class IPv6ExtensionHeaderParser
     /// <summary>Parses a typed TLV option (not Pad1/PadN) and appends its fields.</summary>
     private static void ParseTypedOption(
         MutField parentField, ReadOnlySpan<byte> data, int pos, byte optType, byte optLen,
-        in IPv6Protocol.ExtHeaderFieldIds fields, in ParseContext context)
+        in IPv6Protocol.ExtHeaderFieldIds fields)
     {
         string optDisplay = DisplayTables.GetIpv6OptionTypeDisplayText(optType);
 
         MutField optField = parentField.AppendWithCustomText(
-            fields.OptFieldId, FieldValue.None, optDisplay, in context);
+            fields.OptFieldId, FieldValue.None, optDisplay);
 
         // Option type byte with display text
-        optField.AppendWithCustomText(fields.OptTypeFieldId, FieldValue.NewU64(optType), optDisplay, in context);
+        optField.AppendWithCustomText(fields.OptTypeFieldId, FieldValue.NewU64(optType), optDisplay);
 
         // Action (high 2 bits)
         byte action = (byte)((optType >> 6) & 0x03);
         string actionText = DisplayTables.GetIpv6OptActionDisplayText(action);
-        optField.AppendWithCustomText(fields.OptTypeActionFieldId, FieldValue.NewU64(action), actionText, in context);
+        optField.AppendWithCustomText(fields.OptTypeActionFieldId, FieldValue.NewU64(action), actionText);
 
         // May change en-route (bit 5)
         bool mayChange = (optType & 0x20) != 0;
         string changeText = mayChange ? "Yes" : "No";
-        optField.AppendWithCustomText(fields.OptTypeChangeFieldId, FieldValue.NewBool(mayChange), changeText, in context);
+        optField.AppendWithCustomText(fields.OptTypeChangeFieldId, FieldValue.NewBool(mayChange), changeText);
 
         // Low-order 5 bits
         byte rest = (byte)(optType & 0x1F);
-        optField.Append(fields.OptTypeRestFieldId, FieldValue.NewU64(rest), in context);
+        optField.Append(fields.OptTypeRestFieldId, FieldValue.NewU64(rest));
 
         // Option data length
-        optField.Append(fields.OptLengthFieldId, FieldValue.NewU64(optLen), in context);
+        optField.Append(fields.OptLengthFieldId, FieldValue.NewU64(optLen));
 
         // Parse option-specific data
         int dataStart = pos + 2;
@@ -555,25 +553,25 @@ internal static class IPv6ExtensionHeaderParser
                     string? alertText = DisplayTables.GetIpv6RouterAlertDisplayText(value);
                     string display = alertText ?? $"Unknown ({value})";
                     optField.AppendWithCustomText(
-                        fields.OptRouterAlertFieldId, FieldValue.NewU64(value), display, in context);
+                        fields.OptRouterAlertFieldId, FieldValue.NewU64(value), display);
                     break;
                 }
             case JumboPayload when optLen >= 4:
                 {
                     uint payloadLength = BinaryPrimitives.ReadUInt32BigEndian(data.Slice(dataStart, 4));
-                    optField.Append(fields.OptJumboFieldId, FieldValue.NewU64(payloadLength), in context);
+                    optField.Append(fields.OptJumboFieldId, FieldValue.NewU64(payloadLength));
                     break;
                 }
             case TunnelEncapsulationLimit when optLen >= 1:
                 {
                     byte limit = data[dataStart];
-                    optField.Append(fields.OptTelFieldId, FieldValue.NewU64(limit), in context);
+                    optField.Append(fields.OptTelFieldId, FieldValue.NewU64(limit));
                     break;
                 }
             case HomeAddress when optLen >= 16:
                 {
                     IPv6Address addr = IPv6Address.FromBytes(data.Slice(dataStart, 16));
-                    optField.Append(fields.OptHomeAddressFieldId, FieldValue.NewIPv6(addr), in context);
+                    optField.Append(fields.OptHomeAddressFieldId, FieldValue.NewIPv6(addr));
                     break;
                 }
             default:
@@ -582,7 +580,7 @@ internal static class IPv6ExtensionHeaderParser
                     if (optLen > 0)
                     {
                         ReadOnlyMemory<byte> optData = data.Slice(dataStart, optLen).ToArray();
-                        optField.Append(fields.OptUnknownFieldId, FieldValue.NewBytes(optData), in context);
+                        optField.Append(fields.OptUnknownFieldId, FieldValue.NewBytes(optData));
                     }
                     break;
                 }
@@ -590,3 +588,8 @@ internal static class IPv6ExtensionHeaderParser
     }
     #endregion
 }
+
+
+
+
+

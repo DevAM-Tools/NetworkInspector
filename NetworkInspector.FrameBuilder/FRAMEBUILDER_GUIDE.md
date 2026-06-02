@@ -306,6 +306,19 @@ layer's file.  Examples:
 **Unit naming**: do **not** encode physical units in identifiers; put the
 unit in a comment instead (e.g. `private readonly int _SegmentOffset; // 16-byte units`).
 
+**Layer-internal constant convention**: keep field-geometry constants uniform
+across layers so a reader can infer meaning from the suffix alone:
+
+| Suffix | Meaning | Example |
+|--------|---------|---------|
+| `XxxOffset` | Byte offset of a field within the header | `LengthOffset`, `ChecksumOffset` |
+| `XxxSize` | Byte length of a field or header | `IPv4Header.Size` |
+| `XxxMask` | Bit mask applied to a packed word | `MoreFragmentsMask`, `FragmentOffsetMask` |
+| `XxxBitPosition` | Zero-based bit index used for shifting | `EcnBitPosition` |
+
+Use `XxxMask` only for bit masks (never for byte offsets) and reserve
+`XxxBitPosition` for shift amounts so mask/offset/shift roles never blur.
+
 ---
 
 ## 6. Layer Class Anatomy
@@ -742,7 +755,7 @@ Implementing layers participate in multi-frame iteration:
 ```csharp
 internal readonly struct IPv4Layer : ..., IFragmentable
 {
-    public bool CanFragment => _ClearDontFragment;          // !DontFragment
+    public bool CanFragment => _AllowFragmentation;         // !DontFragment
     public FragmentationKind FragmentationKind => FragmentationKind.NetworkLayer;
     public int FragmentAlignment => 8;                       // RFC 791 §3.2
 

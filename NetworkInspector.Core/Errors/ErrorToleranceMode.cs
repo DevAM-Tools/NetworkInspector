@@ -18,7 +18,7 @@ public enum ErrorToleranceMode
 
     /// <summary>
     /// Stop sequential reading on the first recoverable error.
-    /// <see cref="IFrameSource.NextFrame()"/> returns <c>null</c>.
+    /// <see cref="IFrameSource.NextFrame(CancellationToken)"/> returns <c>null</c>.
     /// Random access to already-read frames (via <see cref="IRandomAccessFrameSource"/>)
     /// remains available.
     /// </summary>

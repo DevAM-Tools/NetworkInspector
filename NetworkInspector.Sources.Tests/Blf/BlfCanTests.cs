@@ -8,15 +8,11 @@ namespace NetworkInspector.Sources.Tests.Blf;
 /// </summary>
 internal sealed class BlfCanTests
 {
+    /// <summary>Creates a full-scan <see cref="BlfSource"/> from raw BLF data.</summary>
     private static BlfSource CreateSource(byte[] blfData) =>
         BlfSource.FromData(blfData, "test.blf", new BlfSourceOptions { ScanMode = ScanMode.Full });
 
-    private static void StartSource(BlfSource source)
-    {
-        FrameInterfaceRegistry registry = new();
-        FrameSourceId sourceId = registry.RegisterSource(source);
-        source.Start(sourceId, registry);
-    }
+
 
     // ========================================================================
     // CAN Classic
@@ -34,7 +30,7 @@ internal sealed class BlfCanTests
         using BlfSource source = CreateSource(blfData);
         await Assert.That(source.EstimatedFrameCount).IsEqualTo(1);
 
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
         Frame? frame = source.NextFrame();
 
         await Assert.That(frame).IsNotNull();
@@ -58,7 +54,7 @@ internal sealed class BlfCanTests
             .Build();
 
         using BlfSource source = CreateSource(blfData);
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
         Frame? frame = source.NextFrame();
 
         await Assert.That(frame).IsNotNull();
@@ -89,7 +85,7 @@ internal sealed class BlfCanTests
                 .Build();
 
             using BlfSource source = CreateSource(blfData);
-            StartSource(source);
+            SourceTestFixture.InitializeAndStartSource(source);
             Frame? frame = source.NextFrame();
 
             await Assert.That(frame).IsNotNull();
@@ -112,7 +108,7 @@ internal sealed class BlfCanTests
             .Build();
 
         using BlfSource source = CreateSource(blfData);
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
         Frame? frame = source.NextFrame();
 
         await Assert.That(frame).IsNotNull();
@@ -143,7 +139,7 @@ internal sealed class BlfCanTests
         using BlfSource source = CreateSource(blfData);
         await Assert.That(source.EstimatedFrameCount).IsEqualTo(3);
 
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         // All three frames should be CAN
         for (int i = 0; i < 3; i++)
@@ -173,7 +169,7 @@ internal sealed class BlfCanTests
             .Build();
 
         using BlfSource source = CreateSource(blfData);
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         Frame? f1 = source.NextFrame();
         Frame? f2 = source.NextFrame();

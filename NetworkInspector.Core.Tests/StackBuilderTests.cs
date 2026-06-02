@@ -956,6 +956,279 @@ internal sealed class StackBuilderTests
         await Assert.That(warning.ToString()).Contains("[Warning]");
     }
 
+    // === Field Alias Group Registration ===
+
+    [Test]
+    public async Task Builder_RegisterFieldAliasGroup_ReturnsValidId()
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        ProtocolId protoId = builder.RegisterProtocol(new StubProtocol("p", "P"));
+        FieldId a = builder.RegisterField(protoId, "p.a", "A", FieldType.U64);
+        FieldId b = builder.RegisterField(protoId, "p.b", "B", FieldType.U64);
+
+        FieldAliasGroupId aliasId = builder.RegisterFieldAliasGroup(protoId, "p.any", null, [a, b]);
+
+        await Assert.That(aliasId.IsValid).IsTrue();
+    }
+
+    [Test]
+    public async Task Builder_RegisterFieldAliasGroup_LookupByName()
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        ProtocolId protoId = builder.RegisterProtocol(new StubProtocol("p", "P"));
+        FieldId a = builder.RegisterField(protoId, "p.a", "A", FieldType.U64);
+        FieldId b = builder.RegisterField(protoId, "p.b", "B", FieldType.U64);
+        FieldAliasGroupId aliasId = builder.RegisterFieldAliasGroup(protoId, "p.any", null, [a, b]);
+
+        FieldAliasGroupId? lookup = builder.GetFieldAliasGroupId("p.any");
+        FieldAliasGroupInfo? info = builder.GetFieldAliasGroup(aliasId);
+
+        await Assert.That(lookup).IsNotNull();
+        await Assert.That(lookup!.Value).IsEqualTo(aliasId);
+        await Assert.That(info).IsNotNull();
+        await Assert.That(info!.Name).IsEqualTo("p.any");
+        await Assert.That(info.ProtocolId).IsEqualTo(protoId);
+        await Assert.That(info.MemberCount).IsEqualTo(2);
+        await Assert.That(info.Members.Span[0]).IsEqualTo(a);
+        await Assert.That(info.Members.Span[1]).IsEqualTo(b);
+    }
+
+    [Test]
+    public async Task Builder_RegisterFieldAliasGroup_LookupById()
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        ProtocolId protoId = builder.RegisterProtocol(new StubProtocol("p", "P"));
+        FieldId a = builder.RegisterField(protoId, "p.a", "A", FieldType.U64);
+        FieldAliasGroupId aliasId = builder.RegisterFieldAliasGroup(protoId, "p.any", null, [a]);
+
+        FieldAliasGroupInfo? info = builder.GetFieldAliasGroup(aliasId);
+
+        await Assert.That(info).IsNotNull();
+        await Assert.That(info!.Id).IsEqualTo(aliasId);
+    }
+
+    [Test]
+    public async Task Builder_RegisterFieldAliasGroup_InvalidSentinelIdReturnsNull()
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        await Assert.That(builder.GetFieldAliasGroup(FieldAliasGroupId.Invalid)).IsNull();
+        await Assert.That(builder.GetFieldAliasGroupId("nope")).IsNull();
+    }
+
+    [Test]
+    public async Task Builder_RegisterFieldAliasGroup_DuplicateNameThrows()
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        ProtocolId protoId = builder.RegisterProtocol(new StubProtocol("p", "P"));
+        FieldId a = builder.RegisterField(protoId, "p.a", "A", FieldType.U64);
+        builder.RegisterFieldAliasGroup(protoId, "p.any", null, [a]);
+
+        RegistrationException ex = Assert.Throws<RegistrationException>(
+            () => builder.RegisterFieldAliasGroup(protoId, "p.any", null, [a]));
+        await Assert.That(ex).IsTypeOf<DuplicateNameRegistrationException>();
+    }
+
+    [Test]
+    [Arguments("")]
+    [Arguments(".")]
+    [Arguments("p.")]
+    [Arguments(".p")]
+    [Arguments("p..a")]
+    [Arguments("1p")]
+    [Arguments("p a")]
+    public async Task Builder_RegisterFieldAliasGroup_InvalidNameThrows(string name)
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        ProtocolId protoId = builder.RegisterProtocol(new StubProtocol("p", "P"));
+        FieldId a = builder.RegisterField(protoId, "p.a", "A", FieldType.U64);
+
+        RegistrationException ex = Assert.Throws<RegistrationException>(
+            () => builder.RegisterFieldAliasGroup(protoId, name, null, [a]));
+        await Assert.That(ex).IsTypeOf<InvalidNameRegistrationException>();
+    }
+
+    [Test]
+    public async Task Builder_RegisterFieldAliasGroup_EmptyMembersThrows()
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        ProtocolId protoId = builder.RegisterProtocol(new StubProtocol("p", "P"));
+
+        await Assert.That(() => builder.RegisterFieldAliasGroup(protoId, "p.any", null, []))
+            .Throws<ArgumentException>();
+    }
+
+    // Hard-break guarantee: alias names and canonical field names live in independent
+    // namespaces. GetFieldId(alias) must never resolve and GetFieldAliasGroupId(canonical)
+    // must never resolve, even after Build(). Locks the breaking contract so future
+    // refactors cannot reintroduce a silent fallback.
+    [Test]
+    public async Task Builder_AliasName_NeverResolvedByGetFieldId()
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        ProtocolId protoId = builder.RegisterProtocol(new StubProtocol("p", "P"));
+        FieldId a = builder.RegisterField(protoId, "p.a", "A", FieldType.U64);
+        FieldId b = builder.RegisterField(protoId, "p.b", "B", FieldType.U64);
+        builder.RegisterFieldAliasGroup(protoId, "p.any", null, [a, b]);
+
+        await Assert.That(builder.GetFieldId("p.any")).IsNull();
+        await Assert.That(builder.GetFieldAliasGroupId("p.a")).IsNull();
+        await Assert.That(builder.GetFieldAliasGroupId("p.b")).IsNull();
+
+        Stack stack = builder.Build();
+        using (stack)
+        {
+            await Assert.That(stack.GetFieldId("p.any")).IsNull();
+            await Assert.That(stack.GetFieldAliasGroupId("p.a")).IsNull();
+            await Assert.That(stack.GetFieldAliasGroupId("p.b")).IsNull();
+            await Assert.That(stack.GetFieldId("p.a")).IsNotNull();
+            await Assert.That(stack.GetFieldAliasGroupId("p.any")).IsNotNull();
+        }
+    }
+
+    [Test]
+    public async Task Builder_RegisterFieldAliasGroup_UnknownMemberThrows()
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        ProtocolId protoId = builder.RegisterProtocol(new StubProtocol("p", "P"));
+        FieldId bogus = new(9999);
+
+        RegistrationException ex = Assert.Throws<RegistrationException>(
+            () => builder.RegisterFieldAliasGroup(protoId, "p.any", null, [bogus]));
+        await Assert.That(ex).IsTypeOf<NotFoundRegistrationException>();
+    }
+
+    [Test]
+    public async Task Builder_RegisterFieldAliasGroup_WrongProtocolThrows()
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        ProtocolId protoA = builder.RegisterProtocol(new StubProtocol("a", "A"));
+        ProtocolId protoB = builder.RegisterProtocol(new StubProtocol("b", "B"));
+        FieldId fieldB = builder.RegisterField(protoB, "b.x", "X", FieldType.U64);
+
+        // fieldB belongs to protoB — registering it under protoA must be rejected.
+        await Assert.That(() => builder.RegisterFieldAliasGroup(protoA, "a.any", null, [fieldB]))
+            .Throws<ArgumentException>();
+    }
+
+    [Test]
+    public async Task Builder_RegisterFieldAliasGroup_DuplicateMemberThrows()
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        ProtocolId protoId = builder.RegisterProtocol(new StubProtocol("p", "P"));
+        FieldId a = builder.RegisterField(protoId, "p.a", "A", FieldType.U64);
+
+        await Assert.That(() => builder.RegisterFieldAliasGroup(protoId, "p.any", null, [a, a]))
+            .Throws<ArgumentException>();
+    }
+
+    [Test]
+    public async Task Builder_RegisterFieldAliasGroup_MixedTypesAllowed()
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        ProtocolId protoId = builder.RegisterProtocol(new StubProtocol("p", "P"));
+        FieldId num = builder.RegisterField(protoId, "p.num", "Num", FieldType.U64);
+        FieldId str = builder.RegisterField(protoId, "p.str", "Str", FieldType.String);
+
+        FieldAliasGroupId aliasId = builder.RegisterFieldAliasGroup(protoId, "p.mixed", null, [num, str]);
+
+        FieldAliasGroupInfo info = builder.GetFieldAliasGroup(aliasId)!;
+        await Assert.That(info.MemberCount).IsEqualTo(2);
+        await Assert.That(info.Members.Span[0]).IsEqualTo(num);
+        await Assert.That(info.Members.Span[1]).IsEqualTo(str);
+    }
+
+    [Test]
+    public async Task Builder_RegisterFieldAliasGroup_DoesNotPolluteFieldNamespace()
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        ProtocolId protoId = builder.RegisterProtocol(new StubProtocol("p", "P"));
+        FieldId a = builder.RegisterField(protoId, "p.a", "A", FieldType.U64);
+        builder.RegisterFieldAliasGroup(protoId, "p.any", null, [a]);
+
+        // Canonical-only field lookup contract: alias name must never resolve via GetFieldId.
+        await Assert.That(builder.GetFieldId("p.any")).IsNull();
+    }
+
+    [Test]
+    public async Task Builder_FieldAliasGroupCount_TracksRegistrations()
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        ProtocolId protoId = builder.RegisterProtocol(new StubProtocol("p", "P"));
+        FieldId a = builder.RegisterField(protoId, "p.a", "A", FieldType.U64);
+        FieldId b = builder.RegisterField(protoId, "p.b", "B", FieldType.U64);
+
+        await Assert.That(builder.FieldAliasGroupCount).IsEqualTo(0);
+        builder.RegisterFieldAliasGroup(protoId, "p.any1", null, [a]);
+        await Assert.That(builder.FieldAliasGroupCount).IsEqualTo(1);
+        builder.RegisterFieldAliasGroup(protoId, "p.any2", null, [b]);
+        await Assert.That(builder.FieldAliasGroupCount).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task Build_FieldAliasGroups_PreservedAndImmutableAfterBuild()
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        ProtocolId protoId = builder.RegisterProtocol(new StubProtocol("p", "P"));
+        FieldId a = builder.RegisterField(protoId, "p.a", "A", FieldType.U64);
+        FieldId b = builder.RegisterField(protoId, "p.b", "B", FieldType.String);
+        FieldAliasGroupId aliasId = builder.RegisterFieldAliasGroup(protoId, "p.any", "any-match for p.a/p.b", [a, b]);
+
+        using Stack stack = builder.Build();
+
+        await Assert.That(stack.FieldAliasGroupCount).IsEqualTo(1);
+        await Assert.That(stack.GetFieldId("p.any")).IsNull();
+        FieldAliasGroupInfo info = stack.GetFieldAliasGroup(aliasId)!;
+        await Assert.That(info.Name).IsEqualTo("p.any");
+        await Assert.That(info.Description).IsEqualTo("any-match for p.a/p.b");
+        await Assert.That(info.MemberCount).IsEqualTo(2);
+        await Assert.That(stack.GetFieldAliasGroupId("p.any")).IsEqualTo(aliasId);
+    }
+
+    [Test]
+    public async Task Stack_FieldAliasGroup_ConcurrentReadsAreSafe()
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        ProtocolId protoId = builder.RegisterProtocol(new StubProtocol("p", "P"));
+        FieldId a = builder.RegisterField(protoId, "p.a", "A", FieldType.U64);
+        FieldId b = builder.RegisterField(protoId, "p.b", "B", FieldType.U64);
+        FieldAliasGroupId aliasId = builder.RegisterFieldAliasGroup(protoId, "p.any", null, [a, b]);
+        using Stack stack = builder.Build();
+
+        // 8 parallel readers performing 5000 lookups each — verifies immutable publication.
+        Task[] readers = new Task[8];
+        for (int t = 0; t < readers.Length; t++)
+        {
+            readers[t] = Task.Run(() =>
+            {
+                for (int i = 0; i < 5000; i++)
+                {
+                    FieldAliasGroupInfo? byId = stack.GetFieldAliasGroup(aliasId);
+                    if (byId is null || byId.MemberCount != 2)
+                    {
+                        throw new InvalidOperationException("Concurrent read produced inconsistent result.");
+                    }
+                }
+            });
+        }
+        await Task.WhenAll(readers).ConfigureAwait(false);
+    }
+
     // === Stub protocol for test use ===
 
     private sealed class StubProtocol(string name, string uiName) : IProtocol

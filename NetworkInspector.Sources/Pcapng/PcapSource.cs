@@ -246,7 +246,7 @@ public sealed class PcapSource : IRandomAccessFrameSource, IErrorTolerantFrameSo
     /// This method is <b>not</b> thread-safe. It must be called from a single thread only.
     /// For thread-safe random access, use <see cref="FrameById"/> instead.
     /// </remarks>
-    public Frame? NextFrame()
+    public Frame? NextFrame(CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _Disposed), this);
 
@@ -260,13 +260,15 @@ public sealed class PcapSource : IRandomAccessFrameSource, IErrorTolerantFrameSo
             return null;
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
+
         // Read _Scanner with Volatile for symmetry with Dispose()'s Volatile.Write.
         if (Volatile.Read(ref _Scanner) is not null)
         {
             return NextFrameFromScanner();
         }
 
-        return NextFrameFromIndex();
+        return NextFrameFromIndex(cancellationToken);
     }
 
     #endregion
@@ -281,7 +283,7 @@ public sealed class PcapSource : IRandomAccessFrameSource, IErrorTolerantFrameSo
     /// returned <c>null</c> at end-of-stream, the lazy scan has finalised and this method
     /// becomes thread-safe.
     /// </remarks>
-    public Frame? FrameById(FrameId id)
+    public Frame? FrameById(FrameId id, CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _Disposed), this);
 
@@ -291,6 +293,8 @@ public sealed class PcapSource : IRandomAccessFrameSource, IErrorTolerantFrameSo
         {
             return null;
         }
+
+        cancellationToken.ThrowIfCancellationRequested();
 
         int frameId = id.Value;
         if (frameId < 0 || frameId >= _Index.Count)
@@ -357,7 +361,7 @@ public sealed class PcapSource : IRandomAccessFrameSource, IErrorTolerantFrameSo
     #region Private helpers
 
     /// <summary>Reads the next frame from the pre-built index (full scan mode).</summary>
-    private Frame? NextFrameFromIndex()
+    private Frame? NextFrameFromIndex(CancellationToken cancellationToken = default)
     {
         // Snapshot _Registry once for the entire scan pass so a concurrent Dispose()
         // cannot null the field between the per-iteration disposed check and Frame.Create.
@@ -369,6 +373,8 @@ public sealed class PcapSource : IRandomAccessFrameSource, IErrorTolerantFrameSo
 
         while (_CurrentFrame < _Index.Count)
         {
+            cancellationToken.ThrowIfCancellationRequested();
+
             // Abort early if another thread disposed the source mid-iteration; the
             // backend may have already released its mmap pointer.
             if (Volatile.Read(ref _Disposed) || Volatile.Read(ref _Aborted))

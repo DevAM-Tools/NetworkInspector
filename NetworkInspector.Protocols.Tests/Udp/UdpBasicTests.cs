@@ -90,31 +90,44 @@ internal sealed class UdpBasicTests
     [Test]
     public async Task Parse_Udp_PortField_ContainsBothEndpoints()
     {
-        // Arrange
+        // udp.port is a metadata-only alias group ({ udp.srcport, udp.dstport }); no udp.port
+        // field is appended to the parse tree. The protocol table name udp.port (UDP demux)
+        // lives in an independent namespace from this alias.
         byte[] frame = BuildUdpFrame(srcPort: 12345, dstPort: 53);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
-            FieldId? portId = stack.GetFieldId("udp.port");
-            await Assert.That(portId).IsNotNull().Because("udp.port must be registered");
+            await Assert.That(stack.GetFieldId("udp.port")).IsNull()
+                .Because("udp.port is an alias name and must never resolve via GetFieldId");
 
-            // Act: collect all udp.port occurrences (src + dst siblings in udp container)
-            FieldLookupCookie cookie = FieldLookupCookie.Start;
+            FieldAliasGroupId? aliasId = stack.GetFieldAliasGroupId("udp.port");
+            await Assert.That(aliasId).IsNotNull().Because("udp.port alias group must be registered");
+
+            FieldAliasGroupInfo? aliasInfo = stack.GetFieldAliasGroup(aliasId!.Value);
+            await Assert.That(aliasInfo).IsNotNull();
+            await Assert.That(aliasInfo!.MemberCount).IsEqualTo(2);
+
+            FieldId srcId = stack.GetFieldId("udp.srcport")!.Value;
+            FieldId dstId = stack.GetFieldId("udp.dstport")!.Value;
+            FieldId[] members = aliasInfo.Members.ToArray();
+            await Assert.That(members.Contains(srcId)).IsTrue();
+            await Assert.That(members.Contains(dstId)).IsTrue();
+
             List<ulong> found = [];
-            while (packet.TryGetNextFieldValue(portId!.Value, ref cookie, out FieldValue value))
+            foreach (FieldId memberId in members)
             {
-                bool ok = value.Data.TryGetAsU64(out ulong port);
-                await Assert.That(ok).IsTrue().Because("udp.port values must be U64");
-                found.Add(port);
+                FieldLookupCookie cookie = FieldLookupCookie.Start;
+                while (packet.TryGetNextFieldValue(memberId, ref cookie, out FieldValue value))
+                {
+                    bool ok = value.Data.TryGetAsU64(out ulong port);
+                    await Assert.That(ok).IsTrue().Because("alias member values must be U64");
+                    found.Add(port);
+                }
             }
 
-            // Assert: exactly two occurrences matching source and destination ports
-            await Assert.That(found.Count).IsEqualTo(2)
-                .Because("udp.port must appear exactly twice — once for source, once for destination");
-            await Assert.That(found.Contains(12345UL)).IsTrue()
-                .Because("udp.port must contain source port 12345");
-            await Assert.That(found.Contains(53UL)).IsTrue()
-                .Because("udp.port must contain destination port 53");
+            await Assert.That(found.Count).IsEqualTo(2);
+            await Assert.That(found.Contains(12345UL)).IsTrue();
+            await Assert.That(found.Contains(53UL)).IsTrue();
         }
     }
 

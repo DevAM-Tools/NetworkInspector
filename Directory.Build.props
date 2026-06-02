@@ -8,7 +8,7 @@
     <ImplicitUsings>disable</ImplicitUsings>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
 
-    <Version>0.3.0</Version>
+    <Version>0.4.0</Version>
 
     <!-- Quality -->
     <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
@@ -26,7 +26,7 @@
     <!-- Package metadata -->
     <Authors>DevAM</Authors>
     <Company>DevAM</Company>
-    <Copyright>Copyright (c) DevAM 2026</Copyright>
+    <Copyright>Copyright © 2026 DevAM. All rights reserved.</Copyright>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageRequireLicenseAcceptance>true</PackageRequireLicenseAcceptance>
     <PackageProjectUrl>https://github.com/DevAM-Tools/NetworkInspector</PackageProjectUrl>
@@ -38,6 +38,10 @@
     <GenerateDocumentationFile Condition="!$(MSBuildProjectName.Contains('.Tests'))">true</GenerateDocumentationFile>
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+		<ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
   </PropertyGroup>
 
 </Project>

@@ -78,7 +78,7 @@ internal sealed class RoundtripFrameFactory
         }
 
         /// <inheritdoc/>
-        public Frame? NextFrame() => null;
+        public Frame? NextFrame(CancellationToken cancellationToken = default) => null;
 
         /// <inheritdoc/>
         public void Dispose()

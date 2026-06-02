@@ -31,6 +31,11 @@ Install Core; generator support is included automatically:
 dotnet add package NetworkInspector.Core
 ```
 
+`NetworkInspector.Core` delivers generator support without additional package references:
+
+- `NetworkInspector.Generators` is bundled directly in Core analyzer assets.
+- `ZeroAlloc` (including `ZeroAlloc.Generator`) flows transitively through NetworkInspector library packages.
+
 ## Quick Start
 
 ```csharp

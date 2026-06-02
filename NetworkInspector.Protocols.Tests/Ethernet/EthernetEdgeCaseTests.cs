@@ -49,12 +49,19 @@ internal sealed class EthernetEdgeCaseTests
 
     #endregion
 
-    #region I/G Bit Tests
+    #region MAC Address Bits (I/G + L/G) CustomText Tests
+
+    // The ig/lg flags are no longer materialised as separate bool fields (eth.dst.ig,
+    // eth.dst.lg, eth.src.ig, eth.src.lg). They are emitted as combined CustomText on
+    // the eth.dst / eth.src fields by EthernetProtocol.FormatMacAddressBits:
+    //   ig = address.IsMulticast ? "Multicast" : "Unicast"
+    //   lg = address.IsLocal     ? "Locally Administered" : "Globally Unique"
+    //   format = "{ig}, {lg}"
+    // Each test below asserts the full combined CustomText for the relevant MAC.
 
     [Test]
     public async Task Parse_UnicastDstMac_IgBitIsFalse()
     {
-        // Unicast MAC: first octet bit 0 = 0
         MacAddress dst = MacAddress.FromBytes([0x00, 0x11, 0x22, 0x33, 0x44, 0x55]);
         MacAddress src = MacAddress.FromBytes([0x00, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE]);
         byte[] frame = BuildEthFrame(dst, src);
@@ -62,13 +69,12 @@ internal sealed class EthernetEdgeCaseTests
         Packet packet = ProtocolTestHelper.ParseWithSharedStack(frame);
         Stack stack = ProtocolTestHelper.SharedStack;
 
-        await ProtocolTestHelper.AssertBoolField(stack, packet, "eth.dst.ig", false).ConfigureAwait(false);
+        await ProtocolTestHelper.AssertDisplayText(stack, packet, "eth.dst", "00:11:22:33:44:55 (Unicast, Globally Unique)").ConfigureAwait(false);
     }
 
     [Test]
     public async Task Parse_MulticastDstMac_IgBitIsTrue()
     {
-        // Multicast MAC: first octet bit 0 = 1 (e.g., 0x01)
         MacAddress dst = MacAddress.FromBytes([0x01, 0x00, 0x5E, 0x00, 0x00, 0x01]);
         MacAddress src = MacAddress.FromBytes([0x00, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE]);
         byte[] frame = BuildEthFrame(dst, src);
@@ -76,13 +82,12 @@ internal sealed class EthernetEdgeCaseTests
         Packet packet = ProtocolTestHelper.ParseWithSharedStack(frame);
         Stack stack = ProtocolTestHelper.SharedStack;
 
-        await ProtocolTestHelper.AssertBoolField(stack, packet, "eth.dst.ig", true).ConfigureAwait(false);
+        await ProtocolTestHelper.AssertDisplayText(stack, packet, "eth.dst", "01:00:5E:00:00:01 (Multicast, Globally Unique)").ConfigureAwait(false);
     }
 
     [Test]
     public async Task Parse_BroadcastDstMac_IgBitIsTrue()
     {
-        // Broadcast: FF:FF:FF:FF:FF:FF — I/G bit is set
         MacAddress dst = MacAddress.FromBytes([0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]);
         MacAddress src = MacAddress.FromBytes([0x00, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE]);
         byte[] frame = BuildEthFrame(dst, src);
@@ -90,7 +95,8 @@ internal sealed class EthernetEdgeCaseTests
         Packet packet = ProtocolTestHelper.ParseWithSharedStack(frame);
         Stack stack = ProtocolTestHelper.SharedStack;
 
-        await ProtocolTestHelper.AssertBoolField(stack, packet, "eth.dst.ig", true).ConfigureAwait(false);
+        // Broadcast: ig=true, lg=true.
+        await ProtocolTestHelper.AssertDisplayText(stack, packet, "eth.dst", "FF:FF:FF:FF:FF:FF (Multicast, Locally Administered)").ConfigureAwait(false);
     }
 
     [Test]
@@ -103,7 +109,7 @@ internal sealed class EthernetEdgeCaseTests
         Packet packet = ProtocolTestHelper.ParseWithSharedStack(frame);
         Stack stack = ProtocolTestHelper.SharedStack;
 
-        await ProtocolTestHelper.AssertBoolField(stack, packet, "eth.src.ig", false).ConfigureAwait(false);
+        await ProtocolTestHelper.AssertDisplayText(stack, packet, "eth.src", "00:11:22:33:44:55 (Unicast, Globally Unique)").ConfigureAwait(false);
     }
 
     #endregion
@@ -113,7 +119,6 @@ internal sealed class EthernetEdgeCaseTests
     [Test]
     public async Task Parse_GloballyAdministeredMac_LgBitIsFalse()
     {
-        // Globally administered (OUI): bit 1 of first octet = 0
         MacAddress dst = MacAddress.FromBytes([0x00, 0x11, 0x22, 0x33, 0x44, 0x55]);
         MacAddress src = MacAddress.FromBytes([0x00, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE]);
         byte[] frame = BuildEthFrame(dst, src);
@@ -121,13 +126,12 @@ internal sealed class EthernetEdgeCaseTests
         Packet packet = ProtocolTestHelper.ParseWithSharedStack(frame);
         Stack stack = ProtocolTestHelper.SharedStack;
 
-        await ProtocolTestHelper.AssertBoolField(stack, packet, "eth.dst.lg", false).ConfigureAwait(false);
+        await ProtocolTestHelper.AssertDisplayText(stack, packet, "eth.dst", "00:11:22:33:44:55 (Unicast, Globally Unique)").ConfigureAwait(false);
     }
 
     [Test]
     public async Task Parse_LocallyAdministeredMac_LgBitIsTrue()
     {
-        // Locally administered: bit 1 of first octet = 1 (e.g., 0x02)
         MacAddress dst = MacAddress.FromBytes([0x02, 0x00, 0x00, 0x00, 0x00, 0x01]);
         MacAddress src = MacAddress.FromBytes([0x00, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE]);
         byte[] frame = BuildEthFrame(dst, src);
@@ -135,13 +139,12 @@ internal sealed class EthernetEdgeCaseTests
         Packet packet = ProtocolTestHelper.ParseWithSharedStack(frame);
         Stack stack = ProtocolTestHelper.SharedStack;
 
-        await ProtocolTestHelper.AssertBoolField(stack, packet, "eth.dst.lg", true).ConfigureAwait(false);
+        await ProtocolTestHelper.AssertDisplayText(stack, packet, "eth.dst", "02:00:00:00:00:01 (Unicast, Locally Administered)").ConfigureAwait(false);
     }
 
     [Test]
     public async Task Parse_LocalMulticastMac_BothIgAndLgSet()
     {
-        // 0x03 = bits 0 and 1 set → both multicast (I/G) and locally administered (L/G)
         MacAddress dst = MacAddress.FromBytes([0x03, 0x00, 0x00, 0x00, 0x00, 0x01]);
         MacAddress src = MacAddress.FromBytes([0x00, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE]);
         byte[] frame = BuildEthFrame(dst, src);
@@ -149,8 +152,7 @@ internal sealed class EthernetEdgeCaseTests
         Packet packet = ProtocolTestHelper.ParseWithSharedStack(frame);
         Stack stack = ProtocolTestHelper.SharedStack;
 
-        await ProtocolTestHelper.AssertBoolField(stack, packet, "eth.dst.ig", true).ConfigureAwait(false);
-        await ProtocolTestHelper.AssertBoolField(stack, packet, "eth.dst.lg", true).ConfigureAwait(false);
+        await ProtocolTestHelper.AssertDisplayText(stack, packet, "eth.dst", "03:00:00:00:00:01 (Multicast, Locally Administered)").ConfigureAwait(false);
     }
 
     #endregion
@@ -256,8 +258,7 @@ internal sealed class EthernetEdgeCaseTests
         Stack stack = ProtocolTestHelper.SharedStack;
 
         await ProtocolTestHelper.AssertMacField(stack, packet, "eth.dst", "FF:FF:FF:FF:FF:FF").ConfigureAwait(false);
-        await ProtocolTestHelper.AssertBoolField(stack, packet, "eth.dst.ig", true).ConfigureAwait(false);
-        await ProtocolTestHelper.AssertBoolField(stack, packet, "eth.dst.lg", true).ConfigureAwait(false);
+        await ProtocolTestHelper.AssertDisplayText(stack, packet, "eth.dst", "FF:FF:FF:FF:FF:FF (Multicast, Locally Administered)").ConfigureAwait(false);
     }
 
     [Test]
@@ -272,8 +273,7 @@ internal sealed class EthernetEdgeCaseTests
         Stack stack = ProtocolTestHelper.SharedStack;
 
         await ProtocolTestHelper.AssertMacField(stack, packet, "eth.dst", "00:00:00:00:00:00").ConfigureAwait(false);
-        await ProtocolTestHelper.AssertBoolField(stack, packet, "eth.dst.ig", false).ConfigureAwait(false);
-        await ProtocolTestHelper.AssertBoolField(stack, packet, "eth.dst.lg", false).ConfigureAwait(false);
+        await ProtocolTestHelper.AssertDisplayText(stack, packet, "eth.dst", "00:00:00:00:00:00 (Unicast, Globally Unique)").ConfigureAwait(false);
     }
 
     #endregion
@@ -339,9 +339,8 @@ internal sealed class EthernetEdgeCaseTests
     [Test]
     public async Task Parse_AddrField_ExistsForDstAndSrc()
     {
-        // eth.addr is appended twice — once as a child of eth.dst, once as a child of eth.src.
-        // TryGetNextFieldValue traverses the flat field array and finds both occurrences
-        // regardless of their nesting depth.
+        // eth.addr is a metadata-only alias group ({ eth.dst, eth.src }); no eth.addr field
+        // is appended to the parse tree. Both endpoint MACs are exposed via the alias members.
         MacAddress dst = MacAddress.FromBytes([0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF]);
         MacAddress src = MacAddress.FromBytes([0x11, 0x22, 0x33, 0x44, 0x55, 0x66]);
         byte[] frame = BuildEthFrame(dst, src);
@@ -349,26 +348,39 @@ internal sealed class EthernetEdgeCaseTests
         Packet packet = ProtocolTestHelper.ParseWithSharedStack(frame);
         Stack stack = ProtocolTestHelper.SharedStack;
 
-        FieldId? addrId = stack.GetFieldId("eth.addr");
-        await Assert.That(addrId).IsNotNull().Because("eth.addr must be registered");
+        await Assert.That(stack.GetFieldId("eth.addr")).IsNull()
+            .Because("eth.addr is an alias name and must never resolve via GetFieldId");
 
-        // Act: collect all eth.addr occurrences
-        FieldLookupCookie cookie = FieldLookupCookie.Start;
+        FieldAliasGroupId? aliasId = stack.GetFieldAliasGroupId("eth.addr");
+        await Assert.That(aliasId).IsNotNull().Because("eth.addr alias group must be registered");
+
+        FieldAliasGroupInfo? aliasInfo = stack.GetFieldAliasGroup(aliasId!.Value);
+        await Assert.That(aliasInfo).IsNotNull();
+        await Assert.That(aliasInfo!.MemberCount).IsEqualTo(2)
+            .Because("eth.addr alias must expose exactly two members: eth.dst and eth.src");
+
+        FieldId dstId = stack.GetFieldId("eth.dst")!.Value;
+        FieldId srcId = stack.GetFieldId("eth.src")!.Value;
+        FieldId[] members = aliasInfo.Members.ToArray();
+        await Assert.That(members.Contains(dstId)).IsTrue().Because("alias must include eth.dst");
+        await Assert.That(members.Contains(srcId)).IsTrue().Because("alias must include eth.src");
+
         List<string> found = [];
-        while (packet.TryGetNextFieldValue(addrId!.Value, ref cookie, out FieldValue value))
+        foreach (FieldId memberId in members)
         {
-            bool ok = value.Data.TryGetAsMacAddress(out MacAddress addr);
-            await Assert.That(ok).IsTrue().Because("eth.addr values must be MAC addresses");
-            found.Add(addr.ToString());
+            FieldLookupCookie cookie = FieldLookupCookie.Start;
+            while (packet.TryGetNextFieldValue(memberId, ref cookie, out FieldValue value))
+            {
+                bool ok = value.Data.TryGetAsMacAddress(out MacAddress addr);
+                await Assert.That(ok).IsTrue().Because("alias member values must be MAC addresses");
+                found.Add(addr.ToString());
+            }
         }
 
-        // Assert: exactly two occurrences matching destination and source MAC addresses
         await Assert.That(found.Count).IsEqualTo(2)
-            .Because("eth.addr must appear exactly twice — once for destination, once for source");
-        await Assert.That(found.Contains("AA:BB:CC:DD:EE:FF")).IsTrue()
-            .Because("eth.addr must contain destination address AA:BB:CC:DD:EE:FF");
-        await Assert.That(found.Contains("11:22:33:44:55:66")).IsTrue()
-            .Because("eth.addr must contain source address 11:22:33:44:55:66");
+            .Because("alias must surface destination and source across its two members");
+        await Assert.That(found.Contains("AA:BB:CC:DD:EE:FF")).IsTrue();
+        await Assert.That(found.Contains("11:22:33:44:55:66")).IsTrue();
     }
 
     #endregion

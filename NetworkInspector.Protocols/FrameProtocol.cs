@@ -101,8 +101,8 @@ public sealed partial class FrameProtocol : IProtocol
     partial void OnStartCustom(Stack stack)
     {
         // Allocate once — each delegate captures only 'this' (a singleton per registered protocol).
-        _Populator = (in MutField container) => PopulateFrameFields(in container);
-        _InterfacePopulator = (in MutField container) => PopulateInterfaceFields(in container);
+        _Populator = PopulateFrameFields;
+        _InterfacePopulator = PopulateInterfaceFields;
         // Link-type table has very few entries (typically just Ethernet = 1); cache all of them.
         // Instance cache stores IProtocol references for zero-indirection dispatch.
         _LinkTypeSparseCache = stack.BuildU64SparseDelegateCache(_LinkTypeTableId);
@@ -115,7 +115,6 @@ public sealed partial class FrameProtocol : IProtocol
     /// </summary>
     private ParseResult PopulateFrameFields(in MutField container)
     {
-        ParseContext context = new ParseContext(container.Packet.Stack);
         Frame frame = container.Packet.Frame;
 
         // Re-read metadata — no captured variables needed.
@@ -128,11 +127,11 @@ public sealed partial class FrameProtocol : IProtocol
         string linkTypeName = GetLinkTypeName(linkType);
         ulong linkTypeValue = (ulong)linkType;
 
-        container.Append(_IdFieldId, FieldValue.NewU64((ulong)frame.Id.Value), in context);
-        container.Append(_TimeFieldId, FieldValue.NewTimestamp(frame.Timestamp), in context);
-        container.AppendWithCustomText(_LinkTypeFieldId, FieldValue.NewU64(linkTypeValue), linkTypeName, in context);
-        container.Append(_LengthFieldId, FieldValue.NewU64((ulong)data.Length), in context);
-        container.Append(_DataFieldId, FieldValue.NewBytes(data), in context);
+        container.Append(_IdFieldId, FieldValue.NewU64((ulong)frame.Id.Value));
+        container.Append(_TimeFieldId, FieldValue.NewTimestamp(frame.Timestamp));
+        container.AppendWithCustomText(_LinkTypeFieldId, FieldValue.NewU64(linkTypeValue), linkTypeName);
+        container.Append(_LengthFieldId, FieldValue.NewU64((ulong)data.Length));
+        container.Append(_DataFieldId, FieldValue.NewBytes(data));
 
         // Append interface sub-tree if interface info is registered.
         if (frame.HasInterface)
@@ -156,7 +155,6 @@ public sealed partial class FrameProtocol : IProtocol
     /// </summary>
     private ParseResult PopulateInterfaceFields(in MutField container)
     {
-        ParseContext context = new ParseContext(container.Packet.Stack);
         Frame frame = container.Packet.Frame;
         if (!frame.HasInterface)
         {
@@ -170,8 +168,8 @@ public sealed partial class FrameProtocol : IProtocol
             return ParseError.InvalidData(ProtocolName, $"Interface {interfaceId.Value} not found in registry");
         }
 
-        container.Append(_InterfaceIdFieldId, FieldValue.NewU64((ulong)interfaceId.Value), in context);
-        container.Append(_InterfaceNameFieldId, FieldValue.NewString(interfaceInfo.UiName), in context);
+        container.Append(_InterfaceIdFieldId, FieldValue.NewU64((ulong)interfaceId.Value));
+        container.Append(_InterfaceNameFieldId, FieldValue.NewString(interfaceInfo.UiName));
 
         return 0;
     }
@@ -262,8 +260,7 @@ public sealed partial class FrameProtocol : IProtocol
 
         // Store the full frame data in the field value so PopulateFrameFields can access it
         // without any captured state (reads from container.Value.Data.AsBytes()).
-        FieldValue containerValue = FieldValue.NewBytes(data);
-        parentField.AppendLazyWithCustomText(_ProtocolFieldId, containerValue, summary, _Populator);
+        parentField.AppendLazyWithCustomText(_ProtocolFieldId, data, summary, _Populator);
 
         // Dispatch to link-layer protocol on parentField (sibling dispatch — all protocols are direct children of root)
         ParseResult dispatchResult = DispatchLinkType(in parentField, linkTypeValue, data, in context);

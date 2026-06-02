@@ -30,7 +30,6 @@ global using NetworkInspector.Core.Errors;
 global using NetworkInspector.Core.Fields;
 global using NetworkInspector.Core.Ids;
 global using NetworkInspector.Core.Index;
-global using NetworkInspector.Core.Index.ValueCache;
 global using NetworkInspector.Core.Infos;
 global using NetworkInspector.Core.Interfaces;
 global using NetworkInspector.Core.Protocols;

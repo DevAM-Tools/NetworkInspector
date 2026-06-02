@@ -9,10 +9,13 @@ namespace NetworkInspector.Core.Fields;
 /// on every <c>Append</c> / <c>Prepend</c> / <c>InsertAfter</c> call.
 /// <para>
 /// The <see cref="ParseContext"/> is no longer embedded; it is threaded explicitly as an
-/// <c>in</c> parameter on every method that needs it (Append variants, dispatch methods).
-/// Lazy field populators (which cannot capture a ref struct) simply pass
-/// <see langword="default"/> for the context — this is correct and intentional, as deferred
-/// index recording is not allowed inside lazy populators.
+/// <c>in</c> parameter only on the dispatch methods (<c>TryCallNextProtocol*</c>). The
+/// field-building methods (Append/Prepend/InsertAfter variants) do not take a context —
+/// presence recording happens eagerly via <see cref="ParseContext"/> in <c>Parse</c>, never
+/// during field construction.
+/// The same cursor type serves both eager parsing (in <c>Parse</c>, with a context for
+/// dispatch) and lazy population (in a <see cref="LazyPopulator"/>, where no context is
+/// available, so dispatch and index mutation are structurally impossible).
 /// </para>
 /// <para>This is a ref struct — cannot be stored in collections.</para>
 /// </summary>
@@ -118,52 +121,34 @@ public readonly ref struct MutField
 
     /// <summary>Appends a child field. Throws <see cref="Errors.FieldAppendException"/> on failure.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public readonly MutField Append(FieldId fieldId, FieldValue value, in ParseContext context)
-    {
-        context.TryRecordValue(fieldId, value.Data);
-        return new(_Packet, _Packet.AppendChild(_Index, fieldId, value), fieldId);
-    }
+    public readonly MutField Append(FieldId fieldId, FieldValue value)
+        => new(_Packet, _Packet.AppendChild(_Index, fieldId, value), fieldId);
 
     /// <summary>Appends a child field with custom display text. Throws <see cref="Errors.FieldAppendException"/> on failure.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public readonly MutField AppendWithCustomText(FieldId fieldId, FieldValue value, LazyString customText, in ParseContext context)
-    {
-        context.TryRecordValue(fieldId, value.Data);
-        return new(_Packet, _Packet.AppendChildWithCustomText(_Index, fieldId, value, customText), fieldId);
-    }
+    public readonly MutField AppendWithCustomText(FieldId fieldId, FieldValue value, LazyString customText)
+        => new(_Packet, _Packet.AppendChildWithCustomText(_Index, fieldId, value, customText), fieldId);
 
     /// <summary>Prepends a child field (inserts before all existing children). Throws <see cref="Errors.FieldAppendException"/> on failure.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public readonly MutField Prepend(FieldId fieldId, FieldValue value, in ParseContext context)
-    {
-        context.TryRecordValue(fieldId, value.Data);
-        return new(_Packet, _Packet.PrependChild(_Index, fieldId, value), fieldId);
-    }
+    public readonly MutField Prepend(FieldId fieldId, FieldValue value)
+        => new(_Packet, _Packet.PrependChild(_Index, fieldId, value), fieldId);
 
     /// <summary>Prepends a child field with custom display text. Throws <see cref="Errors.FieldAppendException"/> on failure.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public readonly MutField PrependWithCustomText(FieldId fieldId, FieldValue value, LazyString customText, in ParseContext context)
-    {
-        context.TryRecordValue(fieldId, value.Data);
-        return new(_Packet, _Packet.PrependChildWithCustomText(_Index, fieldId, value, customText), fieldId);
-    }
+    public readonly MutField PrependWithCustomText(FieldId fieldId, FieldValue value, LazyString customText)
+        => new(_Packet, _Packet.PrependChildWithCustomText(_Index, fieldId, value, customText), fieldId);
 
     /// <summary>Inserts a field after the current field (as sibling). Throws <see cref="Errors.FieldAppendException"/> on failure.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public readonly MutField InsertAfter(FieldId fieldId, FieldValue value, in ParseContext context)
-    {
-        context.TryRecordValue(fieldId, value.Data);
-        return new(_Packet, _Packet.InsertAfter(_Index, fieldId, value), fieldId);
-    }
+    public readonly MutField InsertAfter(FieldId fieldId, FieldValue value)
+        => new(_Packet, _Packet.InsertAfter(_Index, fieldId, value), fieldId);
 
     /// <summary>Inserts a field after the current field (as sibling) with custom display text.
     /// Throws <see cref="Errors.FieldAppendException"/> on failure.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public readonly MutField InsertAfterWithCustomText(FieldId fieldId, FieldValue value, LazyString customText, in ParseContext context)
-    {
-        context.TryRecordValue(fieldId, value.Data);
-        return new(_Packet, _Packet.InsertAfterWithCustomText(_Index, fieldId, value, customText), fieldId);
-    }
+    public readonly MutField InsertAfterWithCustomText(FieldId fieldId, FieldValue value, LazyString customText)
+        => new(_Packet, _Packet.InsertAfterWithCustomText(_Index, fieldId, value, customText), fieldId);
 
     /// <summary>Creates a MutField for a child at the given storage index (internal implementation detail).</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -425,7 +410,7 @@ public readonly ref struct MutField
         FieldId choiceFieldId = context.Stack!.PacketChoiceFieldId;
         // ZA.Lazy defers string concatenation to evaluation time.
         LazyString choiceLabel = ZA.Lazy("Choice: ", tableName, ": ", keyDisplay);
-        MutField choiceField = AppendWithCustomText(choiceFieldId, FieldValue.None, choiceLabel, in context);
+        MutField choiceField = AppendWithCustomText(choiceFieldId, FieldValue.None, choiceLabel);
 
         int maxConsumed = 0;
         for (int i = 0; i < protocols.Length; i++)

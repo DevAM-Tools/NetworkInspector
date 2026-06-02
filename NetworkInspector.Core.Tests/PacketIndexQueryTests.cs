@@ -3,8 +3,8 @@
 namespace NetworkInspector.Core.Tests;
 
 /// <summary>
-/// Tests for <see cref="PacketIndex"/>: direct API (Get/Try bitmap, cardinality),
-/// <see cref="PresenceQuery"/> builder, and <see cref="PacketIndex.ParseValueCacheSettingValue"/>.
+/// Tests for <see cref="PacketIndex"/>: direct API (Get/Try bitmap, cardinality) and
+/// the <see cref="PresenceQuery"/> builder.
 /// Uses a minimal Stack with mock protocols and fields to exercise the index API.
 /// </summary>
 internal sealed class PacketIndexQueryTests
@@ -596,98 +596,6 @@ internal sealed class PacketIndexQueryTests
         }
     }
 
-    // === ParseValueCacheSettingValue ===
-
-    [Test]
-    public async Task ParseValueCacheSettingValue_NullOrEmpty_ReturnsEmpty()
-    {
-        (Stack stack, _, _, _, _, _, _) = BuildIndexTestStack();
-        using (stack)
-        {
-            IReadOnlyList<ValueCacheFieldConfig> result1 = PacketIndex.ParseValueCacheSettingValue(null, stack);
-            IReadOnlyList<ValueCacheFieldConfig> result2 = PacketIndex.ParseValueCacheSettingValue("", stack);
-            IReadOnlyList<ValueCacheFieldConfig> result3 = PacketIndex.ParseValueCacheSettingValue("   ", stack);
-            await Assert.That(result1.Count).IsEqualTo(0);
-            await Assert.That(result2.Count).IsEqualTo(0);
-            await Assert.That(result3.Count).IsEqualTo(0);
-        }
-    }
-
-    [Test]
-    public async Task ParseValueCacheSettingValue_UnknownField_Skipped()
-    {
-        (Stack stack, _, _, _, _, _, _) = BuildIndexTestStack();
-        using (stack)
-        {
-            IReadOnlyList<ValueCacheFieldConfig> result =
-                PacketIndex.ParseValueCacheSettingValue("nonexistent.field", stack);
-            await Assert.That(result.Count).IsEqualTo(0);
-        }
-    }
-
-    [Test]
-    public async Task ParseValueCacheSettingValue_ValidFieldNativeMode()
-    {
-        (Stack stack, _, _, _, _, FieldId f1, _) = BuildIndexTestStack();
-        using (stack)
-        {
-            // "proto1.field" is a U64 field which should be cacheable
-            IReadOnlyList<ValueCacheFieldConfig> result =
-                PacketIndex.ParseValueCacheSettingValue("proto1.field", stack);
-            await Assert.That(result.Count).IsEqualTo(1);
-            await Assert.That(result[0].FieldId).IsEqualTo(f1);
-        }
-    }
-
-    [Test]
-    public async Task ParseValueCacheSettingValue_ValidFieldWithMode()
-    {
-        (Stack stack, _, _, _, _, FieldId f1, _) = BuildIndexTestStack();
-        using (stack)
-        {
-            IReadOnlyList<ValueCacheFieldConfig> result =
-                PacketIndex.ParseValueCacheSettingValue("proto1.field:native", stack);
-            await Assert.That(result.Count).IsEqualTo(1);
-        }
-    }
-
-    [Test]
-    public async Task ParseValueCacheSettingValue_InvalidMode_Skipped()
-    {
-        (Stack stack, _, _, _, _, _, _) = BuildIndexTestStack();
-        using (stack)
-        {
-            IReadOnlyList<ValueCacheFieldConfig> result =
-                PacketIndex.ParseValueCacheSettingValue("proto1.field:bogus_mode", stack);
-            await Assert.That(result.Count).IsEqualTo(0);
-        }
-    }
-
-    [Test]
-    public async Task ParseValueCacheSettingValue_MultipleEntries_MixedValid()
-    {
-        (Stack stack, _, _, _, _, FieldId f1, FieldId f2) = BuildIndexTestStack();
-        using (stack)
-        {
-            // proto1.field is valid, nonexistent is not, proto2.field is valid
-            IReadOnlyList<ValueCacheFieldConfig> result =
-                PacketIndex.ParseValueCacheSettingValue("proto1.field,nonexistent,proto2.field", stack);
-            await Assert.That(result.Count).IsEqualTo(2);
-        }
-    }
-
-    [Test]
-    public async Task ParseValueCacheSettingValue_EmptyEntries_Skipped()
-    {
-        (Stack stack, _, _, _, _, _, _) = BuildIndexTestStack();
-        using (stack)
-        {
-            IReadOnlyList<ValueCacheFieldConfig> result =
-                PacketIndex.ParseValueCacheSettingValue(",,,", stack);
-            await Assert.That(result.Count).IsEqualTo(0);
-        }
-    }
-
     // === PacketIndex off-lifecycle guard (regression for HIGH-3) ===
 
     [Test]
@@ -809,39 +717,6 @@ internal sealed class PacketIndexQueryTests
             // Cardinality must still reflect exactly one packet (id=7), not a spurious id.
             await Assert.That(index.GroupCardinality(g1)).IsEqualTo(1L);
         }
-    }
-
-    // === ValueCacheBuilder off-lifecycle guard (regression for MEDIUM-4) ===
-
-    [Test]
-    public async Task ValueCacheBuilder_TryRecordValue_BeforeBeginPacket_IsNoOp()
-    {
-        // Regression for MEDIUM-4 + initialization fix: _CurrentPacketId starts at -1,
-        // so calling TryRecordValue before BeginPacket must silently return without
-        // throwing and without recording anything.
-        ValueCacheBuilder builder = new(4);
-        FieldId field = new(0);
-        FieldValueData value = FieldValueData.NewU64(42);
-
-        // Must not throw.
-        builder.TryRecordValue(field, value);
-        await Assert.That(builder.FieldCount).IsEqualTo(0); // no fields tracked → nothing recorded
-    }
-
-    [Test]
-    public async Task ValueCacheBuilder_TryRecordValue_AfterEndPacket_IsNoOp()
-    {
-        // Regression for MEDIUM-4.
-        ValueCacheBuilder builder = new(4);
-        builder.BeginPacket(0, 1000);
-        builder.EndPacket();
-
-        FieldId field = new(0);
-        FieldValueData value = FieldValueData.NewU64(99);
-
-        // Must not throw. The guard (_CurrentPacketId = -1) returns early.
-        builder.TryRecordValue(field, value);
-        await Assert.That(builder.FieldCount).IsEqualTo(0);
     }
 
     // === Stub protocol ===

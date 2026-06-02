@@ -10,8 +10,6 @@ namespace NetworkInspector.Protocols;
 /// udp: User Datagram Protocol, Src Port: 12345, Dst Port: 53
 /// ├── udp.srcport: 12345
 /// ├── udp.dstport: 53
-/// ├── udp.port: 12345                          [any-match, appended for both src and dst]
-/// ├── udp.port: 53                             [any-match, appended for both src and dst]
 /// ├── udp.length: 30
 /// ├── udp.checksum: 0xabcd
 /// ├── udp.checksum.status: [Good] / [Bad]  [optional, when verification enabled]
@@ -75,16 +73,11 @@ public sealed partial class UdpProtocol : IProtocol
     [StringField("udp.checksum.status", "Checksum Status", IndexGroup = "udp.checksum.status")]
     private FieldId _ChecksumStatusFieldId;
 
-    // Pre-computed pseudo-header sum, eagerly appended in Parse() when checksum
-    // verification is enabled. Avoids re-walking siblings in the lazy populator.
-    [U64Field("udp.pseudo_sum", "Pseudo-Header Sum", IndexGroup = "udp.checksum.status")]
-    private FieldId _PseudoHeaderSumFieldId;
-
-    // Combined port field (Wireshark udp.port compatibility).
-    // Appended twice per datagram — once for source and once for destination — so that
-    // filter expressions like `udp.port == 53` match either endpoint.
-    [U64Field("udp.port", "Port", IndexGroup = UdpIndexGroup)]
-    private FieldId _PortFieldId;
+    // Field alias group ID assigned in RegisterFieldsCustom for "udp.port" -> { udp.srcport, udp.dstport }.
+    // Independent of the protocol table also named "udp.port" (PortTableName) — alias / field /
+    // table namespaces do not collide. The alias name is metadata-only and never resolves
+    // through GetFieldId, and no udp.port node is appended to the parse tree.
+    private FieldAliasGroupId _PortAliasGroupId;
 
     #endregion
 
@@ -101,11 +94,6 @@ public sealed partial class UdpProtocol : IProtocol
     // Warning field appended when no enclosing IP layer is found (tunnel misconfiguration, etc.)
     [StringField("udp.error.no_ip", "No enclosing IP layer", IndexGroup = "udp.error")]
     private FieldId _NoIpLayerFieldId;
-
-    // Second lazy group container: stores header bytes for the details populator.
-    // Groups length and payload separately from the identifying port and checksum fields.
-    [BytesField("udp.hdr", "Header Details", IndexGroup = UdpIndexGroup)]
-    private FieldId _HdrDetailsFieldId;
 
     // Port dispatch table
     [ProtocolTableU64(PortTableName, "UDP Port")]
@@ -161,129 +149,29 @@ public sealed partial class UdpProtocol : IProtocol
     /// <summary>Resolves cross-protocol field IDs for checksum computation and stream tracking.</summary>
     partial void OnStartCustom(Stack stack)
     {
-        _IpContainerFieldId = stack.GetFieldId("ip") ?? default;
-        _Ipv6ContainerFieldId = stack.GetFieldId("ipv6") ?? default;
-        _IpSrcFieldId = stack.GetFieldId("ip.src") ?? default;
-        _IpDstFieldId = stack.GetFieldId("ip.dst") ?? default;
-        _Ipv6SrcFieldId = stack.GetFieldId("ipv6.src") ?? default;
-        _Ipv6DstFieldId = stack.GetFieldId("ipv6.dst") ?? default;
-        _Ipv4ProtocolId = stack.GetProtocolId("ip") ?? default;
-        _Ipv6ProtocolId = stack.GetProtocolId("ipv6") ?? default;
-
-        // Pre-allocate the populator delegate so it is reused for every packet.
-        // Captures only `this` (singleton) — zero per-packet closure allocation.
-        _Populator = (in MutField container) => PopulateUdpPrimary(in container);
-        _DetailsPopulator = (in MutField container) => PopulateUdpDetails(in container);
+        _IpContainerFieldId = stack.GetFieldId("ip") ?? FieldId.Invalid;
+        _Ipv6ContainerFieldId = stack.GetFieldId("ipv6") ?? FieldId.Invalid;
+        _IpSrcFieldId = stack.GetFieldId("ip.src") ?? FieldId.Invalid;
+        _IpDstFieldId = stack.GetFieldId("ip.dst") ?? FieldId.Invalid;
+        _Ipv6SrcFieldId = stack.GetFieldId("ipv6.src") ?? FieldId.Invalid;
+        _Ipv6DstFieldId = stack.GetFieldId("ipv6.dst") ?? FieldId.Invalid;
+        _Ipv4ProtocolId = stack.GetProtocolId("ip") ?? ProtocolId.Invalid;
+        _Ipv6ProtocolId = stack.GetProtocolId("ipv6") ?? ProtocolId.Invalid;
     }
 
     /// <summary>
-    /// Primary lazy group: port and checksum fields for the UDP datagram.
-    /// Registers <c>udp.hdr</c> as a second lazy group containing length and payload.
-    /// Called on first access of the UDP container's children.
-    /// <para>Checksum validation stays here because <see cref="ValidateChecksum"/> requires
-    /// this container (the UDP container) to walk previous siblings for the pre-computed
-    /// pseudo-header sum appended in <see cref="Parse"/>.</para>
+    /// Registers protocol-owned alias groups. Adds "udp.port" -> { udp.srcport, udp.dstport }
+    /// as metadata; the alias is reachable only via the alias-group APIs on IStack and is
+    /// independent of the dispatch table also named "udp.port".
     /// </summary>
-    private ParseResult PopulateUdpPrimary(in MutField container)
+    partial void RegisterFieldsCustom(IStackBuilder builder, ProtocolId protocolId)
     {
-        ParseContext context = new ParseContext(container.Packet.Stack);
-        if (!container.Value.Data.TryGetAsBytes(out ReadOnlyMemory<byte> udpData))
-        {
-            return ParseError.InvalidData(ProtocolName, "Container value is not of type Bytes");
-        }
-
-        if (udpData.Length < UdpHeader.HeaderSize)
-        {
-            return ParseError.InsufficientDataWithInfo(ProtocolName, UdpHeader.HeaderSize, (ulong)udpData.Length);
-        }
-
-        ReadOnlySpan<byte> headerSpan = udpData.Span[..UdpHeader.HeaderSize];
-        if (!UdpHeader.TryParse(headerSpan, out UdpHeader header, out _))
-        {
-            return ParseError.InvalidData(ProtocolName, "Failed to parse UDP header");
-        }
-
-        ushort srcPort = header.SrcPort.Value;
-        ushort dstPort = header.DstPort.Value;
-        ushort length = header.Length.Value;
-        ushort checksum = header.Checksum.Value;
-
-        // Port fields first — filter expressions like `udp.srcport == X` find them
-        // without walking past the other header fields.
-        container.Append(_SrcPortFieldId, FieldValue.NewU64(srcPort), in context);
-        container.Append(_DstPortFieldId, FieldValue.NewU64(dstPort), in context);
-        container.Append(_PortFieldId, FieldValue.NewU64(srcPort), in context);
-        container.Append(_PortFieldId, FieldValue.NewU64(dstPort), in context);
-
-        // Checksum stays in this (primary) group: ValidateChecksum walks previous siblings
-        // of this UDP container to find the pre-computed pseudo-header sum from Parse().
-        string csumText = DisplayTables.FormatHexU16(checksum);
-        container.AppendWithCustomText(_ChecksumFieldId, FieldValue.NewU64(checksum), csumText, in context);
-
-        bool checksumVerified = _VerifyChecksum && checksum != 0;
-        if (checksumVerified)
-        {
-            bool? checksumValid = ValidateChecksum(in container, udpData.Span, length, in context);
-            string statusText = checksumValid switch
-            {
-                true => "[Good]",
-                false => "[Bad]",
-                null => "[Unverified]",
-            };
-            container.Append(_ChecksumStatusFieldId, FieldValue.NewString(statusText), in context);
-        }
-
-        // Register the second lazy group for length and payload.
-        // Stores the full datagram bytes so the details populator can read them directly.
-        container.AppendLazyWithCustomText(
-            _HdrDetailsFieldId,
-            FieldValue.NewBytes(udpData),
-            new LazyString("Header Details"),
-            _DetailsPopulator);
-
-        return 0;
+        _PortAliasGroupId = builder.RegisterFieldAliasGroup(
+            protocolId,
+            "udp.port",
+            "Any-match alias for source/destination UDP ports.",
+            [_SrcPortFieldId, _DstPortFieldId]);
     }
-
-    /// <summary>
-    /// Details lazy group: length and payload fields for the UDP datagram.
-    /// Fires only when <c>udp.hdr</c> children are accessed (e.g., during full materialisation).
-    /// </summary>
-    private ParseResult PopulateUdpDetails(in MutField container)
-    {
-        ParseContext context = new ParseContext(container.Packet.Stack);
-        if (!container.Value.Data.TryGetAsBytes(out ReadOnlyMemory<byte> udpData))
-        {
-            return ParseError.InvalidData(ProtocolName, "Container value is not of type Bytes");
-        }
-
-        if (udpData.Length < UdpHeader.HeaderSize)
-        {
-            return ParseError.InsufficientDataWithInfo(ProtocolName, UdpHeader.HeaderSize, (ulong)udpData.Length);
-        }
-
-        ReadOnlySpan<byte> headerSpan = udpData.Span[..UdpHeader.HeaderSize];
-        if (!UdpHeader.TryParse(headerSpan, out UdpHeader header, out _))
-        {
-            return ParseError.InvalidData(ProtocolName, "Failed to parse UDP header");
-        }
-
-        ushort length = header.Length.Value;
-        container.Append(_LengthFieldId, FieldValue.NewU64(length), in context);
-
-        // Reconstruct the payload slice from the full stored datagram data.
-        int payloadLen = Math.Max(0, Math.Min(length - UdpHeader.HeaderSize, udpData.Length - UdpHeader.HeaderSize));
-        if (payloadLen > 0)
-        {
-            ReadOnlyMemory<byte> payloadData = udpData.Slice(UdpHeader.HeaderSize, payloadLen);
-            container.Append(_PayloadFieldId, FieldValue.NewBytes(payloadData), in context);
-        }
-
-        return 0;
-    }
-
-    // Pre-allocated delegates — set once in OnStartCustom.
-    private LazyPopulator _Populator = null!;
-    private LazyPopulator _DetailsPopulator = null!;
 
     /// <summary>
     /// Parses a Udp protocol unit from the supplied <paramref name="data"/> buffer,
@@ -321,9 +209,9 @@ public sealed partial class UdpProtocol : IProtocol
         int payloadLen = Math.Max(0, Math.Min(length - UdpHeader.HeaderSize, data.Length - UdpHeader.HeaderSize));
         ReadOnlyMemory<byte> payloadData = payloadLen > 0 ? data.Slice(UdpHeader.HeaderSize, payloadLen) : ReadOnlyMemory<byte>.Empty;
 
-        // UDP-02: Validate checksum at parse time (needed for index group recording).
-        // The actual validation result is re-computed inside PopulateUdpFields at
-        // materialisation time to avoid capturing it in a per-packet closure.
+        // Validate checksum at parse time (needed for index group recording).
+        // The checksum status field itself is appended eagerly further below once the
+        // UDP container exists, so the validation result is computed exactly once.
         bool checksumVerified = _VerifyChecksum && checksum != 0; // UDP checksum 0 means "not computed"
         if (checksumVerified)
         {
@@ -355,70 +243,42 @@ public sealed partial class UdpProtocol : IProtocol
 
         if (!callerIsIpv6 && IPv4Protocol.TryGetCachedAddresses(packetId, out IPv4Address src4, out IPv4Address dst4))
         {
-            // IPv4: build connection key and optional pseudo-header sum directly
+            // IPv4: build connection key
             UdpConnectionKey connKey = UdpConnectionKey.FromIPv4(src4.RawValue, dst4.RawValue, srcPort, dstPort);
             uint streamIndex = _StreamTracker.GetOrCreateStreamIndex(in connKey);
-            parentField.Append(_StreamFieldId, FieldValue.NewU64(streamIndex), in context);
+            parentField.Append(_StreamFieldId, FieldValue.NewU64(streamIndex));
             context.RecordGroupPresence(_UdpStreamGroupId);
-
-            if (checksumVerified)
-            {
-                ulong pseudoSum = InternetChecksum.ComputeIPv4PseudoHeaderSum(
-                    src4.RawValue, dst4.RawValue, UdpProtocolNumber, length);
-                parentField.Append(_PseudoHeaderSumFieldId, FieldValue.NewU64(pseudoSum), in context);
-            }
         }
         else if (!callerIsIpv4 && IPv6Protocol.TryGetCachedAddresses(packetId, out IPv6Address src6, out IPv6Address dst6))
         {
-            // IPv6: build connection key and optional pseudo-header sum directly
+            // IPv6: build connection key
             UdpConnectionKey connKey = new(new UInt128(src6.High, src6.Low), new UInt128(dst6.High, dst6.Low), srcPort, dstPort);
             uint streamIndex = _StreamTracker.GetOrCreateStreamIndex(in connKey);
-            parentField.Append(_StreamFieldId, FieldValue.NewU64(streamIndex), in context);
+            parentField.Append(_StreamFieldId, FieldValue.NewU64(streamIndex));
             context.RecordGroupPresence(_UdpStreamGroupId);
-
-            if (checksumVerified)
-            {
-                ulong pseudoSum = InternetChecksum.ComputeIPv6PseudoHeaderSum(
-                    src6.High, src6.Low, dst6.High, dst6.Low, UdpProtocolNumber, length);
-                parentField.Append(_PseudoHeaderSumFieldId, FieldValue.NewU64(pseudoSum), in context);
-            }
         }
         else if (TryFindPreviousIpAddressesFallback(parentField, out IPv4Address fbSrc4, out IPv4Address fbDst4, in context))
         {
             // Fallback: IPv4 via sibling walk (edge case — cache miss)
             UdpConnectionKey connKey = UdpConnectionKey.FromIPv4(fbSrc4.RawValue, fbDst4.RawValue, srcPort, dstPort);
             uint streamIndex = _StreamTracker.GetOrCreateStreamIndex(in connKey);
-            parentField.Append(_StreamFieldId, FieldValue.NewU64(streamIndex), in context);
+            parentField.Append(_StreamFieldId, FieldValue.NewU64(streamIndex));
             context.RecordGroupPresence(_UdpStreamGroupId);
-
-            if (checksumVerified)
-            {
-                ulong pseudoSum = InternetChecksum.ComputeIPv4PseudoHeaderSum(
-                    fbSrc4.RawValue, fbDst4.RawValue, UdpProtocolNumber, length);
-                parentField.Append(_PseudoHeaderSumFieldId, FieldValue.NewU64(pseudoSum), in context);
-            }
         }
         else if (TryFindPreviousIpv6AddressesFallback(parentField, out IPv6Address fbSrc6, out IPv6Address fbDst6, in context))
         {
             // Fallback: IPv6 via sibling walk (edge case — cache miss)
             UdpConnectionKey connKey = new(new UInt128(fbSrc6.High, fbSrc6.Low), new UInt128(fbDst6.High, fbDst6.Low), srcPort, dstPort);
             uint streamIndex = _StreamTracker.GetOrCreateStreamIndex(in connKey);
-            parentField.Append(_StreamFieldId, FieldValue.NewU64(streamIndex), in context);
+            parentField.Append(_StreamFieldId, FieldValue.NewU64(streamIndex));
             context.RecordGroupPresence(_UdpStreamGroupId);
-
-            if (checksumVerified)
-            {
-                ulong pseudoSum = InternetChecksum.ComputeIPv6PseudoHeaderSum(
-                    fbSrc6.High, fbSrc6.Low, fbDst6.High, fbDst6.Low, UdpProtocolNumber, length);
-                parentField.Append(_PseudoHeaderSumFieldId, FieldValue.NewU64(pseudoSum), in context);
-            }
         }
         else
         {
             // No enclosing IP/IPv6 layer found — append error field for diagnostics.
             // This can happen with misconfigured tunnels or unusual link-layer encapsulations.
             parentField.Append(_NoIpLayerFieldId,
-                FieldValue.NewString("No enclosing IPv4/IPv6 layer found for stream tracking"), in context);
+                FieldValue.NewString("No enclosing IPv4/IPv6 layer found for stream tracking"));
             context.RecordGroupPresence(_UdpErrorGroupId);
         }
 
@@ -430,12 +290,40 @@ public sealed partial class UdpProtocol : IProtocol
         // Higher-level protocols (DNS, HTTP, etc.) can overwrite this later.
         parentField.SetPacketInfo(ZA.Lazy("Src Port: ", srcPort, ", Dst Port: ", dstPort));
 
-        // Store the full UDP datagram (header + payload) in the field value so that
-        // PopulateUdpFields can reconstruct the payload slice without captured state.
+        // Store the full UDP datagram (header + payload) in the field value.
         // The CustomRepresentation still shows "8 bytes" (the header size) to the user.
         FieldValue containerValue = FieldValue.NewBytes(data)
             .WithCustomRepresentation(new LazyString("8 bytes"));
-        parentField.AppendLazyWithCustomText(_ProtocolFieldId, containerValue, summary, _Populator);
+        MutField udpContainer = parentField.AppendWithCustomText(_ProtocolFieldId, containerValue, summary);
+
+        // UDP is fully eager: every descriptive field is appended during Parse() so that
+        // index group recording and downstream filtering never depend on materialisation.
+        // The any-match name "udp.port" is exposed via the alias group registered in
+        // RegisterFieldsCustom; no duplicate udp.port field node is appended.
+        udpContainer.Append(_SrcPortFieldId, FieldValue.NewU64(srcPort));
+        udpContainer.Append(_DstPortFieldId, FieldValue.NewU64(dstPort));
+
+        string csumText = DisplayTables.FormatHexU16(checksum);
+        udpContainer.AppendWithCustomText(_ChecksumFieldId, FieldValue.NewU64(checksum), csumText);
+
+        if (checksumVerified)
+        {
+            bool? checksumValid = ValidateChecksum(in udpContainer, data.Span, length);
+            string statusText = checksumValid switch
+            {
+                true => "[Good]",
+                false => "[Bad]",
+                null => "[Unverified]",
+            };
+            udpContainer.Append(_ChecksumStatusFieldId, FieldValue.NewString(statusText));
+        }
+
+        udpContainer.Append(_LengthFieldId, FieldValue.NewU64(length));
+
+        if (payloadLen > 0)
+        {
+            udpContainer.Append(_PayloadFieldId, FieldValue.NewBytes(payloadData));
+        }
 
         // Dispatch by port on parentField (sibling dispatch — reuse payloadData)
         if (payloadLen > 0)
@@ -464,27 +352,15 @@ public sealed partial class UdpProtocol : IProtocol
     }
 
     /// <summary>
-    /// Validates the UDP checksum. First tries to use the pre-computed pseudo-header
-    /// sum eagerly appended in <see cref="Parse"/>. Falls back to previous-sibling
-    /// navigation for typed IP address lookup if the pre-computed value is not available.
+    /// Validates the UDP checksum by walking previous siblings to find typed IP addresses.
     /// Returns <see langword="true"/> if valid, <see langword="false"/> if invalid,
     /// or <see langword="null"/> if no IP layer was found.
     /// </summary>
-    private bool? ValidateChecksum(in MutField container, ReadOnlySpan<byte> udpSpan, ushort udpLength, in ParseContext context)
+    private bool? ValidateChecksum(in MutField container, ReadOnlySpan<byte> udpSpan, ushort udpLength)
     {
         int segmentLen = Math.Min(udpLength, udpSpan.Length);
 
-        // Fast path: use pre-computed pseudo-header sum from Parse().
-        // The pseudo-header sum field is 1-2 siblings before the UDP container,
-        // so this walk is very short compared to a full IP address lookup.
-        if (TryReadPseudoHeaderSum(container.AsField(), out ulong precomputedSum))
-        {
-            ushort result = InternetChecksum.ComputeWithPseudoHeader(udpSpan[..segmentLen], precomputedSum);
-            return result == 0;
-        }
-
-        // Fallback: walk previous siblings to find typed IP addresses (handles edge
-        // cases where pseudo-header sum was not pre-computed, e.g. no enclosing IP layer)
+        // Walk previous siblings to find typed IP addresses
         Field startField = container.AsField();
         if (!IpAddressExtractor.TryFindPreviousIpAddresses(startField,
             _IpContainerFieldId, _Ipv6ContainerFieldId,
@@ -510,32 +386,8 @@ public sealed partial class UdpProtocol : IProtocol
                 src6.High, src6.Low, dst6.High, dst6.Low, UdpProtocolNumber, udpLength);
         }
 
-        ushort fallbackResult = InternetChecksum.ComputeWithPseudoHeader(udpSpan[..segmentLen], pseudoSum);
-        return fallbackResult == 0;
-    }
-
-    /// <summary>
-    /// Attempts to read the pre-computed pseudo-header sum from a previous sibling.
-    /// The pseudo-header sum field is eagerly appended just before the UDP container
-    /// in Parse(), so it is typically 1-2 siblings back.
-    /// </summary>
-    private bool TryReadPseudoHeaderSum(Field containerField, out ulong pseudoSum)
-    {
-        // Walk at most 3 siblings back — the pseudo-header sum is always
-        // immediately before the container in the sibling list.
-        Field field = containerField;
-        int maxWalk = 3;
-        while (maxWalk-- > 0 && field.TryGetPrev(out field))
-        {
-            if (field.FieldId == _PseudoHeaderSumFieldId
-                && field.Value.Data.TryGetAsU64(out pseudoSum))
-            {
-                return true;
-            }
-        }
-
-        pseudoSum = 0;
-        return false;
+        ushort result = InternetChecksum.ComputeWithPseudoHeader(udpSpan[..segmentLen], pseudoSum);
+        return result == 0;
     }
 
         #endregion

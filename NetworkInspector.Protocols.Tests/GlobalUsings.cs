@@ -21,6 +21,7 @@ global using System.Xml.Linq;
 global using NetworkInspector.Core;
 global using NetworkInspector.Core.Fields;
 global using NetworkInspector.Core.Ids;
+global using NetworkInspector.Core.Infos;
 global using NetworkInspector.Core.Reassembly;
 global using NetworkInspector.Core.Settings;
 global using NetworkInspector.Values;

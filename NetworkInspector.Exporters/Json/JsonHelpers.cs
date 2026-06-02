@@ -15,7 +15,14 @@ internal static class JsonHelpers
     internal static void WriteI64(ref PooledBuffer buffer, long value)
     {
         Span<byte> scratch = stackalloc byte[20]; // max i64 decimal digits + sign
-        value.TryFormat(scratch, out int bytesWritten, default, CultureInfo.InvariantCulture);
+        if (!value.TryFormat(scratch, out int bytesWritten, default, CultureInfo.InvariantCulture))
+        {
+            // TryFormat cannot fail for a 20-byte buffer and a 64-bit integer; guard
+            // defensively so any unexpected future change produces null rather than
+            // a truncated/malformed JSON token.
+            buffer.Write("null"u8);
+            return;
+        }
         buffer.Write(scratch[..bytesWritten]);
     }
 
@@ -25,7 +32,11 @@ internal static class JsonHelpers
     internal static void WriteU64(ref PooledBuffer buffer, ulong value)
     {
         Span<byte> scratch = stackalloc byte[20]; // max u64 decimal digits
-        value.TryFormat(scratch, out int bytesWritten, default, CultureInfo.InvariantCulture);
+        if (!value.TryFormat(scratch, out int bytesWritten, default, CultureInfo.InvariantCulture))
+        {
+            buffer.Write("null"u8);
+            return;
+        }
         buffer.Write(scratch[..bytesWritten]);
     }
 

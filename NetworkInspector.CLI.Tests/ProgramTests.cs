@@ -20,87 +20,32 @@ namespace NetworkInspector.CLI.Tests;
 /// </summary>
 internal sealed class ProgramTests
 {
-    // === No arguments → usage (exit 1) ===
+    // === Main — exit-code contract ===
 
-    [Test]
-    public async Task Main_NoArgs_ReturnsOne()
+    /// <summary>
+    /// Data source for <see cref="Main_ExitCode_MatchesExpected"/>.
+    /// Covers: no args, --help/-h (case-insensitive), unknown command,
+    /// sub-command --help paths, and sub-command with no arguments.
+    /// </summary>
+    public static IEnumerable<Func<(string[] Args, int Expected, string Because)>> Main_ExitCode_Data()
     {
-        int exitCode = Program.Main([]);
-
-        await Assert.That(exitCode).IsEqualTo(1).Because("missing command is a usage error");
-    }
-
-    // === --help / -h → usage (exit 0) ===
-
-    [Test]
-    public async Task Main_HelpLongFlag_ReturnsZero()
-    {
-        int exitCode = Program.Main(["--help"]);
-
-        await Assert.That(exitCode).IsEqualTo(0);
-    }
-
-    [Test]
-    public async Task Main_HelpShortFlag_ReturnsZero()
-    {
-        int exitCode = Program.Main(["-h"]);
-
-        await Assert.That(exitCode).IsEqualTo(0);
+        yield return () => ([], 1, "missing command is a usage error");
+        yield return () => (["--help"], 0, "--help prints usage");
+        yield return () => (["-h"], 0, "-h prints usage");
+        yield return () => (["--Help"], 0, "flags are matched case-insensitively via ToUpperInvariant()");
+        yield return () => (["unknown-command-xyz"], 1, "unrecognised command is a usage error");
+        yield return () => (["convert", "--help"], 0, "convert --help prints usage");
+        yield return () => (["export", "--help"], 0, "export --help prints usage");
+        yield return () => (["convert"], 1, "convert with no source is a usage error");
+        yield return () => (["export"], 1, "export with no source is a usage error");
     }
 
     [Test]
-    public async Task Main_HelpFlagMixedCase_ReturnsZero()
+    [MethodDataSource(nameof(Main_ExitCode_Data))]
+    public async Task Main_ExitCode_MatchesExpected(string[] args, int expected, string because)
     {
-        // Flags are matched case-insensitively via ToUpperInvariant()
-        int exitCode = Program.Main(["--Help"]);
+        int exitCode = Program.Main(args);
 
-        await Assert.That(exitCode).IsEqualTo(0);
-    }
-
-    // === Unknown command → usage (exit 1) ===
-
-    [Test]
-    public async Task Main_UnknownCommand_ReturnsOne()
-    {
-        int exitCode = Program.Main(["unknown-command-xyz"]);
-
-        await Assert.That(exitCode).IsEqualTo(1).Because("unrecognised command is a usage error");
-    }
-
-    // === Sub-command --help paths ===
-
-    [Test]
-    public async Task Main_ConvertHelp_ReturnsZero()
-    {
-        // 'ni convert --help' → ConvertCommand returns 0 for the help flag
-        int exitCode = Program.Main(["convert", "--help"]);
-
-        await Assert.That(exitCode).IsEqualTo(0);
-    }
-
-    [Test]
-    public async Task Main_ExportHelp_ReturnsZero()
-    {
-        int exitCode = Program.Main(["export", "--help"]);
-
-        await Assert.That(exitCode).IsEqualTo(0);
-    }
-
-    // === Sub-command with no arguments → usage error (exit 1) ===
-
-    [Test]
-    public async Task Main_ConvertNoArgs_ReturnsOne()
-    {
-        int exitCode = Program.Main(["convert"]);
-
-        await Assert.That(exitCode).IsEqualTo(1).Because("convert with no source is a usage error");
-    }
-
-    [Test]
-    public async Task Main_ExportNoArgs_ReturnsOne()
-    {
-        int exitCode = Program.Main(["export"]);
-
-        await Assert.That(exitCode).IsEqualTo(1).Because("export with no source is a usage error");
+        await Assert.That(exitCode).IsEqualTo(expected).Because(because);
     }
 }

@@ -16,13 +16,7 @@ internal sealed class BlfStreamSourceTests
     private static BlfStreamSource CreateSource(byte[] data, string uiName = "test.blf", bool leaveOpen = false) =>
         BlfStreamSource.FromStream(new MemoryStream(data), uiName, leaveOpen);
 
-    /// <summary>Starts the source with a fresh registry.</summary>
-    private static void StartSource(BlfStreamSource source)
-    {
-        FrameInterfaceRegistry registry = new();
-        FrameSourceId sourceId = registry.RegisterSource(source);
-        source.Start(sourceId, registry);
-    }
+
 
     // ========================================================================
     // Single Ethernet frame
@@ -40,7 +34,7 @@ internal sealed class BlfStreamSourceTests
         using BlfStreamSource source = CreateSource(blfData);
         await Assert.That(source.EstimatedFrameCount).IsNull();
 
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
         Frame? frame = source.NextFrame();
 
         await Assert.That(frame).IsNotNull();
@@ -71,7 +65,7 @@ internal sealed class BlfStreamSourceTests
 
         byte[] blfData = gen.Build();
         using BlfStreamSource source = CreateSource(blfData);
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         for (int i = 0; i < 5; i++)
         {
@@ -98,7 +92,7 @@ internal sealed class BlfStreamSourceTests
             .Build();
 
         using BlfStreamSource source = CreateSource(blfData);
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         Frame? frame = source.NextFrame();
         await Assert.That(frame).IsNotNull();
@@ -123,7 +117,7 @@ internal sealed class BlfStreamSourceTests
             .Build();
 
         using BlfStreamSource source = CreateSource(blfData);
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         Frame? frame = source.NextFrame();
         await Assert.That(frame).IsNotNull();
@@ -143,7 +137,7 @@ internal sealed class BlfStreamSourceTests
         garbage[0] = 0xFF; // Not "LOGG"
 
         using BlfStreamSource source = CreateSource(garbage);
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         BlfException? caught = null;
         try
@@ -168,7 +162,7 @@ internal sealed class BlfStreamSourceTests
         byte[] empty = [];
 
         using BlfStreamSource source = CreateSource(empty);
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         // Too short for header — should return null (not throw)
         Frame? frame = source.NextFrame();
@@ -237,7 +231,7 @@ internal sealed class BlfStreamSourceTests
     {
         byte[] blfData = new BlfTestGenerator().Build();
         BlfStreamSource source = CreateSource(blfData);
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         source.Dispose();
 
@@ -263,7 +257,7 @@ internal sealed class BlfStreamSourceTests
     {
         byte[] blfData = new BlfTestGenerator().Build();
         BlfStreamSource source = CreateSource(blfData);
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
         source.Dispose();
 
         await Assert.That(() => source.NextFrame()).Throws<ObjectDisposedException>();
@@ -282,7 +276,7 @@ internal sealed class BlfStreamSourceTests
     {
         byte[] blfData = new BlfTestGenerator().Build();
         BlfStreamSource source = CreateSource(blfData);
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         await Assert.That(source.IsRunning).IsTrue();
 

@@ -39,6 +39,7 @@ public sealed class Stack : IStack, IDisposable
     private readonly HeuristicProtocolTableInfo[] _HeuristicTableInfos;
     private readonly PostParserInfo[] _PostParsers;
     private readonly IndexGroupInfo[] _IndexGroups;
+    private readonly FieldAliasGroupInfo[] _FieldAliasGroups;
     private readonly SettingsManager _SettingsManager;
 
     // Frozen name→ID maps (FrozenDictionary for O(1) string lookups)
@@ -47,6 +48,7 @@ public sealed class Stack : IStack, IDisposable
     private readonly FrozenDictionary<string, ProtocolTableId> _ProtocolTableNameMap;
     private readonly FrozenDictionary<string, HeuristicProtocolTableId> _HeuristicTableNameMap;
     private readonly FrozenDictionary<string, IndexGroupId> _IndexGroupNameMap;
+    private readonly FrozenDictionary<string, FieldAliasGroupId> _FieldAliasGroupNameMap;
 
     // Built-in IDs
     private readonly FieldId _RootFieldId;
@@ -125,7 +127,9 @@ public sealed class Stack : IStack, IDisposable
         FrozenDictionary<string, IndexGroupId> indexGroupNameMap,
         FrameInterfaceRegistry frameInterfaceRegistry,
         bool includeExceptionStackTrace,
-        FrozenDictionary<ProtocolId, StreamReassemblyConfig> reassemblyConfigs)
+        FrozenDictionary<ProtocolId, StreamReassemblyConfig> reassemblyConfigs,
+        FieldAliasGroupInfo[] fieldAliasGroups,
+        FrozenDictionary<string, FieldAliasGroupId> fieldAliasGroupNameMap)
     {
         _Protocols = protocols;
         _ProtocolInstances = protocolInstances;
@@ -150,6 +154,8 @@ public sealed class Stack : IStack, IDisposable
         _IndexGroups = indexGroups;
         _IndexGroupNameMap = indexGroupNameMap;
         _FrameInterfaceRegistry = frameInterfaceRegistry;
+        _FieldAliasGroups = fieldAliasGroups;
+        _FieldAliasGroupNameMap = fieldAliasGroupNameMap;
         _IncludeExceptionStackTrace = includeExceptionStackTrace;
         _ReassemblyConfigs = reassemblyConfigs;
     }
@@ -176,7 +182,7 @@ public sealed class Stack : IStack, IDisposable
     /// <summary>The frame protocol auto-discovered by name "frame" during build. Used as default dispatch target by PacketProtocol.</summary>
     internal ProtocolId FrameProtocolId => _FrameProtocolId;
 
-    /// <summary>The shared frame interface registry.</summary>
+    /// <inheritdoc/>
     public FrameInterfaceRegistry FrameInterfaceRegistry => _FrameInterfaceRegistry;
 
     /// <summary>
@@ -198,10 +204,7 @@ public sealed class Stack : IStack, IDisposable
     /// </summary>
     public ReadOnlyMemory<Exception> ShutdownDiagnostics => Volatile.Read(ref _ShutdownDiagnostics);
 
-    /// <summary>
-    /// When <see langword="true"/>, parser exception error messages include the full exception stack trace.
-    /// Configure via <see cref="StackBuilder.IncludeExceptionStackTrace"/>.
-    /// </summary>
+    /// <inheritdoc/>
     public bool IncludeExceptionStackTrace => _IncludeExceptionStackTrace;
 
     /// <summary>Sets all build diagnostics collected during <see cref="StackBuilder.Build"/>.</summary>
@@ -258,6 +261,26 @@ public sealed class Stack : IStack, IDisposable
         }
         return IndexGroupId.Invalid;
     }
+
+    #endregion
+
+    #region Field Alias Group Access
+
+    /// <inheritdoc/>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public FieldAliasGroupInfo? GetFieldAliasGroup(FieldAliasGroupId id) =>
+        IsValidIndex(id.Value, _FieldAliasGroups.Length) ? _FieldAliasGroups[id.Value] : null;
+
+    /// <inheritdoc/>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public FieldAliasGroupId? GetFieldAliasGroupId(string name) =>
+        _FieldAliasGroupNameMap.TryGetValue(name, out FieldAliasGroupId id) ? id : null;
+
+    /// <inheritdoc/>
+    public ReadOnlyMemory<FieldAliasGroupInfo> FieldAliasGroups => _FieldAliasGroups;
+
+    /// <inheritdoc/>
+    public int FieldAliasGroupCount => _FieldAliasGroups.Length;
 
     #endregion
 
@@ -357,68 +380,71 @@ public sealed class Stack : IStack, IDisposable
     internal HeuristicProtocolTable? GetHeuristicProtocolTable(HeuristicProtocolTableId id) =>
         IsValidIndex(id.Value, _HeuristicTables.Length) ? _HeuristicTables[id.Value] : null;
 
+    /// <inheritdoc/>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public ReadOnlySpan<ProtocolId> GetProtocolsFromU64ProtocolTable(ProtocolTableId tableId, ulong key)
+        => GetProtocolTable(tableId) is { } t ? t.GetAllU64(key) : [];
+
+    /// <inheritdoc/>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public ReadOnlySpan<ProtocolId> GetProtocolsFromStringProtocolTable(ProtocolTableId tableId, string key)
+        => GetProtocolTable(tableId) is { } t ? t.GetAllString(key) : [];
+
+    /// <inheritdoc/>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public ReadOnlySpan<ProtocolId> GetProtocolsFromBytesProtocolTable(ProtocolTableId tableId, BytesKey key)
+        => GetProtocolTable(tableId) is { } t ? t.GetAllBytes(key) : [];
+
+    /// <inheritdoc/>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public ReadOnlySpan<ProtocolId> GetProtocolsFromBoolProtocolTable(ProtocolTableId tableId, bool key)
+        => GetProtocolTable(tableId) is { } t ? t.GetAllBool(key) : [];
+
+    /// <inheritdoc/>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public ReadOnlySpan<ProtocolId> GetProtocolsFromAnyProtocolTable(ProtocolTableId tableId)
+        => GetProtocolTable(tableId) is { } t ? t.GetAllAny() : [];
+
+    /// <summary>
+    /// Runs all registered heuristic parsers in the given heuristic dispatch table against
+    /// <paramref name="data"/> and returns the <see cref="ProtocolId"/> of the first match,
+    /// or <see langword="null"/> if the table does not exist or no parser matches.
+    /// <para>
+    /// Intended for per-packet use in protocols that need to cache the detected protocol ID
+    /// on connection state before dispatching — for example TCP's per-connection heuristic
+    /// detection. For single-shot heuristic dispatch use
+    /// <see cref="MutField.TryCallHeuristicProtocol"/>.
+    /// </para>
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public ProtocolId? TryMatchHeuristic(HeuristicProtocolTableId tableId, ReadOnlyMemory<byte> data)
+        => GetHeuristicProtocolTable(tableId)?.TryMatch(data);
+
     #endregion
 
     #region Table Entry Iterators
 
-    /// <summary>
-    /// Iterates all registered u64 key → protocol-ID entries in the given dispatch table.
-    /// Returns <see langword="null"/> if the table does not exist or is not a u64-keyed table.
-    /// <para>
-    /// Intended for one-time use in <see cref="IProtocol.OnStart"/> to build pre-computed
-    /// dispatch caches. Each returned <see cref="ReadOnlyMemory{T}"/> contains the ordered list
-    /// of <see cref="ProtocolId"/> values registered for that key (usually one entry).
-    /// </para>
-    /// </summary>
+    /// <inheritdoc/>
     public IEnumerable<KeyValuePair<ulong, ReadOnlyMemory<ProtocolId>>>? GetU64TableEntries(
         ProtocolTableId tableId)
         => GetProtocolTable(tableId)?.IterU64Entries();
 
-    /// <summary>
-    /// Iterates all registered string key → protocol-ID entries in the given dispatch table.
-    /// Returns <see langword="null"/> if the table does not exist or is not a string-keyed table.
-    /// <para>
-    /// Intended for one-time use in <see cref="IProtocol.OnStart"/> to build pre-computed
-    /// dispatch caches.
-    /// </para>
-    /// </summary>
+    /// <inheritdoc/>
     public IEnumerable<KeyValuePair<string, ReadOnlyMemory<ProtocolId>>>? GetStringTableEntries(
         ProtocolTableId tableId)
         => GetProtocolTable(tableId)?.IterStringEntries();
 
-    /// <summary>
-    /// Iterates all registered bytes key → protocol-ID entries in the given dispatch table.
-    /// Returns <see langword="null"/> if the table does not exist or is not a bytes-keyed table.
-    /// <para>
-    /// Intended for one-time use in <see cref="IProtocol.OnStart"/> to build pre-computed
-    /// dispatch caches.
-    /// </para>
-    /// </summary>
+    /// <inheritdoc/>
     public IEnumerable<KeyValuePair<BytesKey, ReadOnlyMemory<ProtocolId>>>? GetBytesTableEntries(
         ProtocolTableId tableId)
         => GetProtocolTable(tableId)?.IterBytesEntries();
 
-    /// <summary>
-    /// Iterates the bool keys (<c>false</c>, <c>true</c>) of the given dispatch table,
-    /// returning only keys with at least one registered protocol.
-    /// Returns <see langword="null"/> if the table does not exist or is not a bool-keyed table.
-    /// <para>
-    /// Intended for one-time use in <see cref="IProtocol.OnStart"/> to build pre-computed
-    /// dispatch caches.
-    /// </para>
-    /// </summary>
+    /// <inheritdoc/>
     public IEnumerable<KeyValuePair<bool, ReadOnlyMemory<ProtocolId>>>? GetBoolTableEntries(
         ProtocolTableId tableId)
         => GetProtocolTable(tableId)?.IterBoolEntries();
 
-    /// <summary>
-    /// Returns all protocol IDs registered in the given Any-keyed dispatch table.
-    /// Returns <see langword="null"/> if the table does not exist or is not an Any-keyed table.
-    /// <para>
-    /// Intended for one-time use in <see cref="IProtocol.OnStart"/> to build pre-computed
-    /// dispatch caches.
-    /// </para>
-    /// </summary>
+    /// <inheritdoc/>
     public ReadOnlyMemory<ProtocolId>? GetAnyTableProtocolIds(ProtocolTableId tableId)
         => GetProtocolTable(tableId)?.GetAnyProtocolIds();
 
@@ -469,7 +495,7 @@ public sealed class Stack : IStack, IDisposable
     /// </para>
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal ParseDelegate? ResolveParseDelegate(ProtocolId id) =>
+    public ParseDelegate? ResolveParseDelegate(ProtocolId id) =>
         IsValidIndex(id.Value, _ParseDelegates.Length) ? _ParseDelegates[id.Value] : null;
 
     #endregion

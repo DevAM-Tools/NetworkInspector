@@ -1,5 +1,7 @@
 ﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
+using FailingStream = NetworkInspector.Exporters.Tests.Helpers.TestStreams.FailingStream;
+
 namespace NetworkInspector.Exporters.Tests.Text;
 
 /// <summary>
@@ -498,81 +500,6 @@ internal sealed class TextExporterTests
         // Timestamp in ISO 8601 format: T and Z present
         await Assert.That(text.Contains('T', StringComparison.Ordinal)).IsTrue();
         await Assert.That(text.Contains('Z', StringComparison.Ordinal)).IsTrue();
-    }
-
-    // ========================================================================
-    // Helper: FailingStream
-    // ========================================================================
-
-    /// <summary>
-    /// Stream that throws <see cref="IOException"/> after <see cref="ThrowAfterByte"/> bytes
-    /// have been accepted. Used to simulate I/O failures.
-    /// </summary>
-    private sealed class FailingStream : Stream
-    {
-        private long _BytesWritten;
-
-        /// <summary>Number of bytes accepted before throws begin.</summary>
-        internal long ThrowAfterByte
-        {
-            get; init;
-        }
-
-        /// <inheritdoc/>
-        public override bool CanRead => false;
-
-        /// <inheritdoc/>
-        public override bool CanSeek => false;
-
-        /// <inheritdoc/>
-        public override bool CanWrite => true;
-
-        /// <inheritdoc/>
-        public override long Length => _BytesWritten;
-
-        /// <inheritdoc/>
-        public override long Position
-        {
-            get => _BytesWritten;
-            set => throw new NotSupportedException();
-        }
-
-        /// <inheritdoc/>
-        public override void Flush()
-        {
-        }
-
-        /// <inheritdoc/>
-        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
-
-        /// <inheritdoc/>
-        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
-
-        /// <inheritdoc/>
-        public override void SetLength(long value) => throw new NotSupportedException();
-
-        /// <inheritdoc/>
-        public override void Write(byte[] buffer, int offset, int count)
-        {
-            ThrowIfOver(count);
-            _BytesWritten += count;
-        }
-
-        /// <inheritdoc/>
-        public override void Write(ReadOnlySpan<byte> buffer)
-        {
-            ThrowIfOver(buffer.Length);
-            _BytesWritten += buffer.Length;
-        }
-
-        /// <summary>Throws when the cumulative write count would exceed the threshold.</summary>
-        private void ThrowIfOver(int count)
-        {
-            if (_BytesWritten + count > ThrowAfterByte)
-            {
-                throw new IOException("Simulated I/O failure");
-            }
-        }
     }
 
     // ========================================================================

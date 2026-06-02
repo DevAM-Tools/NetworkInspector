@@ -37,7 +37,11 @@ public interface IRandomAccessFrameSource : IFrameSource
     /// multiple threads. Implementations must use internal synchronization
     /// if mutable state is required.
     /// </remarks>
-    Frame? FrameById(FrameId id);
+    /// <exception cref="OperationCanceledException">
+    /// <paramref name="cancellationToken"/> was cancelled.
+    /// </exception>
+    /// <param name="cancellationToken">Token that can be used to cancel the read operation.</param>
+    Frame? FrameById(FrameId id, CancellationToken cancellationToken = default);
 
     #endregion
 }

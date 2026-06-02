@@ -13,7 +13,7 @@ namespace NetworkInspector.Core.Interfaces;
 /// <para>
 /// When <see cref="ErrorTolerance"/> is <see cref="ErrorToleranceMode.Strict"/>,
 /// the source stops sequential reading on the first recoverable error.
-/// <see cref="IFrameSource.NextFrame()"/> returns <c>null</c> (source exhausted).
+/// <see cref="IFrameSource.NextFrame(CancellationToken)"/> returns <c>null</c> (source exhausted).
 /// If the source also implements <see cref="IRandomAccessFrameSource"/>,
 /// random access to already-read frames remains available after the abort.
 /// </para>

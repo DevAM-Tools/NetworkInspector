@@ -105,12 +105,12 @@ internal sealed class PacketProtocol : IProtocol
 
         // Append the packet container field eagerly (NOT lazy — packet.info must
         // be immediately available after parsing completes)
-        MutField packetContainer = parentField.Append(_PacketFieldId, FieldValue.None, in context);
+        MutField packetContainer = parentField.Append(_PacketFieldId, FieldValue.None);
 
         // Append packet metadata fields eagerly
-        packetContainer.Append(_IdFieldId, FieldValue.NewU64((ulong)packet.Id.Value), in context);
-        packetContainer.Append(_TimestampFieldId, FieldValue.NewTimestamp(packet.Timestamp), in context);
-        packetContainer.Append(_FrameSourceIdFieldId, FieldValue.NewU64((ulong)packet.FrameSourceId.Value), in context);
+        packetContainer.Append(_IdFieldId, FieldValue.NewU64((ulong)packet.Id.Value));
+        packetContainer.Append(_TimestampFieldId, FieldValue.NewTimestamp(packet.Timestamp));
+        packetContainer.Append(_FrameSourceIdFieldId, FieldValue.NewU64((ulong)packet.FrameSourceId.Value));
 
         // Dispatch to the first protocol after PacketProtocol:
         // - Per-packet override (set via ParseFrame overload) takes priority
@@ -169,7 +169,7 @@ internal sealed class PacketProtocol : IProtocol
         // TryGetFieldValue("packet.info"), or any exporter that reads the field value.
         // The LazyStringValue caches the result in-heap so all copies of the FieldValueData
         // share one factory invocation.
-        MutField infoField = packetContainer.Append(_InfoFieldId, FieldValue.NewLazyString(packet.InfoLazy), in context);
+        MutField infoField = packetContainer.Append(_InfoFieldId, FieldValue.NewLazyString(packet.InfoLazy));
         packet.SetInfoFieldIndex(infoField.StorageIndex);
 
         return data.Length;

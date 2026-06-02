@@ -238,15 +238,15 @@ public sealed partial class SignalPduProtocol : IProtocol
         // Protocol container
         MutField container = parentField.AppendWithCustomText(
             _ProtocolFieldId, FieldValue.None,
-            ZA.Lazy("Signal PDU: ", matchedPdu.Name), in context);
+            ZA.Lazy("Signal PDU: ", matchedPdu.Name));
 
         parentField.SetPacketInfo(ZA.Lazy("Signal PDU: ", matchedPdu.Name));
 
         // PDU ID
-        container.Append(_PduIdFieldId, FieldValue.NewU64(matchedPdu.PduId), in context);
+        container.Append(_PduIdFieldId, FieldValue.NewU64(matchedPdu.PduId));
 
         // PDU Name
-        container.Append(_NameFieldId, FieldValue.NewString(matchedPdu.Name), in context);
+        container.Append(_NameFieldId, FieldValue.NewString(matchedPdu.Name));
 
         // Decode static signals (always present)
         foreach (SignalDefinition signal in matchedPdu.Signals)
@@ -262,9 +262,9 @@ public sealed partial class SignalPduProtocol : IProtocol
 
             MutField muxField = container.AppendWithCustomText(
                 _MuxFieldId, FieldValue.None,
-                ZA.Lazy("Multiplexer: ", matchedPdu.MuxSignal.Name, " = ", muxValue), in context);
+                ZA.Lazy("Multiplexer: ", matchedPdu.MuxSignal.Name, " = ", muxValue));
 
-            muxField.Append(_MuxValueFieldId, FieldValue.NewU64(muxValue), in context);
+            muxField.Append(_MuxValueFieldId, FieldValue.NewU64(muxValue));
 
             // Find and decode signals for the current mux value
             foreach (MuxGroup group in matchedPdu.MuxGroups)
@@ -318,9 +318,9 @@ public sealed partial class SignalPduProtocol : IProtocol
         }
 
         MutField signalField = parent.AppendWithCustomText(
-            _SignalFieldId, FieldValue.None, displayText, in context);
+            _SignalFieldId, FieldValue.None, displayText);
 
-        signalField.Append(_SignalRawFieldId, FieldValue.NewU64(rawValue), in context);
+        signalField.Append(_SignalRawFieldId, FieldValue.NewU64(rawValue));
     }
 
     /// <summary>

@@ -65,15 +65,11 @@ internal sealed class BlfDecompressionConcurrencyTests
         return outer.Build();
     }
 
+    /// <summary>Creates a <see cref="BlfSource"/> with full scan from raw BLF data, using optional custom <paramref name="options"/>.</summary>
     private static BlfSource CreateSource(byte[] data, BlfSourceOptions? options = null) =>
         BlfSource.FromData(data, "concurrency-test.blf", options ?? new BlfSourceOptions { ScanMode = ScanMode.Full });
 
-    private static void StartSource(BlfSource source)
-    {
-        FrameInterfaceRegistry registry = new();
-        FrameSourceId id = registry.RegisterSource(source);
-        source.Start(id, registry);
-    }
+
 
     #endregion
 
@@ -93,7 +89,7 @@ internal sealed class BlfDecompressionConcurrencyTests
         byte[] blf = BuildMultiContainerBlf(containerCount: 1, framesPerContainer);
 
         using BlfSource source = CreateSource(blf, new BlfSourceOptions { ScanMode = ScanMode.Full });
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         // Establish sequential baseline.
         Frame?[] baseline = new Frame?[framesPerContainer];
@@ -143,7 +139,7 @@ internal sealed class BlfDecompressionConcurrencyTests
             ScanMode = ScanMode.Full,
             MaxDecompressionConcurrency = 1,
         });
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         // Sequential baseline.
         Frame?[] baseline = new Frame?[total];
@@ -186,7 +182,7 @@ internal sealed class BlfDecompressionConcurrencyTests
         byte[] blf = BuildMultiContainerBlf(containerCount, framesPerContainer);
 
         using BlfSource source = CreateSource(blf, new BlfSourceOptions { ScanMode = ScanMode.Full });
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         Parallel.For(0, total * 4, idx => source.FrameById(new FrameId(idx % total)));
 
@@ -224,7 +220,7 @@ internal sealed class BlfDecompressionConcurrencyTests
 
         byte[] blf = gen.Build();
         using BlfSource source = CreateSource(blf, new BlfSourceOptions { ScanMode = ScanMode.Full });
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         // The corrupt container entries (if any were indexed) would return null; raw frames return data.
         // The important assertion is that RandomAccessFailureCount == 0 for raw frames.

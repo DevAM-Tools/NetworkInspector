@@ -18,12 +18,6 @@ namespace NetworkInspector.Core.Index;
 /// </summary>
 public sealed class PacketIndex : IPacketIndexReader
 {
-    /// <summary>
-    /// Name of the string setting that configures upfront value cache fields.
-    /// Format: <c>"field1:mode,field2"</c> where mode is optional (defaults to Native).
-    /// </summary>
-    public const string ValueCacheFieldsSetting = "index.value_cache_fields";
-
     private readonly Stack _Stack;
     private readonly RoaringBitmap[] _GroupBitmaps;
     private readonly RoaringBitmap[] _ProtocolBitmaps;
@@ -32,27 +26,15 @@ public sealed class PacketIndex : IPacketIndexReader
     private readonly ulong[] _GroupDedup;
     private readonly ulong[] _ProtocolDedup;
 
-    // Optional value cache: null when no caching is active
-    private readonly ValueCacheManager _ValueCacheManager;
-
-    // Live value cache builder: null until first field is registered
-    private ValueCacheBuilder? _ValueCacheBuilder;
-
     // Starts at -1 ("no active packet") so the < 0 guard in RecordGroupPresence /
     // RecordProtocolPresence catches calls made before the very first BeginPacket.
     private int _CurrentPacketId = -1;
 
     /// <summary>
     /// Creates a packet index for the given stack, allocating bitmaps for all groups and protocols.
-    /// Optionally initializes upfront value caches so values are recorded from the very first packet.
     /// </summary>
     /// <param name="stack">The protocol stack this index belongs to.</param>
-    /// <param name="valueCacheConfigs">
-    /// Optional list of fields to cache. Each entry must have been validated (cacheable type,
-    /// compatible storage mode) before being passed here. When <see langword="null"/> or empty,
-    /// no value caches are created.
-    /// </param>
-    public PacketIndex(Stack stack, IReadOnlyList<ValueCacheFieldConfig>? valueCacheConfigs = null)
+    public PacketIndex(Stack stack)
     {
         _Stack = stack;
         int groupCount = stack.IndexGroupCount;
@@ -72,17 +54,6 @@ public sealed class PacketIndex : IPacketIndexReader
 
         _GroupDedup = new ulong[(groupCount + 63) >> 6];
         _ProtocolDedup = new ulong[(protoCount + 63) >> 6];
-
-        _ValueCacheManager = new ValueCacheManager();
-
-        // Initialize upfront value caches so values are recorded from packet #0
-        if (valueCacheConfigs is { Count: > 0 })
-        {
-            foreach (ValueCacheFieldConfig config in valueCacheConfigs)
-            {
-                InitializeValueCache(config.FieldId, config.FieldType, config.StorageMode);
-            }
-        }
     }
 
     /// <summary>Number of index groups tracked.</summary>
@@ -290,6 +261,17 @@ public sealed class PacketIndex : IPacketIndexReader
             // Field has no index group — return a shared empty bitmap, zero-allocation path.
             return ReadOnlyRoaringBitmap.Empty;
         }
+        // Bounds-check the resolved group ID for consistency with GetGroupBitmap / TryGetFieldBitmap:
+        // a valid-but-out-of-range ID (e.g. a field ID obtained from a different stack) must surface
+        // a descriptive ArgumentOutOfRangeException, not a context-free IndexOutOfRangeException.
+        if ((uint)groupId.Value >= (uint)_GroupBitmaps.Length)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(fieldId),
+                groupId.Value,
+                $"Field {fieldId.Value} resolves to index group ID {groupId.Value}, which is out of range for this index " +
+                $"(GroupCount={_GroupBitmaps.Length}). Ensure the field ID was obtained from this index's own Stack.");
+        }
         return _GroupBitmaps[groupId.Value].AsReadOnly();
     }
 
@@ -389,238 +371,6 @@ public sealed class PacketIndex : IPacketIndexReader
         }
         cardinality = _ProtocolBitmaps[protocolId.Value].Cardinality;
         return true;
-    }
-
-    // ── Value Cache ──────────────────────────────────────────────────────────
-
-    /// <inheritdoc/>
-    public IValueCacheReader? ValueCache => _ValueCacheManager.SeriesCount > 0 ? _ValueCacheManager : null;
-
-    /// <summary>
-    /// The active value cache builder, or <see langword="null"/> if no fields are being cached.
-    /// Used by <see cref="Packet.ParseFrameIndexed(PacketId, Stack, Frame, PacketIndex)"/> to create <see cref="Protocols.ParseContext"/>
-    /// with the builder for routing field values during parsing.
-    /// </summary>
-    internal ValueCacheBuilder? ValueCacheBuilder => _ValueCacheBuilder;
-
-    /// <summary>Total estimated memory usage across all cached value series, in bytes.</summary>
-    public long ValueCacheTotalMemoryUsage => _ValueCacheManager.TotalMemoryUsage;
-
-    /// <summary>Number of fields currently being cached.</summary>
-    public int ValueCacheSeriesCount => _ValueCacheManager.SeriesCount;
-
-    /// <summary>
-    /// Initializes a value cache for a single field during construction.
-    /// Creates an empty <see cref="ValueCacheSeries"/> and sets up routing
-    /// in the <see cref="ValueCacheBuilder"/> so values are recorded from packet #0.
-    /// </summary>
-    private void InitializeValueCache(
-        FieldId fieldId, FieldType fieldType, ValueCacheStorageMode mode)
-    {
-        // Create empty live series (Count=0, Capacity=0)
-        ValueCacheSeries series = ValueCacheSeries.CreateLive(fieldId, fieldType, mode);
-
-        // Publish immediately — readers can see it (but Count=0)
-        _ValueCacheManager.SetSeries(series);
-
-        // Create builder on first use (lazy initialization)
-        _ValueCacheBuilder ??= new ValueCacheBuilder(_Stack.FieldCount);
-
-        // Register routing: field ID → slot → series
-        _ValueCacheBuilder.AddField(fieldId, series);
-    }
-
-    /// <summary>
-    /// Parses the value cache setting string and resolves field names to configs.
-    /// Invalid or incompatible entries are silently skipped (caller may log warnings).
-    /// </summary>
-    /// <param name="settingValue">
-    /// Comma-separated list, e.g. <c>"tcp.srcport:compact_uint16,ip.src"</c>.
-    /// Mode is optional and defaults to <see cref="ValueCacheStorageMode.Native"/>.
-    /// </param>
-    /// <param name="stack">The built stack used to resolve field names and types.</param>
-    /// <returns>
-    /// A list of validated configs. Empty if <paramref name="settingValue"/> is null/empty
-    /// or no entries are valid.
-    /// </returns>
-    public static IReadOnlyList<ValueCacheFieldConfig> ParseValueCacheSettingValue(
-        string? settingValue, Stack stack)
-        => ParseValueCacheSettingValue(settingValue, stack, out _);
-
-    /// <summary>
-    /// Parses a comma-separated value-cache setting string and returns the valid field configs.
-    /// Skipped entries are reported via <paramref name="warnings"/> — one entry per skip reason —
-    /// so callers can surface misconfiguration diagnostics instead of silently ignoring them.
-    /// </summary>
-    /// <param name="settingValue">
-    /// Comma-separated list of "fieldname" or "fieldname:mode" entries, or null/empty.
-    /// </param>
-    /// <param name="stack">The stack used to resolve field names.</param>
-    /// <param name="warnings">
-    /// Receives the list of skipped entries with their skip reasons.
-    /// Empty when <paramref name="settingValue"/> is null or whitespace.
-    /// </param>
-    public static IReadOnlyList<ValueCacheFieldConfig> ParseValueCacheSettingValue(
-        string? settingValue, Stack stack, out IReadOnlyList<ValueCacheParseWarning> warnings)
-    {
-        List<ValueCacheFieldConfig> configs = [];
-        List<ValueCacheParseWarning> warningsList = [];
-
-        if (string.IsNullOrWhiteSpace(settingValue))
-        {
-            warnings = warningsList;
-            return configs;
-        }
-
-        // Split by comma and process each entry
-        ReadOnlySpan<char> remaining = settingValue.AsSpan();
-        foreach (Range range in remaining.Split(','))
-        {
-            ReadOnlySpan<char> entry = remaining[range].Trim();
-            if (entry.IsEmpty)
-            {
-                continue;
-            }
-
-            string entryString = entry.ToString();
-
-            // Split "fieldname:mode" — mode is optional
-            ReadOnlySpan<char> fieldName;
-            ValueCacheStorageMode storageMode = ValueCacheStorageMode.Native;
-
-            int colonIndex = entry.IndexOf(':');
-            if (colonIndex >= 0)
-            {
-                fieldName = entry[..colonIndex].Trim();
-                ReadOnlySpan<char> modeText = entry[(colonIndex + 1)..].Trim();
-
-                if (!TryParseStorageMode(modeText, out storageMode))
-                {
-                    // Invalid storage mode — skip with diagnostic
-                    warningsList.Add(new ValueCacheParseWarning(
-                        entryString,
-                        ValueCacheParseWarningKind.InvalidStorageMode,
-                        $"'{modeText.ToString()}' is not a recognized storage mode. " +
-                        "Valid modes: native, compact_float, compact_int8, compact_int16, compact_int32, " +
-                        "compact_uint8, compact_uint16, compact_uint32."));
-                    continue;
-                }
-            }
-            else
-            {
-                fieldName = entry;
-            }
-
-            if (fieldName.IsEmpty)
-            {
-                warningsList.Add(new ValueCacheParseWarning(
-                    entryString,
-                    ValueCacheParseWarningKind.EmptyEntry,
-                    "The field name part of the entry is empty after trimming."));
-                continue;
-            }
-
-            // Resolve field name to FieldId
-            FieldId? maybeFieldId = stack.GetFieldId(fieldName.ToString());
-            if (maybeFieldId is not { } fieldId)
-            {
-                warningsList.Add(new ValueCacheParseWarning(
-                    entryString,
-                    ValueCacheParseWarningKind.UnknownField,
-                    $"Field '{fieldName.ToString()}' is not registered in the stack."));
-                continue;
-            }
-
-            // Look up field type
-            FieldInfo? fieldInfo = stack.GetField(fieldId);
-            if (fieldInfo is null)
-            {
-                warningsList.Add(new ValueCacheParseWarning(
-                    entryString,
-                    ValueCacheParseWarningKind.UnknownField,
-                    $"Field '{fieldName.ToString()}' could not be resolved to field metadata."));
-                continue;
-            }
-
-            FieldType fieldType = fieldInfo.FieldType;
-
-            // Validate cacheability and mode compatibility
-            if (!ValueCacheBuilder.IsFieldTypeCacheable(fieldType))
-            {
-                warningsList.Add(new ValueCacheParseWarning(
-                    entryString,
-                    ValueCacheParseWarningKind.UncacheableFieldType,
-                    $"Field '{fieldName.ToString()}' has type '{fieldType}' which cannot be value-cached."));
-                continue;
-            }
-
-            if (!ValueCacheBuilder.IsStorageModeCompatible(fieldType, storageMode))
-            {
-                warningsList.Add(new ValueCacheParseWarning(
-                    entryString,
-                    ValueCacheParseWarningKind.IncompatibleStorageMode,
-                    $"Storage mode '{storageMode}' is incompatible with field type '{fieldType}' " +
-                    $"for field '{fieldName.ToString()}'."));
-                continue;
-            }
-
-            configs.Add(new ValueCacheFieldConfig(fieldId, fieldType, storageMode));
-        }
-
-        warnings = warningsList;
-        return configs;
-    }
-
-    /// <summary>
-    /// Tries to parse a storage mode name (case-insensitive).
-    /// </summary>
-    private static bool TryParseStorageMode(
-        ReadOnlySpan<char> text, out ValueCacheStorageMode mode)
-    {
-        // Compare case-insensitively against known mode names
-        if (text.Equals("native", StringComparison.OrdinalIgnoreCase))
-        {
-            mode = ValueCacheStorageMode.Native;
-            return true;
-        }
-        if (text.Equals("compact_float", StringComparison.OrdinalIgnoreCase))
-        {
-            mode = ValueCacheStorageMode.CompactFloat;
-            return true;
-        }
-        if (text.Equals("compact_int8", StringComparison.OrdinalIgnoreCase))
-        {
-            mode = ValueCacheStorageMode.CompactInt8;
-            return true;
-        }
-        if (text.Equals("compact_int16", StringComparison.OrdinalIgnoreCase))
-        {
-            mode = ValueCacheStorageMode.CompactInt16;
-            return true;
-        }
-        if (text.Equals("compact_int32", StringComparison.OrdinalIgnoreCase))
-        {
-            mode = ValueCacheStorageMode.CompactInt32;
-            return true;
-        }
-        if (text.Equals("compact_uint8", StringComparison.OrdinalIgnoreCase))
-        {
-            mode = ValueCacheStorageMode.CompactUInt8;
-            return true;
-        }
-        if (text.Equals("compact_uint16", StringComparison.OrdinalIgnoreCase))
-        {
-            mode = ValueCacheStorageMode.CompactUInt16;
-            return true;
-        }
-        if (text.Equals("compact_uint32", StringComparison.OrdinalIgnoreCase))
-        {
-            mode = ValueCacheStorageMode.CompactUInt32;
-            return true;
-        }
-
-        mode = default;
-        return false;
     }
 }
 

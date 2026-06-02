@@ -3,7 +3,7 @@
 namespace NetworkInspector.Protocols.Tests;
 
 /// <summary>
-/// Tests for <see cref="TextProtocol"/> — line-based text display protocol
+/// Tests for <see cref="TextProtocol"/> — plain text block display protocol
 /// (Wireshark equivalent: "data-text-lines" dissector).
 /// <para>
 /// Tests reach the protocol via a WebSocket text-opcode (1) frame. When WebSocket parses a
@@ -11,15 +11,13 @@ namespace NetworkInspector.Protocols.Tests;
 /// to <c>TextProtocol</c> via <c>DispatchTextPayload</c>.
 /// </para>
 /// <para>
-/// <b>Line splitting rules:</b>
-/// Lines are delimited by LF (0x0A). An optional CR (0x0D) immediately before the LF is
-/// stripped. Trailing LF produces no extra empty line. A payload with no LF is treated as a
-/// single line.
+/// The protocol appends the entire UTF-8 decoded payload verbatim as a single <c>text</c>
+/// string field. No line splitting is performed.
 /// </para>
 /// <para>
 /// <b>Lazy-tree ordering:</b> same as <see cref="DataProtocolTests"/> — HTTP's lazy populator
 /// must fire first (<c>http.response.code</c>), then WebSocket's (<c>websocket.opcode</c>),
-/// then TextProtocol's (<c>text.lines</c>).
+/// then TextProtocol's (<c>text</c>).
 /// </para>
 /// </summary>
 internal sealed class TextProtocolTests
@@ -61,12 +59,12 @@ internal sealed class TextProtocolTests
 
     #endregion
 
-    // === Single line ===
+    // === Text field contains full payload verbatim ===
 
     [Test]
-    public async Task Parse_SingleLineWithoutLF_ProducesOneLineField()
+    public async Task Parse_TextFrame_TextFieldContainsPayload()
     {
-        // Arrange — payload with no LF: treated as one line
+        // Arrange — simple payload with no newlines
         byte[] frame = BuildFrame(EncodeWsTextFrame("Hello"));
 
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
@@ -75,18 +73,15 @@ internal sealed class TextProtocolTests
             await ProtocolTestHelper.AssertU64Field(stack, packet, "http.response.code", 101).ConfigureAwait(false);
             await ProtocolTestHelper.AssertU64Field(stack, packet, "websocket.opcode", WebSocketOpcode.Text).ConfigureAwait(false);
 
-            // Assert — one line, with the correct text
-            await ProtocolTestHelper.AssertU64Field(stack, packet, "text.lines", 1UL).ConfigureAwait(false);
-            await ProtocolTestHelper.AssertStringField(stack, packet, "text.line", "Hello").ConfigureAwait(false);
+            // Assert — entire payload stored verbatim as single text field
+            await ProtocolTestHelper.AssertStringField(stack, packet, "text", "Hello").ConfigureAwait(false);
         }
     }
 
-    // === Multiple lines ===
-
     [Test]
-    public async Task Parse_TwoLinesWithLF_ProducesTwoLineFields()
+    public async Task Parse_TextFrame_MultilinePayloadStoredVerbatim()
     {
-        // Arrange — two lines separated by LF
+        // Arrange — payload containing newlines; no splitting should occur
         byte[] frame = BuildFrame(EncodeWsTextFrame("First\nSecond"));
 
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
@@ -95,32 +90,15 @@ internal sealed class TextProtocolTests
             await ProtocolTestHelper.AssertU64Field(stack, packet, "http.response.code", 101).ConfigureAwait(false);
             await ProtocolTestHelper.AssertU64Field(stack, packet, "websocket.opcode", WebSocketOpcode.Text).ConfigureAwait(false);
 
-            // Assert — two lines; TryGetFieldValue returns the first match
-            await ProtocolTestHelper.AssertU64Field(stack, packet, "text.lines", 2UL).ConfigureAwait(false);
-            await ProtocolTestHelper.AssertStringField(stack, packet, "text.line", "First").ConfigureAwait(false);
+            // Assert — newlines preserved; whole payload as one field
+            await ProtocolTestHelper.AssertStringField(stack, packet, "text", "First\nSecond").ConfigureAwait(false);
         }
     }
 
     [Test]
-    public async Task Parse_ThreeLinesWithLF_ProducesThreeLineFields()
+    public async Task Parse_TextFrame_CrlfPayloadStoredVerbatim()
     {
-        byte[] frame = BuildFrame(EncodeWsTextFrame("A\nB\nC"));
-
-        (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
-        using (stack)
-        {
-            await ProtocolTestHelper.AssertU64Field(stack, packet, "http.response.code", 101).ConfigureAwait(false);
-            await ProtocolTestHelper.AssertU64Field(stack, packet, "websocket.opcode", WebSocketOpcode.Text).ConfigureAwait(false);
-            await ProtocolTestHelper.AssertU64Field(stack, packet, "text.lines", 3UL).ConfigureAwait(false);
-        }
-    }
-
-    // === CRLF handling ===
-
-    [Test]
-    public async Task Parse_CrlfLineSeparators_CrIsStrippedFromLineText()
-    {
-        // CRLF is the HTTP convention; CR before LF must be stripped
+        // Arrange — CRLF-separated lines stored without modification
         byte[] frame = BuildFrame(EncodeWsTextFrame("HTTP/1.0 200 OK\r\nContent-Type: text/plain"));
 
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
@@ -128,36 +106,16 @@ internal sealed class TextProtocolTests
         {
             await ProtocolTestHelper.AssertU64Field(stack, packet, "http.response.code", 101).ConfigureAwait(false);
             await ProtocolTestHelper.AssertU64Field(stack, packet, "websocket.opcode", WebSocketOpcode.Text).ConfigureAwait(false);
-            await ProtocolTestHelper.AssertU64Field(stack, packet, "text.lines", 2UL).ConfigureAwait(false);
 
-            // First line must NOT contain the trailing CR
-            await ProtocolTestHelper.AssertStringField(stack, packet, "text.line", "HTTP/1.0 200 OK").ConfigureAwait(false);
-        }
-    }
-
-    // === Trailing LF ===
-
-    [Test]
-    public async Task Parse_SingleLineWithTrailingLF_ProducesOneLineNotTwo()
-    {
-        // "Line\n" ends with LF — should produce exactly one line "Line", not a second empty line
-        byte[] frame = BuildFrame(EncodeWsTextFrame("Line\n"));
-
-        (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
-        using (stack)
-        {
-            await ProtocolTestHelper.AssertU64Field(stack, packet, "http.response.code", 101).ConfigureAwait(false);
-            await ProtocolTestHelper.AssertU64Field(stack, packet, "websocket.opcode", WebSocketOpcode.Text).ConfigureAwait(false);
-
-            // CountLines: 1 LF → count=1, span[^1]==LF so no extra line → 1
-            await ProtocolTestHelper.AssertU64Field(stack, packet, "text.lines", 1UL).ConfigureAwait(false);
+            // Assert — CRLF preserved verbatim
+            await ProtocolTestHelper.AssertStringField(stack, packet, "text", "HTTP/1.0 200 OK\r\nContent-Type: text/plain").ConfigureAwait(false);
         }
     }
 
     // === Text container field is present ===
 
     [Test]
-    public async Task Parse_TextFrame_TextContainerFieldPresent()
+    public async Task Parse_TextFrame_TextFieldPresent()
     {
         byte[] frame = BuildFrame(EncodeWsTextFrame("payload"));
 
@@ -167,8 +125,7 @@ internal sealed class TextProtocolTests
             await ProtocolTestHelper.AssertU64Field(stack, packet, "http.response.code", 101).ConfigureAwait(false);
             await ProtocolTestHelper.AssertU64Field(stack, packet, "websocket.opcode", WebSocketOpcode.Text).ConfigureAwait(false);
 
-            // The "text" container field must be present when TextProtocol fires
-            await ProtocolTestHelper.AssertU64Field(stack, packet, "text.lines", 1UL).ConfigureAwait(false);
+            // Assert — text field is present when TextProtocol fires
             await ProtocolTestHelper.AssertFieldExists(stack, packet, "text").ConfigureAwait(false);
         }
     }
@@ -191,7 +148,7 @@ internal sealed class TextProtocolTests
             await ProtocolTestHelper.AssertU64Field(stack, packet, "http.response.code", 101).ConfigureAwait(false);
             await ProtocolTestHelper.AssertU64Field(stack, packet, "websocket.opcode", WebSocketOpcode.Binary).ConfigureAwait(false);
 
-            await ProtocolTestHelper.AssertFieldNotPresent(stack, packet, "text.lines").ConfigureAwait(false);
+            await ProtocolTestHelper.AssertFieldNotPresent(stack, packet, "text").ConfigureAwait(false);
         }
     }
 }

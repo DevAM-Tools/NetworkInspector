@@ -297,14 +297,17 @@ public sealed class CsvExporter : IPacketListener, IErrorTolerantExporter, IDisp
 
     /// <summary>
     /// Returns a <see cref="Span{T}"/> over the instance scratch buffer,
-    /// growing it if needed. Used as the heap fallback in the conditional-stackalloc
-    /// pattern for large quoted-field encoding (avoids a per-call heap allocation).
+    /// growing it if needed. The buffer never shrinks — it is grown to the
+    /// high-water mark so subsequent calls for a smaller size reuse the existing
+    /// allocation. Used as the heap fallback in the conditional-stackalloc pattern
+    /// for large quoted-field encoding (avoids a per-call heap allocation).
     /// </summary>
     private Span<byte> GetQuotedScratch(int minSize)
     {
         if (_Utf8Scratch is null || _Utf8Scratch.Length < minSize)
         {
-            _Utf8Scratch = new byte[minSize];
+            int newSize = Math.Max(_Utf8Scratch?.Length ?? minSize, minSize);
+            _Utf8Scratch = new byte[newSize];
         }
         return _Utf8Scratch;
     }

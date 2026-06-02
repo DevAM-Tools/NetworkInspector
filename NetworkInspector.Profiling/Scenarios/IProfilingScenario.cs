@@ -13,6 +13,17 @@ namespace NetworkInspector.Profiling.Scenarios;
 /// <see cref="WarmupDuration"/> triggers the JIT before the timed phase begins.
 /// </para>
 /// </summary>
+/// <remarks>
+/// <para><b>Lifecycle contract:</b> the runner calls members in this strict order:
+/// <c>Setup()</c> once, then <c>Run()</c> repeatedly during warm-up, then
+/// <c>Run()</c> repeatedly during the timed phase, then <c>Cleanup()</c> once.
+/// Default property values are evaluated once at the point of registration; they
+/// must be stable for the lifetime of the object.</para>
+/// <para><b>Throughput coupling:</b> when <see cref="WorkUnitsPerIteration"/> is
+/// greater than zero, <see cref="WorkUnitName"/> must be a non-empty string.
+/// Implementations that override <see cref="WorkUnitsPerIteration"/> must also
+/// override <see cref="WorkUnitName"/> to return a meaningful label.</para>
+/// </remarks>
 internal interface IProfilingScenario
 {
     /// <summary>Short identifier used for command-line filtering (e.g., "packet-parsing").</summary>
@@ -32,12 +43,18 @@ internal interface IProfilingScenario
     /// for this long so the JIT has compiled all hot paths before profiling begins.
     /// Default: 2 seconds.
     /// </summary>
+    /// <remarks>Override to shorten warm-up for fast-starting scenarios or lengthen it
+    /// for scenarios with multi-tier JIT compilation requirements. Value must be positive
+    /// and is read once before <see cref="Setup"/> is called.</remarks>
     TimeSpan WarmupDuration => TimeSpan.FromSeconds(2);
 
     /// <summary>
     /// Duration of the timed profiling phase. <see cref="Run"/> is called repeatedly
     /// until this time has elapsed. Default: 7 seconds.
     /// </summary>
+    /// <remarks>Override to extend for scenarios that require longer steady-state
+    /// observation windows. Value must be positive and is read once before
+    /// <see cref="Setup"/> is called.</remarks>
     TimeSpan Duration => TimeSpan.FromSeconds(7);
 
     /// <summary>
@@ -53,6 +70,11 @@ internal interface IProfilingScenario
     /// completed iterations to compute throughput metrics (e.g. kpps).
     /// Default: 0 (no throughput metric displayed).
     /// </summary>
+    /// <remarks>
+    /// When overriding to a value greater than zero, <see cref="WorkUnitName"/> must
+    /// also be overridden to return a non-empty, meaningful label. The value is
+    /// expected to be constant for the lifetime of the scenario object.
+    /// </remarks>
     long WorkUnitsPerIteration => 0;
 
     /// <summary>
@@ -60,6 +82,11 @@ internal interface IProfilingScenario
     /// <see cref="WorkUnitsPerIteration"/> (e.g. "packets", "frames", "evaluations").
     /// Only used when <see cref="WorkUnitsPerIteration"/> is greater than zero.
     /// </summary>
+    /// <remarks>
+    /// Must not be empty when <see cref="WorkUnitsPerIteration"/> is greater than zero.
+    /// The default value <c>"items"</c> is a safe placeholder; override in tandem with
+    /// <see cref="WorkUnitsPerIteration"/> to provide a domain-specific label.
+    /// </remarks>
     string WorkUnitName => "items";
 
     /// <summary>

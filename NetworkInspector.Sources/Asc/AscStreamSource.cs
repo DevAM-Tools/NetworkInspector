@@ -216,7 +216,7 @@ public sealed class AscStreamSource : IFrameSource, IErrorTolerantFrameSource
     }
 
     /// <inheritdoc />
-    public Frame? NextFrame()
+    public Frame? NextFrame(CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _Disposed), this);
 
@@ -229,6 +229,8 @@ public sealed class AscStreamSource : IFrameSource, IErrorTolerantFrameSource
         {
             return null;
         }
+
+        cancellationToken.ThrowIfCancellationRequested();
 
         // Deferred initialization: parse header on the first NextFrame() call.
         if (!_Initialized)
@@ -285,7 +287,11 @@ public sealed class AscStreamSource : IFrameSource, IErrorTolerantFrameSource
         GC.SuppressFinalize(this);
         if (!_LeaveOpen)
         {
-            _Stream.Dispose();
+            try
+            {
+                _Stream.Dispose();
+            }
+            catch (ObjectDisposedException) { /* idempotent — stream already disposed */ }
         }
     }
 

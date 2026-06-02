@@ -78,4 +78,16 @@ public ref struct PostFixContext
     {
         get; set;
     }
+
+    /// <summary>
+    /// Outcome of the post-fix walk.  Layers that detect a conformance / state
+    /// violation during a phase set this to a non-<see cref="BuildStatus.Success"/>
+    /// value instead of throwing; the driving <see cref="FrameSequence{TStack,TTrailer,TInterceptor}"/>
+    /// inspects it after each phase walk and aborts the build with that status.
+    /// A <c>default</c> context starts at <see cref="BuildStatus.Success"/> (value 0).
+    /// </summary>
+    public BuildStatus Status
+    {
+        get; set;
+    }
 }

@@ -11,15 +11,11 @@ internal sealed class BlfRandomAccessTests
     private static readonly byte[] BroadcastMac = [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
     private static readonly byte[] SrcMac = [0x00, 0x11, 0x22, 0x33, 0x44, 0x55];
 
+    /// <summary>Creates a full-scan <see cref="BlfSource"/> from raw BLF data.</summary>
     private static BlfSource CreateSource(byte[] blfData) =>
         BlfSource.FromData(blfData, "test.blf", new BlfSourceOptions { ScanMode = ScanMode.Full });
 
-    private static void StartSource(BlfSource source)
-    {
-        FrameInterfaceRegistry registry = new();
-        FrameSourceId sourceId = registry.RegisterSource(source);
-        source.Start(sourceId, registry);
-    }
+
 
     // ========================================================================
     // Basic random access
@@ -37,7 +33,7 @@ internal sealed class BlfRandomAccessTests
             .Build();
 
         using BlfSource source = CreateSource(blfData);
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         // Access frame 1 first (CAN)
         Frame? f1 = source.FrameById(new FrameId(1));
@@ -66,7 +62,7 @@ internal sealed class BlfRandomAccessTests
             .Build();
 
         using BlfSource source = CreateSource(blfData);
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         // Valid
         await Assert.That(source.FrameById(new FrameId(0))).IsNotNull();
@@ -96,7 +92,7 @@ internal sealed class BlfRandomAccessTests
         }
 
         using BlfSource source = CreateSource(gen.Build());
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         // Access in pseudo-random order
         int[] accessOrder = [25, 0, 49, 10, 30, 5, 48, 1, 40, 15, 35, 20, 45, 2, 44, 12];
@@ -118,7 +114,7 @@ internal sealed class BlfRandomAccessTests
             .Build();
 
         using BlfSource source = CreateSource(blfData);
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         Frame? f1 = source.FrameById(new FrameId(0));
         Frame? f2 = source.FrameById(new FrameId(0));
@@ -141,7 +137,7 @@ internal sealed class BlfRandomAccessTests
         using BlfSource source = CreateSource(blfData);
         await Assert.That(source.EstimatedFrameCount).IsEqualTo(0);
 
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
         await Assert.That(source.NextFrame()).IsNull();
     }
 
@@ -151,7 +147,7 @@ internal sealed class BlfRandomAccessTests
         byte[] blfData = new BlfTestGenerator().Build();
 
         using BlfSource source = CreateSource(blfData);
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         await Assert.That(source.FrameById(new FrameId(0))).IsNull();
     }
@@ -216,7 +212,7 @@ internal sealed class BlfRandomAccessTests
         }
 
         using BlfSource source = CreateSource(gen.Build());
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         List<Exception> exceptions = [];
         List<string> failures = [];
@@ -227,7 +223,7 @@ internal sealed class BlfRandomAccessTests
             async (i, _) =>
             {
                 int frameIndex = i % FrameCount;
-                Frame? frame = source.FrameById(new FrameId(frameIndex));
+                Frame? frame = source.FrameById(new FrameId(frameIndex), _);
 
                 if (frame is null)
                 {
@@ -284,7 +280,7 @@ internal sealed class BlfRandomAccessTests
         }
 
         BlfSource source = CreateSource(gen.Build());
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         // Dispose races against the parallel readers after half the accesses.
         int accessCount = 0;
@@ -304,7 +300,7 @@ internal sealed class BlfRandomAccessTests
                 {
                     // Acceptable outcomes: valid Frame, null (disposed / not found),
                     // or ObjectDisposedException.  Anything else is a bug.
-                    source.FrameById(new FrameId(i % FrameCount));
+                    source.FrameById(new FrameId(i % FrameCount), _);
                 }
                 catch (ObjectDisposedException) { /* expected after Dispose */ }
 

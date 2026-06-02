@@ -831,7 +831,7 @@ internal sealed class PostParserTests
 
         public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
         {
-            parentField.Append(_FieldId, FieldValue.NewU64(42), in context);
+            parentField.Append(_FieldId, FieldValue.NewU64(42));
             return 0;
         }
     }

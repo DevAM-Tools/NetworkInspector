@@ -236,10 +236,10 @@ public sealed partial class LinProtocol : IProtocol
             _ProtocolFieldId,
             FieldValue.NewBytes(data[..totalConsumed]),
             ZA.Lazy("LIN ", msgTypeSummaryText, ", ID: ", Helpers.DisplayTables.FormatHexU8(frameId),
-                    ", Len: ", payloadLength), in context);
+                    ", Len: ", payloadLength));
 
         // Message format revision
-        container.Append(_MessageFormatFieldId, FieldValue.NewU64(msgFormatRev), in context);
+        container.Append(_MessageFormatFieldId, FieldValue.NewU64(msgFormatRev));
 
         // Message type
         string msgTypeText = msgType switch
@@ -250,7 +250,7 @@ public sealed partial class LinProtocol : IProtocol
             MsgTypeEvent => "Event",
             _ => ZA.String("Unknown (", msgType, ")")
         };
-        container.AppendWithCustomText(_MessageTypeFieldId, FieldValue.NewString(msgTypeText), msgTypeText, in context);
+        container.AppendWithCustomText(_MessageTypeFieldId, FieldValue.NewString(msgTypeText), msgTypeText);
 
         // For non-event frames only: decode checksum type, PID, parity, length, checksum
         if (msgType != MsgTypeEvent)
@@ -263,35 +263,35 @@ public sealed partial class LinProtocol : IProtocol
                 3 => "Undefined",
                 _ => "Unknown/Error"
             };
-            container.AppendWithCustomText(_ChecksumTypeFieldId, FieldValue.NewString(checksumTypeText), checksumTypeText, in context);
+            container.AppendWithCustomText(_ChecksumTypeFieldId, FieldValue.NewString(checksumTypeText), checksumTypeText);
 
             // Protected ID
             container.AppendWithCustomText(_PidFieldId,
                 FieldValue.NewU64(pid),
-                Helpers.DisplayTables.FormatHexU8(pid), in context);
+                Helpers.DisplayTables.FormatHexU8(pid));
 
             // Frame ID (6-bit)
             container.AppendWithCustomText(_IdFieldId,
                 FieldValue.NewU64(frameId),
-                Helpers.DisplayTables.FormatHexU8(frameId), in context);
+                Helpers.DisplayTables.FormatHexU8(frameId));
 
             // Parity (2-bit)
-            container.Append(_ParityFieldId, FieldValue.NewU64(parity), in context);
+            container.Append(_ParityFieldId, FieldValue.NewU64(parity));
 
             // Parity validity per ISO 17987: P0 = ID0^ID1^ID2^ID4, P1 = !(ID1^ID3^ID4^ID5)
             bool parityValid = ValidateParity(frameId, parity);
             container.AppendWithCustomText(_ParityValidFieldId,
                 FieldValue.NewBool(parityValid),
-                parityValid ? "Valid" : "Invalid", in context);
+                parityValid ? "Valid" : "Invalid");
 
             // Payload length
-            container.Append(_LengthFieldId, FieldValue.NewU64(payloadLength), in context);
+            container.Append(_LengthFieldId, FieldValue.NewU64(payloadLength));
 
             // Checksum
             context.RecordGroupPresence(_LinChecksumGroupId);
             container.AppendWithCustomText(_ChecksumFieldId,
                 FieldValue.NewU64(checksum),
-                Helpers.DisplayTables.FormatHexU8(checksum), in context);
+                Helpers.DisplayTables.FormatHexU8(checksum));
 
             // Checksum validation (only possible when full data was received)
             if (actualDataLen == (int)payloadLength)
@@ -299,27 +299,27 @@ public sealed partial class LinProtocol : IProtocol
                 bool valid = ValidateChecksum(span.Slice(HeaderSize, actualDataLen), pid, checksumType, checksum);
                 container.AppendWithCustomText(_ChecksumStatusFieldId,
                     FieldValue.NewString(valid ? "[Good]" : "[Bad]"),
-                    valid ? "[Good]" : "[Bad]", in context);
+                    valid ? "[Good]" : "[Bad]");
             }
         }
 
         // Error flags
         container.AppendWithCustomText(_ErrorsFieldId,
             FieldValue.NewU64(errorFlags),
-            Helpers.DisplayTables.FormatHexU8(errorFlags), in context);
-        container.Append(_ErrNoSlaveResponseFieldId, FieldValue.NewBool((errorFlags & ErrNoSlaveResponse) != 0), in context);
-        container.Append(_ErrFramingFieldId, FieldValue.NewBool((errorFlags & ErrFraming) != 0), in context);
-        container.Append(_ErrParityFieldId, FieldValue.NewBool((errorFlags & ErrParity) != 0), in context);
-        container.Append(_ErrChecksumFieldId, FieldValue.NewBool((errorFlags & ErrChecksum) != 0), in context);
-        container.Append(_ErrInvalidIdFieldId, FieldValue.NewBool((errorFlags & ErrInvalidId) != 0), in context);
-        container.Append(_ErrOverflowFieldId, FieldValue.NewBool((errorFlags & ErrOverflow) != 0), in context);
+            Helpers.DisplayTables.FormatHexU8(errorFlags));
+        container.Append(_ErrNoSlaveResponseFieldId, FieldValue.NewBool((errorFlags & ErrNoSlaveResponse) != 0));
+        container.Append(_ErrFramingFieldId, FieldValue.NewBool((errorFlags & ErrFraming) != 0));
+        container.Append(_ErrParityFieldId, FieldValue.NewBool((errorFlags & ErrParity) != 0));
+        container.Append(_ErrChecksumFieldId, FieldValue.NewBool((errorFlags & ErrChecksum) != 0));
+        container.Append(_ErrInvalidIdFieldId, FieldValue.NewBool((errorFlags & ErrInvalidId) != 0));
+        container.Append(_ErrOverflowFieldId, FieldValue.NewBool((errorFlags & ErrOverflow) != 0));
 
         // Data payload (only when length > 0); dispatch to sub-protocols for standard frames.
         if (actualDataLen > 0)
         {
             context.RecordGroupPresence(_LinDataGroupId);
             ReadOnlyMemory<byte> payload = data.Slice(HeaderSize, actualDataLen);
-            container.Append(_DataFieldId, FieldValue.NewBytes(payload), in context);
+            container.Append(_DataFieldId, FieldValue.NewBytes(payload));
 
             // Dispatch only for standard frames: lin.id is appended exclusively for non-event
             // frames, so sub-protocols keyed on lin.id are only triggered here.

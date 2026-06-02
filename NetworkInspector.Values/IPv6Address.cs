@@ -3,12 +3,11 @@
 namespace NetworkInspector.Values;
 
 /// <summary>128-bit IPv6 address stored as two <see cref="ulong"/> fields.</summary>
-/// <remarks>Creates an IPv6 address from two 64-bit halves.</remarks>
 [StructLayout(LayoutKind.Sequential)]
-[method: MethodImpl(MethodImplOptions.AggressiveInlining)]
-public readonly struct IPv6Address(ulong high, ulong low)
-        : IEquatable<IPv6Address>, IComparable<IPv6Address>,
-      ISpanFormattable, IUtf8SpanFormattable, IStringSize, IBinarySerializable
+public readonly record struct IPv6Address
+        : IEquatable<IPv6Address>, IComparable<IPv6Address>, IComparable,
+      ISpanFormattable, IUtf8SpanFormattable, IStringSize, IBinarySerializable,
+      ISpanParsable<IPv6Address>, IParsable<IPv6Address>
 {
     #region Constants
 
@@ -17,10 +16,22 @@ public readonly struct IPv6Address(ulong high, ulong low)
 
     #endregion
 
+    #region Constructor
+
+    /// <summary>Creates an <see cref="IPv6Address"/> from two 64-bit halves.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public IPv6Address(ulong high, ulong low)
+    {
+        _High = high;
+        _Low = low;
+    }
+
+    #endregion
+
     #region Fields
 
-    private readonly ulong _High = high; // bits 127..64
-    private readonly ulong _Low = low;  // bits 63..0
+    private readonly ulong _High; // bits 127..64
+    private readonly ulong _Low;  // bits 63..0
 
     #endregion
 
@@ -96,6 +107,107 @@ public readonly struct IPv6Address(ulong high, ulong low)
         return new IPv6Address(high, low);
     }
 
+    /// <summary>
+    /// Parses an IPv6 address from colon-hex notation with optional <c>::</c> compression (RFC 5952).
+    /// </summary>
+    /// <param name="text">Input to parse.</param>
+    /// <param name="result">The parsed address when this method returns <see langword="true"/>.</param>
+    /// <returns><see langword="true"/> if parsing succeeded; <see langword="false"/> for any malformed input.</returns>
+    public static bool TryParse(ReadOnlySpan<char> text, out IPv6Address result)
+    {
+        result = default;
+
+        // Locate a '::' expansion, if present.
+        int colonColon = -1;
+        for (int i = 0; i < text.Length - 1; i++)
+        {
+            if (text[i] == ':' && text[i + 1] == ':')
+            {
+                if (colonColon >= 0) { return false; } // only one '::' allowed
+                colonColon = i;
+            }
+        }
+
+        Span<ushort> groups = stackalloc ushort[8];
+        int groupsFilled;
+
+        if (colonColon < 0)
+        {
+            // No '::' — must have exactly 8 colon-separated groups
+            groupsFilled = ParseGroups(text, groups);
+            if (groupsFilled != 8) { return false; }
+        }
+        else
+        {
+            // Split on '::'
+            ReadOnlySpan<char> left = text[..colonColon];
+            ReadOnlySpan<char> right = colonColon + 2 < text.Length
+                ? text[(colonColon + 2)..]
+                : ReadOnlySpan<char>.Empty;
+
+            Span<ushort> leftGroups = stackalloc ushort[8];
+            Span<ushort> rightGroups = stackalloc ushort[8];
+
+            int leftCount = left.IsEmpty ? 0 : ParseGroups(left, leftGroups);
+            int rightCount = right.IsEmpty ? 0 : ParseGroups(right, rightGroups);
+
+            if (leftCount < 0 || rightCount < 0) { return false; }
+            if (leftCount + rightCount > 7) { return false; } // at least one zero group needed
+
+            for (int i = 0; i < leftCount; i++) { groups[i] = leftGroups[i]; }
+            // Zero groups are already zeroed by stackalloc
+            for (int i = 0; i < rightCount; i++) { groups[8 - rightCount + i] = rightGroups[i]; }
+            groupsFilled = 8;
+        }
+
+        ulong high = ((ulong)groups[0] << 48) | ((ulong)groups[1] << 32) |
+                     ((ulong)groups[2] << 16) | groups[3];
+        ulong low = ((ulong)groups[4] << 48) | ((ulong)groups[5] << 32) |
+                    ((ulong)groups[6] << 16) | groups[7];
+        result = new IPv6Address(high, low);
+        return true;
+    }
+
+    #endregion
+
+    #region ISpanParsable / IParsable
+
+    /// <inheritdoc/>
+    static bool ISpanParsable<IPv6Address>.TryParse(
+        ReadOnlySpan<char> s, IFormatProvider? provider, out IPv6Address result)
+        => TryParse(s, out result);
+
+    /// <inheritdoc/>
+    static IPv6Address ISpanParsable<IPv6Address>.Parse(
+        ReadOnlySpan<char> s, IFormatProvider? provider)
+    {
+        if (!TryParse(s, out IPv6Address result))
+        {
+            throw new FormatException($"Input '{s}' is not a valid IPv6 address.");
+        }
+        return result;
+    }
+
+    /// <inheritdoc/>
+    static bool IParsable<IPv6Address>.TryParse(
+        string? s, IFormatProvider? provider, out IPv6Address result)
+    {
+        if (s is null) { result = default; return false; }
+        return TryParse(s.AsSpan(), out result);
+    }
+
+    /// <inheritdoc/>
+    static IPv6Address IParsable<IPv6Address>.Parse(
+        string s, IFormatProvider? provider)
+    {
+        ArgumentNullException.ThrowIfNull(s);
+        if (!TryParse(s.AsSpan(), out IPv6Address result))
+        {
+            throw new FormatException($"Input '{s}' is not a valid IPv6 address.");
+        }
+        return result;
+    }
+
     #endregion
 
     #region Binary Serialization
@@ -152,10 +264,21 @@ public readonly struct IPv6Address(ulong high, ulong low)
     /// <exception cref="ArgumentException">Thrown when <paramref name="groups"/> is too small.</exception>
     public void GetGroups(Span<ushort> groups)
     {
-        if (groups.Length < 8)
+        if (!TryGetGroups(groups))
         {
             throw new ArgumentException("Destination span must have at least 8 elements.", nameof(groups));
         }
+    }
+
+    /// <summary>
+    /// Writes the 8 groups of 16-bit values into the destination span.
+    /// Returns <see langword="false"/> without throwing when the span is too small.
+    /// </summary>
+    /// <param name="groups">Destination span; must have length &gt;= 8.</param>
+    /// <returns><see langword="true"/> if the groups were written; <see langword="false"/> when the span is too small.</returns>
+    public bool TryGetGroups(Span<ushort> groups)
+    {
+        if (groups.Length < 8) { return false; }
         groups[0] = (ushort)(_High >> 48);
         groups[1] = (ushort)(_High >> 32);
         groups[2] = (ushort)(_High >> 16);
@@ -164,6 +287,7 @@ public readonly struct IPv6Address(ulong high, ulong low)
         groups[5] = (ushort)(_Low >> 32);
         groups[6] = (ushort)(_Low >> 16);
         groups[7] = (ushort)_Low;
+        return true;
     }
 
     #endregion
@@ -282,7 +406,12 @@ public readonly struct IPv6Address(ulong high, ulong low)
         return written;
     }
 
-    /// <summary>Returns a <see cref="TempString"/> backed by a thread-static buffer.</summary>
+    /// <summary>Returns a <see cref="TempString"/> backed by a thread-static or pooled buffer.</summary>
+    /// <remarks>
+    /// The underlying buffer is thread-local or pooled. The caller must dispose the returned <see cref="TempString"/>
+    /// before making another <see cref="FormatTemp"/> call on the same thread to avoid overwriting the buffer.
+    /// Do not retain references to the underlying span after disposal.
+    /// </remarks>
     public TempString FormatTemp()
     {
         char[] buffer = ZeroAllocHelper.AcquireCharBuffer(MaxFormattedLength, out bool isThreadStatic);
@@ -291,6 +420,7 @@ public readonly struct IPv6Address(ulong high, ulong low)
     }
 
     /// <summary>Returns the compressed IPv6 address as a new string.</summary>
+    /// <remarks>Allocates a new string on every call. Use <see cref="FormatInto"/> or <see cref="FormatTemp"/> for allocation-free hot paths.</remarks>
     public string Format()
     {
         Span<char> buf = stackalloc char[MaxFormattedLength];
@@ -310,35 +440,24 @@ public readonly struct IPv6Address(ulong high, ulong low)
 
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public bool Equals(IPv6Address other) => _High == other._High && _Low == other._Low;
-    /// <inheritdoc/>
-    public override bool Equals(object? obj) => obj is IPv6Address other && Equals(other);
-    /// <inheritdoc/>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public override int GetHashCode() => HashCode.Combine(_High, _Low);
-    /// <inheritdoc/>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public int CompareTo(IPv6Address other)
     {
         int c = _High.CompareTo(other._High);
         return c != 0 ? c : _Low.CompareTo(other._Low);
     }
 
+    /// <inheritdoc/>
+    int IComparable.CompareTo(object? obj)
+    {
+        if (obj is null) { return 1; }
+        if (obj is IPv6Address other) { return CompareTo(other); }
+        throw new ArgumentException($"Object must be of type {nameof(IPv6Address)}.", nameof(obj));
+    }
+
     #endregion
 
     #region Operators
 
-    /// <summary>Returns <see langword="true"/> if <paramref name="left"/> and <paramref name="right"/> are equal.</summary>
-    /// <param name="left">The left operand.</param>
-    /// <param name="right">The right operand.</param>
-    /// <returns><see langword="true"/> if the condition holds; otherwise <see langword="false"/>.</returns>
-    public static bool operator ==(IPv6Address left, IPv6Address right) =>
-        left._High == right._High && left._Low == right._Low;
-    /// <summary>Returns <see langword="true"/> if <paramref name="left"/> and <paramref name="right"/> are not equal.</summary>
-    /// <param name="left">The left operand.</param>
-    /// <param name="right">The right operand.</param>
-    /// <returns><see langword="true"/> if the condition holds; otherwise <see langword="false"/>.</returns>
-    public static bool operator !=(IPv6Address left, IPv6Address right) => !(left == right);
     /// <summary>Returns <see langword="true"/> if <paramref name="left"/> is less than <paramref name="right"/>.</summary>
     /// <param name="left">The left operand.</param>
     /// <param name="right">The right operand.</param>
@@ -436,6 +555,42 @@ public readonly struct IPv6Address(ulong high, ulong low)
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static int HexGroupLength(ushort value) =>
         value >= 0x1000 ? 4 : value >= 0x100 ? 3 : value >= 0x10 ? 2 : 1;
+
+    // Parses colon-separated hex groups from a span (no '::' handling).
+    // Returns the number of groups parsed, or -1 on malformed input.
+    private static int ParseGroups(ReadOnlySpan<char> text, Span<ushort> groups)
+    {
+        int count = 0;
+        int start = 0;
+        for (int i = 0; i <= text.Length; i++)
+        {
+            if (i == text.Length || text[i] == ':')
+            {
+                int len = i - start;
+                if (len == 0 || len > 4) { return -1; }
+                ushort v = 0;
+                for (int j = start; j < i; j++)
+                {
+                    int d = HexDigitValue(text[j]);
+                    if (d < 0) { return -1; }
+                    v = (ushort)((v << 4) | d);
+                }
+                if (count >= groups.Length) { return -1; }
+                groups[count++] = v;
+                start = i + 1;
+            }
+        }
+        return count;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static int HexDigitValue(char c)
+    {
+        if (c >= '0' && c <= '9') { return c - '0'; }
+        if (c >= 'a' && c <= 'f') { return c - 'a' + 10; }
+        if (c >= 'A' && c <= 'F') { return c - 'A' + 10; }
+        return -1;
+    }
     #endregion
 }
 

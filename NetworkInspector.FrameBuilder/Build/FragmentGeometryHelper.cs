@@ -58,6 +58,10 @@ internal static class FragmentGeometryHelper
         }
 
         innerLen = dataLength - headerEndOffset;
+        // The guard above guarantees maxFragInnerRaw >= alignment, so rounding
+        // down to the nearest alignment multiple always yields at least one full
+        // alignment unit (maxFragInner >= alignment > 0). A zero per-fragment
+        // slice is therefore unreachable here and downstream loops always advance.
         maxFragInner = maxFragInnerRaw & ~(alignment - 1);
         return BuildStatus.Success;
     }

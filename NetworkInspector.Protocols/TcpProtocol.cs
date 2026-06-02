@@ -9,8 +9,6 @@ namespace NetworkInspector.Protocols;
 /// tcp: Transmission Control Protocol, Src Port: 443, Dst Port: 52341
 /// ├── tcp.srcport: 443
 /// ├── tcp.dstport: 52341
-/// ├── tcp.port: 443                   [any-match, appended twice]
-/// ├── tcp.port: 52341                 [any-match, appended twice]
 /// ├── tcp.seq: 0x12345678
 /// ├── tcp.ack: 0xabcdef01
 /// ├── tcp.seq_raw: 0x12345678         [absolute sequence number]
@@ -163,14 +161,13 @@ public sealed partial class TcpProtocol : IProtocol
 
     #endregion
 
-    #region Combined port field (any-match, Wireshark-compatible)
+    #region Combined port field (alias group, Wireshark-compatible)
 
-    /// <summary>
-    /// Combined port field appended twice per segment (once for src, once for dst)
-    /// so that filter expressions like <c>tcp.port == 443</c> match either endpoint.
-    /// </summary>
-    [U64Field("tcp.port", "Port", IndexGroup = TcpIndexGroup)]
-    private FieldId _PortFieldId;
+    // Field alias group ID assigned in RegisterFieldsCustom for "tcp.port" -> { tcp.srcport, tcp.dstport }.
+    // Independent of the protocol table also named "tcp.port" (PortTableName) — alias / field /
+    // table namespaces do not collide. Alias is metadata-only; GetFieldId("tcp.port") never
+    // resolves and no tcp.port node is appended to the parse tree.
+    private FieldAliasGroupId _PortAliasGroupId;
 
     #endregion
 
@@ -344,20 +341,8 @@ public sealed partial class TcpProtocol : IProtocol
     [StringField("tcp.checksum.status", "Checksum Status", IndexGroup = "tcp.checksum.status")]
     private FieldId _ChecksumStatusFieldId;
 
-    // Pre-computed pseudo-header sum, eagerly appended in Parse() as a preceding sibling of
-    // the TCP container when checksum verification is enabled. The lazy populator reads this
-    // field to validate the checksum without needing the CallerProtocolId from the original
-    // dispatch context (which is not available inside a lazy populator).
-    [U64Field("tcp.pseudo_sum", "Pseudo-Header Sum", IndexGroup = "tcp.checksum.status")]
-    private FieldId _PseudoHeaderSumFieldId;
-
     [BytesField("tcp.payload", "TCP Payload", IndexGroup = "tcp.payload")]
     private FieldId _PayloadFieldId;
-
-    // Second lazy group container: stores TCP bytes for the details populator.
-    // Groups seq/ack/flags/window/options/payload separately from identifying port/checksum fields.
-    [BytesField("tcp.hdr", "Header Details", IndexGroup = TcpIndexGroup)]
-    private FieldId _HdrDetailsFieldId;
 
     #endregion
 
@@ -495,7 +480,6 @@ public sealed partial class TcpProtocol : IProtocol
 
     // Pre-allocated populator and dispatch cache
     private LazyPopulator _Populator = null!;
-    private LazyPopulator _DetailsPopulator = null!;
     private (ulong Key, ParseDelegate Parse)[] _PortSparseCache = [];
 
     // TCP connection tracking for analysis
@@ -509,16 +493,15 @@ public sealed partial class TcpProtocol : IProtocol
 
     partial void OnStartCustom(Stack stack)
     {
-        _IpContainerFieldId = stack.GetFieldId("ip") ?? default;
-        _Ipv6ContainerFieldId = stack.GetFieldId("ipv6") ?? default;
-        _IpSrcFieldId = stack.GetFieldId("ip.src") ?? default;
-        _IpDstFieldId = stack.GetFieldId("ip.dst") ?? default;
-        _Ipv6SrcFieldId = stack.GetFieldId("ipv6.src") ?? default;
-        _Ipv6DstFieldId = stack.GetFieldId("ipv6.dst") ?? default;
-        _Ipv4ProtocolId = stack.GetProtocolId("ip") ?? default;
-        _Ipv6ProtocolId = stack.GetProtocolId("ipv6") ?? default;
-        _Populator = (in MutField container) => PopulateTcpPrimary(in container);
-        _DetailsPopulator = (in MutField container) => PopulateTcpDetails(in container);
+        _IpContainerFieldId = stack.GetFieldId("ip") ?? FieldId.Invalid;
+        _Ipv6ContainerFieldId = stack.GetFieldId("ipv6") ?? FieldId.Invalid;
+        _IpSrcFieldId = stack.GetFieldId("ip.src") ?? FieldId.Invalid;
+        _IpDstFieldId = stack.GetFieldId("ip.dst") ?? FieldId.Invalid;
+        _Ipv6SrcFieldId = stack.GetFieldId("ipv6.src") ?? FieldId.Invalid;
+        _Ipv6DstFieldId = stack.GetFieldId("ipv6.dst") ?? FieldId.Invalid;
+        _Ipv4ProtocolId = stack.GetProtocolId("ip") ?? ProtocolId.Invalid;
+        _Ipv6ProtocolId = stack.GetProtocolId("ipv6") ?? ProtocolId.Invalid;
+        _Populator = PopulateTcp;
         _PortSparseCache = stack.BuildU64SparseDelegateCache(_PortTableId);
         _ReassemblyEngine = new TcpReassemblyEngine(stack);
 
@@ -560,13 +543,27 @@ public sealed partial class TcpProtocol : IProtocol
     }
 
     /// <summary>
-    /// Primary lazy group: port and checksum fields for the TCP segment.
-    /// Registers <c>tcp.hdr</c> as a second lazy group for all remaining fields.
+    /// Registers protocol-owned alias groups. Adds "tcp.port" -> { tcp.srcport, tcp.dstport }
+    /// as metadata; the alias is reachable only via the alias-group APIs on IStack and is
+    /// independent of the dispatch table also named "tcp.port".
+    /// </summary>
+    partial void RegisterFieldsCustom(IStackBuilder builder, ProtocolId protocolId)
+    {
+        _PortAliasGroupId = builder.RegisterFieldAliasGroup(
+            protocolId,
+            "tcp.port",
+            "Any-match alias for source/destination TCP ports.",
+            [_SrcPortFieldId, _DstPortFieldId]);
+    }
+
+    /// <summary>
+    /// Lazy populator: checksum, sequence/ack numbers, header length, flags, window,
+    /// urgent pointer, options, segment length, and payload for the TCP segment.
+    /// Source and destination ports are eagerly appended by <see cref="Parse"/>.
     /// Called on first access of the TCP container's children.
     /// </summary>
-    private ParseResult PopulateTcpPrimary(in MutField container)
+    private ParseResult PopulateTcp(in MutField container)
     {
-        ParseContext context = new ParseContext(container.Packet.Stack);
         if (!container.Value.Data.TryGetAsBytes(out ReadOnlyMemory<byte> tcpData))
         {
             return ParseError.InvalidData(ProtocolName, "Container value is not of type Bytes");
@@ -580,84 +577,54 @@ public sealed partial class TcpProtocol : IProtocol
         ushort srcPort = header.SrcPort.Value;
         ushort dstPort = header.DstPort.Value;
 
-        // Port fields first — filter expressions like `tcp.srcport == X` find them
-        // without walking past the other header fields.
-        container.Append(_SrcPortFieldId, FieldValue.NewU64(srcPort), in context);
-        container.Append(_DstPortFieldId, FieldValue.NewU64(dstPort), in context);
-        container.Append(_PortFieldId, FieldValue.NewU64(srcPort), in context);
-        container.Append(_PortFieldId, FieldValue.NewU64(dstPort), in context);
+        // tcp.srcport and tcp.dstport are eagerly appended by Parse() so that value-cache
+        // recording captures port numbers during the initial parse pass.
+        // The any-match name "tcp.port" is exposed via the alias group registered in
+        // RegisterFieldsCustom; no duplicate tcp.port field node is appended.
 
         string csumText = DisplayTables.FormatHexU16(header.Checksum.Value);
-        container.AppendWithCustomText(_ChecksumFieldId, FieldValue.NewU64(header.Checksum.Value), csumText, in context);
+        container.AppendWithCustomText(_ChecksumFieldId, FieldValue.NewU64(header.Checksum.Value), csumText);
 
         if (_VerifyChecksum && header.Checksum.Value != 0)
         {
-            bool? valid = ValidateChecksum(in container, tcpData.Span, in context);
+            bool? valid = ValidateChecksum(in container, tcpData.Span);
             string statusText = valid switch
             {
                 true => "[Good]",
                 false => "[Bad]",
                 null => "[Unverified]",
             };
-            container.Append(_ChecksumStatusFieldId, FieldValue.NewString(statusText), in context);
-        }
-
-        // Register the details group for seq/ack/flags/window/options/payload.
-        container.AppendLazyWithCustomText(
-            _HdrDetailsFieldId,
-            FieldValue.NewBytes(tcpData),
-            new LazyString("Header Details"),
-            _DetailsPopulator);
-
-        return 0;
-    }
-
-    /// <summary>
-    /// Details lazy group: sequence/ack numbers, header length, flags, window, urgent pointer,
-    /// options, segment length, and payload.
-    /// Fires only when <c>tcp.hdr</c> children are accessed (e.g., during full materialisation).
-    /// </summary>
-    private ParseResult PopulateTcpDetails(in MutField container)
-    {
-        ParseContext context = new ParseContext(container.Packet.Stack);
-        if (!container.Value.Data.TryGetAsBytes(out ReadOnlyMemory<byte> tcpData))
-        {
-            return ParseError.InvalidData(ProtocolName, "Container value is not of type Bytes");
-        }
-
-        if (!TcpHeader.TryParse(tcpData.Span, out TcpHeader header, out _))
-        {
-            return ParseError.InsufficientDataWithInfo(ProtocolName, TcpHeader.MinSize, (ulong)tcpData.Length);
+            container.Append(_ChecksumStatusFieldId, FieldValue.NewString(statusText));
         }
 
         int headerLen = header.HeaderLength;
         int payloadLen = Math.Max(0, tcpData.Length - headerLen);
 
-        container.Append(_SeqFieldId, FieldValue.NewU64(header.SeqNumber.Value), in context);
-        container.Append(_AckFieldId, FieldValue.NewU64(header.AckNumber.Value), in context);
+        container.Append(_SeqFieldId, FieldValue.NewU64(header.SeqNumber.Value));
+        container.Append(_AckFieldId, FieldValue.NewU64(header.AckNumber.Value));
 
         // Raw (absolute) sequence/ack numbers — always appended.
-        container.Append(_SeqRawFieldId, FieldValue.NewU64(header.SeqNumber.Value), in context);
-        container.Append(_AckRawFieldId, FieldValue.NewU64(header.AckNumber.Value), in context);
+        container.Append(_SeqRawFieldId, FieldValue.NewU64(header.SeqNumber.Value));
+        container.Append(_AckRawFieldId, FieldValue.NewU64(header.AckNumber.Value));
 
-        container.Append(_HdrLenFieldId, FieldValue.NewU64((ulong)headerLen), in context);
+        container.Append(_HdrLenFieldId, FieldValue.NewU64((ulong)headerLen));
 
         byte flags = header.Flags;
         string flagsText = TcpFlagsFormatter.Format(flags);
         container.AppendWithCustomText(_FlagsFieldId,
-            FieldValue.NewU64(flags), ZA.Lazy(Helpers.DisplayTables.FormatHexU8(flags), " [", flagsText, "]"), in context);
+            FieldValue.NewU64(flags), ZA.Lazy(Helpers.DisplayTables.FormatHexU8(flags), " [", flagsText, "]"));
 
-        container.Append(_FlagsCwrFieldId, FieldValue.NewBool((flags & 0x80) != 0), in context);
-        container.Append(_FlagsEceFieldId, FieldValue.NewBool((flags & 0x40) != 0), in context);
-        container.Append(_FlagsUrgFieldId, FieldValue.NewBool((flags & 0x20) != 0), in context);
-        container.Append(_FlagsAckFieldId, FieldValue.NewBool((flags & 0x10) != 0), in context);
-        container.Append(_FlagsPushFieldId, FieldValue.NewBool((flags & 0x08) != 0), in context);
-        container.Append(_FlagsResetFieldId, FieldValue.NewBool((flags & 0x04) != 0), in context);
-        container.Append(_FlagsSynFieldId, FieldValue.NewBool((flags & 0x02) != 0), in context);
-        container.Append(_FlagsFinFieldId, FieldValue.NewBool((flags & 0x01) != 0), in context);
+        container.Append(_FlagsCwrFieldId, FieldValue.NewBool((flags & 0x80) != 0));
+        container.Append(_FlagsEceFieldId, FieldValue.NewBool((flags & 0x40) != 0));
+        container.Append(_FlagsUrgFieldId, FieldValue.NewBool((flags & 0x20) != 0));
+        container.Append(_FlagsAckFieldId, FieldValue.NewBool((flags & 0x10) != 0));
+        container.Append(_FlagsPushFieldId, FieldValue.NewBool((flags & 0x08) != 0));
+        container.Append(_FlagsResetFieldId, FieldValue.NewBool((flags & 0x04) != 0));
+        container.Append(_FlagsSynFieldId, FieldValue.NewBool((flags & 0x02) != 0));
+        container.Append(_FlagsFinFieldId, FieldValue.NewBool((flags & 0x01) != 0));
 
-        container.Append(_WindowFieldId, FieldValue.NewU64(header.WindowSize.Value), in context);
-        container.Append(_UrgentPointerFieldId, FieldValue.NewU64(header.UrgentPointer.Value), in context);
+        container.Append(_WindowFieldId, FieldValue.NewU64(header.WindowSize.Value));
+        container.Append(_UrgentPointerFieldId, FieldValue.NewU64(header.UrgentPointer.Value));
 
         // TCP Options (between fixed 20-byte header and payload)
         if (headerLen > TcpHeader.MinSize)
@@ -667,45 +634,32 @@ public sealed partial class TcpProtocol : IProtocol
 
             MutField optionsContainer = container.AppendWithCustomText(
                 _OptionsFieldId, FieldValue.None,
-                (string)ZA.String("Options: (", optionsLen, " bytes)"), in context);
+                (string)ZA.String("Options: (", optionsLen, " bytes)"));
 
-            TcpOptionsParser.Parse(optionsData, in optionsContainer, in _OptionsFieldIds, in context);
+            TcpOptionsParser.Parse(optionsData, in optionsContainer, in _OptionsFieldIds);
         }
 
-        container.Append(_LenFieldId, FieldValue.NewU64((ulong)payloadLen), in context);
+        container.Append(_LenFieldId, FieldValue.NewU64((ulong)payloadLen));
 
         if (payloadLen > 0)
         {
-            container.Append(_PayloadFieldId, FieldValue.NewBytes(tcpData[headerLen..]), in context);
+            container.Append(_PayloadFieldId, FieldValue.NewBytes(tcpData[headerLen..]));
         }
 
         return 0;
     }
 
     /// <summary>
-    /// Validates the TCP checksum using the pre-computed pseudo-header sum stored as a
-    /// preceding sibling field by <see cref="AppendPseudoHeaderSumIfAvailable"/> (fast
-    /// path), falling back to per-protocol thread-local caches and previous-sibling
-    /// navigation for edge cases. Returns <see langword="true"/> if the checksum is valid,
-    /// <see langword="false"/> if invalid, or <see langword="null"/> if no IP layer was found.
+    /// Validates the TCP checksum by walking previous siblings to find typed IP addresses.
+    /// Returns <see langword="true"/> if valid, <see langword="false"/> if invalid,
+    /// or <see langword="null"/> if no IP layer was found.
     /// </summary>
-    private bool? ValidateChecksum(in MutField container, ReadOnlySpan<byte> tcpData, in ParseContext context)
+    private bool? ValidateChecksum(in MutField container, ReadOnlySpan<byte> tcpData)
     {
         const byte TcpProtocolNumber = 6;
         ushort tcpLength = (ushort)tcpData.Length;
 
-        // Fast path: use pre-computed pseudo-header sum stored as a preceding sibling field.
-        // This value was computed in Parse() while CallerProtocolId was still available,
-        // so it always refers to the correct IP layer even in tunnel scenarios (6in4, 4in6).
-        if (TryReadPseudoHeaderSum(container.AsField(), out ulong precomputedSum))
-        {
-            ushort result = InternetChecksum.ComputeWithPseudoHeader(tcpData, precomputedSum);
-            return result == 0;
-        }
-
-        // Fallback: walk previous siblings to find typed IP addresses. This handles
-        // edge cases where no IP layer was found during Parse() (e.g., custom stacks
-        // or non-standard encapsulations where the caches had no entry).
+        // Walk previous siblings to find typed IP addresses
         Field containerField = container.AsField();
         if (!IpAddressExtractor.TryFindPreviousIpAddresses(containerField,
             _IpContainerFieldId, _Ipv6ContainerFieldId,
@@ -730,91 +684,8 @@ public sealed partial class TcpProtocol : IProtocol
                 s6.High, s6.Low, d6.High, d6.Low, TcpProtocolNumber, tcpLength);
         }
 
-        ushort fallbackResult = InternetChecksum.ComputeWithPseudoHeader(tcpData, pseudoSum);
-        return fallbackResult == 0;
-    }
-
-    /// <summary>
-    /// Attempts to read the pre-computed pseudo-header sum from a previous sibling of
-    /// <paramref name="containerField"/>. The pseudo-header sum field is eagerly appended
-    /// by <see cref="AppendPseudoHeaderSumIfAvailable"/> just before the TCP container in
-    /// <see cref="Parse"/>, so it is typically 1 sibling back.
-    /// </summary>
-    private bool TryReadPseudoHeaderSum(Field containerField, out ulong pseudoSum)
-    {
-        // Walk at most 3 siblings back — the pseudo-header sum is always
-        // immediately before the container in the sibling list.
-        Field field = containerField;
-        int maxWalk = 3;
-        while (maxWalk-- > 0 && field.TryGetPrev(out field))
-        {
-            if (field.FieldId == _PseudoHeaderSumFieldId
-                && field.Value.Data.TryGetAsU64(out pseudoSum))
-            {
-                return true;
-            }
-        }
-
-        pseudoSum = 0;
-        return false;
-    }
-
-    /// <summary>
-    /// Pre-computes the TCP checksum pseudo-header sum and stores it as an eager sibling
-    /// field immediately before the TCP protocol container. Called from <see cref="Parse"/>
-    /// when checksum verification is enabled, so that <see cref="ValidateChecksum"/> (which
-    /// runs inside a lazy populator without dispatch context) can read the correct value.
-    /// <para>Uses <paramref name="context"/>'s <c>CallerProtocolId</c> to select the correct
-    /// thread-local address cache, correctly handling tunnel scenarios where both IPv4 and
-    /// IPv6 caches may hold valid entries for the same <see cref="PacketId"/>.</para>
-    /// </summary>
-    private void AppendPseudoHeaderSumIfAvailable(
-        in MutField parentField, ushort tcpLength, in ParseContext context)
-    {
-        const byte TcpProtoNumber = 6;
-        PacketId packetId = parentField.Packet.Id;
-
-        bool callerIsIpv4 = context.Dispatch.HasDispatch && context.Dispatch.CallerProtocolId == _Ipv4ProtocolId;
-        bool callerIsIpv6 = context.Dispatch.HasDispatch && context.Dispatch.CallerProtocolId == _Ipv6ProtocolId;
-
-        if (!callerIsIpv6 && IPv4Protocol.TryGetCachedAddresses(packetId, out IPv4Address src4, out IPv4Address dst4))
-        {
-            ulong sum = InternetChecksum.ComputeIPv4PseudoHeaderSum(src4.RawValue, dst4.RawValue, TcpProtoNumber, tcpLength);
-            parentField.Append(_PseudoHeaderSumFieldId, FieldValue.NewU64(sum), in context);
-            return;
-        }
-        if (!callerIsIpv4 && IPv6Protocol.TryGetCachedAddresses(packetId, out IPv6Address src6, out IPv6Address dst6))
-        {
-            ulong sum = InternetChecksum.ComputeIPv6PseudoHeaderSum(src6.High, src6.Low, dst6.High, dst6.Low, TcpProtoNumber, tcpLength);
-            parentField.Append(_PseudoHeaderSumFieldId, FieldValue.NewU64(sum), in context);
-            return;
-        }
-
-        // Fallback: sibling walk. Naturally finds the closest (innermost) IP layer in
-        // the sibling list, which is correct even in tunnel scenarios.
-        Field root = parentField.AsField();
-        if (root.TryGetLastChild(out Field prev)
-            && IpAddressExtractor.TryFindPreviousIpAddresses(prev,
-                _IpContainerFieldId, _Ipv6ContainerFieldId,
-                _IpSrcFieldId, _IpDstFieldId, _Ipv6SrcFieldId, _Ipv6DstFieldId,
-                out (IPv4Address Src, IPv4Address Dst)? ipv4,
-                out (IPv6Address Src, IPv6Address Dst)? ipv6))
-        {
-            ulong sum;
-            if (ipv4.HasValue)
-            {
-                sum = InternetChecksum.ComputeIPv4PseudoHeaderSum(ipv4.Value.Src.RawValue, ipv4.Value.Dst.RawValue, TcpProtoNumber, tcpLength);
-            }
-            else
-            {
-                IPv6Address fbSrc6 = ipv6!.Value.Src;
-                IPv6Address fbDst6 = ipv6!.Value.Dst;
-                sum = InternetChecksum.ComputeIPv6PseudoHeaderSum(fbSrc6.High, fbSrc6.Low, fbDst6.High, fbDst6.Low, TcpProtoNumber, tcpLength);
-            }
-            parentField.Append(_PseudoHeaderSumFieldId, FieldValue.NewU64(sum), in context);
-        }
-        // If no IP layer found at all, don't append — ValidateChecksum will fall back
-        // to sibling walk and return null (cannot validate).
+        ushort result = InternetChecksum.ComputeWithPseudoHeader(tcpData, pseudoSum);
+        return result == 0;
     }
 
     /// <summary>
@@ -835,6 +706,12 @@ public sealed partial class TcpProtocol : IProtocol
 
         context.RecordProtocolPresence(_ProtocolId);
         context.RecordGroupPresence(_TcpGroupId);
+
+        // tcp.seq_raw / tcp.ack_raw are unconditionally emitted by the lazy populator,
+        // so their index groups must be recorded eagerly here for the index to mirror
+        // the materialized field tree without forcing materialization.
+        context.RecordGroupPresence(_TcpSeqrawGroupId);
+        context.RecordGroupPresence(_TcpAckrawGroupId);
 
         ReadOnlySpan<byte> span = data.Span;
         if (!TcpHeader.TryParse(span, out TcpHeader header, out _))
@@ -863,12 +740,6 @@ public sealed partial class TcpProtocol : IProtocol
         if (_VerifyChecksum && header.Checksum.Value != 0)
         {
             context.RecordGroupPresence(_TcpChecksumStatusGroupId);
-            // Pre-compute pseudo-header sum here, while CallerProtocolId is still available.
-            // The lazy populator (PopulateTcpPrimary) creates a fresh ParseContext that lacks
-            // dispatch information, so ValidateChecksum cannot use CallerProtocolId directly.
-            // Storing the pre-computed value as an eager sibling field before the TCP container
-            // mirrors the approach used by UdpProtocol.
-            AppendPseudoHeaderSumIfAvailable(in parentField, (ushort)data.Length, in context);
         }
         if (payloadLen > 0)
         {
@@ -894,7 +765,12 @@ public sealed partial class TcpProtocol : IProtocol
         // Store full TCP segment (header + payload) for lazy populator
         FieldValue containerValue = FieldValue.NewBytes(data)
             .WithCustomRepresentation(ZA.Lazy(headerLen, " bytes"));
-        parentField.AppendLazyWithCustomText(_ProtocolFieldId, containerValue, summary, _Populator);
+        MutField tcpContainer = parentField.AppendLazyWithCustomText(_ProtocolFieldId, containerValue, summary, _Populator);
+
+        // Eagerly append tcp.srcport and tcp.dstport so that value-cache recording
+        // captures port numbers during the initial parse pass.
+        tcpContainer.Append(_SrcPortFieldId, FieldValue.NewU64(srcPort));
+        tcpContainer.Append(_DstPortFieldId, FieldValue.NewU64(dstPort));
 
     #endregion
 
@@ -904,32 +780,32 @@ public sealed partial class TcpProtocol : IProtocol
             flags, header.WindowSize.Value, payloadLen, span, in context);
 
         // Eagerly append tcp.stream as sibling of the lazy TCP container
-        parentField.Append(_StreamFieldId, FieldValue.NewU64(analysis.StreamIndex), in context);
+        parentField.Append(_StreamFieldId, FieldValue.NewU64(analysis.StreamIndex));
 
         // Report error when no enclosing IP layer was found (no stream tracking possible)
         if (analysis.NoIpLayer)
         {
             parentField.Append(_NoIpLayerFieldId,
-                FieldValue.NewString("No enclosing IPv4/IPv6 layer found for stream tracking"), in context);
+                FieldValue.NewString("No enclosing IPv4/IPv6 layer found for stream tracking"));
             context.RecordGroupPresence(_TcpErrorGroupId);
         }
 
         // Eagerly append stream timing fields
         if (!double.IsNaN(analysis.TimeRelative))
         {
-            parentField.Append(_TimeRelativeFieldId, FieldValue.NewF64(analysis.TimeRelative), in context);
+            parentField.Append(_TimeRelativeFieldId, FieldValue.NewF64(analysis.TimeRelative));
             context.RecordGroupPresence(_TcpTimeGroupId);
         }
         if (!double.IsNaN(analysis.TimeDelta))
         {
-            parentField.Append(_TimeDeltaFieldId, FieldValue.NewF64(analysis.TimeDelta), in context);
+            parentField.Append(_TimeDeltaFieldId, FieldValue.NewF64(analysis.TimeDelta));
         }
 
         // Eagerly append scaled window size when window scale factor is known
         if (analysis.WindowScaleFactor >= 0)
         {
-            parentField.Append(_WindowSizeFieldId, FieldValue.NewU64(analysis.ScaledWindowSize), in context);
-            parentField.Append(_WindowScaleFactorFieldId, FieldValue.NewU64((ulong)analysis.WindowScaleFactor), in context);
+            parentField.Append(_WindowSizeFieldId, FieldValue.NewU64(analysis.ScaledWindowSize));
+            parentField.Append(_WindowScaleFactorFieldId, FieldValue.NewU64((ulong)analysis.WindowScaleFactor));
             context.RecordGroupPresence(_TcpWindowsizeGroupId);
         }
 
@@ -1201,76 +1077,76 @@ public sealed partial class TcpProtocol : IProtocol
     /// </summary>
     private void AppendAnalysisFields(in MutField parentField, in TcpAnalysisResult analysis, in ParseContext context)
     {
-        MutField analysisContainer = parentField.Append(_AnalysisFieldId, FieldValue.None, in context);
+        MutField analysisContainer = parentField.Append(_AnalysisFieldId, FieldValue.None);
 
         TcpAnalysisFlags flags = analysis.Flags;
 
         if ((flags & TcpAnalysisFlags.Retransmission) != 0)
         {
-            analysisContainer.Append(_AnalysisRetransmissionFieldId, FieldValue.NewBool(true), in context);
+            analysisContainer.Append(_AnalysisRetransmissionFieldId, FieldValue.NewBool(true));
         }
         if ((flags & TcpAnalysisFlags.FastRetransmission) != 0)
         {
-            analysisContainer.Append(_AnalysisFastRetransmissionFieldId, FieldValue.NewBool(true), in context);
+            analysisContainer.Append(_AnalysisFastRetransmissionFieldId, FieldValue.NewBool(true));
         }
         if ((flags & TcpAnalysisFlags.SpuriousRetransmission) != 0)
         {
-            analysisContainer.Append(_AnalysisSpuriousRetransmissionFieldId, FieldValue.NewBool(true), in context);
+            analysisContainer.Append(_AnalysisSpuriousRetransmissionFieldId, FieldValue.NewBool(true));
         }
         if ((flags & TcpAnalysisFlags.OutOfOrder) != 0)
         {
-            analysisContainer.Append(_AnalysisOutOfOrderFieldId, FieldValue.NewBool(true), in context);
+            analysisContainer.Append(_AnalysisOutOfOrderFieldId, FieldValue.NewBool(true));
         }
         if ((flags & TcpAnalysisFlags.DuplicateAck) != 0)
         {
-            analysisContainer.Append(_AnalysisDuplicateAckFieldId, FieldValue.NewBool(true), in context);
-            analysisContainer.Append(_AnalysisDupAckNumFieldId, FieldValue.NewU64(analysis.DupAckNum), in context);
+            analysisContainer.Append(_AnalysisDuplicateAckFieldId, FieldValue.NewBool(true));
+            analysisContainer.Append(_AnalysisDupAckNumFieldId, FieldValue.NewU64(analysis.DupAckNum));
         }
         if ((flags & TcpAnalysisFlags.LostSegment) != 0)
         {
-            analysisContainer.Append(_AnalysisLostSegmentFieldId, FieldValue.NewBool(true), in context);
+            analysisContainer.Append(_AnalysisLostSegmentFieldId, FieldValue.NewBool(true));
         }
         if ((flags & TcpAnalysisFlags.KeepAlive) != 0)
         {
-            analysisContainer.Append(_AnalysisKeepAliveFieldId, FieldValue.NewBool(true), in context);
+            analysisContainer.Append(_AnalysisKeepAliveFieldId, FieldValue.NewBool(true));
         }
         if ((flags & TcpAnalysisFlags.ZeroWindow) != 0)
         {
-            analysisContainer.Append(_AnalysisZeroWindowFieldId, FieldValue.NewBool(true), in context);
+            analysisContainer.Append(_AnalysisZeroWindowFieldId, FieldValue.NewBool(true));
         }
         if ((flags & TcpAnalysisFlags.ZeroWindowProbe) != 0)
         {
-            analysisContainer.Append(_AnalysisZeroWindowProbeFieldId, FieldValue.NewBool(true), in context);
+            analysisContainer.Append(_AnalysisZeroWindowProbeFieldId, FieldValue.NewBool(true));
         }
         if ((flags & TcpAnalysisFlags.ZeroWindowProbeAck) != 0)
         {
-            analysisContainer.Append(_AnalysisZeroWindowProbeAckFieldId, FieldValue.NewBool(true), in context);
+            analysisContainer.Append(_AnalysisZeroWindowProbeAckFieldId, FieldValue.NewBool(true));
         }
         if ((flags & TcpAnalysisFlags.WindowUpdate) != 0)
         {
-            analysisContainer.Append(_AnalysisWindowUpdateFieldId, FieldValue.NewBool(true), in context);
+            analysisContainer.Append(_AnalysisWindowUpdateFieldId, FieldValue.NewBool(true));
         }
         if ((flags & TcpAnalysisFlags.WindowFull) != 0)
         {
-            analysisContainer.Append(_AnalysisWindowFullFieldId, FieldValue.NewBool(true), in context);
+            analysisContainer.Append(_AnalysisWindowFullFieldId, FieldValue.NewBool(true));
         }
 
         if (analysis.BytesInFlight > 0)
         {
-            analysisContainer.Append(_AnalysisBytesInFlightFieldId, FieldValue.NewU64(analysis.BytesInFlight), in context);
+            analysisContainer.Append(_AnalysisBytesInFlightFieldId, FieldValue.NewU64(analysis.BytesInFlight));
         }
         if (!double.IsNaN(analysis.InitialRtt))
         {
-            analysisContainer.Append(_AnalysisInitialRttFieldId, FieldValue.NewF64(analysis.InitialRtt), in context);
+            analysisContainer.Append(_AnalysisInitialRttFieldId, FieldValue.NewF64(analysis.InitialRtt));
         }
         if (!double.IsNaN(analysis.AckRtt))
         {
-            analysisContainer.Append(_AnalysisAckRttFieldId, FieldValue.NewF64(analysis.AckRtt), in context);
+            analysisContainer.Append(_AnalysisAckRttFieldId, FieldValue.NewF64(analysis.AckRtt));
         }
 
         // Connection state (always present when analysis container is shown)
         string phaseText = TcpConnectionTracker.GetPhaseDisplayText(analysis.Phase);
-        analysisContainer.Append(_AnalysisConnectionStateFieldId, FieldValue.NewString(phaseText), in context);
+        analysisContainer.Append(_AnalysisConnectionStateFieldId, FieldValue.NewString(phaseText));
     }
 
     /// <summary>
@@ -1308,13 +1184,7 @@ public sealed partial class TcpProtocol : IProtocol
         }
 
         // Level 2: Run the heuristic protocol table to detect the protocol
-        HeuristicProtocolTable? table = context.Stack?.GetHeuristicProtocolTable(_HeuristicTableId);
-        if (table is null)
-        {
-            return 0;
-        }
-
-        ProtocolId? matchedId = table.TryMatch(payload);
+        ProtocolId? matchedId = context.Stack?.TryMatchHeuristic(_HeuristicTableId, payload);
         if (matchedId is null)
         {
             return 0;
@@ -1336,24 +1206,24 @@ public sealed partial class TcpProtocol : IProtocol
     /// </summary>
     private ProtocolId TryIdentifyPortProtocol(ushort lowPort, ushort highPort, in ParseContext context)
     {
-        ProtocolTable? table = context.Stack?.GetProtocolTable(_PortTableId);
-        if (table is null)
+        Stack? stack = context.Stack;
+        if (stack is null)
         {
             return default;
         }
 
-        ReadOnlySpan<ProtocolId> protocols = table.GetAllU64(lowPort);
-        if (!protocols.IsEmpty)
+        ReadOnlySpan<ProtocolId> byLow = stack.GetProtocolsFromU64ProtocolTable(_PortTableId, lowPort);
+        if (!byLow.IsEmpty)
         {
-            return protocols[0];
+            return byLow[0];
         }
 
         if (lowPort != highPort)
         {
-            protocols = table.GetAllU64(highPort);
-            if (!protocols.IsEmpty)
+            ReadOnlySpan<ProtocolId> byHigh = stack.GetProtocolsFromU64ProtocolTable(_PortTableId, highPort);
+            if (!byHigh.IsEmpty)
             {
-                return protocols[0];
+                return byHigh[0];
             }
         }
 

@@ -23,6 +23,12 @@ public sealed class StackBuilder : IStackBuilder
     private readonly List<FieldInfo> _Fields = [];
     private readonly Dictionary<string, FieldId> _FieldNameMap = new(StringComparer.Ordinal);
 
+    // Field alias groups (independent namespace; never resolves through _FieldNameMap)
+    private readonly List<FieldAliasGroupInfo> _FieldAliasGroups = [];
+    private readonly Dictionary<string, FieldAliasGroupId> _FieldAliasGroupNameMap = new(StringComparer.Ordinal);
+    // Snapshot cache for FieldAliasGroups property; invalidated on each RegisterFieldAliasGroup call.
+    private FieldAliasGroupInfo[]? _FieldAliasGroupsSnapshot;
+
     private readonly List<ProtocolTable> _ProtocolTables = [];
     private readonly List<ProtocolTableInfo> _ProtocolTableInfos = [];
     private readonly Dictionary<string, ProtocolTableId> _ProtocolTableNameMap = new(StringComparer.Ordinal);
@@ -61,10 +67,7 @@ public sealed class StackBuilder : IStackBuilder
     /// </summary>
     private const string FrameProtocolName = "frame";
 
-    /// <summary>
-    /// When <see langword="true"/>, parser exception error messages include the full exception stack trace.
-    /// Defaults to <see langword="false"/> to keep error messages concise in production.
-    /// </summary>
+    /// <inheritdoc/>
     /// <remarks>
     /// Use object initializer syntax (<c>new StackBuilder(sm, reg) { IncludeExceptionStackTrace = true }</c>)
     /// to set this flag. The value is captured by <see cref="Build"/>; mutating it after build is impossible
@@ -101,10 +104,6 @@ public sealed class StackBuilder : IStackBuilder
             _PacketProtocolId, "packet.choice", "Choice", FieldType.String,
             "Groups alternative parse results from ambiguous protocol dispatch");
     }
-
-    #region IStack Implementation
-
-    #endregion
 
     #region Protocol Access
 
@@ -149,6 +148,31 @@ public sealed class StackBuilder : IStackBuilder
         }
         return IndexGroupId.Invalid;
     }
+
+    #endregion
+
+    #region Field Alias Group Access
+
+    /// <inheritdoc/>
+    public FieldAliasGroupInfo? GetFieldAliasGroup(FieldAliasGroupId id) =>
+        IsValidIndex(id.Value, _FieldAliasGroups.Count) ? _FieldAliasGroups[id.Value] : null;
+
+    /// <inheritdoc/>
+    public FieldAliasGroupId? GetFieldAliasGroupId(string name) =>
+        _FieldAliasGroupNameMap.TryGetValue(name, out FieldAliasGroupId id) ? id : null;
+
+    /// <inheritdoc/>
+    public ReadOnlyMemory<FieldAliasGroupInfo> FieldAliasGroups
+    {
+        get
+        {
+            _FieldAliasGroupsSnapshot ??= [.. _FieldAliasGroups];
+            return _FieldAliasGroupsSnapshot;
+        }
+    }
+
+    /// <inheritdoc/>
+    public int FieldAliasGroupCount => _FieldAliasGroups.Count;
 
     #endregion
 
@@ -359,10 +383,85 @@ public sealed class StackBuilder : IStackBuilder
         return id;
     }
 
+    #endregion
+
+    #region Field Alias Group Registration
+
+    /// <inheritdoc/>
+    public FieldAliasGroupId RegisterFieldAliasGroup(
+        ProtocolId protocolId, string name, string? description, FieldId[] fieldIds)
+    {
+        // Validate alias name; alias namespace is independent from field/table namespaces
+        // so the only collision check at this point is against existing alias names.
+        ValidateName(name);
+        if (_FieldAliasGroupNameMap.ContainsKey(name))
+        {
+            throw DuplicateNameRegistrationException.For(name);
+        }
+
+        ArgumentNullException.ThrowIfNull(fieldIds);
+        if (fieldIds.Length == 0)
+        {
+            throw new ArgumentException(
+                $"Field alias group '{name}' requires at least one member field ID.",
+                nameof(fieldIds));
+        }
+
+        // Defensive copy: callers must not influence stored membership after registration.
+        FieldId[] members = new FieldId[fieldIds.Length];
+        for (int i = 0; i < fieldIds.Length; i++)
+        {
+            FieldId memberId = fieldIds[i];
+
+            // Member field must be a registered field on this builder.
+            if (!IsValidIndex(memberId.Value, _Fields.Count))
+            {
+                throw NotFoundRegistrationException.For(
+                    $"Field alias group '{name}' references unknown field ID {memberId.Value}");
+            }
+
+            // Member field must belong to the protocol that owns this alias group.
+            if (_Fields[memberId.Value].ProtocolId != protocolId)
+            {
+                throw new ArgumentException(
+                    $"Field alias group '{name}' references field '{_Fields[memberId.Value].Name}' (ID {memberId.Value}) which belongs to protocol '{_Fields[memberId.Value].ProtocolId.Value}', not the owning protocol '{protocolId.Value}'.",
+                    nameof(fieldIds));
+            }
+
+            // Duplicate member IDs are rejected; mixed FieldType values are intentionally allowed.
+            for (int j = 0; j < i; j++)
+            {
+                if (members[j] == memberId)
+                {
+                    throw new ArgumentException(
+                        $"Field alias group '{name}' contains duplicate member field ID {memberId.Value}.",
+                        nameof(fieldIds));
+                }
+            }
+
+            members[i] = memberId;
+        }
+
+        FieldAliasGroupId id = new(_FieldAliasGroups.Count);
+        FieldAliasGroupInfo info = new(id, protocolId, name, description, members);
+        _FieldAliasGroups.Add(info);
+        _FieldAliasGroupNameMap[name] = id;
+        _FieldAliasGroupsSnapshot = null; // Invalidate snapshot cache
+        return id;
+    }
+
+    #endregion
+
+    #region RegisterFieldInGroup Implementation
+
     /// <inheritdoc/>
     public FieldId RegisterFieldInGroup(
-        ProtocolId protocolId, string name, string uiName, FieldType fieldType,
-        string indexGroup, string? description = null)
+        ProtocolId protocolId,
+        string name,
+        string uiName,
+        FieldType fieldType,
+        string indexGroup,
+        string? description = null)
     {
         // name and uiName are validated inside RegisterField
         ValidateName(indexGroup);
@@ -645,7 +744,7 @@ public sealed class StackBuilder : IStackBuilder
         list.Add(callback);
     }
 
-    /// <summary>The shared frame interface registry.</summary>
+    /// <inheritdoc/>
     public FrameInterfaceRegistry FrameInterfaceRegistry => _FrameInterfaceRegistry;
 
     #endregion
@@ -668,6 +767,58 @@ public sealed class StackBuilder : IStackBuilder
     public StreamReassemblyConfig? GetStreamReassemblyConfig(ProtocolId protocolId) =>
         _ReassemblyConfigs.GetValueOrDefault(protocolId);
 
+    /// <inheritdoc/>
+    public ReadOnlySpan<ProtocolId> GetProtocolsFromU64ProtocolTable(ProtocolTableId tableId, ulong key)
+        => IsValidIndex(tableId.Value, _ProtocolTables.Count) ? _ProtocolTables[tableId.Value].GetAllU64(key) : [];
+
+    /// <inheritdoc/>
+    public ReadOnlySpan<ProtocolId> GetProtocolsFromStringProtocolTable(ProtocolTableId tableId, string key)
+        => IsValidIndex(tableId.Value, _ProtocolTables.Count) ? _ProtocolTables[tableId.Value].GetAllString(key) : [];
+
+    /// <inheritdoc/>
+    public ReadOnlySpan<ProtocolId> GetProtocolsFromBytesProtocolTable(ProtocolTableId tableId, BytesKey key)
+        => IsValidIndex(tableId.Value, _ProtocolTables.Count) ? _ProtocolTables[tableId.Value].GetAllBytes(key) : [];
+
+    /// <inheritdoc/>
+    public ReadOnlySpan<ProtocolId> GetProtocolsFromBoolProtocolTable(ProtocolTableId tableId, bool key)
+        => IsValidIndex(tableId.Value, _ProtocolTables.Count) ? _ProtocolTables[tableId.Value].GetAllBool(key) : [];
+
+    /// <inheritdoc/>
+    public ReadOnlySpan<ProtocolId> GetProtocolsFromAnyProtocolTable(ProtocolTableId tableId)
+        => IsValidIndex(tableId.Value, _ProtocolTables.Count) ? _ProtocolTables[tableId.Value].GetAllAny() : [];
+
+    /// <inheritdoc/>
+    public IEnumerable<KeyValuePair<ulong, ReadOnlyMemory<ProtocolId>>>? GetU64TableEntries(ProtocolTableId tableId)
+        => IsValidIndex(tableId.Value, _ProtocolTables.Count) ? _ProtocolTables[tableId.Value].IterU64Entries() : null;
+
+    /// <inheritdoc/>
+    public IEnumerable<KeyValuePair<string, ReadOnlyMemory<ProtocolId>>>? GetStringTableEntries(ProtocolTableId tableId)
+        => IsValidIndex(tableId.Value, _ProtocolTables.Count) ? _ProtocolTables[tableId.Value].IterStringEntries() : null;
+
+    /// <inheritdoc/>
+    public IEnumerable<KeyValuePair<BytesKey, ReadOnlyMemory<ProtocolId>>>? GetBytesTableEntries(ProtocolTableId tableId)
+        => IsValidIndex(tableId.Value, _ProtocolTables.Count) ? _ProtocolTables[tableId.Value].IterBytesEntries() : null;
+
+    /// <inheritdoc/>
+    public IEnumerable<KeyValuePair<bool, ReadOnlyMemory<ProtocolId>>>? GetBoolTableEntries(ProtocolTableId tableId)
+        => IsValidIndex(tableId.Value, _ProtocolTables.Count) ? _ProtocolTables[tableId.Value].IterBoolEntries() : null;
+
+    /// <inheritdoc/>
+    public ReadOnlyMemory<ProtocolId>? GetAnyTableProtocolIds(ProtocolTableId tableId)
+        => IsValidIndex(tableId.Value, _ProtocolTables.Count) ? _ProtocolTables[tableId.Value].GetAnyProtocolIds() : null;
+
+    /// <inheritdoc/>
+    public ProtocolId? TryMatchHeuristic(HeuristicProtocolTableId tableId, ReadOnlyMemory<byte> data)
+        => IsValidIndex(tableId.Value, _HeuristicTables.Count) ? _HeuristicTables[tableId.Value].TryMatch(data) : null;
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// During the build phase, parse delegates are not yet bound, so this method
+    /// always returns <see langword="null"/>. It is only meaningful on the built
+    /// <see cref="Stack"/>.
+    /// </remarks>
+    public ParseDelegate? ResolveParseDelegate(ProtocolId id) => null;
+
     /// <summary>
     /// Freezes the builder into an immutable <see cref="Stack"/>.
     /// Protocol startup exceptions from <see cref="IProtocol.OnStart(Stack)"/> are collected on
@@ -676,16 +827,6 @@ public sealed class StackBuilder : IStackBuilder
     /// </summary>
     public Stack Build()
     {
-        // Register system-level settings (always available regardless of protocol stack)
-        SettingsRegistrar.RegisterStringSetting(
-            PacketIndex.ValueCacheFieldsSetting,
-            "Value Cache Fields",
-            "index",
-            string.Empty,
-            "Comma-separated list of fields to cache for fast columnar access. "
-            + "Format: 'field1:mode,field2' where mode is optional (native, compact_float, "
-            + "compact_int8/16/32, compact_uint8/16/32). Example: 'tcp.srcport:compact_uint16,ip.src'");
-
         // Collect unresolved deferred callbacks as structured warnings
         List<BuildDiagnostic> diagnostics = [];
         CollectUnresolvedCallbacks(_DeferredProtocol, BuildCallbackWarningKind.Protocol, diagnostics);
@@ -737,6 +878,11 @@ public sealed class StackBuilder : IStackBuilder
         FrozenDictionary<ProtocolId, StreamReassemblyConfig> reassemblyConfigs =
             _ReassemblyConfigs.ToFrozenDictionary();
 
+        // Freeze field alias groups (independent namespace from canonical fields)
+        FieldAliasGroupInfo[] fieldAliasGroups = [.. _FieldAliasGroups];
+        FrozenDictionary<string, FieldAliasGroupId> fieldAliasGroupNameMap =
+            _FieldAliasGroupNameMap.ToFrozenDictionary(StringComparer.Ordinal);
+
         // Auto-discover the frame protocol by name (if registered)
         ProtocolId frameProtocolId = protocolNameMap.GetValueOrDefault(FrameProtocolName, ProtocolId.Invalid);
 
@@ -754,7 +900,8 @@ public sealed class StackBuilder : IStackBuilder
             indexGroups, indexGroupNameMap,
             _FrameInterfaceRegistry,
             IncludeExceptionStackTrace,
-            reassemblyConfigs);
+            reassemblyConfigs,
+            fieldAliasGroups, fieldAliasGroupNameMap);
 
         for (int i = 0; i < protocolInstances.Length; i++)
         {

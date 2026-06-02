@@ -122,22 +122,22 @@ public sealed partial class Sll2Protocol : IProtocol
 
         // Append all fields eagerly (only 7 fields, no lazy needed)
         FieldValue headerValue = FieldValue.NewBytes(data[..HeaderSize]);
-        MutField container = parentField.AppendWithCustomText(_ProtocolFieldId, headerValue, summary, in context);
+        MutField container = parentField.AppendWithCustomText(_ProtocolFieldId, headerValue, summary);
 
         string etypeText = DisplayTables.GetEtherTypeDisplayText(etherType);
-        container.AppendWithCustomText(_EtypeFieldId, FieldValue.NewU64(etherType), etypeText, in context);
+        container.AppendWithCustomText(_EtypeFieldId, FieldValue.NewU64(etherType), etypeText);
 
-        container.Append(_ReservedFieldId, FieldValue.NewU64(reserved), in context);
-        container.Append(_IfIndexFieldId, FieldValue.NewU64(ifIndex), in context);
+        container.Append(_ReservedFieldId, FieldValue.NewU64(reserved));
+        container.Append(_IfIndexFieldId, FieldValue.NewU64(ifIndex));
 
         string haTypeText = DisplayTables.GetArpHwTypeDisplayText(haType);
-        container.AppendWithCustomText(_HaTypeFieldId, FieldValue.NewU64(haType), haTypeText, in context);
+        container.AppendWithCustomText(_HaTypeFieldId, FieldValue.NewU64(haType), haTypeText);
 
         string pktTypeText = DisplayTables.GetSllPacketTypeDisplayText(pktType);
-        container.AppendWithCustomText(_PktTypeFieldId, FieldValue.NewU64(pktType), pktTypeText, in context);
+        container.AppendWithCustomText(_PktTypeFieldId, FieldValue.NewU64(pktType), pktTypeText);
 
-        container.Append(_HaLenFieldId, FieldValue.NewU64(haLen), in context);
-        container.Append(_SrcEthFieldId, FieldValue.NewMacAddress(srcMac), in context);
+        container.Append(_HaLenFieldId, FieldValue.NewU64(haLen));
+        container.Append(_SrcEthFieldId, FieldValue.NewMacAddress(srcMac));
 
         // Dispatch to next protocol via EtherType.
         // Only values strictly greater than 0x0600 are genuine Ethernet II EtherTypes.

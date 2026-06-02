@@ -3,12 +3,11 @@
 namespace NetworkInspector.Values;
 
 /// <summary>Nanosecond-precision timestamp (nanoseconds since Unix epoch).</summary>
-/// <remarks>Creates a timestamp from nanoseconds since Unix epoch.</remarks>
 [StructLayout(LayoutKind.Sequential)]
-[method: MethodImpl(MethodImplOptions.AggressiveInlining)]
-public readonly struct Timestamp(long nanos)
-        : IEquatable<Timestamp>, IComparable<Timestamp>,
-      ISpanFormattable, IUtf8SpanFormattable, IStringSize, IBinarySerializable
+public readonly record struct Timestamp
+        : IEquatable<Timestamp>, IComparable<Timestamp>, IComparable,
+      ISpanFormattable, IUtf8SpanFormattable, IStringSize, IBinarySerializable,
+      ISpanParsable<Timestamp>, IParsable<Timestamp>
 {
     #region Constants
 
@@ -21,15 +20,31 @@ public readonly struct Timestamp(long nanos)
 
     #endregion
 
+    #region Constructor
+
+    /// <summary>Creates a <see cref="Timestamp"/> from nanoseconds since Unix epoch.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public Timestamp(long nanos)
+    {
+        _Nanos = nanos;
+    }
+
+    #endregion
+
     #region Fields
 
-    private readonly long _Nanos = nanos;
+    private readonly long _Nanos;
 
     #endregion
 
     #region Properties
 
     /// <summary>Current UTC time as a timestamp.</summary>
+    /// <remarks>
+    /// Resolution is constrained by the underlying OS clock. On Windows, <see cref="DateTimeOffset.UtcNow"/>
+    /// typically has ~15 ms resolution; the nanosecond sub-millisecond digits are therefore zero-padded.
+    /// On Linux and macOS, resolution is typically 1 µs or better.
+    /// </remarks>
     public static Timestamp Now
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -41,6 +56,10 @@ public readonly struct Timestamp(long nanos)
     }
 
     /// <summary>The raw nanosecond value.</summary>
+    /// <remarks>
+    /// Negative values represent timestamps before the Unix epoch (January 1, 1970 UTC).
+    /// Hashing and comparison treat negative values correctly (consistent with <see cref="long"/> semantics).
+    /// </remarks>
     public long AsNanos
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -92,6 +111,91 @@ public readonly struct Timestamp(long nanos)
     public static Timestamp FromSecsAndNanos(long secs, int nanos) =>
         new(secs * NanosPerSecond + nanos);
 
+    /// <summary>
+    /// Parses a timestamp from ISO 8601 UTC nanosecond format <c>yyyy-MM-ddTHH:mm:ss.nnnnnnnnnZ</c>.
+    /// </summary>
+    /// <param name="text">Input to parse; must be exactly 30 characters.</param>
+    /// <param name="result">The parsed timestamp when this method returns <see langword="true"/>.</param>
+    /// <returns><see langword="true"/> if parsing succeeded; <see langword="false"/> for any malformed input.</returns>
+    public static bool TryParse(ReadOnlySpan<char> text, out Timestamp result)
+    {
+        result = default;
+        if (text.Length != MaxFormattedLength) { return false; }
+        // Expected format: yyyy-MM-ddTHH:mm:ss.nnnnnnnnnZ
+        // Positions:       0123456789012345678901234567890
+        if (text[4] != '-' || text[7] != '-' || text[10] != 'T' ||
+            text[13] != ':' || text[16] != ':' || text[19] != '.' ||
+            text[29] != 'Z')
+        {
+            return false;
+        }
+        if (!TryParse4Digits(text[0..4], out int year)) { return false; }
+        if (!TryParse2Digits(text[5..7], out int month)) { return false; }
+        if (!TryParse2Digits(text[8..10], out int day)) { return false; }
+        if (!TryParse2Digits(text[11..13], out int hour)) { return false; }
+        if (!TryParse2Digits(text[14..16], out int minute)) { return false; }
+        if (!TryParse2Digits(text[17..19], out int second)) { return false; }
+        if (!TryParse9Digits(text[20..29], out int nanos)) { return false; }
+
+        // Validate calendar bounds
+        if (month < 1 || month > 12 || day < 1 || day > 31) { return false; }
+        if (hour > 23 || minute > 59 || second > 59) { return false; }
+
+        DateTimeOffset dto;
+        try
+        {
+            dto = new DateTimeOffset(year, month, day, hour, minute, second, TimeSpan.Zero);
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            return false;
+        }
+
+        long epochSecs = (dto.Ticks - DateTimeOffset.UnixEpoch.Ticks) / TimeSpan.TicksPerSecond;
+        result = new Timestamp(epochSecs * NanosPerSecond + nanos);
+        return true;
+    }
+
+    #endregion
+
+    #region ISpanParsable / IParsable
+
+    /// <inheritdoc/>
+    static bool ISpanParsable<Timestamp>.TryParse(
+        ReadOnlySpan<char> s, IFormatProvider? provider, out Timestamp result)
+        => TryParse(s, out result);
+
+    /// <inheritdoc/>
+    static Timestamp ISpanParsable<Timestamp>.Parse(
+        ReadOnlySpan<char> s, IFormatProvider? provider)
+    {
+        if (!TryParse(s, out Timestamp result))
+        {
+            throw new FormatException($"Input '{s}' is not a valid Timestamp.");
+        }
+        return result;
+    }
+
+    /// <inheritdoc/>
+    static bool IParsable<Timestamp>.TryParse(
+        string? s, IFormatProvider? provider, out Timestamp result)
+    {
+        if (s is null) { result = default; return false; }
+        return TryParse(s.AsSpan(), out result);
+    }
+
+    /// <inheritdoc/>
+    static Timestamp IParsable<Timestamp>.Parse(
+        string s, IFormatProvider? provider)
+    {
+        ArgumentNullException.ThrowIfNull(s);
+        if (!TryParse(s.AsSpan(), out Timestamp result))
+        {
+            throw new FormatException($"Input '{s}' is not a valid Timestamp.");
+        }
+        return result;
+    }
+
     #endregion
 
     #region Arithmetic
@@ -112,8 +216,17 @@ public readonly struct Timestamp(long nanos)
     public static Timestamp Subtract(Timestamp ts, TimeSpan duration) =>
         new(ts._Nanos - duration.Ticks * 100);
     /// <summary>Returns the duration between two timestamps.</summary>
-    public static TimeSpan Subtract(Timestamp a, Timestamp b) =>
-        TimeSpan.FromTicks((a._Nanos - b._Nanos) / 100);
+    /// <remarks>Uses <c>Ticks * 100</c> for exact nanosecond conversion (1 tick = 100 ns).
+    /// Throws <see cref="OverflowException"/> when the nanosecond delta exceeds <see cref="long"/> range.</remarks>
+    /// <exception cref="OverflowException">Thrown when the nanosecond delta overflows a signed 64-bit integer.</exception>
+    public static TimeSpan Subtract(Timestamp a, Timestamp b)
+    {
+        checked
+        {
+            long delta = a._Nanos - b._Nanos;
+            return TimeSpan.FromTicks(delta / 100);
+        }
+    }
 
     #endregion
 
@@ -254,7 +367,12 @@ public readonly struct Timestamp(long nanos)
         return written;
     }
 
-    /// <summary>Returns a <see cref="TempString"/> backed by a thread-static buffer.</summary>
+    /// <summary>Returns a <see cref="TempString"/> backed by a thread-static or pooled buffer.</summary>
+    /// <remarks>
+    /// The underlying buffer is thread-local or pooled. The caller must dispose the returned <see cref="TempString"/>
+    /// before making another <see cref="FormatTemp"/> call on the same thread to avoid overwriting the buffer.
+    /// Do not retain references to the underlying span after disposal.
+    /// </remarks>
     public TempString FormatTemp()
     {
         char[] buffer = ZeroAllocHelper.AcquireCharBuffer(MaxFormattedLength, out bool isThreadStatic);
@@ -263,6 +381,7 @@ public readonly struct Timestamp(long nanos)
     }
 
     /// <summary>Returns the formatted timestamp as a new string.</summary>
+    /// <remarks>Allocates a new string on every call. Use <see cref="FormatInto"/> or <see cref="FormatTemp"/> for allocation-free hot paths.</remarks>
     public string Format()
     {
         Span<char> buf = stackalloc char[MaxFormattedLength];
@@ -282,30 +401,20 @@ public readonly struct Timestamp(long nanos)
 
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public bool Equals(Timestamp other) => _Nanos == other._Nanos;
-    /// <inheritdoc/>
-    public override bool Equals(object? obj) => obj is Timestamp other && Equals(other);
-    /// <inheritdoc/>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public override int GetHashCode() => _Nanos.GetHashCode();
-    /// <inheritdoc/>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public int CompareTo(Timestamp other) => _Nanos.CompareTo(other._Nanos);
+
+    /// <inheritdoc/>
+    int IComparable.CompareTo(object? obj)
+    {
+        if (obj is null) { return 1; }
+        if (obj is Timestamp other) { return CompareTo(other); }
+        throw new ArgumentException($"Object must be of type {nameof(Timestamp)}.", nameof(obj));
+    }
 
     #endregion
 
     #region Operators
 
-    /// <summary>Returns <see langword="true"/> if <paramref name="left"/> and <paramref name="right"/> are equal.</summary>
-    /// <param name="left">The left operand.</param>
-    /// <param name="right">The right operand.</param>
-    /// <returns><see langword="true"/> if the condition holds; otherwise <see langword="false"/>.</returns>
-    public static bool operator ==(Timestamp left, Timestamp right) => left._Nanos == right._Nanos;
-    /// <summary>Returns <see langword="true"/> if <paramref name="left"/> and <paramref name="right"/> are not equal.</summary>
-    /// <param name="left">The left operand.</param>
-    /// <param name="right">The right operand.</param>
-    /// <returns><see langword="true"/> if the condition holds; otherwise <see langword="false"/>.</returns>
-    public static bool operator !=(Timestamp left, Timestamp right) => left._Nanos != right._Nanos;
     /// <summary>Returns <see langword="true"/> if <paramref name="left"/> is less than <paramref name="right"/>.</summary>
     /// <param name="left">The left operand.</param>
     /// <param name="right">The right operand.</param>
@@ -356,6 +465,44 @@ public readonly struct Timestamp(long nanos)
             dest[i] = (char)('0' + nanos % 10);
             nanos /= 10;
         }
+    }
+
+    // Parse exactly 4 decimal digits.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool TryParse4Digits(ReadOnlySpan<char> s, out int value)
+    {
+        value = 0;
+        for (int i = 0; i < 4; i++)
+        {
+            char c = s[i];
+            if (c < '0' || c > '9') { return false; }
+            value = value * 10 + (c - '0');
+        }
+        return true;
+    }
+
+    // Parse exactly 2 decimal digits.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool TryParse2Digits(ReadOnlySpan<char> s, out int value)
+    {
+        char c0 = s[0]; char c1 = s[1];
+        if (c0 < '0' || c0 > '9' || c1 < '0' || c1 > '9') { value = 0; return false; }
+        value = (c0 - '0') * 10 + (c1 - '0');
+        return true;
+    }
+
+    // Parse exactly 9 decimal digits.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool TryParse9Digits(ReadOnlySpan<char> s, out int value)
+    {
+        value = 0;
+        for (int i = 0; i < 9; i++)
+        {
+            char c = s[i];
+            if (c < '0' || c > '9') { return false; }
+            value = value * 10 + (c - '0');
+        }
+        return true;
     }
     #endregion
 }

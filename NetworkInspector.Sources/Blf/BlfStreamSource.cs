@@ -225,7 +225,7 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
     /// This method is <b>not</b> thread-safe. It must be called from a single thread only.
     /// All mutable state (stream position, container state, frame index) is accessed without synchronization.
     /// </remarks>
-    public Frame? NextFrame()
+    public Frame? NextFrame(CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _Disposed), this);
 
@@ -238,6 +238,8 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
         {
             return null;
         }
+
+        cancellationToken.ThrowIfCancellationRequested();
 
         // Parse file header on first call (deferred so Start() doesn't throw)
         if (!_Initialized)
@@ -289,7 +291,7 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
             {
                 _Stream.Dispose();
             }
-            catch (Exception) { Interlocked.Increment(ref _ErrorCount); }
+            catch (ObjectDisposedException) { /* idempotent — stream already disposed */ }
         }
 
         GC.SuppressFinalize(this);
@@ -567,7 +569,7 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
                 FrameIndex = _FrameIndex,
                 FileOffset = -1,
                 Kind = FrameReadErrorKind.DecompressionFailure,
-                Message = $"Container decompression failed: {(ex is OutOfMemoryException ? "OutOfMemoryException" : ex.Message)}"
+                Message = $"Container decompression failed: {(ex is OutOfMemoryException ? "OutOfMemoryException" : ex.Message)}."
             });
             _PendingContainer = null;
         }

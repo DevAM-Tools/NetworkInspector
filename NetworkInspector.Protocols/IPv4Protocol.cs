@@ -24,8 +24,6 @@ namespace NetworkInspector.Protocols;
 /// ├── ip.checksum.status: [Good] / [Bad]  [optional, when verification enabled]
 /// ├── ip.src: 192.168.1.100                 [eager]
 /// ├── ip.dst: 10.0.0.1                       [eager]
-/// ├── ip.addr: 192.168.1.100                [any-match, lazy]
-/// ├── ip.addr: 10.0.0.1                     [any-match, lazy]
 /// └── ip.options: Options (N bytes)       [optional, when IHL > 5]
 ///     ├── ip.opt.record_route: Record Route (N bytes, M entries)
 ///     │   ├── ip.opt.type: 7 (Record Route)
@@ -145,17 +143,10 @@ public sealed partial class IPv4Protocol : IProtocol
     [IPv4Field("ip.dst", "Destination Address", IndexGroup = IpIndexGroup)]
     private FieldId _DstFieldId;
 
-    // Combined address field (Wireshark ip.addr compatibility).
-    // Appended twice (once for src, once for dst) to enable any-match filter semantics:
-    // `ip.addr == 10.0.0.1` matches either source or destination.
-    [IPv4Field("ip.addr", "Address", IndexGroup = IpIndexGroup)]
-    private FieldId _AddrFieldId;
-
-    // Second lazy group container: stores header bytes for the details populator.
-    // Groups version, length, flags, TTL, protocol, checksum, and options separately
-    // from the identifying address fields.
-    [BytesField("ip.hdr", "Header Details", IndexGroup = IpIndexGroup)]
-    private FieldId _HdrDetailsFieldId;
+    // Field alias group ID assigned in RegisterFieldsCustom for "ip.addr" -> { ip.src, ip.dst }.
+    // Alias names are metadata-only and never resolve through GetFieldId; the parse tree
+    // contains no ip.addr node.
+    private FieldAliasGroupId _AddrAliasGroupId;
 
     // Options container field (optional, when IHL > 5)
     [NoneField("ip.options", "Options", IndexGroup = "ip.options")]
@@ -252,10 +243,9 @@ public sealed partial class IPv4Protocol : IProtocol
     [BoolSetting("ip.verify_checksum", "Verify Checksum", "ip", Default = false)]
     private bool _VerifyChecksum;
 
-    // Pre-allocated delegates: created once in OnStartCustom, reused for every packet.
+    // Pre-allocated delegate: created once in OnStartCustom, reused for every packet.
     // Captures only `this` (singleton) — zero per-packet allocation.
     private LazyPopulator _Populator = null!;
-    private LazyPopulator _DetailsPopulator = null!;
 
     // Dense dispatch cache for the IP protocol byte (256 entries, ~2 kB).
     // Built once in OnStart from the ip.proto table; avoids a dictionary lookup per packet.
@@ -275,8 +265,7 @@ public sealed partial class IPv4Protocol : IProtocol
     /// </summary>
     partial void OnStartCustom(Stack stack)
     {
-        _Populator = (in MutField container) => PopulateIPv4Primary(in container);
-        _DetailsPopulator = (in MutField container) => PopulateIPv4Details(in container);
+        _Populator = PopulateIPv4;
         _OptionFieldIds = BuildOptionFieldIds();
         // Pre-build 256-entry dense cache: IP protocol field is a u8, so the full domain
         // fits in ~2 kB and direct array indexing replaces dictionary lookup per packet.
@@ -285,51 +274,26 @@ public sealed partial class IPv4Protocol : IProtocol
     }
 
     /// <summary>
-    /// Primary lazy group: source and destination addresses plus any-match <c>ip.addr</c>
-    /// fields. Registers <c>ip.hdr</c> as a second lazy group for all remaining header fields.
-    /// Called on first access of the IPv4 container's children.
+    /// Registers protocol-owned alias groups. Adds "ip.addr" -> { ip.src, ip.dst } as
+    /// metadata; the alias is reachable only via the alias-group APIs on IStack.
     /// </summary>
-    private ParseResult PopulateIPv4Primary(in MutField container)
+    partial void RegisterFieldsCustom(IStackBuilder builder, ProtocolId protocolId)
     {
-        ParseContext context = new ParseContext(container.Packet.Stack);
-        if (!container.Value.Data.TryGetAsBytes(out ReadOnlyMemory<byte> headerBytes))
-        {
-            return ParseError.InvalidData(ProtocolName, "Container value is not of type Bytes");
-        }
-        if (headerBytes.Length < IPv4Header.MinHeaderSize)
-        {
-            return ParseError.InsufficientDataWithInfo(ProtocolName, IPv4Header.MinHeaderSize, (ulong)headerBytes.Length);
-        }
-
-        ReadOnlySpan<byte> span = headerBytes.Span;
-        IPv4Address src = IPv4Header.GetSrc(span);
-        IPv4Address dst = IPv4Header.GetDst(span);
-
-        container.Append(_SrcFieldId, FieldValue.NewIPv4(src), in context);
-        container.Append(_DstFieldId, FieldValue.NewIPv4(dst), in context);
-
-        // ip.addr any-match fields
-        container.Append(_AddrFieldId, FieldValue.NewIPv4(src), in context);
-        container.Append(_AddrFieldId, FieldValue.NewIPv4(dst), in context);
-
-        // Register the details group for all remaining header fields.
-        container.AppendLazyWithCustomText(
-            _HdrDetailsFieldId,
-            FieldValue.NewBytes(headerBytes),
-            new LazyString("Header Details"),
-            _DetailsPopulator);
-
-        return 0;
+        _AddrAliasGroupId = builder.RegisterFieldAliasGroup(
+            protocolId,
+            "ip.addr",
+            "Any-match alias for source/destination IPv4 addresses.",
+            [_SrcFieldId, _DstFieldId]);
     }
 
     /// <summary>
-    /// Details lazy group: version, header length, DSCP, ECN, total length, identification,
-    /// flags, fragment offset, TTL, protocol, checksum, and options.
-    /// Fires only when <c>ip.hdr</c> children are accessed (e.g., during full materialisation).
+    /// Lazy populator: version, header length, DSCP, ECN, total length, identification,
+    /// flags, fragment offset, TTL, checksum, and options. Source address, destination
+    /// address, and protocol number are eagerly appended by <see cref="Parse"/>.
+    /// Called on first access of the IPv4 container's children.
     /// </summary>
-    private ParseResult PopulateIPv4Details(in MutField container)
+    private ParseResult PopulateIPv4(in MutField container)
     {
-        ParseContext context = new ParseContext(container.Packet.Stack);
         if (!container.Value.Data.TryGetAsBytes(out ReadOnlyMemory<byte> headerBytes))
         {
             return ParseError.InvalidData(ProtocolName, "Container value is not of type Bytes");
@@ -345,6 +309,16 @@ public sealed partial class IPv4Protocol : IProtocol
             return ParseError.InvalidData(ProtocolName, "Failed to parse IPv4 header");
         }
 
+        IPv4Address src = IPv4Header.GetSrc(span);
+        IPv4Address dst = IPv4Header.GetDst(span);
+
+        // ip.src and ip.dst are eagerly appended by Parse() as non-lazy children so that
+        // IpAddressExtractor can find them without materialising the lazy group.
+        // The populator skips them to avoid duplicate entries.
+
+        // ip.addr is exposed as an alias group registered in RegisterFieldsCustom; no
+        // duplicate ip.addr field node is appended to the parse tree.
+
         byte version = header.Version;
         int headerLen = header.HeaderLength; // bytes
         byte dscp = header.Dscp;
@@ -359,44 +333,43 @@ public sealed partial class IPv4Protocol : IProtocol
         byte protocol = header.Protocol;
         ushort checksum = header.Checksum.Value;
 
-        container.Append(_VersionFieldId, FieldValue.NewU64(version), in context);
+        container.Append(_VersionFieldId, FieldValue.NewU64(version));
 
         string hdrLenText = DisplayTables.GetHeaderLengthDisplayText(headerLen);
-        container.AppendWithCustomText(_HdrLenFieldId, FieldValue.NewU64((ulong)headerLen), hdrLenText, in context);
+        container.AppendWithCustomText(_HdrLenFieldId, FieldValue.NewU64((ulong)headerLen), hdrLenText);
 
         string dscpText = DisplayTables.GetDscpDisplayText(dscp);
-        container.AppendWithCustomText(_DscpFieldId, FieldValue.NewU64(dscp), dscpText, in context);
+        container.AppendWithCustomText(_DscpFieldId, FieldValue.NewU64(dscp), dscpText);
 
         string ecnText = DisplayTables.GetEcnDisplayText(ecn);
-        container.AppendWithCustomText(_EcnFieldId, FieldValue.NewU64(ecn), ecnText, in context);
+        container.AppendWithCustomText(_EcnFieldId, FieldValue.NewU64(ecn), ecnText);
 
-        container.Append(_TotalLenFieldId, FieldValue.NewU64(totalLength), in context);
+        container.Append(_TotalLenFieldId, FieldValue.NewU64(totalLength));
 
         string idText = DisplayTables.FormatHexU16(identification);
-        container.AppendWithCustomText(_IdFieldId, FieldValue.NewU64(identification), idText, in context);
+        container.AppendWithCustomText(_IdFieldId, FieldValue.NewU64(identification), idText);
 
         // Flags container — precomputed display text lists active flag abbreviations.
         MutField flagsField = container.AppendWithCustomText(
             _FlagsFieldId, FieldValue.None,
-            IPv4.IPv4FlagsFormatter.Format(reservedBit, dontFragment, moreFragments), in context);
-        flagsField.Append(_FlagsRbFieldId, FieldValue.NewBool(reservedBit), in context);
-        flagsField.Append(_FlagsDfFieldId, FieldValue.NewBool(dontFragment), in context);
-        flagsField.Append(_FlagsMfFieldId, FieldValue.NewBool(moreFragments), in context);
-        container.Append(_FragOffsetFieldId, FieldValue.NewU64(fragOffset), in context);
-        container.Append(_TtlFieldId, FieldValue.NewU64(ttl), in context);
+            IPv4.IPv4FlagsFormatter.Format(reservedBit, dontFragment, moreFragments));
+        flagsField.Append(_FlagsRbFieldId, FieldValue.NewBool(reservedBit));
+        flagsField.Append(_FlagsDfFieldId, FieldValue.NewBool(dontFragment));
+        flagsField.Append(_FlagsMfFieldId, FieldValue.NewBool(moreFragments));
+        container.Append(_FragOffsetFieldId, FieldValue.NewU64(fragOffset));
+        container.Append(_TtlFieldId, FieldValue.NewU64(ttl));
 
-        string protoText = DisplayTables.GetIpProtocolDisplayText(protocol);
-        container.AppendWithCustomText(_ProtoFieldId, FieldValue.NewU64(protocol), protoText, in context);
+        // ip.proto is eagerly appended by Parse() for value-cache recording.
 
         string csumText = DisplayTables.FormatHexU16(checksum);
-        container.AppendWithCustomText(_ChecksumFieldId, FieldValue.NewU64(checksum), csumText, in context);
+        container.AppendWithCustomText(_ChecksumFieldId, FieldValue.NewU64(checksum), csumText);
 
         // IPV4-02: Re-verify checksum from the stored header bytes at materialisation time.
         if (_VerifyChecksum)
         {
             ushort computed = InternetChecksum.Compute(span);
             bool checksumValid = computed == 0;
-            container.Append(_ChecksumStatusFieldId, FieldValue.NewString(checksumValid ? "[Good]" : "[Bad]"), in context);
+            container.Append(_ChecksumStatusFieldId, FieldValue.NewString(checksumValid ? "[Good]" : "[Bad]"));
         }
 
         // IPV4-01: Parse individual options when present (IHL > 5).
@@ -407,9 +380,9 @@ public sealed partial class IPv4Protocol : IProtocol
 
             MutField optionsContainer = container.AppendWithCustomText(
                 _OptionsFieldId, FieldValue.None,
-                (string)ZA.String("Options (", optionsLen, " bytes)"), in context);
+                (string)ZA.String("Options (", optionsLen, " bytes)"));
 
-            IPv4OptionsParser.Parse(optionsContainer, optionsSpan, in _OptionFieldIds, in context);
+            IPv4OptionsParser.Parse(optionsContainer, optionsSpan, in _OptionFieldIds);
         }
 
         return 0;
@@ -489,8 +462,16 @@ public sealed partial class IPv4Protocol : IProtocol
         string hdrLenRepresentation = DisplayTables.GetHeaderLengthDisplayText(headerLen);
         FieldValue headerValue = FieldValue.NewBytes(headerBytes)
             .WithCustomRepresentation(hdrLenRepresentation);
-        parentField.AppendLazyWithCustomText(
+        MutField ipContainer = parentField.AppendLazyWithCustomText(
             _ProtocolFieldId, headerValue, summary, _Populator);
+
+        // Eagerly append ip.src, ip.dst, and ip.proto as non-lazy children so downstream
+        // protocols (e.g., TCP/UDP) can locate IPv4 addresses via IpAddressExtractor
+        // without materialising the lazy ip group, and so that value-cache recording
+        // captures these key fields during the initial parse pass.
+        ipContainer.Append(_SrcFieldId, FieldValue.NewIPv4(src));
+        ipContainer.Append(_DstFieldId, FieldValue.NewIPv4(dst));
+        ipContainer.AppendWithCustomText(_ProtoFieldId, FieldValue.NewU64(protocol), DisplayTables.GetIpProtocolDisplayText(protocol));
 
         // Cache raw IPv4 addresses in the thread-local field directly on this protocol
         // so downstream transport protocols (TCP, UDP) can read them without

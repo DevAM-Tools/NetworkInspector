@@ -9,12 +9,7 @@ namespace NetworkInspector.Sources.Tests.Random;
 /// </summary>
 internal sealed class RandomFrameSourceTests
 {
-    private static void StartSource(RandomFrameSource source, out FrameInterfaceRegistry registry)
-    {
-        registry = new FrameInterfaceRegistry();
-        FrameSourceId sourceId = registry.RegisterSource(source);
-        source.Start(sourceId, registry);
-    }
+
 
     // ========================================================================
     // Determinism — same seed produces identical frames
@@ -27,10 +22,10 @@ internal sealed class RandomFrameSourceTests
         const int count = 10;
 
         using RandomFrameSource source1 = new(count, seed);
-        StartSource(source1, out _);
+        SourceTestFixture.InitializeAndStartSource(source1);
 
         using RandomFrameSource source2 = new(count, seed);
-        StartSource(source2, out _);
+        SourceTestFixture.InitializeAndStartSource(source2);
 
         for (int i = 0; i < count; i++)
         {
@@ -47,10 +42,10 @@ internal sealed class RandomFrameSourceTests
     public async Task DifferentSeed_ProducesDifferentFrames()
     {
         using RandomFrameSource source1 = new(1, seed: 42);
-        StartSource(source1, out _);
+        SourceTestFixture.InitializeAndStartSource(source1);
 
         using RandomFrameSource source2 = new(1, seed: 99);
-        StartSource(source2, out _);
+        SourceTestFixture.InitializeAndStartSource(source2);
 
         Frame? f1 = source1.NextFrame();
         Frame? f2 = source2.NextFrame();
@@ -70,7 +65,7 @@ internal sealed class RandomFrameSourceTests
     {
         const int count = 5;
         using RandomFrameSource source = new(count, seed: 42);
-        StartSource(source, out _);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         for (int i = 0; i < count; i++)
         {
@@ -110,7 +105,7 @@ internal sealed class RandomFrameSourceTests
             BaseTimestamp = baseTs,
             TimestampInterval = interval,
         });
-        StartSource(source, out _);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         Frame? f0 = source.NextFrame();
         Frame? f1 = source.NextFrame();
@@ -146,7 +141,7 @@ internal sealed class RandomFrameSourceTests
             Seed = 42,
             Mode = mode,
         });
-        StartSource(source, out _);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         for (int i = 0; i < 3; i++)
         {
@@ -171,7 +166,7 @@ internal sealed class RandomFrameSourceTests
             Seed = 42,
             Mode = RandomFrameMode.Can,
         });
-        StartSource(source, out _);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         Frame? frame = source.NextFrame();
         await Assert.That(frame).IsNotNull();
@@ -189,7 +184,7 @@ internal sealed class RandomFrameSourceTests
             Seed = 42,
             Mode = RandomFrameMode.CanFd,
         });
-        StartSource(source, out _);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         Frame? frame = source.NextFrame();
         await Assert.That(frame).IsNotNull();
@@ -217,7 +212,7 @@ internal sealed class RandomFrameSourceTests
             Seed = 42,
             Mode = mode,
         });
-        StartSource(source, out _);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         Frame? frame = source.NextFrame();
         await Assert.That(frame).IsNotNull();
@@ -239,7 +234,7 @@ internal sealed class RandomFrameSourceTests
     public async Task NextFrame_AfterDispose_Throws()
     {
         RandomFrameSource source = new(1, seed: 42);
-        StartSource(source, out _);
+        SourceTestFixture.InitializeAndStartSource(source);
         source.Dispose();
 
         await Assert.That(() => source.NextFrame()).Throws<ObjectDisposedException>();
@@ -251,7 +246,7 @@ internal sealed class RandomFrameSourceTests
         using RandomFrameSource source = new(1, seed: 42);
         await Assert.That(source.IsRunning).IsFalse();
 
-        StartSource(source, out _);
+        SourceTestFixture.InitializeAndStartSource(source);
         await Assert.That(source.IsRunning).IsTrue();
 
         source.Dispose();
@@ -262,7 +257,7 @@ internal sealed class RandomFrameSourceTests
     public async Task Dispose_CalledTwice_DoesNotThrow()
     {
         RandomFrameSource source = new(1, seed: 42);
-        StartSource(source, out _);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         source.Dispose();
 

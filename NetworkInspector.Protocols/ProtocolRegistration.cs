@@ -22,7 +22,7 @@ public static class ProtocolRegistration
     ///   <item><b>Fallback:</b> Data (raw bytes when no specific dissector applies).</item>
     /// </list>
     /// <para>The frame protocol is auto-discovered by name "frame" during
-    /// <see cref="StackBuilder.Build"/> and stored on <see cref="Stack.FrameProtocolId"/>.</para>
+    /// <see cref="StackBuilder.Build"/> and stored on the stack's <c>FrameProtocolId</c> property.</para>
     /// <para>Dispatch graph (high level):
     /// PacketProtocol → Frame (<c>frame.link_type</c>) → {Ethernet | SLL | SLL2 | CAN | FlexRay | LIN}
     /// → Ethernet (<c>eth.type</c>) → {IPv4 | IPv6 | ARP | VLAN | LLC}

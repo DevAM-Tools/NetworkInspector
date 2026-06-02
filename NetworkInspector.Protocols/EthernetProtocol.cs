@@ -7,20 +7,19 @@ namespace NetworkInspector.Protocols;
 /// <para>Field tree structure:</para>
 /// <code>
 /// eth: Ethernet II, Src: XX:XX:XX:XX:XX:XX, Dst: XX:XX:XX:XX:XX:XX
-/// ├── eth.dst: XX:XX:XX:XX:XX:XX
-/// │   ├── eth.dst.ig: false (Individual/Group bit)
-/// │   ├── eth.dst.lg: false (Local/Global bit)
-/// │   └── eth.addr: XX:XX:XX:XX:XX:XX          [any-match]
-/// ├── eth.src: XX:XX:XX:XX:XX:XX
-/// │   ├── eth.src.ig: false
-/// │   ├── eth.src.lg: false
-/// │   └── eth.addr: XX:XX:XX:XX:XX:XX          [any-match]
+/// ├── eth.dst: XX:XX:XX:XX:XX:XX  (CustomText carries I/G + L/G semantics)
+/// ├── eth.src: XX:XX:XX:XX:XX:XX  (CustomText carries I/G + L/G semantics)
 /// ├── eth.type: 0x0800 (IPv4)
 /// ├── eth.padding: (N bytes)      [optional, when frame padded to minimum]
 /// ├── eth.trailer: (N bytes)      [optional, extra bytes after payload+padding]
 /// ├── eth.fcs: 0x12345678          [optional, when FCS checking enabled]
 /// └── eth.fcs.status: [Good]       [optional, FCS validation result]
 /// </code>
+/// <para>
+/// The any-match name <c>eth.addr</c> is exposed via a field alias group registered
+/// in <see cref="RegisterFieldsCustom"/> that resolves to <c>{ eth.dst, eth.src }</c>;
+/// no <c>eth.addr</c> field node is appended to the parse tree.
+/// </para>
 /// </summary>
 /// <remarks>
 /// <para><b>Thread safety:</b> instances are immutable after registration completes.
@@ -68,28 +67,14 @@ public sealed partial class EthernetProtocol : IProtocol
     [MacField("eth.dst", "Destination", IndexGroup = EthIndexGroup)]
     private FieldId _DstFieldId;
 
-    [BoolField("eth.dst.ig", "I/G bit", IndexGroup = EthIndexGroup)]
-    private FieldId _DstIgFieldId;
-
-    [BoolField("eth.dst.lg", "L/G bit", IndexGroup = EthIndexGroup)]
-    private FieldId _DstLgFieldId;
-
     [MacField("eth.src", "Source", IndexGroup = EthIndexGroup)]
     private FieldId _SrcFieldId;
 
-    [BoolField("eth.src.ig", "I/G bit", IndexGroup = EthIndexGroup)]
-    private FieldId _SrcIgFieldId;
-
-    [BoolField("eth.src.lg", "L/G bit", IndexGroup = EthIndexGroup)]
-    private FieldId _SrcLgFieldId;
-
-    // Combined address field (Wireshark eth.addr compatibility).
-    // Appended twice per frame — once for destination and once for source — so that
-    // filter expressions like `eth.addr == XX:XX:XX:XX:XX:XX` match either endpoint.
-    // The filter engine handles multi-occurrence MAC fields with "any-match" semantics
-    // via StackValue.MacCollection.
-    [MacField("eth.addr", "Address", IndexGroup = EthIndexGroup)]
-    private FieldId _AddrFieldId;
+    // Field alias group ID assigned in RegisterFieldsCustom for "eth.addr" -> { eth.dst, eth.src }.
+    // The alias name is metadata-only: GetFieldId("eth.addr") never resolves, and the parse
+    // tree never contains a separate eth.addr node. Filter engines that need any-match semantics
+    // must consult the alias registry instead of enumerating duplicate field nodes.
+    private FieldAliasGroupId _AddrAliasGroupId;
 
     // Mutually exclusive: type (Ethernet II) vs length (802.3)
     [U64Field(EtherTypeTableName, "Type", IndexGroup = "eth.type")]
@@ -127,80 +112,50 @@ public sealed partial class EthernetProtocol : IProtocol
     [BoolSetting("eth.assume_fcs", "Assume FCS present", "eth", Default = false)]
     private bool _AssumeFcs;
 
-    // Pre-allocated delegate: created once in OnStartCustom, reused for every packet.
-    // Captures only `this` (singleton) — zero per-packet allocation.
-    private LazyPopulator _Populator = null!;
-
     // Sparse dispatch cache built from the EtherType protocol table at stack start.
     // Linear scan over typically 4–6 entries; avoids dictionary hash computation per packet.
     // Pre-bound delegates for direct invocation without interface vtable dispatch.
     private (ulong Key, ParseDelegate Parse)[] _EtherTypeSparseCache = [];
 
     /// <summary>
-    /// Pre-allocates the lazy-field populator delegate and builds the EtherType dispatch cache.
-    /// Neither allocation occurs per packet — both are one-time costs at stack start.
+    /// Registers protocol-owned alias groups. Runs at build time after all canonical
+    /// fields are registered. Adds "eth.addr" -> { eth.dst, eth.src } as metadata.
     /// </summary>
-    partial void OnStartCustom(Stack stack)
+    partial void RegisterFieldsCustom(IStackBuilder builder, ProtocolId protocolId)
     {
-        _Populator = (in MutField container) => PopulateEthernetFields(in container);
-        // Sparse cache: EtherType is 16-bit (65 536 possible values) but only 4–6 are registered.
-        // A tiny array scan beats a dictionary for such small sets.
-        // Delegate cache stores pre-bound ParseDelegate for direct invocation.
-        _EtherTypeSparseCache = stack.BuildU64SparseDelegateCache(_EtherTypeTableId);
+        _AddrAliasGroupId = builder.RegisterFieldAliasGroup(
+            protocolId,
+            "eth.addr",
+            "Any-match alias for source/destination MAC addresses.",
+            [_DstFieldId, _SrcFieldId]);
     }
 
     /// <summary>
-    /// Builds the Ethernet child-field tree from the header bytes stored in
-    /// <paramref name="container"/>'s field value.  Called lazily on first access.
-    /// All address and type/length fields are populated here — no downstream
-    /// protocol requires MAC addresses eagerly, so deferring all fields to
-    /// the lazy populator avoids per-packet field appends on the hot path.
+    /// All four I/G + L/G display strings, indexed by <c>(IsMulticast ? 2 : 0) | (IsLocal ? 1 : 0)</c>.
+    /// Precomputed to eliminate per-packet string interpolation allocations.
     /// </summary>
-    private ParseResult PopulateEthernetFields(in MutField container)
-    {
-        ParseContext context = new ParseContext(container.Packet.Stack);
-        if (!container.Value.Data.TryGetAsBytes(out ReadOnlyMemory<byte> hdrBytes))
-        {
-            return ParseError.InvalidData(ProtocolName, "Container value is not of type Bytes");
-        }
+    private static readonly string[] _MacBitsTable =
+    [
+        "Unicast, Globally Unique",        // 0b00  !multicast, !local
+        "Unicast, Locally Administered",   // 0b01  !multicast,  local
+        "Multicast, Globally Unique",      // 0b10   multicast, !local
+        "Multicast, Locally Administered", // 0b11   multicast,  local
+    ];
 
-        if (hdrBytes.Length < HeaderSize)
-        {
-            return ParseError.InsufficientDataWithInfo(ProtocolName, HeaderSize, (ulong)hdrBytes.Length);
-        }
+    /// <summary>
+    /// Returns the I/G + L/G display string for <paramref name="address"/>
+    /// from the precomputed <see cref="_MacBitsTable"/>; no allocation.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static string FormatMacAddressBits(MacAddress address)
+        => _MacBitsTable[(address.IsMulticast ? 2 : 0) | (address.IsLocal ? 1 : 0)];
 
-        ReadOnlySpan<byte> span = hdrBytes.Span;
-
-        // Parse MAC addresses and decompose I/G and L/G bits.
-        // eth.addr is appended as a child of the respective dst/src field
-        // for structured tree navigation and any-match filter semantics.
-        MacAddress dst = MacAddress.FromBytes(span[..6]);
-        MacAddress src = MacAddress.FromBytes(span[6..12]);
-
-        MutField dstField = container.Append(_DstFieldId, FieldValue.NewMacAddress(dst), in context);
-        dstField.Append(_DstIgFieldId, FieldValue.NewBool(dst.IsMulticast), in context);
-        dstField.Append(_DstLgFieldId, FieldValue.NewBool(dst.IsLocal), in context);
-        dstField.Append(_AddrFieldId, FieldValue.NewMacAddress(dst), in context);
-
-        MutField srcField = container.Append(_SrcFieldId, FieldValue.NewMacAddress(src), in context);
-        srcField.Append(_SrcIgFieldId, FieldValue.NewBool(src.IsMulticast), in context);
-        srcField.Append(_SrcLgFieldId, FieldValue.NewBool(src.IsLocal), in context);
-        srcField.Append(_AddrFieldId, FieldValue.NewMacAddress(src), in context);
-
-        ushort typeOrLen = BinaryPrimitives.ReadUInt16BigEndian(span[12..14]);
-
-        if (typeOrLen >= MinEtherType)
-        {
-            string displayText = DisplayTables.GetEtherTypeDisplayText(typeOrLen);
-            container.AppendWithCustomText(_TypeFieldId, FieldValue.NewU64(typeOrLen), displayText, in context);
-        }
-        else
-        {
-            container.Append(_LenFieldId, FieldValue.NewU64(typeOrLen), in context);
-        }
-
-        return 0;
-    }
+    /// <summary>
+    /// Builds the EtherType dispatch cache at stack start. One-time cost: a tiny array scan
+    /// for the 4–6 registered EtherType entries beats a dictionary for per-packet lookup.
+    /// </summary>
+    partial void OnStartCustom(Stack stack) =>
+        _EtherTypeSparseCache = stack.BuildU64SparseDelegateCache(_EtherTypeTableId);
 
     /// <summary>
     /// Parses a Ethernet protocol unit from the supplied <paramref name="data"/> buffer,
@@ -247,17 +202,29 @@ public sealed partial class EthernetProtocol : IProtocol
             ? ZA.Lazy("Ethernet II, Src: ", src, ", Dst: ", dst)
             : ZA.Lazy("IEEE 802.3, Src: ", src, ", Dst: ", dst);
 
-        // Create lazy protocol field with BytesField value and custom summary text.
+        // Create protocol container field with BytesField value and custom summary text.
         // CustomRepresentation shows the header byte count alongside the field value.
-        // _Populator is pre-allocated in OnStartCustom — no per-packet closure.
         FieldValue headerValue = FieldValue.NewBytes(hdrBytes)
             .WithCustomRepresentation(new LazyString("14 bytes"));
-        parentField.AppendLazyWithCustomText(
-            _ProtocolFieldId, headerValue, summary, _Populator);
+        MutField ethContainer = parentField.AppendWithCustomText(
+            _ProtocolFieldId, headerValue, summary);
 
-        // All address fields (dst, src, ig, lg, addr) are populated lazily by
-        // PopulateEthernetFields — no downstream protocol requires MAC addresses
-        // eagerly, so deferring them reduces per-packet field appends.
+        // Eagerly append eth.dst, eth.src, and eth.type/eth.len so these key identifier
+        // fields are present in the field tree during the initial parse pass.
+        // The alias group "eth.addr" is metadata-only (registered in RegisterFieldsCustom).
+        // CustomText combines the MAC address with its I/G+L/G annotation; ZA.Lazy defers
+        // string allocation until the value is actually rendered.
+        ethContainer.AppendWithCustomText(_DstFieldId, FieldValue.NewMacAddress(dst), ZA.Lazy(dst, " (", FormatMacAddressBits(dst), ")"));
+        ethContainer.AppendWithCustomText(_SrcFieldId, FieldValue.NewMacAddress(src), ZA.Lazy(src, " (", FormatMacAddressBits(src), ")"));
+        if (typeOrLen >= MinEtherType)
+        {
+            ethContainer.AppendWithCustomText(_TypeFieldId, FieldValue.NewU64(typeOrLen),
+                DisplayTables.GetEtherTypeDisplayText(typeOrLen));
+        }
+        else
+        {
+            ethContainer.Append(_LenFieldId, FieldValue.NewU64(typeOrLen));
+        }
 
         // Cache Ethernet MAC addresses in the thread-local field directly on this
         // protocol for potential downstream use (ARP, 802.1X, diagnostics).
@@ -310,9 +277,9 @@ public sealed partial class EthernetProtocol : IProtocol
 
             parentField.AppendWithCustomText(_FcsFieldId,
                 FieldValue.NewU64(fcsValue),
-                DisplayTables.FormatHexU32(fcsValue), in context);
+                DisplayTables.FormatHexU32(fcsValue));
             parentField.Append(_FcsStatusFieldId,
-                FieldValue.NewString(fcsValid ? "[Good]" : "[Bad]"), in context);
+                FieldValue.NewString(fcsValid ? "[Good]" : "[Bad]"));
         }
 
         return data.Length;
@@ -368,14 +335,14 @@ public sealed partial class EthernetProtocol : IProtocol
         {
             context.RecordGroupPresence(_EthPaddingGroupId);
             ReadOnlyMemory<byte> paddingData = data.Slice(extraStart, paddingBytes);
-            parentField.Append(_PaddingFieldId, FieldValue.NewBytes(paddingData), in context);
+            parentField.Append(_PaddingFieldId, FieldValue.NewBytes(paddingData));
         }
 
         if (trailerBytes > 0)
         {
             context.RecordGroupPresence(_EthTrailerGroupId);
             ReadOnlyMemory<byte> trailerData = data.Slice(extraStart + paddingBytes, trailerBytes);
-            parentField.Append(_TrailerFieldId, FieldValue.NewBytes(trailerData), in context);
+            parentField.Append(_TrailerFieldId, FieldValue.NewBytes(trailerData));
         }
     }
 

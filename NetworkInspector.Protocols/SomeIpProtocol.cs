@@ -278,9 +278,6 @@ public sealed partial class SomeIpProtocol : IProtocol
     [StringSetting("someip.config_file", "Configuration File", "someip", Default = "")]
     private string? _ConfigFile;
 
-    // Pre-allocated populator
-    private LazyPopulator _Populator = null!;
-
     /// <summary>SOME/IP-TP fragment reassembly tracker (stateful).</summary>
     private readonly SomeIpTpReassembler _TpReassembler = new();
 
@@ -308,7 +305,6 @@ public sealed partial class SomeIpProtocol : IProtocol
 
     partial void RegisterFieldsCustom(IStackBuilder builder, ProtocolId protocolId)
     {
-        _Populator = (in MutField container) => PopulateSomeIpFields(in container);
         _TpReassembler.Clear();
 
         // Populate TP field IDs struct
@@ -454,17 +450,29 @@ public sealed partial class SomeIpProtocol : IProtocol
             " ", msgTypeText));
 
         FieldValue containerValue = FieldValue.NewBytes(data[..totalLen]);
-        parentField.AppendLazyWithCustomText(_ProtocolFieldId, containerValue, summary, _Populator);
+
+        // SOME/IP builds its field tree eagerly rather than via a lazy populator: TP
+        // reassembly is stateful and must run exactly once, and the reassembled payload
+        // must be dispatched to sub-protocols through the real ParseContext so that
+        // sub-protocol presence is recorded in the index. A lazy populator receives no
+        // ParseContext and therefore cannot dispatch, so eager construction is required.
+        MutField container = parentField.AppendWithCustomText(_ProtocolFieldId, containerValue, summary);
+        ParseResult buildResult = BuildSomeIpFields(in container, in context);
+        if (buildResult.IsError)
+        {
+            return buildResult;
+        }
 
         return totalLen;
     }
 
     /// <summary>
-    /// Populates all SOME/IP fields from stored packet bytes.
+    /// Builds all SOME/IP fields from the container's stored bytes, performs SOME/IP-TP
+    /// reassembly, and dispatches any reassembled or tail payload to registered
+    /// sub-protocols using the supplied <paramref name="context"/>.
     /// </summary>
-    private ParseResult PopulateSomeIpFields(in MutField container)
+    private ParseResult BuildSomeIpFields(in MutField container, in ParseContext context)
     {
-        ParseContext context = new ParseContext(container.Packet.Stack);
         if (!container.Value.Data.TryGetAsBytes(out ReadOnlyMemory<byte> someipData))
         {
             return ParseError.InvalidData(ProtocolName, "Container value is not of type Bytes");
@@ -478,57 +486,57 @@ public sealed partial class SomeIpProtocol : IProtocol
         // Message ID
         LazyString msgIdText = ZA.Lazy("0x", new Hex8(header.MessageId));
         container.AppendWithCustomText(_MessageIdFieldId,
-            FieldValue.NewU64(header.MessageId), msgIdText, in context);
+            FieldValue.NewU64(header.MessageId), msgIdText);
 
         // Service/Method IDs
         container.AppendWithCustomText(_ServiceIdFieldId,
             FieldValue.NewU64(header.ServiceId),
-            Helpers.DisplayTables.FormatHexU16(header.ServiceId), in context);
+            Helpers.DisplayTables.FormatHexU16(header.ServiceId));
         container.AppendWithCustomText(_MethodIdFieldId,
             FieldValue.NewU64(header.MethodId),
-            Helpers.DisplayTables.FormatHexU16(header.MethodId), in context);
+            Helpers.DisplayTables.FormatHexU16(header.MethodId));
 
         // Service/Method names from configuration
         if (_ServiceNames.TryGetValue(header.ServiceId, out string? serviceName))
         {
             context.RecordGroupPresence(_SomeipNameGroupId);
-            container.Append(_ServiceNameFieldId, FieldValue.NewString(serviceName), in context);
+            container.Append(_ServiceNameFieldId, FieldValue.NewString(serviceName));
             if (_MethodNames.TryGetValue(header.MessageId, out string? methodName))
             {
-                container.Append(_MethodNameFieldId, FieldValue.NewString(methodName), in context);
+                container.Append(_MethodNameFieldId, FieldValue.NewString(methodName));
             }
         }
 
         // Length
-        container.Append(_LengthFieldId, FieldValue.NewU64(header.Length), in context);
+        container.Append(_LengthFieldId, FieldValue.NewU64(header.Length));
 
         // Client/Session IDs
         container.AppendWithCustomText(_ClientIdFieldId,
             FieldValue.NewU64(header.ClientId),
-            Helpers.DisplayTables.FormatHexU16(header.ClientId), in context);
+            Helpers.DisplayTables.FormatHexU16(header.ClientId));
         container.AppendWithCustomText(_SessionIdFieldId,
             FieldValue.NewU64(header.SessionId),
-            Helpers.DisplayTables.FormatHexU16(header.SessionId), in context);
+            Helpers.DisplayTables.FormatHexU16(header.SessionId));
 
         // Version fields
-        container.Append(_VersionFieldId, FieldValue.NewU64(header.ProtocolVersion), in context);
-        container.Append(_IfVersionFieldId, FieldValue.NewU64(header.InterfaceVersion), in context);
+        container.Append(_VersionFieldId, FieldValue.NewU64(header.ProtocolVersion));
+        container.Append(_IfVersionFieldId, FieldValue.NewU64(header.InterfaceVersion));
 
         // Message type with display text
         container.AppendWithCustomText(_MsgTypeFieldId,
             FieldValue.NewU64(header.MessageType),
-            SomeIpDisplayTables.GetMsgTypeDisplayText(header.MessageType), in context);
+            SomeIpDisplayTables.GetMsgTypeDisplayText(header.MessageType));
 
         // Decompose message type into ACK and TP flags
         bool isAck = (header.MessageType & 0x40) != 0;
         bool isTp = (header.MessageType & 0x20) != 0;
-        container.Append(_MsgTypeAckFieldId, FieldValue.NewBool(isAck), in context);
-        container.Append(_MsgTypeTpFieldId, FieldValue.NewBool(isTp), in context);
+        container.Append(_MsgTypeAckFieldId, FieldValue.NewBool(isAck));
+        container.Append(_MsgTypeTpFieldId, FieldValue.NewBool(isTp));
 
         // Return code
         container.AppendWithCustomText(_ReturnCodeFieldId,
             FieldValue.NewU64(header.ReturnCode),
-            SomeIpDisplayTables.GetReturnCodeDisplayText(header.ReturnCode), in context);
+            SomeIpDisplayTables.GetReturnCodeDisplayText(header.ReturnCode));
 
         // Determine payload region (after the 16-byte SOME/IP header)
         int payloadStart = SomeIpHeader.Size;
@@ -540,8 +548,6 @@ public sealed partial class SomeIpProtocol : IProtocol
 
         if (isTp && someipData.Length >= payloadStart + SomeIpTpHeader.Size)
         {
-            context.RecordGroupPresence(_SomeipTpGroupId);
-
             if (SomeIpTpHeader.TryParse(someipData.Span[payloadStart..], out SomeIpTpHeader tpHeader))
             {
                 // Build TP summary text
@@ -550,16 +556,16 @@ public sealed partial class SomeIpProtocol : IProtocol
                     "SOME/IP-TP, Offset: ", tpHeader.ByteOffset, " bytes", moreSuffix);
 
                 MutField tpField = container.AppendWithCustomText(
-                    _TpContainerFieldId, FieldValue.None, tpSummary, in context);
+                    _TpContainerFieldId, FieldValue.None, tpSummary);
 
                 // TP offset expressed in bytes
                 tpField.AppendWithCustomText(_TpOffsetFieldId,
                     FieldValue.NewU64(tpHeader.ByteOffset),
-                    (string)ZA.String(tpHeader.ByteOffset, " bytes"), in context);
-                tpField.Append(_TpMoreFieldId, FieldValue.NewBool(tpHeader.MoreSegments), in context);
+                    (string)ZA.String(tpHeader.ByteOffset, " bytes"));
+                tpField.Append(_TpMoreFieldId, FieldValue.NewBool(tpHeader.MoreSegments));
                 tpField.AppendWithCustomText(_TpReservedFieldId,
                     FieldValue.NewU64(tpHeader.Reserved),
-                    Helpers.DisplayTables.FormatHexU8(tpHeader.Reserved), in context);
+                    Helpers.DisplayTables.FormatHexU8(tpHeader.Reserved));
 
                 // Wire the TP fragment into the reassembler.
                 // The fragment payload follows immediately after the 4-byte TP header.
@@ -582,7 +588,7 @@ public sealed partial class SomeIpProtocol : IProtocol
                         }
                         if (!dispatchResult.IsSuccess || dispatchResult.Value == 0)
                         {
-                            container.Append(_PayloadFieldId, FieldValue.NewBytes(reassembledMemory), in context);
+                            container.Append(_PayloadFieldId, FieldValue.NewBytes(reassembledMemory));
                         }
                     }
                 }
@@ -591,7 +597,7 @@ public sealed partial class SomeIpProtocol : IProtocol
                     // Session was evicted (cap hit or size overflow) — surface a diagnostic so
                     // callers can detect the failure rather than silently receiving no output.
                     tpField.Append(_TpDroppedFieldId,
-                        FieldValue.NewString("Reassembly session dropped (cap or size limit exceeded)"), in context);
+                        FieldValue.NewString("Reassembly session dropped (cap or size limit exceeded)"));
                 }
 
                 // When an LRU eviction displaced an older session to make room for this one,
@@ -600,7 +606,7 @@ public sealed partial class SomeIpProtocol : IProtocol
                 if (tpResult.LruEvicted)
                 {
                     tpField.Append(_TpDroppedFieldId,
-                        FieldValue.NewString("Reassembly session limit reached; an older session was evicted"), in context);
+                        FieldValue.NewString("Reassembly session limit reached; an older session was evicted"));
                 }
 
                 // Outcome == InProgress: more fragments are expected; nothing to emit yet.
@@ -616,12 +622,8 @@ public sealed partial class SomeIpProtocol : IProtocol
         // ── SOME/IP-SD (Service Discovery, message ID = 0xFFFF8100) ──
         if (header.MessageId == SomeIpSdParser.SdMessageId && someipData.Length > SomeIpHeader.Size)
         {
-            context.RecordGroupPresence(_SomeipSdGroupId);
-            context.RecordGroupPresence(_SomeipSdEntriesGroupId);
-            context.RecordGroupPresence(_SomeipSdOptionsGroupId);
-
             ReadOnlySpan<byte> sdPayload = someipData.Span[SomeIpHeader.Size..];
-            ParseResult sdResult = SomeIpSdParser.Parse(in container, sdPayload, in _SdFieldIds, in context);
+            ParseResult sdResult = SomeIpSdParser.Parse(in container, sdPayload, in _SdFieldIds);
             if (sdResult.IsError)
             {
                 return sdResult;
@@ -647,7 +649,7 @@ public sealed partial class SomeIpProtocol : IProtocol
             // If no sub-protocol consumed the payload, append raw payload bytes
             if (!dispatchResult.IsSuccess || dispatchResult.Value == 0)
             {
-                container.Append(_PayloadFieldId, FieldValue.NewBytes(payloadData), in context);
+                container.Append(_PayloadFieldId, FieldValue.NewBytes(payloadData));
             }
         }
 

@@ -168,6 +168,7 @@ internal static class ConvertCommand
         {
             foreach (SourceConfig config in configs)
             {
+                config.ValidateBeforeStart();
                 IFrameSource source = config.CreateSource();
                 FrameSourceId sourceId = registry.RegisterSource(source);
                 source.Start(sourceId, registry);
@@ -197,6 +198,10 @@ internal static class ConvertCommand
         IFrameListener? exporter = null;
         string currentPath = "";
 
+        // Cached FileInfo for split-size checks; avoids re-allocating on every frame.
+        // Reset whenever the output path is rotated.
+        FileInfo? splitSizeFileInfo = null;
+
         // Cooperative cancellation: Ctrl+C trips the token, which the loop checks each
         // iteration. The conversion currently in flight is finalised cleanly in the
         // OperationCanceledException catch block below.
@@ -211,23 +216,15 @@ internal static class ConvertCommand
 
         try
         {
-            // Round-robin across sources: track which sources are still active
-            bool[] activeSources = new bool[sources.Count];
-            Array.Fill(activeSources, true);
-            int activeSourceCount = sources.Count;
-            int currentSource = 0;
+            // Round-robin across sources via RoundRobinSourceIterator.
+            // Sources are removed from rotation as they are exhausted.
+            RoundRobinSourceIterator iterator = new(sources);
 
-            while (activeSourceCount > 0 && (maxFrames == 0 || totalFrames < maxFrames))
+            while (iterator.HasActive && (maxFrames == 0 || totalFrames < maxFrames))
             {
                 cts.Token.ThrowIfCancellationRequested();
-                // Advance to the next active source
-                if (!activeSources[currentSource])
-                {
-                    currentSource = (currentSource + 1) % sources.Count;
-                    continue;
-                }
 
-                IFrameSource source = sources[currentSource];
+                IFrameSource source = iterator.Current;
                 Frame? frame;
                 try
                 {
@@ -239,7 +236,7 @@ internal static class ConvertCommand
                     {
                         Console.Error.WriteLine(
                             $"Warning: Skipping frame from {source.UiName}: {ex.Message}");
-                        currentSource = (currentSource + 1) % sources.Count;
+                        iterator.Advance();
                         continue;
                     }
 
@@ -249,15 +246,12 @@ internal static class ConvertCommand
                 if (frame is null)
                 {
                     // This source is exhausted
-                    activeSources[currentSource] = false;
-                    activeSourceCount--;
-                    currentSource = (currentSource + 1) % sources.Count;
+                    iterator.MarkCurrentExhaustedAndAdvance();
                     continue;
                 }
 
                 // Check if we need to open or rotate the output file
-                if (exporter is null || (splitManager.IsSplitting &&
-                    splitManager.NeedsSplit(GetFileSize(currentPath), fileFrames)))
+                if (exporter is null || (splitManager.IsSplitting && NeedsSplit(splitSizeFileInfo, fileFrames, splitManager)))
                 {
                     // Finalize the previous exporter before rotating
                     if (exporter is not null)
@@ -270,6 +264,12 @@ internal static class ConvertCommand
                     currentPath = isStdout ? "-" : splitManager.NextPath();
                     exporter = outputConfig.CreateExporter(currentPath, isStdout);
                     fileFrames = 0;
+
+                    // Reset the cached FileInfo for the new output file.
+                    // Only useful when splitting is active and not writing to stdout.
+                    splitSizeFileInfo = (splitManager.IsSplitting && currentPath != "-")
+                        ? new FileInfo(currentPath)
+                        : null;
                 }
 
                 exporter.OnFrame(frame.Value);
@@ -286,6 +286,8 @@ internal static class ConvertCommand
                 {
                     break;
                 }
+
+                iterator.Advance();
             }
 
             // Finalize the last output file
@@ -334,31 +336,48 @@ internal static class ConvertCommand
         }
     }
 
-    /// <summary>Gets the size of a file, returning 0 if not found or for stdout.</summary>
-    private static long GetFileSize(string path)
+    /// <summary>
+    /// Determines whether the current output file needs to be rotated.
+    /// Refreshes the cached <see cref="FileInfo"/> to get the current on-disk size
+    /// instead of allocating a new instance on every frame.
+    /// </summary>
+    private static bool NeedsSplit(FileInfo? fileInfo, long fileFrames, SplitOutputManager splitManager)
     {
-        if (string.IsNullOrEmpty(path) || path == "-")
+        long currentSize = 0;
+        if (fileInfo is not null)
         {
-            return 0;
+            fileInfo.Refresh();
+            currentSize = fileInfo.Exists ? fileInfo.Length : 0;
         }
 
-        FileInfo fi = new(path);
-        return fi.Exists ? fi.Length : 0;
+        return splitManager.NeedsSplit(currentSize, fileFrames);
     }
 
-    /// <summary>Disposes all sources safely, ignoring individual cleanup errors.</summary>
+    /// <summary>
+    /// Disposes all sources, writing a warning to stderr for each failure.
+    /// If every disposal fails the aggregate is re-thrown so callers are not
+    /// silently left with unreleased resources.
+    /// </summary>
     private static void DisposeSources(List<IFrameSource> sources)
     {
+        List<Exception>? errors = null;
         foreach (IFrameSource source in sources)
         {
             try
             {
                 source.Dispose();
             }
-            catch
+            catch (Exception ex)
             {
-                // Best-effort disposal
+                Console.Error.WriteLine(
+                    $"Warning: failed to dispose source '{source.GetType().Name}': {ex.Message}");
+                (errors ??= []).Add(ex);
             }
+        }
+
+        if (errors is not null && errors.Count == sources.Count && sources.Count > 0)
+        {
+            throw new AggregateException("All source disposals failed.", errors);
         }
     }
 
@@ -366,7 +385,7 @@ internal static class ConvertCommand
     private static bool IsHelpFlag(string arg) =>
         arg is "--help" or "-h" or "-?" or "/?" or "--HELP" or "-H";
 
-    /// <summary>Gets the next argument value, throwing if missing.</summary>
+    /// <summary>Gets the next argument value, throwing if missing or null.</summary>
     private static string GetNextArg(string[] args, ref int index, string name)
     {
         index++;
@@ -375,7 +394,13 @@ internal static class ConvertCommand
             throw new ArgumentException($"Option '{name}' requires a value.");
         }
 
-        return args[index];
+        string? value = args[index];
+        if (value is null)
+        {
+            throw new ArgumentException($"Option '{name}' received a null argument (internal error).");
+        }
+
+        return value;
     }
 
     /// <summary>Parses a long value, throwing a user-friendly message on failure.</summary>
@@ -415,6 +440,7 @@ internal static class ConvertCommand
         Console.Error.WriteLine("Output format is auto-detected from the output extension:");
         Console.Error.WriteLine("  .pcapng / other       PCAPNG (default)");
         Console.Error.WriteLine("  .blf                  BLF with default compression");
+        Console.Error.WriteLine("  .asc                  CANalyzer ASCII log (CAN, CAN FD, LIN, FlexRay)");
         Console.Error.WriteLine();
         Console.Error.WriteLine("Output format specifications (--output-format):");
         Console.Error.WriteLine("  pcapng                PCAPNG format");
@@ -422,12 +448,15 @@ internal static class ConvertCommand
         Console.Error.WriteLine("  blf:compression=off   BLF, no compression");
         Console.Error.WriteLine("  blf:compression=fast  BLF, fast compression");
         Console.Error.WriteLine("  blf:compression=best  BLF, best compression ratio");
+        Console.Error.WriteLine("  asc                   CANalyzer ASCII log (CAN, CAN FD, LIN, FlexRay)");
         Console.Error.WriteLine();
         Console.Error.WriteLine("Source specifications:");
         Console.Error.WriteLine("  capture.pcap[ng]      Auto-detected PCAP/PCAPNG");
         Console.Error.WriteLine("  data.blf              Auto-detected BLF");
+        Console.Error.WriteLine("  log.asc               Auto-detected CANalyzer ASC");
         Console.Error.WriteLine("  pcap:path=<file>      Explicit PCAP/PCAPNG spec");
         Console.Error.WriteLine("  blf:path=<file>       Explicit BLF spec");
+        Console.Error.WriteLine("  asc:path=<file>       Explicit ASC spec");
         Console.Error.WriteLine("  random:count=N,seed=S,mode=udp4|udp6|random  Synthetic frames");
         Console.Error.WriteLine();
         Console.Error.WriteLine("Examples:");

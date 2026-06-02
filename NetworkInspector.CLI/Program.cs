@@ -3,9 +3,37 @@
 namespace NetworkInspector.CLI;
 
 /// <summary>
+/// Well-known process exit codes returned by the CLI.
+/// </summary>
+internal enum ExitCode
+{
+    /// <summary>Command completed successfully.</summary>
+    Success = 0,
+
+    /// <summary>Bad arguments, missing options, or validation failure.</summary>
+    ArgumentError = 1,
+
+    /// <summary>Failed to open one or more source files.</summary>
+    SourceOpenError = 2,
+
+    /// <summary>Runtime failure during processing (IO, serialisation, etc.).</summary>
+    RuntimeError = 3,
+}
+
+/// <summary>
 /// Entry point for the Network Inspector CLI tool.
 /// Routes to sub-commands: convert, export.
 /// </summary>
+/// <remarks>
+/// Exit codes:
+/// <list type="table">
+///   <listheader><term>Code</term><description>Meaning</description></listheader>
+///   <item><term>0</term><description>Success.</description></item>
+///   <item><term>1</term><description>Bad arguments, missing options, or validation failure.</description></item>
+///   <item><term>2</term><description>Failed to open one or more source files.</description></item>
+///   <item><term>3</term><description>Runtime failure during processing (IO, serialisation, etc.).</description></item>
+/// </list>
+/// </remarks>
 internal static class Program
 {
     /// <summary>Application entry point.</summary>
@@ -21,7 +49,7 @@ internal static class Program
         if (args.Length == 0)
         {
             PrintUsage();
-            return 1;
+            return (int)ExitCode.ArgumentError;
         }
 
         try
@@ -38,15 +66,22 @@ internal static class Program
         {
             // User pressed Ctrl+C before a command's own catch could observe it.
             Console.Error.WriteLine("Operation cancelled.");
-            return 0;
+            return (int)ExitCode.Success;
         }
         catch (Exception ex)
         {
             // Top-level safety net: surface the unhandled error rather than crashing
-            // with an opaque .NET stack trace. Per README \u00a7Exit Codes, 3 indicates
+            // with an opaque .NET stack trace. Per README §Exit Codes, 3 indicates
             // a runtime failure that aborted the run.
-            Console.Error.WriteLine($"Fatal: {ex.Message}");
-            return 3;
+            Console.Error.WriteLine($"Fatal ({ex.GetType().Name}): {ex.Message}");
+            Exception? inner = ex.InnerException;
+            while (inner is not null)
+            {
+                Console.Error.WriteLine($"  Caused by ({inner.GetType().Name}): {inner.Message}");
+                inner = inner.InnerException;
+            }
+
+            return (int)ExitCode.RuntimeError;
         }
     }
 
@@ -77,6 +112,6 @@ internal static class Program
         Console.Error.WriteLine($"Unknown command: '{command}'");
         Console.Error.WriteLine();
         PrintUsage();
-        return 1;
+        return (int)ExitCode.ArgumentError;
     }
 }

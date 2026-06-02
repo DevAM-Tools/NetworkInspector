@@ -369,16 +369,7 @@ internal sealed class StatefulSessionSmokeTests
             NoTrailer, DisposedThrowsMarkerInterceptor> session = stack.OpenSession();
         session.Dispose();
 
-        bool threw = false;
-        try
-        {
-            _ = session.NextPacket(ReadOnlySpan<byte>.Empty);
-        }
-        catch (ObjectDisposedException)
-        {
-            threw = true;
-        }
-        await Assert.That(threw).IsTrue();
+        await Assert.That(() => session.NextPacket(ReadOnlySpan<byte>.Empty)).Throws<ObjectDisposedException>();
     }
 
     /// <summary>

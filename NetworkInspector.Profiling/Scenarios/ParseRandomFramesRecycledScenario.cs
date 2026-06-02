@@ -104,7 +104,7 @@ internal sealed class ParseRandomFramesRecycledScenario : IProfilingScenario
         {
             for (int i = 0; i < BatchSize; i++)
             {
-                Packet.ParseFrame(recycle, new PacketId((int)(counter + i)), stack, frames[i]);
+                Packet.ParseFrame(recycle, new PacketId(checked((int)(counter + i))), stack, frames[i]);
                 recycle.MaterializeAll();
             }
         }
@@ -112,7 +112,7 @@ internal sealed class ParseRandomFramesRecycledScenario : IProfilingScenario
         {
             for (int i = 0; i < BatchSize; i++)
             {
-                Packet.ParseFrame(recycle, new PacketId((int)(counter + i)), stack, frames[i]);
+                Packet.ParseFrame(recycle, new PacketId(checked((int)(counter + i))), stack, frames[i]);
             }
         }
 

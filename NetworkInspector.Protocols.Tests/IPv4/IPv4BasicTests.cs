@@ -137,31 +137,47 @@ internal sealed class IPv4BasicTests
     [Test]
     public async Task Parse_IPv4_AddrField_ContainsBothEndpoints()
     {
-        // Arrange
+        // ip.addr is a metadata-only alias group ({ ip.src, ip.dst }); no ip.addr field is
+        // appended. Verifies that the canonical field namespace exposes only ip.src/ip.dst,
+        // and the alias group correctly enumerates both members.
         byte[] frame = BuildIPv4Frame(srcAddr: 0xC0A80101, dstAddr: 0xC0A80102);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
-            FieldId? addrId = stack.GetFieldId("ip.addr");
-            await Assert.That(addrId).IsNotNull().Because("ip.addr must be registered");
+            await Assert.That(stack.GetFieldId("ip.addr")).IsNull()
+                .Because("ip.addr is an alias name and must never resolve via GetFieldId");
 
-            // Act: collect all ip.addr occurrences (src + dst siblings in ip container)
-            FieldLookupCookie cookie = FieldLookupCookie.Start;
+            FieldAliasGroupId? aliasId = stack.GetFieldAliasGroupId("ip.addr");
+            await Assert.That(aliasId).IsNotNull().Because("ip.addr alias group must be registered");
+
+            FieldAliasGroupInfo? aliasInfo = stack.GetFieldAliasGroup(aliasId!.Value);
+            await Assert.That(aliasInfo).IsNotNull();
+            await Assert.That(aliasInfo!.MemberCount).IsEqualTo(2)
+                .Because("ip.addr alias must expose exactly two members: ip.src and ip.dst");
+
+            FieldId srcId = stack.GetFieldId("ip.src")!.Value;
+            FieldId dstId = stack.GetFieldId("ip.dst")!.Value;
+            FieldId[] members = aliasInfo.Members.ToArray();
+            await Assert.That(members.Contains(srcId)).IsTrue().Because("alias must include ip.src");
+            await Assert.That(members.Contains(dstId)).IsTrue().Because("alias must include ip.dst");
+
+            // Enumerate via alias members directly — confirm both endpoint values present.
             List<string> found = [];
-            while (packet.TryGetNextFieldValue(addrId!.Value, ref cookie, out FieldValue value))
+            foreach (FieldId memberId in members)
             {
-                bool ok = value.Data.TryGetAsIPv4(out IPv4Address addr);
-                await Assert.That(ok).IsTrue().Because("ip.addr values must be IPv4 addresses");
-                found.Add(addr.ToString());
+                FieldLookupCookie cookie = FieldLookupCookie.Start;
+                while (packet.TryGetNextFieldValue(memberId, ref cookie, out FieldValue value))
+                {
+                    bool ok = value.Data.TryGetAsIPv4(out IPv4Address addr);
+                    await Assert.That(ok).IsTrue().Because("alias member values must be IPv4 addresses");
+                    found.Add(addr.ToString());
+                }
             }
 
-            // Assert: exactly two occurrences matching source and destination
             await Assert.That(found.Count).IsEqualTo(2)
-                .Because("ip.addr must appear exactly twice — once for source, once for destination");
-            await Assert.That(found.Contains("192.168.1.1")).IsTrue()
-                .Because("ip.addr must contain source address 192.168.1.1");
-            await Assert.That(found.Contains("192.168.1.2")).IsTrue()
-                .Because("ip.addr must contain destination address 192.168.1.2");
+                .Because("alias must surface source and destination across its two members");
+            await Assert.That(found.Contains("192.168.1.1")).IsTrue();
+            await Assert.That(found.Contains("192.168.1.2")).IsTrue();
         }
     }
 

@@ -1565,18 +1565,13 @@ public sealed class Packet
     /// <summary>
     /// Runs the full indexed-parse lifecycle: begins the packet in the index, builds the
     /// parse context, runs the protocol-exception-guarded parse, ends the packet in the
-    /// index, and seals the packet. The <see cref="PacketIndex.ValueCacheBuilder"/> is
-    /// activated and deactivated when present.
+    /// index, and seals the packet.
     /// </summary>
     private static void ParseIndexedAndSeal(Packet packet, Frame frame, PacketIndex index)
     {
         index.BeginPacket(packet._Id.Value);
-        ValueCacheBuilder? cacheBuilder = index.ValueCacheBuilder;
-        cacheBuilder?.BeginPacket(packet._Id.Value, frame.Timestamp.AsNanos);
 
-        ParseContext context = cacheBuilder is not null
-            ? new ParseContext(index, cacheBuilder, packet._Stack)
-            : new ParseContext(index, packet._Stack);
+        ParseContext context = new(index, packet._Stack);
 
         try
         {
@@ -1587,7 +1582,6 @@ public sealed class Packet
             packet.SetError(BuildExceptionMessage(ex, packet._Stack.IncludeExceptionStackTrace));
         }
 
-        cacheBuilder?.EndPacket();
         index.EndPacket();
         packet.Seal();
     }

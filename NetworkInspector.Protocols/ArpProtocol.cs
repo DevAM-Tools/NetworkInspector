@@ -198,66 +198,66 @@ public sealed partial class ArpProtocol : IProtocol
         // ARP is a leaf protocol with few fields — no lazy populator needed.
         FieldValue containerValue = FieldValue.NewBytes(data[..totalSize])
             .WithCustomRepresentation(new LazyString(ZA.String(totalSize, " bytes")));
-        MutField container = parentField.AppendWithCustomText(_ProtocolFieldId, containerValue, summary, in context);
+        MutField container = parentField.AppendWithCustomText(_ProtocolFieldId, containerValue, summary);
 
         // Fixed header fields (always present)
         container.AppendWithCustomText(_HwTypeFieldId, FieldValue.NewU64(hwType),
-            DisplayTables.GetArpHwTypeDisplayText(hwType), in context);
+            DisplayTables.GetArpHwTypeDisplayText(hwType));
         container.AppendWithCustomText(_ProtoTypeFieldId, FieldValue.NewU64(protoType),
-            DisplayTables.GetEtherTypeDisplayText(protoType), in context);
-        container.Append(_HwSizeFieldId, FieldValue.NewU64(hwSize), in context);
-        container.Append(_ProtoSizeFieldId, FieldValue.NewU64(protoSize), in context);
+            DisplayTables.GetEtherTypeDisplayText(protoType));
+        container.Append(_HwSizeFieldId, FieldValue.NewU64(hwSize));
+        container.Append(_ProtoSizeFieldId, FieldValue.NewU64(protoSize));
         container.AppendWithCustomText(_OpcodeFieldId, FieldValue.NewU64(opcode),
-            DisplayTables.GetArpOpcodeDisplayText(opcode), in context);
+            DisplayTables.GetArpOpcodeDisplayText(opcode));
 
         // Sender hardware address
         if (hwSize == EthernetHwSize)
         {
-            container.Append(_SrcHwMacFieldId, FieldValue.NewMacAddress(senderMac), in context);
+            container.Append(_SrcHwMacFieldId, FieldValue.NewMacAddress(senderMac));
         }
         else
         {
-            container.Append(_SrcHwRawFieldId, FieldValue.NewBytes(data.Slice(senderHwOffset, hwSize)), in context);
+            container.Append(_SrcHwRawFieldId, FieldValue.NewBytes(data.Slice(senderHwOffset, hwSize)));
         }
 
         // Sender protocol address
         if (protoSize == IPv4ProtoSize)
         {
-            container.Append(_SrcProtoIpv4FieldId, FieldValue.NewIPv4(senderIp), in context);
+            container.Append(_SrcProtoIpv4FieldId, FieldValue.NewIPv4(senderIp));
         }
         else
         {
-            container.Append(_SrcProtoRawFieldId, FieldValue.NewBytes(data.Slice(senderProtoOffset, protoSize)), in context);
+            container.Append(_SrcProtoRawFieldId, FieldValue.NewBytes(data.Slice(senderProtoOffset, protoSize)));
         }
 
         // Target hardware address
         if (hwSize == EthernetHwSize)
         {
-            container.Append(_DstHwMacFieldId, FieldValue.NewMacAddress(targetMac), in context);
+            container.Append(_DstHwMacFieldId, FieldValue.NewMacAddress(targetMac));
         }
         else
         {
-            container.Append(_DstHwRawFieldId, FieldValue.NewBytes(data.Slice(targetHwOffset, hwSize)), in context);
+            container.Append(_DstHwRawFieldId, FieldValue.NewBytes(data.Slice(targetHwOffset, hwSize)));
         }
 
         // Target protocol address
         if (protoSize == IPv4ProtoSize)
         {
-            container.Append(_DstProtoIpv4FieldId, FieldValue.NewIPv4(targetIp), in context);
+            container.Append(_DstProtoIpv4FieldId, FieldValue.NewIPv4(targetIp));
         }
         else
         {
-            container.Append(_DstProtoRawFieldId, FieldValue.NewBytes(data.Slice(targetProtoOffset, protoSize)), in context);
+            container.Append(_DstProtoRawFieldId, FieldValue.NewBytes(data.Slice(targetProtoOffset, protoSize)));
         }
 
         // Gratuitous ARP: sender IP equals target IP (used for address announcement)
         // Only meaningful for standard IPv4 ARP
         bool isGratuitous = isStandardArp && senderIp == targetIp;
-        container.Append(_IsGratuitousFieldId, FieldValue.NewBool(isGratuitous), in context);
+        container.Append(_IsGratuitousFieldId, FieldValue.NewBool(isGratuitous));
 
         // ARP probe: sender IP is 0.0.0.0 (RFC 5227 — used for duplicate address detection)
         bool isProbe = isStandardArp && senderIp.IsZero;
-        container.Append(_IsProbeFieldId, FieldValue.NewBool(isProbe), in context);
+        container.Append(_IsProbeFieldId, FieldValue.NewBool(isProbe));
 
         return totalSize;
     }

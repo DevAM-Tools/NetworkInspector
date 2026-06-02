@@ -4,55 +4,46 @@ namespace NetworkInspector.Profiling.Scenarios;
 
 /// <summary>
 /// Profiling scenario that exports pre-generated IPv6/UDP frames as BLF
-/// into a <see cref="MemoryStream"/> on every <see cref="Run"/> call.
+/// into a <see cref="MemoryStream"/> on every <see cref="IProfilingScenario.Run"/> call.
 ///
 /// <para>
 /// <b>Hot path:</b> <see cref="Exporters.Blf.BlfExporter.OnFrame"/> serialisation and compression.
-/// Frame generation happens in <see cref="Setup"/>.
+/// Frame generation happens in <see cref="IProfilingScenario.Setup"/>.
 /// </para>
 /// </summary>
-internal sealed class ExportBlfScenario : IProfilingScenario, IDisposable
+[SuppressMessage("Performance", "CA1812:AvoidUninstantiatedInternalClasses", Justification = "Instantiated via reflection in ScenarioDiscovery.Discover.")]
+internal sealed class ExportBlfScenario : ExportScenarioBase<Frame>
 {
-    /// <summary>Number of frames exported per <see cref="Run"/> call.</summary>
-    private const int BatchSize = 10_000;
-
-    private Stack? _Stack;
-    private Frame[]? _Frames;
-    private MemoryStream? _Stream;
+    private const int Batch = 10_000;
 
     /// <inheritdoc/>
-    public string Name => "export-blf";
+    protected override int BatchSize => Batch;
 
     /// <inheritdoc/>
-    public string Description =>
-        $"Export {BatchSize:N0} IPv6/UDP frames as BLF → MemoryStream per iteration.";
+    protected override int InitialStreamCapacityBytes => 4 * 1024 * 1024; // 4 MiB
 
     /// <inheritdoc/>
-    public long WorkUnitsPerIteration => BatchSize;
+    protected override Frame[] CreateItems(Stack stack, Frame[] frames) => frames;
 
     /// <inheritdoc/>
-    public string WorkUnitName => "frames";
+    public override string Name => "export-blf";
 
     /// <inheritdoc/>
-    public void Setup()
+    public override string Description =>
+        $"Export {Batch:N0} IPv6/UDP frames as BLF → MemoryStream per iteration.";
+
+    /// <inheritdoc/>
+    public override string WorkUnitName => "frames";
+
+    /// <inheritdoc/>
+    protected override void Export(MemoryStream stream, Frame[] frames)
     {
-        _Stack = StackHelper.CreateStack();
-        _Frames = FrameHelper.CreateSharedFrames(BatchSize, _Stack);
-        _Stream = new MemoryStream(4 * 1024 * 1024); // 4 MiB initial capacity
-    }
-
-    /// <inheritdoc/>
-    public void Run()
-    {
-        MemoryStream ms = _Stream!;
-        ms.SetLength(0);
-
         using Exporters.Blf.BlfExporter exporter = Exporters.Blf.BlfExporter
             .CreateBuilder()
-            .ToStream(ms)
+            .ToStream(stream)
             .Build();
 
-        foreach (Frame frame in _Frames!)
+        foreach (Frame frame in frames)
         {
             if (!exporter.OnFrame(frame))
             {
@@ -61,18 +52,5 @@ internal sealed class ExportBlfScenario : IProfilingScenario, IDisposable
         }
 
         exporter.OnFinish();
-    }
-
-    /// <inheritdoc/>
-    public void Cleanup() => Dispose();
-
-    /// <inheritdoc/>
-    public void Dispose()
-    {
-        _Stream?.Dispose();
-        _Stream = null;
-        _Stack?.Dispose();
-        _Stack = null;
-        _Frames = null;
     }
 }

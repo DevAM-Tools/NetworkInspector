@@ -29,7 +29,7 @@ namespace NetworkInspector.Core.Reassembly;
 /// must serialize all access. Designed for single-threaded use during packet parsing.
 /// </para>
 /// </summary>
-internal sealed class DatagramFragmentBuffer
+public sealed class DatagramFragmentBuffer
 {
     #region Constants
 
@@ -59,7 +59,7 @@ internal sealed class DatagramFragmentBuffer
     /// <summary>
     /// Number of fragments received so far.
     /// </summary>
-    internal int FragmentCount => _Fragments.Count;
+    public int FragmentCount => _Fragments.Count;
 
     #endregion
 
@@ -78,7 +78,7 @@ internal sealed class DatagramFragmentBuffer
     /// </param>
     /// <returns>A <see cref="FragmentAddResult"/> indicating whether the datagram is
     /// complete, still incomplete, or must be discarded due to an overlap.</returns>
-    internal FragmentAddResult AddFragment(int offset, bool moreFragments, ReadOnlySpan<byte> data, bool dropOnOverlap = false)
+    public FragmentAddResult AddFragment(int offset, bool moreFragments, ReadOnlySpan<byte> data, bool dropOnOverlap = false)
     {
         byte[] copy = data.ToArray();
 
@@ -158,7 +158,7 @@ internal sealed class DatagramFragmentBuffer
     /// Must only be called when <see cref="AddFragment"/> has returned <c>true</c>.
     /// </summary>
     /// <returns>The reassembled payload, or null if fragments don't form a contiguous range.</returns>
-    internal byte[]? Reassemble()
+    public byte[]? Reassemble()
     {
         if (_TotalLength <= 0)
         {

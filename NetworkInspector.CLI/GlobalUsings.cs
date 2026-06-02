@@ -7,6 +7,7 @@ global using System.Collections.Generic;
 global using System.Diagnostics;
 global using System.Globalization;
 global using System.IO;
+global using System.Runtime.CompilerServices;
 global using System.Text;
 global using System.Threading;
 global using System.Threading.Tasks;
@@ -23,6 +24,7 @@ global using NetworkInspector.Core.Settings;
 
 #region NetworkInspector.Exporters
 global using NetworkInspector.Exporters;
+global using NetworkInspector.Exporters.Asc;
 global using NetworkInspector.Exporters.Blf;
 global using NetworkInspector.Exporters.Json;
 global using NetworkInspector.Exporters.Pbf;
@@ -35,6 +37,7 @@ global using NetworkInspector.Protocols;
 #endregion
 
 #region NetworkInspector.Sources
+global using NetworkInspector.Sources.Asc;
 global using NetworkInspector.Sources.Blf;
 global using NetworkInspector.Sources.Cached;
 global using NetworkInspector.Sources.Pcapng;

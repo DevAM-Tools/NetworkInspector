@@ -350,10 +350,9 @@ internal sealed class LazyFieldTests
             parentField.AppendLazy(_ContainerFieldId, FieldValue.None, (in container) =>
             {
                 Interlocked.Increment(ref _PopulateCallCount);
-                ParseContext context = default;
-                container.Append(dstFieldId, FieldValue.NewMacAddress(dst), in context);
-                container.Append(srcFieldId, FieldValue.NewMacAddress(src), in context);
-                container.Append(typeFieldId, FieldValue.NewU64(ethertype), in context);
+                container.Append(dstFieldId, FieldValue.NewMacAddress(dst));
+                container.Append(srcFieldId, FieldValue.NewMacAddress(src));
+                container.Append(typeFieldId, FieldValue.NewU64(ethertype));
                 return 0;
             });
             return 14;
@@ -400,16 +399,14 @@ internal sealed class LazyFieldTests
                 Interlocked.Increment(ref _OuterCallCount);
 
                 // Append an eager child
-                ParseContext context = default;
-                container.Append(outerChildId, FieldValue.NewU64(42), in context);
+                container.Append(outerChildId, FieldValue.NewU64(42));
 
                 // Append a nested lazy container — this is the crux of the test:
                 // the inner lazy field's index will be beyond the initial scan range.
                 container.AppendLazy(innerContainerId, FieldValue.None, (in innerContainer) =>
                 {
                     Interlocked.Increment(ref _InnerCallCount);
-                    ParseContext innerContext = default;
-                    innerContainer.Append(innerChildId, FieldValue.NewU64(99), in innerContext);
+                    innerContainer.Append(innerChildId, FieldValue.NewU64(99));
                     return 0;
                 });
 
@@ -419,3 +416,5 @@ internal sealed class LazyFieldTests
         }
     }
 }
+
+

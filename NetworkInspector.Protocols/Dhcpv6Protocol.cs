@@ -162,9 +162,9 @@ public sealed partial class Dhcpv6Protocol : IProtocol
         parentField.SetPacketInfo(ZA.Lazy("DHCPv6 ", msgTypeText));
 
         FieldValue containerValue = FieldValue.NewBytes(data);
-        MutField container = parentField.AppendWithCustomText(_ProtocolFieldId, containerValue, summary, in context);
+        MutField container = parentField.AppendWithCustomText(_ProtocolFieldId, containerValue, summary);
 
-        container.AppendWithCustomText(_MsgTypeFieldId, FieldValue.NewU64(msgType), msgTypeText, in context);
+        container.AppendWithCustomText(_MsgTypeFieldId, FieldValue.NewU64(msgType), msgTypeText);
 
         if (msgType is MsgTypeRelayForward or MsgTypeRelayReply)
         {
@@ -175,7 +175,7 @@ public sealed partial class Dhcpv6Protocol : IProtocol
 
         // 24-bit transaction ID stored in big-endian byte order at offsets 1..4.
         uint xid = ((uint)span[1] << 16) | ((uint)span[2] << 8) | span[3];
-        container.Append(_XidFieldId, FieldValue.NewU64(xid), in context);
+        container.Append(_XidFieldId, FieldValue.NewU64(xid));
 
         ParseOptions(in container, data[FixedHeaderSize..], in context);
         return data.Length;
@@ -202,13 +202,18 @@ public sealed partial class Dhcpv6Protocol : IProtocol
             ReadOnlyMemory<byte> optionData = options.Slice(i + 4, length);
             string codeText = GetOptionCodeText(code);
 
+            // First well-formed option proves the dhcpv6.options group is present. Recording
+            // here keeps the index free of false positives for option blocks that are empty or
+            // truncated before any complete TLV.
+            context.RecordGroupPresence(_Dhcpv6OptionsGroupId);
+
             MutField optContainer = container.AppendWithCustomText(
                 _OptionFieldId,
                 FieldValue.NewBytes(options.Slice(i, 4 + length)),
-                ZA.Lazy("Option: (", (ulong)code, ") ", codeText), in context);
-            optContainer.AppendWithCustomText(_OptionCodeFieldId, FieldValue.NewU64(code), codeText, in context);
-            optContainer.Append(_OptionLengthFieldId, FieldValue.NewU64(length), in context);
-            optContainer.Append(_OptionValueFieldId, FieldValue.NewBytes(optionData), in context);
+                ZA.Lazy("Option: (", (ulong)code, ") ", codeText));
+            optContainer.AppendWithCustomText(_OptionCodeFieldId, FieldValue.NewU64(code), codeText);
+            optContainer.Append(_OptionLengthFieldId, FieldValue.NewU64(length));
+            optContainer.Append(_OptionValueFieldId, FieldValue.NewBytes(optionData));
 
             EmitOptionPayload(in optContainer, code, optionData, in context);
             i += 4 + length;
@@ -224,21 +229,21 @@ public sealed partial class Dhcpv6Protocol : IProtocol
             case OptionElapsedTime when span.Length == 2:
                 // Elapsed time uses 1/100 second units (RFC 8415 §21.9).
                 optContainer.Append(_OptionElapsedTimeFieldId,
-                    FieldValue.NewU64(BinaryPrimitives.ReadUInt16BigEndian(span)), in context);
+                    FieldValue.NewU64(BinaryPrimitives.ReadUInt16BigEndian(span)));
                 break;
             case OptionRapidCommit:
                 // Rapid commit is a present/absent flag (RFC 8415 §21.14, length must be 0).
-                optContainer.Append(_OptionRapidCommitFieldId, FieldValue.NewBool(true), in context);
+                optContainer.Append(_OptionRapidCommitFieldId, FieldValue.NewBool(true));
                 break;
             case OptionStatusCode when span.Length >= 2:
                 optContainer.Append(_OptionStatusCodeFieldId,
-                    FieldValue.NewU64(BinaryPrimitives.ReadUInt16BigEndian(span[..2])), in context);
+                    FieldValue.NewU64(BinaryPrimitives.ReadUInt16BigEndian(span[..2])));
                 break;
             case OptionDnsServers:
                 EmitIpv6List(in optContainer, _OptionDnsServerFieldId, span, in context);
                 break;
             case OptionIaAddr when span.Length >= 16:
-                optContainer.Append(_OptionIaAddrFieldId, FieldValue.NewIPv6(IPv6Address.FromBytes(span[..16])), in context);
+                optContainer.Append(_OptionIaAddrFieldId, FieldValue.NewIPv6(IPv6Address.FromBytes(span[..16])));
                 break;
             default:
                 // Unknown / unparsed — code, length and raw value are already attached.
@@ -251,7 +256,7 @@ public sealed partial class Dhcpv6Protocol : IProtocol
     {
         for (int i = 0; i + 16 <= span.Length; i += 16)
         {
-            optContainer.Append(fieldId, FieldValue.NewIPv6(IPv6Address.FromBytes(span[i..(i + 16)])), in context);
+            optContainer.Append(fieldId, FieldValue.NewIPv6(IPv6Address.FromBytes(span[i..(i + 16)])));
         }
     }
 

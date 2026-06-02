@@ -33,4 +33,5 @@ global using NetworkInspector.Sources.Cached;
 global using NetworkInspector.Sources.Pcapng;
 global using NetworkInspector.Sources.Random;
 global using NetworkInspector.Sources.Tests.Generators;
+global using NetworkInspector.Sources.Tests.Helpers;
 #endregion

@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright � 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Protocols.Tcp;
 
@@ -6,19 +6,19 @@ namespace NetworkInspector.Protocols.Tcp;
 /// Static parser for TCP options (variable-length area between the fixed 20-byte
 /// TCP header and the payload). Supports the following option kinds:
 /// <list type="bullet">
-///   <item>EOL (0) — End of Option List</item>
-///   <item>NOP (1) — No-Operation / padding</item>
-///   <item>MSS (2) — Maximum Segment Size (RFC 879)</item>
-///   <item>Window Scale (3) — Window Scale factor (RFC 1323, capped to 14)</item>
-///   <item>SACK Permitted (4) — SACK support flag (RFC 2018)</item>
-///   <item>SACK (5) — Selective Acknowledgment blocks (RFC 2018)</item>
-///   <item>Timestamps (8) — TSval/TSecr (RFC 1323)</item>
-///   <item>User Timeout (28) — RFC 5482</item>
-///   <item>TCP Fast Open (34) — cookie (RFC 7413)</item>
-///   <item>MPTCP (30) — Multipath TCP subtype (RFC 6824/8684)</item>
-///   <item>MD5 Signature (19) — RFC 2385</item>
-///   <item>TCP-AO (29) — Authentication Option (RFC 5925)</item>
-///   <item>Unknown — catch-all for unrecognized options</item>
+///   <item>EOL (0) � End of Option List</item>
+///   <item>NOP (1) � No-Operation / padding</item>
+///   <item>MSS (2) � Maximum Segment Size (RFC 879)</item>
+///   <item>Window Scale (3) � Window Scale factor (RFC 1323, capped to 14)</item>
+///   <item>SACK Permitted (4) � SACK support flag (RFC 2018)</item>
+///   <item>SACK (5) � Selective Acknowledgment blocks (RFC 2018)</item>
+///   <item>Timestamps (8) � TSval/TSecr (RFC 1323)</item>
+///   <item>User Timeout (28) � RFC 5482</item>
+///   <item>TCP Fast Open (34) � cookie (RFC 7413)</item>
+///   <item>MPTCP (30) � Multipath TCP subtype (RFC 6824/8684)</item>
+///   <item>MD5 Signature (19) � RFC 2385</item>
+///   <item>TCP-AO (29) � Authentication Option (RFC 5925)</item>
+///   <item>Unknown � catch-all for unrecognized options</item>
 /// </list>
 /// </summary>
 internal static class TcpOptionsParser
@@ -47,12 +47,11 @@ internal static class TcpOptionsParser
     /// <param name="optionsData">The raw TCP options bytes (header[20..headerLen]).</param>
     /// <param name="container">The MutField to append option sub-fields to.</param>
     /// <param name="fieldIds">The registered field IDs for TCP options.</param>
-    /// <param name="context">The parse context providing dispatch resolution and stack access.</param>
     /// <returns>Parsed option information for analysis.</returns>
     internal static TcpOptionsInfo Parse(
         ReadOnlySpan<byte> optionsData,
         in MutField container,
-        in TcpOptionsFieldIds fieldIds, in ParseContext context)
+        in TcpOptionsFieldIds fieldIds)
     {
         ushort? mss = null;
         byte? windowScale = null;
@@ -72,7 +71,7 @@ internal static class TcpOptionsParser
             {
                 container.AppendWithCustomText(
                     fieldIds.Eol, FieldValue.None,
-                    "End of Option List (EOL)", in context);
+                    "End of Option List (EOL)");
                 break; // EOL terminates option parsing
             }
 
@@ -80,7 +79,7 @@ internal static class TcpOptionsParser
             {
                 container.AppendWithCustomText(
                     fieldIds.Nop, FieldValue.None,
-                    "No-Operation (NOP)", in context);
+                    "No-Operation (NOP)");
                 offset++;
                 continue;
             }
@@ -90,7 +89,7 @@ internal static class TcpOptionsParser
             #region Multi-byte options: kind + length + data
             if (offset + 1 >= optionsData.Length)
             {
-                break; // Truncated — no length byte
+                break; // Truncated � no length byte
             }
 
             byte optLen = optionsData[offset + 1];
@@ -104,38 +103,38 @@ internal static class TcpOptionsParser
             switch (kind)
             {
                 case OptMss:
-                    mss = ParseMss(optionBytes, in container, in fieldIds, in context);
+                    mss = ParseMss(optionBytes, in container, in fieldIds);
                     break;
                 case OptWindowScale:
-                    windowScale = ParseWindowScale(optionBytes, in container, in fieldIds, in context);
+                    windowScale = ParseWindowScale(optionBytes, in container, in fieldIds);
                     break;
                 case OptSackPermitted:
-                    ParseSackPermitted(in container, in fieldIds, in context);
+                    ParseSackPermitted(in container, in fieldIds);
                     sackPermitted = true;
                     break;
                 case OptSack:
-                    ParseSack(optionBytes, in container, in fieldIds, in context);
+                    ParseSack(optionBytes, in container, in fieldIds);
                     break;
                 case OptTimestamps:
-                    (tsVal, tsEcr) = ParseTimestamps(optionBytes, in container, in fieldIds, in context);
+                    (tsVal, tsEcr) = ParseTimestamps(optionBytes, in container, in fieldIds);
                     break;
                 case OptUserTimeout:
-                    ParseUserTimeout(optionBytes, in container, in fieldIds, in context);
+                    ParseUserTimeout(optionBytes, in container, in fieldIds);
                     break;
                 case OptFastOpen:
-                    ParseFastOpen(optionBytes, in container, in fieldIds, in context);
+                    ParseFastOpen(optionBytes, in container, in fieldIds);
                     break;
                 case OptMptcp:
-                    ParseMptcp(optionBytes, in container, in fieldIds, in context);
+                    ParseMptcp(optionBytes, in container, in fieldIds);
                     break;
                 case OptMd5Signature:
-                    ParseMd5(optionBytes, in container, in fieldIds, in context);
+                    ParseMd5(optionBytes, in container, in fieldIds);
                     break;
                 case OptTcpAo:
-                    ParseTcpAo(optionBytes, in container, in fieldIds, in context);
+                    ParseTcpAo(optionBytes, in container, in fieldIds);
                     break;
                 default:
-                    ParseUnknown(kind, optionBytes, in container, in fieldIds, in context);
+                    ParseUnknown(kind, optionBytes, in container, in fieldIds);
                     break;
             }
 
@@ -154,7 +153,7 @@ internal static class TcpOptionsParser
 
     /// <summary>Parses MSS option (kind 2, length 4): 2-byte MSS value.</summary>
     private static ushort? ParseMss(
-        ReadOnlySpan<byte> data, in MutField container, in TcpOptionsFieldIds ids, in ParseContext context)
+        ReadOnlySpan<byte> data, in MutField container, in TcpOptionsFieldIds ids)
     {
         if (data.Length < 4)
         {
@@ -164,8 +163,8 @@ internal static class TcpOptionsParser
         ushort value = BinaryPrimitives.ReadUInt16BigEndian(data[2..]);
         MutField mssField = container.AppendWithCustomText(
             ids.Mss, FieldValue.None,
-            (string)ZA.String("Maximum Segment Size: ", value, " bytes"), in context);
-        mssField.Append(ids.MssVal, FieldValue.NewU64(value), in context);
+            (string)ZA.String("Maximum Segment Size: ", value, " bytes"));
+        mssField.Append(ids.MssVal, FieldValue.NewU64(value));
         return value;
     }
 
@@ -174,7 +173,7 @@ internal static class TcpOptionsParser
     /// Capped to 14 per RFC 7323.
     /// </summary>
     private static byte? ParseWindowScale(
-        ReadOnlySpan<byte> data, in MutField container, in TcpOptionsFieldIds ids, in ParseContext context)
+        ReadOnlySpan<byte> data, in MutField container, in TcpOptionsFieldIds ids)
     {
         if (data.Length < 3)
         {
@@ -182,25 +181,25 @@ internal static class TcpOptionsParser
         }
 
         byte shift = data[2];
-        // RFC 7323 §2.3: shift count MUST NOT exceed 14
+        // RFC 7323 �2.3: shift count MUST NOT exceed 14
         byte effectiveShift = Math.Min(shift, MaxWindowScale);
         uint multiplier = 1u << effectiveShift;
 
         MutField wsField = container.AppendWithCustomText(
             ids.WindowScale, FieldValue.None,
-            (string)ZA.String("Window Scale: ", shift, " (multiply by ", multiplier, ")"), in context);
-        wsField.Append(ids.WindowScaleVal, FieldValue.NewU64(shift), in context);
-        wsField.Append(ids.WindowScaleMultiplier, FieldValue.NewU64(multiplier), in context);
+            (string)ZA.String("Window Scale: ", shift, " (multiply by ", multiplier, ")"));
+        wsField.Append(ids.WindowScaleVal, FieldValue.NewU64(shift));
+        wsField.Append(ids.WindowScaleMultiplier, FieldValue.NewU64(multiplier));
 
         return effectiveShift;
     }
 
     /// <summary>Parses SACK Permitted option (kind 4, length 2): no data.</summary>
-    private static void ParseSackPermitted(in MutField container, in TcpOptionsFieldIds ids, in ParseContext context)
+    private static void ParseSackPermitted(in MutField container, in TcpOptionsFieldIds ids)
     {
         container.AppendWithCustomText(
             ids.SackPermitted, FieldValue.None,
-            "SACK Permitted", in context);
+            "SACK Permitted");
     }
 
     /// <summary>
@@ -208,7 +207,7 @@ internal static class TcpOptionsParser
     /// each containing a left edge and right edge (4 bytes each).
     /// </summary>
     private static void ParseSack(
-        ReadOnlySpan<byte> data, in MutField container, in TcpOptionsFieldIds ids, in ParseContext context)
+        ReadOnlySpan<byte> data, in MutField container, in TcpOptionsFieldIds ids)
     {
         // SACK data starts at offset 2, each block is 8 bytes (LE + RE)
         int sackDataLen = data.Length - 2;
@@ -221,16 +220,16 @@ internal static class TcpOptionsParser
 
         MutField sackField = container.AppendWithCustomText(
             ids.Sack, FieldValue.None,
-            (string)ZA.String("SACK: ", blockCount, " block(s)"), in context);
-        sackField.Append(ids.SackCount, FieldValue.NewU64((ulong)blockCount), in context);
+            (string)ZA.String("SACK: ", blockCount, " block(s)"));
+        sackField.Append(ids.SackCount, FieldValue.NewU64((ulong)blockCount));
 
         int blockOffset = 2;
         for (int i = 0; i < blockCount && blockOffset + 8 <= data.Length; i++)
         {
             uint leftEdge = BinaryPrimitives.ReadUInt32BigEndian(data[blockOffset..]);
             uint rightEdge = BinaryPrimitives.ReadUInt32BigEndian(data[(blockOffset + 4)..]);
-            sackField.Append(ids.SackLeftEdge, FieldValue.NewU64(leftEdge), in context);
-            sackField.Append(ids.SackRightEdge, FieldValue.NewU64(rightEdge), in context);
+            sackField.Append(ids.SackLeftEdge, FieldValue.NewU64(leftEdge));
+            sackField.Append(ids.SackRightEdge, FieldValue.NewU64(rightEdge));
             blockOffset += 8;
         }
     }
@@ -239,7 +238,7 @@ internal static class TcpOptionsParser
     /// Parses Timestamps option (kind 8, length 10): TSval (4 bytes) + TSecr (4 bytes).
     /// </summary>
     private static (uint? TsVal, uint? TsEcr) ParseTimestamps(
-        ReadOnlySpan<byte> data, in MutField container, in TcpOptionsFieldIds ids, in ParseContext context)
+        ReadOnlySpan<byte> data, in MutField container, in TcpOptionsFieldIds ids)
     {
         if (data.Length < 10)
         {
@@ -251,9 +250,9 @@ internal static class TcpOptionsParser
 
         MutField tsField = container.AppendWithCustomText(
             ids.Timestamps, FieldValue.None,
-            (string)ZA.String("Timestamps: TSval=", tsVal, ", TSecr=", tsEcr), in context);
-        tsField.Append(ids.TimestampTsVal, FieldValue.NewU64(tsVal), in context);
-        tsField.Append(ids.TimestampTsEcr, FieldValue.NewU64(tsEcr), in context);
+            (string)ZA.String("Timestamps: TSval=", tsVal, ", TSecr=", tsEcr));
+        tsField.Append(ids.TimestampTsVal, FieldValue.NewU64(tsVal));
+        tsField.Append(ids.TimestampTsEcr, FieldValue.NewU64(tsEcr));
 
         return (tsVal, tsEcr);
     }
@@ -263,7 +262,7 @@ internal static class TcpOptionsParser
     /// 1-bit granularity (0=minutes, 1=seconds) + 15-bit value.
     /// </summary>
     private static void ParseUserTimeout(
-        ReadOnlySpan<byte> data, in MutField container, in TcpOptionsFieldIds ids, in ParseContext context)
+        ReadOnlySpan<byte> data, in MutField container, in TcpOptionsFieldIds ids)
     {
         if (data.Length < 4)
         {
@@ -277,9 +276,9 @@ internal static class TcpOptionsParser
 
         MutField utoField = container.AppendWithCustomText(
             ids.UserTimeout, FieldValue.None,
-            (string)ZA.String("User Timeout: ", value, " ", unit), in context);
-        utoField.Append(ids.UserTimeoutGranularity, FieldValue.NewString(unit), in context);
-        utoField.Append(ids.UserTimeoutVal, FieldValue.NewU64(value), in context);
+            (string)ZA.String("User Timeout: ", value, " ", unit));
+        utoField.Append(ids.UserTimeoutGranularity, FieldValue.NewString(unit));
+        utoField.Append(ids.UserTimeoutVal, FieldValue.NewU64(value));
     }
 
     /// <summary>
@@ -287,15 +286,15 @@ internal static class TcpOptionsParser
     /// Length 2 = request (no cookie), length > 2 = cookie present.
     /// </summary>
     private static void ParseFastOpen(
-        ReadOnlySpan<byte> data, in MutField container, in TcpOptionsFieldIds ids, in ParseContext context)
+        ReadOnlySpan<byte> data, in MutField container, in TcpOptionsFieldIds ids)
     {
         if (data.Length == 2)
         {
             // TFO request (no cookie)
             MutField tfoField = container.AppendWithCustomText(
                 ids.FastOpen, FieldValue.None,
-                "TCP Fast Open: Cookie Request", in context);
-            tfoField.Append(ids.FastOpenRequest, FieldValue.NewBool(true), in context);
+                "TCP Fast Open: Cookie Request");
+            tfoField.Append(ids.FastOpenRequest, FieldValue.NewBool(true));
         }
         else if (data.Length > 2)
         {
@@ -303,8 +302,8 @@ internal static class TcpOptionsParser
             ReadOnlyMemory<byte> cookie = data[2..].ToArray();
             MutField tfoField = container.AppendWithCustomText(
                 ids.FastOpen, FieldValue.None,
-                (string)ZA.String("TCP Fast Open: Cookie (", data.Length - 2, " bytes)"), in context);
-            tfoField.Append(ids.FastOpenCookie, FieldValue.NewBytes(cookie), in context);
+                (string)ZA.String("TCP Fast Open: Cookie (", data.Length - 2, " bytes)"));
+            tfoField.Append(ids.FastOpenCookie, FieldValue.NewBytes(cookie));
         }
     }
 
@@ -312,7 +311,7 @@ internal static class TcpOptionsParser
     /// Parses MPTCP option (kind 30, variable length): extracts subtype from first nibble.
     /// </summary>
     private static void ParseMptcp(
-        ReadOnlySpan<byte> data, in MutField container, in TcpOptionsFieldIds ids, in ParseContext context)
+        ReadOnlySpan<byte> data, in MutField container, in TcpOptionsFieldIds ids)
     {
         if (data.Length < 3)
         {
@@ -325,15 +324,15 @@ internal static class TcpOptionsParser
 
         MutField mpField = container.AppendWithCustomText(
             ids.Mptcp, FieldValue.None,
-            (string)ZA.String("Multipath TCP: ", subtypeName), in context);
-        mpField.Append(ids.MptcpSubtype, FieldValue.NewU64(subtype), in context);
+            (string)ZA.String("Multipath TCP: ", subtypeName));
+        mpField.Append(ids.MptcpSubtype, FieldValue.NewU64(subtype));
     }
 
     /// <summary>
     /// Parses MD5 Signature option (kind 19, length 18): 16-byte digest.
     /// </summary>
     private static void ParseMd5(
-        ReadOnlySpan<byte> data, in MutField container, in TcpOptionsFieldIds ids, in ParseContext context)
+        ReadOnlySpan<byte> data, in MutField container, in TcpOptionsFieldIds ids)
     {
         if (data.Length < 18)
         {
@@ -343,8 +342,8 @@ internal static class TcpOptionsParser
         ReadOnlyMemory<byte> digest = data[2..18].ToArray();
         MutField md5Field = container.AppendWithCustomText(
             ids.Md5, FieldValue.None,
-            "MD5 Signature", in context);
-        md5Field.Append(ids.Md5Digest, FieldValue.NewBytes(digest), in context);
+            "MD5 Signature");
+        md5Field.Append(ids.Md5Digest, FieldValue.NewBytes(digest));
     }
 
     /// <summary>
@@ -352,7 +351,7 @@ internal static class TcpOptionsParser
     /// KeyID (1 byte) + RNextKeyID (1 byte) + MAC (remaining).
     /// </summary>
     private static void ParseTcpAo(
-        ReadOnlySpan<byte> data, in MutField container, in TcpOptionsFieldIds ids, in ParseContext context)
+        ReadOnlySpan<byte> data, in MutField container, in TcpOptionsFieldIds ids)
     {
         if (data.Length < 4)
         {
@@ -364,30 +363,30 @@ internal static class TcpOptionsParser
 
         MutField aoField = container.AppendWithCustomText(
             ids.TcpAo, FieldValue.None,
-            (string)ZA.String("TCP-AO: KeyID=", keyId, ", RNextKeyID=", rNextKeyId), in context);
-        aoField.Append(ids.TcpAoKeyId, FieldValue.NewU64(keyId), in context);
-        aoField.Append(ids.TcpAoRNextKeyId, FieldValue.NewU64(rNextKeyId), in context);
+            (string)ZA.String("TCP-AO: KeyID=", keyId, ", RNextKeyID=", rNextKeyId));
+        aoField.Append(ids.TcpAoKeyId, FieldValue.NewU64(keyId));
+        aoField.Append(ids.TcpAoRNextKeyId, FieldValue.NewU64(rNextKeyId));
 
         if (data.Length > 4)
         {
             ReadOnlyMemory<byte> mac = data[4..].ToArray();
-            aoField.Append(ids.TcpAoMac, FieldValue.NewBytes(mac), in context);
+            aoField.Append(ids.TcpAoMac, FieldValue.NewBytes(mac));
         }
     }
 
     /// <summary>Parses an unknown/unrecognized TCP option.</summary>
     private static void ParseUnknown(
-        byte kind, ReadOnlySpan<byte> data, in MutField container, in TcpOptionsFieldIds ids, in ParseContext context)
+        byte kind, ReadOnlySpan<byte> data, in MutField container, in TcpOptionsFieldIds ids)
     {
         string displayText = DisplayTables.GetTcpOptionDisplayText(kind);
         MutField unknownField = container.AppendWithCustomText(
             ids.Unknown, FieldValue.None,
-            (string)ZA.String("Unknown Option: ", displayText), in context);
+            (string)ZA.String("Unknown Option: ", displayText));
 
         if (data.Length > 2)
         {
             ReadOnlyMemory<byte> optData = data[2..].ToArray();
-            unknownField.Append(ids.UnknownData, FieldValue.NewBytes(optData), in context);
+            unknownField.Append(ids.UnknownData, FieldValue.NewBytes(optData));
         }
     }
 
@@ -410,3 +409,6 @@ internal static class TcpOptionsParser
     }
             #endregion
 }
+
+
+

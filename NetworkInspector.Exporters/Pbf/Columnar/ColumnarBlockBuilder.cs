@@ -37,6 +37,7 @@ internal sealed class ColumnarBlockBuilder : IDisposable
     private readonly List<int> _TopologyLengths = new(256);
 
     private readonly FieldPresence _FieldPresence;
+    private readonly int _MaxFieldId;
     private readonly int _MaxPacketsPerBlock;
     private readonly long _MaxBlockSize;
 
@@ -63,6 +64,7 @@ internal sealed class ColumnarBlockBuilder : IDisposable
         int maxPacketsPerBlock = 50000,
         long maxBlockSize = 16 * 1024 * 1024)
     {
+        _MaxFieldId = maxFieldId;
         _FieldPresence = new FieldPresence(maxFieldId);
         _MaxPacketsPerBlock = maxPacketsPerBlock;
         _MaxBlockSize = maxBlockSize;
@@ -237,6 +239,16 @@ internal sealed class ColumnarBlockBuilder : IDisposable
         foreach (Field field in rootField.Descendants())
         {
             int fieldIdValue = field.FieldId.Value;
+
+            // Guard against field IDs outside the configured range. Field IDs >= _MaxFieldId
+            // would corrupt the presence bitmap; throw so the caller's error-tolerance
+            // mechanism skips only this packet rather than silently producing invalid metadata.
+            if ((uint)fieldIdValue >= (uint)_MaxFieldId)
+            {
+                throw new ArgumentOutOfRangeException(nameof(rootField),
+                    $"Field ID {fieldIdValue} is outside the PBF field ID range [0, {_MaxFieldId}).");
+            }
+
             _FieldPresence.Mark(fieldIdValue);
 
             ColumnBuilder column = GetOrCreateColumn(fieldIdValue);

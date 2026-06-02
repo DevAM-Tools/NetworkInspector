@@ -25,16 +25,7 @@ internal sealed class AscStreamSourceTests
         return AscStreamSource.FromStream(ms, "test.asc", leaveOpen: false, options);
     }
 
-    /// <summary>
-    /// Registers the source and starts it.
-    /// </summary>
-    private static FrameInterfaceRegistry StartSource(AscStreamSource source)
-    {
-        FrameInterfaceRegistry registry = new();
-        FrameSourceId sourceId = registry.RegisterSource(source);
-        source.Start(sourceId, registry);
-        return registry;
-    }
+
 
     /// <summary>
     /// Drains all frames from the source with a safety guard against infinite loops.
@@ -64,7 +55,7 @@ internal sealed class AscStreamSourceTests
     public async Task EmptyStream_ProducesNoFrames()
     {
         using AscStreamSource source = CreateFromText("");
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         Frame? frame = source.NextFrame();
 
@@ -78,7 +69,7 @@ internal sealed class AscStreamSourceTests
             "date Sun Nov 24 11:44:00 AM 2019\n" +
             "base hex timestamps absolute\n" +
             "internal events logged\n");
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         Frame? frame = source.NextFrame();
 
@@ -97,7 +88,7 @@ internal sealed class AscStreamSourceTests
             "Begin Triggerblock\n" +
             "0.100000 1 123 Rx d 8 AA BB CC DD EE FF 00 11\n" +
             "End TriggerBlock\n");
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         List<Frame> frames = DrainFrames(source);
 
@@ -121,7 +112,7 @@ internal sealed class AscStreamSourceTests
             "0.400000 Fr 1 V9 0A 4 0 0 1234 x 8 0102030405060708\n" +
             "0.500000 ETH 1 Rx 14:001122334455667788990A0B0C0D\n" +
             "End TriggerBlock\n");
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         List<Frame> frames = DrainFrames(source);
 
@@ -147,7 +138,7 @@ internal sealed class AscStreamSourceTests
             "0.200000 1 200 Rx d 2 03 04\n" +
             "0.300000 1 300 Rx d 2 05 06\n" +
             "End TriggerBlock\n");
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         List<Frame> frames = DrainFrames(source);
 
@@ -170,7 +161,7 @@ internal sealed class AscStreamSourceTests
             "0.100000 1 100 Rx d 2 01 02\n" +
             "0.200000 2 200 Rx d 2 03 04\n" +
             "End TriggerBlock\n");
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         List<Frame> frames = DrainFrames(source);
 
@@ -187,7 +178,7 @@ internal sealed class AscStreamSourceTests
             "0.100000 1 100 Rx d 2 01 02\n" +
             "0.200000 1 200 Rx d 2 03 04\n" +
             "End TriggerBlock\n");
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         List<Frame> frames = DrainFrames(source);
 
@@ -213,7 +204,7 @@ internal sealed class AscStreamSourceTests
             "\n" +
             "0.200000 1 200 Rx d 2 03 04\n" +
             "End TriggerBlock\n");
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         List<Frame> frames = DrainFrames(source);
 
@@ -235,7 +226,7 @@ internal sealed class AscStreamSourceTests
             "0.300000 1 300 Rx d 2 05 06\n" +
             "End TriggerBlock\n",
             new AscSourceOptions { ErrorTolerance = ErrorToleranceMode.Tolerant });
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         List<Frame> frames = DrainFrames(source);
 
@@ -257,7 +248,7 @@ internal sealed class AscStreamSourceTests
             "0.200000 1 200 Rx d 2 03 04\n" +
             "0.300000 1 300 Rx d 2 05 06\n" +
             "End TriggerBlock\n");
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
         DrainFrames(source);
 
         await Assert.That(source.ReadFrameCount).IsEqualTo(3);
@@ -273,7 +264,7 @@ internal sealed class AscStreamSourceTests
         using AscStreamSource source = CreateFromText(
             "base hex\n" +
             "0.100000 1 100 Rx d 2 01 02\n");
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         await Assert.That(source.EstimatedFrameCount).IsNull();
     }
@@ -288,7 +279,7 @@ internal sealed class AscStreamSourceTests
         AscStreamSource source = CreateFromText(
             "base hex\n" +
             "0.100000 1 100 Rx d 2 01 02\n");
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         await Assert.That(source.IsRunning).IsTrue();
 
@@ -307,7 +298,7 @@ internal sealed class AscStreamSourceTests
         AscStreamSource source = CreateFromText(
             "base hex\n" +
             "0.100000 1 100 Rx d 2 01 02\n");
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
         source.Dispose();
 
         await Assert.That(() => source.NextFrame()).Throws<ObjectDisposedException>();
@@ -325,7 +316,7 @@ internal sealed class AscStreamSourceTests
             "Begin Triggerblock\n" +
             "0.100000 1 291 Rx d 2 10 20\n" +
             "End TriggerBlock\n");
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         List<Frame> frames = DrainFrames(source);
 
@@ -351,7 +342,7 @@ internal sealed class AscStreamSourceTests
             "base hex\n" +
             "0.100000 1 100 Rx d 2 01 02\n" +
             "0.200000 1 200 Rx d 2 03 04\n");
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         List<Frame> frames = DrainFrames(source);
 
@@ -384,7 +375,7 @@ internal sealed class AscStreamSourceTests
         AscStreamSource source = CreateFromText(
             "base hex\n" +
             "0.100000 1 100 Rx d 2 01 02\n");
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         source.Dispose();
 

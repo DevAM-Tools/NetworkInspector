@@ -215,7 +215,7 @@ public sealed class RandomFrameSource(RandomSourceOptions options, string? uiNam
     }
 
     /// <inheritdoc/>
-    public Frame? NextFrame()
+    public Frame? NextFrame(CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _Disposed), this);
 
@@ -223,6 +223,8 @@ public sealed class RandomFrameSource(RandomSourceOptions options, string? uiNam
         {
             throw new InvalidOperationException("RandomFrameSource.Start() must be called before NextFrame().");
         }
+
+        cancellationToken.ThrowIfCancellationRequested();
 
         // Read _FrameIndex via Volatile.Read so that any compiler or JIT
         // reordering of the load relative to the _Started/_Disposed checks above is

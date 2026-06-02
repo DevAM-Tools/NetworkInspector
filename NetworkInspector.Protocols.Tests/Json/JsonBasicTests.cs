@@ -49,8 +49,8 @@ internal sealed class JsonBasicTests
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
-            // HTTP uses lazy parsing; MaterializeAll ensures HTTP body dispatch runs,
-            // which calls JSON and appends the JSON lazy container for materialization.
+            // HTTP body dispatch is eager, so JSON protocol/group presence is already recorded.
+            // The JSON descriptive field tree (json.key, ...) is still lazy; MaterializeAll builds it.
             packet.MaterializeAll();
             await ProtocolTestHelper.AssertFieldExists(stack, packet, "json.key").ConfigureAwait(false);
         }

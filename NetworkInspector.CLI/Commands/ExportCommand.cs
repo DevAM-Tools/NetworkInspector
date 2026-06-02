@@ -179,6 +179,7 @@ internal static class ExportCommand
         {
             foreach (SourceConfig config in configs)
             {
+                config.ValidateBeforeStart();
                 IFrameSource source = config.CreateSource();
                 FrameSourceId sourceId = registry.RegisterSource(source);
                 source.Start(sourceId, registry);
@@ -201,82 +202,10 @@ internal static class ExportCommand
             // Safe IDisposable handling — exporter may or may not implement it
             using IDisposable? exporterDisposable = exporter as IDisposable;
 
-            long packetCount = 0;
             int packetIdCounter = 0;
-
-            // Round-robin across sources: track which sources are still active.
-            // A source becomes inactive once it returns null (exhausted).
-            // We keep cycling until all sources are exhausted.
-            bool[] activeSources = new bool[sources.Count];
-            Array.Fill(activeSources, true);
-            int activeSourceCount = sources.Count;
-            int currentSource = 0;
-
-            while (activeSourceCount > 0
-                && !cts.Token.IsCancellationRequested
-                && (maxPackets == 0 || packetCount < maxPackets))
-            {
-                // Advance to the next active source
-                if (!activeSources[currentSource])
-                {
-                    currentSource = (currentSource + 1) % sources.Count;
-                    continue;
-                }
-
-                IFrameSource source = sources[currentSource];
-                Frame? frame;
-                try
-                {
-                    frame = source.NextFrame();
-                }
-                catch (Exception ex)
-                {
-                    if (tolerant)
-                    {
-                        Console.Error.WriteLine(
-                            $"Warning: Skipping frame from {source.UiName}: {ex.Message}");
-                        currentSource = (currentSource + 1) % sources.Count;
-                        continue;
-                    }
-
-                    throw;
-                }
-
-                if (frame is null)
-                {
-                    // This source is exhausted
-                    activeSources[currentSource] = false;
-                    activeSourceCount--;
-                    currentSource = (currentSource + 1) % sources.Count;
-                    continue;
-                }
-
-                // Parse frame into packet
-                PacketId pid = new(Interlocked.Increment(ref packetIdCounter));
-                Packet packet = Packet.ParseFrame(pid, stack, frame.Value);
-
-                // Export the packet
-                if (!exporter.OnPacket(packet))
-                {
-                    // Exporter signalled stop
-                    break;
-                }
-
-                packetCount++;
-
-                // Progress reporting (to stderr so it never pollutes stdout)
-                if (progressInterval > 0 && packetCount % progressInterval == 0)
-                {
-                    Console.Error.WriteLine($"Progress: {packetCount} packets exported");
-                }
-
-                currentSource = (currentSource + 1) % sources.Count;
-
-                if (maxPackets > 0 && packetCount >= maxPackets)
-                {
-                    break;
-                }
-            }
+            long packetCount = RunExportLoop(
+                sources, exporter, stack, maxPackets, progressInterval, tolerant,
+                ref packetIdCounter, cts.Token);
 
             exporter.OnFinish();
 
@@ -301,25 +230,142 @@ internal static class ExportCommand
     }
 
     /// <summary>
+    /// Drives the frame-read → parse → export loop across all active sources.
+    /// </summary>
+    /// <param name="sources">Active, already-started frame sources in round-robin order.</param>
+    /// <param name="exporter">Target packet listener; <see cref="IPacketListener.OnFinish"/>
+    /// is <b>not</b> called here — the caller is responsible.</param>
+    /// <param name="stack">Protocol stack that owns parsed packets.</param>
+    /// <param name="maxPackets">Stop after this many packets (0 = unlimited).</param>
+    /// <param name="progressInterval">Print progress every N packets to stderr (0 = silent).</param>
+    /// <param name="tolerant">When <see langword="true"/>, log and skip frames that throw.</param>
+    /// <param name="packetIdCounter">Monotonically increasing packet ID counter; passed by reference
+    /// so the caller can observe the final value if needed.</param>
+    /// <param name="cancellationToken">Cooperative cancellation.</param>
+    /// <returns>Number of packets exported successfully.</returns>
+    internal static long RunExportLoop(
+        List<IFrameSource> sources,
+        IPacketListener exporter,
+        Stack stack,
+        long maxPackets,
+        long progressInterval,
+        bool tolerant,
+        ref int packetIdCounter,
+        CancellationToken cancellationToken)
+    {
+        long packetCount = 0;
+        Packet? recyclePacket = null;
+
+        // Round-robin across sources via RoundRobinSourceIterator.
+        // Sources are removed from rotation as they are exhausted.
+        RoundRobinSourceIterator iterator = new(sources);
+
+        while (iterator.HasActive
+            && !cancellationToken.IsCancellationRequested
+            && (maxPackets == 0 || packetCount < maxPackets))
+        {
+            IFrameSource source = iterator.Current;
+            Frame? frame;
+            try
+            {
+                frame = source.NextFrame(cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                if (tolerant)
+                {
+                    Console.Error.WriteLine(
+                        $"Warning: Skipping frame from {source.UiName}: {ex.Message}");
+                    iterator.Advance();
+                    continue;
+                }
+
+                throw;
+            }
+
+            if (frame is null)
+            {
+                // This source is exhausted
+                iterator.MarkCurrentExhaustedAndAdvance();
+                continue;
+            }
+
+            // Parse frame into packet — reuse the previous packet where possible to eliminate
+            // per-frame heap allocation. All four RecycleError codes are structurally impossible
+            // in this context (same stack, same registry, single thread, packet always sealed);
+            // the non-null guard is a purely defensive fallback that keeps the loop alive.
+            PacketId pid = new(Interlocked.Increment(ref packetIdCounter));
+            Packet packet;
+            if (recyclePacket is null || Packet.TryParseFrame(recyclePacket, pid, stack, frame.Value) is not null)
+            {
+                // First frame, or unexpected precondition failure: allocate fresh.
+                packet = Packet.ParseFrame(pid, stack, frame.Value);
+            }
+            else
+            {
+                packet = recyclePacket;
+            }
+
+            // Export the packet; update recycle slot unconditionally since packet is sealed here.
+            bool continueExport = exporter.OnPacket(packet);
+            recyclePacket = packet;
+            packetCount++;
+
+            // Progress reporting (to stderr so it never pollutes stdout)
+            if (progressInterval > 0 && packetCount % progressInterval == 0)
+            {
+                Console.Error.WriteLine($"Progress: {packetCount} packets exported");
+            }
+
+            iterator.Advance();
+
+            if (!continueExport)
+            {
+                // Exporter signalled stop; packet was already counted
+                break;
+            }
+
+            if (maxPackets > 0 && packetCount >= maxPackets)
+            {
+                break;
+            }
+        }
+
+        return packetCount;
+    }
+
+    /// <summary>
     /// Constructs a <see cref="SettingsManager"/> using the provided settings path and profile.
     /// Delegates to <see cref="SettingsManagerFactory.Create"/> for consistent path resolution.
     /// </summary>
     private static SettingsManager BuildSettingsManager(string? settingsPath, string? profileName)
         => SettingsManagerFactory.Create(settingsPath, profileName);
 
-    /// <summary>Disposes all sources safely, ignoring individual cleanup errors.</summary>
+    /// <summary>
+    /// Disposes all sources, writing a warning to stderr for each failure.
+    /// If every disposal fails the aggregate is re-thrown so callers are not
+    /// silently left with unreleased resources.
+    /// </summary>
     private static void DisposeSources(List<IFrameSource> sources)
     {
+        List<Exception>? errors = null;
         foreach (IFrameSource source in sources)
         {
             try
             {
                 source.Dispose();
             }
-            catch
+            catch (Exception ex)
             {
-                // Best-effort disposal
+                Console.Error.WriteLine(
+                    $"Warning: failed to dispose source '{source.GetType().Name}': {ex.Message}");
+                (errors ??= []).Add(ex);
             }
+        }
+
+        if (errors is not null && errors.Count == sources.Count && sources.Count > 0)
+        {
+            throw new AggregateException("All source disposals failed.", errors);
         }
     }
 
@@ -327,7 +373,7 @@ internal static class ExportCommand
     private static bool IsHelpFlag(string arg) =>
         arg is "--help" or "-h" or "-?" or "/?" or "--HELP" or "-H";
 
-    /// <summary>Gets the next argument value, throwing if missing.</summary>
+    /// <summary>Gets the next argument value, throwing if missing or null.</summary>
     private static string GetNextArg(string[] args, ref int index, string name)
     {
         index++;
@@ -336,7 +382,13 @@ internal static class ExportCommand
             throw new ArgumentException($"Option '{name}' requires a value.");
         }
 
-        return args[index];
+        string? value = args[index];
+        if (value is null)
+        {
+            throw new ArgumentException($"Option '{name}' received a null argument (internal error).");
+        }
+
+        return value;
     }
 
     /// <summary>Parses a long value, throwing a user-friendly message on failure.</summary>
@@ -374,8 +426,10 @@ internal static class ExportCommand
         Console.Error.WriteLine("Source specifications:");
         Console.Error.WriteLine("  capture.pcap[ng]      Auto-detected PCAP/PCAPNG file");
         Console.Error.WriteLine("  data.blf              Auto-detected BLF file");
+        Console.Error.WriteLine("  log.asc               Auto-detected CANalyzer ASC file");
         Console.Error.WriteLine("  pcap:path=<file>      Explicit PCAP/PCAPNG spec");
         Console.Error.WriteLine("  blf:path=<file>       Explicit BLF spec");
+        Console.Error.WriteLine("  asc:path=<file>       Explicit ASC spec");
         Console.Error.WriteLine("  random:count=N,seed=S,mode=udp4|udp6|random  Synthetic frames");
         Console.Error.WriteLine();
         Console.Error.WriteLine("Format specifications:");

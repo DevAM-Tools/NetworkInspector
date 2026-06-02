@@ -5,12 +5,11 @@ namespace NetworkInspector.Values;
 /// <summary>
 /// 48-bit MAC (EUI-48) address stored in the lower 6 bytes of a <see cref="ulong"/>.
 /// </summary>
-/// <remarks>Creates a MAC address from a raw 64-bit value (only lower 48 bits are used).</remarks>
 [StructLayout(LayoutKind.Sequential)]
-[method: MethodImpl(MethodImplOptions.AggressiveInlining)]
-public readonly struct MacAddress(ulong value)
-        : IEquatable<MacAddress>, IComparable<MacAddress>,
-      ISpanFormattable, IUtf8SpanFormattable, IStringSize, IBinarySerializable
+public readonly record struct MacAddress
+        : IEquatable<MacAddress>, IComparable<MacAddress>, IComparable,
+      ISpanFormattable, IUtf8SpanFormattable, IStringSize, IBinarySerializable,
+      ISpanParsable<MacAddress>, IParsable<MacAddress>
 {
     #region Constants
 
@@ -21,9 +20,20 @@ public readonly struct MacAddress(ulong value)
 
     #endregion
 
+    #region Constructor
+
+    /// <summary>Creates a <see cref="MacAddress"/> from a raw 64-bit value (only lower 48 bits are used).</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public MacAddress(ulong value)
+    {
+        _Value = value & Mask48;
+    }
+
+    #endregion
+
     #region Fields
 
-    private readonly ulong _Value = value & Mask48;
+    private readonly ulong _Value;
 
     #endregion
 
@@ -89,10 +99,10 @@ public readonly struct MacAddress(ulong value)
         {
             return default;
         }
-        ulong value = ((ulong)bytes[0] << 40) | ((ulong)bytes[1] << 32) |
-                      ((ulong)bytes[2] << 24) | ((ulong)bytes[3] << 16) |
-                      ((ulong)bytes[4] << 8) | bytes[5];
-        return new MacAddress(value);
+        // BinaryPrimitives has no ReadUInt48 — combine a 2-byte and 4-byte read for portability.
+        ulong high = BinaryPrimitives.ReadUInt16BigEndian(bytes);
+        ulong low = BinaryPrimitives.ReadUInt32BigEndian(bytes[2..]);
+        return new MacAddress((high << 32) | low);
     }
 
     /// <summary>Parses a MAC address from "XX:XX:XX:XX:XX:XX" notation (case-insensitive).</summary>
@@ -121,6 +131,46 @@ public readonly struct MacAddress(ulong value)
         }
         result = new MacAddress(value);
         return true;
+    }
+
+    #endregion
+
+    #region ISpanParsable / IParsable
+
+    /// <inheritdoc/>
+    static bool ISpanParsable<MacAddress>.TryParse(
+        ReadOnlySpan<char> s, IFormatProvider? provider, out MacAddress result)
+        => TryParse(s, out result);
+
+    /// <inheritdoc/>
+    static MacAddress ISpanParsable<MacAddress>.Parse(
+        ReadOnlySpan<char> s, IFormatProvider? provider)
+    {
+        if (!TryParse(s, out MacAddress result))
+        {
+            throw new FormatException($"Input '{s}' is not a valid MAC address.");
+        }
+        return result;
+    }
+
+    /// <inheritdoc/>
+    static bool IParsable<MacAddress>.TryParse(
+        string? s, IFormatProvider? provider, out MacAddress result)
+    {
+        if (s is null) { result = default; return false; }
+        return TryParse(s.AsSpan(), out result);
+    }
+
+    /// <inheritdoc/>
+    static MacAddress IParsable<MacAddress>.Parse(
+        string s, IFormatProvider? provider)
+    {
+        ArgumentNullException.ThrowIfNull(s);
+        if (!TryParse(s.AsSpan(), out MacAddress result))
+        {
+            throw new FormatException($"Input '{s}' is not a valid MAC address.");
+        }
+        return result;
     }
 
     #endregion
@@ -182,6 +232,7 @@ public readonly struct MacAddress(ulong value)
     #region ISpanFormattable
 
     /// <inheritdoc/>
+    /// <remarks>Uses <see cref="ZeroAlloc.SpanStringBuilder"/> for zero-allocation span-based formatting.</remarks>
     public bool TryFormat(
         Span<char> destination, out int charsWritten,
         ReadOnlySpan<char> format, IFormatProvider? provider)
@@ -259,7 +310,12 @@ public readonly struct MacAddress(ulong value)
         return written;
     }
 
-    /// <summary>Returns a <see cref="TempString"/> backed by a thread-static buffer.</summary>
+    /// <summary>Returns a <see cref="TempString"/> backed by a thread-static or pooled buffer.</summary>
+    /// <remarks>
+    /// The underlying buffer is thread-local or pooled. The caller must dispose the returned <see cref="TempString"/>
+    /// before making another <see cref="FormatTemp"/> call on the same thread to avoid overwriting the buffer.
+    /// Do not retain references to the underlying span after disposal.
+    /// </remarks>
     public TempString FormatTemp()
     {
         char[] buffer = ZeroAllocHelper.AcquireCharBuffer(FormattedLength, out bool isThreadStatic);
@@ -268,11 +324,12 @@ public readonly struct MacAddress(ulong value)
     }
 
     /// <summary>Returns the formatted MAC address as a new string.</summary>
+    /// <remarks>Allocates a new string on every call. Use <see cref="FormatInto"/> or <see cref="FormatTemp"/> for allocation-free hot paths.</remarks>
     public string Format()
     {
         Span<char> buf = stackalloc char[FormattedLength];
-        TryFormat(buf, out _, default, null);
-        return new string(buf);
+        TryFormat(buf, out int written, default, null);
+        return new string(buf[..written]);
     }
 
     /// <inheritdoc/>
@@ -287,30 +344,20 @@ public readonly struct MacAddress(ulong value)
 
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public bool Equals(MacAddress other) => _Value == other._Value;
-    /// <inheritdoc/>
-    public override bool Equals(object? obj) => obj is MacAddress other && Equals(other);
-    /// <inheritdoc/>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public override int GetHashCode() => _Value.GetHashCode();
-    /// <inheritdoc/>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public int CompareTo(MacAddress other) => _Value.CompareTo(other._Value);
+
+    /// <inheritdoc/>
+    int IComparable.CompareTo(object? obj)
+    {
+        if (obj is null) { return 1; }
+        if (obj is MacAddress other) { return CompareTo(other); }
+        throw new ArgumentException($"Object must be of type {nameof(MacAddress)}.", nameof(obj));
+    }
 
     #endregion
 
     #region Operators
 
-    /// <summary>Returns <see langword="true"/> if <paramref name="left"/> and <paramref name="right"/> are equal.</summary>
-    /// <param name="left">The left operand.</param>
-    /// <param name="right">The right operand.</param>
-    /// <returns><see langword="true"/> if the condition holds; otherwise <see langword="false"/>.</returns>
-    public static bool operator ==(MacAddress left, MacAddress right) => left._Value == right._Value;
-    /// <summary>Returns <see langword="true"/> if <paramref name="left"/> and <paramref name="right"/> are not equal.</summary>
-    /// <param name="left">The left operand.</param>
-    /// <param name="right">The right operand.</param>
-    /// <returns><see langword="true"/> if the condition holds; otherwise <see langword="false"/>.</returns>
-    public static bool operator !=(MacAddress left, MacAddress right) => left._Value != right._Value;
     /// <summary>Returns <see langword="true"/> if <paramref name="left"/> is less than <paramref name="right"/>.</summary>
     /// <param name="left">The left operand.</param>
     /// <param name="right">The right operand.</param>

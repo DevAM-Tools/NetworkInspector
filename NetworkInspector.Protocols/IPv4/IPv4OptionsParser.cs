@@ -53,11 +53,10 @@ internal static class IPv4OptionsParser
     /// <param name="optionsContainer">The parent field for all options (ip.options).</param>
     /// <param name="data">Options bytes (from offset 20 to header length).</param>
     /// <param name="fields">Field IDs for the option sub-fields.</param>
-    /// <param name="context">The parse context providing dispatch resolution and stack access.</param>
     internal static void Parse(
         MutField optionsContainer,
         ReadOnlySpan<byte> data,
-        in IPv4Protocol.OptionFieldIds fields, in ParseContext context)
+        in IPv4Protocol.OptionFieldIds fields)
     {
         int len = data.Length;
         if (len == 0 || len > MaxOptionsLen)
@@ -76,13 +75,13 @@ internal static class IPv4OptionsParser
                     // End of Options List — terminates parsing, remaining bytes are padding
                     optionsContainer.AppendWithCustomText(
                         fields.EolFieldId, FieldValue.None,
-                        "End of Options List (EOL)", in context);
+                        "End of Options List (EOL)");
 
                     if (offset + 1 < len)
                     {
                         ReadOnlyMemory<byte> padding = data[(offset + 1)..len].ToArray();
                         optionsContainer.Append(fields.PaddingFieldId,
-                            FieldValue.NewBytes(padding), in context);
+                            FieldValue.NewBytes(padding));
                     }
                     return; // EOOL terminates option parsing
 
@@ -90,7 +89,7 @@ internal static class IPv4OptionsParser
                     // No-Operation — single byte used for alignment
                     optionsContainer.AppendWithCustomText(
                         fields.NopFieldId, FieldValue.None,
-                        "No-Operation (NOP)", in context);
+                        "No-Operation (NOP)");
                     offset += 1;
                     break;
 
@@ -108,7 +107,7 @@ internal static class IPv4OptionsParser
                     }
 
                     ReadOnlySpan<byte> optData = data.Slice(offset, optLen);
-                    ParseMultiByteOption(optionsContainer, optType, optData, in fields, in context);
+                    ParseMultiByteOption(optionsContainer, optType, optData, in fields);
                     offset += optLen;
                     break;
             }
@@ -120,40 +119,40 @@ internal static class IPv4OptionsParser
         MutField optionsContainer,
         byte optType,
         ReadOnlySpan<byte> optData,
-        in IPv4Protocol.OptionFieldIds fields, in ParseContext context)
+        in IPv4Protocol.OptionFieldIds fields)
     {
         switch (optType)
         {
             case RecordRoute:
-                ParseRecordRouteOption(optionsContainer, optData, in fields, in context);
+                ParseRecordRouteOption(optionsContainer, optData, in fields);
                 break;
 
             case LooseSourceRoute:
-                ParseSourceRouteOption(optionsContainer, optData, fields.LooseSourceRouteFieldId, in fields, in context);
+                ParseSourceRouteOption(optionsContainer, optData, fields.LooseSourceRouteFieldId, in fields);
                 break;
 
             case StrictSourceRoute:
-                ParseSourceRouteOption(optionsContainer, optData, fields.StrictSourceRouteFieldId, in fields, in context);
+                ParseSourceRouteOption(optionsContainer, optData, fields.StrictSourceRouteFieldId, in fields);
                 break;
 
             case Timestamp:
-                ParseTimestampOption(optionsContainer, optData, in fields, in context);
+                ParseTimestampOption(optionsContainer, optData, in fields);
                 break;
 
             case RouterAlert:
-                ParseRouterAlertOption(optionsContainer, optData, in fields, in context);
+                ParseRouterAlertOption(optionsContainer, optData, in fields);
                 break;
 
             case Security or ExtendedSecurity:
-                ParseSecurityOption(optionsContainer, optData, in fields, in context);
+                ParseSecurityOption(optionsContainer, optData, in fields);
                 break;
 
             case StreamId:
-                ParseStreamIdOption(optionsContainer, optData, in fields, in context);
+                ParseStreamIdOption(optionsContainer, optData, in fields);
                 break;
 
             default:
-                ParseUnknownOption(optionsContainer, optType, optData, in fields, in context);
+                ParseUnknownOption(optionsContainer, optType, optData, in fields);
                 break;
         }
     }
@@ -167,7 +166,7 @@ internal static class IPv4OptionsParser
     private static void ParseRecordRouteOption(
         MutField optionsContainer,
         ReadOnlySpan<byte> optData,
-        in IPv4Protocol.OptionFieldIds fields, in ParseContext context)
+        in IPv4Protocol.OptionFieldIds fields)
     {
         int optLen = optData.Length;
         if (optLen < MinRouteOptionLen)
@@ -181,14 +180,14 @@ internal static class IPv4OptionsParser
 
         MutField container = optionsContainer.AppendWithCustomText(
             fields.RecordRouteFieldId, FieldValue.None,
-            (string)ZA.String(optName, " (", optLen, " bytes, ", addrCount, " entries)"), in context);
+            (string)ZA.String(optName, " (", optLen, " bytes, ", addrCount, " entries)"));
 
-        AppendOptionTypeFields(container, optData[0], in fields, in context);
-        container.Append(fields.OptLenFieldId, FieldValue.NewU64((ulong)optLen), in context);
-        container.Append(fields.OptPtrFieldId, FieldValue.NewU64(pointer), in context);
+        AppendOptionTypeFields(container, optData[0], in fields);
+        container.Append(fields.OptLenFieldId, FieldValue.NewU64((ulong)optLen));
+        container.Append(fields.OptPtrFieldId, FieldValue.NewU64(pointer));
 
         // Parse recorded route addresses (each 4 bytes starting at offset 3)
-        ParseIpv4Addresses(container, optData, 3, fields.OptAddrFieldId, in context);
+        ParseIpv4Addresses(container, optData, 3, fields.OptAddrFieldId);
     }
 
     /// <summary>
@@ -199,7 +198,7 @@ internal static class IPv4OptionsParser
         MutField optionsContainer,
         ReadOnlySpan<byte> optData,
         FieldId containerFieldId,
-        in IPv4Protocol.OptionFieldIds fields, in ParseContext context)
+        in IPv4Protocol.OptionFieldIds fields)
     {
         int optLen = optData.Length;
         if (optLen < MinRouteOptionLen)
@@ -213,13 +212,13 @@ internal static class IPv4OptionsParser
 
         MutField container = optionsContainer.AppendWithCustomText(
             containerFieldId, FieldValue.None,
-            (string)ZA.String(optName, " (", optLen, " bytes, ", addrCount, " entries)"), in context);
+            (string)ZA.String(optName, " (", optLen, " bytes, ", addrCount, " entries)"));
 
-        AppendOptionTypeFields(container, optData[0], in fields, in context);
-        container.Append(fields.OptLenFieldId, FieldValue.NewU64((ulong)optLen), in context);
-        container.Append(fields.OptPtrFieldId, FieldValue.NewU64(pointer), in context);
+        AppendOptionTypeFields(container, optData[0], in fields);
+        container.Append(fields.OptLenFieldId, FieldValue.NewU64((ulong)optLen));
+        container.Append(fields.OptPtrFieldId, FieldValue.NewU64(pointer));
 
-        ParseIpv4Addresses(container, optData, 3, fields.OptAddrFieldId, in context);
+        ParseIpv4Addresses(container, optData, 3, fields.OptAddrFieldId);
     }
 
     /// <summary>
@@ -229,7 +228,7 @@ internal static class IPv4OptionsParser
     private static void ParseTimestampOption(
         MutField optionsContainer,
         ReadOnlySpan<byte> optData,
-        in IPv4Protocol.OptionFieldIds fields, in ParseContext context)
+        in IPv4Protocol.OptionFieldIds fields)
     {
         int optLen = optData.Length;
         if (optLen < MinTimestampOptionLen)
@@ -247,14 +246,14 @@ internal static class IPv4OptionsParser
 
         MutField container = optionsContainer.AppendWithCustomText(
             fields.TimestampFieldId, FieldValue.None,
-            (string)ZA.String(optName, " (", optLen, " bytes, ", flagDisplay, ")"), in context);
+            (string)ZA.String(optName, " (", optLen, " bytes, ", flagDisplay, ")"));
 
-        AppendOptionTypeFields(container, optData[0], in fields, in context);
-        container.Append(fields.OptLenFieldId, FieldValue.NewU64((ulong)optLen), in context);
-        container.Append(fields.OptPtrFieldId, FieldValue.NewU64(pointer), in context);
-        container.Append(fields.OptOverflowFieldId, FieldValue.NewU64(overflow), in context);
+        AppendOptionTypeFields(container, optData[0], in fields);
+        container.Append(fields.OptLenFieldId, FieldValue.NewU64((ulong)optLen));
+        container.Append(fields.OptPtrFieldId, FieldValue.NewU64(pointer));
+        container.Append(fields.OptOverflowFieldId, FieldValue.NewU64(overflow));
         container.AppendWithCustomText(fields.OptFlagFieldId,
-            FieldValue.NewU64(flag), flagDisplay, in context);
+            FieldValue.NewU64(flag), flagDisplay);
 
         // Parse timestamp entries starting at offset 4
         int entryOffset = 4;
@@ -266,7 +265,7 @@ internal static class IPv4OptionsParser
                 {
                     uint tsVal = ReadU32BigEndian(optData, entryOffset);
                     container.Append(fields.OptTimeStampFieldId,
-                        FieldValue.NewU64(tsVal), in context);
+                        FieldValue.NewU64(tsVal));
                     entryOffset += 4;
                 }
                 break;
@@ -278,9 +277,9 @@ internal static class IPv4OptionsParser
                     IPv4Address addr = ReadIpv4Address(optData, entryOffset);
                     uint tsVal = ReadU32BigEndian(optData, entryOffset + 4);
                     container.Append(fields.OptTimeStampAddrFieldId,
-                        FieldValue.NewIPv4(addr), in context);
+                        FieldValue.NewIPv4(addr));
                     container.Append(fields.OptTimeStampFieldId,
-                        FieldValue.NewU64(tsVal), in context);
+                        FieldValue.NewU64(tsVal));
                     entryOffset += 8;
                 }
                 break;
@@ -294,7 +293,7 @@ internal static class IPv4OptionsParser
     private static void ParseRouterAlertOption(
         MutField optionsContainer,
         ReadOnlySpan<byte> optData,
-        in IPv4Protocol.OptionFieldIds fields, in ParseContext context)
+        in IPv4Protocol.OptionFieldIds fields)
     {
         if (optData.Length < RouterAlertLen)
         {
@@ -310,12 +309,12 @@ internal static class IPv4OptionsParser
 
         MutField container = optionsContainer.AppendWithCustomText(
             fields.RouterAlertFieldId, FieldValue.None,
-            (string)ZA.String(optName, ": ", raDisplay), in context);
+            (string)ZA.String(optName, ": ", raDisplay));
 
-        AppendOptionTypeFields(container, optData[0], in fields, in context);
-        container.Append(fields.OptLenFieldId, FieldValue.NewU64((ulong)optData.Length), in context);
+        AppendOptionTypeFields(container, optData[0], in fields);
+        container.Append(fields.OptLenFieldId, FieldValue.NewU64((ulong)optData.Length));
         container.AppendWithCustomText(fields.OptRaFieldId,
-            FieldValue.NewU64(raValue), raDisplay, in context);
+            FieldValue.NewU64(raValue), raDisplay);
     }
 
     /// <summary>
@@ -325,23 +324,23 @@ internal static class IPv4OptionsParser
     private static void ParseSecurityOption(
         MutField optionsContainer,
         ReadOnlySpan<byte> optData,
-        in IPv4Protocol.OptionFieldIds fields, in ParseContext context)
+        in IPv4Protocol.OptionFieldIds fields)
     {
         int optLen = optData.Length;
         string optName = DisplayTables.GetIpOptionTypeName(optData[0]);
 
         MutField container = optionsContainer.AppendWithCustomText(
             fields.SecurityFieldId, FieldValue.None,
-            (string)ZA.String(optName, " (", optLen, " bytes)"), in context);
+            (string)ZA.String(optName, " (", optLen, " bytes)"));
 
-        AppendOptionTypeFields(container, optData[0], in fields, in context);
-        container.Append(fields.OptLenFieldId, FieldValue.NewU64((ulong)optLen), in context);
+        AppendOptionTypeFields(container, optData[0], in fields);
+        container.Append(fields.OptLenFieldId, FieldValue.NewU64((ulong)optLen));
 
         // Store raw option data (after type + length)
         if (optLen > 2)
         {
             ReadOnlyMemory<byte> rawData = optData[2..].ToArray();
-            container.Append(fields.OptDataFieldId, FieldValue.NewBytes(rawData), in context);
+            container.Append(fields.OptDataFieldId, FieldValue.NewBytes(rawData));
         }
     }
 
@@ -352,7 +351,7 @@ internal static class IPv4OptionsParser
     private static void ParseStreamIdOption(
         MutField optionsContainer,
         ReadOnlySpan<byte> optData,
-        in IPv4Protocol.OptionFieldIds fields, in ParseContext context)
+        in IPv4Protocol.OptionFieldIds fields)
     {
         if (optData.Length < StreamIdLen)
         {
@@ -364,11 +363,11 @@ internal static class IPv4OptionsParser
 
         MutField container = optionsContainer.AppendWithCustomText(
             fields.StreamIdFieldId, FieldValue.None,
-            (string)ZA.String(optName, ": ", sidValue), in context);
+            (string)ZA.String(optName, ": ", sidValue));
 
-        AppendOptionTypeFields(container, optData[0], in fields, in context);
-        container.Append(fields.OptLenFieldId, FieldValue.NewU64((ulong)optData.Length), in context);
-        container.Append(fields.OptSidFieldId, FieldValue.NewU64(sidValue), in context);
+        AppendOptionTypeFields(container, optData[0], in fields);
+        container.Append(fields.OptLenFieldId, FieldValue.NewU64((ulong)optData.Length));
+        container.Append(fields.OptSidFieldId, FieldValue.NewU64(sidValue));
     }
 
     /// <summary>Parses an unknown option — displays type, length, and raw data.</summary>
@@ -376,7 +375,7 @@ internal static class IPv4OptionsParser
         MutField optionsContainer,
         byte optType,
         ReadOnlySpan<byte> optData,
-        in IPv4Protocol.OptionFieldIds fields, in ParseContext context)
+        in IPv4Protocol.OptionFieldIds fields)
     {
         int optLen = optData.Length;
         string optName = DisplayTables.GetIpOptionTypeName(optType);
@@ -384,16 +383,16 @@ internal static class IPv4OptionsParser
 
         MutField container = optionsContainer.AppendWithCustomText(
             fields.UnknownFieldId, FieldValue.None,
-            (string)ZA.String(displayName, " (type ", optType, ", ", optLen, " bytes)"), in context);
+            (string)ZA.String(displayName, " (type ", optType, ", ", optLen, " bytes)"));
 
-        AppendOptionTypeFields(container, optType, in fields, in context);
-        container.Append(fields.OptLenFieldId, FieldValue.NewU64((ulong)optLen), in context);
+        AppendOptionTypeFields(container, optType, in fields);
+        container.Append(fields.OptLenFieldId, FieldValue.NewU64((ulong)optLen));
 
         // Store raw option data (after type + length)
         if (optLen > 2)
         {
             ReadOnlyMemory<byte> rawData = optData[2..].ToArray();
-            container.Append(fields.OptDataFieldId, FieldValue.NewBytes(rawData), in context);
+            container.Append(fields.OptDataFieldId, FieldValue.NewBytes(rawData));
         }
     }
 
@@ -408,7 +407,7 @@ internal static class IPv4OptionsParser
     private static void AppendOptionTypeFields(
         MutField parentField,
         byte optType,
-        in IPv4Protocol.OptionFieldIds fields, in ParseContext context)
+        in IPv4Protocol.OptionFieldIds fields)
     {
         bool copy = (optType & 0x80) != 0;
         byte optClass = (byte)((optType >> 5) & 0x03);
@@ -416,16 +415,16 @@ internal static class IPv4OptionsParser
 
         string typeDisplay = DisplayTables.GetIpOptionTypeDisplayText(optType);
         parentField.AppendWithCustomText(fields.OptTypeFieldId,
-            FieldValue.NewU64(optType), typeDisplay, in context);
+            FieldValue.NewU64(optType), typeDisplay);
 
         parentField.AppendWithCustomText(fields.OptTypeCopyFieldId,
-            FieldValue.NewBool(copy), copy ? "Set" : "Not Set", in context);
+            FieldValue.NewBool(copy), copy ? "Set" : "Not Set");
 
         string classDisplay = DisplayTables.GetIpOptionClassDisplayText(optClass);
         parentField.AppendWithCustomText(fields.OptTypeClassFieldId,
-            FieldValue.NewU64(optClass), classDisplay, in context);
+            FieldValue.NewU64(optClass), classDisplay);
 
-        parentField.Append(fields.OptTypeNumberFieldId, FieldValue.NewU64(number), in context);
+        parentField.Append(fields.OptTypeNumberFieldId, FieldValue.NewU64(number));
     }
 
     /// <summary>
@@ -437,13 +436,13 @@ internal static class IPv4OptionsParser
         MutField parentField,
         ReadOnlySpan<byte> data,
         int startOffset,
-        FieldId addrFieldId, in ParseContext context)
+        FieldId addrFieldId)
     {
         int offset = startOffset;
         while (offset + 4 <= data.Length)
         {
             IPv4Address addr = ReadIpv4Address(data, offset);
-            parentField.Append(addrFieldId, FieldValue.NewIPv4(addr), in context);
+            parentField.Append(addrFieldId, FieldValue.NewIPv4(addr));
             offset += 4;
         }
     }
@@ -460,3 +459,8 @@ internal static class IPv4OptionsParser
          | ((uint)data[offset + 2] << 8) | data[offset + 3];
     #endregion
 }
+
+
+
+
+

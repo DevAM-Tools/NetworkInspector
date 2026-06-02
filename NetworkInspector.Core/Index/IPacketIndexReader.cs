@@ -146,14 +146,5 @@ public interface IPacketIndexReader
     /// </summary>
     bool TryProtocolCardinality(ProtocolId protocolId, out long cardinality);
 
-    /// <summary>
-    /// Read-only view of cached field values. Returns <see langword="null"/>
-    /// if no value cache has been configured or built.
-    /// </summary>
-    IValueCacheReader? ValueCache
-    {
-        get;
-    }
-
     #endregion
 }

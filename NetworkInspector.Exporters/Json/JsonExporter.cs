@@ -39,8 +39,11 @@ public sealed class JsonExporter : IPacketListener, IErrorTolerantExporter, IDis
 
     // Output target consumed on lazy init
     private ExportOutput? _Output;
-    // Non-owning stream reference for direct writes; _Output owns the underlying stream
-    // and disposes it. We must not dispose this reference directly — CA2213 suppressed.
+    // _OutputStreamRef: non-owning reference to the stream created by _Output.
+    // _Output is the sole owner and is responsible for disposing it on Dispose/OnFinish.
+    // Never dispose _OutputStreamRef directly — doing so would double-dispose the underlying stream.
+    // Rename kept as _DirectStream for API-surface stability; the 'Ref' suffix communicates
+    // the non-owning semantics to future readers even without this comment.
     [SuppressMessage("Design", "CA2213:Disposable fields should be disposed",
         Justification = "_DirectStream is a non-owning reference to _Output's stream; _Output.Dispose() handles cleanup.")]
     private Stream? _DirectStream;
@@ -56,6 +59,10 @@ public sealed class JsonExporter : IPacketListener, IErrorTolerantExporter, IDis
     private bool _HasError;
     private bool _Started;
     private bool _Finished;
+    // Tracks whether the closing JSON array bracket has been written.
+    // Separate from _Finished so that a failed bracket write on the first
+    // OnFinish call can be retried on a subsequent call.
+    private bool _ClosingBracketWritten;
 
     /// <summary>Creates a new exporter (use <see cref="CreateBuilder"/> for construction).</summary>
     private JsonExporter(
@@ -160,7 +167,7 @@ public sealed class JsonExporter : IPacketListener, IErrorTolerantExporter, IDis
     /// <inheritdoc/>
     public void OnFinish()
     {
-        if (_Finished)
+        if (_Finished && _ClosingBracketWritten)
         {
             return;
         }
@@ -179,11 +186,14 @@ public sealed class JsonExporter : IPacketListener, IErrorTolerantExporter, IDis
                 Start();
             }
 
-            // Skip the closing bracket when an error occurred — writing a bracket
-            // after partial serialization would produce invalid JSON.
-            if (!_HasError)
+            // Write the closing bracket when it has not been written yet.
+            // A previous OnFinish call may have failed before completing the write;
+            // retrying here ensures the file becomes a valid JSON document when
+            // the underlying stream recovers or is retried by the caller.
+            if (!_ClosingBracketWritten && _DirectStream is not null)
             {
                 WriteClosingBracket();
+                _ClosingBracketWritten = true;
                 _DirectStream?.Flush();
             }
         }

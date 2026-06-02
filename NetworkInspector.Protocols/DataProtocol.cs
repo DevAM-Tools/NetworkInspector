@@ -56,10 +56,10 @@ public sealed partial class DataProtocol : IProtocol
         LazyString summary = ZA.Lazy("Data (", data.Length, " bytes)");
 
         MutField container = parentField.AppendWithCustomText(
-            _ProtocolFieldId, FieldValue.NewBytes(data), summary, in context);
+            _ProtocolFieldId, FieldValue.NewBytes(data), summary);
 
-        container.Append(_DataFieldId, FieldValue.NewBytes(data), in context);
-        container.Append(_LenFieldId, FieldValue.NewU64((ulong)data.Length), in context);
+        container.Append(_DataFieldId, FieldValue.NewBytes(data));
+        container.Append(_LenFieldId, FieldValue.NewU64((ulong)data.Length));
 
         return data.Length;
     }

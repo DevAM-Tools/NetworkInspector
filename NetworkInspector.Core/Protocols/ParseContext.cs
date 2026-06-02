@@ -3,8 +3,8 @@
 namespace NetworkInspector.Core.Protocols;
 
 /// <summary>
-/// Carries the active <see cref="PacketIndex"/>, optional <see cref="ValueCacheBuilder"/>,
-/// the <see cref="DispatchContext"/>, the owning <see cref="Stack"/>, and the identity of the
+/// Carries the active <see cref="PacketIndex"/>, the <see cref="DispatchContext"/>,
+/// the owning <see cref="Stack"/>, and the identity of the
 /// currently-executing protocol (<see cref="SelfProtocolId"/>) through the protocol parse chain.
 /// <para>
 /// Declared as a <see langword="readonly ref struct"/> so it is stack-only and
@@ -27,7 +27,6 @@ public readonly ref struct ParseContext
     #region Fields
 
     private readonly PacketIndex? _Index;
-    private readonly ValueCacheBuilder? _ValueCacheBuilder;
 
     /// <summary>
     /// The dispatch context for the current parse invocation.
@@ -66,7 +65,6 @@ public readonly ref struct ParseContext
     internal ParseContext(Stack stack)
     {
         _Index = null;
-        _ValueCacheBuilder = null;
         _Dispatch = default;
         _Stack = stack;
         _SelfProtocolId = ProtocolId.Invalid;
@@ -76,27 +74,15 @@ public readonly ref struct ParseContext
     internal ParseContext(PacketIndex index, Stack stack)
     {
         _Index = index;
-        _ValueCacheBuilder = null;
-        _Dispatch = default;
-        _Stack = stack;
-        _SelfProtocolId = ProtocolId.Invalid;
-    }
-
-    /// <summary>Creates a parse context with a packet index, value cache builder, and stack.</summary>
-    internal ParseContext(PacketIndex index, ValueCacheBuilder valueCacheBuilder, Stack stack)
-    {
-        _Index = index;
-        _ValueCacheBuilder = valueCacheBuilder;
         _Dispatch = default;
         _Stack = stack;
         _SelfProtocolId = ProtocolId.Invalid;
     }
 
     /// <summary>Full private constructor used by <see cref="WithDispatch"/> and <see cref="WithSelfProtocol"/> to produce updated copies.</summary>
-    private ParseContext(PacketIndex? index, ValueCacheBuilder? valueCacheBuilder, DispatchContext dispatch, Stack? stack, ProtocolId selfProtocolId)
+    private ParseContext(PacketIndex? index, DispatchContext dispatch, Stack? stack, ProtocolId selfProtocolId)
     {
         _Index = index;
-        _ValueCacheBuilder = valueCacheBuilder;
         _Dispatch = dispatch;
         _Stack = stack;
         _SelfProtocolId = selfProtocolId;
@@ -148,13 +134,6 @@ public readonly ref struct ParseContext
         get => _SelfProtocolId;
     }
 
-    /// <summary>The optional value cache builder for recording field values. May be <see langword="null"/>.</summary>
-    internal ValueCacheBuilder? ValueCacheBuilder
-    {
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _ValueCacheBuilder;
-    }
-
     /// <summary>
     /// The dispatch context for the protocol currently being parsed.
     /// <see cref="DispatchContext.HasDispatch"/> is <see langword="false"/> when the protocol
@@ -189,7 +168,7 @@ public readonly ref struct ParseContext
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal ParseContext WithDispatch(DispatchContext dispatch)
-        => new(_Index, _ValueCacheBuilder, dispatch, _Stack, _SelfProtocolId);
+        => new(_Index, dispatch, _Stack, _SelfProtocolId);
 
     /// <summary>
     /// Returns a copy of this context with <see cref="SelfProtocolId"/> set to
@@ -199,7 +178,7 @@ public readonly ref struct ParseContext
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal ParseContext WithSelfProtocol(ProtocolId protocolId)
-        => new(_Index, _ValueCacheBuilder, _Dispatch, _Stack, protocolId);
+        => new(_Index, _Dispatch, _Stack, protocolId);
 
     /// <summary>
     /// Records that the current packet contains the given index group.
@@ -218,14 +197,6 @@ public readonly ref struct ParseContext
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void RecordProtocolPresence(ProtocolId protocolId)
         => _Index?.RecordProtocolPresence(protocolId);
-
-    /// <summary>
-    /// Records a field value in the active value cache builder.
-    /// No-op when no builder is attached (single null-check, zero overhead).
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal void TryRecordValue(FieldId fieldId, in FieldValueData value)
-        => _ValueCacheBuilder?.TryRecordValue(fieldId, value);
 
     #endregion
 }

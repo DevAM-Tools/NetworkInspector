@@ -77,7 +77,7 @@ internal sealed class ParseRandomFramesScenario : IProfilingScenario
         {
             for (int i = 0; i < BatchSize; i++)
             {
-                Packet packet = Packet.ParseFrame((int)(counter + i), stack, frames[i]);
+                Packet packet = Packet.ParseFrame(checked((int)(counter + i)), stack, frames[i]);
                 packet.MaterializeAll();
             }
         }
@@ -86,7 +86,7 @@ internal sealed class ParseRandomFramesScenario : IProfilingScenario
             for (int i = 0; i < BatchSize; i++)
             {
                 // Hot path: parse only — the field tree is built but not walked.
-                Packet.ParseFrame((int)(counter + i), stack, frames[i]);
+                Packet.ParseFrame(checked((int)(counter + i)), stack, frames[i]);
             }
         }
 

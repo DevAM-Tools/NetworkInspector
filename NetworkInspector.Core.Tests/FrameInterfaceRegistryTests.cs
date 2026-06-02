@@ -218,7 +218,7 @@ internal sealed class FrameInterfaceRegistryTests
         public void Start(FrameSourceId sourceId, FrameInterfaceRegistry registry)
         {
         }
-        public Frame? NextFrame() => null;
+        public Frame? NextFrame(CancellationToken cancellationToken = default) => null;
         public void Stop() => _ = UiName; // Intentional: prevents CA1822 since this is an interface impl
         public void Dispose()
         {

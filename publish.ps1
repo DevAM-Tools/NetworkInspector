@@ -100,7 +100,12 @@ if (-not (Test-Path $SlnFile)) {
 if (-not $Version) {
     $BuildProps = Join-Path $RepoRoot 'Directory.Build.props'
     $Xml        = [xml](Get-Content $BuildProps -Raw)
-    $Version    = $Xml.Project.PropertyGroup.Version | Where-Object { $_ } | Select-Object -First 1
+    foreach ($PropGroup in $Xml.Project.PropertyGroup) {
+        if ($PropGroup.Version) {
+            $Version = $PropGroup.Version
+            break
+        }
+    }
     if (-not $Version) {
         throw 'Could not read <Version> from Directory.Build.props. Pass -Version explicitly.'
     }

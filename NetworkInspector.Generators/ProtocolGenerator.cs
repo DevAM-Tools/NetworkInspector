@@ -80,6 +80,24 @@ public sealed partial class ProtocolGenerator : IIncrementalGenerator
 
     #endregion
 
+    #region Tracking names
+
+    /// <summary>
+    /// Stable tracking names assigned to the incremental pipeline stages. They allow tests
+    /// (and tooling) to assert that the generator caches correctly across edits via
+    /// <see cref="GeneratorRunResult.TrackedSteps"/>. Changing these is a public test contract.
+    /// </summary>
+    public static class TrackingNames
+    {
+        /// <summary>Tracking name for the per-symbol <see cref="ProtocolInfo"/> extraction step.</summary>
+        public const string ProtocolInfo = nameof(ProtocolInfo);
+
+        /// <summary>Tracking name for the null-filtered <see cref="ProtocolInfo"/> step fed to source output.</summary>
+        public const string FilteredProtocolInfo = nameof(FilteredProtocolInfo);
+    }
+
+    #endregion
+
     #region Public API
 
     /// <summary>
@@ -96,7 +114,9 @@ public sealed partial class ProtocolGenerator : IIncrementalGenerator
                 predicate: static (node, _) => node is ClassDeclarationSyntax,
                 transform: static (ctx, _) => ExtractProtocolInfo(
                     (INamedTypeSymbol)ctx.TargetSymbol, LocationInfo.From(ctx.TargetNode.GetLocation())))
-            .Where(static info => info is not null);
+            .WithTrackingName(TrackingNames.ProtocolInfo)
+            .Where(static info => info is not null)
+            .WithTrackingName(TrackingNames.FilteredProtocolInfo);
 
         context.RegisterSourceOutput(provider, static (spc, info) => Execute(spc, info!));
     }

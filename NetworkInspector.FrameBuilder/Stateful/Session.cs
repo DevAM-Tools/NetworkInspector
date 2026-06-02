@@ -105,10 +105,13 @@ public sealed class Session<TStack, TTrailer, TInterceptor> : IDisposable
         in TInterceptor interceptor)
     {
         Internals internals = TryRentFromPool() ?? new Internals();
+        // Reset any state carried over from a pooled instance BEFORE copying the
+        // new handle fields, so a partially-initialised Internals is never
+        // observable and InitializeStatefulState always starts from a clean slate.
+        internals.State = default;
         internals.Values = values;
         internals.Trailer = trailer;
         internals.Interceptor = interceptor;
-        internals.State = default;
         internals.Values.InitializeStatefulState(ref internals.State);
         return new Session<TStack, TTrailer, TInterceptor>(internals);
     }

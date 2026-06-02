@@ -8,13 +8,22 @@ namespace NetworkInspector.Exporters.Tests;
 /// </summary>
 internal static class TestHarness
 {
-    /// <summary>Cached stack instance (lazy, thread-safe).</summary>
+    /// <summary>
+    /// Cached stack instance. Written once under <see cref="_Lock"/>; read without lock
+    /// via <see cref="Volatile.Read{T}"/> to avoid the lock on the fast path.
+    /// </summary>
     private static Stack? _Stack;
 
-    /// <summary>Guard for lazy initialization.</summary>
+    /// <summary>
+    /// Guards lazy initialisation of <see cref="_Stack"/>.
+    /// Held only for the duration of the construction call; never held across I/O.
+    /// </summary>
     private static readonly Lock _Lock = new();
 
-    /// <summary>Monotonically increasing counter for unique packet IDs.</summary>
+    /// <summary>
+    /// Monotonically increasing counter used to assign unique packet IDs.
+    /// Incremented atomically via <see cref="Interlocked.Increment(ref long)"/>.
+    /// </summary>
     private static long _NextPacketId;
 
     /// <summary>
@@ -140,7 +149,7 @@ internal static class TestHarness
         }
 
         /// <inheritdoc/>
-        public Frame? NextFrame() => null;
+        public Frame? NextFrame(CancellationToken cancellationToken = default) => null;
 
         /// <inheritdoc/>
         public void Dispose()

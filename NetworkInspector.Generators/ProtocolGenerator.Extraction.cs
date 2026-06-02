@@ -495,19 +495,42 @@ public sealed partial class ProtocolGenerator
         return new ProtocolTableInfo(fieldSymbol.Name, name, uiName, keyType, desc);
     }
 
+    /// <summary>
+    /// Validates the three mandatory positional string arguments — <c>name</c>, <c>uiName</c> and
+    /// <c>groupName</c> — shared by every <c>[*Setting]</c> attribute. On any failure a single
+    /// payload-incomplete diagnostic is appended and the method returns <see langword="false"/> so
+    /// each <c>Extract*SettingInfo</c> method can bail out uniformly instead of repeating the guard.
+    /// </summary>
+    /// <remarks>
+    /// The original per-method code emitted the same diagnostic from two separate branches (argument
+    /// count and type pattern); collapsing them here is behaviour-preserving because the same single
+    /// diagnostic is still added exactly once per malformed attribute.
+    /// </remarks>
+    private static bool TryExtractSettingHeader(
+        IFieldSymbol fieldSymbol, AttributeData attr, string attributeName, string className,
+        List<DiagnosticInfo> diagnostics, out string name, out string uiName, out string groupName)
+    {
+        if (attr.ConstructorArguments.Length < 3
+            || attr.ConstructorArguments[0].Value is not string parsedName
+            || attr.ConstructorArguments[1].Value is not string parsedUiName
+            || attr.ConstructorArguments[2].Value is not string parsedGroupName)
+        {
+            diagnostics.Add(new DiagnosticInfo(_DiagAttributePayloadIncomplete, attributeName, fieldSymbol.Name, className));
+            name = uiName = groupName = "";
+            return false;
+        }
+
+        name = parsedName;
+        uiName = parsedUiName;
+        groupName = parsedGroupName;
+        return true;
+    }
+
     /// <summary>Extracts a <c>[BoolSetting]</c> descriptor.</summary>
     private static SettingInfo? ExtractBoolSettingInfo(IFieldSymbol fieldSymbol, AttributeData attr, string className, List<DiagnosticInfo> diagnostics)
     {
-        if (attr.ConstructorArguments.Length < 3)
+        if (!TryExtractSettingHeader(fieldSymbol, attr, "BoolSettingAttribute", className, diagnostics, out string name, out string uiName, out string groupName))
         {
-            diagnostics.Add(new DiagnosticInfo(_DiagAttributePayloadIncomplete, "BoolSettingAttribute", fieldSymbol.Name, className));
-            return null;
-        }
-        if (attr.ConstructorArguments[0].Value is not string name
-            || attr.ConstructorArguments[1].Value is not string uiName
-            || attr.ConstructorArguments[2].Value is not string groupName)
-        {
-            diagnostics.Add(new DiagnosticInfo(_DiagAttributePayloadIncomplete, "BoolSettingAttribute", fieldSymbol.Name, className));
             return null;
         }
 
@@ -532,16 +555,8 @@ public sealed partial class ProtocolGenerator
     /// <summary>Extracts a <c>[StringSetting]</c> descriptor.</summary>
     private static SettingInfo? ExtractStringSettingInfo(IFieldSymbol fieldSymbol, AttributeData attr, string className, List<DiagnosticInfo> diagnostics)
     {
-        if (attr.ConstructorArguments.Length < 3)
+        if (!TryExtractSettingHeader(fieldSymbol, attr, "StringSettingAttribute", className, diagnostics, out string name, out string uiName, out string groupName))
         {
-            diagnostics.Add(new DiagnosticInfo(_DiagAttributePayloadIncomplete, "StringSettingAttribute", fieldSymbol.Name, className));
-            return null;
-        }
-        if (attr.ConstructorArguments[0].Value is not string name
-            || attr.ConstructorArguments[1].Value is not string uiName
-            || attr.ConstructorArguments[2].Value is not string groupName)
-        {
-            diagnostics.Add(new DiagnosticInfo(_DiagAttributePayloadIncomplete, "StringSettingAttribute", fieldSymbol.Name, className));
             return null;
         }
 
@@ -565,16 +580,8 @@ public sealed partial class ProtocolGenerator
     /// <summary>Extracts an <c>[F64Setting]</c> descriptor.</summary>
     private static SettingInfo? ExtractF64SettingInfo(IFieldSymbol fieldSymbol, AttributeData attr, string className, List<DiagnosticInfo> diagnostics)
     {
-        if (attr.ConstructorArguments.Length < 3)
+        if (!TryExtractSettingHeader(fieldSymbol, attr, "F64SettingAttribute", className, diagnostics, out string name, out string uiName, out string groupName))
         {
-            diagnostics.Add(new DiagnosticInfo(_DiagAttributePayloadIncomplete, "F64SettingAttribute", fieldSymbol.Name, className));
-            return null;
-        }
-        if (attr.ConstructorArguments[0].Value is not string name
-            || attr.ConstructorArguments[1].Value is not string uiName
-            || attr.ConstructorArguments[2].Value is not string groupName)
-        {
-            diagnostics.Add(new DiagnosticInfo(_DiagAttributePayloadIncomplete, "F64SettingAttribute", fieldSymbol.Name, className));
             return null;
         }
 
@@ -612,16 +619,8 @@ public sealed partial class ProtocolGenerator
     /// <summary>Extracts a <c>[U64Setting]</c> descriptor.</summary>
     private static SettingInfo? ExtractU64SettingInfo(IFieldSymbol fieldSymbol, AttributeData attr, string className, List<DiagnosticInfo> diagnostics)
     {
-        if (attr.ConstructorArguments.Length < 3)
+        if (!TryExtractSettingHeader(fieldSymbol, attr, "U64SettingAttribute", className, diagnostics, out string name, out string uiName, out string groupName))
         {
-            diagnostics.Add(new DiagnosticInfo(_DiagAttributePayloadIncomplete, "U64SettingAttribute", fieldSymbol.Name, className));
-            return null;
-        }
-        if (attr.ConstructorArguments[0].Value is not string name
-            || attr.ConstructorArguments[1].Value is not string uiName
-            || attr.ConstructorArguments[2].Value is not string groupName)
-        {
-            diagnostics.Add(new DiagnosticInfo(_DiagAttributePayloadIncomplete, "U64SettingAttribute", fieldSymbol.Name, className));
             return null;
         }
 
@@ -669,16 +668,8 @@ public sealed partial class ProtocolGenerator
     /// <summary>Extracts an <c>[I64Setting]</c> descriptor.</summary>
     private static SettingInfo? ExtractI64SettingInfo(IFieldSymbol fieldSymbol, AttributeData attr, string className, List<DiagnosticInfo> diagnostics)
     {
-        if (attr.ConstructorArguments.Length < 3)
+        if (!TryExtractSettingHeader(fieldSymbol, attr, "I64SettingAttribute", className, diagnostics, out string name, out string uiName, out string groupName))
         {
-            diagnostics.Add(new DiagnosticInfo(_DiagAttributePayloadIncomplete, "I64SettingAttribute", fieldSymbol.Name, className));
-            return null;
-        }
-        if (attr.ConstructorArguments[0].Value is not string name
-            || attr.ConstructorArguments[1].Value is not string uiName
-            || attr.ConstructorArguments[2].Value is not string groupName)
-        {
-            diagnostics.Add(new DiagnosticInfo(_DiagAttributePayloadIncomplete, "I64SettingAttribute", fieldSymbol.Name, className));
             return null;
         }
 
@@ -726,16 +717,8 @@ public sealed partial class ProtocolGenerator
     /// <summary>Extracts a <c>[BytesSetting]</c> descriptor and validates <c>DefaultHex</c>.</summary>
     private static SettingInfo? ExtractBytesSettingInfo(IFieldSymbol fieldSymbol, AttributeData attr, string className, List<DiagnosticInfo> diagnostics)
     {
-        if (attr.ConstructorArguments.Length < 3)
+        if (!TryExtractSettingHeader(fieldSymbol, attr, "BytesSettingAttribute", className, diagnostics, out string name, out string uiName, out string groupName))
         {
-            diagnostics.Add(new DiagnosticInfo(_DiagAttributePayloadIncomplete, "BytesSettingAttribute", fieldSymbol.Name, className));
-            return null;
-        }
-        if (attr.ConstructorArguments[0].Value is not string name
-            || attr.ConstructorArguments[1].Value is not string uiName
-            || attr.ConstructorArguments[2].Value is not string groupName)
-        {
-            diagnostics.Add(new DiagnosticInfo(_DiagAttributePayloadIncomplete, "BytesSettingAttribute", fieldSymbol.Name, className));
             return null;
         }
 
@@ -768,16 +751,8 @@ public sealed partial class ProtocolGenerator
     /// <summary>Extracts an <c>[EnumSetting]</c> descriptor; pre-formats the allowed-values tuple list.</summary>
     private static SettingInfo? ExtractEnumSettingInfo(IFieldSymbol fieldSymbol, AttributeData attr, string className, List<DiagnosticInfo> diagnostics)
     {
-        if (attr.ConstructorArguments.Length < 3)
+        if (!TryExtractSettingHeader(fieldSymbol, attr, "EnumSettingAttribute", className, diagnostics, out string name, out string uiName, out string groupName))
         {
-            diagnostics.Add(new DiagnosticInfo(_DiagAttributePayloadIncomplete, "EnumSettingAttribute", fieldSymbol.Name, className));
-            return null;
-        }
-        if (attr.ConstructorArguments[0].Value is not string name
-            || attr.ConstructorArguments[1].Value is not string uiName
-            || attr.ConstructorArguments[2].Value is not string groupName)
-        {
-            diagnostics.Add(new DiagnosticInfo(_DiagAttributePayloadIncomplete, "EnumSettingAttribute", fieldSymbol.Name, className));
             return null;
         }
 
@@ -856,6 +831,15 @@ public sealed partial class ProtocolGenerator
     /// Safely converts a boxed attribute constructor value (which may be <see langword="null"/> or
     /// any integral type) to <see cref="ulong"/>. Returns 0 when the value cannot be converted.
     /// </summary>
+    /// <remarks>
+    /// The <c>_ =&gt; 0UL</c> fallback is intentionally silent: attribute arguments are validated
+    /// by the C# compiler against the declared parameter type before they reach the generator, so an
+    /// unexpected runtime type here indicates a malformed or partially-bound symbol (e.g. during
+    /// incremental edits). Emitting 0 keeps generation deterministic and avoids throwing inside the
+    /// generator pipeline; the resulting code is still re-generated correctly once the symbol binds.
+    /// Signed values are reinterpreted via an unchecked cast (two's-complement bit pattern preserved),
+    /// never range-clamped, so callers must treat the result as a raw bit pattern, not a magnitude.
+    /// </remarks>
     private static ulong TryToUInt64(object? value) => value switch
     {
         null => 0UL,
@@ -873,6 +857,13 @@ public sealed partial class ProtocolGenerator
 
     /// <summary>Safely converts a boxed attribute constructor value to <see cref="long"/>.
     /// Returns 0 for null or non-numeric types.</summary>
+    /// <remarks>
+    /// As with <see cref="TryToUInt64"/>, the <c>_ =&gt; 0L</c> fallback is deliberately silent because
+    /// attribute arguments are compiler-validated before reaching the generator; a non-numeric value here
+    /// signals an unbound/malformed symbol during incremental compilation. Returning 0 keeps the pipeline
+    /// non-throwing and deterministic. The <c>ulong</c> case reinterprets the bit pattern via an unchecked
+    /// cast rather than clamping, so large unsigned values surface as negative <see cref="long"/> values.
+    /// </remarks>
     private static long TryToInt64(object? value) => value switch
     {
         null => 0L,

@@ -85,7 +85,7 @@ public sealed partial class VlanProtocol : IProtocol
     /// </summary>
     partial void OnStartCustom(Stack stack)
     {
-        _Populator = (in MutField container) => PopulateVlanFields(in container);
+        _Populator = PopulateVlanFields;
         _EtherTypeSparseCache = stack.BuildU64SparseDelegateCache(_EtherTypeTableId);
     }
 
@@ -95,7 +95,6 @@ public sealed partial class VlanProtocol : IProtocol
     /// </summary>
     private ParseResult PopulateVlanFields(in MutField container)
     {
-        ParseContext context = new ParseContext(container.Packet.Stack);
         if (!container.Value.Data.TryGetAsBytes(out ReadOnlyMemory<byte> headerBytes))
         {
             return ParseError.InvalidData(ProtocolName, "Container value is not of type Bytes");
@@ -111,12 +110,12 @@ public sealed partial class VlanProtocol : IProtocol
         ushort etherType = header.EtherType.Value;
 
         string pcpText = DisplayTables.GetVlanPriorityDisplayText(pcp);
-        container.AppendWithCustomText(_PriorityFieldId, FieldValue.NewU64(pcp), pcpText, in context);
-        container.Append(_DeiFieldId, FieldValue.NewBool(dei), in context);
-        container.Append(_IdFieldId, FieldValue.NewU64(vid), in context);
+        container.AppendWithCustomText(_PriorityFieldId, FieldValue.NewU64(pcp), pcpText);
+        container.Append(_DeiFieldId, FieldValue.NewBool(dei));
+        container.Append(_IdFieldId, FieldValue.NewU64(vid));
 
         string etherTypeText = DisplayTables.GetEtherTypeDisplayText(etherType);
-        container.AppendWithCustomText(_EtherTypeFieldId, FieldValue.NewU64(etherType), etherTypeText, in context);
+        container.AppendWithCustomText(_EtherTypeFieldId, FieldValue.NewU64(etherType), etherTypeText);
 
         return 0;
     }

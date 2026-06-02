@@ -25,22 +25,9 @@ internal sealed class PreviousFieldStore
     private readonly Dictionary<int, string?>? _SparseValueCustomTexts;
     // Dense-mode overflow store for field IDs that fall outside the dense
     // array. Allocated lazily so the common (in-range) hot path stays alloc-free.
-    // Capped at MaxOverflowEntries per dictionary to prevent unbounded
-    // memory growth from a capture file with adversarially large field IDs.
-    // When the cap is reached, _OverflowCapped is set and the overflow dictionaries
-    // are no longer updated; the same-as-previous check falls back to treating every
-    // out-of-range field as always-new, which is safe but loses delta compression.
     private Dictionary<int, string?>? _OverflowValues;
     private Dictionary<int, string?>? _OverflowCustomTexts;
     private Dictionary<int, string?>? _OverflowValueCustomTexts;
-    private bool _OverflowCapped;
-
-    /// <summary>
-    /// Maximum number of entries in each overflow dictionary before same-as-previous
-    /// detection is silently disabled for new out-of-range field IDs.
-    /// 4096 entries × 3 dictionaries × (string pointer + int key) ≈ ~200 KiB worst case.
-    /// </summary>
-    private const int MaxOverflowEntries = 4096;
 
     /// <summary>Creates a store optimized for the given field count.</summary>
     /// <param name="fieldCount">Expected maximum field count. Determines dense vs sparse mode.</param>
@@ -101,16 +88,6 @@ internal sealed class PreviousFieldStore
             }
             else
             {
-                // Field id falls outside the dense array. Silently dropping the
-                // entry would defeat same-as-previous detection for high-id
-                // fields, so fall back to a lazily-constructed sparse overflow
-                // dictionary that keeps semantics intact.
-                // Once the cap is reached, we stop updating the dictionaries
-                // and return flags=0 (always-new), preventing unbounded memory growth.
-                if (_OverflowCapped)
-                {
-                    return 0;
-                }
 
                 _OverflowValues ??= new Dictionary<int, string?>(16);
                 _OverflowValueCustomTexts ??= new Dictionary<int, string?>(16);
@@ -136,12 +113,6 @@ internal sealed class PreviousFieldStore
                     flags |= SameFlags.FieldSameCustomText;
                 }
                 _OverflowCustomTexts[fieldIdValue] = currentCustomText;
-
-                // Check cap AFTER inserting (3 dicts track the same keys, so one count suffices).
-                if (_OverflowValues.Count >= MaxOverflowEntries)
-                {
-                    _OverflowCapped = true;
-                }
             }
         }
         else
@@ -183,9 +154,6 @@ internal sealed class PreviousFieldStore
             _OverflowValues?.Clear();
             _OverflowCustomTexts?.Clear();
             _OverflowValueCustomTexts?.Clear();
-            // Also reset the cap flag so same-as-previous detection can resume
-            // after a block boundary reset (caps reset alongside the data).
-            _OverflowCapped = false;
         }
         else
         {

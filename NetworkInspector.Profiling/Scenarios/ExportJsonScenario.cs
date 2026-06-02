@@ -4,58 +4,49 @@ namespace NetworkInspector.Profiling.Scenarios;
 
 /// <summary>
 /// Profiling scenario that exports pre-parsed IPv6/UDP packets as JSON (Compact)
-/// into a <see cref="MemoryStream"/> on every <see cref="Run"/> call.
+/// into a <see cref="MemoryStream"/> on every <see cref="IProfilingScenario.Run"/> call.
 ///
 /// <para>
 /// <b>Hot path:</b> <see cref="Exporters.Json.JsonExporter.OnPacket"/> serialisation,
 /// including field enumeration and SIMD escape scanning.
-/// Frame generation and parsing happen in <see cref="Setup"/>.
+/// Frame generation and parsing happen in <see cref="IProfilingScenario.Setup"/>.
 /// </para>
 /// </summary>
-internal sealed class ExportJsonScenario : IProfilingScenario, IDisposable
+[SuppressMessage("Performance", "CA1812:AvoidUninstantiatedInternalClasses", Justification = "Instantiated via reflection in ScenarioDiscovery.Discover.")]
+internal sealed class ExportJsonScenario : ExportScenarioBase<Packet>
 {
-    /// <summary>Number of packets exported per <see cref="Run"/> call.</summary>
-    private const int BatchSize = 10_000;
-
-    private Stack? _Stack;
-    private Packet[]? _Packets;
-    private MemoryStream? _Stream;
+    private const int Batch = 10_000;
 
     /// <inheritdoc/>
-    public string Name => "export-json";
+    protected override int BatchSize => Batch;
 
     /// <inheritdoc/>
-    public string Description =>
-        $"Export {BatchSize:N0} parsed IPv6/UDP packets as JSON (Compact) → MemoryStream per iteration.";
+    protected override int InitialStreamCapacityBytes => 8 * 1024 * 1024; // 8 MiB
 
     /// <inheritdoc/>
-    public long WorkUnitsPerIteration => BatchSize;
+    protected override Packet[] CreateItems(Stack stack, Frame[] frames)
+        => FrameHelper.ParseAndMaterialize(frames, stack);
 
     /// <inheritdoc/>
-    public string WorkUnitName => "packets";
+    public override string Name => "export-json";
 
     /// <inheritdoc/>
-    public void Setup()
+    public override string Description =>
+        $"Export {Batch:N0} parsed IPv6/UDP packets as JSON (Compact) → MemoryStream per iteration.";
+
+    /// <inheritdoc/>
+    public override string WorkUnitName => "packets";
+
+    /// <inheritdoc/>
+    protected override void Export(MemoryStream stream, Packet[] packets)
     {
-        _Stack = StackHelper.CreateStack();
-        Frame[] frames = FrameHelper.CreateSharedFrames(BatchSize, _Stack);
-        _Packets = FrameHelper.ParseAndMaterialize(frames, _Stack);
-        _Stream = new MemoryStream(8 * 1024 * 1024); // 8 MiB initial capacity
-    }
-
-    /// <inheritdoc/>
-    public void Run()
-    {
-        MemoryStream ms = _Stream!;
-        ms.SetLength(0);
-
         using Exporters.Json.JsonExporter exporter = Exporters.Json.JsonExporter
             .CreateBuilder()
-            .ToStream(ms)
+            .ToStream(stream)
             .WithFormat(Exporters.Json.JsonExportFormat.Compact)
             .Build();
 
-        foreach (Packet packet in _Packets!)
+        foreach (Packet packet in packets)
         {
             if (!exporter.OnPacket(packet))
             {
@@ -64,18 +55,5 @@ internal sealed class ExportJsonScenario : IProfilingScenario, IDisposable
         }
 
         exporter.OnFinish();
-    }
-
-    /// <inheritdoc/>
-    public void Cleanup() => Dispose();
-
-    /// <inheritdoc/>
-    public void Dispose()
-    {
-        _Stream?.Dispose();
-        _Stream = null;
-        _Stack?.Dispose();
-        _Stack = null;
-        _Packets = null;
     }
 }

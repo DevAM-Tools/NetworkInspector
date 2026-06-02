@@ -245,26 +245,26 @@ public sealed partial class DhcpProtocol : IProtocol
         parentField.SetPacketInfo(ZA.Lazy("DHCP ", msgTypeText, " - Transaction ID 0x", xid.ToString("X8")));
 
         FieldValue containerValue = FieldValue.NewBytes(data);
-        MutField container = parentField.AppendWithCustomText(_ProtocolFieldId, containerValue, summary, in context);
+        MutField container = parentField.AppendWithCustomText(_ProtocolFieldId, containerValue, summary);
 
-        container.AppendWithCustomText(_OpFieldId, FieldValue.NewU64(op), opText, in context);
-        container.Append(_HwTypeFieldId, FieldValue.NewU64(htype), in context);
-        container.Append(_HwLenFieldId, FieldValue.NewU64(hlen), in context);
-        container.Append(_HopsFieldId, FieldValue.NewU64(hops), in context);
-        container.Append(_XidFieldId, FieldValue.NewU64(xid), in context);
-        container.Append(_SecsFieldId, FieldValue.NewU64(secs), in context);
+        container.AppendWithCustomText(_OpFieldId, FieldValue.NewU64(op), opText);
+        container.Append(_HwTypeFieldId, FieldValue.NewU64(htype));
+        container.Append(_HwLenFieldId, FieldValue.NewU64(hlen));
+        container.Append(_HopsFieldId, FieldValue.NewU64(hops));
+        container.Append(_XidFieldId, FieldValue.NewU64(xid));
+        container.Append(_SecsFieldId, FieldValue.NewU64(secs));
         // Bit 15 (0x8000) is the DHCP broadcast flag (RFC 2131 §2).
         // Display shows hex value followed by the active flag name in brackets.
         bool broadcastFlag = (flags & 0x8000) != 0;
         container.AppendWithCustomText(_FlagsFieldId, FieldValue.NewU64(flags),
-            ZA.Lazy(Helpers.DisplayTables.FormatHexU16(flags), Dhcp.DhcpFlagsFormatter.Format(flags)), in context);
-        container.Append(_FlagsBroadcastFieldId, FieldValue.NewBool(broadcastFlag), in context);
-        container.Append(_CiAddrFieldId, FieldValue.NewIPv4(ciaddr), in context);
-        container.Append(_YiAddrFieldId, FieldValue.NewIPv4(yiaddr), in context);
-        container.Append(_SiAddrFieldId, FieldValue.NewIPv4(siaddr), in context);
-        container.Append(_GiAddrFieldId, FieldValue.NewIPv4(giaddr), in context);
-        container.Append(_ChAddrFieldId, FieldValue.NewMacAddress(chaddr), in context);
-        container.Append(_CookieFieldId, FieldValue.NewU64(cookie), in context);
+            ZA.Lazy(Helpers.DisplayTables.FormatHexU16(flags), Dhcp.DhcpFlagsFormatter.Format(flags)));
+        container.Append(_FlagsBroadcastFieldId, FieldValue.NewBool(broadcastFlag));
+        container.Append(_CiAddrFieldId, FieldValue.NewIPv4(ciaddr));
+        container.Append(_YiAddrFieldId, FieldValue.NewIPv4(yiaddr));
+        container.Append(_SiAddrFieldId, FieldValue.NewIPv4(siaddr));
+        container.Append(_GiAddrFieldId, FieldValue.NewIPv4(giaddr));
+        container.Append(_ChAddrFieldId, FieldValue.NewMacAddress(chaddr));
+        container.Append(_CookieFieldId, FieldValue.NewU64(cookie));
 
         // Walk options. Bytes after the cookie are TLV-encoded except the single-byte
         // sentinels Pad (0x00) and End (0xFF).
@@ -343,12 +343,17 @@ public sealed partial class DhcpProtocol : IProtocol
             ReadOnlyMemory<byte> optionData = options.Slice(i + 2, length);
             string typeText = GetDhcpOptionTypeText(type);
 
+            // First real TLV option proves the dhcp.options group is present. Recording here
+            // (rather than unconditionally in Parse) keeps the index free of false positives
+            // for messages that carry only Pad/End sentinels after the magic cookie.
+            context.RecordGroupPresence(_DhcpOptionsGroupId);
+
             MutField optContainer = container.AppendWithCustomText(
                 _OptionFieldId,
                 FieldValue.NewBytes(options.Slice(i, 2 + length)),
-                ZA.Lazy("Option: (", (ulong)type, ") ", typeText), in context);
-            optContainer.AppendWithCustomText(_OptionTypeFieldId, FieldValue.NewU64(type), typeText, in context);
-            optContainer.Append(_OptionLengthFieldId, FieldValue.NewU64(length), in context);
+                ZA.Lazy("Option: (", (ulong)type, ") ", typeText));
+            optContainer.AppendWithCustomText(_OptionTypeFieldId, FieldValue.NewU64(type), typeText);
+            optContainer.Append(_OptionLengthFieldId, FieldValue.NewU64(length));
 
             EmitOptionPayload(in optContainer, type, optionData, in context);
             i += 2 + length;
@@ -365,11 +370,11 @@ public sealed partial class DhcpProtocol : IProtocol
                 optContainer.AppendWithCustomText(
                     _OptionDhcpMsgTypeFieldId,
                     FieldValue.NewU64(span[0]),
-                    GetDhcpMessageTypeText(span[0]), in context);
+                    GetDhcpMessageTypeText(span[0]));
                 break;
             case OptionSubnetMask when span.Length == 4:
                 optContainer.Append(_OptionSubnetMaskFieldId,
-                    FieldValue.NewIPv4(new IPv4Address(BinaryPrimitives.ReadUInt32BigEndian(span))), in context);
+                    FieldValue.NewIPv4(new IPv4Address(BinaryPrimitives.ReadUInt32BigEndian(span))));
                 break;
             case OptionRouter:
                 EmitIpv4List(in optContainer, _OptionRouterFieldId, span, in context);
@@ -379,29 +384,29 @@ public sealed partial class DhcpProtocol : IProtocol
                 break;
             case OptionRequestedIp when span.Length == 4:
                 optContainer.Append(_OptionRequestedIpFieldId,
-                    FieldValue.NewIPv4(new IPv4Address(BinaryPrimitives.ReadUInt32BigEndian(span))), in context);
+                    FieldValue.NewIPv4(new IPv4Address(BinaryPrimitives.ReadUInt32BigEndian(span))));
                 break;
             case OptionServerId when span.Length == 4:
                 optContainer.Append(_OptionServerIdFieldId,
-                    FieldValue.NewIPv4(new IPv4Address(BinaryPrimitives.ReadUInt32BigEndian(span))), in context);
+                    FieldValue.NewIPv4(new IPv4Address(BinaryPrimitives.ReadUInt32BigEndian(span))));
                 break;
             case OptionLeaseTime when span.Length == 4:
                 optContainer.Append(_OptionLeaseTimeFieldId,
-                    FieldValue.NewU64(BinaryPrimitives.ReadUInt32BigEndian(span)), in context);
+                    FieldValue.NewU64(BinaryPrimitives.ReadUInt32BigEndian(span)));
                 break;
             case OptionHostName:
                 optContainer.Append(_OptionHostNameFieldId,
-                    FieldValue.NewString(System.Text.Encoding.ASCII.GetString(span)), in context);
+                    FieldValue.NewString(System.Text.Encoding.ASCII.GetString(span)));
                 break;
             case OptionVendorClass:
                 optContainer.Append(_OptionVendorClassFieldId,
-                    FieldValue.NewString(System.Text.Encoding.ASCII.GetString(span)), in context);
+                    FieldValue.NewString(System.Text.Encoding.ASCII.GetString(span)));
                 break;
             case OptionClientId:
-                optContainer.Append(_OptionClientIdFieldId, FieldValue.NewBytes(data), in context);
+                optContainer.Append(_OptionClientIdFieldId, FieldValue.NewBytes(data));
                 break;
             case OptionParamRequestList:
-                optContainer.Append(_OptionParamRequestListFieldId, FieldValue.NewBytes(data), in context);
+                optContainer.Append(_OptionParamRequestListFieldId, FieldValue.NewBytes(data));
                 break;
             default:
                 // Unknown / unparsed option — type and length are already attached.
@@ -415,7 +420,7 @@ public sealed partial class DhcpProtocol : IProtocol
         for (int i = 0; i + 4 <= span.Length; i += 4)
         {
             optContainer.Append(fieldId,
-                FieldValue.NewIPv4(new IPv4Address(BinaryPrimitives.ReadUInt32BigEndian(span[i..(i + 4)]))), in context);
+                FieldValue.NewIPv4(new IPv4Address(BinaryPrimitives.ReadUInt32BigEndian(span[i..(i + 4)]))));
         }
     }
 

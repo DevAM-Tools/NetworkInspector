@@ -13,6 +13,10 @@ namespace NetworkInspector.CLI.Tests;
 /// a zero-padded 5-digit index in the file name; when splitting is disabled it always
 /// returns the original path unchanged.
 /// </para>
+/// <para>
+/// <see cref="SplitOutputManager"/> is documented as not thread-safe (single-threaded contract);
+/// no concurrent-access tests are included.
+/// </para>
 /// </summary>
 internal sealed class SplitOutputManagerTests
 {

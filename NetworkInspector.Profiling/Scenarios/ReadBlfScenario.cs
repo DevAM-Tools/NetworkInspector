@@ -9,42 +9,32 @@ namespace NetworkInspector.Profiling.Scenarios;
 /// <para>
 /// <b>Hot path:</b> <see cref="BlfSource.NextFrame"/> — container decompression,
 /// object parsing, and frame materialisation from the BLF binary format.
-/// The sample file is generated once in <see cref="Setup"/>.
+/// The sample file is generated once in <see cref="IProfilingScenario.Setup"/>.
 /// </para>
 /// </summary>
-internal sealed class ReadBlfScenario : IProfilingScenario
+[SuppressMessage("Performance", "CA1812:AvoidUninstantiatedInternalClasses", Justification = "Instantiated via reflection in ScenarioDiscovery.Discover.")]
+internal sealed class ReadBlfScenario : ReadScenarioBase
 {
-    /// <summary>Number of frames in the sample file.</summary>
-    private const int FrameCount = 50_000;
-
-    private Stack? _Stack;
-    private string? _FilePath;
+    private const int Count = 50_000;
 
     /// <inheritdoc/>
-    public string Name => "read-blf";
+    protected override int FrameCount => Count;
 
     /// <inheritdoc/>
-    public string Description =>
-        $"Read {FrameCount:N0} frames from a BLF file per iteration.";
+    protected override string CreateSampleFile(Frame[] frames)
+        => SampleFileHelper.CreateBlfFile(frames);
 
     /// <inheritdoc/>
-    public long WorkUnitsPerIteration => FrameCount;
+    public override string Name => "read-blf";
 
     /// <inheritdoc/>
-    public string WorkUnitName => "frames";
+    public override string Description =>
+        $"Read {Count:N0} frames from a BLF file per iteration.";
 
     /// <inheritdoc/>
-    public void Setup()
+    protected override void RunIteration(string filePath)
     {
-        _Stack = StackHelper.CreateStack();
-        Frame[] frames = FrameHelper.CreateSharedFrames(FrameCount, _Stack);
-        _FilePath = SampleFileHelper.CreateBlfFile(frames);
-    }
-
-    /// <inheritdoc/>
-    public void Run()
-    {
-        using BlfSource source = BlfSource.Open(_FilePath!);
+        using BlfSource source = BlfSource.Open(filePath);
 
         FrameInterfaceRegistry registry = new();
         FrameSourceId sourceId = registry.RegisterSource(source);
@@ -54,14 +44,5 @@ internal sealed class ReadBlfScenario : IProfilingScenario
         {
             // Consume frames — measure read/decompression throughput only.
         }
-    }
-
-    /// <inheritdoc/>
-    public void Cleanup()
-    {
-        SampleFileHelper.Cleanup();
-        _Stack?.Dispose();
-        _Stack = null;
-        _FilePath = null;
     }
 }

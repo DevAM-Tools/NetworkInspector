@@ -24,7 +24,7 @@ public interface IStack
     ///   </description></item>
     ///   <item><description>
     ///     <see cref="BuildStartupError"/> — an exception thrown by a protocol's
-    ///     <see cref="NetworkInspector.Core.Protocols.IProtocol.OnStart(Stack)"/> hook.
+    ///     <see cref="IProtocol.OnStart(Stack)"/> hook.
     ///   </description></item>
     /// </list>
     /// Callers should inspect this after <see cref="StackBuilder.Build"/> and decide whether
@@ -38,6 +38,17 @@ public interface IStack
     {
         get;
     }
+
+    /// <summary>
+    /// The shared frame interface registry managing capture-interface registrations.
+    /// </summary>
+    FrameInterfaceRegistry FrameInterfaceRegistry { get; }
+
+    /// <summary>
+    /// When <see langword="true"/>, parser exception error messages include the full exception
+    /// stack trace. Defaults to <see langword="false"/> to keep error messages concise in production.
+    /// </summary>
+    bool IncludeExceptionStackTrace { get; }
 
     #endregion
 
@@ -68,7 +79,17 @@ public interface IStack
     /// <summary>Gets field info by ID. Returns <c>null</c> if the ID is out of range.</summary>
     FieldInfo? GetField(FieldId id);
 
-    /// <summary>Looks up a field ID by name. Returns <c>null</c> if not found.</summary>
+    /// <summary>
+    /// Looks up a canonical field ID by name. Returns <c>null</c> if not found.
+    /// <para>
+    /// Field alias names (e.g., <c>"eth.addr"</c>, <c>"ip.addr"</c>, <c>"udp.port"</c>) are
+    /// <b>never</b> resolved by this method by design; the canonical field namespace and the
+    /// alias namespace are independent. Use <see cref="GetFieldAliasGroupId(string)"/> to
+    /// resolve alias names. This separation guarantees value-cache, indexing, and per-packet
+    /// field-lookup paths see only canonical fields and never accidentally observe an alias
+    /// fallback.
+    /// </para>
+    /// </summary>
     FieldId? GetFieldId(string name);
 
     /// <summary>All registered fields.</summary>
@@ -85,6 +106,37 @@ public interface IStack
 
     /// <summary>Gets the index group assigned to a field. Returns <see cref="IndexGroupId.Invalid"/> if none.</summary>
     IndexGroupId GetFieldIndexGroup(FieldId fieldId);
+
+    #endregion
+
+    #region Field Alias Group Access
+
+    /// <summary>
+    /// Gets field alias group info by ID. Returns <c>null</c> if the ID is out of range.
+    /// <para>
+    /// Alias groups expose any-match semantics for protocol fields (e.g., <c>"eth.addr"</c>
+    /// resolves to <c>{ eth.dst, eth.src }</c>) as metadata only; canonical lookup via
+    /// <see cref="GetFieldId(string)"/> is unaffected and never resolves alias names.
+    /// </para>
+    /// </summary>
+    FieldAliasGroupInfo? GetFieldAliasGroup(FieldAliasGroupId id);
+
+    /// <summary>
+    /// Looks up a field alias group ID by name. Returns <c>null</c> if not found.
+    /// </summary>
+    FieldAliasGroupId? GetFieldAliasGroupId(string name);
+
+    /// <summary>All registered field alias groups.</summary>
+    ReadOnlyMemory<FieldAliasGroupInfo> FieldAliasGroups
+    {
+        get;
+    }
+
+    /// <summary>Number of registered field alias groups.</summary>
+    int FieldAliasGroupCount
+    {
+        get;
+    }
 
     #endregion
 
@@ -209,5 +261,148 @@ public interface IStack
     /// </summary>
     /// <param name="protocolId">The protocol to query.</param>
     StreamReassemblyConfig? GetStreamReassemblyConfig(ProtocolId protocolId);
+
+    #endregion
+
+    #region Dispatch Helpers
+
+    /// <summary>
+    /// Returns all <see cref="ProtocolId"/> values registered for <paramref name="key"/> in
+    /// the specified u64-keyed dispatch table, or an empty span if the table does not exist,
+    /// is not u64-keyed, or has no entry for that key.
+    /// <para>
+    /// Intended for per-packet "identify without dispatching" use cases — for example to check
+    /// which protocols own a port before deciding whether stream reassembly applies.
+    /// For hot-path dispatch, build delegate caches once in <see cref="IProtocol.OnStart"/> using
+    /// the table-entry iterators (<see cref="Stack.GetU64TableEntries"/> etc.).
+    /// </para>
+    /// </summary>
+    ReadOnlySpan<ProtocolId> GetProtocolsFromU64ProtocolTable(ProtocolTableId tableId, ulong key);
+
+    /// <summary>
+    /// Returns all <see cref="ProtocolId"/> values registered for <paramref name="key"/> in
+    /// the specified string-keyed dispatch table, or an empty span if the table does not exist,
+    /// is not string-keyed, or has no entry for that key.
+    /// <para>
+    /// Intended for per-packet "identify without dispatching" use cases.
+    /// For hot-path dispatch, build delegate caches once in <see cref="IProtocol.OnStart"/> using
+    /// the table-entry iterators (<see cref="Stack.GetStringTableEntries"/> etc.).
+    /// </para>
+    /// </summary>
+    ReadOnlySpan<ProtocolId> GetProtocolsFromStringProtocolTable(ProtocolTableId tableId, string key);
+
+    /// <summary>
+    /// Returns all <see cref="ProtocolId"/> values registered for <paramref name="key"/> in
+    /// the specified bytes-keyed dispatch table, or an empty span if the table does not exist,
+    /// is not bytes-keyed, or has no entry for that key.
+    /// <para>
+    /// Intended for per-packet "identify without dispatching" use cases.
+    /// For hot-path dispatch, build delegate caches once in <see cref="IProtocol.OnStart"/> using
+    /// the table-entry iterators (<see cref="Stack.GetBytesTableEntries"/> etc.).
+    /// </para>
+    /// </summary>
+    ReadOnlySpan<ProtocolId> GetProtocolsFromBytesProtocolTable(ProtocolTableId tableId, BytesKey key);
+
+    /// <summary>
+    /// Returns all <see cref="ProtocolId"/> values registered for <paramref name="key"/> in
+    /// the specified bool-keyed dispatch table, or an empty span if the table does not exist,
+    /// is not bool-keyed, or has no entry for that key.
+    /// <para>
+    /// Intended for per-packet "identify without dispatching" use cases.
+    /// For hot-path dispatch, build delegate caches once in <see cref="IProtocol.OnStart"/> using
+    /// the table-entry iterators (<see cref="Stack.GetBoolTableEntries"/> etc.).
+    /// </para>
+    /// </summary>
+    ReadOnlySpan<ProtocolId> GetProtocolsFromBoolProtocolTable(ProtocolTableId tableId, bool key);
+
+    /// <summary>
+    /// Returns all <see cref="ProtocolId"/> values registered in the specified Any-keyed
+    /// dispatch table, or an empty span if the table does not exist or is not Any-keyed.
+    /// <para>
+    /// Intended for per-packet "identify without dispatching" use cases.
+    /// For hot-path dispatch, build delegate caches once in <see cref="IProtocol.OnStart"/> using
+    /// <see cref="Stack.GetAnyTableProtocolIds"/>.
+    /// </para>
+    /// </summary>
+    ReadOnlySpan<ProtocolId> GetProtocolsFromAnyProtocolTable(ProtocolTableId tableId);
+
+    /// <summary>
+    /// Runs all registered heuristic parsers in the given heuristic dispatch table against
+    /// <paramref name="data"/> and returns the <see cref="ProtocolId"/> of the first match,
+    /// or <see langword="null"/> if the table does not exist or no parser matches.
+    /// <para>
+    /// Intended for per-packet use in protocols that need to cache the detected protocol ID
+    /// on connection state before dispatching.
+    /// </para>
+    /// </summary>
+    ProtocolId? TryMatchHeuristic(HeuristicProtocolTableId tableId, ReadOnlyMemory<byte> data);
+
+    /// <summary>
+    /// Resolves a <see cref="ProtocolId"/> to its pre-bound <see cref="ParseDelegate"/>.
+    /// Intended for one-time use in <see cref="IProtocol.OnStart"/> to build dispatch caches
+    /// that store delegates for direct invocation without interface vtable dispatch.
+    /// <para>
+    /// <b>Do not call per packet.</b> The returned delegate is stable for the lifetime of
+    /// the stack.
+    /// </para>
+    /// </summary>
+    ParseDelegate? ResolveParseDelegate(ProtocolId id);
+
+    #endregion
+
+    #region Table Entry Iterators
+
+    /// <summary>
+    /// Iterates all registered u64 key → protocol-ID entries in the given dispatch table.
+    /// Returns <see langword="null"/> if the table does not exist or is not a u64-keyed table.
+    /// <para>
+    /// Intended for one-time use in <see cref="IProtocol.OnStart"/> to build pre-computed
+    /// dispatch caches. Each returned <see cref="ReadOnlyMemory{T}"/> contains the ordered list
+    /// of <see cref="ProtocolId"/> values registered for that key (usually one entry).
+    /// </para>
+    /// </summary>
+    IEnumerable<KeyValuePair<ulong, ReadOnlyMemory<ProtocolId>>>? GetU64TableEntries(ProtocolTableId tableId);
+
+    /// <summary>
+    /// Iterates all registered string key → protocol-ID entries in the given dispatch table.
+    /// Returns <see langword="null"/> if the table does not exist or is not a string-keyed table.
+    /// <para>
+    /// Intended for one-time use in <see cref="IProtocol.OnStart"/> to build pre-computed
+    /// dispatch caches.
+    /// </para>
+    /// </summary>
+    IEnumerable<KeyValuePair<string, ReadOnlyMemory<ProtocolId>>>? GetStringTableEntries(ProtocolTableId tableId);
+
+    /// <summary>
+    /// Iterates all registered bytes key → protocol-ID entries in the given dispatch table.
+    /// Returns <see langword="null"/> if the table does not exist or is not a bytes-keyed table.
+    /// <para>
+    /// Intended for one-time use in <see cref="IProtocol.OnStart"/> to build pre-computed
+    /// dispatch caches.
+    /// </para>
+    /// </summary>
+    IEnumerable<KeyValuePair<BytesKey, ReadOnlyMemory<ProtocolId>>>? GetBytesTableEntries(ProtocolTableId tableId);
+
+    /// <summary>
+    /// Iterates the bool keys (<c>false</c>, <c>true</c>) of the given dispatch table,
+    /// returning only keys with at least one registered protocol.
+    /// Returns <see langword="null"/> if the table does not exist or is not a bool-keyed table.
+    /// <para>
+    /// Intended for one-time use in <see cref="IProtocol.OnStart"/> to build pre-computed
+    /// dispatch caches.
+    /// </para>
+    /// </summary>
+    IEnumerable<KeyValuePair<bool, ReadOnlyMemory<ProtocolId>>>? GetBoolTableEntries(ProtocolTableId tableId);
+
+    /// <summary>
+    /// Returns all protocol IDs registered in the given Any-keyed dispatch table.
+    /// Returns <see langword="null"/> if the table does not exist or is not an Any-keyed table.
+    /// <para>
+    /// Intended for one-time use in <see cref="IProtocol.OnStart"/> to build pre-computed
+    /// dispatch caches.
+    /// </para>
+    /// </summary>
+    ReadOnlyMemory<ProtocolId>? GetAnyTableProtocolIds(ProtocolTableId tableId);
+
     #endregion
 }

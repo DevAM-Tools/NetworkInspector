@@ -9,11 +9,10 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="NetworkInspector.Core.Tests" />
-    <InternalsVisibleTo Include="NetworkInspector.Protocols" />
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="ZeroAlloc" />
+    <PackageReference Include="ZeroAlloc" PrivateAssets="none" />
   </ItemGroup>
 
   <ItemGroup>

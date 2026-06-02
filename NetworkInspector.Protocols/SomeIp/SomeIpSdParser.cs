@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright � 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Protocols.SomeIp;
 
@@ -30,10 +30,9 @@ internal static class SomeIpSdParser
     /// <param name="parent">The SOME/IP protocol container field.</param>
     /// <param name="sdData">SD payload data (after the 16-byte SOME/IP header).</param>
     /// <param name="fieldIds">Pre-registered field IDs for all SD sub-fields.</param>
-    /// <param name="context">The parse context providing dispatch resolution and stack access.</param>
     /// <returns>ParseResult indicating success or error.</returns>
     internal static ParseResult Parse(in MutField parent, ReadOnlySpan<byte> sdData,
-        in SomeIpSdFieldIds fieldIds, in ParseContext context)
+        in SomeIpSdFieldIds fieldIds)
     {
         if (sdData.Length < SdMinHeaderSize)
         {
@@ -48,16 +47,16 @@ internal static class SomeIpSdParser
 
         // Create SD container
         MutField sdField = parent.AppendWithCustomText(fieldIds.Container,
-            FieldValue.None, "SOME/IP-SD", in context);
+            FieldValue.None, "SOME/IP-SD");
 
-        // ── Flags ──
+        // -- Flags --
         sdField.AppendWithCustomText(fieldIds.Flags,
-            FieldValue.NewU64(flags), Helpers.DisplayTables.FormatHexU8(flags), in context);
-        sdField.Append(fieldIds.FlagsReboot, FieldValue.NewBool((flags & 0x80) != 0), in context);
-        sdField.Append(fieldIds.FlagsUnicast, FieldValue.NewBool((flags & 0x40) != 0), in context);
-        sdField.Append(fieldIds.FlagsInitialEvents, FieldValue.NewBool((flags & 0x20) != 0), in context);
+            FieldValue.NewU64(flags), Helpers.DisplayTables.FormatHexU8(flags));
+        sdField.Append(fieldIds.FlagsReboot, FieldValue.NewBool((flags & 0x80) != 0));
+        sdField.Append(fieldIds.FlagsUnicast, FieldValue.NewBool((flags & 0x40) != 0));
+        sdField.Append(fieldIds.FlagsInitialEvents, FieldValue.NewBool((flags & 0x20) != 0));
 
-        // ── Entries array ──
+        // -- Entries array --
         int entriesStart = 8; // after flags(1) + reserved(3) + entries_length(4)
         int entriesEnd = entriesStart + entriesLength;
 
@@ -70,21 +69,21 @@ internal static class SomeIpSdParser
         int entryCount = entriesLength / SdEntrySize;
         MutField entriesField = sdField.AppendWithCustomText(fieldIds.EntriesContainer,
             FieldValue.None,
-            entryCount == 1 ? "Entries Array (1 entry)" : ZA.Lazy("Entries Array (", entryCount, " entries)"), in context);
+            entryCount == 1 ? "Entries Array (1 entry)" : ZA.Lazy("Entries Array (", entryCount, " entries)"));
 
         // Parse individual entries
         int offset = entriesStart;
         while (offset + SdEntrySize <= entriesEnd)
         {
-            ParseEntry(in entriesField, sdData[offset..(offset + SdEntrySize)], in fieldIds, in context);
+            ParseEntry(in entriesField, sdData[offset..(offset + SdEntrySize)], in fieldIds);
             offset += SdEntrySize;
         }
 
-        // ── Options array ──
+        // -- Options array --
         int optionsLengthOffset = entriesEnd;
         if (optionsLengthOffset + 4 > sdData.Length)
         {
-            // No options — valid if there is no space for the options length field
+            // No options � valid if there is no space for the options length field
             return 0;
         }
 
@@ -103,9 +102,9 @@ internal static class SomeIpSdParser
         if (optionsLength > 0)
         {
             MutField optionsField = sdField.AppendWithCustomText(fieldIds.OptionsContainer,
-                FieldValue.None, ZA.Lazy("Options Array (", optionsLength, " bytes)"), in context);
+                FieldValue.None, ZA.Lazy("Options Array (", optionsLength, " bytes)"));
 
-            ParseOptions(in optionsField, sdData, optionsStart, optionsEnd, in fieldIds, in context);
+            ParseOptions(in optionsField, sdData, optionsStart, optionsEnd, in fieldIds);
         }
 
         return 0;
@@ -113,7 +112,7 @@ internal static class SomeIpSdParser
 
     /// <summary>Parses a single 16-byte SD entry.</summary>
     private static void ParseEntry(in MutField parent, ReadOnlySpan<byte> data,
-        in SomeIpSdFieldIds f, in ParseContext context)
+        in SomeIpSdFieldIds f)
     {
         if (data.Length < SdEntrySize)
         {
@@ -131,52 +130,52 @@ internal static class SomeIpSdParser
         // TTL is a 24-bit field spanning bytes 9-11
         uint ttl = (uint)((data[9] << 16) | (data[10] << 8) | data[11]);
 
-        // Display name varies based on entry type and TTL (TTL=0 → stop/nack)
+        // Display name varies based on entry type and TTL (TTL=0 ? stop/nack)
         string displayName = GetEntryDisplayName(entryType, ttl);
 
         MutField entryField = parent.AppendWithCustomText(f.EntryContainer,
-            FieldValue.None, displayName, in context);
+            FieldValue.None, displayName);
 
         // Entry type with display text
         entryField.AppendWithCustomText(f.EntryType,
             FieldValue.NewU64(entryType),
-            SomeIpSdDisplayTables.GetEntryTypeDisplayText(entryType), in context);
+            SomeIpSdDisplayTables.GetEntryTypeDisplayText(entryType));
 
         // Option indices and counts
-        entryField.Append(f.EntryIndex1, FieldValue.NewU64(index1), in context);
-        entryField.Append(f.EntryIndex2, FieldValue.NewU64(index2), in context);
-        entryField.Append(f.EntryNumOpt1, FieldValue.NewU64(numOpt1), in context);
-        entryField.Append(f.EntryNumOpt2, FieldValue.NewU64(numOpt2), in context);
+        entryField.Append(f.EntryIndex1, FieldValue.NewU64(index1));
+        entryField.Append(f.EntryIndex2, FieldValue.NewU64(index2));
+        entryField.Append(f.EntryNumOpt1, FieldValue.NewU64(numOpt1));
+        entryField.Append(f.EntryNumOpt2, FieldValue.NewU64(numOpt2));
 
         // Service and Instance IDs (hex-formatted)
         entryField.AppendWithCustomText(f.EntryServiceId,
-            FieldValue.NewU64(serviceId), Helpers.DisplayTables.FormatHexU16(serviceId), in context);
+            FieldValue.NewU64(serviceId), Helpers.DisplayTables.FormatHexU16(serviceId));
         entryField.AppendWithCustomText(f.EntryInstanceId,
-            FieldValue.NewU64(instanceId), Helpers.DisplayTables.FormatHexU16(instanceId), in context);
+            FieldValue.NewU64(instanceId), Helpers.DisplayTables.FormatHexU16(instanceId));
 
         // Major version and TTL
-        entryField.Append(f.EntryMajorVer, FieldValue.NewU64(majorVer), in context);
-        entryField.Append(f.EntryTtl, FieldValue.NewU64(ttl), in context);
+        entryField.Append(f.EntryMajorVer, FieldValue.NewU64(majorVer));
+        entryField.Append(f.EntryTtl, FieldValue.NewU64(ttl));
 
         // Last 4 bytes semantics depend on entry type:
-        //   Service entries (type < 0x04) → Minor Version (32-bit)
-        //   Eventgroup entries (type >= 0x04) → reserved(1) + flags(1) + EventgroupID(2)
+        //   Service entries (type < 0x04) ? Minor Version (32-bit)
+        //   Eventgroup entries (type >= 0x04) ? reserved(1) + flags(1) + EventgroupID(2)
         if (entryType < 0x04)
         {
             uint minorVer = BinaryPrimitives.ReadUInt32BigEndian(data[12..16]);
-            entryField.Append(f.EntryMinorVer, FieldValue.NewU64(minorVer), in context);
+            entryField.Append(f.EntryMinorVer, FieldValue.NewU64(minorVer));
         }
         else
         {
             ushort eventgroupId = BinaryPrimitives.ReadUInt16BigEndian(data[14..16]);
             entryField.AppendWithCustomText(f.EntryEventgroupId,
-                FieldValue.NewU64(eventgroupId), Helpers.DisplayTables.FormatHexU16(eventgroupId), in context);
+                FieldValue.NewU64(eventgroupId), Helpers.DisplayTables.FormatHexU16(eventgroupId));
         }
     }
 
     /// <summary>
     /// Entry display name based on type and TTL. TTL=0 changes semantics:
-    /// OfferService → StopOfferService, SubscribeEventgroup → StopSubscribe, etc.
+    /// OfferService ? StopOfferService, SubscribeEventgroup ? StopSubscribe, etc.
     /// </summary>
     private static string GetEntryDisplayName(byte entryType, uint ttl)
     {
@@ -196,16 +195,16 @@ internal static class SomeIpSdParser
 
     /// <summary>Parses all options in the options array.</summary>
     private static void ParseOptions(in MutField parent, ReadOnlySpan<byte> fullData,
-        int start, int end, in SomeIpSdFieldIds f, in ParseContext context)
+        int start, int end, in SomeIpSdFieldIds f)
     {
         int offset = start;
 
         while (offset + 3 <= end) // minimum: length(2) + type(1)
         {
             // Option wire format:
-            //   length (2 bytes) — bytes after the type field
+            //   length (2 bytes) � bytes after the type field
             //   type (1 byte)
-            //   [reserved (1 byte)] — for most option types
+            //   [reserved (1 byte)] � for most option types
             //   option data
             // Total wire size = length + 3 (per Wireshark packet-someip-sd.c)
             int optLength = BinaryPrimitives.ReadUInt16BigEndian(
@@ -219,25 +218,25 @@ internal static class SomeIpSdParser
             }
 
             ParseSingleOption(in parent, fullData[offset..(offset + totalOptSize)],
-                optLength, optType, in f, in context);
+                optLength, optType, in f);
             offset += totalOptSize;
         }
     }
 
     /// <summary>Parses a single SD option.</summary>
     private static void ParseSingleOption(in MutField parent, ReadOnlySpan<byte> data,
-        int optLength, byte optType, in SomeIpSdFieldIds f, in ParseContext context)
+        int optLength, byte optType, in SomeIpSdFieldIds f)
     {
         string displayText = SomeIpSdDisplayTables.GetOptionTypeShortName(optType);
 
         MutField optField = parent.AppendWithCustomText(f.OptionContainer,
-            FieldValue.None, displayText, in context);
+            FieldValue.None, displayText);
 
         // Option length and type
-        optField.Append(f.OptionLength, FieldValue.NewU64((ulong)optLength), in context);
+        optField.Append(f.OptionLength, FieldValue.NewU64((ulong)optLength));
         optField.AppendWithCustomText(f.OptionType,
             FieldValue.NewU64(optType),
-            SomeIpSdDisplayTables.GetOptionTypeDisplayText(optType), in context);
+            SomeIpSdDisplayTables.GetOptionTypeDisplayText(optType));
 
         // Payload starts at byte 4: skip length(2) + type(1) + reserved(1)
         int payloadStart = 4;
@@ -246,12 +245,12 @@ internal static class SomeIpSdParser
         {
             // IPv4 Endpoint / IPv4 Multicast / IPv4 SD Endpoint
             case 0x04 or 0x14 or 0x24:
-                ParseIpv4EndpointOption(in optField, data, payloadStart, in f, in context);
+                ParseIpv4EndpointOption(in optField, data, payloadStart, in f);
                 break;
 
             // IPv6 Endpoint / IPv6 Multicast / IPv6 SD Endpoint
             case 0x06 or 0x16 or 0x26:
-                ParseIpv6EndpointOption(in optField, data, payloadStart, in f, in context);
+                ParseIpv6EndpointOption(in optField, data, payloadStart, in f);
                 break;
 
             // Configuration option
@@ -261,7 +260,7 @@ internal static class SomeIpSdParser
                     ReadOnlySpan<byte> configBytes = data[payloadStart..];
                     string configStr = System.Text.Encoding.UTF8.GetString(configBytes);
                     optField.Append(f.OptionConfigString,
-                        FieldValue.NewString(configStr), in context);
+                        FieldValue.NewString(configStr));
                 }
                 break;
 
@@ -273,8 +272,8 @@ internal static class SomeIpSdParser
                         data[payloadStart..(payloadStart + 2)]);
                     ushort weight = BinaryPrimitives.ReadUInt16BigEndian(
                         data[(payloadStart + 2)..(payloadStart + 4)]);
-                    optField.Append(f.OptionLbPriority, FieldValue.NewU64(priority), in context);
-                    optField.Append(f.OptionLbWeight, FieldValue.NewU64(weight), in context);
+                    optField.Append(f.OptionLbPriority, FieldValue.NewU64(priority));
+                    optField.Append(f.OptionLbWeight, FieldValue.NewU64(weight));
                 }
                 break;
         }
@@ -284,7 +283,7 @@ internal static class SomeIpSdParser
     /// Parses IPv4 endpoint/multicast option: 4 bytes IPv4 + 1 reserved + 1 protocol + 2 port.
     /// </summary>
     private static void ParseIpv4EndpointOption(in MutField optField, ReadOnlySpan<byte> data,
-        int payloadStart, in SomeIpSdFieldIds f, in ParseContext context)
+        int payloadStart, in SomeIpSdFieldIds f)
     {
         if (data.Length < payloadStart + 8)
         {
@@ -293,23 +292,23 @@ internal static class SomeIpSdParser
 
         uint ipv4Raw = BinaryPrimitives.ReadUInt32BigEndian(
             data[payloadStart..(payloadStart + 4)]);
-        optField.Append(f.OptionIpv4, FieldValue.NewIPv4(new IPv4Address(ipv4Raw)), in context);
+        optField.Append(f.OptionIpv4, FieldValue.NewIPv4(new IPv4Address(ipv4Raw)));
 
         byte proto = data[payloadStart + 5];
         optField.AppendWithCustomText(f.OptionProto,
             FieldValue.NewU64(proto),
-            SomeIpSdDisplayTables.GetL4ProtoDisplayText(proto), in context);
+            SomeIpSdDisplayTables.GetL4ProtoDisplayText(proto));
 
         ushort port = BinaryPrimitives.ReadUInt16BigEndian(
             data[(payloadStart + 6)..(payloadStart + 8)]);
-        optField.Append(f.OptionPort, FieldValue.NewU64(port), in context);
+        optField.Append(f.OptionPort, FieldValue.NewU64(port));
     }
 
     /// <summary>
     /// Parses IPv6 endpoint/multicast option: 16 bytes IPv6 + 1 reserved + 1 protocol + 2 port.
     /// </summary>
     private static void ParseIpv6EndpointOption(in MutField optField, ReadOnlySpan<byte> data,
-        int payloadStart, in SomeIpSdFieldIds f, in ParseContext context)
+        int payloadStart, in SomeIpSdFieldIds f)
     {
         if (data.Length < payloadStart + 20)
         {
@@ -320,15 +319,18 @@ internal static class SomeIpSdParser
             data[payloadStart..(payloadStart + 8)]);
         ulong low = BinaryPrimitives.ReadUInt64BigEndian(
             data[(payloadStart + 8)..(payloadStart + 16)]);
-        optField.Append(f.OptionIpv6, FieldValue.NewIPv6(new IPv6Address(high, low)), in context);
+        optField.Append(f.OptionIpv6, FieldValue.NewIPv6(new IPv6Address(high, low)));
 
         byte proto = data[payloadStart + 17];
         optField.AppendWithCustomText(f.OptionProto,
             FieldValue.NewU64(proto),
-            SomeIpSdDisplayTables.GetL4ProtoDisplayText(proto), in context);
+            SomeIpSdDisplayTables.GetL4ProtoDisplayText(proto));
 
         ushort port = BinaryPrimitives.ReadUInt16BigEndian(
             data[(payloadStart + 18)..(payloadStart + 20)]);
-        optField.Append(f.OptionPort, FieldValue.NewU64(port), in context);
+        optField.Append(f.OptionPort, FieldValue.NewU64(port));
     }
 }
+
+
+

@@ -8,7 +8,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="ZeroAlloc" />
+    <PackageReference Include="ZeroAlloc" PrivateAssets="none" />
   </ItemGroup>
 
   <!-- Include README in the NuGet package -->

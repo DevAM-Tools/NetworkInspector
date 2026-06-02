@@ -517,7 +517,7 @@ internal sealed class PbfInternalTests
             scoped MutField current = parentField;
             for (int i = 0; i < _Depth; i++)
             {
-                current = current.Append(_ContainerFieldId, FieldValue.None, in context);
+                current = current.Append(_ContainerFieldId, FieldValue.None);
             }
 
             return 0; // consumed bytes irrelevant for this test protocol

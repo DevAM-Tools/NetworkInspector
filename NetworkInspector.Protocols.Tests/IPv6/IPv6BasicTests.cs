@@ -103,31 +103,43 @@ internal sealed class IPv6BasicTests
     [Test]
     public async Task Parse_IPv6_AddrField_ContainsBothEndpoints()
     {
-        // Arrange
+        // ipv6.addr is a metadata-only alias group ({ ipv6.src, ipv6.dst }); no ipv6.addr
+        // field is appended to the parse tree.
         byte[] frame = BuildIPv6UdpFrame();
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
-            FieldId? addrId = stack.GetFieldId("ipv6.addr");
-            await Assert.That(addrId).IsNotNull().Because("ipv6.addr must be registered");
+            await Assert.That(stack.GetFieldId("ipv6.addr")).IsNull()
+                .Because("ipv6.addr is an alias name and must never resolve via GetFieldId");
 
-            // Act: collect all ipv6.addr occurrences (src + dst siblings in ipv6 container, lazy-populated)
-            FieldLookupCookie cookie = FieldLookupCookie.Start;
+            FieldAliasGroupId? aliasId = stack.GetFieldAliasGroupId("ipv6.addr");
+            await Assert.That(aliasId).IsNotNull().Because("ipv6.addr alias group must be registered");
+
+            FieldAliasGroupInfo? aliasInfo = stack.GetFieldAliasGroup(aliasId!.Value);
+            await Assert.That(aliasInfo).IsNotNull();
+            await Assert.That(aliasInfo!.MemberCount).IsEqualTo(2);
+
+            FieldId srcId = stack.GetFieldId("ipv6.src")!.Value;
+            FieldId dstId = stack.GetFieldId("ipv6.dst")!.Value;
+            FieldId[] members = aliasInfo.Members.ToArray();
+            await Assert.That(members.Contains(srcId)).IsTrue();
+            await Assert.That(members.Contains(dstId)).IsTrue();
+
             List<string> found = [];
-            while (packet.TryGetNextFieldValue(addrId!.Value, ref cookie, out FieldValue value))
+            foreach (FieldId memberId in members)
             {
-                bool ok = value.Data.TryGetAsIPv6(out IPv6Address addr);
-                await Assert.That(ok).IsTrue().Because("ipv6.addr values must be IPv6 addresses");
-                found.Add(addr.ToString().ToUpperInvariant());
+                FieldLookupCookie cookie = FieldLookupCookie.Start;
+                while (packet.TryGetNextFieldValue(memberId, ref cookie, out FieldValue value))
+                {
+                    bool ok = value.Data.TryGetAsIPv6(out IPv6Address addr);
+                    await Assert.That(ok).IsTrue().Because("alias member values must be IPv6 addresses");
+                    found.Add(addr.ToString().ToUpperInvariant());
+                }
             }
 
-            // Assert: exactly two occurrences matching source and destination
-            await Assert.That(found.Count).IsEqualTo(2)
-                .Because("ipv6.addr must appear exactly twice — once for source, once for destination");
-            await Assert.That(found.Contains("2001:DB8::1")).IsTrue()
-                .Because("ipv6.addr must contain source address 2001:db8::1");
-            await Assert.That(found.Contains("2001:DB8::2")).IsTrue()
-                .Because("ipv6.addr must contain destination address 2001:db8::2");
+            await Assert.That(found.Count).IsEqualTo(2);
+            await Assert.That(found.Contains("2001:DB8::1")).IsTrue();
+            await Assert.That(found.Contains("2001:DB8::2")).IsTrue();
         }
     }
 

@@ -21,12 +21,7 @@ internal sealed class CachedFrameSourceTests
         return new CachedFrameSource(inner);
     }
 
-    private static void StartSource(CachedFrameSource source)
-    {
-        FrameInterfaceRegistry registry = new();
-        FrameSourceId sourceId = registry.RegisterSource(source);
-        source.Start(sourceId, registry);
-    }
+
 
     // ========================================================================
     // Basic caching
@@ -36,7 +31,7 @@ internal sealed class CachedFrameSourceTests
     public async Task NextFrame_CachesFrames_FrameByIdReturns()
     {
         using CachedFrameSource source = CreateCached(5);
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         // Read all frames
         Frame[] frames = new Frame[5];
@@ -61,7 +56,7 @@ internal sealed class CachedFrameSourceTests
     public async Task FrameById_InvalidId_ReturnsNull()
     {
         using CachedFrameSource source = CreateCached(1);
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
         source.NextFrame();
 
         // Out-of-range FrameId
@@ -73,7 +68,7 @@ internal sealed class CachedFrameSourceTests
     public async Task FrameById_NotYetRead_ReturnsNull()
     {
         using CachedFrameSource source = CreateCached(5);
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         // Read only the first frame
         source.NextFrame();
@@ -112,7 +107,7 @@ internal sealed class CachedFrameSourceTests
     public async Task Dispose_DisposesInner()
     {
         CachedFrameSource source = CreateCached(1);
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
         source.NextFrame();
 
         source.Dispose();
@@ -149,7 +144,7 @@ internal sealed class CachedFrameSourceTests
     {
         const int count = 100;
         using CachedFrameSource source = CreateCached(count);
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         // Read all frames first
         Frame[] frames = new Frame[count];
@@ -192,7 +187,7 @@ internal sealed class CachedFrameSourceTests
     public async Task NextFrame_AfterExhaustion_ReturnsNull()
     {
         using CachedFrameSource source = CreateCached(2);
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         await Assert.That(source.NextFrame()).IsNotNull();
         await Assert.That(source.NextFrame()).IsNotNull();
@@ -208,7 +203,7 @@ internal sealed class CachedFrameSourceTests
     public async Task Dispose_CalledTwice_DoesNotThrow()
     {
         CachedFrameSource source = CreateCached(1);
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         source.Dispose();
 
@@ -227,7 +222,7 @@ internal sealed class CachedFrameSourceTests
     public async Task IsRunning_TrueAfterStart_FalseAfterDispose()
     {
         CachedFrameSource source = CreateCached(1);
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         await Assert.That(source.IsRunning).IsTrue();
 
@@ -240,7 +235,7 @@ internal sealed class CachedFrameSourceTests
     public async Task NextFrame_AfterDispose_ThrowsObjectDisposedException()
     {
         CachedFrameSource source = CreateCached(1);
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
         source.Dispose();
 
         await Assert.That(() => source.NextFrame()).Throws<ObjectDisposedException>();
@@ -250,7 +245,7 @@ internal sealed class CachedFrameSourceTests
     public async Task FrameById_AfterDispose_ThrowsObjectDisposedException()
     {
         CachedFrameSource source = CreateCached(1);
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         Frame? f = source.NextFrame();
         await Assert.That(f).IsNotNull();
@@ -296,7 +291,7 @@ internal sealed class CachedFrameSourceTests
         public void Start(FrameSourceId sourceId, FrameInterfaceRegistry registry) { }
 
         /// <inheritdoc/>
-        public Frame? NextFrame() => throw new InvalidOperationException("Simulated inner source failure.");
+        public Frame? NextFrame(CancellationToken cancellationToken = default) => throw new InvalidOperationException("Simulated inner source failure.");
 
         /// <inheritdoc/>
         public void Dispose() { }

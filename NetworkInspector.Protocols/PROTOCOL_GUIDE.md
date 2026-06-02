@@ -24,6 +24,9 @@
 11. [Heuristic Protocol Tables](#11-heuristic-protocol-tables)
 12. [Dispatch Cache Optimization](#12-dispatch-cache-optimization)
 13. [Index Groups & PacketIndex](#13-index-groups--packetindex)
+    - [Field Alias Groups (Any-Match Names)](#13a-field-alias-groups-any-match-names)
+    - [Primary / Details Field Layout](#13b-primary--details-field-layout)
+    - [Mandatory Eager Rules](#13c-mandatory-eager-rules)
 14. [String Handling & Display Text](#14-string-handling--display-text)
 15. [Error Handling](#15-error-handling)
 16. [Binary Header Parsing](#16-binary-header-parsing)
@@ -675,7 +678,7 @@ private LazyPopulator _Populator = null!;
 partial void OnStartCustom(Stack stack)
 {
     // Allocate once — captures only 'this' (the singleton protocol instance)
-    _Populator = (in MutField container) => PopulateUdpFields(in container);
+    _ = PopulateUdpFields(in container);
 }
 ```
 
@@ -696,7 +699,7 @@ parentField.AppendLazyWithCustomText(_ProtocolFieldId, containerValue, summary, 
 In the populator method, re-read and re-parse from the stored bytes:
 
 ```csharp
-private ParseResult PopulateIPv4Fields(in MutField container)
+private ParseResult PopulateIPv4Fields(in LazyField container)
 {
     // Re-read the header bytes stored in the container's field value
     ReadOnlyMemory<byte> headerBytes = container.Value.Data.AsBytes();
@@ -705,11 +708,8 @@ private ParseResult PopulateIPv4Fields(in MutField container)
         return ParseError.InvalidData(ProtocolName, "Failed to parse IPv4 header");
     }
 
-    // ParseContext must be constructed inside the populator (ref struct, cannot be captured)
-    ParseContext context = new ParseContext(container.Packet.Stack);
-
     // Append all child fields from the re-parsed header
-    container.Append(_VersionFieldId, FieldValue.NewU64(header.Version), in context);
+    container.Append(_VersionFieldId, FieldValue.NewU64(header.Version));
     // ... more fields ...
 
     return 0;  // Success (return value ignored for populators)
@@ -719,7 +719,7 @@ private ParseResult PopulateIPv4Fields(in MutField container)
 ### 9.4 LazyPopulator Delegate
 
 ```csharp
-public delegate ParseResult LazyPopulator(in MutField parentField);
+public delegate ParseResult LazyPopulator(in LazyField parentField);
 ```
 
 - Called **exactly once** on first access to the container's children.
@@ -820,36 +820,16 @@ parentField.AppendLazyWithCustomText(_ProtocolFieldId, containerValue, summary, 
 **Step 2 — Read back in the populator via `AsField()` + `TryGetPrev()`:**
 
 ```csharp
-private ParseResult PopulateMyProtocolFields(in MutField container)
+private ParseResult PopulateMyProtocolFields(in LazyField container)
 {
     // Get a read-only Field view of the container to navigate siblings.
     Field self = container.AsField();
 
-    // Walk at most 3 siblings back to find the pre-computed value.
-    // It is always immediately before the container, so the walk is very short.
-    Field field = self;
-    ulong pseudoSum = 0;
-    bool hasPseudoSum = false;
-    int maxWalk = 3;
-    while (maxWalk-- > 0 && field.TryGetPrev(out field))
-    {
-        if (field.FieldId == _PseudoHeaderSumFieldId
-            && field.Value.Data.TryGetAsU64(out pseudoSum))
-        {
-            hasPseudoSum = true;
-            break;
-        }
-    }
-
-    // Use the pre-computed sum if available; otherwise fall back.
-    if (hasPseudoSum)
-    {
-        // fast checksum path using pseudoSum
-    }
+    // Walk previous siblings to find pre-computed values (e.g., IP addresses)
+    // for checksum validation via IpAddressExtractor.
 
     // Append remaining fields ...
-    ParseContext context = new ParseContext(container.Packet.Stack);
-    container.Append(_MyFieldId, FieldValue.NewU64(value), in context);
+    container.Append(_MyFieldId, FieldValue.NewU64(value));
     return 0;
 }
 ```
@@ -1055,27 +1035,16 @@ private SignalPduDefinition? FindPduByDispatchKey(in ParseContext context)
 | `context.HasIndex` | `bool` | `true` when a `PacketIndex` is attached (i.e., this parse is being indexed). Use to skip expensive index-only work during non-indexed reads. |
 
 `context.Stack` is needed only in rare cases — for example, building a
-`new ParseContext(container.Packet.Stack)` inside a lazy populator (since
-`ParseContext` is a `ref struct` that cannot be captured):
+`new ParseContext(container.Packet.Stack)` is not needed inside a lazy populator.
+`LazyField.Append*()` methods do not require a `ParseContext`:
 
 ```csharp
-private ParseResult PopulateMyFields(in MutField container)
+private ParseResult PopulateMyFields(in LazyField container)
 {
-    // ParseContext cannot be captured — construct a stack-only context here.
-    // HasIndex is false: presence recording is only valid during Parse(), not in populators.
-    ParseContext context = new ParseContext(container.Packet.Stack);
-    container.Append(_MyFieldId, FieldValue.NewU64(value), in context);
+    container.Append(_MyFieldId, FieldValue.NewU64(value));
     return 0;
 }
 ```
-
-`context.HasIndex` is useful when a protocol computes an expensive index-only
-derived value (e.g., connection stream index):
-
-```csharp
-if (context.HasIndex)
-{
-    // Compute and record stream index only when indexing is active
     uint streamIndex = _StreamTracker.GetOrCreateStreamIndex(in connKey);
     parentField.Append(_StreamFieldId, FieldValue.NewU64(streamIndex), in context);
     context.RecordGroupPresence(_StreamGroupId);
@@ -1326,6 +1295,213 @@ _UdpChecksumStatusGroupId = builder.GetOrCreateIndexGroup("udp.checksum.status")
 |----------|---------------------------|
 | Per-field bitmaps | ~84 |
 | With index groups | ~8–10 |
+
+---
+
+## 13a. Field Alias Groups (Any-Match Names)
+
+Field alias groups are **metadata-only** registries that expose any-match semantic
+names (e.g., `eth.addr`, `ip.addr`, `ipv6.addr`, `udp.port`, `tcp.port`) without
+adding any extra field nodes to the parse tree. They replace the older pattern
+of physically appending a duplicate field (`eth.addr` appended as a child of both
+`eth.dst` and `eth.src`) which doubled allocations and confused enumeration.
+
+### 13a.1 Core Rules (Mandatory)
+
+- **No physical duplicate field is registered or appended** for any-match names.
+  Do **not** declare `[MacField("eth.addr") private FieldId _AddrFieldId;` —
+  this is the breaking change locked by Step 4 of the alias plan.
+- **Alias names and canonical field names live in independent namespaces.**
+  `stack.GetFieldId("eth.addr")` returns `null` by design. Always use
+  `stack.GetFieldAliasGroupId("eth.addr")` to resolve alias names. The
+  separation guarantees value-cache, indexing, and per-packet field-lookup paths
+  see only canonical fields.
+- **Alias members may have mixed `FieldType` values.** The registry stores
+  member `FieldId`s only; consumers query each member by its own type.
+
+### 13a.2 Manual Registration Pattern
+
+Alias groups are registered manually inside `RegisterFieldsCustom` (the partial
+that the generator invokes after all attribute fields are registered, so member
+`FieldId`s are populated):
+
+```csharp
+[Protocol("eth", "Ethernet II")]
+public sealed partial class EthernetProtocol : IProtocol
+{
+    [MacField("eth.dst", "Destination", IndexGroup = EthIndexGroup)]
+    private FieldId _DstFieldId;
+
+    [MacField("eth.src", "Source", IndexGroup = EthIndexGroup)]
+    private FieldId _SrcFieldId;
+
+    // Holds the alias group ID returned from manual registration.
+    private FieldAliasGroupId _AddrAliasGroupId;
+
+    partial void RegisterFieldsCustom(IStackBuilder builder, ProtocolId protocolId)
+    {
+        // Members must already be registered by the time this is called.
+        _AddrAliasGroupId = builder.RegisterFieldAliasGroup(
+            protocolId, "eth.addr", null, [_DstFieldId, _SrcFieldId]);
+    }
+}
+```
+
+The same pattern applies to `ip.addr` (→ `{ ip.src, ip.dst }`), `ipv6.addr`,
+`udp.port` (→ `{ udp.srcport, udp.dstport }`), `tcp.port`, and any future
+any-match name. Note that the alias name `udp.port` is **independent** of the
+protocol-table name `udp.port` (UDP demux) — alias, field, and table namespaces
+are three separate registries.
+
+### 13a.3 Consumer Pattern (Enumeration via Alias)
+
+```csharp
+FieldAliasGroupId? aliasId = stack.GetFieldAliasGroupId("eth.addr");
+if (aliasId is { } id)
+{
+    FieldAliasGroupInfo info = stack.GetFieldAliasGroup(id)!;
+    foreach (FieldId memberId in info.Members.Span)
+    {
+        FieldLookupCookie cookie = FieldLookupCookie.Start;
+        while (packet.TryGetNextFieldValue(memberId, ref cookie, out FieldValue value))
+        {
+            // process value per member type
+        }
+    }
+}
+```
+
+### 13a.4 Ethernet I/G + L/G Bits via CustomText
+
+The legacy `eth.dst.ig`, `eth.dst.lg`, `eth.src.ig`, `eth.src.lg` bool fields
+are removed. The I/G and L/G semantics are now exposed as **CustomText on
+`eth.dst` and `eth.src`** via `EthernetProtocol.FormatMacAddressBits`:
+
+| I/G   | L/G    | CustomText                          |
+|-------|--------|-------------------------------------|
+| false | false  | `Unicast, Globally Unique`          |
+| false | true   | `Unicast, Locally Administered`     |
+| true  | false  | `Multicast, Globally Unique`        |
+| true  | true   | `Multicast, Locally Administered`   |
+
+Tests assert this via `AssertDisplayText(stack, packet, "eth.dst", "…")`.
+
+---
+
+## 13b. Eager / Lazy Field Layout
+
+Every in-scope protocol (`eth`, `ip`, `ipv6`, `udp`, `tcp`, `tls`, `dtls`)
+splits its work between **eager** fields appended during `Parse()` (small,
+summary-critical, or required by downstream protocols) and **lazy** fields
+materialised by a single per-protocol populator when the protocol container
+is first accessed. All decoded fields are direct children of the protocol
+container — there is no nested `*.hdr` intermediate container.
+
+### 13b.1 Required Layout
+
+| Protocol | Eager (Parse) | Lazy populator children (direct under protocol container) |
+|----------|---------------|------------------------------------------------------------|
+| `eth`    | —             | `eth.dst`, `eth.src` (+ ig/lg CustomText), `eth.type` / `eth.len`, padding, … |
+| `ip`     | `ip.src`, `ip.dst` (required by transport protocols) | version, hlen, dscp/ecn, flags, ttl, proto, checksum, options |
+| `ipv6`   | `ipv6.src`, `ipv6.dst` (required by transport protocols) | version, tclass, flow, payload length, next header, hop limit, extension headers |
+| `udp`    | —             | `udp.srcport`, `udp.dstport`, checksum (+status), length, payload |
+| `tcp`    | —             | ports, checksum, seq/ack, hdr_len, flags (+ sub-flags), window, urgent ptr, options, len, payload |
+| `tls`    | —             | per record: `tls.record` (content_type, version, length) followed by handshake/alert as siblings |
+| `dtls`   | —             | per record: `dtls.record` (content_type, version, epoch, seq, length) followed by handshake as siblings |
+
+### 13b.2 Implementation Sketch
+
+```csharp
+// One populator delegate, captured once in OnStartCustom — zero per-packet allocation.
+private LazyPopulator _Populator = null!;
+
+partial void OnStartCustom(Stack stack) => _Populator = PopulateFoo;
+
+private ParseResult PopulateFoo(in LazyField container)
+{
+    // Append all decoded fields directly under the protocol container.
+    // For ip/ipv6: src/dst stay in Parse (eager); everything else goes here.
+    container.Append(_VersionFieldId, FieldValue.NewU64(version));
+    container.Append(_HlenFieldId, FieldValue.NewU64(hlen));
+    // … remaining fields …
+    return 0;
+}
+```
+
+---
+
+## 13c. Mandatory Eager Rules
+
+The presence index is the **single** reliable filtering layer — there is no
+value-cache fallback. A filter that asks "does this packet contain field
+`tls.sni` / `dns.opt` / `http.host`?" must be answerable from the index alone,
+without materialising the lazy descriptive field tree. The five rules below are
+**binding** for every current and future protocol; they make that guarantee
+hold by construction. They are enforced by
+`EagerIndexGroupRegistrationTests` and the eager-dispatch tests.
+
+### 13c.1 All sub-protocol dispatch is eager
+
+**All dispatch to sub-protocols must occur in `Parse()`** — never inside a lazy
+populator. A populator builds descriptive fields for *one* protocol; it must not
+decide or invoke the next protocol. Dispatch governs which protocols are present
+in a packet, and presence must be known the moment the packet is finalised, not
+deferred until (or if) a container is later expanded.
+
+### 13c.2 The index is finalised when the packet is finalised
+
+A lazy populator must **never** mutate the index, record presence, or dispatch.
+It only builds the field tree. This is enforced by the type system: a populator
+receives a `LazyField` / `MutField` cursor with **no `ParseContext`**, so it has
+no API surface to touch the index. Everything index-affecting happens during the
+eager `Parse()` pass.
+
+### 13c.3 Every emittable group is recorded eagerly — no false positives, no false negatives
+
+For each packet, the index must record a group **if and only if** materialisation
+would emit at least one field of that group. Two failure modes are equally
+forbidden:
+
+- **False negative** — a lazily-materialised field whose group was *not* recorded
+  in `Parse()`. The filter would wrongly exclude a matching packet.
+- **False positive** — a group recorded in `Parse()` for which no field is ever
+  emitted. The filter would wrongly include a non-matching packet.
+
+Unconditional groups are recorded directly. **Conditional and content-dependent
+groups must be decided in `Parse()`**, even when the corresponding fields are
+deferred to the populator. This frequently means `Parse()` must perform an eager
+payload scan that **duplicates the populator's parsing logic**, with each eager
+guard mirroring its populator's emission guard exactly. Duplicated evaluation is
+the accepted price of the lazy model. For example, TLS records all twelve
+`tls.*` groups by walking records/handshakes/extensions in `Parse()` with the
+same length and bounds checks the populator uses; DNS walks the question and
+resource-record sections to record `dns.opt`, `dns.ds`, `dns.rrsig`, `dns.nsec`,
+`dns.dnskey`, etc.
+
+A field that is declared but **never emitted** (dead field) must **not** have its
+group recorded — doing so would be a false positive.
+
+### 13c.4 Prefer eager fields; defer only with enough candidates
+
+Append fields eagerly by default. Introduce a lazy populator **only** when a
+protocol has **≥ 2 (ideally ≥ 3)** lazy-field candidates; for a single deferrable
+field the populator's per-access overhead is not worth it — append eagerly and
+omit the populator. (Recording the group eagerly per §13c.3 is required either
+way.)
+
+### 13c.5 Follow the approved eager/lazy cut
+
+The authoritative eager/lazy split for the in-scope protocols is the table in
+**§13b.1** and is binding:
+
+- `ip` / `ipv6` keep **only** `*.src` and `*.dst` eager, because transport
+  demux reads them during its own `Parse()`; every other field is lazy.
+- `tcp.flags` (and all other TCP fields) are **lazy**.
+- `eth`, `udp`, `tls`, `dtls` are **fully lazy** — no eager descriptive fields —
+  while still recording their presence and applicable groups eagerly per §13c.3.
+
+Any new protocol must document its cut as a row consistent with §13b.1 before
+implementation.
 
 ---
 
@@ -1902,7 +2078,7 @@ partial void RegisterFieldsCustom(IStackBuilder builder, ProtocolId protocolId)
 // User writes (optional — for caches and delegates):
 partial void OnStartCustom(Stack stack)
 {
-    _Populator = (in MutField container) => PopulateUdpFields(in container);
+    _ = PopulateUdpFields(in container);
     // Build dispatch caches, resolve cross-protocol fields, etc.
 }
 ```
@@ -1993,10 +2169,9 @@ Frame ──[frame.link_type]──► Ethernet ──[eth.type]──► IPv4/I
 
 - [ ] Pre-allocate delegate in `OnStartCustom()` (captures only `this`)
 - [ ] Re-parse header from `container.Value.Data.AsBytes()`
-- [ ] Construct `ParseContext context = new ParseContext(container.Packet.Stack)` for `Append` calls
 - [ ] Read pre-computed helper fields via `container.AsField()` + `TryGetPrev()` (bounded walk)
 - [ ] Append all child fields via `container.Append()` / `container.AppendWithCustomText()`
-- [ ] Do NOT call `TryCallNextProtocol*()` inside the populator
+- [ ] May call `TryCallNextProtocol*()` dispatch methods
 - [ ] Do NOT call `context.RecordGroupPresence()` inside the populator
 - [ ] Return `ParseResult` (0 on success)
 

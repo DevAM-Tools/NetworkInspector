@@ -16,16 +16,21 @@ namespace NetworkInspector.Protocols;
 /// <para>Field tree structure:</para>
 /// <code>
 /// pdu_transport: PDU Transport
-/// ├── pdu_transport.pdu: PDU: BrakeStatus (ID: 1)
+/// ├── [dispatched payload via pdu_transport.id table]   [eager, per PDU, when a sub-protocol matches]
+/// ├── pdu_transport.payload: (16 bytes)                 [eager, per PDU, when no sub-protocol matches]
+/// ├── pdu_transport.pdu: PDU: BrakeStatus (ID: 1)       [lazy descriptive metadata]
 /// │   ├── pdu_transport.id: 1
 /// │   ├── pdu_transport.length: 8
-/// │   ├── pdu_transport.name: "BrakeStatus"          [optional, from config]
-/// │   └── [dispatched payload via pdu_transport.id table]
+/// │   └── pdu_transport.name: "BrakeStatus"             [optional, from config]
 /// ├── pdu_transport.pdu: PDU: EngineData (ID: 2)
 /// │   ├── pdu_transport.id: 2
-/// │   ├── pdu_transport.length: 16
-/// │   └── pdu_transport.payload: (16 bytes)          [if no sub-protocol matches]
+/// │   └── pdu_transport.length: 16
 /// </code>
+/// <para>
+/// Sub-protocol dispatch and the raw-payload fallback are performed eagerly in <see cref="Parse"/>
+/// (so dispatched sub-protocols record their index groups during the index phase); the descriptive
+/// <c>pdu_transport.pdu</c> metadata tree is built lazily.
+/// </para>
 /// </summary>
 /// <remarks>
 /// <para><b>Thread safety:</b> instances are immutable after registration completes.
@@ -152,7 +157,7 @@ public sealed partial class PduTransportProtocol : IProtocol
     /// </summary>
     partial void RegisterFieldsCustom(IStackBuilder builder, ProtocolId protocolId)
     {
-        _Populator = (in MutField container) => PopulatePduTransportFields(in container);
+        _Populator = PopulatePduTransportFields;
 
         // Validate field sizes — only 1, 2, and 4 byte sizes are supported.
         // Invalid values are clamped to the default (4 bytes) and a warning is
@@ -209,7 +214,13 @@ public sealed partial class PduTransportProtocol : IProtocol
 
     /// <summary>
     /// Parses PDU Transport datagrams containing one or more concatenated PDUs.
-    /// Uses lazy population for field details.
+    /// <para>
+    /// Sub-protocol dispatch is performed <b>eagerly</b> here (not in the lazy populator) so
+    /// the dispatched sub-protocols record their index groups during the capture/index phase,
+    /// when the real index-carrying <see cref="ParseContext"/> is available. The descriptive
+    /// per-PDU field tree (<c>pdu_transport.pdu</c> / <c>id</c> / <c>length</c> / <c>name</c>)
+    /// remains lazily built in <see cref="PopulatePduTransportFields"/>.
+    /// </para>
     /// </summary>
     public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
     {
@@ -225,19 +236,74 @@ public sealed partial class PduTransportProtocol : IProtocol
         parentField.SetPacketInfo(new LazyString("PDU Transport"));
 
         FieldValue containerValue = FieldValue.NewBytes(data);
-        parentField.AppendLazyWithCustomText(
+        MutField container = parentField.AppendLazyWithCustomText(
             _ProtocolFieldId, containerValue, new LazyString("PDU Transport"), _Populator);
+
+        // Eagerly walk the concatenated PDUs and dispatch each payload to its sub-protocol
+        // with the real index-carrying context. Dispatched sub-protocols therefore record
+        // their presence during the index phase (Q6: the index must be complete when the
+        // packet is finalized). When no sub-protocol consumes a payload, the raw payload
+        // field is appended eagerly so the dispatch decision is fully resolved here and the
+        // lazy populator never needs to dispatch.
+        ReadOnlySpan<byte> span = data.Span;
+        int idSize = (int)_IdFieldSize;
+        int lenSize = (int)_LengthFieldSize;
+        int offset = 0;
+        while (offset + headerSize <= span.Length)
+        {
+            uint pduId = ReadBigEndianUint(span[offset..], idSize);
+            offset += idSize;
+
+            uint payloadLength = ReadBigEndianUint(span[offset..], lenSize);
+            offset += lenSize;
+
+            // The lazy populator emits pdu_transport.name for every PDU whose ID resolves to a
+            // configured display name. The index must mirror that decision, so perform the same
+            // name lookup eagerly here and record the group when a name is present. This repeats
+            // the lookup the populator performs later — the accepted cost of deferred field building.
+            if (!string.IsNullOrEmpty(_NameLookup.GetValueOrDefault(pduId)))
+            {
+                context.RecordGroupPresence(_Pdu_transportNameGroupId);
+            }
+
+            // Clamp payload to available data before slicing (boundary validation).
+            int actualPayload = Math.Min((int)payloadLength, span.Length - offset);
+            if (actualPayload > 0)
+            {
+                ReadOnlyMemory<byte> payloadData = data.Slice(offset, actualPayload);
+
+                ParseResult dispatchResult = container.TryCallNextProtocolU64(
+                    _IdTableId, pduId, payloadData, in context);
+                if (dispatchResult.IsError)
+                {
+                    return dispatchResult;
+                }
+
+                // If no sub-protocol consumed the payload, append raw bytes.
+                if (!dispatchResult.IsSuccess || dispatchResult.Value == 0)
+                {
+                    context.RecordGroupPresence(_Pdu_transportPayloadGroupId);
+                    container.Append(_PayloadFieldId, FieldValue.NewBytes(payloadData));
+                }
+            }
+
+            offset += actualPayload;
+        }
 
         return data.Length;
     }
 
     /// <summary>
-    /// Populates PDU Transport fields by parsing concatenated PDUs from stored data.
+    /// Lazily populates the descriptive PDU Transport field tree from stored data.
     /// Each PDU has: [id:id_field_size] [length:length_field_size] [payload:length].
+    /// <para>
+    /// This populator builds only the descriptive metadata (<c>pdu</c> / <c>id</c> /
+    /// <c>length</c> / <c>name</c>); sub-protocol dispatch and the raw-payload fallback are
+    /// performed eagerly in <see cref="Parse"/> so the index is complete at packet finalization.
+    /// </para>
     /// </summary>
     private ParseResult PopulatePduTransportFields(in MutField container)
     {
-        ParseContext context = new ParseContext(container.Packet.Stack);
         if (!container.Value.Data.TryGetAsBytes(out ReadOnlyMemory<byte> pduData))
         {
             return ParseError.InvalidData(ProtocolName, "Container value is not of type Bytes");
@@ -272,39 +338,18 @@ public sealed partial class PduTransportProtocol : IProtocol
                 : ZA.Lazy("PDU (ID: ", pduId, ")");
 
             MutField pduField = container.AppendWithCustomText(
-                _PduFieldId, FieldValue.None, pduSummary, in context);
+                _PduFieldId, FieldValue.None, pduSummary);
 
             // PDU ID
-            pduField.Append(_IdFieldId, FieldValue.NewU64(pduId), in context);
+            pduField.Append(_IdFieldId, FieldValue.NewU64(pduId));
 
             // Length
-            pduField.Append(_LengthFieldId, FieldValue.NewU64(payloadLength), in context);
+            pduField.Append(_LengthFieldId, FieldValue.NewU64(payloadLength));
 
             // Name (from config)
             if (hasName)
             {
-                context.RecordGroupPresence(_Pdu_transportNameGroupId);
-                pduField.Append(_NameFieldId, FieldValue.NewString(name!), in context);
-            }
-
-            // Dispatch payload to sub-protocols registered on pdu_transport.id
-            if (actualPayload > 0)
-            {
-                ReadOnlyMemory<byte> payloadData = pduData.Slice(offset, actualPayload);
-
-                ParseResult dispatchResult = pduField.TryCallNextProtocolU64(
-                    _IdTableId, pduId, payloadData, in context);
-                if (dispatchResult.IsError)
-                {
-                    return dispatchResult;
-                }
-
-                // If no sub-protocol consumed the payload, append raw bytes
-                if (!dispatchResult.IsSuccess || dispatchResult.Value == 0)
-                {
-                    context.RecordGroupPresence(_Pdu_transportPayloadGroupId);
-                    pduField.Append(_PayloadFieldId, FieldValue.NewBytes(payloadData), in context);
-                }
+                pduField.Append(_NameFieldId, FieldValue.NewString(name!));
             }
 
             offset += actualPayload;

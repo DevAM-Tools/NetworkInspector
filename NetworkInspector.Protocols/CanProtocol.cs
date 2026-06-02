@@ -368,47 +368,47 @@ public sealed partial class CanProtocol : IProtocol
             : ZA.Lazy("CAN 0x", new Hex8(canId)));
 
         MutField canField = parentField.AppendWithCustomText(
-            _ProtocolFieldId, FieldValue.NewBytes(data[..totalLen]), summary, in context);
+            _ProtocolFieldId, FieldValue.NewBytes(data[..totalLen]), summary);
 
         // CAN ID
         LazyString idText = isExtended
             ? ZA.Lazy("0x", new Hex8(canId), " (Extended)")
             : ZA.Lazy("0x", new Hex3((ushort)canId), " (Standard)");
-        canField.AppendWithCustomText(_IdFieldId, FieldValue.NewU64(canId), idText, in context);
+        canField.AppendWithCustomText(_IdFieldId, FieldValue.NewU64(canId), idText);
 
         // Message name from configuration
         if (_MessageNames.TryGetValue(canId, out string? messageName))
         {
             context.RecordGroupPresence(_CanNameGroupId);
-            canField.Append(_NameFieldId, FieldValue.NewString(messageName), in context);
+            canField.Append(_NameFieldId, FieldValue.NewString(messageName));
         }
 
         // Flags container — precomputed display text lists active flag abbreviations.
         string flagsText = isFd
             ? CanFlagsFormatter.FormatFd(isExtended, isRtr, isError, brs, esi)
             : CanFlagsFormatter.FormatClassic(isExtended, isRtr, isError);
-        MutField flagsField = canField.AppendWithCustomText(_FlagsFieldId, FieldValue.None, flagsText, in context);
-        flagsField.Append(_FlagsXtdFieldId, FieldValue.NewBool(isExtended), in context);
-        flagsField.Append(_FlagsRtrFieldId, FieldValue.NewBool(isRtr), in context);
-        flagsField.Append(_FlagsErrFieldId, FieldValue.NewBool(isError), in context);
+        MutField flagsField = canField.AppendWithCustomText(_FlagsFieldId, FieldValue.None, flagsText);
+        flagsField.Append(_FlagsXtdFieldId, FieldValue.NewBool(isExtended));
+        flagsField.Append(_FlagsRtrFieldId, FieldValue.NewBool(isRtr));
+        flagsField.Append(_FlagsErrFieldId, FieldValue.NewBool(isError));
 
         // CAN FD specific flags
         if (isFd)
         {
             context.RecordGroupPresence(_CanFdGroupId);
-            flagsField.Append(_FlagsFdFieldId, FieldValue.NewBool(true), in context);
-            flagsField.Append(_FlagsBrsFieldId, FieldValue.NewBool(brs), in context);
-            flagsField.Append(_FlagsEsiFieldId, FieldValue.NewBool(esi), in context);
+            flagsField.Append(_FlagsFdFieldId, FieldValue.NewBool(true));
+            flagsField.Append(_FlagsBrsFieldId, FieldValue.NewBool(brs));
+            flagsField.Append(_FlagsEsiFieldId, FieldValue.NewBool(esi));
         }
 
         // DLC
-        canField.Append(_LenFieldId, FieldValue.NewU64(dlc), in context);
+        canField.Append(_LenFieldId, FieldValue.NewU64(dlc));
 
         // Data
         if (dataLen > 0)
         {
             context.RecordGroupPresence(_CanDataGroupId);
-            canField.Append(_DataFieldId, FieldValue.NewBytes(data.Slice(MinHeaderSize, dataLen)), in context);
+            canField.Append(_DataFieldId, FieldValue.NewBytes(data.Slice(MinHeaderSize, dataLen)));
 
             // Dispatch payload to sub-protocols registered on can.id (e.g., Signal PDU).
             // Extended frames (29-bit IDs) are also dispatched via can.extended_id so that
@@ -521,33 +521,33 @@ public sealed partial class CanProtocol : IProtocol
 
         // Append protocol container with frame slice bytes
         MutField xlField = parentField.AppendWithCustomText(
-            _CanxlProtocolFieldId, FieldValue.NewBytes(data[..totalLen]), summary, in context);
+            _CanxlProtocolFieldId, FieldValue.NewBytes(data[..totalLen]), summary);
 
         // Priority (11-bit, bits 0-10 of the priority/VCID word)
-        xlField.Append(_CanxlPriorityFieldId, FieldValue.NewU64(priority), in context);
+        xlField.Append(_CanxlPriorityFieldId, FieldValue.NewU64(priority));
 
         // Virtual CAN Network ID (8-bit, bits 16-23 of the priority/VCID word)
         xlField.AppendWithCustomText(_CanxlVcidFieldId, FieldValue.NewU64(vcid),
-            Helpers.DisplayTables.FormatHexU8((byte)vcid), in context);
+            Helpers.DisplayTables.FormatHexU8((byte)vcid));
 
         // Flags container — XLF is structurally always true for CAN XL frames.
         // Precomputed display text lists "XLF" plus any active variable flags.
         MutField flagsField = xlField.AppendWithCustomText(
-            _CanxlFlagsFieldId, FieldValue.None, CanFlagsFormatter.FormatXl(isSec, isRrs), in context);
-        flagsField.Append(_CanxlFlagsXlfFieldId, FieldValue.NewBool(true), in context);
-        flagsField.Append(_CanxlFlagsSecFieldId, FieldValue.NewBool(isSec), in context);
-        flagsField.Append(_CanxlFlagsRrsFieldId, FieldValue.NewBool(isRrs), in context);
+            _CanxlFlagsFieldId, FieldValue.None, CanFlagsFormatter.FormatXl(isSec, isRrs));
+        flagsField.Append(_CanxlFlagsXlfFieldId, FieldValue.NewBool(true));
+        flagsField.Append(_CanxlFlagsSecFieldId, FieldValue.NewBool(isSec));
+        flagsField.Append(_CanxlFlagsRrsFieldId, FieldValue.NewBool(isRrs));
 
         // SDU Type (hex display)
         xlField.AppendWithCustomText(_CanxlSduTypeFieldId, FieldValue.NewU64(sduType),
-            Helpers.DisplayTables.FormatHexU8(sduType), in context);
+            Helpers.DisplayTables.FormatHexU8(sduType));
 
         // Payload Length
-        xlField.Append(_CanxlLenFieldId, FieldValue.NewU64(payloadLength), in context);
+        xlField.Append(_CanxlLenFieldId, FieldValue.NewU64(payloadLength));
 
         // Acceptance Field (hex display)
         xlField.AppendWithCustomText(_CanxlAcceptanceFieldId, FieldValue.NewU64(acceptanceField),
-            ZA.Lazy("0x", new Hex8(acceptanceField)), in context);
+            ZA.Lazy("0x", new Hex8(acceptanceField)));
 
         // Data payload (conditional — present when payload length > 0).
         // Dispatches via can.id (key = priority) and can.extended_id (key = acceptanceField)
@@ -557,7 +557,7 @@ public sealed partial class CanProtocol : IProtocol
         {
             context.RecordGroupPresence(_CanxlDataGroupId);
             ReadOnlyMemory<byte> payload = data.Slice(XlHeaderSize, effectivePayloadLength);
-            xlField.Append(_CanxlDataFieldId, FieldValue.NewBytes(payload), in context);
+            xlField.Append(_CanxlDataFieldId, FieldValue.NewBytes(payload));
 
             // Dispatch via can.id using priority (11-bit, 0–2047) as the key.
             ParseResult dispatchResult = xlField.TryCallNextProtocolU64(_IdTableId, priority, payload, in context);

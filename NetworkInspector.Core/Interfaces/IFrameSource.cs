@@ -95,7 +95,11 @@ public interface IFrameSource : IDisposable
     /// <exception cref="InvalidOperationException">
     /// The source has not been started via <see cref="Start"/>.
     /// </exception>
-    Frame? NextFrame();
+    /// <exception cref="OperationCanceledException">
+    /// <paramref name="cancellationToken"/> was cancelled.
+    /// </exception>
+    /// <param name="cancellationToken">Token that can be used to cancel the read operation.</param>
+    Frame? NextFrame(CancellationToken cancellationToken = default);
 
     #endregion
 }

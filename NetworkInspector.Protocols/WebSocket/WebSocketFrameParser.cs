@@ -27,7 +27,6 @@ public sealed partial class WebSocketProtocol
     /// </remarks>
     private ParseResult PopulateWebSocketFields(in MutField container)
     {
-        ParseContext context = new ParseContext(container.Packet.Stack);
         if (!container.Value.Data.TryGetAsBytes(out ReadOnlyMemory<byte> wsData))
         {
             return ParseError.InvalidData(ProtocolName, "Container value is not of type Bytes");
@@ -103,37 +102,36 @@ public sealed partial class WebSocketProtocol
             // Frame container
             MutField frameContainer = container.AppendWithCustomText(
                 _FrameFieldId, FieldValue.None,
-                ZA.Lazy(opcodeText, fin ? " [FIN]" : "", ", Length: ", payloadLength), in context);
+                ZA.Lazy(opcodeText, fin ? " [FIN]" : "", ", Length: ", payloadLength));
 
             // FIN
-            frameContainer.Append(_FinFieldId, FieldValue.NewBool(fin), in context);
+            frameContainer.Append(_FinFieldId, FieldValue.NewBool(fin));
 
             // RSV
-            frameContainer.Append(_RsvFieldId, FieldValue.NewU64(rsv), in context);
+            frameContainer.Append(_RsvFieldId, FieldValue.NewU64(rsv));
 
             // Opcode
             frameContainer.AppendWithCustomText(_OpcodeFieldId,
-                FieldValue.NewU64(opcode), opcodeText, in context);
+                FieldValue.NewU64(opcode), opcodeText);
 
             // Mask flag
-            frameContainer.Append(_MaskFieldId, FieldValue.NewBool(masked), in context);
+            frameContainer.Append(_MaskFieldId, FieldValue.NewBool(masked));
 
             // Payload length
-            frameContainer.Append(_PayloadLengthFieldId, FieldValue.NewU64(payloadLength), in context);
+            frameContainer.Append(_PayloadLengthFieldId, FieldValue.NewU64(payloadLength));
 
             // Masking key (if masked)
             if (masked)
             {
                 frameContainer.AppendWithCustomText(_MaskingKeyFieldId,
                     FieldValue.NewU64(maskingKey),
-                    ZA.Lazy("0x", new Hex8(maskingKey)), in context);
+                    ZA.Lazy("0x", new Hex8(maskingKey)));
             }
 
             // RSV1 = Per-Message Compressed (RFC 7692)
             if (rsv != 0 && (rsv & 0x04) != 0)
             {
-                context.RecordGroupPresence(_WebsocketPmcGroupId);
-                frameContainer.Append(_PmcFieldId, FieldValue.NewBool(true), in context);
+                frameContainer.Append(_PmcFieldId, FieldValue.NewBool(true));
             }
 
             // Payload
@@ -143,35 +141,15 @@ public sealed partial class WebSocketProtocol
                 ReadOnlyMemory<byte> payloadData;
                 if (masked)
                 {
-                    // Unmask the payload using 4-byte cyclic XOR.
-                    // GC.AllocateUninitializedArray avoids zeroing since every byte is written.
-                    byte[] unmasked = GC.AllocateUninitializedArray<byte>(payloadLen);
-
-                    // Extract mask bytes from the uint directly — no array allocation needed.
-                    byte m0 = (byte)(maskingKey >> 24);
-                    byte m1 = (byte)(maskingKey >> 16);
-                    byte m2 = (byte)(maskingKey >> 8);
-                    byte m3 = (byte)maskingKey;
-
-                    for (int i = 0; i < payloadLen; i++)
-                    {
-                        unmasked[i] = (byte)(span[offset + i] ^ (i & 3) switch
-                        {
-                            0 => m0,
-                            1 => m1,
-                            2 => m2,
-                            _ => m3
-                        });
-                    }
-
-                    payloadData = unmasked;
+                    // Unmask the payload using the shared 4-byte cyclic XOR helper.
+                    payloadData = UnmaskPayload(span.Slice(offset, payloadLen), maskingKey);
                 }
                 else
                 {
                     payloadData = wsData.Slice(offset, payloadLen);
                 }
 
-                frameContainer.Append(_PayloadFieldId, FieldValue.NewBytes(payloadData), in context);
+                frameContainer.Append(_PayloadFieldId, FieldValue.NewBytes(payloadData));
 
                 // RFC 7692: Decompress per-message compressed payload (RSV1 set on first frame).
                 // The compressed data uses raw DEFLATE with an appended 0x00 0x00 0xFF 0xFF trailer.
@@ -183,43 +161,40 @@ public sealed partial class WebSocketProtocol
                     if (decompressed is not null)
                     {
                         effectivePayload = decompressed.Value;
-                        context.RecordGroupPresence(_WebsocketPayloadDecompressedGroupId);
                         frameContainer.Append(_DecompressedPayloadFieldId,
-                            FieldValue.NewBytes(effectivePayload), in context);
+                            FieldValue.NewBytes(effectivePayload));
                     }
                     else if (payloadData.Length > 0)
                     {
                         // Decompression failed on a non-empty compressed payload — surface the error
                         // so callers can detect the failure rather than silently receiving no field.
-                        context.RecordGroupPresence(_WebsocketPayloadDecompressedGroupId);
                         frameContainer.Append(_DecompressedPayloadErrorFieldId,
-                            FieldValue.NewString("Decompression failed"), in context);
+                            FieldValue.NewString("Decompression failed"));
                     }
                 }
 
-                // Dispatch payload based on opcode
+                // Append opcode-specific descriptive fields. Sub-protocol dispatch for text
+                // (opcode 1) and binary (opcode 2) frames is performed eagerly in Parse() with
+                // the real index-carrying context, so it is not repeated here.
                 switch (opcode)
                 {
                     case 0: // Continuation frame — mark as continuation
-                        context.RecordGroupPresence(_WebsocketContinuationGroupId);
-                        frameContainer.Append(_ContinuationFieldId, FieldValue.NewBool(true), in context);
+                        frameContainer.Append(_ContinuationFieldId, FieldValue.NewBool(true));
                         break;
-                    case 1: // Text frame — decode UTF-8 and dispatch to Text/JSON
-                        DispatchTextPayload(in frameContainer, effectivePayload, in context);
+                    case 1: // Text frame — decode UTF-8 for display (dispatch happens eagerly in Parse)
+                        frameContainer.Append(_PayloadTextField,
+                            FieldValue.NewString(System.Text.Encoding.UTF8.GetString(effectivePayload.Span)));
                         break;
-                    case 2: // Binary frame — dispatch via port table or to Data protocol
-                        DispatchBinaryPayload(in frameContainer, effectivePayload, in context);
+                    case 2: // Binary frame — raw payload already appended; dispatch happens eagerly in Parse
                         break;
                     case 8: // Close frame — parse status code and reason
-                        ParseClosePayload(in frameContainer, payloadData, in context);
+                        ParseClosePayload(in frameContainer, payloadData);
                         break;
                     case 9: // Ping
-                        context.RecordGroupPresence(_WebsocketPingGroupId);
-                        frameContainer.Append(_PingPayloadFieldId, FieldValue.NewBytes(payloadData), in context);
+                        frameContainer.Append(_PingPayloadFieldId, FieldValue.NewBytes(payloadData));
                         break;
                     case 10: // Pong
-                        context.RecordGroupPresence(_WebsocketPongGroupId);
-                        frameContainer.Append(_PongPayloadFieldId, FieldValue.NewBytes(payloadData), in context);
+                        frameContainer.Append(_PongPayloadFieldId, FieldValue.NewBytes(payloadData));
                         break;
                 }
             }
@@ -235,7 +210,7 @@ public sealed partial class WebSocketProtocol
     /// <para>Per RFC 6455 §5.5.1 the first two bytes are a big-endian unsigned status code;
     /// any remaining bytes are a UTF-8 reason string.</para>
     /// </summary>
-    private void ParseClosePayload(in MutField frameContainer, ReadOnlyMemory<byte> payloadData, in ParseContext context)
+    private void ParseClosePayload(in MutField frameContainer, ReadOnlyMemory<byte> payloadData)
     {
         ReadOnlySpan<byte> closeData = payloadData.Span;
         if (closeData.Length >= 2)
@@ -243,13 +218,13 @@ public sealed partial class WebSocketProtocol
             ushort statusCode = (ushort)((closeData[0] << 8) | closeData[1]);
             string statusText = WebSocketDisplayTables.GetCloseCodeDisplayText(statusCode);
             frameContainer.AppendWithCustomText(_CloseCodeFieldId,
-                FieldValue.NewU64(statusCode), statusText, in context);
+                FieldValue.NewU64(statusCode), statusText);
 
             if (closeData.Length > 2)
             {
                 string reason = System.Text.Encoding.UTF8.GetString(closeData[2..]);
                 frameContainer.Append(_CloseReasonFieldId,
-                    FieldValue.NewString(reason), in context);
+                    FieldValue.NewString(reason));
             }
         }
     }

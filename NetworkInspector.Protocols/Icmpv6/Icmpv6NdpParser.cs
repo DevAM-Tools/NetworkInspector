@@ -30,6 +30,84 @@ internal static class Icmpv6NdpParser
         type is >= TypeRouterSolicitation and <= TypeRedirect;
 
     /// <summary>
+    /// Returns the offset at which NDP options begin for the given message type, or -1 when the
+    /// fixed header for that type is truncated. Mirrors the per-type length guards in the emitting
+    /// Parse* helpers so the eager detection path agrees with what the populator actually emits.
+    /// </summary>
+    private static int OptionsOffset(byte type, int bodyLength) => type switch
+    {
+        TypeRouterSolicitation => bodyLength >= 4 ? 4 : -1,
+        TypeRouterAdvertisement => bodyLength >= 12 ? 12 : -1,
+        TypeNeighborSolicitation => bodyLength >= 20 ? 20 : -1,
+        TypeNeighborAdvertisement => bodyLength >= 20 ? 20 : -1,
+        TypeRedirect => bodyLength >= 36 ? 36 : -1,
+        _ => -1
+    };
+
+    /// <summary>
+    /// Scans an NDP message body to decide which option-specific presence groups apply, mirroring
+    /// the option walk in <see cref="ParseOptions"/> without emitting any fields. Used by the eager
+    /// parse path so the presence index records icmpv6.nd.opt / .prefix / .mtu / .rdnss only when the
+    /// lazy populator will actually emit a field in that group (content-consistent, no false positives).
+    /// This duplicate walk is the deliberate cost of recording content-dependent groups eagerly while
+    /// keeping option field emission lazy.
+    /// </summary>
+    internal static void DetectGroups(
+        ReadOnlySpan<byte> body, byte type,
+        out bool hasAnyOption, out bool hasPrefix, out bool hasMtu, out bool hasRdnss)
+    {
+        hasAnyOption = false;
+        hasPrefix = false;
+        hasMtu = false;
+        hasRdnss = false;
+
+        int optionsOffset = OptionsOffset(type, body.Length);
+        if (optionsOffset <= 0 || optionsOffset >= body.Length)
+        {
+            return;
+        }
+
+        ReadOnlySpan<byte> data = body[optionsOffset..];
+        int offset = 0;
+        while (offset + 2 <= data.Length)
+        {
+            byte optType = data[offset];
+            byte optLenUnits = data[offset + 1]; // length in 8-byte units
+
+            if (optLenUnits == 0)
+            {
+                break; // invalid length — matches the ParseOptions guard
+            }
+
+            int optLen = optLenUnits * 8;
+            if (offset + optLen > data.Length)
+            {
+                break; // truncated option
+            }
+
+            // ParseOptions appends an option container for every in-bounds option.
+            hasAnyOption = true;
+
+            // Option-specific helpers emit their fields only when the option is long enough,
+            // so the group thresholds here match those guards exactly.
+            switch (optType)
+            {
+                case OptPrefixInfo when optLen >= 32:
+                    hasPrefix = true;
+                    break;
+                case OptMtu when optLen >= 8:
+                    hasMtu = true;
+                    break;
+                case OptRdnss when optLen >= 24:
+                    hasRdnss = true;
+                    break;
+            }
+
+            offset += optLen;
+        }
+    }
+
+    /// <summary>
     /// Parses an NDP message body (after the 4-byte ICMPv6 type/code/checksum header).
     /// The <paramref name="body"/> starts at offset 4 of the ICMPv6 packet.
     /// </summary>
@@ -37,28 +115,27 @@ internal static class Icmpv6NdpParser
     /// <param name="body">The NDP message body (starting after type/code/checksum).</param>
     /// <param name="type">The ICMPv6 type code (133-137).</param>
     /// <param name="f">The registered NDP field IDs.</param>
-    /// <param name="context">The parse context providing dispatch resolution and stack access.</param>
     internal static void Parse(
         in MutField container,
         ReadOnlySpan<byte> body,
         byte type,
-        in Icmpv6NdpFieldIds f, in ParseContext context)
+        in Icmpv6NdpFieldIds f)
     {
         // Each NDP message type has a fixed-length header after the 4-byte ICMPv6 header
         int optionsOffset = type switch
         {
-            TypeRouterSolicitation => ParseRouterSolicitation(in container, body, in f, in context),
-            TypeRouterAdvertisement => ParseRouterAdvertisement(in container, body, in f, in context),
-            TypeNeighborSolicitation => ParseNeighborSolicitation(in container, body, in f, in context),
-            TypeNeighborAdvertisement => ParseNeighborAdvertisement(in container, body, in f, in context),
-            TypeRedirect => ParseRedirect(in container, body, in f, in context),
+            TypeRouterSolicitation => ParseRouterSolicitation(in container, body, in f),
+            TypeRouterAdvertisement => ParseRouterAdvertisement(in container, body, in f),
+            TypeNeighborSolicitation => ParseNeighborSolicitation(in container, body, in f),
+            TypeNeighborAdvertisement => ParseNeighborAdvertisement(in container, body, in f),
+            TypeRedirect => ParseRedirect(in container, body, in f),
             _ => -1 // Should not happen — caller checks IsNdpType first
         };
 
         // Parse NDP options after the fixed header
         if (optionsOffset > 0 && optionsOffset < body.Length)
         {
-            ParseOptions(in container, body[optionsOffset..], in f, in context);
+            ParseOptions(in container, body[optionsOffset..], in f);
         }
     }
 
@@ -66,7 +143,7 @@ internal static class Icmpv6NdpParser
     /// Router Solicitation (type 133): 4 reserved bytes, then options.
     /// </summary>
     private static int ParseRouterSolicitation(
-        in MutField container, ReadOnlySpan<byte> body, in Icmpv6NdpFieldIds f, in ParseContext context)
+        in MutField container, ReadOnlySpan<byte> body, in Icmpv6NdpFieldIds f)
     {
         // Body: 4 bytes reserved (already consumed as part of body[0..4])
         if (body.Length < 4)
@@ -81,14 +158,8 @@ internal static class Icmpv6NdpParser
     /// reachable time, retrans timer (12 bytes), then options.
     /// </summary>
     private static int ParseRouterAdvertisement(
-        in MutField container, ReadOnlySpan<byte> body, in Icmpv6NdpFieldIds f, in ParseContext context)
+        in MutField container, ReadOnlySpan<byte> body, in Icmpv6NdpFieldIds f)
     {
-        // Body layout (12 bytes):
-        //   Byte 0: Cur Hop Limit
-        //   Byte 1: Flags (M=0x80, O=0x40)
-        //   Bytes 2-3: Router Lifetime (seconds)
-        //   Bytes 4-7: Reachable Time (ms)
-        //   Bytes 8-11: Retrans Timer (ms)
         if (body.Length < 12)
         {
             return -1;
@@ -100,27 +171,27 @@ internal static class Icmpv6NdpParser
         uint reachableTime = BinaryPrimitives.ReadUInt32BigEndian(body[4..8]);
         uint retransTimer = BinaryPrimitives.ReadUInt32BigEndian(body[8..12]);
 
-        container.Append(f.RaCurHopLimit, FieldValue.NewU64(curHopLimit), in context);
+        container.Append(f.RaCurHopLimit, FieldValue.NewU64(curHopLimit));
 
         // Flags
         bool managed = (flags & 0x80) != 0;
         bool other = (flags & 0x40) != 0;
         MutField raFlagsField = container.AppendWithCustomText(
             f.RaFlags, FieldValue.None,
-            Icmpv6NdpFlagsFormatter.FormatRa(managed, other), in context);
-        raFlagsField.Append(f.RaFlagManaged, FieldValue.NewBool(managed), in context);
-        raFlagsField.Append(f.RaFlagOther, FieldValue.NewBool(other), in context);
+            Icmpv6NdpFlagsFormatter.FormatRa(managed, other));
+        raFlagsField.Append(f.RaFlagManaged, FieldValue.NewBool(managed));
+        raFlagsField.Append(f.RaFlagOther, FieldValue.NewBool(other));
 
         // Lifetime and timers
         container.AppendWithCustomText(f.RaRouterLifetime,
             FieldValue.NewU64(routerLifetime),
-            ZA.Lazy(routerLifetime, " seconds"), in context); /* seconds */
+            ZA.Lazy(routerLifetime, " seconds")); /* seconds */
         container.AppendWithCustomText(f.RaReachableTime,
             FieldValue.NewU64(reachableTime),
-            ZA.Lazy(reachableTime, " ms"), in context); /* milliseconds */
+            ZA.Lazy(reachableTime, " ms")); /* milliseconds */
         container.AppendWithCustomText(f.RaRetransTimer,
             FieldValue.NewU64(retransTimer),
-            ZA.Lazy(retransTimer, " ms"), in context); /* milliseconds */
+            ZA.Lazy(retransTimer, " ms")); /* milliseconds */
 
         return 12; // Options start at offset 12
     }
@@ -129,15 +200,14 @@ internal static class Icmpv6NdpParser
     /// Neighbor Solicitation (type 135): 4 reserved bytes + 16-byte target address, then options.
     /// </summary>
     private static int ParseNeighborSolicitation(
-        in MutField container, ReadOnlySpan<byte> body, in Icmpv6NdpFieldIds f, in ParseContext context)
+        in MutField container, ReadOnlySpan<byte> body, in Icmpv6NdpFieldIds f)
     {
-        // Body: 4 bytes reserved + 16 bytes target address = 20 bytes
         if (body.Length < 20)
         {
             return -1;
         }
 
-        AppendIpv6Address(in container, f.TargetAddress, body[4..20], "Target Address", in context);
+        AppendIpv6Address(in container, f.TargetAddress, body[4..20], "Target Address");
         return 20; // Options start at offset 20
     }
 
@@ -145,9 +215,8 @@ internal static class Icmpv6NdpParser
     /// Neighbor Advertisement (type 136): flags (4 bytes) + 16-byte target address, then options.
     /// </summary>
     private static int ParseNeighborAdvertisement(
-        in MutField container, ReadOnlySpan<byte> body, in Icmpv6NdpFieldIds f, in ParseContext context)
+        in MutField container, ReadOnlySpan<byte> body, in Icmpv6NdpFieldIds f)
     {
-        // Body: 4 bytes (flags + reserved) + 16 bytes target address = 20 bytes
         if (body.Length < 20)
         {
             return -1;
@@ -160,12 +229,12 @@ internal static class Icmpv6NdpParser
 
         MutField naFlagsField = container.AppendWithCustomText(
             f.NaFlags, FieldValue.None,
-            Icmpv6NdpFlagsFormatter.FormatNa(router, solicited, overrideFlag), in context);
-        naFlagsField.Append(f.NaFlagRouter, FieldValue.NewBool(router), in context);
-        naFlagsField.Append(f.NaFlagSolicited, FieldValue.NewBool(solicited), in context);
-        naFlagsField.Append(f.NaFlagOverride, FieldValue.NewBool(overrideFlag), in context);
+            Icmpv6NdpFlagsFormatter.FormatNa(router, solicited, overrideFlag));
+        naFlagsField.Append(f.NaFlagRouter, FieldValue.NewBool(router));
+        naFlagsField.Append(f.NaFlagSolicited, FieldValue.NewBool(solicited));
+        naFlagsField.Append(f.NaFlagOverride, FieldValue.NewBool(overrideFlag));
 
-        AppendIpv6Address(in container, f.TargetAddress, body[4..20], "Target Address", in context);
+        AppendIpv6Address(in container, f.TargetAddress, body[4..20], "Target Address");
         return 20; // Options start at offset 20
     }
 
@@ -173,16 +242,15 @@ internal static class Icmpv6NdpParser
     /// Redirect (type 137): 4 reserved bytes + 16-byte target + 16-byte destination, then options.
     /// </summary>
     private static int ParseRedirect(
-        in MutField container, ReadOnlySpan<byte> body, in Icmpv6NdpFieldIds f, in ParseContext context)
+        in MutField container, ReadOnlySpan<byte> body, in Icmpv6NdpFieldIds f)
     {
-        // Body: 4 bytes reserved + 16 bytes target + 16 bytes destination = 36 bytes
         if (body.Length < 36)
         {
             return -1;
         }
 
-        AppendIpv6Address(in container, f.TargetAddress, body[4..20], "Target Address", in context);
-        AppendIpv6Address(in container, f.RedirectDstAddress, body[20..36], "Destination Address", in context);
+        AppendIpv6Address(in container, f.TargetAddress, body[4..20], "Target Address");
+        AppendIpv6Address(in container, f.RedirectDstAddress, body[20..36], "Destination Address");
         return 36; // Options start at offset 36
     }
 
@@ -190,7 +258,7 @@ internal static class Icmpv6NdpParser
     /// Parses NDP options (TLV format: type=1 byte, length=1 byte in 8-byte units).
     /// </summary>
     private static void ParseOptions(
-        in MutField container, ReadOnlySpan<byte> data, in Icmpv6NdpFieldIds f, in ParseContext context)
+        in MutField container, ReadOnlySpan<byte> data, in Icmpv6NdpFieldIds f)
     {
         int offset = 0;
         while (offset + 2 <= data.Length)
@@ -215,27 +283,27 @@ internal static class Icmpv6NdpParser
 
             MutField optField = container.AppendWithCustomText(
                 f.OptContainer, FieldValue.None,
-                ZA.Lazy(optName, " (", optType, ")"), in context);
+                ZA.Lazy(optName, " (", optType, ")"));
 
-            optField.Append(f.OptType, FieldValue.NewU64(optType), in context);
+            optField.Append(f.OptType, FieldValue.NewU64(optType));
             optField.AppendWithCustomText(f.OptLen, FieldValue.NewU64(optLenUnits),
-                ZA.Lazy(optLenUnits, " (", optLen, " bytes)"), in context);
+                ZA.Lazy(optLenUnits, " (", optLen, " bytes)"));
 
             // Parse option-specific data (starts at byte 2 within the option)
             switch (optType)
             {
                 case OptSourceLinkAddr:
                 case OptTargetLinkAddr:
-                    ParseLinkAddrOption(in optField, optData, in f, in context);
+                    ParseLinkAddrOption(in optField, optData, in f);
                     break;
                 case OptPrefixInfo:
-                    ParsePrefixInfoOption(in optField, optData, in f, in context);
+                    ParsePrefixInfoOption(in optField, optData, in f);
                     break;
                 case OptMtu:
-                    ParseMtuOption(in optField, optData, in f, in context);
+                    ParseMtuOption(in optField, optData, in f);
                     break;
                 case OptRdnss:
-                    ParseRdnssOption(in optField, optData, in f, in context);
+                    ParseRdnssOption(in optField, optData, in f);
                     break;
             }
 
@@ -248,12 +316,12 @@ internal static class Icmpv6NdpParser
     /// Format: type(1) + len(1) + link-layer addr (6 for Ethernet).
     /// </summary>
     private static void ParseLinkAddrOption(
-        in MutField optField, ReadOnlySpan<byte> optData, in Icmpv6NdpFieldIds f, in ParseContext context)
+        in MutField optField, ReadOnlySpan<byte> optData, in Icmpv6NdpFieldIds f)
     {
         if (optData.Length >= 8) // 2-byte header + 6-byte MAC
         {
             MacAddress mac = MacAddress.FromBytes(optData[2..8]);
-            optField.Append(f.OptLinkAddr, FieldValue.NewMacAddress(mac), in context);
+            optField.Append(f.OptLinkAddr, FieldValue.NewMacAddress(mac));
         }
     }
 
@@ -263,7 +331,7 @@ internal static class Icmpv6NdpParser
     /// valid_lifetime(4) + preferred_lifetime(4) + reserved(4) + prefix(16).
     /// </summary>
     private static void ParsePrefixInfoOption(
-        in MutField optField, ReadOnlySpan<byte> optData, in Icmpv6NdpFieldIds f, in ParseContext context)
+        in MutField optField, ReadOnlySpan<byte> optData, in Icmpv6NdpFieldIds f)
     {
         if (optData.Length < 32)
         {
@@ -277,22 +345,22 @@ internal static class Icmpv6NdpParser
         uint validLifetime = BinaryPrimitives.ReadUInt32BigEndian(optData[4..8]); /* seconds */
         uint preferredLifetime = BinaryPrimitives.ReadUInt32BigEndian(optData[8..12]); /* seconds */
 
-        optField.Append(f.OptPrefixLength, FieldValue.NewU64(prefixLen), in context);
-        optField.Append(f.OptPrefixFlagOnLink, FieldValue.NewBool(onLink), in context);
-        optField.Append(f.OptPrefixFlagAuto, FieldValue.NewBool(autonomous), in context);
+        optField.Append(f.OptPrefixLength, FieldValue.NewU64(prefixLen));
+        optField.Append(f.OptPrefixFlagOnLink, FieldValue.NewBool(onLink));
+        optField.Append(f.OptPrefixFlagAuto, FieldValue.NewBool(autonomous));
         optField.AppendWithCustomText(f.OptPrefixValidLifetime,
             FieldValue.NewU64(validLifetime),
             validLifetime == 0xFFFFFFFF
                 ? new LazyString("Infinity")
-                : ZA.Lazy(validLifetime, " seconds"), in context); /* seconds */
+                : ZA.Lazy(validLifetime, " seconds")); /* seconds */
         optField.AppendWithCustomText(f.OptPrefixPreferredLifetime,
             FieldValue.NewU64(preferredLifetime),
             preferredLifetime == 0xFFFFFFFF
                 ? new LazyString("Infinity")
-                : ZA.Lazy(preferredLifetime, " seconds"), in context); /* seconds */
+                : ZA.Lazy(preferredLifetime, " seconds")); /* seconds */
 
         // Prefix (16 bytes at offset 16)
-        AppendIpv6Address(in optField, f.OptPrefix, optData[16..32], "Prefix", in context);
+        AppendIpv6Address(in optField, f.OptPrefix, optData[16..32], "Prefix");
     }
 
     /// <summary>
@@ -300,7 +368,7 @@ internal static class Icmpv6NdpParser
     /// Format: type(1) + len(1) + reserved(2) + mtu(4).
     /// </summary>
     private static void ParseMtuOption(
-        in MutField optField, ReadOnlySpan<byte> optData, in Icmpv6NdpFieldIds f, in ParseContext context)
+        in MutField optField, ReadOnlySpan<byte> optData, in Icmpv6NdpFieldIds f)
     {
         if (optData.Length < 8)
         {
@@ -308,7 +376,7 @@ internal static class Icmpv6NdpParser
         }
 
         uint mtu = BinaryPrimitives.ReadUInt32BigEndian(optData[4..8]);
-        optField.Append(f.OptMtu, FieldValue.NewU64(mtu), in context);
+        optField.Append(f.OptMtu, FieldValue.NewU64(mtu));
     }
 
     /// <summary>
@@ -316,7 +384,7 @@ internal static class Icmpv6NdpParser
     /// Format: type(1) + len(1) + reserved(2) + lifetime(4) + addresses(16 each).
     /// </summary>
     private static void ParseRdnssOption(
-        in MutField optField, ReadOnlySpan<byte> optData, in Icmpv6NdpFieldIds f, in ParseContext context)
+        in MutField optField, ReadOnlySpan<byte> optData, in Icmpv6NdpFieldIds f)
     {
         if (optData.Length < 24) // Minimum: 8-byte header + at least one 16-byte address
         {
@@ -328,14 +396,14 @@ internal static class Icmpv6NdpParser
             FieldValue.NewU64(lifetime),
             lifetime == 0xFFFFFFFF
                 ? new LazyString("Infinity")
-                : ZA.Lazy(lifetime, " seconds"), in context); /* seconds */
+                : ZA.Lazy(lifetime, " seconds")); /* seconds */
 
         // Each DNS server address is 16 bytes, starting at offset 8
         int addrOffset = 8;
         while (addrOffset + 16 <= optData.Length)
         {
             AppendIpv6Address(in optField, f.OptRdnssAddress,
-                optData[addrOffset..(addrOffset + 16)], "DNS Server", in context);
+                optData[addrOffset..(addrOffset + 16)], "DNS Server");
             addrOffset += 16;
         }
     }
@@ -358,7 +426,7 @@ internal static class Icmpv6NdpParser
     /// Appends an IPv6 address field from a 16-byte span.
     /// </summary>
     private static void AppendIpv6Address(
-        in MutField container, FieldId fieldId, ReadOnlySpan<byte> addr, string label, in ParseContext context)
+        in MutField container, FieldId fieldId, ReadOnlySpan<byte> addr, string label)
     {
         // Read 128-bit IPv6 address as two 64-bit halves (big-endian)
         ulong high = BinaryPrimitives.ReadUInt64BigEndian(addr[..8]);
@@ -368,6 +436,6 @@ internal static class Icmpv6NdpParser
         System.Net.IPAddress ipAddr = new(addr);
 
         container.AppendWithCustomText(fieldId,
-            FieldValue.NewIPv6(addrValue), ZA.Lazy(label, ": ", ipAddr), in context);
+            FieldValue.NewIPv6(addrValue), ZA.Lazy(label, ": ", ipAddr));
     }
 }

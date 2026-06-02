@@ -1,5 +1,7 @@
 ﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
+using FailingStream = NetworkInspector.Exporters.Tests.Helpers.TestStreams.FailingStream;
+
 namespace NetworkInspector.Exporters.Tests;
 
 /// <summary>
@@ -12,83 +14,6 @@ namespace NetworkInspector.Exporters.Tests;
 /// </summary>
 internal sealed class ErrorToleranceTests
 {
-    #region Test helper — failing stream
-
-    /// <summary>
-    /// Stream that throws <see cref="IOException"/> on every <see cref="Write(ReadOnlySpan{byte})"/>
-    /// call after <see cref="ThrowAfterByte"/> has been reached. Used to simulate a broken
-    /// underlying file/socket without involving the real filesystem.
-    /// </summary>
-    private sealed class FailingStream : Stream
-    {
-        private long _BytesWritten;
-
-        /// <summary>Number of bytes accepted before the stream begins throwing.</summary>
-        internal long ThrowAfterByte
-        {
-            get; init;
-        }
-
-        /// <inheritdoc/>
-        public override bool CanRead => false;
-
-        /// <inheritdoc/>
-        public override bool CanSeek => false;
-
-        /// <inheritdoc/>
-        public override bool CanWrite => true;
-
-        /// <inheritdoc/>
-        public override long Length => _BytesWritten;
-
-        /// <inheritdoc/>
-        public override long Position
-        {
-            get => _BytesWritten;
-            set => throw new NotSupportedException();
-        }
-
-        /// <inheritdoc/>
-        public override void Flush()
-        {
-            // No-op
-        }
-
-        /// <inheritdoc/>
-        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
-
-        /// <inheritdoc/>
-        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
-
-        /// <inheritdoc/>
-        public override void SetLength(long value) => throw new NotSupportedException();
-
-        /// <inheritdoc/>
-        public override void Write(byte[] buffer, int offset, int count)
-        {
-            CheckThrow(count);
-            _BytesWritten += count;
-        }
-
-        /// <inheritdoc/>
-        public override void Write(ReadOnlySpan<byte> buffer)
-        {
-            CheckThrow(buffer.Length);
-            _BytesWritten += buffer.Length;
-        }
-
-        /// <summary>Throws when the cumulative byte count would exceed the threshold.</summary>
-        private void CheckThrow(int count)
-        {
-            if (_BytesWritten + count > ThrowAfterByte)
-            {
-                throw new IOException("Simulated I/O failure");
-            }
-        }
-    }
-
-    #endregion
-
     #region CSV
 
     [Test]

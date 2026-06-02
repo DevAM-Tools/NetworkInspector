@@ -11,15 +11,11 @@ internal sealed class PcapSourceBasicTests
     private static readonly byte[] SrcMac = [0x00, 0x11, 0x22, 0x33, 0x44, 0x55];
     private static readonly byte[] DstMac = [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
 
+    /// <summary>Creates a <see cref="PcapSource"/> from raw PcapNG data.</summary>
     private static PcapSource CreateSource(byte[] pcapData) =>
         PcapSource.FromData(pcapData, "test.pcapng");
 
-    private static void StartSource(PcapSource source)
-    {
-        FrameInterfaceRegistry registry = new();
-        FrameSourceId sourceId = registry.RegisterSource(source);
-        source.Start(sourceId, registry);
-    }
+
 
     // ========================================================================
     // Single frame
@@ -38,7 +34,7 @@ internal sealed class PcapSourceBasicTests
         using PcapSource source = CreateSource(pcapData);
         await Assert.That(source.EstimatedFrameCount).IsEqualTo(1);
 
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
         Frame? frame = source.NextFrame();
 
         await Assert.That(frame).IsNotNull();
@@ -71,7 +67,7 @@ internal sealed class PcapSourceBasicTests
         using PcapSource source = CreateSource(writer.Build());
         await Assert.That(source.EstimatedFrameCount).IsEqualTo(5);
 
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
         for (int i = 0; i < 5; i++)
         {
             Frame? frame = source.NextFrame();
@@ -102,7 +98,7 @@ internal sealed class PcapSourceBasicTests
         }
 
         using PcapSource source = CreateSource(writer.Build());
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         long prevTs = long.MinValue;
         for (int i = 0; i < 5; i++)
@@ -132,7 +128,7 @@ internal sealed class PcapSourceBasicTests
         writer.WriteFrame(0, 1_500_000_000, eth);
 
         using PcapSource source = CreateSource(writer.Build());
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         Frame? frame = source.NextFrame();
         await Assert.That(frame).IsNotNull();
@@ -163,7 +159,7 @@ internal sealed class PcapSourceBasicTests
         }
 
         using PcapSource source = CreateSource(writer.Build());
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
 
         // Access frame 5 directly
         Frame? f5 = source.FrameById(new FrameId(5));
@@ -207,7 +203,7 @@ internal sealed class PcapSourceBasicTests
         using PcapSource source = CreateSource(writer.Build());
         await Assert.That(source.EstimatedFrameCount).IsEqualTo(0);
 
-        StartSource(source);
+        SourceTestFixture.InitializeAndStartSource(source);
         await Assert.That(source.NextFrame()).IsNull();
     }
 

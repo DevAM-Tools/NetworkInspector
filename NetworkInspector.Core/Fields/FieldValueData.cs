@@ -16,7 +16,7 @@ namespace NetworkInspector.Core.Fields;
 /// <list type="bullet">
 ///   <item><c>null</c> → <see cref="FieldType.None"/></item>
 ///   <item>Static marker singleton (e.g. <see cref="I64Marker"/>) → inline type, value in <c>_Data</c></item>
-///   <item><c>string</c> or boxed <see cref="ZeroAlloc.LazyString"/> → <see cref="FieldType.String"/></item>
+///   <item><c>string</c> or boxed <see cref="LazyString"/> → <see cref="FieldType.String"/></item>
 ///   <item><c>byte[]</c> → <see cref="FieldType.Bytes"/></item>
 ///   <item><see cref="IPv6AddressMarker"/> → 128-bit IPv6 address inline in <c>_Data</c>/<c>_Data1</c></item>
 ///   <item><see cref="UuidMarker"/> → 128-bit UUID inline in <c>_Data</c>/<c>_Data1</c></item>
@@ -78,8 +78,8 @@ public readonly struct FieldValueData : IEquatable<FieldValueData>, IComparable<
 
     /// <summary>
     /// Creates a string field value whose content is deferred until first access via <see cref="TryGetAsString"/>.
-    /// The <see cref="ZeroAlloc.LazyString"/> is boxed so all copies of this <see cref="FieldValueData"/>
-    /// share one heap object; <see cref="ZeroAlloc.LazyString.AsString"/> is called via
+    /// The <see cref="LazyString"/> is boxed so all copies of this <see cref="FieldValueData"/>
+    /// share one heap object; <see cref="LazyString.AsString"/> is called via
     /// <see cref="Unsafe.Unbox{T}"/> so the CAS-based caching persists to the heap-resident struct.
     /// </summary>
     internal static FieldValueData NewLazyString(LazyString lazy) => new(0, (object)lazy);

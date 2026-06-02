@@ -92,7 +92,7 @@ internal sealed class SettingsIntegrationTests
         builder.SettingsRegistrar.RegisterBoolSetting("test.a", "A", "test", true);
         builder.SettingsRegistrar.RegisterBoolSetting("test.b", "B", "test", false);
         Stack stack = builder.Build();
-        await Assert.That(stack.Settings.AllSettings.Count).IsEqualTo(3); // 2 user + 1 system (index.value_cache_fields)
+        await Assert.That(stack.Settings.AllSettings.Count).IsEqualTo(2); // 2 user settings, no system settings
     }
 
     [Test]
@@ -103,7 +103,7 @@ internal sealed class SettingsIntegrationTests
         builder.SettingsRegistrar.RegisterBoolSetting("test.a", "A", "test", true);
         builder.SettingsRegistrar.RegisterStringSetting("test.b", "B", "test", "x");
         Stack stack = builder.Build();
-        await Assert.That(stack.Settings.SettingCount).IsEqualTo(3); // 2 user + 1 system (index.value_cache_fields)
+        await Assert.That(stack.Settings.SettingCount).IsEqualTo(2); // 2 user settings, no system settings
     }
 
     [Test]
@@ -136,7 +136,7 @@ internal sealed class SettingsIntegrationTests
         builder.SettingsRegistrar.RegisterBoolSetting("b.y", "Y", "group2", false);
         Stack stack = builder.Build();
         IReadOnlyList<string> groups = stack.Settings.AllGroups;
-        await Assert.That(groups.Count).IsEqualTo(3); // group1, group2, index
+        await Assert.That(groups.Count).IsEqualTo(2); // group1, group2
     }
 
     [Test]
