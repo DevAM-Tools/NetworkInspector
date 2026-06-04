@@ -20,6 +20,7 @@
     <ProjectReference Include="..\NetworkInspector.Protocols\NetworkInspector.Protocols.csproj" />
     <ProjectReference Include="..\NetworkInspector.Exporters\NetworkInspector.Exporters.csproj" />
     <ProjectReference Include="..\NetworkInspector.Sources\NetworkInspector.Sources.csproj" />
+    <ProjectReference Include="..\NetworkInspector.Sessions\NetworkInspector.Sessions.csproj" />
     <ProjectReference Include="..\NetworkInspector.FrameBuilder\NetworkInspector.FrameBuilder.csproj" />
   </ItemGroup>
 </Project>

@@ -67,17 +67,40 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            software-properties-common
-          sudo add-apt-repository -y ppa:wireshark-dev/wireshark
+            curl gpg
+
+          # add-apt-repository performs an online Launchpad API check that can fail even when the
+          # PPA exists (e.g. the PPA has no packages for the current Ubuntu release codename, or a
+          # transient API error occurs). Work around this by adding the PPA source directly:
+          # fetch the signing-key fingerprint from the Launchpad REST API, import the key, write
+          # the apt source list entry, and refresh the package index — all without touching
+          # add-apt-repository.
+          UBUNTU_CODENAME=$(. /etc/os-release && echo "$VERSION_CODENAME")
+          PPA_KEY_FINGERPRINT=$(
+            curl -fsSL \
+              "https://launchpad.net/api/1.0/~wireshark-dev/+archive/ubuntu/wireshark" |
+              python3 -c \
+                "import sys, json; print(json.load(sys.stdin)['signing_key_fingerprint'])"
+          )
+          if [ -z "$PPA_KEY_FINGERPRINT" ]; then
+            echo "::error::Cannot retrieve Wireshark PPA signing key from Launchpad."
+            exit 1
+          fi
+          sudo gpg --keyserver hkps://keyserver.ubuntu.com --recv-keys "$PPA_KEY_FINGERPRINT"
+          sudo gpg --export "$PPA_KEY_FINGERPRINT" |
+            sudo tee /usr/share/keyrings/wireshark-keyring.gpg > /dev/null
+          echo "deb [signed-by=/usr/share/keyrings/wireshark-keyring.gpg] https://ppa.launchpadcontent.net/wireshark-dev/wireshark/ubuntu $UBUNTU_CODENAME main" |
+            sudo tee /etc/apt/sources.list.d/wireshark.list > /dev/null
           sudo apt-get update -qq
+
           TSHARK_APT_VERSION=$(
             apt-cache madison tshark |
               awk '{print $3}' |
-              grep -E '^4\.6\.' |
+              grep -E '^4\.6\.4([^0-9]|$)' |
               head -n1
           )
           if [ -z "$TSHARK_APT_VERSION" ]; then
-            echo "::error::No tshark 4.6.x package found in apt sources after adding the Wireshark PPA."
+            echo "::error::No tshark 4.6.4 package found in apt sources after adding the Wireshark PPA."
             exit 1
           fi
           echo "Installing tshark package version: $TSHARK_APT_VERSION"
@@ -88,23 +111,17 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $availableVersions = @(
-            choco search wireshark --exact --all-versions --limit-output |
-              ForEach-Object {
-                if ($_ -match '^wireshark\|([0-9]+\.[0-9]+\.[0-9]+)$') {
-                  $Matches[1]
-                }
-              } |
-              Where-Object { $_ -like '4.6.*' } |
-              Sort-Object { [Version]$_ } -Descending
-          )
-          if ($availableVersions.Count -eq 0) {
-            Write-Error "No Wireshark 4.6.x package found in Chocolatey feed."
+          # Install Wireshark 4.6.4 from Chocolatey. The version is pinned explicitly so that
+          # the test suite always runs against a known-good tshark version regardless of
+          # which Chocolatey package is current at the time the job runs.
+          choco install wireshark --version 4.6.4 -y --no-progress
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "choco install wireshark 4.6.4 failed with exit code $LASTEXITCODE."
             exit 1
           }
-          $selectedVersion = $availableVersions[0]
-          Write-Host "Installing Wireshark $selectedVersion from Chocolatey."
-          choco install wireshark --version $selectedVersion -y --no-progress
+          # Append Wireshark's directory to GITHUB_PATH so tshark.exe is on PATH for all
+          # subsequent steps. This is the mechanism documented by GitHub Actions for persistent
+          # PATH additions across steps; it takes effect from the very next step onward.
           'C:\Program Files\Wireshark' |
             Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
@@ -112,27 +129,31 @@ jobs:
         if: runner.os == 'macOS'
         shell: bash
         run: |
-          COMMITS_JSON=$(curl -fsSL "https://api.github.com/repos/Homebrew/homebrew-core/commits?path=Formula/w/wireshark.rb&per_page=100")
-          WIRESHARK_FORMULA_SHA=$(
-            printf '%s' "$COMMITS_JSON" |
-              grep -oE '"sha": "[0-9a-f]{40}"' |
-              awk -F'"' '{print $4}' |
-              while read -r SHA; do
-                FORMULA_URL="https://raw.githubusercontent.com/Homebrew/homebrew-core/$SHA/Formula/w/wireshark.rb"
-                if curl -fsSL "$FORMULA_URL" | grep -qE 'wireshark-4\.6\.[0-9]+\.tar\.xz'; then
-                  echo "$SHA"
-                  break
-                fi
-              done
-          )
-          if [ -z "$WIRESHARK_FORMULA_SHA" ]; then
-            echo "::error::Cannot find a Homebrew wireshark formula revision pinned to 4.6.x."
-            exit 1
-          fi
-          FORMULA_URL="https://raw.githubusercontent.com/Homebrew/homebrew-core/$WIRESHARK_FORMULA_SHA/Formula/w/wireshark.rb"
-          brew install --quiet "$FORMULA_URL"
-          # Ensure the Homebrew default Apple Silicon prefix is available in PATH for subsequent steps.
-          echo "/opt/homebrew/bin" >> "$GITHUB_PATH"
+          # Download the official Wireshark 4.6.4 universal DMG directly from the Wireshark
+          # Foundation server. This avoids all GitHub API / Homebrew commit-history lookups
+          # that previously caused 403 errors on unauthenticated CI runners.
+          # The 4.6.x series uses a single architecture-neutral universal binary DMG, so one
+          # URL covers both Intel (x64) and Apple Silicon (arm64) runner images.
+          DMG_URL="https://2.na.dl.wireshark.org/osx/all-versions/Wireshark%204.6.4.dmg"
+          DMG_FILE="/tmp/wireshark-4.6.4.dmg"
+          curl -fsSL -o "$DMG_FILE" "$DMG_URL"
+
+          # Mount the disk image at a controlled path to avoid relying on the default
+          # /Volumes/<name> path (which contains spaces and could vary across macOS versions).
+          MOUNT_DIR=$(mktemp -d)
+          hdiutil attach "$DMG_FILE" -nobrowse -quiet -mountpoint "$MOUNT_DIR"
+
+          # Run the macOS package installer. The official Wireshark .pkg creates a symlink
+          # at /usr/local/bin/tshark pointing into the installed Wireshark.app bundle.
+          sudo installer -pkg "$MOUNT_DIR/Wireshark 4.6.4.pkg" -target /
+
+          hdiutil detach "$MOUNT_DIR" -quiet
+          rm -f "$DMG_FILE"
+
+          # /usr/local/bin is already on the default PATH, but append it to GITHUB_PATH
+          # explicitly so tshark is discoverable from all subsequent steps regardless of
+          # any runner image PATH changes.
+          echo "/usr/local/bin" >> "$GITHUB_PATH"
 
       - name: Verify tshark version (Linux and macOS)
         if: runner.os != 'Windows'

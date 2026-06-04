@@ -41,6 +41,11 @@ global using NetworkInspector.Sources.Pcapng;
 global using NetworkInspector.Sources.Random;
 #endregion
 
+#region NetworkInspector.Sessions
+global using NetworkInspector.Sessions;
+global using NetworkInspector.Sessions.Listeners;
+#endregion
+
 #region NetworkInspector.Profiling
 global using NetworkInspector.Profiling.Helpers;
 global using NetworkInspector.Profiling.Scenarios;

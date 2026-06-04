@@ -8,6 +8,7 @@
   <Project Path="NetworkInspector.Protocols/NetworkInspector.Protocols.csproj" />
   <Project Path="NetworkInspector.FrameBuilder/NetworkInspector.FrameBuilder.csproj" />
   <Project Path="NetworkInspector.Sources/NetworkInspector.Sources.csproj" />
+  <Project Path="NetworkInspector.Sessions/NetworkInspector.Sessions.csproj" />
   <Project Path="NetworkInspector.Exporters/NetworkInspector.Exporters.csproj" />
   <Project Path="NetworkInspector.CLI.Tests/NetworkInspector.CLI.Tests.csproj" />
   <Project Path="NetworkInspector.CLI/NetworkInspector.CLI.csproj" />
@@ -18,5 +19,6 @@
   <Project Path="NetworkInspector.Protocols.Tests/NetworkInspector.Protocols.Tests.csproj" />
   <Project Path="NetworkInspector.FrameBuilder.Tests/NetworkInspector.FrameBuilder.Tests.csproj" />
   <Project Path="NetworkInspector.Sources.Tests/NetworkInspector.Sources.Tests.csproj" />
+  <Project Path="NetworkInspector.Sessions.Tests/NetworkInspector.Sessions.Tests.csproj" />
   <Project Path="NetworkInspector.Exporters.Tests/NetworkInspector.Exporters.Tests.csproj" />
 </Solution>
