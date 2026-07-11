@@ -36,13 +36,15 @@ namespace NetworkInspector.Profiling;
 /// </summary>
 internal static class Program
 {
-    private static int Main(string[] args)
+    internal static int Main(string[] args)
     {
         Console.OutputEncoding = System.Text.Encoding.UTF8;
+        Thread.CurrentThread.CurrentCulture = CultureInfo.InvariantCulture;
+        Thread.CurrentThread.CurrentUICulture = CultureInfo.InvariantCulture;
 
         // Elevate process priority to High and pin the current thread to a single
         // core so OS scheduling noise does not skew throughput measurements.
-        ElevateProcessPriority();
+        _ElevateProcessPriority();
 
         string? filter = null;
         bool manualStart = false;
@@ -97,18 +99,18 @@ internal static class Program
             // ── --list: print all scenarios and exit ─────────────────────────────────
             if (listOnly)
             {
-                PrintScenarioList(scenarios);
+                _PrintScenarioList(scenarios);
                 return 0;
             }
 
             // ── No filter: interactive numbered menu ─────────────────────────────────
             if (filter is null)
             {
-                return RunInteractiveMenu(scenarios, manualStart);
+                return _RunInteractiveMenu(scenarios, manualStart);
             }
 
             // ── Filter mode: run matching scenarios (for dotnet-trace or scripted use)
-            return RunFilteredScenarios(scenarios, filter, manualStart);
+            return _RunFilteredScenarios(scenarios, filter, manualStart);
         }
         finally
         {
@@ -124,7 +126,7 @@ internal static class Program
     }
 
     /// <summary>Prints a numbered list of all available scenarios.</summary>
-    private static void PrintScenarioList(IProfilingScenario[] scenarios)
+    private static void _PrintScenarioList(IProfilingScenario[] scenarios)
     {
         Console.WriteLine("Available profiling scenarios:");
         Console.WriteLine();
@@ -142,7 +144,7 @@ internal static class Program
     /// Presents an interactive numbered menu, lets the user pick a scenario,
     /// and runs it with a profiler-attach pause.
     /// </summary>
-    private static int RunInteractiveMenu(IProfilingScenario[] scenarios, bool manualStart)
+    private static int _RunInteractiveMenu(IProfilingScenario[] scenarios, bool manualStart)
     {
         while (true)
         {
@@ -152,7 +154,7 @@ internal static class Program
             Console.WriteLine("╚══════════════════════════════════════════════════════╝");
             Console.WriteLine();
 
-            PrintScenarioList(scenarios);
+            _PrintScenarioList(scenarios);
 
             Console.WriteLine();
             Console.WriteLine("  [ 0] Exit");
@@ -166,13 +168,16 @@ internal static class Program
                 return 0;
             }
 
-            if (!int.TryParse(input, out int selection) || selection < 1 || selection > scenarios.Length)
+            if (!int.TryParse(input, NumberStyles.Integer, CultureInfo.InvariantCulture, out int selection)
+                || selection < 1 || selection > scenarios.Length)
             {
-                Console.Error.WriteLine($"Invalid selection '{input}'. Enter a number between 1 and {scenarios.Length}.");
+                Console.Error.WriteLine(
+                    FormattableString.Invariant(
+                        $"Invalid selection '{input}'. Enter a number between 1 and {scenarios.Length}."));
                 continue;
             }
 
-            RunScenario(scenarios[selection - 1], manualStart);
+            _RunScenario(scenarios[selection - 1], manualStart);
 
             Console.WriteLine();
             Console.Write("Press Enter to return to the menu...");
@@ -185,7 +190,7 @@ internal static class Program
     /// When the filter exactly matches a scenario name, only that scenario runs.
     /// Otherwise the filter is used as a substring match.
     /// </summary>
-    private static int RunFilteredScenarios(IProfilingScenario[] scenarios, string? filter, bool manualStart)
+    private static int _RunFilteredScenarios(IProfilingScenario[] scenarios, string? filter, bool manualStart)
     {
         bool anyRan = false;
 
@@ -217,7 +222,7 @@ internal static class Program
                 }
             }
 
-            RunScenario(scenario, manualStart);
+            _RunScenario(scenario, manualStart);
             anyRan = true;
         }
 
@@ -225,7 +230,7 @@ internal static class Program
         {
             Console.Error.WriteLine($"No scenario matched filter '{filter}'.");
             Console.Error.WriteLine();
-            PrintScenarioList(scenarios);
+            _PrintScenarioList(scenarios);
             return 1;
         }
 
@@ -239,10 +244,10 @@ internal static class Program
     /// time has elapsed. This ensures every scenario runs for a predictable
     /// amount of time regardless of how fast a single iteration is.
     /// </summary>
-    private static void RunScenario(IProfilingScenario scenario, bool manualStart)
+    private static void _RunScenario(IProfilingScenario scenario, bool manualStart)
     {
         Console.WriteLine();
-        WriteColored($"=== Scenario: {scenario.Name} ===", ConsoleColor.Cyan);
+        _WriteColored($"=== Scenario: {scenario.Name} ===", ConsoleColor.Cyan);
         Console.WriteLine($"    {scenario.Description}");
         Console.WriteLine();
 
@@ -256,16 +261,18 @@ internal static class Program
 
         // Warm-up phase: call Run() for the configured warm-up duration so the
         // JIT has compiled all hot paths before the timed phase begins.
-        long warmupIterations = RunForDuration(scenario, scenario.WarmupDuration);
+        long warmupIterations = _RunForDuration(scenario, scenario.WarmupDuration);
         Console.ForegroundColor = ConsoleColor.DarkGray;
-        Console.WriteLine($"Warm-up: {warmupIterations} iterations in {scenario.WarmupDuration.TotalSeconds:F1} s.");
+        Console.WriteLine(
+            FormattableString.Invariant(
+                $"Warm-up: {warmupIterations} iterations in {scenario.WarmupDuration.TotalSeconds:F1} s."));
         Console.ResetColor();
 
         // Flush the heap again so GC activity does not skew the timed measurements.
         GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
         GC.WaitForPendingFinalizers();
 
-        PauseBeforeTimedPhase(manualStart);
+        _PauseBeforeTimedPhase(manualStart);
 
         // Capture GC baseline before the timed phase.
         // GC.GetTotalAllocatedBytes(precise: true) performs a full heap walk (~10–50 ms);
@@ -277,9 +284,10 @@ internal static class Program
         int gen2Before = GC.CollectionCount(2);
 
         // Timed profiling phase: call Run() until the configured duration has elapsed.
-        Console.WriteLine($"Running for {scenario.Duration.TotalSeconds:F1} s...");
+        Console.WriteLine(
+            FormattableString.Invariant($"Running for {scenario.Duration.TotalSeconds:F1} s..."));
         Stopwatch sw = Stopwatch.StartNew();
-        long timedIterations = RunForDuration(scenario, scenario.Duration);
+        long timedIterations = _RunForDuration(scenario, scenario.Duration);
         sw.Stop();
 
         // Capture GC counters after the timed phase.
@@ -291,9 +299,9 @@ internal static class Program
         GCMemoryInfo gcInfo = GC.GetGCMemoryInfo();
 
         double iterationsPerSecond = timedIterations / sw.Elapsed.TotalSeconds;
-        WriteColored(
-            $"Completed {timedIterations} iterations in {sw.Elapsed.TotalSeconds:F3} s " +
-            $"({iterationsPerSecond:F1} iter/s).",
+        _WriteColored(
+            FormattableString.Invariant(
+                $"Completed {timedIterations} iterations in {sw.Elapsed.TotalSeconds:F3} s ({iterationsPerSecond:F1} iter/s)."),
             ConsoleColor.Green);
 
         // Print throughput metric when the scenario provides work-unit information.
@@ -301,10 +309,10 @@ internal static class Program
         {
             double totalWorkUnits = (double)timedIterations * scenario.WorkUnitsPerIteration;
             double unitsPerSecond = totalWorkUnits / sw.Elapsed.TotalSeconds;
-            string throughput = FormatRate(unitsPerSecond);
-            WriteColored(
-                $"Throughput: {throughput} {scenario.WorkUnitName}/s " +
-                $"({totalWorkUnits:N0} {scenario.WorkUnitName} total).",
+            string throughput = _FormatRate(unitsPerSecond);
+            _WriteColored(
+                FormattableString.Invariant(
+                    $"Throughput: {throughput} {scenario.WorkUnitName}/s ({totalWorkUnits:N0} {scenario.WorkUnitName} total)."),
                 ConsoleColor.Yellow);
         }
 
@@ -313,14 +321,21 @@ internal static class Program
         double allocPerIter = (double)allocDelta / timedIterations;
         double allocPerSec = allocDelta / sw.Elapsed.TotalSeconds;
         Console.ForegroundColor = ConsoleColor.Magenta;
-        Console.WriteLine($"  GC Allocations: {FormatBytes(allocDelta)} total, {FormatBytes((long)allocPerIter)}/iter, {FormatRate(allocPerSec)}B/s");
-        Console.WriteLine($"  GC Collections: Gen0={gen0After - gen0Before}, Gen1={gen1After - gen1Before}, Gen2={gen2After - gen2Before}");
-        Console.WriteLine($"  GC Heap: {gcInfo.HeapSizeBytes / 1024.0 / 1024:F1} MB, Pause: {gcInfo.PauseTimePercentage:F1}%");
+        Console.WriteLine(
+            FormattableString.Invariant(
+                $"  GC Allocations: {_FormatBytes(allocDelta)} total, {_FormatBytes((long)allocPerIter)}/iter, {_FormatRate(allocPerSec)}B/s"));
+        Console.WriteLine(
+            FormattableString.Invariant(
+                $"  GC Collections: Gen0={gen0After - gen0Before}, Gen1={gen1After - gen1Before}, Gen2={gen2After - gen2Before}"));
+        Console.WriteLine(
+            FormattableString.Invariant(
+                $"  GC Heap: {gcInfo.HeapSizeBytes / 1024.0 / 1024:F1} MB, Pause: {gcInfo.PauseTimePercentage:F1}%"));
         if (scenario.WorkUnitsPerIteration > 0)
         {
             double totalWorkUnits = (double)timedIterations * scenario.WorkUnitsPerIteration;
             double allocPerWorkUnit = allocDelta / totalWorkUnits;
-            Console.WriteLine($"  Alloc/packet: {allocPerWorkUnit:F0} bytes");
+            Console.WriteLine(
+                FormattableString.Invariant($"  Alloc/packet: {allocPerWorkUnit:F0} bytes"));
         }
         Console.ResetColor();
 
@@ -334,7 +349,7 @@ internal static class Program
     /// Manual mode keeps the existing Enter gate. The default mode waits briefly
     /// after the post-warm-up GC cycle and then starts automatically.
     /// </summary>
-    private static void PauseBeforeTimedPhase(bool manualStart)
+    private static void _PauseBeforeTimedPhase(bool manualStart)
     {
         TimeSpan startDelay = TimeSpan.FromSeconds(0.5);
 
@@ -347,12 +362,13 @@ internal static class Program
             return;
         }
 
-        Console.WriteLine($"Starting timed phase automatically in {startDelay.TotalSeconds:F1} s...");
+        Console.WriteLine(
+            FormattableString.Invariant($"Starting timed phase automatically in {startDelay.TotalSeconds:F1} s..."));
         Thread.Sleep(startDelay);
     }
 
     /// <summary>Writes a line to the console in the specified color, then resets to the default color.</summary>
-    private static void WriteColored(string text, ConsoleColor color)
+    private static void _WriteColored(string text, ConsoleColor color)
     {
         Console.ForegroundColor = color;
         Console.WriteLine(text);
@@ -363,21 +379,21 @@ internal static class Program
     /// Formats a rate value with an appropriate SI prefix (k, M, G) for readability.
     /// For example, 1_234_000 becomes "1,234.0 k" and 56_000 becomes "56.0 k".
     /// </summary>
-    private static string FormatRate(double rate) => rate switch
+    private static string _FormatRate(double rate) => rate switch
     {
-        >= 1_000_000_000 => $"{rate / 1_000_000_000:F2} G",
-        >= 1_000_000 => $"{rate / 1_000_000:F2} M",
-        >= 1_000 => $"{rate / 1_000:F1} k",
-        _ => $"{rate:F1} ",
+        >= 1_000_000_000 => FormattableString.Invariant($"{rate / 1_000_000_000:F2} G"),
+        >= 1_000_000 => FormattableString.Invariant($"{rate / 1_000_000:F2} M"),
+        >= 1_000 => FormattableString.Invariant($"{rate / 1_000:F1} k"),
+        _ => FormattableString.Invariant($"{rate:F1} "),
     };
 
     /// <summary>Formats a byte count with appropriate SI prefix.</summary>
-    private static string FormatBytes(long bytes) => bytes switch
+    private static string _FormatBytes(long bytes) => bytes switch
     {
-        >= 1_073_741_824 => $"{bytes / 1_073_741_824.0:F2} GB",
-        >= 1_048_576 => $"{bytes / 1_048_576.0:F1} MB",
-        >= 1_024 => $"{bytes / 1_024.0:F1} KB",
-        _ => $"{bytes} B",
+        >= 1_073_741_824 => FormattableString.Invariant($"{bytes / 1_073_741_824.0:F2} GB"),
+        >= 1_048_576 => FormattableString.Invariant($"{bytes / 1_048_576.0:F1} MB"),
+        >= 1_024 => FormattableString.Invariant($"{bytes / 1_024.0:F1} KB"),
+        _ => FormattableString.Invariant($"{bytes} B"),
     };
 
     /// <summary>
@@ -387,7 +403,7 @@ internal static class Program
     /// Failures are logged but do not abort the profiling run (e.g. when running
     /// without administrator privileges).
     /// </summary>
-    private static void ElevateProcessPriority()
+    private static void _ElevateProcessPriority()
     {
         try
         {
@@ -428,7 +444,7 @@ internal static class Program
     /// <paramref name="duration"/> has elapsed. Returns the number of
     /// completed iterations.
     /// </summary>
-    private static long RunForDuration(IProfilingScenario scenario, TimeSpan duration)
+    private static long _RunForDuration(IProfilingScenario scenario, TimeSpan duration)
     {
         long iterations = 0;
         Stopwatch timer = Stopwatch.StartNew();

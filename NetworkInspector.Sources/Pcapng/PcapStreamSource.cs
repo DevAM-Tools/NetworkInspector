@@ -206,7 +206,7 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
             bool initialized;
             try
             {
-                initialized = Initialize();
+                initialized = _Initialize();
             }
             catch
             {
@@ -226,10 +226,10 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
 
         if (_IsLegacy)
         {
-            return NextFrameLegacy();
+            return _NextFrameLegacy();
         }
 
-        return NextFramePcapNg();
+        return _NextFramePcapNg();
     }
 
     #endregion
@@ -270,11 +270,11 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
     /// </summary>
     /// <returns>True if initialization succeeded; false if the stream is too short or corrupt.</returns>
     /// <exception cref="PcapException">The stream contains an unrecognized format.</exception>
-    private bool Initialize()
+    private bool _Initialize()
     {
         // Read enough bytes for format detection (at least 12 bytes for SHB detection)
         Span<byte> detectionBuffer = stackalloc byte[PcapFormatDetection.MinDetectionBytes];
-        if (!TryReadExact(detectionBuffer))
+        if (!_TryReadExact(detectionBuffer))
         {
             return false;
         }
@@ -287,18 +287,18 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
         if (detection.Format == FileFormat.PcapNg)
         {
             _IsLegacy = false;
-            return InitializePcapNg(detectionBuffer);
+            return _InitializePcapNg(detectionBuffer);
         }
 
         _IsLegacy = true;
-        return InitializeLegacyPcap(detectionBuffer, detection);
+        return _InitializeLegacyPcap(detectionBuffer, detection);
     }
 
     /// <summary>
     /// Reads the Section Header Block from the stream and creates the first section.
     /// The detection buffer already contains the first 12 bytes (block type + length + byte order magic).
     /// </summary>
-    private bool InitializePcapNg(ReadOnlySpan<byte> detectionBytes)
+    private bool _InitializePcapNg(ReadOnlySpan<byte> detectionBytes)
     {
         // We have the first 12 bytes: block_type(4) + block_total_length(4) + byte_order_magic(4)
         uint magic = BinaryPrimitives.ReadUInt32LittleEndian(detectionBytes[8..]);
@@ -312,8 +312,8 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
         }
 
         // Guard: uint → int cast is undefined for blockLength > int.MaxValue and produces
-        // a negative remaining that bypasses EnsureBuffer's cap check.
-        if (blockLength > (uint)MaxBufferSize)
+        // a negative remaining that bypasses _EnsureBuffer's cap check.
+        if (blockLength > (uint)_MaxBufferSize)
         {
             return false;
         }
@@ -321,7 +321,7 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
         // Read the rest of the SHB block
         // We already have 12 bytes; need blockLength - 12 more
         int remaining = (int)blockLength - PcapFormatDetection.MinDetectionBytes;
-        byte[]? shbBuffer = EnsureBuffer((int)blockLength);
+        byte[]? shbBuffer = _EnsureBuffer((int)blockLength);
         if (shbBuffer is null)
         {
             return false;
@@ -329,7 +329,7 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
 
         detectionBytes.CopyTo(shbBuffer);
 
-        if (remaining > 0 && !TryReadExact(shbBuffer.AsSpan(PcapFormatDetection.MinDetectionBytes, remaining)))
+        if (remaining > 0 && !_TryReadExact(shbBuffer.AsSpan(PcapFormatDetection.MinDetectionBytes, remaining)))
         {
             return false;
         }
@@ -353,10 +353,10 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
     /// Parses the legacy PCAP global header (24 bytes).
     /// The detection buffer already contains the first 12 bytes.
     /// </summary>
-    private bool InitializeLegacyPcap(ReadOnlySpan<byte> detectionBytes, FormatDetectionResult detection)
+    private bool _InitializeLegacyPcap(ReadOnlySpan<byte> detectionBytes, FormatDetectionResult detection)
     {
         // Need 24 bytes total; we have 12
-        byte[]? headerBuffer = EnsureBuffer(PcapConstants.PcapGlobalHeaderSize);
+        byte[]? headerBuffer = _EnsureBuffer(PcapConstants.PcapGlobalHeaderSize);
         if (headerBuffer is null)
         {
             return false;
@@ -364,7 +364,7 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
         detectionBytes.CopyTo(headerBuffer);
 
         int remaining = PcapConstants.PcapGlobalHeaderSize - PcapFormatDetection.MinDetectionBytes;
-        if (!TryReadExact(headerBuffer.AsSpan(PcapFormatDetection.MinDetectionBytes, remaining)))
+        if (!_TryReadExact(headerBuffer.AsSpan(PcapFormatDetection.MinDetectionBytes, remaining)))
         {
             return false;
         }
@@ -378,7 +378,7 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
         _LegacyInfo = new LegacyPcapInfo(swap, detection.NanosecondTimestamps, (ushort)rawNetwork, rawSnapLen);
 
         // Register the single default interface
-        RegisterLegacyInterface();
+        _RegisterLegacyInterface();
         return true;
     }
 
@@ -390,14 +390,14 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
     /// Reads PCAPNG blocks from the stream until a packet block is found.
     /// Processes SHB/IDB blocks inline and skips unknown block types.
     /// </summary>
-    private Frame? NextFramePcapNg()
+    private Frame? _NextFramePcapNg()
     {
         Span<byte> headerBytes = _PcapNgHeaderBuf;
 
         while (true)
         {
             // Step 1: Read block type (4 bytes) + block total length (4 bytes)
-            if (!TryReadExact(headerBytes))
+            if (!_TryReadExact(headerBytes))
             {
                 Volatile.Write(ref _Exhausted, true);
                 return null;
@@ -414,10 +414,10 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
                 // SHB: need to read the byte-order magic to determine endianness
                 // Read at least 4 more bytes (magic) before we know the byte order
                 Span<byte> magicBuf = _MagicBuf;
-                if (!TryReadExact(magicBuf))
+                if (!_TryReadExact(magicBuf))
                 {
                     // Stream truncated mid-SHB (header read succeeded but magic read failed)
-                    HandleSkip(new FrameReadErrorEventArgs
+                    _HandleSkip(new FrameReadErrorEventArgs
                     {
                         FrameIndex = _FrameIndex,
                         FileOffset = -1,
@@ -436,10 +436,10 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
                 blockType = PcapConstants.BlockTypeSHB;
 
                 // Read the rest of the SHB block (already read 12 bytes: 8 header + 4 magic)
-                if (!ProcessSectionHeaderFromStream(swap, blockLength, headerBytes, magicBuf))
+                if (!_ProcessSectionHeaderFromStream(swap, blockLength, headerBytes, magicBuf))
                 {
                     // Stream truncated mid-SHB body
-                    HandleSkip(new FrameReadErrorEventArgs
+                    _HandleSkip(new FrameReadErrorEventArgs
                     {
                         FrameIndex = _FrameIndex,
                         FileOffset = -1,
@@ -457,7 +457,7 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
             {
                 // A data block arrived before any Section Header Block, which means
                 // the stream is corrupt.  Report the skip so ErrorCount is accurate.
-                HandleSkip(new FrameReadErrorEventArgs
+                _HandleSkip(new FrameReadErrorEventArgs
                 {
                     FrameIndex = _FrameIndex,
                     FileOffset = -1,
@@ -477,8 +477,8 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
             if (blockLength < PcapConstants.MinBlockSize)
             {
                 // Block length is below the spec-mandated minimum — the stream is corrupt.
-                // Report via HandleSkip before exhausting so callers receive the diagnostic.
-                HandleSkip(new FrameReadErrorEventArgs
+                // Report via _HandleSkip before exhausting so callers receive the diagnostic.
+                _HandleSkip(new FrameReadErrorEventArgs
                 {
                     FrameIndex = _FrameIndex,
                     FileOffset = -1,
@@ -490,18 +490,18 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
             }
 
             // Guard: uint → int cast is undefined for blockLength > int.MaxValue and produces
-            // a negative bodySize that bypasses EnsureBuffer's cap check, causing
+            // a negative bodySize that bypasses _EnsureBuffer's cap check, causing
             // blockBuffer.AsSpan(0, bodySize) to throw ArgumentOutOfRangeException.
             // Use an unsigned comparison to cover both the int-overflow range and valid-but-
-            // oversized values that EnsureBuffer would otherwise handle via its null return.
-            if (blockLength > (uint)MaxBufferSize + 8u)
+            // oversized values that _EnsureBuffer would otherwise handle via its null return.
+            if (blockLength > (uint)_MaxBufferSize + 8u)
             {
-                HandleSkip(new FrameReadErrorEventArgs
+                _HandleSkip(new FrameReadErrorEventArgs
                 {
                     FrameIndex = _FrameIndex,
                     FileOffset = -1,
                     Kind = FrameReadErrorKind.CorruptedBlock,
-                    Message = $"Block length {blockLength} exceeds the {MaxBufferSize / (1024 * 1024)} MiB safety cap; the stream data may be corrupt."
+                    Message = $"Block length {blockLength} exceeds the {_MaxBufferSize / (1024 * 1024)} MiB safety cap; the stream data may be corrupt."
                 });
                 Volatile.Write(ref _Exhausted, true);
                 return null;
@@ -510,24 +510,24 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
             // Read the remaining block body: blockLength - 8 (header) bytes
             // (body includes the trailing 4-byte block_total_length copy)
             int bodySize = (int)blockLength - 8;
-            byte[]? blockBuffer = EnsureBuffer(bodySize);
+            byte[]? blockBuffer = _EnsureBuffer(bodySize);
             if (blockBuffer is null)
             {
-                HandleSkip(new FrameReadErrorEventArgs
+                _HandleSkip(new FrameReadErrorEventArgs
                 {
                     FrameIndex = _FrameIndex,
                     FileOffset = -1,
                     Kind = FrameReadErrorKind.CorruptedBlock,
-                    Message = $"Block body size {bodySize} exceeds the {MaxBufferSize / (1024 * 1024)} MiB safety cap; the stream data may be corrupt."
+                    Message = $"Block body size {bodySize} exceeds the {_MaxBufferSize / (1024 * 1024)} MiB safety cap; the stream data may be corrupt."
                 });
                 Volatile.Write(ref _Exhausted, true);
                 return null;
             }
 
-            if (!TryReadExact(blockBuffer.AsSpan(0, bodySize)))
+            if (!_TryReadExact(blockBuffer.AsSpan(0, bodySize)))
             {
                 // Stream truncated mid-block (header read succeeded but body read failed)
-                HandleSkip(new FrameReadErrorEventArgs
+                _HandleSkip(new FrameReadErrorEventArgs
                 {
                     FrameIndex = _FrameIndex,
                     FileOffset = -1,
@@ -543,12 +543,12 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
             switch (blockType)
             {
                 case PcapConstants.BlockTypeIDB:
-                    ProcessInterfaceDescription(bodySpan);
+                    _ProcessInterfaceDescription(bodySpan);
                     continue;
 
                 case PcapConstants.BlockTypeEPB:
                     {
-                        Frame? frame = TryScanEnhancedPacket(bodySpan);
+                        Frame? frame = _TryScanEnhancedPacket(bodySpan);
                         if (frame.HasValue)
                         {
                             return frame;
@@ -559,7 +559,7 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
 
                 case PcapConstants.BlockTypeSPB:
                     {
-                        Frame? frame = TryScanSimplePacket(bodySpan, blockLength);
+                        Frame? frame = _TryScanSimplePacket(bodySpan, blockLength);
                         if (frame.HasValue)
                         {
                             return frame;
@@ -569,7 +569,7 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
 
                 case PcapConstants.BlockTypePB:
                     {
-                        Frame? frame = TryScanObsoletePacket(bodySpan, blockLength);
+                        Frame? frame = _TryScanObsoletePacket(bodySpan, blockLength);
                         if (frame.HasValue)
                         {
                             return frame;
@@ -592,7 +592,7 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
     /// <param name="blockLength">Total block length from the header.</param>
     /// <param name="headerBytes">First 8 bytes: block_type + block_total_length.</param>
     /// <param name="magicBytes">4 bytes of byte-order magic.</param>
-    private bool ProcessSectionHeaderFromStream(bool swap, uint blockLength, ReadOnlySpan<byte> headerBytes, ReadOnlySpan<byte> magicBytes)
+    private bool _ProcessSectionHeaderFromStream(bool swap, uint blockLength, ReadOnlySpan<byte> headerBytes, ReadOnlySpan<byte> magicBytes)
     {
         if (blockLength < PcapConstants.ShbFixedSize)
         {
@@ -600,8 +600,8 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
         }
 
         // Guard: uint → int cast is undefined for blockLength > int.MaxValue and produces
-        // a negative remaining that bypasses EnsureBuffer's cap check.
-        if (blockLength > (uint)MaxBufferSize)
+        // a negative remaining that bypasses _EnsureBuffer's cap check.
+        if (blockLength > (uint)_MaxBufferSize)
         {
             return false;
         }
@@ -609,7 +609,7 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
         // Already read: 8 (header) + 4 (magic) = 12 bytes
         // Need: blockLength - 12 more bytes (version, section length, options, trailing length)
         int remaining = (int)blockLength - 12;
-        byte[]? shbBuffer = EnsureBuffer((int)blockLength);
+        byte[]? shbBuffer = _EnsureBuffer((int)blockLength);
         if (shbBuffer is null)
         {
             return false;
@@ -618,7 +618,7 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
         headerBytes.CopyTo(shbBuffer);
         magicBytes.CopyTo(shbBuffer.AsSpan(8));
 
-        if (remaining > 0 && !TryReadExact(shbBuffer.AsSpan(12, remaining)))
+        if (remaining > 0 && !_TryReadExact(shbBuffer.AsSpan(12, remaining)))
         {
             return false;
         }
@@ -645,7 +645,7 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
     /// Processes an Interface Description Block.
     /// The body span starts after the 8-byte block header (contains link_type, reserved, snap_len, options, trailing length).
     /// </summary>
-    private void ProcessInterfaceDescription(ReadOnlySpan<byte> bodySpan)
+    private void _ProcessInterfaceDescription(ReadOnlySpan<byte> bodySpan)
     {
         if (_Sections.Count == 0 || bodySpan.Length < 8)
         {
@@ -671,14 +671,14 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
         int localId = section.AddInterface(info);
 
         // Register with the stack
-        RegisterPcapNgInterface(section, (ushort)(_Sections.Count - 1), (ushort)localId, info);
+        _RegisterPcapNgInterface(section, (ushort)(_Sections.Count - 1), (ushort)localId, info);
     }
 
     /// <summary>
     /// Tries to scan an Enhanced Packet Block from the body span.
     /// Body starts after the 8-byte block header.
     /// </summary>
-    private Frame? TryScanEnhancedPacket(ReadOnlySpan<byte> bodySpan)
+    private Frame? _TryScanEnhancedPacket(ReadOnlySpan<byte> bodySpan)
     {
         // EPB body layout: interface_id(4) + ts_high(4) + ts_low(4) + captured_len(4)
         //                  + original_len(4) + data + options + trailing_length(4)
@@ -724,13 +724,13 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
         byte[] frameData = bodySpan.Slice(20, actualCaptured).ToArray();
 
         ushort sectionIndex = (ushort)(_Sections.Count - 1);
-        return CreateTrackedFrame(sectionIndex, (ushort)interfaceId, timestampNanos, frameData);
+        return _CreateTrackedFrame(sectionIndex, (ushort)interfaceId, timestampNanos, frameData);
     }
 
     /// <summary>
     /// Tries to scan a Simple Packet Block from the body span.
     /// </summary>
-    private Frame? TryScanSimplePacket(ReadOnlySpan<byte> bodySpan, uint blockLength)
+    private Frame? _TryScanSimplePacket(ReadOnlySpan<byte> bodySpan, uint blockLength)
     {
         // SPB body layout: original_packet_len(4) + data + trailing_length(4)
         if (bodySpan.Length < 8 || _Sections.Count == 0)
@@ -762,13 +762,13 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
         byte[] frameData = bodySpan.Slice(4, capturedLength).ToArray();
 
         ushort sectionIndex = (ushort)(_Sections.Count - 1);
-        return CreateTrackedFrame(sectionIndex, 0, 0, frameData); // SPB has no timestamp
+        return _CreateTrackedFrame(sectionIndex, 0, 0, frameData); // SPB has no timestamp
     }
 
     /// <summary>
     /// Tries to scan an Obsolete Packet Block from the body span.
     /// </summary>
-    private Frame? TryScanObsoletePacket(ReadOnlySpan<byte> bodySpan, uint blockLength)
+    private Frame? _TryScanObsoletePacket(ReadOnlySpan<byte> bodySpan, uint blockLength)
     {
         // PB body layout: interface_id(2) + drops_count(2) + ts_high(4) + ts_low(4)
         //                + captured_len(4) + original_len(4) + data + options + trailing(4)
@@ -805,7 +805,7 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
         byte[] frameData = bodySpan.Slice(20, actualCaptured).ToArray();
 
         ushort sectionIndex = (ushort)(_Sections.Count - 1);
-        return CreateTrackedFrame(sectionIndex, interfaceId, timestampNanos, frameData);
+        return _CreateTrackedFrame(sectionIndex, interfaceId, timestampNanos, frameData);
     }
 
     #endregion
@@ -815,7 +815,7 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
     /// <summary>
     /// Reads the next legacy PCAP packet record from the stream.
     /// </summary>
-    private Frame? NextFrameLegacy()
+    private Frame? _NextFrameLegacy()
     {
         if (_LegacyInfo is null)
         {
@@ -823,7 +823,7 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
         }
 
         Span<byte> headerBuf = stackalloc byte[PcapConstants.PcapPacketHeaderSize];
-        if (!TryReadExact(headerBuf))
+        if (!_TryReadExact(headerBuf))
         {
             // Natural EOF between frames — no event needed
             Volatile.Write(ref _Exhausted, true);
@@ -844,7 +844,7 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
         // unknown, so exhaust to avoid further desynchronisation.
         if (inclLen > int.MaxValue)
         {
-            HandleSkip(new FrameReadErrorEventArgs
+            _HandleSkip(new FrameReadErrorEventArgs
             {
                 FrameIndex = _FrameIndex,
                 FileOffset = -1,
@@ -864,7 +864,7 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
         uint effectiveSnapLen = snapLen > 0 ? snapLen : PcapConstants.DefaultSnapLength;
         if (inclLen > effectiveSnapLen)
         {
-            HandleSkip(new FrameReadErrorEventArgs
+            _HandleSkip(new FrameReadErrorEventArgs
             {
                 FrameIndex = _FrameIndex,
                 FileOffset = -1,
@@ -888,7 +888,7 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
         }
         catch (OutOfMemoryException)
         {
-            HandleSkip(new FrameReadErrorEventArgs
+            _HandleSkip(new FrameReadErrorEventArgs
             {
                 FrameIndex = _FrameIndex,
                 FileOffset = -1,
@@ -900,10 +900,10 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
         }
 
         // Read frame data
-        if (!TryReadExact(frameData))
+        if (!_TryReadExact(frameData))
         {
             // Stream truncated mid-frame (header read succeeded but data read failed)
-            HandleSkip(new FrameReadErrorEventArgs
+            _HandleSkip(new FrameReadErrorEventArgs
             {
                 FrameIndex = _FrameIndex,
                 FileOffset = -1,
@@ -914,7 +914,7 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
             return null;
         }
 
-        return CreateTrackedFrame(0, 0, timestampNanos, frameData);
+        return _CreateTrackedFrame(0, 0, timestampNanos, frameData);
     }
 
     #endregion
@@ -924,7 +924,7 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
     /// <summary>
     /// Registers a PCAPNG interface with the stack and caches the mapping.
     /// </summary>
-    private void RegisterPcapNgInterface(SectionInfo section, ushort sectionIndex, ushort localInterfaceId, InterfaceInfo info)
+    private void _RegisterPcapNgInterface(SectionInfo section, ushort sectionIndex, ushort localInterfaceId, InterfaceInfo info)
     {
         if (_Registry is null)
         {
@@ -938,7 +938,7 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
         }
 
         string name = info.Name ?? $"Interface {localInterfaceId}";
-        Dictionary<string, object>? props = BuildPcapNgProperties(info, section);
+        Dictionary<string, object>? props = _BuildPcapNgProperties(info, section);
         FrameInterfaceId id = _Registry.Register(_SourceId, name, info.Description, info.LinkType, props);
         _Interfaces[key] = id;
     }
@@ -946,7 +946,7 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
     /// <summary>
     /// Registers the single default interface for legacy PCAP.
     /// </summary>
-    private void RegisterLegacyInterface()
+    private void _RegisterLegacyInterface()
     {
         if (_Registry is null || _LegacyInfo is null)
         {
@@ -959,7 +959,7 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
             return;
         }
 
-        Dictionary<string, object>? props = BuildLegacyPcapProperties(_LegacyInfo);
+        Dictionary<string, object>? props = _BuildLegacyPcapProperties(_LegacyInfo);
         FrameInterfaceId id = _Registry.Register(_SourceId, "Default Interface", null, _LegacyInfo.LinkType, props);
         _Interfaces[key] = id;
     }
@@ -968,7 +968,7 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
     /// Builds a properties dictionary from PCAPNG interface and section metadata.
     /// Returns null when no properties are available (avoids empty dictionary allocation).
     /// </summary>
-    private static Dictionary<string, object>? BuildPcapNgProperties(InterfaceInfo info, SectionInfo section)
+    private static Dictionary<string, object>? _BuildPcapNgProperties(InterfaceInfo info, SectionInfo section)
     {
         // RawLinkType and SnapLength are always available — initialize with them
         Dictionary<string, object> props = new()
@@ -1016,7 +1016,7 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
     /// Builds a properties dictionary from legacy PCAP global header metadata.
     /// Returns null when no properties are available.
     /// </summary>
-    private static Dictionary<string, object>? BuildLegacyPcapProperties(LegacyPcapInfo info)
+    private static Dictionary<string, object>? _BuildLegacyPcapProperties(LegacyPcapInfo info)
     {
         // Legacy PCAP has limited metadata — snap length and raw link type
         Dictionary<string, object> props = new()
@@ -1031,7 +1031,7 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
     /// <summary>
     /// Resolves the link type and registered interface ID for a frame.
     /// </summary>
-    private bool TryResolveInterface(ushort sectionIndex, ushort interfaceId,
+    private bool _TryResolveInterface(ushort sectionIndex, ushort interfaceId,
         out LinkType linkType, out FrameInterfaceId frameInterfaceId)
     {
         if (_IsLegacy && _LegacyInfo is not null)
@@ -1067,7 +1067,7 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
     /// so subscribers can log the first offending block even when the source aborts
     /// (per SOURCE_GUIDE.md §12.2).
     /// </summary>
-    private void HandleSkip(FrameReadErrorEventArgs error)
+    private void _HandleSkip(FrameReadErrorEventArgs error)
     {
         Interlocked.Increment(ref _SkippedFrameCount);
         Interlocked.Increment(ref _ErrorCount);
@@ -1087,7 +1087,7 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
     /// Creates a frame from resolved data, tracking statistics.
     /// Returns null if interface resolution or frame creation fails.
     /// </summary>
-    private Frame? CreateTrackedFrame(ushort sectionIndex, ushort interfaceId, long timestampNanos, byte[] frameData)
+    private Frame? _CreateTrackedFrame(ushort sectionIndex, ushort interfaceId, long timestampNanos, byte[] frameData)
     {
         // Enforce maximum frame count — FrameId is int-based
         if (_FrameIndex == int.MaxValue)
@@ -1095,10 +1095,10 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
             return null;
         }
 
-        if (!TryResolveInterface(sectionIndex, interfaceId, out LinkType linkType, out FrameInterfaceId frameInterfaceId))
+        if (!_TryResolveInterface(sectionIndex, interfaceId, out LinkType linkType, out FrameInterfaceId frameInterfaceId))
         {
             int skipId = _FrameIndex++;
-            HandleSkip(new FrameReadErrorEventArgs
+            _HandleSkip(new FrameReadErrorEventArgs
             {
                 FrameIndex = skipId,
                 FileOffset = -1,
@@ -1123,7 +1123,7 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
             return result.Value;
         }
 
-        HandleSkip(new FrameReadErrorEventArgs
+        _HandleSkip(new FrameReadErrorEventArgs
         {
             FrameIndex = frameId,
             FileOffset = -1,
@@ -1142,7 +1142,7 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
     /// Returns false if the stream ended before all bytes could be read (EOF).
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private bool TryReadExact(Span<byte> buffer)
+    private bool _TryReadExact(Span<byte> buffer)
     {
         int totalRead = 0;
         while (totalRead < buffer.Length)
@@ -1159,19 +1159,19 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
 
     /// <summary>Maximum block body size (256 MiB). Malformed blocks declaring larger sizes
     /// are rejected to prevent unbounded allocation.</summary>
-    private const int MaxBufferSize = 256 * 1024 * 1024;
+    private const int _MaxBufferSize = 256 * 1024 * 1024;
 
     /// <summary>
     /// Ensures the internal block buffer is at least the given size.
     /// Returns the buffer (may be larger than requested), or <c>null</c> when
-    /// <paramref name="minSize"/> exceeds <see cref="MaxBufferSize"/>.
+    /// <paramref name="minSize"/> exceeds <see cref="_MaxBufferSize"/>.
     /// When <c>null</c> is returned the caller must skip the oversized block
-    /// via <see cref="HandleSkip"/> and mark the stream exhausted.
+    /// via <see cref="_HandleSkip"/> and mark the stream exhausted.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private byte[]? EnsureBuffer(int minSize)
+    private byte[]? _EnsureBuffer(int minSize)
     {
-        if (minSize > MaxBufferSize)
+        if (minSize > _MaxBufferSize)
         {
             // Block exceeds the 256 MiB safety cap. Raise a diagnostic so the
             // caller can log the offending block offset, then let the caller
@@ -1182,7 +1182,7 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
         if (_BlockBuffer.Length < minSize)
         {
             // Grow to the next power of two or the requested size, whichever is larger
-            int newSize = Math.Min(Math.Max(minSize, _BlockBuffer.Length * 2), MaxBufferSize);
+            int newSize = Math.Min(Math.Max(minSize, _BlockBuffer.Length * 2), _MaxBufferSize);
             _BlockBuffer = new byte[newSize];
         }
         return _BlockBuffer;

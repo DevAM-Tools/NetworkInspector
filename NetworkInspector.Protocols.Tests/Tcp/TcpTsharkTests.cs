@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Protocols.Tests;
 
@@ -39,7 +39,7 @@ internal sealed class TcpTsharkTests
     /// Builds a plain SYN frame (no options, no payload) with fixed ports and
     /// sequence number so every header field is fully determined.
     /// </summary>
-    private static byte[] BuildSynFrame(
+    private static byte[] _BuildSynFrame(
         ushort srcPort = 49152,
         ushort dstPort = 80,
         uint seqNum = 0x12345678,
@@ -56,7 +56,7 @@ internal sealed class TcpTsharkTests
     /// Builds a SYN+ACK frame (server → client) with explicit sequence and
     /// acknowledgement numbers.
     /// </summary>
-    private static byte[] BuildSynAckFrame(
+    private static byte[] _BuildSynAckFrame(
         uint seqNum = 0xABCDEF01,
         uint ackNum = 0x12345679,
         ushort windowSize = 8192)
@@ -73,7 +73,7 @@ internal sealed class TcpTsharkTests
     /// <c>tcp.len</c> should equal the payload length; sequence and
     /// acknowledgement numbers are explicit so they match both parsers exactly.
     /// </summary>
-    private static byte[] BuildDataFrame(
+    private static byte[] _BuildDataFrame(
         uint seqNum = 0x12345679,
         uint ackNum = 0xABCDEF02,
         int payloadLength = 32)
@@ -93,7 +93,7 @@ internal sealed class TcpTsharkTests
     /// <summary>
     /// Builds a FIN+ACK frame to exercise the FIN flag field.
     /// </summary>
-    private static byte[] BuildFinAckFrame(
+    private static byte[] _BuildFinAckFrame(
         uint seqNum = 0x12345699,
         uint ackNum = 0xABCDEF20)
     {
@@ -111,7 +111,7 @@ internal sealed class TcpTsharkTests
     /// tshark parses and exposes option sub-fields from the raw option bytes,
     /// so a match confirms both the encoding and the parsing.
     /// </summary>
-    private static byte[] BuildSynWithOptionsFrame()
+    private static byte[] _BuildSynWithOptionsFrame()
     {
         // SynOptions() encodes the 22-byte standard SYN option bundle, padded to
         // 24 bytes.  MSS=1460, WScale shift=7.
@@ -139,7 +139,7 @@ internal sealed class TcpTsharkTests
     [Test]
     public async Task Tcp_SynFrame_AllFieldsMatchTshark()
     {
-        byte[] frame = BuildSynFrame();
+        byte[] frame = _BuildSynFrame();
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -170,7 +170,7 @@ internal sealed class TcpTsharkTests
     [Test]
     public async Task Tcp_SynAckFrame_AckAndFlagsMatchTshark()
     {
-        byte[] frame = BuildSynAckFrame();
+        byte[] frame = _BuildSynAckFrame();
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -195,7 +195,7 @@ internal sealed class TcpTsharkTests
     [Test]
     public async Task Tcp_DataSegment_AllFieldsMatchTshark()
     {
-        byte[] frame = BuildDataFrame();
+        byte[] frame = _BuildDataFrame();
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -223,7 +223,7 @@ internal sealed class TcpTsharkTests
     [Test]
     public async Task Tcp_FinAckFrame_FlagsMatchTshark()
     {
-        byte[] frame = BuildFinAckFrame();
+        byte[] frame = _BuildFinAckFrame();
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -250,7 +250,7 @@ internal sealed class TcpTsharkTests
     [Test]
     public async Task Tcp_SynWithOptions_OptionFieldsMatchTshark()
     {
-        byte[] frame = BuildSynWithOptionsFrame();
+        byte[] frame = _BuildSynWithOptionsFrame();
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {

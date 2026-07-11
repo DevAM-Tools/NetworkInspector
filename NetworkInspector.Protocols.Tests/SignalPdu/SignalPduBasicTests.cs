@@ -9,9 +9,9 @@ namespace NetworkInspector.Protocols.Tests.SignalPdu;
 /// </summary>
 internal sealed class SignalPduBasicTests
 {
-    private const ushort BenchUdpDestinationPort = 16000;
+    private const ushort _BenchUdpDestinationPort = 16000;
 
-    private static SignalPduLayout BenchUdpLayout =>
+    private static SignalPduLayout _BenchUdpLayout =>
         new()
         {
             PduId = AutomotivePduBench.SignalPduMessageId,
@@ -23,7 +23,7 @@ internal sealed class SignalPduBasicTests
                     new DispatchBinding
                     {
                         Table = UdpProtocol.PortTableName,
-                        Key = BenchUdpDestinationPort,
+                        Key = _BenchUdpDestinationPort,
                     }),
             Mux = null,
             MuxGroups = [],
@@ -32,7 +32,7 @@ internal sealed class SignalPduBasicTests
     [Test]
     public async Task Parses_UdpCarrier_MatchesExpectedFields()
     {
-        SignalPduLayout layout = BenchUdpLayout;
+        SignalPduLayout layout = _BenchUdpLayout;
 
         SignalValueSet vals = SignalValueSet.For(layout).Set("EngineRpm", 125.0).Set("Thr", 555);
         SignalPduLayer spdu = new(layout, vals);
@@ -40,7 +40,7 @@ internal sealed class SignalPduBasicTests
         byte[] frame = FrameStack
             .Start(AutomotiveEthUdpFrames.TestEthernet())
             .Then(AutomotiveEthUdpFrames.TestIpv4())
-            .Then(new UdpLayer(15000, BenchUdpDestinationPort))
+            .Then(new UdpLayer(15000, _BenchUdpDestinationPort))
             .Then(spdu)
             .CreateWithFixedValues()
             .EmitFrame(ReadOnlySpan<byte>.Empty);
@@ -52,7 +52,7 @@ internal sealed class SignalPduBasicTests
         {
             await File.WriteAllTextAsync(jsonPath, SignalPduConfigBridge.SerializeJson(layout)).ConfigureAwait(false);
 
-            (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame, ConfigureSignalSettings(jsonPath));
+            (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame, _ConfigureSignalSettings(jsonPath));
 
             using (stack)
             {
@@ -69,6 +69,6 @@ internal sealed class SignalPduBasicTests
         }
     }
 
-    private static Action<SettingsManager> ConfigureSignalSettings(string jsonPath) =>
+    private static Action<SettingsManager> _ConfigureSignalSettings(string jsonPath) =>
         sm => sm.PreloadValue("signal_pdu.config_file", jsonPath);
 }

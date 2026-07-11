@@ -20,10 +20,10 @@ namespace NetworkInspector.Profiling.Scenarios;
 internal sealed class FrameBuilderFragmentedScenario : FrameBuilderScenarioBase
 {
     /// <summary>Number of full datagrams to build per timed run.</summary>
-    private const int DatagramCount = 250_000;
+    private const int _DatagramCount = 250_000;
 
     /// <summary>Frame buffer size (link MTU).</summary>
-    private const int FrameBufferSize = 1500;
+    private const int _FrameBufferSize = 1500;
 
     /// <inheritdoc/>
     protected override int PayloadSize => 8000;
@@ -40,11 +40,11 @@ internal sealed class FrameBuilderFragmentedScenario : FrameBuilderScenarioBase
 
     /// <inheritdoc/>
     public override string Description =>
-        $"Build {DatagramCount:N0} Eth/IPv4/UDP datagrams with a {PayloadSize}-byte payload, "
-        + $"emitting six IP fragments per datagram via the new FrameStack fragmentation API.";
+        FormattableString.Invariant(
+            $"Build {_DatagramCount:N0} Eth/IPv4/UDP datagrams with a {PayloadSize}-byte payload, emitting six IP fragments per datagram via the new FrameStack fragmentation API.");
 
     /// <inheritdoc/>
-    public override long WorkUnitsPerIteration => DatagramCount;
+    public override long WorkUnitsPerIteration => _DatagramCount;
 
     /// <inheritdoc/>
     public override string WorkUnitName => "datagrams";
@@ -59,7 +59,7 @@ internal sealed class FrameBuilderFragmentedScenario : FrameBuilderScenarioBase
         EthernetLayer eth = new(
             MacAddress.FromBytes([0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF]),
             MacAddress.FromBytes([0x00, 0x11, 0x22, 0x33, 0x44, 0x55]),
-            maxFrameSize: FrameBufferSize);
+            maxFrameSize: _FrameBufferSize);
         IPv4Layer ip = new(
             new IPv4Address(0x0A000001),
             new IPv4Address(0x0A000002),
@@ -67,14 +67,14 @@ internal sealed class FrameBuilderFragmentedScenario : FrameBuilderScenarioBase
         UdpLayer udp = new(srcPort: 12345, dstPort: 53);
 
         _Stack = FrameStack.Start(eth).Then(ip).Then(udp).CreateWithFixedValues();
-        _Buffer = new byte[FrameBufferSize];
+        _Buffer = new byte[_FrameBufferSize];
     }
 
     /// <inheritdoc/>
     public override void Run()
     {
         Span<byte> dst = _Buffer;
-        for (int i = 0; i < DatagramCount; i++)
+        for (int i = 0; i < _DatagramCount; i++)
         {
             // One full datagram = N fragment frames.  Drain the iterator.
             FrameSequence<StatelessStack<UdpLayer, StatelessStack<IPv4Layer, StatelessStack<EthernetLayer, StackEnd>>>, NoTrailer, NoInterceptor> seq

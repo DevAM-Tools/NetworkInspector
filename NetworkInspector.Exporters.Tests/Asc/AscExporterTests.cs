@@ -184,7 +184,7 @@ internal sealed class AscExporterTests
         using AscExporter exporter = AscExporter.CreateBuilder().ToStream(ms).Build();
 
         byte[] frData = FlexRayGenerators.BuildFlexRayFrame(
-            channel: 1, frameId: 0x000A, cycle: 3, headerCrc: 0xABCD,
+            channel: 0, frameId: 0x000A, cycle: 3, headerCrc: 0x05A3,
             data: [0xDE, 0xAD, 0xBE, 0xEF]);
         Frame frame = TestHarness.CreateFrame(new FrameId(0), 0L, frData, LinkType.Flexray);
         exporter.OnFrame(frame);
@@ -197,8 +197,8 @@ internal sealed class AscExporterTests
         await Assert.That(content).Contains("V9");
         // Frame ID: 4-char uppercase hex
         await Assert.That(content).Contains("000A");
-        // Header CRC: 4-char uppercase hex
-        await Assert.That(content).Contains("ABCD");
+        // Header CRC: 11-bit value, 4-char uppercase hex
+        await Assert.That(content).Contains("05A3");
         // Data bytes
         await Assert.That(content).Contains("DE AD BE EF");
     }

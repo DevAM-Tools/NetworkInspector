@@ -15,7 +15,7 @@ namespace NetworkInspector.Profiling.Scenarios;
 [SuppressMessage("Performance", "CA1812:AvoidUninstantiatedInternalClasses", Justification = "Instantiated via reflection in ScenarioDiscovery.Discover.")]
 internal sealed class FrameBuilderTcpIPv6SessionScenario : FrameBuilderScenarioBase
 {
-    private const int FrameCount = 500_000;
+    private const int _FrameCount = 500_000;
 
     /// <inheritdoc/>
     protected override int PayloadSize => 64;
@@ -31,10 +31,11 @@ internal sealed class FrameBuilderTcpIPv6SessionScenario : FrameBuilderScenarioB
 
     /// <inheritdoc/>
     public override string Description =>
-        $"Stream {FrameCount:N0} TCP/IPv6 segments through a stateful Session with auto-sequence.";
+        FormattableString.Invariant(
+            $"Stream {_FrameCount:N0} TCP/IPv6 segments through a stateful Session with auto-sequence.");
 
     /// <inheritdoc/>
-    public override long WorkUnitsPerIteration => FrameCount;
+    public override long WorkUnitsPerIteration => _FrameCount;
 
     /// <inheritdoc/>
     public override string WorkUnitName => "frames";
@@ -66,7 +67,7 @@ internal sealed class FrameBuilderTcpIPv6SessionScenario : FrameBuilderScenarioB
         using Session<Stack<TcpLayerWithAutoSequence, StatelessStack<IPv6Layer, StatelessStack<EthernetLayer, StackEnd>>>, NoTrailer, NoInterceptor> session
             = _Stack.OpenSession();
 
-        for (int i = 0; i < FrameCount; i++)
+        for (int i = 0; i < _FrameCount; i++)
         {
             session.NextPacket(_Payload).MoveNext(dst, out _);
         }

@@ -9,7 +9,7 @@ namespace NetworkInspector.Profiling.Helpers;
 internal static class SampleFileHelper
 {
     /// <summary>Base directory for profiling temp files.</summary>
-    private static readonly string TempDir = Path.Combine(Path.GetTempPath(), "ni_profiling");
+    private static readonly string _TempDir = Path.Combine(Path.GetTempPath(), "ni_profiling");
 
     /// <summary>
     /// Generates a temporary PCAPNG file containing the given frames.
@@ -19,8 +19,8 @@ internal static class SampleFileHelper
     /// <returns>The full path to the generated PCAPNG file.</returns>
     internal static string CreatePcapngFile(Frame[] frames)
     {
-        Directory.CreateDirectory(TempDir);
-        string path = Path.Combine(TempDir, "profiling_sample.pcapng");
+        Directory.CreateDirectory(_TempDir);
+        string path = Path.Combine(_TempDir, "profiling_sample.pcapng");
 
         using Exporters.Pcapng.PcapngExporter exporter = Exporters.Pcapng.PcapngExporter
             .CreateBuilder()
@@ -47,8 +47,8 @@ internal static class SampleFileHelper
     /// <returns>The full path to the generated BLF file.</returns>
     internal static string CreateBlfFile(Frame[] frames)
     {
-        Directory.CreateDirectory(TempDir);
-        string path = Path.Combine(TempDir, "profiling_sample.blf");
+        Directory.CreateDirectory(_TempDir);
+        string path = Path.Combine(_TempDir, "profiling_sample.blf");
 
         using Exporters.Blf.BlfExporter exporter = Exporters.Blf.BlfExporter
             .CreateBuilder()
@@ -75,9 +75,9 @@ internal static class SampleFileHelper
     {
         try
         {
-            if (Directory.Exists(TempDir))
+            if (Directory.Exists(_TempDir))
             {
-                Directory.Delete(TempDir, recursive: true);
+                Directory.Delete(_TempDir, recursive: true);
             }
         }
         catch (IOException)

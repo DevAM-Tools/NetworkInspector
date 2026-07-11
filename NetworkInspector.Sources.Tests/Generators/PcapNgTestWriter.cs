@@ -12,10 +12,10 @@ internal sealed class PcapNgTestWriter : IDisposable
     // Constants
     // ========================================================================
 
-    private const uint ShbType = 0x0A0D_0D0A;
-    private const uint IdbType = 0x0000_0001;
-    private const uint EpbType = 0x0000_0006;
-    private const uint ByteOrderMagic = 0x1A2B_3C4D;
+    private const uint _ShbType = 0x0A0D_0D0A;
+    private const uint _IdbType = 0x0000_0001;
+    private const uint _EpbType = 0x0000_0006;
+    private const uint _ByteOrderMagic = 0x1A2B_3C4D;
 
     // ========================================================================
     // State
@@ -29,7 +29,7 @@ internal sealed class PcapNgTestWriter : IDisposable
     /// </summary>
     internal PcapNgTestWriter()
     {
-        WriteSectionHeaderBlock();
+        _WriteSectionHeaderBlock();
     }
 
     /// <summary>
@@ -45,10 +45,10 @@ internal sealed class PcapNgTestWriter : IDisposable
     {
         uint interfaceId = (uint)_TsResolutions.Count;
         byte tsResolution = nanosecondResolution ? (byte)9 : (byte)6;
-        ulong divisor = Pow10(tsResolution);
+        ulong divisor = _Pow10(tsResolution);
         _TsResolutions.Add(divisor);
 
-        WriteInterfaceDescriptionBlock(linkType, snapLen, tsResolution);
+        _WriteInterfaceDescriptionBlock(linkType, snapLen, tsResolution);
         return interfaceId;
     }
 
@@ -79,7 +79,7 @@ internal sealed class PcapNgTestWriter : IDisposable
         uint blockLen = (uint)(32 + paddedLen);
 
         Span<byte> header = stackalloc byte[32];
-        BinaryPrimitives.WriteUInt32LittleEndian(header, EpbType);
+        BinaryPrimitives.WriteUInt32LittleEndian(header, _EpbType);
         BinaryPrimitives.WriteUInt32LittleEndian(header[4..], blockLen);
         BinaryPrimitives.WriteUInt32LittleEndian(header[8..], interfaceId);
         BinaryPrimitives.WriteUInt32LittleEndian(header[12..], tsHigh);
@@ -120,14 +120,14 @@ internal sealed class PcapNgTestWriter : IDisposable
     // Block writers
     // ========================================================================
 
-    private void WriteSectionHeaderBlock()
+    private void _WriteSectionHeaderBlock()
     {
         // Minimum SHB: 28 bytes (no options)
         uint blockLen = 28;
         Span<byte> block = stackalloc byte[28];
-        BinaryPrimitives.WriteUInt32LittleEndian(block, ShbType);
+        BinaryPrimitives.WriteUInt32LittleEndian(block, _ShbType);
         BinaryPrimitives.WriteUInt32LittleEndian(block[4..], blockLen);
-        BinaryPrimitives.WriteUInt32LittleEndian(block[8..], ByteOrderMagic);
+        BinaryPrimitives.WriteUInt32LittleEndian(block[8..], _ByteOrderMagic);
         BinaryPrimitives.WriteUInt16LittleEndian(block[12..], 1); // major version
         BinaryPrimitives.WriteUInt16LittleEndian(block[14..], 0); // minor version
         BinaryPrimitives.WriteInt64LittleEndian(block[16..], -1); // section length = unknown
@@ -135,7 +135,7 @@ internal sealed class PcapNgTestWriter : IDisposable
         _Stream.Write(block);
     }
 
-    private void WriteInterfaceDescriptionBlock(LinkType linkType, uint snapLen, byte tsResolution)
+    private void _WriteInterfaceDescriptionBlock(LinkType linkType, uint snapLen, byte tsResolution)
     {
         // Options: if_tsresol (code 9, length 1, padded to 4) + opt_endofopt (4)
         // Options size: 4 (code+len) + 4 (value+padding) + 4 (endofopt) = 12
@@ -144,7 +144,7 @@ internal sealed class PcapNgTestWriter : IDisposable
         uint blockLen = (uint)(20 + optionsLen);
 
         byte[] block = new byte[blockLen];
-        BinaryPrimitives.WriteUInt32LittleEndian(block, IdbType);
+        BinaryPrimitives.WriteUInt32LittleEndian(block, _IdbType);
         BinaryPrimitives.WriteUInt32LittleEndian(block.AsSpan(4), blockLen);
         BinaryPrimitives.WriteUInt16LittleEndian(block.AsSpan(8), (ushort)linkType);
         // reserved 2 bytes at offset 10 (already zero)
@@ -166,7 +166,7 @@ internal sealed class PcapNgTestWriter : IDisposable
     }
 
     /// <summary>Returns 10 raised to <paramref name="exponent"/>; used to convert the pcapng timestamp resolution option to a divisor.</summary>
-    private static ulong Pow10(byte exponent)
+    private static ulong _Pow10(byte exponent)
     {
         ulong result = 1;
         for (int i = 0; i < exponent; i++)

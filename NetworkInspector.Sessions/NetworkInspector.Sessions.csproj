@@ -1,9 +1,7 @@
 <!-- Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root. -->
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <RootNamespace>NetworkInspector.Sessions</RootNamespace>
-    <AssemblyName>NetworkInspector.Sessions</AssemblyName>
-    <Description>Session orchestration for NetworkInspector. Coordinates frame sources, protocol stack parsing, pull-based listeners, and background jobs with thread-safe packet access and indexing.</Description>
+    <Description>Session orchestration for NetworkInspector. Coordinates frame sources, protocol stack parsing, pull-based listeners, and background jobs.</Description>
     <PackageTags>network;session;orchestration;listeners;jobs;packet</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
@@ -15,9 +13,5 @@
   <ItemGroup>
     <ProjectReference Include="..\NetworkInspector.Core\NetworkInspector.Core.csproj" />
     <ProjectReference Include="..\NetworkInspector.Sources\NetworkInspector.Sources.csproj" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <None Include="README.md" Pack="true" PackagePath="" />
   </ItemGroup>
 </Project>

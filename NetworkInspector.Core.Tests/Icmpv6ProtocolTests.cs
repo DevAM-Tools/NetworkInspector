@@ -11,7 +11,7 @@ internal sealed class Icmpv6ProtocolTests
     /// <summary>
     /// Builds a full stack with standard protocols and parses the given frame data.
     /// </summary>
-    private static (Stack Stack, Packet Packet) BuildAndParse(byte[] frameData)
+    private static (Stack Stack, Packet Packet) _BuildAndParse(byte[] frameData)
     {
         using SettingsManager settingsManager = new();
         StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
@@ -37,7 +37,7 @@ internal sealed class Icmpv6ProtocolTests
         byte[] frameData = FrameBuilders.GenerateIcmpv6EchoRequestFrame(
             identifier: 0x5678, sequence: 0x000A, payload: payload);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             // Verify ICMPv6 protocol detected
@@ -81,7 +81,7 @@ internal sealed class Icmpv6ProtocolTests
         byte[] frameData = FrameBuilders.GenerateIcmpv6EchoReplyFrame(
             identifier: 0x9999, sequence: 0x0003, payload: payload);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             // Type = 129 (Echo Reply)
@@ -100,7 +100,7 @@ internal sealed class Icmpv6ProtocolTests
         byte[] frameData = FrameBuilders.GenerateIcmpv6EchoRequestFrame(
             identifier: 0x0001, sequence: 0x0001, payload: payload);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? checksumId = stack.GetFieldId("icmpv6.checksum");
@@ -126,7 +126,7 @@ internal sealed class Icmpv6ProtocolTests
         shortFrame[20] = 58;
         shortFrame[21] = 64; // Hop limit
 
-        (Stack stack, Packet packet) = BuildAndParse(shortFrame);
+        (Stack stack, Packet packet) = _BuildAndParse(shortFrame);
         using (stack)
         {
             await Assert.That(packet.IsFinalized).IsTrue();

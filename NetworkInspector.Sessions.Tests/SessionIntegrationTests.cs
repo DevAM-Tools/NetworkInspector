@@ -22,7 +22,7 @@ internal sealed class SessionIntegrationTests
         session.WaitForCompletion();
 
         // Give the listener slot time to process remaining flags.
-        WaitForCondition(() => listener.TotalPacketsSeen >= frameCount);
+        _WaitForCondition(() => listener.TotalPacketsSeen >= frameCount);
 
         session.Shutdown();
 
@@ -46,7 +46,7 @@ internal sealed class SessionIntegrationTests
         session.WaitForCompletion();
 
         // Wait for the AllSourcesCompleted flag to propagate.
-        WaitForCondition(() => listener.AllSourcesCompletedCount > 0);
+        _WaitForCondition(() => listener.AllSourcesCompletedCount > 0);
 
         session.Shutdown();
 
@@ -68,7 +68,7 @@ internal sealed class SessionIntegrationTests
         session.WaitForCompletion();
 
         // Wait for the listener to process all flags.
-        WaitForCondition(() => listener.AllSourcesCompletedCount > 0);
+        _WaitForCondition(() => listener.AllSourcesCompletedCount > 0);
 
         session.Shutdown();
 
@@ -91,7 +91,7 @@ internal sealed class SessionIntegrationTests
         session.Shutdown();
 
         // Wait for listener thread to drain.
-        WaitForCondition(() => listener.UnsubscribedCount > 0);
+        _WaitForCondition(() => listener.UnsubscribedCount > 0);
 
         await Assert.That(listener.ShuttingDownCount).IsGreaterThanOrEqualTo(1);
         await Assert.That(listener.UnsubscribedCount).IsEqualTo(1);
@@ -150,7 +150,7 @@ internal sealed class SessionIntegrationTests
         session.WaitForCompletion();
 
         // Wait for listener to catch up.
-        WaitForCondition(() => listener.TotalPacketsSeen >= frameCount);
+        _WaitForCondition(() => listener.TotalPacketsSeen >= frameCount);
 
         await Assert.That(session.PacketCount).IsEqualTo(frameCount);
 
@@ -167,11 +167,11 @@ internal sealed class SessionIntegrationTests
         await Assert.That(session.PacketCount).IsEqualTo(frameCount);
 
         // Listener receives re-parsed packets via StackChanged + NewPackets notification.
-        WaitForCondition(() => listener.TotalPacketsSeen >= frameCount * 2);
+        _WaitForCondition(() => listener.TotalPacketsSeen >= frameCount * 2);
         await Assert.That(listener.TotalPacketsSeen).IsGreaterThanOrEqualTo(frameCount * 2);
 
         // Listener received exactly one OnStackChanged callback.
-        WaitForCondition(() => listener.StackChangedCount >= 1);
+        _WaitForCondition(() => listener.StackChangedCount >= 1);
         await Assert.That(listener.StackChangedCount).IsEqualTo(1);
 
         session.Shutdown();
@@ -217,7 +217,7 @@ internal sealed class SessionIntegrationTests
         session.WaitForCompletion();
 
         // Both listeners should see all packets.
-        WaitForCondition(() =>
+        _WaitForCondition(() =>
             listener1.TotalPacketsSeen >= frameCount &&
             listener2.TotalPacketsSeen >= frameCount);
 
@@ -245,7 +245,7 @@ internal sealed class SessionIntegrationTests
         session.Dispose();
 
         // Listener should have been notified and unsubscribed.
-        WaitForCondition(() => listener.UnsubscribedCount > 0);
+        _WaitForCondition(() => listener.UnsubscribedCount > 0);
         await Assert.That(listener.UnsubscribedCount).IsEqualTo(1);
     }
 
@@ -300,7 +300,7 @@ internal sealed class SessionIntegrationTests
     /// Spins for up to ~5 seconds until <paramref name="condition"/> returns true.
     /// Throws <see cref="TimeoutException"/> if the condition is not met.
     /// </summary>
-    private static void WaitForCondition(Func<bool> condition, int timeoutMs = 5000)
+    private static void _WaitForCondition(Func<bool> condition, int timeoutMs = 5000)
     {
         Stopwatch sw = Stopwatch.StartNew();
         SpinWait wait = new();

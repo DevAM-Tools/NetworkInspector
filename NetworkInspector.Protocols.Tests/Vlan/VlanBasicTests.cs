@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Protocols.Tests;
 
@@ -12,7 +12,7 @@ internal sealed class VlanBasicTests
     #region Helper Methods
 
     /// <summary>Builds an Ethernet+VLAN+IPv4+UDP frame with the given VLAN parameters.</summary>
-    private static byte[] BuildVlanFrame(ushort vlanId, byte pcp = 0, byte dei = 0)
+    private static byte[] _BuildVlanFrame(ushort vlanId, byte pcp = 0, byte dei = 0)
     {
         EthernetLayer eth = new(
             MacAddress.FromBytes([0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF]),
@@ -32,7 +32,7 @@ internal sealed class VlanBasicTests
     [Test]
     public async Task Parse_VlanId_CorrectValue()
     {
-        byte[] frame = BuildVlanFrame(100);
+        byte[] frame = _BuildVlanFrame(100);
 
         Packet packet = ProtocolTestHelper.ParseWithSharedStack(frame);
         Stack stack = ProtocolTestHelper.SharedStack;
@@ -44,7 +44,7 @@ internal sealed class VlanBasicTests
     public async Task Parse_VlanId_MaxValue()
     {
         // Maximum VLAN ID: 4095 (12-bit field)
-        byte[] frame = BuildVlanFrame(4095);
+        byte[] frame = _BuildVlanFrame(4095);
 
         Packet packet = ProtocolTestHelper.ParseWithSharedStack(frame);
         Stack stack = ProtocolTestHelper.SharedStack;
@@ -56,7 +56,7 @@ internal sealed class VlanBasicTests
     public async Task Parse_VlanId_Zero()
     {
         // VLAN ID 0 = priority-tagged frame (null VLAN)
-        byte[] frame = BuildVlanFrame(0);
+        byte[] frame = _BuildVlanFrame(0);
 
         Packet packet = ProtocolTestHelper.ParseWithSharedStack(frame);
         Stack stack = ProtocolTestHelper.SharedStack;
@@ -68,7 +68,7 @@ internal sealed class VlanBasicTests
     public async Task Parse_VlanId_One()
     {
         // VLAN ID 1 = default VLAN
-        byte[] frame = BuildVlanFrame(1);
+        byte[] frame = _BuildVlanFrame(1);
 
         Packet packet = ProtocolTestHelper.ParseWithSharedStack(frame);
         Stack stack = ProtocolTestHelper.SharedStack;
@@ -79,7 +79,7 @@ internal sealed class VlanBasicTests
     [Test]
     public async Task Parse_VlanPriority_Zero()
     {
-        byte[] frame = BuildVlanFrame(100, 0);
+        byte[] frame = _BuildVlanFrame(100, 0);
 
         Packet packet = ProtocolTestHelper.ParseWithSharedStack(frame);
         Stack stack = ProtocolTestHelper.SharedStack;
@@ -91,7 +91,7 @@ internal sealed class VlanBasicTests
     public async Task Parse_VlanPriority_Seven()
     {
         // Maximum PCP value (3-bit field: 0-7)
-        byte[] frame = BuildVlanFrame(100, 7);
+        byte[] frame = _BuildVlanFrame(100, 7);
 
         Packet packet = ProtocolTestHelper.ParseWithSharedStack(frame);
         Stack stack = ProtocolTestHelper.SharedStack;
@@ -102,7 +102,7 @@ internal sealed class VlanBasicTests
     [Test]
     public async Task Parse_VlanDei_False()
     {
-        byte[] frame = BuildVlanFrame(100, 0, 0);
+        byte[] frame = _BuildVlanFrame(100, 0, 0);
 
         Packet packet = ProtocolTestHelper.ParseWithSharedStack(frame);
         Stack stack = ProtocolTestHelper.SharedStack;
@@ -113,7 +113,7 @@ internal sealed class VlanBasicTests
     [Test]
     public async Task Parse_VlanDei_True()
     {
-        byte[] frame = BuildVlanFrame(100, 0, 1);
+        byte[] frame = _BuildVlanFrame(100, 0, 1);
 
         Packet packet = ProtocolTestHelper.ParseWithSharedStack(frame);
         Stack stack = ProtocolTestHelper.SharedStack;
@@ -124,7 +124,7 @@ internal sealed class VlanBasicTests
     [Test]
     public async Task Parse_VlanEtherType_IPv4()
     {
-        byte[] frame = BuildVlanFrame(100);
+        byte[] frame = _BuildVlanFrame(100);
 
         Packet packet = ProtocolTestHelper.ParseWithSharedStack(frame);
         Stack stack = ProtocolTestHelper.SharedStack;
@@ -140,7 +140,7 @@ internal sealed class VlanBasicTests
     [Test]
     public async Task Parse_VlanFrame_EtherTypeIs8021Q()
     {
-        byte[] frame = BuildVlanFrame(100);
+        byte[] frame = _BuildVlanFrame(100);
 
         Packet packet = ProtocolTestHelper.ParseWithSharedStack(frame);
         Stack stack = ProtocolTestHelper.SharedStack;
@@ -156,7 +156,7 @@ internal sealed class VlanBasicTests
     [Test]
     public async Task Parse_VlanFrame_VlanProtocolPresent()
     {
-        byte[] frame = BuildVlanFrame(100);
+        byte[] frame = _BuildVlanFrame(100);
 
         Packet packet = ProtocolTestHelper.ParseWithSharedStack(frame);
         Stack stack = ProtocolTestHelper.SharedStack;
@@ -167,7 +167,7 @@ internal sealed class VlanBasicTests
     [Test]
     public async Task Parse_VlanFrame_IPv4ProtocolPresent()
     {
-        byte[] frame = BuildVlanFrame(100);
+        byte[] frame = _BuildVlanFrame(100);
 
         Packet packet = ProtocolTestHelper.ParseWithSharedStack(frame);
         Stack stack = ProtocolTestHelper.SharedStack;
@@ -184,7 +184,7 @@ internal sealed class VlanBasicTests
     public async Task Parse_AllVlanFieldsCombined()
     {
         // VLAN ID 42, priority 5 (Voice), DEI set
-        byte[] frame = BuildVlanFrame(42, 5, 1);
+        byte[] frame = _BuildVlanFrame(42, 5, 1);
 
         Packet packet = ProtocolTestHelper.ParseWithSharedStack(frame);
         Stack stack = ProtocolTestHelper.SharedStack;

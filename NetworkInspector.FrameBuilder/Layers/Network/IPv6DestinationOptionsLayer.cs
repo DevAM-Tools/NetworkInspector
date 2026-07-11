@@ -17,7 +17,7 @@ public readonly struct IPv6DestinationOptionsLayer :
 
     /// <summary>Creates a Destination Options header layer.</summary>
     /// <param name="nextHeader">
-    /// NextHeader field; <see cref="Auto{T}.Compute"/> (default) means auto-patch from inner.
+    /// NextHeader field; <see cref="Auto.Compute"/> (default) means auto-patch from inner.
     /// </param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public IPv6DestinationOptionsLayer(Auto<byte> nextHeader = default)
@@ -54,8 +54,8 @@ public readonly struct IPv6DestinationOptionsLayer :
 
     /// <inheritdoc />
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public void PatchNextProtocol(scoped Span<byte> frame, int myOffset, ushort next)
-        => IPv6ExtensionLayerHelpers.PatchNextProtocol(frame, myOffset, next, _NextHeaderIsExplicit);
+    public void PatchNextProtocol(scoped Span<byte> frame, int myOffset, ushort nextProtocol)
+        => IPv6ExtensionLayerHelpers.PatchNextProtocol(frame, myOffset, nextProtocol, _NextHeaderIsExplicit);
 
     /// <inheritdoc />
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

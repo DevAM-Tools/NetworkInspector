@@ -138,10 +138,10 @@ internal sealed class Eui64Tests
     // === Binary Serialization ===
 
     [Test]
-    public async Task TryGetSerializedSize_Is8()
+    public async Task TryGetWrittenSize_Is8()
     {
         Eui64 eui = new(0x0011223344556677UL);
-        bool ok = eui.TryGetSerializedSize(out int size);
+        bool ok = eui.TryGetWrittenSize(out int size);
         await Assert.That(ok).IsTrue();
         await Assert.That(size).IsEqualTo(8);
     }
@@ -164,6 +164,140 @@ internal sealed class Eui64Tests
     }
 
     [Test]
+    public async Task FromBytes_ShortSpan_ReturnsDefault()
+    {
+        Eui64 eui = Eui64.FromBytes([0x01, 0x02, 0x03]);
+
+        await Assert.That(eui).IsEqualTo(default(Eui64));
+    }
+
+    [Test]
+    public async Task SpanParsable_ParseAndTryParse_Work()
+    {
+        bool tryOk = _TryParseSpan("00:11:22:33:44:55:66:77".AsSpan(), out Eui64 parsed);
+        Eui64 direct = _ParseSpan("00:11:22:33:44:55:66:77".AsSpan());
+
+        await Assert.That(tryOk).IsTrue();
+        await Assert.That(parsed.RawValue).IsEqualTo(0x0011223344556677UL);
+        await Assert.That(direct).IsEqualTo(parsed);
+    }
+
+    [Test]
+    public async Task SpanParsable_Parse_InvalidInput_Throws()
+    {
+        await Assert.That(() =>
+        {
+            _ParseSpan("invalid".AsSpan());
+            return Task.CompletedTask;
+        }).Throws<FormatException>();
+    }
+
+    [Test]
+    public async Task Parsable_ParseAndTryParse_Work()
+    {
+        bool tryOk = _TryParseString("00:11:22:33:44:55:66:77", out Eui64 parsed);
+        Eui64 direct = _ParseString("00:11:22:33:44:55:66:77");
+
+        await Assert.That(tryOk).IsTrue();
+        await Assert.That(parsed.RawValue).IsEqualTo(0x0011223344556677UL);
+        await Assert.That(direct).IsEqualTo(parsed);
+        await Assert.That(_TryParseString(null, out _)).IsFalse();
+    }
+
+    [Test]
+    public async Task Parsable_Parse_InvalidInput_Throws()
+    {
+        await Assert.That(() =>
+        {
+            _ParseString("invalid");
+            return Task.CompletedTask;
+        }).Throws<FormatException>();
+    }
+
+    [Test]
+    public async Task ToBytes_BufferTooSmall_ReturnsZero()
+    {
+        Eui64 eui = new(1UL);
+        int written = eui.ToBytes(stackalloc byte[4]);
+
+        await Assert.That(written).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task TryWrite_BufferTooSmall_ReturnsFalse()
+    {
+        Eui64 eui = new(1UL);
+        bool ok = eui.TryWrite(stackalloc byte[4], out int written);
+
+        await Assert.That(ok).IsFalse();
+        await Assert.That(written).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task Utf8TryFormat_WritesAsciiBytes()
+    {
+        Eui64 eui = new(0x0011223344556677UL);
+        byte[] buffer = new byte[32];
+        bool ok = ((IUtf8SpanFormattable)eui).TryFormat(buffer, out int written, default, null);
+
+        await Assert.That(ok).IsTrue();
+        await Assert.That(written).IsEqualTo(Eui64.FormattedLength);
+    }
+
+    [Test]
+    public async Task Utf8TryFormat_BufferTooSmall_ReturnsFalse()
+    {
+        Eui64 eui = new(1UL);
+        bool ok = ((IUtf8SpanFormattable)eui).TryFormat(stackalloc byte[4], out int written, default, null);
+
+        await Assert.That(ok).IsFalse();
+        await Assert.That(written).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task TryGetStringSize_ReturnsFormattedLength()
+    {
+        Eui64 eui = new(1UL);
+        bool ok = eui.TryGetStringSize(default, null, out int size);
+
+        await Assert.That(ok).IsTrue();
+        await Assert.That(size).IsEqualTo(Eui64.FormattedLength);
+    }
+
+    [Test]
+    public async Task FormatInto_WritesIntoDestination()
+    {
+        Eui64 eui = new(0x0011223344556677UL);
+        char[] buffer = new char[Eui64.FormattedLength];
+        int written = eui.FormatInto(buffer);
+        string formatted = new string(buffer, 0, written);
+
+        await Assert.That(written).IsEqualTo(Eui64.FormattedLength);
+        await Assert.That(formatted).IsEqualTo("00:11:22:33:44:55:66:77");
+    }
+
+    [Test]
+    public async Task ToString_WithFormatProvider_MatchesFormat()
+    {
+        Eui64 eui = new(0x0011223344556677UL);
+
+        await Assert.That(eui.ToString(null, CultureInfo.InvariantCulture))
+            .IsEqualTo("00:11:22:33:44:55:66:77");
+    }
+
+    [Test]
+    public async Task ComparisonOperators_IncludeLessOrEqualAndGreaterOrEqual()
+    {
+        Eui64 lo = new(1UL);
+        Eui64 hi = new(2UL);
+        Eui64 same = new(1UL);
+        await Assert.That(lo <= hi).IsTrue();
+        await Assert.That(hi >= lo).IsTrue();
+        await Assert.That(lo <= same).IsTrue();
+        await Assert.That(lo >= same).IsTrue();
+    }
+
+    [Test]
     public async Task FromBytes_ToBytes_RoundTrip()
     {
         Eui64 original = new(0x0011223344556677UL);
@@ -172,4 +306,32 @@ internal sealed class Eui64Tests
         Eui64 restored = Eui64.FromBytes(buf);
         await Assert.That(restored).IsEqualTo(original);
     }
+
+    private static bool _TryParseSpan(ReadOnlySpan<char> s, out Eui64 result)
+        => _TryParseInterface(s, out result);
+
+    private static Eui64 _ParseSpan(ReadOnlySpan<char> s)
+        => _ParseInterface<Eui64>(s);
+
+    private static bool _TryParseString(string? s, out Eui64 result)
+        => _TryParseStringInterface<Eui64>(s, out result);
+
+    private static Eui64 _ParseString(string s)
+        => _ParseStringInterface<Eui64>(s);
+
+    private static bool _TryParseInterface<T>(ReadOnlySpan<char> s, out T result)
+        where T : struct, ISpanParsable<T>
+        => T.TryParse(s, provider: null!, out result);
+
+    private static T _ParseInterface<T>(ReadOnlySpan<char> s)
+        where T : struct, ISpanParsable<T>
+        => T.Parse(s, provider: null!);
+
+    private static bool _TryParseStringInterface<T>(string? s, out T result)
+        where T : struct, IParsable<T>
+        => T.TryParse(s, provider: null!, out result);
+
+    private static T _ParseStringInterface<T>(string s)
+        where T : struct, IParsable<T>
+        => T.Parse(s, provider: null!);
 }

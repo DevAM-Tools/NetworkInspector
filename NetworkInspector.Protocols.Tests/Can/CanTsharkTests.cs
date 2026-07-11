@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Protocols.Tests;
 
@@ -18,30 +18,30 @@ namespace NetworkInspector.Protocols.Tests;
 /// </remarks>
 internal sealed class CanTsharkTests
 {
-    private const int DltCanSocketcan = 227;
+    private const int _DltCanSocketcan = 227;
 
     #region Frame builders
 
     /// <summary>Standard-ID classic CAN frame with caller-supplied data.</summary>
-    private static byte[] BuildClassicFrame(uint canId, ReadOnlySpan<byte> data)
+    private static byte[] _BuildClassicFrame(uint canId, ReadOnlySpan<byte> data)
     {
         SocketCanLayer can = new(canId, data);
         return FrameStack.Start(can).CreateWithFixedValues().EmitFrame(ReadOnlySpan<byte>.Empty);
     }
 
-    private static byte[] BuildExtendedFrame(uint canId, ReadOnlySpan<byte> data)
+    private static byte[] _BuildExtendedFrame(uint canId, ReadOnlySpan<byte> data)
     {
         SocketCanLayer can = new(canId, data, extended: true);
         return FrameStack.Start(can).CreateWithFixedValues().EmitFrame(ReadOnlySpan<byte>.Empty);
     }
 
-    private static byte[] BuildRemoteFrame(uint canId)
+    private static byte[] _BuildRemoteFrame(uint canId)
     {
         SocketCanLayer can = new(canId, data: ReadOnlySpan<byte>.Empty, remoteTransmissionRequest: true);
         return FrameStack.Start(can).CreateWithFixedValues().EmitFrame(ReadOnlySpan<byte>.Empty);
     }
 
-    private static byte[] BuildErrorFrame(uint canId)
+    private static byte[] _BuildErrorFrame(uint canId)
     {
         SocketCanLayer can = new(canId, data: ReadOnlySpan<byte>.Empty, errorFrame: true);
         return FrameStack.Start(can).CreateWithFixedValues().EmitFrame(ReadOnlySpan<byte>.Empty);
@@ -72,11 +72,11 @@ internal sealed class CanTsharkTests
         {
             data[i] = (byte)(0x10 + i);
         }
-        byte[] frame = BuildClassicFrame(0x123u, data);
+        byte[] frame = _BuildClassicFrame(0x123u, data);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame, LinkType.CanSocketcan);
         using (stack)
         {
-            await TsharkAssert.AssertEquivalentMany(stack, packet, frame, DltCanSocketcan,
+            await TsharkAssert.AssertEquivalentMany(stack, packet, frame, _DltCanSocketcan,
                 ("can.id", "can.id"),
                 ("can.len", "can.len"),
                 ("can.flags.xtd", "can.flags.xtd"),
@@ -92,11 +92,11 @@ internal sealed class CanTsharkTests
     [Test]
     public async Task Can_ExtendedId_FieldsMatchTshark()
     {
-        byte[] frame = BuildExtendedFrame(0x1ABCDEFu, [0x42]);
+        byte[] frame = _BuildExtendedFrame(0x1ABCDEFu, [0x42]);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame, LinkType.CanSocketcan);
         using (stack)
         {
-            await TsharkAssert.AssertEquivalentMany(stack, packet, frame, DltCanSocketcan,
+            await TsharkAssert.AssertEquivalentMany(stack, packet, frame, _DltCanSocketcan,
                 ("can.id", "can.id"),
                 ("can.flags.xtd", "can.flags.xtd"),
                 ("can.len", "can.len")).ConfigureAwait(false);
@@ -111,11 +111,11 @@ internal sealed class CanTsharkTests
     [Test]
     public async Task Can_RemoteTransmissionRequest_FieldsMatchTshark()
     {
-        byte[] frame = BuildRemoteFrame(0x321u);
+        byte[] frame = _BuildRemoteFrame(0x321u);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame, LinkType.CanSocketcan);
         using (stack)
         {
-            await TsharkAssert.AssertEquivalentMany(stack, packet, frame, DltCanSocketcan,
+            await TsharkAssert.AssertEquivalentMany(stack, packet, frame, _DltCanSocketcan,
                 ("can.id", "can.id"),
                 ("can.flags.rtr", "can.flags.rtr"),
                 ("can.flags.xtd", "can.flags.xtd")).ConfigureAwait(false);
@@ -133,11 +133,11 @@ internal sealed class CanTsharkTests
     [Test]
     public async Task Can_ErrorFrame_FieldsMatchTshark()
     {
-        byte[] frame = BuildErrorFrame(0x456u);
+        byte[] frame = _BuildErrorFrame(0x456u);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame, LinkType.CanSocketcan);
         using (stack)
         {
-            await TsharkAssert.AssertEquivalentMany(stack, packet, frame, DltCanSocketcan,
+            await TsharkAssert.AssertEquivalentMany(stack, packet, frame, _DltCanSocketcan,
                 ("can.len", "can.len")).ConfigureAwait(false);
         }
     }

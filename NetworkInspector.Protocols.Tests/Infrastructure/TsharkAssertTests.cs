@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Protocols.Tests.Infrastructure;
 
@@ -17,7 +17,7 @@ namespace NetworkInspector.Protocols.Tests.Infrastructure;
 /// </remarks>
 internal sealed class TsharkAssertTests
 {
-    private static byte[] BuildSampleFrame()
+    private static byte[] _BuildSampleFrame()
     {
         EthernetLayer eth = new(
             MacAddress.FromBytes([0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF]),
@@ -32,7 +32,7 @@ internal sealed class TsharkAssertTests
     [Test]
     public async Task AssertEquivalent_VlanId_PassesWhenNiAndTsharkAgree()
     {
-        byte[] frame = BuildSampleFrame();
+        byte[] frame = _BuildSampleFrame();
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         try
         {
@@ -47,7 +47,7 @@ internal sealed class TsharkAssertTests
     [Test]
     public async Task AssertEquivalent_BasicFields_PassWhenNiAndTsharkAgree()
     {
-        byte[] frame = BuildSampleFrame();
+        byte[] frame = _BuildSampleFrame();
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         try
         {
@@ -65,7 +65,7 @@ internal sealed class TsharkAssertTests
     [Test]
     public async Task AssertEquivalentMany_AllPairs_Passes()
     {
-        byte[] frame = BuildSampleFrame();
+        byte[] frame = _BuildSampleFrame();
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         try
         {
@@ -91,7 +91,7 @@ internal sealed class TsharkAssertTests
             return;
         }
 
-        byte[] frame = BuildSampleFrame();
+        byte[] frame = _BuildSampleFrame();
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         try
         {
@@ -121,7 +121,7 @@ internal sealed class TsharkAssertTests
             return;
         }
 
-        byte[] frame = BuildSampleFrame();
+        byte[] frame = _BuildSampleFrame();
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         try
         {

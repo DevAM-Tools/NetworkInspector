@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Core.Tests;
 
@@ -14,28 +14,28 @@ internal sealed class ParseResultTypedTests
     [Test]
     public async Task Ok_IsSuccess_IsTrue()
     {
-        ParseResult<int> result = ParseResult<int>.Ok(42);
+        ParseResult<int> result = ParseResult.Ok<int>(42);
         await Assert.That(result.IsSuccess).IsTrue();
     }
 
     [Test]
     public async Task Ok_IsError_IsFalse()
     {
-        ParseResult<int> result = ParseResult<int>.Ok(42);
+        ParseResult<int> result = ParseResult.Ok<int>(42);
         await Assert.That(result.IsError).IsFalse();
     }
 
     [Test]
     public async Task Ok_Value_ReturnsStoredValue()
     {
-        ParseResult<string> result = ParseResult<string>.Ok("hello");
+        ParseResult<string> result = ParseResult.Ok<string>("hello");
         await Assert.That(result.Value).IsEqualTo("hello");
     }
 
     [Test]
     public async Task Ok_TryGetValue_ReturnsTrueAndValue()
     {
-        ParseResult<int> result = ParseResult<int>.Ok(7);
+        ParseResult<int> result = ParseResult.Ok<int>(7);
         bool ok = result.TryGetValue(out int value);
         await Assert.That(ok).IsTrue();
         await Assert.That(value).IsEqualTo(7);
@@ -44,7 +44,7 @@ internal sealed class ParseResultTypedTests
     [Test]
     public async Task Ok_TryGetError_ReturnsFalse()
     {
-        ParseResult<int> result = ParseResult<int>.Ok(0);
+        ParseResult<int> result = ParseResult.Ok<int>(0);
         bool hasError = result.TryGetError(out ParseError _);
         await Assert.That(hasError).IsFalse();
     }
@@ -52,7 +52,7 @@ internal sealed class ParseResultTypedTests
     [Test]
     public async Task Ok_ToString_ContainsValue()
     {
-        ParseResult<int> result = ParseResult<int>.Ok(99);
+        ParseResult<int> result = ParseResult.Ok<int>(99);
         await Assert.That(result.ToString()).IsEqualTo("Ok(99)");
     }
 
@@ -61,14 +61,14 @@ internal sealed class ParseResultTypedTests
     [Test]
     public async Task Fail_IsError_IsTrue()
     {
-        ParseResult<int> result = ParseResult<int>.Fail(ParseError.InsufficientData("test"));
+        ParseResult<int> result = ParseResult.Fail<int>(ParseError.InsufficientData("test"));
         await Assert.That(result.IsError).IsTrue();
     }
 
     [Test]
     public async Task Fail_IsSuccess_IsFalse()
     {
-        ParseResult<int> result = ParseResult<int>.Fail(ParseError.InsufficientData("test"));
+        ParseResult<int> result = ParseResult.Fail<int>(ParseError.InsufficientData("test"));
         await Assert.That(result.IsSuccess).IsFalse();
     }
 
@@ -76,7 +76,7 @@ internal sealed class ParseResultTypedTests
     public async Task Fail_Error_ReturnsStoredError()
     {
         ParseError error = ParseError.InvalidData("proto", "bad packet");
-        ParseResult<int> result = ParseResult<int>.Fail(error);
+        ParseResult<int> result = ParseResult.Fail<int>(error);
         await Assert.That(result.Error.Kind).IsEqualTo(ParseErrorKind.InvalidData);
         await Assert.That(result.Error.ProtocolName).IsEqualTo("proto");
         await Assert.That(result.Error.Message).IsEqualTo("bad packet");
@@ -86,7 +86,7 @@ internal sealed class ParseResultTypedTests
     public async Task Fail_TryGetError_ReturnsTrueAndError()
     {
         ParseError error = ParseError.Custom("p", "oops");
-        ParseResult<int> result = ParseResult<int>.Fail(error);
+        ParseResult<int> result = ParseResult.Fail<int>(error);
         bool hasError = result.TryGetError(out ParseError retrieved);
         await Assert.That(hasError).IsTrue();
         await Assert.That(retrieved.Message).IsEqualTo("oops");
@@ -95,7 +95,7 @@ internal sealed class ParseResultTypedTests
     [Test]
     public async Task Fail_TryGetValue_ReturnsFalse()
     {
-        ParseResult<int> result = ParseResult<int>.Fail(ParseError.InsufficientData("p"));
+        ParseResult<int> result = ParseResult.Fail<int>(ParseError.InsufficientData("p"));
         bool ok = result.TryGetValue(out int value);
         await Assert.That(ok).IsFalse();
         await Assert.That(value).IsEqualTo(default(int));
@@ -104,7 +104,7 @@ internal sealed class ParseResultTypedTests
     [Test]
     public async Task Fail_ToString_ContainsErrorMessage()
     {
-        ParseResult<int> result = ParseResult<int>.Fail(ParseError.Custom("p", "boom"));
+        ParseResult<int> result = ParseResult.Fail<int>(ParseError.Custom("p", "boom"));
         await Assert.That(result.ToString()).IsEqualTo("Error(boom)");
     }
 
@@ -113,14 +113,14 @@ internal sealed class ParseResultTypedTests
     [Test]
     public async Task Ok_Error_Throws()
     {
-        ParseResult<int> result = ParseResult<int>.Ok(1);
+        ParseResult<int> result = ParseResult.Ok<int>(1);
         await Assert.That(() => result.Error).Throws<InvalidOperationException>();
     }
 
     [Test]
     public async Task Fail_Value_Throws()
     {
-        ParseResult<int> result = ParseResult<int>.Fail(ParseError.InsufficientData("p"));
+        ParseResult<int> result = ParseResult.Fail<int>(ParseError.InsufficientData("p"));
         await Assert.That(() => result.Value).Throws<InvalidOperationException>();
     }
 

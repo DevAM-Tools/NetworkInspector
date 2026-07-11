@@ -70,14 +70,14 @@ internal static class AscDateParser
                 DateTimeStyles.None,
                 out DateTime parsed))
         {
-            return CivilToEpochSeconds(parsed, dateTimeZone);
+            return _CivilToEpochSeconds(parsed, dateTimeZone);
         }
 
         // Fallback 1: try general parsing with invariant culture.
         if (DateTime.TryParse(dateString, CultureInfo.InvariantCulture,
                 DateTimeStyles.None, out DateTime fallback))
         {
-            return CivilToEpochSeconds(fallback, dateTimeZone);
+            return _CivilToEpochSeconds(fallback, dateTimeZone);
         }
 
         // Fallback 2: try the German locale specifically. Vector tools on a
@@ -93,7 +93,7 @@ internal static class AscDateParser
                 DateTimeStyles.None,
                 out DateTime localParsed))
         {
-            return CivilToEpochSeconds(localParsed, dateTimeZone);
+            return _CivilToEpochSeconds(localParsed, dateTimeZone);
         }
 
         return 0.0;
@@ -105,7 +105,7 @@ internal static class AscDateParser
     /// fields in <paramref name="dateTimeZone"/> so the result is independent of the
     /// host's local timezone.
     /// </summary>
-    private static double CivilToEpochSeconds(DateTime civil, TimeZoneInfo dateTimeZone)
+    private static double _CivilToEpochSeconds(DateTime civil, TimeZoneInfo dateTimeZone)
     {
         DateTime unspecified = DateTime.SpecifyKind(civil, DateTimeKind.Unspecified);
         DateTimeOffset dto = new(unspecified, dateTimeZone.GetUtcOffset(unspecified));

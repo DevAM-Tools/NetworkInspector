@@ -7,7 +7,7 @@ namespace NetworkInspector.FrameBuilder.Tests.Application;
 /// </summary>
 internal sealed class SignalPduLayerWriteRoundTripTests
 {
-    private static SignalPduLayout DualUint16LittleEndianFixture =>
+    private static SignalPduLayout _DualUint16LittleEndianFixture =>
         new()
         {
             PduId = 0x901,
@@ -48,7 +48,7 @@ internal sealed class SignalPduLayerWriteRoundTripTests
     [Test]
     public async Task WriteHeader_EncodesScaledLittleEndianFields()
     {
-        SignalPduLayout layout = DualUint16LittleEndianFixture;
+        SignalPduLayout layout = _DualUint16LittleEndianFixture;
 
         SignalValueSet vals =
             SignalValueSet.For(layout)
@@ -74,7 +74,7 @@ internal sealed class SignalPduLayerWriteRoundTripTests
     [Test]
     public async Task FlexRay_SignalPdu_SignalBytesAtCorrectOffset()
     {
-        SignalPduLayout layout = DualUint16LittleEndianFixture;
+        SignalPduLayout layout = _DualUint16LittleEndianFixture;
 
         SignalValueSet vals =
             SignalValueSet.For(layout)
@@ -116,7 +116,7 @@ internal sealed class SignalPduLayerWriteRoundTripTests
     [Test]
     public async Task Lin_SignalPdu_SignalBytesAtCorrectOffset()
     {
-        SignalPduLayout layout = DualUint16LittleEndianFixture;
+        SignalPduLayout layout = _DualUint16LittleEndianFixture;
 
         SignalValueSet vals =
             SignalValueSet.For(layout)

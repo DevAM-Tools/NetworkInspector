@@ -46,7 +46,7 @@ public sealed partial class BlfSource : IRandomAccessFrameSource, IErrorTolerant
     private readonly Dictionary<(uint ObjectType, ushort Channel), FrameInterfaceId> _InterfaceMap = new();
 
     /// <summary>
-    /// Synchronises concurrent <see cref="GetOrRegisterInterface"/> calls that arrive via
+    /// Synchronises concurrent <see cref="_GetOrRegisterInterface"/> calls that arrive via
     /// the thread-safe <see cref="FrameById"/> path. All writes to <see cref="_InterfaceMap"/>
     /// are guarded by this lock; reads are performed under the lock too to avoid torn reads
     /// on the dictionary's internal state.
@@ -78,7 +78,7 @@ public sealed partial class BlfSource : IRandomAccessFrameSource, IErrorTolerant
 
     /// <summary>
     /// Guards the lifetime of the mmap-backed <see cref="_Backend"/> against a Dispose/read race.
-    /// <see cref="FrameById"/> acquires the read lock for the duration of <see cref="TryBuildFrame"/>
+    /// <see cref="FrameById"/> acquires the read lock for the duration of <see cref="_TryBuildFrame"/>
     /// so that the <see cref="ReadOnlySpan{Byte}"/> returned by the mmap primary view remains valid.
     /// <see cref="Dispose"/> acquires the write lock before disposing the backend, guaranteeing that
     /// all in-flight random-access reads have completed before the pointer is released.
@@ -123,11 +123,11 @@ public sealed partial class BlfSource : IRandomAccessFrameSource, IErrorTolerant
     {
         _Backend = backend;
         _FileInfo = fileInfo;
-        _Index = new BlfFrameIndex();
+        _Index = new();
         _Options = options;
         _UiName = uiName;
         ErrorTolerance = options.ErrorTolerance;
-        _ContainerCache = TwoQueueCache<long, byte[]>.Create2Q(
+        _ContainerCache = TwoQueueCache.Create2Q<long, byte[]>(
             options.CacheBudget,
             ContainerWeigher.Instance);
         _DecompressionSemaphore = new SemaphoreSlim(
@@ -146,10 +146,33 @@ public sealed partial class BlfSource : IRandomAccessFrameSource, IErrorTolerant
     public string? Description => null;
 
     /// <inheritdoc/>
-    public int? EstimatedFrameCount => Volatile.Read(ref _FullyScanned) ? _Index.Count : null;
+    public int? EstimatedFrameCount
+    {
+        get
+        {
+            if (Volatile.Read(ref _FullyScanned))
+            {
+                return _Index.Count;
+            }
+
+            return null;
+        }
+    }
 
     /// <inheritdoc/>
-    public bool IsFrameCountTruncated => Volatile.Read(ref _Scanner)?.IsIndexFull ?? _Index.IsFull;
+    public bool IsFrameCountTruncated
+    {
+        get
+        {
+            BlfIncrementalScanner? scanner = Volatile.Read(ref _Scanner);
+            if (scanner is not null)
+            {
+                return scanner.IsIndexFull;
+            }
+
+            return _Index.IsFull;
+        }
+    }
 
     /// <inheritdoc/>
     public bool IsRunning => Volatile.Read(ref _Started) && !Volatile.Read(ref _Disposed);
@@ -209,7 +232,7 @@ public sealed partial class BlfSource : IRandomAccessFrameSource, IErrorTolerant
     public static BlfSource Open(string path, BlfSourceOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(path);
-        options ??= new BlfSourceOptions();
+        options ??= new();
         string uiName = options.UiName ?? Path.GetFileName(path);
 
         FileInfo fileInfo = new(path);
@@ -222,11 +245,11 @@ public sealed partial class BlfSource : IRandomAccessFrameSource, IErrorTolerant
 
         // Choose backend: in-memory when the file fits within the preload budget;
         // memory-mapped otherwise to avoid pinning large LOH allocations.
-        BlfDataBackend backend = fileSize <= options.PreloadBudget
+        BlfDataBackend backend = options.PreloadBudget.HasValue && fileSize <= options.PreloadBudget.Value
             ? BlfDataBackend.FromMemory(File.ReadAllBytes(path))
             : BlfDataBackend.FromMmap(path, options.MmapSlotCount);
 
-        return OpenFromBackend(backend, uiName, options);
+        return _OpenFromBackend(backend, uiName, options);
     }
 
     /// <summary>
@@ -241,9 +264,9 @@ public sealed partial class BlfSource : IRandomAccessFrameSource, IErrorTolerant
     {
         ArgumentNullException.ThrowIfNull(data);
         ArgumentNullException.ThrowIfNull(uiName);
-        options ??= new BlfSourceOptions();
+        options ??= new();
         BlfDataBackend backend = BlfDataBackend.FromMemory(data);
-        return OpenFromBackend(backend, uiName, options);
+        return _OpenFromBackend(backend, uiName, options);
     }
 
     /// <summary>
@@ -251,7 +274,7 @@ public sealed partial class BlfSource : IRandomAccessFrameSource, IErrorTolerant
     /// from a pre-constructed <see cref="BlfDataBackend"/>.
     /// Takes ownership of <paramref name="backend"/> — disposes it on failure.
     /// </summary>
-    private static BlfSource OpenFromBackend(BlfDataBackend backend, string uiName, BlfSourceOptions options)
+    private static BlfSource _OpenFromBackend(BlfDataBackend backend, string uiName, BlfSourceOptions options)
     {
         // Parse file header from the first bytes of the backend
         ReadOnlySpan<byte> header = backend.GetSpan(0, Format.BlfConstants.FileHeaderMinSize + 128);
@@ -266,11 +289,11 @@ public sealed partial class BlfSource : IRandomAccessFrameSource, IErrorTolerant
 
         if (options.ScanMode == ScanMode.Full)
         {
-            source.ScanFull();
+            source._ScanFull();
         }
         else
         {
-            source.InitializeLazyScanner();
+            source._InitializeLazyScanner();
         }
 
         return source;
@@ -336,7 +359,7 @@ public sealed partial class BlfSource : IRandomAccessFrameSource, IErrorTolerant
                 while (_LastReportedDecompressionFailures < failures)
                 {
                     _LastReportedDecompressionFailures++;
-                    HandleSkip(new FrameReadErrorEventArgs
+                    _HandleSkip(new FrameReadErrorEventArgs
                     {
                         FrameIndex = _NextFrameIndex,
                         FileOffset = -1,
@@ -355,7 +378,7 @@ public sealed partial class BlfSource : IRandomAccessFrameSource, IErrorTolerant
                 while (_LastReportedCorruptedContainerCount < corrupted)
                 {
                     _LastReportedCorruptedContainerCount++;
-                    HandleSkip(new FrameReadErrorEventArgs
+                    _HandleSkip(new FrameReadErrorEventArgs
                     {
                         FrameIndex = _NextFrameIndex,
                         FileOffset = -1,
@@ -374,7 +397,7 @@ public sealed partial class BlfSource : IRandomAccessFrameSource, IErrorTolerant
                 while (_LastReportedTruncatedObjectCount < truncated)
                 {
                     _LastReportedTruncatedObjectCount++;
-                    HandleSkip(new FrameReadErrorEventArgs
+                    _HandleSkip(new FrameReadErrorEventArgs
                     {
                         FrameIndex = _NextFrameIndex,
                         FileOffset = -1,
@@ -402,7 +425,7 @@ public sealed partial class BlfSource : IRandomAccessFrameSource, IErrorTolerant
         {
             cancellationToken.ThrowIfCancellationRequested();
             int frameIndex = _NextFrameIndex++;
-            Frame? frame = BuildFrame(frameIndex, cancellationToken);
+            Frame? frame = _BuildFrame(frameIndex, cancellationToken);
             if (frame is not null)
             {
                 Interlocked.Increment(ref _ReadFrameCount);
@@ -435,7 +458,7 @@ public sealed partial class BlfSource : IRandomAccessFrameSource, IErrorTolerant
     /// the abort flag, so callers (e.g. UI threads) cannot poison sequential consumption.
     /// <para>
     /// Thread-safety: a <see cref="ReaderWriterLockSlim"/> read lock is held for the entire
-    /// duration of <see cref="TryBuildFrame"/> so that the mmap primary view pointer cannot be
+    /// duration of <see cref="_TryBuildFrame"/> so that the mmap primary view pointer cannot be
     /// released by a concurrent <see cref="Dispose"/> call while a span read is in progress.
     /// </para>
     /// </remarks>
@@ -470,7 +493,7 @@ public sealed partial class BlfSource : IRandomAccessFrameSource, IErrorTolerant
                 return null;
             }
 
-            return TryBuildFrame(index, cancellationToken);
+            return _TryBuildFrame(index, cancellationToken);
         }
         finally
         {

@@ -78,8 +78,15 @@ internal sealed class SectionInfo
 
     /// <summary>Retrieves the interface at the given index, or null if out of range.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal InterfaceInfo? Interface(int id) =>
-        (uint)id < (uint)_Interfaces.Count ? _Interfaces[id] : null;
+    internal InterfaceInfo? Interface(int id)
+    {
+        if ((uint)id >= (uint)_Interfaces.Count)
+        {
+            return null;
+        }
+
+        return _Interfaces[id];
+    }
 
     /// <summary>
     /// Parses the options area of a Section Header Block and applies recognized options.

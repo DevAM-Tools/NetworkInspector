@@ -23,37 +23,37 @@ internal sealed class BlfTestGenerator
     // ========================================================================
 
     /// <summary>"LOGG" as little-endian u32.</summary>
-    private const uint FileMagic = 0x47474F4C;
+    private const uint _FileMagic = 0x47474F4C;
 
     /// <summary>"LOBJ" as little-endian u32.</summary>
-    private const uint ObjectMagic = 0x4A424F4C;
+    private const uint _ObjectMagic = 0x4A424F4C;
 
     /// <summary>Minimum file header size.</summary>
-    private const int FileHeaderSize = 144;
+    private const int _FileHeaderSize = 144;
 
     /// <summary>Block header (16B) + V1 log object header (16B).</summary>
-    private const int ObjectHeaderOverhead = 32;
+    private const int _ObjectHeaderOverhead = 32;
 
     /// <summary>V1 header type constant.</summary>
-    private const ushort HeaderTypeV1 = 1;
+    private const ushort _HeaderTypeV1 = 1;
 
     /// <summary>Timestamp flags indicating 1 ns resolution.</summary>
-    private const uint TimestampFlagsNs = 0x02;
+    private const uint _TimestampFlagsNs = 0x02;
 
     /// <summary>LogContainer object type — wraps one or more compressed inner LOBJ objects.</summary>
-    private const uint ObjTypeLogContainer = 10;
+    private const uint _ObjTypeLogContainer = 10;
 
-    /// <summary>BLF container header size in bytes (matches BlfConstants.ContainerHeaderSize).</summary>
-    private const int ContainerHeaderSize = 16;
+    /// <summary>BLF container header size in bytes (matches BlfConstants._ContainerHeaderSize).</summary>
+    private const int _ContainerHeaderSize = 16;
 
     // BLF object type constants (matching BlfConstants)
-    private const uint ObjTypeCanMessage = 1;
-    private const uint ObjTypeCanFdMessage = 100;
-    private const uint ObjTypeLinMessage = 11;
-    private const uint ObjTypeLinMessage2 = 57;
-    private const uint ObjTypeFlexRayRcvMessage = 50;
-    private const uint ObjTypeEthernetFrame = 71;
-    private const uint ObjTypeAppText = 65;
+    private const uint _ObjTypeCanMessage = 1;
+    private const uint _ObjTypeCanFdMessage = 100;
+    private const uint _ObjTypeLinMessage = 11;
+    private const uint _ObjTypeLinMessage2 = 57;
+    private const uint _ObjTypeFlexRayRcvMessage = 50;
+    private const uint _ObjTypeEthernetFrame = 71;
+    private const uint _ObjTypeAppText = 65;
 
     // ========================================================================
     // State
@@ -111,9 +111,9 @@ internal sealed class BlfTestGenerator
     /// <param name="inner">Generator whose queued objects become the container payload.</param>
     internal BlfTestGenerator AddLogContainer(ushort compressionMethod, BlfTestGenerator inner)
     {
-        byte[] uncompressedContent = inner.BuildInnerObjectBytes();
-        byte[] compressedContent = CompressForContainer(compressionMethod, uncompressedContent);
-        return AddLogContainerRaw(compressionMethod, (uint)uncompressedContent.Length, compressedContent);
+        byte[] uncompressedContent = inner._BuildInnerObjectBytes();
+        byte[] compressedContent = _CompressForContainer(compressionMethod, uncompressedContent);
+        return _AddLogContainerRaw(compressionMethod, (uint)uncompressedContent.Length, compressedContent);
     }
 
     /// <summary>
@@ -124,9 +124,9 @@ internal sealed class BlfTestGenerator
     internal BlfTestGenerator AddLogContainerWithWrongSize(
         ushort compressionMethod, BlfTestGenerator inner, uint wrongUncompressedSize)
     {
-        byte[] uncompressedContent = inner.BuildInnerObjectBytes();
-        byte[] compressedContent = CompressForContainer(compressionMethod, uncompressedContent);
-        return AddLogContainerRaw(compressionMethod, wrongUncompressedSize, compressedContent);
+        byte[] uncompressedContent = inner._BuildInnerObjectBytes();
+        byte[] compressedContent = _CompressForContainer(compressionMethod, uncompressedContent);
+        return _AddLogContainerRaw(compressionMethod, wrongUncompressedSize, compressedContent);
     }
 
     /// <summary>
@@ -137,7 +137,7 @@ internal sealed class BlfTestGenerator
     /// </summary>
     internal BlfTestGenerator AddCorruptLogContainer(
         ushort compressionMethod, uint claimedUncompressedSize, byte[] corruptPayload) =>
-        AddLogContainerRaw(compressionMethod, claimedUncompressedSize, corruptPayload);
+        _AddLogContainerRaw(compressionMethod, claimedUncompressedSize, corruptPayload);
 
     /// <summary>
     /// Builds the raw LOBJ bytes for all queued objects <b>without</b> the file header.
@@ -145,12 +145,12 @@ internal sealed class BlfTestGenerator
     /// block header (16B) + V1 log header (16B) + payload + 4-byte alignment padding
     /// for each object.
     /// </summary>
-    private byte[] BuildInnerObjectBytes()
+    private byte[] _BuildInnerObjectBytes()
     {
         int totalSize = 0;
         foreach (PendingObject obj in _Objects)
         {
-            int objSize = ObjectHeaderOverhead + obj.Payload.Length;
+            int objSize = _ObjectHeaderOverhead + obj.Payload.Length;
             int rem = objSize % 4;
             totalSize += rem != 0 ? objSize + (4 - rem) : objSize;
         }
@@ -160,7 +160,7 @@ internal sealed class BlfTestGenerator
         int offset = 0;
         foreach (PendingObject obj in _Objects)
         {
-            offset += WriteObject(span[offset..], obj);
+            offset += _WriteObject(span[offset..], obj);
         }
 
         return result;
@@ -173,7 +173,7 @@ internal sealed class BlfTestGenerator
     /// cannot achieve compression (compressed output would exceed input size — use
     /// more repetitive test content or <c>compressionMethod = 0</c>).
     /// </summary>
-    private static byte[] CompressForContainer(ushort compressionMethod, byte[] data)
+    private static byte[] _CompressForContainer(ushort compressionMethod, byte[] data)
     {
         if (compressionMethod == 0)
         {
@@ -213,7 +213,7 @@ internal sealed class BlfTestGenerator
 
     /// <summary>
     /// Writes the LogContainer payload (container header + compressed bytes) and
-    /// adds it as an LOBJ with type <see cref="ObjTypeLogContainer"/>.
+    /// adds it as an LOBJ with type <see cref="_ObjTypeLogContainer"/>.
     ///
     /// Container header layout (16 bytes):
     ///   [0..2)  compressionMethod (u16 LE)
@@ -225,16 +225,16 @@ internal sealed class BlfTestGenerator
     /// scanner's slice <c>fullObjectData[48..]</c> contains exactly the compressed
     /// bytes — trailing alignment padding zeros are excluded and would confuse LZ4.
     /// </summary>
-    private BlfTestGenerator AddLogContainerRaw(
+    private BlfTestGenerator _AddLogContainerRaw(
         ushort compressionMethod, uint uncompressedSize, byte[] compressedContent)
     {
-        byte[] payload = new byte[ContainerHeaderSize + compressedContent.Length];
+        byte[] payload = new byte[_ContainerHeaderSize + compressedContent.Length];
         BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(0), compressionMethod);
         // [2..8] reserved — zero-initialised
         BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(8), uncompressedSize);
         // [12..16] reserved — zero-initialised
-        compressedContent.CopyTo(payload.AsSpan(ContainerHeaderSize));
-        _Objects.Add(new PendingObject(ObjTypeLogContainer, 0, payload, UnpaddedObjectLength: true));
+        compressedContent.CopyTo(payload.AsSpan(_ContainerHeaderSize));
+        _Objects.Add(new PendingObject(_ObjTypeLogContainer, 0, payload, UnpaddedObjectLength: true));
         return this;
     }
 
@@ -304,7 +304,7 @@ internal sealed class BlfTestGenerator
         // [24..32] uint64 res — left zero by new byte[]
         ethPayload.CopyTo(payload.AsSpan(32));                                      // [32..] payload
 
-        return AddRawObject(ObjTypeEthernetFrame, offsetNanos, payload);
+        return AddRawObject(_ObjTypeEthernetFrame, offsetNanos, payload);
     }
 
     /// <summary>
@@ -345,7 +345,7 @@ internal sealed class BlfTestGenerator
                 .CopyTo(payload.AsSpan(8));
         }
 
-        return AddRawObject(ObjTypeCanMessage, offsetNanos, payload);
+        return AddRawObject(_ObjTypeCanMessage, offsetNanos, payload);
     }
 
     /// <summary>
@@ -418,7 +418,7 @@ internal sealed class BlfTestGenerator
                 .CopyTo(payload.AsSpan(24));
         }
 
-        return AddRawObject(ObjTypeCanFdMessage, offsetNanos, payload);
+        return AddRawObject(_ObjTypeCanFdMessage, offsetNanos, payload);
     }
 
     /// <summary>
@@ -458,7 +458,7 @@ internal sealed class BlfTestGenerator
         BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(26), cycle);
         data.CopyTo(payload.AsSpan(FlexRayHeaderSize));
 
-        return AddRawObject(ObjTypeFlexRayRcvMessage, offsetNanos, payload);
+        return AddRawObject(_ObjTypeFlexRayRcvMessage, offsetNanos, payload);
     }
 
     /// <summary>
@@ -473,7 +473,7 @@ internal sealed class BlfTestGenerator
         payload[2] = (byte)(frameId & 0x3F);
         payload[3] = dlc;
         data[..dlc].CopyTo(payload.AsSpan(4));
-        return AddRawObject(ObjTypeLinMessage, offsetNanos, payload);
+        return AddRawObject(_ObjTypeLinMessage, offsetNanos, payload);
     }
 
     /// <summary>
@@ -500,7 +500,7 @@ internal sealed class BlfTestGenerator
         payload[38] = dlc;                                                     // dlc
         data[..dlc].CopyTo(payload.AsSpan(112));                               // data[8]
         payload[120] = checksum;                                               // crc low byte
-        return AddRawObject(ObjTypeLinMessage2, offsetNanos, payload);
+        return AddRawObject(_ObjTypeLinMessage2, offsetNanos, payload);
     }
 
     /// <summary>
@@ -522,7 +522,7 @@ internal sealed class BlfTestGenerator
         BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(8), (uint)textBytes.Length);
         textBytes.CopyTo(payload.AsSpan(12));
 
-        return AddRawObject(ObjTypeAppText, offsetNanos, payload);
+        return AddRawObject(_ObjTypeAppText, offsetNanos, payload);
     }
 
     // ========================================================================
@@ -535,12 +535,12 @@ internal sealed class BlfTestGenerator
     internal byte[] Build()
     {
         // Calculate total size: file header + all objects
-        int totalSize = FileHeaderSize;
+        int totalSize = _FileHeaderSize;
         foreach (PendingObject obj in _Objects)
         {
-            totalSize += ObjectHeaderOverhead + obj.Payload.Length;
+            totalSize += _ObjectHeaderOverhead + obj.Payload.Length;
             // Pad to 4-byte alignment
-            int remainder = (ObjectHeaderOverhead + obj.Payload.Length) % 4;
+            int remainder = (_ObjectHeaderOverhead + obj.Payload.Length) % 4;
             if (remainder != 0)
             {
                 totalSize += 4 - remainder;
@@ -551,13 +551,13 @@ internal sealed class BlfTestGenerator
         Span<byte> span = result;
 
         // Write file header (144 bytes)
-        WriteFileHeader(span);
+        _WriteFileHeader(span);
 
         // Write objects
-        int offset = FileHeaderSize;
+        int offset = _FileHeaderSize;
         foreach (PendingObject obj in _Objects)
         {
-            offset += WriteObject(span[offset..], obj);
+            offset += _WriteObject(span[offset..], obj);
         }
 
         return result;
@@ -573,13 +573,13 @@ internal sealed class BlfTestGenerator
     /// app_major(1) app_minor(1) len_compressed(8) len_uncompressed(8) obj_count(4)
     /// app_build(4) start_date(16) end_date(16) restore_point_offset(4) padding[]</c>.
     /// </summary>
-    private void WriteFileHeader(Span<byte> span)
+    private void _WriteFileHeader(Span<byte> span)
     {
         // "LOGG" magic
-        BinaryPrimitives.WriteUInt32LittleEndian(span, FileMagic);
+        BinaryPrimitives.WriteUInt32LittleEndian(span, _FileMagic);
 
         // Header size
-        BinaryPrimitives.WriteUInt32LittleEndian(span[4..], FileHeaderSize);
+        BinaryPrimitives.WriteUInt32LittleEndian(span[4..], _FileHeaderSize);
 
         // API version (decimal-encoded — keep historical 0x0403 placeholder)
         BinaryPrimitives.WriteUInt32LittleEndian(span[8..], 0x0403);
@@ -591,13 +591,13 @@ internal sealed class BlfTestGenerator
         // [36..40] application_build (u32) → leave 0.
 
         // Measurement start time at offset 40: BlfDate (16 bytes)
-        WriteBlfDateFromNanos(span[40..], _StartNanos);
+        _WriteBlfDateFromNanos(span[40..], _StartNanos);
 
         // Measurement end time at offset 56: BlfDate (16 bytes)
         long lastTs = _Objects.Count > 0
             ? _StartNanos + _Objects[^1].OffsetNanos + 1_000_000_000L
             : _StartNanos + 1_000_000_000L;
-        WriteBlfDateFromNanos(span[56..], lastTs);
+        _WriteBlfDateFromNanos(span[56..], lastTs);
 
         // [72..76] restore_point_offset → leave 0.
         // [76..144] padding → leave 0.
@@ -610,10 +610,10 @@ internal sealed class BlfTestGenerator
     /// block header's <c>objectLength</c> field is the unpadded total so that
     /// scanners read exactly the payload bytes without trailing zeros.
     /// </summary>
-    private static int WriteObject(Span<byte> span, PendingObject obj)
+    private static int _WriteObject(Span<byte> span, PendingObject obj)
     {
         int payloadLen = obj.Payload.Length;
-        int objectLength = ObjectHeaderOverhead + payloadLen;
+        int objectLength = _ObjectHeaderOverhead + payloadLen;
 
         // Align to 4 bytes
         int remainder = objectLength % 4;
@@ -624,23 +624,23 @@ internal sealed class BlfTestGenerator
         uint storedObjectLength = obj.UnpaddedObjectLength ? (uint)objectLength : (uint)totalSize;
 
         // Block header (16 bytes)
-        BinaryPrimitives.WriteUInt32LittleEndian(span, ObjectMagic);                          // "LOBJ"
-        BinaryPrimitives.WriteUInt16LittleEndian(span[4..], ObjectHeaderOverhead);            // headerSize = 32
-        BinaryPrimitives.WriteUInt16LittleEndian(span[6..], HeaderTypeV1);                    // headerType = 1 (V1)
+        BinaryPrimitives.WriteUInt32LittleEndian(span, _ObjectMagic);                          // "LOBJ"
+        BinaryPrimitives.WriteUInt16LittleEndian(span[4..], _ObjectHeaderOverhead);            // headerSize = 32
+        BinaryPrimitives.WriteUInt16LittleEndian(span[6..], _HeaderTypeV1);                    // headerType = 1 (V1)
         BinaryPrimitives.WriteUInt32LittleEndian(span[8..], storedObjectLength);              // objectLength
         BinaryPrimitives.WriteUInt32LittleEndian(span[12..], obj.ObjectType);                 // objectType
 
         // V1 log object header (16 bytes) at offset 16, per Vector blf_logobjectheader_t:
         //   uint32 flags (4) | uint16 client_index (2) | uint16 object_version (2) | uint64 timestamp (8)
         // flags (u32 LE) — 0x02 = nanosecond resolution
-        BinaryPrimitives.WriteUInt32LittleEndian(span[16..], TimestampFlagsNs);
+        BinaryPrimitives.WriteUInt32LittleEndian(span[16..], _TimestampFlagsNs);
         // clientIndex (u16 LE) = 0 → [20..22] already zero from new byte[]
         // objectVersion (u16 LE) = 0 → [22..24] already zero
         // timestamp (u64 LE) — nanoseconds offset from file start
         BinaryPrimitives.WriteUInt64LittleEndian(span[24..], (ulong)obj.OffsetNanos);
 
         // Payload at offset 32
-        obj.Payload.AsSpan().CopyTo(span[ObjectHeaderOverhead..]);
+        obj.Payload.AsSpan().CopyTo(span[_ObjectHeaderOverhead..]);
 
         return totalSize;
     }
@@ -651,7 +651,7 @@ internal sealed class BlfTestGenerator
     /// new default of <see cref="TimeZoneInfo.Utc"/>; this keeps the round-trip stable
     /// regardless of which machine the tests run on.
     /// </summary>
-    private static void WriteBlfDateFromNanos(Span<byte> span, long nanos)
+    private static void _WriteBlfDateFromNanos(Span<byte> span, long nanos)
     {
         DateTimeOffset utcDto = DateTimeOffset.FromUnixTimeMilliseconds(nanos / 1_000_000L);
         DateTime utc = utcDto.UtcDateTime;

@@ -25,7 +25,7 @@ public readonly struct IPv6RoutingLayer :
 
     /// <summary>Creates a minimal 8-byte Routing header with no type-specific data.</summary>
     /// <param name="nextHeader">
-    /// NextHeader field; <see cref="Auto{T}.Compute"/> (default) means auto-patch from inner.
+    /// NextHeader field; <see cref="Auto.Compute"/> (default) means auto-patch from inner.
     /// </param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public IPv6RoutingLayer(Auto<byte> nextHeader = default)
@@ -40,7 +40,7 @@ public readonly struct IPv6RoutingLayer :
     /// <summary>Creates a Type 2 (Mobile IPv6) Routing header with a 16-byte home address.</summary>
     /// <param name="homeAddress">16-byte IPv6 home address.</param>
     /// <param name="nextHeader">
-    /// NextHeader field; <see cref="Auto{T}.Compute"/> (default) means auto-patch from inner.
+    /// NextHeader field; <see cref="Auto.Compute"/> (default) means auto-patch from inner.
     /// </param>
     /// <exception cref="ArgumentException">Thrown when homeAddress is not 16 bytes.</exception>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -62,7 +62,7 @@ public readonly struct IPv6RoutingLayer :
     /// <param name="segmentsLeft">Segments left field.</param>
     /// <param name="typeSpecificData">Type-specific data; padded to 8-byte boundary.</param>
     /// <param name="nextHeader">
-    /// NextHeader field; <see cref="Auto{T}.Compute"/> (default) means auto-patch from inner.
+    /// NextHeader field; <see cref="Auto.Compute"/> (default) means auto-patch from inner.
     /// </param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public IPv6RoutingLayer(
@@ -138,8 +138,8 @@ public readonly struct IPv6RoutingLayer :
 
     /// <inheritdoc />
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public void PatchNextProtocol(scoped Span<byte> frame, int myOffset, ushort next)
-        => IPv6ExtensionLayerHelpers.PatchNextProtocol(frame, myOffset, next, _NextHeaderIsExplicit);
+    public void PatchNextProtocol(scoped Span<byte> frame, int myOffset, ushort nextProtocol)
+        => IPv6ExtensionLayerHelpers.PatchNextProtocol(frame, myOffset, nextProtocol, _NextHeaderIsExplicit);
 
     /// <inheritdoc />
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

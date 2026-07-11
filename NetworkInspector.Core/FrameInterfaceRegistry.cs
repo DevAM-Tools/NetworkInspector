@@ -105,7 +105,11 @@ public sealed class FrameInterfaceRegistry
     {
         // Read the snapshot once — consistent even if another thread is registering
         FrameInterfaceInfo[] snapshot = Volatile.Read(ref _Interfaces);
-        return (uint)id.Value < (uint)snapshot.Length ? snapshot[id.Value] : null;
+        if ((uint)id.Value < (uint)snapshot.Length)
+        {
+            return snapshot[id.Value];
+        }
+        return null;
     }
 
     /// <summary>
@@ -178,7 +182,11 @@ public sealed class FrameInterfaceRegistry
     public FrameSourceInfo? GetSource(FrameSourceId id)
     {
         FrameSourceInfo[] snapshot = Volatile.Read(ref _Sources);
-        return (uint)id.Value < (uint)snapshot.Length ? snapshot[id.Value] : null;
+        if ((uint)id.Value < (uint)snapshot.Length)
+        {
+            return snapshot[id.Value];
+        }
+        return null;
     }
 
     /// <summary>

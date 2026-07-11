@@ -23,14 +23,14 @@ namespace NetworkInspector.FrameBuilder;
 public readonly struct SomeIpLayer : IStatelessLayer, IPayloadLayer, IPseudoHeaderIndependent
 {
     /// <summary>Offset of the Length field within the SOME/IP header.</summary>
-    private const int LengthOffset = 4;
+    private const int _LengthOffset = 4;
 
     /// <summary>
     /// Number of bytes preceding (and including) the Length field — the
     /// Length field counts everything AFTER these initial 8 bytes
     /// (ServiceId, MethodId, Length itself).
     /// </summary>
-    private const int LengthFieldEndOffset = 8;
+    private const int _LengthFieldEndOffset = 8;
 
     private readonly ushort _ServiceId;
     private readonly ushort _MethodId;
@@ -108,7 +108,7 @@ public readonly struct SomeIpLayer : IStatelessLayer, IPayloadLayer, IPseudoHead
 
         // Length covers ClientId..end of payload = total SOME/IP message
         // size minus the first 8 bytes (ServiceId + MethodId + Length itself).
-        uint length = (uint)(myLength - LengthFieldEndOffset);
-        BinaryPrimitives.WriteUInt32BigEndian(frame.Slice(myOffset + LengthOffset, 4), length);
+        uint length = (uint)(myLength - _LengthFieldEndOffset);
+        BinaryPrimitives.WriteUInt32BigEndian(frame.Slice(myOffset + _LengthOffset, 4), length);
     }
 }

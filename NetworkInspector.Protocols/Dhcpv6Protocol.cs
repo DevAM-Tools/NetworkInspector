@@ -42,97 +42,97 @@ public sealed partial class Dhcpv6Protocol : IProtocol
     public const ulong UdpPortServer = 547;
 
     /// <summary>Minimum size of a client/server DHCPv6 message (msg-type + xid).</summary>
-    private const int FixedHeaderSize = 4;
+    private const int _FixedHeaderSize = 4;
 
     /// <summary>DHCPv6 message-type for RELAY-FORW.</summary>
-    private const byte MsgTypeRelayForward = 12;
+    private const byte _MsgTypeRelayForward = 12;
 
     /// <summary>DHCPv6 message-type for RELAY-REPL.</summary>
-    private const byte MsgTypeRelayReply = 13;
+    private const byte _MsgTypeRelayReply = 13;
 
     /// <summary>DHCPv6 option code OPTION_CLIENTID.</summary>
-    private const ushort OptionClientId = 1;
+    private const ushort _OptionClientId = 1;
 
     /// <summary>DHCPv6 option code OPTION_SERVERID.</summary>
-    private const ushort OptionServerId = 2;
+    private const ushort _OptionServerId = 2;
 
     /// <summary>DHCPv6 option code OPTION_IA_NA.</summary>
-    private const ushort OptionIaNa = 3;
+    private const ushort _OptionIaNa = 3;
 
     /// <summary>DHCPv6 option code OPTION_IA_TA.</summary>
-    private const ushort OptionIaTa = 4;
+    private const ushort _OptionIaTa = 4;
 
     /// <summary>DHCPv6 option code OPTION_IAADDR.</summary>
-    private const ushort OptionIaAddr = 5;
+    private const ushort _OptionIaAddr = 5;
 
     /// <summary>DHCPv6 option code OPTION_ORO (Option Request Option).</summary>
-    private const ushort OptionOro = 6;
+    private const ushort _OptionOro = 6;
 
     /// <summary>DHCPv6 option code OPTION_ELAPSED_TIME.</summary>
-    private const ushort OptionElapsedTime = 8;
+    private const ushort _OptionElapsedTime = 8;
 
     /// <summary>DHCPv6 option code OPTION_STATUS_CODE.</summary>
-    private const ushort OptionStatusCode = 13;
+    private const ushort _OptionStatusCode = 13;
 
     /// <summary>DHCPv6 option code OPTION_RAPID_COMMIT.</summary>
-    private const ushort OptionRapidCommit = 14;
+    private const ushort _OptionRapidCommit = 14;
 
     /// <summary>DHCPv6 option code OPTION_DNS_SERVERS.</summary>
-    private const ushort OptionDnsServers = 23;
+    private const ushort _OptionDnsServers = 23;
 
     /// <summary>DHCPv6 option code OPTION_DOMAIN_LIST.</summary>
-    private const ushort OptionDomainList = 24;
+    private const ushort _OptionDomainList = 24;
 
     /// <summary>DHCPv6 option code OPTION_IA_PD.</summary>
-    private const ushort OptionIaPd = 25;
+    private const ushort _OptionIaPd = 25;
 
     /// <summary>DHCPv6 option code OPTION_IAPREFIX.</summary>
-    private const ushort OptionIaPrefix = 26;
+    private const ushort _OptionIaPrefix = 26;
 
     /// <summary>Index group for always-present DHCPv6 fields.</summary>
-    private const string Dhcpv6IndexGroup = "dhcpv6";
+    private const string _Dhcpv6IndexGroup = "dhcpv6";
 
     /// <summary>Index group for DHCPv6 option fields.</summary>
-    private const string Dhcpv6OptionsIndexGroup = "dhcpv6.options";
+    private const string _Dhcpv6OptionsIndexGroup = "dhcpv6.options";
 
     #endregion
 
     #region Fields
 
-    [BytesField("dhcpv6", "DHCPv6", IndexGroup = Dhcpv6IndexGroup)]
+    [BytesField("dhcpv6", "DHCPv6", IndexGroup = _Dhcpv6IndexGroup)]
     private FieldId _ProtocolFieldId;
 
-    [U64Field("dhcpv6.msgtype", "Message type", IndexGroup = Dhcpv6IndexGroup)]
+    [U64Field("dhcpv6.msgtype", "Message type", IndexGroup = _Dhcpv6IndexGroup)]
     private FieldId _MsgTypeFieldId;
 
-    [U64Field("dhcpv6.xid", "Transaction ID", IndexGroup = Dhcpv6IndexGroup)]
+    [U64Field("dhcpv6.xid", "Transaction ID", IndexGroup = _Dhcpv6IndexGroup)]
     private FieldId _XidFieldId;
 
-    [BytesField("dhcpv6.option", "Option", IndexGroup = Dhcpv6OptionsIndexGroup)]
+    [BytesField("dhcpv6.option", "Option", IndexGroup = _Dhcpv6OptionsIndexGroup)]
     private FieldId _OptionFieldId;
 
-    [U64Field("dhcpv6.option.code", "Option code", IndexGroup = Dhcpv6OptionsIndexGroup)]
+    [U64Field("dhcpv6.option.code", "Option code", IndexGroup = _Dhcpv6OptionsIndexGroup)]
     private FieldId _OptionCodeFieldId;
 
-    [U64Field("dhcpv6.option.length", "Option length", IndexGroup = Dhcpv6OptionsIndexGroup)]
+    [U64Field("dhcpv6.option.length", "Option length", IndexGroup = _Dhcpv6OptionsIndexGroup)]
     private FieldId _OptionLengthFieldId;
 
-    [BytesField("dhcpv6.option.value", "Option value", IndexGroup = Dhcpv6OptionsIndexGroup)]
+    [BytesField("dhcpv6.option.value", "Option value", IndexGroup = _Dhcpv6OptionsIndexGroup)]
     private FieldId _OptionValueFieldId;
 
-    [U64Field("dhcpv6.option.elapsed_time", "Elapsed time", IndexGroup = Dhcpv6OptionsIndexGroup)]
+    [U64Field("dhcpv6.option.elapsed_time", "Elapsed time", IndexGroup = _Dhcpv6OptionsIndexGroup)]
     private FieldId _OptionElapsedTimeFieldId;
 
-    [BoolField("dhcpv6.option.rapid_commit", "Rapid commit", IndexGroup = Dhcpv6OptionsIndexGroup)]
+    [BoolField("dhcpv6.option.rapid_commit", "Rapid commit", IndexGroup = _Dhcpv6OptionsIndexGroup)]
     private FieldId _OptionRapidCommitFieldId;
 
-    [U64Field("dhcpv6.option.status_code", "Status code", IndexGroup = Dhcpv6OptionsIndexGroup)]
+    [U64Field("dhcpv6.option.status_code", "Status code", IndexGroup = _Dhcpv6OptionsIndexGroup)]
     private FieldId _OptionStatusCodeFieldId;
 
-    [IPv6Field("dhcpv6.option.dns_server", "Domain name server", IndexGroup = Dhcpv6OptionsIndexGroup)]
+    [IPv6Field("dhcpv6.option.dns_server", "Domain name server", IndexGroup = _Dhcpv6OptionsIndexGroup)]
     private FieldId _OptionDnsServerFieldId;
 
-    [IPv6Field("dhcpv6.option.iaaddr", "IA Address", IndexGroup = Dhcpv6OptionsIndexGroup)]
+    [IPv6Field("dhcpv6.option.iaaddr", "IA Address", IndexGroup = _Dhcpv6OptionsIndexGroup)]
     private FieldId _OptionIaAddrFieldId;
 
     /// <summary>
@@ -146,9 +146,9 @@ public sealed partial class Dhcpv6Protocol : IProtocol
     /// <returns>Number of bytes consumed, or a <see cref="ParseError"/> describing the failure.</returns>
     public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
     {
-        if (data.Length < FixedHeaderSize)
+        if (data.Length < _FixedHeaderSize)
         {
-            return ParseError.InsufficientDataWithInfo(ProtocolName, FixedHeaderSize, (ulong)data.Length);
+            return ParseError.InsufficientDataWithInfo(ProtocolName, _FixedHeaderSize, (ulong)data.Length);
         }
 
         ReadOnlySpan<byte> span = data.Span;
@@ -157,7 +157,7 @@ public sealed partial class Dhcpv6Protocol : IProtocol
         context.RecordProtocolPresence(_ProtocolId);
         context.RecordGroupPresence(_Dhcpv6GroupId);
 
-        string msgTypeText = GetMessageTypeText(msgType);
+        string msgTypeText = _GetMessageTypeText(msgType);
         LazyString summary = ZA.Lazy("DHCPv6 ", msgTypeText);
         parentField.SetPacketInfo(ZA.Lazy("DHCPv6 ", msgTypeText));
 
@@ -166,7 +166,7 @@ public sealed partial class Dhcpv6Protocol : IProtocol
 
         container.AppendWithCustomText(_MsgTypeFieldId, FieldValue.NewU64(msgType), msgTypeText);
 
-        if (msgType is MsgTypeRelayForward or MsgTypeRelayReply)
+        if (msgType is _MsgTypeRelayForward or _MsgTypeRelayReply)
         {
             // Relay messages have a different header layout (msg-type + hop-count + link-addr + peer-addr).
             // Recognise but do not decode further at this stage.
@@ -177,7 +177,7 @@ public sealed partial class Dhcpv6Protocol : IProtocol
         uint xid = ((uint)span[1] << 16) | ((uint)span[2] << 8) | span[3];
         container.Append(_XidFieldId, FieldValue.NewU64(xid));
 
-        ParseOptions(in container, data[FixedHeaderSize..], in context);
+        _ParseOptions(in container, data[_FixedHeaderSize..], in context);
         return data.Length;
     }
 
@@ -186,7 +186,7 @@ public sealed partial class Dhcpv6Protocol : IProtocol
     /// big-endian code followed by a 2-byte big-endian length and the option
     /// data. There is no End sentinel — parsing stops at end of data.
     /// </summary>
-    private void ParseOptions(in MutField container, ReadOnlyMemory<byte> options, in ParseContext context)
+    private void _ParseOptions(in MutField container, ReadOnlyMemory<byte> options, in ParseContext context)
     {
         ReadOnlySpan<byte> span = options.Span;
         int i = 0;
@@ -200,7 +200,7 @@ public sealed partial class Dhcpv6Protocol : IProtocol
             }
 
             ReadOnlyMemory<byte> optionData = options.Slice(i + 4, length);
-            string codeText = GetOptionCodeText(code);
+            string codeText = _GetOptionCodeText(code);
 
             // First well-formed option proves the dhcpv6.options group is present. Recording
             // here keeps the index free of false positives for option blocks that are empty or
@@ -215,34 +215,34 @@ public sealed partial class Dhcpv6Protocol : IProtocol
             optContainer.Append(_OptionLengthFieldId, FieldValue.NewU64(length));
             optContainer.Append(_OptionValueFieldId, FieldValue.NewBytes(optionData));
 
-            EmitOptionPayload(in optContainer, code, optionData, in context);
+            _EmitOptionPayload(in optContainer, code, optionData, in context);
             i += 4 + length;
         }
     }
 
     /// <summary>Emits option-specific child fields for known DHCPv6 option codes.</summary>
-    private void EmitOptionPayload(in MutField optContainer, ushort code, ReadOnlyMemory<byte> data, in ParseContext context)
+    private void _EmitOptionPayload(in MutField optContainer, ushort code, ReadOnlyMemory<byte> data, in ParseContext context)
     {
         ReadOnlySpan<byte> span = data.Span;
         switch (code)
         {
-            case OptionElapsedTime when span.Length == 2:
+            case _OptionElapsedTime when span.Length == 2:
                 // Elapsed time uses 1/100 second units (RFC 8415 §21.9).
                 optContainer.Append(_OptionElapsedTimeFieldId,
                     FieldValue.NewU64(BinaryPrimitives.ReadUInt16BigEndian(span)));
                 break;
-            case OptionRapidCommit:
+            case _OptionRapidCommit:
                 // Rapid commit is a present/absent flag (RFC 8415 §21.14, length must be 0).
                 optContainer.Append(_OptionRapidCommitFieldId, FieldValue.NewBool(true));
                 break;
-            case OptionStatusCode when span.Length >= 2:
+            case _OptionStatusCode when span.Length >= 2:
                 optContainer.Append(_OptionStatusCodeFieldId,
                     FieldValue.NewU64(BinaryPrimitives.ReadUInt16BigEndian(span[..2])));
                 break;
-            case OptionDnsServers:
-                EmitIpv6List(in optContainer, _OptionDnsServerFieldId, span, in context);
+            case _OptionDnsServers:
+                _EmitIpv6List(in optContainer, _OptionDnsServerFieldId, span, in context);
                 break;
-            case OptionIaAddr when span.Length >= 16:
+            case _OptionIaAddr when span.Length >= 16:
                 optContainer.Append(_OptionIaAddrFieldId, FieldValue.NewIPv6(IPv6Address.FromBytes(span[..16])));
                 break;
             default:
@@ -252,7 +252,7 @@ public sealed partial class Dhcpv6Protocol : IProtocol
     }
 
     /// <summary>Emits each IPv6 address from a tightly packed 16-byte-aligned span.</summary>
-    private static void EmitIpv6List(in MutField optContainer, FieldId fieldId, ReadOnlySpan<byte> span, in ParseContext context)
+    private static void _EmitIpv6List(in MutField optContainer, FieldId fieldId, ReadOnlySpan<byte> span, in ParseContext context)
     {
         for (int i = 0; i + 16 <= span.Length; i += 16)
         {
@@ -261,7 +261,7 @@ public sealed partial class Dhcpv6Protocol : IProtocol
     }
 
     /// <summary>Returns a human-readable label for the DHCPv6 message type byte.</summary>
-    private static string GetMessageTypeText(byte msgType) => msgType switch
+    private static string _GetMessageTypeText(byte msgType) => msgType switch
     {
         1 => "SOLICIT (1)",
         2 => "ADVERTISE (2)",
@@ -274,27 +274,27 @@ public sealed partial class Dhcpv6Protocol : IProtocol
         9 => "DECLINE (9)",
         10 => "RECONFIGURE (10)",
         11 => "INFORMATION-REQUEST (11)",
-        MsgTypeRelayForward => "RELAY-FORW (12)",
-        MsgTypeRelayReply => "RELAY-REPL (13)",
+        _MsgTypeRelayForward => "RELAY-FORW (12)",
+        _MsgTypeRelayReply => "RELAY-REPL (13)",
         _ => "Unknown",
     };
 
     /// <summary>Returns a human-readable label for a DHCPv6 option code.</summary>
-    private static string GetOptionCodeText(ushort code) => code switch
+    private static string _GetOptionCodeText(ushort code) => code switch
     {
-        OptionClientId => "OPTION_CLIENTID",
-        OptionServerId => "OPTION_SERVERID",
-        OptionIaNa => "OPTION_IA_NA",
-        OptionIaTa => "OPTION_IA_TA",
-        OptionIaAddr => "OPTION_IAADDR",
-        OptionOro => "OPTION_ORO",
-        OptionElapsedTime => "OPTION_ELAPSED_TIME",
-        OptionStatusCode => "OPTION_STATUS_CODE",
-        OptionRapidCommit => "OPTION_RAPID_COMMIT",
-        OptionDnsServers => "OPTION_DNS_SERVERS",
-        OptionDomainList => "OPTION_DOMAIN_LIST",
-        OptionIaPd => "OPTION_IA_PD",
-        OptionIaPrefix => "OPTION_IAPREFIX",
+        _OptionClientId => "OPTION_CLIENTID",
+        _OptionServerId => "OPTION_SERVERID",
+        _OptionIaNa => "OPTION_IA_NA",
+        _OptionIaTa => "OPTION_IA_TA",
+        _OptionIaAddr => "OPTION_IAADDR",
+        _OptionOro => "OPTION_ORO",
+        _OptionElapsedTime => "OPTION_ELAPSED_TIME",
+        _OptionStatusCode => "OPTION_STATUS_CODE",
+        _OptionRapidCommit => "OPTION_RAPID_COMMIT",
+        _OptionDnsServers => "OPTION_DNS_SERVERS",
+        _OptionDomainList => "OPTION_DOMAIN_LIST",
+        _OptionIaPd => "OPTION_IA_PD",
+        _OptionIaPrefix => "OPTION_IAPREFIX",
         _ => "Unknown",
     };
 

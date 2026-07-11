@@ -10,7 +10,7 @@ namespace NetworkInspector.Exporters.Pbf;
 internal static class ProtobufEncoder
 {
     /// <summary>Maximum number of bytes a varint can occupy (ceil(64/7) = 10).</summary>
-    private const int MaxVarintLength = 10;
+    private const int _MaxVarintLength = 10;
 
     // -----------------------------------------------------------------------
     // Thread-local UTF-8 scratch buffer for WriteString
@@ -32,7 +32,7 @@ internal static class ProtobufEncoder
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static void WriteVarint(ref PooledBuffer buffer, ulong value)
     {
-        Span<byte> scratch = stackalloc byte[MaxVarintLength];
+        Span<byte> scratch = stackalloc byte[_MaxVarintLength];
         int pos = 0;
         while (value > 0x7F)
         {

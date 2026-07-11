@@ -38,8 +38,8 @@ internal static class TsharkPduTransportSignalUatProfile
     {
         int idBits = pduTransport.IdFieldSize * 8;
         int lengthBits = pduTransport.LengthFieldSize * 8;
-        WritePduTransportIdentifiers(profileDirectory, pduTransport);
-        WritePduTransportExtendedConfig(profileDirectory, udpDestinationPort, idBits, lengthBits);
+        _WritePduTransportIdentifiers(profileDirectory, pduTransport);
+        _WritePduTransportExtendedConfig(profileDirectory, udpDestinationPort, idBits, lengthBits);
     }
 
     /// <summary>
@@ -66,12 +66,12 @@ internal static class TsharkPduTransportSignalUatProfile
         }
 
         EmitPduTransportUdpDescriptors(profileDirectory, udpDestinationPort, pduTransport);
-        WriteSignalPduIdentifiers(profileDirectory, signalLayout);
-        WriteSignalPduSignalList(profileDirectory, signalLayout);
-        WriteSignalPduBindingPduTransport(profileDirectory, pduTransportWireId, signalLayout.PduId);
+        _WriteSignalPduIdentifiers(profileDirectory, signalLayout);
+        _WriteSignalPduSignalList(profileDirectory, signalLayout);
+        _WriteSignalPduBindingPduTransport(profileDirectory, pduTransportWireId, signalLayout.PduId);
     }
 
-    private static void WritePduTransportIdentifiers(string profileDirectory, PduTransportConfigFb cfg)
+    private static void _WritePduTransportIdentifiers(string profileDirectory, PduTransportConfigFb cfg)
     {
         StringBuilder sb = new();
         foreach (PduEntry entry in cfg.Pdus)
@@ -83,10 +83,10 @@ internal static class TsharkPduTransportSignalUatProfile
         }
 
         string path = Path.Combine(profileDirectory, WiresharkPduTransportFilenames.Identifiers + WiresharkCsvUat.Filesuffix);
-        File.WriteAllText(path, sb.ToString(), WiresharkUtf8NoBom());
+        File.WriteAllText(path, sb.ToString(), _WiresharkUtf8NoBom());
     }
 
-    private static void WritePduTransportExtendedConfig(
+    private static void _WritePduTransportExtendedConfig(
         string profileDirectory,
         ushort udpDestinationPort,
         int idFieldBits,
@@ -107,18 +107,18 @@ internal static class TsharkPduTransportSignalUatProfile
             WiresharkCsvUat.UatQuoted(lengthFieldBits),
             WiresharkCsvUat.UatQuoted(WiresharkCsvUat.Hex32Upper(0)));
 
-        File.WriteAllText(path, line + Environment.NewLine, WiresharkUtf8NoBom());
+        File.WriteAllText(path, line + Environment.NewLine, _WiresharkUtf8NoBom());
     }
 
-    private static void WriteSignalPduIdentifiers(string profileDirectory, SignalPduLayout layout)
+    private static void _WriteSignalPduIdentifiers(string profileDirectory, SignalPduLayout layout)
     {
         string path = Path.Combine(profileDirectory, WiresharkSignalPduFilenames.Identifiers + WiresharkCsvUat.Filesuffix);
         string line =
             $"{WiresharkCsvUat.UatQuoted(WiresharkCsvUat.Hex32Upper(layout.PduId))},{WiresharkCsvUat.UatQuoted(layout.Name)}";
-        File.WriteAllText(path, line + Environment.NewLine, WiresharkUtf8NoBom());
+        File.WriteAllText(path, line + Environment.NewLine, _WiresharkUtf8NoBom());
     }
 
-    private static void WriteSignalPduSignalList(string profileDirectory, SignalPduLayout layout)
+    private static void _WriteSignalPduSignalList(string profileDirectory, SignalPduLayout layout)
     {
         ImmutableArray<SignalSpec> sigs = layout.Signals;
         int n = sigs.Length;
@@ -197,10 +197,10 @@ internal static class TsharkPduTransportSignalUatProfile
         }
 
         string path = Path.Combine(profileDirectory, WiresharkSignalPduFilenames.SignalList + WiresharkCsvUat.Filesuffix);
-        File.WriteAllText(path, sb.ToString(), WiresharkUtf8NoBom());
+        File.WriteAllText(path, sb.ToString(), _WiresharkUtf8NoBom());
     }
 
-    private static void WriteSignalPduBindingPduTransport(
+    private static void _WriteSignalPduBindingPduTransport(
         string profileDirectory,
         uint pduTransportWireId,
         uint signalPduMessageId)
@@ -210,10 +210,10 @@ internal static class TsharkPduTransportSignalUatProfile
             ',',
             WiresharkCsvUat.UatQuoted(WiresharkCsvUat.Hex32Upper(pduTransportWireId)),
             WiresharkCsvUat.UatQuoted(WiresharkCsvUat.Hex32Upper(signalPduMessageId)));
-        File.WriteAllText(path, line + Environment.NewLine, WiresharkUtf8NoBom());
+        File.WriteAllText(path, line + Environment.NewLine, _WiresharkUtf8NoBom());
     }
 
-    private static UTF8Encoding WiresharkUtf8NoBom() =>
+    private static UTF8Encoding _WiresharkUtf8NoBom() =>
         new(encoderShouldEmitUTF8Identifier: false);
 
     private static class ProtoFilterSanitizer
@@ -255,7 +255,12 @@ internal static class TsharkPduTransportSignalUatProfile
                 }
             }
 
-            return sb.Length == 0 ? "sig" : sb.ToString();
+            if (sb.Length == 0)
+            {
+                return "sig";
+            }
+
+            return sb.ToString();
         }
     }
 }

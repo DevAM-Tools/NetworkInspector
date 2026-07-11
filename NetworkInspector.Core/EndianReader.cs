@@ -90,22 +90,46 @@ public readonly struct EndianReader(bool byteSwapped)
 
     /// <summary>Conditionally reverses the byte order of an already-loaded 16-bit value.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ushort Swap(ushort value) =>
-        _NeedSwap ? BinaryPrimitives.ReverseEndianness(value) : value;
+    public ushort Swap(ushort value)
+    {
+        if (_NeedSwap)
+        {
+            return BinaryPrimitives.ReverseEndianness(value);
+        }
+        return value;
+    }
 
     /// <summary>Conditionally reverses the byte order of an already-loaded 32-bit value.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public uint Swap(uint value) =>
-        _NeedSwap ? BinaryPrimitives.ReverseEndianness(value) : value;
+    public uint Swap(uint value)
+    {
+        if (_NeedSwap)
+        {
+            return BinaryPrimitives.ReverseEndianness(value);
+        }
+        return value;
+    }
 
     /// <summary>Conditionally reverses the byte order of an already-loaded 64-bit unsigned value.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ulong Swap(ulong value) =>
-        _NeedSwap ? BinaryPrimitives.ReverseEndianness(value) : value;
+    public ulong Swap(ulong value)
+    {
+        if (_NeedSwap)
+        {
+            return BinaryPrimitives.ReverseEndianness(value);
+        }
+        return value;
+    }
 
     /// <summary>Conditionally reverses the byte order of an already-loaded 64-bit signed value.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public long Swap(long value) =>
-        _NeedSwap ? BinaryPrimitives.ReverseEndianness(value) : value;
+    public long Swap(long value)
+    {
+        if (_NeedSwap)
+        {
+            return BinaryPrimitives.ReverseEndianness(value);
+        }
+        return value;
+    }
     #endregion
 }

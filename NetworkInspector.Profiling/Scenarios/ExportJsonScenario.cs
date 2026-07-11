@@ -15,10 +15,10 @@ namespace NetworkInspector.Profiling.Scenarios;
 [SuppressMessage("Performance", "CA1812:AvoidUninstantiatedInternalClasses", Justification = "Instantiated via reflection in ScenarioDiscovery.Discover.")]
 internal sealed class ExportJsonScenario : ExportScenarioBase<Packet>
 {
-    private const int Batch = 10_000;
+    private const int _Batch = 10_000;
 
     /// <inheritdoc/>
-    protected override int BatchSize => Batch;
+    protected override int BatchSize => _Batch;
 
     /// <inheritdoc/>
     protected override int InitialStreamCapacityBytes => 8 * 1024 * 1024; // 8 MiB
@@ -32,7 +32,8 @@ internal sealed class ExportJsonScenario : ExportScenarioBase<Packet>
 
     /// <inheritdoc/>
     public override string Description =>
-        $"Export {Batch:N0} parsed IPv6/UDP packets as JSON (Compact) → MemoryStream per iteration.";
+        FormattableString.Invariant(
+            $"Export {_Batch:N0} parsed IPv6/UDP packets as JSON (Compact) → MemoryStream per iteration.");
 
     /// <inheritdoc/>
     public override string WorkUnitName => "packets";

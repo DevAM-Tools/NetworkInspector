@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Protocols.Tests;
 
@@ -9,7 +9,7 @@ namespace NetworkInspector.Protocols.Tests;
 internal sealed class IPv4BasicTests
 {
     /// <summary>Creates an Ethernet + IPv4 + UDP frame with known values.</summary>
-    private static byte[] BuildIPv4Frame(
+    private static byte[] _BuildIPv4Frame(
         uint srcAddr = 0xC0A80101,  // 192.168.1.1
         uint dstAddr = 0xC0A80102,  // 192.168.1.2
         byte ttl = 64,
@@ -28,7 +28,7 @@ internal sealed class IPv4BasicTests
     [Test]
     public async Task Parse_IPv4_SourceAddress()
     {
-        byte[] frame = BuildIPv4Frame();
+        byte[] frame = _BuildIPv4Frame();
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -39,7 +39,7 @@ internal sealed class IPv4BasicTests
     [Test]
     public async Task Parse_IPv4_DestinationAddress()
     {
-        byte[] frame = BuildIPv4Frame();
+        byte[] frame = _BuildIPv4Frame();
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -50,7 +50,7 @@ internal sealed class IPv4BasicTests
     [Test]
     public async Task Parse_IPv4_Version()
     {
-        byte[] frame = BuildIPv4Frame();
+        byte[] frame = _BuildIPv4Frame();
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -61,7 +61,7 @@ internal sealed class IPv4BasicTests
     [Test]
     public async Task Parse_IPv4_Ttl()
     {
-        byte[] frame = BuildIPv4Frame(ttl: 128);
+        byte[] frame = _BuildIPv4Frame(ttl: 128);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -72,7 +72,7 @@ internal sealed class IPv4BasicTests
     [Test]
     public async Task Parse_IPv4_Protocol_Udp()
     {
-        byte[] frame = BuildIPv4Frame();
+        byte[] frame = _BuildIPv4Frame();
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -84,7 +84,7 @@ internal sealed class IPv4BasicTests
     [Test]
     public async Task Parse_IPv4_DontFragment_Set()
     {
-        byte[] frame = BuildIPv4Frame();
+        byte[] frame = _BuildIPv4Frame();
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -95,7 +95,7 @@ internal sealed class IPv4BasicTests
     [Test]
     public async Task Parse_IPv4_DontFragment_Clear()
     {
-        byte[] frame = BuildIPv4Frame(dontFragment: false);
+        byte[] frame = _BuildIPv4Frame(dontFragment: false);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -106,7 +106,7 @@ internal sealed class IPv4BasicTests
     [Test]
     public async Task Parse_IPv4_HeaderLength()
     {
-        byte[] frame = BuildIPv4Frame();
+        byte[] frame = _BuildIPv4Frame();
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -140,7 +140,7 @@ internal sealed class IPv4BasicTests
         // ip.addr is a metadata-only alias group ({ ip.src, ip.dst }); no ip.addr field is
         // appended. Verifies that the canonical field namespace exposes only ip.src/ip.dst,
         // and the alias group correctly enumerates both members.
-        byte[] frame = BuildIPv4Frame(srcAddr: 0xC0A80101, dstAddr: 0xC0A80102);
+        byte[] frame = _BuildIPv4Frame(srcAddr: 0xC0A80101, dstAddr: 0xC0A80102);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -186,7 +186,7 @@ internal sealed class IPv4BasicTests
     [Test]
     public async Task Parse_IPv4_FlagsContainer_DontFragment_DisplayText()
     {
-        byte[] frame = BuildIPv4Frame(dontFragment: true);
+        byte[] frame = _BuildIPv4Frame(dontFragment: true);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -197,7 +197,7 @@ internal sealed class IPv4BasicTests
     [Test]
     public async Task Parse_IPv4_FlagsContainer_NoFlags_DisplayText()
     {
-        byte[] frame = BuildIPv4Frame(dontFragment: false);
+        byte[] frame = _BuildIPv4Frame(dontFragment: false);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -210,7 +210,7 @@ internal sealed class IPv4BasicTests
     {
         // Verify that ip.flags.df, ip.flags.rb, ip.flags.mf are still resolvable
         // after being re-parented under the new ip.flags NoneField container.
-        byte[] frame = BuildIPv4Frame(dontFragment: true);
+        byte[] frame = _BuildIPv4Frame(dontFragment: true);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {

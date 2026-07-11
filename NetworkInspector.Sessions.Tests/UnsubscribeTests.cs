@@ -24,7 +24,7 @@ internal sealed class UnsubscribeTests
         session.TryStart();
 
         // Wait for initial frames to be consumed.
-        WaitForCondition(() => session.PacketCount >= initialFrames);
+        _WaitForCondition(() => session.PacketCount >= initialFrames);
 
         // Unsubscribe the source — should cancel its job.
         JobInfo sourceJob = session.GetJobs().First(
@@ -34,7 +34,7 @@ internal sealed class UnsubscribeTests
         await Assert.That(result).IsTrue();
 
         // Wait for the source job to reach a terminal state.
-        WaitForCondition(
+        _WaitForCondition(
             () => sourceJob.Status is JobStatus.Cancelled or JobStatus.Completed);
 
         // The source should have stopped producing frames shortly after unsubscribe.
@@ -81,7 +81,7 @@ internal sealed class UnsubscribeTests
         session.TryAddListener(listener, out _);
         session.TryStart();
 
-        WaitForCondition(() => session.PacketCount >= initialFrames);
+        _WaitForCondition(() => session.PacketCount >= initialFrames);
 
         // Unsubscribe the only source.
         JobInfo sourceJob = session.GetJobs().First(
@@ -91,7 +91,7 @@ internal sealed class UnsubscribeTests
         await Assert.That(result).IsTrue();
 
         // Session should transition to Stopped since all sources are done.
-        WaitForCondition(
+        _WaitForCondition(
             () => session.Phase == SessionPhase.Stopped);
 
         await Assert.That(session.Phase).IsEqualTo(SessionPhase.Stopped);
@@ -111,14 +111,14 @@ internal sealed class UnsubscribeTests
         session.TryAddFrameSource(source, out FrameSourceInfo? sourceInfo);
         session.TryStart();
 
-        WaitForCondition(() => session.PacketCount >= initialFrames);
+        _WaitForCondition(() => session.PacketCount >= initialFrames);
 
         // Use convenience API.
         await Assert.That(sourceInfo!.IsStoppable).IsTrue();
         sourceInfo.Stop();
 
         // Wait for the source to stop.
-        WaitForCondition(
+        _WaitForCondition(
             () => session.Phase == SessionPhase.Stopped);
 
         await Assert.That(session.PacketCount).IsGreaterThanOrEqualTo(initialFrames);
@@ -141,7 +141,7 @@ internal sealed class UnsubscribeTests
         session.TryAddListener(listener, out ListenerInfo? listenerInfo);
         session.TryStart();
 
-        WaitForCondition(() => session.PacketCount >= frameCount);
+        _WaitForCondition(() => session.PacketCount >= frameCount);
 
         // Find the listener's job.
         JobInfo listenerJob = session.GetJobs().First(
@@ -151,7 +151,7 @@ internal sealed class UnsubscribeTests
         await Assert.That(result).IsTrue();
 
         // OnUnsubscribed should have been called.
-        WaitForCondition(() => listener.UnsubscribedCount > 0);
+        _WaitForCondition(() => listener.UnsubscribedCount > 0);
         await Assert.That(listener.UnsubscribedCount).IsEqualTo(1);
 
         // Status should be Unsubscribed.
@@ -176,13 +176,13 @@ internal sealed class UnsubscribeTests
         session.TryAddListener(listener, out ListenerInfo? listenerInfo);
         session.TryStart();
 
-        WaitForCondition(() => session.PacketCount >= frameCount);
+        _WaitForCondition(() => session.PacketCount >= frameCount);
 
         // Use convenience API.
         listenerInfo!.Unsubscribe();
 
         // OnUnsubscribed should have been called.
-        WaitForCondition(() => listener.UnsubscribedCount > 0);
+        _WaitForCondition(() => listener.UnsubscribedCount > 0);
         await Assert.That(listener.UnsubscribedCount).IsEqualTo(1);
         await Assert.That(listenerInfo.Status).IsEqualTo(SubscriptionStatus.Unsubscribed);
 
@@ -233,14 +233,14 @@ internal sealed class UnsubscribeTests
         await Assert.That(jobInfo).IsNotNull();
 
         // Wait for the job to start.
-        WaitForCondition(() => jobInfo!.Status == JobStatus.Running);
+        _WaitForCondition(() => jobInfo!.Status == JobStatus.Running);
 
         // Unsubscribe the user job.
         bool result = session.TryUnsubscribe(jobInfo!);
 
         await Assert.That(result).IsTrue();
 
-        WaitForCondition(
+        _WaitForCondition(
             () => jobInfo!.Status is JobStatus.Cancelled or JobStatus.Completed);
 
         session.Shutdown();
@@ -262,7 +262,7 @@ internal sealed class UnsubscribeTests
         // Source job is already completed.
         JobInfo sourceJob = session.GetJobs().First(
             j => j.UiName == source.UiName);
-        WaitForCondition(
+        _WaitForCondition(
             () => sourceJob.Status is JobStatus.Completed or JobStatus.Cancelled);
 
         bool result = session.TryUnsubscribe(sourceJob);
@@ -295,7 +295,7 @@ internal sealed class UnsubscribeTests
     /// <summary>
     /// Spins for up to ~5 seconds until <paramref name="condition"/> returns true.
     /// </summary>
-    private static void WaitForCondition(Func<bool> condition, int timeoutMs = 5000)
+    private static void _WaitForCondition(Func<bool> condition, int timeoutMs = 5000)
     {
         Stopwatch sw = Stopwatch.StartNew();
         SpinWait wait = new();

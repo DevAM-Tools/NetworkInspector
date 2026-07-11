@@ -11,7 +11,7 @@ internal sealed class EndToEndParseTests
     /// <summary>
     /// Builds a Stack with a mock Ethernet protocol set as the packet protocol.
     /// </summary>
-    private static (Stack Stack, MockEthernetProtocol Eth, ProtocolId EthId) BuildEthernetStack()
+    private static (Stack Stack, MockEthernetProtocol Eth, ProtocolId EthId) _BuildEthernetStack()
     {
         using SettingsManager settingsManager = new();
         StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
@@ -25,7 +25,7 @@ internal sealed class EndToEndParseTests
     /// <summary>
     /// Creates a minimal 14-byte Ethernet frame.
     /// </summary>
-    private static byte[] BuildEthernetFrame(
+    private static byte[] _BuildEthernetFrame(
         byte[] dstMac, byte[] srcMac, ushort ethertype)
     {
         byte[] frame = new byte[14];
@@ -35,7 +35,7 @@ internal sealed class EndToEndParseTests
         return frame;
     }
 
-    private static Packet ParseTestFrame(Stack stack, byte[] frameData, ProtocolId firstProtocolId)
+    private static Packet _ParseTestFrame(Stack stack, byte[] frameData, ProtocolId firstProtocolId)
     {
         Frame frame = Frame.Create(
             new FrameId(1),
@@ -55,15 +55,15 @@ internal sealed class EndToEndParseTests
     [Test]
     public async Task Parse_ValidEthernetFrame_CreatesFields()
     {
-        (Stack? stack, MockEthernetProtocol _, ProtocolId ethId) = BuildEthernetStack();
+        (Stack? stack, MockEthernetProtocol _, ProtocolId ethId) = _BuildEthernetStack();
         using (stack)
         {
-            byte[] frameData = BuildEthernetFrame(
+            byte[] frameData = _BuildEthernetFrame(
                 [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF],
                 [0x00, 0x11, 0x22, 0x33, 0x44, 0x55],
                 0x0800);
 
-            Packet packet = ParseTestFrame(stack, frameData, ethId);
+            Packet packet = _ParseTestFrame(stack, frameData, ethId);
 
             bool isFinalized = packet.IsFinalized;
             int fieldCountBeforeMaterialize = packet.FieldCount();
@@ -82,15 +82,15 @@ internal sealed class EndToEndParseTests
     [Test]
     public async Task Parse_ValidEthernetFrame_FieldValuesCorrect()
     {
-        (Stack? stack, MockEthernetProtocol? eth, ProtocolId ethId) = BuildEthernetStack();
+        (Stack? stack, MockEthernetProtocol? eth, ProtocolId ethId) = _BuildEthernetStack();
         using (stack)
         {
-            byte[] frameData = BuildEthernetFrame(
+            byte[] frameData = _BuildEthernetFrame(
                 [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF],
                 [0x00, 0x11, 0x22, 0x33, 0x44, 0x55],
                 0x0800);
 
-            Packet packet = ParseTestFrame(stack, frameData, ethId);
+            Packet packet = _ParseTestFrame(stack, frameData, ethId);
 
             // Extract values before any await (Field is a ref struct)
             string? dstMacStr = null;
@@ -129,11 +129,11 @@ internal sealed class EndToEndParseTests
     [Test]
     public async Task Parse_ShortData_ProducesError()
     {
-        (Stack? stack, MockEthernetProtocol _, ProtocolId ethId) = BuildEthernetStack();
+        (Stack? stack, MockEthernetProtocol _, ProtocolId ethId) = _BuildEthernetStack();
         using (stack)
         {
             byte[] shortData = new byte[10];
-            Packet packet = ParseTestFrame(stack, shortData, ethId);
+            Packet packet = _ParseTestFrame(stack, shortData, ethId);
 
             bool isFinalized = packet.IsFinalized;
             bool rootFieldValid = packet.RootField().FieldId.IsValid;
@@ -146,7 +146,7 @@ internal sealed class EndToEndParseTests
     [Test]
     public async Task Parse_EmptyData_ProducesError()
     {
-        (Stack? stack, MockEthernetProtocol _, ProtocolId ethId) = BuildEthernetStack();
+        (Stack? stack, MockEthernetProtocol _, ProtocolId ethId) = _BuildEthernetStack();
         using (stack)
         {
             Frame frame = Frame.Create(
@@ -171,15 +171,15 @@ internal sealed class EndToEndParseTests
     [Test]
     public async Task Parse_FieldTreeNavigation_RootHasChildren()
     {
-        (Stack? stack, MockEthernetProtocol _, ProtocolId ethId) = BuildEthernetStack();
+        (Stack? stack, MockEthernetProtocol _, ProtocolId ethId) = _BuildEthernetStack();
         using (stack)
         {
-            byte[] frameData = BuildEthernetFrame(
+            byte[] frameData = _BuildEthernetFrame(
                 [0x01, 0x02, 0x03, 0x04, 0x05, 0x06],
                 [0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F],
                 0x86DD);
 
-            Packet packet = ParseTestFrame(stack, frameData, ethId);
+            Packet packet = _ParseTestFrame(stack, frameData, ethId);
 
             Field root = packet.RootField();
             bool isRoot = root.IsRoot;
@@ -196,15 +196,15 @@ internal sealed class EndToEndParseTests
     [Test]
     public async Task Parse_FieldTreeNavigation_SiblingTraversal()
     {
-        (Stack? stack, MockEthernetProtocol _, ProtocolId ethId) = BuildEthernetStack();
+        (Stack? stack, MockEthernetProtocol _, ProtocolId ethId) = _BuildEthernetStack();
         using (stack)
         {
-            byte[] frameData = BuildEthernetFrame(
+            byte[] frameData = _BuildEthernetFrame(
                 [0x01, 0x02, 0x03, 0x04, 0x05, 0x06],
                 [0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F],
                 0x0800);
 
-            Packet packet = ParseTestFrame(stack, frameData, ethId);
+            Packet packet = _ParseTestFrame(stack, frameData, ethId);
 
             Field root = packet.RootField();
             // Root has 2 children: packet container + eth container
@@ -231,15 +231,15 @@ internal sealed class EndToEndParseTests
     [Test]
     public async Task Parse_FieldTreeNavigation_ParentNavigation()
     {
-        (Stack? stack, MockEthernetProtocol _, ProtocolId ethId) = BuildEthernetStack();
+        (Stack? stack, MockEthernetProtocol _, ProtocolId ethId) = _BuildEthernetStack();
         using (stack)
         {
-            byte[] frameData = BuildEthernetFrame(
+            byte[] frameData = _BuildEthernetFrame(
                 [0x01, 0x02, 0x03, 0x04, 0x05, 0x06],
                 [0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F],
                 0x0800);
 
-            Packet packet = ParseTestFrame(stack, frameData, ethId);
+            Packet packet = _ParseTestFrame(stack, frameData, ethId);
 
             Field root = packet.RootField();
             ushort rootIndex = root.StorageIndex;
@@ -276,7 +276,7 @@ internal sealed class EndToEndParseTests
 
         using (stack)
         {
-            byte[] frameData = BuildEthernetFrame(
+            byte[] frameData = _BuildEthernetFrame(
                 [0x01, 0x02, 0x03, 0x04, 0x05, 0x06],
                 [0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F],
                 0x0800);
@@ -310,15 +310,15 @@ internal sealed class EndToEndParseTests
     [Test]
     public async Task Parse_FieldCount_MatchesExpected()
     {
-        (Stack? stack, MockEthernetProtocol _, ProtocolId ethId) = BuildEthernetStack();
+        (Stack? stack, MockEthernetProtocol _, ProtocolId ethId) = _BuildEthernetStack();
         using (stack)
         {
-            byte[] frameData = BuildEthernetFrame(
+            byte[] frameData = _BuildEthernetFrame(
                 [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF],
                 [0x00, 0x00, 0x00, 0x00, 0x00, 0x01],
                 0x0800);
 
-            Packet packet = ParseTestFrame(stack, frameData, ethId);
+            Packet packet = _ParseTestFrame(stack, frameData, ethId);
 
             // Before materialization: root(1) + packet(1) + packet.id(1) + packet.timestamp(1)
             //   + packet.frame_source_id(1) + packet.info(1) + lazy eth container(1) = 7
@@ -387,15 +387,15 @@ internal sealed class EndToEndParseTests
     [Test]
     public async Task Parse_FieldByIndex_ValidAccess()
     {
-        (Stack? stack, MockEthernetProtocol _, ProtocolId ethId) = BuildEthernetStack();
+        (Stack? stack, MockEthernetProtocol _, ProtocolId ethId) = _BuildEthernetStack();
         using (stack)
         {
-            byte[] frameData = BuildEthernetFrame(
+            byte[] frameData = _BuildEthernetFrame(
                 [0x01, 0x02, 0x03, 0x04, 0x05, 0x06],
                 [0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F],
                 0x0800);
 
-            Packet packet = ParseTestFrame(stack, frameData, ethId);
+            Packet packet = _ParseTestFrame(stack, frameData, ethId);
 
             bool hasRoot = packet.TryGetFieldAt(0, out Field rootField);
             bool isRoot = rootField.IsRoot;

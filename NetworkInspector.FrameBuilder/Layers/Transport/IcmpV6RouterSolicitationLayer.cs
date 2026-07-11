@@ -17,8 +17,8 @@ namespace NetworkInspector.FrameBuilder;
 public readonly struct IcmpV6RouterSolicitationLayer :
     IStatelessLayer, IProvidesProtocolType, IProvidesNextProtocolValue<IpNextProtocolKind>, IRequiresPseudoHeader
 {
-    private const int ChecksumOffset = 2;
-    private const int HeaderBytes = 8; // 4-byte ICMPv6 common + 4-byte reserved
+    private const int _ChecksumOffset = 2;
+    private const int _HeaderBytes = 8; // 4-byte ICMPv6 common + 4-byte reserved
 
     /// <summary>Explicit checksum value when the caller pinned one.</summary>
     private readonly ushort _ExplicitChecksum;
@@ -39,7 +39,7 @@ public readonly struct IcmpV6RouterSolicitationLayer :
     public int HeaderSize
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => HeaderBytes;
+        get => _HeaderBytes;
     }
 
     /// <inheritdoc />
@@ -86,15 +86,15 @@ public readonly struct IcmpV6RouterSolicitationLayer :
     {
         if (isExplicit)
         {
-            BinaryPrimitives.WriteUInt16BigEndian(frame.Slice(myOffset + ChecksumOffset, 2), explicitValue);
+            BinaryPrimitives.WriteUInt16BigEndian(frame.Slice(myOffset + _ChecksumOffset, 2), explicitValue);
             return;
         }
-        frame[myOffset + ChecksumOffset] = 0;
-        frame[myOffset + ChecksumOffset + 1] = 0;
+        frame[myOffset + _ChecksumOffset] = 0;
+        frame[myOffset + _ChecksumOffset + 1] = 0;
         ReadOnlySpan<byte> segment = frame.Slice(myOffset, myLength);
         ReadOnlySpan<byte> srcIp = ctx.PseudoSrcIp[..ctx.PseudoIpLength];
         ReadOnlySpan<byte> dstIp = ctx.PseudoDstIp[..ctx.PseudoIpLength];
         ushort checksum = ChecksumUtils.PseudoHeaderIPv6(srcIp, dstIp, IpProtocols.IcmpV6, segment);
-        BinaryPrimitives.WriteUInt16BigEndian(frame.Slice(myOffset + ChecksumOffset, 2), checksum);
+        BinaryPrimitives.WriteUInt16BigEndian(frame.Slice(myOffset + _ChecksumOffset, 2), checksum);
     }
 }

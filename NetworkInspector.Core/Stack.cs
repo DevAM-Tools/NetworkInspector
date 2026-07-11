@@ -165,7 +165,7 @@ public sealed class Stack : IStack, IDisposable
     #region Index Validation
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static bool IsValidIndex(int idValue, int count) => (uint)idValue < (uint)count;
+    private static bool _IsValidIndex(int idValue, int count) => (uint)idValue < (uint)count;
 
     #endregion
 
@@ -217,13 +217,25 @@ public sealed class Stack : IStack, IDisposable
 
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ProtocolInfo? GetProtocol(ProtocolId id) =>
-        IsValidIndex(id.Value, _Protocols.Length) ? _Protocols[id.Value] : null;
+    public ProtocolInfo? GetProtocol(ProtocolId id)
+    {
+        if (_IsValidIndex(id.Value, _Protocols.Length))
+        {
+            return _Protocols[id.Value];
+        }
+        return null;
+    }
 
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ProtocolId? GetProtocolId(string name) =>
-        _ProtocolNameMap.TryGetValue(name, out ProtocolId id) ? id : null;
+    public ProtocolId? GetProtocolId(string name)
+    {
+        if (_ProtocolNameMap.TryGetValue(name, out ProtocolId id))
+        {
+            return id;
+        }
+        return null;
+    }
 
     /// <inheritdoc/>
     public ReadOnlyMemory<ProtocolInfo> Protocols => _Protocols;
@@ -237,13 +249,25 @@ public sealed class Stack : IStack, IDisposable
 
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public FieldInfo? GetField(FieldId id) =>
-        IsValidIndex(id.Value, _Fields.Length) ? _Fields[id.Value] : null;
+    public FieldInfo? GetField(FieldId id)
+    {
+        if (_IsValidIndex(id.Value, _Fields.Length))
+        {
+            return _Fields[id.Value];
+        }
+        return null;
+    }
 
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public FieldId? GetFieldId(string name) =>
-        _FieldNameMap.TryGetValue(name, out FieldId id) ? id : null;
+    public FieldId? GetFieldId(string name)
+    {
+        if (_FieldNameMap.TryGetValue(name, out FieldId id))
+        {
+            return id;
+        }
+        return null;
+    }
 
     /// <inheritdoc/>
     public ReadOnlyMemory<FieldInfo> Fields => _Fields;
@@ -255,9 +279,12 @@ public sealed class Stack : IStack, IDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public IndexGroupId GetFieldIndexGroup(FieldId fieldId)
     {
-        if (IsValidIndex(fieldId.Value, _Fields.Length))
+        if (_IsValidIndex(fieldId.Value, _Fields.Length))
         {
-            return _Fields[fieldId.Value].IndexGroup ?? IndexGroupId.Invalid;
+            if (_Fields[fieldId.Value].IndexGroup is { } indexGroup)
+            {
+                return indexGroup;
+            }
         }
         return IndexGroupId.Invalid;
     }
@@ -268,13 +295,25 @@ public sealed class Stack : IStack, IDisposable
 
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public FieldAliasGroupInfo? GetFieldAliasGroup(FieldAliasGroupId id) =>
-        IsValidIndex(id.Value, _FieldAliasGroups.Length) ? _FieldAliasGroups[id.Value] : null;
+    public FieldAliasGroupInfo? GetFieldAliasGroup(FieldAliasGroupId id)
+    {
+        if (_IsValidIndex(id.Value, _FieldAliasGroups.Length))
+        {
+            return _FieldAliasGroups[id.Value];
+        }
+        return null;
+    }
 
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public FieldAliasGroupId? GetFieldAliasGroupId(string name) =>
-        _FieldAliasGroupNameMap.TryGetValue(name, out FieldAliasGroupId id) ? id : null;
+    public FieldAliasGroupId? GetFieldAliasGroupId(string name)
+    {
+        if (_FieldAliasGroupNameMap.TryGetValue(name, out FieldAliasGroupId id))
+        {
+            return id;
+        }
+        return null;
+    }
 
     /// <inheritdoc/>
     public ReadOnlyMemory<FieldAliasGroupInfo> FieldAliasGroups => _FieldAliasGroups;
@@ -288,13 +327,25 @@ public sealed class Stack : IStack, IDisposable
 
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public IndexGroupInfo? GetIndexGroup(IndexGroupId id) =>
-        IsValidIndex(id.Value, _IndexGroups.Length) ? _IndexGroups[id.Value] : null;
+    public IndexGroupInfo? GetIndexGroup(IndexGroupId id)
+    {
+        if (_IsValidIndex(id.Value, _IndexGroups.Length))
+        {
+            return _IndexGroups[id.Value];
+        }
+        return null;
+    }
 
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public IndexGroupId? GetIndexGroupId(string name) =>
-        _IndexGroupNameMap.TryGetValue(name, out IndexGroupId id) ? id : null;
+    public IndexGroupId? GetIndexGroupId(string name)
+    {
+        if (_IndexGroupNameMap.TryGetValue(name, out IndexGroupId id))
+        {
+            return id;
+        }
+        return null;
+    }
 
     /// <inheritdoc/>
     public ReadOnlyMemory<IndexGroupInfo> IndexGroups => _IndexGroups;
@@ -308,13 +359,25 @@ public sealed class Stack : IStack, IDisposable
 
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ProtocolTableInfo? GetProtocolTableInfo(ProtocolTableId id) =>
-        IsValidIndex(id.Value, _ProtocolTableInfos.Length) ? _ProtocolTableInfos[id.Value] : null;
+    public ProtocolTableInfo? GetProtocolTableInfo(ProtocolTableId id)
+    {
+        if (_IsValidIndex(id.Value, _ProtocolTableInfos.Length))
+        {
+            return _ProtocolTableInfos[id.Value];
+        }
+        return null;
+    }
 
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ProtocolTableId? GetProtocolTableId(string name) =>
-        _ProtocolTableNameMap.TryGetValue(name, out ProtocolTableId id) ? id : null;
+    public ProtocolTableId? GetProtocolTableId(string name)
+    {
+        if (_ProtocolTableNameMap.TryGetValue(name, out ProtocolTableId id))
+        {
+            return id;
+        }
+        return null;
+    }
 
     /// <inheritdoc/>
     public ReadOnlyMemory<ProtocolTableInfo> ProtocolTableInfos => _ProtocolTableInfos;
@@ -338,13 +401,25 @@ public sealed class Stack : IStack, IDisposable
 
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public HeuristicProtocolTableInfo? GetHeuristicProtocolTableInfo(HeuristicProtocolTableId id) =>
-        IsValidIndex(id.Value, _HeuristicTableInfos.Length) ? _HeuristicTableInfos[id.Value] : null;
+    public HeuristicProtocolTableInfo? GetHeuristicProtocolTableInfo(HeuristicProtocolTableId id)
+    {
+        if (_IsValidIndex(id.Value, _HeuristicTableInfos.Length))
+        {
+            return _HeuristicTableInfos[id.Value];
+        }
+        return null;
+    }
 
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public HeuristicProtocolTableId? GetHeuristicProtocolTableId(string name) =>
-        _HeuristicTableNameMap.TryGetValue(name, out HeuristicProtocolTableId id) ? id : null;
+    public HeuristicProtocolTableId? GetHeuristicProtocolTableId(string name)
+    {
+        if (_HeuristicTableNameMap.TryGetValue(name, out HeuristicProtocolTableId id))
+        {
+            return id;
+        }
+        return null;
+    }
 
     /// <inheritdoc/>
     public ReadOnlyMemory<HeuristicProtocolTableInfo> HeuristicProtocolTableInfos => _HeuristicTableInfos;
@@ -357,7 +432,7 @@ public sealed class Stack : IStack, IDisposable
     #region Settings Access
 
     /// <inheritdoc/>
-    public IReadOnlySettingsManager Settings => _SettingsManager;
+    public IReadOnlySettingsManager Settings => _SettingsManager.ReadOnly;
 
     #endregion
 
@@ -373,37 +448,84 @@ public sealed class Stack : IStack, IDisposable
     #region Dispatch Helpers
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal ProtocolTable? GetProtocolTable(ProtocolTableId id) =>
-        IsValidIndex(id.Value, _ProtocolTables.Length) ? _ProtocolTables[id.Value] : null;
+    internal ProtocolTable? GetProtocolTable(ProtocolTableId id)
+    {
+        if (_IsValidIndex(id.Value, _ProtocolTables.Length))
+        {
+            return _ProtocolTables[id.Value];
+        }
+        return null;
+    }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal HeuristicProtocolTable? GetHeuristicProtocolTable(HeuristicProtocolTableId id) =>
-        IsValidIndex(id.Value, _HeuristicTables.Length) ? _HeuristicTables[id.Value] : null;
+    internal HeuristicProtocolTable? GetHeuristicProtocolTable(HeuristicProtocolTableId id)
+    {
+        if (_IsValidIndex(id.Value, _HeuristicTables.Length))
+        {
+            return _HeuristicTables[id.Value];
+        }
+        return null;
+    }
 
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ReadOnlySpan<ProtocolId> GetProtocolsFromU64ProtocolTable(ProtocolTableId tableId, ulong key)
-        => GetProtocolTable(tableId) is { } t ? t.GetAllU64(key) : [];
+    {
+        ProtocolTable? table = GetProtocolTable(tableId);
+        if (table is not null)
+        {
+            return table.GetAllU64(key);
+        }
+        return [];
+    }
 
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ReadOnlySpan<ProtocolId> GetProtocolsFromStringProtocolTable(ProtocolTableId tableId, string key)
-        => GetProtocolTable(tableId) is { } t ? t.GetAllString(key) : [];
+    {
+        ProtocolTable? table = GetProtocolTable(tableId);
+        if (table is not null)
+        {
+            return table.GetAllString(key);
+        }
+        return [];
+    }
 
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ReadOnlySpan<ProtocolId> GetProtocolsFromBytesProtocolTable(ProtocolTableId tableId, BytesKey key)
-        => GetProtocolTable(tableId) is { } t ? t.GetAllBytes(key) : [];
+    {
+        ProtocolTable? table = GetProtocolTable(tableId);
+        if (table is not null)
+        {
+            return table.GetAllBytes(key);
+        }
+        return [];
+    }
 
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ReadOnlySpan<ProtocolId> GetProtocolsFromBoolProtocolTable(ProtocolTableId tableId, bool key)
-        => GetProtocolTable(tableId) is { } t ? t.GetAllBool(key) : [];
+    {
+        ProtocolTable? table = GetProtocolTable(tableId);
+        if (table is not null)
+        {
+            return table.GetAllBool(key);
+        }
+        return [];
+    }
 
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ReadOnlySpan<ProtocolId> GetProtocolsFromAnyProtocolTable(ProtocolTableId tableId)
-        => GetProtocolTable(tableId) is { } t ? t.GetAllAny() : [];
+    {
+        ProtocolTable? table = GetProtocolTable(tableId);
+        if (table is not null)
+        {
+            return table.GetAllAny();
+        }
+        return [];
+    }
 
     /// <summary>
     /// Runs all registered heuristic parsers in the given heuristic dispatch table against
@@ -463,7 +585,7 @@ public sealed class Stack : IStack, IDisposable
     internal ParseResult CallProtocol(
         ProtocolId protocolId, in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
     {
-        if (!IsValidIndex(protocolId.Value, _ParseDelegates.Length))
+        if (!_IsValidIndex(protocolId.Value, _ParseDelegates.Length))
         {
             return ParseError.Custom("stack", $"Invalid protocol ID: {protocolId.Value}");
         }
@@ -482,8 +604,14 @@ public sealed class Stack : IStack, IDisposable
     /// </para>
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal IProtocol? ResolveProtocol(ProtocolId id) =>
-        IsValidIndex(id.Value, _ProtocolInstances.Length) ? _ProtocolInstances[id.Value] : null;
+    internal IProtocol? ResolveProtocol(ProtocolId id)
+    {
+        if (_IsValidIndex(id.Value, _ProtocolInstances.Length))
+        {
+            return _ProtocolInstances[id.Value];
+        }
+        return null;
+    }
 
     /// <summary>
     /// Resolves a <see cref="ProtocolId"/> to its pre-bound <see cref="ParseDelegate"/>.
@@ -495,8 +623,14 @@ public sealed class Stack : IStack, IDisposable
     /// </para>
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ParseDelegate? ResolveParseDelegate(ProtocolId id) =>
-        IsValidIndex(id.Value, _ParseDelegates.Length) ? _ParseDelegates[id.Value] : null;
+    public ParseDelegate? ResolveParseDelegate(ProtocolId id)
+    {
+        if (_IsValidIndex(id.Value, _ParseDelegates.Length))
+        {
+            return _ParseDelegates[id.Value];
+        }
+        return null;
+    }
 
     #endregion
 

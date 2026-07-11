@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Protocols.Tests;
 
@@ -16,8 +16,8 @@ internal sealed class TcpOptionsTests
     private static readonly IPv4Address _ClientIp = new(0x0A000001);
     private static readonly IPv4Address _ServerIp = new(0x0A000002);
 
-    private const ushort ClientPort = 49152;
-    private const ushort ServerPort = 80;
+    private const ushort _ClientPort = 49152;
+    private const ushort _ServerPort = 80;
 
     #endregion
 
@@ -28,12 +28,12 @@ internal sealed class TcpOptionsTests
     /// pre-encoded option bytes.  Padding to a 4-byte boundary is performed by
     /// <see cref="TcpLayerWithOptions"/>.
     /// </summary>
-    private static byte[] BuildFrameWithOptions(byte flags, byte[] optionBytes)
+    private static byte[] _BuildFrameWithOptions(byte flags, byte[] optionBytes)
     {
         EthernetLayer eth = new(_DstMac, _SrcMac);
         IPv4Layer ip = new(_ClientIp, _ServerIp);
         TcpLayerWithOptions tcp = new(
-            ClientPort, ServerPort, optionBytes,
+            _ClientPort, _ServerPort, optionBytes,
             seqNum: 1000, ackNum: 0, flags: flags);
         return FrameStack.Start(eth).Then(ip).Then(tcp).CreateWithFixedValues().EmitFrame(ReadOnlySpan<byte>.Empty);
     }
@@ -43,7 +43,7 @@ internal sealed class TcpOptionsTests
     /// MSS(4) + SACKPerm(2) + NOP+NOP+Timestamps(12) + NOP(1) + WScale(3) = 22 bytes.
     /// (The 4-byte boundary padding is added by <see cref="TcpLayerWithOptions"/>.)
     /// </summary>
-    private static byte[] BuildSynOptionsBytes(ushort mss, byte windowScale, uint tsVal, uint tsEcr)
+    private static byte[] _BuildSynOptionsBytes(ushort mss, byte windowScale, uint tsVal, uint tsEcr)
     {
         byte[] opts = new byte[22];
         Span<byte> s = opts;
@@ -78,14 +78,14 @@ internal sealed class TcpOptionsTests
     /// Builds an Ethernet + IPv4 + TCP SYN frame with standard SYN options
     /// (MSS + SACK Permitted + Timestamps + NOP + Window Scale).
     /// </summary>
-    private static byte[] BuildSynWithOptions(
+    private static byte[] _BuildSynWithOptions(
         ushort mss = 1460,
         byte windowScale = 7,
         uint tsVal = 0,
         uint tsEcr = 0) =>
-        BuildFrameWithOptions(TcpFlags.Syn, BuildSynOptionsBytes(mss, windowScale, tsVal, tsEcr));
+        _BuildFrameWithOptions(TcpFlags.Syn, _BuildSynOptionsBytes(mss, windowScale, tsVal, tsEcr));
 
-    private static Packet Parse(Stack stack, byte[] frameData) =>
+    private static Packet _Parse(Stack stack, byte[] frameData) =>
         ProtocolTestHelper.ParseFrame(stack, frameData, 0, Timestamp.FromMillis(0));
 
     #endregion
@@ -96,8 +96,8 @@ internal sealed class TcpOptionsTests
     public async Task Options_Mss_Parsed()
     {
         using Stack stack = ProtocolTestHelper.BuildStack();
-        byte[] frame = BuildSynWithOptions(mss: 1460);
-        Packet p = Parse(stack, frame);
+        byte[] frame = _BuildSynWithOptions(mss: 1460);
+        Packet p = _Parse(stack, frame);
 
         await ProtocolTestHelper.AssertU64Field(stack, p, "tcp.options.mss_val", 1460).ConfigureAwait(false);
     }
@@ -106,8 +106,8 @@ internal sealed class TcpOptionsTests
     public async Task Options_Mss_CustomValue()
     {
         using Stack stack = ProtocolTestHelper.BuildStack();
-        byte[] frame = BuildSynWithOptions(mss: 536);
-        Packet p = Parse(stack, frame);
+        byte[] frame = _BuildSynWithOptions(mss: 536);
+        Packet p = _Parse(stack, frame);
 
         await ProtocolTestHelper.AssertU64Field(stack, p, "tcp.options.mss_val", 536).ConfigureAwait(false);
     }
@@ -120,8 +120,8 @@ internal sealed class TcpOptionsTests
     public async Task Options_WindowScale_ShiftCount()
     {
         using Stack stack = ProtocolTestHelper.BuildStack();
-        byte[] frame = BuildSynWithOptions(windowScale: 7);
-        Packet p = Parse(stack, frame);
+        byte[] frame = _BuildSynWithOptions(windowScale: 7);
+        Packet p = _Parse(stack, frame);
 
         await ProtocolTestHelper.AssertU64Field(stack, p, "tcp.options.wscale.shift", 7).ConfigureAwait(false);
     }
@@ -131,8 +131,8 @@ internal sealed class TcpOptionsTests
     {
         using Stack stack = ProtocolTestHelper.BuildStack();
         // Shift count 7 → multiplier = 2^7 = 128
-        byte[] frame = BuildSynWithOptions(windowScale: 7);
-        Packet p = Parse(stack, frame);
+        byte[] frame = _BuildSynWithOptions(windowScale: 7);
+        Packet p = _Parse(stack, frame);
 
         await ProtocolTestHelper.AssertU64Field(stack, p, "tcp.options.wscale.multiplier", 128).ConfigureAwait(false);
     }
@@ -145,8 +145,8 @@ internal sealed class TcpOptionsTests
     public async Task Options_SackPermitted_Present()
     {
         using Stack stack = ProtocolTestHelper.BuildStack();
-        byte[] frame = BuildSynWithOptions();
-        Packet p = Parse(stack, frame);
+        byte[] frame = _BuildSynWithOptions();
+        Packet p = _Parse(stack, frame);
 
         // SACK Permitted option should be present in SYN options
         await ProtocolTestHelper.AssertFieldExists(stack, p, "tcp.options.sack_perm").ConfigureAwait(false);
@@ -160,8 +160,8 @@ internal sealed class TcpOptionsTests
     public async Task Options_Timestamps_TsVal()
     {
         using Stack stack = ProtocolTestHelper.BuildStack();
-        byte[] frame = BuildSynWithOptions(tsVal: 123456);
-        Packet p = Parse(stack, frame);
+        byte[] frame = _BuildSynWithOptions(tsVal: 123456);
+        Packet p = _Parse(stack, frame);
 
         await ProtocolTestHelper.AssertU64Field(stack, p, "tcp.options.timestamp.tsval", 123456).ConfigureAwait(false);
     }
@@ -170,8 +170,8 @@ internal sealed class TcpOptionsTests
     public async Task Options_Timestamps_TsEcr()
     {
         using Stack stack = ProtocolTestHelper.BuildStack();
-        byte[] frame = BuildSynWithOptions(tsVal: 100, tsEcr: 789012);
-        Packet p = Parse(stack, frame);
+        byte[] frame = _BuildSynWithOptions(tsVal: 100, tsEcr: 789012);
+        Packet p = _Parse(stack, frame);
 
         await ProtocolTestHelper.AssertU64Field(stack, p, "tcp.options.timestamp.tsecr", 789012).ConfigureAwait(false);
     }
@@ -194,8 +194,8 @@ internal sealed class TcpOptionsTests
         sackOpts[3] = 0x0A; // Length = 10
         BinaryPrimitives.WriteUInt32BigEndian(sackOpts.AsSpan(4), 1001); // Left edge
         BinaryPrimitives.WriteUInt32BigEndian(sackOpts.AsSpan(8), 1101); // Right edge
-        byte[] frame = BuildFrameWithOptions(TcpFlags.Ack, sackOpts);
-        Packet p = Parse(stack, frame);
+        byte[] frame = _BuildFrameWithOptions(TcpFlags.Ack, sackOpts);
+        Packet p = _Parse(stack, frame);
 
         await ProtocolTestHelper.AssertU64Field(stack, p, "tcp.options.sack.count", 1).ConfigureAwait(false);
         await ProtocolTestHelper.AssertU64Field(stack, p, "tcp.options.sack_le", 1001).ConfigureAwait(false);
@@ -211,8 +211,8 @@ internal sealed class TcpOptionsTests
     {
         using Stack stack = ProtocolTestHelper.BuildStack();
         // SYN options include NOP padding
-        byte[] frame = BuildSynWithOptions();
-        Packet p = Parse(stack, frame);
+        byte[] frame = _BuildSynWithOptions();
+        Packet p = _Parse(stack, frame);
 
         await ProtocolTestHelper.AssertFieldExists(stack, p, "tcp.options.nop").ConfigureAwait(false);
     }
@@ -228,8 +228,8 @@ internal sealed class TcpOptionsTests
         eolOpts[1] = 0x04; // Length
         BinaryPrimitives.WriteUInt16BigEndian(eolOpts.AsSpan(2), 1460);
         eolOpts[4] = 0x00; // EOL
-        byte[] frame = BuildFrameWithOptions(TcpFlags.Syn, eolOpts);
-        Packet p = Parse(stack, frame);
+        byte[] frame = _BuildFrameWithOptions(TcpFlags.Syn, eolOpts);
+        Packet p = _Parse(stack, frame);
 
         await ProtocolTestHelper.AssertFieldExists(stack, p, "tcp.options.eol").ConfigureAwait(false);
     }
@@ -242,8 +242,8 @@ internal sealed class TcpOptionsTests
     public async Task Options_Container_Present_WhenOptionsExist()
     {
         using Stack stack = ProtocolTestHelper.BuildStack();
-        byte[] frame = BuildSynWithOptions();
-        Packet p = Parse(stack, frame);
+        byte[] frame = _BuildSynWithOptions();
+        Packet p = _Parse(stack, frame);
 
         await ProtocolTestHelper.AssertFieldExists(stack, p, "tcp.options").ConfigureAwait(false);
     }
@@ -256,9 +256,9 @@ internal sealed class TcpOptionsTests
         // Plain TCP frame without options (DataOffset = 5)
         EthernetLayer ethLayer = new(_DstMac, _SrcMac);
         IPv4Layer ipLayer = new(_ClientIp, _ServerIp);
-        TcpLayer tcpLayer = new(ClientPort, ServerPort, seqNum: 1000, ackNum: 0, flags: TcpFlags.Syn);
+        TcpLayer tcpLayer = new(_ClientPort, _ServerPort, seqNum: 1000, ackNum: 0, flags: TcpFlags.Syn);
         byte[] buffer = FrameStack.Start(ethLayer).Then(ipLayer).Then(tcpLayer).CreateWithFixedValues().EmitFrame(ReadOnlySpan<byte>.Empty);
-        Packet p = Parse(stack, buffer);
+        Packet p = _Parse(stack, buffer);
 
         await ProtocolTestHelper.AssertFieldNotPresent(stack, p, "tcp.options").ConfigureAwait(false);
     }
@@ -271,8 +271,8 @@ internal sealed class TcpOptionsTests
     public async Task Options_Mss_DisplayText()
     {
         using Stack stack = ProtocolTestHelper.BuildStack();
-        byte[] frame = BuildSynWithOptions(mss: 1460);
-        Packet p = Parse(stack, frame);
+        byte[] frame = _BuildSynWithOptions(mss: 1460);
+        Packet p = _Parse(stack, frame);
 
         await ProtocolTestHelper.AssertDisplayText(stack, p, "tcp.options.mss", "Maximum Segment Size: 1460 bytes").ConfigureAwait(false);
     }

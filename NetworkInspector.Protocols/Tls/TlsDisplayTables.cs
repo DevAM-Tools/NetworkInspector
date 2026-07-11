@@ -10,12 +10,12 @@ internal static class TlsDisplayTables
 {
     #region Content Type (5 known values for byte field)
 
-    private static readonly string[] ContentTypeTable = BuildContentTypeTable();
+    private static readonly string[] _ContentTypeTable = _BuildContentTypeTable();
 
     /// <summary>Returns display text for a TLS content type byte.</summary>
-    internal static string GetContentTypeDisplayText(byte ct) => ContentTypeTable[ct];
+    internal static string GetContentTypeDisplayText(byte ct) => _ContentTypeTable[ct];
 
-    private static string[] BuildContentTypeTable()
+    private static string[] _BuildContentTypeTable()
     {
         string[] table = new string[256];
         table[20] = "Change Cipher Spec (20)";
@@ -26,7 +26,7 @@ internal static class TlsDisplayTables
 
         for (int i = 0; i < 256; i++)
         {
-            table[i] ??= i.ToString();
+            table[i] ??= i.ToString(CultureInfo.InvariantCulture);
         }
         return table;
     }
@@ -39,14 +39,14 @@ internal static class TlsDisplayTables
         22 => "Handshake",
         23 => "Application Data",
         25 => "Heartbeat",
-        _ => ct.ToString()
+        _ => ct.ToString(CultureInfo.InvariantCulture)
     };
 
     #endregion
 
     #region TLS Version (sparse — use dictionary)
 
-    private static readonly Dictionary<ushort, string> VersionDisplayTexts = new()
+    private static readonly Dictionary<ushort, string> _VersionDisplayTexts = new()
     {
         [0x0300] = "SSL 3.0 (0x0300)",
         [0x0301] = "TLS 1.0 (0x0301)",
@@ -56,17 +56,24 @@ internal static class TlsDisplayTables
     };
 
     /// <summary>Returns display text for a TLS version field.</summary>
-    internal static string GetVersionDisplayText(ushort version) =>
-        VersionDisplayTexts.TryGetValue(version, out string? text) ? text : $"0x{version:X4}";
+    internal static string GetVersionDisplayText(ushort version)
+    {
+        if (_VersionDisplayTexts.TryGetValue(version, out string? text))
+        {
+            return text;
+        }
+
+        return $"0x{version:X4}";
+    }
 
     #endregion
 
     #region Handshake Type (byte field)
 
-    private static readonly string[] HandshakeTypeTable = BuildHandshakeTypeTable();
+    private static readonly string[] _HandshakeTypeTable = _BuildHandshakeTypeTable();
 
     /// <summary>Returns display text for a TLS handshake type byte.</summary>
-    internal static string GetHandshakeTypeDisplayText(byte hsType) => HandshakeTypeTable[hsType];
+    internal static string GetHandshakeTypeDisplayText(byte hsType) => _HandshakeTypeTable[hsType];
 
     /// <summary>Returns short name for a handshake type.</summary>
     internal static string GetHandshakeTypeName(byte hsType) => hsType switch
@@ -84,10 +91,10 @@ internal static class TlsDisplayTables
         15 => "Certificate Verify",
         16 => "Client Key Exchange",
         20 => "Finished",
-        _ => hsType.ToString()
+        _ => hsType.ToString(CultureInfo.InvariantCulture)
     };
 
-    private static string[] BuildHandshakeTypeTable()
+    private static string[] _BuildHandshakeTypeTable()
     {
         string[] table = new string[256];
         table[0] = "Hello Request (0)";
@@ -106,7 +113,7 @@ internal static class TlsDisplayTables
 
         for (int i = 0; i < 256; i++)
         {
-            table[i] ??= i.ToString();
+            table[i] ??= i.ToString(CultureInfo.InvariantCulture);
         }
         return table;
     }
@@ -116,13 +123,13 @@ internal static class TlsDisplayTables
     #region Cipher Suites (binary search on sorted list)
 
     /// <summary>Known cipher suite entries sorted by code for binary search.</summary>
-    private static readonly (ushort Code, string Name)[] CipherSuites = BuildCipherSuiteTable();
+    private static readonly (ushort Code, string Name)[] _CipherSuites = _BuildCipherSuiteTable();
 
     /// <summary>Precomputed display text for GREASE values (0x?A?A pattern, 16 entries).</summary>
-    private static readonly Dictionary<ushort, string> GreaseDisplayTexts = BuildGreaseDisplayTexts();
+    private static readonly Dictionary<ushort, string> _GreaseDisplayTexts = _BuildGreaseDisplayTexts();
 
     /// <summary>Builds the 16-entry GREASE display text lookup.</summary>
-    private static Dictionary<ushort, string> BuildGreaseDisplayTexts()
+    private static Dictionary<ushort, string> _BuildGreaseDisplayTexts()
     {
         Dictionary<ushort, string> result = new(16);
         for (int hi = 0; hi < 16; hi++)
@@ -140,25 +147,25 @@ internal static class TlsDisplayTables
         // GREASE detection: pattern 0x?A?A — precomputed lookup
         if ((code & 0x0F0F) == 0x0A0A)
         {
-            return GreaseDisplayTexts[code];
+            return _GreaseDisplayTexts[code];
         }
 
-        int idx = BinarySearchCipherSuite(code);
+        int idx = _BinarySearchCipherSuite(code);
         if (idx >= 0)
         {
-            return CipherSuites[idx].Name;
+            return _CipherSuites[idx].Name;
         }
         return $"Unknown (0x{code:X4})";
     }
 
-    private static int BinarySearchCipherSuite(ushort code)
+    private static int _BinarySearchCipherSuite(ushort code)
     {
         int lo = 0;
-        int hi = CipherSuites.Length - 1;
+        int hi = _CipherSuites.Length - 1;
         while (lo <= hi)
         {
             int mid = lo + ((hi - lo) >> 1);
-            ushort midCode = CipherSuites[mid].Code;
+            ushort midCode = _CipherSuites[mid].Code;
             if (midCode == code)
             {
                 return mid;
@@ -175,7 +182,7 @@ internal static class TlsDisplayTables
         return -1;
     }
 
-    private static (ushort, string)[] BuildCipherSuiteTable()
+    private static (ushort, string)[] _BuildCipherSuiteTable()
     {
         // Sorted by code for binary search. Includes the most common suites.
         (ushort, string)[] table =
@@ -221,7 +228,7 @@ internal static class TlsDisplayTables
 
     #region Extension Types
 
-    private static readonly Dictionary<ushort, string> ExtensionTypeNames = new()
+    private static readonly Dictionary<ushort, string> _ExtensionTypeNames = new()
     {
         [0] = "server_name",
         [1] = "max_fragment_length",
@@ -250,13 +257,13 @@ internal static class TlsDisplayTables
     };
 
     /// <summary>Precomputed display text for known TLS extension types.</summary>
-    private static readonly Dictionary<ushort, string> ExtensionTypeDisplayTexts = BuildExtensionTypeDisplayTexts();
+    private static readonly Dictionary<ushort, string> _ExtensionTypeDisplayTexts = _BuildExtensionTypeDisplayTexts();
 
     /// <summary>Builds the precomputed extension type display text dictionary.</summary>
-    private static Dictionary<ushort, string> BuildExtensionTypeDisplayTexts()
+    private static Dictionary<ushort, string> _BuildExtensionTypeDisplayTexts()
     {
-        Dictionary<ushort, string> result = new(ExtensionTypeNames.Count);
-        foreach ((ushort type, string name) in ExtensionTypeNames)
+        Dictionary<ushort, string> result = new(_ExtensionTypeNames.Count);
+        foreach ((ushort type, string name) in _ExtensionTypeNames)
         {
             result[type] = $"{name} ({type})";
         }
@@ -269,10 +276,10 @@ internal static class TlsDisplayTables
         // GREASE detection — precomputed lookup (shared with cipher suites)
         if ((type & 0x0F0F) == 0x0A0A)
         {
-            return GreaseDisplayTexts[type];
+            return _GreaseDisplayTexts[type];
         }
 
-        if (ExtensionTypeDisplayTexts.TryGetValue(type, out string? text))
+        if (_ExtensionTypeDisplayTexts.TryGetValue(type, out string? text))
         {
             return text;
         }
@@ -286,7 +293,12 @@ internal static class TlsDisplayTables
         {
             return "GREASE";
         }
-        return ExtensionTypeNames.TryGetValue(type, out string? name) ? name : type.ToString();
+        if (_ExtensionTypeNames.TryGetValue(type, out string? name))
+        {
+            return name;
+        }
+
+        return type.ToString(CultureInfo.InvariantCulture);
     }
 
     #endregion
@@ -298,7 +310,7 @@ internal static class TlsDisplayTables
     {
         1 => "Warning (1)",
         2 => "Fatal (2)",
-        _ => level.ToString()
+        _ => level.ToString(CultureInfo.InvariantCulture)
     };
 
     /// <summary>Returns display text for a TLS alert description.</summary>
@@ -334,7 +346,7 @@ internal static class TlsDisplayTables
         115 => "Unknown PSK Identity (115)",
         116 => "Certificate Required (116)",
         120 => "No Application Protocol (120)",
-        _ => desc.ToString()
+        _ => desc.ToString(CultureInfo.InvariantCulture)
     };
 
     #endregion
@@ -342,13 +354,13 @@ internal static class TlsDisplayTables
     #region Compression Methods
 
     /// <summary>Precomputed display text table for TLS compression methods (256 entries).</summary>
-    private static readonly string[] CompressionMethodTable = BuildCompressionMethodTable();
+    private static readonly string[] _CompressionMethodTable = _BuildCompressionMethodTable();
 
     /// <summary>Returns display text for a TLS compression method byte.</summary>
     internal static string GetCompressionMethodDisplayText(byte method) =>
-        CompressionMethodTable[method];
+        _CompressionMethodTable[method];
 
-    private static string[] BuildCompressionMethodTable()
+    private static string[] _BuildCompressionMethodTable()
     {
         string[] table = new string[256];
         table[0] = "null (0)";
@@ -357,7 +369,7 @@ internal static class TlsDisplayTables
 
         for (int i = 0; i < 256; i++)
         {
-            table[i] ??= i.ToString();
+            table[i] ??= i.ToString(CultureInfo.InvariantCulture);
         }
         return table;
     }
@@ -366,7 +378,7 @@ internal static class TlsDisplayTables
 
     #region Supported Groups (elliptic curves / named groups, RFC 8422/8446)
 
-    private static readonly Dictionary<ushort, string> SupportedGroupNames = new()
+    private static readonly Dictionary<ushort, string> _SupportedGroupNames = new()
     {
         [1] = "sect163k1",
         [19] = "secp192r1",
@@ -388,16 +400,27 @@ internal static class TlsDisplayTables
     {
         if ((group & 0x0F0F) == 0x0A0A)
         {
-            return GreaseDisplayTexts.TryGetValue(group, out string? grease) ? grease : $"GREASE (0x{group:X4})";
+            if (_GreaseDisplayTexts.TryGetValue(group, out string? grease))
+            {
+                return grease;
+            }
+
+            return $"GREASE (0x{group:X4})";
         }
-        return SupportedGroupNames.TryGetValue(group, out string? name) ? $"{name} ({group})" : $"Unknown ({group})";
+
+        if (_SupportedGroupNames.TryGetValue(group, out string? name))
+        {
+            return $"{name} ({group})";
+        }
+
+        return $"Unknown ({group})";
     }
 
     #endregion
 
     #region Signature Algorithms (RFC 8446 Section 4.2.3)
 
-    private static readonly Dictionary<ushort, string> SignatureAlgorithmNames = new()
+    private static readonly Dictionary<ushort, string> _SignatureAlgorithmNames = new()
     {
         [0x0201] = "rsa_pkcs1_sha1",
         [0x0301] = "SHA224 ECDSA",
@@ -422,11 +445,20 @@ internal static class TlsDisplayTables
     {
         if ((algo & 0x0F0F) == 0x0A0A)
         {
-            return GreaseDisplayTexts.TryGetValue(algo, out string? grease) ? grease : $"GREASE (0x{algo:X4})";
+            if (_GreaseDisplayTexts.TryGetValue(algo, out string? grease))
+            {
+                return grease;
+            }
+
+            return $"GREASE (0x{algo:X4})";
         }
-        return SignatureAlgorithmNames.TryGetValue(algo, out string? name)
-            ? $"{name} (0x{algo:X4})"
-            : $"Unknown (0x{algo:X4})";
+
+        if (_SignatureAlgorithmNames.TryGetValue(algo, out string? name))
+        {
+            return $"{name} (0x{algo:X4})";
+        }
+
+        return $"Unknown (0x{algo:X4})";
     }
     #endregion
 }

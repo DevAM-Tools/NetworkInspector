@@ -26,18 +26,18 @@ public readonly struct IPv4LayerWithAutoIpId :
     IProvidesNextProtocolValue<EtherTypeKind>, IConsumesNextProtocolValue<IpNextProtocolKind>, IProvidesPseudoHeader,
     IFragmentable
 {
-    private const int ProtocolFieldOffset = 9;
-    private const int SrcAddrOffset = 12;
-    private const int DstAddrOffset = 16;
+    private const int _ProtocolFieldOffset = 9;
+    private const int _SrcAddrOffset = 12;
+    private const int _DstAddrOffset = 16;
 
     /// <summary>Offset of the Flags+FragmentOffset combined 16-bit field.</summary>
-    private const int FlagsFragOffsetOffset = 6;
+    private const int _FlagsFragOffsetOffset = 6;
 
     /// <summary>Mask of the MF (More Fragments) flag inside the combined field.</summary>
-    private const ushort MoreFragmentsMask = 0x2000;
+    private const ushort _MoreFragmentsMask = 0x2000;
 
     /// <summary>Mask of the FragmentOffset bits (in 8-octet units).</summary>
-    private const ushort FragmentOffsetMask = 0x1FFF;
+    private const ushort _FragmentOffsetMask = 0x1FFF;
 
     private readonly IPv4Address _SrcAddr;
     private readonly IPv4Address _DstAddr;
@@ -61,7 +61,7 @@ public readonly struct IPv4LayerWithAutoIpId :
     /// counter is incremented by 1 per emitted frame.
     /// </param>
     /// <param name="protocol">
-    /// IP Protocol field; <see cref="Auto{T}.Compute"/> (default) means auto-patch
+    /// IP Protocol field; <see cref="Auto.Compute"/> (default) means auto-patch
     /// from the inner transport layer.
     /// </param>
     /// <param name="dontFragment">DF flag; default <c>true</c>.</param>
@@ -123,11 +123,11 @@ public readonly struct IPv4LayerWithAutoIpId :
 
     /// <inheritdoc />
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public void PatchNextProtocol(scoped Span<byte> frame, int myOffset, ushort next)
+    public void PatchNextProtocol(scoped Span<byte> frame, int myOffset, ushort nextProtocol)
     {
         if (_ExplicitProtocol == 0)
         {
-            frame[myOffset + ProtocolFieldOffset] = (byte)next;
+            frame[myOffset + _ProtocolFieldOffset] = (byte)nextProtocol;
         }
     }
 
@@ -142,7 +142,7 @@ public readonly struct IPv4LayerWithAutoIpId :
                 break;
 
             case FixPhase.PublishPseudoHeader:
-                PublishPseudoHeader(frame, myOffset, myLength, ref ctx);
+                _PublishPseudoHeader(frame, myOffset, myLength, ref ctx);
                 break;
 
             case FixPhase.OuterChecksum:
@@ -159,13 +159,13 @@ public readonly struct IPv4LayerWithAutoIpId :
 
     /// <summary>See <see cref="IPv4Layer"/> for the pseudo-header publish details.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static void PublishPseudoHeader(scoped Span<byte> frame, int myOffset, int myLength, scoped ref PostFixContext ctx)
+    private static void _PublishPseudoHeader(scoped Span<byte> frame, int myOffset, int myLength, scoped ref PostFixContext ctx)
     {
-        frame.Slice(myOffset + SrcAddrOffset, 4).CopyTo(ctx.PseudoSrcIp);
-        frame.Slice(myOffset + DstAddrOffset, 4).CopyTo(ctx.PseudoDstIp);
+        frame.Slice(myOffset + _SrcAddrOffset, 4).CopyTo(ctx.PseudoSrcIp);
+        frame.Slice(myOffset + _DstAddrOffset, 4).CopyTo(ctx.PseudoDstIp);
         ctx.PseudoIpLength = 4;
         ctx.PseudoIsIPv6 = false;
-        ctx.PseudoProtocol = frame[myOffset + ProtocolFieldOffset];
+        ctx.PseudoProtocol = frame[myOffset + _ProtocolFieldOffset];
         ctx.TransportOffset = myOffset + IPv4Header.Size;
         ctx.TransportEnd = myOffset + myLength;
     }
@@ -193,12 +193,12 @@ public readonly struct IPv4LayerWithAutoIpId :
     public void PatchFragmentHeader(scoped Span<byte> frame, int myOffset, int myLength, int fragmentPayloadOffset, bool moreFragments)
     {
         // myLength is patched separately by FixPhase.Length; nothing to do here.
-        ushort fragField = (ushort)((fragmentPayloadOffset >> 3) & FragmentOffsetMask);
+        ushort fragField = (ushort)((fragmentPayloadOffset >> 3) & _FragmentOffsetMask);
         if (moreFragments)
         {
-            fragField |= MoreFragmentsMask;
+            fragField |= _MoreFragmentsMask;
         }
-        BinaryPrimitives.WriteUInt16BigEndian(frame.Slice(myOffset + FlagsFragOffsetOffset, 2), fragField);
+        BinaryPrimitives.WriteUInt16BigEndian(frame.Slice(myOffset + _FlagsFragOffsetOffset, 2), fragField);
     }
 }
 

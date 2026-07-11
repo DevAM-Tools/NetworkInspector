@@ -66,7 +66,7 @@ internal static class FrameBuilders
         frame[ipOffset + 19] = 2;
 
         // IPv4 header checksum
-        ushort checksum = CalculateIpv4Checksum(frame.AsSpan(ipOffset, ipv4Size));
+        ushort checksum = _CalculateIpv4Checksum(frame.AsSpan(ipOffset, ipv4Size));
         BinaryPrimitives.WriteUInt16BigEndian(frame.AsSpan(ipOffset + 10), checksum);
 
         // UDP header (8 bytes)
@@ -163,7 +163,7 @@ internal static class FrameBuilders
     }
 
     /// <summary>Calculates the IPv4 header checksum (one's complement of one's complement sum).</summary>
-    private static ushort CalculateIpv4Checksum(ReadOnlySpan<byte> header)
+    private static ushort _CalculateIpv4Checksum(ReadOnlySpan<byte> header)
     {
         uint sum = 0;
         for (int i = 0; i < header.Length - 1; i += 2)
@@ -190,7 +190,7 @@ internal static class FrameBuilders
     internal static byte[] GenerateArpRequestFrame(
         byte[] senderMac, byte[] senderIp,
         byte[] targetMac, byte[] targetIp)
-        => GenerateArpFrame(1, senderMac, senderIp, targetMac, targetIp);
+        => _GenerateArpFrame(1, senderMac, senderIp, targetMac, targetIp);
 
     /// <summary>
     /// Generates an ARP reply frame (Ethernet + ARP, 42 bytes total).
@@ -198,13 +198,13 @@ internal static class FrameBuilders
     internal static byte[] GenerateArpReplyFrame(
         byte[] senderMac, byte[] senderIp,
         byte[] targetMac, byte[] targetIp)
-        => GenerateArpFrame(2, senderMac, senderIp, targetMac, targetIp);
+        => _GenerateArpFrame(2, senderMac, senderIp, targetMac, targetIp);
 
     /// <summary>
     /// Generates an ARP frame with the specified opcode.
     /// Ethernet header (14) + ARP (28) = 42 bytes.
     /// </summary>
-    private static byte[] GenerateArpFrame(
+    private static byte[] _GenerateArpFrame(
         ushort opcode, byte[] senderMac, byte[] senderIp,
         byte[] targetMac, byte[] targetIp)
     {
@@ -242,25 +242,25 @@ internal static class FrameBuilders
     /// </summary>
     internal static byte[] GenerateIcmpEchoRequestFrame(
         ushort identifier, ushort sequence, byte[] payload)
-        => GenerateIcmpFrame(8, 0, identifier, sequence, payload);
+        => _GenerateIcmpFrame(8, 0, identifier, sequence, payload);
 
     /// <summary>
     /// Generates an ICMP Echo Reply frame (Ethernet + IPv4 + ICMP, variable size).
     /// </summary>
     internal static byte[] GenerateIcmpEchoReplyFrame(
         ushort identifier, ushort sequence, byte[] payload)
-        => GenerateIcmpFrame(0, 0, identifier, sequence, payload);
+        => _GenerateIcmpFrame(0, 0, identifier, sequence, payload);
 
     /// <summary>
     /// Generates an ICMP Destination Unreachable frame (Ethernet + IPv4 + ICMP).
     /// </summary>
     internal static byte[] GenerateIcmpDestUnreachFrame(byte code)
-        => GenerateIcmpFrame(3, code, 0, 0, new byte[28]); // 28 bytes = original IP header stub
+        => _GenerateIcmpFrame(3, code, 0, 0, new byte[28]); // 28 bytes = original IP header stub
 
     /// <summary>
     /// Generates a complete ICMP frame with Ethernet + IPv4 headers.
     /// </summary>
-    private static byte[] GenerateIcmpFrame(
+    private static byte[] _GenerateIcmpFrame(
         byte type, byte code, ushort identifier, ushort sequence, byte[] payload)
     {
         const int ethSize = 14;
@@ -304,7 +304,7 @@ internal static class FrameBuilders
         frame[ipOffset + 17] = 168;
         frame[ipOffset + 18] = 1;
         frame[ipOffset + 19] = 2;
-        ushort ipChecksum = CalculateIpv4Checksum(frame.AsSpan(ipOffset, ipv4Size));
+        ushort ipChecksum = _CalculateIpv4Checksum(frame.AsSpan(ipOffset, ipv4Size));
         BinaryPrimitives.WriteUInt16BigEndian(frame.AsSpan(ipOffset + 10), ipChecksum);
 
         // ICMP header + payload
@@ -317,7 +317,7 @@ internal static class FrameBuilders
         Array.Copy(payload, 0, frame, icmpOffset + icmpHeaderSize, payload.Length);
 
         // Compute ICMP checksum over entire ICMP message
-        ushort icmpChecksum = CalculateIpv4Checksum(frame.AsSpan(icmpOffset, icmpLen));
+        ushort icmpChecksum = _CalculateIpv4Checksum(frame.AsSpan(icmpOffset, icmpLen));
         BinaryPrimitives.WriteUInt16BigEndian(frame.AsSpan(icmpOffset + 2), icmpChecksum);
 
         return frame;
@@ -331,20 +331,20 @@ internal static class FrameBuilders
     /// </summary>
     internal static byte[] GenerateIcmpv6EchoRequestFrame(
         ushort identifier, ushort sequence, byte[] payload)
-        => GenerateIcmpv6Frame(128, 0, identifier, sequence, payload);
+        => _GenerateIcmpv6Frame(128, 0, identifier, sequence, payload);
 
     /// <summary>
     /// Generates an ICMPv6 Echo Reply frame (Ethernet + IPv6 + ICMPv6).
     /// </summary>
     internal static byte[] GenerateIcmpv6EchoReplyFrame(
         ushort identifier, ushort sequence, byte[] payload)
-        => GenerateIcmpv6Frame(129, 0, identifier, sequence, payload);
+        => _GenerateIcmpv6Frame(129, 0, identifier, sequence, payload);
 
     /// <summary>
     /// Generates a complete ICMPv6 frame with Ethernet + IPv6 headers.
     /// Uses IPv6 pseudo-header for checksum computation.
     /// </summary>
-    private static byte[] GenerateIcmpv6Frame(
+    private static byte[] _GenerateIcmpv6Frame(
         byte type, byte code, ushort identifier, ushort sequence, byte[] payload)
     {
         const int ethSize = 14;
@@ -442,35 +442,35 @@ internal static class FrameBuilders
     // === TCP Frame Builders ===
 
     /// <summary>TCP flag bit constants used by frame builders.</summary>
-    private const byte TcpFin = 0x01;
-    private const byte TcpSyn = 0x02;
-    private const byte TcpRst = 0x04;
-    private const byte TcpPsh = 0x08;
-    private const byte TcpAck = 0x10;
+    private const byte _TcpFin = 0x01;
+    private const byte _TcpSyn = 0x02;
+    private const byte _TcpRst = 0x04;
+    private const byte _TcpPsh = 0x08;
+    private const byte _TcpAck = 0x10;
 
     /// <summary>
     /// Generates a TCP SYN frame (Ethernet + IPv4 + TCP, 54 bytes, no payload).
     /// </summary>
-    internal static byte[] GenerateTcpSynFrame(
+    internal static byte[] Generate_TcpSynFrame(
         ushort srcPort = 12345, ushort dstPort = 80,
         uint seq = 1000)
-        => GenerateTcpFrame(srcPort, dstPort, seq, 0, TcpSyn, ReadOnlySpan<byte>.Empty);
+        => _GenerateTcpFrame(srcPort, dstPort, seq, 0, _TcpSyn, ReadOnlySpan<byte>.Empty);
 
     /// <summary>
     /// Generates a TCP SYN-ACK frame (Ethernet + IPv4 + TCP, 54 bytes, no payload).
     /// </summary>
-    internal static byte[] GenerateTcpSynAckFrame(
+    internal static byte[] Generate_TcpSynAckFrame(
         ushort srcPort = 80, ushort dstPort = 12345,
         uint seq = 2000, uint ack = 1001)
-        => GenerateTcpFrame(srcPort, dstPort, seq, ack, TcpSyn | TcpAck, ReadOnlySpan<byte>.Empty);
+        => _GenerateTcpFrame(srcPort, dstPort, seq, ack, _TcpSyn | _TcpAck, ReadOnlySpan<byte>.Empty);
 
     /// <summary>
     /// Generates a TCP ACK frame (Ethernet + IPv4 + TCP, 54 bytes, no payload).
     /// </summary>
-    internal static byte[] GenerateTcpAckFrame(
+    internal static byte[] Generate_TcpAckFrame(
         ushort srcPort = 12345, ushort dstPort = 80,
         uint seq = 1001, uint ack = 2001)
-        => GenerateTcpFrame(srcPort, dstPort, seq, ack, TcpAck, ReadOnlySpan<byte>.Empty);
+        => _GenerateTcpFrame(srcPort, dstPort, seq, ack, _TcpAck, ReadOnlySpan<byte>.Empty);
 
     /// <summary>
     /// Generates a TCP data frame with PSH+ACK flags (Ethernet + IPv4 + TCP + payload).
@@ -478,29 +478,29 @@ internal static class FrameBuilders
     internal static byte[] GenerateTcpDataFrame(
         ushort srcPort, ushort dstPort,
         uint seq, uint ack, byte[] payload)
-        => GenerateTcpFrame(srcPort, dstPort, seq, ack, TcpPsh | TcpAck, payload);
+        => _GenerateTcpFrame(srcPort, dstPort, seq, ack, _TcpPsh | _TcpAck, payload);
 
     /// <summary>
     /// Generates a TCP FIN-ACK frame (Ethernet + IPv4 + TCP, 54 bytes).
     /// </summary>
-    internal static byte[] GenerateTcpFinAckFrame(
+    internal static byte[] Generate_TcpFinAckFrame(
         ushort srcPort = 12345, ushort dstPort = 80,
         uint seq = 1001, uint ack = 2001)
-        => GenerateTcpFrame(srcPort, dstPort, seq, ack, TcpFin | TcpAck, ReadOnlySpan<byte>.Empty);
+        => _GenerateTcpFrame(srcPort, dstPort, seq, ack, _TcpFin | _TcpAck, ReadOnlySpan<byte>.Empty);
 
     /// <summary>
     /// Generates a TCP RST frame (Ethernet + IPv4 + TCP, 54 bytes).
     /// </summary>
-    internal static byte[] GenerateTcpRstFrame(
+    internal static byte[] Generate_TcpRstFrame(
         ushort srcPort = 12345, ushort dstPort = 80,
         uint seq = 1001)
-        => GenerateTcpFrame(srcPort, dstPort, seq, 0, TcpRst, ReadOnlySpan<byte>.Empty);
+        => _GenerateTcpFrame(srcPort, dstPort, seq, 0, _TcpRst, ReadOnlySpan<byte>.Empty);
 
     /// <summary>
     /// Generates a complete TCP frame with Ethernet + IPv4 headers.
     /// IPv4 src=192.168.1.1, dst=192.168.1.2. TCP checksum is computed correctly.
     /// </summary>
-    private static byte[] GenerateTcpFrame(
+    private static byte[] _GenerateTcpFrame(
         ushort srcPort, ushort dstPort,
         uint seq, uint ack, byte flags,
         ReadOnlySpan<byte> payload)
@@ -546,7 +546,7 @@ internal static class FrameBuilders
         frame[ipOffset + 17] = 168;
         frame[ipOffset + 18] = 1;
         frame[ipOffset + 19] = 2;
-        ushort ipChecksum = CalculateIpv4Checksum(frame.AsSpan(ipOffset, ipv4Size));
+        ushort ipChecksum = _CalculateIpv4Checksum(frame.AsSpan(ipOffset, ipv4Size));
         BinaryPrimitives.WriteUInt16BigEndian(frame.AsSpan(ipOffset + 10), ipChecksum);
 
         // TCP header (20 bytes, data offset = 5)
@@ -568,7 +568,7 @@ internal static class FrameBuilders
         }
 
         // Compute TCP checksum with IPv4 pseudo-header
-        ushort tcpChecksum = CalculateTcpChecksum(
+        ushort tcpChecksum = _CalculateTcpChecksum(
             frame.AsSpan(ipOffset + 12, 4),  // src IP
             frame.AsSpan(ipOffset + 16, 4),  // dst IP
             frame.AsSpan(tcpOffset, tcpLen));
@@ -580,7 +580,7 @@ internal static class FrameBuilders
     /// <summary>
     /// Calculates the TCP checksum including IPv4 pseudo-header.
     /// </summary>
-    private static ushort CalculateTcpChecksum(
+    private static ushort _CalculateTcpChecksum(
         ReadOnlySpan<byte> srcIp, ReadOnlySpan<byte> dstIp,
         ReadOnlySpan<byte> tcpSegment)
     {
@@ -667,7 +667,7 @@ internal static class FrameBuilders
         frame[ipOffset + 17] = 0;
         frame[ipOffset + 18] = 0;
         frame[ipOffset + 19] = 2;
-        ushort ipCsum = CalculateIpv4Checksum(frame.AsSpan(ipOffset, ipv4Size));
+        ushort ipCsum = _CalculateIpv4Checksum(frame.AsSpan(ipOffset, ipv4Size));
         BinaryPrimitives.WriteUInt16BigEndian(frame.AsSpan(ipOffset + 10), ipCsum);
 
         int udpOffset = ipOffset + ipv4Size;
@@ -734,7 +734,7 @@ internal static class FrameBuilders
         frame[ipOffset + 17] = 0;
         frame[ipOffset + 18] = 0;
         frame[ipOffset + 19] = 2;
-        ushort ipCsum2 = CalculateIpv4Checksum(frame.AsSpan(ipOffset, ipv4Size));
+        ushort ipCsum2 = _CalculateIpv4Checksum(frame.AsSpan(ipOffset, ipv4Size));
         BinaryPrimitives.WriteUInt16BigEndian(frame.AsSpan(ipOffset + 10), ipCsum2);
 
         int udpOffset = ipOffset + ipv4Size;
@@ -809,7 +809,7 @@ internal static class FrameBuilders
         frame[ipOffset + 17] = 0;
         frame[ipOffset + 18] = 0;
         frame[ipOffset + 19] = 2;
-        ushort ipCsum3 = CalculateIpv4Checksum(frame.AsSpan(ipOffset, ipv4Size));
+        ushort ipCsum3 = _CalculateIpv4Checksum(frame.AsSpan(ipOffset, ipv4Size));
         BinaryPrimitives.WriteUInt16BigEndian(frame.AsSpan(ipOffset + 10), ipCsum3);
 
         int udpOffset = ipOffset + ipv4Size;
@@ -839,7 +839,7 @@ internal static class FrameBuilders
         ushort queryClass = 1) // IN
     {
         // Encode the DNS query name as labels
-        byte[] dnsNameBytes = EncodeDnsName(queryName);
+        byte[] dnsNameBytes = _EncodeDnsName(queryName);
         int dnsPayloadLen = 12 + dnsNameBytes.Length + 4; // header + name + qtype(2) + qclass(2)
 
         const int ethSize = 14;
@@ -881,7 +881,7 @@ internal static class FrameBuilders
         frame[ipOffset + 17] = 8;
         frame[ipOffset + 18] = 8;
         frame[ipOffset + 19] = 8;
-        ushort ipCsum = CalculateIpv4Checksum(frame.AsSpan(ipOffset, ipv4Size));
+        ushort ipCsum = _CalculateIpv4Checksum(frame.AsSpan(ipOffset, ipv4Size));
         BinaryPrimitives.WriteUInt16BigEndian(frame.AsSpan(ipOffset + 10), ipCsum);
 
         // UDP header
@@ -917,7 +917,7 @@ internal static class FrameBuilders
         byte ip1 = 93, byte ip2 = 184, byte ip3 = 216, byte ip4 = 34,
         uint ttl = 300)
     {
-        byte[] dnsNameBytes = EncodeDnsName(queryName);
+        byte[] dnsNameBytes = _EncodeDnsName(queryName);
         // DNS payload: header(12) + question(name + 4) + answer(name-ptr(2) + type(2) + class(2) + ttl(4) + rdlen(2) + rdata(4))
         int questionLen = dnsNameBytes.Length + 4;
         int answerLen = 2 + 2 + 2 + 4 + 2 + 4; // name pointer + type + class + ttl + rdlen + A record
@@ -962,7 +962,7 @@ internal static class FrameBuilders
         frame[ipOffset + 17] = 168;
         frame[ipOffset + 18] = 1;
         frame[ipOffset + 19] = 100;
-        ushort ipCsum = CalculateIpv4Checksum(frame.AsSpan(ipOffset, ipv4Size));
+        ushort ipCsum = _CalculateIpv4Checksum(frame.AsSpan(ipOffset, ipv4Size));
         BinaryPrimitives.WriteUInt16BigEndian(frame.AsSpan(ipOffset + 10), ipCsum);
 
         // UDP header — source 53, dest arbitrary high port
@@ -1005,7 +1005,7 @@ internal static class FrameBuilders
     }
 
     /// <summary>Encodes a domain name as DNS labels (e.g. "www.example.com" → 3www7example3com0).</summary>
-    private static byte[] EncodeDnsName(string name)
+    private static byte[] _EncodeDnsName(string name)
     {
         string[] labels = name.Split('.');
         int totalLen = 1; // null terminator
@@ -1043,8 +1043,8 @@ internal static class FrameBuilders
         cipherSuites ??= [0x1301, 0x1302, 0x1303, 0xC02F, 0xC030]; // TLS 1.3 + common ECDHE
 
         // Build the Client Hello body
-        byte[] sniExtData = BuildSniExtension(serverName);
-        byte[] clientHelloBody = BuildClientHelloBody(cipherSuites, tlsVersion, sniExtData);
+        byte[] sniExtData = _BuildSniExtension(serverName);
+        byte[] clientHelloBody = _BuildClientHelloBody(cipherSuites, tlsVersion, sniExtData);
 
         // Handshake header: type(1) + length(3)
         int handshakeLen = clientHelloBody.Length;
@@ -1064,7 +1064,7 @@ internal static class FrameBuilders
         handshakeMsg.CopyTo(tlsRecord.AsSpan(5));
 
         // Wrap in Ethernet + IPv4 + TCP frame
-        return WrapInTcpFrame(tlsRecord, srcPort: 54321, dstPort: 443);
+        return _WrapInTcpFrame(tlsRecord, srcPort: 54321, dstPort: 443);
     }
 
     /// <summary>
@@ -1103,11 +1103,11 @@ internal static class FrameBuilders
         BinaryPrimitives.WriteUInt16BigEndian(tlsRecord.AsSpan(3), (ushort)handshakeMsg.Length);
         handshakeMsg.CopyTo(tlsRecord.AsSpan(5));
 
-        return WrapInTcpFrame(tlsRecord, srcPort: 443, dstPort: 54321);
+        return _WrapInTcpFrame(tlsRecord, srcPort: 443, dstPort: 54321);
     }
 
     /// <summary>Builds a TLS Client Hello body (after handshake header).</summary>
-    private static byte[] BuildClientHelloBody(
+    private static byte[] _BuildClientHelloBody(
         ushort[] cipherSuites, ushort version, byte[] sniExtData)
     {
         int cipherSuitesLen = cipherSuites.Length * 2;
@@ -1154,7 +1154,7 @@ internal static class FrameBuilders
     /// Builds a Server Name Indication extension.
     /// Format: type(2) + len(2) + server_name_list_len(2) + name_type(1) + name_len(2) + name(N)
     /// </summary>
-    private static byte[] BuildSniExtension(string serverName)
+    private static byte[] _BuildSniExtension(string serverName)
     {
         byte[] nameBytes = System.Text.Encoding.ASCII.GetBytes(serverName);
         int sniListLen = 1 + 2 + nameBytes.Length; // name_type + name_len + name
@@ -1178,7 +1178,7 @@ internal static class FrameBuilders
     }
 
     /// <summary>Wraps a payload in Ethernet + IPv4 + TCP frame.</summary>
-    private static byte[] WrapInTcpFrame(byte[] tlsPayload, ushort srcPort, ushort dstPort)
+    private static byte[] _WrapInTcpFrame(byte[] tlsPayload, ushort srcPort, ushort dstPort)
     {
         const int ethSize = 14;
         const int ipv4Size = 20;
@@ -1217,7 +1217,7 @@ internal static class FrameBuilders
         frame[ipOffset + 17] = 184;
         frame[ipOffset + 18] = 216;
         frame[ipOffset + 19] = 34;
-        ushort ipCsum = CalculateIpv4Checksum(frame.AsSpan(ipOffset, ipv4Size));
+        ushort ipCsum = _CalculateIpv4Checksum(frame.AsSpan(ipOffset, ipv4Size));
         BinaryPrimitives.WriteUInt16BigEndian(frame.AsSpan(ipOffset + 10), ipCsum);
 
         // TCP header (minimal, no options)
@@ -1461,7 +1461,7 @@ internal static class FrameBuilders
         frame[ipOffset + 17] = 0;
         frame[ipOffset + 18] = 0;
         frame[ipOffset + 19] = 1;
-        ushort ipCsum = CalculateIpv4Checksum(frame.AsSpan(ipOffset, ipv4Size));
+        ushort ipCsum = _CalculateIpv4Checksum(frame.AsSpan(ipOffset, ipv4Size));
         BinaryPrimitives.WriteUInt16BigEndian(frame.AsSpan(ipOffset + 10), ipCsum);
 
         // UDP header (port 30490 = SOME/IP default)

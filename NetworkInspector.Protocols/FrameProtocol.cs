@@ -21,7 +21,7 @@ namespace NetworkInspector.Protocols;
 /// </summary>
 /// <remarks>
 /// <para><b>Thread safety:</b> instances are immutable after registration completes.
-/// All mutable state is initialised inside <c>RegisterFieldsCustom</c> / <c>OnStartCustom</c>
+/// All mutable state is initialised inside <c>RegisterFieldsCustom</c> / <c>_OnStartCustom</c>
 /// (single-threaded build phase) and is read-only thereafter, so <see cref="Parse"/> may
 /// be invoked concurrently from any number of threads on the same instance without external
 /// synchronisation. Per-thread caches (when present) are stored in <c>[ThreadStatic]</c> fields.</para>
@@ -39,40 +39,40 @@ public sealed partial class FrameProtocol : IProtocol
     #region Index Group Constants
 
     /// <summary>Index group for always-present frame fields.</summary>
-    private const string FrameIndexGroup = "frame";
+    private const string _FrameIndexGroup = "frame";
 
     /// <summary>Index group for optional interface fields.</summary>
-    private const string InterfaceIndexGroup = "frame.interface";
+    private const string _InterfaceIndexGroup = "frame.interface";
 
     #endregion
 
     #region Fields
 
-    [NoneField("frame", "Frame", IndexGroup = FrameIndexGroup)]
+    [NoneField("frame", "Frame", IndexGroup = _FrameIndexGroup)]
     private FieldId _ProtocolFieldId;
 
-    [U64Field("frame.id", "Frame Number", IndexGroup = FrameIndexGroup)]
+    [U64Field("frame.id", "Frame Number", IndexGroup = _FrameIndexGroup)]
     private FieldId _IdFieldId;
 
-    [TimestampField("frame.time", "Arrival Time", IndexGroup = FrameIndexGroup)]
+    [TimestampField("frame.time", "Arrival Time", IndexGroup = _FrameIndexGroup)]
     private FieldId _TimeFieldId;
 
-    [U64Field("frame.link_type", "Link Type", IndexGroup = FrameIndexGroup)]
+    [U64Field("frame.link_type", "Link Type", IndexGroup = _FrameIndexGroup)]
     private FieldId _LinkTypeFieldId;
 
-    [U64Field("frame.len", "Frame Length", IndexGroup = FrameIndexGroup)]
+    [U64Field("frame.len", "Frame Length", IndexGroup = _FrameIndexGroup)]
     private FieldId _LengthFieldId;
 
-    [BytesField("frame.data", "Frame Data", IndexGroup = FrameIndexGroup)]
+    [BytesField("frame.data", "Frame Data", IndexGroup = _FrameIndexGroup)]
     private FieldId _DataFieldId;
 
-    [NoneField("frame.interface", "Interface", IndexGroup = InterfaceIndexGroup)]
+    [NoneField("frame.interface", "Interface", IndexGroup = _InterfaceIndexGroup)]
     private FieldId _InterfaceFieldId;
 
-    [U64Field("frame.interface.id", "Interface ID", IndexGroup = InterfaceIndexGroup)]
+    [U64Field("frame.interface.id", "Interface ID", IndexGroup = _InterfaceIndexGroup)]
     private FieldId _InterfaceIdFieldId;
 
-    [StringField("frame.interface.name", "Interface Name", IndexGroup = InterfaceIndexGroup)]
+    [StringField("frame.interface.name", "Interface Name", IndexGroup = _InterfaceIndexGroup)]
     private FieldId _InterfaceNameFieldId;
 
     #endregion
@@ -85,7 +85,7 @@ public sealed partial class FrameProtocol : IProtocol
 
     #endregion
 
-    #region Pre-allocated populators (created once in OnStartCustom, shared across all packets)
+    #region Pre-allocated populators (created once in _OnStartCustom, shared across all packets)
 
     /// <summary>Pre-allocated delegate for frame field population — captures only 'this'.</summary>
     private LazyPopulator _Populator = null!;
@@ -98,11 +98,11 @@ public sealed partial class FrameProtocol : IProtocol
     // Pre-bound delegates for direct invocation without interface vtable dispatch.
     private (ulong Key, ParseDelegate Parse)[] _LinkTypeSparseCache = [];
 
-    partial void OnStartCustom(Stack stack)
+    partial void _OnStartCustom(Stack stack)
     {
         // Allocate once — each delegate captures only 'this' (a singleton per registered protocol).
-        _Populator = PopulateFrameFields;
-        _InterfacePopulator = PopulateInterfaceFields;
+        _Populator = _PopulateFrameFields;
+        _InterfacePopulator = _PopulateInterfaceFields;
         // Link-type table has very few entries (typically just Ethernet = 1); cache all of them.
         // Instance cache stores IProtocol references for zero-indirection dispatch.
         _LinkTypeSparseCache = stack.BuildU64SparseDelegateCache(_LinkTypeTableId);
@@ -113,7 +113,7 @@ public sealed partial class FrameProtocol : IProtocol
     /// Reads all needed data from <see cref="MutField.Packet"/> and the stored bytes
     /// to avoid per-packet closure allocations.
     /// </summary>
-    private ParseResult PopulateFrameFields(in MutField container)
+    private ParseResult _PopulateFrameFields(in MutField container)
     {
         Frame frame = container.Packet.Frame;
 
@@ -153,7 +153,7 @@ public sealed partial class FrameProtocol : IProtocol
     /// Re-queries the interface registry from <see cref="MutField.Packet"/> instead of
     /// capturing the info object in a per-packet closure.
     /// </summary>
-    private ParseResult PopulateInterfaceFields(in MutField container)
+    private ParseResult _PopulateInterfaceFields(in MutField container)
     {
         Frame frame = container.Packet.Frame;
         if (!frame.HasInterface)
@@ -235,7 +235,7 @@ public sealed partial class FrameProtocol : IProtocol
         context.RecordGroupPresence(_FrameGroupId);
 
         // Extract frame metadata needed for: summary closure + dispatch + index recording.
-        // (Other fields are re-read inside PopulateFrameFields at materialisation time.)
+        // (Other fields are re-read inside _PopulateFrameFields at materialisation time.)
         FrameId frameId = frame.Id;
         LinkType linkType = frame.LinkType;
         int frameLength = data.Length;
@@ -258,12 +258,12 @@ public sealed partial class FrameProtocol : IProtocol
         // Summary captures only 3 small values (int, int, string-ref) from the eagerly-extracted locals.
         LazyString summary = ZA.Lazy("Frame ", frameId.Value, ": ", frameLength, " bytes (", linkTypeName, ")");
 
-        // Store the full frame data in the field value so PopulateFrameFields can access it
+        // Store the full frame data in the field value so _PopulateFrameFields can access it
         // without any captured state (reads from container.Value.Data.AsBytes()).
         parentField.AppendLazyWithCustomText(_ProtocolFieldId, data, summary, _Populator);
 
         // Dispatch to link-layer protocol on parentField (sibling dispatch — all protocols are direct children of root)
-        ParseResult dispatchResult = DispatchLinkType(in parentField, linkTypeValue, data, in context);
+        ParseResult dispatchResult = _DispatchLinkType(in parentField, linkTypeValue, data, in context);
         if (dispatchResult.IsError)
         {
             return dispatchResult;
@@ -277,7 +277,7 @@ public sealed partial class FrameProtocol : IProtocol
     /// Scans the pre-built sparse cache (typically 1–3 entries) before falling back to
     /// full table dispatch for multi-protocol keys or unknown link types.
     /// </summary>
-    private ParseResult DispatchLinkType(
+    private ParseResult _DispatchLinkType(
         in MutField parentField, ulong linkType, ReadOnlyMemory<byte> data, in ParseContext context)
     {
         // Direct delegate call — no ProtocolId resolution, no vtable dispatch.

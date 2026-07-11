@@ -25,7 +25,7 @@ internal static class Icmpv6NdpFlagsFormatter
     #region Router Advertisement flags (2 flags)
 
     // Key packing: bit0=M (Managed), bit1=O (Other)
-    private static readonly string[] RaFlagsTable = BuildRaFlagsTable();
+    private static readonly string[] _RaFlagsTable = _BuildRaFlagsTable();
 
     /// <summary>
     /// Returns the precomputed display string for the given Router Advertisement flag combination.
@@ -34,15 +34,15 @@ internal static class Icmpv6NdpFlagsFormatter
     internal static string FormatRa(bool managed, bool other)
     {
         int key = (managed ? 1 : 0) | (other ? 2 : 0);
-        return RaFlagsTable[key];
+        return _RaFlagsTable[key];
     }
 
-    private static string[] BuildRaFlagsTable()
+    private static string[] _BuildRaFlagsTable()
     {
         string[] table = new string[4];
         for (int i = 0; i < 4; i++)
         {
-            table[i] = BuildFlagString(
+            table[i] = _BuildFlagString(
                 [(i & 1) != 0, (i & 2) != 0],
                 ["M", "O"]);
         }
@@ -54,7 +54,7 @@ internal static class Icmpv6NdpFlagsFormatter
     #region Neighbor Advertisement flags (3 flags)
 
     // Key packing: bit0=R (Router), bit1=S (Solicited), bit2=O (Override)
-    private static readonly string[] NaFlagsTable = BuildNaFlagsTable();
+    private static readonly string[] _NaFlagsTable = _BuildNaFlagsTable();
 
     /// <summary>
     /// Returns the precomputed display string for the given Neighbor Advertisement flag combination.
@@ -63,15 +63,15 @@ internal static class Icmpv6NdpFlagsFormatter
     internal static string FormatNa(bool router, bool solicited, bool overrideFlag)
     {
         int key = (router ? 1 : 0) | (solicited ? 2 : 0) | (overrideFlag ? 4 : 0);
-        return NaFlagsTable[key];
+        return _NaFlagsTable[key];
     }
 
-    private static string[] BuildNaFlagsTable()
+    private static string[] _BuildNaFlagsTable()
     {
         string[] table = new string[8];
         for (int i = 0; i < 8; i++)
         {
-            table[i] = BuildFlagString(
+            table[i] = _BuildFlagString(
                 [(i & 1) != 0, (i & 2) != 0, (i & 4) != 0],
                 ["R", "S", "O"]);
         }
@@ -82,7 +82,7 @@ internal static class Icmpv6NdpFlagsFormatter
 
     #region Shared string builder
 
-    private static string BuildFlagString(bool[] active, string[] names)
+    private static string _BuildFlagString(bool[] active, string[] names)
     {
         int count = 0;
         for (int i = 0; i < active.Length; i++)

@@ -1,13 +1,5 @@
 ﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
-using System;
-using System.Collections.Generic;
-using System.Collections.Immutable;
-using System.Linq;
-using System.Text;
-using Microsoft.CodeAnalysis;
-using NetworkInspector.Generators.Models;
-
 namespace NetworkInspector.Generators;
 
 /// <summary>
@@ -25,7 +17,7 @@ public sealed partial class ProtocolGenerator
     /// missing or its mandatory constructor arguments are absent; all other errors are
     /// captured as <see cref="DiagnosticInfo"/> entries inside the returned <see cref="ProtocolInfo"/>.
     /// </summary>
-    private static ProtocolInfo? ExtractProtocolInfo(INamedTypeSymbol classSymbol, LocationInfo classLocation)
+    private static ProtocolInfo? _ExtractProtocolInfo(INamedTypeSymbol classSymbol, LocationInfo classLocation)
     {
         List<DiagnosticInfo> diagnostics = [];
 
@@ -47,7 +39,7 @@ public sealed partial class ProtocolGenerator
 
         // NIGEN012: every declaration must be 'partial' so the generated companion file can
         // contribute additional members without producing CS0260 from the generated source.
-        if (!IsDeclaredPartial(classSymbol))
+        if (!_IsDeclaredPartial(classSymbol))
         {
             diagnostics.Add(new DiagnosticInfo(_DiagNotPartial, classSymbol.Name));
         }
@@ -96,7 +88,7 @@ public sealed partial class ProtocolGenerator
 
         // NIGEN004: validate the protocol name; an invalid name would flow into generated
         // identifiers and break compilation downstream.
-        if (!IsValidGroupOrTableName(protocolName))
+        if (!_IsValidGroupOrTableName(protocolName))
         {
             diagnostics.Add(new DiagnosticInfo(_DiagInvalidIdentifierName, protocolName));
         }
@@ -104,7 +96,7 @@ public sealed partial class ProtocolGenerator
         string namespaceName = classSymbol.ContainingNamespace.ToDisplayString();
         string className = classSymbol.Name;
 
-        List<TableRegistration> tableRegistrations = ExtractTableRegistrations(classSymbol, className, diagnostics);
+        List<TableRegistration> tableRegistrations = _ExtractTableRegistrations(classSymbol, className, diagnostics);
 
         List<FieldInfo> fields = [];
         List<ProtocolTableInfo> protocolTables = [];
@@ -113,8 +105,8 @@ public sealed partial class ProtocolGenerator
         HashSet<string> indexGroupSet = [];
         List<string> indexGroups = [];
 
-        ExtractFieldsTablesSettings(classSymbol, className, fields, protocolTables, usesTables, settings, indexGroupSet, indexGroups, diagnostics);
-        ValidateDuplicates(className, fields, settings, protocolTables, diagnostics);
+        _ExtractFieldsTablesSettings(classSymbol, className, fields, protocolTables, usesTables, settings, indexGroupSet, indexGroups, diagnostics);
+        _ValidateDuplicates(className, fields, settings, protocolTables, diagnostics);
 
         // Sort index groups lexicographically so the generated output is deterministic regardless
         // of field declaration order in the source file. This matters for reproducible builds and
@@ -127,7 +119,7 @@ public sealed partial class ProtocolGenerator
     }
 
     /// <summary>Extracts class-level [RegisterAt*Table] attributes into <see cref="TableRegistration"/> entries.</summary>
-    private static List<TableRegistration> ExtractTableRegistrations(INamedTypeSymbol classSymbol, string className, List<DiagnosticInfo> diagnostics)
+    private static List<TableRegistration> _ExtractTableRegistrations(INamedTypeSymbol classSymbol, string className, List<DiagnosticInfo> diagnostics)
     {
         List<TableRegistration> registrations = [];
 
@@ -147,7 +139,7 @@ public sealed partial class ProtocolGenerator
                     diagnostics.Add(new DiagnosticInfo(_DiagAttributePayloadIncomplete, "RegisterAtTable", className, className));
                     continue;
                 }
-                ulong key = TryToUInt64(attr.ConstructorArguments[1].Value);
+                ulong key = _TryToUInt64(attr.ConstructorArguments[1].Value);
                 registrations.Add(new TableRegistration(table, key));
             }
             else if (fqn == _FqnRegisterAtStringTableAttribute)
@@ -204,10 +196,10 @@ public sealed partial class ProtocolGenerator
                 byte[] keyBytes = new byte[values.Length];
                 for (int i = 0; i < values.Length; i++)
                 {
-                    keyBytes[i] = values[i].Value is byte b ? b : (byte)TryToUInt64(values[i].Value);
+                    keyBytes[i] = values[i].Value is byte b ? b : (byte)_TryToUInt64(values[i].Value);
                 }
 
-                registrations.Add(TableRegistration.ForBytes(table, BytesToHex(keyBytes)));
+                registrations.Add(TableRegistration.ForBytes(table, _BytesToHex(keyBytes)));
             }
             else if (fqn == _FqnRegisterAtAnyTableAttribute)
             {
@@ -233,7 +225,7 @@ public sealed partial class ProtocolGenerator
     /// uses-table references, settings, and index groups.
     /// Attribute FQN comparison prevents name-hijacking from attributes in other namespaces.
     /// </summary>
-    private static void ExtractFieldsTablesSettings(
+    private static void _ExtractFieldsTablesSettings(
         INamedTypeSymbol classSymbol,
         string className,
         List<FieldInfo> fields,
@@ -265,7 +257,7 @@ public sealed partial class ProtocolGenerator
                 if (fqn.StartsWith(_FqnNs, StringComparison.Ordinal)
                     && attrShortName.EndsWith(_FieldAttributeSuffix, StringComparison.Ordinal))
                 {
-                    FieldInfo? fi = ExtractFieldInfo(fieldSymbol, attr, attrShortName, className, diagnostics);
+                    FieldInfo? fi = _ExtractFieldInfo(fieldSymbol, attr, attrShortName, className, diagnostics);
                     if (fi is not null)
                     {
                         fields.Add(fi);
@@ -277,7 +269,7 @@ public sealed partial class ProtocolGenerator
                 }
                 else if (fqn == _FqnProtocolTableU64Attribute)
                 {
-                    ProtocolTableInfo? ti = ExtractProtocolTableInfo(fieldSymbol, attr, "U64", className, diagnostics);
+                    ProtocolTableInfo? ti = _ExtractProtocolTableInfo(fieldSymbol, attr, "U64", className, diagnostics);
                     if (ti is not null)
                     {
                         protocolTables.Add(ti);
@@ -285,7 +277,7 @@ public sealed partial class ProtocolGenerator
                 }
                 else if (fqn == _FqnProtocolTableStringAttribute)
                 {
-                    ProtocolTableInfo? ti = ExtractProtocolTableInfo(fieldSymbol, attr, "String", className, diagnostics);
+                    ProtocolTableInfo? ti = _ExtractProtocolTableInfo(fieldSymbol, attr, "String", className, diagnostics);
                     if (ti is not null)
                     {
                         protocolTables.Add(ti);
@@ -293,7 +285,7 @@ public sealed partial class ProtocolGenerator
                 }
                 else if (fqn == _FqnProtocolTableBytesAttribute)
                 {
-                    ProtocolTableInfo? ti = ExtractProtocolTableInfo(fieldSymbol, attr, "Bytes", className, diagnostics);
+                    ProtocolTableInfo? ti = _ExtractProtocolTableInfo(fieldSymbol, attr, "Bytes", className, diagnostics);
                     if (ti is not null)
                     {
                         protocolTables.Add(ti);
@@ -301,7 +293,7 @@ public sealed partial class ProtocolGenerator
                 }
                 else if (fqn == _FqnProtocolTableBoolAttribute)
                 {
-                    ProtocolTableInfo? ti = ExtractProtocolTableInfo(fieldSymbol, attr, "Bool", className, diagnostics);
+                    ProtocolTableInfo? ti = _ExtractProtocolTableInfo(fieldSymbol, attr, "Bool", className, diagnostics);
                     if (ti is not null)
                     {
                         protocolTables.Add(ti);
@@ -309,7 +301,7 @@ public sealed partial class ProtocolGenerator
                 }
                 else if (fqn == _FqnProtocolTableAnyAttribute)
                 {
-                    ProtocolTableInfo? ti = ExtractProtocolTableInfo(fieldSymbol, attr, "Any", className, diagnostics);
+                    ProtocolTableInfo? ti = _ExtractProtocolTableInfo(fieldSymbol, attr, "Any", className, diagnostics);
                     if (ti is not null)
                     {
                         protocolTables.Add(ti);
@@ -332,7 +324,7 @@ public sealed partial class ProtocolGenerator
                 }
                 else if (fqn == _FqnBoolSettingAttribute)
                 {
-                    SettingInfo? si = ExtractBoolSettingInfo(fieldSymbol, attr, className, diagnostics);
+                    SettingInfo? si = _ExtractBoolSettingInfo(fieldSymbol, attr, className, diagnostics);
                     if (si is not null)
                     {
                         settings.Add(si);
@@ -340,7 +332,7 @@ public sealed partial class ProtocolGenerator
                 }
                 else if (fqn == _FqnStringSettingAttribute)
                 {
-                    SettingInfo? si = ExtractStringSettingInfo(fieldSymbol, attr, className, diagnostics);
+                    SettingInfo? si = _ExtractStringSettingInfo(fieldSymbol, attr, className, diagnostics);
                     if (si is not null)
                     {
                         settings.Add(si);
@@ -348,7 +340,7 @@ public sealed partial class ProtocolGenerator
                 }
                 else if (fqn == _FqnF64SettingAttribute)
                 {
-                    SettingInfo? si = ExtractF64SettingInfo(fieldSymbol, attr, className, diagnostics);
+                    SettingInfo? si = _ExtractF64SettingInfo(fieldSymbol, attr, className, diagnostics);
                     if (si is not null)
                     {
                         settings.Add(si);
@@ -356,7 +348,7 @@ public sealed partial class ProtocolGenerator
                 }
                 else if (fqn == _FqnU64SettingAttribute)
                 {
-                    SettingInfo? si = ExtractU64SettingInfo(fieldSymbol, attr, className, diagnostics);
+                    SettingInfo? si = _ExtractU64SettingInfo(fieldSymbol, attr, className, diagnostics);
                     if (si is not null)
                     {
                         settings.Add(si);
@@ -364,7 +356,7 @@ public sealed partial class ProtocolGenerator
                 }
                 else if (fqn == _FqnI64SettingAttribute)
                 {
-                    SettingInfo? si = ExtractI64SettingInfo(fieldSymbol, attr, className, diagnostics);
+                    SettingInfo? si = _ExtractI64SettingInfo(fieldSymbol, attr, className, diagnostics);
                     if (si is not null)
                     {
                         settings.Add(si);
@@ -372,7 +364,7 @@ public sealed partial class ProtocolGenerator
                 }
                 else if (fqn == _FqnBytesSettingAttribute)
                 {
-                    SettingInfo? si = ExtractBytesSettingInfo(fieldSymbol, attr, className, diagnostics);
+                    SettingInfo? si = _ExtractBytesSettingInfo(fieldSymbol, attr, className, diagnostics);
                     if (si is not null)
                     {
                         settings.Add(si);
@@ -380,7 +372,7 @@ public sealed partial class ProtocolGenerator
                 }
                 else if (fqn == _FqnEnumSettingAttribute)
                 {
-                    SettingInfo? si = ExtractEnumSettingInfo(fieldSymbol, attr, className, diagnostics);
+                    SettingInfo? si = _ExtractEnumSettingInfo(fieldSymbol, attr, className, diagnostics);
                     if (si is not null)
                     {
                         settings.Add(si);
@@ -391,7 +383,7 @@ public sealed partial class ProtocolGenerator
     }
 
     /// <summary>Extracts a single field's metadata from a recognized <c>[*Field]</c> attribute.</summary>
-    private static FieldInfo? ExtractFieldInfo(
+    private static FieldInfo? _ExtractFieldInfo(
         IFieldSymbol fieldSymbol, AttributeData attr, string attrShortName, string className, List<DiagnosticInfo> diagnostics)
     {
         if (attr.ConstructorArguments.Length < 2)
@@ -408,7 +400,7 @@ public sealed partial class ProtocolGenerator
         }
 
         // NIGEN004: field names participate in generated identifier construction.
-        if (!IsValidGroupOrTableName(name))
+        if (!_IsValidGroupOrTableName(name))
         {
             diagnostics.Add(new DiagnosticInfo(_DiagInvalidIdentifierName, name));
         }
@@ -430,7 +422,7 @@ public sealed partial class ProtocolGenerator
         }
 
         // Validate that the index group name only contains safe identifier characters.
-        if (indexGroup is not null && !IsValidGroupOrTableName(indexGroup))
+        if (indexGroup is not null && !_IsValidGroupOrTableName(indexGroup))
         {
             diagnostics.Add(new DiagnosticInfo(_DiagInvalidIdentifierName, indexGroup!));
             indexGroup = null; // Drop rather than generate an invalid C# identifier.
@@ -454,7 +446,7 @@ public sealed partial class ProtocolGenerator
             "UuidFieldAttribute" => $"{_GloFieldType}.Uuid",
             "TimestampFieldAttribute" => $"{_GloFieldType}.Timestamp",
             "BoolFieldAttribute" => $"{_GloFieldType}.Bool",
-            _ => SetUnknown(out isKnown, $"{_GloFieldType}.None")
+            _ => _SetUnknown(out isKnown, $"{_GloFieldType}.None")
         };
 
         if (!isKnown)
@@ -466,7 +458,7 @@ public sealed partial class ProtocolGenerator
     }
 
     /// <summary>Extracts a protocol-table descriptor for the given key type.</summary>
-    private static ProtocolTableInfo? ExtractProtocolTableInfo(
+    private static ProtocolTableInfo? _ExtractProtocolTableInfo(
         IFieldSymbol fieldSymbol, AttributeData attr, string keyType, string className, List<DiagnosticInfo> diagnostics)
     {
         string attrShortName = $"ProtocolTable{keyType}Attribute";
@@ -506,7 +498,7 @@ public sealed partial class ProtocolGenerator
     /// count and type pattern); collapsing them here is behaviour-preserving because the same single
     /// diagnostic is still added exactly once per malformed attribute.
     /// </remarks>
-    private static bool TryExtractSettingHeader(
+    private static bool _TryExtractSettingHeader(
         IFieldSymbol fieldSymbol, AttributeData attr, string attributeName, string className,
         List<DiagnosticInfo> diagnostics, out string name, out string uiName, out string groupName)
     {
@@ -527,9 +519,9 @@ public sealed partial class ProtocolGenerator
     }
 
     /// <summary>Extracts a <c>[BoolSetting]</c> descriptor.</summary>
-    private static SettingInfo? ExtractBoolSettingInfo(IFieldSymbol fieldSymbol, AttributeData attr, string className, List<DiagnosticInfo> diagnostics)
+    private static SettingInfo? _ExtractBoolSettingInfo(IFieldSymbol fieldSymbol, AttributeData attr, string className, List<DiagnosticInfo> diagnostics)
     {
-        if (!TryExtractSettingHeader(fieldSymbol, attr, "BoolSettingAttribute", className, diagnostics, out string name, out string uiName, out string groupName))
+        if (!_TryExtractSettingHeader(fieldSymbol, attr, "BoolSettingAttribute", className, diagnostics, out string name, out string uiName, out string groupName))
         {
             return null;
         }
@@ -553,9 +545,9 @@ public sealed partial class ProtocolGenerator
     }
 
     /// <summary>Extracts a <c>[StringSetting]</c> descriptor.</summary>
-    private static SettingInfo? ExtractStringSettingInfo(IFieldSymbol fieldSymbol, AttributeData attr, string className, List<DiagnosticInfo> diagnostics)
+    private static SettingInfo? _ExtractStringSettingInfo(IFieldSymbol fieldSymbol, AttributeData attr, string className, List<DiagnosticInfo> diagnostics)
     {
-        if (!TryExtractSettingHeader(fieldSymbol, attr, "StringSettingAttribute", className, diagnostics, out string name, out string uiName, out string groupName))
+        if (!_TryExtractSettingHeader(fieldSymbol, attr, "StringSettingAttribute", className, diagnostics, out string name, out string uiName, out string groupName))
         {
             return null;
         }
@@ -578,9 +570,9 @@ public sealed partial class ProtocolGenerator
     }
 
     /// <summary>Extracts an <c>[F64Setting]</c> descriptor.</summary>
-    private static SettingInfo? ExtractF64SettingInfo(IFieldSymbol fieldSymbol, AttributeData attr, string className, List<DiagnosticInfo> diagnostics)
+    private static SettingInfo? _ExtractF64SettingInfo(IFieldSymbol fieldSymbol, AttributeData attr, string className, List<DiagnosticInfo> diagnostics)
     {
-        if (!TryExtractSettingHeader(fieldSymbol, attr, "F64SettingAttribute", className, diagnostics, out string name, out string uiName, out string groupName))
+        if (!_TryExtractSettingHeader(fieldSymbol, attr, "F64SettingAttribute", className, diagnostics, out string name, out string uiName, out string groupName))
         {
             return null;
         }
@@ -617,9 +609,9 @@ public sealed partial class ProtocolGenerator
     }
 
     /// <summary>Extracts a <c>[U64Setting]</c> descriptor.</summary>
-    private static SettingInfo? ExtractU64SettingInfo(IFieldSymbol fieldSymbol, AttributeData attr, string className, List<DiagnosticInfo> diagnostics)
+    private static SettingInfo? _ExtractU64SettingInfo(IFieldSymbol fieldSymbol, AttributeData attr, string className, List<DiagnosticInfo> diagnostics)
     {
-        if (!TryExtractSettingHeader(fieldSymbol, attr, "U64SettingAttribute", className, diagnostics, out string name, out string uiName, out string groupName))
+        if (!_TryExtractSettingHeader(fieldSymbol, attr, "U64SettingAttribute", className, diagnostics, out string name, out string uiName, out string groupName))
         {
             return null;
         }
@@ -634,7 +626,7 @@ public sealed partial class ProtocolGenerator
         {
             if (named.Key == "Default")
             {
-                defaultValue = TryToUInt64(named.Value.Value);
+                defaultValue = _TryToUInt64(named.Value.Value);
             }
             else if (named.Key == "HasMin" && named.Value.Value is bool bMin)
             {
@@ -646,11 +638,11 @@ public sealed partial class ProtocolGenerator
             }
             else if (named.Key == "Min")
             {
-                min = TryToUInt64(named.Value.Value);
+                min = _TryToUInt64(named.Value.Value);
             }
             else if (named.Key == "Max")
             {
-                max = TryToUInt64(named.Value.Value);
+                max = _TryToUInt64(named.Value.Value);
             }
             else if (named.Key == "Description")
             {
@@ -666,9 +658,9 @@ public sealed partial class ProtocolGenerator
     }
 
     /// <summary>Extracts an <c>[I64Setting]</c> descriptor.</summary>
-    private static SettingInfo? ExtractI64SettingInfo(IFieldSymbol fieldSymbol, AttributeData attr, string className, List<DiagnosticInfo> diagnostics)
+    private static SettingInfo? _ExtractI64SettingInfo(IFieldSymbol fieldSymbol, AttributeData attr, string className, List<DiagnosticInfo> diagnostics)
     {
-        if (!TryExtractSettingHeader(fieldSymbol, attr, "I64SettingAttribute", className, diagnostics, out string name, out string uiName, out string groupName))
+        if (!_TryExtractSettingHeader(fieldSymbol, attr, "I64SettingAttribute", className, diagnostics, out string name, out string uiName, out string groupName))
         {
             return null;
         }
@@ -683,7 +675,7 @@ public sealed partial class ProtocolGenerator
         {
             if (named.Key == "Default")
             {
-                defaultValue = TryToInt64(named.Value.Value);
+                defaultValue = _TryToInt64(named.Value.Value);
             }
             else if (named.Key == "HasMin" && named.Value.Value is bool bMin)
             {
@@ -695,11 +687,11 @@ public sealed partial class ProtocolGenerator
             }
             else if (named.Key == "Min")
             {
-                min = TryToInt64(named.Value.Value);
+                min = _TryToInt64(named.Value.Value);
             }
             else if (named.Key == "Max")
             {
-                max = TryToInt64(named.Value.Value);
+                max = _TryToInt64(named.Value.Value);
             }
             else if (named.Key == "Description")
             {
@@ -715,9 +707,9 @@ public sealed partial class ProtocolGenerator
     }
 
     /// <summary>Extracts a <c>[BytesSetting]</c> descriptor and validates <c>DefaultHex</c>.</summary>
-    private static SettingInfo? ExtractBytesSettingInfo(IFieldSymbol fieldSymbol, AttributeData attr, string className, List<DiagnosticInfo> diagnostics)
+    private static SettingInfo? _ExtractBytesSettingInfo(IFieldSymbol fieldSymbol, AttributeData attr, string className, List<DiagnosticInfo> diagnostics)
     {
-        if (!TryExtractSettingHeader(fieldSymbol, attr, "BytesSettingAttribute", className, diagnostics, out string name, out string uiName, out string groupName))
+        if (!_TryExtractSettingHeader(fieldSymbol, attr, "BytesSettingAttribute", className, diagnostics, out string name, out string uiName, out string groupName))
         {
             return null;
         }
@@ -738,7 +730,7 @@ public sealed partial class ProtocolGenerator
 
         if (!string.IsNullOrEmpty(defaultHex))
         {
-            if (defaultHex.Length % 2 != 0 || !IsValidHex(defaultHex))
+            if (defaultHex.Length % 2 != 0 || !_IsValidHex(defaultHex))
             {
                 diagnostics.Add(new DiagnosticInfo(_DiagInvalidBytesDefaultHex, defaultHex, name, className));
                 defaultHex = ""; // Fall back to empty array.
@@ -749,9 +741,9 @@ public sealed partial class ProtocolGenerator
     }
 
     /// <summary>Extracts an <c>[EnumSetting]</c> descriptor; pre-formats the allowed-values tuple list.</summary>
-    private static SettingInfo? ExtractEnumSettingInfo(IFieldSymbol fieldSymbol, AttributeData attr, string className, List<DiagnosticInfo> diagnostics)
+    private static SettingInfo? _ExtractEnumSettingInfo(IFieldSymbol fieldSymbol, AttributeData attr, string className, List<DiagnosticInfo> diagnostics)
     {
-        if (!TryExtractSettingHeader(fieldSymbol, attr, "EnumSettingAttribute", className, diagnostics, out string name, out string uiName, out string groupName))
+        if (!_TryExtractSettingHeader(fieldSymbol, attr, "EnumSettingAttribute", className, diagnostics, out string name, out string uiName, out string groupName))
         {
             return null;
         }
@@ -763,7 +755,7 @@ public sealed partial class ProtocolGenerator
         {
             if (named.Key == "Default")
             {
-                defaultValue = TryToUInt64(named.Value.Value);
+                defaultValue = _TryToUInt64(named.Value.Value);
             }
             else if (named.Key == "AllowedValues" && named.Value.Value is string av)
             {
@@ -777,7 +769,7 @@ public sealed partial class ProtocolGenerator
 
         // Validate and pre-format enum pairs at extraction time so that emission is trivial
         // and any NIGEN005 diagnostics point back to the attribute (not to generated code).
-        string formattedPairs = FormatEnumPairs(allowedValues, name, className, diagnostics);
+        string formattedPairs = _FormatEnumPairs(allowedValues, name, className, diagnostics);
         string defaultStr = defaultValue.ToString(System.Globalization.CultureInfo.InvariantCulture);
 
         return new SettingInfo(fieldSymbol.Name, name, uiName, groupName, "Enum", defaultStr, desc, enumValues: formattedPairs);
@@ -788,7 +780,7 @@ public sealed partial class ProtocolGenerator
     #region Validation
 
     /// <summary>Checks for duplicate field, setting, and table names within one protocol class and appends diagnostics.</summary>
-    private static void ValidateDuplicates(
+    private static void _ValidateDuplicates(
         string className,
         List<FieldInfo> fields,
         List<SettingInfo> settings,
@@ -840,7 +832,7 @@ public sealed partial class ProtocolGenerator
     /// Signed values are reinterpreted via an unchecked cast (two's-complement bit pattern preserved),
     /// never range-clamped, so callers must treat the result as a raw bit pattern, not a magnitude.
     /// </remarks>
-    private static ulong TryToUInt64(object? value) => value switch
+    private static ulong _TryToUInt64(object? value) => value switch
     {
         null => 0UL,
         byte b => b,
@@ -851,20 +843,21 @@ public sealed partial class ProtocolGenerator
         uint u => u,
         long l => (ulong)l,
         ulong u => u,
-        bool bv => bv ? 1UL : 0UL,
+        true => 1UL,
+        false => 0UL,
         _ => 0UL
     };
 
     /// <summary>Safely converts a boxed attribute constructor value to <see cref="long"/>.
     /// Returns 0 for null or non-numeric types.</summary>
     /// <remarks>
-    /// As with <see cref="TryToUInt64"/>, the <c>_ =&gt; 0L</c> fallback is deliberately silent because
+    /// As with <see cref="_TryToUInt64"/>, the <c>_ =&gt; 0L</c> fallback is deliberately silent because
     /// attribute arguments are compiler-validated before reaching the generator; a non-numeric value here
     /// signals an unbound/malformed symbol during incremental compilation. Returning 0 keeps the pipeline
     /// non-throwing and deterministic. The <c>ulong</c> case reinterprets the bit pattern via an unchecked
     /// cast rather than clamping, so large unsigned values surface as negative <see cref="long"/> values.
     /// </remarks>
-    private static long TryToInt64(object? value) => value switch
+    private static long _TryToInt64(object? value) => value switch
     {
         null => 0L,
         byte b => b,
@@ -875,7 +868,8 @@ public sealed partial class ProtocolGenerator
         uint u => u,
         long l => l,
         ulong u => (long)u,
-        bool bv => bv ? 1L : 0L,
+        true => 1L,
+        false => 0L,
         _ => 0L
     };
 
@@ -883,7 +877,7 @@ public sealed partial class ProtocolGenerator
     /// Returns <see langword="true"/> when <paramref name="name"/> consists only of
     /// letters, digits, dots, and underscores ([a-zA-Z0-9._]).
     /// </summary>
-    private static bool IsValidGroupOrTableName(string name)
+    private static bool _IsValidGroupOrTableName(string name)
     {
         if (name.Length == 0)
         {
@@ -907,7 +901,7 @@ public sealed partial class ProtocolGenerator
     /// generator emits <c>partial class</c> contributions; a missing modifier would produce
     /// CS0260 from the generated source rather than a meaningful diagnostic on the user's class.
     /// </summary>
-    private static bool IsDeclaredPartial(INamedTypeSymbol classSymbol)
+    private static bool _IsDeclaredPartial(INamedTypeSymbol classSymbol)
     {
         foreach (SyntaxReference syntaxRef in classSymbol.DeclaringSyntaxReferences)
         {
@@ -925,19 +919,19 @@ public sealed partial class ProtocolGenerator
     /// <paramref name="fallback"/>. Used in switch expressions to record an
     /// unknown branch while still returning a valid fallback value.
     /// </summary>
-    private static string SetUnknown(out bool isKnown, string fallback)
+    private static string _SetUnknown(out bool isKnown, string fallback)
     {
         isKnown = false;
         return fallback;
     }
 
     /// <summary>Converts a byte array to an uppercase hex string (e.g. <c>[0x01, 0xAB]</c> -> <c>"01AB"</c>).</summary>
-    private static string BytesToHex(byte[] bytes)
+    private static string _BytesToHex(byte[] bytes)
     {
         StringBuilder sbHex = new(bytes.Length * 2);
         foreach (byte b in bytes)
         {
-            sbHex.AppendFormat("{0:X2}", b);
+            sbHex.AppendFormat(CultureInfo.InvariantCulture, "{0:X2}", b);
         }
 
         return sbHex.ToString();
@@ -947,7 +941,7 @@ public sealed partial class ProtocolGenerator
     /// Returns <see langword="true"/> when <paramref name="hex"/> is a non-empty, even-length
     /// string whose characters are exclusively hex digits (0-9, a-f, A-F).
     /// </summary>
-    private static bool IsValidHex(string hex)
+    private static bool _IsValidHex(string hex)
     {
         if (hex.Length == 0 || hex.Length % 2 != 0)
         {
@@ -971,7 +965,7 @@ public sealed partial class ProtocolGenerator
     /// diagnostics for any entry whose value cannot be parsed as a <see cref="ulong"/>.
     /// Returns the C# tuple initializer string for the generated EnumSettingMetadata.FromPairs call.
     /// </summary>
-    private static string FormatEnumPairs(string allowedValues, string settingName, string className, List<DiagnosticInfo> diagnostics)
+    private static string _FormatEnumPairs(string allowedValues, string settingName, string className, List<DiagnosticInfo> diagnostics)
     {
         if (string.IsNullOrWhiteSpace(allowedValues))
         {
@@ -1008,7 +1002,7 @@ public sealed partial class ProtocolGenerator
                 sb.Append(", ");
             }
 
-            sb.Append($"(\"{EscapeString(entryName)}\", {entryValue})");
+            sb.Append($"(\"{_EscapeString(entryName)}\", {entryValue})");
         }
 
         return sb.ToString();

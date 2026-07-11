@@ -17,11 +17,11 @@ public sealed partial class WebSocketProtocol
     /// feeding it into the raw DEFLATE decompressor.  These bytes form a SYNC flush marker
     /// that signals end-of-stream to the <see cref="DeflateStream"/>.</para>
     /// <para>The method returns <see langword="null"/> on decompression failure rather than
-    /// propagating an exception — the caller (<see cref="PopulateWebSocketFields"/>) silently
+    /// propagating an exception — the caller (<see cref="_PopulateWebSocketFields"/>) silently
     /// omits the decompressed field in that case, which is preferable to aborting the entire
     /// frame parse.</para>
     /// </remarks>
-    private static ReadOnlyMemory<byte>? DecompressPermessageDeflate(ReadOnlyMemory<byte> data)
+    private static ReadOnlyMemory<byte>? _DecompressPermessageDeflate(ReadOnlyMemory<byte> data)
     {
         if (data.Length == 0)
         {

@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Exporters.Text;
 
@@ -42,7 +42,7 @@ public sealed class TextExporter : IPacketListener, IErrorTolerantExporter, IDis
     // ========================================================================
 
     /// <summary>Number of spaces per indentation level.</summary>
-    private const int IndentWidth = 2;
+    private const int _IndentWidth = 2;
 
     // ========================================================================
     // Fields
@@ -62,7 +62,7 @@ public sealed class TextExporter : IPacketListener, IErrorTolerantExporter, IDis
     private bool _Started;
     private bool _Finished;
 
-    // Instance UTF-8 scratch buffer shared by WriteString and WriteIndent.
+    // Instance UTF-8 scratch buffer shared by _WriteString and _WriteIndent.
     // Grows to the maximum bytes ever needed by this exporter instance and is then
     // reused without allocation. Buffer lifetime is tied to the exporter instance.
     private byte[]? _Utf8Scratch;
@@ -139,9 +139,6 @@ public sealed class TextExporter : IPacketListener, IErrorTolerantExporter, IDis
         || (_TargetPacketCount > 0 && PacketCount >= _TargetPacketCount);
 
     /// <inheritdoc/>
-    bool IExporterStatistics.IsFinished => IsFinished;
-
-    /// <inheritdoc/>
     public ErrorToleranceMode ErrorTolerance { get; set; } = ErrorToleranceMode.Tolerant;
 
     /// <inheritdoc/>
@@ -164,7 +161,7 @@ public sealed class TextExporter : IPacketListener, IErrorTolerantExporter, IDis
             return false;
         }
 
-        return HandlePacket(packet);
+        return _HandlePacket(packet);
     }
 
     /// <inheritdoc/>
@@ -182,14 +179,14 @@ public sealed class TextExporter : IPacketListener, IErrorTolerantExporter, IDis
         }
 
         _Finished = true;
-        FlushAndClose();
+        _FlushAndClose();
     }
 
     /// <inheritdoc/>
     public void Dispose() => OnFinish();
 
     /// <summary>Handles a single packet — formats it and writes it to the output.</summary>
-    private bool HandlePacket(Packet packet)
+    private bool _HandlePacket(Packet packet)
     {
         if (_TargetPacketCount > 0 && PacketCount >= _TargetPacketCount)
         {
@@ -203,9 +200,9 @@ public sealed class TextExporter : IPacketListener, IErrorTolerantExporter, IDis
             _Buffer.Reset();
 
             long packetNumber = PacketCount + 1;
-            WritePacketHeader(packet, packetNumber);
-            WriteFieldTree(packet);
-            WriteSeparator();
+            _WritePacketHeader(packet, packetNumber);
+            _WriteFieldTree(packet);
+            _WriteSeparator();
 
             _Output!.Write(_Buffer.WrittenSpan);
 
@@ -224,7 +221,7 @@ public sealed class TextExporter : IPacketListener, IErrorTolerantExporter, IDis
             }
 
             SkippedCount++;
-            RaiseItemSkipped(index, ExportErrorKind.SerializationError, ex.Message);
+            _RaiseItemSkipped(index, ExportErrorKind.SerializationError, ex.Message);
             return true;
         }
     }
@@ -238,7 +235,7 @@ public sealed class TextExporter : IPacketListener, IErrorTolerantExporter, IDis
     /// </summary>
     /// <param name="packet">The packet to describe.</param>
     /// <param name="packetNumber">1-based packet number, pre-computed by the caller.</param>
-    private void WritePacketHeader(Packet packet, long packetNumber)
+    private void _WritePacketHeader(Packet packet, long packetNumber)
     {
         // "Packet "
         _Buffer.Write("Packet "u8);
@@ -270,13 +267,13 @@ public sealed class TextExporter : IPacketListener, IErrorTolerantExporter, IDis
     /// The field tree already ends with a newline, so one additional newline
     /// produces an empty line that visually separates consecutive packets.
     /// </summary>
-    private void WriteSeparator() => _Buffer.Write("\n"u8);
+    private void _WriteSeparator() => _Buffer.Write("\n"u8);
 
     /// <summary>
     /// Writes the protocol field tree starting from the packet root field.
     /// The root field itself is not printed; its children begin the output.
     /// </summary>
-    private void WriteFieldTree(Packet packet)
+    private void _WriteFieldTree(Packet packet)
     {
         Field root = packet.RootField();
         if (!root.IsValid || !root.HasChildren)
@@ -287,7 +284,7 @@ public sealed class TextExporter : IPacketListener, IErrorTolerantExporter, IDis
         // Root (depth 0) is skipped in output; recurse into its children at depth 1
         foreach (Field child in root.Children(materialize: false))
         {
-            WriteField(child, depth: 1);
+            _WriteField(child, depth: 1);
         }
     }
 
@@ -297,9 +294,9 @@ public sealed class TextExporter : IPacketListener, IErrorTolerantExporter, IDis
     /// <param name="field">The field to write.</param>
     /// <param name="depth">
     /// Current depth in the tree. Depth 1 is a direct child of root (no indentation).
-    /// Each additional level adds <see cref="IndentWidth"/> spaces.
+    /// Each additional level adds <see cref="_IndentWidth"/> spaces.
     /// </param>
-    private void WriteField(Field field, int depth)
+    private void _WriteField(Field field, int depth)
     {
         if (!field.IsValid)
         {
@@ -322,24 +319,24 @@ public sealed class TextExporter : IPacketListener, IErrorTolerantExporter, IDis
         }
 
         // Write this field's line
-        WriteFieldLine(field, fieldType, depth);
+        _WriteFieldLine(field, fieldType, depth);
 
         // Recurse into children unless Summary mode suppresses sub-fields
         if (field.HasChildren && _DetailLevel != TextDetailLevel.Summary)
         {
             foreach (Field child in field.Children(materialize: false))
             {
-                WriteField(child, depth + 1);
+                _WriteField(child, depth + 1);
             }
         }
     }
 
     /// <summary>Writes the indented line for a single field.</summary>
-    private void WriteFieldLine(Field field, FieldType fieldType, int depth)
+    private void _WriteFieldLine(Field field, FieldType fieldType, int depth)
     {
         // depth 1 → 0 spaces, depth 2 → 2 spaces, etc.
-        int indentSpaces = (depth - 1) * IndentWidth;
-        WriteIndent(indentSpaces);
+        int indentSpaces = (depth - 1) * _IndentWidth;
+        _WriteIndent(indentSpaces);
 
         if (fieldType == FieldType.None)
         {
@@ -347,26 +344,26 @@ public sealed class TextExporter : IPacketListener, IErrorTolerantExporter, IDis
             // Priority: CustomText (zero-alloc via AsSpan) → UiName → Name → "(unknown)".
             if (!field.CustomText.IsNull)
             {
-                WriteSpan(field.CustomText.AsSpan, _MaxTextLength);
+                _WriteSpan(field.CustomText.AsSpan, _MaxTextLength);
             }
             else
             {
-                WriteString(field.FieldInfo?.UiName ?? field.FieldInfo?.Name ?? "(unknown)");
+                _WriteString(field.FieldInfo?.UiName ?? field.FieldInfo?.Name ?? "(unknown)");
             }
         }
         else if (fieldType == FieldType.Bytes)
         {
             // Bytes field (only reached in Full mode): render as hex without per-byte string allocs.
-            WriteString(field.FieldInfo?.UiName ?? field.FieldInfo?.Name ?? "(unknown)");
-            WriteString(": ");
-            WriteBytesFieldHex(field);
+            _WriteString(field.FieldInfo?.UiName ?? field.FieldInfo?.Name ?? "(unknown)");
+            _WriteString(": ");
+            _WriteBytesFieldHex(field);
         }
         else
         {
             // Value field: write "Label: value" using zero-alloc path when possible.
-            WriteString(field.FieldInfo?.UiName ?? field.FieldInfo?.Name ?? "(unknown)");
-            WriteString(": ");
-            WriteValueDirect(field);
+            _WriteString(field.FieldInfo?.UiName ?? field.FieldInfo?.Name ?? "(unknown)");
+            _WriteString(": ");
+            _WriteValueDirect(field);
         }
 
         _Buffer.Write("\n"u8);
@@ -383,12 +380,12 @@ public sealed class TextExporter : IPacketListener, IErrorTolerantExporter, IDis
     ///   <item>Fallback: <c>FieldValue.ToString()</c> (one allocation, covers exotic types).</item>
     /// </list>
     /// </summary>
-    private void WriteValueDirect(Field field)
+    private void _WriteValueDirect(Field field)
     {
         // 1. CustomText: protocol-assigned display string, read as a ReadOnlySpan<char> — no alloc.
         if (!field.CustomText.IsNull)
         {
-            WriteSpan(field.CustomText.AsSpan, _MaxTextLength);
+            _WriteSpan(field.CustomText.AsSpan, _MaxTextLength);
             return;
         }
 
@@ -416,7 +413,7 @@ public sealed class TextExporter : IPacketListener, IErrorTolerantExporter, IDis
                     _Buffer.Write(buf[..Math.Min(written, limitMaxBytes)]);
                     if (needsEllipsis)
                     {
-                        WriteString("…");
+                        _WriteString("…");
                     }
                     return;
                 }
@@ -433,7 +430,7 @@ public sealed class TextExporter : IPacketListener, IErrorTolerantExporter, IDis
                     _Buffer.Write(buf[..Math.Min(written, limitMaxBytes)]);
                     if (needsEllipsis)
                     {
-                        WriteString("…");
+                        _WriteString("…");
                     }
                     return;
                 }
@@ -441,7 +438,8 @@ public sealed class TextExporter : IPacketListener, IErrorTolerantExporter, IDis
         }
 
         // 3. Fallback: ToString() — one allocation, covers exotic or future value types.
-        WriteString(TruncateText(field.Value.ToString(), _MaxTextLength));
+        // FieldValue.ToString() uses InvariantCulture via FieldValueData.ToTempString() / ZA.String.
+        _WriteString(_TruncateText(field.Value.ToString(), _MaxTextLength));
     }
 
     /// <summary>
@@ -450,7 +448,7 @@ public sealed class TextExporter : IPacketListener, IErrorTolerantExporter, IDis
     /// If <paramref name="maxLength"/> is 0, the full span is written.
     /// Encoding uses a stackalloc buffer for ≤512 max bytes; the instance scratch for larger spans.
     /// </summary>
-    private void WriteSpan(ReadOnlySpan<char> chars, int maxLength)
+    private void _WriteSpan(ReadOnlySpan<char> chars, int maxLength)
     {
         bool needsEllipsis = maxLength > 0 && chars.Length > maxLength;
         ReadOnlySpan<char> toWrite = needsEllipsis ? chars[..maxLength] : chars;
@@ -459,7 +457,7 @@ public sealed class TextExporter : IPacketListener, IErrorTolerantExporter, IDis
         {
             if (needsEllipsis)
             {
-                WriteString("…");
+                _WriteString("…");
             }
             return;
         }
@@ -483,7 +481,7 @@ public sealed class TextExporter : IPacketListener, IErrorTolerantExporter, IDis
 
         if (needsEllipsis)
         {
-            WriteString("…");
+            _WriteString("…");
         }
     }
 
@@ -491,18 +489,18 @@ public sealed class TextExporter : IPacketListener, IErrorTolerantExporter, IDis
     /// Writes a <see cref="FieldType.Bytes"/> field as space-separated lowercase hex.
     /// The output is truncated at <see cref="_MaxTextLength"/> characters if configured.
     /// </summary>
-    private void WriteBytesFieldHex(Field field)
+    private void _WriteBytesFieldHex(Field field)
     {
         // CustomText takes priority (the protocol may have already formatted the bytes).
         if (!field.CustomText.IsNull)
         {
-            WriteSpan(field.CustomText.AsSpan, _MaxTextLength);
+            _WriteSpan(field.CustomText.AsSpan, _MaxTextLength);
             return;
         }
 
         if (!field.Value.Data.TryGetAsBytes(out ReadOnlyMemory<byte> bytes))
         {
-            WriteString(TruncateText(field.Value.ToString(), _MaxTextLength));
+            _WriteString(_TruncateText(field.Value.ToString(), _MaxTextLength));
             return;
         }
 
@@ -530,7 +528,7 @@ public sealed class TextExporter : IPacketListener, IErrorTolerantExporter, IDis
 
         if (_MaxTextLength > 0 && span.Length > maxBytes)
         {
-            WriteString("…");
+            _WriteString("…");
         }
     }
 
@@ -539,7 +537,7 @@ public sealed class TextExporter : IPacketListener, IErrorTolerantExporter, IDis
     /// appending an ellipsis (<c>…</c>) if truncation occurred.
     /// If <paramref name="maxLength"/> is 0, the text is returned unchanged.
     /// </summary>
-    private static string TruncateText(string text, int maxLength)
+    private static string _TruncateText(string text, int maxLength)
     {
         if (maxLength == 0 || text.Length <= maxLength)
         {
@@ -550,7 +548,7 @@ public sealed class TextExporter : IPacketListener, IErrorTolerantExporter, IDis
     }
 
     /// <summary>Writes indentation spaces to the buffer.</summary>
-    private void WriteIndent(int spaces)
+    private void _WriteIndent(int spaces)
     {
         if (spaces <= 0)
         {
@@ -577,7 +575,7 @@ public sealed class TextExporter : IPacketListener, IErrorTolerantExporter, IDis
     }
 
     /// <summary>Encodes <paramref name="text"/> as UTF-8 and writes it to the buffer.</summary>
-    private void WriteString(string text)
+    private void _WriteString(string text)
     {
         if (text.Length == 0)
         {
@@ -605,7 +603,7 @@ public sealed class TextExporter : IPacketListener, IErrorTolerantExporter, IDis
     }
 
     /// <summary>Flushes remaining data and closes the output.</summary>
-    private void FlushAndClose()
+    private void _FlushAndClose()
     {
         // Always return the rented buffer, even on flush/dispose failure.
         try
@@ -686,7 +684,7 @@ public sealed class TextExporter : IPacketListener, IErrorTolerantExporter, IDis
     }
 
     /// <summary>Raises the <see cref="ItemSkipped"/> event.</summary>
-    private void RaiseItemSkipped(long index, ExportErrorKind kind, string message)
+    private void _RaiseItemSkipped(long index, ExportErrorKind kind, string message)
     {
         ItemSkipped?.Invoke(this, new ExportErrorEventArgs
         {

@@ -12,8 +12,8 @@ namespace NetworkInspector.Sessions.Cache;
 ///
 /// <para>
 /// <b>Layout:</b>
-/// Chunked array: <c>_Chunks[packetId &gt;&gt; ChunkShift][packetId &amp; ChunkMask]</c>.
-/// Each chunk holds <see cref="ChunkSize"/> <see cref="Packet"/> reference slots.
+/// Chunked array: <c>_Chunks[packetId &gt;&gt; _ChunkShift][packetId &amp; _ChunkMask]</c>.
+/// Each chunk holds <see cref="_ChunkSize"/> <see cref="Packet"/> reference slots.
 /// Chunks are allocated lazily on first write.
 /// </para>
 ///
@@ -35,12 +35,12 @@ namespace NetworkInspector.Sessions.Cache;
 internal sealed class PacketStore
 {
     // 2^14 = 16 384 entries per chunk (128 KB per inner array of Packet?).
-    private const int ChunkShift = 14;
-    private const int ChunkSize = 1 << ChunkShift;  // 16 384
-    private const int ChunkMask = ChunkSize - 1;
-    private const int MaxChunks = 8192;              // 134 M packets max
+    private const int _ChunkShift = 14;
+    private const int _ChunkSize = 1 << _ChunkShift;  // 16 384
+    private const int _ChunkMask = _ChunkSize - 1;
+    private const int _MaxChunks = 8192;              // 134 M packets max
 
-    private readonly Packet?[]?[] _Chunks = new Packet?[]?[MaxChunks];
+    private readonly Packet?[]?[] _Chunks = new Packet?[]?[_MaxChunks];
 
     /// <summary>
     /// Stores a packet at its <see cref="PacketId"/> position.
@@ -49,14 +49,14 @@ internal sealed class PacketStore
     /// </summary>
     internal void Store(PacketId id, Packet packet)
     {
-        int chunkIdx = id.Value >> ChunkShift;
-        int slotIdx = id.Value & ChunkMask;
+        int chunkIdx = id.Value >> _ChunkShift;
+        int slotIdx = id.Value & _ChunkMask;
 
         Packet?[]? chunk = Volatile.Read(ref _Chunks[chunkIdx]);
         if (chunk is null)
         {
             // Lazily allocate chunk. CAS ensures exactly one allocation wins.
-            Packet?[] newChunk = new Packet?[ChunkSize];
+            Packet?[] newChunk = new Packet?[_ChunkSize];
             chunk = Interlocked.CompareExchange(ref _Chunks[chunkIdx], newChunk, null) ?? newChunk;
         }
 
@@ -77,11 +77,16 @@ internal sealed class PacketStore
             return null;
         }
 
-        int chunkIdx = id.Value >> ChunkShift;
-        int slotIdx = id.Value & ChunkMask;
+        int chunkIdx = id.Value >> _ChunkShift;
+        int slotIdx = id.Value & _ChunkMask;
 
         Packet?[]? chunk = Volatile.Read(ref _Chunks[chunkIdx]);
-        return chunk is null ? null : Volatile.Read(ref chunk[slotIdx]);
+        if (chunk is null)
+        {
+            return null;
+        }
+
+        return Volatile.Read(ref chunk[slotIdx]);
     }
 
     /// <summary>
@@ -110,10 +115,10 @@ internal sealed class PacketStore
                 continue;
             }
 
-            int chunkIdx = (int)(idx >> ChunkShift);
-            int slotIdx = (int)(idx & ChunkMask);
+            int chunkIdx = (int)(idx >> _ChunkShift);
+            int slotIdx = (int)(idx & _ChunkMask);
 
-            if (chunkIdx >= MaxChunks)
+            if (chunkIdx >= _MaxChunks)
             {
                 // Beyond maximum capacity — stop filling.
                 break;
@@ -133,7 +138,7 @@ internal sealed class PacketStore
     /// </summary>
     internal void Clear()
     {
-        for (int i = 0; i < MaxChunks; i++)
+        for (int i = 0; i < _MaxChunks; i++)
         {
             Volatile.Write(ref _Chunks[i], null);
         }

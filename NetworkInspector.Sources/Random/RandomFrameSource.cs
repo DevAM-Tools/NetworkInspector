@@ -43,52 +43,52 @@ public sealed class RandomFrameSource(RandomSourceOptions options, string? uiNam
     // ─── Protocol constants ───────────────────────────────────────────────────
 
     /// <summary>Ethernet II EtherType for IPv4.</summary>
-    private const ushort EtherTypeIPv4 = 0x0800;
+    private const ushort _EtherTypeIPv4 = 0x0800;
 
     /// <summary>Ethernet II EtherType for IPv6.</summary>
-    private const ushort EtherTypeIPv6 = 0x86DD;
+    private const ushort _EtherTypeIPv6 = 0x86DD;
 
     /// <summary>IPv4 header Version (4) + IHL (5 = 20 bytes) packed into one byte.</summary>
-    private const byte IPv4VersionIhl = 0x45;
+    private const byte _IPv4VersionIhl = 0x45;
 
     /// <summary>IP protocol number for UDP.</summary>
-    private const byte IpProtoUdp = 17;
+    private const byte _IpProtoUdp = 17;
 
     /// <summary>Ethernet header size.</summary>
-    private const int EthHeaderSize = 14;  // bytes
+    private const int _EthHeaderSize = 14;  // bytes
 
     /// <summary>IPv4 header size (no options).</summary>
-    private const int IPv4HeaderSize = 20; // bytes
+    private const int _IPv4HeaderSize = 20; // bytes
 
     /// <summary>IPv6 fixed header size.</summary>
-    private const int IPv6HeaderSize = 40; // bytes
+    private const int _IPv6HeaderSize = 40; // bytes
 
     /// <summary>UDP header size.</summary>
-    private const int UdpHeaderSize = 8;   // bytes
+    private const int _UdpHeaderSize = 8;   // bytes
 
     /// <summary>SocketCAN header size (ID + DLC + flags + reserved).</summary>
-    private const int SocketCanHeaderSize = 8; // bytes
+    private const int _SocketCanHeaderSize = 8; // bytes
 
     /// <summary>Classic CAN fixed data area size.</summary>
-    private const int CanClassicDataSize = 8; // bytes
+    private const int _CanClassicDataSize = 8; // bytes
 
     /// <summary>SocketCAN Extended Frame Format flag (bit 31 of ID field).</summary>
-    private const uint SocketCanEff = 0x80000000;
+    private const uint _SocketCanEff = 0x80000000;
 
     /// <summary>SocketCAN FD Format indicator flag (byte 5, bit 2).</summary>
-    private const byte SocketCanFdFdf = 0x04;
+    private const byte _SocketCanFdFdf = 0x04;
 
     /// <summary>SocketCAN Bit Rate Switch flag (byte 5, bit 0).</summary>
-    private const byte SocketCanFdBrs = 0x01;
+    private const byte _SocketCanFdBrs = 0x01;
 
     /// <summary>IP protocol number for TCP.</summary>
-    private const byte IpProtoTcp = 6;
+    private const byte _IpProtoTcp = 6;
 
     /// <summary>TCP header size (no options).</summary>
-    private const int TcpHeaderSize = 20; // bytes
+    private const int _TcpHeaderSize = 20; // bytes
 
     /// <summary>CAN FD DLC-to-data-length mapping (indices 0–15).</summary>
-    private static ReadOnlySpan<byte> CanFdDlcToLength =>
+    private static ReadOnlySpan<byte> _CanFdDlcToLength =>
         [0, 1, 2, 3, 4, 5, 6, 7, 8, 12, 16, 20, 24, 32, 48, 64];
 
     #endregion
@@ -100,7 +100,7 @@ public sealed class RandomFrameSource(RandomSourceOptions options, string? uiNam
     /// <summary>Resolved options (never null after construction). Validated eagerly so
     /// invalid options surface at construction time, matching <c>BlfSource.Open</c> /
     /// <c>PcapSource.Open</c>.</summary>
-    private readonly RandomSourceOptions _Options = ValidateOptions(options);
+    private readonly RandomSourceOptions _Options = _ValidateOptions(options);
 
     /// <summary>Resolved master seed (derived from options or entropy at Start time).</summary>
     private ulong _MasterSeed;
@@ -109,7 +109,7 @@ public sealed class RandomFrameSource(RandomSourceOptions options, string? uiNam
     private Timestamp _BaseTimestamp;
 
     /// <summary>User-friendly source name.</summary>
-    private readonly string _UiName = uiName ?? BuildDefaultName(options);
+    private readonly string _UiName = uiName ?? _BuildDefaultName(options);
 
     // ─── Runtime state ────────────────────────────────────────────────────────
 
@@ -167,7 +167,7 @@ public sealed class RandomFrameSource(RandomSourceOptions options, string? uiNam
     /// <inheritdoc/>
     public string? Description =>
         $"Synthetic random frame source — mode={_Options.Mode}, " +
-        $"seed={(_Options.Seed.HasValue ? _Options.Seed.Value.ToString() : (Volatile.Read(ref _Started) ? _MasterSeed.ToString() : "<entropy>"))}, " +
+        $"seed={(_Options.Seed.HasValue ? _Options.Seed.Value.ToString(CultureInfo.InvariantCulture) : (Volatile.Read(ref _Started) ? _MasterSeed.ToString(CultureInfo.InvariantCulture) : "<entropy>"))}, " +
         $"count={_Options.FrameCount}";
 
     /// <inheritdoc/>
@@ -192,15 +192,15 @@ public sealed class RandomFrameSource(RandomSourceOptions options, string? uiNam
         _FrameIndex = 0;
 
         // Resolve seed: use configured value or derive from system entropy
-        _MasterSeed = _Options.Seed ?? DeriveEntropySeed();
+        _MasterSeed = _Options.Seed ?? _DeriveEntropySeed();
 
         // Resolve base timestamp: use configured value or current wall clock
-        _BaseTimestamp = _Options.BaseTimestamp ?? CurrentTimestamp();
+        _BaseTimestamp = _Options.BaseTimestamp ?? _CurrentTimestamp();
 
         // Register an interface matching the frame mode's link type
-        LinkType linkType = LinkTypeForMode(_Options.Mode);
-        string ifName = IsCanMode(_Options.Mode) ? "can0" : "eth0";
-        string ifDescr = IsCanMode(_Options.Mode)
+        LinkType linkType = _LinkTypeForMode(_Options.Mode);
+        string ifName = _IsCanMode(_Options.Mode) ? "can0" : "eth0";
+        string ifDescr = _IsCanMode(_Options.Mode)
             ? "Synthetic SocketCAN interface"
             : "Synthetic Ethernet interface";
         _InterfaceId = registry.Register(sourceId, ifName, ifDescr, linkType);
@@ -259,7 +259,7 @@ public sealed class RandomFrameSource(RandomSourceOptions options, string? uiNam
                 new FrameId(currentIndex),
                 timestamp,
                 streamData,
-                LinkTypeForMode(_Options.Mode),
+                _LinkTypeForMode(_Options.Mode),
                 _InterfaceId,
                 _Registry!);
 
@@ -273,7 +273,7 @@ public sealed class RandomFrameSource(RandomSourceOptions options, string? uiNam
             return streamResult.Value;
         }
 
-        Frame frame = GenerateFrameByIndex(currentIndex);
+        Frame frame = _GenerateFrameByIndex(currentIndex);
         Volatile.Write(ref _FrameIndex, currentIndex + 1);
         return frame;
     }
@@ -310,7 +310,7 @@ public sealed class RandomFrameSource(RandomSourceOptions options, string? uiNam
     /// </para>
     /// </summary>
     /// <exception cref="InvalidOperationException">Frame creation unexpectedly failed.</exception>
-    private Frame GenerateFrameByIndex(int index)
+    private Frame _GenerateFrameByIndex(int index)
     {
         ulong frameSeed = Xoroshiro128PlusPlus.DeriveFrameSeed(_MasterSeed, (uint)index);
         Xoroshiro128PlusPlus rng = new(frameSeed);
@@ -324,18 +324,18 @@ public sealed class RandomFrameSource(RandomSourceOptions options, string? uiNam
         if (_Options.Mode == RandomFrameMode.Can)
         {
             // Classic CAN: fixed 16 bytes (8-byte header + 8-byte data)
-            frameSize = SocketCanHeaderSize + CanClassicDataSize;
+            frameSize = _SocketCanHeaderSize + _CanClassicDataSize;
         }
         else if (_Options.Mode == RandomFrameMode.CanFd)
         {
             // CAN FD: random DLC 0–15 → variable data length
             canFdDlc = (byte)(rng.NextU64() % 16);
-            int dataLen = CanFdDlcToLength[canFdDlc];
-            frameSize = SocketCanHeaderSize + dataLen;
+            int dataLen = _CanFdDlcToLength[canFdDlc];
+            frameSize = _SocketCanHeaderSize + dataLen;
         }
         else
         {
-            int minSize = MinSizeForMode(_Options.Mode, _Options.MinFrameSize);
+            int minSize = _MinSizeForMode(_Options.Mode, _Options.MinFrameSize);
             int maxSize = Math.Max(minSize, _Options.MaxFrameSize);
             frameSize = rng.NextRange(minSize, maxSize + 1); // bytes
         }
@@ -346,34 +346,34 @@ public sealed class RandomFrameSource(RandomSourceOptions options, string? uiNam
         switch (_Options.Mode)
         {
             case RandomFrameMode.FullRandom:
-                GenerateFullRandom(ref rng, data);
+                _GenerateFullRandom(ref rng, data);
                 break;
             case RandomFrameMode.Ethernet:
-                GenerateEthernet(ref rng, data);
+                _GenerateEthernet(ref rng, data);
                 break;
             case RandomFrameMode.IPv4:
-                GenerateIPv4(ref rng, data);
+                _GenerateIPv4(ref rng, data);
                 break;
             case RandomFrameMode.IPv6:
-                GenerateIPv6(ref rng, data);
+                _GenerateIPv6(ref rng, data);
                 break;
             case RandomFrameMode.UdpIPv4:
-                GenerateUdpIPv4(ref rng, data);
+                _GenerateUdpIPv4(ref rng, data);
                 break;
             case RandomFrameMode.UdpIPv6:
-                GenerateUdpIPv6(ref rng, data);
+                _GenerateUdpIPv6(ref rng, data);
                 break;
             case RandomFrameMode.Can:
-                GenerateCan(ref rng, data);
+                _GenerateCan(ref rng, data);
                 break;
             case RandomFrameMode.CanFd:
-                GenerateCanFd(ref rng, data, canFdDlc);
+                _GenerateCanFd(ref rng, data, canFdDlc);
                 break;
             case RandomFrameMode.TcpIPv4:
-                GenerateTcpIPv4(ref rng, data);
+                _GenerateTcpIPv4(ref rng, data);
                 break;
             case RandomFrameMode.TcpIPv6:
-                GenerateTcpIPv6(ref rng, data);
+                _GenerateTcpIPv6(ref rng, data);
                 break;
             default:
                 throw new InvalidOperationException($"Unsupported RandomFrameMode: {_Options.Mode}");
@@ -386,7 +386,7 @@ public sealed class RandomFrameSource(RandomSourceOptions options, string? uiNam
             new FrameId(index),
             timestamp,
             data,
-            LinkTypeForMode(_Options.Mode),
+            _LinkTypeForMode(_Options.Mode),
             _InterfaceId,
             _Registry!);
 
@@ -405,7 +405,7 @@ public sealed class RandomFrameSource(RandomSourceOptions options, string? uiNam
     /// <b>FullRandom</b>: fill entire buffer — no protocol structure, fastest mode.
     /// </summary>
     // Single SIMD-accelerated bulk fill, nothing to patch
-    private static void GenerateFullRandom(ref Xoroshiro128PlusPlus rng, byte[] data) =>
+    private static void _GenerateFullRandom(ref Xoroshiro128PlusPlus rng, byte[] data) =>
         rng.FillBytes(data);
 
     /// <summary>
@@ -413,7 +413,7 @@ public sealed class RandomFrameSource(RandomSourceOptions options, string? uiNam
     /// MAC addresses and EtherType are already random — no patching needed.
     /// </summary>
     // All Ethernet fields (dst MAC, src MAC, EtherType) are random — nothing to patch
-    private static void GenerateEthernet(ref Xoroshiro128PlusPlus rng, byte[] data) =>
+    private static void _GenerateEthernet(ref Xoroshiro128PlusPlus rng, byte[] data) =>
         rng.FillBytes(data);
 
     /// <summary>
@@ -421,17 +421,17 @@ public sealed class RandomFrameSource(RandomSourceOptions options, string? uiNam
     /// Random payload, addresses, and identification.  Patches version, IHL, lengths,
     /// DF flag, TTL, and header checksum.  Protocol is kept random (non-zero).
     /// </summary>
-    private static void GenerateIPv4(ref Xoroshiro128PlusPlus rng, byte[] data)
+    private static void _GenerateIPv4(ref Xoroshiro128PlusPlus rng, byte[] data)
     {
         rng.FillBytes(data);
 
         // Patch Ethernet EtherType
-        BinaryPrimitives.WriteUInt16BigEndian(data.AsSpan(12), EtherTypeIPv4);
+        BinaryPrimitives.WriteUInt16BigEndian(data.AsSpan(12), _EtherTypeIPv4);
 
-        int ip = EthHeaderSize;
-        ushort totalLength = (ushort)(data.Length - EthHeaderSize); // bytes
+        int ip = _EthHeaderSize;
+        ushort totalLength = (ushort)(data.Length - _EthHeaderSize); // bytes
 
-        data[ip] = IPv4VersionIhl;          // Version 4, IHL 5 (20 bytes, no options)
+        data[ip] = _IPv4VersionIhl;          // Version 4, IHL 5 (20 bytes, no options)
         data[ip + 1] = 0;                        // DSCP + ECN = 0
         BinaryPrimitives.WriteUInt16BigEndian(data.AsSpan(ip + 2), totalLength);
         // Identification (ip+4, ip+5) already random
@@ -449,7 +449,7 @@ public sealed class RandomFrameSource(RandomSourceOptions options, string? uiNam
         // Source IP (ip+12..ip+15): already random
         // Dest IP   (ip+16..ip+19): already random
 
-        ushort checksum = CalculateIPv4Checksum(data, ip);
+        ushort checksum = _CalculateIPv4Checksum(data, ip);
         BinaryPrimitives.WriteUInt16BigEndian(data.AsSpan(ip + 10), checksum);
     }
 
@@ -458,15 +458,15 @@ public sealed class RandomFrameSource(RandomSourceOptions options, string? uiNam
     /// Random addresses and payload.  Patches EtherType, version nibble,
     /// payload length, and hop limit.  Next-header is kept random (non-zero).
     /// </summary>
-    private static void GenerateIPv6(ref Xoroshiro128PlusPlus rng, byte[] data)
+    private static void _GenerateIPv6(ref Xoroshiro128PlusPlus rng, byte[] data)
     {
         rng.FillBytes(data);
 
         // Patch Ethernet EtherType
-        BinaryPrimitives.WriteUInt16BigEndian(data.AsSpan(12), EtherTypeIPv6);
+        BinaryPrimitives.WriteUInt16BigEndian(data.AsSpan(12), _EtherTypeIPv6);
 
-        int ip = EthHeaderSize;
-        ushort payloadLength = (ushort)(data.Length - EthHeaderSize - IPv6HeaderSize); // bytes
+        int ip = _EthHeaderSize;
+        ushort payloadLength = (ushort)(data.Length - _EthHeaderSize - _IPv6HeaderSize); // bytes
 
         // Patch version nibble (high 4 bits = 6), keep random Traffic Class + Flow Label
         data[ip] = (byte)((data[ip] & 0x0F) | 0x60);
@@ -486,37 +486,37 @@ public sealed class RandomFrameSource(RandomSourceOptions options, string? uiNam
     /// Fully well-formed Ethernet/IPv4/UDP frame.  UDP checksum is set to 0
     /// (optional in IPv4 per RFC 768).
     /// </summary>
-    private static void GenerateUdpIPv4(ref Xoroshiro128PlusPlus rng, byte[] data)
+    private static void _GenerateUdpIPv4(ref Xoroshiro128PlusPlus rng, byte[] data)
     {
         rng.FillBytes(data);
 
         // ── Ethernet header (0–13) ──
-        BinaryPrimitives.WriteUInt16BigEndian(data.AsSpan(12), EtherTypeIPv4);
+        BinaryPrimitives.WriteUInt16BigEndian(data.AsSpan(12), _EtherTypeIPv4);
 
-        int ip = EthHeaderSize;
-        int udp = ip + IPv4HeaderSize;
-        ushort totalLength = (ushort)(data.Length - EthHeaderSize); // bytes
+        int ip = _EthHeaderSize;
+        int udp = ip + _IPv4HeaderSize;
+        ushort totalLength = (ushort)(data.Length - _EthHeaderSize); // bytes
         ushort udpLength = (ushort)(data.Length - udp);           // bytes
 
         // ── IPv4 header (ip..ip+19) ──
-        data[ip] = IPv4VersionIhl;
+        data[ip] = _IPv4VersionIhl;
         data[ip + 1] = 0;                        // DSCP + ECN = 0
         BinaryPrimitives.WriteUInt16BigEndian(data.AsSpan(ip + 2), totalLength);
         // Identification (ip+4, ip+5) already random
         data[ip + 6] = 0x40;  // DF
         data[ip + 7] = 0x00;
         data[ip + 8] = 64;    // TTL
-        data[ip + 9] = IpProtoUdp;
+        data[ip + 9] = _IpProtoUdp;
         data[ip + 10] = 0;    // Checksum — clear before computing
         data[ip + 11] = 0;
         // Source IP (ip+12..ip+15): already random
         // Dest IP   (ip+16..ip+19): already random
 
-        ushort checksum = CalculateIPv4Checksum(data, ip);
+        ushort checksum = _CalculateIPv4Checksum(data, ip);
         BinaryPrimitives.WriteUInt16BigEndian(data.AsSpan(ip + 10), checksum);
 
         // ── UDP header (udp..udp+7) ──
-        if (udpLength >= UdpHeaderSize && data.Length >= udp + UdpHeaderSize)
+        if (udpLength >= _UdpHeaderSize && data.Length >= udp + _UdpHeaderSize)
         {
             // Source port (udp+0, udp+1): already random
             // Dest port   (udp+2, udp+3): already random
@@ -531,28 +531,28 @@ public sealed class RandomFrameSource(RandomSourceOptions options, string? uiNam
     /// <b>UdpIPv6</b>: fill-then-patch.
     /// Fully well-formed Ethernet/IPv6/UDP frame.  UDP checksum is set to 0.
     /// </summary>
-    private static void GenerateUdpIPv6(ref Xoroshiro128PlusPlus rng, byte[] data)
+    private static void _GenerateUdpIPv6(ref Xoroshiro128PlusPlus rng, byte[] data)
     {
         rng.FillBytes(data);
 
         // ── Ethernet header (0–13) ──
-        BinaryPrimitives.WriteUInt16BigEndian(data.AsSpan(12), EtherTypeIPv6);
+        BinaryPrimitives.WriteUInt16BigEndian(data.AsSpan(12), _EtherTypeIPv6);
 
-        int ip = EthHeaderSize;
-        int udp = ip + IPv6HeaderSize;
-        ushort payloadLength = (ushort)(data.Length - ip - IPv6HeaderSize); // bytes
+        int ip = _EthHeaderSize;
+        int udp = ip + _IPv6HeaderSize;
+        ushort payloadLength = (ushort)(data.Length - ip - _IPv6HeaderSize); // bytes
         ushort udpLength = (ushort)(data.Length - udp);                  // bytes
 
         // ── IPv6 header (ip..ip+39) ──
         data[ip] = (byte)((data[ip] & 0x0F) | 0x60);  // version = 6, keep TC/FL random
         BinaryPrimitives.WriteUInt16BigEndian(data.AsSpan(ip + 4), payloadLength);
-        data[ip + 6] = IpProtoUdp;  // Next header = UDP
+        data[ip + 6] = _IpProtoUdp;  // Next header = UDP
         data[ip + 7] = 64;          // Hop limit
         // Source address (ip+8..ip+23):  already random
         // Dest address   (ip+24..ip+39): already random
 
         // ── UDP header (udp..udp+7) ──
-        if (udpLength >= UdpHeaderSize && data.Length >= udp + UdpHeaderSize)
+        if (udpLength >= _UdpHeaderSize && data.Length >= udp + _UdpHeaderSize)
         {
             // Source port (udp+0, udp+1): already random
             // Dest port   (udp+2, udp+3): already random
@@ -572,7 +572,7 @@ public sealed class RandomFrameSource(RandomSourceOptions options, string? uiNam
     /// when DLC &lt; 8, matching real CAN bus behaviour).
     /// </para>
     /// </summary>
-    private static void GenerateCan(ref Xoroshiro128PlusPlus rng, byte[] data)
+    private static void _GenerateCan(ref Xoroshiro128PlusPlus rng, byte[] data)
     {
         // Fill entire 16-byte frame with random bytes first (data area gets random padding)
         rng.FillBytes(data);
@@ -584,7 +584,7 @@ public sealed class RandomFrameSource(RandomSourceOptions options, string? uiNam
         if (extended)
         {
             // 29-bit ID with EFF flag set
-            canId = (rng.NextU32() & 0x1FFFFFFF) | SocketCanEff;
+            canId = (rng.NextU32() & 0x1FFFFFFF) | _SocketCanEff;
         }
         else
         {
@@ -615,7 +615,7 @@ public sealed class RandomFrameSource(RandomSourceOptions options, string? uiNam
     /// sized correctly.  FDF and BRS flags are set.
     /// </para>
     /// </summary>
-    private static void GenerateCanFd(ref Xoroshiro128PlusPlus rng, byte[] data, byte dlc)
+    private static void _GenerateCanFd(ref Xoroshiro128PlusPlus rng, byte[] data, byte dlc)
     {
         // Fill entire frame with random bytes first (data area gets random content)
         rng.FillBytes(data);
@@ -625,7 +625,7 @@ public sealed class RandomFrameSource(RandomSourceOptions options, string? uiNam
         uint canId;
         if (extended)
         {
-            canId = (rng.NextU32() & 0x1FFFFFFF) | SocketCanEff;
+            canId = (rng.NextU32() & 0x1FFFFFFF) | _SocketCanEff;
         }
         else
         {
@@ -637,7 +637,7 @@ public sealed class RandomFrameSource(RandomSourceOptions options, string? uiNam
         data[4] = dlc;
 
         // ── FD flags (byte 5): FDF + BRS set ──
-        data[5] = SocketCanFdFdf | SocketCanFdBrs;
+        data[5] = _SocketCanFdFdf | _SocketCanFdBrs;
 
         // ── Reserved (bytes 6–7): must be zero ──
         data[6] = 0;
@@ -652,33 +652,33 @@ public sealed class RandomFrameSource(RandomSourceOptions options, string? uiNam
     /// sequence/ack numbers, and payload. ACK+PSH flags set by default.
     /// TCP checksum is set to 0 (no pseudo-header computation for simplicity).
     /// </summary>
-    private static void GenerateTcpIPv4(ref Xoroshiro128PlusPlus rng, byte[] data)
+    private static void _GenerateTcpIPv4(ref Xoroshiro128PlusPlus rng, byte[] data)
     {
         rng.FillBytes(data);
 
         // ── Ethernet header (0–13) ──
-        BinaryPrimitives.WriteUInt16BigEndian(data.AsSpan(12), EtherTypeIPv4);
+        BinaryPrimitives.WriteUInt16BigEndian(data.AsSpan(12), _EtherTypeIPv4);
 
-        int ip = EthHeaderSize;
-        int tcp = ip + IPv4HeaderSize;
-        ushort totalLength = (ushort)(data.Length - EthHeaderSize); // bytes
+        int ip = _EthHeaderSize;
+        int tcp = ip + _IPv4HeaderSize;
+        ushort totalLength = (ushort)(data.Length - _EthHeaderSize); // bytes
 
         // ── IPv4 header ──
-        data[ip] = IPv4VersionIhl;
+        data[ip] = _IPv4VersionIhl;
         data[ip + 1] = 0;
         BinaryPrimitives.WriteUInt16BigEndian(data.AsSpan(ip + 2), totalLength);
         data[ip + 6] = 0x40;  // DF
         data[ip + 7] = 0x00;
         data[ip + 8] = 64;    // TTL
-        data[ip + 9] = IpProtoTcp;
+        data[ip + 9] = _IpProtoTcp;
         data[ip + 10] = 0;
         data[ip + 11] = 0;
 
-        ushort checksum = CalculateIPv4Checksum(data, ip);
+        ushort checksum = _CalculateIPv4Checksum(data, ip);
         BinaryPrimitives.WriteUInt16BigEndian(data.AsSpan(ip + 10), checksum);
 
         // ── TCP header (tcp..tcp+19) ──
-        if (data.Length >= tcp + TcpHeaderSize)
+        if (data.Length >= tcp + _TcpHeaderSize)
         {
             // Src port (tcp+0,+1): already random
             // Dst port (tcp+2,+3): already random
@@ -701,25 +701,25 @@ public sealed class RandomFrameSource(RandomSourceOptions options, string? uiNam
     /// sequence/ack numbers, and payload. ACK+PSH flags set by default.
     /// TCP checksum is set to 0 for simplicity.
     /// </summary>
-    private static void GenerateTcpIPv6(ref Xoroshiro128PlusPlus rng, byte[] data)
+    private static void _GenerateTcpIPv6(ref Xoroshiro128PlusPlus rng, byte[] data)
     {
         rng.FillBytes(data);
 
         // ── Ethernet header (0–13) ──
-        BinaryPrimitives.WriteUInt16BigEndian(data.AsSpan(12), EtherTypeIPv6);
+        BinaryPrimitives.WriteUInt16BigEndian(data.AsSpan(12), _EtherTypeIPv6);
 
-        int ip = EthHeaderSize;
-        int tcp = ip + IPv6HeaderSize;
-        ushort payloadLength = (ushort)(data.Length - ip - IPv6HeaderSize); // bytes
+        int ip = _EthHeaderSize;
+        int tcp = ip + _IPv6HeaderSize;
+        ushort payloadLength = (ushort)(data.Length - ip - _IPv6HeaderSize); // bytes
 
         // ── IPv6 header ──
         data[ip] = (byte)((data[ip] & 0x0F) | 0x60);
         BinaryPrimitives.WriteUInt16BigEndian(data.AsSpan(ip + 4), payloadLength);
-        data[ip + 6] = IpProtoTcp;
+        data[ip + 6] = _IpProtoTcp;
         data[ip + 7] = 64;
 
         // ── TCP header ──
-        if (data.Length >= tcp + TcpHeaderSize)
+        if (data.Length >= tcp + _TcpHeaderSize)
         {
             data[tcp + 12] = 0x50;
             data[tcp + 13] = 0x18;  // ACK + PSH
@@ -737,10 +737,10 @@ public sealed class RandomFrameSource(RandomSourceOptions options, string? uiNam
     /// located at <paramref name="offset"/> inside <paramref name="buffer"/>.
     /// The checksum field (bytes 10–11 of the header) must be zeroed before calling.
     /// </summary>
-    private static ushort CalculateIPv4Checksum(byte[] buffer, int offset)
+    private static ushort _CalculateIPv4Checksum(byte[] buffer, int offset)
     {
         // Validate that the 20-byte IPv4 header fits in the buffer
-        if (buffer.Length < offset + IPv4HeaderSize)
+        if (buffer.Length < offset + _IPv4HeaderSize)
         {
             return 0;
         }
@@ -765,22 +765,22 @@ public sealed class RandomFrameSource(RandomSourceOptions options, string? uiNam
     /// The returned value is the greater of <paramref name="configuredMin"/> and the
     /// hard minimum for the mode.
     /// </summary>
-    private static int MinSizeForMode(RandomFrameMode mode, int configuredMin)
+    private static int _MinSizeForMode(RandomFrameMode mode, int configuredMin)
     {
         int modeMin = mode switch
         {
             RandomFrameMode.FullRandom => 1,
-            RandomFrameMode.Ethernet => EthHeaderSize,
-            RandomFrameMode.IPv4 => EthHeaderSize + IPv4HeaderSize,
-            RandomFrameMode.IPv6 => EthHeaderSize + IPv6HeaderSize,
-            RandomFrameMode.UdpIPv4 => EthHeaderSize + IPv4HeaderSize + UdpHeaderSize,
-            RandomFrameMode.UdpIPv6 => EthHeaderSize + IPv6HeaderSize + UdpHeaderSize,
+            RandomFrameMode.Ethernet => _EthHeaderSize,
+            RandomFrameMode.IPv4 => _EthHeaderSize + _IPv4HeaderSize,
+            RandomFrameMode.IPv6 => _EthHeaderSize + _IPv6HeaderSize,
+            RandomFrameMode.UdpIPv4 => _EthHeaderSize + _IPv4HeaderSize + _UdpHeaderSize,
+            RandomFrameMode.UdpIPv6 => _EthHeaderSize + _IPv6HeaderSize + _UdpHeaderSize,
             RandomFrameMode.TcpIPv4 or RandomFrameMode.TcpStreamIPv4
-                                       => EthHeaderSize + IPv4HeaderSize + TcpHeaderSize,
+                                       => _EthHeaderSize + _IPv4HeaderSize + _TcpHeaderSize,
             RandomFrameMode.TcpIPv6 or RandomFrameMode.TcpStreamIPv6
-                                       => EthHeaderSize + IPv6HeaderSize + TcpHeaderSize,
-            RandomFrameMode.Can => SocketCanHeaderSize + CanClassicDataSize,  // fixed 16 bytes
-            RandomFrameMode.CanFd => SocketCanHeaderSize + 1,                   // min 1 data byte
+                                       => _EthHeaderSize + _IPv6HeaderSize + _TcpHeaderSize,
+            RandomFrameMode.Can => _SocketCanHeaderSize + _CanClassicDataSize,  // fixed 16 bytes
+            RandomFrameMode.CanFd => _SocketCanHeaderSize + 1,                   // min 1 data byte
             _ => 1,
         };
         return Math.Max(configuredMin, modeMin);
@@ -790,7 +790,7 @@ public sealed class RandomFrameSource(RandomSourceOptions options, string? uiNam
     /// Derives an unpredictable 64-bit seed from system entropy:
     /// current UTC time in nanoseconds XOR-ed with the process ID shifted to the high 32 bits.
     /// </summary>
-    private static ulong DeriveEntropySeed()
+    private static ulong _DeriveEntropySeed()
     {
         long nanos = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() * 1_000_000L;
         ulong pid = (ulong)Environment.ProcessId;
@@ -798,15 +798,15 @@ public sealed class RandomFrameSource(RandomSourceOptions options, string? uiNam
     }
 
     /// <summary>Returns the current UTC time as a <see cref="Timestamp"/>.</summary>
-    private static Timestamp CurrentTimestamp()
+    private static Timestamp _CurrentTimestamp()
     {
         long nanos = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() * 1_000_000L;
         return new Timestamp(nanos);
     }
 
     /// <summary>Builds a human-readable name from the options when no explicit name is provided.</summary>
-    private static string BuildDefaultName(RandomSourceOptions options) =>
-        $"random({options.Mode}, count={options.FrameCount}, seed={options.Seed?.ToString() ?? "entropy"})";
+    private static string _BuildDefaultName(RandomSourceOptions options) =>
+        $"random({options.Mode}, count={options.FrameCount}, seed={options.Seed?.ToString(CultureInfo.InvariantCulture) ?? "entropy"})";
 
     /// <summary>
     /// Validates the supplied options at construction time so invalid configurations surface
@@ -815,7 +815,7 @@ public sealed class RandomFrameSource(RandomSourceOptions options, string? uiNam
     /// </summary>
     /// <exception cref="ArgumentNullException"><paramref name="options"/> is null.</exception>
     /// <exception cref="ArgumentOutOfRangeException">An option is outside its allowed range.</exception>
-    private static RandomSourceOptions ValidateOptions(RandomSourceOptions options)
+    private static RandomSourceOptions _ValidateOptions(RandomSourceOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
         options.Validate();
@@ -827,14 +827,21 @@ public sealed class RandomFrameSource(RandomSourceOptions options, string? uiNam
     /// CAN and CAN FD modes use <see cref="LinkType.CanSocketcan"/>; all others use
     /// <see cref="LinkType.Ethernet"/>.
     /// </summary>
-    private static LinkType LinkTypeForMode(RandomFrameMode mode) =>
-        IsCanMode(mode) ? LinkType.CanSocketcan : LinkType.Ethernet;
+    private static LinkType _LinkTypeForMode(RandomFrameMode mode)
+    {
+        if (_IsCanMode(mode))
+        {
+            return LinkType.CanSocketcan;
+        }
+
+        return LinkType.Ethernet;
+    }
 
     /// <summary>
     /// Returns <c>true</c> when <paramref name="mode"/> generates CAN bus frames
     /// instead of Ethernet frames.
     /// </summary>
-    private static bool IsCanMode(RandomFrameMode mode) =>
+    private static bool _IsCanMode(RandomFrameMode mode) =>
         mode is RandomFrameMode.Can or RandomFrameMode.CanFd;
 
     #endregion

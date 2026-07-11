@@ -11,18 +11,18 @@ internal static class SomeIpSdDisplayTables
     #region Entry Types
 
     /// <summary>256-entry lookup table for SD entry type display text ("Name (0xNN)").</summary>
-    private static readonly string[] EntryTypeTable = BuildEntryTypeTable();
+    private static readonly string[] _EntryTypeTable = _BuildEntryTypeTable();
 
     /// <summary>256-entry lookup table for SD entry type short names (no hex suffix).</summary>
-    private static readonly string[] EntryTypeShortTable = BuildEntryTypeShortTable();
+    private static readonly string[] _EntryTypeShortTable = _BuildEntryTypeShortTable();
 
     /// <summary>Returns the full display text for an SD entry type byte.</summary>
-    internal static string GetEntryTypeDisplayText(byte entryType) => EntryTypeTable[entryType];
+    internal static string GetEntryTypeDisplayText(byte entryType) => _EntryTypeTable[entryType];
 
     /// <summary>Returns the short name for an SD entry type byte (no hex suffix).</summary>
-    internal static string GetEntryTypeShortName(byte entryType) => EntryTypeShortTable[entryType];
+    internal static string GetEntryTypeShortName(byte entryType) => _EntryTypeShortTable[entryType];
 
-    private static string[] BuildEntryTypeTable()
+    private static string[] _BuildEntryTypeTable()
     {
         string[] table = new string[256];
         table[0x00] = "FindService (0x00)";
@@ -37,7 +37,7 @@ internal static class SomeIpSdDisplayTables
         return table;
     }
 
-    private static string[] BuildEntryTypeShortTable()
+    private static string[] _BuildEntryTypeShortTable()
     {
         string[] table = new string[256];
         table[0x00] = "FindService";
@@ -57,18 +57,18 @@ internal static class SomeIpSdDisplayTables
     #region Option Types
 
     /// <summary>256-entry lookup table for SD option type display text ("Name (0xNN)").</summary>
-    private static readonly string[] OptionTypeTable = BuildOptionTypeTable();
+    private static readonly string[] _OptionTypeTable = _BuildOptionTypeTable();
 
     /// <summary>256-entry lookup table for SD option type short names.</summary>
-    private static readonly string[] OptionTypeShortTable = BuildOptionTypeShortTable();
+    private static readonly string[] _OptionTypeShortTable = _BuildOptionTypeShortTable();
 
     /// <summary>Returns the full display text for an SD option type byte.</summary>
-    internal static string GetOptionTypeDisplayText(byte optType) => OptionTypeTable[optType];
+    internal static string GetOptionTypeDisplayText(byte optType) => _OptionTypeTable[optType];
 
     /// <summary>Returns the short name for an SD option type byte.</summary>
-    internal static string GetOptionTypeShortName(byte optType) => OptionTypeShortTable[optType];
+    internal static string GetOptionTypeShortName(byte optType) => _OptionTypeShortTable[optType];
 
-    private static string[] BuildOptionTypeTable()
+    private static string[] _BuildOptionTypeTable()
     {
         string[] table = new string[256];
         table[0x01] = "Configuration (0x01)";
@@ -87,7 +87,7 @@ internal static class SomeIpSdDisplayTables
         return table;
     }
 
-    private static string[] BuildOptionTypeShortTable()
+    private static string[] _BuildOptionTypeShortTable()
     {
         string[] table = new string[256];
         table[0x01] = "Configuration";
@@ -111,12 +111,12 @@ internal static class SomeIpSdDisplayTables
     #region L4 Protocol
 
     /// <summary>256-entry lookup table for L4 protocol display text.</summary>
-    private static readonly string[] L4ProtoTable = BuildL4ProtoTable();
+    private static readonly string[] _L4ProtoTable = _BuildL4ProtoTable();
 
     /// <summary>Returns display text for an L4 protocol byte.</summary>
-    internal static string GetL4ProtoDisplayText(byte proto) => L4ProtoTable[proto];
+    internal static string GetL4ProtoDisplayText(byte proto) => _L4ProtoTable[proto];
 
-    private static string[] BuildL4ProtoTable()
+    private static string[] _BuildL4ProtoTable()
     {
         string[] table = new string[256];
         table[6] = "TCP (6)";
@@ -124,7 +124,7 @@ internal static class SomeIpSdDisplayTables
 
         for (int i = 0; i < 256; i++)
         {
-            table[i] ??= i.ToString();
+            table[i] ??= i.ToString(CultureInfo.InvariantCulture);
         }
         return table;
     }

@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 
 namespace NetworkInspector.FrameBuilder.Tests;
@@ -27,7 +27,7 @@ internal sealed class NewFrameStackSmokeTests
         FB.IPv4Layer ip = new(srcIp, dstIp);
         // Explicit checksum 0 = "no checksum" (UDP/IPv4 only); avoids depending on
         // pseudo-header computation for the structural-fields assertion.
-        FB.UdpLayer udp = new(5353, 5353, FB.Auto<ushort>.Explicit(0));
+        FB.UdpLayer udp = new(5353, 5353, FB.Auto.Explicit((ushort)0));
 
         FB.CreatedStack<
             FB.StatelessStack<FB.UdpLayer,
@@ -41,7 +41,7 @@ internal sealed class NewFrameStackSmokeTests
                 .CreateWithFixedValues();
 
         byte[] frame = new byte[created.HeaderSize + _Payload.Length];
-        (_, int len, _) = EmitOnce(in created, _Payload, frame);
+        (_, int len, _) = _EmitOnce(in created, _Payload, frame);
 
         // Total length = 14 (Eth) + 20 (IPv4) + 8 (UDP) + payload.
         await Assert.That(len).IsEqualTo(14 + 20 + 8 + _Payload.Length);
@@ -74,7 +74,7 @@ internal sealed class NewFrameStackSmokeTests
     /// in a synchronous helper so test methods can <c>await</c> their assertions
     /// without keeping the ref struct alive across the await boundary (CS4007).
     /// </remarks>
-    private static (bool Emitted, int Length, FB.BuildStatus Status) EmitOnce<TStack, TTrailer, TInterceptor>(
+    private static (bool Emitted, int Length, FB.BuildStatus Status) _EmitOnce<TStack, TTrailer, TInterceptor>(
         in FB.CreatedStack<TStack, TTrailer, TInterceptor> created,
         ReadOnlySpan<byte> payload,
         Span<byte> dst)
@@ -107,7 +107,7 @@ internal sealed class NewFrameStackSmokeTests
 
         FB.EthernetLayer eth = new(_DstMac, _SrcMac);
         // Outer IPv4: pin protocol=4 (IP-in-IP per IANA / RFC 2003).
-        FB.IPv4Layer outerIp = new(tunnelSrc, tunnelDst, protocol: FB.Auto<byte>.Explicit(4));
+        FB.IPv4Layer outerIp = new(tunnelSrc, tunnelDst, protocol: FB.Auto.Explicit((byte)4));
         FB.IPv4Layer innerIp = new(innerSrc, innerDst);
 
         FB.CreatedStack<
@@ -123,7 +123,7 @@ internal sealed class NewFrameStackSmokeTests
 
         // Inner payload is empty for this minimal smoke test.
         byte[] frame = new byte[created.HeaderSize];
-        (_, int len, _) = EmitOnce(in created, [], frame);
+        (_, int len, _) = _EmitOnce(in created, [], frame);
 
         // Total length = 14 (Eth) + 20 (outer IPv4) + 20 (inner IPv4).
         await Assert.That(len).IsEqualTo(14 + 20 + 20);

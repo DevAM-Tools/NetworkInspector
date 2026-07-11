@@ -61,7 +61,7 @@ public readonly struct ProtocolTableId(int value) : IEquatable<ProtocolTableId>,
     public override bool Equals(object? obj) => obj is ProtocolTableId other && Equals(other);
 
     /// <inheritdoc/>
-    public override string ToString() => _Value.ToString();
+    public override string ToString() => _Value.ToString(CultureInfo.InvariantCulture);
 
     #endregion
 

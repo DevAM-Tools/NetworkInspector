@@ -20,10 +20,10 @@ internal sealed class TcpConnectionTests
 {
     #region Constants & helpers
 
-    private const int EthHeaderSize = 14;
-    private const int IPv4HeaderSize = 20;
-    private const int TcpHeaderSize = 20;
-    private const int TcpHeaderOffset = EthHeaderSize + IPv4HeaderSize;
+    private const int _EthHeaderSize = 14;
+    private const int _IPv4HeaderSize = 20;
+    private const int _TcpHeaderSize = 20;
+    private const int _TcpHeaderOffset = _EthHeaderSize + _IPv4HeaderSize;
 
     private static readonly MacAddress _ClientMac = MacAddress.FromBytes([0x02, 0, 0, 0, 0, 0x01]);
     private static readonly MacAddress _ServerMac = MacAddress.FromBytes([0x02, 0, 0, 0, 0, 0x02]);
@@ -31,7 +31,7 @@ internal sealed class TcpConnectionTests
     private static readonly IPv4Address _ServerIp = new(0x0A000002);
 
     /// <summary>Build the client→server carrier (client MAC/IP as source).</summary>
-    private static StatelessStack<IPv4Layer, StatelessStack<EthernetLayer, StackEnd>> BuildClientCarrier()
+    private static StatelessStack<IPv4Layer, StatelessStack<EthernetLayer, StackEnd>> _BuildClientCarrier()
     {
         EthernetLayer eth = new(_ServerMac, _ClientMac);
         IPv4Layer ip = new(_ClientIp, _ServerIp);
@@ -39,7 +39,7 @@ internal sealed class TcpConnectionTests
     }
 
     /// <summary>Build the server→client carrier (server MAC/IP as source).</summary>
-    private static StatelessStack<IPv4Layer, StatelessStack<EthernetLayer, StackEnd>> BuildServerCarrier()
+    private static StatelessStack<IPv4Layer, StatelessStack<EthernetLayer, StackEnd>> _BuildServerCarrier()
     {
         EthernetLayer eth = new(_ClientMac, _ServerMac);
         IPv4Layer ip = new(_ServerIp, _ClientIp);
@@ -47,40 +47,40 @@ internal sealed class TcpConnectionTests
     }
 
     /// <summary>Reads the TCP source port from a frame whose TCP header is at fixed offset 34.</summary>
-    private static ushort ReadTcpSrcPort(ReadOnlySpan<byte> frame)
-        => BinaryPrimitives.ReadUInt16BigEndian(frame.Slice(TcpHeaderOffset, 2));
+    private static ushort _ReadTcpSrcPort(ReadOnlySpan<byte> frame)
+        => BinaryPrimitives.ReadUInt16BigEndian(frame.Slice(_TcpHeaderOffset, 2));
 
-    private static uint ReadTcpSeq(ReadOnlySpan<byte> frame)
-        => BinaryPrimitives.ReadUInt32BigEndian(frame.Slice(TcpHeaderOffset + 4, 4));
+    private static uint _ReadTcpSeq(ReadOnlySpan<byte> frame)
+        => BinaryPrimitives.ReadUInt32BigEndian(frame.Slice(_TcpHeaderOffset + 4, 4));
 
-    private static uint ReadTcpAck(ReadOnlySpan<byte> frame)
-        => BinaryPrimitives.ReadUInt32BigEndian(frame.Slice(TcpHeaderOffset + 8, 4));
+    private static uint _ReadTcpAck(ReadOnlySpan<byte> frame)
+        => BinaryPrimitives.ReadUInt32BigEndian(frame.Slice(_TcpHeaderOffset + 8, 4));
 
-    private static byte ReadTcpFlags(ReadOnlySpan<byte> frame)
-        => frame[TcpHeaderOffset + 13];
+    private static byte _ReadTcpFlags(ReadOnlySpan<byte> frame)
+        => frame[_TcpHeaderOffset + 13];
 
-    private static ushort ReadTcpWindow(ReadOnlySpan<byte> frame)
-        => BinaryPrimitives.ReadUInt16BigEndian(frame.Slice(TcpHeaderOffset + 14, 2));
+    private static ushort _ReadTcpWindow(ReadOnlySpan<byte> frame)
+        => BinaryPrimitives.ReadUInt16BigEndian(frame.Slice(_TcpHeaderOffset + 14, 2));
 
-    private static ushort ReadTcpChecksum(ReadOnlySpan<byte> frame)
-        => BinaryPrimitives.ReadUInt16BigEndian(frame.Slice(TcpHeaderOffset + 16, 2));
+    private static ushort _ReadTcpChecksum(ReadOnlySpan<byte> frame)
+        => BinaryPrimitives.ReadUInt16BigEndian(frame.Slice(_TcpHeaderOffset + 16, 2));
 
-    private static ReadOnlySpan<byte> TcpPayload(ReadOnlySpan<byte> frame)
-        => frame[(TcpHeaderOffset + TcpHeaderSize)..];
+    private static ReadOnlySpan<byte> _TcpPayload(ReadOnlySpan<byte> frame)
+        => frame[(_TcpHeaderOffset + _TcpHeaderSize)..];
 
     /// <summary>Snapshots one wire frame into a heap-allocated byte[] inside a sink.</summary>
-    private static (FrameSink Sink, List<byte[]> Frames) NewFrameCollector()
+    private static (FrameSink Sink, List<byte[]> Frames) _NewFrameCollector()
     {
         List<byte[]> frames = [];
         FrameSink sink = frame => frames.Add(frame.ToArray());
         return (sink, frames);
     }
 
-    private static TcpConnection<IPv4Layer, StatelessStack<EthernetLayer, StackEnd>> OpenDefault(
+    private static TcpConnection<IPv4Layer, StatelessStack<EthernetLayer, StackEnd>> _OpenDefault(
         TcpConnectionOptions? options = null)
         => TcpConnection.Open(
-            BuildClientCarrier(),
-            BuildServerCarrier(),
+            _BuildClientCarrier(),
+            _BuildServerCarrier(),
             clientPort: 49152,
             serverPort: 80,
             options: options ?? new TcpConnectionOptions(ClientIsn: 1000, ServerIsn: 9000, Mss: 1460, WindowSize: 65535));
@@ -92,41 +92,41 @@ internal sealed class TcpConnectionTests
     [Test]
     public async Task EmitHandshake_Produces_3_Frames_With_Correct_Flags()
     {
-        using TcpConnection<IPv4Layer, StatelessStack<EthernetLayer, StackEnd>> conn = OpenDefault();
-        (FrameSink sink, List<byte[]> frames) = NewFrameCollector();
+        using TcpConnection<IPv4Layer, StatelessStack<EthernetLayer, StackEnd>> conn = _OpenDefault();
+        (FrameSink sink, List<byte[]> frames) = _NewFrameCollector();
 
         conn.EmitHandshake(sink);
 
         await Assert.That(frames.Count).IsEqualTo(3);
-        await Assert.That(ReadTcpFlags(frames[0])).IsEqualTo<byte>(TcpFlags.Syn);
-        await Assert.That(ReadTcpFlags(frames[1])).IsEqualTo<byte>(TcpFlags.SynAck);
-        await Assert.That(ReadTcpFlags(frames[2])).IsEqualTo<byte>(TcpFlags.Ack);
+        await Assert.That(_ReadTcpFlags(frames[0])).IsEqualTo<byte>(TcpFlags.Syn);
+        await Assert.That(_ReadTcpFlags(frames[1])).IsEqualTo<byte>(TcpFlags.SynAck);
+        await Assert.That(_ReadTcpFlags(frames[2])).IsEqualTo<byte>(TcpFlags.Ack);
     }
 
     [Test]
     public async Task EmitHandshake_SeqAndAck_Match_RFC793()
     {
-        using TcpConnection<IPv4Layer, StatelessStack<EthernetLayer, StackEnd>> conn = OpenDefault(
+        using TcpConnection<IPv4Layer, StatelessStack<EthernetLayer, StackEnd>> conn = _OpenDefault(
             new TcpConnectionOptions(ClientIsn: 1000, ServerIsn: 9000));
-        (FrameSink sink, List<byte[]> frames) = NewFrameCollector();
+        (FrameSink sink, List<byte[]> frames) = _NewFrameCollector();
 
         conn.EmitHandshake(sink);
 
         // SYN: SEQ=1000, ACK=0
-        await Assert.That(ReadTcpSeq(frames[0])).IsEqualTo(1000u);
-        await Assert.That(ReadTcpAck(frames[0])).IsEqualTo(0u);
+        await Assert.That(_ReadTcpSeq(frames[0])).IsEqualTo(1000u);
+        await Assert.That(_ReadTcpAck(frames[0])).IsEqualTo(0u);
         // SYN+ACK: SEQ=9000, ACK=1001
-        await Assert.That(ReadTcpSeq(frames[1])).IsEqualTo(9000u);
-        await Assert.That(ReadTcpAck(frames[1])).IsEqualTo(1001u);
+        await Assert.That(_ReadTcpSeq(frames[1])).IsEqualTo(9000u);
+        await Assert.That(_ReadTcpAck(frames[1])).IsEqualTo(1001u);
         // ACK: SEQ=1001, ACK=9001
-        await Assert.That(ReadTcpSeq(frames[2])).IsEqualTo(1001u);
-        await Assert.That(ReadTcpAck(frames[2])).IsEqualTo(9001u);
+        await Assert.That(_ReadTcpSeq(frames[2])).IsEqualTo(1001u);
+        await Assert.That(_ReadTcpAck(frames[2])).IsEqualTo(9001u);
     }
 
     [Test]
     public async Task EmitHandshake_Twice_Throws()
     {
-        using TcpConnection<IPv4Layer, StatelessStack<EthernetLayer, StackEnd>> conn = OpenDefault();
+        using TcpConnection<IPv4Layer, StatelessStack<EthernetLayer, StackEnd>> conn = _OpenDefault();
         FrameSink sink = _ => { };
         conn.EmitHandshake(sink);
         await Assert.That(() => conn.EmitHandshake(sink)).Throws<InvalidOperationException>();
@@ -135,13 +135,13 @@ internal sealed class TcpConnectionTests
     [Test]
     public async Task Source_Ports_Reflect_Direction()
     {
-        using TcpConnection<IPv4Layer, StatelessStack<EthernetLayer, StackEnd>> conn = OpenDefault();
-        (FrameSink sink, List<byte[]> frames) = NewFrameCollector();
+        using TcpConnection<IPv4Layer, StatelessStack<EthernetLayer, StackEnd>> conn = _OpenDefault();
+        (FrameSink sink, List<byte[]> frames) = _NewFrameCollector();
         conn.EmitHandshake(sink);
 
-        await Assert.That(ReadTcpSrcPort(frames[0])).IsEqualTo<ushort>(49152);   // client
-        await Assert.That(ReadTcpSrcPort(frames[1])).IsEqualTo<ushort>(80);      // server
-        await Assert.That(ReadTcpSrcPort(frames[2])).IsEqualTo<ushort>(49152);   // client
+        await Assert.That(_ReadTcpSrcPort(frames[0])).IsEqualTo<ushort>(49152);   // client
+        await Assert.That(_ReadTcpSrcPort(frames[1])).IsEqualTo<ushort>(80);      // server
+        await Assert.That(_ReadTcpSrcPort(frames[2])).IsEqualTo<ushort>(49152);   // client
     }
 
     #endregion
@@ -151,8 +151,8 @@ internal sealed class TcpConnectionTests
     [Test]
     public async Task WriteFromClient_Small_Payload_Produces_Single_PshAck_Segment()
     {
-        using TcpConnection<IPv4Layer, StatelessStack<EthernetLayer, StackEnd>> conn = OpenDefault();
-        (FrameSink sink, List<byte[]> frames) = NewFrameCollector();
+        using TcpConnection<IPv4Layer, StatelessStack<EthernetLayer, StackEnd>> conn = _OpenDefault();
+        (FrameSink sink, List<byte[]> frames) = _NewFrameCollector();
         conn.EmitHandshake(sink);
         frames.Clear();
 
@@ -160,18 +160,18 @@ internal sealed class TcpConnectionTests
         conn.WriteFromClient(payload, sink);
 
         await Assert.That(frames.Count).IsEqualTo(1);
-        await Assert.That(ReadTcpFlags(frames[0])).IsEqualTo<byte>(TcpFlags.PshAck);
-        await Assert.That(TcpPayload(frames[0]).SequenceEqual(payload)).IsTrue();
-        await Assert.That(ReadTcpSeq(frames[0])).IsEqualTo(1001u);
-        await Assert.That(ReadTcpAck(frames[0])).IsEqualTo(9001u);
+        await Assert.That(_ReadTcpFlags(frames[0])).IsEqualTo<byte>(TcpFlags.PshAck);
+        await Assert.That(_TcpPayload(frames[0]).SequenceEqual(payload)).IsTrue();
+        await Assert.That(_ReadTcpSeq(frames[0])).IsEqualTo(1001u);
+        await Assert.That(_ReadTcpAck(frames[0])).IsEqualTo(9001u);
     }
 
     [Test]
     public async Task WriteFromClient_Larger_Than_Mss_Splits_Into_Multiple_Segments()
     {
-        using TcpConnection<IPv4Layer, StatelessStack<EthernetLayer, StackEnd>> conn = OpenDefault(
+        using TcpConnection<IPv4Layer, StatelessStack<EthernetLayer, StackEnd>> conn = _OpenDefault(
             new TcpConnectionOptions(ClientIsn: 1000, ServerIsn: 9000, Mss: 100));
-        (FrameSink sink, List<byte[]> frames) = NewFrameCollector();
+        (FrameSink sink, List<byte[]> frames) = _NewFrameCollector();
         conn.EmitHandshake(sink);
         frames.Clear();
 
@@ -183,45 +183,45 @@ internal sealed class TcpConnectionTests
         conn.WriteFromClient(payload, sink);
 
         await Assert.That(frames.Count).IsEqualTo(3);
-        await Assert.That(TcpPayload(frames[0]).Length).IsEqualTo(100);
-        await Assert.That(TcpPayload(frames[1]).Length).IsEqualTo(100);
-        await Assert.That(TcpPayload(frames[2]).Length).IsEqualTo(50);
+        await Assert.That(_TcpPayload(frames[0]).Length).IsEqualTo(100);
+        await Assert.That(_TcpPayload(frames[1]).Length).IsEqualTo(100);
+        await Assert.That(_TcpPayload(frames[2]).Length).IsEqualTo(50);
 
         // SEQ progression: 1001, 1101, 1201
-        await Assert.That(ReadTcpSeq(frames[0])).IsEqualTo(1001u);
-        await Assert.That(ReadTcpSeq(frames[1])).IsEqualTo(1101u);
-        await Assert.That(ReadTcpSeq(frames[2])).IsEqualTo(1201u);
+        await Assert.That(_ReadTcpSeq(frames[0])).IsEqualTo(1001u);
+        await Assert.That(_ReadTcpSeq(frames[1])).IsEqualTo(1101u);
+        await Assert.That(_ReadTcpSeq(frames[2])).IsEqualTo(1201u);
 
         // Only the last segment has PSH set.
-        await Assert.That(ReadTcpFlags(frames[0])).IsEqualTo<byte>(TcpFlags.Ack);
-        await Assert.That(ReadTcpFlags(frames[1])).IsEqualTo<byte>(TcpFlags.Ack);
-        await Assert.That(ReadTcpFlags(frames[2])).IsEqualTo<byte>(TcpFlags.PshAck);
+        await Assert.That(_ReadTcpFlags(frames[0])).IsEqualTo<byte>(TcpFlags.Ack);
+        await Assert.That(_ReadTcpFlags(frames[1])).IsEqualTo<byte>(TcpFlags.Ack);
+        await Assert.That(_ReadTcpFlags(frames[2])).IsEqualTo<byte>(TcpFlags.PshAck);
 
         // Reassembled bytes match the original payload exactly.
-        byte[] reassembled = [.. TcpPayload(frames[0]).ToArray(), .. TcpPayload(frames[1]).ToArray(), .. TcpPayload(frames[2]).ToArray()];
+        byte[] reassembled = [.. _TcpPayload(frames[0]).ToArray(), .. _TcpPayload(frames[1]).ToArray(), .. _TcpPayload(frames[2]).ToArray()];
         await Assert.That(reassembled.AsSpan().SequenceEqual(payload)).IsTrue();
     }
 
     [Test]
     public async Task WriteFromClient_Empty_With_Push_Emits_Single_PshAck()
     {
-        using TcpConnection<IPv4Layer, StatelessStack<EthernetLayer, StackEnd>> conn = OpenDefault();
-        (FrameSink sink, List<byte[]> frames) = NewFrameCollector();
+        using TcpConnection<IPv4Layer, StatelessStack<EthernetLayer, StackEnd>> conn = _OpenDefault();
+        (FrameSink sink, List<byte[]> frames) = _NewFrameCollector();
         conn.EmitHandshake(sink);
         frames.Clear();
 
         conn.WriteFromClient(ReadOnlySpan<byte>.Empty, sink, push: true);
 
         await Assert.That(frames.Count).IsEqualTo(1);
-        await Assert.That(ReadTcpFlags(frames[0])).IsEqualTo<byte>(TcpFlags.PshAck);
-        await Assert.That(TcpPayload(frames[0]).Length).IsEqualTo(0);
+        await Assert.That(_ReadTcpFlags(frames[0])).IsEqualTo<byte>(TcpFlags.PshAck);
+        await Assert.That(_TcpPayload(frames[0]).Length).IsEqualTo(0);
     }
 
     [Test]
     public async Task WriteFromClient_Empty_Without_Push_Emits_Nothing()
     {
-        using TcpConnection<IPv4Layer, StatelessStack<EthernetLayer, StackEnd>> conn = OpenDefault();
-        (FrameSink sink, List<byte[]> frames) = NewFrameCollector();
+        using TcpConnection<IPv4Layer, StatelessStack<EthernetLayer, StackEnd>> conn = _OpenDefault();
+        (FrameSink sink, List<byte[]> frames) = _NewFrameCollector();
         conn.EmitHandshake(sink);
         frames.Clear();
 
@@ -233,8 +233,8 @@ internal sealed class TcpConnectionTests
     [Test]
     public async Task Bidirectional_Writes_Update_Each_Other_Ack()
     {
-        using TcpConnection<IPv4Layer, StatelessStack<EthernetLayer, StackEnd>> conn = OpenDefault();
-        (FrameSink sink, List<byte[]> frames) = NewFrameCollector();
+        using TcpConnection<IPv4Layer, StatelessStack<EthernetLayer, StackEnd>> conn = _OpenDefault();
+        (FrameSink sink, List<byte[]> frames) = _NewFrameCollector();
         conn.EmitHandshake(sink);
         frames.Clear();
 
@@ -243,18 +243,18 @@ internal sealed class TcpConnectionTests
 
         await Assert.That(frames.Count).IsEqualTo(2);
         // Client segment SEQ=1001, ACK=9001
-        await Assert.That(ReadTcpSeq(frames[0])).IsEqualTo(1001u);
-        await Assert.That(ReadTcpAck(frames[0])).IsEqualTo(9001u);
+        await Assert.That(_ReadTcpSeq(frames[0])).IsEqualTo(1001u);
+        await Assert.That(_ReadTcpAck(frames[0])).IsEqualTo(9001u);
         // Server segment SEQ=9001, ACK should now be 1006 (1001 + 5 client bytes)
-        await Assert.That(ReadTcpSeq(frames[1])).IsEqualTo(9001u);
-        await Assert.That(ReadTcpAck(frames[1])).IsEqualTo(1006u);
+        await Assert.That(_ReadTcpSeq(frames[1])).IsEqualTo(9001u);
+        await Assert.That(_ReadTcpAck(frames[1])).IsEqualTo(1006u);
     }
 
     [Test]
     public async Task Per_Call_Mss_Override_Forces_Smaller_Segments()
     {
-        using TcpConnection<IPv4Layer, StatelessStack<EthernetLayer, StackEnd>> conn = OpenDefault();
-        (FrameSink sink, List<byte[]> frames) = NewFrameCollector();
+        using TcpConnection<IPv4Layer, StatelessStack<EthernetLayer, StackEnd>> conn = _OpenDefault();
+        (FrameSink sink, List<byte[]> frames) = _NewFrameCollector();
         conn.EmitHandshake(sink);
         frames.Clear();
 
@@ -262,9 +262,9 @@ internal sealed class TcpConnectionTests
 
         // 60 / 25 = 3 segments (25 + 25 + 10)
         await Assert.That(frames.Count).IsEqualTo(3);
-        await Assert.That(TcpPayload(frames[0]).Length).IsEqualTo(25);
-        await Assert.That(TcpPayload(frames[1]).Length).IsEqualTo(25);
-        await Assert.That(TcpPayload(frames[2]).Length).IsEqualTo(10);
+        await Assert.That(_TcpPayload(frames[0]).Length).IsEqualTo(25);
+        await Assert.That(_TcpPayload(frames[1]).Length).IsEqualTo(25);
+        await Assert.That(_TcpPayload(frames[2]).Length).IsEqualTo(10);
     }
 
     #endregion
@@ -287,9 +287,9 @@ internal sealed class TcpConnectionTests
     [Test]
     public async Task WriteFromClient_StreamProducer_Wraps_Bytes_In_Tcp_Segments()
     {
-        using TcpConnection<IPv4Layer, StatelessStack<EthernetLayer, StackEnd>> conn = OpenDefault(
+        using TcpConnection<IPv4Layer, StatelessStack<EthernetLayer, StackEnd>> conn = _OpenDefault(
             new TcpConnectionOptions(ClientIsn: 1000, ServerIsn: 9000, Mss: 100));
-        (FrameSink sink, List<byte[]> frames) = NewFrameCollector();
+        (FrameSink sink, List<byte[]> frames) = _NewFrameCollector();
         conn.EmitHandshake(sink);
         frames.Clear();
 
@@ -304,10 +304,10 @@ internal sealed class TcpConnectionTests
         // Producer wire-form is 2-byte length + 150 body bytes = 152 bytes total.
         // MSS=100 → two segments (100 + 52).
         await Assert.That(frames.Count).IsEqualTo(2);
-        await Assert.That(TcpPayload(frames[0]).Length).IsEqualTo(100);
-        await Assert.That(TcpPayload(frames[1]).Length).IsEqualTo(52);
+        await Assert.That(_TcpPayload(frames[0]).Length).IsEqualTo(100);
+        await Assert.That(_TcpPayload(frames[1]).Length).IsEqualTo(52);
 
-        byte[] reassembled = [.. TcpPayload(frames[0]).ToArray(), .. TcpPayload(frames[1]).ToArray()];
+        byte[] reassembled = [.. _TcpPayload(frames[0]).ToArray(), .. _TcpPayload(frames[1]).ToArray()];
         await Assert.That(BinaryPrimitives.ReadUInt16BigEndian(reassembled)).IsEqualTo<ushort>(150);
         await Assert.That(reassembled.AsSpan(2).SequenceEqual(body)).IsTrue();
     }
@@ -319,22 +319,22 @@ internal sealed class TcpConnectionTests
     [Test]
     public async Task Mutator_Null_Default_Is_NoOp_And_Preserves_Default_Flags()
     {
-        using TcpConnection<IPv4Layer, StatelessStack<EthernetLayer, StackEnd>> conn = OpenDefault();
+        using TcpConnection<IPv4Layer, StatelessStack<EthernetLayer, StackEnd>> conn = _OpenDefault();
         await Assert.That(conn.OnSegment).IsNull();
 
-        (FrameSink sink, List<byte[]> frames) = NewFrameCollector();
+        (FrameSink sink, List<byte[]> frames) = _NewFrameCollector();
         conn.EmitHandshake(sink);
         conn.WriteFromClient("ping"u8, sink);
 
-        await Assert.That(ReadTcpFlags(frames[0])).IsEqualTo<byte>(TcpFlags.Syn);
-        await Assert.That(ReadTcpFlags(frames[3])).IsEqualTo<byte>(TcpFlags.PshAck);
+        await Assert.That(_ReadTcpFlags(frames[0])).IsEqualTo<byte>(TcpFlags.Syn);
+        await Assert.That(_ReadTcpFlags(frames[3])).IsEqualTo<byte>(TcpFlags.PshAck);
     }
 
     [Test]
     public async Task Per_Call_Mutator_Sets_Ecn_Cwr_Flag()
     {
-        using TcpConnection<IPv4Layer, StatelessStack<EthernetLayer, StackEnd>> conn = OpenDefault();
-        (FrameSink sink, List<byte[]> frames) = NewFrameCollector();
+        using TcpConnection<IPv4Layer, StatelessStack<EthernetLayer, StackEnd>> conn = _OpenDefault();
+        (FrameSink sink, List<byte[]> frames) = _NewFrameCollector();
         conn.EmitHandshake(sink);
         frames.Clear();
 
@@ -342,14 +342,14 @@ internal sealed class TcpConnectionTests
             => seg.Flags |= TcpFlags.Cwr;
         conn.WriteFromClient("x"u8, sink, mutator: mutator);
 
-        await Assert.That((ReadTcpFlags(frames[0]) & TcpFlags.Cwr) != 0).IsTrue();
+        await Assert.That((_ReadTcpFlags(frames[0]) & TcpFlags.Cwr) != 0).IsTrue();
     }
 
     [Test]
     public async Task Global_Mutator_Sees_Every_Segment_With_Correct_Direction_And_Phase()
     {
-        using TcpConnection<IPv4Layer, StatelessStack<EthernetLayer, StackEnd>> conn = OpenDefault();
-        (FrameSink sink, List<byte[]> frames) = NewFrameCollector();
+        using TcpConnection<IPv4Layer, StatelessStack<EthernetLayer, StackEnd>> conn = _OpenDefault();
+        (FrameSink sink, List<byte[]> frames) = _NewFrameCollector();
 
         List<(TcpDirection Dir, TcpLifecycle Phase, int Idx, int Count)> log = [];
         conn.OnSegment = (ref TcpSegmentDescriptor _, in TcpSegmentContext ctx)
@@ -373,8 +373,8 @@ internal sealed class TcpConnectionTests
     [Test]
     public async Task Mutator_Override_Sequence_Reflects_In_Wire_And_Ack_Bookkeeping()
     {
-        using TcpConnection<IPv4Layer, StatelessStack<EthernetLayer, StackEnd>> conn = OpenDefault();
-        (FrameSink sink, List<byte[]> frames) = NewFrameCollector();
+        using TcpConnection<IPv4Layer, StatelessStack<EthernetLayer, StackEnd>> conn = _OpenDefault();
+        (FrameSink sink, List<byte[]> frames) = _NewFrameCollector();
         conn.EmitHandshake(sink);
         frames.Clear();
 
@@ -382,7 +382,7 @@ internal sealed class TcpConnectionTests
             (ref TcpSegmentDescriptor seg, in TcpSegmentContext _)
                 => seg.Sequence = 5000);
 
-        await Assert.That(ReadTcpSeq(frames[0])).IsEqualTo(5000u);
+        await Assert.That(_ReadTcpSeq(frames[0])).IsEqualTo(5000u);
     }
 
     /// <summary>
@@ -395,9 +395,9 @@ internal sealed class TcpConnectionTests
     [Test]
     public async Task Mutator_FinOnDataSegment_AdvancesPeerAck_ByPayloadPlusOne()
     {
-        using TcpConnection<IPv4Layer, StatelessStack<EthernetLayer, StackEnd>> conn = OpenDefault(
+        using TcpConnection<IPv4Layer, StatelessStack<EthernetLayer, StackEnd>> conn = _OpenDefault(
             new TcpConnectionOptions(ClientIsn: 0, ServerIsn: 0, Mss: 1460, WindowSize: 65535));
-        (FrameSink sink, List<byte[]> frames) = NewFrameCollector();
+        (FrameSink sink, List<byte[]> frames) = _NewFrameCollector();
 
         conn.EmitHandshake(sink);
         frames.Clear();
@@ -418,11 +418,11 @@ internal sealed class TcpConnectionTests
         await Assert.That(frames.Count).IsEqualTo(1);
 
         // Emitted frame must have PSH+ACK+FIN.
-        byte emittedFlags = ReadTcpFlags(frames[0]);
+        byte emittedFlags = _ReadTcpFlags(frames[0]);
         await Assert.That((emittedFlags & TcpFlags.Psh) != 0).IsTrue();
         await Assert.That((emittedFlags & TcpFlags.Ack) != 0).IsTrue();
         await Assert.That((emittedFlags & TcpFlags.Fin) != 0).IsTrue();
-        await Assert.That(TcpPayload(frames[0]).Length).IsEqualTo(5);
+        await Assert.That(_TcpPayload(frames[0]).Length).IsEqualTo(5);
 
         // ClientNextSeq must have advanced by payload (5) + FIN (1) = 6.
         // Before write: client NextSeq = 1 (post-handshake).  After: 1 + 6 = 7.
@@ -432,7 +432,7 @@ internal sealed class TcpConnectionTests
         // sequence space consumed: 5 payload bytes + 1 FIN = 6 → server ACK = 1 + 6 = 7.
         frames.Clear();
         conn.WriteFromServer([0xAA], sink); // 1-byte server→client segment
-        await Assert.That(ReadTcpAck(frames[0])).IsEqualTo(7u);
+        await Assert.That(_ReadTcpAck(frames[0])).IsEqualTo(7u);
     }
 
     #endregion
@@ -442,58 +442,58 @@ internal sealed class TcpConnectionTests
     [Test]
     public async Task EmitFinClose_Produces_4_Correct_Frames()
     {
-        using TcpConnection<IPv4Layer, StatelessStack<EthernetLayer, StackEnd>> conn = OpenDefault();
-        (FrameSink sink, List<byte[]> frames) = NewFrameCollector();
+        using TcpConnection<IPv4Layer, StatelessStack<EthernetLayer, StackEnd>> conn = _OpenDefault();
+        (FrameSink sink, List<byte[]> frames) = _NewFrameCollector();
         conn.EmitHandshake(sink);
         frames.Clear();
 
         conn.EmitFinClose(sink);
 
         await Assert.That(frames.Count).IsEqualTo(4);
-        await Assert.That(ReadTcpFlags(frames[0])).IsEqualTo<byte>(TcpFlags.FinAck);   // client FIN
-        await Assert.That(ReadTcpFlags(frames[1])).IsEqualTo<byte>(TcpFlags.Ack);       // server ACK
-        await Assert.That(ReadTcpFlags(frames[2])).IsEqualTo<byte>(TcpFlags.FinAck);   // server FIN
-        await Assert.That(ReadTcpFlags(frames[3])).IsEqualTo<byte>(TcpFlags.Ack);       // client ACK
+        await Assert.That(_ReadTcpFlags(frames[0])).IsEqualTo<byte>(TcpFlags.FinAck);   // client FIN
+        await Assert.That(_ReadTcpFlags(frames[1])).IsEqualTo<byte>(TcpFlags.Ack);       // server ACK
+        await Assert.That(_ReadTcpFlags(frames[2])).IsEqualTo<byte>(TcpFlags.FinAck);   // server FIN
+        await Assert.That(_ReadTcpFlags(frames[3])).IsEqualTo<byte>(TcpFlags.Ack);       // client ACK
 
         // After client FIN (SEQ=1001, consumes 1) → server ACK should be 1002.
-        await Assert.That(ReadTcpAck(frames[1])).IsEqualTo(1002u);
+        await Assert.That(_ReadTcpAck(frames[1])).IsEqualTo(1002u);
         // Server FIN SEQ=9001 → client final ACK = 9002.
-        await Assert.That(ReadTcpAck(frames[3])).IsEqualTo(9002u);
+        await Assert.That(_ReadTcpAck(frames[3])).IsEqualTo(9002u);
     }
 
     [Test]
     public async Task EmitRstFromClient_Emits_Single_RstAck_Frame()
     {
-        using TcpConnection<IPv4Layer, StatelessStack<EthernetLayer, StackEnd>> conn = OpenDefault();
-        (FrameSink sink, List<byte[]> frames) = NewFrameCollector();
+        using TcpConnection<IPv4Layer, StatelessStack<EthernetLayer, StackEnd>> conn = _OpenDefault();
+        (FrameSink sink, List<byte[]> frames) = _NewFrameCollector();
         conn.EmitHandshake(sink);
         frames.Clear();
 
         conn.EmitRstFromClient(sink);
 
         await Assert.That(frames.Count).IsEqualTo(1);
-        await Assert.That((ReadTcpFlags(frames[0]) & TcpFlags.Rst) != 0).IsTrue();
+        await Assert.That((_ReadTcpFlags(frames[0]) & TcpFlags.Rst) != 0).IsTrue();
     }
 
     [Test]
     public async Task EmitWindowUpdateFromServer_Emits_Bare_Ack_With_New_Window()
     {
-        using TcpConnection<IPv4Layer, StatelessStack<EthernetLayer, StackEnd>> conn = OpenDefault();
-        (FrameSink sink, List<byte[]> frames) = NewFrameCollector();
+        using TcpConnection<IPv4Layer, StatelessStack<EthernetLayer, StackEnd>> conn = _OpenDefault();
+        (FrameSink sink, List<byte[]> frames) = _NewFrameCollector();
         conn.EmitHandshake(sink);
         frames.Clear();
 
         conn.EmitWindowUpdateFromServer(newWindow: 4096, sink);
 
         await Assert.That(frames.Count).IsEqualTo(1);
-        await Assert.That(ReadTcpFlags(frames[0])).IsEqualTo<byte>(TcpFlags.Ack);
-        await Assert.That(ReadTcpWindow(frames[0])).IsEqualTo<ushort>(4096);
-        await Assert.That(TcpPayload(frames[0]).Length).IsEqualTo(0);
+        await Assert.That(_ReadTcpFlags(frames[0])).IsEqualTo<byte>(TcpFlags.Ack);
+        await Assert.That(_ReadTcpWindow(frames[0])).IsEqualTo<ushort>(4096);
+        await Assert.That(_TcpPayload(frames[0]).Length).IsEqualTo(0);
 
         // Subsequent server emission reverts to default window.
         frames.Clear();
         conn.WriteFromServer("y"u8, sink);
-        await Assert.That(ReadTcpWindow(frames[0])).IsEqualTo<ushort>(65535);
+        await Assert.That(_ReadTcpWindow(frames[0])).IsEqualTo<ushort>(65535);
     }
 
     #endregion
@@ -527,7 +527,7 @@ internal sealed class TcpConnectionTests
             TcpConnection.Open(clientCarrier, serverCarrier, 1234, 80,
                 new TcpConnectionOptions(ClientIsn: 0, ServerIsn: 0, Mss: 40, WindowSize: 65535));
 
-        (FrameSink sink, List<byte[]> frames) = NewFrameCollector();
+        (FrameSink sink, List<byte[]> frames) = _NewFrameCollector();
         conn.EmitHandshake(sink);
         frames.Clear();
 
@@ -555,13 +555,13 @@ internal sealed class TcpConnectionTests
         // MSS of 60 bytes: a 150-byte payload requires exactly 3 TCP segments.
         using TcpConnection<IPv4Layer, StatelessStack<EthernetLayer, StackEnd>> conn =
             TcpConnection.Open(
-                BuildClientCarrier(),
-                BuildServerCarrier(),
+                _BuildClientCarrier(),
+                _BuildServerCarrier(),
                 1234,
                 80,
                 new TcpConnectionOptions(ClientIsn: 0, ServerIsn: 0, Mss: 60, WindowSize: 65535));
 
-        (FrameSink sink, List<byte[]> frames) = NewFrameCollector();
+        (FrameSink sink, List<byte[]> frames) = _NewFrameCollector();
         conn.EmitHandshake(sink);
         frames.Clear();
 
@@ -579,8 +579,8 @@ internal sealed class TcpConnectionTests
         List<byte> allData = [];
         foreach (byte[] frame in frames)
         {
-            int tcpDataOffset = (frame[TcpHeaderOffset + 12] >> 4) * 4;
-            int tcpPayloadStart = TcpHeaderOffset + tcpDataOffset;
+            int tcpDataOffset = (frame[_TcpHeaderOffset + 12] >> 4) * 4;
+            int tcpPayloadStart = _TcpHeaderOffset + tcpDataOffset;
             allData.AddRange(frame.AsSpan(tcpPayloadStart).ToArray());
         }
 
@@ -598,7 +598,7 @@ internal sealed class TcpConnectionTests
     [Test]
     public async Task Dispose_Is_Idempotent()
     {
-        TcpConnection<IPv4Layer, StatelessStack<EthernetLayer, StackEnd>> conn = OpenDefault();
+        TcpConnection<IPv4Layer, StatelessStack<EthernetLayer, StackEnd>> conn = _OpenDefault();
         conn.Dispose();
         conn.Dispose();   // must not throw
 

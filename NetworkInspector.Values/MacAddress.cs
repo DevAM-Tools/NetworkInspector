@@ -16,7 +16,7 @@ public readonly record struct MacAddress
     /// <summary>Formatted length: "XX:XX:XX:XX:XX:XX" = 17 characters.</summary>
     public const int FormattedLength = 17;
 
-    private const ulong Mask48 = 0xFFFF_FFFF_FFFF;
+    private const ulong _Mask48 = 0xFFFF_FFFF_FFFF;
 
     #endregion
 
@@ -26,7 +26,7 @@ public readonly record struct MacAddress
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public MacAddress(ulong value)
     {
-        _Value = value & Mask48;
+        _Value = value & _Mask48;
     }
 
     #endregion
@@ -54,7 +54,7 @@ public readonly record struct MacAddress
     public bool IsBroadcast
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _Value == Mask48;
+        get => _Value == _Mask48;
     }
     /// <summary>True if the multicast bit (bit 0 of octet 0) is set.</summary>
     public bool IsMulticast
@@ -121,8 +121,8 @@ public readonly record struct MacAddress
             {
                 return false;
             }
-            int h = HexDigitValue(text[offset]);
-            int l = HexDigitValue(text[offset + 1]);
+            int h = _HexDigitValue(text[offset]);
+            int l = _HexDigitValue(text[offset + 1]);
             if (h < 0 || l < 0)
             {
                 return false;
@@ -208,7 +208,7 @@ public readonly record struct MacAddress
 
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public bool TryGetSerializedSize(out int size)
+    public bool TryGetWrittenSize(out int size)
     {
         size = 6;
         return true;
@@ -384,7 +384,7 @@ public readonly record struct MacAddress
     #region Private Helpers
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static int HexDigitValue(char c)
+    private static int _HexDigitValue(char c)
     {
         if (c >= '0' && c <= '9')
         {

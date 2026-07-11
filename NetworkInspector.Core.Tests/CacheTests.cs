@@ -14,7 +14,7 @@ internal sealed class CacheTests
     [Test]
     public async Task TwoQueueCache_InsertAndRetrieve()
     {
-        TwoQueueCache<string, int> cache = TwoQueueCache<string, int>.CreateBounded(10);
+        TwoQueueCache<string, int> cache = TwoQueueCache.CreateBounded<string, int>(10);
         cache.Put("key1", 100);
 
         bool found = cache.TryGet("key1", out int value);
@@ -25,7 +25,7 @@ internal sealed class CacheTests
     [Test]
     public async Task TwoQueueCache_MissReturnsDefault()
     {
-        TwoQueueCache<string, int> cache = TwoQueueCache<string, int>.CreateBounded(10);
+        TwoQueueCache<string, int> cache = TwoQueueCache.CreateBounded<string, int>(10);
 
         bool found = cache.TryGet("missing", out int value);
         await Assert.That(found).IsFalse();
@@ -35,7 +35,7 @@ internal sealed class CacheTests
     [Test]
     public async Task TwoQueueCache_Count()
     {
-        TwoQueueCache<int, string> cache = TwoQueueCache<int, string>.CreateBounded(10);
+        TwoQueueCache<int, string> cache = TwoQueueCache.CreateBounded<int, string>(10);
         await Assert.That(cache.Count).IsEqualTo(0);
         await Assert.That(cache.IsEmpty).IsTrue();
 
@@ -50,7 +50,7 @@ internal sealed class CacheTests
     [Test]
     public async Task TwoQueueCache_UpdateExistingKey()
     {
-        TwoQueueCache<string, int> cache = TwoQueueCache<string, int>.CreateBounded(10);
+        TwoQueueCache<string, int> cache = TwoQueueCache.CreateBounded<string, int>(10);
         cache.Put("key", 1);
         cache.Put("key", 2);
 
@@ -64,7 +64,7 @@ internal sealed class CacheTests
     public async Task TwoQueueCache_Eviction_WhenOverCapacity()
     {
         // maxWeight=3 with unit weigher means max 3 entries
-        TwoQueueCache<int, string> cache = TwoQueueCache<int, string>.CreateBounded(3);
+        TwoQueueCache<int, string> cache = TwoQueueCache.CreateBounded<int, string>(3);
         cache.Put(1, "a");
         cache.Put(2, "b");
         cache.Put(3, "c");
@@ -88,7 +88,7 @@ internal sealed class CacheTests
     public async Task TwoQueueCache_GhostPromotion()
     {
         // Ghost promotion: item evicted from A1in, then re-inserted → goes to Am
-        TwoQueueCache<int, string> cache = TwoQueueCache<int, string>.CreateBounded(3);
+        TwoQueueCache<int, string> cache = TwoQueueCache.CreateBounded<int, string>(3);
 
         // Fill cache
         cache.Put(1, "a");
@@ -111,7 +111,7 @@ internal sealed class CacheTests
     [Test]
     public async Task TwoQueueCache_Remove()
     {
-        TwoQueueCache<string, int> cache = TwoQueueCache<string, int>.CreateBounded(10);
+        TwoQueueCache<string, int> cache = TwoQueueCache.CreateBounded<string, int>(10);
         cache.Put("key", 42);
 
         bool removed = cache.Remove("key");
@@ -125,7 +125,7 @@ internal sealed class CacheTests
     [Test]
     public async Task TwoQueueCache_Remove_NonExistent()
     {
-        TwoQueueCache<string, int> cache = TwoQueueCache<string, int>.CreateBounded(10);
+        TwoQueueCache<string, int> cache = TwoQueueCache.CreateBounded<string, int>(10);
         bool removed = cache.Remove("nope");
         await Assert.That(removed).IsFalse();
     }
@@ -133,7 +133,7 @@ internal sealed class CacheTests
     [Test]
     public async Task TwoQueueCache_Clear()
     {
-        TwoQueueCache<int, int> cache = TwoQueueCache<int, int>.CreateBounded(10);
+        TwoQueueCache<int, int> cache = TwoQueueCache.CreateBounded<int, int>(10);
         cache.Put(1, 10);
         cache.Put(2, 20);
         cache.Put(3, 30);
@@ -149,7 +149,7 @@ internal sealed class CacheTests
     [Test]
     public async Task TwoQueueCache_TotalWeight()
     {
-        TwoQueueCache<int, int> cache = TwoQueueCache<int, int>.CreateBounded(100);
+        TwoQueueCache<int, int> cache = TwoQueueCache.CreateBounded<int, int>(100);
         cache.Put(1, 10);
         cache.Put(2, 20);
         // With unit weigher, each entry has weight 1
@@ -160,7 +160,7 @@ internal sealed class CacheTests
     public async Task TwoQueueCache_CustomWeigher()
     {
         // Custom weigher: weight = value length
-        TwoQueueCache<string, string> cache = TwoQueueCache<string, string>.CreateBounded(
+        TwoQueueCache<string, string> cache = TwoQueueCache.CreateBounded<string, string>(
             10,
             new StringLengthWeigher());
         cache.Put("k1", "short");    // weight 5
@@ -178,7 +178,7 @@ internal sealed class CacheTests
     [Test]
     public async Task TwoQueueCache_ManyEntries()
     {
-        TwoQueueCache<int, int> cache = TwoQueueCache<int, int>.CreateBounded(100);
+        TwoQueueCache<int, int> cache = TwoQueueCache.CreateBounded<int, int>(100);
 
         for (int i = 0; i < 200; i++)
         {
@@ -201,7 +201,7 @@ internal sealed class CacheTests
     [Test]
     public async Task TwoQueueCache_CreateBounded_ZeroBudgetDisablesCaching()
     {
-        TwoQueueCache<int, int> cache = TwoQueueCache<int, int>.CreateBounded(0);
+        TwoQueueCache<int, int> cache = TwoQueueCache.CreateBounded<int, int>(0);
 
         cache.Put(1, 1);
 
@@ -213,7 +213,7 @@ internal sealed class CacheTests
     [Test]
     public async Task TwoQueueCache_CreateUnbounded_NoEviction()
     {
-        TwoQueueCache<int, int> cache = TwoQueueCache<int, int>.CreateUnbounded();
+        TwoQueueCache<int, int> cache = TwoQueueCache.CreateUnbounded<int, int>();
 
         // Insert many entries — no eviction should occur
         for (int i = 0; i < 1000; i++)
@@ -238,7 +238,7 @@ internal sealed class CacheTests
     public async Task TwoQueueCache_CreateScanResistant_TwoPhaseEviction()
     {
         // 25% of 100 = A1in max 25, ghost max 50
-        TwoQueueCache<int, string> cache = TwoQueueCache<int, string>.Create2Q(100);
+        TwoQueueCache<int, string> cache = TwoQueueCache.Create2Q<int, string>(100);
 
         // Fill A1in beyond its 25-entry limit (with unit weigher)
         for (int i = 0; i < 50; i++)
@@ -263,7 +263,7 @@ internal sealed class CacheTests
     public async Task TwoQueueCache_Create2QCustom_ExplicitLimits()
     {
         // maxWeight=10, A1in=3, ghost=5
-        TwoQueueCache<int, int> cache = TwoQueueCache<int, int>.Create2QCustom(10, 3, 5);
+        TwoQueueCache<int, int> cache = TwoQueueCache.Create2QCustom<int, int>(10, 3, 5);
 
         for (int i = 0; i < 20; i++)
         {
@@ -282,7 +282,7 @@ internal sealed class CacheTests
     public async Task TwoQueueCache_GhostWeightTracking_CustomWeigher()
     {
         // With string length weigher, ghost entries track actual eviction weight
-        TwoQueueCache<string, string> cache = TwoQueueCache<string, string>.CreateBounded(
+        TwoQueueCache<string, string> cache = TwoQueueCache.CreateBounded<string, string>(
             20,
             new StringLengthWeigher());
 
@@ -312,7 +312,7 @@ internal sealed class CacheTests
     public async Task TwoQueueCache_A1InUpdate_PreservesFifoOrder()
     {
         // Updates to A1in entries should not change their FIFO position
-        TwoQueueCache<int, string> cache = TwoQueueCache<int, string>.CreateBounded(3);
+        TwoQueueCache<int, string> cache = TwoQueueCache.CreateBounded<int, string>(3);
 
         cache.Put(1, "a"); // oldest in A1in
         cache.Put(2, "b");
@@ -337,7 +337,7 @@ internal sealed class CacheTests
     public async Task TwoQueueCache_AmAccess_MovesToFront()
     {
         // Keys in Am are moved to front on access, protecting them from eviction
-        TwoQueueCache<int, string> cache = TwoQueueCache<int, string>.CreateBounded(5);
+        TwoQueueCache<int, string> cache = TwoQueueCache.CreateBounded<int, string>(5);
 
         // Insert 5 entries
         for (int i = 1; i <= 5; i++)
@@ -366,7 +366,7 @@ internal sealed class CacheTests
     [Test]
     public async Task TwoQueueCache_GetOrAdd_CacheMissStoresValue()
     {
-        TwoQueueCache<int, string> cache = TwoQueueCache<int, string>.CreateBounded(10);
+        TwoQueueCache<int, string> cache = TwoQueueCache.CreateBounded<int, string>(10);
 
         string value = cache.GetOrAdd(42, static key => $"value-{key}");
 
@@ -379,7 +379,7 @@ internal sealed class CacheTests
     [Test]
     public async Task TwoQueueCache_GetOrAdd_CacheHitSkipsFactory()
     {
-        TwoQueueCache<int, string> cache = TwoQueueCache<int, string>.CreateBounded(10);
+        TwoQueueCache<int, string> cache = TwoQueueCache.CreateBounded<int, string>(10);
         cache.Put(42, "existing");
 
         string value = cache.GetOrAdd(42, static _ => throw new InvalidOperationException("Should not run."));
@@ -391,7 +391,7 @@ internal sealed class CacheTests
     [Test]
     public async Task TwoQueueCache_GetOrAdd_StateOverload_PassesArgument()
     {
-        TwoQueueCache<int, string> cache = TwoQueueCache<int, string>.CreateBounded(10);
+        TwoQueueCache<int, string> cache = TwoQueueCache.CreateBounded<int, string>(10);
 
         string value = cache.GetOrAdd(7, static (key, prefix) => $"{prefix}-{key}", "prefix");
 
@@ -403,7 +403,7 @@ internal sealed class CacheTests
     [Test]
     public async Task TwoQueueCache_GetOrAdd_FactoryExceptionDoesNotCache()
     {
-        TwoQueueCache<int, string> cache = TwoQueueCache<int, string>.CreateBounded(10);
+        TwoQueueCache<int, string> cache = TwoQueueCache.CreateBounded<int, string>(10);
 
         await Assert.That(() => cache.GetOrAdd(42, static _ => throw new InvalidOperationException("boom")))
             .Throws<InvalidOperationException>();
@@ -577,6 +577,211 @@ internal sealed class CacheTests
         ghost.Add(1, 10);
         await Assert.That(ghost.Count).IsEqualTo(1);
         await Assert.That(ghost.TotalWeight).IsEqualTo(10);
+    }
+
+    [Test]
+    public async Task GhostSet_IsEmpty_WhenNoEntries()
+    {
+        GhostSet<int> ghost = new(100);
+
+        await Assert.That(ghost.IsEmpty).IsTrue();
+
+        ghost.Add(1, 5);
+
+        await Assert.That(ghost.IsEmpty).IsFalse();
+    }
+
+    [Test]
+    public async Task LinkedMap_PopBack_EmptyReturnsFalse()
+    {
+        LinkedMap<string, int> map = new();
+
+        bool popped = map.PopBack(out string? key, out int value);
+
+        await Assert.That(popped).IsFalse();
+        await Assert.That(key).IsNull();
+        await Assert.That(value).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task LinkedMap_MoveToFront_MissAndHit()
+    {
+        LinkedMap<string, int> map = new();
+        map.InsertFront("a", 1);
+
+        await Assert.That(map.MoveToFront("missing")).IsFalse();
+        await Assert.That(map.MoveToFront("a")).IsTrue();
+    }
+
+    [Test]
+    public async Task LinkedMap_ContainsKey_ReflectsMembership()
+    {
+        LinkedMap<string, int> map = new();
+        map.InsertFront("present", 7);
+
+        await Assert.That(map.ContainsKey("present")).IsTrue();
+        await Assert.That(map.ContainsKey("absent")).IsFalse();
+    }
+
+    [Test]
+    public async Task TwoQueueCache_Create2Q_ZeroMaxWeight_ReturnsNoOpCache()
+    {
+        TwoQueueCache<int, int> cache = TwoQueueCache.Create2Q<int, int>(0);
+
+        cache.Put(1, 42);
+        await Assert.That(cache.TryGet(1, out _)).IsFalse();
+        await Assert.That(cache.Count).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task TwoQueueCache_Create2QCustom_InvalidA1In_Throws()
+    {
+        await Assert.That(() => TwoQueueCache.Create2QCustom<int, int>(5, 10, 2))
+            .Throws<ArgumentOutOfRangeException>();
+    }
+
+    [Test]
+    public async Task TwoQueueCache_Put_ZeroBudgetIsNoOp()
+    {
+        TwoQueueCache<int, int> cache = TwoQueueCache.CreateBounded<int, int>(0);
+
+        cache.Put(1, 99);
+
+        await Assert.That(cache.Count).IsEqualTo(0);
+        await Assert.That(cache.TryGet(1, out _)).IsFalse();
+    }
+
+    [Test]
+    public async Task TwoQueueCache_GetOrAdd_CacheHit_ReturnsWithoutFactory()
+    {
+        TwoQueueCache<int, string> cache = TwoQueueCache.CreateBounded<int, string>(10);
+        cache.Put(7, "cached");
+
+        string value = cache.GetOrAdd(7, static (_, arg) => $"new-{arg}", "ignored");
+
+        await Assert.That(value).IsEqualTo("cached");
+    }
+
+    [Test]
+    public async Task TwoQueueCache_Put_UpdateExistingAmEntry()
+    {
+        TwoQueueCache<int, string> cache = TwoQueueCache.CreateBounded<int, string>(100);
+
+        cache.Put(1, "first");
+        cache.Put(1, "first");
+        cache.Put(1, "updated");
+
+        await Assert.That(cache.TryGet(1, out string? value)).IsTrue();
+        await Assert.That(value).IsEqualTo("updated");
+    }
+
+    [Test]
+    public async Task TwoQueueCache_Remove_FromAmQueue()
+    {
+        TwoQueueCache<int, string> cache = TwoQueueCache.Create2QCustom<int, string>(4, 1, 2);
+
+        cache.Put(1, "one");
+        cache.Put(2, "two");
+        cache.Put(1, "one-again");
+
+        bool removed = cache.Remove(1);
+
+        await Assert.That(removed).IsTrue();
+        await Assert.That(cache.TryGet(1, out _)).IsFalse();
+    }
+
+    [Test]
+    public async Task TwoQueueCache_Remove_FromA1InQueue()
+    {
+        TwoQueueCache<int, string> cache = TwoQueueCache.Create2QCustom<int, string>(8, 4, 4);
+
+        cache.Put(9, "recent");
+
+        bool removed = cache.Remove(9);
+
+        await Assert.That(removed).IsTrue();
+        await Assert.That(cache.TryGet(9, out _)).IsFalse();
+    }
+
+    [Test]
+    public async Task TwoQueueCache_Put_GhostPromotion_MovesEntryToAm()
+    {
+        TwoQueueCache<int, string> cache = TwoQueueCache.Create2QCustom<int, string>(4, 1, 2);
+
+        cache.Put(1, "first");
+        cache.Put(2, "second");
+        cache.Put(1, "promoted");
+
+        await Assert.That(cache.TryGet(1, out string? value)).IsTrue();
+        await Assert.That(value).IsEqualTo("promoted");
+    }
+
+    [Test]
+    public async Task TwoQueueCache_Put_UpdateExistingAmEntry_ChangesValue()
+    {
+        TwoQueueCache<int, string> cache = TwoQueueCache.Create2QCustom<int, string>(4, 1, 2);
+
+        cache.Put(1, "first");
+        cache.Put(2, "second");
+        cache.Put(1, "in-am");
+        cache.Put(1, "updated-in-am");
+
+        await Assert.That(cache.TryGet(1, out string? value)).IsTrue();
+        await Assert.That(value).IsEqualTo("updated-in-am");
+    }
+
+    [Test]
+    public async Task TwoQueueCache_Eviction_TrimsQueuesWhenOverBudget()
+    {
+        TwoQueueCache<int, int> cache = TwoQueueCache.Create2QCustom<int, int>(3, 1, 2);
+
+        cache.Put(1, 1);
+        cache.Put(2, 2);
+        cache.Put(3, 3);
+        cache.Put(4, 4);
+
+        await Assert.That(cache.TotalWeight).IsLessThanOrEqualTo(3);
+        await Assert.That(cache.Count).IsLessThanOrEqualTo(3);
+    }
+
+    [Test]
+    public async Task TwoQueueCache_EvictFromEmptyQueues_ReturnsFalseViaReflection()
+    {
+        TwoQueueCache<int, int> cache = TwoQueueCache.CreateBounded<int, int>(10);
+        System.Reflection.MethodInfo? evictA1In = typeof(TwoQueueCache<int, int>)
+            .GetMethod("_EvictFromA1In", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+        System.Reflection.MethodInfo? evictAm = typeof(TwoQueueCache<int, int>)
+            .GetMethod("_EvictFromAm", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+
+        await Assert.That(evictA1In).IsNotNull();
+        await Assert.That(evictAm).IsNotNull();
+        await Assert.That((bool)evictA1In!.Invoke(cache, null)!).IsFalse();
+        await Assert.That((bool)evictAm!.Invoke(cache, null)!).IsFalse();
+    }
+
+    [Test]
+    public async Task TwoQueueCache_EvictFromAm_ReturnsTrueWhenQueueHasEntries()
+    {
+        TwoQueueCache<int, int> cache = TwoQueueCache.CreateBounded<int, int>(10);
+
+        System.Reflection.FieldInfo amField = typeof(TwoQueueCache<int, int>).GetField(
+            "_Am",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+        object am = amField.GetValue(cache)!;
+        System.Reflection.MethodInfo insertFront = am.GetType().GetMethod(
+            "InsertFront",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic)!;
+        insertFront.Invoke(am, [42, (99, 1)]);
+
+        System.Reflection.FieldInfo amWeightField = typeof(TwoQueueCache<int, int>).GetField(
+            "_AmWeight",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+        amWeightField.SetValue(cache, 1);
+
+        System.Reflection.MethodInfo? evictAm = typeof(TwoQueueCache<int, int>)
+            .GetMethod("_EvictFromAm", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+        await Assert.That(evictAm).IsNotNull();
+        await Assert.That((bool)evictAm!.Invoke(cache, null)!).IsTrue();
     }
 
     /// <summary>Custom weigher that uses string length as weight.</summary>

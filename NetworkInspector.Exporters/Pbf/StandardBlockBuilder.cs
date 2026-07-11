@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Exporters.Pbf;
 
@@ -38,7 +38,7 @@ internal sealed class StandardBlockBuilder
 
     /// <summary>
     /// Number of field subtrees silently dropped in this block because the protocol tree
-    /// exceeded <see cref="MaxNestingDepth"/>. Reset by <see cref="Reset"/>.
+    /// exceeded <see cref="_MaxNestingDepth"/>. Reset by <see cref="Reset"/>.
     /// Exposed so <see cref="PbfExporter"/> can report the truncation through the error
     /// tolerance mechanism instead of failing silently.
     /// </summary>
@@ -47,8 +47,8 @@ internal sealed class StandardBlockBuilder
     // Per-depth scratch buffers used during packet/field serialization.
     // Index 0 = packet buffer, 1 = top-level field buffer, 2+ = nested.
     // Pre-allocated once and Reset() between uses — zero per-call allocations
-    // for protocol trees with depth ≤ MaxNestingDepth (HIGH-1 fix).
-    private const int MaxNestingDepth = 16;
+    // for protocol trees with depth ≤ _MaxNestingDepth (HIGH-1 fix).
+    private const int _MaxNestingDepth = 16;
     private readonly PooledBuffer[] _Scratch;
 
     // Reusable envelope buffer: holds the final serialized block bytes returned
@@ -71,10 +71,10 @@ internal sealed class StandardBlockBuilder
         _MaxBlockSize = maxBlockSize;
 
         // Pre-allocate per-depth scratch buffers. Depth 0 = packet, 1 = top-level
-        // field, 2..MaxNestingDepth-1 = nested children. Each buffer starts small
+        // field, 2.._MaxNestingDepth-1 = nested children. Each buffer starts small
         // and grows on demand; after warm-up they reach steady state.
-        _Scratch = new PooledBuffer[MaxNestingDepth];
-        for (int i = 0; i < MaxNestingDepth; i++)
+        _Scratch = new PooledBuffer[_MaxNestingDepth];
+        for (int i = 0; i < _MaxNestingDepth; i++)
         {
             _Scratch[i] = new PooledBuffer(256);
         }
@@ -104,7 +104,7 @@ internal sealed class StandardBlockBuilder
 
     /// <summary>
     /// Number of field subtrees dropped because the protocol tree exceeded
-    /// <see cref="MaxNestingDepth"/> during this block's serialization.
+    /// <see cref="_MaxNestingDepth"/> during this block's serialization.
     /// Reset to zero by <see cref="Reset"/>.
     /// </summary>
     internal int TruncatedFieldCount => _TruncatedFieldCount;
@@ -148,7 +148,7 @@ internal sealed class StandardBlockBuilder
 
         // Serialize the packet using _Scratch[0] as the packet buffer (no allocation).
         _Scratch[0].Reset();
-        SerializePacket(packet);
+        _SerializePacket(packet);
 
         // Write as nested message in the block: tag + length + content
         ProtobufEncoder.WriteLengthDelimited(ref _Buffer, PbfFieldNumbers.PacketField, _Scratch[0].WrittenSpan);
@@ -232,7 +232,7 @@ internal sealed class StandardBlockBuilder
     /// Uses depth-indexed scratch buffers for nested field serialization —
     /// no <see cref="PooledBuffer"/> objects are allocated per call (HIGH-1 fix).
     /// </summary>
-    private void SerializePacket(Packet packet)
+    private void _SerializePacket(Packet packet)
     {
         ref PooledBuffer buffer = ref _Scratch[0];
 
@@ -271,7 +271,7 @@ internal sealed class StandardBlockBuilder
         {
             foreach (Field child in root.Children())
             {
-                SerializeField(child, depth: 1);
+                _SerializeField(child, depth: 1);
                 ProtobufEncoder.WriteLengthDelimited(ref buffer, PbfFieldNumbers.PacketField, _Scratch[1].WrittenSpan);
             }
         }
@@ -281,13 +281,13 @@ internal sealed class StandardBlockBuilder
     /// Serializes a single field recursively using <see cref="_Scratch"/>[<paramref name="depth"/>].
     /// Children are written into <c>_Scratch[depth + 1]</c>, copied into this level's
     /// buffer, then the child buffer is overwritten on the next sibling — zero per-call
-    /// allocations for protocol trees with depth &lt; <see cref="MaxNestingDepth"/>.
+    /// allocations for protocol trees with depth &lt; <see cref="_MaxNestingDepth"/>.
     /// </summary>
-    private void SerializeField(Field field, int depth)
+    private void _SerializeField(Field field, int depth)
     {
-        if (depth >= MaxNestingDepth)
+        if (depth >= _MaxNestingDepth)
         {
-            // Protocol tree is deeper than MaxNestingDepth; this field and all its
+            // Protocol tree is deeper than _MaxNestingDepth; this field and all its
             // descendants are dropped. Count for diagnostic reporting so PbfExporter
             // can surface the truncation via the error tolerance mechanism.
             _TruncatedFieldCount++;
@@ -326,7 +326,7 @@ internal sealed class StandardBlockBuilder
 
         // Field value with same-as-previous
         FieldValue value = field.Value;
-        string? valueStr = FormatFieldValue(value);
+        string? valueStr = _FormatFieldValue(value);
         string? valueCustomRepresentation = !value.CustomRepresentation.IsNull
             ? value.CustomRepresentation.AsString : null;
         LazyString customText = field.CustomText;
@@ -338,7 +338,7 @@ internal sealed class StandardBlockBuilder
         // Value
         if (value.Type != FieldType.None && (fieldSameFlags & SameFlags.FieldSameValue) == 0)
         {
-            WriteFieldValue(ref buffer, value);
+            _WriteFieldValue(ref buffer, value);
         }
 
         // Custom representation text
@@ -360,24 +360,24 @@ internal sealed class StandardBlockBuilder
         }
 
         // Children (recursive, next depth level)
-        if (field.HasChildren && depth + 1 < MaxNestingDepth)
+        if (field.HasChildren && depth + 1 < _MaxNestingDepth)
         {
             foreach (Field child in field.Children())
             {
-                SerializeField(child, depth + 1);
+                _SerializeField(child, depth + 1);
                 ProtobufEncoder.WriteLengthDelimited(ref buffer, PbfFieldNumbers.FieldChild, _Scratch[depth + 1].WrittenSpan);
             }
         }
         else if (field.HasChildren)
         {
-            // We are at MaxNestingDepth - 1: children would exceed the depth limit.
+            // We are at _MaxNestingDepth - 1: children would exceed the depth limit.
             // Count each such field so PbfExporter can report the truncation.
             _TruncatedFieldCount++;
         }
     }
 
     /// <summary>Writes the field value using the appropriate protobuf encoding.</summary>
-    private static void WriteFieldValue(ref PooledBuffer buffer, FieldValue value)
+    private static void _WriteFieldValue(ref PooledBuffer buffer, FieldValue value)
     {
         switch (value.Type)
         {
@@ -494,5 +494,5 @@ internal sealed class StandardBlockBuilder
     }
 
     /// <summary>Formats a field value as string for same-as-previous comparison.</summary>
-    private static string? FormatFieldValue(FieldValue value) => FieldValueFormatter.Format(value);
+    private static string? _FormatFieldValue(FieldValue value) => FieldValueFormatter.Format(value);
 }

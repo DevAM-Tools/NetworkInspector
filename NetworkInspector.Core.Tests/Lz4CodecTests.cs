@@ -30,7 +30,7 @@ internal sealed class Lz4CodecTests
     /// Compresses <paramref name="input"/> and returns the compressed bytes.
     /// Throws if compression fails unexpectedly.
     /// </summary>
-    private static byte[] CompressFull(byte[] input)
+    private static byte[] _CompressFull(byte[] input)
     {
         byte[] buf = new byte[Lz4Codec.MaxCompressedSize(input.Length)];
         int len = Lz4Codec.Compress(input, buf);
@@ -42,7 +42,7 @@ internal sealed class Lz4CodecTests
     }
 
     /// <summary>Decompresses <paramref name="compressed"/> into a buffer of <paramref name="originalSize"/> bytes.</summary>
-    private static byte[] DecompressFull(byte[] compressed, int originalSize)
+    private static byte[] _DecompressFull(byte[] compressed, int originalSize)
     {
         byte[] output = new byte[originalSize];
         int written = Lz4Codec.Decompress(compressed, output);
@@ -83,12 +83,12 @@ internal sealed class Lz4CodecTests
     public async Task Roundtrip_AllZeros_RecoversOriginal()
     {
         byte[] input = new byte[64 * 1024]; // 64 KB of zeros
-        byte[] compressed = CompressFull(input);
+        byte[] compressed = _CompressFull(input);
 
         // Compressed size must be well below the original.
         await Assert.That(compressed.Length).IsLessThan(input.Length / 4);
 
-        byte[] recovered = DecompressFull(compressed, input.Length);
+        byte[] recovered = _DecompressFull(compressed, input.Length);
         await Assert.That(recovered.AsSpan().SequenceEqual(input)).IsTrue();
     }
 
@@ -107,10 +107,10 @@ internal sealed class Lz4CodecTests
         byte[] input = new byte[32 * 1024];
         Array.Fill(input, (byte)0xAB);
 
-        byte[] compressed = CompressFull(input);
+        byte[] compressed = _CompressFull(input);
         await Assert.That(compressed.Length).IsLessThan(input.Length / 8);
 
-        byte[] recovered = DecompressFull(compressed, input.Length);
+        byte[] recovered = _DecompressFull(compressed, input.Length);
         await Assert.That(recovered.AsSpan().SequenceEqual(input)).IsTrue();
     }
 
@@ -133,8 +133,8 @@ internal sealed class Lz4CodecTests
             input[i] = (byte)((i % 3) + 1);
         }
 
-        byte[] compressed = CompressFull(input);
-        byte[] recovered = DecompressFull(compressed, input.Length);
+        byte[] compressed = _CompressFull(input);
+        byte[] recovered = _DecompressFull(compressed, input.Length);
         await Assert.That(recovered.AsSpan().SequenceEqual(input)).IsTrue();
     }
 
@@ -168,7 +168,7 @@ internal sealed class Lz4CodecTests
         // the codec is correct — just skip roundtrip check when -1.
         if (compressedLen > 0)
         {
-            byte[] recovered = DecompressFull(buf[0..compressedLen], input.Length);
+            byte[] recovered = _DecompressFull(buf[0..compressedLen], input.Length);
             await Assert.That(recovered.AsSpan().SequenceEqual(input)).IsTrue();
         }
         else
@@ -502,8 +502,8 @@ internal sealed class Lz4CodecTests
             input[i] = (byte)(i % 2 == 0 ? 0x55 : 0xAA);
         }
 
-        byte[] compressed = CompressFull(input);
-        byte[] recovered = DecompressFull(compressed, input.Length);
+        byte[] compressed = _CompressFull(input);
+        byte[] recovered = _DecompressFull(compressed, input.Length);
         await Assert.That(recovered.AsSpan().SequenceEqual(input)).IsTrue();
     }
 }

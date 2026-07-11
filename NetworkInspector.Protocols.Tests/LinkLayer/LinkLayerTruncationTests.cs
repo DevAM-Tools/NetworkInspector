@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Protocols.Tests;
 
@@ -142,7 +142,7 @@ internal sealed class LinkLayerTruncationTests
     {
         // Build an IEEE 802.3 frame with EtherType < 0x0600 (triggers LLC dispatch)
         // but provide zero bytes for the LLC payload (too short for 3-byte minimum)
-        byte[] frame = BuildIeee8023Frame(etherLen: 0, llcPayload: ReadOnlySpan<byte>.Empty);
+        byte[] frame = _BuildIeee8023Frame(etherLen: 0, llcPayload: ReadOnlySpan<byte>.Empty);
 
         Packet packet = ProtocolTestHelper.ParseWithSharedStack(frame);
         Stack stack = ProtocolTestHelper.SharedStack;
@@ -161,7 +161,7 @@ internal sealed class LinkLayerTruncationTests
     {
         // Two LLC bytes — one short of the 3-byte minimum (DSAP + SSAP only, no Control)
         byte[] llcPayload = [0xAA, 0xAA]; // DSAP = SNAP, SSAP = SNAP, missing Control byte
-        byte[] frame = BuildIeee8023Frame(etherLen: (ushort)llcPayload.Length, llcPayload: llcPayload);
+        byte[] frame = _BuildIeee8023Frame(etherLen: (ushort)llcPayload.Length, llcPayload: llcPayload);
 
         Packet packet = ProtocolTestHelper.ParseWithSharedStack(frame);
         Stack stack = ProtocolTestHelper.SharedStack;
@@ -180,7 +180,7 @@ internal sealed class LinkLayerTruncationTests
     {
         // Minimum valid LLC header: DSAP=0x42, SSAP=0x42, Control=0x03 (Spanning Tree)
         byte[] llcPayload = [0x42, 0x42, 0x03];
-        byte[] frame = BuildIeee8023Frame(etherLen: (ushort)llcPayload.Length, llcPayload: llcPayload);
+        byte[] frame = _BuildIeee8023Frame(etherLen: (ushort)llcPayload.Length, llcPayload: llcPayload);
 
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
@@ -194,7 +194,7 @@ internal sealed class LinkLayerTruncationTests
     /// so the Ethernet parser dispatches to LLC.
     /// Layout: dst(6) + src(6) + length(2) + llcPayload.
     /// </summary>
-    private static byte[] BuildIeee8023Frame(ushort etherLen, ReadOnlySpan<byte> llcPayload)
+    private static byte[] _BuildIeee8023Frame(ushort etherLen, ReadOnlySpan<byte> llcPayload)
     {
         byte[] frame = new byte[14 + llcPayload.Length];
         Span<byte> s = frame;

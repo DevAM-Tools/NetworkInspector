@@ -128,15 +128,15 @@ public ref struct StatefulFrameSequence<TStack, TTrailer, TInterceptor>
             case SequenceState.Done:
                 return false;
             case SequenceState.Fragmenting:
-                return EmitNextFragment(dst, out bytesWritten);
+                return _EmitNextFragment(dst, out bytesWritten);
             case SequenceState.NotStarted:
             default:
-                return EmitFirst(dst, out bytesWritten);
+                return _EmitFirst(dst, out bytesWritten);
         }
     }
 
     /// <summary>First-call dispatcher: validates depth, picks single-frame or multi-fragment path.</summary>
-    private bool EmitFirst(Span<byte> dst, out int bytesWritten)
+    private bool _EmitFirst(Span<byte> dst, out int bytesWritten)
     {
         bytesWritten = 0;
 
@@ -144,7 +144,7 @@ public ref struct StatefulFrameSequence<TStack, TTrailer, TInterceptor>
         if (depth > MaxSupportedDepth)
         {
             Status = BuildStatus.StackTooDeep;
-            Finish();
+            _Finish();
             return false;
         }
 
@@ -155,28 +155,28 @@ public ref struct StatefulFrameSequence<TStack, TTrailer, TInterceptor>
 
         if (total <= maxFrameLen)
         {
-            return EmitSingleFrame(dst, depth, totalHdr, trailerSize, total, out bytesWritten);
+            return _EmitSingleFrame(dst, depth, totalHdr, trailerSize, total, out bytesWritten);
         }
 
         if (!_Values.HasFragmentable)
         {
             Status = BuildStatus.FragmentationRequired;
-            Finish();
+            _Finish();
             return false;
         }
 
-        return BeginFragmenting(dst, depth, totalHdr, trailerSize, total, maxFrameLen, out bytesWritten);
+        return _BeginFragmenting(dst, depth, totalHdr, trailerSize, total, maxFrameLen, out bytesWritten);
     }
 
     /// <summary>Builds the entire frame in <paramref name="dst"/> in the non-fragmenting case.</summary>
-    private bool EmitSingleFrame(Span<byte> dst, int depth, int totalHdr, int trailerSize, int total, out int bytesWritten)
+    private bool _EmitSingleFrame(Span<byte> dst, int depth, int totalHdr, int trailerSize, int total, out int bytesWritten)
     {
         bytesWritten = 0;
 
         if (dst.Length < total)
         {
             Status = BuildStatus.BufferTooSmall;
-            Finish();
+            _Finish();
             return false;
         }
 
@@ -210,7 +210,7 @@ public ref struct StatefulFrameSequence<TStack, TTrailer, TInterceptor>
         _Interceptor.OnFrameComplete(dst[..total]);
 
         bytesWritten = total;
-        Finish();
+        _Finish();
         return true;
     }
 
@@ -219,7 +219,7 @@ public ref struct StatefulFrameSequence<TStack, TTrailer, TInterceptor>
     /// session counters exactly once for the whole logical packet) and emits
     /// fragment 0.
     /// </summary>
-    private bool BeginFragmenting(Span<byte> dst, int depth, int totalHdr, int trailerSize, int total, int maxFrameLen, out int bytesWritten)
+    private bool _BeginFragmenting(Span<byte> dst, int depth, int totalHdr, int trailerSize, int total, int maxFrameLen, out int bytesWritten)
     {
         bytesWritten = 0;
 
@@ -236,7 +236,7 @@ public ref struct StatefulFrameSequence<TStack, TTrailer, TInterceptor>
         _State.CurrentPayloadLength = _Payload.Length;
         // Snapshot session state so we can roll back the auto-counters in the
         // recoverable error paths below (FragmentationRequired / InvalidLayerState).
-        // Without this, a failed BeginFragmenting would leave TcpNextSeq,
+        // Without this, a failed _BeginFragmenting would leave TcpNextSeq,
         // IPv4NextId, IPv6NextFragId and SomeIpNextSessionId advanced for a
         // packet that was never emitted, poisoning the session.
         SessionState stateSnapshot = _State;
@@ -253,7 +253,7 @@ public ref struct StatefulFrameSequence<TStack, TTrailer, TInterceptor>
         {
             _State = stateSnapshot;
             Status = BuildStatus.InvalidLayerState;
-            Finish();
+            _Finish();
             return false;
         }
         _ = headerOffset;
@@ -262,7 +262,7 @@ public ref struct StatefulFrameSequence<TStack, TTrailer, TInterceptor>
         {
             _State = stateSnapshot;
             Status = BuildStatus.FragmentationRequired;
-            Finish();
+            _Finish();
             return false;
         }
 
@@ -271,7 +271,7 @@ public ref struct StatefulFrameSequence<TStack, TTrailer, TInterceptor>
             // Power-of-two alignment is required so '& ~(alignment-1)' rounds correctly.
             _State = stateSnapshot;
             Status = BuildStatus.InvalidLayerState;
-            Finish();
+            _Finish();
             return false;
         }
 
@@ -284,7 +284,7 @@ public ref struct StatefulFrameSequence<TStack, TTrailer, TInterceptor>
         // ONCE on the unfragmented scratch so e.g. UDP/TCP checksums cover the
         // whole datagram (fragment 0 carries the transport header).
         // Application-layer segmentation: per-segment payload differs, so the
-        // pseudo-header and inner-checksum walks are deferred to EmitNextFragment.
+        // pseudo-header and inner-checksum walks are deferred to _EmitNextFragment.
         if (kind == FragmentationKind.NetworkLayer)
         {
             _Values.ApplyPostFix(FixPhase.Length, scratch, offsets, dataLength, ref ctx);
@@ -300,7 +300,7 @@ public ref struct StatefulFrameSequence<TStack, TTrailer, TInterceptor>
         {
             _State = stateSnapshot;
             Status = geoStatus;
-            Finish();
+            _Finish();
             return false;
         }
 
@@ -315,24 +315,24 @@ public ref struct StatefulFrameSequence<TStack, TTrailer, TInterceptor>
         _FragKind = kind;
 
         _Phase = SequenceState.Fragmenting;
-        return EmitNextFragment(dst, out bytesWritten);
+        return _EmitNextFragment(dst, out bytesWritten);
     }
 
     /// <summary>Copies cached headers + next slice into <paramref name="dst"/> and runs per-fragment post-fix.</summary>
-    private bool EmitNextFragment(Span<byte> dst, out int bytesWritten)
+    private bool _EmitNextFragment(Span<byte> dst, out int bytesWritten)
     {
         bytesWritten = 0;
 
         if (_Scratch is null || _ScratchOffsets is null)
         {
             Status = BuildStatus.InvalidLayerState;
-            Finish();
+            _Finish();
             return false;
         }
 
         if (_FragmentCursor >= _InnerPayloadLength)
         {
-            Finish();
+            _Finish();
             return false;
         }
 
@@ -346,7 +346,7 @@ public ref struct StatefulFrameSequence<TStack, TTrailer, TInterceptor>
         if (dst.Length < total)
         {
             Status = BuildStatus.BufferTooSmall;
-            Finish();
+            _Finish();
             return false;
         }
 
@@ -396,7 +396,7 @@ public ref struct StatefulFrameSequence<TStack, TTrailer, TInterceptor>
         bytesWritten = total;
         if (!moreFragments)
         {
-            Finish();
+            _Finish();
         }
         return true;
     }
@@ -414,7 +414,7 @@ public ref struct StatefulFrameSequence<TStack, TTrailer, TInterceptor>
     /// pooled per-thread scratch reservation if owned.  Idempotent.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void Finish()
+    private void _Finish()
     {
         if (_OwnsScratch)
         {

@@ -17,7 +17,7 @@ namespace NetworkInspector.Exporters.Tests.Generators;
 internal static class LinGenerators
 {
     /// <summary>Maximum LIN data length.</summary>
-    private const int MaxLinDataLength = 8;
+    private const int _MaxLinDataLength = 8;
 
     /// <summary>
     /// Builds a DLT_LIN frame with the specified parameters.
@@ -29,7 +29,7 @@ internal static class LinGenerators
     internal static byte[] BuildLinFrame(
         byte frameId, ReadOnlySpan<byte> data, byte checksum = 0, byte errors = 0)
     {
-        int dataLength = Math.Min(data.Length, MaxLinDataLength);
+        int dataLength = Math.Min(data.Length, _MaxLinDataLength);
 
         // DLT_LIN layout: pid(1) + length(1) + data(dataLength) + checksum(1) + errors(1)
         byte[] frame = new byte[2 + dataLength + 2];

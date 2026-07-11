@@ -26,25 +26,25 @@ public readonly struct IPv4LayerWithOptions :
     IConsumesNextProtocolValue<IpNextProtocolKind>, IProvidesPseudoHeader, IFragmentable
 {
     /// <summary>Offset of the Protocol field within the IPv4 header.</summary>
-    private const int ProtocolFieldOffset = 9;
+    private const int _ProtocolFieldOffset = 9;
 
     /// <summary>Offset of the SrcAddr field within the IPv4 header.</summary>
-    private const int SrcAddrOffset = 12;
+    private const int _SrcAddrOffset = 12;
 
     /// <summary>Offset of the DstAddr field within the IPv4 header.</summary>
-    private const int DstAddrOffset = 16;
+    private const int _DstAddrOffset = 16;
 
     /// <summary>Maximum total IPv4 header size (IHL=15).</summary>
-    private const int MaxHeaderSize = 60;
+    private const int _MaxHeaderSize = 60;
 
     /// <summary>Offset of the Flags+FragmentOffset combined 16-bit field.</summary>
-    private const int FlagsFragOffsetOffset = 6;
+    private const int _FlagsFragOffsetOffset = 6;
 
     /// <summary>Mask of the MF (More Fragments) flag inside the combined field.</summary>
-    private const ushort MoreFragmentsMask = 0x2000;
+    private const ushort _MoreFragmentsMask = 0x2000;
 
     /// <summary>Mask of the FragmentOffset bits (in 8-octet units).</summary>
-    private const ushort FragmentOffsetMask = 0x1FFF;
+    private const ushort _FragmentOffsetMask = 0x1FFF;
 
     private readonly IPv4Address _SrcAddr;
     private readonly IPv4Address _DstAddr;
@@ -52,7 +52,7 @@ public readonly struct IPv4LayerWithOptions :
     private readonly ushort _Identification;
     private readonly byte _ExplicitProtocol;
 
-    /// <summary><c>true</c> when the caller supplied an explicit Protocol via <see cref="Auto{T}.Explicit"/>.</summary>
+    /// <summary><c>true</c> when the caller supplied an explicit Protocol via <see cref="Auto.Explicit"/>.</summary>
     private readonly bool _ProtocolIsExplicit;
 
     /// <summary>Caller-supplied option bytes (raw, will be padded with 0x00 EOOL).</summary>
@@ -75,7 +75,7 @@ public readonly struct IPv4LayerWithOptions :
     /// <param name="ttl">Time-to-live; default 64.</param>
     /// <param name="identification">Identification field; default 0.</param>
     /// <param name="protocol">
-    /// Protocol field; <see cref="Auto{T}.Compute"/> (default) auto-patches from inner layer.
+    /// Protocol field; <see cref="Auto.Compute"/> (default) auto-patches from inner layer.
     /// </param>
     /// <param name="dontFragment">
     /// Don't-Fragment (DF) flag.  Default <c>true</c>.  Set to <c>false</c> to
@@ -94,10 +94,10 @@ public readonly struct IPv4LayerWithOptions :
     {
         // Pad options length up to a 4-byte boundary; max header = 60 bytes (40 options).
         int padded = (options.Length + 3) & ~3;
-        if (padded > MaxHeaderSize - IPv4Header.Size)
+        if (padded > _MaxHeaderSize - IPv4Header.Size)
         {
             throw new ArgumentException(
-                $"IPv4 options exceed the maximum length of {MaxHeaderSize - IPv4Header.Size} bytes.",
+                $"IPv4 options exceed the maximum length of {_MaxHeaderSize - IPv4Header.Size} bytes.",
                 nameof(options));
         }
 
@@ -154,11 +154,11 @@ public readonly struct IPv4LayerWithOptions :
 
     /// <inheritdoc />
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public void PatchNextProtocol(scoped Span<byte> frame, int myOffset, ushort next)
+    public void PatchNextProtocol(scoped Span<byte> frame, int myOffset, ushort nextProtocol)
     {
         if (!_ProtocolIsExplicit)
         {
-            frame[myOffset + ProtocolFieldOffset] = (byte)next;
+            frame[myOffset + _ProtocolFieldOffset] = (byte)nextProtocol;
         }
     }
 
@@ -174,11 +174,11 @@ public readonly struct IPv4LayerWithOptions :
                 break;
 
             case FixPhase.PublishPseudoHeader:
-                frame.Slice(myOffset + SrcAddrOffset, 4).CopyTo(ctx.PseudoSrcIp);
-                frame.Slice(myOffset + DstAddrOffset, 4).CopyTo(ctx.PseudoDstIp);
+                frame.Slice(myOffset + _SrcAddrOffset, 4).CopyTo(ctx.PseudoSrcIp);
+                frame.Slice(myOffset + _DstAddrOffset, 4).CopyTo(ctx.PseudoDstIp);
                 ctx.PseudoIpLength = 4;
                 ctx.PseudoIsIPv6 = false;
-                ctx.PseudoProtocol = frame[myOffset + ProtocolFieldOffset];
+                ctx.PseudoProtocol = frame[myOffset + _ProtocolFieldOffset];
                 ctx.TransportOffset = myOffset + headerSize;
                 ctx.TransportEnd = myOffset + myLength;
                 break;
@@ -216,13 +216,13 @@ public readonly struct IPv4LayerWithOptions :
     public void PatchFragmentHeader(scoped Span<byte> frame, int myOffset, int myLength, int fragmentPayloadOffset, bool moreFragments)
     {
         _ = myLength; // Only TotalLength uses it; that field is repatched by FixPhase.Length.
-        ushort fragField = (ushort)((fragmentPayloadOffset >> 3) & FragmentOffsetMask);
+        ushort fragField = (ushort)((fragmentPayloadOffset >> 3) & _FragmentOffsetMask);
         if (moreFragments)
         {
-            fragField |= MoreFragmentsMask;
+            fragField |= _MoreFragmentsMask;
         }
         // The DF bit is implicitly cleared because we rewrite the full 16-bit field;
         // any DF flag that may have been carried over from the cached header is dropped.
-        BinaryPrimitives.WriteUInt16BigEndian(frame.Slice(myOffset + FlagsFragOffsetOffset, 2), fragField);
+        BinaryPrimitives.WriteUInt16BigEndian(frame.Slice(myOffset + _FlagsFragOffsetOffset, 2), fragField);
     }
 }

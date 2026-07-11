@@ -39,8 +39,8 @@ internal sealed class RawIPv6SmokeTests
 
         // Wrap ref-struct emission in a synchronous helper so the
         // FrameSequence and ReadOnlySpan locals never cross an await boundary
-        // (CS4007 — same pattern as NewFrameStackSmokeTests.EmitOnce).
-        (bool emitted, int written, FB.BuildStatus status) = EmitOnce(in created, payloadCopy, frame);
+        // (CS4007 — same pattern as NewFrameStackSmokeTests._EmitOnce).
+        (bool emitted, int written, FB.BuildStatus status) = _EmitOnce(in created, payloadCopy, frame);
 
         await Assert.That(emitted).IsTrue();
         await Assert.That(status).IsEqualTo(FB.BuildStatus.Success);
@@ -57,8 +57,8 @@ internal sealed class RawIPv6SmokeTests
         await Assert.That(written).IsEqualTo(40 + 8 + payloadCopy.Length);
     }
 
-    /// <summary>Synchronous emit wrapper — mirrors NewFrameStackSmokeTests.EmitOnce.</summary>
-    private static (bool Emitted, int Length, FB.BuildStatus Status) EmitOnce<TStack, TTrailer, TInterceptor>(
+    /// <summary>Synchronous emit wrapper — mirrors NewFrameStackSmokeTests._EmitOnce.</summary>
+    private static (bool Emitted, int Length, FB.BuildStatus Status) _EmitOnce<TStack, TTrailer, TInterceptor>(
         in FB.CreatedStack<TStack, TTrailer, TInterceptor> created,
         ReadOnlySpan<byte> payload,
         Span<byte> dst)

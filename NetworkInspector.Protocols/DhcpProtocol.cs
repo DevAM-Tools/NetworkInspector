@@ -50,145 +50,145 @@ public sealed partial class DhcpProtocol : IProtocol
     public const ulong UdpPortServer = 67;
 
     /// <summary>Fixed BOOTP header size in bytes including the magic cookie.</summary>
-    private const int FixedHeaderSize = 240;
+    private const int _FixedHeaderSize = 240;
 
     /// <summary>BOOTP magic cookie (RFC 2131 §3) preceding the option block.</summary>
-    private const uint MagicCookie = 0x63825363u;
+    private const uint _MagicCookie = 0x63825363u;
 
     /// <summary>DHCP option code marking the end of the option block.</summary>
-    private const byte OptionEnd = 255;
+    private const byte _OptionEnd = 255;
 
     /// <summary>DHCP option code for padding (single-byte option, no length).</summary>
-    private const byte OptionPad = 0;
+    private const byte _OptionPad = 0;
 
     /// <summary>DHCP option code for the Subnet Mask (RFC 2132 §3.3).</summary>
-    private const byte OptionSubnetMask = 1;
+    private const byte _OptionSubnetMask = 1;
 
     /// <summary>DHCP option code for the Router list (RFC 2132 §3.5).</summary>
-    private const byte OptionRouter = 3;
+    private const byte _OptionRouter = 3;
 
     /// <summary>DHCP option code for the DNS server list (RFC 2132 §3.8).</summary>
-    private const byte OptionDns = 6;
+    private const byte _OptionDns = 6;
 
     /// <summary>DHCP option code for the Host Name (RFC 2132 §3.14).</summary>
-    private const byte OptionHostName = 12;
+    private const byte _OptionHostName = 12;
 
     /// <summary>DHCP option code for the Requested IP Address (RFC 2132 §9.1).</summary>
-    private const byte OptionRequestedIp = 50;
+    private const byte _OptionRequestedIp = 50;
 
     /// <summary>DHCP option code for the IP Address Lease Time (RFC 2132 §9.2).</summary>
-    private const byte OptionLeaseTime = 51;
+    private const byte _OptionLeaseTime = 51;
 
     /// <summary>DHCP option code for the DHCP Message Type (RFC 2132 §9.6).</summary>
-    private const byte OptionMessageType = 53;
+    private const byte _OptionMessageType = 53;
 
     /// <summary>DHCP option code for the Server Identifier (RFC 2132 §9.7).</summary>
-    private const byte OptionServerId = 54;
+    private const byte _OptionServerId = 54;
 
     /// <summary>DHCP option code for the Parameter Request List (RFC 2132 §9.8).</summary>
-    private const byte OptionParamRequestList = 55;
+    private const byte _OptionParamRequestList = 55;
 
     /// <summary>DHCP option code for the Vendor Class Identifier (RFC 2132 §9.13).</summary>
-    private const byte OptionVendorClass = 60;
+    private const byte _OptionVendorClass = 60;
 
     /// <summary>DHCP option code for the Client Identifier (RFC 2132 §9.14).</summary>
-    private const byte OptionClientId = 61;
+    private const byte _OptionClientId = 61;
 
     /// <summary>Index group for always-present DHCP fields.</summary>
-    private const string DhcpIndexGroup = "dhcp";
+    private const string _DhcpIndexGroup = "dhcp";
 
     /// <summary>Index group for optional DHCP option fields.</summary>
-    private const string DhcpOptionsIndexGroup = "dhcp.options";
+    private const string _DhcpOptionsIndexGroup = "dhcp.options";
 
     #endregion
 
     #region Fields
 
-    [BytesField("dhcp", "Dynamic Host Configuration Protocol", IndexGroup = DhcpIndexGroup)]
+    [BytesField("dhcp", "Dynamic Host Configuration Protocol", IndexGroup = _DhcpIndexGroup)]
     private FieldId _ProtocolFieldId;
 
-    [U64Field("dhcp.type", "Message op code", IndexGroup = DhcpIndexGroup)]
+    [U64Field("dhcp.type", "Message op code", IndexGroup = _DhcpIndexGroup)]
     private FieldId _OpFieldId;
 
-    [U64Field("dhcp.hw.type", "Hardware type", IndexGroup = DhcpIndexGroup)]
+    [U64Field("dhcp.hw.type", "Hardware type", IndexGroup = _DhcpIndexGroup)]
     private FieldId _HwTypeFieldId;
 
-    [U64Field("dhcp.hw.len", "Hardware address length", IndexGroup = DhcpIndexGroup)]
+    [U64Field("dhcp.hw.len", "Hardware address length", IndexGroup = _DhcpIndexGroup)]
     private FieldId _HwLenFieldId;
 
-    [U64Field("dhcp.hops", "Hops", IndexGroup = DhcpIndexGroup)]
+    [U64Field("dhcp.hops", "Hops", IndexGroup = _DhcpIndexGroup)]
     private FieldId _HopsFieldId;
 
-    [U64Field("dhcp.id", "Transaction ID", IndexGroup = DhcpIndexGroup)]
+    [U64Field("dhcp.id", "Transaction ID", IndexGroup = _DhcpIndexGroup)]
     private FieldId _XidFieldId;
 
-    [U64Field("dhcp.secs", "Seconds elapsed", IndexGroup = DhcpIndexGroup)]
+    [U64Field("dhcp.secs", "Seconds elapsed", IndexGroup = _DhcpIndexGroup)]
     private FieldId _SecsFieldId;
 
-    [U64Field("dhcp.flags", "Bootp flags", IndexGroup = DhcpIndexGroup)]
+    [U64Field("dhcp.flags", "Bootp flags", IndexGroup = _DhcpIndexGroup)]
     private FieldId _FlagsFieldId;
 
-    [BoolField("dhcp.flags.bc", "Broadcast flag", IndexGroup = DhcpIndexGroup)]
+    [BoolField("dhcp.flags.bc", "Broadcast flag", IndexGroup = _DhcpIndexGroup)]
     private FieldId _FlagsBroadcastFieldId;
 
-    [IPv4Field("dhcp.ip.client", "Client IP address", IndexGroup = DhcpIndexGroup)]
+    [IPv4Field("dhcp.ip.client", "Client IP address", IndexGroup = _DhcpIndexGroup)]
     private FieldId _CiAddrFieldId;
 
-    [IPv4Field("dhcp.ip.your", "Your (client) IP address", IndexGroup = DhcpIndexGroup)]
+    [IPv4Field("dhcp.ip.your", "Your (client) IP address", IndexGroup = _DhcpIndexGroup)]
     private FieldId _YiAddrFieldId;
 
-    [IPv4Field("dhcp.ip.server", "Next server IP address", IndexGroup = DhcpIndexGroup)]
+    [IPv4Field("dhcp.ip.server", "Next server IP address", IndexGroup = _DhcpIndexGroup)]
     private FieldId _SiAddrFieldId;
 
-    [IPv4Field("dhcp.ip.relay", "Relay agent IP address", IndexGroup = DhcpIndexGroup)]
+    [IPv4Field("dhcp.ip.relay", "Relay agent IP address", IndexGroup = _DhcpIndexGroup)]
     private FieldId _GiAddrFieldId;
 
-    [MacField("dhcp.hw.mac_addr", "Client MAC address", IndexGroup = DhcpIndexGroup)]
+    [MacField("dhcp.hw.mac_addr", "Client MAC address", IndexGroup = _DhcpIndexGroup)]
     private FieldId _ChAddrFieldId;
 
-    [U64Field("dhcp.cookie", "Magic cookie", IndexGroup = DhcpIndexGroup)]
+    [U64Field("dhcp.cookie", "Magic cookie", IndexGroup = _DhcpIndexGroup)]
     private FieldId _CookieFieldId;
 
-    [BytesField("dhcp.option", "Option", IndexGroup = DhcpOptionsIndexGroup)]
+    [BytesField("dhcp.option", "Option", IndexGroup = _DhcpOptionsIndexGroup)]
     private FieldId _OptionFieldId;
 
-    [U64Field("dhcp.option.type", "Option type", IndexGroup = DhcpOptionsIndexGroup)]
+    [U64Field("dhcp.option.type", "Option type", IndexGroup = _DhcpOptionsIndexGroup)]
     private FieldId _OptionTypeFieldId;
 
-    [U64Field("dhcp.option.length", "Option length", IndexGroup = DhcpOptionsIndexGroup)]
+    [U64Field("dhcp.option.length", "Option length", IndexGroup = _DhcpOptionsIndexGroup)]
     private FieldId _OptionLengthFieldId;
 
-    [U64Field("dhcp.option.dhcp", "DHCP message type", IndexGroup = DhcpOptionsIndexGroup)]
+    [U64Field("dhcp.option.dhcp", "DHCP message type", IndexGroup = _DhcpOptionsIndexGroup)]
     private FieldId _OptionDhcpMsgTypeFieldId;
 
-    [IPv4Field("dhcp.option.subnet_mask", "Subnet mask", IndexGroup = DhcpOptionsIndexGroup)]
+    [IPv4Field("dhcp.option.subnet_mask", "Subnet mask", IndexGroup = _DhcpOptionsIndexGroup)]
     private FieldId _OptionSubnetMaskFieldId;
 
-    [IPv4Field("dhcp.option.router", "Router", IndexGroup = DhcpOptionsIndexGroup)]
+    [IPv4Field("dhcp.option.router", "Router", IndexGroup = _DhcpOptionsIndexGroup)]
     private FieldId _OptionRouterFieldId;
 
-    [IPv4Field("dhcp.option.dns_server", "Domain name server", IndexGroup = DhcpOptionsIndexGroup)]
+    [IPv4Field("dhcp.option.dns_server", "Domain name server", IndexGroup = _DhcpOptionsIndexGroup)]
     private FieldId _OptionDnsFieldId;
 
-    [IPv4Field("dhcp.option.requested_ip", "Requested IP address", IndexGroup = DhcpOptionsIndexGroup)]
+    [IPv4Field("dhcp.option.requested_ip", "Requested IP address", IndexGroup = _DhcpOptionsIndexGroup)]
     private FieldId _OptionRequestedIpFieldId;
 
-    [IPv4Field("dhcp.option.dhcp_server_id", "DHCP server identifier", IndexGroup = DhcpOptionsIndexGroup)]
+    [IPv4Field("dhcp.option.dhcp_server_id", "DHCP server identifier", IndexGroup = _DhcpOptionsIndexGroup)]
     private FieldId _OptionServerIdFieldId;
 
-    [U64Field("dhcp.option.lease_time", "IP address lease time", IndexGroup = DhcpOptionsIndexGroup)]
+    [U64Field("dhcp.option.lease_time", "IP address lease time", IndexGroup = _DhcpOptionsIndexGroup)]
     private FieldId _OptionLeaseTimeFieldId;
 
-    [StringField("dhcp.option.hostname", "Host name", IndexGroup = DhcpOptionsIndexGroup)]
+    [StringField("dhcp.option.hostname", "Host name", IndexGroup = _DhcpOptionsIndexGroup)]
     private FieldId _OptionHostNameFieldId;
 
-    [StringField("dhcp.option.vendor_class_id", "Vendor class identifier", IndexGroup = DhcpOptionsIndexGroup)]
+    [StringField("dhcp.option.vendor_class_id", "Vendor class identifier", IndexGroup = _DhcpOptionsIndexGroup)]
     private FieldId _OptionVendorClassFieldId;
 
-    [BytesField("dhcp.option.client_id", "Client identifier", IndexGroup = DhcpOptionsIndexGroup)]
+    [BytesField("dhcp.option.client_id", "Client identifier", IndexGroup = _DhcpOptionsIndexGroup)]
     private FieldId _OptionClientIdFieldId;
 
-    [BytesField("dhcp.option.parameter_request_list", "Parameter Request List", IndexGroup = DhcpOptionsIndexGroup)]
+    [BytesField("dhcp.option.parameter_request_list", "Parameter Request List", IndexGroup = _DhcpOptionsIndexGroup)]
     private FieldId _OptionParamRequestListFieldId;
 
     /// <summary>
@@ -202,14 +202,14 @@ public sealed partial class DhcpProtocol : IProtocol
     /// <returns>Number of bytes consumed, or a <see cref="ParseError"/> describing the failure.</returns>
     public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
     {
-        if (data.Length < FixedHeaderSize)
+        if (data.Length < _FixedHeaderSize)
         {
-            return ParseError.InsufficientDataWithInfo(ProtocolName, FixedHeaderSize, (ulong)data.Length);
+            return ParseError.InsufficientDataWithInfo(ProtocolName, _FixedHeaderSize, (ulong)data.Length);
         }
 
         ReadOnlySpan<byte> span = data.Span;
         uint cookie = BinaryPrimitives.ReadUInt32BigEndian(span[236..240]);
-        if (cookie != MagicCookie)
+        if (cookie != _MagicCookie)
         {
             return ParseError.InvalidData(ProtocolName, "Invalid BOOTP magic cookie");
         }
@@ -233,16 +233,16 @@ public sealed partial class DhcpProtocol : IProtocol
         MacAddress chaddr = MacAddress.FromBytes(span[28..34]);
 
         // Walk option block once to locate the DHCP message type for the summary line.
-        byte msgType = ScanDhcpMessageType(span[FixedHeaderSize..]);
+        byte msgType = _ScanDhcpMessageType(span[_FixedHeaderSize..]);
         string opText = op switch
         {
             1 => "Boot Request (1)",
             2 => "Boot Reply (2)",
             _ => "Unknown"
         };
-        string msgTypeText = GetDhcpMessageTypeText(msgType);
-        LazyString summary = ZA.Lazy("DHCP ", msgTypeText, " - Transaction ID 0x", xid.ToString("X8"));
-        parentField.SetPacketInfo(ZA.Lazy("DHCP ", msgTypeText, " - Transaction ID 0x", xid.ToString("X8")));
+        string msgTypeText = _GetDhcpMessageTypeText(msgType);
+        LazyString summary = ZA.Lazy("DHCP ", msgTypeText, " - Transaction ID 0x", xid.ToString("X8", CultureInfo.InvariantCulture));
+        parentField.SetPacketInfo(ZA.Lazy("DHCP ", msgTypeText, " - Transaction ID 0x", xid.ToString("X8", CultureInfo.InvariantCulture)));
 
         FieldValue containerValue = FieldValue.NewBytes(data);
         MutField container = parentField.AppendWithCustomText(_ProtocolFieldId, containerValue, summary);
@@ -268,7 +268,7 @@ public sealed partial class DhcpProtocol : IProtocol
 
         // Walk options. Bytes after the cookie are TLV-encoded except the single-byte
         // sentinels Pad (0x00) and End (0xFF).
-        ParseOptions(in container, data[FixedHeaderSize..], in context);
+        _ParseOptions(in container, data[_FixedHeaderSize..], in context);
         return data.Length;
     }
 
@@ -276,17 +276,17 @@ public sealed partial class DhcpProtocol : IProtocol
     /// Scans the option block once to find the DHCP message type (option 53).
     /// Returns 0 when no message type option is found.
     /// </summary>
-    private static byte ScanDhcpMessageType(ReadOnlySpan<byte> options)
+    private static byte _ScanDhcpMessageType(ReadOnlySpan<byte> options)
     {
         int i = 0;
         while (i < options.Length)
         {
             byte type = options[i];
-            if (type == OptionEnd)
+            if (type == _OptionEnd)
             {
                 return 0;
             }
-            if (type == OptionPad)
+            if (type == _OptionPad)
             {
                 i++;
                 continue;
@@ -300,7 +300,7 @@ public sealed partial class DhcpProtocol : IProtocol
             {
                 return 0;
             }
-            if (type == OptionMessageType && length == 1)
+            if (type == _OptionMessageType && length == 1)
             {
                 return options[i + 2];
             }
@@ -314,18 +314,18 @@ public sealed partial class DhcpProtocol : IProtocol
     /// Unknown options are emitted with type and length only so filters can still
     /// match on the option code.
     /// </summary>
-    private void ParseOptions(in MutField container, ReadOnlyMemory<byte> options, in ParseContext context)
+    private void _ParseOptions(in MutField container, ReadOnlyMemory<byte> options, in ParseContext context)
     {
         ReadOnlySpan<byte> span = options.Span;
         int i = 0;
         while (i < span.Length)
         {
             byte type = span[i];
-            if (type == OptionEnd)
+            if (type == _OptionEnd)
             {
                 return;
             }
-            if (type == OptionPad)
+            if (type == _OptionPad)
             {
                 i++;
                 continue;
@@ -341,7 +341,7 @@ public sealed partial class DhcpProtocol : IProtocol
             }
 
             ReadOnlyMemory<byte> optionData = options.Slice(i + 2, length);
-            string typeText = GetDhcpOptionTypeText(type);
+            string typeText = _GetDhcpOptionTypeText(type);
 
             // First real TLV option proves the dhcp.options group is present. Recording here
             // (rather than unconditionally in Parse) keeps the index free of false positives
@@ -355,57 +355,57 @@ public sealed partial class DhcpProtocol : IProtocol
             optContainer.AppendWithCustomText(_OptionTypeFieldId, FieldValue.NewU64(type), typeText);
             optContainer.Append(_OptionLengthFieldId, FieldValue.NewU64(length));
 
-            EmitOptionPayload(in optContainer, type, optionData, in context);
+            _EmitOptionPayload(in optContainer, type, optionData, in context);
             i += 2 + length;
         }
     }
 
     /// <summary>Emits the option-specific child fields for a recognised option code.</summary>
-    private void EmitOptionPayload(in MutField optContainer, byte type, ReadOnlyMemory<byte> data, in ParseContext context)
+    private void _EmitOptionPayload(in MutField optContainer, byte type, ReadOnlyMemory<byte> data, in ParseContext context)
     {
         ReadOnlySpan<byte> span = data.Span;
         switch (type)
         {
-            case OptionMessageType when span.Length == 1:
+            case _OptionMessageType when span.Length == 1:
                 optContainer.AppendWithCustomText(
                     _OptionDhcpMsgTypeFieldId,
                     FieldValue.NewU64(span[0]),
-                    GetDhcpMessageTypeText(span[0]));
+                    _GetDhcpMessageTypeText(span[0]));
                 break;
-            case OptionSubnetMask when span.Length == 4:
+            case _OptionSubnetMask when span.Length == 4:
                 optContainer.Append(_OptionSubnetMaskFieldId,
                     FieldValue.NewIPv4(new IPv4Address(BinaryPrimitives.ReadUInt32BigEndian(span))));
                 break;
-            case OptionRouter:
-                EmitIpv4List(in optContainer, _OptionRouterFieldId, span, in context);
+            case _OptionRouter:
+                _EmitIpv4List(in optContainer, _OptionRouterFieldId, span, in context);
                 break;
-            case OptionDns:
-                EmitIpv4List(in optContainer, _OptionDnsFieldId, span, in context);
+            case _OptionDns:
+                _EmitIpv4List(in optContainer, _OptionDnsFieldId, span, in context);
                 break;
-            case OptionRequestedIp when span.Length == 4:
+            case _OptionRequestedIp when span.Length == 4:
                 optContainer.Append(_OptionRequestedIpFieldId,
                     FieldValue.NewIPv4(new IPv4Address(BinaryPrimitives.ReadUInt32BigEndian(span))));
                 break;
-            case OptionServerId when span.Length == 4:
+            case _OptionServerId when span.Length == 4:
                 optContainer.Append(_OptionServerIdFieldId,
                     FieldValue.NewIPv4(new IPv4Address(BinaryPrimitives.ReadUInt32BigEndian(span))));
                 break;
-            case OptionLeaseTime when span.Length == 4:
+            case _OptionLeaseTime when span.Length == 4:
                 optContainer.Append(_OptionLeaseTimeFieldId,
                     FieldValue.NewU64(BinaryPrimitives.ReadUInt32BigEndian(span)));
                 break;
-            case OptionHostName:
+            case _OptionHostName:
                 optContainer.Append(_OptionHostNameFieldId,
                     FieldValue.NewString(System.Text.Encoding.ASCII.GetString(span)));
                 break;
-            case OptionVendorClass:
+            case _OptionVendorClass:
                 optContainer.Append(_OptionVendorClassFieldId,
                     FieldValue.NewString(System.Text.Encoding.ASCII.GetString(span)));
                 break;
-            case OptionClientId:
+            case _OptionClientId:
                 optContainer.Append(_OptionClientIdFieldId, FieldValue.NewBytes(data));
                 break;
-            case OptionParamRequestList:
+            case _OptionParamRequestList:
                 optContainer.Append(_OptionParamRequestListFieldId, FieldValue.NewBytes(data));
                 break;
             default:
@@ -415,7 +415,7 @@ public sealed partial class DhcpProtocol : IProtocol
     }
 
     /// <summary>Emits each IPv4 address from a tightly packed 4-byte-aligned span.</summary>
-    private static void EmitIpv4List(in MutField optContainer, FieldId fieldId, ReadOnlySpan<byte> span, in ParseContext context)
+    private static void _EmitIpv4List(in MutField optContainer, FieldId fieldId, ReadOnlySpan<byte> span, in ParseContext context)
     {
         for (int i = 0; i + 4 <= span.Length; i += 4)
         {
@@ -425,7 +425,7 @@ public sealed partial class DhcpProtocol : IProtocol
     }
 
     /// <summary>Returns a human readable label for the DHCP message type (option 53 value).</summary>
-    private static string GetDhcpMessageTypeText(byte msgType) => msgType switch
+    private static string _GetDhcpMessageTypeText(byte msgType) => msgType switch
     {
         1 => "Discover (1)",
         2 => "Offer (2)",
@@ -439,21 +439,21 @@ public sealed partial class DhcpProtocol : IProtocol
     };
 
     /// <summary>Returns a human readable label for the DHCP option code (TLV type byte).</summary>
-    private static string GetDhcpOptionTypeText(byte type) => type switch
+    private static string _GetDhcpOptionTypeText(byte type) => type switch
     {
-        OptionSubnetMask => "Subnet Mask",
-        OptionRouter => "Router",
-        OptionDns => "Domain Name Server",
-        OptionHostName => "Host Name",
-        OptionRequestedIp => "Requested IP Address",
-        OptionLeaseTime => "IP Address Lease Time",
-        OptionMessageType => "DHCP Message Type",
-        OptionServerId => "DHCP Server Identifier",
-        OptionParamRequestList => "Parameter Request List",
-        OptionVendorClass => "Vendor Class Identifier",
-        OptionClientId => "Client Identifier",
-        OptionEnd => "End",
-        OptionPad => "Pad",
+        _OptionSubnetMask => "Subnet Mask",
+        _OptionRouter => "Router",
+        _OptionDns => "Domain Name Server",
+        _OptionHostName => "Host Name",
+        _OptionRequestedIp => "Requested IP Address",
+        _OptionLeaseTime => "IP Address Lease Time",
+        _OptionMessageType => "DHCP Message Type",
+        _OptionServerId => "DHCP Server Identifier",
+        _OptionParamRequestList => "Parameter Request List",
+        _OptionVendorClass => "Vendor Class Identifier",
+        _OptionClientId => "Client Identifier",
+        _OptionEnd => "End",
+        _OptionPad => "Pad",
         _ => "Unknown",
     };
 

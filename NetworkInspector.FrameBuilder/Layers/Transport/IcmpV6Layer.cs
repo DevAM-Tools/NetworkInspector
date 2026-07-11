@@ -28,7 +28,7 @@ namespace NetworkInspector.FrameBuilder;
 public readonly struct IcmpV6Layer : IStatelessLayer, IProvidesProtocolType, IProvidesNextProtocolValue<IpNextProtocolKind>, IRequiresPseudoHeader
 {
     /// <summary>Offset of the Checksum field within the ICMPv6 header.</summary>
-    private const int ChecksumOffset = 2;
+    private const int _ChecksumOffset = 2;
 
     private readonly byte _Type;
     private readonly byte _Code;
@@ -43,8 +43,8 @@ public readonly struct IcmpV6Layer : IStatelessLayer, IProvidesProtocolType, IPr
     /// <param name="type">ICMPv6 message type.</param>
     /// <param name="code">ICMPv6 code for the given type.</param>
     /// <param name="checksum">
-    /// Checksum field; <see cref="Auto{T}.Compute"/> (default) means auto-compute over
-    /// the IPv6 pseudo-header + ICMPv6 message. Use <see cref="Auto{T}.Explicit"/> to pin.
+    /// Checksum field; <see cref="Auto.Compute"/> (default) means auto-compute over
+    /// the IPv6 pseudo-header + ICMPv6 message. Use <see cref="Auto.Explicit"/> to pin.
     /// </param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public IcmpV6Layer(byte type, byte code = 0, Auto<ushort> checksum = default)
@@ -90,17 +90,17 @@ public readonly struct IcmpV6Layer : IStatelessLayer, IProvidesProtocolType, IPr
 
         if (_ChecksumIsExplicit)
         {
-            BinaryPrimitives.WriteUInt16BigEndian(frame.Slice(myOffset + ChecksumOffset, 2), _ExplicitChecksum);
+            BinaryPrimitives.WriteUInt16BigEndian(frame.Slice(myOffset + _ChecksumOffset, 2), _ExplicitChecksum);
             return;
         }
 
         // Zero the checksum field, then compute over the IPv6 pseudo-header + ICMPv6 message.
-        frame[myOffset + ChecksumOffset] = 0;
-        frame[myOffset + ChecksumOffset + 1] = 0;
+        frame[myOffset + _ChecksumOffset] = 0;
+        frame[myOffset + _ChecksumOffset + 1] = 0;
         ReadOnlySpan<byte> segment = frame.Slice(myOffset, myLength);
         ReadOnlySpan<byte> srcIp = ctx.PseudoSrcIp[..ctx.PseudoIpLength];
         ReadOnlySpan<byte> dstIp = ctx.PseudoDstIp[..ctx.PseudoIpLength];
         ushort checksum = ChecksumUtils.PseudoHeaderIPv6(srcIp, dstIp, IpProtocols.IcmpV6, segment);
-        BinaryPrimitives.WriteUInt16BigEndian(frame.Slice(myOffset + ChecksumOffset, 2), checksum);
+        BinaryPrimitives.WriteUInt16BigEndian(frame.Slice(myOffset + _ChecksumOffset, 2), checksum);
     }
 }

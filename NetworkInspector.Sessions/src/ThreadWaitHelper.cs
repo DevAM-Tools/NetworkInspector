@@ -8,7 +8,7 @@ namespace NetworkInspector.Sessions;
 /// </summary>
 internal static class ThreadWaitHelper
 {
-    private const int SpinIterationsBeforeSleep = 1024;
+    private const int _SpinIterationsBeforeSleep = 1024;
 
     /// <summary>Blocks until <paramref name="condition"/> returns <see langword="true"/>.</summary>
     internal static void WaitUntil(Func<bool> condition)
@@ -17,7 +17,7 @@ internal static class ThreadWaitHelper
         int spins = 0;
         while (!condition())
         {
-            if (spins++ >= SpinIterationsBeforeSleep)
+            if (spins++ >= _SpinIterationsBeforeSleep)
             {
                 Thread.Sleep(1);
                 spins = 0;
@@ -46,7 +46,7 @@ internal static class ThreadWaitHelper
                 return false;
             }
 
-            if (spins++ >= SpinIterationsBeforeSleep)
+            if (spins++ >= _SpinIterationsBeforeSleep)
             {
                 Thread.Sleep(1);
                 spins = 0;

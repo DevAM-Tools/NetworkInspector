@@ -43,7 +43,7 @@ public sealed class AscStreamSource : IFrameSource, IErrorTolerantFrameSource
     private bool _Initialized;
 
     /// <summary>
-    /// A frame parsed from the first data line during <see cref="Initialize"/>.
+    /// A frame parsed from the first data line during <see cref="_Initialize"/>.
     /// ASC files that lack a "Begin Triggerblock" start data immediately after the header;
     /// the first data line is captured here so it is not lost when the header scanning loop
     /// consumes it.
@@ -237,7 +237,7 @@ public sealed class AscStreamSource : IFrameSource, IErrorTolerantFrameSource
         {
             try
             {
-                Initialize();
+                _Initialize();
             }
             catch
             {
@@ -264,7 +264,7 @@ public sealed class AscStreamSource : IFrameSource, IErrorTolerantFrameSource
             }
         }
 
-        return ReadNextFrame();
+        return _ReadNextFrame();
     }
 
     #endregion
@@ -304,13 +304,13 @@ public sealed class AscStreamSource : IFrameSource, IErrorTolerantFrameSource
     /// If the first non-header line is a data line (files without "Begin Triggerblock"),
     /// it is parsed immediately and stored in <see cref="_PendingFirstFrame"/> so it is not lost.
     /// </summary>
-    private void Initialize()
+    private void _Initialize()
     {
         _Header = new AscHeader { TimestampTimeZone = _TimestampTimeZone };
 
         while (true)
         {
-            if (!TryReadNextLine(out ReadOnlySpan<byte> lineBytes))
+            if (!_TryReadNextLine(out ReadOnlySpan<byte> lineBytes))
             {
                 // Stream exhausted before or during header parsing
                 Volatile.Write(ref _Exhausted, true);
@@ -330,9 +330,9 @@ public sealed class AscStreamSource : IFrameSource, IErrorTolerantFrameSource
             if (!trimmed.IsEmpty)
             {
                 AscLineType firstLineType = AscLineClassifier.Classify(trimmed);
-                if (IsFrameProducingType(firstLineType))
+                if (_IsFrameProducingType(firstLineType))
                 {
-                    _PendingFirstFrame = ParseLine(trimmed, firstLineType);
+                    _PendingFirstFrame = _ParseLine(trimmed, firstLineType);
                 }
             }
 
@@ -349,7 +349,7 @@ public sealed class AscStreamSource : IFrameSource, IErrorTolerantFrameSource
     /// Lines that exceed <see cref="AscSourceOptions.MaxLineLength"/> are silently skipped;
     /// the method continues reading until it finds a shorter line or the stream ends.
     /// </summary>
-    private bool TryReadNextLine(out ReadOnlySpan<byte> line)
+    private bool _TryReadNextLine(out ReadOnlySpan<byte> line)
     {
         while (true)
         {
@@ -466,7 +466,7 @@ public sealed class AscStreamSource : IFrameSource, IErrorTolerantFrameSource
     /// Reads lines from the stream until a valid frame is produced or the stream is exhausted.
     /// Lines are classified once and the classified type is forwarded to avoid redundant work.
     /// </summary>
-    private Frame? ReadNextFrame()
+    private Frame? _ReadNextFrame()
     {
         while (!Volatile.Read(ref _Exhausted))
         {
@@ -476,7 +476,7 @@ public sealed class AscStreamSource : IFrameSource, IErrorTolerantFrameSource
                 return null;
             }
 
-            if (!TryReadNextLine(out ReadOnlySpan<byte> lineBytes))
+            if (!_TryReadNextLine(out ReadOnlySpan<byte> lineBytes))
             {
                 Volatile.Write(ref _Exhausted, true);
                 return null;
@@ -488,20 +488,20 @@ public sealed class AscStreamSource : IFrameSource, IErrorTolerantFrameSource
                 continue;
             }
 
-            // Classify once — avoid re-classifying inside ParseLine
+            // Classify once — avoid re-classifying inside _ParseLine
             AscLineType lineType = AscLineClassifier.Classify(trimmed);
-            if (!IsFrameProducingType(lineType))
+            if (!_IsFrameProducingType(lineType))
             {
                 continue;
             }
 
-            Frame? frame = ParseLine(trimmed, lineType);
+            Frame? frame = _ParseLine(trimmed, lineType);
             if (frame.HasValue)
             {
                 return frame.Value;
             }
 
-            // ParseLine has already reported any skip via HandleSkip; do not double-report
+            // _ParseLine has already reported any skip via _HandleSkip; do not double-report
             // here. If strict mode flipped the exhausted flag, abort the loop.
             if (Volatile.Read(ref _Exhausted))
             {
@@ -515,12 +515,12 @@ public sealed class AscStreamSource : IFrameSource, IErrorTolerantFrameSource
     /// <summary>
     /// Parses a single already-trimmed and already-classified ASC line into a <see cref="Frame"/>.
     /// All failure paths (parser failure, empty payload, Frame.Create failure) report exactly
-    /// one skip via <see cref="HandleSkip"/> and return <c>null</c>. Callers must not report
+    /// one skip via <see cref="_HandleSkip"/> and return <c>null</c>. Callers must not report
     /// an additional skip on a <c>null</c> result.
     /// </summary>
     /// <param name="span">Trimmed ASC line content.</param>
     /// <param name="lineType">Pre-classified line type.</param>
-    private Frame? ParseLine(ReadOnlySpan<byte> span, AscLineType lineType)
+    private Frame? _ParseLine(ReadOnlySpan<byte> span, AscLineType lineType)
     {
         bool parsed;
         double timestamp;
@@ -572,7 +572,7 @@ public sealed class AscStreamSource : IFrameSource, IErrorTolerantFrameSource
 
         if (!parsed || frameData.Length == 0)
         {
-            HandleSkip(new FrameReadErrorEventArgs
+            _HandleSkip(new FrameReadErrorEventArgs
             {
                 FrameIndex = _FrameIndex,
                 FileOffset = -1,
@@ -583,7 +583,7 @@ public sealed class AscStreamSource : IFrameSource, IErrorTolerantFrameSource
         }
 
         long absoluteNanos = (long)((_BaseEpoch + timestamp) * 1_000_000_000.0);
-        FrameInterfaceId interfaceId = GetOrRegisterInterface(busType, channel, linkType);
+        FrameInterfaceId interfaceId = _GetOrRegisterInterface(busType, channel, linkType);
 
         int frameId = _FrameIndex++;
         ParseResult<Frame> result = Frame.Create(
@@ -601,7 +601,7 @@ public sealed class AscStreamSource : IFrameSource, IErrorTolerantFrameSource
         }
 
         // Frame.Create failed — record and handle the error (F14)
-        HandleSkip(new FrameReadErrorEventArgs
+        _HandleSkip(new FrameReadErrorEventArgs
         {
             FrameIndex = frameId,
             FileOffset = -1,
@@ -618,9 +618,9 @@ public sealed class AscStreamSource : IFrameSource, IErrorTolerantFrameSource
 
     /// <summary>
     /// Records a skipped frame, updates statistics, and raises <see cref="FrameSkipped"/>.
-    /// In strict mode, marks the stream as exhausted so <see cref="ReadNextFrame"/> stops.
+    /// In strict mode, marks the stream as exhausted so <see cref="_ReadNextFrame"/> stops.
     /// </summary>
-    private void HandleSkip(FrameReadErrorEventArgs error)
+    private void _HandleSkip(FrameReadErrorEventArgs error)
     {
         Interlocked.Increment(ref _SkippedFrameCount);
         Interlocked.Increment(ref _ErrorCount);
@@ -644,7 +644,7 @@ public sealed class AscStreamSource : IFrameSource, IErrorTolerantFrameSource
     /// Gets or lazily registers a frame interface for the given bus type and channel.
     /// Single-threaded; no locking required.
     /// </summary>
-    private FrameInterfaceId GetOrRegisterInterface(AscBusType busType, int channel, LinkType linkType)
+    private FrameInterfaceId _GetOrRegisterInterface(AscBusType busType, int channel, LinkType linkType)
     {
         (AscBusType, int) key = (busType, channel);
         if (_InterfaceMap.TryGetValue(key, out FrameInterfaceId existingId))
@@ -676,7 +676,7 @@ public sealed class AscStreamSource : IFrameSource, IErrorTolerantFrameSource
 
     /// <summary>Returns <c>true</c> when the line type corresponds to a parseable frame.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static bool IsFrameProducingType(AscLineType lineType) => lineType switch
+    private static bool _IsFrameProducingType(AscLineType lineType) => lineType switch
     {
         AscLineType.CanMessage => true,
         AscLineType.CanFdMessage => true,

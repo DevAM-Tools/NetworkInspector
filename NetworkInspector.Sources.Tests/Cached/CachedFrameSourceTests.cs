@@ -13,7 +13,7 @@ internal sealed class CachedFrameSourceTests
     /// The <see cref="CachedFrameSource"/> takes ownership of the inner source
     /// and disposes it when itself is disposed (CA2000 suppressed intentionally).
     /// </remarks>
-    private static CachedFrameSource CreateCached(int count, ulong seed = 42)
+    private static CachedFrameSource _CreateCached(int count, ulong seed = 42)
     {
 #pragma warning disable CA2000 // CachedFrameSource takes ownership of inner
         RandomFrameSource inner = new(count, seed);
@@ -30,7 +30,7 @@ internal sealed class CachedFrameSourceTests
     [Test]
     public async Task NextFrame_CachesFrames_FrameByIdReturns()
     {
-        using CachedFrameSource source = CreateCached(5);
+        using CachedFrameSource source = _CreateCached(5);
         SourceTestFixture.InitializeAndStartSource(source);
 
         // Read all frames
@@ -55,7 +55,7 @@ internal sealed class CachedFrameSourceTests
     [Test]
     public async Task FrameById_InvalidId_ReturnsNull()
     {
-        using CachedFrameSource source = CreateCached(1);
+        using CachedFrameSource source = _CreateCached(1);
         SourceTestFixture.InitializeAndStartSource(source);
         source.NextFrame();
 
@@ -67,7 +67,7 @@ internal sealed class CachedFrameSourceTests
     [Test]
     public async Task FrameById_NotYetRead_ReturnsNull()
     {
-        using CachedFrameSource source = CreateCached(5);
+        using CachedFrameSource source = _CreateCached(5);
         SourceTestFixture.InitializeAndStartSource(source);
 
         // Read only the first frame
@@ -95,7 +95,7 @@ internal sealed class CachedFrameSourceTests
     [Test]
     public async Task EstimatedFrameCount_DelegatedToInner()
     {
-        using CachedFrameSource source = CreateCached(100);
+        using CachedFrameSource source = _CreateCached(100);
         await Assert.That(source.EstimatedFrameCount).IsEqualTo(100);
     }
 
@@ -106,7 +106,7 @@ internal sealed class CachedFrameSourceTests
     [Test]
     public async Task Dispose_DisposesInner()
     {
-        CachedFrameSource source = CreateCached(1);
+        CachedFrameSource source = _CreateCached(1);
         SourceTestFixture.InitializeAndStartSource(source);
         source.NextFrame();
 
@@ -143,7 +143,7 @@ internal sealed class CachedFrameSourceTests
     public async Task ConcurrentFrameById_ReturnsCorrectFrames()
     {
         const int count = 100;
-        using CachedFrameSource source = CreateCached(count);
+        using CachedFrameSource source = _CreateCached(count);
         SourceTestFixture.InitializeAndStartSource(source);
 
         // Read all frames first
@@ -186,7 +186,7 @@ internal sealed class CachedFrameSourceTests
     [Test]
     public async Task NextFrame_AfterExhaustion_ReturnsNull()
     {
-        using CachedFrameSource source = CreateCached(2);
+        using CachedFrameSource source = _CreateCached(2);
         SourceTestFixture.InitializeAndStartSource(source);
 
         await Assert.That(source.NextFrame()).IsNotNull();
@@ -202,7 +202,7 @@ internal sealed class CachedFrameSourceTests
     [Test]
     public async Task Dispose_CalledTwice_DoesNotThrow()
     {
-        CachedFrameSource source = CreateCached(1);
+        CachedFrameSource source = _CreateCached(1);
         SourceTestFixture.InitializeAndStartSource(source);
 
         source.Dispose();
@@ -214,14 +214,14 @@ internal sealed class CachedFrameSourceTests
     [Test]
     public async Task IsRunning_FalseBeforeStart()
     {
-        using CachedFrameSource source = CreateCached(1);
+        using CachedFrameSource source = _CreateCached(1);
         await Assert.That(source.IsRunning).IsFalse();
     }
 
     [Test]
     public async Task IsRunning_TrueAfterStart_FalseAfterDispose()
     {
-        CachedFrameSource source = CreateCached(1);
+        CachedFrameSource source = _CreateCached(1);
         SourceTestFixture.InitializeAndStartSource(source);
 
         await Assert.That(source.IsRunning).IsTrue();
@@ -234,7 +234,7 @@ internal sealed class CachedFrameSourceTests
     [Test]
     public async Task NextFrame_AfterDispose_ThrowsObjectDisposedException()
     {
-        CachedFrameSource source = CreateCached(1);
+        CachedFrameSource source = _CreateCached(1);
         SourceTestFixture.InitializeAndStartSource(source);
         source.Dispose();
 
@@ -244,7 +244,7 @@ internal sealed class CachedFrameSourceTests
     [Test]
     public async Task FrameById_AfterDispose_ThrowsObjectDisposedException()
     {
-        CachedFrameSource source = CreateCached(1);
+        CachedFrameSource source = _CreateCached(1);
         SourceTestFixture.InitializeAndStartSource(source);
 
         Frame? f = source.NextFrame();

@@ -62,14 +62,14 @@ internal readonly struct TcpConnectionKey : IEquatable<TcpConnectionKey>
     internal static TcpConnectionKey FromIPv4(uint srcIp, uint dstIp, ushort srcPort, ushort dstPort)
     {
         // Map IPv4 to IPv4-mapped IPv6: ::ffff:a.b.c.d
-        UInt128 srcAddr = MapIPv4ToIPv6(srcIp);
-        UInt128 dstAddr = MapIPv4ToIPv6(dstIp);
+        UInt128 srcAddr = _MapIPv4ToIPv6(srcIp);
+        UInt128 dstAddr = _MapIPv4ToIPv6(dstIp);
         return new TcpConnectionKey(srcAddr, dstAddr, srcPort, dstPort);
     }
 
     /// <summary>Maps an IPv4 address (32 bits) to IPv4-mapped IPv6 (::ffff:x.x.x.x) as UInt128.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static UInt128 MapIPv4ToIPv6(uint ipv4) =>
+    private static UInt128 _MapIPv4ToIPv6(uint ipv4) =>
         // IPv4-mapped IPv6: upper 80 bits are 0, next 16 bits are 0xFFFF, lower 32 bits are the IPv4 address
         new UInt128(0, 0x0000_FFFF_0000_0000UL | ipv4);
 
@@ -102,10 +102,10 @@ internal readonly struct TcpConnectionKey : IEquatable<TcpConnectionKey>
         // XOR-rotate mixing: each rotate uses a different prime shift count
         // to minimize collision probability on structured network data.
         ulong h = lo1;
-        h = RotateLeft(h, 5) ^ lo2;
-        h = RotateLeft(h, 7) ^ hi1;
-        h = RotateLeft(h, 11) ^ hi2;
-        h = RotateLeft(h, 13) ^ ports;
+        h = _RotateLeft(h, 5) ^ lo2;
+        h = _RotateLeft(h, 7) ^ hi1;
+        h = _RotateLeft(h, 11) ^ hi2;
+        h = _RotateLeft(h, 13) ^ ports;
 
         // Final avalanche — ensures all bits influence the result
         h ^= h >> 33;
@@ -117,6 +117,6 @@ internal readonly struct TcpConnectionKey : IEquatable<TcpConnectionKey>
 
     /// <summary>Rotates a 64-bit value left by the specified number of bits.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static ulong RotateLeft(ulong value, int shift) =>
+    private static ulong _RotateLeft(ulong value, int shift) =>
         (value << shift) | (value >> (64 - shift));
 }

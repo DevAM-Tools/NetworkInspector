@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Protocols.Tests;
 
@@ -8,7 +8,7 @@ namespace NetworkInspector.Protocols.Tests;
 /// </summary>
 internal sealed class Icmpv6TsharkTests
 {
-    private static byte[] BuildIcmpV6Frame(byte type, byte code, ReadOnlySpan<byte> body)
+    private static byte[] _BuildIcmpV6Frame(byte type, byte code, ReadOnlySpan<byte> body)
     {
         EthernetLayer eth = new(
             MacAddress.FromBytes([0x00, 0x11, 0x22, 0x33, 0x44, 0x55]),
@@ -25,7 +25,7 @@ internal sealed class Icmpv6TsharkTests
         byte[] body = new byte[8];
         BinaryPrimitives.WriteUInt16BigEndian(body.AsSpan(0, 2), 0x1234);
         BinaryPrimitives.WriteUInt16BigEndian(body.AsSpan(2, 2), 0x0001);
-        byte[] frame = BuildIcmpV6Frame(type: 128, code: 0, body);
+        byte[] frame = _BuildIcmpV6Frame(type: 128, code: 0, body);
 
         string? value = TsharkVerifier.GetFieldValue(frame, "icmpv6.type");
         await Assert.That(value).IsNotNull().Because("tshark must report this field");
@@ -38,7 +38,7 @@ internal sealed class Icmpv6TsharkTests
         byte[] body = new byte[8];
         BinaryPrimitives.WriteUInt16BigEndian(body.AsSpan(0, 2), 0x1234);
         BinaryPrimitives.WriteUInt16BigEndian(body.AsSpan(2, 2), 0x0001);
-        byte[] frame = BuildIcmpV6Frame(type: 128, code: 0, body);
+        byte[] frame = _BuildIcmpV6Frame(type: 128, code: 0, body);
 
         string? value = TsharkVerifier.GetFieldValue(frame, "icmpv6.echo.identifier");
         await Assert.That(value).IsNotNull().Because("tshark must report this field");

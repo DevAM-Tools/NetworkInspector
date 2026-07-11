@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 
 namespace NetworkInspector.FrameBuilder.Tests;
@@ -20,7 +20,7 @@ internal sealed class TrailerAndInterceptorSmokeTests
     {
         FB.EthernetLayer eth = new(_DstMac, _SrcMac);
         FB.IPv4Layer ip = new(new IPv4Address(0x0A000001), new IPv4Address(0x0A000002));
-        FB.UdpLayer udp = new(53, 53, FB.Auto<ushort>.Explicit(0));
+        FB.UdpLayer udp = new(53, 53, FB.Auto.Explicit((ushort)0));
 
         FB.CreatedStack<
             FB.StatelessStack<FB.UdpLayer,
@@ -37,7 +37,7 @@ internal sealed class TrailerAndInterceptorSmokeTests
         // Total = 14 + 20 + 8 + payload + 4 (FCS).
         int expectedTotal = 14 + 20 + 8 + _Payload.Length + 4;
         byte[] frame = new byte[expectedTotal];
-        int written = EmitOnce(in stack, _Payload, frame);
+        int written = _EmitOnce(in stack, _Payload, frame);
 
         await Assert.That(written).IsEqualTo(expectedTotal);
 
@@ -46,7 +46,7 @@ internal sealed class TrailerAndInterceptorSmokeTests
         // Equivalent: re-computing the CRC over the data and reading the FCS
         // back must match.
         ReadOnlySpan<byte> data = frame.AsSpan(0, written - 4);
-        uint expectedCrc = ComputeReferenceCrc32(data);
+        uint expectedCrc = _ComputeReferenceCrc32(data);
         uint actualCrc = BinaryPrimitives.ReadUInt32LittleEndian(frame.AsSpan(written - 4, 4));
         await Assert.That(actualCrc).IsEqualTo(expectedCrc);
     }
@@ -56,7 +56,7 @@ internal sealed class TrailerAndInterceptorSmokeTests
     {
         FB.EthernetLayer eth = new(_DstMac, _SrcMac);
         FB.IPv4Layer ip = new(new IPv4Address(0x0A000001), new IPv4Address(0x0A000002));
-        FB.UdpLayer udp = new(53, 53, FB.Auto<ushort>.Explicit(0));
+        FB.UdpLayer udp = new(53, 53, FB.Auto.Explicit((ushort)0));
 
         int written;
         int frameLen;
@@ -68,8 +68,8 @@ internal sealed class TrailerAndInterceptorSmokeTests
             _HeaderCount = 0;
 
             FB.DelegateInterceptor interceptor = new(
-                onHeader: &OnHeaderStatic,
-                onFrame: &OnFrameStatic);
+                onHeader: &_OnHeaderStatic,
+                onFrame: &_OnFrameStatic);
 
             FB.CreatedStack<
                 FB.StatelessStack<FB.UdpLayer,
@@ -83,7 +83,7 @@ internal sealed class TrailerAndInterceptorSmokeTests
                     .CreateWithFixedValues(in interceptor);
 
             byte[] frame = new byte[14 + 20 + 8 + _Payload.Length];
-            written = EmitOnce(in stack, _Payload, frame);
+            written = _EmitOnce(in stack, _Payload, frame);
             frameLen = _LastFrameLength;
             headerCount = _HeaderCount;
         }
@@ -101,13 +101,13 @@ internal sealed class TrailerAndInterceptorSmokeTests
     private static volatile int _HeaderCount;
 
     /// <summary>Static callback target; function pointers can only point to non-instance methods.</summary>
-    private static void OnFrameStatic(Span<byte> frame) => _LastFrameLength = frame.Length;
+    private static void _OnFrameStatic(Span<byte> frame) => _LastFrameLength = frame.Length;
 
     /// <summary>Static callback target for OnHeaderWritten.</summary>
-    private static void OnHeaderStatic(Span<byte> header) => _HeaderCount++;
+    private static void _OnHeaderStatic(Span<byte> header) => Interlocked.Increment(ref _HeaderCount);
 
     /// <summary>Sync helper to keep the ref-struct iterator off the await stack.</summary>
-    private static int EmitOnce<TStack, TTrailer, TInterceptor>(
+    private static int _EmitOnce<TStack, TTrailer, TInterceptor>(
         in FB.CreatedStack<TStack, TTrailer, TInterceptor> created,
         ReadOnlySpan<byte> payload,
         Span<byte> dst)
@@ -124,7 +124,7 @@ internal sealed class TrailerAndInterceptorSmokeTests
     /// Reference CRC-32 (IEEE 802.3) used by tests to independently verify the
     /// FCS the trailer wrote.  Same algorithm, different code path.
     /// </summary>
-    private static uint ComputeReferenceCrc32(ReadOnlySpan<byte> data)
+    private static uint _ComputeReferenceCrc32(ReadOnlySpan<byte> data)
     {
         const uint Polynomial = 0xEDB88320u;
         uint crc = 0xFFFFFFFFu;
@@ -133,7 +133,14 @@ internal sealed class TrailerAndInterceptorSmokeTests
             crc ^= data[i];
             for (int k = 0; k < 8; k++)
             {
-                crc = (crc & 1) != 0 ? Polynomial ^ (crc >> 1) : crc >> 1;
+                if ((crc & 1) != 0)
+                {
+                    crc = Polynomial ^ (crc >> 1);
+                }
+                else
+                {
+                    crc = crc >> 1;
+                }
             }
         }
         return ~crc;

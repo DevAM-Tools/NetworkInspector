@@ -43,10 +43,10 @@ internal sealed class WebSocketTsharkTests
     private static readonly IPv4Address _ServerIp = new(0x0A000002);
     private static readonly IPv4Address _ClientIp = new(0x0A000001);
 
-    private const ushort ServerPort = 80;
-    private const ushort ClientPort = 49152;
+    private const ushort _ServerPort = 80;
+    private const ushort _ClientPort = 49152;
 
-    private const string Http101Response =
+    private const string _Http101Response =
         "HTTP/1.1 101 Switching Protocols\r\n" +
         "Upgrade: websocket\r\n" +
         "Connection: Upgrade\r\n" +
@@ -56,7 +56,7 @@ internal sealed class WebSocketTsharkTests
     /// Encodes a single WebSocket frame using <see cref="WebSocketLayer"/> and returns the
     /// raw RFC 6455 wire bytes.  Uses the FrameBuilder encoder for round-trip fidelity.
     /// </summary>
-    private static byte[] EncodeWsFrame(byte[] payload, byte opcode, WebSocketFrameOptions options = default)
+    private static byte[] _EncodeWsFrame(byte[] payload, byte opcode, WebSocketFrameOptions options = default)
     {
         WebSocketLayer layer = new(payload, opcode, options);
         ArrayBufferWriter<byte> writer = new(initialCapacity: 256);
@@ -68,23 +68,23 @@ internal sealed class WebSocketTsharkTests
     /// Builds a server → client Ethernet + IPv4 + TCP frame whose TCP payload is an HTTP
     /// 101 Switching Protocols response immediately followed by <paramref name="wsBytes"/>.
     /// <para>
-    /// The source port is 80 (server), destination port is <see cref="ClientPort"/> (client).
+    /// The source port is 80 (server), destination port is <see cref="_ClientPort"/> (client).
     /// TCP dispatches to HTTP on the low port <c>min(80, 49152) = 80</c>.  HTTP detects the
     /// 101 response and dispatches <paramref name="wsBytes"/> to WebSocket via the
     /// <c>http.upgrade</c> table.  tshark applies its HTTP dissector on port 80 and
     /// dissects the body as WebSocket in the same packet.
     /// </para>
     /// </summary>
-    private static byte[] BuildHttpUpgradeWithWebSocketFrame(byte[] wsBytes)
+    private static byte[] _BuildHttpUpgradeWithWebSocketFrame(byte[] wsBytes)
     {
-        byte[] http101 = Encoding.ASCII.GetBytes(Http101Response);
+        byte[] http101 = Encoding.ASCII.GetBytes(_Http101Response);
         byte[] combined = new byte[http101.Length + wsBytes.Length];
         http101.CopyTo(combined, 0);
         wsBytes.CopyTo(combined, http101.Length);
 
         EthernetLayer eth = new(_ServerMac, _ClientMac);
         IPv4Layer ip = new(_ServerIp, _ClientIp);
-        TcpLayer tcp = new(ServerPort, ClientPort, seqNum: 1, ackNum: 1, flags: TcpFlags.PshAck, windowSize: 65535);
+        TcpLayer tcp = new(_ServerPort, _ClientPort, seqNum: 1, ackNum: 1, flags: TcpFlags.PshAck, windowSize: 65535);
         return FrameStack.Start(eth).Then(ip).Then(tcp).CreateWithFixedValues().EmitFrame(combined);
     }
 
@@ -92,7 +92,7 @@ internal sealed class WebSocketTsharkTests
     /// Encodes a WebSocket close frame payload: 2-byte big-endian status code followed by
     /// an optional UTF-8 reason string.
     /// </summary>
-    private static byte[] EncodeClosePayload(ushort statusCode, string reason)
+    private static byte[] _EncodeClosePayload(ushort statusCode, string reason)
     {
         byte[] reasonBytes = Encoding.UTF8.GetBytes(reason);
         byte[] payload = new byte[2 + reasonBytes.Length];
@@ -118,12 +118,12 @@ internal sealed class WebSocketTsharkTests
     public async Task WebSocket_TextFrame_OpcodeAndPayloadLengthMatchTshark()
     {
         const string TextPayload = "Hello tshark WebSocket";
-        byte[] wsBytes = EncodeWsFrame(
+        byte[] wsBytes = _EncodeWsFrame(
             Encoding.UTF8.GetBytes(TextPayload),
             WebSocketOpcode.Text,
             new WebSocketFrameOptions(Fin: true));
 
-        byte[] frame = BuildHttpUpgradeWithWebSocketFrame(wsBytes);
+        byte[] frame = _BuildHttpUpgradeWithWebSocketFrame(wsBytes);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -147,9 +147,9 @@ internal sealed class WebSocketTsharkTests
     public async Task WebSocket_BinaryFrame_OpcodeAndPayloadLengthMatchTshark()
     {
         byte[] binaryPayload = [0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x01, 0x02, 0x03];
-        byte[] wsBytes = EncodeWsFrame(binaryPayload, WebSocketOpcode.Binary, new WebSocketFrameOptions(Fin: true));
+        byte[] wsBytes = _EncodeWsFrame(binaryPayload, WebSocketOpcode.Binary, new WebSocketFrameOptions(Fin: true));
 
-        byte[] frame = BuildHttpUpgradeWithWebSocketFrame(wsBytes);
+        byte[] frame = _BuildHttpUpgradeWithWebSocketFrame(wsBytes);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -175,10 +175,10 @@ internal sealed class WebSocketTsharkTests
     {
         const ushort StatusCode = 1000; // Normal Closure
         const string Reason = "Normal Closure";
-        byte[] closePayload = EncodeClosePayload(StatusCode, Reason);
-        byte[] wsBytes = EncodeWsFrame(closePayload, WebSocketOpcode.Close, new WebSocketFrameOptions(Fin: true));
+        byte[] closePayload = _EncodeClosePayload(StatusCode, Reason);
+        byte[] wsBytes = _EncodeWsFrame(closePayload, WebSocketOpcode.Close, new WebSocketFrameOptions(Fin: true));
 
-        byte[] frame = BuildHttpUpgradeWithWebSocketFrame(wsBytes);
+        byte[] frame = _BuildHttpUpgradeWithWebSocketFrame(wsBytes);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {

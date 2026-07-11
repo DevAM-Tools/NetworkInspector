@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Exporters.Pbf.Columnar;
 
@@ -24,12 +24,12 @@ internal static class TopologyEncoder
 
         foreach (Field child in rootField.Children())
         {
-            EncodeField(child, fieldIds, childCounts);
+            _EncodeField(child, fieldIds, childCounts);
         }
     }
 
     /// <summary>Recursively encodes a single field and its children.</summary>
-    private static void EncodeField(Field field, List<int> fieldIds, List<int> childCounts)
+    private static void _EncodeField(Field field, List<int> fieldIds, List<int> childCounts)
     {
         fieldIds.Add(field.FieldId.Value);
 
@@ -39,7 +39,7 @@ internal static class TopologyEncoder
             foreach (Field child in field.Children())
             {
                 count++;
-                EncodeField(child, fieldIds, childCounts);
+                _EncodeField(child, fieldIds, childCounts);
             }
         }
         childCounts.Add(count);

@@ -5,7 +5,7 @@ namespace NetworkInspector.Exporters.Pbf;
 /// <summary>
 /// PBF packet exporter. Writes parsed packets to a PBF (Packet Binary Format) file.
 /// <para>
-/// File layout: Magic(44B) + Header + [Blocks...] + Trailer + TrailerSize(4B) + Magic(44B).
+/// File layout: _Magic(44B) + Header + [Blocks...] + Trailer + TrailerSize(4B) + _Magic(44B).
 /// Supports standard (row-oriented) and columnar block formats with optional LZ4 compression.
 /// Skipped packets are counted in <see cref="IExporterStatistics.SkippedCount"/>.
 /// </para>
@@ -28,7 +28,7 @@ namespace NetworkInspector.Exporters.Pbf;
 public sealed class PbfExporter : IPacketListener, IErrorTolerantExporter, IDisposable
 {
     /// <summary>44-byte PBF magic header/footer.</summary>
-    private static ReadOnlySpan<byte> Magic => "NETWORK-INSPECTOR-PBF-FORMAT-v1\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"u8;
+    private static ReadOnlySpan<byte> _Magic => "NETWORK-INSPECTOR-PBF-FORMAT-v1\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"u8;
 
     private readonly CancellationToken _CancellationToken;
     private readonly PbfExportFormat _Format;
@@ -54,18 +54,18 @@ public sealed class PbfExporter : IPacketListener, IErrorTolerantExporter, IDisp
     private readonly List<BlockIndexEntry> _BlockIndex = new(64);
     /// <summary>
     /// Maximum field ID supported by both the per-block presence bitmap and the global
-    /// trailer bitmap. Bitmap byte size = <c>(MaxFieldId + 7) / 8</c>. Choosing a power
+    /// trailer bitmap. Bitmap byte size = <c>(_MaxFieldId + 7) / 8</c>. Choosing a power
     /// of two keeps both bitmaps aligned and avoids partial-byte arithmetic.
     /// </summary>
-    private const int MaxFieldId = 32768;
-    private readonly byte[] _GlobalFieldBitmap = new byte[MaxFieldId / 8]; // supports up to MaxFieldId field IDs
+    private const int _MaxFieldId = 32768;
+    private readonly byte[] _GlobalFieldBitmap = new byte[_MaxFieldId / 8]; // supports up to _MaxFieldId field IDs
 
     private bool _HasError;
     private bool _Started;
     private bool _Finished;
 
     /// <summary>
-    /// Reusable framing buffer for <see cref="FlushCurrentBlock"/>. Sized with
+    /// Reusable framing buffer for <see cref="_FlushCurrentBlock"/>. Sized with
     /// 64 KiB initial capacity (typical block size) and reset between flushes
     /// instead of allocating a fresh <see cref="PooledBuffer"/> every call.
     /// Returned in <see cref="OnFinish"/>'s finally.
@@ -148,9 +148,6 @@ public sealed class PbfExporter : IPacketListener, IErrorTolerantExporter, IDisp
         || (_TargetPacketCount > 0 && PacketCount >= _TargetPacketCount);
 
     /// <inheritdoc/>
-    bool IExporterStatistics.IsFinished => IsFinished;
-
-    /// <inheritdoc/>
     public ErrorToleranceMode ErrorTolerance { get; set; } = ErrorToleranceMode.Tolerant;
 
     /// <inheritdoc/>
@@ -169,12 +166,12 @@ public sealed class PbfExporter : IPacketListener, IErrorTolerantExporter, IDisp
             return false;
         }
 
-        if (!_Started && !Start())
+        if (!_Started && !_Start())
         {
             return false;
         }
 
-        return HandlePacket(packet);
+        return _HandlePacket(packet);
     }
 
     /// <inheritdoc/>
@@ -195,14 +192,14 @@ public sealed class PbfExporter : IPacketListener, IErrorTolerantExporter, IDisp
         {
             if (!_Started && _Output is not null)
             {
-                Start();
+                _Start();
             }
 
             // Flush remaining block
-            FlushCurrentBlock();
+            _FlushCurrentBlock();
 
             // Write trailer
-            WriteTrailer();
+            _WriteTrailer();
 
             _DirectStream?.Flush();
         }
@@ -306,7 +303,7 @@ public sealed class PbfExporter : IPacketListener, IErrorTolerantExporter, IDisp
     // ========================================================================
 
     /// <summary>Lazily initializes output and writes magic + header.</summary>
-    private bool Start()
+    private bool _Start()
     {
         if (_Output is null)
         {
@@ -328,7 +325,7 @@ public sealed class PbfExporter : IPacketListener, IErrorTolerantExporter, IDisp
         // greater than 4095 are tracked in both per-block presence and the merged trailer
         // bitmap. Previously this was 4096 bits, causing silent loss of presence info for
         // any field ID >= 4096 (review B7).
-        int maxFieldId = MaxFieldId;
+        int maxFieldId = _MaxFieldId;
         if (_Format == PbfExportFormat.Columnar)
         {
             _ColumnarBuilder = new ColumnarBlockBuilder(maxFieldId, _MaxPacketsPerBlock, _MaxBlockSize);
@@ -340,12 +337,12 @@ public sealed class PbfExporter : IPacketListener, IErrorTolerantExporter, IDisp
 
         try
         {
-            // Magic + header writes go straight to the underlying stream and may
+            // _Magic + header writes go straight to the underlying stream and may
             // throw on a broken target — surface as an export error rather than
             // bubbling out to the caller.
             _DirectStream = underlyingStream;
-            _DirectStream.Write(Magic);
-            WriteHeader(_DirectStream);
+            _DirectStream.Write(_Magic);
+            _WriteHeader(_DirectStream);
         }
         catch (Exception ex)
         {
@@ -365,7 +362,7 @@ public sealed class PbfExporter : IPacketListener, IErrorTolerantExporter, IDisp
 
     /// <summary>Writes the PBF file header. Encodes the two fields directly into a stack-allocated
     /// buffer to avoid a pool rent+return for this single call-site.</summary>
-    private static void WriteHeader(Stream stream)
+    private static void _WriteHeader(Stream stream)
     {
         // Encode the two-field protobuf header message directly into a stack-allocated buffer.
         // Maximum encoded size: 2 bytes (version varint field) + 11 bytes (sint64 timestamp field) = 13 bytes.
@@ -395,7 +392,7 @@ public sealed class PbfExporter : IPacketListener, IErrorTolerantExporter, IDisp
     }
 
     /// <summary>Handles a single packet: adds to block, flushes if needed.</summary>
-    private bool HandlePacket(Packet packet)
+    private bool _HandlePacket(Packet packet)
     {
         if (_TargetPacketCount > 0 && PacketCount >= _TargetPacketCount)
         {
@@ -405,7 +402,7 @@ public sealed class PbfExporter : IPacketListener, IErrorTolerantExporter, IDisp
         bool shouldFlush;
 
         // Wrap the entire add+flush sequence: AddPacket may throw on a malformed
-        // packet, FlushCurrentBlock may throw on I/O errors. Either case must
+        // packet, _FlushCurrentBlock may throw on I/O errors. Either case must
         // degrade to a skipped packet rather than tearing down the pipeline.
         try
         {
@@ -420,12 +417,12 @@ public sealed class PbfExporter : IPacketListener, IErrorTolerantExporter, IDisp
 
             if (shouldFlush)
             {
-                FlushCurrentBlock();
+                _FlushCurrentBlock();
             }
         }
         catch (Exception ex)
         {
-            return HandleSkip(new ExportErrorEventArgs
+            return _HandleSkip(new ExportErrorEventArgs
             {
                 ItemIndex = PacketCount,
                 Kind = ex is IOException ? ExportErrorKind.IoError : ExportErrorKind.SerializationError,
@@ -442,7 +439,7 @@ public sealed class PbfExporter : IPacketListener, IErrorTolerantExporter, IDisp
     /// Handles a skipped packet: increments counters, fires the event in Tolerant mode,
     /// and returns false to abort in Strict mode.
     /// </summary>
-    private bool HandleSkip(ExportErrorEventArgs error)
+    private bool _HandleSkip(ExportErrorEventArgs error)
     {
         SkippedCount++;
         ErrorCount++;
@@ -459,7 +456,7 @@ public sealed class PbfExporter : IPacketListener, IErrorTolerantExporter, IDisp
     }
 
     /// <summary>Flushes the current block to output.</summary>
-    private void FlushCurrentBlock()
+    private void _FlushCurrentBlock()
     {
         ReadOnlySpan<byte> blockData;
         long minTs = 0, maxTs = 0;
@@ -491,7 +488,7 @@ public sealed class PbfExporter : IPacketListener, IErrorTolerantExporter, IDisp
             int truncated = _StandardBuilder.TruncatedFieldCount;
             if (truncated > 0)
             {
-                if (!HandleSkip(new ExportErrorEventArgs
+                if (!_HandleSkip(new ExportErrorEventArgs
                 {
                     Kind = ExportErrorKind.MalformedData,
                     Message = $"{truncated} field subtree(s) were dropped because the protocol tree exceeded the maximum nesting depth"
@@ -562,7 +559,7 @@ public sealed class PbfExporter : IPacketListener, IErrorTolerantExporter, IDisp
             ArrayPool<byte>.Shared.Return(compressedBuf);
         }
 
-        // Send block to output (_DirectStream guaranteed non-null after Start())
+        // Send block to output (_DirectStream guaranteed non-null after _Start())
         _DirectStream!.Write(blockBuf.WrittenSpan);
         blockBuf.Reset();
 
@@ -584,9 +581,9 @@ public sealed class PbfExporter : IPacketListener, IErrorTolerantExporter, IDisp
     }
 
     /// <summary>Writes the trailer, trailer size, and closing magic.</summary>
-    private void WriteTrailer()
+    private void _WriteTrailer()
     {
-        // Guard against a failed Start() leaving _DirectStream null; the outer
+        // Guard against a failed _Start() leaving _DirectStream null; the outer
         // try/catch in OnFinish will have already recorded the error.
         if (_DirectStream is null)
         {
@@ -631,11 +628,11 @@ public sealed class PbfExporter : IPacketListener, IErrorTolerantExporter, IDisp
         Span<byte> trailerSizeBytes = stackalloc byte[4];
         BinaryPrimitives.WriteInt32LittleEndian(trailerSizeBytes, trailer.Length);
 
-        // _DirectStream is guaranteed non-null after Start() succeeds
+        // _DirectStream is guaranteed non-null after _Start() succeeds
         _DirectStream!.Write(trailer.WrittenSpan);
         trailer.Return();
         _DirectStream.Write(trailerSizeBytes);
-        _DirectStream.Write(Magic);
+        _DirectStream.Write(_Magic);
     }
 
     // ========================================================================

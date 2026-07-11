@@ -24,41 +24,94 @@ internal static class FieldValueFormatter
     /// </summary>
     /// <param name="value">The value to format.</param>
     /// <returns>The string representation, or <c>null</c> for <see cref="FieldType.None"/>.</returns>
-    internal static string? Format(FieldValue value) => value.Type switch
+    internal static string? Format(FieldValue value)
     {
-        FieldType.I64 => value.Data.TryGetAsI64(out long i64)
-            ? i64.ToString(CultureInfo.InvariantCulture)
-            : null,
-        FieldType.U64 => value.Data.TryGetAsU64(out ulong u64)
-            ? u64.ToString(CultureInfo.InvariantCulture)
-            : null,
-        FieldType.F64 => value.Data.TryGetAsF64(out double f64)
-            ? f64.ToString(CultureInfo.InvariantCulture)
-            : null,
-        FieldType.String => value.Data.TryGetAsString(out string str) ? str : null,
-        FieldType.Bool => value.Data.TryGetAsBool(out bool b) ? (b ? "true" : "false") : null,
-        FieldType.Timestamp => value.Data.TryGetAsTimestamp(out Timestamp ts)
-            ? ts.AsNanos.ToString(CultureInfo.InvariantCulture)
-            : null,
-        FieldType.Bytes => value.Data.TryGetAsBytes(out ReadOnlyMemory<byte> bytes)
-            ? Convert.ToHexString(bytes.Span)
-            : null,
-        FieldType.MacAddress => value.Data.TryGetAsMacAddress(out MacAddress mac)
-            ? mac.ToString()
-            : null,
-        FieldType.IPv4Address => value.Data.TryGetAsIPv4(out IPv4Address ipv4)
-            ? ipv4.ToString()
-            : null,
-        FieldType.IPv6Address => value.Data.TryGetAsIPv6(out IPv6Address ipv6)
-            ? ipv6.ToString()
-            : null,
-        FieldType.Eui64 => value.Data.TryGetAsEui64(out Eui64 eui)
-            ? eui.ToString()
-            : null,
-        FieldType.Uuid => value.Data.TryGetAsUuid(out Uuid uuid)
-            ? uuid.ToString()
-            : null,
-        // FieldType.None — there is no comparable string representation
-        _ => null,
-    };
+        switch (value.Type)
+        {
+            case FieldType.I64:
+                if (value.Data.TryGetAsI64(out long i64))
+                {
+                    return i64.ToString(CultureInfo.InvariantCulture);
+                }
+                return null;
+            case FieldType.U64:
+                if (value.Data.TryGetAsU64(out ulong u64))
+                {
+                    return u64.ToString(CultureInfo.InvariantCulture);
+                }
+                return null;
+            case FieldType.F64:
+                if (value.Data.TryGetAsF64(out double f64))
+                {
+                    return f64.ToString(CultureInfo.InvariantCulture);
+                }
+                return null;
+            case FieldType.String:
+                if (value.Data.TryGetAsString(out string str))
+                {
+                    return str;
+                }
+                return null;
+            case FieldType.Bool:
+                if (value.Data.TryGetAsBool(out bool b))
+                {
+                    if (b)
+                    {
+                        return "true";
+                    }
+                    return "false";
+                }
+                return null;
+            case FieldType.Timestamp:
+                if (value.Data.TryGetAsTimestamp(out Timestamp ts))
+                {
+                    return ts.AsNanos.ToString(CultureInfo.InvariantCulture);
+                }
+                return null;
+            case FieldType.Bytes:
+                if (value.Data.TryGetAsBytes(out ReadOnlyMemory<byte> bytes))
+                {
+                    return Convert.ToHexString(bytes.Span);
+                }
+                return null;
+            case FieldType.MacAddress:
+                if (value.Data.TryGetAsMacAddress(out MacAddress mac))
+                {
+                    // MacAddress.ToString() uses a fixed colon-hex layout (culture-independent).
+                    return mac.ToString();
+                }
+                return null;
+            case FieldType.IPv4Address:
+                if (value.Data.TryGetAsIPv4(out IPv4Address ipv4))
+                {
+                    // IPv4Address.ToString() uses dotted-decimal layout (culture-independent).
+                    return ipv4.ToString();
+                }
+                return null;
+            case FieldType.IPv6Address:
+                if (value.Data.TryGetAsIPv6(out IPv6Address ipv6))
+                {
+                    // IPv6Address.ToString() uses RFC 5952 layout (culture-independent).
+                    return ipv6.ToString();
+                }
+                return null;
+            case FieldType.Eui64:
+                if (value.Data.TryGetAsEui64(out Eui64 eui))
+                {
+                    // Eui64.ToString() uses colon-hex layout (culture-independent).
+                    return eui.ToString();
+                }
+                return null;
+            case FieldType.Uuid:
+                if (value.Data.TryGetAsUuid(out Uuid uuid))
+                {
+                    // Uuid.ToString() uses canonical hyphenated hex (culture-independent).
+                    return uuid.ToString();
+                }
+                return null;
+            default:
+                // FieldType.None — there is no comparable string representation
+                return null;
+        }
+    }
 }

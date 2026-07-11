@@ -15,7 +15,7 @@ internal sealed class CanProtocolXlTests
     /// <summary>
     /// Builds a stack and parses a SocketCAN frame (link type 227).
     /// </summary>
-    private static (Stack Stack, Packet Packet) BuildAndParse(byte[] frameData)
+    private static (Stack Stack, Packet Packet) _BuildAndParse(byte[] frameData)
     {
         using SettingsManager settingsManager = new();
         StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
@@ -39,7 +39,7 @@ internal sealed class CanProtocolXlTests
     {
         byte[] frameData = FrameBuilders.GenerateCanXlFrame(priority: 7);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? prioField = stack.GetFieldId("canxl.priority");
@@ -58,7 +58,7 @@ internal sealed class CanProtocolXlTests
         // Maximum 11-bit priority = 2047 (0x7FF)
         byte[] frameData = FrameBuilders.GenerateCanXlFrame(priority: 0x7FF);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? prioField = stack.GetFieldId("canxl.priority");
@@ -74,7 +74,7 @@ internal sealed class CanProtocolXlTests
     {
         byte[] frameData = FrameBuilders.GenerateCanXlFrame(vcid: 0xAB);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? vcidField = stack.GetFieldId("canxl.vcid");
@@ -92,7 +92,7 @@ internal sealed class CanProtocolXlTests
     {
         byte[] frameData = FrameBuilders.GenerateCanXlFrame();
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? xlfField = stack.GetFieldId("canxl.flags.xlf");
@@ -110,7 +110,7 @@ internal sealed class CanProtocolXlTests
     {
         byte[] frameData = FrameBuilders.GenerateCanXlFrame(sec: true);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? secField = stack.GetFieldId("canxl.flags.sec");
@@ -128,7 +128,7 @@ internal sealed class CanProtocolXlTests
     {
         byte[] frameData = FrameBuilders.GenerateCanXlFrame(sec: false);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? secField = stack.GetFieldId("canxl.flags.sec");
@@ -144,7 +144,7 @@ internal sealed class CanProtocolXlTests
     {
         byte[] frameData = FrameBuilders.GenerateCanXlFrame(rrs: true);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? rrsField = stack.GetFieldId("canxl.flags.rrs");
@@ -162,7 +162,7 @@ internal sealed class CanProtocolXlTests
     {
         byte[] frameData = FrameBuilders.GenerateCanXlFrame(sduType: 0x42);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? sduField = stack.GetFieldId("canxl.sdu_type");
@@ -181,7 +181,7 @@ internal sealed class CanProtocolXlTests
         byte[] payload = new byte[64];
         byte[] frameData = FrameBuilders.GenerateCanXlFrame(payload: payload);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? lenField = stack.GetFieldId("canxl.len");
@@ -199,7 +199,7 @@ internal sealed class CanProtocolXlTests
     {
         byte[] frameData = FrameBuilders.GenerateCanXlFrame(acceptanceField: 0xDEADBEEF);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? afField = stack.GetFieldId("canxl.acceptance_field");
@@ -218,7 +218,7 @@ internal sealed class CanProtocolXlTests
         byte[] payload = [0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE];
         byte[] frameData = FrameBuilders.GenerateCanXlFrame(payload: payload);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? dataField = stack.GetFieldId("canxl.data");
@@ -245,7 +245,7 @@ internal sealed class CanProtocolXlTests
         }
         byte[] frameData = FrameBuilders.GenerateCanXlFrame(payload: payload);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? dataField = stack.GetFieldId("canxl.data");
@@ -265,7 +265,7 @@ internal sealed class CanProtocolXlTests
         // A classic CAN frame must still be parsed by CanProtocol, not CanXlProtocol
         byte[] frameData = FrameBuilders.GenerateCanFrame(canId: 0x123);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             // Classic CAN fields should still be present
@@ -290,7 +290,7 @@ internal sealed class CanProtocolXlTests
         // A CAN FD frame must still be parsed by CanProtocol, not CanXlProtocol
         byte[] frameData = FrameBuilders.GenerateCanFdFrame(canId: 0x456);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             // CAN FD fields should still be present
@@ -315,7 +315,7 @@ internal sealed class CanProtocolXlTests
         // frames shorter than MinHeaderSize (8 bytes), so no fields are appended.
         byte[] shortFrame = [0x23, 0x01, 0x00, 0x00];
 
-        (Stack stack, Packet packet) = BuildAndParse(shortFrame);
+        (Stack stack, Packet packet) = _BuildAndParse(shortFrame);
         using (stack)
         {
             // Neither CAN nor CAN XL fields should be present
@@ -332,7 +332,7 @@ internal sealed class CanProtocolXlTests
         // 5 bytes with XLF set — enough to detect CAN XL but not enough for full header
         byte[] frame = [0x05, 0x00, 0x00, 0x00, 0x80];
 
-        (Stack stack, Packet packet) = BuildAndParse(frame);
+        (Stack stack, Packet packet) = _BuildAndParse(frame);
         using (stack)
         {
             // CAN XL parsing should fail (insufficient data for 12-byte header)
@@ -384,7 +384,7 @@ internal sealed class CanProtocolXlTests
         // Test with all optional flags enabled
         byte[] frameData = FrameBuilders.GenerateCanXlFrame(sec: true, rrs: true);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? secField = stack.GetFieldId("canxl.flags.sec");
@@ -413,7 +413,7 @@ internal sealed class CanProtocolXlTests
         // Edge case: priority=0, vcid=0
         byte[] frameData = FrameBuilders.GenerateCanXlFrame(priority: 0, vcid: 0);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? prioField = stack.GetFieldId("canxl.priority");
@@ -437,7 +437,7 @@ internal sealed class CanProtocolXlTests
         // Maximum 8-bit VCID = 255 (0xFF)
         byte[] frameData = FrameBuilders.GenerateCanXlFrame(vcid: 0xFF);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? vcidField = stack.GetFieldId("canxl.vcid");

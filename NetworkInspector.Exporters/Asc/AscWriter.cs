@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Exporters.Asc;
 
@@ -26,10 +26,10 @@ internal sealed class AscWriter
     #region Constants
 
     /// <summary>Uppercase hex digit lookup table (ASCII).</summary>
-    private static ReadOnlySpan<byte> HexDigits => "0123456789ABCDEF"u8;
+    private static ReadOnlySpan<byte> _HexDigits => "0123456789ABCDEF"u8;
 
     /// <summary>Windows-style line ending.</summary>
-    private static ReadOnlySpan<byte> CrLf => "\r\n"u8;
+    private static ReadOnlySpan<byte> _CrLf => "\r\n"u8;
 
     #endregion
 
@@ -66,7 +66,7 @@ internal sealed class AscWriter
     {
         _Stream = stream;
         _AnchorNs = Math.Max(0L, anchorNs);
-        WriteHeader(_AnchorNs);
+        _WriteHeader(_AnchorNs);
     }
 
     #endregion
@@ -99,26 +99,26 @@ internal sealed class AscWriter
         uint rawCanId, bool isExtended, bool isRemote, byte dlc,
         ReadOnlySpan<byte> data)
     {
-        AppendTimestamp(timestampNs);
+        _AppendTimestamp(timestampNs);
         _LineBuffer.WriteByte((byte)' ');
-        AppendDecimalInt(channel);
+        _AppendDecimalInt(channel);
         _LineBuffer.WriteByte((byte)' ');
 
         // CAN ID: 3-char hex for standard (11-bit), 8-char hex + 'x' for extended (29-bit).
         if (isExtended)
         {
-            AppendHexUInt32(rawCanId, 8);
+            _AppendHexUInt32(rawCanId, 8);
             _LineBuffer.WriteByte((byte)'x');
         }
         else
         {
-            AppendHexUInt32(rawCanId, 3);
+            _AppendHexUInt32(rawCanId, 3);
         }
 
         _LineBuffer.Write(" Rx "u8);
         _LineBuffer.WriteByte(isRemote ? (byte)'r' : (byte)'d');
         _LineBuffer.WriteByte((byte)' ');
-        AppendDecimalInt(dlc);
+        _AppendDecimalInt(dlc);
 
         // Remote frames carry no data bytes.
         if (!isRemote)
@@ -126,12 +126,12 @@ internal sealed class AscWriter
             foreach (byte b in data)
             {
                 _LineBuffer.WriteByte((byte)' ');
-                AppendHexByte(b);
+                _AppendHexByte(b);
             }
         }
 
-        _LineBuffer.Write(CrLf);
-        FlushLine();
+        _LineBuffer.Write(_CrLf);
+        _FlushLine();
     }
 
     /// <summary>
@@ -159,19 +159,19 @@ internal sealed class AscWriter
         uint rawCanId, bool isExtended, bool brs, bool esi, byte dlc,
         ReadOnlySpan<byte> data)
     {
-        AppendTimestamp(timestampNs);
+        _AppendTimestamp(timestampNs);
         _LineBuffer.Write(" CANFD "u8);
-        AppendDecimalInt(channel);
+        _AppendDecimalInt(channel);
         _LineBuffer.Write(" Rx "u8);
 
         if (isExtended)
         {
-            AppendHexUInt32(rawCanId, 8);
+            _AppendHexUInt32(rawCanId, 8);
             _LineBuffer.WriteByte((byte)'x');
         }
         else
         {
-            AppendHexUInt32(rawCanId, 3);
+            _AppendHexUInt32(rawCanId, 3);
         }
 
         _LineBuffer.WriteByte((byte)' ');
@@ -179,18 +179,18 @@ internal sealed class AscWriter
         _LineBuffer.WriteByte((byte)' ');
         _LineBuffer.WriteByte(esi ? (byte)'1' : (byte)'0');
         _LineBuffer.WriteByte((byte)' ');
-        AppendDecimalInt(dlc);
+        _AppendDecimalInt(dlc);
         _LineBuffer.WriteByte((byte)' ');
-        AppendDecimalInt(data.Length);
+        _AppendDecimalInt(data.Length);
 
         foreach (byte b in data)
         {
             _LineBuffer.WriteByte((byte)' ');
-            AppendHexByte(b);
+            _AppendHexByte(b);
         }
 
-        _LineBuffer.Write(CrLf);
-        FlushLine();
+        _LineBuffer.Write(_CrLf);
+        _FlushLine();
     }
 
     /// <summary>
@@ -217,26 +217,26 @@ internal sealed class AscWriter
         long timestampNs, int channel,
         byte frameId, ReadOnlySpan<byte> data, byte checksum)
     {
-        AppendTimestamp(timestampNs);
+        _AppendTimestamp(timestampNs);
         _LineBuffer.WriteByte((byte)' ');
         _LineBuffer.WriteByte((byte)'L');
-        AppendDecimalInt(channel);
+        _AppendDecimalInt(channel);
         _LineBuffer.WriteByte((byte)' ');
-        AppendHexByte((byte)(frameId & 0x3F));
+        _AppendHexByte((byte)(frameId & 0x3F));
         _LineBuffer.Write(" Rx "u8);
-        AppendDecimalInt(data.Length);
+        _AppendDecimalInt(data.Length);
 
         foreach (byte b in data)
         {
             _LineBuffer.WriteByte((byte)' ');
-            AppendHexByte(b);
+            _AppendHexByte(b);
         }
 
         _LineBuffer.Write(" checksum = "u8);
-        AppendHexByte(checksum);
+        _AppendHexByte(checksum);
         _LineBuffer.Write(" CSM = enhanced"u8);
-        _LineBuffer.Write(CrLf);
-        FlushLine();
+        _LineBuffer.Write(_CrLf);
+        _FlushLine();
     }
 
     /// <summary>
@@ -271,28 +271,28 @@ internal sealed class AscWriter
         // Payload length in 16-bit words (ceiling division).
         int payloadWords = (data.Length + 1) / 2;
 
-        AppendTimestamp(timestampNs);
+        _AppendTimestamp(timestampNs);
         _LineBuffer.Write(" Fr "u8);
-        AppendDecimalInt(channel);
+        _AppendDecimalInt(channel);
         _LineBuffer.Write(" V9 "u8);
-        AppendHexUInt16(frameId, 4);
+        _AppendHexUInt16(frameId, 4);
         _LineBuffer.WriteByte((byte)' ');
-        AppendDecimalInt(payloadWords);
+        _AppendDecimalInt(payloadWords);
         _LineBuffer.WriteByte((byte)' ');
-        AppendDecimalInt(cycle);
+        _AppendDecimalInt(cycle);
         _LineBuffer.Write(" 0 "u8); // NM flag = 0
-        AppendHexUInt16(headerCrc, 4);
+        _AppendHexUInt16(headerCrc, 4);
         _LineBuffer.Write(" x "u8); // identifier placeholder
-        AppendDecimalInt(data.Length);
+        _AppendDecimalInt(data.Length);
 
         foreach (byte b in data)
         {
             _LineBuffer.WriteByte((byte)' ');
-            AppendHexByte(b);
+            _AppendHexByte(b);
         }
 
-        _LineBuffer.Write(CrLf);
-        FlushLine();
+        _LineBuffer.Write(_CrLf);
+        _FlushLine();
     }
 
     /// <summary>
@@ -302,8 +302,8 @@ internal sealed class AscWriter
     internal void Finish()
     {
         _LineBuffer.Write("End TriggerBlock"u8);
-        _LineBuffer.Write(CrLf);
-        FlushLine();
+        _LineBuffer.Write(_CrLf);
+        _FlushLine();
         _Stream.Flush();
     }
 
@@ -324,34 +324,34 @@ internal sealed class AscWriter
     /// is written only once per export.
     /// </summary>
     /// <param name="anchorNs">Capture start time in nanoseconds since Unix epoch (non-negative).</param>
-    private void WriteHeader(long anchorNs)
+    private void _WriteHeader(long anchorNs)
     {
         // Convert to UTC DateTimeOffset for the date string.
         DateTimeOffset dto = DateTimeOffset.FromUnixTimeMilliseconds(anchorNs / 1_000_000);
-        string dateStr = FormatAscDate(dto);
+        string dateStr = _FormatAscDate(dto);
         byte[] dateBytes = Encoding.ASCII.GetBytes(dateStr);
 
         // date <dateStr>
         _LineBuffer.Write("date "u8);
         _LineBuffer.Write(dateBytes);
-        _LineBuffer.Write(CrLf);
-        FlushLine();
+        _LineBuffer.Write(_CrLf);
+        _FlushLine();
 
         // base hex  timestamps absolute
         _LineBuffer.Write("base hex  timestamps absolute"u8);
-        _LineBuffer.Write(CrLf);
-        FlushLine();
+        _LineBuffer.Write(_CrLf);
+        _FlushLine();
 
         // no internal events logged
         _LineBuffer.Write("no internal events logged"u8);
-        _LineBuffer.Write(CrLf);
-        FlushLine();
+        _LineBuffer.Write(_CrLf);
+        _FlushLine();
 
         // Begin Triggerblock <dateStr>
         _LineBuffer.Write("Begin Triggerblock "u8);
         _LineBuffer.Write(dateBytes);
-        _LineBuffer.Write(CrLf);
-        FlushLine();
+        _LineBuffer.Write(_CrLf);
+        _FlushLine();
     }
 
     /// <summary>
@@ -359,7 +359,7 @@ internal sealed class AscWriter
     /// Uses Unix <c>ctime</c>-style format: <c>ddd MMM  d HH:mm:ss.fff yyyy</c>
     /// where single-digit days are space-padded (e.g., <c>Mon Jan  1 10:00:00.000 2024</c>).
     /// </summary>
-    private static string FormatAscDate(DateTimeOffset dto)
+    private static string _FormatAscDate(DateTimeOffset dto)
     {
         string dow = dto.ToString("ddd", CultureInfo.InvariantCulture);
         string mon = dto.ToString("MMM", CultureInfo.InvariantCulture);
@@ -379,7 +379,7 @@ internal sealed class AscWriter
     /// zero-allocation decimal formatting.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void AppendTimestamp(long timestampNs)
+    private void _AppendTimestamp(long timestampNs)
     {
         double relSec = Math.Max(0.0, (timestampNs - _AnchorNs) / 1_000_000_000.0);
         Span<byte> scratch = stackalloc byte[32];
@@ -392,9 +392,9 @@ internal sealed class AscWriter
     /// to <see cref="_LineBuffer"/>.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void AppendHexByte(byte b)
+    private void _AppendHexByte(byte b)
     {
-        ReadOnlySpan<byte> hex = HexDigits;
+        ReadOnlySpan<byte> hex = _HexDigits;
         _LineBuffer.WriteByte(hex[b >> 4]);
         _LineBuffer.WriteByte(hex[b & 0xF]);
     }
@@ -406,9 +406,9 @@ internal sealed class AscWriter
     /// </summary>
     /// <param name="value">Value to format.</param>
     /// <param name="minWidth">Minimum output width (1–4). Used for FlexRay slot IDs and CRCs.</param>
-    private void AppendHexUInt16(ushort value, int minWidth)
+    private void _AppendHexUInt16(ushort value, int minWidth)
     {
-        ReadOnlySpan<byte> hex = HexDigits;
+        ReadOnlySpan<byte> hex = _HexDigits;
         // Produce all 4 hex digits, then trim leading zeros down to minWidth.
         Span<byte> buf = stackalloc byte[4];
         buf[0] = hex[(value >> 12) & 0xF];
@@ -430,9 +430,9 @@ internal sealed class AscWriter
     /// </summary>
     /// <param name="value">Value to format.</param>
     /// <param name="minWidth">Minimum output width (1–8). Use 3 for standard CAN IDs, 8 for extended.</param>
-    private void AppendHexUInt32(uint value, int minWidth)
+    private void _AppendHexUInt32(uint value, int minWidth)
     {
-        ReadOnlySpan<byte> hex = HexDigits;
+        ReadOnlySpan<byte> hex = _HexDigits;
         // Produce all 8 hex digits, then trim leading zeros down to minWidth.
         Span<byte> buf = stackalloc byte[8];
         buf[0] = hex[(int)((value >> 28) & 0xF)];
@@ -456,7 +456,7 @@ internal sealed class AscWriter
     /// Uses <c>Utf8Formatter.TryFormat</c> for zero-allocation decimal formatting.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void AppendDecimalInt(int value)
+    private void _AppendDecimalInt(int value)
     {
         Span<byte> scratch = stackalloc byte[12];
         Utf8Formatter.TryFormat(value, scratch, out int written);
@@ -469,7 +469,7 @@ internal sealed class AscWriter
     /// when the stream write throws.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void FlushLine()
+    private void _FlushLine()
     {
         try
         {

@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Protocols.Tests;
 
@@ -9,7 +9,7 @@ namespace NetworkInspector.Protocols.Tests;
 internal sealed class UdpBasicTests
 {
     /// <summary>Creates an Ethernet + IPv4 + UDP frame with known values.</summary>
-    private static byte[] BuildUdpFrame(ushort srcPort = 12345, ushort dstPort = 53)
+    private static byte[] _BuildUdpFrame(ushort srcPort = 12345, ushort dstPort = 53)
     {
         MacAddress dstMac = MacAddress.FromBytes([0x00, 0x11, 0x22, 0x33, 0x44, 0x55]);
         MacAddress srcMac = MacAddress.FromBytes([0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB]);
@@ -24,7 +24,7 @@ internal sealed class UdpBasicTests
     [Test]
     public async Task Parse_Udp_SourcePort()
     {
-        byte[] frame = BuildUdpFrame(srcPort: 12345);
+        byte[] frame = _BuildUdpFrame(srcPort: 12345);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -35,7 +35,7 @@ internal sealed class UdpBasicTests
     [Test]
     public async Task Parse_Udp_DestinationPort()
     {
-        byte[] frame = BuildUdpFrame(dstPort: 53);
+        byte[] frame = _BuildUdpFrame(dstPort: 53);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -46,7 +46,7 @@ internal sealed class UdpBasicTests
     [Test]
     public async Task Parse_Udp_Length()
     {
-        byte[] frame = BuildUdpFrame();
+        byte[] frame = _BuildUdpFrame();
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -58,7 +58,7 @@ internal sealed class UdpBasicTests
     [Test]
     public async Task Parse_Udp_ChecksumFieldExists()
     {
-        byte[] frame = BuildUdpFrame();
+        byte[] frame = _BuildUdpFrame();
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -93,7 +93,7 @@ internal sealed class UdpBasicTests
         // udp.port is a metadata-only alias group ({ udp.srcport, udp.dstport }); no udp.port
         // field is appended to the parse tree. The protocol table name udp.port (UDP demux)
         // lives in an independent namespace from this alias.
-        byte[] frame = BuildUdpFrame(srcPort: 12345, dstPort: 53);
+        byte[] frame = _BuildUdpFrame(srcPort: 12345, dstPort: 53);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {

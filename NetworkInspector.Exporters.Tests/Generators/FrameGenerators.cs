@@ -9,13 +9,13 @@ namespace NetworkInspector.Exporters.Tests.Generators;
 internal static class FrameGenerators
 {
     /// <summary>Standard broadcast destination MAC.</summary>
-    private static readonly byte[] BroadcastMac = [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
+    private static readonly byte[] _BroadcastMac = [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
 
     /// <summary>Standard test source MAC.</summary>
-    private static readonly byte[] TestSrcMac = [0x00, 0x11, 0x22, 0x33, 0x44, 0x55];
+    private static readonly byte[] _TestSrcMac = [0x00, 0x11, 0x22, 0x33, 0x44, 0x55];
 
     /// <summary>Standard test destination MAC.</summary>
-    private static readonly byte[] TestDstMac = [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF];
+    private static readonly byte[] _TestDstMac = [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF];
 
     /// <summary>
     /// Builds a simple Ethernet II frame: dst(6) + src(6) + ethertype(2 BE) + payload.
@@ -80,7 +80,7 @@ internal static class FrameGenerators
 
         byte[] udp = BuildUdpDatagram(12345, 53, payload);
         byte[] ipv4 = BuildIpv4Packet(srcIp, dstIp, 17, udp); // 17 = UDP
-        return BuildEthernetFrame(TestDstMac, TestSrcMac, 0x0800, ipv4);
+        return BuildEthernetFrame(_TestDstMac, _TestSrcMac, 0x0800, ipv4);
     }
 
     /// <summary>
@@ -102,5 +102,5 @@ internal static class FrameGenerators
     /// Builds a simple broadcast Ethernet frame with the given ethertype and payload.
     /// </summary>
     internal static byte[] BuildSimpleEthernetFrame(ushort etherType, ReadOnlySpan<byte> payload) =>
-        BuildEthernetFrame(BroadcastMac, TestSrcMac, etherType, payload);
+        BuildEthernetFrame(_BroadcastMac, _TestSrcMac, etherType, payload);
 }

@@ -61,7 +61,7 @@ public readonly struct FieldId(int value) : IEquatable<FieldId>, IComparable<Fie
     public override bool Equals(object? obj) => obj is FieldId other && Equals(other);
 
     /// <inheritdoc/>
-    public override string ToString() => _Value.ToString();
+    public override string ToString() => _Value.ToString(CultureInfo.InvariantCulture);
 
     #endregion
 

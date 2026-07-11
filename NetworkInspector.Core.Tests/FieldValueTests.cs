@@ -285,6 +285,43 @@ internal sealed class FieldValueTests
     }
 
     [Test]
+    public async Task FieldValue_NewIPv6()
+    {
+        IPv6Address ip = IPv6Address.FromBytes(new byte[16]);
+        FieldValue val = FieldValue.NewIPv6(ip, "custom-v6");
+        await Assert.That(val.Type).IsEqualTo(FieldType.IPv6Address);
+        await Assert.That(val.CustomRepresentation.AsString).IsEqualTo("custom-v6");
+        val.Data.TryGetAsIPv6(out IPv6Address ipv6Val);
+        await Assert.That(ipv6Val.Format()).IsEqualTo("::");
+    }
+
+    [Test]
+    public async Task FieldValue_NewEui64()
+    {
+        Eui64 eui = Eui64.FromBytes(new byte[] { 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77 });
+        FieldValue val = FieldValue.NewEui64(eui, "eui-custom");
+        await Assert.That(val.Type).IsEqualTo(FieldType.Eui64);
+        await Assert.That(val.CustomRepresentation.AsString).IsEqualTo("eui-custom");
+        val.Data.TryGetAsEui64(out Eui64 euiVal);
+        await Assert.That(euiVal.Format()).IsEqualTo("00:11:22:33:44:55:66:77");
+    }
+
+    [Test]
+    public async Task FieldValue_NewUuid()
+    {
+        Uuid uuid = Uuid.FromBytes(new byte[]
+        {
+            0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+            0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10,
+        });
+        FieldValue val = FieldValue.NewUuid(uuid, "uuid-custom");
+        await Assert.That(val.Type).IsEqualTo(FieldType.Uuid);
+        await Assert.That(val.CustomRepresentation.AsString).IsEqualTo("uuid-custom");
+        val.Data.TryGetAsUuid(out Uuid uuidVal);
+        await Assert.That(uuidVal.ToString()).IsEqualTo(uuid.Format());
+    }
+
+    [Test]
     public async Task FieldValue_NewTimestamp()
     {
         Timestamp ts = Timestamp.FromMillis(5000);
@@ -357,12 +394,12 @@ internal sealed class FieldValueTests
         => await Assert.That(FieldValueData.NewBytes(ReadOnlyMemory<byte>.Empty).ToString()).IsEqualTo(string.Empty);
 
     [Test]
-    public async Task FieldValueData_ToString_Bytes_SingleByte() => await Assert.That(FieldValueData.NewBytes(new byte[] { 0xAB }).ToString()).IsEqualTo("AB");
+    public async Task FieldValueData_ToString_Bytes_SingleByte() => await Assert.That(FieldValueData.NewBytes([0xAB]).ToString()).IsEqualTo("AB");
 
     [Test]
     public async Task FieldValueData_ToString_Bytes_MultipleBytes()
     {
-        await Assert.That(FieldValueData.NewBytes(new byte[] { 0xDE, 0xAD, 0xBE, 0xEF }).ToString())
+        await Assert.That(FieldValueData.NewBytes([0xDE, 0xAD, 0xBE, 0xEF]).ToString())
             .IsEqualTo("DE AD BE EF");
     }
 
@@ -424,7 +461,7 @@ internal sealed class FieldValueTests
     public async Task FieldValueData_TryFormat_Char_Bytes()
     {
         char[] buf = new char[32];
-        bool result = FieldValueData.NewBytes(new byte[] { 0x0A, 0xFF }).TryFormat(buf, out int written, default, null);
+        bool result = FieldValueData.NewBytes([0x0A, 0xFF]).TryFormat(buf, out int written, default, null);
         string text = new(buf, 0, written);
         await Assert.That(result).IsTrue();
         await Assert.That(text).IsEqualTo("0A FF");
@@ -434,7 +471,7 @@ internal sealed class FieldValueTests
     public async Task FieldValueData_TryFormat_Char_Bytes_InsufficientSpace()
     {
         char[] buf = new char[4]; // "0A FF" needs 5
-        bool result = FieldValueData.NewBytes(new byte[] { 0x0A, 0xFF }).TryFormat(buf, out int written, default, null);
+        bool result = FieldValueData.NewBytes([0x0A, 0xFF]).TryFormat(buf, out int written, default, null);
         await Assert.That(result).IsFalse();
         await Assert.That(written).IsEqualTo(0);
     }
@@ -475,7 +512,7 @@ internal sealed class FieldValueTests
     public async Task FieldValueData_TryFormat_Utf8_Bytes()
     {
         byte[] buf = new byte[32];
-        bool result = FieldValueData.NewBytes(new byte[] { 0xCA, 0xFE }).TryFormat(buf, out int written, default, null);
+        bool result = FieldValueData.NewBytes([0xCA, 0xFE]).TryFormat(buf, out int written, default, null);
         string text = System.Text.Encoding.UTF8.GetString(buf, 0, written);
         await Assert.That(result).IsTrue();
         await Assert.That(text).IsEqualTo("CA FE");
@@ -910,7 +947,7 @@ internal sealed class FieldValueTests
         {
             result = temp.AsSpan().ToString();
         }
-        await Assert.That(result).IsEqualTo(value.ToString());
+        await Assert.That(result).IsEqualTo(value.ToString(CultureInfo.InvariantCulture));
     }
 
     [Test]
@@ -922,7 +959,7 @@ internal sealed class FieldValueTests
         {
             result = temp.AsSpan().ToString();
         }
-        await Assert.That(result).IsEqualTo(value.ToString());
+        await Assert.That(result).IsEqualTo(value.ToString(CultureInfo.InvariantCulture));
     }
 
     [Test]
@@ -1023,7 +1060,7 @@ internal sealed class FieldValueTests
             FieldValueData.NewI64(-42L),
             FieldValueData.NewU64(42UL),
             FieldValueData.NewString("test"),
-            FieldValueData.NewBytes(new byte[] { 0xAB, 0xCD }),
+            FieldValueData.NewBytes([0xAB, 0xCD]),
             FieldValueData.NewMacAddress(new MacAddress(0x001122334455UL)),
             FieldValueData.NewIPv4(new IPv4Address(0x0A000001u)),
         ];
@@ -1038,5 +1075,627 @@ internal sealed class FieldValueTests
             string fromToString = val.ToString();
             await Assert.That(fromTempString).IsEqualTo(fromToString);
         }
+    }
+
+    // === FieldValue equality, comparison, formatting gaps ===
+
+    [Test]
+    public async Task FieldValue_EqualsObjectAndGetHashCode()
+    {
+        FieldValue a = FieldValue.NewU64(42);
+        FieldValue b = FieldValue.NewU64(42);
+        await Assert.That(a.Equals((object)b)).IsTrue();
+        await Assert.That(a.Equals((object)"not")).IsFalse();
+        await Assert.That(a.GetHashCode()).IsEqualTo(b.GetHashCode());
+    }
+
+    [Test]
+    public async Task FieldValue_ComparisonOperators()
+    {
+        FieldValue low = FieldValue.NewU64(1);
+        FieldValue high = FieldValue.NewU64(9);
+        FieldValue lowCopy = FieldValue.NewU64(1);
+        await Assert.That(low < high).IsTrue();
+        await Assert.That(high > low).IsTrue();
+        await Assert.That(low <= high).IsTrue();
+        await Assert.That(high >= low).IsTrue();
+        await Assert.That(low <= lowCopy).IsTrue();
+        await Assert.That(lowCopy >= low).IsTrue();
+    }
+
+    [Test]
+    public async Task FieldValue_TryFormat_CustomRep_InsufficientCharBuffer()
+    {
+        FieldValue val = FieldValue.NewU64(1, "ABCDEF");
+        char[] buf = new char[3];
+        bool result = val.TryFormat(buf, out int written, default, null);
+        await Assert.That(result).IsFalse();
+        await Assert.That(written).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task FieldValue_TryFormat_CustomRep_InsufficientUtf8Buffer()
+    {
+        FieldValue val = FieldValue.NewU64(1, "ABCDEF");
+        byte[] buf = new byte[2];
+        bool result = val.TryFormat(buf, out int written, default, null);
+        await Assert.That(result).IsFalse();
+        await Assert.That(written).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task FieldValue_ToString_WithFormatProvider()
+    {
+        FieldValue val = FieldValue.NewU64(80, "HTTP");
+        await Assert.That(val.ToString(null, CultureInfo.InvariantCulture)).IsEqualTo("HTTP");
+        await Assert.That(FieldValue.NewI64(-5).ToString(null, null)).IsEqualTo("-5");
+    }
+
+    [Test]
+    public async Task FieldValue_Implicit_NarrowNumericTypes()
+    {
+        FieldValue fromShort = (short)-3;
+        FieldValue fromUshort = (ushort)5;
+        FieldValue fromSbyte = (sbyte)-2;
+        FieldValue fromByte = (byte)9;
+        await Assert.That(fromShort.Data.TryGetAsI64(out long i64)).IsTrue();
+        await Assert.That(i64).IsEqualTo(-3L);
+        await Assert.That(fromUshort.Data.TryGetAsU64(out ulong u64)).IsTrue();
+        await Assert.That(u64).IsEqualTo(5UL);
+        await Assert.That(fromSbyte.Data.TryGetAsI64(out long i64b)).IsTrue();
+        await Assert.That(i64b).IsEqualTo(-2L);
+        await Assert.That(fromByte.Data.TryGetAsU64(out ulong u64b)).IsTrue();
+        await Assert.That(u64b).IsEqualTo(9UL);
+    }
+
+    [Test]
+    public async Task FieldValue_Implicit_AddressTypes()
+    {
+        IPv6Address ipv6 = IPv6Address.FromBytes(new byte[16]);
+        Eui64 eui = Eui64.FromBytes(new byte[] { 1, 2, 3, 4, 5, 6, 7, 8 });
+        Uuid uuid = Uuid.FromBytes(new byte[16]);
+        FieldValue v6 = ipv6;
+        FieldValue euiVal = eui;
+        FieldValue uuidVal = uuid;
+        await Assert.That(v6.Type).IsEqualTo(FieldType.IPv6Address);
+        await Assert.That(euiVal.Type).IsEqualTo(FieldType.Eui64);
+        await Assert.That(uuidVal.Type).IsEqualTo(FieldType.Uuid);
+    }
+
+    [Test]
+    public async Task FieldValue_DefaultText_ImplicitStringConversion()
+    {
+        FieldValue val = FieldValue.NewI64(42L);
+        string text = val.DataText;
+        await Assert.That(text).IsEqualTo("42");
+    }
+
+    [Test]
+    public async Task FieldValueData_NewString_FromReadOnlyMemory()
+    {
+        FieldValueData val = FieldValueData.NewString("memory".AsMemory());
+        await Assert.That(val.TryGetAsString(out string text)).IsTrue();
+        await Assert.That(text).IsEqualTo("memory");
+    }
+
+    [Test]
+    public async Task FieldValueData_NewBytes_FromNonArrayMemory()
+    {
+        using System.Buffers.IMemoryOwner<byte> owner = System.Buffers.MemoryPool<byte>.Shared.Rent(4);
+        ReadOnlySpan<byte> source = [0x01, 0x02, 0x03];
+        source.CopyTo(owner.Memory.Span[..3]);
+        FieldValueData val = FieldValueData.NewBytes(owner.Memory[..3]);
+        await Assert.That(val.TryGetAsBytes(out ReadOnlyMemory<byte> bytes)).IsTrue();
+        await Assert.That(bytes.Length).IsEqualTo(3);
+        await Assert.That(bytes.Span[0]).IsEqualTo((byte)0x01);
+    }
+
+    [Test]
+    public async Task FieldValueData_TryGetAs_WrongType_ReturnsFalse()
+    {
+        FieldValueData u64 = FieldValueData.NewU64(1);
+        await Assert.That(u64.TryGetAsBool(out _)).IsFalse();
+        await Assert.That(u64.TryGetAsI64(out _)).IsFalse();
+        await Assert.That(u64.TryGetAsF64(out _)).IsFalse();
+        await Assert.That(u64.TryGetAsString(out _)).IsFalse();
+        await Assert.That(u64.TryGetAsBytes(out _)).IsFalse();
+        await Assert.That(u64.TryGetAsMacAddress(out _)).IsFalse();
+        await Assert.That(u64.TryGetAsIPv4(out _)).IsFalse();
+        await Assert.That(u64.TryGetAsIPv6(out _)).IsFalse();
+        await Assert.That(u64.TryGetAsEui64(out _)).IsFalse();
+        await Assert.That(u64.TryGetAsUuid(out _)).IsFalse();
+        await Assert.That(u64.TryGetAsTimestamp(out _)).IsFalse();
+    }
+
+    [Test]
+    public async Task FieldValueData_LazyString_Roundtrip()
+    {
+        LazyString lazy = LazyString.Lazy(static () => "lazy-value");
+        FieldValueData val = FieldValueData.NewLazyString(lazy);
+        await Assert.That(val.Type).IsEqualTo(FieldType.String);
+        await Assert.That(val.TryGetAsString(out string text)).IsTrue();
+        await Assert.That(text).IsEqualTo("lazy-value");
+    }
+
+    [Test]
+    public async Task FieldValueData_EqualsObjectAndGetHashCode()
+    {
+        FieldValueData a = FieldValueData.NewString("x");
+        FieldValueData b = FieldValueData.NewString("x");
+        await Assert.That(a.Equals((object)b)).IsTrue();
+        await Assert.That(a.Equals((object)FieldValueData.NewU64(1))).IsFalse();
+        await Assert.That(a.GetHashCode()).IsEqualTo(b.GetHashCode());
+    }
+
+    [Test]
+    public async Task FieldValueData_ComparisonOperators()
+    {
+        FieldValueData low = FieldValueData.NewU64(1);
+        FieldValueData high = FieldValueData.NewU64(9);
+        await Assert.That(low < high).IsTrue();
+        await Assert.That(high > low).IsTrue();
+        await Assert.That(low <= high).IsTrue();
+        await Assert.That(high >= low).IsTrue();
+    }
+
+    [Test]
+    public async Task FieldValueData_CompareTo_MacAddressVsEui64()
+    {
+        MacAddress mac = MacAddress.FromBytes([0x00, 0x11, 0x22, 0x33, 0x44, 0x55]);
+        Eui64 eui = Eui64.FromBytes([0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77]);
+        FieldValueData macVal = FieldValueData.NewMacAddress(mac);
+        FieldValueData euiVal = FieldValueData.NewEui64(eui);
+        await Assert.That(macVal.CompareTo(euiVal)).IsLessThan(0);
+        await Assert.That(euiVal.CompareTo(macVal)).IsGreaterThan(0);
+    }
+
+    [Test]
+    public async Task FieldValueData_CompareTo_IncompatibleTypes_UsesTypeOrder()
+    {
+        FieldValueData str = FieldValueData.NewString("a");
+        FieldValueData u64 = FieldValueData.NewU64(1);
+        await Assert.That(str.CompareTo(u64)).IsNotEqualTo(0);
+    }
+
+    [Test]
+    public async Task FieldValueData_ToString_IPv6_Eui64_Uuid_Timestamp()
+    {
+        IPv6Address ipv6 = IPv6Address.FromBytes(new byte[] { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 });
+        Eui64 eui = Eui64.FromBytes(new byte[] { 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08 });
+        Uuid uuid = Uuid.FromBytes(new byte[16]);
+        Timestamp ts = Timestamp.FromSecs(5);
+        await Assert.That(FieldValueData.NewIPv6(ipv6).ToString()).IsEqualTo(ipv6.Format());
+        await Assert.That(FieldValueData.NewEui64(eui).ToString()).IsEqualTo(eui.Format());
+        await Assert.That(FieldValueData.NewUuid(uuid).ToString()).IsEqualTo(uuid.Format());
+        await Assert.That(FieldValueData.NewTimestamp(ts).ToString()).IsEqualTo(ts.ToString());
+    }
+
+    [Test]
+    public async Task FieldValueData_TryFormat_Char_AllScalarTypes()
+    {
+        FieldValueData[] values =
+        [
+            FieldValueData.NewI64(-7),
+            FieldValueData.NewF64(1.5),
+            FieldValueData.NewMacAddress(new MacAddress(0xAABBCCDDEEFFUL)),
+            FieldValueData.NewIPv4(new IPv4Address(0x7F000001u)),
+            FieldValueData.NewIPv6(IPv6Address.FromBytes(new byte[16])),
+            FieldValueData.NewEui64(Eui64.FromBytes(new byte[8])),
+            FieldValueData.NewUuid(Uuid.FromBytes(new byte[16])),
+            FieldValueData.NewTimestamp(Timestamp.FromSecs(1)),
+        ];
+
+        foreach (FieldValueData val in values)
+        {
+            char[] buf = new char[128];
+            bool result = val.TryFormat(buf, out int written, default, null);
+            await Assert.That(result).IsTrue();
+            await Assert.That(written).IsGreaterThan(0);
+        }
+    }
+
+    [Test]
+    public async Task FieldValueData_TryFormat_Utf8_AllScalarTypes()
+    {
+        FieldValueData[] values =
+        [
+            FieldValueData.NewI64(-7),
+            FieldValueData.NewF64(1.5),
+            FieldValueData.NewMacAddress(new MacAddress(0xAABBCCDDEEFFUL)),
+            FieldValueData.NewIPv4(new IPv4Address(0x7F000001u)),
+            FieldValueData.NewIPv6(IPv6Address.FromBytes(new byte[16])),
+            FieldValueData.NewEui64(Eui64.FromBytes(new byte[8])),
+            FieldValueData.NewUuid(Uuid.FromBytes(new byte[16])),
+            FieldValueData.NewTimestamp(Timestamp.FromSecs(1)),
+        ];
+
+        foreach (FieldValueData val in values)
+        {
+            byte[] buf = new byte[128];
+            bool result = val.TryFormat(buf, out int written, default, null);
+            await Assert.That(result).IsTrue();
+            await Assert.That(written).IsGreaterThan(0);
+        }
+    }
+
+    [Test]
+    public async Task FieldValueData_TryFormat_String_InsufficientBuffers()
+    {
+        FieldValueData val = FieldValueData.NewString("ABCDEF");
+        char[] charBuf = new char[3];
+        byte[] byteBuf = new byte[2];
+        await Assert.That(val.TryFormat(charBuf, out int charWritten, default, null)).IsFalse();
+        await Assert.That(charWritten).IsEqualTo(0);
+        await Assert.That(val.TryFormat(byteBuf, out int byteWritten, default, null)).IsFalse();
+        await Assert.That(byteWritten).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task FieldValueData_TryFormat_BoolUtf8_InsufficientSpace()
+    {
+        byte[] buf = new byte[3];
+        bool result = FieldValueData.NewBool(true).TryFormat(buf, out int written, default, null);
+        await Assert.That(result).IsFalse();
+        await Assert.That(written).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task FieldValueData_TryFormat_BytesUtf8_InsufficientSpace()
+    {
+        byte[] buf = new byte[4];
+        bool result = FieldValueData.NewBytes([0xDE, 0xAD, 0xBE, 0xEF]).TryFormat(buf, out int written, default, null);
+        await Assert.That(result).IsFalse();
+        await Assert.That(written).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task FieldValueData_IStringSize_IPv6_Eui64_Uuid_Timestamp()
+    {
+        await Assert.That(FieldValueData.NewIPv6(IPv6Address.FromBytes(new byte[16])).TryGetStringSize(default, null, out int ipv6Size)).IsTrue();
+        await Assert.That(ipv6Size).IsGreaterThan(0);
+        await Assert.That(FieldValueData.NewEui64(Eui64.FromBytes(new byte[8])).TryGetStringSize(default, null, out int euiSize)).IsTrue();
+        await Assert.That(euiSize).IsGreaterThan(0);
+        await Assert.That(FieldValueData.NewUuid(Uuid.FromBytes(new byte[16])).TryGetStringSize(default, null, out int uuidSize)).IsTrue();
+        await Assert.That(uuidSize).IsGreaterThan(0);
+        await Assert.That(FieldValueData.NewTimestamp(Timestamp.FromSecs(1)).TryGetStringSize(default, null, out int tsSize)).IsTrue();
+        await Assert.That(tsSize).IsGreaterThan(0);
+    }
+
+    [Test]
+    public async Task FieldValueData_IStringSize_LazyString_ReturnsLength()
+    {
+        FieldValueData val = FieldValueData.NewLazyString(LazyString.Lazy(static () => "lazy"));
+        await Assert.That(val.TryGetStringSize(default, null, out int size)).IsTrue();
+        await Assert.That(size).IsEqualTo(4);
+    }
+
+    [Test]
+    public async Task FieldValueData_ToTempString_ScalarTypes()
+    {
+        FieldValueData[] values =
+        [
+            FieldValueData.NewF64(2.5),
+            FieldValueData.NewIPv6(IPv6Address.FromBytes(new byte[16])),
+            FieldValueData.NewEui64(Eui64.FromBytes(new byte[8])),
+            FieldValueData.NewUuid(Uuid.FromBytes(new byte[16])),
+            FieldValueData.NewTimestamp(Timestamp.FromSecs(2)),
+        ];
+
+        foreach (FieldValueData val in values)
+        {
+            string text;
+            using (TempString temp = val.ToTempString())
+            {
+                text = temp.AsSpan().ToString();
+            }
+            await Assert.That(text).IsEqualTo(val.ToString());
+        }
+    }
+
+    [Test]
+    public async Task FieldValueData_Equality_SameRefDifferentData()
+    {
+        string shared = "shared";
+        FieldValueData a = FieldValueData.NewString(shared);
+        FieldValueData b = FieldValueData.NewString(shared);
+        await Assert.That(a.Equals(b)).IsTrue();
+    }
+
+    [Test]
+    public async Task FieldValueData_GetHashCode_BytesAndUuid()
+    {
+        byte[] bytes = [1, 2, 3];
+        FieldValueData bytesVal = FieldValueData.NewBytes(bytes);
+        FieldValueData uuidVal = FieldValueData.NewUuid(Uuid.FromBytes(new byte[16]));
+        await Assert.That(bytesVal.GetHashCode()).IsNotEqualTo(0);
+        await Assert.That(uuidVal.GetHashCode()).IsNotEqualTo(0);
+    }
+
+    [Test]
+    public async Task FieldValue_DefaultText_Utf8TryFormat_ToStringOverload_AndStringSize()
+    {
+        FieldValue.DefaultText dataText = FieldValue.NewU64(99).DataText;
+
+        byte[] utf8 = new byte[16];
+        bool utf8Ok = dataText.TryFormat(utf8, out int byteWritten, default, null);
+        string utf8Text = Encoding.UTF8.GetString(utf8, 0, byteWritten);
+
+        bool sizeOk = dataText.TryGetStringSize(default, null, out int size);
+        string overload = dataText.ToString("G", CultureInfo.InvariantCulture);
+
+        await Assert.That(utf8Ok).IsTrue();
+        await Assert.That(utf8Text).IsEqualTo("99");
+        await Assert.That(sizeOk).IsTrue();
+        await Assert.That(size).IsEqualTo(20);
+        await Assert.That(overload).IsEqualTo("99");
+    }
+
+    [Test]
+    public async Task FieldValueData_Matrix_ExercisesCompareToAndEqualsSwitchArms()
+    {
+        FieldValueData noneA = FieldValueData.None;
+        FieldValueData noneB = FieldValueData.None;
+        await Assert.That(noneA.Equals(noneB)).IsTrue();
+        await Assert.That(noneA.CompareTo(noneB)).IsEqualTo(0);
+
+        FieldValueData i64A = FieldValueData.NewI64(1);
+        FieldValueData i64B = FieldValueData.NewI64(2);
+        await Assert.That(i64A.CompareTo(i64B)).IsLessThan(0);
+
+        FieldValueData f64A = FieldValueData.NewF64(1.0);
+        FieldValueData f64B = FieldValueData.NewF64(2.0);
+        await Assert.That(f64A.CompareTo(f64B)).IsLessThan(0);
+
+        FieldValueData strA = FieldValueData.NewString("a");
+        FieldValueData strB = FieldValueData.NewString("b");
+        await Assert.That(strA.CompareTo(strB)).IsLessThan(0);
+        await Assert.That(strA.Equals(strB)).IsFalse();
+
+        FieldValueData bytesA = FieldValueData.NewBytes([1]);
+        FieldValueData bytesB = FieldValueData.NewBytes([2]);
+        await Assert.That(bytesA.CompareTo(bytesB)).IsLessThan(0);
+        await Assert.That(bytesA.Equals(bytesB)).IsFalse();
+
+        FieldValueData ipv6A = FieldValueData.NewIPv6(IPv6Address.FromBytes(new byte[16]));
+        FieldValueData ipv6B = FieldValueData.NewIPv6(IPv6Address.FromBytes(
+        [
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
+        ]));
+        await Assert.That(ipv6A.CompareTo(ipv6B)).IsLessThan(0);
+
+        FieldValueData uuidA = FieldValueData.NewUuid(Uuid.FromBytes(new byte[16]));
+        FieldValueData uuidB = FieldValueData.NewUuid(Uuid.FromBytes(
+        [
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
+        ]));
+        await Assert.That(uuidA.CompareTo(uuidB)).IsLessThan(0);
+
+        await Assert.That(FieldValueData.NewF64(2).CompareTo(FieldValueData.NewI64(1))).IsGreaterThan(0);
+        await Assert.That(FieldValueData.NewF64(2).CompareTo(FieldValueData.NewU64(1))).IsGreaterThan(0);
+    }
+
+    [Test]
+    public async Task FieldValueData_LazyString_FormattingPaths()
+    {
+        FieldValueData lazy = FieldValueData.NewLazyString(LazyString.Lazy(static () => "lazy-format"));
+
+        char[] charBuf = new char[32];
+        bool charOk = lazy.TryFormat(charBuf, out int charWritten, default, null);
+        string charText = new(charBuf, 0, charWritten);
+
+        byte[] utf8Buf = new byte[32];
+        bool utf8Ok = lazy.TryFormat(utf8Buf, out int byteWritten, default, null);
+        string utf8Text = Encoding.UTF8.GetString(utf8Buf, 0, byteWritten);
+
+        string toString = lazy.ToString();
+        string overload = lazy.ToString(null, CultureInfo.InvariantCulture);
+
+        string tempText;
+        using (TempString temp = lazy.ToTempString())
+        {
+            tempText = temp.AsSpan().ToString();
+        }
+
+        bool smallChar = lazy.TryFormat(new char[3], out int smallCharWritten, default, null);
+        bool smallUtf8 = lazy.TryFormat(new byte[3], out int smallUtf8Written, default, null);
+
+        await Assert.That(charOk).IsTrue();
+        await Assert.That(charText).IsEqualTo("lazy-format");
+        await Assert.That(utf8Ok).IsTrue();
+        await Assert.That(utf8Text).IsEqualTo("lazy-format");
+        await Assert.That(toString).IsEqualTo("lazy-format");
+        await Assert.That(overload).IsEqualTo("lazy-format");
+        await Assert.That(tempText).IsEqualTo("lazy-format");
+        await Assert.That(smallChar).IsFalse();
+        await Assert.That(smallCharWritten).IsEqualTo(0);
+        await Assert.That(smallUtf8).IsFalse();
+        await Assert.That(smallUtf8Written).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task FieldValueData_NewBytes_CopyPath_ReturnsIndependentBuffer()
+    {
+        using NonArrayBytesMemory owner = new([0xAA, 0xBB]);
+        FieldValueData val = FieldValueData.NewBytes(owner.Memory);
+        val.TryGetAsBytes(out ReadOnlyMemory<byte> bytes);
+        owner.Memory.Span[0] = 0xFF;
+        await Assert.That(bytes.Span[0]).IsEqualTo((byte)0xAA);
+        await Assert.That(bytes.Span[1]).IsEqualTo((byte)0xBB);
+    }
+
+    /// <summary>Memory not array-backed so <see cref="FieldValueData.NewBytes"/> copies.</summary>
+    private sealed class NonArrayBytesMemory : MemoryManager<byte>
+    {
+        private readonly byte[] _data;
+
+        public NonArrayBytesMemory(byte[] data) => _data = data;
+
+        public override Span<byte> GetSpan() => _data;
+
+        public override MemoryHandle Pin(int elementIndex = 0) => throw new NotSupportedException();
+
+        public override void Unpin() { }
+
+        protected override void Dispose(bool disposing) { }
+    }
+
+    [Test]
+    public async Task FieldValueData_TryGetAsU64_OnNonU64_ReturnsFalse()
+    {
+        FieldValueData val = FieldValueData.NewBool(true);
+        bool ok = val.TryGetAsU64(out ulong value);
+        await Assert.That(ok).IsFalse();
+        await Assert.That(value).IsEqualTo(0UL);
+    }
+
+    private static FieldValueData _WithRef(FieldValueData value, object? refValue)
+    {
+        object boxed = value;
+        System.Reflection.FieldInfo field = typeof(FieldValueData).GetField(
+            "_Ref",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+        field.SetValue(boxed, refValue);
+        return (FieldValueData)boxed;
+    }
+
+    [Test]
+    public async Task FieldValueData_CorruptRef_FallbackClassificationAndFormatting()
+    {
+        FieldValueData corrupt = _WithRef(FieldValueData.NewU64(1), new());
+        await Assert.That(corrupt.Type).IsEqualTo(FieldType.None);
+
+        Span<char> charBuf = stackalloc char[4];
+        bool charOk = corrupt.TryFormat(charBuf, out int charWritten, default, null);
+        byte[] utf8Buf = new byte[4];
+        bool utf8Ok = corrupt.TryFormat(utf8Buf, out int utf8Written, default, null);
+        bool sizeOk = corrupt.TryGetStringSize(default, null, out int size);
+
+        await Assert.That(charOk).IsFalse();
+        await Assert.That(charWritten).IsEqualTo(0);
+        await Assert.That(utf8Ok).IsFalse();
+        await Assert.That(utf8Written).IsEqualTo(0);
+        await Assert.That(sizeOk).IsTrue();
+        await Assert.That(size).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task FieldValueData_Equals_StringLazyAndScalarSwitchArms()
+    {
+        // Distinct string instances (avoid interning) so Equals skips the ReferenceEquals fast path.
+        string strLeft = string.Concat("al", "pha");
+        string strRight = new(['a', 'l', 'p', 'h', 'a']);
+        FieldValueData strA = FieldValueData.NewString(strLeft);
+        FieldValueData strB = FieldValueData.NewString(strRight);
+        FieldValueData lazyA = FieldValueData.NewLazyString(LazyString.Lazy(static () => "lazy-eq"));
+        FieldValueData lazyB = FieldValueData.NewLazyString(LazyString.Lazy(static () => "lazy-eq"));
+        byte[] bytesLeft = [1, 2];
+        byte[] bytesRight = [1, 2];
+        FieldValueData bytesA = FieldValueData.NewBytes(bytesLeft);
+        FieldValueData bytesB = FieldValueData.NewBytes(bytesRight);
+        FieldValueData boolA = FieldValueData.NewBool(true);
+        FieldValueData boolB = FieldValueData.NewBool(true);
+        FieldValueData noneA = _WithRef(FieldValueData.None, new());
+        FieldValueData noneB = _WithRef(FieldValueData.None, new());
+
+        await Assert.That(ReferenceEquals(strLeft, strRight)).IsFalse();
+        await Assert.That(strA.Equals(strB)).IsTrue();
+        await Assert.That(lazyA.Equals(lazyB)).IsTrue();
+        await Assert.That(bytesA.Equals(bytesB)).IsTrue();
+        await Assert.That(boolA.Equals(boolB)).IsTrue();
+        await Assert.That(noneA.Equals(noneB)).IsTrue();
+    }
+
+    [Test]
+    public async Task FieldValueData_Equals_StringAndBytesSwitchArms()
+    {
+        string unique = Guid.NewGuid().ToString("N");
+        string left = unique;
+        string right = new string(unique.ToCharArray());
+        FieldValueData strLeft = FieldValueData.NewString(left);
+        FieldValueData strRight = FieldValueData.NewString(right);
+        FieldValueData strOther = FieldValueData.NewString(unique + "x");
+
+        byte[] bytesLeft = [0x10, 0x20, 0x30];
+        byte[] bytesRight = (byte[])bytesLeft.Clone();
+        FieldValueData bytesLeftVal = FieldValueData.NewBytes(bytesLeft);
+        FieldValueData bytesRightVal = FieldValueData.NewBytes(bytesRight);
+        FieldValueData bytesOtherVal = FieldValueData.NewBytes([0x10, 0x20, 0x31]);
+
+        await Assert.That(ReferenceEquals(left, right)).IsFalse();
+        await Assert.That(ReferenceEquals(bytesLeft, bytesRight)).IsFalse();
+        await Assert.That(strLeft.Equals(strRight)).IsTrue();
+        await Assert.That(strLeft.Equals(strOther)).IsFalse();
+        await Assert.That(bytesLeftVal.Equals(bytesRightVal)).IsTrue();
+        await Assert.That(bytesLeftVal.Equals(bytesOtherVal)).IsFalse();
+        await Assert.That(strLeft.Equals((object)strRight)).IsTrue();
+        await Assert.That(bytesLeftVal.Equals((object)bytesRightVal)).IsTrue();
+    }
+
+    [Test]
+    public async Task FieldValueData_ExtractString_PrivatePaths()
+    {
+        MethodInfo extract = typeof(FieldValueData).GetMethod(
+            "_ExtractString",
+            BindingFlags.Static | BindingFlags.NonPublic)!;
+
+        string fromObject = (string)extract.Invoke(null, [new()])!;
+        FieldValueData lazyVal = FieldValueData.NewLazyString(LazyString.Lazy(static () => "extract-lazy"));
+        object boxed = lazyVal;
+        object? lazyRef = typeof(FieldValueData).GetField(
+            "_Ref",
+            BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(boxed);
+        string fromLazy = (string)extract.Invoke(null, [lazyRef])!;
+
+        await Assert.That(fromObject).IsEqualTo(string.Empty);
+        await Assert.That(fromLazy).IsEqualTo("extract-lazy");
+    }
+
+    [Test]
+    public async Task FieldValueData_CompareTo_UuidArm()
+    {
+        FieldValueData left = FieldValueData.NewUuid(Uuid.FromBytes(new byte[16]));
+        FieldValueData right = FieldValueData.NewUuid(Uuid.FromBytes(
+        [
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
+        ]));
+        int cmp = left.CompareTo(right);
+        await Assert.That(cmp).IsLessThan(0);
+    }
+
+    [Test]
+    public async Task FieldValueData_Equals_MarkerTypes_UseSwitchArms()
+    {
+        FieldValueData ipv6A = FieldValueData.NewIPv6(IPv6Address.FromBytes(new byte[16]));
+        FieldValueData ipv6B = FieldValueData.NewIPv6(IPv6Address.FromBytes(new byte[16]));
+        FieldValueData uuidA = FieldValueData.NewUuid(Uuid.FromBytes(new byte[16]));
+        FieldValueData uuidB = FieldValueData.NewUuid(Uuid.FromBytes(new byte[16]));
+        FieldValueData u64A = FieldValueData.NewU64(42);
+        FieldValueData u64B = FieldValueData.NewU64(42);
+        FieldValueData boolA = FieldValueData.NewBool(true);
+        FieldValueData boolB = FieldValueData.NewBool(true);
+
+        await Assert.That(ipv6A.Equals(ipv6B)).IsTrue();
+        await Assert.That(uuidA.Equals(uuidB)).IsTrue();
+        await Assert.That(u64A.Equals(u64B)).IsTrue();
+        await Assert.That(boolA.Equals(boolB)).IsTrue();
+    }
+
+    [Test]
+    public async Task FieldValueData_CompareTo_TimestampArm()
+    {
+        FieldValueData early = FieldValueData.NewTimestamp(Timestamp.FromSecs(1));
+        FieldValueData late = FieldValueData.NewTimestamp(Timestamp.FromSecs(9));
+        await Assert.That(early.CompareTo(late)).IsLessThan(0);
+        await Assert.That(late.CompareTo(early)).IsGreaterThan(0);
+    }
+
+    [Test]
+    public async Task FieldValueData_Utf8TryFormat_None_ReturnsEmpty()
+    {
+        FieldValueData none = FieldValueData.None;
+        byte[] buf = new byte[8];
+        bool ok = none.TryFormat(buf, out int written, default, null);
+        await Assert.That(ok).IsTrue();
+        await Assert.That(written).IsEqualTo(0);
     }
 }

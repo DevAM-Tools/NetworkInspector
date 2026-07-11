@@ -95,75 +95,75 @@ public sealed partial class TcpProtocol : IProtocol
     public const string PortTableName = "tcp.port";
 
     /// <summary>Index group for always-present TCP fields.</summary>
-    private const string TcpIndexGroup = "tcp";
+    private const string _TcpIndexGroup = "tcp";
 
     #endregion
 
     #region Fields (always present)
 
-    [BytesField("tcp", "TCP", IndexGroup = TcpIndexGroup)]
+    [BytesField("tcp", "TCP", IndexGroup = _TcpIndexGroup)]
     private FieldId _ProtocolFieldId;
 
-    [U64Field("tcp.srcport", "Source Port", IndexGroup = TcpIndexGroup)]
+    [U64Field("tcp.srcport", "Source Port", IndexGroup = _TcpIndexGroup)]
     private FieldId _SrcPortFieldId;
 
-    [U64Field("tcp.dstport", "Destination Port", IndexGroup = TcpIndexGroup)]
+    [U64Field("tcp.dstport", "Destination Port", IndexGroup = _TcpIndexGroup)]
     private FieldId _DstPortFieldId;
 
-    [U64Field("tcp.seq", "Sequence Number", IndexGroup = TcpIndexGroup)]
+    [U64Field("tcp.seq", "Sequence Number", IndexGroup = _TcpIndexGroup)]
     private FieldId _SeqFieldId;
 
-    [U64Field("tcp.ack", "Acknowledgment Number", IndexGroup = TcpIndexGroup)]
+    [U64Field("tcp.ack", "Acknowledgment Number", IndexGroup = _TcpIndexGroup)]
     private FieldId _AckFieldId;
 
-    [U64Field("tcp.hdr_len", "Header Length", IndexGroup = TcpIndexGroup)]
+    [U64Field("tcp.hdr_len", "Header Length", IndexGroup = _TcpIndexGroup)]
     private FieldId _HdrLenFieldId;
 
-    [U64Field("tcp.flags", "Flags", IndexGroup = TcpIndexGroup)]
+    [U64Field("tcp.flags", "Flags", IndexGroup = _TcpIndexGroup)]
     private FieldId _FlagsFieldId;
 
     // Flag sub-fields (always present, under tcp.flags container in populator)
-    [BoolField("tcp.flags.cwr", "Congestion Window Reduced", IndexGroup = TcpIndexGroup)]
+    [BoolField("tcp.flags.cwr", "Congestion Window Reduced", IndexGroup = _TcpIndexGroup)]
     private FieldId _FlagsCwrFieldId;
 
-    [BoolField("tcp.flags.ece", "ECN-Echo", IndexGroup = TcpIndexGroup)]
+    [BoolField("tcp.flags.ece", "ECN-Echo", IndexGroup = _TcpIndexGroup)]
     private FieldId _FlagsEceFieldId;
 
-    [BoolField("tcp.flags.urg", "Urgent", IndexGroup = TcpIndexGroup)]
+    [BoolField("tcp.flags.urg", "Urgent", IndexGroup = _TcpIndexGroup)]
     private FieldId _FlagsUrgFieldId;
 
-    [BoolField("tcp.flags.ack", "Acknowledgment", IndexGroup = TcpIndexGroup)]
+    [BoolField("tcp.flags.ack", "Acknowledgment", IndexGroup = _TcpIndexGroup)]
     private FieldId _FlagsAckFieldId;
 
-    [BoolField("tcp.flags.push", "Push", IndexGroup = TcpIndexGroup)]
+    [BoolField("tcp.flags.push", "Push", IndexGroup = _TcpIndexGroup)]
     private FieldId _FlagsPushFieldId;
 
-    [BoolField("tcp.flags.reset", "Reset", IndexGroup = TcpIndexGroup)]
+    [BoolField("tcp.flags.reset", "Reset", IndexGroup = _TcpIndexGroup)]
     private FieldId _FlagsResetFieldId;
 
-    [BoolField("tcp.flags.syn", "Syn", IndexGroup = TcpIndexGroup)]
+    [BoolField("tcp.flags.syn", "Syn", IndexGroup = _TcpIndexGroup)]
     private FieldId _FlagsSynFieldId;
 
-    [BoolField("tcp.flags.fin", "Fin", IndexGroup = TcpIndexGroup)]
+    [BoolField("tcp.flags.fin", "Fin", IndexGroup = _TcpIndexGroup)]
     private FieldId _FlagsFinFieldId;
 
-    [U64Field("tcp.window_size_value", "Window", IndexGroup = TcpIndexGroup)]
+    [U64Field("tcp.window_size_value", "Window", IndexGroup = _TcpIndexGroup)]
     private FieldId _WindowFieldId;
 
-    [U64Field("tcp.checksum", "Checksum", IndexGroup = TcpIndexGroup)]
+    [U64Field("tcp.checksum", "Checksum", IndexGroup = _TcpIndexGroup)]
     private FieldId _ChecksumFieldId;
 
-    [U64Field("tcp.urgent_pointer", "Urgent Pointer", IndexGroup = TcpIndexGroup)]
+    [U64Field("tcp.urgent_pointer", "Urgent Pointer", IndexGroup = _TcpIndexGroup)]
     private FieldId _UrgentPointerFieldId;
 
-    [U64Field("tcp.len", "TCP Segment Len", IndexGroup = TcpIndexGroup)]
+    [U64Field("tcp.len", "TCP Segment Len", IndexGroup = _TcpIndexGroup)]
     private FieldId _LenFieldId;
 
     #endregion
 
     #region Combined port field (alias group, Wireshark-compatible)
 
-    // Field alias group ID assigned in RegisterFieldsCustom for "tcp.port" -> { tcp.srcport, tcp.dstport }.
+    // Field alias group ID assigned in _RegisterFieldsCustom for "tcp.port" -> { tcp.srcport, tcp.dstport }.
     // Independent of the protocol table also named "tcp.port" (PortTableName) — alias / field /
     // table namespaces do not collide. Alias is metadata-only; GetFieldId("tcp.port") never
     // resolves and no tcp.port node is appended to the parse tree.
@@ -203,135 +203,135 @@ public sealed partial class TcpProtocol : IProtocol
 
     #region TCP Options fields (optional, when header length > 20)
 
-    private const string OptionsIndexGroup = "tcp.options";
+    private const string _OptionsIndexGroup = "tcp.options";
 
-    [NoneField("tcp.options", "Options", IndexGroup = OptionsIndexGroup)]
+    [NoneField("tcp.options", "Options", IndexGroup = _OptionsIndexGroup)]
     private FieldId _OptionsFieldId;
 
-    [NoneField("tcp.options.eol", "End of Option List", IndexGroup = OptionsIndexGroup)]
+    [NoneField("tcp.options.eol", "End of Option List", IndexGroup = _OptionsIndexGroup)]
     private FieldId _OptEolFieldId;
 
-    [NoneField("tcp.options.nop", "No-Operation", IndexGroup = OptionsIndexGroup)]
+    [NoneField("tcp.options.nop", "No-Operation", IndexGroup = _OptionsIndexGroup)]
     private FieldId _OptNopFieldId;
 
     #endregion
 
     #region MSS (kind 2)
-    [NoneField("tcp.options.mss", "Maximum Segment Size", IndexGroup = OptionsIndexGroup)]
+    [NoneField("tcp.options.mss", "Maximum Segment Size", IndexGroup = _OptionsIndexGroup)]
     private FieldId _OptMssFieldId;
 
-    [U64Field("tcp.options.mss_val", "MSS Value", IndexGroup = OptionsIndexGroup)]
+    [U64Field("tcp.options.mss_val", "MSS Value", IndexGroup = _OptionsIndexGroup)]
     private FieldId _OptMssValFieldId;
 
     #endregion
 
     #region Window Scale (kind 3)
-    [NoneField("tcp.options.wscale", "Window Scale", IndexGroup = OptionsIndexGroup)]
+    [NoneField("tcp.options.wscale", "Window Scale", IndexGroup = _OptionsIndexGroup)]
     private FieldId _OptWscaleFieldId;
 
-    [U64Field("tcp.options.wscale.shift", "Shift count", IndexGroup = OptionsIndexGroup)]
+    [U64Field("tcp.options.wscale.shift", "Shift count", IndexGroup = _OptionsIndexGroup)]
     private FieldId _OptWscaleShiftFieldId;
 
-    [U64Field("tcp.options.wscale.multiplier", "Multiplier", IndexGroup = OptionsIndexGroup)]
+    [U64Field("tcp.options.wscale.multiplier", "Multiplier", IndexGroup = _OptionsIndexGroup)]
     private FieldId _OptWscaleMultiplierFieldId;
 
     #endregion
 
     #region SACK Permitted (kind 4)
-    [NoneField("tcp.options.sack_perm", "SACK Permitted", IndexGroup = OptionsIndexGroup)]
+    [NoneField("tcp.options.sack_perm", "SACK Permitted", IndexGroup = _OptionsIndexGroup)]
     private FieldId _OptSackPermFieldId;
 
     #endregion
 
     #region SACK (kind 5)
-    [NoneField("tcp.options.sack", "SACK", IndexGroup = OptionsIndexGroup)]
+    [NoneField("tcp.options.sack", "SACK", IndexGroup = _OptionsIndexGroup)]
     private FieldId _OptSackFieldId;
 
-    [U64Field("tcp.options.sack.count", "SACK Block Count", IndexGroup = OptionsIndexGroup)]
+    [U64Field("tcp.options.sack.count", "SACK Block Count", IndexGroup = _OptionsIndexGroup)]
     private FieldId _OptSackCountFieldId;
 
-    [U64Field("tcp.options.sack_le", "SACK Left Edge", IndexGroup = OptionsIndexGroup)]
+    [U64Field("tcp.options.sack_le", "SACK Left Edge", IndexGroup = _OptionsIndexGroup)]
     private FieldId _OptSackLeFieldId;
 
-    [U64Field("tcp.options.sack_re", "SACK Right Edge", IndexGroup = OptionsIndexGroup)]
+    [U64Field("tcp.options.sack_re", "SACK Right Edge", IndexGroup = _OptionsIndexGroup)]
     private FieldId _OptSackReFieldId;
 
     #endregion
 
     #region Timestamps (kind 8)
-    [NoneField("tcp.options.timestamp", "Timestamps", IndexGroup = OptionsIndexGroup)]
+    [NoneField("tcp.options.timestamp", "Timestamps", IndexGroup = _OptionsIndexGroup)]
     private FieldId _OptTimestampsFieldId;
 
-    [U64Field("tcp.options.timestamp.tsval", "Timestamp Value", IndexGroup = OptionsIndexGroup)]
+    [U64Field("tcp.options.timestamp.tsval", "Timestamp Value", IndexGroup = _OptionsIndexGroup)]
     private FieldId _OptTsValFieldId;
 
-    [U64Field("tcp.options.timestamp.tsecr", "Timestamp Echo Reply", IndexGroup = OptionsIndexGroup)]
+    [U64Field("tcp.options.timestamp.tsecr", "Timestamp Echo Reply", IndexGroup = _OptionsIndexGroup)]
     private FieldId _OptTsEcrFieldId;
 
     #endregion
 
     #region User Timeout (kind 28)
-    [NoneField("tcp.options.user_timeout", "User Timeout", IndexGroup = OptionsIndexGroup)]
+    [NoneField("tcp.options.user_timeout", "User Timeout", IndexGroup = _OptionsIndexGroup)]
     private FieldId _OptUserTimeoutFieldId;
 
-    [StringField("tcp.options.user_timeout.granularity", "Granularity", IndexGroup = OptionsIndexGroup)]
+    [StringField("tcp.options.user_timeout.granularity", "Granularity", IndexGroup = _OptionsIndexGroup)]
     private FieldId _OptUserTimeoutGranularityFieldId;
 
-    [U64Field("tcp.options.user_timeout.val", "User Timeout Value", IndexGroup = OptionsIndexGroup)]
+    [U64Field("tcp.options.user_timeout.val", "User Timeout Value", IndexGroup = _OptionsIndexGroup)]
     private FieldId _OptUserTimeoutValFieldId;
 
     #endregion
 
     #region TCP Fast Open (kind 34)
-    [NoneField("tcp.options.tfo", "TCP Fast Open", IndexGroup = OptionsIndexGroup)]
+    [NoneField("tcp.options.tfo", "TCP Fast Open", IndexGroup = _OptionsIndexGroup)]
     private FieldId _OptTfoFieldId;
 
-    [BoolField("tcp.options.tfo.request", "Cookie Request", IndexGroup = OptionsIndexGroup)]
+    [BoolField("tcp.options.tfo.request", "Cookie Request", IndexGroup = _OptionsIndexGroup)]
     private FieldId _OptTfoRequestFieldId;
 
-    [BytesField("tcp.options.tfo.cookie", "Cookie", IndexGroup = OptionsIndexGroup)]
+    [BytesField("tcp.options.tfo.cookie", "Cookie", IndexGroup = _OptionsIndexGroup)]
     private FieldId _OptTfoCookieFieldId;
 
     #endregion
 
     #region MPTCP (kind 30)
-    [NoneField("tcp.options.mptcp", "Multipath TCP", IndexGroup = OptionsIndexGroup)]
+    [NoneField("tcp.options.mptcp", "Multipath TCP", IndexGroup = _OptionsIndexGroup)]
     private FieldId _OptMptcpFieldId;
 
-    [U64Field("tcp.options.mptcp.subtype", "Subtype", IndexGroup = OptionsIndexGroup)]
+    [U64Field("tcp.options.mptcp.subtype", "Subtype", IndexGroup = _OptionsIndexGroup)]
     private FieldId _OptMptcpSubtypeFieldId;
 
     #endregion
 
     #region MD5 Signature (kind 19)
-    [NoneField("tcp.options.md5", "MD5 Signature", IndexGroup = OptionsIndexGroup)]
+    [NoneField("tcp.options.md5", "MD5 Signature", IndexGroup = _OptionsIndexGroup)]
     private FieldId _OptMd5FieldId;
 
-    [BytesField("tcp.options.md5.digest", "Digest", IndexGroup = OptionsIndexGroup)]
+    [BytesField("tcp.options.md5.digest", "Digest", IndexGroup = _OptionsIndexGroup)]
     private FieldId _OptMd5DigestFieldId;
 
     #endregion
 
     #region TCP-AO (kind 29)
-    [NoneField("tcp.options.ao", "TCP Authentication Option", IndexGroup = OptionsIndexGroup)]
+    [NoneField("tcp.options.ao", "TCP Authentication Option", IndexGroup = _OptionsIndexGroup)]
     private FieldId _OptAoFieldId;
 
-    [U64Field("tcp.options.ao.keyid", "KeyID", IndexGroup = OptionsIndexGroup)]
+    [U64Field("tcp.options.ao.keyid", "KeyID", IndexGroup = _OptionsIndexGroup)]
     private FieldId _OptAoKeyIdFieldId;
 
-    [U64Field("tcp.options.ao.rnextkeyid", "RNextKeyID", IndexGroup = OptionsIndexGroup)]
+    [U64Field("tcp.options.ao.rnextkeyid", "RNextKeyID", IndexGroup = _OptionsIndexGroup)]
     private FieldId _OptAoRNextKeyIdFieldId;
 
-    [BytesField("tcp.options.ao.mac", "MAC", IndexGroup = OptionsIndexGroup)]
+    [BytesField("tcp.options.ao.mac", "MAC", IndexGroup = _OptionsIndexGroup)]
     private FieldId _OptAoMacFieldId;
 
     #endregion
 
     #region Unknown options
-    [NoneField("tcp.options.unknown", "Unknown Option", IndexGroup = OptionsIndexGroup)]
+    [NoneField("tcp.options.unknown", "Unknown Option", IndexGroup = _OptionsIndexGroup)]
     private FieldId _OptUnknownFieldId;
 
-    [BytesField("tcp.options.unknown.data", "Data", IndexGroup = OptionsIndexGroup)]
+    [BytesField("tcp.options.unknown.data", "Data", IndexGroup = _OptionsIndexGroup)]
     private FieldId _OptUnknownDataFieldId;
 
     #endregion
@@ -355,67 +355,67 @@ public sealed partial class TcpProtocol : IProtocol
 
     #region Stream index (always present, eagerly appended)
 
-    [U64Field("tcp.stream", "Stream index", IndexGroup = TcpIndexGroup)]
+    [U64Field("tcp.stream", "Stream index", IndexGroup = _TcpIndexGroup)]
     private FieldId _StreamFieldId;
 
     #endregion
 
     #region TCP Analysis fields (eagerly appended, optional)
 
-    private const string AnalysisIndexGroup = "tcp.analysis";
+    private const string _AnalysisIndexGroup = "tcp.analysis";
 
-    [NoneField("tcp.analysis", "SEQ/ACK analysis", IndexGroup = AnalysisIndexGroup)]
+    [NoneField("tcp.analysis", "SEQ/ACK analysis", IndexGroup = _AnalysisIndexGroup)]
     private FieldId _AnalysisFieldId;
 
-    [BoolField("tcp.analysis.retransmission", "Retransmission", IndexGroup = AnalysisIndexGroup)]
+    [BoolField("tcp.analysis.retransmission", "Retransmission", IndexGroup = _AnalysisIndexGroup)]
     private FieldId _AnalysisRetransmissionFieldId;
 
-    [BoolField("tcp.analysis.fast_retransmission", "Fast Retransmission", IndexGroup = AnalysisIndexGroup)]
+    [BoolField("tcp.analysis.fast_retransmission", "Fast Retransmission", IndexGroup = _AnalysisIndexGroup)]
     private FieldId _AnalysisFastRetransmissionFieldId;
 
-    [BoolField("tcp.analysis.spurious_retransmission", "Spurious Retransmission", IndexGroup = AnalysisIndexGroup)]
+    [BoolField("tcp.analysis.spurious_retransmission", "Spurious Retransmission", IndexGroup = _AnalysisIndexGroup)]
     private FieldId _AnalysisSpuriousRetransmissionFieldId;
 
-    [BoolField("tcp.analysis.out_of_order", "Out-Of-Order", IndexGroup = AnalysisIndexGroup)]
+    [BoolField("tcp.analysis.out_of_order", "Out-Of-Order", IndexGroup = _AnalysisIndexGroup)]
     private FieldId _AnalysisOutOfOrderFieldId;
 
-    [BoolField("tcp.analysis.duplicate_ack", "Duplicate ACK", IndexGroup = AnalysisIndexGroup)]
+    [BoolField("tcp.analysis.duplicate_ack", "Duplicate ACK", IndexGroup = _AnalysisIndexGroup)]
     private FieldId _AnalysisDuplicateAckFieldId;
 
-    [U64Field("tcp.analysis.duplicate_ack_num", "Duplicate ACK #", IndexGroup = AnalysisIndexGroup)]
+    [U64Field("tcp.analysis.duplicate_ack_num", "Duplicate ACK #", IndexGroup = _AnalysisIndexGroup)]
     private FieldId _AnalysisDupAckNumFieldId;
 
-    [BoolField("tcp.analysis.lost_segment", "Previous segment not captured", IndexGroup = AnalysisIndexGroup)]
+    [BoolField("tcp.analysis.lost_segment", "Previous segment not captured", IndexGroup = _AnalysisIndexGroup)]
     private FieldId _AnalysisLostSegmentFieldId;
 
-    [BoolField("tcp.analysis.keep_alive", "Keep-Alive", IndexGroup = AnalysisIndexGroup)]
+    [BoolField("tcp.analysis.keep_alive", "Keep-Alive", IndexGroup = _AnalysisIndexGroup)]
     private FieldId _AnalysisKeepAliveFieldId;
 
-    [BoolField("tcp.analysis.zero_window", "Zero Window", IndexGroup = AnalysisIndexGroup)]
+    [BoolField("tcp.analysis.zero_window", "Zero Window", IndexGroup = _AnalysisIndexGroup)]
     private FieldId _AnalysisZeroWindowFieldId;
 
-    [BoolField("tcp.analysis.zero_window_probe", "Zero Window Probe", IndexGroup = AnalysisIndexGroup)]
+    [BoolField("tcp.analysis.zero_window_probe", "Zero Window Probe", IndexGroup = _AnalysisIndexGroup)]
     private FieldId _AnalysisZeroWindowProbeFieldId;
 
-    [BoolField("tcp.analysis.zero_window_probe_ack", "Zero Window Probe Ack", IndexGroup = AnalysisIndexGroup)]
+    [BoolField("tcp.analysis.zero_window_probe_ack", "Zero Window Probe Ack", IndexGroup = _AnalysisIndexGroup)]
     private FieldId _AnalysisZeroWindowProbeAckFieldId;
 
-    [BoolField("tcp.analysis.window_update", "Window update", IndexGroup = AnalysisIndexGroup)]
+    [BoolField("tcp.analysis.window_update", "Window update", IndexGroup = _AnalysisIndexGroup)]
     private FieldId _AnalysisWindowUpdateFieldId;
 
-    [BoolField("tcp.analysis.window_full", "Window is full", IndexGroup = AnalysisIndexGroup)]
+    [BoolField("tcp.analysis.window_full", "Window is full", IndexGroup = _AnalysisIndexGroup)]
     private FieldId _AnalysisWindowFullFieldId;
 
-    [U64Field("tcp.analysis.bytes_in_flight", "Bytes in flight", IndexGroup = AnalysisIndexGroup)]
+    [U64Field("tcp.analysis.bytes_in_flight", "Bytes in flight", IndexGroup = _AnalysisIndexGroup)]
     private FieldId _AnalysisBytesInFlightFieldId;
 
-    [F64Field("tcp.analysis.initial_rtt", "iRTT", IndexGroup = AnalysisIndexGroup)]
+    [F64Field("tcp.analysis.initial_rtt", "iRTT", IndexGroup = _AnalysisIndexGroup)]
     private FieldId _AnalysisInitialRttFieldId;
 
-    [F64Field("tcp.analysis.ack_rtt", "ACK RTT", IndexGroup = AnalysisIndexGroup)]
+    [F64Field("tcp.analysis.ack_rtt", "ACK RTT", IndexGroup = _AnalysisIndexGroup)]
     private FieldId _AnalysisAckRttFieldId;
 
-    [StringField("tcp.analysis.connection_state", "Connection State", IndexGroup = AnalysisIndexGroup)]
+    [StringField("tcp.analysis.connection_state", "Connection State", IndexGroup = _AnalysisIndexGroup)]
     private FieldId _AnalysisConnectionStateFieldId;
 
     #endregion
@@ -491,7 +491,7 @@ public sealed partial class TcpProtocol : IProtocol
     // Bundled field IDs for passing to the options parser
     private TcpOptionsFieldIds _OptionsFieldIds;
 
-    partial void OnStartCustom(Stack stack)
+    partial void _OnStartCustom(Stack stack)
     {
         _IpContainerFieldId = stack.GetFieldId("ip") ?? FieldId.Invalid;
         _Ipv6ContainerFieldId = stack.GetFieldId("ipv6") ?? FieldId.Invalid;
@@ -501,7 +501,7 @@ public sealed partial class TcpProtocol : IProtocol
         _Ipv6DstFieldId = stack.GetFieldId("ipv6.dst") ?? FieldId.Invalid;
         _Ipv4ProtocolId = stack.GetProtocolId("ip") ?? ProtocolId.Invalid;
         _Ipv6ProtocolId = stack.GetProtocolId("ipv6") ?? ProtocolId.Invalid;
-        _Populator = PopulateTcp;
+        _Populator = _PopulateTcp;
         _PortSparseCache = stack.BuildU64SparseDelegateCache(_PortTableId);
         _ReassemblyEngine = new TcpReassemblyEngine(stack);
 
@@ -547,7 +547,7 @@ public sealed partial class TcpProtocol : IProtocol
     /// as metadata; the alias is reachable only via the alias-group APIs on IStack and is
     /// independent of the dispatch table also named "tcp.port".
     /// </summary>
-    partial void RegisterFieldsCustom(IStackBuilder builder, ProtocolId protocolId)
+    partial void _RegisterFieldsCustom(IStackBuilder builder, ProtocolId protocolId)
     {
         _PortAliasGroupId = builder.RegisterFieldAliasGroup(
             protocolId,
@@ -562,7 +562,7 @@ public sealed partial class TcpProtocol : IProtocol
     /// Source and destination ports are eagerly appended by <see cref="Parse"/>.
     /// Called on first access of the TCP container's children.
     /// </summary>
-    private ParseResult PopulateTcp(in MutField container)
+    private ParseResult _PopulateTcp(in MutField container)
     {
         if (!container.Value.Data.TryGetAsBytes(out ReadOnlyMemory<byte> tcpData))
         {
@@ -580,14 +580,14 @@ public sealed partial class TcpProtocol : IProtocol
         // tcp.srcport and tcp.dstport are eagerly appended by Parse() so that value-cache
         // recording captures port numbers during the initial parse pass.
         // The any-match name "tcp.port" is exposed via the alias group registered in
-        // RegisterFieldsCustom; no duplicate tcp.port field node is appended.
+        // _RegisterFieldsCustom; no duplicate tcp.port field node is appended.
 
         string csumText = DisplayTables.FormatHexU16(header.Checksum.Value);
         container.AppendWithCustomText(_ChecksumFieldId, FieldValue.NewU64(header.Checksum.Value), csumText);
 
         if (_VerifyChecksum && header.Checksum.Value != 0)
         {
-            bool? valid = ValidateChecksum(in container, tcpData.Span);
+            bool? valid = _ValidateChecksum(in container, tcpData.Span);
             string statusText = valid switch
             {
                 true => "[Good]",
@@ -654,7 +654,7 @@ public sealed partial class TcpProtocol : IProtocol
     /// Returns <see langword="true"/> if valid, <see langword="false"/> if invalid,
     /// or <see langword="null"/> if no IP layer was found.
     /// </summary>
-    private bool? ValidateChecksum(in MutField container, ReadOnlySpan<byte> tcpData)
+    private bool? _ValidateChecksum(in MutField container, ReadOnlySpan<byte> tcpData)
     {
         const byte TcpProtocolNumber = 6;
         ushort tcpLength = (ushort)tcpData.Length;
@@ -775,7 +775,7 @@ public sealed partial class TcpProtocol : IProtocol
     #endregion
 
         #region TCP Analysis (stateful, runs on every segment)
-        TcpAnalysisResult analysis = RunAnalysis(
+        TcpAnalysisResult analysis = _RunAnalysis(
             in parentField, srcPort, dstPort, header.SeqNumber.Value, header.AckNumber.Value,
             flags, header.WindowSize.Value, payloadLen, span, in context);
 
@@ -814,7 +814,7 @@ public sealed partial class TcpProtocol : IProtocol
             || !double.IsNaN(analysis.InitialRtt) || !double.IsNaN(analysis.AckRtt))
         {
             context.RecordGroupPresence(_TcpAnalysisGroupId);
-            AppendAnalysisFields(in parentField, in analysis, in context);
+            _AppendAnalysisFields(in parentField, in analysis, in context);
         }
 
         // Dispatch by port on parentField, with reassembly and heuristic fallback
@@ -827,7 +827,7 @@ public sealed partial class TcpProtocol : IProtocol
             // Identify the target protocol and check for reassembly support.
             // If the protocol has a StreamReassemblyConfig, buffer segments and
             // dispatch extracted PDUs instead of raw segment payloads.
-            ProtocolId targetProtocol = TryIdentifyPortProtocol(lowPort, highPort, in context);
+            ProtocolId targetProtocol = _TryIdentifyPortProtocol(lowPort, highPort, in context);
 
             if (targetProtocol.IsValid && _ReassemblyEngine is not null
                 && analysis.ConnectionState is not null)
@@ -867,7 +867,7 @@ public sealed partial class TcpProtocol : IProtocol
             }
 
             // No reassembly — dispatch raw payload directly
-            ParseResult result = DispatchPort(in parentField, lowPort, payload, in context);
+            ParseResult result = _DispatchPort(in parentField, lowPort, payload, in context);
             if (result.IsError)
             {
                 return result;
@@ -876,7 +876,7 @@ public sealed partial class TcpProtocol : IProtocol
             // If lowPort didn't match, try highPort
             if (result.Value == 0 && lowPort != highPort)
             {
-                result = DispatchPort(in parentField, highPort, payload, in context);
+                result = _DispatchPort(in parentField, highPort, payload, in context);
                 if (result.IsError)
                 {
                     return result;
@@ -886,7 +886,7 @@ public sealed partial class TcpProtocol : IProtocol
             // If no port-based match, try heuristic detection as fallback
             if (result.Value == 0 && _HeuristicTableId.IsValid)
             {
-                result = TryHeuristicDispatch(in parentField, payload, in context, analysis.ConnectionState);
+                result = _TryHeuristicDispatch(in parentField, payload, in context, analysis.ConnectionState);
                 if (result.IsError)
                 {
                     return result;
@@ -903,7 +903,7 @@ public sealed partial class TcpProtocol : IProtocol
     /// For SYN packets with options, extracts the Window Scale value and passes it
     /// to the analyzer so it can be stored for future window calculations.
     /// </summary>
-    private TcpAnalysisResult RunAnalysis(
+    private TcpAnalysisResult _RunAnalysis(
         in MutField parentField,
         ushort srcPort, ushort dstPort,
         uint seqNum, uint ackNum,
@@ -917,7 +917,7 @@ public sealed partial class TcpProtocol : IProtocol
         // Try to build a connection key from IP addresses via sibling navigation.
         // Uses sibling walk to find the immediately enclosing IP layer,
         // which correctly handles tunnel scenarios (IP-in-IP, GRE).
-        if (!TryCreateConnectionKey(in parentField, srcPort, dstPort, out TcpConnectionKey key, out UInt128 srcAddr, in context))
+        if (!_TryCreateConnectionKey(in parentField, srcPort, dstPort, out TcpConnectionKey key, out UInt128 srcAddr, in context))
         {
             // No IP layer found — return empty result with NoIpLayer flag
             // so the caller can append a diagnostic error field.
@@ -941,7 +941,7 @@ public sealed partial class TcpProtocol : IProtocol
             if (headerLen > TcpHeader.MinSize && headerLen <= tcpSegment.Length)
             {
                 ReadOnlySpan<byte> optionsData = tcpSegment[TcpHeader.MinSize..headerLen];
-                windowScale = ExtractWindowScale(optionsData);
+                windowScale = _ExtractWindowScale(optionsData);
             }
         }
 
@@ -958,7 +958,7 @@ public sealed partial class TcpProtocol : IProtocol
     /// Lightweight scan of TCP options to extract only the Window Scale value.
     /// Used during SYN/SYN-ACK processing before full lazy option parsing.
     /// </summary>
-    private static byte? ExtractWindowScale(ReadOnlySpan<byte> optionsData)
+    private static byte? _ExtractWindowScale(ReadOnlySpan<byte> optionsData)
     {
         const byte OptEol = 0;
         const byte OptNop = 1;
@@ -1001,7 +1001,7 @@ public sealed partial class TcpProtocol : IProtocol
     /// per-protocol thread-local caches first (fast path), falling back to
     /// previous-sibling tree navigation for edge cases.
     /// </summary>
-    private bool TryCreateConnectionKey(
+    private bool _TryCreateConnectionKey(
         in MutField parentField,
         ushort srcPort, ushort dstPort,
         out TcpConnectionKey key,
@@ -1075,7 +1075,7 @@ public sealed partial class TcpProtocol : IProtocol
     /// Eagerly appends tcp.analysis container and its sub-fields to the parent field.
     /// Only called when there is analysis data worth displaying.
     /// </summary>
-    private void AppendAnalysisFields(in MutField parentField, in TcpAnalysisResult analysis, in ParseContext context)
+    private void _AppendAnalysisFields(in MutField parentField, in TcpAnalysisResult analysis, in ParseContext context)
     {
         MutField analysisContainer = parentField.Append(_AnalysisFieldId, FieldValue.None);
 
@@ -1153,7 +1153,7 @@ public sealed partial class TcpProtocol : IProtocol
     /// Dispatches to the next protocol by TCP port using the sparse cache.
     /// Falls back to full table dispatch for uncached ports.
     /// </summary>
-    private ParseResult DispatchPort(
+    private ParseResult _DispatchPort(
         in MutField parentField, ulong port, ReadOnlyMemory<byte> payload, in ParseContext context)
     {
         foreach ((ulong key, ParseDelegate parse) in _PortSparseCache)
@@ -1173,7 +1173,7 @@ public sealed partial class TcpProtocol : IProtocol
     /// If a match is found, caches the protocol ID on the connection state so subsequent
     /// packets bypass the heuristic tests.
     /// </summary>
-    private ParseResult TryHeuristicDispatch(
+    private ParseResult _TryHeuristicDispatch(
         in MutField parentField, ReadOnlyMemory<byte> payload, in ParseContext context,
         TcpConnectionState? connectionState)
     {
@@ -1204,7 +1204,7 @@ public sealed partial class TcpProtocol : IProtocol
     /// Checks low port first, then high port. Returns invalid <see cref="ProtocolId"/>
     /// if no match is found.
     /// </summary>
-    private ProtocolId TryIdentifyPortProtocol(ushort lowPort, ushort highPort, in ParseContext context)
+    private ProtocolId _TryIdentifyPortProtocol(ushort lowPort, ushort highPort, in ParseContext context)
     {
         Stack? stack = context.Stack;
         if (stack is null)

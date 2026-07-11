@@ -64,7 +64,7 @@ internal static class TsharkProcess
 
             // Escape the profile name so that a name containing backslashes or double-quotes
             // cannot break out of the surrounding quotes and inject additional tshark options.
-            string escapedProfileName = EscapeArgumentValue(profileName);
+            string escapedProfileName = _EscapeArgumentValue(profileName);
 
             // -C must come BEFORE -r/-T/-e so tshark applies the profile while parsing
             // the rest of the args.
@@ -146,7 +146,7 @@ internal static class TsharkProcess
     /// that an attacker-controlled value cannot break out of the surrounding quotes and
     /// inject additional tshark options (CWE-78).
     /// </summary>
-    private static string EscapeArgumentValue(string value)
+    private static string _EscapeArgumentValue(string value)
         => value
             .Replace("\\", "\\\\", StringComparison.Ordinal)
             .Replace("\"", "\\\"", StringComparison.Ordinal);

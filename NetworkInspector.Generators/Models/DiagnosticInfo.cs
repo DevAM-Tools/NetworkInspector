@@ -1,9 +1,5 @@
 ﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
-using System;
-using System.Linq;
-using Microsoft.CodeAnalysis;
-
 namespace NetworkInspector.Generators.Models;
 
 /// <summary>

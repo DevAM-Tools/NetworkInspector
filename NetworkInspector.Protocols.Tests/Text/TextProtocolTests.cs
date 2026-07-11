@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Protocols.Tests;
 
@@ -29,13 +29,13 @@ internal sealed class TextProtocolTests
     private static readonly IPv4Address _ServerIp = new(0x0A000002);
     private static readonly IPv4Address _ClientIp = new(0x0A000001);
 
-    private const string Http101Response =
+    private const string _Http101Response =
         "HTTP/1.1 101 Switching Protocols\r\n" +
         "Upgrade: websocket\r\n" +
         "Connection: Upgrade\r\n" +
         "\r\n";
 
-    private static byte[] EncodeWsTextFrame(string text)
+    private static byte[] _EncodeWsTextFrame(string text)
     {
         byte[] payload = Encoding.UTF8.GetBytes(text);
         WebSocketLayer layer = new(payload, WebSocketOpcode.Text, new WebSocketFrameOptions(Fin: true));
@@ -44,9 +44,9 @@ internal sealed class TextProtocolTests
         return writer.WrittenSpan.ToArray();
     }
 
-    private static byte[] BuildFrame(byte[] wsBytes)
+    private static byte[] _BuildFrame(byte[] wsBytes)
     {
-        byte[] http101 = Encoding.ASCII.GetBytes(Http101Response);
+        byte[] http101 = Encoding.ASCII.GetBytes(_Http101Response);
         byte[] combined = new byte[http101.Length + wsBytes.Length];
         http101.CopyTo(combined, 0);
         wsBytes.CopyTo(combined, http101.Length);
@@ -65,7 +65,7 @@ internal sealed class TextProtocolTests
     public async Task Parse_TextFrame_TextFieldContainsPayload()
     {
         // Arrange — simple payload with no newlines
-        byte[] frame = BuildFrame(EncodeWsTextFrame("Hello"));
+        byte[] frame = _BuildFrame(_EncodeWsTextFrame("Hello"));
 
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
@@ -82,7 +82,7 @@ internal sealed class TextProtocolTests
     public async Task Parse_TextFrame_MultilinePayloadStoredVerbatim()
     {
         // Arrange — payload containing newlines; no splitting should occur
-        byte[] frame = BuildFrame(EncodeWsTextFrame("First\nSecond"));
+        byte[] frame = _BuildFrame(_EncodeWsTextFrame("First\nSecond"));
 
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
@@ -99,7 +99,7 @@ internal sealed class TextProtocolTests
     public async Task Parse_TextFrame_CrlfPayloadStoredVerbatim()
     {
         // Arrange — CRLF-separated lines stored without modification
-        byte[] frame = BuildFrame(EncodeWsTextFrame("HTTP/1.0 200 OK\r\nContent-Type: text/plain"));
+        byte[] frame = _BuildFrame(_EncodeWsTextFrame("HTTP/1.0 200 OK\r\nContent-Type: text/plain"));
 
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
@@ -117,7 +117,7 @@ internal sealed class TextProtocolTests
     [Test]
     public async Task Parse_TextFrame_TextFieldPresent()
     {
-        byte[] frame = BuildFrame(EncodeWsTextFrame("payload"));
+        byte[] frame = _BuildFrame(_EncodeWsTextFrame("payload"));
 
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
@@ -140,7 +140,7 @@ internal sealed class TextProtocolTests
         WebSocketLayer layer = new(payload, WebSocketOpcode.Binary, new WebSocketFrameOptions(Fin: true));
         ArrayBufferWriter<byte> writer = new(initialCapacity: 64);
         layer.WriteStream(writer);
-        byte[] frame = BuildFrame(writer.WrittenSpan.ToArray());
+        byte[] frame = _BuildFrame(writer.WrittenSpan.ToArray());
 
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)

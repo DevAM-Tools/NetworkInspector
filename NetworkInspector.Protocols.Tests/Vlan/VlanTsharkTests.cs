@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Protocols.Tests;
 
@@ -25,7 +25,7 @@ internal sealed class VlanTsharkTests
     #region Frame builders
 
     /// <summary>Single-tag Ethernet+VLAN+IPv4+UDP frame.</summary>
-    private static byte[] BuildSingleTaggedFrame(ushort vlanId, byte pcp = 0, byte dei = 0)
+    private static byte[] _BuildSingleTaggedFrame(ushort vlanId, byte pcp = 0, byte dei = 0)
     {
         EthernetLayer eth = new(
             MacAddress.FromBytes([0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF]),
@@ -43,7 +43,7 @@ internal sealed class VlanTsharkTests
     /// fields; we verify the inner (most-recent) one which the dissector reads
     /// last.
     /// </summary>
-    private static byte[] BuildQinQFrame(ushort outerId, ushort innerId, byte outerPcp = 0, byte innerPcp = 0)
+    private static byte[] _BuildQinQFrame(ushort outerId, ushort innerId, byte outerPcp = 0, byte innerPcp = 0)
     {
         EthernetLayer eth = new(
             MacAddress.FromBytes([0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF]),
@@ -68,7 +68,7 @@ internal sealed class VlanTsharkTests
     [Test]
     public async Task Vlan_SingleTag_AllFieldsMatchTshark()
     {
-        byte[] frame = BuildSingleTaggedFrame(vlanId: 42, pcp: 5, dei: 1);
+        byte[] frame = _BuildSingleTaggedFrame(vlanId: 42, pcp: 5, dei: 1);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -84,7 +84,7 @@ internal sealed class VlanTsharkTests
     [Test]
     public async Task Vlan_VlanIdZero_MatchesTshark()
     {
-        byte[] frame = BuildSingleTaggedFrame(vlanId: 0, pcp: 7);
+        byte[] frame = _BuildSingleTaggedFrame(vlanId: 0, pcp: 7);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -99,7 +99,7 @@ internal sealed class VlanTsharkTests
     [Test]
     public async Task Vlan_VlanIdMax_MatchesTshark()
     {
-        byte[] frame = BuildSingleTaggedFrame(vlanId: 4095, pcp: 0);
+        byte[] frame = _BuildSingleTaggedFrame(vlanId: 4095, pcp: 0);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -125,7 +125,7 @@ internal sealed class VlanTsharkTests
     [Arguments((byte)7)]
     public async Task Vlan_AllPcpValues_MatchTshark(byte pcp)
     {
-        byte[] frame = BuildSingleTaggedFrame(vlanId: 100, pcp: pcp);
+        byte[] frame = _BuildSingleTaggedFrame(vlanId: 100, pcp: pcp);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -152,7 +152,7 @@ internal sealed class VlanTsharkTests
     [Test]
     public async Task Vlan_QinQ_RoundTripParsesSuccessfully()
     {
-        byte[] frame = BuildQinQFrame(outerId: 100, innerId: 200, outerPcp: 3, innerPcp: 4);
+        byte[] frame = _BuildQinQFrame(outerId: 100, innerId: 200, outerPcp: 3, innerPcp: 4);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {

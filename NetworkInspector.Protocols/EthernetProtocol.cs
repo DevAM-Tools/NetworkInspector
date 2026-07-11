@@ -17,13 +17,13 @@ namespace NetworkInspector.Protocols;
 /// </code>
 /// <para>
 /// The any-match name <c>eth.addr</c> is exposed via a field alias group registered
-/// in <see cref="RegisterFieldsCustom"/> that resolves to <c>{ eth.dst, eth.src }</c>;
+/// in <see cref="_RegisterFieldsCustom"/> that resolves to <c>{ eth.dst, eth.src }</c>;
 /// no <c>eth.addr</c> field node is appended to the parse tree.
 /// </para>
 /// </summary>
 /// <remarks>
 /// <para><b>Thread safety:</b> instances are immutable after registration completes.
-/// All mutable state is initialised inside <c>RegisterFieldsCustom</c> / <c>OnStartCustom</c>
+/// All mutable state is initialised inside <c>_RegisterFieldsCustom</c> / <c>_OnStartCustom</c>
 /// (single-threaded build phase) and is read-only thereafter, so <see cref="Parse"/> may
 /// be invoked concurrently from any number of threads on the same instance without external
 /// synchronisation. Per-thread caches (when present) are stored in <c>[ThreadStatic]</c> fields.</para>
@@ -33,13 +33,13 @@ namespace NetworkInspector.Protocols;
 public sealed partial class EthernetProtocol : IProtocol
 {
     /// <summary>Ethernet frame header size in bytes (6 dst + 6 src + 2 type/len).</summary>
-    private const int HeaderSize = 14;
+    private const int _HeaderSize = 14;
 
     /// <summary>Minimum EtherType value distinguishing Ethernet II from 802.3.</summary>
-    private const ushort MinEtherType = 0x0600;
+    private const ushort _MinEtherType = 0x0600;
 
     /// <summary>Minimum Ethernet payload size (bytes) before padding is required.</summary>
-    private const int MinPayloadSize = 46;
+    private const int _MinPayloadSize = 46;
 
     #region Table Name Constants
 
@@ -54,23 +54,23 @@ public sealed partial class EthernetProtocol : IProtocol
     #region Index Group Constants
 
     /// <summary>Index group for always-present Ethernet fields.</summary>
-    private const string EthIndexGroup = "eth";
+    private const string _EthIndexGroup = "eth";
 
     #endregion
 
     #region Fields
 
     // ETH-02: BytesField container carries header byte range for UI highlighting
-    [BytesField("eth", "Ethernet", IndexGroup = EthIndexGroup)]
+    [BytesField("eth", "Ethernet", IndexGroup = _EthIndexGroup)]
     private FieldId _ProtocolFieldId;
 
-    [MacField("eth.dst", "Destination", IndexGroup = EthIndexGroup)]
+    [MacField("eth.dst", "Destination", IndexGroup = _EthIndexGroup)]
     private FieldId _DstFieldId;
 
-    [MacField("eth.src", "Source", IndexGroup = EthIndexGroup)]
+    [MacField("eth.src", "Source", IndexGroup = _EthIndexGroup)]
     private FieldId _SrcFieldId;
 
-    // Field alias group ID assigned in RegisterFieldsCustom for "eth.addr" -> { eth.dst, eth.src }.
+    // Field alias group ID assigned in _RegisterFieldsCustom for "eth.addr" -> { eth.dst, eth.src }.
     // The alias name is metadata-only: GetFieldId("eth.addr") never resolves, and the parse
     // tree never contains a separate eth.addr node. Filter engines that need any-match semantics
     // must consult the alias registry instead of enumerating duplicate field nodes.
@@ -121,7 +121,7 @@ public sealed partial class EthernetProtocol : IProtocol
     /// Registers protocol-owned alias groups. Runs at build time after all canonical
     /// fields are registered. Adds "eth.addr" -> { eth.dst, eth.src } as metadata.
     /// </summary>
-    partial void RegisterFieldsCustom(IStackBuilder builder, ProtocolId protocolId)
+    partial void _RegisterFieldsCustom(IStackBuilder builder, ProtocolId protocolId)
     {
         _AddrAliasGroupId = builder.RegisterFieldAliasGroup(
             protocolId,
@@ -147,14 +147,14 @@ public sealed partial class EthernetProtocol : IProtocol
     /// from the precomputed <see cref="_MacBitsTable"/>; no allocation.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static string FormatMacAddressBits(MacAddress address)
+    private static string _FormatMacAddressBits(MacAddress address)
         => _MacBitsTable[(address.IsMulticast ? 2 : 0) | (address.IsLocal ? 1 : 0)];
 
     /// <summary>
     /// Builds the EtherType dispatch cache at stack start. One-time cost: a tiny array scan
     /// for the 4–6 registered EtherType entries beats a dictionary for per-packet lookup.
     /// </summary>
-    partial void OnStartCustom(Stack stack) =>
+    partial void _OnStartCustom(Stack stack) =>
         _EtherTypeSparseCache = stack.BuildU64SparseDelegateCache(_EtherTypeTableId);
 
     /// <summary>
@@ -168,9 +168,9 @@ public sealed partial class EthernetProtocol : IProtocol
     /// <returns>Number of bytes consumed, or a <see cref="ParseError"/> describing the failure.</returns>
     public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
     {
-        if (data.Length < HeaderSize)
+        if (data.Length < _HeaderSize)
         {
-            return ParseError.InsufficientDataWithInfo(ProtocolName, HeaderSize, (ulong)data.Length);
+            return ParseError.InsufficientDataWithInfo(ProtocolName, _HeaderSize, (ulong)data.Length);
         }
 
         // Record presence in index (no-op when no index attached)
@@ -184,7 +184,7 @@ public sealed partial class EthernetProtocol : IProtocol
         ushort typeOrLen = BinaryPrimitives.ReadUInt16BigEndian(span[12..14]);
 
         // Record optional index groups based on frame type
-        if (typeOrLen >= MinEtherType)
+        if (typeOrLen >= _MinEtherType)
         {
             context.RecordGroupPresence(_EthTypeGroupId);
         }
@@ -197,8 +197,8 @@ public sealed partial class EthernetProtocol : IProtocol
         // formatting is still deferred via ZA.Lazy until the summary is displayed.
         MacAddress src = MacAddress.FromBytes(span[6..12]);
         MacAddress dst = MacAddress.FromBytes(span[..6]);
-        ReadOnlyMemory<byte> hdrBytes = data[..HeaderSize];
-        LazyString summary = typeOrLen >= MinEtherType
+        ReadOnlyMemory<byte> hdrBytes = data[.._HeaderSize];
+        LazyString summary = typeOrLen >= _MinEtherType
             ? ZA.Lazy("Ethernet II, Src: ", src, ", Dst: ", dst)
             : ZA.Lazy("IEEE 802.3, Src: ", src, ", Dst: ", dst);
 
@@ -211,12 +211,12 @@ public sealed partial class EthernetProtocol : IProtocol
 
         // Eagerly append eth.dst, eth.src, and eth.type/eth.len so these key identifier
         // fields are present in the field tree during the initial parse pass.
-        // The alias group "eth.addr" is metadata-only (registered in RegisterFieldsCustom).
+        // The alias group "eth.addr" is metadata-only (registered in _RegisterFieldsCustom).
         // CustomText combines the MAC address with its I/G+L/G annotation; ZA.Lazy defers
         // string allocation until the value is actually rendered.
-        ethContainer.AppendWithCustomText(_DstFieldId, FieldValue.NewMacAddress(dst), ZA.Lazy(dst, " (", FormatMacAddressBits(dst), ")"));
-        ethContainer.AppendWithCustomText(_SrcFieldId, FieldValue.NewMacAddress(src), ZA.Lazy(src, " (", FormatMacAddressBits(src), ")"));
-        if (typeOrLen >= MinEtherType)
+        ethContainer.AppendWithCustomText(_DstFieldId, FieldValue.NewMacAddress(dst), ZA.Lazy(dst, " (", _FormatMacAddressBits(dst), ")"));
+        ethContainer.AppendWithCustomText(_SrcFieldId, FieldValue.NewMacAddress(src), ZA.Lazy(src, " (", _FormatMacAddressBits(src), ")"));
+        if (typeOrLen >= _MinEtherType)
         {
             ethContainer.AppendWithCustomText(_TypeFieldId, FieldValue.NewU64(typeOrLen),
                 DisplayTables.GetEtherTypeDisplayText(typeOrLen));
@@ -233,12 +233,12 @@ public sealed partial class EthernetProtocol : IProtocol
         // Dispatch to next protocol on parentField (sibling dispatch)
         // If FCS is assumed present, strip the last 4 bytes before dispatch.
         const int FcsSize = 4;
-        bool hasFcs = _AssumeFcs && data.Length >= HeaderSize + FcsSize;
-        ReadOnlyMemory<byte> payloadRegion = hasFcs ? data[HeaderSize..^FcsSize] : data[HeaderSize..];
+        bool hasFcs = _AssumeFcs && data.Length >= _HeaderSize + FcsSize;
+        ReadOnlyMemory<byte> payloadRegion = hasFcs ? data[_HeaderSize..^FcsSize] : data[_HeaderSize..];
         int childConsumed = 0;
-        if (typeOrLen >= MinEtherType)
+        if (typeOrLen >= _MinEtherType)
         {
-            ParseResult dispatchResult = DispatchEtherType(in parentField, typeOrLen, payloadRegion, in context);
+            ParseResult dispatchResult = _DispatchEtherType(in parentField, typeOrLen, payloadRegion, in context);
             if (dispatchResult.IsError)
             {
                 return dispatchResult;
@@ -260,7 +260,7 @@ public sealed partial class EthernetProtocol : IProtocol
             childConsumed = dispatchResult.Value;
         }
 
-        AppendPaddingAndTrailer(parentField, data, typeOrLen, childConsumed, hasFcs, in context);
+        _AppendPaddingAndTrailer(parentField, data, typeOrLen, childConsumed, hasFcs, in context);
 
         // Append FCS fields after padding/trailer (at the very end of the frame)
         if (hasFcs)
@@ -291,17 +291,17 @@ public sealed partial class EthernetProtocol : IProtocol
     /// Trailer is any extra bytes beyond padding.
     /// When FCS is present, the last 4 bytes are excluded from the calculation.
     /// </summary>
-    private void AppendPaddingAndTrailer(
+    private void _AppendPaddingAndTrailer(
         in MutField parentField, ReadOnlyMemory<byte> data,
         ushort typeOrLen, int childConsumed, bool hasFcs, in ParseContext context)
     {
         // Effective data length excludes FCS (4 bytes at the end)
         int effectiveLen = hasFcs ? data.Length - 4 : data.Length;
-        int payloadSize = effectiveLen - HeaderSize;
+        int payloadSize = effectiveLen - _HeaderSize;
 
         // Determine actual payload length as reported by child protocol
         int declaredPayloadLen;
-        if (typeOrLen < MinEtherType)
+        if (typeOrLen < _MinEtherType)
         {
             // 802.3: typeOrLen IS the payload length
             declaredPayloadLen = typeOrLen;
@@ -323,10 +323,10 @@ public sealed partial class EthernetProtocol : IProtocol
             return;
         }
 
-        int extraStart = HeaderSize + declaredPayloadLen;
+        int extraStart = _HeaderSize + declaredPayloadLen;
 
         // Calculate how much padding is needed to reach minimum frame size (60 bytes)
-        int minFramePayload = MinPayloadSize; // 46 bytes
+        int minFramePayload = _MinPayloadSize; // 46 bytes
         int paddingNeeded = Math.Max(0, minFramePayload - declaredPayloadLen);
         int paddingBytes = Math.Min(paddingNeeded, extraBytes);
         int trailerBytes = extraBytes - paddingBytes;
@@ -351,7 +351,7 @@ public sealed partial class EthernetProtocol : IProtocol
     /// Scans the pre-built sparse cache first (typically 4–6 entries, all in L1 D-cache);
     /// falls back to full table dispatch for multi-protocol keys or unknown EtherTypes.
     /// </summary>
-    private ParseResult DispatchEtherType(
+    private ParseResult _DispatchEtherType(
         in MutField parentField, ulong etherType, ReadOnlyMemory<byte> payload, in ParseContext context)
     {
         // Direct delegate call — no ProtocolId resolution, no vtable dispatch.

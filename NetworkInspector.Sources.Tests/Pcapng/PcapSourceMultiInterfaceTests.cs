@@ -8,11 +8,11 @@ namespace NetworkInspector.Sources.Tests.Pcapng;
 /// </summary>
 internal sealed class PcapSourceMultiInterfaceTests
 {
-    private static readonly byte[] SrcMac = [0x00, 0x11, 0x22, 0x33, 0x44, 0x55];
-    private static readonly byte[] DstMac = [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
+    private static readonly byte[] _SrcMac = [0x00, 0x11, 0x22, 0x33, 0x44, 0x55];
+    private static readonly byte[] _DstMac = [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
 
     /// <summary>Creates a <see cref="PcapSource"/> from raw PcapNG data.</summary>
-    private static PcapSource CreateSource(byte[] pcapData) =>
+    private static PcapSource _CreateSource(byte[] pcapData) =>
         PcapSource.FromData(pcapData, "test.pcapng");
 
 
@@ -28,13 +28,13 @@ internal sealed class PcapSourceMultiInterfaceTests
         uint iface0 = writer.AddInterface(LinkType.Ethernet, nanosecondResolution: true);
         uint iface1 = writer.AddInterface(LinkType.Ethernet, nanosecondResolution: true);
 
-        byte[] eth0 = FrameBuilders.BuildEthernetFrame(DstMac, SrcMac, 0x0800, [0xAA]);
-        byte[] eth1 = FrameBuilders.BuildEthernetFrame(DstMac, SrcMac, 0x0800, [0xBB]);
+        byte[] eth0 = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0xAA]);
+        byte[] eth1 = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0xBB]);
 
         writer.WriteFrame(iface0, 1_000_000_000, eth0);
         writer.WriteFrame(iface1, 2_000_000_000, eth1);
 
-        using PcapSource source = CreateSource(writer.Build());
+        using PcapSource source = _CreateSource(writer.Build());
         FrameInterfaceRegistry registry = SourceTestFixture.InitializeAndStartSource(source);
 
         Frame? f0 = source.NextFrame();
@@ -71,11 +71,11 @@ internal sealed class PcapSourceMultiInterfaceTests
         {
             uint iface = (i % 2 == 0) ? iface0 : iface1;
             byte[] payload = [(byte)i];
-            byte[] eth = FrameBuilders.BuildEthernetFrame(DstMac, SrcMac, 0x0800, payload);
+            byte[] eth = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, payload);
             writer.WriteFrame(iface, (i + 1) * 1_000_000_000L, eth);
         }
 
-        using PcapSource source = CreateSource(writer.Build());
+        using PcapSource source = _CreateSource(writer.Build());
         SourceTestFixture.InitializeAndStartSource(source);
 
         int count = 0;
@@ -105,12 +105,12 @@ internal sealed class PcapSourceMultiInterfaceTests
         {
             uint iface = (uint)(i % 2);
             byte[] payload = Enumerable.Repeat((byte)i, 10).ToArray();
-            byte[] eth = FrameBuilders.BuildEthernetFrame(DstMac, SrcMac, 0x0800, payload);
+            byte[] eth = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, payload);
             expected.Add(eth);
             writer.WriteFrame(iface, (i + 1) * 1_000_000_000L, eth);
         }
 
-        using PcapSource source = CreateSource(writer.Build());
+        using PcapSource source = _CreateSource(writer.Build());
         SourceTestFixture.InitializeAndStartSource(source);
 
         // Access frames from both interfaces out of order

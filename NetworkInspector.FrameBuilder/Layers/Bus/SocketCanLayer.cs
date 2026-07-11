@@ -21,7 +21,7 @@ namespace NetworkInspector.FrameBuilder;
 public readonly struct SocketCanLayer : IStatelessLayer, IRootLayer
 {
     /// <summary>Maximum payload size for classic CAN.</summary>
-    private const int MaxClassicCanData = 8;
+    private const int _MaxClassicCanData = 8;
 
     private readonly uint _CanIdWithFlags;
     private readonly byte _Dlc;
@@ -63,7 +63,7 @@ public readonly struct SocketCanLayer : IStatelessLayer, IRootLayer
         }
         _CanIdWithFlags = id;
 
-        int len = data.Length > MaxClassicCanData ? MaxClassicCanData : data.Length;
+        int len = data.Length > _MaxClassicCanData ? _MaxClassicCanData : data.Length;
         _Dlc = (byte)len;
         _Data0 = len > 0 ? data[0] : (byte)0;
         _Data1 = len > 1 ? data[1] : (byte)0;

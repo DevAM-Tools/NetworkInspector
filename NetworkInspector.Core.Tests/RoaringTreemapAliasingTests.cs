@@ -9,7 +9,7 @@ namespace NetworkInspector.Core.Tests;
 /// </summary>
 internal sealed class RoaringTreemapAliasingTests
 {
-    private static RoaringTreemap Build(params ulong[] values)
+    private static RoaringTreemap _Build(params ulong[] values)
     {
         RoaringTreemap tm = new();
         foreach (ulong v in values)
@@ -22,7 +22,7 @@ internal sealed class RoaringTreemapAliasingTests
     [Test]
     public async Task SelfAnd_EqualsSelfClone_NoMutation()
     {
-        RoaringTreemap a = Build(1UL, 100UL, 0x1_0000_0001UL);
+        RoaringTreemap a = _Build(1UL, 100UL, 0x1_0000_0001UL);
         RoaringTreemap r = a.And(a);
         await Assert.That(r.Cardinality).IsEqualTo(3L);
         await Assert.That(r.Contains(1UL)).IsTrue();
@@ -37,7 +37,7 @@ internal sealed class RoaringTreemapAliasingTests
     [Test]
     public async Task SelfOr_EqualsSelfClone_NoMutation()
     {
-        RoaringTreemap a = Build(5UL, 0x2_0000_0005UL);
+        RoaringTreemap a = _Build(5UL, 0x2_0000_0005UL);
         RoaringTreemap r = a.Or(a);
         await Assert.That(r.Cardinality).IsEqualTo(2L);
         r.Add(99UL);
@@ -47,7 +47,7 @@ internal sealed class RoaringTreemapAliasingTests
     [Test]
     public async Task SelfAndNot_IsEmpty()
     {
-        RoaringTreemap a = Build(1UL, 2UL, 3UL);
+        RoaringTreemap a = _Build(1UL, 2UL, 3UL);
         RoaringTreemap r = a.AndNot(a);
         await Assert.That(r.IsEmpty).IsTrue();
         await Assert.That(a.Cardinality).IsEqualTo(3L);
@@ -56,7 +56,7 @@ internal sealed class RoaringTreemapAliasingTests
     [Test]
     public async Task SelfXor_IsEmpty()
     {
-        RoaringTreemap a = Build(7UL, 0x3_0000_0007UL);
+        RoaringTreemap a = _Build(7UL, 0x3_0000_0007UL);
         RoaringTreemap r = a.Xor(a);
         await Assert.That(r.IsEmpty).IsTrue();
         await Assert.That(a.Cardinality).IsEqualTo(2L);
@@ -65,7 +65,7 @@ internal sealed class RoaringTreemapAliasingTests
     [Test]
     public async Task Clone_ProducesIndependentCopy()
     {
-        RoaringTreemap a = Build(1UL, 2UL);
+        RoaringTreemap a = _Build(1UL, 2UL);
         RoaringTreemap c = a.Clone();
         await Assert.That(c.Cardinality).IsEqualTo(2L);
         c.Add(99UL);

@@ -9,7 +9,7 @@ public sealed partial class BlfSource
     /// <summary>
     /// Performs a full scan of the entire BLF file, populating the index completely.
     /// </summary>
-    private void ScanFull()
+    private void _ScanFull()
     {
         _Scanner = new BlfIncrementalScanner(_Backend, _FileInfo, _Index, _Options.MaxUncompressedContainerSize);
         _Scanner.ScanToEnd();
@@ -22,14 +22,14 @@ public sealed partial class BlfSource
     /// Points _ChannelNames at the scanner's live dictionary so channel names
     /// discovered during lazy scanning are available for interface registration.
     /// </summary>
-    private void InitializeLazyScanner()
+    private void _InitializeLazyScanner()
     {
         _Scanner = new BlfIncrementalScanner(_Backend, _FileInfo, _Index, _Options.MaxUncompressedContainerSize);
         _ChannelNames = _Scanner.ChannelNames;
     }
 
     /// <summary>
-    /// Pure (read-only) variant of <see cref="BuildFrame"/> for random-access callers.
+    /// Pure (read-only) variant of <see cref="_BuildFrame"/> for random-access callers.
     /// Returns <c>null</c> on any failure without mutating statistics, raising the
     /// <see cref="FrameSkipped"/> event, or setting the abort flag. This guarantees
     /// that <see cref="FrameById"/> never poisons sequential consumption.
@@ -41,14 +41,14 @@ public sealed partial class BlfSource
     /// variable. That local is then passed to all helper methods so that no helper
     /// re-reads the field and observes a different (e.g. nulled-out) value.
     /// Specifically, <c>_Registry</c> is snapshotted once and passed to
-    /// <see cref="GetOrRegisterInterface"/>; callers must never re-read <c>_Registry</c>
+    /// <see cref="_GetOrRegisterInterface"/>; callers must never re-read <c>_Registry</c>
     /// inside the same logical operation.</para>
     /// </remarks>
-    private Frame? TryBuildFrame(int frameIndex, CancellationToken cancellationToken = default)
+    private Frame? _TryBuildFrame(int frameIndex, CancellationToken cancellationToken = default)
     {
         ref readonly BlfFrameEntry entry = ref _Index.GetEntry(frameIndex);
 
-        byte[]? frameData = TryExtractFrameData(in entry, cancellationToken);
+        byte[]? frameData = _TryExtractFrameData(in entry, cancellationToken);
         if (frameData is null)
         {
             return null;
@@ -62,8 +62,8 @@ public sealed partial class BlfSource
             return null;
         }
 
-        LinkType linkType = GetLinkTypeForObjectType(entry.ObjectType);
-        FrameInterfaceId interfaceId = GetOrRegisterInterface(entry.ObjectType, entry.Channel, registry);
+        LinkType linkType = _GetLinkTypeForObjectType(entry.ObjectType);
+        FrameInterfaceId interfaceId = _GetOrRegisterInterface(entry.ObjectType, entry.Channel, registry);
 
         ParseResult<Frame> result = Frame.Create(
             new FrameId(frameIndex),
@@ -73,20 +73,25 @@ public sealed partial class BlfSource
             interfaceId,
             registry);
 
-        return result.IsSuccess ? result.Value : null;
+        if (!result.IsSuccess)
+        {
+            return null;
+        }
+
+        return result.Value;
     }
 
     /// <summary>
-    /// Pure (read-only) variant of <see cref="ExtractFrameData"/> for random-access callers.
-    /// Returns <c>null</c> on any failure without invoking <see cref="HandleSkip"/>.
+    /// Pure (read-only) variant of <see cref="_ExtractFrameData"/> for random-access callers.
+    /// Returns <c>null</c> on any failure without invoking <see cref="_HandleSkip"/>.
     /// </summary>
-    private byte[]? TryExtractFrameData(in BlfFrameEntry entry, CancellationToken cancellationToken = default)
+    private byte[]? _TryExtractFrameData(in BlfFrameEntry entry, CancellationToken cancellationToken = default)
     {
         ReadOnlySpan<byte> objectData;
 
         if (entry.ObjectOffset >= 0)
         {
-            byte[] containerData = TryGetContainerData(entry.ContainerOffset, cancellationToken);
+            byte[] containerData = _TryGetContainerData(entry.ContainerOffset, cancellationToken);
             if (containerData.Length == 0)
             {
                 return null;
@@ -125,17 +130,17 @@ public sealed partial class BlfSource
     /// <summary>
     /// Builds a <see cref="Frame"/> from the index entry at the given position.
     /// Re-parses the object from the file or cached container data.
-    /// Reports errors via <see cref="HandleSkip"/> when frame construction fails.
+    /// Reports errors via <see cref="_HandleSkip"/> when frame construction fails.
     /// </summary>
-    private Frame? BuildFrame(int frameIndex, CancellationToken cancellationToken = default)
+    private Frame? _BuildFrame(int frameIndex, CancellationToken cancellationToken = default)
     {
         ref readonly BlfFrameEntry entry = ref _Index.GetEntry(frameIndex);
 
         // Get or decompress the container data
-        byte[]? frameData = ExtractFrameData(in entry, frameIndex, cancellationToken);
+        byte[]? frameData = _ExtractFrameData(in entry, frameIndex, cancellationToken);
         if (frameData is null)
         {
-            // Error already reported in ExtractFrameData
+            // Error already reported in _ExtractFrameData
             return null;
         }
 
@@ -148,11 +153,11 @@ public sealed partial class BlfSource
         }
 
         // Determine link type from object type
-        LinkType linkType = GetLinkTypeForObjectType(entry.ObjectType);
+        LinkType linkType = _GetLinkTypeForObjectType(entry.ObjectType);
 
         // Get or register the interface, passing the snapshotted registry so we never
         // re-read _Registry inside the lock (TOCTOU race with Dispose() nulling it).
-        FrameInterfaceId interfaceId = GetOrRegisterInterface(entry.ObjectType, entry.Channel, registry);
+        FrameInterfaceId interfaceId = _GetOrRegisterInterface(entry.ObjectType, entry.Channel, registry);
 
         ParseResult<Frame> result = Frame.Create(
             new FrameId(frameIndex),
@@ -167,7 +172,7 @@ public sealed partial class BlfSource
             return result.Value;
         }
 
-        HandleSkip(new FrameReadErrorEventArgs
+        _HandleSkip(new FrameReadErrorEventArgs
         {
             FrameIndex = frameIndex,
             FileOffset = entry.ContainerOffset,
@@ -183,25 +188,25 @@ public sealed partial class BlfSource
     /// For container objects: retrieves from cache or decompresses the container,
     /// then re-parses the object at the stored offset.
     /// For raw objects: reads directly from file data.
-    /// Reports errors via <see cref="HandleSkip"/> on failure.
+    /// Reports errors via <see cref="_HandleSkip"/> on failure.
     /// </summary>
-    private byte[]? ExtractFrameData(in BlfFrameEntry entry, int frameIndex, CancellationToken cancellationToken = default)
+    private byte[]? _ExtractFrameData(in BlfFrameEntry entry, int frameIndex, CancellationToken cancellationToken = default)
     {
         ReadOnlySpan<byte> objectData;
 
         if (entry.ObjectOffset >= 0)
         {
             // Container object: get decompressed container data
-            byte[] containerData = GetContainerData(entry.ContainerOffset, frameIndex, cancellationToken);
+            byte[] containerData = _GetContainerData(entry.ContainerOffset, frameIndex, cancellationToken);
             if (containerData.Length == 0)
             {
-                // Error already reported in GetContainerData
+                // Error already reported in _GetContainerData
                 return null;
             }
 
             if (entry.ObjectOffset + entry.ObjectLength > containerData.Length)
             {
-                HandleSkip(new FrameReadErrorEventArgs
+                _HandleSkip(new FrameReadErrorEventArgs
                 {
                     FrameIndex = frameIndex,
                     FileOffset = entry.ContainerOffset,
@@ -218,7 +223,7 @@ public sealed partial class BlfSource
             // Raw file object
             if (entry.ContainerOffset + entry.ObjectLength > _Backend.FileSize)
             {
-                HandleSkip(new FrameReadErrorEventArgs
+                _HandleSkip(new FrameReadErrorEventArgs
                 {
                     FrameIndex = frameIndex,
                     FileOffset = entry.ContainerOffset,
@@ -234,7 +239,7 @@ public sealed partial class BlfSource
         // Re-parse the object to extract the frame
         if (!BlfObjectHeaderParser.TryParse(objectData, entry.ContainerOffset, out BlfObjectInfo objInfo, out _))
         {
-            HandleSkip(new FrameReadErrorEventArgs
+            _HandleSkip(new FrameReadErrorEventArgs
             {
                 FrameIndex = frameIndex,
                 FileOffset = entry.ContainerOffset,
@@ -246,7 +251,7 @@ public sealed partial class BlfSource
 
         if (!BlfFrameDispatcher.TryDispatch(in objInfo, out BlfFrameResult result))
         {
-            HandleSkip(new FrameReadErrorEventArgs
+            _HandleSkip(new FrameReadErrorEventArgs
             {
                 FrameIndex = frameIndex,
                 FileOffset = entry.ContainerOffset,
@@ -260,9 +265,9 @@ public sealed partial class BlfSource
     }
 
     /// <summary>
-    /// Pure (read-only) variant of <see cref="GetContainerData"/> for random-access callers.
+    /// Pure (read-only) variant of <see cref="_GetContainerData"/> for random-access callers.
     /// Returns the cached decompressed container if present, otherwise decompresses it silently
-    /// (no <see cref="HandleSkip"/>, no sequential counter mutation).
+    /// (no <see cref="_HandleSkip"/>, no sequential counter mutation).
     /// Returns an empty array on any failure except
     /// <see cref="Format.BlfDecompressionLimitExceededException"/>, which propagates to the
     /// caller so it can react.
@@ -287,7 +292,7 @@ public sealed partial class BlfSource
     /// time across all container offsets. Waiting threads do not hold a semaphore slot.
     /// </para>
     /// </remarks>
-    private byte[] TryGetContainerData(long containerFileOffset, CancellationToken cancellationToken = default)
+    private byte[] _TryGetContainerData(long containerFileOffset, CancellationToken cancellationToken = default)
     {
         ContainerDecompressionWork work;
         bool isWinner;
@@ -305,7 +310,7 @@ public sealed partial class BlfSource
             }
             else
             {
-                work = new ContainerDecompressionWork();
+                work = new();
                 _PendingDecompressions[containerFileOffset] = work;
                 isWinner = true;
             }
@@ -335,7 +340,7 @@ public sealed partial class BlfSource
         byte[]? decompressed = null;
         Exception? failure = null;
 
-        if (!TryReadContainerPayload(containerFileOffset, out ReadOnlySpan<byte> payloadData,
+        if (!_TryReadContainerPayload(containerFileOffset, out ReadOnlySpan<byte> payloadData,
             out ushort compressionMethod, out uint uncompressedSize, out _, out _))
         {
             failure = new BlfException($"Failed to parse container headers at offset {containerFileOffset}.");
@@ -395,28 +400,33 @@ public sealed partial class BlfSource
             Interlocked.Increment(ref _RandomAccessFailureCount);
         }
 
-        return decompressed ?? [];
+        if (decompressed is null)
+        {
+            return [];
+        }
+
+        return decompressed;
     }
 
     /// <summary>
     /// Gets decompressed container data for the sequential read path, using the 2Q cache.
-    /// Reports decompression and parse failures via <see cref="HandleSkip"/>.
+    /// Reports decompression and parse failures via <see cref="_HandleSkip"/>.
     /// </summary>
     /// <remarks>
     /// <para>
     /// Called only from the single-threaded <see cref="NextFrame"/> path.
     /// The cache lock is still taken to remain consistent with parallel
-    /// <see cref="TryGetContainerData"/> calls arriving from <see cref="FrameById"/> on
+    /// <see cref="_TryGetContainerData"/> calls arriving from <see cref="FrameById"/> on
     /// other threads.
     /// </para>
     /// <para>
     /// Deduplication: shares the same <see cref="_PendingDecompressions"/> dictionary as
-    /// <see cref="TryGetContainerData"/>, so a container that a random-access thread has
+    /// <see cref="_TryGetContainerData"/>, so a container that a random-access thread has
     /// already started decompressing will not be re-decompressed by the sequential path;
-    /// this path waits and then calls <see cref="HandleSkip"/> if the other thread failed.
+    /// this path waits and then calls <see cref="_HandleSkip"/> if the other thread failed.
     /// </para>
     /// </remarks>
-    private byte[] GetContainerData(long containerFileOffset, int frameIndex, CancellationToken cancellationToken = default)
+    private byte[] _GetContainerData(long containerFileOffset, int frameIndex, CancellationToken cancellationToken = default)
     {
         ContainerDecompressionWork work;
         bool isWinner;
@@ -434,7 +444,7 @@ public sealed partial class BlfSource
             }
             else
             {
-                work = new ContainerDecompressionWork();
+                work = new();
                 _PendingDecompressions[containerFileOffset] = work;
                 isWinner = true;
             }
@@ -453,8 +463,8 @@ public sealed partial class BlfSource
                 }
             }
 
-            // Winner failed — report via HandleSkip so the sequential path surfaces the error.
-            HandleSkip(new FrameReadErrorEventArgs
+            // Winner failed — report via _HandleSkip so the sequential path surfaces the error.
+            _HandleSkip(new FrameReadErrorEventArgs
             {
                 FrameIndex = frameIndex,
                 FileOffset = containerFileOffset,
@@ -470,7 +480,7 @@ public sealed partial class BlfSource
         Exception? failure = null;
         FrameReadErrorEventArgs? errorArgs = null;
 
-        if (!TryReadContainerPayload(containerFileOffset, out ReadOnlySpan<byte> payloadData,
+        if (!_TryReadContainerPayload(containerFileOffset, out ReadOnlySpan<byte> payloadData,
             out ushort compressionMethod, out uint uncompressedSize,
             out FrameReadErrorKind errorKind, out string? errorMessage))
         {
@@ -537,10 +547,15 @@ public sealed partial class BlfSource
         // Report errors outside the lock to keep the critical section short.
         if (errorArgs is not null)
         {
-            HandleSkip(errorArgs);
+            _HandleSkip(errorArgs);
         }
 
-        return decompressed ?? [];
+        if (decompressed is null)
+        {
+            return [];
+        }
+
+        return decompressed;
     }
 
     /// <summary>
@@ -562,7 +577,7 @@ public sealed partial class BlfSource
     /// <param name="errorKind">Populated when the method returns <c>false</c>.</param>
     /// <param name="errorMessage">Human-readable diagnostic populated when the method returns <c>false</c>.</param>
     /// <returns><c>true</c> on success; <c>false</c> if any header is malformed or out of bounds.</returns>
-    private bool TryReadContainerPayload(
+    private bool _TryReadContainerPayload(
         long containerFileOffset,
         out ReadOnlySpan<byte> payloadData,
         out ushort compressionMethod,
@@ -648,7 +663,7 @@ public sealed partial class BlfSource
     /// Handles a skipped frame by updating statistics and raising the event.
     /// In strict mode, sets the abort flag so subsequent NextFrame calls return null.
     /// </summary>
-    private void HandleSkip(FrameReadErrorEventArgs error)
+    private void _HandleSkip(FrameReadErrorEventArgs error)
     {
         Interlocked.Increment(ref _SkippedFrameCount);
         Interlocked.Increment(ref _ErrorCount);
@@ -677,7 +692,7 @@ public sealed partial class BlfSource
     /// never re-read <c>_Registry</c> inside the lock (TOCTOU race with
     /// <see cref="Dispose"/> nulling <c>_Registry</c>).
     /// </param>
-    private FrameInterfaceId GetOrRegisterInterface(uint objectType, ushort channel, FrameInterfaceRegistry registry)
+    private FrameInterfaceId _GetOrRegisterInterface(uint objectType, ushort channel, FrameInterfaceRegistry registry)
     {
         (uint ObjectType, ushort Channel) key = (objectType, channel);
 
@@ -688,10 +703,10 @@ public sealed partial class BlfSource
                 return existingId;
             }
 
-            string busName = GetBusName(objectType);
-            string interfaceName = TryGetChannelName(objectType, channel)
+            string busName = _GetBusName(objectType);
+            string interfaceName = _TryGetChannelName(objectType, channel)
                 ?? $"{busName} {channel}";
-            LinkType linkType = GetLinkTypeForObjectType(objectType);
+            LinkType linkType = _GetLinkTypeForObjectType(objectType);
 
             FrameInterfaceId id = registry.Register(
                 _SourceId, interfaceName, null, linkType,
@@ -699,7 +714,7 @@ public sealed partial class BlfSource
                 {
                     [FrameInterfacePropertyKeys.BlfChannel] = (long)channel,
                     [FrameInterfacePropertyKeys.BlfObjectType] = objectType,
-                    [FrameInterfacePropertyKeys.BlfBusType] = GetBusTypeForObjectType(objectType),
+                    [FrameInterfacePropertyKeys.BlfBusType] = _GetBusTypeForObjectType(objectType),
                 });
             _InterfaceMap[key] = id;
             return id;
@@ -710,28 +725,33 @@ public sealed partial class BlfSource
     /// Tries to find a channel name from AppText channel name discovery.
     /// Maps the BLF object type to the AppText bus type for lookup.
     /// </summary>
-    private string? TryGetChannelName(uint objectType, ushort channel)
+    private string? _TryGetChannelName(uint objectType, ushort channel)
     {
         if (_ChannelNames is null || _ChannelNames.Count == 0)
         {
             return null;
         }
 
-        byte busType = GetBusTypeForObjectType(objectType);
+        byte busType = _GetBusTypeForObjectType(objectType);
         if (busType == 0)
         {
             return null;
         }
 
         // AppText channel numbers are 0-based
-        return _ChannelNames.TryGetValue((busType, (byte)channel), out string? name) ? name : null;
+        if (!_ChannelNames.TryGetValue((busType, (byte)channel), out string? name))
+        {
+            return null;
+        }
+
+        return name;
     }
 
     /// <summary>
     /// Returns the link type for a given BLF object type.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static LinkType GetLinkTypeForObjectType(uint objectType) => objectType switch
+    private static LinkType _GetLinkTypeForObjectType(uint objectType) => objectType switch
     {
         BlfConstants.ObjTypeEthernetFrame or BlfConstants.ObjTypeEthernetFrameEx
             or BlfConstants.ObjTypeEthernetRxError => LinkType.Ethernet,
@@ -761,7 +781,7 @@ public sealed partial class BlfSource
     /// Returns a bus name string for interface naming.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static string GetBusName(uint objectType) => objectType switch
+    private static string _GetBusName(uint objectType) => objectType switch
     {
         BlfConstants.ObjTypeEthernetFrame or BlfConstants.ObjTypeEthernetFrameEx
             or BlfConstants.ObjTypeEthernetRxError => "Ethernet",
@@ -792,7 +812,7 @@ public sealed partial class BlfSource
     /// Returns 0 if the object type has no corresponding bus type.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static byte GetBusTypeForObjectType(uint objectType) => objectType switch
+    private static byte _GetBusTypeForObjectType(uint objectType) => objectType switch
     {
         BlfConstants.ObjTypeEthernetFrame or BlfConstants.ObjTypeEthernetFrameEx
             or BlfConstants.ObjTypeEthernetRxError => BlfConstants.BusTypeEthernet,

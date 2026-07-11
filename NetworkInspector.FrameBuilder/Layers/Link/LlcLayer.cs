@@ -45,7 +45,7 @@ public readonly struct LlcLayer :
     public const byte SnapControl = 0x03;
 
     /// <summary>Byte offset to the EtherType field in the SNAP variant.</summary>
-    private const int EtherTypeOffset = 6;
+    private const int _EtherTypeOffset = 6;
 
     private readonly byte _Dsap;
     private readonly byte _Ssap;
@@ -77,7 +77,7 @@ public readonly struct LlcLayer :
     /// Creates a SNAP LLC layer (8-byte header, DSAP=0xAA, SSAP=0xAA, Control=0x03).
     /// </summary>
     /// <param name="oui">3-byte OUI (organization code), default 0x000000 for generic Ethernet types.</param>
-    /// <param name="etherType">EtherType value; use <see cref="Auto{T}.Compute"/> (default) to auto-fill from the inner layer.</param>
+    /// <param name="etherType">EtherType value; use <see cref="Auto.Compute"/> (default) to auto-fill from the inner layer.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static LlcLayer CreateSnap(uint oui = 0, Auto<ushort> etherType = default)
     {
@@ -102,7 +102,15 @@ public readonly struct LlcLayer :
     public int HeaderSize
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _IsSnap ? 8 : 3;
+        get
+        {
+            if (_IsSnap)
+            {
+                return 8;
+            }
+
+            return 3;
+        }
     }
 
     /// <inheritdoc />
@@ -126,11 +134,11 @@ public readonly struct LlcLayer :
 
     /// <inheritdoc />
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public void PatchNextProtocol(scoped Span<byte> frame, int myOffset, ushort next)
+    public void PatchNextProtocol(scoped Span<byte> frame, int myOffset, ushort nextProtocol)
     {
         if (_IsSnap && !_EtherTypeIsExplicit)
         {
-            BinaryPrimitives.WriteUInt16BigEndian(frame.Slice(myOffset + EtherTypeOffset, 2), next);
+            BinaryPrimitives.WriteUInt16BigEndian(frame.Slice(myOffset + _EtherTypeOffset, 2), nextProtocol);
         }
     }
 

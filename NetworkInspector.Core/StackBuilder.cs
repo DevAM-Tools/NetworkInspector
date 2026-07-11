@@ -65,7 +65,7 @@ public sealed class StackBuilder : IStackBuilder
     /// Protocol name used to auto-discover the frame protocol during <see cref="Build"/>.
     /// Must match <c>FrameProtocol.ProtocolName</c> from <c>NetworkInspector.Protocols</c>.
     /// </summary>
-    private const string FrameProtocolName = "frame";
+    private const string _FrameProtocolName = "frame";
 
     /// <inheritdoc/>
     /// <remarks>
@@ -73,7 +73,7 @@ public sealed class StackBuilder : IStackBuilder
     /// to set this flag. The value is captured by <see cref="Build"/>; mutating it after build is impossible
     /// because the property is <see langword="init"/>-only.
     /// </remarks>
-    public bool IncludeExceptionStackTrace { get; init; } = false;
+    public bool IncludeExceptionStackTrace { get; init; }
 
     /// <summary>Creates a new stack builder with externally provided dependencies and registers built-in root and error fields.</summary>
     /// <param name="settingsManager">The settings manager instance for managing protocol settings.</param>
@@ -91,8 +91,8 @@ public sealed class StackBuilder : IStackBuilder
             rootProtocol,
             static (builder, id, _) => RootProtocol.RegisterWith(builder, id));
 
-        _PacketProtocolId = RegisterProtocol(
-            new PacketProtocol(),
+        _PacketProtocolId = RegisterProtocol<PacketProtocol>(
+            new(),
             static (builder, id, proto) => proto.RegisterWith(builder, id));
 
         // Root field is owned by RootProtocol (the dummy exists so that root has an owning protocol).
@@ -108,12 +108,24 @@ public sealed class StackBuilder : IStackBuilder
     #region Protocol Access
 
     /// <inheritdoc/>
-    public ProtocolInfo? GetProtocol(ProtocolId id) =>
-        IsValidIndex(id.Value, _Protocols.Count) ? _Protocols[id.Value] : null;
+    public ProtocolInfo? GetProtocol(ProtocolId id)
+    {
+        if (_IsValidIndex(id.Value, _Protocols.Count))
+        {
+            return _Protocols[id.Value];
+        }
+        return null;
+    }
 
     /// <inheritdoc/>
-    public ProtocolId? GetProtocolId(string name) =>
-        _ProtocolNameMap.TryGetValue(name, out ProtocolId id) ? id : null;
+    public ProtocolId? GetProtocolId(string name)
+    {
+        if (_ProtocolNameMap.TryGetValue(name, out ProtocolId id))
+        {
+            return id;
+        }
+        return null;
+    }
 
     /// <inheritdoc/>
     public ReadOnlyMemory<ProtocolInfo> Protocols => _Protocols.ToArray();
@@ -126,12 +138,24 @@ public sealed class StackBuilder : IStackBuilder
     #region Field Access
 
     /// <inheritdoc/>
-    public FieldInfo? GetField(FieldId id) =>
-        IsValidIndex(id.Value, _Fields.Count) ? _Fields[id.Value] : null;
+    public FieldInfo? GetField(FieldId id)
+    {
+        if (_IsValidIndex(id.Value, _Fields.Count))
+        {
+            return _Fields[id.Value];
+        }
+        return null;
+    }
 
     /// <inheritdoc/>
-    public FieldId? GetFieldId(string name) =>
-        _FieldNameMap.TryGetValue(name, out FieldId id) ? id : null;
+    public FieldId? GetFieldId(string name)
+    {
+        if (_FieldNameMap.TryGetValue(name, out FieldId id))
+        {
+            return id;
+        }
+        return null;
+    }
 
     /// <inheritdoc/>
     public ReadOnlyMemory<FieldInfo> Fields => _Fields.ToArray();
@@ -142,9 +166,12 @@ public sealed class StackBuilder : IStackBuilder
     /// <inheritdoc/>
     public IndexGroupId GetFieldIndexGroup(FieldId fieldId)
     {
-        if (IsValidIndex(fieldId.Value, _Fields.Count))
+        if (_IsValidIndex(fieldId.Value, _Fields.Count))
         {
-            return _Fields[fieldId.Value].IndexGroup ?? IndexGroupId.Invalid;
+            if (_Fields[fieldId.Value].IndexGroup is { } indexGroup)
+            {
+                return indexGroup;
+            }
         }
         return IndexGroupId.Invalid;
     }
@@ -154,12 +181,24 @@ public sealed class StackBuilder : IStackBuilder
     #region Field Alias Group Access
 
     /// <inheritdoc/>
-    public FieldAliasGroupInfo? GetFieldAliasGroup(FieldAliasGroupId id) =>
-        IsValidIndex(id.Value, _FieldAliasGroups.Count) ? _FieldAliasGroups[id.Value] : null;
+    public FieldAliasGroupInfo? GetFieldAliasGroup(FieldAliasGroupId id)
+    {
+        if (_IsValidIndex(id.Value, _FieldAliasGroups.Count))
+        {
+            return _FieldAliasGroups[id.Value];
+        }
+        return null;
+    }
 
     /// <inheritdoc/>
-    public FieldAliasGroupId? GetFieldAliasGroupId(string name) =>
-        _FieldAliasGroupNameMap.TryGetValue(name, out FieldAliasGroupId id) ? id : null;
+    public FieldAliasGroupId? GetFieldAliasGroupId(string name)
+    {
+        if (_FieldAliasGroupNameMap.TryGetValue(name, out FieldAliasGroupId id))
+        {
+            return id;
+        }
+        return null;
+    }
 
     /// <inheritdoc/>
     public ReadOnlyMemory<FieldAliasGroupInfo> FieldAliasGroups
@@ -181,7 +220,7 @@ public sealed class StackBuilder : IStackBuilder
     /// <inheritdoc/>
     public IndexGroupInfo? GetIndexGroup(IndexGroupId id)
     {
-        if (!IsValidIndex(id.Value, _NextIndexGroupId))
+        if (!_IsValidIndex(id.Value, _NextIndexGroupId))
         {
             return null;
         }
@@ -197,8 +236,14 @@ public sealed class StackBuilder : IStackBuilder
     }
 
     /// <inheritdoc/>
-    public IndexGroupId? GetIndexGroupId(string name) =>
-        _IndexGroupMap.TryGetValue(name, out IndexGroupId id) ? id : null;
+    public IndexGroupId? GetIndexGroupId(string name)
+    {
+        if (_IndexGroupMap.TryGetValue(name, out IndexGroupId id))
+        {
+            return id;
+        }
+        return null;
+    }
 
     /// <inheritdoc/>
     public ReadOnlyMemory<IndexGroupInfo> IndexGroups
@@ -224,12 +269,24 @@ public sealed class StackBuilder : IStackBuilder
     #region Protocol Table Access
 
     /// <inheritdoc/>
-    public ProtocolTableInfo? GetProtocolTableInfo(ProtocolTableId id) =>
-        IsValidIndex(id.Value, _ProtocolTableInfos.Count) ? _ProtocolTableInfos[id.Value] : null;
+    public ProtocolTableInfo? GetProtocolTableInfo(ProtocolTableId id)
+    {
+        if (_IsValidIndex(id.Value, _ProtocolTableInfos.Count))
+        {
+            return _ProtocolTableInfos[id.Value];
+        }
+        return null;
+    }
 
     /// <inheritdoc/>
-    public ProtocolTableId? GetProtocolTableId(string name) =>
-        _ProtocolTableNameMap.TryGetValue(name, out ProtocolTableId id) ? id : null;
+    public ProtocolTableId? GetProtocolTableId(string name)
+    {
+        if (_ProtocolTableNameMap.TryGetValue(name, out ProtocolTableId id))
+        {
+            return id;
+        }
+        return null;
+    }
 
     /// <inheritdoc/>
     public ReadOnlyMemory<ProtocolTableInfo> ProtocolTableInfos => _ProtocolTableInfos.ToArray();
@@ -256,12 +313,24 @@ public sealed class StackBuilder : IStackBuilder
     #region Heuristic Table Access
 
     /// <inheritdoc/>
-    public HeuristicProtocolTableInfo? GetHeuristicProtocolTableInfo(HeuristicProtocolTableId id) =>
-        IsValidIndex(id.Value, _HeuristicTableInfos.Count) ? _HeuristicTableInfos[id.Value] : null;
+    public HeuristicProtocolTableInfo? GetHeuristicProtocolTableInfo(HeuristicProtocolTableId id)
+    {
+        if (_IsValidIndex(id.Value, _HeuristicTableInfos.Count))
+        {
+            return _HeuristicTableInfos[id.Value];
+        }
+        return null;
+    }
 
     /// <inheritdoc/>
-    public HeuristicProtocolTableId? GetHeuristicProtocolTableId(string name) =>
-        _HeuristicTableNameMap.TryGetValue(name, out HeuristicProtocolTableId id) ? id : null;
+    public HeuristicProtocolTableId? GetHeuristicProtocolTableId(string name)
+    {
+        if (_HeuristicTableNameMap.TryGetValue(name, out HeuristicProtocolTableId id))
+        {
+            return id;
+        }
+        return null;
+    }
 
     /// <inheritdoc/>
     public ReadOnlyMemory<HeuristicProtocolTableInfo> HeuristicProtocolTableInfos => _HeuristicTableInfos.ToArray();
@@ -274,7 +343,7 @@ public sealed class StackBuilder : IStackBuilder
     #region Settings Access
 
     /// <inheritdoc/>
-    public IReadOnlySettingsManager Settings => _SettingsManager;
+    public IReadOnlySettingsManager Settings => _SettingsManager.ReadOnly;
 
     /// <inheritdoc/>
     public ReadOnlyMemory<BuildDiagnostic> BuildDiagnostics => ReadOnlyMemory<BuildDiagnostic>.Empty;
@@ -288,10 +357,10 @@ public sealed class StackBuilder : IStackBuilder
     #region Validation Helpers
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static bool IsValidIndex(int idValue, int count) => (uint)idValue < (uint)count;
+    private static bool _IsValidIndex(int idValue, int count) => (uint)idValue < (uint)count;
 
     /// <summary>Throws <see cref="InvalidNameRegistrationException"/> when the name is not a valid dot-separated C-style identifier.</summary>
-    private static void ValidateName(string name)
+    private static void _ValidateName(string name)
     {
         if (!NameValidation.IsValidName(name))
         {
@@ -300,7 +369,7 @@ public sealed class StackBuilder : IStackBuilder
     }
 
     /// <summary>Throws <see cref="InvalidUiNameRegistrationException"/> when the UI name is empty or contains control characters.</summary>
-    private static void ValidateUiName(string uiName)
+    private static void _ValidateUiName(string uiName)
     {
         if (!NameValidation.IsValidUiName(uiName))
         {
@@ -316,8 +385,8 @@ public sealed class StackBuilder : IStackBuilder
     public ProtocolId RegisterProtocol(IProtocol protocol)
     {
         string name = protocol.Name;
-        ValidateName(name);
-        ValidateUiName(protocol.UiName);
+        _ValidateName(name);
+        _ValidateUiName(protocol.UiName);
         if (_ProtocolNameMap.ContainsKey(name))
         {
             throw DuplicateNameRegistrationException.For(name);
@@ -360,8 +429,8 @@ public sealed class StackBuilder : IStackBuilder
     public FieldId RegisterField(
         ProtocolId protocolId, string name, string uiName, FieldType fieldType, string? description = null)
     {
-        ValidateName(name);
-        ValidateUiName(uiName);
+        _ValidateName(name);
+        _ValidateUiName(uiName);
         if (_FieldNameMap.ContainsKey(name))
         {
             throw DuplicateNameRegistrationException.For(name);
@@ -393,7 +462,7 @@ public sealed class StackBuilder : IStackBuilder
     {
         // Validate alias name; alias namespace is independent from field/table namespaces
         // so the only collision check at this point is against existing alias names.
-        ValidateName(name);
+        _ValidateName(name);
         if (_FieldAliasGroupNameMap.ContainsKey(name))
         {
             throw DuplicateNameRegistrationException.For(name);
@@ -414,7 +483,7 @@ public sealed class StackBuilder : IStackBuilder
             FieldId memberId = fieldIds[i];
 
             // Member field must be a registered field on this builder.
-            if (!IsValidIndex(memberId.Value, _Fields.Count))
+            if (!_IsValidIndex(memberId.Value, _Fields.Count))
             {
                 throw NotFoundRegistrationException.For(
                     $"Field alias group '{name}' references unknown field ID {memberId.Value}");
@@ -464,7 +533,7 @@ public sealed class StackBuilder : IStackBuilder
         string? description = null)
     {
         // name and uiName are validated inside RegisterField
-        ValidateName(indexGroup);
+        _ValidateName(indexGroup);
         FieldId id = RegisterField(protocolId, name, uiName, fieldType, description);
 
         // Resolve or create index group
@@ -485,7 +554,7 @@ public sealed class StackBuilder : IStackBuilder
     /// <inheritdoc/>
     public IndexGroupId GetOrCreateIndexGroup(string name)
     {
-        ValidateName(name);
+        _ValidateName(name);
         if (!_IndexGroupMap.TryGetValue(name, out IndexGroupId groupId))
         {
             groupId = new IndexGroupId(_NextIndexGroupId++);
@@ -502,8 +571,8 @@ public sealed class StackBuilder : IStackBuilder
     public ProtocolTableId RegisterProtocolTable(
         string name, string uiName, ProtocolTableKeyType keyType, string? description = null)
     {
-        ValidateName(name);
-        ValidateUiName(uiName);
+        _ValidateName(name);
+        _ValidateUiName(uiName);
         if (_ProtocolTableNameMap.ContainsKey(name))
         {
             throw DuplicateNameRegistrationException.For(name);
@@ -529,7 +598,7 @@ public sealed class StackBuilder : IStackBuilder
     /// <inheritdoc/>
     public void RegisterParserInU64Table(ProtocolTableId tableId, ulong key, ProtocolId protocolId)
     {
-        if (!IsValidIndex(tableId.Value, _ProtocolTables.Count))
+        if (!_IsValidIndex(tableId.Value, _ProtocolTables.Count))
         {
             throw NotFoundRegistrationException.For($"Protocol table ID {tableId.Value} not found");
         }
@@ -549,7 +618,7 @@ public sealed class StackBuilder : IStackBuilder
     /// <inheritdoc/>
     public void RegisterParserInStringTable(ProtocolTableId tableId, string key, ProtocolId protocolId)
     {
-        if (!IsValidIndex(tableId.Value, _ProtocolTables.Count))
+        if (!_IsValidIndex(tableId.Value, _ProtocolTables.Count))
         {
             throw NotFoundRegistrationException.For($"Protocol table ID {tableId.Value} not found");
         }
@@ -569,7 +638,7 @@ public sealed class StackBuilder : IStackBuilder
     /// <inheritdoc/>
     public void RegisterParserInBytesTable(ProtocolTableId tableId, BytesKey key, ProtocolId protocolId)
     {
-        if (!IsValidIndex(tableId.Value, _ProtocolTables.Count))
+        if (!_IsValidIndex(tableId.Value, _ProtocolTables.Count))
         {
             throw NotFoundRegistrationException.For($"Protocol table ID {tableId.Value} not found");
         }
@@ -589,7 +658,7 @@ public sealed class StackBuilder : IStackBuilder
     /// <inheritdoc/>
     public void RegisterParserInBoolTable(ProtocolTableId tableId, bool key, ProtocolId protocolId)
     {
-        if (!IsValidIndex(tableId.Value, _ProtocolTables.Count))
+        if (!_IsValidIndex(tableId.Value, _ProtocolTables.Count))
         {
             throw NotFoundRegistrationException.For($"Protocol table ID {tableId.Value} not found");
         }
@@ -609,7 +678,7 @@ public sealed class StackBuilder : IStackBuilder
     /// <inheritdoc/>
     public void RegisterParserInAnyTable(ProtocolTableId tableId, ProtocolId protocolId)
     {
-        if (!IsValidIndex(tableId.Value, _ProtocolTables.Count))
+        if (!_IsValidIndex(tableId.Value, _ProtocolTables.Count))
         {
             throw NotFoundRegistrationException.For($"Protocol table ID {tableId.Value} not found");
         }
@@ -656,8 +725,8 @@ public sealed class StackBuilder : IStackBuilder
     public HeuristicProtocolTableId RegisterHeuristicProtocolTable(
         ProtocolId owningProtocolId, string name, string uiName, string? description = null)
     {
-        ValidateName(name);
-        ValidateUiName(uiName);
+        _ValidateName(name);
+        _ValidateUiName(uiName);
         if (_HeuristicTableNameMap.ContainsKey(name))
         {
             throw DuplicateNameRegistrationException.For(name);
@@ -675,7 +744,7 @@ public sealed class StackBuilder : IStackBuilder
     /// <inheritdoc/>
     public void RegisterHeuristicParser(HeuristicProtocolTableId tableId, IHeuristicParser parser)
     {
-        if (!IsValidIndex(tableId.Value, _HeuristicTables.Count))
+        if (!_IsValidIndex(tableId.Value, _HeuristicTables.Count))
         {
             throw NotFoundRegistrationException.For($"Heuristic table ID {tableId.Value} not found");
         }
@@ -696,7 +765,7 @@ public sealed class StackBuilder : IStackBuilder
     /// <inheritdoc/>
     public void WhenProtocolRegistered(string name, Action<ProtocolId> callback)
     {
-        ValidateName(name);
+        _ValidateName(name);
         if (_ProtocolNameMap.TryGetValue(name, out ProtocolId id))
         {
             callback(id);
@@ -713,7 +782,7 @@ public sealed class StackBuilder : IStackBuilder
     /// <inheritdoc/>
     public void WhenFieldRegistered(string name, Action<FieldId> callback)
     {
-        ValidateName(name);
+        _ValidateName(name);
         if (_FieldNameMap.TryGetValue(name, out FieldId id))
         {
             callback(id);
@@ -730,7 +799,7 @@ public sealed class StackBuilder : IStackBuilder
     /// <inheritdoc/>
     public void WhenProtocolTableRegistered(string name, Action<ProtocolTableId> callback)
     {
-        ValidateName(name);
+        _ValidateName(name);
         if (_ProtocolTableNameMap.TryGetValue(name, out ProtocolTableId id))
         {
             callback(id);
@@ -769,47 +838,113 @@ public sealed class StackBuilder : IStackBuilder
 
     /// <inheritdoc/>
     public ReadOnlySpan<ProtocolId> GetProtocolsFromU64ProtocolTable(ProtocolTableId tableId, ulong key)
-        => IsValidIndex(tableId.Value, _ProtocolTables.Count) ? _ProtocolTables[tableId.Value].GetAllU64(key) : [];
+    {
+        if (_IsValidIndex(tableId.Value, _ProtocolTables.Count))
+        {
+            return _ProtocolTables[tableId.Value].GetAllU64(key);
+        }
+        return [];
+    }
 
     /// <inheritdoc/>
     public ReadOnlySpan<ProtocolId> GetProtocolsFromStringProtocolTable(ProtocolTableId tableId, string key)
-        => IsValidIndex(tableId.Value, _ProtocolTables.Count) ? _ProtocolTables[tableId.Value].GetAllString(key) : [];
+    {
+        if (_IsValidIndex(tableId.Value, _ProtocolTables.Count))
+        {
+            return _ProtocolTables[tableId.Value].GetAllString(key);
+        }
+        return [];
+    }
 
     /// <inheritdoc/>
     public ReadOnlySpan<ProtocolId> GetProtocolsFromBytesProtocolTable(ProtocolTableId tableId, BytesKey key)
-        => IsValidIndex(tableId.Value, _ProtocolTables.Count) ? _ProtocolTables[tableId.Value].GetAllBytes(key) : [];
+    {
+        if (_IsValidIndex(tableId.Value, _ProtocolTables.Count))
+        {
+            return _ProtocolTables[tableId.Value].GetAllBytes(key);
+        }
+        return [];
+    }
 
     /// <inheritdoc/>
     public ReadOnlySpan<ProtocolId> GetProtocolsFromBoolProtocolTable(ProtocolTableId tableId, bool key)
-        => IsValidIndex(tableId.Value, _ProtocolTables.Count) ? _ProtocolTables[tableId.Value].GetAllBool(key) : [];
+    {
+        if (_IsValidIndex(tableId.Value, _ProtocolTables.Count))
+        {
+            return _ProtocolTables[tableId.Value].GetAllBool(key);
+        }
+        return [];
+    }
 
     /// <inheritdoc/>
     public ReadOnlySpan<ProtocolId> GetProtocolsFromAnyProtocolTable(ProtocolTableId tableId)
-        => IsValidIndex(tableId.Value, _ProtocolTables.Count) ? _ProtocolTables[tableId.Value].GetAllAny() : [];
+    {
+        if (_IsValidIndex(tableId.Value, _ProtocolTables.Count))
+        {
+            return _ProtocolTables[tableId.Value].GetAllAny();
+        }
+        return [];
+    }
 
     /// <inheritdoc/>
     public IEnumerable<KeyValuePair<ulong, ReadOnlyMemory<ProtocolId>>>? GetU64TableEntries(ProtocolTableId tableId)
-        => IsValidIndex(tableId.Value, _ProtocolTables.Count) ? _ProtocolTables[tableId.Value].IterU64Entries() : null;
+    {
+        if (_IsValidIndex(tableId.Value, _ProtocolTables.Count))
+        {
+            return _ProtocolTables[tableId.Value].IterU64Entries();
+        }
+        return null;
+    }
 
     /// <inheritdoc/>
     public IEnumerable<KeyValuePair<string, ReadOnlyMemory<ProtocolId>>>? GetStringTableEntries(ProtocolTableId tableId)
-        => IsValidIndex(tableId.Value, _ProtocolTables.Count) ? _ProtocolTables[tableId.Value].IterStringEntries() : null;
+    {
+        if (_IsValidIndex(tableId.Value, _ProtocolTables.Count))
+        {
+            return _ProtocolTables[tableId.Value].IterStringEntries();
+        }
+        return null;
+    }
 
     /// <inheritdoc/>
     public IEnumerable<KeyValuePair<BytesKey, ReadOnlyMemory<ProtocolId>>>? GetBytesTableEntries(ProtocolTableId tableId)
-        => IsValidIndex(tableId.Value, _ProtocolTables.Count) ? _ProtocolTables[tableId.Value].IterBytesEntries() : null;
+    {
+        if (_IsValidIndex(tableId.Value, _ProtocolTables.Count))
+        {
+            return _ProtocolTables[tableId.Value].IterBytesEntries();
+        }
+        return null;
+    }
 
     /// <inheritdoc/>
     public IEnumerable<KeyValuePair<bool, ReadOnlyMemory<ProtocolId>>>? GetBoolTableEntries(ProtocolTableId tableId)
-        => IsValidIndex(tableId.Value, _ProtocolTables.Count) ? _ProtocolTables[tableId.Value].IterBoolEntries() : null;
+    {
+        if (_IsValidIndex(tableId.Value, _ProtocolTables.Count))
+        {
+            return _ProtocolTables[tableId.Value].IterBoolEntries();
+        }
+        return null;
+    }
 
     /// <inheritdoc/>
     public ReadOnlyMemory<ProtocolId>? GetAnyTableProtocolIds(ProtocolTableId tableId)
-        => IsValidIndex(tableId.Value, _ProtocolTables.Count) ? _ProtocolTables[tableId.Value].GetAnyProtocolIds() : null;
+    {
+        if (_IsValidIndex(tableId.Value, _ProtocolTables.Count))
+        {
+            return _ProtocolTables[tableId.Value].GetAnyProtocolIds();
+        }
+        return null;
+    }
 
     /// <inheritdoc/>
     public ProtocolId? TryMatchHeuristic(HeuristicProtocolTableId tableId, ReadOnlyMemory<byte> data)
-        => IsValidIndex(tableId.Value, _HeuristicTables.Count) ? _HeuristicTables[tableId.Value].TryMatch(data) : null;
+    {
+        if (_IsValidIndex(tableId.Value, _HeuristicTables.Count))
+        {
+            return _HeuristicTables[tableId.Value].TryMatch(data);
+        }
+        return null;
+    }
 
     /// <inheritdoc/>
     /// <remarks>
@@ -829,9 +964,9 @@ public sealed class StackBuilder : IStackBuilder
     {
         // Collect unresolved deferred callbacks as structured warnings
         List<BuildDiagnostic> diagnostics = [];
-        CollectUnresolvedCallbacks(_DeferredProtocol, BuildCallbackWarningKind.Protocol, diagnostics);
-        CollectUnresolvedCallbacks(_DeferredField, BuildCallbackWarningKind.Field, diagnostics);
-        CollectUnresolvedCallbacks(_DeferredTable, BuildCallbackWarningKind.ProtocolTable, diagnostics);
+        _CollectUnresolvedCallbacks(_DeferredProtocol, BuildCallbackWarningKind.Protocol, diagnostics);
+        _CollectUnresolvedCallbacks(_DeferredField, BuildCallbackWarningKind.Field, diagnostics);
+        _CollectUnresolvedCallbacks(_DeferredTable, BuildCallbackWarningKind.ProtocolTable, diagnostics);
 
         // Freeze into arrays
         ProtocolInfo[] protocols = [.. _Protocols];
@@ -884,7 +1019,7 @@ public sealed class StackBuilder : IStackBuilder
             _FieldAliasGroupNameMap.ToFrozenDictionary(StringComparer.Ordinal);
 
         // Auto-discover the frame protocol by name (if registered)
-        ProtocolId frameProtocolId = protocolNameMap.GetValueOrDefault(FrameProtocolName, ProtocolId.Invalid);
+        ProtocolId frameProtocolId = protocolNameMap.GetValueOrDefault(_FrameProtocolName, ProtocolId.Invalid);
 
         Stack stack = new(
             protocols, protocolInstances, parseDelegates, protocolNameMap,
@@ -928,7 +1063,7 @@ public sealed class StackBuilder : IStackBuilder
     }
 
     /// <summary>Collects unresolved deferred callbacks as structured <see cref="BuildCallbackWarning"/> entries.</summary>
-    private static void CollectUnresolvedCallbacks<T>(
+    private static void _CollectUnresolvedCallbacks<T>(
         Dictionary<string, List<Action<T>>> deferred,
         BuildCallbackWarningKind entityKind,
         List<BuildDiagnostic> diagnostics)

@@ -22,7 +22,7 @@ internal sealed class ParseContextDispatchTests
     /// and a child protocol that records the context it receives.
     /// </summary>
     private static (Stack Stack, SpyProtocol Parent, SpyProtocol Child, ProtocolId ParentId, ProtocolId ChildId)
-        BuildDispatchStack()
+        _BuildDispatchStack()
     {
         using SettingsManager settingsManager = new();
         StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
@@ -49,7 +49,7 @@ internal sealed class ParseContextDispatchTests
     /// Parses a minimal synthetic frame using the given protocol as the first protocol.
     /// Frame payload is a single byte 0x99 that the parent uses as the dispatch key.
     /// </summary>
-    private static Packet ParseFrame(Stack stack, ProtocolId firstProtocolId)
+    private static Packet _ParseFrame(Stack stack, ProtocolId firstProtocolId)
     {
         // 1-byte payload: dispatch key 0x99
         byte[] data = [0x99];
@@ -71,10 +71,10 @@ internal sealed class ParseContextDispatchTests
     [Test]
     public async Task SelfProtocolId_IsSetToOwnProtocolId_ForParentProtocol()
     {
-        (Stack stack, SpyProtocol parent, _, ProtocolId parentId, _) = BuildDispatchStack();
+        (Stack stack, SpyProtocol parent, _, ProtocolId parentId, _) = _BuildDispatchStack();
         using (stack)
         {
-            _ = ParseFrame(stack, parentId);
+            _ = _ParseFrame(stack, parentId);
             await Assert.That(parent.ReceivedSelfProtocolId).IsEqualTo(parentId);
         }
     }
@@ -82,10 +82,10 @@ internal sealed class ParseContextDispatchTests
     [Test]
     public async Task SelfProtocolId_IsSetToOwnProtocolId_ForChildProtocol()
     {
-        (Stack stack, _, SpyProtocol child, ProtocolId parentId, ProtocolId childId) = BuildDispatchStack();
+        (Stack stack, _, SpyProtocol child, ProtocolId parentId, ProtocolId childId) = _BuildDispatchStack();
         using (stack)
         {
-            _ = ParseFrame(stack, parentId);
+            _ = _ParseFrame(stack, parentId);
             await Assert.That(child.ReceivedSelfProtocolId).IsEqualTo(childId);
         }
     }
@@ -110,10 +110,10 @@ internal sealed class ParseContextDispatchTests
     [Test]
     public async Task CallerProtocolId_IsParentId_WhenDispatchedViaTable()
     {
-        (Stack stack, _, SpyProtocol child, ProtocolId parentId, _) = BuildDispatchStack();
+        (Stack stack, _, SpyProtocol child, ProtocolId parentId, _) = _BuildDispatchStack();
         using (stack)
         {
-            _ = ParseFrame(stack, parentId);
+            _ = _ParseFrame(stack, parentId);
             // The child was dispatched by the parent — CallerProtocolId must equal parentId
             await Assert.That(child.ReceivedCallerProtocolId).IsEqualTo(parentId);
         }
@@ -122,13 +122,13 @@ internal sealed class ParseContextDispatchTests
     [Test]
     public async Task CallerProtocolId_HasDispatch_IsFalse_ForRootProtocol()
     {
-        // The root protocol was invoked via Packet.ParseFrame → CallProtocol directly,
+        // The root protocol was invoked via Packet._ParseFrame → CallProtocol directly,
         // without a dispatch table lookup — HasDispatch must be false.
         // CallerProtocolId is meaningless when HasDispatch is false.
-        (Stack stack, SpyProtocol parent, _, ProtocolId parentId, _) = BuildDispatchStack();
+        (Stack stack, SpyProtocol parent, _, ProtocolId parentId, _) = _BuildDispatchStack();
         using (stack)
         {
-            _ = ParseFrame(stack, parentId);
+            _ = _ParseFrame(stack, parentId);
             await Assert.That(parent.ReceivedHasDispatch).IsFalse();
         }
     }
@@ -254,7 +254,12 @@ internal sealed class ParseContextDispatchTests
                 container.TryCallNextProtocolU64(_TableId, _DispatchKey, data[1..], in context);
             }
 
-            return data.Length >= 1 ? 1 : 0;
+            if (data.Length >= 1)
+            {
+                return 1;
+            }
+
+            return 0;
         }
     }
 

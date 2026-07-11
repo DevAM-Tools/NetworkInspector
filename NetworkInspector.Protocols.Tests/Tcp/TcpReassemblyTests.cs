@@ -20,7 +20,7 @@ internal sealed class TcpReassemblyTests
     #region Helpers
 
     /// <summary>Creates a config with a length-prefix PDU boundary detector.</summary>
-    private static StreamReassemblyConfig LengthPrefixConfig(
+    private static StreamReassemblyConfig _LengthPrefixConfig(
         int offset = 0,
         int size = 2,
         bool bigEndian = true,
@@ -31,13 +31,13 @@ internal sealed class TcpReassemblyTests
         };
 
     /// <summary>Creates a config with a delimiter-based PDU boundary detector.</summary>
-    private static StreamReassemblyConfig DelimiterConfig(byte[] delimiter) => new()
+    private static StreamReassemblyConfig _DelimiterConfig(byte[] delimiter) => new()
     {
         BoundaryDetector = new DelimiterDetector(delimiter),
     };
 
     /// <summary>Creates a default stream detection context.</summary>
-    private static StreamDetectionContext DefaultContext() => new()
+    private static StreamDetectionContext _DefaultContext() => new()
     {
         StreamId = _TestStreamId,
         ProtocolId = _TestProtocolId,
@@ -215,7 +215,7 @@ internal sealed class TcpReassemblyTests
     public async Task SegmentBuffer_SinglePdu_Complete()
     {
         // Length-prefix config: 2-byte big-endian length at offset 0
-        StreamReassemblyConfig config = LengthPrefixConfig();
+        StreamReassemblyConfig config = _LengthPrefixConfig();
         SegmentBuffer buffer = new(config);
 
         // Append a complete PDU: length=3, data=[A,B,C]
@@ -223,7 +223,7 @@ internal sealed class TcpReassemblyTests
         bool appended = buffer.AppendSegment(segment);
         await Assert.That(appended).IsTrue();
 
-        bool extracted = buffer.TryExtractPdu(DefaultContext(), out ReadOnlyMemory<byte> pdu);
+        bool extracted = buffer.TryExtractPdu(_DefaultContext(), out ReadOnlyMemory<byte> pdu);
         await Assert.That(extracted).IsTrue();
         await Assert.That(pdu.Length).IsEqualTo(5);
     }
@@ -231,7 +231,7 @@ internal sealed class TcpReassemblyTests
     [Test]
     public async Task SegmentBuffer_MultiSegment_ReassemblesComplete()
     {
-        StreamReassemblyConfig config = LengthPrefixConfig();
+        StreamReassemblyConfig config = _LengthPrefixConfig();
         SegmentBuffer buffer = new(config);
 
         // First segment: partial PDU (length=5 but only 2 bytes of data)
@@ -239,7 +239,7 @@ internal sealed class TcpReassemblyTests
         buffer.AppendSegment(seg1);
 
         // Should be incomplete — can't extract yet
-        bool extracted1 = buffer.TryExtractPdu(DefaultContext(), out _);
+        bool extracted1 = buffer.TryExtractPdu(_DefaultContext(), out _);
         await Assert.That(extracted1).IsFalse();
 
         // Second segment: remaining 3 bytes
@@ -247,7 +247,7 @@ internal sealed class TcpReassemblyTests
         buffer.AppendSegment(seg2);
 
         // Now should be complete
-        bool extracted2 = buffer.TryExtractPdu(DefaultContext(), out ReadOnlyMemory<byte> pdu);
+        bool extracted2 = buffer.TryExtractPdu(_DefaultContext(), out ReadOnlyMemory<byte> pdu);
         await Assert.That(extracted2).IsTrue();
         // Total = prefix(2) + payload(5) = 7
         await Assert.That(pdu.Length).IsEqualTo(7);
@@ -256,7 +256,7 @@ internal sealed class TcpReassemblyTests
     [Test]
     public async Task SegmentBuffer_MultiplePdus_ExtractedSequentially()
     {
-        StreamReassemblyConfig config = LengthPrefixConfig();
+        StreamReassemblyConfig config = _LengthPrefixConfig();
         SegmentBuffer buffer = new(config);
 
         // Two complete PDUs in one segment
@@ -266,17 +266,17 @@ internal sealed class TcpReassemblyTests
         buffer.AppendSegment(segment);
 
         // Extract first PDU
-        bool extracted1 = buffer.TryExtractPdu(DefaultContext(), out ReadOnlyMemory<byte> pdu1);
+        bool extracted1 = buffer.TryExtractPdu(_DefaultContext(), out ReadOnlyMemory<byte> pdu1);
         await Assert.That(extracted1).IsTrue();
         await Assert.That(pdu1.Length).IsEqualTo(4);
 
         // Extract second PDU
-        bool extracted2 = buffer.TryExtractPdu(DefaultContext(), out ReadOnlyMemory<byte> pdu2);
+        bool extracted2 = buffer.TryExtractPdu(_DefaultContext(), out ReadOnlyMemory<byte> pdu2);
         await Assert.That(extracted2).IsTrue();
         await Assert.That(pdu2.Length).IsEqualTo(3);
 
         // No more PDUs
-        bool extracted3 = buffer.TryExtractPdu(DefaultContext(), out _);
+        bool extracted3 = buffer.TryExtractPdu(_DefaultContext(), out _);
         await Assert.That(extracted3).IsFalse();
     }
 
@@ -294,7 +294,7 @@ internal sealed class TcpReassemblyTests
     [Test]
     public async Task SegmentBuffer_Clear_ResetsState()
     {
-        StreamReassemblyConfig config = LengthPrefixConfig();
+        StreamReassemblyConfig config = _LengthPrefixConfig();
         SegmentBuffer buffer = new(config);
 
         byte[] segment = [0x00, 0x03, 0x41, 0x42, 0x43];
@@ -307,13 +307,13 @@ internal sealed class TcpReassemblyTests
     [Test]
     public async Task SegmentBuffer_Delimiter_ExtractsPdu()
     {
-        StreamReassemblyConfig config = DelimiterConfig("\r\n"u8.ToArray());
+        StreamReassemblyConfig config = _DelimiterConfig("\r\n"u8.ToArray());
         SegmentBuffer buffer = new(config);
 
         byte[] segment = "Hello\r\n"u8.ToArray();
         buffer.AppendSegment(segment);
 
-        bool extracted = buffer.TryExtractPdu(DefaultContext(), out ReadOnlyMemory<byte> pdu);
+        bool extracted = buffer.TryExtractPdu(_DefaultContext(), out ReadOnlyMemory<byte> pdu);
         await Assert.That(extracted).IsTrue();
         await Assert.That(pdu.Length).IsEqualTo(7);
     }
@@ -340,11 +340,11 @@ internal sealed class TcpReassemblyTests
         buffer.AppendSegment(segment);
 
         // Extract triggers detection (Invalid) → resync with overshoot skip.
-        buffer.TryExtractPdu(DefaultContext(), out _);
+        buffer.TryExtractPdu(_DefaultContext(), out _);
 
         // TotalLength must be non-negative; buffer must be in Error state (no more extraction).
         await Assert.That(buffer.TotalLength).IsGreaterThanOrEqualTo(0);
-        bool extractedAfterError = buffer.TryExtractPdu(DefaultContext(), out _);
+        bool extractedAfterError = buffer.TryExtractPdu(_DefaultContext(), out _);
         await Assert.That(extractedAfterError).IsFalse();
     }
 
@@ -355,7 +355,7 @@ internal sealed class TcpReassemblyTests
     [Test]
     public async Task StreamState_ForwardAndReverse_IndependentBuffers()
     {
-        StreamReassemblyConfig config = LengthPrefixConfig();
+        StreamReassemblyConfig config = _LengthPrefixConfig();
         TcpStreamState state = new(_TestStreamId, _TestProtocolId, config);
 
         SegmentBuffer forward = state.GetBuffer(true);
@@ -368,10 +368,10 @@ internal sealed class TcpReassemblyTests
     [Test]
     public async Task StreamState_Bidirectional_ReassemblesIndependently()
     {
-        StreamReassemblyConfig config = LengthPrefixConfig();
+        StreamReassemblyConfig config = _LengthPrefixConfig();
         TcpStreamState state = new(_TestStreamId, _TestProtocolId, config);
 
-        StreamDetectionContext ctx = DefaultContext();
+        StreamDetectionContext ctx = _DefaultContext();
 
         // Forward direction: complete PDU
         byte[] fwdData = [0x00, 0x02, 0xAA, 0xBB];
@@ -396,7 +396,7 @@ internal sealed class TcpReassemblyTests
     [Test]
     public async Task StreamState_Clear_ClearsBothDirections()
     {
-        StreamReassemblyConfig config = LengthPrefixConfig();
+        StreamReassemblyConfig config = _LengthPrefixConfig();
         TcpStreamState state = new(_TestStreamId, _TestProtocolId, config);
 
         byte[] data = [0x00, 0x01, 0xFF];

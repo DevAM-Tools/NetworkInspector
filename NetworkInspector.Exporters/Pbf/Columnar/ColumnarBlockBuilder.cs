@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Exporters.Pbf.Columnar;
 
@@ -102,7 +102,7 @@ internal sealed class ColumnarBlockBuilder : IDisposable
         _InfoStrings.Add(packet.Info);
 
         // Track estimated size: 16 bytes per packet for IDs/timestamps (encoded varints),
-        // plus the info string. Field values are tracked inside CollectFieldValues.
+        // plus the info string. Field values are tracked inside _CollectFieldValues.
         _EstimatedSize += 16 + packet.Info.Length;
 
         // Encode topology into flat arrays (no per-packet List<int> allocation).
@@ -114,7 +114,7 @@ internal sealed class ColumnarBlockBuilder : IDisposable
         _EstimatedSize += topoCount * 4; // rough: 2 varints per topology entry
 
         // Collect field values into columns (depth-first traversal)
-        CollectFieldValues(packet.RootField());
+        _CollectFieldValues(packet.RootField());
 
         return PacketCount >= _MaxPacketsPerBlock || _EstimatedSize >= _MaxBlockSize;
     }
@@ -163,19 +163,19 @@ internal sealed class ColumnarBlockBuilder : IDisposable
         }
 
         // Delta-encode packet IDs (inline, avoids long[] allocation from DeltaEncoder)
-        WriteColumnSint64(ref payload, 10, CollectionsMarshal.AsSpan(_PacketIds));
+        _WriteColumnSint64(ref payload, 10, CollectionsMarshal.AsSpan(_PacketIds));
 
         // Delta-encode timestamps (inline)
-        WriteColumnSint64(ref payload, 11, CollectionsMarshal.AsSpan(_Timestamps));
+        _WriteColumnSint64(ref payload, 11, CollectionsMarshal.AsSpan(_Timestamps));
 
         // Info strings column
-        WriteColumnStrings(ref payload, 12, _InfoStrings);
+        _WriteColumnStrings(ref payload, 12, _InfoStrings);
 
         // Topology columns
-        WriteTopologyColumns(ref payload);
+        _WriteTopologyColumns(ref payload);
 
         // Field value columns
-        WriteFieldColumns(ref payload);
+        _WriteFieldColumns(ref payload);
 
         // Wrap in block envelope. Release any previous envelope first (defensive: the
         // caller is expected to call Reset between blocks, but Build-without-Reset must
@@ -232,7 +232,7 @@ internal sealed class ColumnarBlockBuilder : IDisposable
     /// Uses the struct-based <see cref="FieldDescendantEnumerator"/> (inline stack, zero-alloc for
     /// trees up to 16 levels deep) instead of recursion to avoid per-level C# stack frame growth.
     /// </summary>
-    private void CollectFieldValues(Field rootField)
+    private void _CollectFieldValues(Field rootField)
     {
         // Descendants() returns FieldDescendantEnumerable whose GetEnumerator() resolves to the
         // ref-struct FieldDescendantEnumerator via duck-typing — no IEnumerable<Field> boxing.
@@ -251,9 +251,9 @@ internal sealed class ColumnarBlockBuilder : IDisposable
 
             _FieldPresence.Mark(fieldIdValue);
 
-            ColumnBuilder column = GetOrCreateColumn(fieldIdValue);
+            ColumnBuilder column = _GetOrCreateColumn(fieldIdValue);
             FieldValue value = field.Value;
-            string? valueStr = FormatFieldValue(value);
+            string? valueStr = _FormatFieldValue(value);
             string? customRepresentation = !value.CustomRepresentation.IsNull
                 ? value.CustomRepresentation.AsString : null;
             LazyString customText = field.CustomText;
@@ -267,7 +267,7 @@ internal sealed class ColumnarBlockBuilder : IDisposable
     }
 
     /// <summary>Gets or creates a column builder for the given field ID.</summary>
-    private ColumnBuilder GetOrCreateColumn(int fieldIdValue)
+    private ColumnBuilder _GetOrCreateColumn(int fieldIdValue)
     {
         if (!_Columns.TryGetValue(fieldIdValue, out ColumnBuilder? column))
         {
@@ -284,7 +284,7 @@ internal sealed class ColumnarBlockBuilder : IDisposable
     /// for monotonic sequences such as packet IDs and timestamps.
     /// No intermediate array is allocated; deltas are computed inline (LOW-3 fix).
     /// </summary>
-    private static void WriteColumnSint64(
+    private static void _WriteColumnSint64(
         ref PooledBuffer buffer, int fieldNumber, ReadOnlySpan<long> values)
     {
         if (values.IsEmpty)
@@ -303,7 +303,7 @@ internal sealed class ColumnarBlockBuilder : IDisposable
     }
 
     /// <summary>Writes a string column.</summary>
-    private static void WriteColumnStrings(
+    private static void _WriteColumnStrings(
         ref PooledBuffer buffer, int fieldNumber, List<string> values)
     {
         PooledBuffer col = new(values.Count * 16);
@@ -316,7 +316,7 @@ internal sealed class ColumnarBlockBuilder : IDisposable
     }
 
     /// <summary>Writes topology columns (field IDs and child counts per packet).</summary>
-    private void WriteTopologyColumns(ref PooledBuffer buffer)
+    private void _WriteTopologyColumns(ref PooledBuffer buffer)
     {
         PooledBuffer topo = new(PacketCount * 64);
         for (int i = 0; i < PacketCount; i++)
@@ -343,7 +343,7 @@ internal sealed class ColumnarBlockBuilder : IDisposable
     }
 
     /// <summary>Writes all field value columns.</summary>
-    private void WriteFieldColumns(ref PooledBuffer buffer)
+    private void _WriteFieldColumns(ref PooledBuffer buffer)
     {
         foreach (KeyValuePair<int, ColumnBuilder> entry in _Columns)
         {
@@ -390,5 +390,5 @@ internal sealed class ColumnarBlockBuilder : IDisposable
     }
 
     /// <summary>Formats a field value as string for columnar storage.</summary>
-    private static string? FormatFieldValue(FieldValue value) => FieldValueFormatter.Format(value);
+    private static string? _FormatFieldValue(FieldValue value) => FieldValueFormatter.Format(value);
 }

@@ -61,7 +61,7 @@ public readonly struct FrameInterfaceId(int value) : IEquatable<FrameInterfaceId
     public override bool Equals(object? obj) => obj is FrameInterfaceId other && Equals(other);
 
     /// <inheritdoc/>
-    public override string ToString() => _Value.ToString();
+    public override string ToString() => _Value.ToString(CultureInfo.InvariantCulture);
 
     #endregion
 

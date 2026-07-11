@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Protocols.Tests;
 
@@ -10,7 +10,7 @@ namespace NetworkInspector.Protocols.Tests;
 internal sealed class DhcpMalformedTests
 {
     // 0.0.0.0 → 255.255.255.255 is the canonical DHCP DISCOVER pair.
-    private static byte[] WrapUdp(ReadOnlySpan<byte> dhcpPayload)
+    private static byte[] _WrapUdp(ReadOnlySpan<byte> dhcpPayload)
     {
         EthernetLayer eth = new(
             MacAddress.FromBytes([0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF]),
@@ -25,7 +25,7 @@ internal sealed class DhcpMalformedTests
     {
         // Less than the 240-byte BOOTP header.
         byte[] payload = new byte[100];
-        byte[] frame = WrapUdp(payload);
+        byte[] frame = _WrapUdp(payload);
 
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame, LinkType.Ethernet);
         using (stack)
@@ -42,7 +42,7 @@ internal sealed class DhcpMalformedTests
         // Set op = 1 so the first byte is plausible, but leave the magic cookie at zero.
         payload[0] = 1;
         payload[240] = 0xFF;
-        byte[] frame = WrapUdp(payload);
+        byte[] frame = _WrapUdp(payload);
 
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame, LinkType.Ethernet);
         using (stack)

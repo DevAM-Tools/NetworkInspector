@@ -62,7 +62,7 @@ namespace NetworkInspector.Protocols;
 public sealed partial class IPv4Protocol : IProtocol
 {
     /// <summary>Expected IP version number.</summary>
-    private const byte ExpectedVersion = 4;
+    private const byte _ExpectedVersion = 4;
 
     #region Table Key Constants
 
@@ -81,69 +81,69 @@ public sealed partial class IPv4Protocol : IProtocol
     #region Index Group Constants
 
     /// <summary>Index group for always-present IPv4 fields.</summary>
-    private const string IpIndexGroup = "ip";
+    private const string _IpIndexGroup = "ip";
 
     #endregion
 
     #region Fields
 
     // BytesField container carries header byte range for UI highlighting
-    [BytesField("ip", "IPv4", IndexGroup = IpIndexGroup)]
+    [BytesField("ip", "IPv4", IndexGroup = _IpIndexGroup)]
     private FieldId _ProtocolFieldId;
 
-    [U64Field("ip.version", "Version", IndexGroup = IpIndexGroup)]
+    [U64Field("ip.version", "Version", IndexGroup = _IpIndexGroup)]
     private FieldId _VersionFieldId;
 
-    [U64Field("ip.hdr_len", "Header Length", IndexGroup = IpIndexGroup)]
+    [U64Field("ip.hdr_len", "Header Length", IndexGroup = _IpIndexGroup)]
     private FieldId _HdrLenFieldId;
 
-    [U64Field("ip.dscp", "DSCP", IndexGroup = IpIndexGroup)]
+    [U64Field("ip.dscp", "DSCP", IndexGroup = _IpIndexGroup)]
     private FieldId _DscpFieldId;
 
-    [U64Field("ip.ecn", "ECN", IndexGroup = IpIndexGroup)]
+    [U64Field("ip.ecn", "ECN", IndexGroup = _IpIndexGroup)]
     private FieldId _EcnFieldId;
 
-    [U64Field("ip.len", "Total Length", IndexGroup = IpIndexGroup)]
+    [U64Field("ip.len", "Total Length", IndexGroup = _IpIndexGroup)]
     private FieldId _TotalLenFieldId;
 
-    [U64Field("ip.id", "Identification", IndexGroup = IpIndexGroup)]
+    [U64Field("ip.id", "Identification", IndexGroup = _IpIndexGroup)]
     private FieldId _IdFieldId;
 
-    [NoneField("ip.flags", "Flags", IndexGroup = IpIndexGroup)]
+    [NoneField("ip.flags", "Flags", IndexGroup = _IpIndexGroup)]
     private FieldId _FlagsFieldId;
 
-    [BoolField("ip.flags.rb", "Reserved bit", IndexGroup = IpIndexGroup)]
+    [BoolField("ip.flags.rb", "Reserved bit", IndexGroup = _IpIndexGroup)]
     private FieldId _FlagsRbFieldId;
 
-    [BoolField("ip.flags.df", "Don't Fragment", IndexGroup = IpIndexGroup)]
+    [BoolField("ip.flags.df", "Don't Fragment", IndexGroup = _IpIndexGroup)]
     private FieldId _FlagsDfFieldId;
 
-    [BoolField("ip.flags.mf", "More Fragments", IndexGroup = IpIndexGroup)]
+    [BoolField("ip.flags.mf", "More Fragments", IndexGroup = _IpIndexGroup)]
     private FieldId _FlagsMfFieldId;
 
-    [U64Field("ip.frag_offset", "Fragment Offset", IndexGroup = IpIndexGroup)]
+    [U64Field("ip.frag_offset", "Fragment Offset", IndexGroup = _IpIndexGroup)]
     private FieldId _FragOffsetFieldId;
 
-    [U64Field("ip.ttl", "Time To Live", IndexGroup = IpIndexGroup)]
+    [U64Field("ip.ttl", "Time To Live", IndexGroup = _IpIndexGroup)]
     private FieldId _TtlFieldId;
 
-    [U64Field(IpProtoTableName, "Protocol", IndexGroup = IpIndexGroup)]
+    [U64Field(IpProtoTableName, "Protocol", IndexGroup = _IpIndexGroup)]
     private FieldId _ProtoFieldId;
 
-    [U64Field("ip.checksum", "Header Checksum", IndexGroup = IpIndexGroup)]
+    [U64Field("ip.checksum", "Header Checksum", IndexGroup = _IpIndexGroup)]
     private FieldId _ChecksumFieldId;
 
     // Checksum validation status (optional, only when verification enabled)
     [StringField("ip.checksum.status", "Checksum Status", IndexGroup = "ip.checksum.status")]
     private FieldId _ChecksumStatusFieldId;
 
-    [IPv4Field("ip.src", "Source Address", IndexGroup = IpIndexGroup)]
+    [IPv4Field("ip.src", "Source Address", IndexGroup = _IpIndexGroup)]
     private FieldId _SrcFieldId;
 
-    [IPv4Field("ip.dst", "Destination Address", IndexGroup = IpIndexGroup)]
+    [IPv4Field("ip.dst", "Destination Address", IndexGroup = _IpIndexGroup)]
     private FieldId _DstFieldId;
 
-    // Field alias group ID assigned in RegisterFieldsCustom for "ip.addr" -> { ip.src, ip.dst }.
+    // Field alias group ID assigned in _RegisterFieldsCustom for "ip.addr" -> { ip.src, ip.dst }.
     // Alias names are metadata-only and never resolve through GetFieldId; the parse tree
     // contains no ip.addr node.
     private FieldAliasGroupId _AddrAliasGroupId;
@@ -243,7 +243,7 @@ public sealed partial class IPv4Protocol : IProtocol
     [BoolSetting("ip.verify_checksum", "Verify Checksum", "ip", Default = false)]
     private bool _VerifyChecksum;
 
-    // Pre-allocated delegate: created once in OnStartCustom, reused for every packet.
+    // Pre-allocated delegate: created once in _OnStartCustom, reused for every packet.
     // Captures only `this` (singleton) — zero per-packet allocation.
     private LazyPopulator _Populator = null!;
 
@@ -253,7 +253,7 @@ public sealed partial class IPv4Protocol : IProtocol
     // Null entry → zero or multiple protocols → fall back to full table dispatch.
     private ParseDelegate?[] _IpProtoDelegateCache = [];
 
-    // Pre-allocated option field IDs struct, built once in OnStartCustom.
+    // Pre-allocated option field IDs struct, built once in _OnStartCustom.
     private OptionFieldIds _OptionFieldIds;
 
     // IP fragment reassembly engine — datagram-based, keyed by (src, dst, id, protocol).
@@ -263,10 +263,10 @@ public sealed partial class IPv4Protocol : IProtocol
     /// Pre-allocates the lazy-field populator delegate and builds the IP-protocol dispatch cache.
     /// Neither allocation occurs per packet — both are one-time costs at stack start.
     /// </summary>
-    partial void OnStartCustom(Stack stack)
+    partial void _OnStartCustom(Stack stack)
     {
-        _Populator = PopulateIPv4;
-        _OptionFieldIds = BuildOptionFieldIds();
+        _Populator = _PopulateIPv4;
+        _OptionFieldIds = _BuildOptionFieldIds();
         // Pre-build 256-entry dense cache: IP protocol field is a u8, so the full domain
         // fits in ~2 kB and direct array indexing replaces dictionary lookup per packet.
         // Delegate cache stores pre-bound ParseDelegate for direct invocation.
@@ -277,7 +277,7 @@ public sealed partial class IPv4Protocol : IProtocol
     /// Registers protocol-owned alias groups. Adds "ip.addr" -> { ip.src, ip.dst } as
     /// metadata; the alias is reachable only via the alias-group APIs on IStack.
     /// </summary>
-    partial void RegisterFieldsCustom(IStackBuilder builder, ProtocolId protocolId)
+    partial void _RegisterFieldsCustom(IStackBuilder builder, ProtocolId protocolId)
     {
         _AddrAliasGroupId = builder.RegisterFieldAliasGroup(
             protocolId,
@@ -292,7 +292,7 @@ public sealed partial class IPv4Protocol : IProtocol
     /// address, and protocol number are eagerly appended by <see cref="Parse"/>.
     /// Called on first access of the IPv4 container's children.
     /// </summary>
-    private ParseResult PopulateIPv4(in MutField container)
+    private ParseResult _PopulateIPv4(in MutField container)
     {
         if (!container.Value.Data.TryGetAsBytes(out ReadOnlyMemory<byte> headerBytes))
         {
@@ -316,7 +316,7 @@ public sealed partial class IPv4Protocol : IProtocol
         // IpAddressExtractor can find them without materialising the lazy group.
         // The populator skips them to avoid duplicate entries.
 
-        // ip.addr is exposed as an alias group registered in RegisterFieldsCustom; no
+        // ip.addr is exposed as an alias group registered in _RegisterFieldsCustom; no
         // duplicate ip.addr field node is appended to the parse tree.
 
         byte version = header.Version;
@@ -418,7 +418,7 @@ public sealed partial class IPv4Protocol : IProtocol
 
         byte version = header.Version;
         int headerLen = header.HeaderLength; // bytes
-        if (version != ExpectedVersion)
+        if (version != _ExpectedVersion)
         {
             return ParseError.InvalidData(ProtocolName, $"Expected version 4, got {version}");
         }
@@ -506,7 +506,7 @@ public sealed partial class IPv4Protocol : IProtocol
                 {
                     // All fragments received — dispatch the reassembled datagram
                     ReadOnlyMemory<byte> reassembledPayload = reassembled;
-                    ParseResult dispatchResult = DispatchIpProtocol(
+                    ParseResult dispatchResult = _DispatchIpProtocol(
                         in parentField, protocol, reassembledPayload, in context);
                     if (dispatchResult.IsError)
                     {
@@ -519,7 +519,7 @@ public sealed partial class IPv4Protocol : IProtocol
             {
                 // Non-fragmented packet — dispatch directly
                 ReadOnlyMemory<byte> payload = data.Slice(payloadStart, payloadLen);
-                ParseResult dispatchResult = DispatchIpProtocol(
+                ParseResult dispatchResult = _DispatchIpProtocol(
                     in parentField, protocol, payload, in context);
                 if (dispatchResult.IsError)
                 {
@@ -536,7 +536,7 @@ public sealed partial class IPv4Protocol : IProtocol
     /// Uses the pre-cached delegate for the common single-protocol case (O(1) array lookup);
     /// falls back to full table dispatch for multi-protocol keys or entries outside the cache.
     /// </summary>
-    private ParseResult DispatchIpProtocol(
+    private ParseResult _DispatchIpProtocol(
         in MutField parentField, byte protocol, ReadOnlyMemory<byte> payload, in ParseContext context)
     {
         // _IpProtoDelegateCache has 256 entries after OnStart; non-null means single registered protocol.
@@ -663,7 +663,7 @@ public sealed partial class IPv4Protocol : IProtocol
     }
 
     /// <summary>Builds the <see cref="OptionFieldIds"/> struct from the protocol's registered fields.</summary>
-    private OptionFieldIds BuildOptionFieldIds() => new()
+    private OptionFieldIds _BuildOptionFieldIds() => new()
     {
         OptTypeFieldId = _OptTypeFieldId,
         OptTypeCopyFieldId = _OptTypeCopyFieldId,

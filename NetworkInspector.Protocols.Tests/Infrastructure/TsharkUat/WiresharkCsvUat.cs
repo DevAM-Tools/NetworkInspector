@@ -25,8 +25,15 @@ internal static class WiresharkCsvUat
     internal static string Hex32Upper(uint id) =>
         $"{id:X8}".ToUpperInvariant();
 
-    internal static string Bool(bool value) =>
-        value ? "TRUE" : "FALSE";
+    internal static string Bool(bool value)
+    {
+        if (value)
+        {
+            return "TRUE";
+        }
+
+        return "FALSE";
+    }
 
     internal static string CsvDouble(double value) =>
         value.ToString(CultureInfo.InvariantCulture);
@@ -77,7 +84,7 @@ internal static class WiresharkCsvUat
 
     internal static string CsvEscaped(string raw)
     {
-        if (!RequiresCsvEscaping(raw))
+        if (!_RequiresCsvEscaping(raw))
         {
             return raw;
         }
@@ -110,7 +117,7 @@ internal static class WiresharkCsvUat
         return sb.ToString();
     }
 
-    private static bool RequiresCsvEscaping(string raw)
+    private static bool _RequiresCsvEscaping(string raw)
     {
         foreach (char c in raw)
         {

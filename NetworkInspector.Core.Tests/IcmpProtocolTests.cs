@@ -11,7 +11,7 @@ internal sealed class IcmpProtocolTests
     /// <summary>
     /// Builds a full stack with standard protocols and parses the given frame data.
     /// </summary>
-    private static (Stack Stack, Packet Packet) BuildAndParse(byte[] frameData)
+    private static (Stack Stack, Packet Packet) _BuildAndParse(byte[] frameData)
     {
         using SettingsManager settingsManager = new();
         StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
@@ -37,7 +37,7 @@ internal sealed class IcmpProtocolTests
         byte[] frameData = FrameBuilders.GenerateIcmpEchoRequestFrame(
             identifier: 0x1234, sequence: 0x0001, payload: payload);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             // Verify ICMP protocol detected
@@ -81,7 +81,7 @@ internal sealed class IcmpProtocolTests
         byte[] frameData = FrameBuilders.GenerateIcmpEchoReplyFrame(
             identifier: 0xABCD, sequence: 0x0005, payload: payload);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             // Type = 0 (Echo Reply)
@@ -105,7 +105,7 @@ internal sealed class IcmpProtocolTests
     {
         byte[] frameData = FrameBuilders.GenerateIcmpDestUnreachFrame(code: 1); // Host unreachable
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             // Type = 3 (Dest Unreachable)
@@ -136,7 +136,7 @@ internal sealed class IcmpProtocolTests
         byte[] frameData = FrameBuilders.GenerateIcmpEchoRequestFrame(
             identifier: 0x0001, sequence: 0x0001, payload: payload);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             // Checksum field should be present
@@ -160,7 +160,7 @@ internal sealed class IcmpProtocolTests
         System.Buffers.Binary.BinaryPrimitives.WriteUInt16BigEndian(shortFrame.AsSpan(16), 22); // total len
         shortFrame[23] = 1; // Protocol: ICMP
 
-        (Stack stack, Packet packet) = BuildAndParse(shortFrame);
+        (Stack stack, Packet packet) = _BuildAndParse(shortFrame);
         using (stack)
         {
             await Assert.That(packet.IsFinalized).IsTrue();

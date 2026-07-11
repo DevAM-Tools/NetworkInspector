@@ -1,11 +1,6 @@
 <!-- Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root. -->
 <Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup>
-    <OutputType>Exe</OutputType>
-    <RootNamespace>NetworkInspector.FrameBuilder.Tests</RootNamespace>
-  </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="TUnit" />
     <PackageReference Include="ZeroAlloc" />
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" />
   </ItemGroup>
@@ -15,12 +10,7 @@
     <ProjectReference Include="..\NetworkInspector.Testing.Tshark\NetworkInspector.Testing.Tshark.csproj" />
   </ItemGroup>
   <ItemGroup>
-    <!--
-      WithCulture=false is mandatory: the file extension '.cs.txt' would otherwise
-      make MSBuild interpret '.cs' as the Czech culture code and emit the snippets
-      into a satellite assembly (cs\*.resources.dll) instead of the main DLL,
-      which causes Assembly.GetManifestResourceNames() to return zero entries.
-    -->
+    <!-- WithCulture=false: '.cs.txt' must not be treated as Czech satellite resources. -->
     <EmbeddedResource Include="Negative\Snippets\*.cs.txt" WithCulture="false" />
   </ItemGroup>
 </Project>

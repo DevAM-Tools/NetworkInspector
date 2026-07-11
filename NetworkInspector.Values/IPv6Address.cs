@@ -134,7 +134,7 @@ public readonly record struct IPv6Address
         if (colonColon < 0)
         {
             // No '::' — must have exactly 8 colon-separated groups
-            groupsFilled = ParseGroups(text, groups);
+            groupsFilled = _ParseGroups(text, groups);
             if (groupsFilled != 8) { return false; }
         }
         else
@@ -148,8 +148,8 @@ public readonly record struct IPv6Address
             Span<ushort> leftGroups = stackalloc ushort[8];
             Span<ushort> rightGroups = stackalloc ushort[8];
 
-            int leftCount = left.IsEmpty ? 0 : ParseGroups(left, leftGroups);
-            int rightCount = right.IsEmpty ? 0 : ParseGroups(right, rightGroups);
+            int leftCount = left.IsEmpty ? 0 : _ParseGroups(left, leftGroups);
+            int rightCount = right.IsEmpty ? 0 : _ParseGroups(right, rightGroups);
 
             if (leftCount < 0 || rightCount < 0) { return false; }
             if (leftCount + rightCount > 7) { return false; } // at least one zero group needed
@@ -238,7 +238,7 @@ public readonly record struct IPv6Address
 
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public bool TryGetSerializedSize(out int size)
+    public bool TryGetWrittenSize(out int size)
     {
         size = 16;
         return true;
@@ -308,7 +308,7 @@ public readonly record struct IPv6Address
         GetGroups(groups);
 
         // Find longest run of consecutive zero groups (RFC 5952 section 4.2.3)
-        FindLongestZeroRun(groups, out int bestStart, out int bestLen);
+        _FindLongestZeroRun(groups, out int bestStart, out int bestLen);
 
         int pos = 0;
         for (int i = 0; i < 8;)
@@ -327,7 +327,7 @@ public readonly record struct IPv6Address
             {
                 destination[pos++] = ':';
             }
-            pos += WriteHexGroup(groups[i], destination[pos..]);
+            pos += _WriteHexGroup(groups[i], destination[pos..]);
             i++;
         }
         charsWritten = pos;
@@ -373,7 +373,7 @@ public readonly record struct IPv6Address
     {
         Span<ushort> groups = stackalloc ushort[8];
         GetGroups(groups);
-        FindLongestZeroRun(groups, out int bestStart, out int bestLen);
+        _FindLongestZeroRun(groups, out int bestStart, out int bestLen);
 
         size = 0;
         for (int i = 0; i < 8;)
@@ -389,7 +389,7 @@ public readonly record struct IPv6Address
             {
                 size++; // colon separator
             }
-            size += HexGroupLength(groups[i]);
+            size += _HexGroupLength(groups[i]);
             i++;
         }
         return true;
@@ -443,7 +443,12 @@ public readonly record struct IPv6Address
     public int CompareTo(IPv6Address other)
     {
         int c = _High.CompareTo(other._High);
-        return c != 0 ? c : _Low.CompareTo(other._Low);
+        if (c != 0)
+        {
+            return c;
+        }
+
+        return _Low.CompareTo(other._Low);
     }
 
     /// <inheritdoc/>
@@ -484,7 +489,7 @@ public readonly record struct IPv6Address
     #region Private Helpers
 
     /// <summary>Finds the longest run of consecutive zero groups for :: compression.</summary>
-    private static void FindLongestZeroRun(
+    private static void _FindLongestZeroRun(
         ReadOnlySpan<ushort> groups, out int bestStart, out int bestLen)
     {
         bestStart = -1;
@@ -524,7 +529,7 @@ public readonly record struct IPv6Address
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static int WriteHexGroup(ushort value, Span<char> dest)
+    private static int _WriteHexGroup(ushort value, Span<char> dest)
     {
         ReadOnlySpan<char> hex = "0123456789ABCDEF";
         if (value >= 0x1000)
@@ -553,12 +558,29 @@ public readonly record struct IPv6Address
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static int HexGroupLength(ushort value) =>
-        value >= 0x1000 ? 4 : value >= 0x100 ? 3 : value >= 0x10 ? 2 : 1;
+    private static int _HexGroupLength(ushort value)
+    {
+        if (value >= 0x1000)
+        {
+            return 4;
+        }
+
+        if (value >= 0x100)
+        {
+            return 3;
+        }
+
+        if (value >= 0x10)
+        {
+            return 2;
+        }
+
+        return 1;
+    }
 
     // Parses colon-separated hex groups from a span (no '::' handling).
     // Returns the number of groups parsed, or -1 on malformed input.
-    private static int ParseGroups(ReadOnlySpan<char> text, Span<ushort> groups)
+    private static int _ParseGroups(ReadOnlySpan<char> text, Span<ushort> groups)
     {
         int count = 0;
         int start = 0;
@@ -571,7 +593,7 @@ public readonly record struct IPv6Address
                 ushort v = 0;
                 for (int j = start; j < i; j++)
                 {
-                    int d = HexDigitValue(text[j]);
+                    int d = _HexDigitValue(text[j]);
                     if (d < 0) { return -1; }
                     v = (ushort)((v << 4) | d);
                 }
@@ -584,7 +606,7 @@ public readonly record struct IPv6Address
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static int HexDigitValue(char c)
+    private static int _HexDigitValue(char c)
     {
         if (c >= '0' && c <= '9') { return c - '0'; }
         if (c >= 'a' && c <= 'f') { return c - 'a' + 10; }

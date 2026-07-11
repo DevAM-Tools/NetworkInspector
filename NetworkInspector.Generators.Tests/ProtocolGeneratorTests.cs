@@ -1,7 +1,5 @@
 // Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
-using static NetworkInspector.Generators.Tests.TestInfrastructure;
-
 namespace NetworkInspector.Generators.Tests;
 
 /// <summary>
@@ -490,7 +488,7 @@ internal sealed class ProtocolGeneratorTests
 
     // Extended stubs that add Min/Max (F64) and HasMin/HasMax/Min/Max (U64/I64) properties.
     // These are NOT in the shared AttributeStubs because they are only needed here.
-    private const string NumericSettingStubs = """
+    private const string _NumericSettingStubs = """
         using System;
         namespace NetworkInspector.Protocols.Attributes
         {
@@ -552,7 +550,7 @@ internal sealed class ProtocolGeneratorTests
             }
             """;
 
-        GeneratorDriverRunResult result = RunGeneratorFromRawSources(NumericSettingStubs, source);
+        GeneratorDriverRunResult result = RunGeneratorFromRawSources(_NumericSettingStubs, source);
 
         await Assert.That(result.Diagnostics.Any(static d => d.Severity == DiagnosticSeverity.Error)).IsFalse();
         await Assert.That(HasGeneratedSource(result)).IsTrue();
@@ -579,7 +577,7 @@ internal sealed class ProtocolGeneratorTests
             }
             """;
 
-        GeneratorDriverRunResult result = RunGeneratorFromRawSources(NumericSettingStubs, source);
+        GeneratorDriverRunResult result = RunGeneratorFromRawSources(_NumericSettingStubs, source);
 
         await Assert.That(result.Diagnostics.Any(static d => d.Severity == DiagnosticSeverity.Error)).IsFalse();
 
@@ -606,7 +604,7 @@ internal sealed class ProtocolGeneratorTests
             }
             """;
 
-        GeneratorDriverRunResult result = RunGeneratorFromRawSources(NumericSettingStubs, source);
+        GeneratorDriverRunResult result = RunGeneratorFromRawSources(_NumericSettingStubs, source);
 
         await Assert.That(result.Diagnostics.Any(static d => d.Severity == DiagnosticSeverity.Error)).IsFalse();
 
@@ -635,7 +633,7 @@ internal sealed class ProtocolGeneratorTests
             }
             """;
 
-        GeneratorDriverRunResult result = RunGeneratorFromRawSources(NumericSettingStubs, source);
+        GeneratorDriverRunResult result = RunGeneratorFromRawSources(_NumericSettingStubs, source);
 
         await Assert.That(result.Diagnostics.Any(static d => d.Severity == DiagnosticSeverity.Error)).IsFalse();
 
@@ -663,7 +661,7 @@ internal sealed class ProtocolGeneratorTests
             }
             """;
 
-        GeneratorDriverRunResult result = RunGeneratorFromRawSources(NumericSettingStubs, source);
+        GeneratorDriverRunResult result = RunGeneratorFromRawSources(_NumericSettingStubs, source);
 
         await Assert.That(result.Diagnostics.Any(static d => d.Severity == DiagnosticSeverity.Error)).IsFalse();
 

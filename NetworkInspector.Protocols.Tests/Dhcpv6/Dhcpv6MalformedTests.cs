@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Protocols.Tests;
 
@@ -10,7 +10,7 @@ namespace NetworkInspector.Protocols.Tests;
 internal sealed class Dhcpv6MalformedTests
 {
     // fe80::1 → ff02::1:2 is the canonical link-local DHCPv6 conversation pair.
-    private static byte[] WrapUdp(ReadOnlySpan<byte> dhcpv6Payload)
+    private static byte[] _WrapUdp(ReadOnlySpan<byte> dhcpv6Payload)
     {
         EthernetLayer eth = new(
             MacAddress.FromBytes([0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF]),
@@ -27,7 +27,7 @@ internal sealed class Dhcpv6MalformedTests
     {
         // Less than the 4-byte client/server header.
         byte[] payload = [0x01, 0x00];
-        byte[] frame = WrapUdp(payload);
+        byte[] frame = _WrapUdp(payload);
 
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame, LinkType.Ethernet);
         using (stack)
@@ -41,7 +41,7 @@ internal sealed class Dhcpv6MalformedTests
     {
         // Header: SOLICIT msg-type with xid 0; option claims 0xFFFF length but no data.
         byte[] payload = [0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0xFF, 0xFF];
-        byte[] frame = WrapUdp(payload);
+        byte[] frame = _WrapUdp(payload);
 
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame, LinkType.Ethernet);
         using (stack)

@@ -63,4 +63,12 @@ public readonly struct ListenerId(int value) : IEquatable<ListenerId>, IComparab
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool operator >(ListenerId left, ListenerId right) => left._Value > right._Value;
+
+    /// <inheritdoc/>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static bool operator <=(ListenerId left, ListenerId right) => left._Value <= right._Value;
+
+    /// <inheritdoc/>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static bool operator >=(ListenerId left, ListenerId right) => left._Value >= right._Value;
 }

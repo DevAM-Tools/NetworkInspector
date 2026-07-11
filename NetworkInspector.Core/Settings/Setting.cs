@@ -172,7 +172,7 @@ public sealed class Setting : IReadOnlySetting
             }
 
             // Validate before storing — throws on failure
-            (ValidationErrorKind kind, string? error) = Validate(value);
+            (ValidationErrorKind kind, string? error) = _Validate(value);
             if (kind == ValidationErrorKind.TypeMismatch)
             {
                 throw TypeMismatchSettingsException.For(_Type, value.Type);
@@ -232,26 +232,32 @@ public sealed class Setting : IReadOnlySetting
     /// Validates a value against the setting's constraints.
     /// Returns <see cref="ValidationErrorKind.None"/> if valid.
     /// </summary>
-    private (ValidationErrorKind Kind, string? Message) Validate(SettingValue value)
+    private (ValidationErrorKind Kind, string? Message) _Validate(SettingValue value)
     {
         return (_Type, value.Type) switch
         {
             (SettingType.Bool, SettingType.Bool) => (ValidationErrorKind.None, null),
             (SettingType.String, SettingType.String) => (ValidationErrorKind.None, null),
             (SettingType.Bytes, SettingType.Bytes) => (ValidationErrorKind.None, null),
-            (SettingType.F64, SettingType.F64) when value.TryGetAsF64(out double f64v) => WrapValidation(ValidateF64(f64v)),
-            (SettingType.U64, SettingType.U64) when value.TryGetAsU64(out ulong u64v) => WrapValidation(ValidateU64(u64v)),
-            (SettingType.I64, SettingType.I64) when value.TryGetAsI64(out long i64v) => WrapValidation(ValidateI64(i64v)),
-            (SettingType.Enum, SettingType.Enum) => WrapValidation(ValidateEnum(value)),
+            (SettingType.F64, SettingType.F64) when value.TryGetAsF64(out double f64v) => _WrapValidation(_ValidateF64(f64v)),
+            (SettingType.U64, SettingType.U64) when value.TryGetAsU64(out ulong u64v) => _WrapValidation(_ValidateU64(u64v)),
+            (SettingType.I64, SettingType.I64) when value.TryGetAsI64(out long i64v) => _WrapValidation(_ValidateI64(i64v)),
+            (SettingType.Enum, SettingType.Enum) => _WrapValidation(_ValidateEnum(value)),
             _ => (ValidationErrorKind.TypeMismatch, null),
         };
     }
 
     /// <summary>Wraps a nullable string validation message into a typed result.</summary>
-    private static (ValidationErrorKind Kind, string? Message) WrapValidation(string? error) =>
-        error is null ? (ValidationErrorKind.None, null) : (ValidationErrorKind.ValidationFailed, error);
+    private static (ValidationErrorKind Kind, string? Message) _WrapValidation(string? error)
+    {
+        if (error is null)
+        {
+            return (ValidationErrorKind.None, null);
+        }
+        return (ValidationErrorKind.ValidationFailed, error);
+    }
 
-    private string? ValidateF64(double v)
+    private string? _ValidateF64(double v)
     {
         if (!double.IsFinite(v))
         {
@@ -268,7 +274,7 @@ public sealed class Setting : IReadOnlySetting
         return null;
     }
 
-    private string? ValidateU64(ulong v)
+    private string? _ValidateU64(ulong v)
     {
         if (_MinValue is { } min && min.TryGetAsU64(out ulong minU64) && v < minU64)
         {
@@ -281,7 +287,7 @@ public sealed class Setting : IReadOnlySetting
         return null;
     }
 
-    private string? ValidateI64(long v)
+    private string? _ValidateI64(long v)
     {
         if (_MinValue is { } min && min.TryGetAsI64(out long minI64) && v < minI64)
         {
@@ -294,7 +300,7 @@ public sealed class Setting : IReadOnlySetting
         return null;
     }
 
-    private string? ValidateEnum(SettingValue value)
+    private string? _ValidateEnum(SettingValue value)
     {
         if (_EnumMetadata is null)
         {

@@ -10,9 +10,9 @@ internal static class Http2DisplayTables
 {
     #region Frame Types (RFC 7540 Section 6) — 256-entry table
 
-    private static readonly string[] _FrameTypeDisplayText = GenerateFrameTypeTable();
+    private static readonly string[] _FrameTypeDisplayText = _GenerateFrameTypeTable();
 
-    private static string[] GenerateFrameTypeTable()
+    private static string[] _GenerateFrameTypeTable()
     {
         string[] table = new string[256];
         for (int i = 0; i < 256; i++)
@@ -29,7 +29,7 @@ internal static class Http2DisplayTables
                 7 => "GOAWAY (7)",
                 8 => "WINDOW_UPDATE (8)",
                 9 => "CONTINUATION (9)",
-                _ => i.ToString()
+                _ => i.ToString(CultureInfo.InvariantCulture)
             };
         }
 
@@ -44,9 +44,9 @@ internal static class Http2DisplayTables
 
     #region Error Codes (RFC 7540 Section 7) — used in RST_STREAM and GOAWAY
 
-    private static readonly string[] _ErrorCodeDisplayText = GenerateErrorCodeTable();
+    private static readonly string[] _ErrorCodeDisplayText = _GenerateErrorCodeTable();
 
-    private static string[] GenerateErrorCodeTable()
+    private static string[] _GenerateErrorCodeTable()
     {
         // Error codes are 32-bit, but defined values are 0-13. Use 256-entry table for fast lookup.
         string[] table = new string[256];
@@ -79,16 +79,23 @@ internal static class Http2DisplayTables
     /// Returns display text for an HTTP/2 error code.
     /// Only values 0-255 use the fast table; larger values fall back to formatting.
     /// </summary>
-    public static string GetErrorCodeDisplayText(uint errorCode) =>
-        errorCode < 256 ? _ErrorCodeDisplayText[errorCode] : $"0x{errorCode:x}";
+    public static string GetErrorCodeDisplayText(uint errorCode)
+    {
+        if (errorCode < 256)
+        {
+            return _ErrorCodeDisplayText[errorCode];
+        }
+
+        return $"0x{errorCode:x}";
+    }
 
     #endregion
 
     #region Settings Identifiers (RFC 7540 Section 6.5.2)
 
-    private static readonly string[] _SettingsDisplayText = GenerateSettingsTable();
+    private static readonly string[] _SettingsDisplayText = _GenerateSettingsTable();
 
-    private static string[] GenerateSettingsTable()
+    private static string[] _GenerateSettingsTable()
     {
         string[] table = new string[16];
         for (int i = 0; i < 16; i++)
@@ -109,7 +116,14 @@ internal static class Http2DisplayTables
     }
 
     /// <summary>Returns display text for an HTTP/2 settings identifier.</summary>
-    public static string GetSettingsDisplayText(ushort settingsId) =>
-        settingsId < 16 ? _SettingsDisplayText[settingsId] : $"Unknown (0x{settingsId:x})";
+    public static string GetSettingsDisplayText(ushort settingsId)
+    {
+        if (settingsId < 16)
+        {
+            return _SettingsDisplayText[settingsId];
+        }
+
+        return $"Unknown (0x{settingsId:x})";
+    }
     #endregion
 }

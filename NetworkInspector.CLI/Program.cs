@@ -48,7 +48,7 @@ internal static class Program
 
         if (args.Length == 0)
         {
-            PrintUsage();
+            _PrintUsage();
             return (int)ExitCode.ArgumentError;
         }
 
@@ -58,8 +58,8 @@ internal static class Program
             {
                 "CONVERT" => ConvertCommand.Run(args[1..]),
                 "EXPORT" => ExportCommand.Run(args[1..]),
-                "--HELP" or "-H" => PrintUsageAndReturn(0),
-                _ => PrintUnknownCommand(args[0]),
+                "--HELP" or "-H" => _PrintUsageAndReturn(0),
+                _ => _PrintUnknownCommand(args[0]),
             };
         }
         catch (OperationCanceledException)
@@ -86,7 +86,7 @@ internal static class Program
     }
 
     /// <summary>Prints usage information to stderr.</summary>
-    private static void PrintUsage()
+    private static void _PrintUsage()
     {
         Console.Error.WriteLine("Network Inspector CLI");
         Console.Error.WriteLine();
@@ -100,18 +100,18 @@ internal static class Program
     }
 
     /// <summary>Prints usage and returns the given exit code.</summary>
-    private static int PrintUsageAndReturn(int exitCode)
+    private static int _PrintUsageAndReturn(int exitCode)
     {
-        PrintUsage();
+        _PrintUsage();
         return exitCode;
     }
 
     /// <summary>Prints an error message for an unknown command.</summary>
-    private static int PrintUnknownCommand(string command)
+    private static int _PrintUnknownCommand(string command)
     {
         Console.Error.WriteLine($"Unknown command: '{command}'");
         Console.Error.WriteLine();
-        PrintUsage();
+        _PrintUsage();
         return (int)ExitCode.ArgumentError;
     }
 }

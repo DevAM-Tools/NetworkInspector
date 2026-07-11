@@ -10,7 +10,7 @@ internal sealed class FlexRayProtocolTests
     /// <summary>
     /// Builds a stack and parses a FlexRay frame (link type 210).
     /// </summary>
-    private static (Stack Stack, Packet Packet) BuildAndParse(byte[] frameData)
+    private static (Stack Stack, Packet Packet) _BuildAndParse(byte[] frameData)
     {
         using SettingsManager settingsManager = new();
         StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
@@ -34,7 +34,7 @@ internal sealed class FlexRayProtocolTests
     {
         byte[] frameData = FrameBuilders.GenerateFlexRayFrame(frameId: 42);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? frameIdField = stack.GetFieldId("flexray.frame_id");
@@ -52,7 +52,7 @@ internal sealed class FlexRayProtocolTests
         // 11-bit max frame ID = 2047 (0x7FF)
         byte[] frameData = FrameBuilders.GenerateFlexRayFrame(frameId: 2047);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? frameIdField = stack.GetFieldId("flexray.frame_id");
@@ -69,7 +69,7 @@ internal sealed class FlexRayProtocolTests
     {
         byte[] frameData = FrameBuilders.GenerateFlexRayFrame(cycle: 7);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? cycleField = stack.GetFieldId("flexray.cycle");
@@ -87,7 +87,7 @@ internal sealed class FlexRayProtocolTests
         // 6-bit cycle count max = 63
         byte[] frameData = FrameBuilders.GenerateFlexRayFrame(cycle: 63);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? cycleField = stack.GetFieldId("flexray.cycle");
@@ -105,7 +105,7 @@ internal sealed class FlexRayProtocolTests
         byte[] payload = new byte[16];
         byte[] frameData = FrameBuilders.GenerateFlexRayFrame(payload: payload);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? lengthField = stack.GetFieldId("flexray.payload_length");
@@ -122,7 +122,7 @@ internal sealed class FlexRayProtocolTests
     {
         byte[] frameData = FrameBuilders.GenerateFlexRayFrame(channelB: false);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? channelField = stack.GetFieldId("flexray.channel");
@@ -139,7 +139,7 @@ internal sealed class FlexRayProtocolTests
     {
         byte[] frameData = FrameBuilders.GenerateFlexRayFrame(channelB: true);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? channelField = stack.GetFieldId("flexray.channel");
@@ -157,7 +157,7 @@ internal sealed class FlexRayProtocolTests
         // NFI=true means NOT a null frame
         byte[] frameData = FrameBuilders.GenerateFlexRayFrame(nfi: true);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? nfiField = stack.GetFieldId("flexray.nfi");
@@ -175,7 +175,7 @@ internal sealed class FlexRayProtocolTests
         // NFI=false means it IS a null frame
         byte[] frameData = FrameBuilders.GenerateFlexRayFrame(nfi: false);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? nfiField = stack.GetFieldId("flexray.nfi");
@@ -192,7 +192,7 @@ internal sealed class FlexRayProtocolTests
     {
         byte[] frameData = FrameBuilders.GenerateFlexRayFrame(sfi: true);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? sfiField = stack.GetFieldId("flexray.sfi");
@@ -209,7 +209,7 @@ internal sealed class FlexRayProtocolTests
     {
         byte[] frameData = FrameBuilders.GenerateFlexRayFrame(stfi: true);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? stfiField = stack.GetFieldId("flexray.stfi");
@@ -226,7 +226,7 @@ internal sealed class FlexRayProtocolTests
     {
         byte[] frameData = FrameBuilders.GenerateFlexRayFrame(ppi: true);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? ppiField = stack.GetFieldId("flexray.ppi");
@@ -243,7 +243,7 @@ internal sealed class FlexRayProtocolTests
     {
         byte[] frameData = FrameBuilders.GenerateFlexRayFrame(headerCrc: 0x5A3);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? hcrcField = stack.GetFieldId("flexray.hcrc");
@@ -260,7 +260,7 @@ internal sealed class FlexRayProtocolTests
     {
         byte[] frameData = FrameBuilders.GenerateFlexRayFrame(errorFlags: 0x10);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? fcrcField = stack.GetFieldId("flexray.fcrc_err");
@@ -277,7 +277,7 @@ internal sealed class FlexRayProtocolTests
     {
         byte[] frameData = FrameBuilders.GenerateFlexRayFrame(errorFlags: 0x00);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? fcrcField = stack.GetFieldId("flexray.fcrc_err");
@@ -319,7 +319,7 @@ internal sealed class FlexRayProtocolTests
             stfi: true,
             ppi: true);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             // Verify frame ID is still correct when indicators are set
@@ -362,13 +362,13 @@ internal sealed class FlexRayProtocolTests
     {
         byte[] frameData = FrameBuilders.GenerateFlexRayFrame(nfi: false, sfi: false, stfi: false, ppi: false);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? flagsField = stack.GetFieldId("flexray.flags");
             await Assert.That(flagsField).IsNotNull();
 
-            string? flagsDisplayText = FindCustomText(packet.RootField(), flagsField!.Value);
+            string? flagsDisplayText = _FindCustomText(packet.RootField(), flagsField!.Value);
             await Assert.That(flagsDisplayText).IsEqualTo("[None]");
         }
     }
@@ -378,13 +378,13 @@ internal sealed class FlexRayProtocolTests
     {
         byte[] frameData = FrameBuilders.GenerateFlexRayFrame(nfi: true, sfi: false, stfi: false, ppi: false);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? flagsField = stack.GetFieldId("flexray.flags");
             await Assert.That(flagsField).IsNotNull();
 
-            string? flagsDisplayText = FindCustomText(packet.RootField(), flagsField!.Value);
+            string? flagsDisplayText = _FindCustomText(packet.RootField(), flagsField!.Value);
             await Assert.That(flagsDisplayText).IsEqualTo("[NFI]");
         }
     }
@@ -394,13 +394,13 @@ internal sealed class FlexRayProtocolTests
     {
         byte[] frameData = FrameBuilders.GenerateFlexRayFrame(errorFlags: 0x00);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? errFlagsField = stack.GetFieldId("flexray.err_flags");
             await Assert.That(errFlagsField).IsNotNull();
 
-            string? errFlagsDisplayText = FindCustomText(packet.RootField(), errFlagsField!.Value);
+            string? errFlagsDisplayText = _FindCustomText(packet.RootField(), errFlagsField!.Value);
             await Assert.That(errFlagsDisplayText).IsEqualTo("[None]");
         }
     }
@@ -410,13 +410,13 @@ internal sealed class FlexRayProtocolTests
     {
         byte[] frameData = FrameBuilders.GenerateFlexRayFrame(errorFlags: 0x10);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? errFlagsField = stack.GetFieldId("flexray.err_flags");
             await Assert.That(errFlagsField).IsNotNull();
 
-            string? errFlagsDisplayText = FindCustomText(packet.RootField(), errFlagsField!.Value);
+            string? errFlagsDisplayText = _FindCustomText(packet.RootField(), errFlagsField!.Value);
             await Assert.That(errFlagsDisplayText).IsEqualTo("[FCRC_ERR]");
         }
     }
@@ -426,7 +426,7 @@ internal sealed class FlexRayProtocolTests
     {
         byte[] shortFrame = [0x01, 0x00, 0x00]; // Only 3 bytes, need 7
 
-        (Stack stack, Packet packet) = BuildAndParse(shortFrame);
+        (Stack stack, Packet packet) = _BuildAndParse(shortFrame);
         using (stack)
         {
             FieldId? frameIdField = stack.GetFieldId("flexray.frame_id");
@@ -466,9 +466,79 @@ internal sealed class FlexRayProtocolTests
         }
     }
 
+    [Test]
+    public async Task Parse_FlexRay_DispatchKey_IncludesSlotChannelCycle()
+    {
+        const ushort frameId = 100;
+        const byte cycle = 15;
+        byte[] payload = [0x01, 0x02, 0x03, 0x04];
+        byte[] frameData = FlexRayLinkTypeFrame.BuildFrame(
+            channelB: true,
+            frameId,
+            cycle,
+            headerCrc: 0,
+            payload);
+
+        ulong expectedKey = FlexRayLinkTypeFrame.EncodeDispatchKey(frameId, channelB: true, cycle);
+
+        string jsonDir = Path.Combine(Path.GetTempPath(), "ni_flexray_dispatch_" + Guid.NewGuid().ToString("N"));
+        _ = Directory.CreateDirectory(jsonDir);
+        string jsonPath = Path.Combine(jsonDir, "signal_pdu.json");
+        try
+        {
+            string json = $$"""
+                {
+                  "pdus": [{
+                    "pdu_id": 1,
+                    "name": "FrDispatchProbe",
+                    "byte_length": 4,
+                    "register_at": [{ "table": "flexray.id", "key": {{expectedKey}} }],
+                    "signals": [{
+                      "name": "Probe",
+                      "start_bit": 0,
+                      "bit_length": 16,
+                      "byte_order": "little_endian",
+                      "data_type": "unsigned"
+                    }]
+                  }]
+                }
+                """;
+            File.WriteAllText(jsonPath, json);
+
+            using SettingsManager settingsManager = new();
+            settingsManager.PreloadValue("signal_pdu.config_file", jsonPath);
+            StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+            ProtocolRegistration.RegisterStandardProtocols(builder);
+            Stack stack = builder.Build();
+            using (stack)
+            {
+                Frame frame = Frame.Create(
+                    new FrameId(0),
+                    Timestamp.FromSecs(0),
+                    frameData,
+                    LinkType.Flexray,
+                    FrameInterfaceId.Invalid,
+                    stack.FrameInterfaceRegistry).Value;
+
+                Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame);
+
+                FieldId? pduIdField = stack.GetFieldId("signal_pdu.pdu_id");
+                await Assert.That(pduIdField).IsNotNull();
+                bool has = packet.TryGetFieldValue(pduIdField!.Value, out FieldValue pduIdValue);
+                await Assert.That(has).IsTrue();
+                pduIdValue.Data.TryGetAsU64(out ulong pduId);
+                await Assert.That(pduId).IsEqualTo(1UL);
+            }
+        }
+        finally
+        {
+            Directory.Delete(jsonDir, recursive: true);
+        }
+    }
+
     /// <summary>Depth-first search for the first field with <paramref name="fieldId"/>;
     /// returns its <c>CustomText.ToString()</c> or <see langword="null"/> when not present.</summary>
-    private static string? FindCustomText(Field field, FieldId fieldId)
+    private static string? _FindCustomText(Field field, FieldId fieldId)
     {
         if (field.FieldId == fieldId && !field.CustomText.IsNull)
         {
@@ -477,7 +547,7 @@ internal sealed class FlexRayProtocolTests
 
         foreach (Field child in field.Children())
         {
-            string? result = FindCustomText(child, fieldId);
+            string? result = _FindCustomText(child, fieldId);
             if (result is not null)
             {
                 return result;

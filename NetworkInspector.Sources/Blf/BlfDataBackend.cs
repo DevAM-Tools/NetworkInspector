@@ -146,7 +146,12 @@ internal sealed class BlfDataBackend : IDisposable
         // Snapshot before use so that a parallel Dispose() cannot null _MmapPool
         // between the null-conditional read and the method call.
         MmapPool? pool = _MmapPool;
-        return pool is null ? ReadOnlySpan<byte>.Empty : pool.GetPrimarySpan(offset, length);
+        if (pool is null)
+        {
+            return ReadOnlySpan<byte>.Empty;
+        }
+
+        return pool.GetPrimarySpan(offset, length);
     }
 
     #endregion

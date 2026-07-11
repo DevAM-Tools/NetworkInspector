@@ -31,7 +31,7 @@ internal sealed class BusAndExtensionLayerSmokeTests
             = FB.FrameStack.Start(can).CreateWithFixedValues();
 
         byte[] frame = new byte[16];
-        int written = EmitOnce(in stack, ReadOnlySpan<byte>.Empty, frame);
+        int written = _EmitOnce(in stack, ReadOnlySpan<byte>.Empty, frame);
 
         await Assert.That(written).IsEqualTo(16);
 
@@ -61,7 +61,7 @@ internal sealed class BusAndExtensionLayerSmokeTests
             = FB.FrameStack.Start(can).CreateWithFixedValues();
 
         byte[] frame = new byte[16];
-        EmitOnce(in stack, ReadOnlySpan<byte>.Empty, frame);
+        _EmitOnce(in stack, ReadOnlySpan<byte>.Empty, frame);
 
         uint canIdField = BinaryPrimitives.ReadUInt32BigEndian(frame.AsSpan(0, 4));
         await Assert.That((canIdField & 0x80000000u) != 0).IsTrue();        // EFF set
@@ -83,7 +83,7 @@ internal sealed class BusAndExtensionLayerSmokeTests
             = FB.FrameStack.Start(canfd).CreateWithFixedValues();
 
         byte[] frame = new byte[FB.SocketCanFdLayer.FrameSize];
-        int written = EmitOnce(in stack, ReadOnlySpan<byte>.Empty, frame);
+        int written = _EmitOnce(in stack, ReadOnlySpan<byte>.Empty, frame);
 
         await Assert.That(written).IsEqualTo(FB.SocketCanFdLayer.FrameSize);
         await Assert.That(BinaryPrimitives.ReadUInt32BigEndian(frame.AsSpan(0, 4))).IsEqualTo(0x456u);
@@ -117,7 +117,7 @@ internal sealed class BusAndExtensionLayerSmokeTests
 
         int totalSize = FB.SocketCanXlLayer.FrameSize; // fixed 2060 bytes
         byte[] frame = new byte[totalSize];
-        int written = EmitOnce(in stack, ReadOnlySpan<byte>.Empty, frame);
+        int written = _EmitOnce(in stack, ReadOnlySpan<byte>.Empty, frame);
 
         await Assert.That(written).IsEqualTo(totalSize);
         await Assert.That(BinaryPrimitives.ReadUInt32BigEndian(frame.AsSpan(0, 4))).IsEqualTo(0x12345678u);
@@ -146,7 +146,7 @@ internal sealed class BusAndExtensionLayerSmokeTests
             = FB.FrameStack.Start(flexray).CreateWithFixedValues();
 
         byte[] frame = new byte[11];
-        int written = EmitOnce(in stack, ReadOnlySpan<byte>.Empty, frame);
+        int written = _EmitOnce(in stack, ReadOnlySpan<byte>.Empty, frame);
 
         await Assert.That(written).IsEqualTo(11);
 
@@ -181,7 +181,7 @@ internal sealed class BusAndExtensionLayerSmokeTests
 
         // frameId=10, 1-byte payload rounded up to 2 (even) → total = 7 + 2 = 9 bytes.
         byte[] frame = new byte[9];
-        EmitOnce(in stack, ReadOnlySpan<byte>.Empty, frame);
+        _EmitOnce(in stack, ReadOnlySpan<byte>.Empty, frame);
 
         // Byte 0: channel B (bit 7 = 1) | typeIndex 1 = 0x81.
         await Assert.That(frame[0]).IsEqualTo((byte)0x81);
@@ -202,7 +202,7 @@ internal sealed class BusAndExtensionLayerSmokeTests
             = FB.FrameStack.Start(lin).CreateWithFixedValues();
 
         byte[] frame = new byte[10];
-        int written = EmitOnce(in stack, ReadOnlySpan<byte>.Empty, frame);
+        int written = _EmitOnce(in stack, ReadOnlySpan<byte>.Empty, frame);
 
         await Assert.That(written).IsEqualTo(10);
 
@@ -256,7 +256,7 @@ internal sealed class BusAndExtensionLayerSmokeTests
 
         const int FrameSize = 14 + 20 + 8 + 16 + 4;
         byte[] frame = new byte[FrameSize];
-        int written = EmitOnce(in stack, payload, frame);
+        int written = _EmitOnce(in stack, payload, frame);
 
         await Assert.That(written).IsEqualTo(FrameSize);
 
@@ -299,7 +299,7 @@ internal sealed class BusAndExtensionLayerSmokeTests
 
         const int FrameSize = 14 + 40 + 8 + 8 + 2;
         byte[] frame = new byte[FrameSize];
-        int written = EmitOnce(in stack, payload, frame);
+        int written = _EmitOnce(in stack, payload, frame);
 
         await Assert.That(written).IsEqualTo(FrameSize);
 
@@ -346,7 +346,7 @@ internal sealed class BusAndExtensionLayerSmokeTests
         const int UdpSize = 8;
         int total = EthSize + IPv6Size + ExtSize * 3 + UdpSize + payload.Length;
         byte[] frame = new byte[total];
-        int written = EmitOnce(in stack, payload, frame);
+        int written = _EmitOnce(in stack, payload, frame);
         await Assert.That(written).IsEqualTo(total);
 
         // Walk the next-header chain: IPv6 → HopByHop → Routing → DestOpts → UDP.
@@ -361,7 +361,7 @@ internal sealed class BusAndExtensionLayerSmokeTests
     #region Helpers
 
     /// <summary>Sync helper that emits a single frame and returns its byte length.</summary>
-    private static int EmitOnce<TStack, TTrailer, TInterceptor>(
+    private static int _EmitOnce<TStack, TTrailer, TInterceptor>(
         in FB.CreatedStack<TStack, TTrailer, TInterceptor> created,
         ReadOnlySpan<byte> payload,
         Span<byte> dst)

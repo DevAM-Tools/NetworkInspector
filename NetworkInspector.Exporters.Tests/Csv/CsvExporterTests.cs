@@ -32,8 +32,8 @@ internal sealed class CsvExporterTests
 
         exporter.OnFinish();
 
-        string csv = GetCsvString(ms);
-        string[] lines = SplitCsvLines(csv);
+        string csv = _GetCsvString(ms);
+        string[] lines = _SplitCsvLines(csv);
 
         // Header + 3 data rows
         await Assert.That(lines.Length).IsEqualTo(4);
@@ -98,8 +98,8 @@ internal sealed class CsvExporterTests
         exporter.OnPacket(packets[0]);
         exporter.OnFinish();
 
-        string csv = GetCsvString(ms);
-        string[] lines = SplitCsvLines(csv);
+        string csv = _GetCsvString(ms);
+        string[] lines = _SplitCsvLines(csv);
 
         // Header should use semicolons
         await Assert.That(lines[0]).IsEqualTo("No.;Time;Info;Length");
@@ -119,8 +119,8 @@ internal sealed class CsvExporterTests
         exporter.OnPacket(packets[0]);
         exporter.OnFinish();
 
-        string csv = GetCsvString(ms);
-        string[] lines = SplitCsvLines(csv);
+        string csv = _GetCsvString(ms);
+        string[] lines = _SplitCsvLines(csv);
 
         // Header should use tabs
         await Assert.That(lines[0]).IsEqualTo("No.\tTime\tInfo\tLength");
@@ -140,8 +140,8 @@ internal sealed class CsvExporterTests
         exporter.OnPacket(packets[0]);
         exporter.OnFinish();
 
-        string csv = GetCsvString(ms);
-        string[] lines = SplitCsvLines(csv);
+        string csv = _GetCsvString(ms);
+        string[] lines = _SplitCsvLines(csv);
 
         // Header should use pipes
         await Assert.That(lines[0]).IsEqualTo("No.|Time|Info|Length");
@@ -165,8 +165,8 @@ internal sealed class CsvExporterTests
 
         exporter.OnFinish();
 
-        string csv = GetCsvString(ms);
-        string[] lines = SplitCsvLines(csv);
+        string csv = _GetCsvString(ms);
+        string[] lines = _SplitCsvLines(csv);
 
         // No header row — just 2 data rows
         await Assert.That(lines.Length).IsEqualTo(2);
@@ -190,8 +190,8 @@ internal sealed class CsvExporterTests
         exporter.OnPacket(packets[0]);
         exporter.OnFinish();
 
-        string csv = GetCsvString(ms);
-        string[] lines = SplitCsvLines(csv);
+        string csv = _GetCsvString(ms);
+        string[] lines = _SplitCsvLines(csv);
 
         // Header with only two columns
         await Assert.That(lines[0]).IsEqualTo("No.,Length");
@@ -216,8 +216,8 @@ internal sealed class CsvExporterTests
         exporter.OnPacket(packets[0]);
         exporter.OnFinish();
 
-        string csv = GetCsvString(ms);
-        string[] lines = SplitCsvLines(csv);
+        string csv = _GetCsvString(ms);
+        string[] lines = _SplitCsvLines(csv);
 
         await Assert.That(lines[0]).IsEqualTo("Packet,Zeitstempel");
     }
@@ -313,7 +313,7 @@ internal sealed class CsvExporterTests
         exporter.OnFinish();
 
         string csv = await File.ReadAllTextAsync(path, Encoding.UTF8).ConfigureAwait(false);
-        string[] lines = SplitCsvLines(csv);
+        string[] lines = _SplitCsvLines(csv);
 
         // Header + 5 data rows
         await Assert.That(lines.Length).IsEqualTo(6);
@@ -365,8 +365,8 @@ internal sealed class CsvExporterTests
         exporter.OnPacket(packets[0]);
         exporter.OnFinish();
 
-        string csv = GetCsvString(ms);
-        string[] lines = SplitCsvLines(csv);
+        string csv = _GetCsvString(ms);
+        string[] lines = _SplitCsvLines(csv);
 
         // Data row should contain a timestamp with 'T' and 'Z'
         await Assert.That(lines[1].Contains('T', StringComparison.Ordinal)).IsTrue();
@@ -411,8 +411,8 @@ internal sealed class CsvExporterTests
 
         exporter.OnFinish();
 
-        string csv = GetCsvString(ms);
-        string[] lines = SplitCsvLines(csv);
+        string csv = _GetCsvString(ms);
+        string[] lines = _SplitCsvLines(csv);
 
         // Header + 20 data rows
         await Assert.That(lines.Length).IsEqualTo(count + 1);
@@ -431,8 +431,8 @@ internal sealed class CsvExporterTests
         exporter.OnPacket(packets[0]);
         exporter.OnFinish();
 
-        string csv = GetCsvString(ms);
-        string[] lines = SplitCsvLines(csv);
+        string csv = _GetCsvString(ms);
+        string[] lines = _SplitCsvLines(csv);
 
         // Default columns: No., Time, Info, Length
         string[] headers = lines[0].Split(',');
@@ -457,8 +457,8 @@ internal sealed class CsvExporterTests
         exporter.OnPacket(packets[0]);
         exporter.OnFinish();
 
-        string csv = GetCsvString(ms);
-        string[] lines = SplitCsvLines(csv);
+        string csv = _GetCsvString(ms);
+        string[] lines = _SplitCsvLines(csv);
 
         // Data row should have a non-zero frame length
         bool parsed = int.TryParse(lines[1], out int length);
@@ -582,7 +582,7 @@ internal sealed class CsvExporterTests
 
         await Assert.That(File.Exists(path)).IsTrue();
         string csv = await File.ReadAllTextAsync(path, Encoding.UTF8).ConfigureAwait(false);
-        string[] lines = SplitCsvLines(csv);
+        string[] lines = _SplitCsvLines(csv);
 
         // Header + 1 data row
         await Assert.That(lines.Length).IsEqualTo(2);
@@ -636,14 +636,14 @@ internal sealed class CsvExporterTests
     }
 
     /// <summary>Extracts the CSV string from a <see cref="MemoryStream"/>.</summary>
-    private static string GetCsvString(MemoryStream ms) =>
+    private static string _GetCsvString(MemoryStream ms) =>
         Encoding.UTF8.GetString(ms.ToArray());
 
     /// <summary>
     /// Splits a CSV string into lines, handling CRLF line endings
     /// and removing the trailing empty line if present.
     /// </summary>
-    private static string[] SplitCsvLines(string csv)
+    private static string[] _SplitCsvLines(string csv)
     {
         string[] lines = csv.Split("\r\n", StringSplitOptions.None);
 
@@ -688,8 +688,8 @@ internal sealed class CsvExporterTests
         exporter.OnPacket(packet);
         exporter.OnFinish();
 
-        string csv = GetCsvString(ms);
-        string[] lines = SplitCsvLines(csv);
+        string csv = _GetCsvString(ms);
+        string[] lines = _SplitCsvLines(csv);
 
         // Must be exactly 2 lines: header + data
         await Assert.That(lines.Length).IsEqualTo(2);
@@ -736,8 +736,8 @@ internal sealed class CsvExporterTests
         exporter.OnPacket(packet);
         exporter.OnFinish();
 
-        string csv = GetCsvString(ms);
-        string[] lines = SplitCsvLines(csv);
+        string csv = _GetCsvString(ms);
+        string[] lines = _SplitCsvLines(csv);
 
         string timestampCell = lines[1];
 

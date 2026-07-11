@@ -12,7 +12,7 @@ internal sealed class DnsProtocolTests
     /// <summary>
     /// Builds a full stack with standard protocols and parses the given frame data.
     /// </summary>
-    private static (Stack Stack, Packet Packet) BuildAndParse(byte[] frameData)
+    private static (Stack Stack, Packet Packet) _BuildAndParse(byte[] frameData)
     {
         using SettingsManager settingsManager = new();
         StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
@@ -40,7 +40,7 @@ internal sealed class DnsProtocolTests
             queryName: "www.example.com",
             transactionId: 0xABCD);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             // DNS protocol detected
@@ -77,7 +77,7 @@ internal sealed class DnsProtocolTests
         // Standard query with recursion desired: flags = 0x0100
         byte[] frameData = FrameBuilders.GenerateDnsQueryFrame();
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             // QR flag = false (query)
@@ -125,7 +125,7 @@ internal sealed class DnsProtocolTests
             queryType: 1, // A
             queryClass: 1); // IN
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             // Query name
@@ -168,7 +168,7 @@ internal sealed class DnsProtocolTests
             queryName: "www.example.com",
             transactionId: 0x5678);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             // Transaction ID
@@ -229,7 +229,7 @@ internal sealed class DnsProtocolTests
             ip1: 93, ip2: 184, ip3: 216, ip4: 34,
             ttl: 300);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             // Answer name
@@ -299,7 +299,7 @@ internal sealed class DnsProtocolTests
         BinaryPrimitives.WriteUInt16BigEndian(shortFrame.AsSpan(38), 14); // UDP length
         // Only 6 bytes of "DNS" data — insufficient for 12-byte header
 
-        (Stack stack, Packet packet) = BuildAndParse(shortFrame);
+        (Stack stack, Packet packet) = _BuildAndParse(shortFrame);
         using (stack)
         {
             // Should not crash; DNS fields may not be present due to insufficient data
@@ -383,7 +383,7 @@ internal sealed class DnsProtocolTests
             queryName: "ipv6.example.com",
             queryType: 28); // AAAA
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? qryType = stack.GetFieldId("dns.qry.type");
@@ -403,7 +403,7 @@ internal sealed class DnsProtocolTests
         foreach (string domain in domains)
         {
             byte[] frameData = FrameBuilders.GenerateDnsQueryFrame(queryName: domain);
-            (Stack stack, Packet packet) = BuildAndParse(frameData);
+            (Stack stack, Packet packet) = _BuildAndParse(frameData);
             using (stack)
             {
                 FieldId? qryName = stack.GetFieldId("dns.qry.name");

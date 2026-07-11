@@ -15,16 +15,16 @@ namespace NetworkInspector.Profiling.Scenarios;
 internal sealed class RandomSourceParseScenario : IProfilingScenario
 {
     /// <summary>Number of frames generated and parsed per <see cref="Run"/> call.</summary>
-    private const int FrameCount = 10_000;
+    private const int _FrameCount = 10_000;
 
     /// <summary>Fixed PRNG seed so results are reproducible across iterations.</summary>
-    private const ulong Seed = 42;
+    private const ulong _Seed = 42;
 
     /// <summary>Minimum frame size in bytes.</summary>
-    private const int MinFrameSize = 128;
+    private const int _MinFrameSize = 128;
 
     /// <summary>Maximum frame size in bytes.</summary>
-    private const int MaxFrameSize = 1024;
+    private const int _MaxFrameSize = 1024;
 
     private Stack? _Stack;
 
@@ -33,11 +33,11 @@ internal sealed class RandomSourceParseScenario : IProfilingScenario
 
     /// <inheritdoc/>
     public string Description =>
-        $"Direct parse: RandomFrameSource(UdpIPv6) -> ParseFrame -> MaterializeAll, " +
-        $"{FrameCount:N0} frames per iteration.";
+        FormattableString.Invariant(
+            $"Direct parse: RandomFrameSource(UdpIPv6) -> ParseFrame -> MaterializeAll, {_FrameCount:N0} frames per iteration.");
 
     /// <inheritdoc/>
-    public long WorkUnitsPerIteration => FrameCount;
+    public long WorkUnitsPerIteration => _FrameCount;
 
     /// <inheritdoc/>
     public string WorkUnitName => "frames";
@@ -52,11 +52,11 @@ internal sealed class RandomSourceParseScenario : IProfilingScenario
 
         using RandomFrameSource source = new(new RandomSourceOptions
         {
-            FrameCount = FrameCount,
-            Seed = Seed,
+            FrameCount = _FrameCount,
+            Seed = _Seed,
             Mode = RandomFrameMode.UdpIPv6,
-            MinFrameSize = MinFrameSize,
-            MaxFrameSize = MaxFrameSize,
+            MinFrameSize = _MinFrameSize,
+            MaxFrameSize = _MaxFrameSize,
         });
 
         // Register the source to obtain a valid FrameSourceId, then start it.

@@ -44,7 +44,11 @@ public sealed class PatternResyncHeuristic : IResyncHeuristic
         }
 
         int idx = data[1..].IndexOf(_Pattern.AsSpan());
-        return idx >= 0 ? ResyncResult.Skip(idx + 1) : ResyncResult.Failure;
+        if (idx >= 0)
+        {
+            return ResyncResult.Skip(idx + 1);
+        }
+        return ResyncResult.Failure;
     }
 
     #endregion

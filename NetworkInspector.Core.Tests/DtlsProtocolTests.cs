@@ -11,7 +11,7 @@ internal sealed class DtlsProtocolTests
     /// <summary>
     /// Generates a DTLS record wrapped in Ethernet + IPv4 + UDP (port 443).
     /// </summary>
-    private static byte[] GenerateDtlsRecord(
+    private static byte[] _GenerateDtlsRecord(
         byte contentType = 22,
         ushort version = 0xFEFD,
         ushort epoch = 0,
@@ -36,13 +36,13 @@ internal sealed class DtlsProtocolTests
         payload.CopyTo(dtlsRecord.AsSpan(13));
 
         // Wrap in Ethernet + IPv4 + UDP(port 443)
-        return WrapInUdpFrame(dtlsRecord, srcPort: 54321, dstPort: 443);
+        return _WrapInUdpFrame(dtlsRecord, srcPort: 54321, dstPort: 443);
     }
 
     /// <summary>
     /// Generates a DTLS Client Hello record for testing.
     /// </summary>
-    private static byte[] GenerateDtlsClientHello()
+    private static byte[] _GenerateDtlsClientHello()
     {
         // Minimal DTLS Client Hello handshake body
         // DTLS handshake header: type(1) + length(3) + message_seq(2) + fragment_offset(3) + fragment_length(3) = 12 bytes
@@ -53,11 +53,11 @@ internal sealed class DtlsProtocolTests
         hsBody[3] = 0; // Length = 0 (minimal)
         // message_seq, fragment_offset, fragment_length left as 0
 
-        return GenerateDtlsRecord(contentType: 22, payload: hsBody);
+        return _GenerateDtlsRecord(contentType: 22, payload: hsBody);
     }
 
     /// <summary>Wraps a payload in Ethernet + IPv4 + UDP frame.</summary>
-    private static byte[] WrapInUdpFrame(byte[] payload, ushort srcPort, ushort dstPort)
+    private static byte[] _WrapInUdpFrame(byte[] payload, ushort srcPort, ushort dstPort)
     {
         const int ethSize = 14;
         const int ipv4Size = 20;
@@ -121,7 +121,7 @@ internal sealed class DtlsProtocolTests
         return frame;
     }
 
-    private static (Stack Stack, Packet Packet) BuildAndParse(byte[] frameData)
+    private static (Stack Stack, Packet Packet) _BuildAndParse(byte[] frameData)
     {
         using SettingsManager settingsManager = new();
         StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
@@ -143,9 +143,9 @@ internal sealed class DtlsProtocolTests
     [Test]
     public async Task Parse_DtlsRecord_ContentTypeCorrect()
     {
-        byte[] frameData = GenerateDtlsRecord(contentType: 22); // Handshake
+        byte[] frameData = _GenerateDtlsRecord(contentType: 22); // Handshake
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? ctField = stack.GetFieldId("dtls.record.content_type");
@@ -160,9 +160,9 @@ internal sealed class DtlsProtocolTests
     [Test]
     public async Task Parse_DtlsRecord_VersionCorrect()
     {
-        byte[] frameData = GenerateDtlsRecord(version: 0xFEFD); // DTLS 1.2
+        byte[] frameData = _GenerateDtlsRecord(version: 0xFEFD); // DTLS 1.2
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? verField = stack.GetFieldId("dtls.record.version");
@@ -177,9 +177,9 @@ internal sealed class DtlsProtocolTests
     [Test]
     public async Task Parse_DtlsRecord_EpochCorrect()
     {
-        byte[] frameData = GenerateDtlsRecord(epoch: 1);
+        byte[] frameData = _GenerateDtlsRecord(epoch: 1);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? epochField = stack.GetFieldId("dtls.record.epoch");
@@ -194,9 +194,9 @@ internal sealed class DtlsProtocolTests
     [Test]
     public async Task Parse_DtlsRecord_SequenceNumber()
     {
-        byte[] frameData = GenerateDtlsRecord(sequenceNumber: 42);
+        byte[] frameData = _GenerateDtlsRecord(sequenceNumber: 42);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? seqField = stack.GetFieldId("dtls.record.sequence_number");
@@ -211,9 +211,9 @@ internal sealed class DtlsProtocolTests
     [Test]
     public async Task Parse_DtlsHandshake_ClientHello()
     {
-        byte[] frameData = GenerateDtlsClientHello();
+        byte[] frameData = _GenerateDtlsClientHello();
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? hsTypeField = stack.GetFieldId("dtls.handshake.type");
@@ -230,9 +230,9 @@ internal sealed class DtlsProtocolTests
     {
         // Only 5 bytes of DTLS data — need at least 13 for DTLS record header
         byte[] shortPayload = new byte[5];
-        byte[] frameData = WrapInUdpFrame(shortPayload, 54321, 443);
+        byte[] frameData = _WrapInUdpFrame(shortPayload, 54321, 443);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? ctField = stack.GetFieldId("dtls.record.content_type");
@@ -245,7 +245,7 @@ internal sealed class DtlsProtocolTests
     [Test]
     public async Task Parse_DtlsRecord_IndexPresence()
     {
-        byte[] frameData = GenerateDtlsRecord();
+        byte[] frameData = _GenerateDtlsRecord();
 
         using SettingsManager settingsManager = new();
 

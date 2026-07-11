@@ -35,13 +35,13 @@ internal static class HpackDecoder
             {
                 // §6.1 Indexed Header Field Representation
                 // Bit pattern: 1xxxxxxx
-                int index = DecodeInteger(data, ref offset, 7);
+                int index = _DecodeInteger(data, ref offset, 7);
                 if (index <= 0)
                 {
                     break; // Invalid index
                 }
 
-                Header? header = LookupIndex(index, dynamicTable);
+                Header? header = _LookupIndex(index, dynamicTable);
                 if (header is not null)
                 {
                     headers.Add(header.Value);
@@ -51,7 +51,7 @@ internal static class HpackDecoder
             {
                 // §6.2.1 Literal Header Field with Incremental Indexing
                 // Bit pattern: 01xxxxxx
-                Header? header = DecodeLiteralHeader(data, ref offset, 6, dynamicTable);
+                Header? header = _DecodeLiteralHeader(data, ref offset, 6, dynamicTable);
                 if (header is null)
                 {
                     break;
@@ -63,7 +63,7 @@ internal static class HpackDecoder
             {
                 // §6.2.2 Literal Header Field without Indexing
                 // Bit pattern: 0000xxxx
-                Header? header = DecodeLiteralHeader(data, ref offset, 4, dynamicTable);
+                Header? header = _DecodeLiteralHeader(data, ref offset, 4, dynamicTable);
                 if (header is null)
                 {
                     break;
@@ -74,7 +74,7 @@ internal static class HpackDecoder
             {
                 // §6.2.3 Literal Header Field Never Indexed
                 // Bit pattern: 0001xxxx
-                Header? header = DecodeLiteralHeader(data, ref offset, 4, dynamicTable);
+                Header? header = _DecodeLiteralHeader(data, ref offset, 4, dynamicTable);
                 if (header is null)
                 {
                     break;
@@ -85,7 +85,7 @@ internal static class HpackDecoder
             {
                 // §6.3 Dynamic Table Size Update
                 // Bit pattern: 001xxxxx
-                _ = DecodeInteger(data, ref offset, 5); // Consume the size update
+                _ = _DecodeInteger(data, ref offset, 5); // Consume the size update
             }
             else
             {
@@ -99,10 +99,10 @@ internal static class HpackDecoder
     /// <summary>
     /// Decodes a literal header field from the HPACK data.
     /// </summary>
-    private static Header? DecodeLiteralHeader(
+    private static Header? _DecodeLiteralHeader(
         ReadOnlySpan<byte> data, ref int offset, int prefixBits, List<Header> dynamicTable)
     {
-        int nameIndex = DecodeInteger(data, ref offset, prefixBits);
+        int nameIndex = _DecodeInteger(data, ref offset, prefixBits);
         if (nameIndex < 0)
         {
             return null;
@@ -112,7 +112,7 @@ internal static class HpackDecoder
         if (nameIndex > 0)
         {
             // Name is indexed in the static/dynamic table
-            Header? indexed = LookupIndex(nameIndex, dynamicTable);
+            Header? indexed = _LookupIndex(nameIndex, dynamicTable);
             if (indexed is null)
             {
                 return null;
@@ -122,7 +122,7 @@ internal static class HpackDecoder
         else
         {
             // Name is a literal string
-            string? decoded = DecodeString(data, ref offset);
+            string? decoded = _DecodeString(data, ref offset);
             if (decoded is null)
             {
                 return null;
@@ -131,7 +131,7 @@ internal static class HpackDecoder
         }
 
         // Value is always a literal string
-        string? value = DecodeString(data, ref offset);
+        string? value = _DecodeString(data, ref offset);
         if (value is null)
         {
             return null;
@@ -143,7 +143,7 @@ internal static class HpackDecoder
     /// <summary>
     /// Decodes an HPACK integer using the prefix-coded encoding (RFC 7541 §5.1).
     /// </summary>
-    private static int DecodeInteger(ReadOnlySpan<byte> data, ref int offset, int prefixBits)
+    private static int _DecodeInteger(ReadOnlySpan<byte> data, ref int offset, int prefixBits)
     {
         if (offset >= data.Length)
         {
@@ -187,7 +187,7 @@ internal static class HpackDecoder
     /// Decodes an HPACK string (RFC 7541 §5.2).
     /// Supports both plain and Huffman-encoded strings.
     /// </summary>
-    private static string? DecodeString(ReadOnlySpan<byte> data, ref int offset)
+    private static string? _DecodeString(ReadOnlySpan<byte> data, ref int offset)
     {
         if (offset >= data.Length)
         {
@@ -195,7 +195,7 @@ internal static class HpackDecoder
         }
 
         bool huffmanEncoded = (data[offset] & 0x80) != 0;
-        int length = DecodeInteger(data, ref offset, 7);
+        int length = _DecodeInteger(data, ref offset, 7);
         if (length < 0 || offset + length > data.Length)
         {
             return null;
@@ -206,7 +206,7 @@ internal static class HpackDecoder
 
         if (huffmanEncoded)
         {
-            return HuffmanDecode(stringData);
+            return _HuffmanDecode(stringData);
         }
 
         return Encoding.ASCII.GetString(stringData);
@@ -216,15 +216,15 @@ internal static class HpackDecoder
     /// Looks up a header by index in the combined static + dynamic table.
     /// Static table indices: 1-61, Dynamic table indices: 62+.
     /// </summary>
-    private static Header? LookupIndex(int index, List<Header> dynamicTable)
+    private static Header? _LookupIndex(int index, List<Header> dynamicTable)
     {
-        if (index >= 1 && index <= StaticTable.Length)
+        if (index >= 1 && index <= _StaticTable.Length)
         {
-            return StaticTable[index - 1];
+            return _StaticTable[index - 1];
         }
 
         // Dynamic table: index 62 = first entry (most recent)
-        int dynamicIndex = index - StaticTable.Length - 1;
+        int dynamicIndex = index - _StaticTable.Length - 1;
         if (dynamicIndex >= 0 && dynamicIndex < dynamicTable.Count)
         {
             return dynamicTable[dynamicIndex];
@@ -237,7 +237,7 @@ internal static class HpackDecoder
     /// Decodes a Huffman-encoded string using the HPACK Huffman table (RFC 7541, Appendix B).
     /// Uses a state machine approach for efficient bit-by-bit decoding.
     /// </summary>
-    private static string? HuffmanDecode(ReadOnlySpan<byte> data)
+    private static string? _HuffmanDecode(ReadOnlySpan<byte> data)
     {
         // Use a simple bit-by-bit approach with the Huffman code table
         StringBuilder sb = new(data.Length * 2); // Pre-size: Huffman usually expands
@@ -259,7 +259,7 @@ internal static class HpackDecoder
                 {
                     uint code = (accumulator >> (bits - len)) & ((1u << len) - 1);
 
-                    if (TryLookupHuffmanSymbol(code, len, out byte symbol))
+                    if (_TryLookupHuffmanSymbol(code, len, out byte symbol))
                     {
                         sb.Append((char)symbol);
                         bits -= len;
@@ -283,12 +283,12 @@ internal static class HpackDecoder
     /// <summary>
     /// Attempts to find a symbol matching the given Huffman code and code length.
     /// </summary>
-    private static bool TryLookupHuffmanSymbol(uint code, int codeLen, out byte symbol)
+    private static bool _TryLookupHuffmanSymbol(uint code, int codeLen, out byte symbol)
     {
         // Search the Huffman table for a match
-        for (int i = 0; i < HuffmanTable.Length; i++)
+        for (int i = 0; i < _HuffmanTable.Length; i++)
         {
-            (uint hCode, int hLen) = HuffmanTable[i];
+            (uint hCode, int hLen) = _HuffmanTable[i];
             if (hLen == codeLen && hCode == code)
             {
                 symbol = (byte)i;
@@ -304,7 +304,7 @@ internal static class HpackDecoder
     /// <summary>
     /// The 61-entry HPACK static table. Index 1 = entry[0], index 61 = entry[60].
     /// </summary>
-    private static readonly Header[] StaticTable =
+    private static readonly Header[] _StaticTable =
     [
         new(":authority", ""),          // 1
         new(":method", "GET"),          // 2
@@ -377,7 +377,7 @@ internal static class HpackDecoder
     /// HPACK Huffman encoding table. Index = symbol (0-255), value = (code, code_length_in_bits).
     /// Used for decoding Huffman-encoded header strings.
     /// </summary>
-    private static readonly (uint Code, int Length)[] HuffmanTable =
+    private static readonly (uint Code, int Length)[] _HuffmanTable =
     [
         (0x1ff8, 13),     // 0
         (0x7fffd8, 23),   // 1

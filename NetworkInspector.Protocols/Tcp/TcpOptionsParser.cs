@@ -24,21 +24,21 @@ namespace NetworkInspector.Protocols.Tcp;
 internal static class TcpOptionsParser
 {
     #region Option Kind Constants
-    private const byte OptEol = 0;
-    private const byte OptNop = 1;
-    private const byte OptMss = 2;
-    private const byte OptWindowScale = 3;
-    private const byte OptSackPermitted = 4;
-    private const byte OptSack = 5;
-    private const byte OptTimestamps = 8;
-    private const byte OptMd5Signature = 19;
-    private const byte OptUserTimeout = 28;
-    private const byte OptTcpAo = 29;
-    private const byte OptMptcp = 30;
-    private const byte OptFastOpen = 34;
+    private const byte _OptEol = 0;
+    private const byte _OptNop = 1;
+    private const byte _OptMss = 2;
+    private const byte _OptWindowScale = 3;
+    private const byte _OptSackPermitted = 4;
+    private const byte _OptSack = 5;
+    private const byte _OptTimestamps = 8;
+    private const byte _OptMd5Signature = 19;
+    private const byte _OptUserTimeout = 28;
+    private const byte _OptTcpAo = 29;
+    private const byte _OptMptcp = 30;
+    private const byte _OptFastOpen = 34;
 
     /// <summary>Maximum window scale shift count per RFC 7323.</summary>
-    private const byte MaxWindowScale = 14;
+    private const byte _MaxWindowScale = 14;
 
     /// <summary>
     /// Parses all TCP options from the options area and appends fields to the container.
@@ -67,7 +67,7 @@ internal static class TcpOptionsParser
     #endregion
 
             #region Single-byte options (no length field)
-            if (kind == OptEol)
+            if (kind == _OptEol)
             {
                 container.AppendWithCustomText(
                     fieldIds.Eol, FieldValue.None,
@@ -75,7 +75,7 @@ internal static class TcpOptionsParser
                 break; // EOL terminates option parsing
             }
 
-            if (kind == OptNop)
+            if (kind == _OptNop)
             {
                 container.AppendWithCustomText(
                     fieldIds.Nop, FieldValue.None,
@@ -102,39 +102,39 @@ internal static class TcpOptionsParser
 
             switch (kind)
             {
-                case OptMss:
-                    mss = ParseMss(optionBytes, in container, in fieldIds);
+                case _OptMss:
+                    mss = _ParseMss(optionBytes, in container, in fieldIds);
                     break;
-                case OptWindowScale:
-                    windowScale = ParseWindowScale(optionBytes, in container, in fieldIds);
+                case _OptWindowScale:
+                    windowScale = _ParseWindowScale(optionBytes, in container, in fieldIds);
                     break;
-                case OptSackPermitted:
-                    ParseSackPermitted(in container, in fieldIds);
+                case _OptSackPermitted:
+                    _ParseSackPermitted(in container, in fieldIds);
                     sackPermitted = true;
                     break;
-                case OptSack:
-                    ParseSack(optionBytes, in container, in fieldIds);
+                case _OptSack:
+                    _ParseSack(optionBytes, in container, in fieldIds);
                     break;
-                case OptTimestamps:
-                    (tsVal, tsEcr) = ParseTimestamps(optionBytes, in container, in fieldIds);
+                case _OptTimestamps:
+                    (tsVal, tsEcr) = _ParseTimestamps(optionBytes, in container, in fieldIds);
                     break;
-                case OptUserTimeout:
-                    ParseUserTimeout(optionBytes, in container, in fieldIds);
+                case _OptUserTimeout:
+                    _ParseUserTimeout(optionBytes, in container, in fieldIds);
                     break;
-                case OptFastOpen:
-                    ParseFastOpen(optionBytes, in container, in fieldIds);
+                case _OptFastOpen:
+                    _ParseFastOpen(optionBytes, in container, in fieldIds);
                     break;
-                case OptMptcp:
-                    ParseMptcp(optionBytes, in container, in fieldIds);
+                case _OptMptcp:
+                    _ParseMptcp(optionBytes, in container, in fieldIds);
                     break;
-                case OptMd5Signature:
-                    ParseMd5(optionBytes, in container, in fieldIds);
+                case _OptMd5Signature:
+                    _ParseMd5(optionBytes, in container, in fieldIds);
                     break;
-                case OptTcpAo:
-                    ParseTcpAo(optionBytes, in container, in fieldIds);
+                case _OptTcpAo:
+                    _ParseTcpAo(optionBytes, in container, in fieldIds);
                     break;
                 default:
-                    ParseUnknown(kind, optionBytes, in container, in fieldIds);
+                    _ParseUnknown(kind, optionBytes, in container, in fieldIds);
                     break;
             }
 
@@ -152,7 +152,7 @@ internal static class TcpOptionsParser
     }
 
     /// <summary>Parses MSS option (kind 2, length 4): 2-byte MSS value.</summary>
-    private static ushort? ParseMss(
+    private static ushort? _ParseMss(
         ReadOnlySpan<byte> data, in MutField container, in TcpOptionsFieldIds ids)
     {
         if (data.Length < 4)
@@ -172,7 +172,7 @@ internal static class TcpOptionsParser
     /// Parses Window Scale option (kind 3, length 3): 1-byte shift count.
     /// Capped to 14 per RFC 7323.
     /// </summary>
-    private static byte? ParseWindowScale(
+    private static byte? _ParseWindowScale(
         ReadOnlySpan<byte> data, in MutField container, in TcpOptionsFieldIds ids)
     {
         if (data.Length < 3)
@@ -182,7 +182,7 @@ internal static class TcpOptionsParser
 
         byte shift = data[2];
         // RFC 7323 �2.3: shift count MUST NOT exceed 14
-        byte effectiveShift = Math.Min(shift, MaxWindowScale);
+        byte effectiveShift = Math.Min(shift, _MaxWindowScale);
         uint multiplier = 1u << effectiveShift;
 
         MutField wsField = container.AppendWithCustomText(
@@ -195,7 +195,7 @@ internal static class TcpOptionsParser
     }
 
     /// <summary>Parses SACK Permitted option (kind 4, length 2): no data.</summary>
-    private static void ParseSackPermitted(in MutField container, in TcpOptionsFieldIds ids)
+    private static void _ParseSackPermitted(in MutField container, in TcpOptionsFieldIds ids)
     {
         container.AppendWithCustomText(
             ids.SackPermitted, FieldValue.None,
@@ -206,7 +206,7 @@ internal static class TcpOptionsParser
     /// Parses SACK option (kind 5, variable length): 1-4 SACK blocks,
     /// each containing a left edge and right edge (4 bytes each).
     /// </summary>
-    private static void ParseSack(
+    private static void _ParseSack(
         ReadOnlySpan<byte> data, in MutField container, in TcpOptionsFieldIds ids)
     {
         // SACK data starts at offset 2, each block is 8 bytes (LE + RE)
@@ -237,7 +237,7 @@ internal static class TcpOptionsParser
     /// <summary>
     /// Parses Timestamps option (kind 8, length 10): TSval (4 bytes) + TSecr (4 bytes).
     /// </summary>
-    private static (uint? TsVal, uint? TsEcr) ParseTimestamps(
+    private static (uint? TsVal, uint? TsEcr) _ParseTimestamps(
         ReadOnlySpan<byte> data, in MutField container, in TcpOptionsFieldIds ids)
     {
         if (data.Length < 10)
@@ -261,7 +261,7 @@ internal static class TcpOptionsParser
     /// Parses User Timeout option (kind 28, length 4):
     /// 1-bit granularity (0=minutes, 1=seconds) + 15-bit value.
     /// </summary>
-    private static void ParseUserTimeout(
+    private static void _ParseUserTimeout(
         ReadOnlySpan<byte> data, in MutField container, in TcpOptionsFieldIds ids)
     {
         if (data.Length < 4)
@@ -285,7 +285,7 @@ internal static class TcpOptionsParser
     /// Parses TCP Fast Open option (kind 34, variable length):
     /// Length 2 = request (no cookie), length > 2 = cookie present.
     /// </summary>
-    private static void ParseFastOpen(
+    private static void _ParseFastOpen(
         ReadOnlySpan<byte> data, in MutField container, in TcpOptionsFieldIds ids)
     {
         if (data.Length == 2)
@@ -310,7 +310,7 @@ internal static class TcpOptionsParser
     /// <summary>
     /// Parses MPTCP option (kind 30, variable length): extracts subtype from first nibble.
     /// </summary>
-    private static void ParseMptcp(
+    private static void _ParseMptcp(
         ReadOnlySpan<byte> data, in MutField container, in TcpOptionsFieldIds ids)
     {
         if (data.Length < 3)
@@ -320,7 +320,7 @@ internal static class TcpOptionsParser
 
         // Subtype is in the upper 4 bits of byte 2
         byte subtype = (byte)(data[2] >> 4);
-        string subtypeName = GetMptcpSubtypeName(subtype);
+        string subtypeName = _GetMptcpSubtypeName(subtype);
 
         MutField mpField = container.AppendWithCustomText(
             ids.Mptcp, FieldValue.None,
@@ -331,7 +331,7 @@ internal static class TcpOptionsParser
     /// <summary>
     /// Parses MD5 Signature option (kind 19, length 18): 16-byte digest.
     /// </summary>
-    private static void ParseMd5(
+    private static void _ParseMd5(
         ReadOnlySpan<byte> data, in MutField container, in TcpOptionsFieldIds ids)
     {
         if (data.Length < 18)
@@ -350,7 +350,7 @@ internal static class TcpOptionsParser
     /// Parses TCP-AO option (kind 29, variable length):
     /// KeyID (1 byte) + RNextKeyID (1 byte) + MAC (remaining).
     /// </summary>
-    private static void ParseTcpAo(
+    private static void _ParseTcpAo(
         ReadOnlySpan<byte> data, in MutField container, in TcpOptionsFieldIds ids)
     {
         if (data.Length < 4)
@@ -375,7 +375,7 @@ internal static class TcpOptionsParser
     }
 
     /// <summary>Parses an unknown/unrecognized TCP option.</summary>
-    private static void ParseUnknown(
+    private static void _ParseUnknown(
         byte kind, ReadOnlySpan<byte> data, in MutField container, in TcpOptionsFieldIds ids)
     {
         string displayText = DisplayTables.GetTcpOptionDisplayText(kind);
@@ -391,7 +391,7 @@ internal static class TcpOptionsParser
     }
 
     /// <summary>Returns the name of an MPTCP subtype.</summary>
-    private static string GetMptcpSubtypeName(byte subtype)
+    private static string _GetMptcpSubtypeName(byte subtype)
     {
         return subtype switch
         {

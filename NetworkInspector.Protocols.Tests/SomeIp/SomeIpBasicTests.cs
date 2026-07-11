@@ -18,7 +18,7 @@ internal sealed class SomeIpBasicTests
     private static readonly IPv4Address _SrcIp = IPv4Address.FromBytes([192, 168, 1, 1]);
     private static readonly IPv4Address _DstIp = IPv4Address.FromBytes([192, 168, 1, 2]);
 
-    private static byte[] BuildSomeIpUdp(SomeIpLayer someIp, byte[] payload)
+    private static byte[] _BuildSomeIpUdp(SomeIpLayer someIp, byte[] payload)
     {
         EthernetLayer eth = new(_DstMac, _SrcMac);
         IPv4Layer ip = new(_SrcIp, _DstIp);
@@ -36,7 +36,7 @@ internal sealed class SomeIpBasicTests
             sessionId: 0x0010,
             messageType: SomeIpMessageType.Request);
         byte[] payload = [0xDE, 0xAD, 0xBE, 0xEF];
-        byte[] frame = BuildSomeIpUdp(someIp, payload);
+        byte[] frame = _BuildSomeIpUdp(someIp, payload);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -58,7 +58,7 @@ internal sealed class SomeIpBasicTests
             serviceId: 0x1234, methodId: 0x0042,
             clientId: 0, sessionId: 0,
             messageType: SomeIpMessageType.Response, returnCode: 0);
-        byte[] frame = BuildSomeIpUdp(someIp, []);
+        byte[] frame = _BuildSomeIpUdp(someIp, []);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -73,7 +73,7 @@ internal sealed class SomeIpBasicTests
             serviceId: 0xABCD, methodId: 0x0001,
             clientId: 0, sessionId: 0,
             messageType: SomeIpMessageType.Error, returnCode: 0x05);
-        byte[] frame = BuildSomeIpUdp(someIp, []);
+        byte[] frame = _BuildSomeIpUdp(someIp, []);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -89,7 +89,7 @@ internal sealed class SomeIpBasicTests
             serviceId: 0x4242, methodId: 0x8001,
             clientId: 0, sessionId: 0,
             messageType: SomeIpMessageType.Notification);
-        byte[] frame = BuildSomeIpUdp(someIp, [1, 2, 3]);
+        byte[] frame = _BuildSomeIpUdp(someIp, [1, 2, 3]);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {

@@ -22,7 +22,7 @@ internal sealed class HttpBasicTests
     /// Builds an Ethernet + IPv4 + TCP + HTTP payload frame.
     /// The TCP destination port is 80 so the stack dispatches to HTTP.
     /// </summary>
-    private static byte[] BuildHttpFrame(string httpMessage, ushort dstPort = 80)
+    private static byte[] _BuildHttpFrame(string httpMessage, ushort dstPort = 80)
     {
         byte[] httpBytes = Encoding.ASCII.GetBytes(httpMessage);
         EthernetLayer eth = new(_DstMac, _SrcMac);
@@ -31,13 +31,13 @@ internal sealed class HttpBasicTests
         return FrameStack.Start(eth).Then(ip).Then(tcp).CreateWithFixedValues().EmitFrame(httpBytes);
     }
 
-    private const string HttpGetRequest =
+    private const string _HttpGetRequest =
         "GET /index.html HTTP/1.1\r\n" +
         "Host: example.com\r\n" +
         "User-Agent: TestAgent/1.0\r\n" +
         "\r\n";
 
-    private const string HttpPostRequest =
+    private const string _HttpPostRequest =
         "POST /api/data HTTP/1.1\r\n" +
         "Host: api.example.com\r\n" +
         "Content-Type: application/json\r\n" +
@@ -45,25 +45,25 @@ internal sealed class HttpBasicTests
         "\r\n" +
         "{}";
 
-    private const string Http200Response =
+    private const string _Http200Response =
         "HTTP/1.1 200 OK\r\n" +
         "Content-Type: text/plain\r\n" +
         "Content-Length: 5\r\n" +
         "\r\n" +
         "Hello";
 
-    private const string Http404Response =
+    private const string _Http404Response =
         "HTTP/1.1 404 Not Found\r\n" +
         "Content-Length: 0\r\n" +
         "\r\n";
 
-    private const string Http101Response =
+    private const string _Http101Response =
         "HTTP/1.1 101 Switching Protocols\r\n" +
         "Upgrade: websocket\r\n" +
         "Connection: Upgrade\r\n" +
         "\r\n";
 
-    private const string HttpChunkedResponse =
+    private const string _HttpChunkedResponse =
         "HTTP/1.1 200 OK\r\n" +
         "Transfer-Encoding: chunked\r\n" +
         "\r\n" +
@@ -79,7 +79,7 @@ internal sealed class HttpBasicTests
     [Test]
     public async Task Parse_Http_Request_IsPresent()
     {
-        byte[] frame = BuildHttpFrame(HttpGetRequest);
+        byte[] frame = _BuildHttpFrame(_HttpGetRequest);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -90,7 +90,7 @@ internal sealed class HttpBasicTests
     [Test]
     public async Task Parse_Http_Request_Method_GET()
     {
-        byte[] frame = BuildHttpFrame(HttpGetRequest);
+        byte[] frame = _BuildHttpFrame(_HttpGetRequest);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -101,7 +101,7 @@ internal sealed class HttpBasicTests
     [Test]
     public async Task Parse_Http_Request_Uri()
     {
-        byte[] frame = BuildHttpFrame(HttpGetRequest);
+        byte[] frame = _BuildHttpFrame(_HttpGetRequest);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -112,7 +112,7 @@ internal sealed class HttpBasicTests
     [Test]
     public async Task Parse_Http_Request_Version()
     {
-        byte[] frame = BuildHttpFrame(HttpGetRequest);
+        byte[] frame = _BuildHttpFrame(_HttpGetRequest);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -123,7 +123,7 @@ internal sealed class HttpBasicTests
     [Test]
     public async Task Parse_Http_Request_Host_Header()
     {
-        byte[] frame = BuildHttpFrame(HttpGetRequest);
+        byte[] frame = _BuildHttpFrame(_HttpGetRequest);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -134,7 +134,7 @@ internal sealed class HttpBasicTests
     [Test]
     public async Task Parse_Http_Request_UserAgent_Header()
     {
-        byte[] frame = BuildHttpFrame(HttpGetRequest);
+        byte[] frame = _BuildHttpFrame(_HttpGetRequest);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -145,7 +145,7 @@ internal sealed class HttpBasicTests
     [Test]
     public async Task Parse_Http_Post_Method()
     {
-        byte[] frame = BuildHttpFrame(HttpPostRequest);
+        byte[] frame = _BuildHttpFrame(_HttpPostRequest);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -156,7 +156,7 @@ internal sealed class HttpBasicTests
     [Test]
     public async Task Parse_Http_Post_ContentType_Header()
     {
-        byte[] frame = BuildHttpFrame(HttpPostRequest);
+        byte[] frame = _BuildHttpFrame(_HttpPostRequest);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -167,7 +167,7 @@ internal sealed class HttpBasicTests
     [Test]
     public async Task Parse_Http_Post_ContentLength_Header()
     {
-        byte[] frame = BuildHttpFrame(HttpPostRequest);
+        byte[] frame = _BuildHttpFrame(_HttpPostRequest);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -182,7 +182,7 @@ internal sealed class HttpBasicTests
     [Test]
     public async Task Parse_Http_Response_IsPresent()
     {
-        byte[] frame = BuildHttpFrame(Http200Response);
+        byte[] frame = _BuildHttpFrame(_Http200Response);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -193,7 +193,7 @@ internal sealed class HttpBasicTests
     [Test]
     public async Task Parse_Http_Response_StatusCode_200()
     {
-        byte[] frame = BuildHttpFrame(Http200Response);
+        byte[] frame = _BuildHttpFrame(_Http200Response);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -204,7 +204,7 @@ internal sealed class HttpBasicTests
     [Test]
     public async Task Parse_Http_Response_ReasonPhrase_OK()
     {
-        byte[] frame = BuildHttpFrame(Http200Response);
+        byte[] frame = _BuildHttpFrame(_Http200Response);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -215,7 +215,7 @@ internal sealed class HttpBasicTests
     [Test]
     public async Task Parse_Http_Response_StatusCode_404()
     {
-        byte[] frame = BuildHttpFrame(Http404Response);
+        byte[] frame = _BuildHttpFrame(_Http404Response);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -226,7 +226,7 @@ internal sealed class HttpBasicTests
     [Test]
     public async Task Parse_Http_Response_ReasonPhrase_NotFound()
     {
-        byte[] frame = BuildHttpFrame(Http404Response);
+        byte[] frame = _BuildHttpFrame(_Http404Response);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -237,7 +237,7 @@ internal sealed class HttpBasicTests
     [Test]
     public async Task Parse_Http_Response_Version()
     {
-        byte[] frame = BuildHttpFrame(Http200Response);
+        byte[] frame = _BuildHttpFrame(_Http200Response);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -248,7 +248,7 @@ internal sealed class HttpBasicTests
     [Test]
     public async Task Parse_Http_Response_ContentLength()
     {
-        byte[] frame = BuildHttpFrame(Http200Response);
+        byte[] frame = _BuildHttpFrame(_Http200Response);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -263,7 +263,7 @@ internal sealed class HttpBasicTests
     [Test]
     public async Task Parse_Http_101_UpgradeFieldPresent()
     {
-        byte[] frame = BuildHttpFrame(Http101Response);
+        byte[] frame = _BuildHttpFrame(_Http101Response);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -274,7 +274,7 @@ internal sealed class HttpBasicTests
     [Test]
     public async Task Parse_Http_101_UpgradeValue_Websocket()
     {
-        byte[] frame = BuildHttpFrame(Http101Response);
+        byte[] frame = _BuildHttpFrame(_Http101Response);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -289,7 +289,7 @@ internal sealed class HttpBasicTests
     [Test]
     public async Task Parse_Http_Response_ChunkedEncoding_FieldPresent()
     {
-        byte[] frame = BuildHttpFrame(HttpChunkedResponse);
+        byte[] frame = _BuildHttpFrame(_HttpChunkedResponse);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -304,7 +304,7 @@ internal sealed class HttpBasicTests
     [Test]
     public async Task Parse_Http_OnPort8080_RequestPresent()
     {
-        byte[] frame = BuildHttpFrame(HttpGetRequest, dstPort: 8080);
+        byte[] frame = _BuildHttpFrame(_HttpGetRequest, dstPort: 8080);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {

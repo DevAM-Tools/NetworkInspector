@@ -43,18 +43,18 @@ public static class ChecksumUtils
         // branches for unsupported ISAs at compile time (IsHardwareAccelerated is a JIT constant).
         if (Vector256.IsHardwareAccelerated && data.Length >= Vector256<byte>.Count)
         {
-            sum = AccumulateVector256(data);
+            sum = _AccumulateVector256(data);
         }
         else if (Vector128.IsHardwareAccelerated && data.Length >= Vector128<byte>.Count)
         {
-            sum = AccumulateVector128(data);
+            sum = _AccumulateVector128(data);
         }
         else
         {
-            sum = AccumulateScalar(data);
+            sum = _AccumulateScalar(data);
         }
 
-        return Fold32To16(sum);
+        return _Fold32To16(sum);
     }
 
     /// <summary>
@@ -111,9 +111,9 @@ public static class ChecksumUtils
         sum += (uint)segment.Length;
 
         // Add the transport segment checksum (raw partial sum, not yet folded/inverted)
-        sum += PartialSum(segment);
+        sum += _PartialSum(segment);
 
-        return Fold32To16(sum);
+        return _Fold32To16(sum);
     }
 
     /// <summary>
@@ -176,9 +176,9 @@ public static class ChecksumUtils
         sum += nextHeader;
 
         // Add the transport segment checksum (raw partial sum, not yet folded/inverted)
-        sum += PartialSum(segment);
+        sum += _PartialSum(segment);
 
-        return Fold32To16(sum);
+        return _Fold32To16(sum);
     }
 
     #endregion
@@ -191,19 +191,19 @@ public static class ChecksumUtils
     /// for combining multiple partial sums incrementally.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static uint PartialSum(ReadOnlySpan<byte> data)
+    private static uint _PartialSum(ReadOnlySpan<byte> data)
     {
         if (Vector256.IsHardwareAccelerated && data.Length >= Vector256<byte>.Count)
         {
-            return AccumulateVector256(data);
+            return _AccumulateVector256(data);
         }
 
         if (Vector128.IsHardwareAccelerated && data.Length >= Vector128<byte>.Count)
         {
-            return AccumulateVector128(data);
+            return _AccumulateVector128(data);
         }
 
-        return AccumulateScalar(data);
+        return _AccumulateScalar(data);
     }
 
     #endregion
@@ -215,7 +215,7 @@ public static class ChecksumUtils
     /// Repeatedly adds carry bits until the result fits in 16 bits, then inverts.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static ushort Fold32To16(uint sum)
+    private static ushort _Fold32To16(uint sum)
     {
         // Two iterations are sufficient for a 32-bit accumulator:
         // after the first fold the maximum value is 0x1FFFE, so the
@@ -249,7 +249,7 @@ public static class ChecksumUtils
     /// We shuffle each 128-bit half independently with Vector128.Shuffle to ensure each
     /// half's byte-swap references its own bytes, not the other half's.
     /// </remarks>
-    private static uint AccumulateVector256(ReadOnlySpan<byte> data)
+    private static uint _AccumulateVector256(ReadOnlySpan<byte> data)
     {
         // Accumulator holds 8 × uint lanes.
         // Maximum iterations before u32 overflow: 2^32 / (0xFFFF × 16) ≈ 4096 iterations.
@@ -291,7 +291,7 @@ public static class ChecksumUtils
         uint sum = Vector256.Sum(vSum);
 
         // Handle remaining bytes with the scalar tail
-        sum += AccumulateScalarTail(data, i);
+        sum += _AccumulateScalarTail(data, i);
 
         return sum;
     }
@@ -303,9 +303,9 @@ public static class ChecksumUtils
     /// <summary>
     /// Accumulates 16-bit big-endian word sums using 128-bit SIMD vectors.
     /// Processes 16 bytes per iteration for ~2× throughput over scalar.
-    /// Same algorithm as <see cref="AccumulateVector256"/> at half width.
+    /// Same algorithm as <see cref="_AccumulateVector256"/> at half width.
     /// </summary>
-    private static uint AccumulateVector128(ReadOnlySpan<byte> data)
+    private static uint _AccumulateVector128(ReadOnlySpan<byte> data)
     {
         Vector128<uint> vSum = Vector128<uint>.Zero;
 
@@ -337,7 +337,7 @@ public static class ChecksumUtils
         uint sum = Vector128.Sum(vSum);
 
         // Handle remaining bytes with the scalar tail
-        sum += AccumulateScalarTail(data, i);
+        sum += _AccumulateScalarTail(data, i);
 
         return sum;
     }
@@ -350,15 +350,15 @@ public static class ChecksumUtils
     /// Scalar accumulation of 16-bit big-endian words with 4× unrolling (8 bytes/iteration).
     /// Used as the fallback when no SIMD is available, or for small inputs below the vector threshold.
     /// </summary>
-    private static uint AccumulateScalar(ReadOnlySpan<byte> data)
-        => AccumulateScalarTail(data, 0);
+    private static uint _AccumulateScalar(ReadOnlySpan<byte> data)
+        => _AccumulateScalarTail(data, 0);
 
     /// <summary>
     /// Scalar accumulation starting from a given byte offset. Used for both the
     /// full scalar path and as the tail handler after SIMD vector processing.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static uint AccumulateScalarTail(ReadOnlySpan<byte> data, int i)
+    private static uint _AccumulateScalarTail(ReadOnlySpan<byte> data, int i)
     {
         uint sum = 0;
 

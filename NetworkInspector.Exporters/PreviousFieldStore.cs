@@ -6,7 +6,7 @@ namespace NetworkInspector.Exporters;
 /// Stores previously seen field values for same-as-previous detection.
 /// Shared between the JSON Compact writer and the PBF Standard block builder.
 /// <para>
-/// For small field counts (≤ <see cref="DenseThreshold"/>), uses a dense <c>string?[]</c>
+/// For small field counts (≤ 2048), uses a dense <c>string?[]</c>
 /// array indexed by field ID for O(1) access. For larger field counts, falls back
 /// to a <see cref="Dictionary{TKey, TValue}"/>. The threshold balances memory usage
 /// against lookup speed for typical protocol stacks.
@@ -15,7 +15,7 @@ namespace NetworkInspector.Exporters;
 internal sealed class PreviousFieldStore
 {
     /// <summary>Maximum field count for the dense (array-based) representation.</summary>
-    private const int DenseThreshold = 2048;
+    private const int _DenseThreshold = 2048;
 
     private readonly string?[]? _DenseValues;
     private readonly string?[]? _DenseCustomTexts;
@@ -33,7 +33,7 @@ internal sealed class PreviousFieldStore
     /// <param name="fieldCount">Expected maximum field count. Determines dense vs sparse mode.</param>
     internal PreviousFieldStore(int fieldCount)
     {
-        if (fieldCount <= DenseThreshold)
+        if (fieldCount <= _DenseThreshold)
         {
             _DenseValues = new string?[fieldCount];
             _DenseCustomTexts = new string?[fieldCount];

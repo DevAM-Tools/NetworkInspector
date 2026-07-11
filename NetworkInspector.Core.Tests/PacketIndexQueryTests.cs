@@ -14,7 +14,7 @@ internal sealed class PacketIndexQueryTests
     private static (Stack Stack, ProtocolId Proto1, ProtocolId Proto2,
         IndexGroupId Group1, IndexGroupId Group2,
         FieldId Field1, FieldId Field2)
-        BuildIndexTestStack()
+        _BuildIndexTestStack()
     {
         using SettingsManager settingsManager = new();
         StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
@@ -40,7 +40,7 @@ internal sealed class PacketIndexQueryTests
     [Test]
     public async Task Constructor_AllocatesBitmaps()
     {
-        (Stack stack, _, _, _, _, _, _) = BuildIndexTestStack();
+        (Stack stack, _, _, _, _, _, _) = _BuildIndexTestStack();
         using (stack)
         {
             PacketIndex index = new(stack);
@@ -55,7 +55,7 @@ internal sealed class PacketIndexQueryTests
     [Test]
     public async Task RecordGroupPresence_AndGetGroupBitmap()
     {
-        (Stack stack, _, _, IndexGroupId g1, _, _, _) = BuildIndexTestStack();
+        (Stack stack, _, _, IndexGroupId g1, _, _, _) = _BuildIndexTestStack();
         using (stack)
         {
             PacketIndex index = new(stack);
@@ -78,7 +78,7 @@ internal sealed class PacketIndexQueryTests
     [Test]
     public async Task RecordProtocolPresence_AndGetProtocolBitmap()
     {
-        (Stack stack, ProtocolId p1, _, _, _, _, _) = BuildIndexTestStack();
+        (Stack stack, ProtocolId p1, _, _, _, _, _) = _BuildIndexTestStack();
         using (stack)
         {
             PacketIndex index = new(stack);
@@ -96,7 +96,7 @@ internal sealed class PacketIndexQueryTests
     [Test]
     public async Task GetFieldBitmap_ResolvesViaIndexGroup()
     {
-        (Stack stack, _, _, IndexGroupId g1, _, FieldId f1, _) = BuildIndexTestStack();
+        (Stack stack, _, _, IndexGroupId g1, _, FieldId f1, _) = _BuildIndexTestStack();
         using (stack)
         {
             PacketIndex index = new(stack);
@@ -113,7 +113,7 @@ internal sealed class PacketIndexQueryTests
     [Test]
     public async Task GetFieldBitmap_NoGroup_ReturnsEmpty()
     {
-        (Stack stack, ProtocolId p1, _, _, _, _, _) = BuildIndexTestStack();
+        (Stack stack, ProtocolId p1, _, _, _, _, _) = _BuildIndexTestStack();
         using (stack)
         {
             PacketIndex index = new(stack);
@@ -130,7 +130,7 @@ internal sealed class PacketIndexQueryTests
     [Test]
     public async Task RecordGroupPresence_Dedup_WithinSamePacket()
     {
-        (Stack stack, _, _, IndexGroupId g1, _, _, _) = BuildIndexTestStack();
+        (Stack stack, _, _, IndexGroupId g1, _, _, _) = _BuildIndexTestStack();
         using (stack)
         {
             PacketIndex index = new(stack);
@@ -151,7 +151,7 @@ internal sealed class PacketIndexQueryTests
     [Test]
     public async Task GroupCardinality()
     {
-        (Stack stack, _, _, IndexGroupId g1, _, _, _) = BuildIndexTestStack();
+        (Stack stack, _, _, IndexGroupId g1, _, _, _) = _BuildIndexTestStack();
         using (stack)
         {
             PacketIndex index = new(stack);
@@ -170,7 +170,7 @@ internal sealed class PacketIndexQueryTests
     [Test]
     public async Task ProtocolCardinality()
     {
-        (Stack stack, ProtocolId p1, _, _, _, _, _) = BuildIndexTestStack();
+        (Stack stack, ProtocolId p1, _, _, _, _, _) = _BuildIndexTestStack();
         using (stack)
         {
             PacketIndex index = new(stack);
@@ -191,7 +191,7 @@ internal sealed class PacketIndexQueryTests
     [Test]
     public async Task TryGetGroupBitmap_ValidId_ReturnsTrue()
     {
-        (Stack stack, _, _, IndexGroupId g1, _, _, _) = BuildIndexTestStack();
+        (Stack stack, _, _, IndexGroupId g1, _, _, _) = _BuildIndexTestStack();
         using (stack)
         {
             PacketIndex index = new(stack);
@@ -209,7 +209,7 @@ internal sealed class PacketIndexQueryTests
     [Test]
     public async Task TryGetGroupBitmap_InvalidId_ReturnsFalse()
     {
-        (Stack stack, _, _, _, _, _, _) = BuildIndexTestStack();
+        (Stack stack, _, _, _, _, _, _) = _BuildIndexTestStack();
         using (stack)
         {
             PacketIndex index = new(stack);
@@ -222,7 +222,7 @@ internal sealed class PacketIndexQueryTests
     [Test]
     public async Task TryGetProtocolBitmap_ValidId_ReturnsTrue()
     {
-        (Stack stack, ProtocolId p1, _, _, _, _, _) = BuildIndexTestStack();
+        (Stack stack, ProtocolId p1, _, _, _, _, _) = _BuildIndexTestStack();
         using (stack)
         {
             PacketIndex index = new(stack);
@@ -240,7 +240,7 @@ internal sealed class PacketIndexQueryTests
     [Test]
     public async Task TryGetProtocolBitmap_InvalidId_ReturnsFalse()
     {
-        (Stack stack, _, _, _, _, _, _) = BuildIndexTestStack();
+        (Stack stack, _, _, _, _, _, _) = _BuildIndexTestStack();
         using (stack)
         {
             PacketIndex index = new(stack);
@@ -253,7 +253,7 @@ internal sealed class PacketIndexQueryTests
     [Test]
     public async Task TryGetFieldBitmap_ValidField()
     {
-        (Stack stack, _, _, IndexGroupId g1, _, FieldId f1, _) = BuildIndexTestStack();
+        (Stack stack, _, _, IndexGroupId g1, _, FieldId f1, _) = _BuildIndexTestStack();
         using (stack)
         {
             PacketIndex index = new(stack);
@@ -271,7 +271,7 @@ internal sealed class PacketIndexQueryTests
     [Test]
     public async Task TryGetFieldBitmap_InvalidField_ReturnsFalse()
     {
-        (Stack stack, _, _, _, _, _, _) = BuildIndexTestStack();
+        (Stack stack, _, _, _, _, _, _) = _BuildIndexTestStack();
         using (stack)
         {
             PacketIndex index = new(stack);
@@ -283,7 +283,7 @@ internal sealed class PacketIndexQueryTests
     [Test]
     public async Task TryGroupCardinality_ValidId()
     {
-        (Stack stack, _, _, IndexGroupId g1, _, _, _) = BuildIndexTestStack();
+        (Stack stack, _, _, IndexGroupId g1, _, _, _) = _BuildIndexTestStack();
         using (stack)
         {
             PacketIndex index = new(stack);
@@ -301,7 +301,7 @@ internal sealed class PacketIndexQueryTests
     [Test]
     public async Task TryGroupCardinality_InvalidId_ReturnsFalse()
     {
-        (Stack stack, _, _, _, _, _, _) = BuildIndexTestStack();
+        (Stack stack, _, _, _, _, _, _) = _BuildIndexTestStack();
         using (stack)
         {
             PacketIndex index = new(stack);
@@ -314,7 +314,7 @@ internal sealed class PacketIndexQueryTests
     [Test]
     public async Task TryProtocolCardinality_ValidId()
     {
-        (Stack stack, ProtocolId p1, _, _, _, _, _) = BuildIndexTestStack();
+        (Stack stack, ProtocolId p1, _, _, _, _, _) = _BuildIndexTestStack();
         using (stack)
         {
             PacketIndex index = new(stack);
@@ -332,7 +332,7 @@ internal sealed class PacketIndexQueryTests
     [Test]
     public async Task TryProtocolCardinality_InvalidId_ReturnsFalse()
     {
-        (Stack stack, _, _, _, _, _, _) = BuildIndexTestStack();
+        (Stack stack, _, _, _, _, _, _) = _BuildIndexTestStack();
         using (stack)
         {
             PacketIndex index = new(stack);
@@ -347,7 +347,7 @@ internal sealed class PacketIndexQueryTests
     [Test]
     public async Task Query_SelectProtocol()
     {
-        (Stack stack, ProtocolId p1, ProtocolId p2, _, _, _, _) = BuildIndexTestStack();
+        (Stack stack, ProtocolId p1, ProtocolId p2, _, _, _, _) = _BuildIndexTestStack();
         using (stack)
         {
             PacketIndex index = new(stack);
@@ -378,7 +378,7 @@ internal sealed class PacketIndexQueryTests
     [Test]
     public async Task Query_SelectGroup()
     {
-        (Stack stack, _, _, IndexGroupId g1, IndexGroupId g2, _, _) = BuildIndexTestStack();
+        (Stack stack, _, _, IndexGroupId g1, IndexGroupId g2, _, _) = _BuildIndexTestStack();
         using (stack)
         {
             PacketIndex index = new(stack);
@@ -398,7 +398,7 @@ internal sealed class PacketIndexQueryTests
     [Test]
     public async Task Query_SelectField()
     {
-        (Stack stack, _, _, IndexGroupId g1, _, FieldId f1, _) = BuildIndexTestStack();
+        (Stack stack, _, _, IndexGroupId g1, _, FieldId f1, _) = _BuildIndexTestStack();
         using (stack)
         {
             PacketIndex index = new(stack);
@@ -418,7 +418,7 @@ internal sealed class PacketIndexQueryTests
     [Test]
     public async Task Query_And_IntersectsProtocols()
     {
-        (Stack stack, ProtocolId p1, ProtocolId p2, _, _, _, _) = BuildIndexTestStack();
+        (Stack stack, ProtocolId p1, ProtocolId p2, _, _, _, _) = _BuildIndexTestStack();
         using (stack)
         {
             PacketIndex index = new(stack);
@@ -442,7 +442,7 @@ internal sealed class PacketIndexQueryTests
     [Test]
     public async Task Query_Or_UnionsProtocols()
     {
-        (Stack stack, ProtocolId p1, ProtocolId p2, _, _, _, _) = BuildIndexTestStack();
+        (Stack stack, ProtocolId p1, ProtocolId p2, _, _, _, _) = _BuildIndexTestStack();
         using (stack)
         {
             PacketIndex index = new(stack);
@@ -462,7 +462,7 @@ internal sealed class PacketIndexQueryTests
     [Test]
     public async Task Query_AndNot_SubtractsProtocol()
     {
-        (Stack stack, ProtocolId p1, ProtocolId p2, _, _, _, _) = BuildIndexTestStack();
+        (Stack stack, ProtocolId p1, ProtocolId p2, _, _, _, _) = _BuildIndexTestStack();
         using (stack)
         {
             PacketIndex index = new(stack);
@@ -492,7 +492,7 @@ internal sealed class PacketIndexQueryTests
     [Test]
     public async Task Query_Xor_SymmetricDifference()
     {
-        (Stack stack, ProtocolId p1, ProtocolId p2, _, _, _, _) = BuildIndexTestStack();
+        (Stack stack, ProtocolId p1, ProtocolId p2, _, _, _, _) = _BuildIndexTestStack();
         using (stack)
         {
             PacketIndex index = new(stack);
@@ -517,7 +517,7 @@ internal sealed class PacketIndexQueryTests
     [Test]
     public async Task Query_Contains()
     {
-        (Stack stack, ProtocolId p1, _, _, _, _, _) = BuildIndexTestStack();
+        (Stack stack, ProtocolId p1, _, _, _, _, _) = _BuildIndexTestStack();
         using (stack)
         {
             PacketIndex index = new(stack);
@@ -536,7 +536,7 @@ internal sealed class PacketIndexQueryTests
     [Test]
     public async Task Query_ToReadOnlyBitmap()
     {
-        (Stack stack, ProtocolId p1, _, _, _, _, _) = BuildIndexTestStack();
+        (Stack stack, ProtocolId p1, _, _, _, _, _) = _BuildIndexTestStack();
         using (stack)
         {
             PacketIndex index = new(stack);
@@ -553,7 +553,7 @@ internal sealed class PacketIndexQueryTests
     [Test]
     public async Task Query_ToBitmap_Detached()
     {
-        (Stack stack, ProtocolId p1, _, _, _, _, _) = BuildIndexTestStack();
+        (Stack stack, ProtocolId p1, _, _, _, _, _) = _BuildIndexTestStack();
         using (stack)
         {
             PacketIndex index = new(stack);
@@ -573,7 +573,7 @@ internal sealed class PacketIndexQueryTests
     [Test]
     public async Task Query_Empty_CountIsZero()
     {
-        (Stack stack, _, _, _, _, _, _) = BuildIndexTestStack();
+        (Stack stack, _, _, _, _, _, _) = _BuildIndexTestStack();
         using (stack)
         {
             PacketIndex index = new(stack);
@@ -586,7 +586,7 @@ internal sealed class PacketIndexQueryTests
     [Test]
     public async Task Query_AndNot_NoResult_Yields_Empty()
     {
-        (Stack stack, ProtocolId p1, _, _, _, _, _) = BuildIndexTestStack();
+        (Stack stack, ProtocolId p1, _, _, _, _, _) = _BuildIndexTestStack();
         using (stack)
         {
             PacketIndex index = new(stack);
@@ -603,7 +603,7 @@ internal sealed class PacketIndexQueryTests
     {
         // Regression for HIGH-3 + initialization fix: _CurrentPacketId now starts at -1,
         // so calling RecordGroupPresence before any BeginPacket must throw.
-        (Stack stack, _, _, IndexGroupId g1, _, _, _) = BuildIndexTestStack();
+        (Stack stack, _, _, IndexGroupId g1, _, _, _) = _BuildIndexTestStack();
         using (stack)
         {
             PacketIndex index = new(stack);
@@ -624,7 +624,7 @@ internal sealed class PacketIndexQueryTests
     public async Task RecordGroupPresence_AfterEndPacket_ThrowsInvalidOperationException()
     {
         // Regression for HIGH-3: RecordGroupPresence must fail fast after EndPacket.
-        (Stack stack, _, _, IndexGroupId g1, _, _, _) = BuildIndexTestStack();
+        (Stack stack, _, _, IndexGroupId g1, _, _, _) = _BuildIndexTestStack();
         using (stack)
         {
             PacketIndex index = new(stack);
@@ -648,7 +648,7 @@ internal sealed class PacketIndexQueryTests
     public async Task RecordProtocolPresence_BeforeFirstBeginPacket_ThrowsInvalidOperationException()
     {
         // Regression for HIGH-3 + initialization fix.
-        (Stack stack, ProtocolId p1, _, _, _, _, _) = BuildIndexTestStack();
+        (Stack stack, ProtocolId p1, _, _, _, _, _) = _BuildIndexTestStack();
         using (stack)
         {
             PacketIndex index = new(stack);
@@ -669,7 +669,7 @@ internal sealed class PacketIndexQueryTests
     public async Task RecordProtocolPresence_AfterEndPacket_ThrowsInvalidOperationException()
     {
         // Regression for HIGH-3.
-        (Stack stack, ProtocolId p1, _, _, _, _, _) = BuildIndexTestStack();
+        (Stack stack, ProtocolId p1, _, _, _, _, _) = _BuildIndexTestStack();
         using (stack)
         {
             PacketIndex index = new(stack);
@@ -693,7 +693,7 @@ internal sealed class PacketIndexQueryTests
     public async Task RecordGroupPresence_AfterThrow_DoesNotMutateBitmap()
     {
         // Verify that an off-lifecycle call does not silently insert anything into bitmaps.
-        (Stack stack, _, _, IndexGroupId g1, _, _, _) = BuildIndexTestStack();
+        (Stack stack, _, _, IndexGroupId g1, _, _, _) = _BuildIndexTestStack();
         using (stack)
         {
             PacketIndex index = new(stack);
@@ -716,6 +716,191 @@ internal sealed class PacketIndexQueryTests
 
             // Cardinality must still reflect exactly one packet (id=7), not a spurious id.
             await Assert.That(index.GroupCardinality(g1)).IsEqualTo(1L);
+        }
+    }
+
+    // === Throw paths and extended PresenceQuery (exit-point coverage) ===
+
+    [Test]
+    public async Task GetGroupBitmap_OutOfRange_Throws()
+    {
+        (Stack stack, _, _, _, _, _, _) = _BuildIndexTestStack();
+        using (stack)
+        {
+            PacketIndex index = new(stack);
+            await Assert.That(() => index.GetGroupBitmap(new IndexGroupId(9999)))
+                .Throws<ArgumentOutOfRangeException>();
+        }
+    }
+
+    [Test]
+    public async Task GetProtocolBitmap_OutOfRange_Throws()
+    {
+        (Stack stack, _, _, _, _, _, _) = _BuildIndexTestStack();
+        using (stack)
+        {
+            PacketIndex index = new(stack);
+            await Assert.That(() => index.GetProtocolBitmap(new ProtocolId(9999)))
+                .Throws<ArgumentOutOfRangeException>();
+        }
+    }
+
+    [Test]
+    public async Task GetFieldBitmap_OutOfRange_Throws()
+    {
+        (Stack stack, _, _, _, _, _, _) = _BuildIndexTestStack();
+        using (stack)
+        {
+            PacketIndex index = new(stack);
+            await Assert.That(() => index.GetFieldBitmap(new FieldId(9999)))
+                .Throws<ArgumentOutOfRangeException>();
+            await Assert.That(() => index.GroupCardinality(new IndexGroupId(9999)))
+                .Throws<ArgumentOutOfRangeException>();
+            await Assert.That(() => index.ProtocolCardinality(new ProtocolId(9999)))
+                .Throws<ArgumentOutOfRangeException>();
+        }
+    }
+
+    [Test]
+    public async Task RecordGroupPresence_OutOfRange_Throws()
+    {
+        (Stack stack, _, _, _, _, _, _) = _BuildIndexTestStack();
+        using (stack)
+        {
+            PacketIndex index = new(stack);
+            index.BeginPacket(0);
+            await Assert.That(() => index.RecordGroupPresence(new IndexGroupId(9999)))
+                .Throws<ArgumentOutOfRangeException>();
+        }
+    }
+
+    [Test]
+    public async Task RecordProtocolPresence_DedupWithinPacket_ReturnsEarly()
+    {
+        (Stack stack, ProtocolId p1, _, _, _, _, _) = _BuildIndexTestStack();
+        using (stack)
+        {
+            PacketIndex index = new(stack);
+            index.BeginPacket(0);
+            index.RecordProtocolPresence(p1);
+            index.RecordProtocolPresence(p1);
+            index.EndPacket();
+            await Assert.That(index.ProtocolCardinality(p1)).IsEqualTo(1L);
+        }
+    }
+
+    [Test]
+    public async Task RecordProtocolPresence_OutOfRange_Throws()
+    {
+        (Stack stack, _, _, _, _, _, _) = _BuildIndexTestStack();
+        using (stack)
+        {
+            PacketIndex index = new(stack);
+            index.BeginPacket(0);
+            await Assert.That(() => index.RecordProtocolPresence(new ProtocolId(9999)))
+                .Throws<ArgumentOutOfRangeException>();
+        }
+    }
+
+    [Test]
+    public async Task PresenceQuery_GroupAndFieldCombinators()
+    {
+        (Stack stack, ProtocolId p1, ProtocolId p2, IndexGroupId g1, IndexGroupId g2, FieldId f1, FieldId f2) =
+            _BuildIndexTestStack();
+        using (stack)
+        {
+            PacketIndex index = new(stack);
+            index.BeginPacket(0);
+            index.RecordGroupPresence(g1);
+            index.RecordProtocolPresence(p1);
+            index.EndPacket();
+            index.BeginPacket(1);
+            index.RecordGroupPresence(g2);
+            index.RecordProtocolPresence(p2);
+            index.EndPacket();
+
+            long andGroup = index.Query().SelectProtocol(p1).AndGroup(g1).Count();
+            long orField = index.Query().SelectProtocol(p1).OrField(f2).Count();
+            long andNotGroup = index.Query().OrProtocol(p1).OrProtocol(p2).AndNotGroup(g2).Count();
+            long xorField = index.Query().SelectProtocol(p1).XorField(f1).Count();
+
+            await Assert.That(andGroup).IsEqualTo(1L);
+            await Assert.That(orField).IsEqualTo(1L);
+            await Assert.That(andNotGroup).IsEqualTo(1L);
+            await Assert.That(xorField).IsEqualTo(0L);
+        }
+    }
+
+    [Test]
+    public async Task PresenceQuery_ToBitmapAndContains()
+    {
+        (Stack stack, ProtocolId p1, _, IndexGroupId g1, _, _, _) = _BuildIndexTestStack();
+        using (stack)
+        {
+            PacketIndex index = new(stack);
+            index.BeginPacket(3);
+            index.RecordGroupPresence(g1);
+            index.RecordProtocolPresence(p1);
+            index.EndPacket();
+
+            PresenceQuery query = index.Query().SelectProtocol(p1);
+            bool contains3 = query.Contains(3);
+            bool contains99 = query.Contains(99);
+            RoaringBitmap mutable = query.ToBitmap();
+            ReadOnlyRoaringBitmap readOnly = query.ToReadOnlyBitmap();
+            bool mutableContains = mutable.Contains(3);
+            bool readOnlyContains = readOnly.Contains(3);
+
+            await Assert.That(contains3).IsTrue();
+            await Assert.That(contains99).IsFalse();
+            await Assert.That(mutableContains).IsTrue();
+            await Assert.That(readOnlyContains).IsTrue();
+        }
+    }
+
+    [Test]
+    public async Task PresenceQuery_XorAndAndNotFieldCombinators()
+    {
+        (Stack stack, ProtocolId p1, ProtocolId p2, IndexGroupId g1, IndexGroupId g2, FieldId f1, FieldId f2) =
+            _BuildIndexTestStack();
+        using (stack)
+        {
+            PacketIndex index = new(stack);
+            index.BeginPacket(0);
+            index.RecordGroupPresence(g1);
+            index.RecordProtocolPresence(p1);
+            index.EndPacket();
+            index.BeginPacket(1);
+            index.RecordGroupPresence(g2);
+            index.RecordProtocolPresence(p2);
+            index.EndPacket();
+
+            long xorGroup = index.Query().SelectProtocol(p1).XorGroup(g2).Count();
+            long andNotField = index.Query().OrProtocol(p1).OrProtocol(p2).AndNotField(f2).Count();
+            long orGroup = index.Query().SelectProtocol(p1).OrGroup(g2).Count();
+            long andField = index.Query().SelectProtocol(p1).AndField(f1).Count();
+
+            await Assert.That(xorGroup).IsEqualTo(2L);
+            await Assert.That(andNotField).IsEqualTo(1L);
+            await Assert.That(orGroup).IsEqualTo(2L);
+            await Assert.That(andField).IsEqualTo(1L);
+        }
+    }
+
+    [Test]
+    public async Task PresenceQuery_EmptyQuery_ContainsFalseAndEmptyBitmap()
+    {
+        (Stack stack, _, _, _, _, _, _) = _BuildIndexTestStack();
+        using (stack)
+        {
+            PacketIndex index = new(stack);
+            PresenceQuery query = index.Query();
+            bool contains0 = query.Contains(0);
+            bool bitmapEmpty = query.ToBitmap().IsEmpty;
+            bool readOnlyEmpty = query.ToReadOnlyBitmap().IsEmpty;
+            await Assert.That(contains0).IsFalse();
+            await Assert.That(bitmapEmpty).IsTrue();
+            await Assert.That(readOnlyEmpty).IsTrue();
         }
     }
 

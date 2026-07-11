@@ -148,10 +148,10 @@ internal sealed class UuidTests
     // === Binary Serialization ===
 
     [Test]
-    public async Task TryGetSerializedSize_Is16()
+    public async Task TryGetWrittenSize_Is16()
     {
         Uuid uuid = new(0x0102030405060708UL, 0x090A0B0C0D0E0F10UL);
-        bool ok = uuid.TryGetSerializedSize(out int size);
+        bool ok = uuid.TryGetWrittenSize(out int size);
         await Assert.That(ok).IsTrue();
         await Assert.That(size).IsEqualTo(16);
     }

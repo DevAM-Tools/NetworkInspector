@@ -111,4 +111,67 @@ internal sealed class DatagramDefragmenterTests
         // Buffer must be removed immediately, not left pending until eviction.
         await Assert.That(d.PendingCount).IsEqualTo(0);
     }
+
+    [Test]
+    public async Task ProcessFragment_EvictionDuringReassembly_DiscardsPartialDatagram()
+    {
+        DatagramDefragmenter<IntKey> d = new(maxEntries: 2);
+        d.ProcessFragment(new IntKey(1), 0, moreFragments: true, [0x01]);
+        d.ProcessFragment(new IntKey(2), 0, moreFragments: true, [0x02]);
+        byte[]? result = d.ProcessFragment(new IntKey(3), 0, moreFragments: true, [0x03]);
+        await Assert.That(result).IsNull();
+        await Assert.That(d.EvictedCount).IsEqualTo(1L);
+        await Assert.That(d.PendingCount).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task ProcessFragment_OverlapDiscarded_ReturnsNull()
+    {
+        DatagramDefragmenter<IntKey> d = new(dropOnOverlap: true);
+        d.ProcessFragment(new IntKey(1), 0, moreFragments: true, [0x01, 0x02, 0x03, 0x04]);
+        byte[]? result = d.ProcessFragment(new IntKey(1), 2, moreFragments: false, [0x05, 0x06]);
+        await Assert.That(result).IsNull();
+        await Assert.That(d.PendingCount).IsEqualTo(0);
+    }
+
+    // === DatagramFragmentBuffer direct API ===
+
+    [Test]
+    public async Task FragmentBuffer_DuplicateOffset_KeepsLargerPayload()
+    {
+        DatagramFragmentBuffer buffer = new();
+        buffer.AddFragment(0, moreFragments: true, [0x01, 0x02]);
+        FragmentAddResult second = buffer.AddFragment(0, moreFragments: true, [0x01, 0x02, 0x03, 0x04]);
+        await Assert.That(buffer.FragmentCount).IsEqualTo(1);
+        await Assert.That(second).IsEqualTo(FragmentAddResult.Incomplete);
+    }
+
+    [Test]
+    public async Task FragmentBuffer_OverlapWithDropOnOverlap_ReturnsOverlapDiscarded()
+    {
+        DatagramFragmentBuffer buffer = new();
+        buffer.AddFragment(0, moreFragments: true, [0x01, 0x02, 0x03, 0x04]);
+        FragmentAddResult result = buffer.AddFragment(2, moreFragments: true, [0x05, 0x06], dropOnOverlap: true);
+        await Assert.That(result).IsEqualTo(FragmentAddResult.OverlapDiscarded);
+    }
+
+    [Test]
+    public async Task FragmentBuffer_Reassemble_ContiguousFragments()
+    {
+        DatagramFragmentBuffer buffer = new();
+        buffer.AddFragment(0, moreFragments: true, [0x01, 0x02, 0x03, 0x04]);
+        FragmentAddResult last = buffer.AddFragment(4, moreFragments: false, [0x05, 0x06]);
+        await Assert.That(last).IsEqualTo(FragmentAddResult.Complete);
+        byte[]? payload = buffer.Reassemble();
+        await Assert.That(payload).IsEqualTo([0x01, 0x02, 0x03, 0x04, 0x05, 0x06]);
+    }
+
+    [Test]
+    public async Task FragmentBuffer_OversizeTerminal_ReturnsOversizeDiscarded()
+    {
+        DatagramFragmentBuffer buffer = new();
+        buffer.AddFragment(0, moreFragments: true, [0x01]);
+        FragmentAddResult result = buffer.AddFragment(65520, moreFragments: false, new byte[20]);
+        await Assert.That(result).IsEqualTo(FragmentAddResult.OversizeDiscarded);
+    }
 }

@@ -26,25 +26,25 @@ namespace NetworkInspector.Protocols.Http2;
 internal static class Http2FlagsFormatter
 {
     // Full 256-entry table for the 8-bit flags byte.
-    private static readonly string[] FlagsTable = BuildFlagsTable();
+    private static readonly string[] _FlagsTable = _BuildFlagsTable();
 
     /// <summary>
     /// Returns the display string for the given HTTP/2 frame flags byte.
     /// Output example: <c>0x05 [ES/ACK, END_HDRS]</c>.
     /// </summary>
-    internal static string Format(byte flags) => FlagsTable[flags];
+    internal static string Format(byte flags) => _FlagsTable[flags];
 
-    private static string[] BuildFlagsTable()
+    private static string[] _BuildFlagsTable()
     {
         string[] table = new string[256];
         for (int i = 0; i < 256; i++)
         {
-            table[i] = BuildFlagString((byte)i);
+            table[i] = _BuildFlagString((byte)i);
         }
         return table;
     }
 
-    private static string BuildFlagString(byte flags)
+    private static string _BuildFlagString(byte flags)
     {
         // Known flag bit definitions
         ReadOnlySpan<(byte mask, string name)> knownFlags =
@@ -82,7 +82,7 @@ internal static class Http2FlagsFormatter
         }
         // Reserve space for unknown bits rendered as "0xNN" (max 4 chars each, 4 unknown bits = at most 4 entries)
         // We use a growable approach: compute actual unknown names first.
-        string[] unknownNames = BuildUnknownNames(flags);
+        string[] unknownNames = _BuildUnknownNames(flags);
         foreach (string name in unknownNames)
         {
             if (count > 0)
@@ -136,7 +136,7 @@ internal static class Http2FlagsFormatter
     /// Builds display names for any set bits that are not covered by the four known flag positions.
     /// Returns an empty array when all set bits are known.
     /// </summary>
-    private static string[] BuildUnknownNames(byte flags)
+    private static string[] _BuildUnknownNames(byte flags)
     {
         // Unknown bit positions: 0x02, 0x10, 0x40, 0x80
         ReadOnlySpan<byte> unknownMasks = [0x02, 0x10, 0x40, 0x80];

@@ -1,8 +1,7 @@
 ﻿<!-- Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root. -->
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <RootNamespace>NetworkInspector.Exporters</RootNamespace>
-    <Description>Frame exporter implementations for NetworkInspector. Writes captured frames and parsed packets to PCAPNG, BLF, CSV, JSON, PBF, and plain-text formats with streaming and memory-efficient output.</Description>
+    <Description>Frame exporter implementations for NetworkInspector. Writes captured frames and parsed packets to PCAPNG, BLF, CSV, JSON, PBF, and plain-text formats.</Description>
     <PackageTags>network;pcapng;blf;csv;json;pbf;exporter;packet-export;capture</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
@@ -13,14 +12,13 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="ZeroAlloc" PrivateAssets="none" />
+    <PackageReference Include="ZeroAlloc" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\NetworkInspector.Core\NetworkInspector.Core.csproj" />
   </ItemGroup>
 
-  <!-- Shared PCAPNG format files (compiled into this assembly, no Sources dependency) -->
   <ItemGroup>
     <Compile Include="..\NetworkInspector.Sources\Pcapng\Format\PcapConstants.cs" Link="Shared\Pcapng\PcapConstants.cs" />
     <Compile Include="..\NetworkInspector.Sources\Pcapng\Format\PcapPadding.cs" Link="Shared\Pcapng\PcapPadding.cs" />
@@ -28,10 +26,6 @@
     <Compile Include="..\NetworkInspector.Sources\Pcapng\Format\Blocks\InterfaceDescriptionBlock.cs" Link="Shared\Pcapng\Blocks\InterfaceDescriptionBlock.cs" />
     <Compile Include="..\NetworkInspector.Sources\Pcapng\Format\Blocks\EnhancedPacketBlock.cs" Link="Shared\Pcapng\Blocks\EnhancedPacketBlock.cs" />
     <Compile Include="..\NetworkInspector.Sources\Pcapng\Format\Blocks\OptionHeader.cs" Link="Shared\Pcapng\Blocks\OptionHeader.cs" />
-  </ItemGroup>
-
-  <!-- Shared BLF format files (compiled into this assembly, no Sources dependency) -->
-  <ItemGroup>
     <Compile Include="..\NetworkInspector.Sources\Blf\Format\BlfConstants.cs" Link="Shared\Blf\BlfConstants.cs" />
     <Compile Include="..\NetworkInspector.Sources\Blf\Format\BlfTimestamp.cs" Link="Shared\Blf\BlfTimestamp.cs" />
     <Compile Include="..\NetworkInspector.Sources\Blf\Format\Headers\BlfFileHeaderPrefix.cs" Link="Shared\Blf\Headers\BlfFileHeaderPrefix.cs" />
@@ -41,10 +35,5 @@
     <Compile Include="..\NetworkInspector.Sources\Blf\Format\Headers\BlfLogObjectHeaderV3.cs" Link="Shared\Blf\Headers\BlfLogObjectHeaderV3.cs" />
     <Compile Include="..\NetworkInspector.Sources\Blf\Format\Headers\BlfContainerHeader.cs" Link="Shared\Blf\Headers\BlfContainerHeader.cs" />
     <Compile Include="..\NetworkInspector.Sources\Blf\Format\Headers\BlfDate.cs" Link="Shared\Blf\Headers\BlfDate.cs" />
-  </ItemGroup>
-
-  <!-- Include README in the NuGet package -->
-  <ItemGroup>
-    <None Include="README.md" Pack="true" PackagePath="" />
   </ItemGroup>
 </Project>

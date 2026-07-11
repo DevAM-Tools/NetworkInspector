@@ -16,7 +16,7 @@ namespace NetworkInspector.Profiling.Scenarios;
 [SuppressMessage("Performance", "CA1812:AvoidUninstantiatedInternalClasses", Justification = "Instantiated via reflection in ScenarioDiscovery.Discover.")]
 internal sealed class FrameBuilderCustomInterceptorScenario : FrameBuilderScenarioBase
 {
-    private const int FrameCount = 1_000_000;
+    private const int _FrameCount = 1_000_000;
 
     /// <inheritdoc/>
     protected override int PayloadSize => 64;
@@ -69,10 +69,11 @@ internal sealed class FrameBuilderCustomInterceptorScenario : FrameBuilderScenar
 
     /// <inheritdoc/>
     public override string Description =>
-        $"Build {FrameCount:N0} Eth/IPv4/UDP frames with a custom IFrameInterceptor.";
+        FormattableString.Invariant(
+            $"Build {_FrameCount:N0} Eth/IPv4/UDP frames with a custom IFrameInterceptor.");
 
     /// <inheritdoc/>
-    public override long WorkUnitsPerIteration => FrameCount;
+    public override long WorkUnitsPerIteration => _FrameCount;
 
     /// <inheritdoc/>
     public override string WorkUnitName => "frames";
@@ -87,9 +88,10 @@ internal sealed class FrameBuilderCustomInterceptorScenario : FrameBuilderScenar
         IPv4Layer ip = new(new IPv4Address(0x0A000001), new IPv4Address(0x0A000002));
         UdpLayer udp = new(srcPort: 12345, dstPort: 53);
 
+        CountingInterceptor interceptor = new();
         _Stack = FrameStack.CreateWithFixedValues(
             FrameStack.Start(eth).Then(ip).Then(udp),
-            new CountingInterceptor());
+            interceptor);
         _Buffer = new byte[_Stack.HeaderSize + PayloadSize];
 
         CountingInterceptor.HeaderCalls = 0;
@@ -101,7 +103,7 @@ internal sealed class FrameBuilderCustomInterceptorScenario : FrameBuilderScenar
     public override void Run()
     {
         Span<byte> dst = _Buffer;
-        for (int i = 0; i < FrameCount; i++)
+        for (int i = 0; i < _FrameCount; i++)
         {
             _Stack.Build(_Payload).MoveNext(dst, out _);
         }

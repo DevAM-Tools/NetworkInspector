@@ -68,11 +68,31 @@ internal sealed class Job : IDisposable
     /// <summary>Current execution status. Volatile read — always current.</summary>
     internal JobStatus Status => (JobStatus)Volatile.Read(ref _Status);
     /// <summary>When the job thread started. Null if not yet started.</summary>
-    internal DateTimeOffset? StartTime =>
-        Volatile.Read(ref _StartTimeSet) != 0 ? _StartTimeValue : null;
+    internal DateTimeOffset? StartTime
+    {
+        get
+        {
+            if (Volatile.Read(ref _StartTimeSet) != 0)
+            {
+                return _StartTimeValue;
+            }
+
+            return null;
+        }
+    }
     /// <summary>When the job thread ended. Null if still running.</summary>
-    internal DateTimeOffset? EndTime =>
-        Volatile.Read(ref _EndTimeSet) != 0 ? _EndTimeValue : null;
+    internal DateTimeOffset? EndTime
+    {
+        get
+        {
+            if (Volatile.Read(ref _EndTimeSet) != 0)
+            {
+                return _EndTimeValue;
+            }
+
+            return null;
+        }
+    }
     /// <summary>Exception that caused job failure, if any.</summary>
     internal Exception? FailureException => Volatile.Read(ref _FailureException!);
     // ── Lifecycle ─────────────────────────────────────────────────────────────
@@ -99,7 +119,7 @@ internal sealed class Job : IDisposable
         {
             return;
         }
-        Thread thread = new(RunCore)
+        Thread thread = new(_RunCore)
         {
             Name = $"session-job-{Id.Value}-{UiName}",
             IsBackground = true,
@@ -109,7 +129,7 @@ internal sealed class Job : IDisposable
         // never see Status==Running with a null StartTime.
         _StartTimeValue = DateTimeOffset.UtcNow;
         Volatile.Write(ref _StartTimeSet, 1);
-        SetStatus(JobStatus.Running);
+        _SetStatus(JobStatus.Running);
         try
         {
             thread.Start();
@@ -121,7 +141,7 @@ internal sealed class Job : IDisposable
             Volatile.Write(ref _FailureException, ex);
             _EndTimeValue = DateTimeOffset.UtcNow;
             Volatile.Write(ref _EndTimeSet, 1);
-            SetStatus(JobStatus.Failed);
+            _SetStatus(JobStatus.Failed);
             throw;
         }
     }
@@ -137,7 +157,7 @@ internal sealed class Job : IDisposable
     /// </summary>
     internal void Join()
     {
-        if (IsTerminal(Status))
+        if (_IsTerminal(Status))
         {
             return;
         }
@@ -149,7 +169,7 @@ internal sealed class Job : IDisposable
     /// <returns><see langword="true"/> when the job finished before the timeout.</returns>
     internal bool Join(TimeSpan timeout)
     {
-        if (IsTerminal(Status))
+        if (_IsTerminal(Status))
         {
             return true;
         }
@@ -162,20 +182,20 @@ internal sealed class Job : IDisposable
         _Cts.Dispose();
     }
     // ── Private implementation ────────────────────────────────────────────────
-  private static bool IsTerminal(JobStatus status) =>
+  private static bool _IsTerminal(JobStatus status) =>
         status is JobStatus.Completed or JobStatus.Cancelled or JobStatus.Failed;
     /// <summary>
     /// Entry point for the job thread. Executes the work delegate and updates
     /// status regardless of outcome.
     /// </summary>
-    private void RunCore()
+    private void _RunCore()
     {
         try
         {
             _Work(_Cts.Token);
             _EndTimeValue = DateTimeOffset.UtcNow;
             Volatile.Write(ref _EndTimeSet, 1);
-            SetStatus(JobStatus.Completed);
+            _SetStatus(JobStatus.Completed);
         }
         catch (OperationCanceledException oce) when (oce.CancellationToken == _Cts.Token)
         {
@@ -185,25 +205,25 @@ internal sealed class Job : IDisposable
             // to the Exception catch below.
             _EndTimeValue = DateTimeOffset.UtcNow;
             Volatile.Write(ref _EndTimeSet, 1);
-            SetStatus(JobStatus.Cancelled);
+            _SetStatus(JobStatus.Cancelled);
         }
         catch (Exception ex)
         {
             Volatile.Write(ref _FailureException, ex);
             _EndTimeValue = DateTimeOffset.UtcNow;
             Volatile.Write(ref _EndTimeSet, 1);
-            SetStatus(JobStatus.Failed);
+            _SetStatus(JobStatus.Failed);
         }
     }
     /// <summary>
     /// Atomically updates the status and notifies the session coordinator.
-    /// The callback is <see cref="Session.OnJobStatusChanged"/> which only performs
+    /// The callback is <see cref="Session._OnJobStatusChanged"/> which only performs
     /// <c>Interlocked.Or</c> on listener slots — it cannot throw.
     /// </summary>
-    private void SetStatus(JobStatus status)
+    private void _SetStatus(JobStatus status)
     {
         Interlocked.Exchange(ref _Status, (int)status);
-        if (IsTerminal(status))
+        if (_IsTerminal(status))
         {
             _Completed.Set();
         }

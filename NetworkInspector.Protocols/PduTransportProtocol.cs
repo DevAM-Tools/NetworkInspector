@@ -34,7 +34,7 @@ namespace NetworkInspector.Protocols;
 /// </summary>
 /// <remarks>
 /// <para><b>Thread safety:</b> instances are immutable after registration completes.
-/// All mutable state is initialised inside <c>RegisterFieldsCustom</c> / <c>OnStartCustom</c>
+/// All mutable state is initialised inside <c>_RegisterFieldsCustom</c> / <c>OnStartCustom</c>
 /// (single-threaded build phase) and is read-only thereafter, so <see cref="Parse"/> may
 /// be invoked concurrently from any number of threads on the same instance without external
 /// synchronisation. Per-thread caches (when present) are stored in <c>[ThreadStatic]</c> fields.</para>
@@ -48,34 +48,34 @@ public sealed partial class PduTransportProtocol : IProtocol
     public const string IdTableName = "pdu_transport.id";
 
     /// <summary>Index group for always-present PDU Transport fields.</summary>
-    private const string PduTrIndexGroup = "pdu_transport";
+    private const string _PduTrIndexGroup = "pdu_transport";
 
     /// <summary>Index group for optional name field.</summary>
-    private const string PduTrNameGroup = "pdu_transport.name";
+    private const string _PduTrNameGroup = "pdu_transport.name";
 
     /// <summary>Index group for raw payload (when no sub-protocol matches).</summary>
-    private const string PduTrPayloadGroup = "pdu_transport.payload";
+    private const string _PduTrPayloadGroup = "pdu_transport.payload";
 
     #endregion
 
     #region Fields
 
-    [NoneField("pdu_transport", "PDU Transport", IndexGroup = PduTrIndexGroup)]
+    [NoneField("pdu_transport", "PDU Transport", IndexGroup = _PduTrIndexGroup)]
     private FieldId _ProtocolFieldId;
 
-    [NoneField("pdu_transport.pdu", "PDU", IndexGroup = PduTrIndexGroup)]
+    [NoneField("pdu_transport.pdu", "PDU", IndexGroup = _PduTrIndexGroup)]
     private FieldId _PduFieldId;
 
-    [U64Field("pdu_transport.id", "PDU ID", IndexGroup = PduTrIndexGroup)]
+    [U64Field("pdu_transport.id", "PDU ID", IndexGroup = _PduTrIndexGroup)]
     private FieldId _IdFieldId;
 
-    [U64Field("pdu_transport.length", "Length", IndexGroup = PduTrIndexGroup)]
+    [U64Field("pdu_transport.length", "Length", IndexGroup = _PduTrIndexGroup)]
     private FieldId _LengthFieldId;
 
-    [StringField("pdu_transport.name", "Name", IndexGroup = PduTrNameGroup)]
+    [StringField("pdu_transport.name", "Name", IndexGroup = _PduTrNameGroup)]
     private FieldId _NameFieldId;
 
-    [BytesField("pdu_transport.payload", "Payload", IndexGroup = PduTrPayloadGroup)]
+    [BytesField("pdu_transport.payload", "Payload", IndexGroup = _PduTrPayloadGroup)]
     private FieldId _PayloadFieldId;
 
     #endregion
@@ -155,9 +155,9 @@ public sealed partial class PduTransportProtocol : IProtocol
     /// and pre-allocates the lazy populator delegate. Performing all of this during the
     /// registration phase keeps the resulting <c>Stack</c> immutable.
     /// </summary>
-    partial void RegisterFieldsCustom(IStackBuilder builder, ProtocolId protocolId)
+    partial void _RegisterFieldsCustom(IStackBuilder builder, ProtocolId protocolId)
     {
-        _Populator = PopulatePduTransportFields;
+        _Populator = _PopulatePduTransportFields;
 
         // Validate field sizes — only 1, 2, and 4 byte sizes are supported.
         // Invalid values are clamped to the default (4 bytes) and a warning is
@@ -219,7 +219,7 @@ public sealed partial class PduTransportProtocol : IProtocol
     /// the dispatched sub-protocols record their index groups during the capture/index phase,
     /// when the real index-carrying <see cref="ParseContext"/> is available. The descriptive
     /// per-PDU field tree (<c>pdu_transport.pdu</c> / <c>id</c> / <c>length</c> / <c>name</c>)
-    /// remains lazily built in <see cref="PopulatePduTransportFields"/>.
+    /// remains lazily built in <see cref="_PopulatePduTransportFields"/>.
     /// </para>
     /// </summary>
     public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
@@ -251,10 +251,10 @@ public sealed partial class PduTransportProtocol : IProtocol
         int offset = 0;
         while (offset + headerSize <= span.Length)
         {
-            uint pduId = ReadBigEndianUint(span[offset..], idSize);
+            uint pduId = _ReadBigEndianUint(span[offset..], idSize);
             offset += idSize;
 
-            uint payloadLength = ReadBigEndianUint(span[offset..], lenSize);
+            uint payloadLength = _ReadBigEndianUint(span[offset..], lenSize);
             offset += lenSize;
 
             // The lazy populator emits pdu_transport.name for every PDU whose ID resolves to a
@@ -302,7 +302,7 @@ public sealed partial class PduTransportProtocol : IProtocol
     /// performed eagerly in <see cref="Parse"/> so the index is complete at packet finalization.
     /// </para>
     /// </summary>
-    private ParseResult PopulatePduTransportFields(in MutField container)
+    private ParseResult _PopulatePduTransportFields(in MutField container)
     {
         if (!container.Value.Data.TryGetAsBytes(out ReadOnlyMemory<byte> pduData))
         {
@@ -318,11 +318,11 @@ public sealed partial class PduTransportProtocol : IProtocol
         while (offset + headerSize <= span.Length)
         {
             // Read PDU ID (big-endian)
-            uint pduId = ReadBigEndianUint(span[offset..], idSize);
+            uint pduId = _ReadBigEndianUint(span[offset..], idSize);
             offset += idSize;
 
             // Read payload length (big-endian)
-            uint payloadLength = ReadBigEndianUint(span[offset..], lenSize);
+            uint payloadLength = _ReadBigEndianUint(span[offset..], lenSize);
             offset += lenSize;
 
             // Clamp payload to available data
@@ -362,7 +362,7 @@ public sealed partial class PduTransportProtocol : IProtocol
     /// Reads a big-endian unsigned integer of the given byte size (1, 2, or 4).
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static uint ReadBigEndianUint(ReadOnlySpan<byte> span, int size) => size switch
+    private static uint _ReadBigEndianUint(ReadOnlySpan<byte> span, int size) => size switch
     {
         1 => span[0],
         2 => BinaryPrimitives.ReadUInt16BigEndian(span),

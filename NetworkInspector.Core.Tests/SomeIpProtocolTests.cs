@@ -11,7 +11,7 @@ internal sealed class SomeIpProtocolTests
     /// <summary>
     /// Builds a stack and parses a SOME/IP-over-UDP frame.
     /// </summary>
-    private static (Stack Stack, Packet Packet) BuildAndParse(byte[] frameData)
+    private static (Stack Stack, Packet Packet) _BuildAndParse(byte[] frameData)
     {
         using SettingsManager settingsManager = new();
         StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
@@ -36,7 +36,7 @@ internal sealed class SomeIpProtocolTests
         byte[] frameData = FrameBuilders.GenerateSomeIpFrame(
             serviceId: 0x0123, methodId: 0x4567);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? serviceIdField = stack.GetFieldId("someip.serviceid");
@@ -54,7 +54,7 @@ internal sealed class SomeIpProtocolTests
         byte[] frameData = FrameBuilders.GenerateSomeIpFrame(
             serviceId: 0xABCD, methodId: 0x1234);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? methodIdField = stack.GetFieldId("someip.methodid");
@@ -72,7 +72,7 @@ internal sealed class SomeIpProtocolTests
         byte[] frameData = FrameBuilders.GenerateSomeIpFrame(
             serviceId: 0x0123, methodId: 0x4567);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? msgIdField = stack.GetFieldId("someip.messageid");
@@ -89,7 +89,7 @@ internal sealed class SomeIpProtocolTests
     {
         byte[] frameData = FrameBuilders.GenerateSomeIpFrame(messageType: 0x80); // RESPONSE
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? msgTypeField = stack.GetFieldId("someip.msgtype");
@@ -106,7 +106,7 @@ internal sealed class SomeIpProtocolTests
     {
         byte[] frameData = FrameBuilders.GenerateSomeIpFrame(returnCode: 0x01); // E_NOT_OK
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? returnCodeField = stack.GetFieldId("someip.returncode");
@@ -124,7 +124,7 @@ internal sealed class SomeIpProtocolTests
         byte[] payload = [0xAA, 0xBB, 0xCC, 0xDD, 0xEE];
         byte[] frameData = FrameBuilders.GenerateSomeIpFrame(payload: payload);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? payloadField = stack.GetFieldId("someip.payload");
@@ -149,7 +149,7 @@ internal sealed class SomeIpProtocolTests
         byte[] truncated = new byte[frameData.Length - 10];
         Array.Copy(frameData, truncated, truncated.Length);
 
-        (Stack stack, Packet packet) = BuildAndParse(truncated);
+        (Stack stack, Packet packet) = _BuildAndParse(truncated);
         using (stack)
         {
             // SOME/IP service ID should not be present (data too short)
@@ -206,7 +206,7 @@ internal sealed class SomeIpProtocolTests
         // Message type 0xC0 = RESPONSE (0x80) | ACK (0x40)
         byte[] frameData = FrameBuilders.GenerateSomeIpFrame(messageType: 0xC0);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? ackField = stack.GetFieldId("someip.msgtype.ack");
@@ -223,7 +223,7 @@ internal sealed class SomeIpProtocolTests
     {
         byte[] frameData = FrameBuilders.GenerateSomeIpFrame(messageType: 0x00);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? tpField = stack.GetFieldId("someip.msgtype.tp");
@@ -246,7 +246,7 @@ internal sealed class SomeIpProtocolTests
         byte[] frameData = FrameBuilders.GenerateSomeIpTpFrame(
             byteOffset: 0x100, moreSegments: true);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? offsetField = stack.GetFieldId("someip.tp.offset");
@@ -263,7 +263,7 @@ internal sealed class SomeIpProtocolTests
     {
         byte[] frameData = FrameBuilders.GenerateSomeIpTpFrame(moreSegments: true);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? moreField = stack.GetFieldId("someip.tp.more");
@@ -280,7 +280,7 @@ internal sealed class SomeIpProtocolTests
     {
         byte[] frameData = FrameBuilders.GenerateSomeIpTpFrame(moreSegments: false);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? moreField = stack.GetFieldId("someip.tp.more");
@@ -297,7 +297,7 @@ internal sealed class SomeIpProtocolTests
     {
         byte[] frameData = FrameBuilders.GenerateSomeIpTpFrame();
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             // TP flag should be set in message type decomposition
@@ -316,7 +316,7 @@ internal sealed class SomeIpProtocolTests
         // TP messages should NOT have a raw payload field — TP data is structured
         byte[] frameData = FrameBuilders.GenerateSomeIpTpFrame(payload: [0xAA, 0xBB]);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             // Payload field should still be present (it's the data after TP header)
@@ -335,7 +335,7 @@ internal sealed class SomeIpProtocolTests
     {
         byte[] frameData = FrameBuilders.GenerateSomeIpSdFrame(flags: 0xC0);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? flagsField = stack.GetFieldId("someip_sd.flags");
@@ -352,7 +352,7 @@ internal sealed class SomeIpProtocolTests
     {
         byte[] frameData = FrameBuilders.GenerateSomeIpSdFrame(flags: 0x80);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? rebootField = stack.GetFieldId("someip_sd.flags.reboot");
@@ -369,7 +369,7 @@ internal sealed class SomeIpProtocolTests
     {
         byte[] frameData = FrameBuilders.GenerateSomeIpSdFrame(flags: 0x40);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? unicastField = stack.GetFieldId("someip_sd.flags.unicast");
@@ -387,7 +387,7 @@ internal sealed class SomeIpProtocolTests
         byte[] entry = FrameBuilders.BuildSdOfferEntry(0xABCD, 0x0001, 1, 3, 0);
         byte[] frameData = FrameBuilders.GenerateSomeIpSdFrame(entries: entry);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? serviceIdField = stack.GetFieldId("someip_sd.entry.serviceid");
@@ -405,7 +405,7 @@ internal sealed class SomeIpProtocolTests
         byte[] entry = FrameBuilders.BuildSdOfferEntry(0x0001, 0x0001, 1, 86400, 0);
         byte[] frameData = FrameBuilders.GenerateSomeIpSdFrame(entries: entry);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? ttlField = stack.GetFieldId("someip_sd.entry.ttl");
@@ -423,7 +423,7 @@ internal sealed class SomeIpProtocolTests
         byte[] entry = FrameBuilders.BuildSdOfferEntry(0x0001, 0x0001, 1, 3, 0);
         byte[] frameData = FrameBuilders.GenerateSomeIpSdFrame(entries: entry);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? typeField = stack.GetFieldId("someip_sd.entry.type");
@@ -441,7 +441,7 @@ internal sealed class SomeIpProtocolTests
         byte[] option = FrameBuilders.BuildSdIpv4EndpointOption(10, 0, 0, 1, 17, 30490);
         byte[] frameData = FrameBuilders.GenerateSomeIpSdFrame(options: option);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? portField = stack.GetFieldId("someip_sd.option.port");
@@ -459,7 +459,7 @@ internal sealed class SomeIpProtocolTests
         byte[] option = FrameBuilders.BuildSdIpv4EndpointOption(10, 0, 0, 1, 6, 30490);
         byte[] frameData = FrameBuilders.GenerateSomeIpSdFrame(options: option);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? protoField = stack.GetFieldId("someip_sd.option.proto");
@@ -477,7 +477,7 @@ internal sealed class SomeIpProtocolTests
         // SD messages should NOT have a raw payload field — it's all parsed as SD
         byte[] frameData = FrameBuilders.GenerateSomeIpSdFrame();
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? payloadField = stack.GetFieldId("someip.payload");

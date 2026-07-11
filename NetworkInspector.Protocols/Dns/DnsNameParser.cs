@@ -9,13 +9,13 @@ namespace NetworkInspector.Protocols.Dns;
 internal static class DnsNameParser
 {
     /// <summary>Maximum pointer chain depth to prevent infinite loops.</summary>
-    private const int MaxPointerDepth = 64;
+    private const int _MaxPointerDepth = 64;
 
     /// <summary>Maximum label length (63 bytes per RFC 1035).</summary>
-    private const int MaxLabelLength = 63;
+    private const int _MaxLabelLength = 63;
 
     /// <summary>Pointer indicator mask (top 2 bits = 11).</summary>
-    private const byte PointerMask = 0xC0;
+    private const byte _PointerMask = 0xC0;
 
     /// <summary>
     /// Reads a DNS domain name from the data at the given offset.
@@ -30,7 +30,7 @@ internal static class DnsNameParser
         // Use stackalloc for small names (< 256 chars), fall back to StringBuilder otherwise
         Span<char> buffer = stackalloc char[256];
         int written = 0;
-        bool success = ReadNameCore(fullPacket, ref offset, buffer, ref written, depth: 0, firstLevel: true);
+        bool success = _ReadNameCore(fullPacket, ref offset, buffer, ref written, depth: 0, firstLevel: true);
 
         if (!success || written == 0)
         {
@@ -50,7 +50,7 @@ internal static class DnsNameParser
     /// Advances <paramref name="offset"/> past a DNS domain name without materializing the decoded
     /// string. Used by the eager index-group detector, which only needs the post-name read position
     /// to walk resource records and must not allocate a throwaway name string per record on the parse
-    /// hot path. Reuses the identical <see cref="ReadNameCore"/> traversal as <see cref="ReadName"/>,
+    /// hot path. Reuses the identical <see cref="_ReadNameCore"/> traversal as <see cref="ReadName"/>,
     /// so the resulting offset is byte-for-byte the same — the detector cannot drift from the populator.
     /// </summary>
     /// <param name="fullPacket">The entire DNS packet data (needed for pointer resolution).</param>
@@ -58,10 +58,10 @@ internal static class DnsNameParser
     internal static void SkipName(ReadOnlySpan<byte> fullPacket, ref int offset)
     {
         // Same traversal and offset progression as ReadName; the stackalloc buffer is required by
-        // ReadNameCore but its contents are intentionally discarded (no final string allocation).
+        // _ReadNameCore but its contents are intentionally discarded (no final string allocation).
         Span<char> buffer = stackalloc char[256];
         int written = 0;
-        _ = ReadNameCore(fullPacket, ref offset, buffer, ref written, depth: 0, firstLevel: true);
+        _ = _ReadNameCore(fullPacket, ref offset, buffer, ref written, depth: 0, firstLevel: true);
     }
 
     /// <summary>
@@ -74,12 +74,12 @@ internal static class DnsNameParser
     /// <param name="depth">Current pointer recursion depth.</param>
     /// <param name="firstLevel">True if this is the top-level call (advances offset).</param>
     /// <returns>True on success, false on malformed data.</returns>
-    private static bool ReadNameCore(
+    private static bool _ReadNameCore(
         ReadOnlySpan<byte> data, ref int offset,
         Span<char> buffer, ref int written,
         int depth, bool firstLevel)
     {
-        if (depth > MaxPointerDepth)
+        if (depth > _MaxPointerDepth)
         {
             return false; // Probable infinite pointer loop
         }
@@ -102,7 +102,7 @@ internal static class DnsNameParser
             }
 
             // Pointer (top 2 bits = 11)
-            if ((labelLen & PointerMask) == PointerMask)
+            if ((labelLen & _PointerMask) == _PointerMask)
             {
                 if (pos + 1 >= data.Length)
                 {
@@ -124,11 +124,11 @@ internal static class DnsNameParser
                 }
 
                 int ptrOffset = pointerTarget;
-                return ReadNameCore(data, ref ptrOffset, buffer, ref written, depth + 1, firstLevel: false);
+                return _ReadNameCore(data, ref ptrOffset, buffer, ref written, depth + 1, firstLevel: false);
             }
 
             // Regular label
-            if (labelLen > MaxLabelLength)
+            if (labelLen > _MaxLabelLength)
             {
                 return false;
             }

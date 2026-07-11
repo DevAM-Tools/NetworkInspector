@@ -30,7 +30,7 @@ internal static class CanFlagsFormatter
     #region Classic CAN (3 flags)
 
     // Key packing: bit0=XTD, bit1=RTR, bit2=ERR
-    private static readonly string[] ClassicFlagsTable = BuildClassicFlagsTable();
+    private static readonly string[] _ClassicFlagsTable = _Build_ClassicFlagsTable();
 
     /// <summary>
     /// Returns the precomputed display string for the given classic CAN flag combination.
@@ -39,15 +39,15 @@ internal static class CanFlagsFormatter
     internal static string FormatClassic(bool xtd, bool rtr, bool err)
     {
         int key = (xtd ? 1 : 0) | (rtr ? 2 : 0) | (err ? 4 : 0);
-        return ClassicFlagsTable[key];
+        return _ClassicFlagsTable[key];
     }
 
-    private static string[] BuildClassicFlagsTable()
+    private static string[] _Build_ClassicFlagsTable()
     {
         string[] table = new string[8];
         for (int i = 0; i < 8; i++)
         {
-            table[i] = BuildFlagString(
+            table[i] = _BuildFlagString(
                 [(i & 1) != 0, (i & 2) != 0, (i & 4) != 0],
                 ["XTD", "RTR", "ERR"],
                 prefix: null);
@@ -61,7 +61,7 @@ internal static class CanFlagsFormatter
 
     // Key packing: bit0=XTD, bit1=RTR, bit2=ERR, bit3=BRS, bit4=ESI
     // "FD" is always prepended — the FDF flag is structurally true for all FD frames.
-    private static readonly string[] FdFlagsTable = BuildFdFlagsTable();
+    private static readonly string[] _FdFlagsTable = _Build_FdFlagsTable();
 
     /// <summary>
     /// Returns the precomputed display string for the given CAN FD flag combination.
@@ -70,15 +70,15 @@ internal static class CanFlagsFormatter
     internal static string FormatFd(bool xtd, bool rtr, bool err, bool brs, bool esi)
     {
         int key = (xtd ? 1 : 0) | (rtr ? 2 : 0) | (err ? 4 : 0) | (brs ? 8 : 0) | (esi ? 16 : 0);
-        return FdFlagsTable[key];
+        return _FdFlagsTable[key];
     }
 
-    private static string[] BuildFdFlagsTable()
+    private static string[] _Build_FdFlagsTable()
     {
         string[] table = new string[32];
         for (int i = 0; i < 32; i++)
         {
-            table[i] = BuildFlagString(
+            table[i] = _BuildFlagString(
                 [(i & 1) != 0, (i & 2) != 0, (i & 4) != 0, (i & 8) != 0, (i & 16) != 0],
                 ["XTD", "RTR", "ERR", "BRS", "ESI"],
                 prefix: "FD");
@@ -92,7 +92,7 @@ internal static class CanFlagsFormatter
 
     // Key packing: bit0=SEC, bit1=RRS
     // "XLF" is always prepended — the XL frame indicator is structurally always set.
-    private static readonly string[] XlFlagsTable = BuildXlFlagsTable();
+    private static readonly string[] _XlFlagsTable = _Build_XlFlagsTable();
 
     /// <summary>
     /// Returns the precomputed display string for the given CAN XL flag combination.
@@ -101,15 +101,15 @@ internal static class CanFlagsFormatter
     internal static string FormatXl(bool sec, bool rrs)
     {
         int key = (sec ? 1 : 0) | (rrs ? 2 : 0);
-        return XlFlagsTable[key];
+        return _XlFlagsTable[key];
     }
 
-    private static string[] BuildXlFlagsTable()
+    private static string[] _Build_XlFlagsTable()
     {
         string[] table = new string[4];
         for (int i = 0; i < 4; i++)
         {
-            table[i] = BuildFlagString(
+            table[i] = _BuildFlagString(
                 [(i & 1) != 0, (i & 2) != 0],
                 ["SEC", "RRS"],
                 prefix: "XLF");
@@ -126,7 +126,7 @@ internal static class CanFlagsFormatter
     /// An optional <paramref name="prefix"/> is always inserted as the first entry.
     /// Example output: <c>[FD, BRS]</c>, <c>[None]</c> (when no variable flags set and no prefix).
     /// </summary>
-    private static string BuildFlagString(bool[] active, string[] names, string? prefix)
+    private static string _BuildFlagString(bool[] active, string[] names, string? prefix)
     {
         // Single pass: accumulate total length and detect early-exit (all-false with no prefix).
         // Format: "[" + entries joined by ", " + "]"

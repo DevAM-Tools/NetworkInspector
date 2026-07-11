@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Protocols.Tests;
 
@@ -15,22 +15,22 @@ internal sealed class TcpFlagsTests
     private static readonly IPv4Address _ClientIp = new(0x0A000001);
     private static readonly IPv4Address _ServerIp = new(0x0A000002);
 
-    private const ushort ClientPort = 49152;
-    private const ushort ServerPort = 80;
+    private const ushort _ClientPort = 49152;
+    private const ushort _ServerPort = 80;
 
     #endregion
 
     #region Helpers
 
-    private static byte[] BuildFrame(byte flags)
+    private static byte[] _BuildFrame(byte flags)
     {
         EthernetLayer eth = new(_DstMac, _SrcMac);
         IPv4Layer ip = new(_ClientIp, _ServerIp);
-        TcpLayer tcp = new(ClientPort, ServerPort, seqNum: 1000, ackNum: 0, flags: flags);
+        TcpLayer tcp = new(_ClientPort, _ServerPort, seqNum: 1000, ackNum: 0, flags: flags);
         return FrameStack.Start(eth).Then(ip).Then(tcp).CreateWithFixedValues().EmitFrame(ReadOnlySpan<byte>.Empty);
     }
 
-    private static Packet Parse(Stack stack, byte[] frameData) =>
+    private static Packet _Parse(Stack stack, byte[] frameData) =>
         ProtocolTestHelper.ParseFrame(stack, frameData, 0, Timestamp.FromMillis(0));
 
     #endregion
@@ -41,7 +41,7 @@ internal sealed class TcpFlagsTests
     public async Task Flags_Syn_Only()
     {
         using Stack stack = ProtocolTestHelper.BuildStack();
-        Packet p = Parse(stack, BuildFrame(TcpFlags.Syn));
+        Packet p = _Parse(stack, _BuildFrame(TcpFlags.Syn));
 
         await ProtocolTestHelper.AssertBoolField(stack, p, "tcp.flags.syn", true).ConfigureAwait(false);
         await ProtocolTestHelper.AssertBoolField(stack, p, "tcp.flags.ack", false).ConfigureAwait(false);
@@ -54,7 +54,7 @@ internal sealed class TcpFlagsTests
     public async Task Flags_Ack_Only()
     {
         using Stack stack = ProtocolTestHelper.BuildStack();
-        Packet p = Parse(stack, BuildFrame(TcpFlags.Ack));
+        Packet p = _Parse(stack, _BuildFrame(TcpFlags.Ack));
 
         await ProtocolTestHelper.AssertBoolField(stack, p, "tcp.flags.ack", true).ConfigureAwait(false);
         await ProtocolTestHelper.AssertBoolField(stack, p, "tcp.flags.syn", false).ConfigureAwait(false);
@@ -64,7 +64,7 @@ internal sealed class TcpFlagsTests
     public async Task Flags_Fin_Only()
     {
         using Stack stack = ProtocolTestHelper.BuildStack();
-        Packet p = Parse(stack, BuildFrame(TcpFlags.Fin));
+        Packet p = _Parse(stack, _BuildFrame(TcpFlags.Fin));
 
         await ProtocolTestHelper.AssertBoolField(stack, p, "tcp.flags.fin", true).ConfigureAwait(false);
         await ProtocolTestHelper.AssertBoolField(stack, p, "tcp.flags.syn", false).ConfigureAwait(false);
@@ -74,7 +74,7 @@ internal sealed class TcpFlagsTests
     public async Task Flags_Rst_Only()
     {
         using Stack stack = ProtocolTestHelper.BuildStack();
-        Packet p = Parse(stack, BuildFrame(TcpFlags.Rst));
+        Packet p = _Parse(stack, _BuildFrame(TcpFlags.Rst));
 
         await ProtocolTestHelper.AssertBoolField(stack, p, "tcp.flags.reset", true).ConfigureAwait(false);
         await ProtocolTestHelper.AssertBoolField(stack, p, "tcp.flags.syn", false).ConfigureAwait(false);
@@ -84,7 +84,7 @@ internal sealed class TcpFlagsTests
     public async Task Flags_Psh_Only()
     {
         using Stack stack = ProtocolTestHelper.BuildStack();
-        Packet p = Parse(stack, BuildFrame(TcpFlags.Psh));
+        Packet p = _Parse(stack, _BuildFrame(TcpFlags.Psh));
 
         await ProtocolTestHelper.AssertBoolField(stack, p, "tcp.flags.push", true).ConfigureAwait(false);
         await ProtocolTestHelper.AssertBoolField(stack, p, "tcp.flags.syn", false).ConfigureAwait(false);
@@ -94,7 +94,7 @@ internal sealed class TcpFlagsTests
     public async Task Flags_Urg_Only()
     {
         using Stack stack = ProtocolTestHelper.BuildStack();
-        Packet p = Parse(stack, BuildFrame(TcpFlags.Urg));
+        Packet p = _Parse(stack, _BuildFrame(TcpFlags.Urg));
 
         await ProtocolTestHelper.AssertBoolField(stack, p, "tcp.flags.urg", true).ConfigureAwait(false);
         await ProtocolTestHelper.AssertBoolField(stack, p, "tcp.flags.syn", false).ConfigureAwait(false);
@@ -104,7 +104,7 @@ internal sealed class TcpFlagsTests
     public async Task Flags_Ece_Only()
     {
         using Stack stack = ProtocolTestHelper.BuildStack();
-        Packet p = Parse(stack, BuildFrame(TcpFlags.Ece));
+        Packet p = _Parse(stack, _BuildFrame(TcpFlags.Ece));
 
         await ProtocolTestHelper.AssertBoolField(stack, p, "tcp.flags.ece", true).ConfigureAwait(false);
         await ProtocolTestHelper.AssertBoolField(stack, p, "tcp.flags.syn", false).ConfigureAwait(false);
@@ -114,7 +114,7 @@ internal sealed class TcpFlagsTests
     public async Task Flags_Cwr_Only()
     {
         using Stack stack = ProtocolTestHelper.BuildStack();
-        Packet p = Parse(stack, BuildFrame(TcpFlags.Cwr));
+        Packet p = _Parse(stack, _BuildFrame(TcpFlags.Cwr));
 
         await ProtocolTestHelper.AssertBoolField(stack, p, "tcp.flags.cwr", true).ConfigureAwait(false);
         await ProtocolTestHelper.AssertBoolField(stack, p, "tcp.flags.syn", false).ConfigureAwait(false);
@@ -128,7 +128,7 @@ internal sealed class TcpFlagsTests
     public async Task Flags_SynAck()
     {
         using Stack stack = ProtocolTestHelper.BuildStack();
-        Packet p = Parse(stack, BuildFrame(TcpFlags.SynAck));
+        Packet p = _Parse(stack, _BuildFrame(TcpFlags.SynAck));
 
         await ProtocolTestHelper.AssertBoolField(stack, p, "tcp.flags.syn", true).ConfigureAwait(false);
         await ProtocolTestHelper.AssertBoolField(stack, p, "tcp.flags.ack", true).ConfigureAwait(false);
@@ -139,7 +139,7 @@ internal sealed class TcpFlagsTests
     public async Task Flags_FinAck()
     {
         using Stack stack = ProtocolTestHelper.BuildStack();
-        Packet p = Parse(stack, BuildFrame(TcpFlags.FinAck));
+        Packet p = _Parse(stack, _BuildFrame(TcpFlags.FinAck));
 
         await ProtocolTestHelper.AssertBoolField(stack, p, "tcp.flags.fin", true).ConfigureAwait(false);
         await ProtocolTestHelper.AssertBoolField(stack, p, "tcp.flags.ack", true).ConfigureAwait(false);
@@ -150,7 +150,7 @@ internal sealed class TcpFlagsTests
     public async Task Flags_PshAck()
     {
         using Stack stack = ProtocolTestHelper.BuildStack();
-        Packet p = Parse(stack, BuildFrame(TcpFlags.PshAck));
+        Packet p = _Parse(stack, _BuildFrame(TcpFlags.PshAck));
 
         await ProtocolTestHelper.AssertBoolField(stack, p, "tcp.flags.push", true).ConfigureAwait(false);
         await ProtocolTestHelper.AssertBoolField(stack, p, "tcp.flags.ack", true).ConfigureAwait(false);
@@ -163,7 +163,7 @@ internal sealed class TcpFlagsTests
         byte xmasFlags = (byte)(TcpFlags.Fin | TcpFlags.Syn | TcpFlags.Rst |
                                 TcpFlags.Psh | TcpFlags.Ack | TcpFlags.Urg);
         using Stack stack = ProtocolTestHelper.BuildStack();
-        Packet p = Parse(stack, BuildFrame(xmasFlags));
+        Packet p = _Parse(stack, _BuildFrame(xmasFlags));
 
         await ProtocolTestHelper.AssertBoolField(stack, p, "tcp.flags.fin", true).ConfigureAwait(false);
         await ProtocolTestHelper.AssertBoolField(stack, p, "tcp.flags.syn", true).ConfigureAwait(false);
@@ -178,7 +178,7 @@ internal sealed class TcpFlagsTests
     {
         // Null scan: no flags set
         using Stack stack = ProtocolTestHelper.BuildStack();
-        Packet p = Parse(stack, BuildFrame(0x00));
+        Packet p = _Parse(stack, _BuildFrame(0x00));
 
         await ProtocolTestHelper.AssertBoolField(stack, p, "tcp.flags.fin", false).ConfigureAwait(false);
         await ProtocolTestHelper.AssertBoolField(stack, p, "tcp.flags.syn", false).ConfigureAwait(false);
@@ -196,7 +196,7 @@ internal sealed class TcpFlagsTests
     public async Task Flags_ContainerValue_IsNumericBitmask()
     {
         using Stack stack = ProtocolTestHelper.BuildStack();
-        Packet p = Parse(stack, BuildFrame(TcpFlags.SynAck));
+        Packet p = _Parse(stack, _BuildFrame(TcpFlags.SynAck));
 
         // tcp.flags stores the raw byte as U64
         await ProtocolTestHelper.AssertU64Field(stack, p, "tcp.flags", TcpFlags.SynAck).ConfigureAwait(false);
@@ -207,7 +207,7 @@ internal sealed class TcpFlagsTests
     {
         byte all = 0xFF;
         using Stack stack = ProtocolTestHelper.BuildStack();
-        Packet p = Parse(stack, BuildFrame(all));
+        Packet p = _Parse(stack, _BuildFrame(all));
 
         await ProtocolTestHelper.AssertU64Field(stack, p, "tcp.flags", all).ConfigureAwait(false);
     }
@@ -220,7 +220,7 @@ internal sealed class TcpFlagsTests
     public async Task Flags_DisplayText_SynOnly()
     {
         using Stack stack = ProtocolTestHelper.BuildStack();
-        Packet p = Parse(stack, BuildFrame(TcpFlags.Syn));
+        Packet p = _Parse(stack, _BuildFrame(TcpFlags.Syn));
 
         // Display text format: "0xHH [flag1, flag2, ...]"
         await ProtocolTestHelper.AssertDisplayText(stack, p, "tcp.flags", "0x02 [SYN]").ConfigureAwait(false);
@@ -230,7 +230,7 @@ internal sealed class TcpFlagsTests
     public async Task Flags_DisplayText_SynAck()
     {
         using Stack stack = ProtocolTestHelper.BuildStack();
-        Packet p = Parse(stack, BuildFrame(TcpFlags.SynAck));
+        Packet p = _Parse(stack, _BuildFrame(TcpFlags.SynAck));
 
         await ProtocolTestHelper.AssertDisplayText(stack, p, "tcp.flags", "0x12 [ACK, SYN]").ConfigureAwait(false);
     }
@@ -239,7 +239,7 @@ internal sealed class TcpFlagsTests
     public async Task Flags_DisplayText_None()
     {
         using Stack stack = ProtocolTestHelper.BuildStack();
-        Packet p = Parse(stack, BuildFrame(0x00));
+        Packet p = _Parse(stack, _BuildFrame(0x00));
 
         await ProtocolTestHelper.AssertDisplayText(stack, p, "tcp.flags", "0x00 [None]").ConfigureAwait(false);
     }

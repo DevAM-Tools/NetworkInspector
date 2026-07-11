@@ -16,17 +16,18 @@ namespace NetworkInspector.Profiling.Scenarios;
 internal sealed class GenerateFramesScenario : IProfilingScenario
 {
     /// <summary>Number of frames generated per iteration.</summary>
-    private const int FrameCount = 100_000;
+    private const int _FrameCount = 100_000;
 
     /// <inheritdoc/>
     public string Name => "generate-frames";
 
     /// <inheritdoc/>
     public string Description =>
-        $"Generate {FrameCount:N0} random IPv6/UDP frames via RandomFrameSource per iteration.";
+        FormattableString.Invariant(
+            $"Generate {_FrameCount:N0} random IPv6/UDP frames via RandomFrameSource per iteration.");
 
     /// <inheritdoc/>
-    public long WorkUnitsPerIteration => FrameCount;
+    public long WorkUnitsPerIteration => _FrameCount;
 
     /// <inheritdoc/>
     public string WorkUnitName => "frames";
@@ -44,7 +45,7 @@ internal sealed class GenerateFramesScenario : IProfilingScenario
         FrameInterfaceRegistry registry = new();
 
         using RandomFrameSource source = new(
-            count: FrameCount,
+            count: _FrameCount,
             seed: 42,
             mode: RandomFrameMode.UdpIPv6);
 

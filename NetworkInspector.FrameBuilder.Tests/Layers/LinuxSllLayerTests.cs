@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.FrameBuilder.Tests.Layers;
 
@@ -101,7 +101,7 @@ internal sealed class LinuxSllLayerTests
     public async Task WriteHeader_ExplicitEtherType_WrittenAtOffset14()
     {
         // An explicit EtherType must appear in bytes 14–15 immediately after WriteHeader.
-        LinuxSllLayer layer = new(etherType: FB.Auto<ushort>.Explicit(0x0800));
+        LinuxSllLayer layer = new(etherType: FB.Auto.Explicit((ushort)0x0800));
         byte[] buf = new byte[16];
 
         layer.WriteHeader(buf.AsSpan());
@@ -117,7 +117,7 @@ internal sealed class LinuxSllLayerTests
         LinuxSllLayer layer = new(); // default: auto EtherType
         byte[] frame = new byte[32];
 
-        layer.PatchNextProtocol(frame.AsSpan(), myOffset: 0, next: 0x86DD); // IPv6
+        layer.PatchNextProtocol(frame.AsSpan(), myOffset: 0, nextProtocol: 0x86DD); // IPv6
 
         ushort patched = BinaryPrimitives.ReadUInt16BigEndian(frame.AsSpan(14, 2));
         await Assert.That(patched).IsEqualTo((ushort)0x86DD);
@@ -128,11 +128,11 @@ internal sealed class LinuxSllLayerTests
     {
         // An explicit EtherType must not be overwritten by PatchNextProtocol; the outer layer
         // may call this unconditionally and the SLL layer is responsible for ignoring the patch.
-        LinuxSllLayer layer = new(etherType: FB.Auto<ushort>.Explicit(0x0800));
+        LinuxSllLayer layer = new(etherType: FB.Auto.Explicit((ushort)0x0800));
         byte[] frame = new byte[32];
 
         layer.WriteHeader(frame.AsSpan());
-        layer.PatchNextProtocol(frame.AsSpan(), myOffset: 0, next: 0x86DD);
+        layer.PatchNextProtocol(frame.AsSpan(), myOffset: 0, nextProtocol: 0x86DD);
 
         ushort etherType = BinaryPrimitives.ReadUInt16BigEndian(frame.AsSpan(14, 2));
         await Assert.That(etherType).IsEqualTo((ushort)0x0800)

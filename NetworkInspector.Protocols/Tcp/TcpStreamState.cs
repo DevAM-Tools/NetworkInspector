@@ -48,7 +48,15 @@ internal sealed class TcpStreamState
     }
 
     /// <summary>Gets the segment buffer for the given direction.</summary>
-    internal SegmentBuffer GetBuffer(bool isForward) => isForward ? Forward : Reverse;
+    internal SegmentBuffer GetBuffer(bool isForward)
+    {
+        if (isForward)
+        {
+            return Forward;
+        }
+
+        return Reverse;
+    }
 
     /// <summary>Clears both direction buffers.</summary>
     internal void Clear()

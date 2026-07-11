@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Exporters.Json;
 
@@ -51,7 +51,7 @@ internal static class ArrayWriter
                     buffer.WriteByte((byte)',');
                 }
                 first = false;
-                WriteFieldFlat(child, ref buffer);
+                _WriteFieldFlat(child, ref buffer);
             }
             buffer.WriteByte((byte)']');
         }
@@ -60,7 +60,7 @@ internal static class ArrayWriter
     }
 
     /// <summary>Writes a single field as a flat JSON object (no indentation).</summary>
-    private static void WriteFieldFlat(Field field, ref PooledBuffer buffer)
+    private static void _WriteFieldFlat(Field field, ref PooledBuffer buffer)
     {
         buffer.WriteByte((byte)'{');
 
@@ -117,7 +117,7 @@ internal static class ArrayWriter
                     buffer.WriteByte((byte)',');
                 }
                 firstChild = false;
-                WriteFieldFlat(child, ref buffer);
+                _WriteFieldFlat(child, ref buffer);
             }
             buffer.WriteByte((byte)']');
         }

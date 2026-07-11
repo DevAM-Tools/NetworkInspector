@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Protocols.Tests;
 
@@ -32,7 +32,7 @@ internal sealed class IPv4TsharkTests
     /// Standard Eth+IPv4+UDP frame with explicit identification, TTL and
     /// don't-fragment so every dissector field has a concrete expected value.
     /// </summary>
-    private static byte[] BuildPlainFrame(byte ttl = 64, ushort identification = 0xABCD, bool dontFragment = true)
+    private static byte[] _BuildPlainFrame(byte ttl = 64, ushort identification = 0xABCD, bool dontFragment = true)
     {
         EthernetLayer eth = new(_DstMac, _SrcMac);
         IPv4Layer ip = new(
@@ -52,7 +52,7 @@ internal sealed class IPv4TsharkTests
     /// The option is exactly four bytes so no padding is needed and the IHL
     /// field becomes 6 (24 bytes header).
     /// </summary>
-    private static byte[] BuildOptionsFrame()
+    private static byte[] _BuildOptionsFrame()
     {
         byte[] routerAlert = [0x94, 0x04, 0x00, 0x00];
         EthernetLayer eth = new(_DstMac, _SrcMac);
@@ -80,7 +80,7 @@ internal sealed class IPv4TsharkTests
     [Test]
     public async Task IPv4_PlainFrame_AllFieldsMatchTshark()
     {
-        byte[] frame = BuildPlainFrame();
+        byte[] frame = _BuildPlainFrame();
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -106,7 +106,7 @@ internal sealed class IPv4TsharkTests
     [Test]
     public async Task IPv4_DontFragmentCleared_FlagFieldsMatchTshark()
     {
-        byte[] frame = BuildPlainFrame(dontFragment: false);
+        byte[] frame = _BuildPlainFrame(dontFragment: false);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -121,7 +121,7 @@ internal sealed class IPv4TsharkTests
     [Test]
     public async Task IPv4_NonDefaultTtlAndId_FieldsMatchTshark()
     {
-        byte[] frame = BuildPlainFrame(ttl: 128, identification: 0x4242);
+        byte[] frame = _BuildPlainFrame(ttl: 128, identification: 0x4242);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -143,7 +143,7 @@ internal sealed class IPv4TsharkTests
     [Test]
     public async Task IPv4_WithOptions_AllFieldsMatchTshark()
     {
-        byte[] frame = BuildOptionsFrame();
+        byte[] frame = _BuildOptionsFrame();
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {

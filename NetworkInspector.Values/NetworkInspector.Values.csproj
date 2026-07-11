@@ -1,18 +1,12 @@
 <!-- Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root. -->
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <RootNamespace>NetworkInspector.Values</RootNamespace>
-    <PackageReadmeFile>README.md</PackageReadmeFile>
     <Description>Strongly-typed network address and timestamp value types for NetworkInspector. Provides MacAddress, IPv4Address, IPv6Address, Eui64, Uuid, and Timestamp structs.</Description>
     <PackageTags>network;address;mac;ipv4;ipv6;values</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="ZeroAlloc" PrivateAssets="none" />
-  </ItemGroup>
-
-  <!-- Include README in the NuGet package -->
-  <ItemGroup>
-    <None Include="README.md" Pack="true" PackagePath="" />
   </ItemGroup>
 </Project>

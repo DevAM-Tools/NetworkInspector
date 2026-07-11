@@ -234,10 +234,10 @@ internal sealed class IPv4AddressTests
     // === Binary Serialization ===
 
     [Test]
-    public async Task TryGetSerializedSize_Is4()
+    public async Task TryGetWrittenSize_Is4()
     {
         IPv4Address addr = new(0xC0A80101u);
-        bool ok = addr.TryGetSerializedSize(out int size);
+        bool ok = addr.TryGetWrittenSize(out int size);
         await Assert.That(ok).IsTrue();
         await Assert.That(size).IsEqualTo(4);
     }

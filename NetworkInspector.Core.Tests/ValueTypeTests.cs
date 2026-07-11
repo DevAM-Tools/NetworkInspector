@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Core.Tests;
 
@@ -454,10 +454,10 @@ internal sealed class ValueTypeTests
     // === MacAddress extended coverage ===
 
     [Test]
-    public async Task MacAddress_TryGetSerializedSize()
+    public async Task MacAddress_TryGetWrittenSize()
     {
         MacAddress mac = new(0x001122334455);
-        bool ok = mac.TryGetSerializedSize(out int size);
+        bool ok = mac.TryGetWrittenSize(out int size);
         await Assert.That(ok).IsTrue();
         await Assert.That(size).IsEqualTo(6);
     }
@@ -607,10 +607,10 @@ internal sealed class ValueTypeTests
     // === IPv4Address extended coverage ===
 
     [Test]
-    public async Task IPv4Address_TryGetSerializedSize()
+    public async Task IPv4Address_TryGetWrittenSize()
     {
         IPv4Address ip = new(0xC0A80001);
-        bool ok = ip.TryGetSerializedSize(out int size);
+        bool ok = ip.TryGetWrittenSize(out int size);
         await Assert.That(ok).IsTrue();
         await Assert.That(size).IsEqualTo(4);
     }
@@ -777,10 +777,10 @@ internal sealed class ValueTypeTests
     }
 
     [Test]
-    public async Task Timestamp_TryGetSerializedSize()
+    public async Task Timestamp_TryGetWrittenSize()
     {
         Timestamp ts = Timestamp.FromSecs(0);
-        bool ok = ts.TryGetSerializedSize(out int size);
+        bool ok = ts.TryGetWrittenSize(out int size);
         await Assert.That(ok).IsTrue();
         await Assert.That(size).IsEqualTo(8);
     }

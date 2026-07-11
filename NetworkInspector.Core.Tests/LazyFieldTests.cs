@@ -8,7 +8,7 @@ namespace NetworkInspector.Core.Tests;
 /// </summary>
 internal sealed class LazyFieldTests
 {
-    private static (Stack Stack, MockLazyProtocol Proto, ProtocolId ProtoId) BuildLazyStack()
+    private static (Stack Stack, MockLazyProtocol Proto, ProtocolId ProtoId) _BuildLazyStack()
     {
         using SettingsManager settingsManager = new();
         StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
@@ -19,7 +19,7 @@ internal sealed class LazyFieldTests
         return (stack, proto, protoId);
     }
 
-    private static Packet ParseFrame(Stack stack, byte[] data, ProtocolId firstProtocolId)
+    private static Packet _ParseFrame(Stack stack, byte[] data, ProtocolId firstProtocolId)
     {
         Frame frame = Frame.Create(
             new FrameId(1),
@@ -39,11 +39,11 @@ internal sealed class LazyFieldTests
     [Test]
     public async Task LazyField_FieldCountBeforeMaterialization()
     {
-        (Stack? stack, MockLazyProtocol _, ProtocolId protoId) = BuildLazyStack();
+        (Stack? stack, MockLazyProtocol _, ProtocolId protoId) = _BuildLazyStack();
         using (stack)
         {
             byte[] data = new byte[14];
-            Packet packet = ParseFrame(stack, data, protoId);
+            Packet packet = _ParseFrame(stack, data, protoId);
 
             // Before materialization: root(1) + packet(1) + packet.id(1) + packet.timestamp(1)
             //   + packet.frame_source_id(1) + packet.info(1) + lazy container(1) = 7
@@ -55,11 +55,11 @@ internal sealed class LazyFieldTests
     [Test]
     public async Task LazyField_FieldCountAfterMaterialization()
     {
-        (Stack? stack, MockLazyProtocol _, ProtocolId protoId) = BuildLazyStack();
+        (Stack? stack, MockLazyProtocol _, ProtocolId protoId) = _BuildLazyStack();
         using (stack)
         {
             byte[] data = new byte[14];
-            Packet packet = ParseFrame(stack, data, protoId);
+            Packet packet = _ParseFrame(stack, data, protoId);
 
             // After: root(1) + 5 packet fields + container(1) + 3 fields = 10
             int count = packet.FieldCount(materialize: true);
@@ -70,11 +70,11 @@ internal sealed class LazyFieldTests
     [Test]
     public async Task LazyField_IsLazyFlag()
     {
-        (Stack? stack, MockLazyProtocol _, ProtocolId protoId) = BuildLazyStack();
+        (Stack? stack, MockLazyProtocol _, ProtocolId protoId) = _BuildLazyStack();
         using (stack)
         {
             byte[] data = new byte[14];
-            Packet packet = ParseFrame(stack, data, protoId);
+            Packet packet = _ParseFrame(stack, data, protoId);
 
             Field root = packet.RootField();
             // Root is not lazy
@@ -106,11 +106,11 @@ internal sealed class LazyFieldTests
     [Test]
     public async Task LazyField_AccessingChildrenTriggersMaterialization()
     {
-        (Stack? stack, _, ProtocolId protoId) = BuildLazyStack();
+        (Stack? stack, _, ProtocolId protoId) = _BuildLazyStack();
         using (stack)
         {
             byte[] data = new byte[14];
-            Packet packet = ParseFrame(stack, data, protoId);
+            Packet packet = _ParseFrame(stack, data, protoId);
 
             // Access children through the mock's lazy container — triggers materialization
             // Navigate past the packet container (first child) to reach the mock container (second child)
@@ -132,11 +132,11 @@ internal sealed class LazyFieldTests
     [Test]
     public async Task LazyField_DfsIteratorMaterializes()
     {
-        (Stack? stack, _, ProtocolId protoId) = BuildLazyStack();
+        (Stack? stack, _, ProtocolId protoId) = _BuildLazyStack();
         using (stack)
         {
             byte[] data = new byte[14];
-            Packet packet = ParseFrame(stack, data, protoId);
+            Packet packet = _ParseFrame(stack, data, protoId);
 
             // DFS iterator materializes lazy fields during traversal
             int fieldCount = 0;
@@ -153,11 +153,11 @@ internal sealed class LazyFieldTests
     [Test]
     public async Task LazyField_HasUnpopulatedLazyFields()
     {
-        (Stack? stack, MockLazyProtocol _, ProtocolId protoId) = BuildLazyStack();
+        (Stack? stack, MockLazyProtocol _, ProtocolId protoId) = _BuildLazyStack();
         using (stack)
         {
             byte[] data = new byte[14];
-            Packet packet = ParseFrame(stack, data, protoId);
+            Packet packet = _ParseFrame(stack, data, protoId);
 
             bool hasBefore = packet.HasUnpopulatedLazyFields;
             packet.MaterializeAll();
@@ -171,11 +171,11 @@ internal sealed class LazyFieldTests
     [Test]
     public async Task LazyField_MaterializeIsIdempotent()
     {
-        (Stack? stack, MockLazyProtocol? proto, ProtocolId protoId) = BuildLazyStack();
+        (Stack? stack, MockLazyProtocol? proto, ProtocolId protoId) = _BuildLazyStack();
         using (stack)
         {
             byte[] data = new byte[14];
-            Packet packet = ParseFrame(stack, data, protoId);
+            Packet packet = _ParseFrame(stack, data, protoId);
 
             int countFirst = packet.FieldCount(materialize: true);
 
@@ -190,7 +190,7 @@ internal sealed class LazyFieldTests
     [Test]
     public async Task LazyField_FieldValuesCorrectAfterMaterialization()
     {
-        (Stack? stack, MockLazyProtocol? proto, ProtocolId protoId) = BuildLazyStack();
+        (Stack? stack, MockLazyProtocol? proto, ProtocolId protoId) = _BuildLazyStack();
         using (stack)
         {
             byte[] data = new byte[14];
@@ -209,7 +209,7 @@ internal sealed class LazyFieldTests
             data[11] = 0x55;
             BinaryPrimitives.WriteUInt16BigEndian(data.AsSpan(12), 0x0800);
 
-            Packet packet = ParseFrame(stack, data, protoId);
+            Packet packet = _ParseFrame(stack, data, protoId);
 
             // Access via DFS to trigger materialization
             string? dstMacStr = null;
@@ -237,11 +237,11 @@ internal sealed class LazyFieldTests
     [Test]
     public async Task LazyField_ChildrenWithoutMaterializationDoesNotPopulate()
     {
-        (Stack? stack, MockLazyProtocol? proto, ProtocolId protoId) = BuildLazyStack();
+        (Stack? stack, MockLazyProtocol? proto, ProtocolId protoId) = _BuildLazyStack();
         using (stack)
         {
             byte[] data = new byte[14];
-            Packet packet = ParseFrame(stack, data, protoId);
+            Packet packet = _ParseFrame(stack, data, protoId);
 
             // Iterate without materialization
             int childCount = 0;
@@ -273,7 +273,7 @@ internal sealed class LazyFieldTests
         using (stack)
         {
             byte[] data = new byte[14];
-            Packet packet = ParseFrame(stack, data, protoId);
+            Packet packet = _ParseFrame(stack, data, protoId);
 
             // Before materialization: root(1) + 5 packet fields + outer lazy(1) = 7
             await Assert.That(packet.FieldCount()).IsEqualTo(7);

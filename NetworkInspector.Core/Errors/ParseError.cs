@@ -136,7 +136,14 @@ public readonly struct ParseError
     #region Formatting
 
     /// <inheritdoc/>
-    public override string ToString() => Message ?? Kind.ToString();
+    public override string ToString()
+    {
+        if (Message is not null)
+        {
+            return Message;
+        }
+        return Kind.ToString();
+    }
 
     #endregion
 }

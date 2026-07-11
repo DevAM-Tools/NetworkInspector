@@ -53,7 +53,12 @@ internal sealed class TestSessionListener : ISessionListener
         get
         {
             int v = Volatile.Read(ref _LastPhase);
-            return v < 0 ? null : (SessionPhase)v;
+            if (v < 0)
+            {
+                return null;
+            }
+
+            return (SessionPhase)v;
         }
     }
 

@@ -15,7 +15,7 @@ namespace NetworkInspector.Core;
 public static class LargeBufferStreamExtensions
 {
     /// <summary>Default intermediate buffer size for async operations (64 KiB).</summary>
-    private const int DefaultAsyncBufferSize = 64 * 1024;
+    private const int _DefaultAsyncBufferSize = 64 * 1024;
 
     #region LargeBuffer — Sync
 
@@ -70,7 +70,7 @@ public static class LargeBufferStreamExtensions
         CancellationToken cancellationToken = default)
     {
         // Rent a pooled buffer for the async bridge
-        int chunkSize = Math.Min(count, DefaultAsyncBufferSize);
+        int chunkSize = Math.Min(count, _DefaultAsyncBufferSize);
         byte[] temp = ArrayPool<byte>.Shared.Rent(chunkSize);
 
         try
@@ -121,7 +121,7 @@ public static class LargeBufferStreamExtensions
         int count,
         CancellationToken cancellationToken = default)
     {
-        int chunkSize = Math.Min(count, DefaultAsyncBufferSize);
+        int chunkSize = Math.Min(count, _DefaultAsyncBufferSize);
         byte[] temp = ArrayPool<byte>.Shared.Rent(chunkSize);
 
         try

@@ -13,22 +13,22 @@ internal static class DnsDisplayTables
     // Max known type code is 257 (CAA) — a 258-entry array covers all defined types.
 
     // Private holder built once; both public arrays reference its fields.
-    private static readonly (string?[] TypeNames, string[] DisplayTexts) _TypeData = BuildTypeData();
+    private static readonly (string?[] _TypeNames, string[] DisplayTexts) _TypeData = _BuildTypeData();
 
     /// <summary>
     /// Short name table for DNS record types (index = type code, null = unknown/unassigned).
     /// Codes above 257 fall back to numeric strings on range check.
     /// </summary>
-    private static readonly string?[] TypeNames = _TypeData.TypeNames;
+    private static readonly string?[] _TypeNames = _TypeData._TypeNames;
 
     /// <summary>
     /// Display text table for DNS record types (e.g. "A (1)") indexed by type code.
     /// Unknown entries contain the numeric string (e.g. "30").
     /// </summary>
-    private static readonly string[] TypeDisplayTexts = _TypeData.DisplayTexts;
+    private static readonly string[] _TypeDisplayTexts = _TypeData.DisplayTexts;
 
     /// <summary>Builds the 258-entry type name and display text arrays in a single pass.</summary>
-    private static (string?[] TypeNames, string[] DisplayTexts) BuildTypeData()
+    private static (string?[] _TypeNames, string[] DisplayTexts) _BuildTypeData()
     {
         string?[] names = new string?[258]; // covers type codes 0–257
         string[] displayTexts = new string[258];
@@ -36,7 +36,7 @@ internal static class DnsDisplayTables
         // Pre-fill display texts with the numeric string as fallback for all entries.
         for (int i = 0; i < displayTexts.Length; i++)
         {
-            displayTexts[i] = i.ToString();
+            displayTexts[i] = i.ToString(CultureInfo.InvariantCulture);
         }
 
         // Known DNS type codes — RFC 1035, 2535, 2782, 3596, 6698, 7208, 8659, etc.
@@ -75,20 +75,40 @@ internal static class DnsDisplayTables
 
     /// <summary>Gets display text for a DNS record type (e.g. "A (1)").</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal static string GetTypeDisplayText(ushort qtype) =>
-        qtype < TypeDisplayTexts.Length ? TypeDisplayTexts[qtype] : qtype.ToString();
+    internal static string GetTypeDisplayText(ushort qtype)
+    {
+        if (qtype < _TypeDisplayTexts.Length)
+        {
+            return _TypeDisplayTexts[qtype];
+        }
+
+        return qtype.ToString(CultureInfo.InvariantCulture);
+    }
 
     /// <summary>Gets the short name for a DNS record type (e.g. "A", "AAAA").</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal static string GetTypeName(ushort qtype) =>
-        qtype < TypeNames.Length ? TypeNames[qtype] ?? qtype.ToString() : qtype.ToString();
+    internal static string GetTypeName(ushort qtype)
+    {
+        if (qtype < _TypeNames.Length)
+        {
+            string? name = _TypeNames[qtype];
+            if (name is not null)
+            {
+                return name;
+            }
+
+            return qtype.ToString(CultureInfo.InvariantCulture);
+        }
+
+        return qtype.ToString(CultureInfo.InvariantCulture);
+    }
 
     #endregion
 
     #region DNS Classes
 
     /// <summary>Precomputed 8-entry display text table for DNS query classes.</summary>
-    private static readonly string[] ClassDisplayTexts =
+    private static readonly string[] _ClassDisplayTexts =
     [
         "Reserved (0)",   // 0
         "IN (1)",         // 1
@@ -101,11 +121,16 @@ internal static class DnsDisplayTables
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static string GetClassDisplayText(ushort qclass)
     {
-        if (qclass < ClassDisplayTexts.Length)
+        if (qclass < _ClassDisplayTexts.Length)
         {
-            return ClassDisplayTexts[qclass];
+            return _ClassDisplayTexts[qclass];
         }
-        return qclass == 255 ? "ANY (255)" : qclass.ToString();
+        if (qclass == 255)
+        {
+            return "ANY (255)";
+        }
+
+        return qclass.ToString(CultureInfo.InvariantCulture);
     }
 
     #endregion
@@ -113,7 +138,7 @@ internal static class DnsDisplayTables
     #region DNS Opcodes
 
     /// <summary>Precomputed 16-entry display text table for DNS opcodes.</summary>
-    private static readonly string[] OpcodeDisplayTexts =
+    private static readonly string[] _OpcodeDisplayTexts =
     [
         "Standard query (0)",    // 0
         "Inverse query (1)",     // 1
@@ -127,15 +152,22 @@ internal static class DnsDisplayTables
 
     /// <summary>Gets display text for a DNS opcode (e.g. "Standard query (0)").</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal static string GetOpcodeDisplayText(byte opcode) =>
-        opcode < 16 ? OpcodeDisplayTexts[opcode] : opcode.ToString();
+    internal static string GetOpcodeDisplayText(byte opcode)
+    {
+        if (opcode < 16)
+        {
+            return _OpcodeDisplayTexts[opcode];
+        }
+
+        return opcode.ToString(CultureInfo.InvariantCulture);
+    }
 
     #endregion
 
     #region DNS Response Codes
 
     /// <summary>Precomputed 16-entry display text table for DNS response codes.</summary>
-    private static readonly string[] RcodeDisplayTexts =
+    private static readonly string[] _RcodeDisplayTexts =
     [
         "No error (0)",       // 0
         "Format error (1)",   // 1
@@ -154,8 +186,15 @@ internal static class DnsDisplayTables
 
     /// <summary>Gets display text for a DNS response code (e.g. "No error (0)").</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal static string GetRcodeDisplayText(byte rcode) =>
-        rcode < 16 ? RcodeDisplayTexts[rcode] : rcode.ToString();
+    internal static string GetRcodeDisplayText(byte rcode)
+    {
+        if (rcode < 16)
+        {
+            return _RcodeDisplayTexts[rcode];
+        }
+
+        return rcode.ToString(CultureInfo.InvariantCulture);
+    }
 
     /// <summary>Gets the display name for an EDNS0 option code (RFC 6891 / IANA registry).</summary>
     internal static string GetEdnsOptionName(ushort code) => code switch

@@ -25,19 +25,19 @@ public sealed partial class DataProtocol : IProtocol
     #region Constants
 
     /// <summary>Index group for data fields.</summary>
-    private const string DataIndexGroup = "data";
+    private const string _DataIndexGroup = "data";
 
     #endregion
 
     #region Fields
 
-    [BytesField("data", "Data", IndexGroup = DataIndexGroup)]
+    [BytesField("data", "Data", IndexGroup = _DataIndexGroup)]
     private FieldId _ProtocolFieldId;
 
-    [BytesField("data.data", "Data", IndexGroup = DataIndexGroup)]
+    [BytesField("data.data", "Data", IndexGroup = _DataIndexGroup)]
     private FieldId _DataFieldId;
 
-    [U64Field("data.len", "Length", IndexGroup = DataIndexGroup)]
+    [U64Field("data.len", "Length", IndexGroup = _DataIndexGroup)]
     private FieldId _LenFieldId;
 
     /// <summary>

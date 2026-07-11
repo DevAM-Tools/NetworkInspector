@@ -34,7 +34,7 @@ public sealed class DatagramFragmentBuffer
     #region Constants
 
     /// <summary>Maximum allowed total datagram payload length (IPv4 max = 65535).</summary>
-    private const int MaxTotalLength = 65535;
+    private const int _MaxTotalLength = 65535;
 
     #endregion
 
@@ -97,7 +97,11 @@ public sealed class DatagramFragmentBuffer
                     _ReceivedBytes += copy.Length - _Fragments[i].Data.Length;
                     _Fragments[i] = new Fragment(offset, copy);
                 }
-                return IsComplete() ? FragmentAddResult.Complete : FragmentAddResult.Incomplete;
+                if (_IsComplete())
+                {
+                    return FragmentAddResult.Complete;
+                }
+                return FragmentAddResult.Incomplete;
             }
             if (_Fragments[i].Offset > offset)
             {
@@ -143,14 +147,18 @@ public sealed class DatagramFragmentBuffer
             // Reject datagrams exceeding the maximum allowed size to prevent memory exhaustion.
             // Return OversizeDiscarded so the caller can remove the buffer immediately instead
             // of letting it linger until eviction (which would waste memory under malformed traffic).
-            if (total > MaxTotalLength)
+            if (total > _MaxTotalLength)
             {
                 return FragmentAddResult.OversizeDiscarded;
             }
             _TotalLength = total;
         }
 
-        return IsComplete() ? FragmentAddResult.Complete : FragmentAddResult.Incomplete;
+        if (_IsComplete())
+        {
+            return FragmentAddResult.Complete;
+        }
+        return FragmentAddResult.Incomplete;
     }
 
     /// <summary>
@@ -190,7 +198,7 @@ public sealed class DatagramFragmentBuffer
     /// Requires: (1) last fragment received (MF=0 → _TotalLength known),
     ///           (2) no gaps in the byte range [0, _TotalLength).
     /// </summary>
-    private bool IsComplete()
+    private bool _IsComplete()
     {
         if (_TotalLength < 0)
         {

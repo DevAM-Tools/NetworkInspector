@@ -29,7 +29,7 @@ internal sealed class EagerDispatchIndexTests
     /// Builds an Ethernet + IPv4 + TCP + HTTP POST frame carrying a JSON body with
     /// Content-Type "application/json" so HTTP dispatches the body to the JSON protocol.
     /// </summary>
-    private static byte[] BuildJsonHttpFrame(string jsonBody)
+    private static byte[] _BuildJsonHttpFrame(string jsonBody)
     {
         string httpMessage =
             "POST /api HTTP/1.1\r\n" +
@@ -49,7 +49,7 @@ internal sealed class EagerDispatchIndexTests
     [Test]
     public async Task HttpJsonBody_SubProtocolPresence_QueryableFromIndexWithoutMaterialization()
     {
-        byte[] frame = BuildJsonHttpFrame("{\"name\":\"John\"}");
+        byte[] frame = _BuildJsonHttpFrame("{\"name\":\"John\"}");
 
         using Stack stack = ProtocolTestHelper.BuildStack();
 

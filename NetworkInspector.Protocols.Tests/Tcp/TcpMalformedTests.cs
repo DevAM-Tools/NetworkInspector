@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Protocols.Tests;
 
@@ -24,7 +24,7 @@ internal sealed class TcpMalformedTests
     #region Helpers
 
     /// <summary>Creates a valid Ethernet + IPv4 + TCP SYN frame with payload.</summary>
-    private static byte[] BuildValidFrame()
+    private static byte[] _BuildValidFrame()
     {
         MacAddress dstMac = MacAddress.FromBytes([0x00, 0x11, 0x22, 0x33, 0x44, 0x55]);
         MacAddress srcMac = MacAddress.FromBytes([0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB]);
@@ -40,9 +40,9 @@ internal sealed class TcpMalformedTests
     /// Creates a frame with a modified TCP data offset value.
     /// The data offset is stored in the upper nibble of TCP byte 12.
     /// </summary>
-    private static byte[] BuildFrameWithDataOffset(byte dataOffset)
+    private static byte[] _BuildFrameWithDataOffset(byte dataOffset)
     {
-        byte[] frame = BuildValidFrame();
+        byte[] frame = _BuildValidFrame();
         int tcpDataOffsetByte = _TcpOffset + _DataOffsetByteOffset;
 
         // Upper nibble = dataOffset, lower nibble = reserved bits (preserve them)
@@ -59,7 +59,7 @@ internal sealed class TcpMalformedTests
     public async Task Truncated_EmptyTcpData_NoTcpFields()
     {
         // Ethernet(14) + IPv4(20) header only — zero TCP bytes
-        byte[] frame = BuildValidFrame()[.._TcpOffset];
+        byte[] frame = _BuildValidFrame()[.._TcpOffset];
 
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
@@ -74,7 +74,7 @@ internal sealed class TcpMalformedTests
     public async Task Truncated_OneByteTcp_NoTcpFields()
     {
         // Only 1 byte of TCP header — far below the 20-byte minimum
-        byte[] frame = BuildValidFrame()[..(_TcpOffset + 1)];
+        byte[] frame = _BuildValidFrame()[..(_TcpOffset + 1)];
 
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
@@ -88,7 +88,7 @@ internal sealed class TcpMalformedTests
     public async Task Truncated_NineteenBytesTcp_NoTcpFields()
     {
         // 19 bytes = 1 byte short of minimum TCP header (20 bytes)
-        byte[] frame = BuildValidFrame()[..(_TcpOffset + 19)];
+        byte[] frame = _BuildValidFrame()[..(_TcpOffset + 19)];
 
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
@@ -102,7 +102,7 @@ internal sealed class TcpMalformedTests
     public async Task Truncated_ExactMinimumHeader_ParsesSuccessfully()
     {
         // Exactly 20 bytes of TCP header (data offset = 5) — should parse
-        byte[] fullFrame = BuildValidFrame();
+        byte[] fullFrame = _BuildValidFrame();
 
         // Truncate to Eth(14) + IPv4(20) + TCP(20) = 54 bytes
         byte[] frame = fullFrame[..(_TcpOffset + 20)];
@@ -119,7 +119,7 @@ internal sealed class TcpMalformedTests
     public async Task Truncated_HeaderLargerThanData_ErrorField()
     {
         // Set data offset = 15 (60 bytes header), but only provide 20 bytes of TCP data
-        byte[] frame = BuildFrameWithDataOffset(15);
+        byte[] frame = _BuildFrameWithDataOffset(15);
         // Truncate to exactly 20 bytes of TCP
         frame = frame[..(_TcpOffset + 20)];
 
@@ -139,7 +139,7 @@ internal sealed class TcpMalformedTests
     public async Task DataOffset_Zero_ParseError()
     {
         // DataOffset = 0 → header length = 0 bytes, which is < 20 byte minimum
-        byte[] frame = BuildFrameWithDataOffset(0);
+        byte[] frame = _BuildFrameWithDataOffset(0);
 
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
@@ -152,7 +152,7 @@ internal sealed class TcpMalformedTests
     public async Task DataOffset_One_ParseError()
     {
         // DataOffset = 1 → header length = 4 bytes, far below minimum
-        byte[] frame = BuildFrameWithDataOffset(1);
+        byte[] frame = _BuildFrameWithDataOffset(1);
 
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
@@ -165,7 +165,7 @@ internal sealed class TcpMalformedTests
     public async Task DataOffset_Four_ParseError()
     {
         // DataOffset = 4 → header length = 16 bytes, just below the minimum 20
-        byte[] frame = BuildFrameWithDataOffset(4);
+        byte[] frame = _BuildFrameWithDataOffset(4);
 
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
@@ -178,7 +178,7 @@ internal sealed class TcpMalformedTests
     public async Task DataOffset_Five_ValidMinimum()
     {
         // DataOffset = 5 → header length = 20 bytes = minimum valid header
-        byte[] frame = BuildFrameWithDataOffset(5);
+        byte[] frame = _BuildFrameWithDataOffset(5);
 
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
@@ -193,7 +193,7 @@ internal sealed class TcpMalformedTests
     {
         // DataOffset = 15 → header length = 60 bytes (maximum)
         // Need to ensure the frame has enough data for a 60-byte TCP header
-        byte[] frame = BuildFrameWithDataOffset(15);
+        byte[] frame = _BuildFrameWithDataOffset(15);
 
         // Current frame may be too short for 60-byte header.
         // Extend it with zero padding to accommodate the full header.
@@ -221,7 +221,7 @@ internal sealed class TcpMalformedTests
     public async Task NoCrash_OnRandomGarbage()
     {
         // Build valid Ethernet + IPv4 header, then append random-looking TCP data
-        byte[] validFrame = BuildValidFrame();
+        byte[] validFrame = _BuildValidFrame();
         byte[] garbageFrame = validFrame[.._TcpOffset];
 
         // Append 30 bytes of deterministic pseudo-random TCP data
@@ -252,12 +252,12 @@ internal sealed class TcpMalformedTests
         using (stack)
         {
             // First: malformed — truncated TCP
-            byte[] malformed = BuildValidFrame()[..(_TcpOffset + 5)];
+            byte[] malformed = _BuildValidFrame()[..(_TcpOffset + 5)];
             Packet badPacket = ProtocolTestHelper.ParseFrame(stack, malformed, 0, Timestamp.FromMillis(0));
             await ProtocolTestHelper.AssertFieldNotPresent(stack, badPacket, "tcp.srcport").ConfigureAwait(false);
 
             // Second: valid frame — should parse successfully
-            byte[] valid = BuildValidFrame();
+            byte[] valid = _BuildValidFrame();
             Packet goodPacket = ProtocolTestHelper.ParseFrame(stack, valid, 1, Timestamp.FromMillis(100));
             await ProtocolTestHelper.AssertU64Field(stack, goodPacket, "tcp.srcport", 12345).ConfigureAwait(false);
         }

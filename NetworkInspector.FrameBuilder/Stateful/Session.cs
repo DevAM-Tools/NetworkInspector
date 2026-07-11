@@ -31,7 +31,7 @@ namespace NetworkInspector.FrameBuilder;
 /// When the session is disposed the version is incremented in the
 /// <see cref="Internals"/> object before it is returned to the pool.
 /// Any caller that retains an old handle will see the version
-/// mismatch in <see cref="ThrowIfDisposed"/> and receive an
+/// mismatch in <see cref="_ThrowIfDisposed"/> and receive an
 /// <see cref="ObjectDisposedException"/> — even if the internals have been
 /// re-rented by a new caller.
 /// </para>
@@ -104,7 +104,7 @@ public sealed class Session<TStack, TTrailer, TInterceptor> : IDisposable
         in TTrailer trailer,
         in TInterceptor interceptor)
     {
-        Internals internals = TryRentFromPool() ?? new Internals();
+        Internals internals = _TryRentFromPool() ?? new Internals();
         // Reset any state carried over from a pooled instance BEFORE copying the
         // new handle fields, so a partially-initialised Internals is never
         // observable and InitializeStatefulState always starts from a clean slate.
@@ -117,7 +117,7 @@ public sealed class Session<TStack, TTrailer, TInterceptor> : IDisposable
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static Internals? TryRentFromPool()
+    private static Internals? _TryRentFromPool()
     {
         // Lock-free linear scan.  The cheap volatile read filters out empty
         // slots so that Interlocked.Exchange (the expensive fenced operation)
@@ -144,16 +144,16 @@ public sealed class Session<TStack, TTrailer, TInterceptor> : IDisposable
     /// (stale-handle detection via version mismatch).
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void ThrowIfDisposed()
+    private void _ThrowIfDisposed()
     {
         if (_Disposed || _I.Version != _OpenVersion)
         {
-            ThrowDisposed();
+            _ThrowDisposed();
         }
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private void ThrowDisposed() =>
+    private void _ThrowDisposed() =>
         throw new ObjectDisposedException(GetType().Name);
 
 
@@ -185,7 +185,7 @@ public sealed class Session<TStack, TTrailer, TInterceptor> : IDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public StatefulFrameSequence<TStack, TTrailer, TInterceptor> NextPacket(ReadOnlySpan<byte> payload)
     {
-        ThrowIfDisposed();
+        _ThrowIfDisposed();
         return new StatefulFrameSequence<TStack, TTrailer, TInterceptor>(
             _I.Values, _I.Trailer, _I.Interceptor, ref _I.State, payload);
     }
@@ -200,7 +200,7 @@ public sealed class Session<TStack, TTrailer, TInterceptor> : IDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void UpdateAck(uint ack)
     {
-        ThrowIfDisposed();
+        _ThrowIfDisposed();
         _I.State.TcpAck = ack;
     }
 
@@ -214,7 +214,7 @@ public sealed class Session<TStack, TTrailer, TInterceptor> : IDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal uint PeekTcpStreamNextSeq()
     {
-        ThrowIfDisposed();
+        _ThrowIfDisposed();
         return _I.State.TcpStreamNextSeq;
     }
 
@@ -222,7 +222,7 @@ public sealed class Session<TStack, TTrailer, TInterceptor> : IDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal uint PeekTcpStreamAck()
     {
-        ThrowIfDisposed();
+        _ThrowIfDisposed();
         return _I.State.TcpStreamAck;
     }
 
@@ -230,7 +230,7 @@ public sealed class Session<TStack, TTrailer, TInterceptor> : IDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void SetTcpStreamAck(uint ack)
     {
-        ThrowIfDisposed();
+        _ThrowIfDisposed();
         _I.State.TcpStreamAck = ack;
     }
 
@@ -238,7 +238,7 @@ public sealed class Session<TStack, TTrailer, TInterceptor> : IDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void AdvanceTcpStreamAck(uint delta)
     {
-        ThrowIfDisposed();
+        _ThrowIfDisposed();
         unchecked
         {
             _I.State.TcpStreamAck += delta;
@@ -249,7 +249,7 @@ public sealed class Session<TStack, TTrailer, TInterceptor> : IDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void SetTcpStreamWindow(ushort window)
     {
-        ThrowIfDisposed();
+        _ThrowIfDisposed();
         _I.State.TcpStreamWindow = window;
     }
 
@@ -257,7 +257,7 @@ public sealed class Session<TStack, TTrailer, TInterceptor> : IDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal ushort PeekTcpStreamWindow()
     {
-        ThrowIfDisposed();
+        _ThrowIfDisposed();
         return _I.State.TcpStreamWindow;
     }
 
@@ -265,7 +265,7 @@ public sealed class Session<TStack, TTrailer, TInterceptor> : IDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void PrepareTcpStreamFrame(uint seq, uint ack, byte flags, ushort window, ushort urgent)
     {
-        ThrowIfDisposed();
+        _ThrowIfDisposed();
         _I.State.TcpStreamNextSeq = seq;
         _I.State.TcpStreamAck = ack;
         _I.State.TcpStreamFlags = flags;
@@ -288,7 +288,7 @@ public sealed class Session<TStack, TTrailer, TInterceptor> : IDisposable
         _Disposed = true;
 
         // Increment the version so any stale references held by former callers
-        // will detect the mismatch in ThrowIfDisposed and receive ObjectDisposedException
+        // will detect the mismatch in _ThrowIfDisposed and receive ObjectDisposedException
         // even if the internals are re-rented by a new caller.
         _I.Version++;
 

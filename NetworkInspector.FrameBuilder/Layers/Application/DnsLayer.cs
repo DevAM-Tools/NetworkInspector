@@ -57,7 +57,7 @@ public readonly struct DnsLayer : IStatelessLayer, IPayloadLayer, IPseudoHeaderI
     {
         byte[] name = EncodeName(queryName);
         byte[] payload = new byte[DnsHeaderSize + name.Length + 4];
-        WriteHeader(payload, id, flags, qdCount: 1, anCount: 0, nsCount: 0, arCount: 0);
+        _WriteDnsHeader(payload, id, flags, qdCount: 1, anCount: 0, nsCount: 0, arCount: 0);
         name.CopyTo(payload.AsSpan(DnsHeaderSize));
         int off = DnsHeaderSize + name.Length;
         BinaryPrimitives.WriteUInt16BigEndian(payload.AsSpan(off, 2), qtype);
@@ -96,7 +96,7 @@ public readonly struct DnsLayer : IStatelessLayer, IPayloadLayer, IPseudoHeaderI
         // header(12) + QNAME + 4(qtype+qclass) + 2(name ptr) + 2(type) + 2(class) + 4(TTL) + 2(RDLENGTH) + RDATA
         int total = DnsHeaderSize + name.Length + 4 + 2 + 2 + 2 + 4 + 2 + rdata.Length;
         byte[] payload = new byte[total];
-        WriteHeader(payload, id, flags, qdCount: 1, anCount: 1, nsCount: 0, arCount: 0);
+        _WriteDnsHeader(payload, id, flags, qdCount: 1, anCount: 1, nsCount: 0, arCount: 0);
         int off = DnsHeaderSize;
         name.CopyTo(payload.AsSpan(off));
         off += name.Length;
@@ -310,7 +310,7 @@ public readonly struct DnsLayer : IStatelessLayer, IPayloadLayer, IPseudoHeaderI
     }
 
     /// <summary>Writes the 12-byte DNS header to <paramref name="dst"/>.</summary>
-    private static void WriteHeader(Span<byte> dst, ushort id, ushort flags, ushort qdCount, ushort anCount, ushort nsCount, ushort arCount)
+    private static void _WriteDnsHeader(Span<byte> dst, ushort id, ushort flags, ushort qdCount, ushort anCount, ushort nsCount, ushort arCount)
     {
         BinaryPrimitives.WriteUInt16BigEndian(dst[0..2], id);
         BinaryPrimitives.WriteUInt16BigEndian(dst[2..4], flags);

@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Protocols.Tests;
 
@@ -26,7 +26,7 @@ internal sealed class DataProtocolTests
     private static readonly IPv4Address _ServerIp = new(0x0A000002);
     private static readonly IPv4Address _ClientIp = new(0x0A000001);
 
-    private const string Http101Response =
+    private const string _Http101Response =
         "HTTP/1.1 101 Switching Protocols\r\n" +
         "Upgrade: websocket\r\n" +
         "Connection: Upgrade\r\n" +
@@ -35,7 +35,7 @@ internal sealed class DataProtocolTests
     /// <summary>
     /// Encodes a WebSocket frame and returns raw wire bytes.
     /// </summary>
-    private static byte[] EncodeWsFrame(byte[] payload, byte opcode)
+    private static byte[] _EncodeWsFrame(byte[] payload, byte opcode)
     {
         WebSocketLayer layer = new(payload, opcode, new WebSocketFrameOptions(Fin: true));
         ArrayBufferWriter<byte> writer = new(initialCapacity: 256);
@@ -47,9 +47,9 @@ internal sealed class DataProtocolTests
     /// Builds an Ethernet + IPv4 + TCP frame whose TCP payload is an HTTP 101 response
     /// followed by <paramref name="wsBytes"/>. Port 80 triggers HTTP dispatch.
     /// </summary>
-    private static byte[] BuildFrame(byte[] wsBytes)
+    private static byte[] _BuildFrame(byte[] wsBytes)
     {
-        byte[] http101 = Encoding.ASCII.GetBytes(Http101Response);
+        byte[] http101 = Encoding.ASCII.GetBytes(_Http101Response);
         byte[] combined = new byte[http101.Length + wsBytes.Length];
         http101.CopyTo(combined, 0);
         wsBytes.CopyTo(combined, http101.Length);
@@ -69,7 +69,7 @@ internal sealed class DataProtocolTests
     {
         // Arrange — binary frame with 7-byte payload
         byte[] payload = [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07];
-        byte[] frame = BuildFrame(EncodeWsFrame(payload, WebSocketOpcode.Binary));
+        byte[] frame = _BuildFrame(_EncodeWsFrame(payload, WebSocketOpcode.Binary));
 
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
@@ -88,7 +88,7 @@ internal sealed class DataProtocolTests
     {
         // Arrange — binary frame with known byte pattern
         byte[] payload = [0xDE, 0xAD, 0xBE, 0xEF];
-        byte[] frame = BuildFrame(EncodeWsFrame(payload, WebSocketOpcode.Binary));
+        byte[] frame = _BuildFrame(_EncodeWsFrame(payload, WebSocketOpcode.Binary));
 
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
@@ -106,7 +106,7 @@ internal sealed class DataProtocolTests
     {
         // Arrange — any non-empty binary payload triggers DataProtocol
         byte[] payload = [0xFF];
-        byte[] frame = BuildFrame(EncodeWsFrame(payload, WebSocketOpcode.Binary));
+        byte[] frame = _BuildFrame(_EncodeWsFrame(payload, WebSocketOpcode.Binary));
 
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
@@ -123,7 +123,7 @@ internal sealed class DataProtocolTests
     public async Task Parse_BinaryFrame_SingleByte_DataLenIsOne()
     {
         byte[] payload = [0xAB];
-        byte[] frame = BuildFrame(EncodeWsFrame(payload, WebSocketOpcode.Binary));
+        byte[] frame = _BuildFrame(_EncodeWsFrame(payload, WebSocketOpcode.Binary));
 
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
@@ -142,7 +142,7 @@ internal sealed class DataProtocolTests
         // A WebSocket text (opcode=1) frame dispatches to TextProtocol, not DataProtocol.
         // Ensure data.* fields are absent.
         byte[] payload = Encoding.UTF8.GetBytes("Hello");
-        byte[] frame = BuildFrame(EncodeWsFrame(payload, WebSocketOpcode.Text));
+        byte[] frame = _BuildFrame(_EncodeWsFrame(payload, WebSocketOpcode.Text));
 
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)

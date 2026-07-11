@@ -28,7 +28,7 @@ internal sealed class BlfCompressionTests
     /// Ten frames (480 bytes of repetitive LOBJ structure) is sufficient for LZ4 to
     /// achieve a compressed output smaller than the input.
     /// </summary>
-    private static BlfTestGenerator InnerCanFrames(int count = 10)
+    private static BlfTestGenerator _InnerCanFrames(int count = 10)
     {
         BlfTestGenerator gen = new();
         for (int i = 0; i < count; i++)
@@ -40,21 +40,21 @@ internal sealed class BlfCompressionTests
     }
 
     /// <summary>Creates a full-scan <see cref="BlfSource"/> from raw BLF data.</summary>
-    private static BlfSource CreateFullSource(byte[] data, string name = "test.blf") =>
+    private static BlfSource _CreateFullSource(byte[] data, string name = "test.blf") =>
         BlfSource.FromData(data, name, new BlfSourceOptions { ScanMode = ScanMode.Full });
 
     /// <summary>Creates a lazy-scan <see cref="BlfSource"/> from raw BLF data.</summary>
-    private static BlfSource CreateLazySource(byte[] data, string name = "test.blf") =>
+    private static BlfSource _CreateLazySource(byte[] data, string name = "test.blf") =>
         BlfSource.FromData(data, name, new BlfSourceOptions { ScanMode = ScanMode.Lazy });
 
     /// <summary>Creates a <see cref="BlfStreamSource"/> from raw BLF data.</summary>
-    private static BlfStreamSource CreateStreamSource(byte[] data, string name = "test.blf") =>
+    private static BlfStreamSource _CreateStreamSource(byte[] data, string name = "test.blf") =>
         BlfStreamSource.FromStream(new MemoryStream(data), name);
 
 
 
     /// <summary>Reads all frames from a started <see cref="BlfSource"/>.</summary>
-    private static List<Frame> ReadAll(BlfSource source)
+    private static List<Frame> _ReadAll(BlfSource source)
     {
         List<Frame> frames = [];
         Frame? f;
@@ -67,7 +67,7 @@ internal sealed class BlfCompressionTests
     }
 
     /// <summary>Reads all frames from a started <see cref="BlfStreamSource"/>.</summary>
-    private static List<Frame> ReadAll(BlfStreamSource source)
+    private static List<Frame> _ReadAll(BlfStreamSource source)
     {
         List<Frame> frames = [];
         Frame? f;
@@ -255,10 +255,10 @@ internal sealed class BlfCompressionTests
     public async Task BlfSource_LogContainer_None_AllFramesParsed()
     {
         byte[] blfData = new BlfTestGenerator()
-            .AddLogContainer(BlfConstants.CompressionNone, InnerCanFrames(5))
+            .AddLogContainer(BlfConstants.CompressionNone, _InnerCanFrames(5))
             .Build();
 
-        using BlfSource source = CreateFullSource(blfData);
+        using BlfSource source = _CreateFullSource(blfData);
         SourceTestFixture.InitializeAndStartSource(source);
 
         await Assert.That(source.EstimatedFrameCount).IsEqualTo(5);
@@ -275,10 +275,10 @@ internal sealed class BlfCompressionTests
     public async Task BlfSource_LogContainer_Lz4_AllFramesParsed()
     {
         byte[] blfData = new BlfTestGenerator()
-            .AddLogContainer(BlfConstants.CompressionLz4, InnerCanFrames(10))
+            .AddLogContainer(BlfConstants.CompressionLz4, _InnerCanFrames(10))
             .Build();
 
-        using BlfSource source = CreateFullSource(blfData);
+        using BlfSource source = _CreateFullSource(blfData);
         SourceTestFixture.InitializeAndStartSource(source);
 
         await Assert.That(source.EstimatedFrameCount).IsEqualTo(10);
@@ -296,10 +296,10 @@ internal sealed class BlfCompressionTests
     public async Task BlfSource_LogContainer_Zlib_AllFramesParsed()
     {
         byte[] blfData = new BlfTestGenerator()
-            .AddLogContainer(BlfConstants.CompressionZlib, InnerCanFrames(10))
+            .AddLogContainer(BlfConstants.CompressionZlib, _InnerCanFrames(10))
             .Build();
 
-        using BlfSource source = CreateFullSource(blfData);
+        using BlfSource source = _CreateFullSource(blfData);
         SourceTestFixture.InitializeAndStartSource(source);
 
         await Assert.That(source.EstimatedFrameCount).IsEqualTo(10);
@@ -317,12 +317,12 @@ internal sealed class BlfCompressionTests
     public async Task BlfSource_MultipleContainersMixedCompression_AllFramesParsed()
     {
         byte[] blfData = new BlfTestGenerator()
-            .AddLogContainer(BlfConstants.CompressionNone, InnerCanFrames(4))
-            .AddLogContainer(BlfConstants.CompressionLz4, InnerCanFrames(10))
-            .AddLogContainer(BlfConstants.CompressionZlib, InnerCanFrames(6))
+            .AddLogContainer(BlfConstants.CompressionNone, _InnerCanFrames(4))
+            .AddLogContainer(BlfConstants.CompressionLz4, _InnerCanFrames(10))
+            .AddLogContainer(BlfConstants.CompressionZlib, _InnerCanFrames(6))
             .Build();
 
-        using BlfSource source = CreateFullSource(blfData);
+        using BlfSource source = _CreateFullSource(blfData);
         SourceTestFixture.InitializeAndStartSource(source);
 
         await Assert.That(source.EstimatedFrameCount).IsEqualTo(20);
@@ -340,13 +340,13 @@ internal sealed class BlfCompressionTests
             // Corrupt container: claims 200 uncompressed bytes but payload is 4 garbage bytes.
             .AddCorruptLogContainer(BlfConstants.CompressionLz4, 200, [0xDE, 0xAD, 0xBE, 0xEF])
             // Valid container follows: must still be parsed.
-            .AddLogContainer(BlfConstants.CompressionNone, InnerCanFrames(3))
+            .AddLogContainer(BlfConstants.CompressionNone, _InnerCanFrames(3))
             .Build();
 
-        using BlfSource source = CreateLazySource(blfData);
+        using BlfSource source = _CreateLazySource(blfData);
         SourceTestFixture.InitializeAndStartSource(source);
 
-        List<Frame> frames = ReadAll(source);
+        List<Frame> frames = _ReadAll(source);
 
         // Three valid frames recovered after the corrupt container.
         await Assert.That(frames.Count).IsEqualTo(3);
@@ -366,14 +366,14 @@ internal sealed class BlfCompressionTests
     {
         byte[] blfData = new BlfTestGenerator()
             // LZ4-compressed with correct compressed data but wrong declared output size.
-            .AddLogContainerWithWrongSize(BlfConstants.CompressionLz4, InnerCanFrames(5), wrongUncompressedSize: 9999)
-            .AddLogContainer(BlfConstants.CompressionNone, InnerCanFrames(2))
+            .AddLogContainerWithWrongSize(BlfConstants.CompressionLz4, _InnerCanFrames(5), wrongUncompressedSize: 9999)
+            .AddLogContainer(BlfConstants.CompressionNone, _InnerCanFrames(2))
             .Build();
 
-        using BlfSource source = CreateLazySource(blfData);
+        using BlfSource source = _CreateLazySource(blfData);
         SourceTestFixture.InitializeAndStartSource(source);
 
-        List<Frame> frames = ReadAll(source);
+        List<Frame> frames = _ReadAll(source);
 
         await Assert.That(frames.Count).IsEqualTo(2);
         await Assert.That(source.SkippedFrameCount > 0).IsTrue();
@@ -391,13 +391,13 @@ internal sealed class BlfCompressionTests
     public async Task BlfStreamSource_LogContainer_None_AllFramesParsed()
     {
         byte[] blfData = new BlfTestGenerator()
-            .AddLogContainer(BlfConstants.CompressionNone, InnerCanFrames(5))
+            .AddLogContainer(BlfConstants.CompressionNone, _InnerCanFrames(5))
             .Build();
 
-        using BlfStreamSource source = CreateStreamSource(blfData);
+        using BlfStreamSource source = _CreateStreamSource(blfData);
         SourceTestFixture.InitializeAndStartSource(source);
 
-        List<Frame> frames = ReadAll(source);
+        List<Frame> frames = _ReadAll(source);
 
         await Assert.That(frames.Count).IsEqualTo(5);
         await Assert.That(frames[0].LinkType).IsEqualTo(LinkType.CanSocketcan);
@@ -411,13 +411,13 @@ internal sealed class BlfCompressionTests
     public async Task BlfStreamSource_LogContainer_Lz4_AllFramesParsed()
     {
         byte[] blfData = new BlfTestGenerator()
-            .AddLogContainer(BlfConstants.CompressionLz4, InnerCanFrames(10))
+            .AddLogContainer(BlfConstants.CompressionLz4, _InnerCanFrames(10))
             .Build();
 
-        using BlfStreamSource source = CreateStreamSource(blfData);
+        using BlfStreamSource source = _CreateStreamSource(blfData);
         SourceTestFixture.InitializeAndStartSource(source);
 
-        List<Frame> frames = ReadAll(source);
+        List<Frame> frames = _ReadAll(source);
 
         await Assert.That(frames.Count).IsEqualTo(10);
         await Assert.That(frames[0].LinkType).IsEqualTo(LinkType.CanSocketcan);
@@ -431,13 +431,13 @@ internal sealed class BlfCompressionTests
     public async Task BlfStreamSource_LogContainer_Zlib_AllFramesParsed()
     {
         byte[] blfData = new BlfTestGenerator()
-            .AddLogContainer(BlfConstants.CompressionZlib, InnerCanFrames(10))
+            .AddLogContainer(BlfConstants.CompressionZlib, _InnerCanFrames(10))
             .Build();
 
-        using BlfStreamSource source = CreateStreamSource(blfData);
+        using BlfStreamSource source = _CreateStreamSource(blfData);
         SourceTestFixture.InitializeAndStartSource(source);
 
-        List<Frame> frames = ReadAll(source);
+        List<Frame> frames = _ReadAll(source);
 
         await Assert.That(frames.Count).IsEqualTo(10);
         await Assert.That(frames[0].LinkType).IsEqualTo(LinkType.CanSocketcan);
@@ -456,13 +456,13 @@ internal sealed class BlfCompressionTests
             // Corrupt Zlib payload: invalid stream header causes InvalidDataException,
             // which must be wrapped as BlfException (regression guard for the fix in BlfContainer).
             .AddCorruptLogContainer(BlfConstants.CompressionZlib, 200, [0xDE, 0xAD, 0xBE, 0xEF])
-            .AddLogContainer(BlfConstants.CompressionNone, InnerCanFrames(3))
+            .AddLogContainer(BlfConstants.CompressionNone, _InnerCanFrames(3))
             .Build();
 
-        using BlfStreamSource source = CreateStreamSource(blfData);
+        using BlfStreamSource source = _CreateStreamSource(blfData);
         SourceTestFixture.InitializeAndStartSource(source);
 
-        List<Frame> frames = ReadAll(source);
+        List<Frame> frames = _ReadAll(source);
 
         await Assert.That(frames.Count).IsEqualTo(3);
         await Assert.That(frames[0].LinkType).IsEqualTo(LinkType.CanSocketcan);
@@ -478,13 +478,13 @@ internal sealed class BlfCompressionTests
     {
         byte[] blfData = new BlfTestGenerator()
             .AddCorruptLogContainer(99, 100, [0x01, 0x02, 0x03, 0x04])
-            .AddLogContainer(BlfConstants.CompressionNone, InnerCanFrames(2))
+            .AddLogContainer(BlfConstants.CompressionNone, _InnerCanFrames(2))
             .Build();
 
-        using BlfStreamSource source = CreateStreamSource(blfData);
+        using BlfStreamSource source = _CreateStreamSource(blfData);
         SourceTestFixture.InitializeAndStartSource(source);
 
-        List<Frame> frames = ReadAll(source);
+        List<Frame> frames = _ReadAll(source);
 
         await Assert.That(frames.Count).IsEqualTo(2);
         await Assert.That(source.SkippedFrameCount > 0).IsTrue();
@@ -597,7 +597,7 @@ internal sealed class BlfCompressionTests
     {
         // Build a valid LZ4 container whose uncompressed payload exceeds 10 bytes.
         byte[] blfData = new BlfTestGenerator()
-            .AddLogContainer(BlfConstants.CompressionLz4, InnerCanFrames(5))
+            .AddLogContainer(BlfConstants.CompressionLz4, _InnerCanFrames(5))
             .Build();
 
         BlfSourceOptions options = new()
@@ -609,7 +609,7 @@ internal sealed class BlfCompressionTests
         using BlfSource source = BlfSource.FromData(blfData, "test.blf", options);
         SourceTestFixture.InitializeAndStartSource(source);
 
-        await Assert.That(() => ReadAll(source)).Throws<BlfDecompressionLimitExceededException>();
+        await Assert.That(() => _ReadAll(source)).Throws<BlfDecompressionLimitExceededException>();
     }
 
     /// <summary>
@@ -620,7 +620,7 @@ internal sealed class BlfCompressionTests
     public async Task BlfSource_FullScan_LimitExceeded_Throws()
     {
         byte[] blfData = new BlfTestGenerator()
-            .AddLogContainer(BlfConstants.CompressionLz4, InnerCanFrames(5))
+            .AddLogContainer(BlfConstants.CompressionLz4, _InnerCanFrames(5))
             .Build();
 
         BlfSourceOptions options = new()
@@ -649,7 +649,7 @@ internal sealed class BlfCompressionTests
     public async Task BlfSource_FrameById_LimitEnforcedViaFullScan_Throws()
     {
         byte[] blfData = new BlfTestGenerator()
-            .AddLogContainer(BlfConstants.CompressionLz4, InnerCanFrames(5))
+            .AddLogContainer(BlfConstants.CompressionLz4, _InnerCanFrames(5))
             .Build();
 
         BlfSourceOptions options = new()
@@ -675,7 +675,7 @@ internal sealed class BlfCompressionTests
     public async Task BlfSource_LimitSufficient_AllFramesParsed()
     {
         byte[] blfData = new BlfTestGenerator()
-            .AddLogContainer(BlfConstants.CompressionLz4, InnerCanFrames(5))
+            .AddLogContainer(BlfConstants.CompressionLz4, _InnerCanFrames(5))
             .Build();
 
         BlfSourceOptions options = new()
@@ -687,7 +687,7 @@ internal sealed class BlfCompressionTests
         using BlfSource source = BlfSource.FromData(blfData, "test.blf", options);
         SourceTestFixture.InitializeAndStartSource(source);
 
-        List<Frame> frames = ReadAll(source);
+        List<Frame> frames = _ReadAll(source);
         await Assert.That(frames.Count).IsEqualTo(5);
     }
 
@@ -700,14 +700,14 @@ internal sealed class BlfCompressionTests
     public async Task BlfStreamSource_LimitExceeded_Throws()
     {
         byte[] blfData = new BlfTestGenerator()
-            .AddLogContainer(BlfConstants.CompressionLz4, InnerCanFrames(5))
+            .AddLogContainer(BlfConstants.CompressionLz4, _InnerCanFrames(5))
             .Build();
 
-        using BlfStreamSource source = CreateStreamSource(blfData);
+        using BlfStreamSource source = _CreateStreamSource(blfData);
         source.MaxUncompressedContainerSize = 10;   // far below actual container size
         SourceTestFixture.InitializeAndStartSource(source);
 
-        await Assert.That(() => ReadAll(source)).Throws<BlfDecompressionLimitExceededException>();
+        await Assert.That(() => _ReadAll(source)).Throws<BlfDecompressionLimitExceededException>();
     }
 
     /// <summary>
@@ -718,14 +718,14 @@ internal sealed class BlfCompressionTests
     public async Task BlfStreamSource_LimitSufficient_AllFramesParsed()
     {
         byte[] blfData = new BlfTestGenerator()
-            .AddLogContainer(BlfConstants.CompressionLz4, InnerCanFrames(5))
+            .AddLogContainer(BlfConstants.CompressionLz4, _InnerCanFrames(5))
             .Build();
 
-        using BlfStreamSource source = CreateStreamSource(blfData);
+        using BlfStreamSource source = _CreateStreamSource(blfData);
         source.MaxUncompressedContainerSize = 1024 * 1024;
         SourceTestFixture.InitializeAndStartSource(source);
 
-        List<Frame> frames = ReadAll(source);
+        List<Frame> frames = _ReadAll(source);
         await Assert.That(frames.Count).IsEqualTo(5);
     }
 
@@ -747,7 +747,7 @@ internal sealed class BlfCompressionTests
     [Test]
     public async Task BlfStreamSource_NegativeLimit_ThrowsArgumentOutOfRange()
     {
-        using BlfStreamSource source = CreateStreamSource([]);
+        using BlfStreamSource source = _CreateStreamSource([]);
         await Assert.That(() => source.MaxUncompressedContainerSize = -1)
             .Throws<ArgumentOutOfRangeException>();
     }

@@ -37,7 +37,7 @@ namespace NetworkInspector.Sources.Cached;
 ///
 /// <para>
 /// <b>Cache cap:</b> When more than
-/// <c>MaxChunks × ChunkSize</c> (≈ 134 217 728) frames are observed, additional frames are
+/// <c>_MaxChunks × _ChunkSize</c> (≈ 134 217 728) frames are observed, additional frames are
 /// still returned by <see cref="NextFrame"/> (delegated to the inner source) but cannot
 /// be cached. <see cref="FrameById"/> for those IDs returns <see langword="null"/>, and
 /// <see cref="IsCacheCapped"/> becomes <see langword="true"/> on the first overflow so
@@ -50,10 +50,10 @@ public sealed class CachedFrameSource : IRandomAccessFrameSource, IErrorTolerant
     #region Constants
 
     // 2^14 = 16384 slots per chunk, ~128 KB of references per chunk.
-    private const int ChunkShift = 14;
-    private const int ChunkSize = 1 << ChunkShift;  // 16384
-    private const int ChunkMask = ChunkSize - 1;
-    private const int MaxChunks = 8192;              // 8192 × 16384 = ~134M frames
+    private const int _ChunkShift = 14;
+    private const int _ChunkSize = 1 << _ChunkShift;  // 16384
+    private const int _ChunkMask = _ChunkSize - 1;
+    private const int _MaxChunks = 8192;              // 8192 × 16384 = ~134M frames
 
     /// <summary>
     /// Default maximum memory budget for cached frame structs: 512 MiB on 64-bit
@@ -66,7 +66,7 @@ public sealed class CachedFrameSource : IRandomAccessFrameSource, IErrorTolerant
         Environment.Is64BitProcess ? 512L * 1024 * 1024 : 64L * 1024 * 1024;
 
     /// <summary>Approximate byte size of a <see cref="Frame"/> struct reference stored in a chunk slot.</summary>
-    private const int FrameSlotBytes = 8;
+    private const int _FrameSlotBytes = 8;
 
     #endregion
 
@@ -80,8 +80,8 @@ public sealed class CachedFrameSource : IRandomAccessFrameSource, IErrorTolerant
     // Outer array of chunk references. Inner arrays are allocated lazily.
     // Writes: source thread only (single writer per chunk slot).
     // Reads: any thread via Volatile.Read on the chunk reference + validity flag.
-    private readonly Frame[][] _Chunks = new Frame[MaxChunks][];
-    private readonly bool[][] _Valid = new bool[MaxChunks][];
+    private readonly Frame[][] _Chunks = new Frame[_MaxChunks][];
+    private readonly bool[][] _Valid = new bool[_MaxChunks][];
 
     /// <summary>Maximum number of frame-struct bytes to cache before switching to pass-through mode.</summary>
     private readonly long _MaxCacheMemoryBytes;
@@ -98,9 +98,9 @@ public sealed class CachedFrameSource : IRandomAccessFrameSource, IErrorTolerant
     private bool _Disposed;
 
     /// <summary>
-    /// Set to <see langword="true"/> the first time <see cref="CacheFrame"/> is asked to
+    /// Set to <see langword="true"/> the first time <see cref="_CacheFrame"/> is asked to
     /// store a frame whose <see cref="FrameId"/> exceeds the cache capacity
-    /// (<see cref="MaxChunks"/> × <see cref="ChunkSize"/>), or when the memory budget
+    /// (<see cref="_MaxChunks"/> × <see cref="_ChunkSize"/>), or when the memory budget
     /// (<see cref="_MaxCacheMemoryBytes"/>) is reached, or when an
     /// <see cref="OutOfMemoryException"/> occurs during chunk allocation.
     /// Inspected via <see cref="IsCacheCapped"/>.
@@ -201,7 +201,7 @@ public sealed class CachedFrameSource : IRandomAccessFrameSource, IErrorTolerant
 
         if (frame is not null)
         {
-            CacheFrame(frame.Value);
+            _CacheFrame(frame.Value);
         }
 
         return frame;
@@ -233,21 +233,73 @@ public sealed class CachedFrameSource : IRandomAccessFrameSource, IErrorTolerant
     // ── IErrorTolerantFrameSource delegation ──────────────────────────────────
 
     /// <inheritdoc/>
-    public long ReadFrameCount => _InnerErrorTolerant?.ReadFrameCount ?? 0;
+    public long ReadFrameCount
+    {
+        get
+        {
+            if (_InnerErrorTolerant is null)
+            {
+                return 0;
+            }
+
+            return _InnerErrorTolerant.ReadFrameCount;
+        }
+    }
 
     /// <inheritdoc/>
-    public long SkippedFrameCount => _InnerErrorTolerant?.SkippedFrameCount ?? 0;
+    public long SkippedFrameCount
+    {
+        get
+        {
+            if (_InnerErrorTolerant is null)
+            {
+                return 0;
+            }
+
+            return _InnerErrorTolerant.SkippedFrameCount;
+        }
+    }
 
     /// <inheritdoc/>
-    public long ErrorCount => _InnerErrorTolerant?.ErrorCount ?? 0;
+    public long ErrorCount
+    {
+        get
+        {
+            if (_InnerErrorTolerant is null)
+            {
+                return 0;
+            }
+
+            return _InnerErrorTolerant.ErrorCount;
+        }
+    }
 
     /// <inheritdoc/>
-    public bool HasErrors => _InnerErrorTolerant?.HasErrors ?? false;
+    public bool HasErrors
+    {
+        get
+        {
+            if (_InnerErrorTolerant is null)
+            {
+                return false;
+            }
+
+            return _InnerErrorTolerant.HasErrors;
+        }
+    }
 
     /// <inheritdoc/>
     public ErrorToleranceMode ErrorTolerance
     {
-        get => _InnerErrorTolerant?.ErrorTolerance ?? ErrorToleranceMode.Tolerant;
+        get
+        {
+            if (_InnerErrorTolerant is null)
+            {
+                return ErrorToleranceMode.Tolerant;
+            }
+
+            return _InnerErrorTolerant.ErrorTolerance;
+        }
         set
         {
             if (_InnerErrorTolerant is not null)
@@ -311,11 +363,11 @@ public sealed class CachedFrameSource : IRandomAccessFrameSource, IErrorTolerant
 
         cancellationToken.ThrowIfCancellationRequested();
 
-        int chunkIdx = id.Value >> ChunkShift;
-        int slotIdx = id.Value & ChunkMask;
+        int chunkIdx = id.Value >> _ChunkShift;
+        int slotIdx = id.Value & _ChunkMask;
 
         // Bounds check: FrameId beyond supported range.
-        if ((uint)chunkIdx >= MaxChunks)
+        if ((uint)chunkIdx >= _MaxChunks)
         {
             return null;
         }
@@ -362,7 +414,7 @@ public sealed class CachedFrameSource : IRandomAccessFrameSource, IErrorTolerant
     /// </para>
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void CacheFrame(Frame frame)
+    private void _CacheFrame(Frame frame)
     {
         // Guard against invalid frame IDs (negative values would produce wrong chunk index)
         if (!frame.Id.IsValid)
@@ -376,14 +428,14 @@ public sealed class CachedFrameSource : IRandomAccessFrameSource, IErrorTolerant
             return;
         }
 
-        int chunkIdx = frame.Id.Value >> ChunkShift;
-        int slotIdx = frame.Id.Value & ChunkMask;
+        int chunkIdx = frame.Id.Value >> _ChunkShift;
+        int slotIdx = frame.Id.Value & _ChunkMask;
 
         // Beyond supported range — the wrapped source returned a frame whose ID
         // is past the cache capacity (~134 M frames). The frame itself is still
         // delivered to the caller of NextFrame() unchanged; only the cache copy
         // is dropped. Surface IsCacheCapped so hosts can warn the user.
-        if ((uint)chunkIdx >= MaxChunks)
+        if ((uint)chunkIdx >= _MaxChunks)
         {
             Volatile.Write(ref _CacheCapped, true);
             return;
@@ -395,9 +447,9 @@ public sealed class CachedFrameSource : IRandomAccessFrameSource, IErrorTolerant
         if (chunk is null)
         {
             // Check memory budget before allocating a new chunk.
-            // Each chunk holds ChunkSize frames; account for both the frame array and
+            // Each chunk holds _ChunkSize frames; account for both the frame array and
             // the parallel validity boolean array.
-            long chunkBytes = (long)ChunkSize * (FrameSlotBytes + sizeof(bool));
+            long chunkBytes = (long)_ChunkSize * (_FrameSlotBytes + sizeof(bool));
             if (_CacheMemoryBytes + chunkBytes > _MaxCacheMemoryBytes)
             {
                 Volatile.Write(ref _CacheCapped, true);
@@ -409,8 +461,8 @@ public sealed class CachedFrameSource : IRandomAccessFrameSource, IErrorTolerant
             try
             {
                 // Lazy allocation. Single writer per source thread, so no CAS needed.
-                chunk = new Frame[ChunkSize];
-                validChunk = new bool[ChunkSize];
+                chunk = new Frame[_ChunkSize];
+                validChunk = new bool[_ChunkSize];
             }
             catch (OutOfMemoryException)
             {

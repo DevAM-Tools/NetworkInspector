@@ -18,7 +18,7 @@ internal sealed class PacketRecycleTests
     // ── Helpers ──────────────────────────────────────────────────────────────────────
 
     /// <summary>Builds a stack with all standard protocols registered.</summary>
-    private static Stack BuildStack()
+    private static Stack _BuildStack()
     {
         FrameInterfaceRegistry registry = new();
         using SettingsManager settingsManager = new();
@@ -28,7 +28,7 @@ internal sealed class PacketRecycleTests
     }
 
     /// <summary>Creates a valid synthetic Ethernet/IPv6/UDP frame for testing.</summary>
-    private static byte[] BuildIpv6UdpFrame(
+    private static byte[] _BuildIpv6UdpFrame(
         ushort srcPort = 12345, ushort dstPort = 54321, int totalSize = 128)
     {
         const int ethSize = 14;
@@ -83,7 +83,7 @@ internal sealed class PacketRecycleTests
     }
 
     /// <summary>Wraps raw bytes into a <see cref="Frame"/> using the given stack's registry.</summary>
-    private static Frame MakeFrame(Stack stack, byte[] data, int frameId = 1) =>
+    private static Frame _MakeFrame(Stack stack, byte[] data, int frameId = 1) =>
         Frame.Create(
             new FrameId(frameId),
             Timestamp.FromSecs(frameId),
@@ -97,11 +97,11 @@ internal sealed class PacketRecycleTests
     [Test]
     public async Task Recycle_ProducesCorrectIdAndTimestamp()
     {
-        using Stack stack = BuildStack();
-        byte[] frameData = BuildIpv6UdpFrame();
+        using Stack stack = _BuildStack();
+        byte[] frameData = _BuildIpv6UdpFrame();
 
-        Frame frame1 = MakeFrame(stack, frameData, frameId: 1);
-        Frame frame2 = MakeFrame(stack, frameData, frameId: 2);
+        Frame frame1 = _MakeFrame(stack, frameData, frameId: 1);
+        Frame frame2 = _MakeFrame(stack, frameData, frameId: 2);
 
         Packet packet = Packet.ParseFrame(new PacketId(1), stack, frame1);
 
@@ -117,18 +117,18 @@ internal sealed class PacketRecycleTests
     [Test]
     public async Task Recycle_FieldCountMatchesFreshParse()
     {
-        using Stack stack = BuildStack();
-        byte[] frameData = BuildIpv6UdpFrame();
+        using Stack stack = _BuildStack();
+        byte[] frameData = _BuildIpv6UdpFrame();
 
-        Frame freshFrame = MakeFrame(stack, frameData, frameId: 1);
-        Frame recycleFrame = MakeFrame(stack, frameData, frameId: 2);
+        Frame freshFrame = _MakeFrame(stack, frameData, frameId: 1);
+        Frame recycleFrame = _MakeFrame(stack, frameData, frameId: 2);
 
         // Fresh parse baseline
         Packet fresh = Packet.ParseFrame(new PacketId(1), stack, freshFrame);
         int freshCount = fresh.FieldCount(materialize: true);
 
         // Seed packet to recycle
-        Packet seed = Packet.ParseFrame(new PacketId(10), stack, MakeFrame(stack, frameData, frameId: 10));
+        Packet seed = Packet.ParseFrame(new PacketId(10), stack, _MakeFrame(stack, frameData, frameId: 10));
 
         // Recycled parse
         Packet recycled = Packet.ParseFrame(seed, new PacketId(2), stack, recycleFrame);
@@ -140,17 +140,17 @@ internal sealed class PacketRecycleTests
     [Test]
     public async Task Recycle_OldFieldsNotRetainedAfterReset()
     {
-        using Stack stack = BuildStack();
-        byte[] frameData = BuildIpv6UdpFrame();
+        using Stack stack = _BuildStack();
+        byte[] frameData = _BuildIpv6UdpFrame();
 
         // Parse a first packet to be recycled
-        Frame frame1 = MakeFrame(stack, frameData, frameId: 1);
+        Frame frame1 = _MakeFrame(stack, frameData, frameId: 1);
         Packet packet = Packet.ParseFrame(new PacketId(1), stack, frame1);
         int firstCount = packet.FieldCount(materialize: true);
         await Assert.That(firstCount).IsGreaterThan(1);
 
         // Recycle
-        Frame frame2 = MakeFrame(stack, frameData, frameId: 2);
+        Frame frame2 = _MakeFrame(stack, frameData, frameId: 2);
         Packet recycled = Packet.ParseFrame(packet, new PacketId(2), stack, frame2);
 
         // Verify that _Id changed — old identity is gone
@@ -166,17 +166,17 @@ internal sealed class PacketRecycleTests
     [Test]
     public async Task Recycle_PendingLazyCountIsZeroAfterReset()
     {
-        using Stack stack = BuildStack();
-        byte[] frameData = BuildIpv6UdpFrame();
+        using Stack stack = _BuildStack();
+        byte[] frameData = _BuildIpv6UdpFrame();
 
-        Frame frame1 = MakeFrame(stack, frameData, frameId: 1);
+        Frame frame1 = _MakeFrame(stack, frameData, frameId: 1);
         Packet packet = Packet.ParseFrame(new PacketId(1), stack, frame1);
 
         // Packet should have lazy fields before materialization
         await Assert.That(packet.HasUnpopulatedLazyFields).IsTrue();
 
         // Recycle WITHOUT materializing — lazy populators from parse 1 must be gone
-        Frame frame2 = MakeFrame(stack, frameData, frameId: 2);
+        Frame frame2 = _MakeFrame(stack, frameData, frameId: 2);
         Packet recycled = Packet.ParseFrame(packet, new PacketId(2), stack, frame2);
 
         // After recycle and fresh parse, lazy fields refer only to the new parse
@@ -188,16 +188,16 @@ internal sealed class PacketRecycleTests
     [Test]
     public async Task Recycle_MaterializeAllAfterRecycleSucceeds()
     {
-        using Stack stack = BuildStack();
-        byte[] frameData = BuildIpv6UdpFrame(srcPort: 9999, dstPort: 1234);
+        using Stack stack = _BuildStack();
+        byte[] frameData = _BuildIpv6UdpFrame(srcPort: 9999, dstPort: 1234);
 
         // Fresh parse for field count baseline
-        Packet fresh = Packet.ParseFrame(new PacketId(1), stack, MakeFrame(stack, frameData));
+        Packet fresh = Packet.ParseFrame(new PacketId(1), stack, _MakeFrame(stack, frameData));
         int freshCount = fresh.FieldCount(materialize: true);
 
         // Seed + recycle
-        Packet seed = Packet.ParseFrame(new PacketId(10), stack, MakeFrame(stack, frameData, 10));
-        Frame recycleFrame = MakeFrame(stack, frameData, frameId: 2);
+        Packet seed = Packet.ParseFrame(new PacketId(10), stack, _MakeFrame(stack, frameData, 10));
+        Frame recycleFrame = _MakeFrame(stack, frameData, frameId: 2);
         Packet recycled = Packet.ParseFrame(seed, new PacketId(2), stack, recycleFrame);
         recycled.MaterializeAll();
 
@@ -209,17 +209,17 @@ internal sealed class PacketRecycleTests
     [Test]
     public async Task MultipleRecycles_ProduceCorrectResultsEachTime()
     {
-        using Stack stack = BuildStack();
-        byte[] frameData = BuildIpv6UdpFrame();
+        using Stack stack = _BuildStack();
+        byte[] frameData = _BuildIpv6UdpFrame();
 
         // Establish expected field count
-        Packet baseline = Packet.ParseFrame(new PacketId(0), stack, MakeFrame(stack, frameData, 0));
+        Packet baseline = Packet.ParseFrame(new PacketId(0), stack, _MakeFrame(stack, frameData, 0));
         int expected = baseline.FieldCount(materialize: true);
 
         // Recycle the same packet 50 times
         for (int i = 1; i <= 50; i++)
         {
-            Frame frame = MakeFrame(stack, frameData, i);
+            Frame frame = _MakeFrame(stack, frameData, i);
             Packet recycled = Packet.ParseFrame(baseline, new PacketId(i), stack, frame);
 
             await Assert.That(recycled.Id).IsEqualTo(new PacketId(i));
@@ -234,13 +234,13 @@ internal sealed class PacketRecycleTests
     [Test]
     public async Task Recycle_WithFirstProtocolOverride_IsApplied()
     {
-        using Stack stack = BuildStack();
-        byte[] frameData = BuildIpv6UdpFrame();
+        using Stack stack = _BuildStack();
+        byte[] frameData = _BuildIpv6UdpFrame();
 
-        Packet seed = Packet.ParseFrame(new PacketId(1), stack, MakeFrame(stack, frameData, 1));
+        Packet seed = Packet.ParseFrame(new PacketId(1), stack, _MakeFrame(stack, frameData, 1));
 
         // Recycle with explicit first protocol (stack default)
-        Frame frame2 = MakeFrame(stack, frameData, 2);
+        Frame frame2 = _MakeFrame(stack, frameData, 2);
         Packet recycled = Packet.ParseFrame(
             seed, new PacketId(2), stack, frame2, stack.FrameProtocolId);
 
@@ -253,15 +253,15 @@ internal sealed class PacketRecycleTests
     [Test]
     public async Task RecycleIndexed_PacketIndexIsRecordedCorrectly()
     {
-        using Stack stack = BuildStack();
-        byte[] frameData = BuildIpv6UdpFrame();
+        using Stack stack = _BuildStack();
+        byte[] frameData = _BuildIpv6UdpFrame();
 
         PacketIndex index = new(stack);
 
-        Frame frame1 = MakeFrame(stack, frameData, 1);
+        Frame frame1 = _MakeFrame(stack, frameData, 1);
         Packet seed = Packet.ParseFrameIndexed(new PacketId(1), stack, frame1, index);
 
-        Frame frame2 = MakeFrame(stack, frameData, 2);
+        Frame frame2 = _MakeFrame(stack, frameData, 2);
         Packet recycled = Packet.ParseFrameIndexed(seed, new PacketId(2), stack, frame2, index);
 
         await Assert.That(recycled.Id).IsEqualTo(new PacketId(2));
@@ -274,14 +274,14 @@ internal sealed class PacketRecycleTests
     [Test]
     public async Task Recycle_ThrowsWhenPacketNotFinalized()
     {
-        using Stack stack = BuildStack();
-        byte[] frameData = BuildIpv6UdpFrame();
+        using Stack stack = _BuildStack();
+        byte[] frameData = _BuildIpv6UdpFrame();
 
         // Create an unsealed packet directly via internal constructor
-        Frame frame = MakeFrame(stack, frameData, 1);
+        Frame frame = _MakeFrame(stack, frameData, 1);
         Packet unsealed = new(new PacketId(1), stack, frame);  // NOT Sealed
 
-        Frame frame2 = MakeFrame(stack, frameData, 2);
+        Frame frame2 = _MakeFrame(stack, frameData, 2);
 
         await Assert.That(() => Packet.ParseFrame(unsealed, new PacketId(2), stack, frame2))
             .Throws<InvalidOperationException>();
@@ -290,16 +290,16 @@ internal sealed class PacketRecycleTests
     [Test]
     public async Task Recycle_ThrowsWhenStackMismatch()
     {
-        using Stack stack1 = BuildStack();
-        using Stack stack2 = BuildStack();
+        using Stack stack1 = _BuildStack();
+        using Stack stack2 = _BuildStack();
 
-        byte[] frameData = BuildIpv6UdpFrame();
-        Frame frame1 = MakeFrame(stack1, frameData, 1);
+        byte[] frameData = _BuildIpv6UdpFrame();
+        Frame frame1 = _MakeFrame(stack1, frameData, 1);
         Packet packet = Packet.ParseFrame(new PacketId(1), stack1, frame1);
 
         // frame2 must be from stack2 to satisfy registry check for stack2,
         // but the recycle packet is from stack1 — stack mismatch
-        Frame frame2 = MakeFrame(stack2, frameData, 2);
+        Frame frame2 = _MakeFrame(stack2, frameData, 2);
 
         await Assert.That(() => Packet.ParseFrame(packet, new PacketId(2), stack2, frame2))
             .Throws<ArgumentException>();
@@ -308,15 +308,15 @@ internal sealed class PacketRecycleTests
     [Test]
     public async Task Recycle_ThrowsWhenRegistryMismatch()
     {
-        using Stack stack = BuildStack();
-        using Stack otherStack = BuildStack();
+        using Stack stack = _BuildStack();
+        using Stack otherStack = _BuildStack();
 
-        byte[] frameData = BuildIpv6UdpFrame();
-        Frame frame1 = MakeFrame(stack, frameData, 1);
+        byte[] frameData = _BuildIpv6UdpFrame();
+        Frame frame1 = _MakeFrame(stack, frameData, 1);
         Packet packet = Packet.ParseFrame(new PacketId(1), stack, frame1);
 
         // frame2 from a different registry, but same stack reference
-        Frame frame2 = MakeFrame(otherStack, frameData, 2);
+        Frame frame2 = _MakeFrame(otherStack, frameData, 2);
 
         await Assert.That(() => Packet.ParseFrame(packet, new PacketId(2), stack, frame2))
             .Throws<ArgumentException>();
@@ -327,19 +327,19 @@ internal sealed class PacketRecycleTests
     [Test]
     public async Task Recycle_FieldValuesMatchFreshParse()
     {
-        using Stack stack = BuildStack();
-        byte[] frameData = BuildIpv6UdpFrame(srcPort: 7777, dstPort: 8888);
+        using Stack stack = _BuildStack();
+        byte[] frameData = _BuildIpv6UdpFrame(srcPort: 7777, dstPort: 8888);
 
         // Collect field IDs and values from fresh parse
-        Frame freshFrame = MakeFrame(stack, frameData, 1);
+        Frame freshFrame = _MakeFrame(stack, frameData, 1);
         Packet fresh = Packet.ParseFrame(new PacketId(1), stack, freshFrame);
-        List<FieldId> freshFields = CollectFieldIds(fresh);
+        List<FieldId> freshFields = _CollectFieldIds(fresh);
 
         // Seed + recycle
-        Packet seed = Packet.ParseFrame(new PacketId(99), stack, MakeFrame(stack, frameData, 99));
-        Frame recycleFrame = MakeFrame(stack, frameData, 2);
+        Packet seed = Packet.ParseFrame(new PacketId(99), stack, _MakeFrame(stack, frameData, 99));
+        Frame recycleFrame = _MakeFrame(stack, frameData, 2);
         Packet recycled = Packet.ParseFrame(seed, new PacketId(2), stack, recycleFrame);
-        List<FieldId> recycledFields = CollectFieldIds(recycled);
+        List<FieldId> recycledFields = _CollectFieldIds(recycled);
 
         // Same number of fields in same order
         await Assert.That(recycledFields.Count).IsEqualTo(freshFields.Count);
@@ -354,7 +354,7 @@ internal sealed class PacketRecycleTests
     /// Materializes all fields and returns their <see cref="FieldId"/> values
     /// in flat/storage order.
     /// </summary>
-    private static List<FieldId> CollectFieldIds(Packet packet)
+    private static List<FieldId> _CollectFieldIds(Packet packet)
     {
         List<FieldId> result = [];
         foreach (Field field in packet.IterFieldsFlat(materialize: true))

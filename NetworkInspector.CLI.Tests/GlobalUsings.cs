@@ -3,6 +3,7 @@
 #region System
 global using System;
 global using System.Collections.Generic;
+global using System.Threading;
 global using System.Threading.Tasks;
 #endregion
 
@@ -10,6 +11,15 @@ global using System.Threading.Tasks;
 global using TUnit.Assertions;
 global using TUnit.Assertions.Extensions;
 global using TUnit.Core;
+#endregion
+
+#region NetworkInspector
+global using NetworkInspector.Core;
+global using NetworkInspector.Core.Ids;
+global using NetworkInspector.Core.Interfaces;
+global using NetworkInspector.Core.Settings;
+global using NetworkInspector.Protocols;
+global using NetworkInspector.Sources.Random;
 #endregion
 
 #region NetworkInspector.CLI

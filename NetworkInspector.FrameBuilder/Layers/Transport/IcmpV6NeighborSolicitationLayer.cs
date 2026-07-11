@@ -18,7 +18,7 @@ namespace NetworkInspector.FrameBuilder;
 public readonly struct IcmpV6NeighborSolicitationLayer :
     IStatelessLayer, IProvidesProtocolType, IProvidesNextProtocolValue<IpNextProtocolKind>, IRequiresPseudoHeader
 {
-    private const int HeaderBytes = 24;
+    private const int _HeaderBytes = 24;
 
     private readonly IPv6Address _TargetAddress;
     private readonly ushort _ExplicitChecksum;
@@ -39,7 +39,7 @@ public readonly struct IcmpV6NeighborSolicitationLayer :
     public int HeaderSize
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => HeaderBytes;
+        get => _HeaderBytes;
     }
 
     /// <inheritdoc />

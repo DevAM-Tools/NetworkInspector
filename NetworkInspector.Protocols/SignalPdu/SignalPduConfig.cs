@@ -164,7 +164,7 @@ internal sealed class SignalDefinition
         NumericValueNames = new Dictionary<ulong, string>(ValueNames.Count);
         foreach (KeyValuePair<string, string> kvp in ValueNames)
         {
-            if (ulong.TryParse(kvp.Key, out ulong key))
+            if (ulong.TryParse(kvp.Key, NumberStyles.Integer, CultureInfo.InvariantCulture, out ulong key))
             {
                 NumericValueNames[key] = kvp.Value;
             }

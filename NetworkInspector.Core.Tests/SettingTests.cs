@@ -357,4 +357,130 @@ internal sealed class SettingTests
         _ = Assert.Throws<InvalidNameRegistrationException>(
             () => Setting.F64("test.ratio", "Ratio", "MyGroup", 0.5));
     }
+
+    [Test]
+    public async Task U64_MinGreaterThanMax_Fails()
+    {
+        _ = Assert.Throws<ValidationSettingsException>(
+            () => Setting.U64("test.count", "Count", "test", 10, min: 100, max: 1));
+    }
+
+    [Test]
+    public async Task U64_DefaultAboveMax_Fails()
+    {
+        _ = Assert.Throws<ValidationSettingsException>(
+            () => Setting.U64("test.count", "Count", "test", 200, max: 100));
+    }
+
+    [Test]
+    public async Task I64_DefaultBelowMin_Fails()
+    {
+        _ = Assert.Throws<ValidationSettingsException>(
+            () => Setting.I64("test.offset", "Offset", "test", -5, min: 0));
+    }
+
+    [Test]
+    public async Task I64_DefaultAboveMax_Fails()
+    {
+        _ = Assert.Throws<ValidationSettingsException>(
+            () => Setting.I64("test.offset", "Offset", "test", 5, max: 0));
+    }
+
+    [Test]
+    public async Task MinMaxValue_ExposedForConstrainedNumericSettings()
+    {
+        Setting s = Setting.U64("test.port", "Port", "test", 8080, min: 1024, max: 65535);
+        await Assert.That(s.MinValue).IsNotNull();
+        await Assert.That(s.MaxValue).IsNotNull();
+        SettingValue minVal = s.MinValue!.Value;
+        SettingValue maxVal = s.MaxValue!.Value;
+        minVal.TryGetAsU64(out ulong min);
+        maxVal.TryGetAsU64(out ulong max);
+        await Assert.That(min).IsEqualTo(1024UL);
+        await Assert.That(max).IsEqualTo(65535UL);
+    }
+
+    [Test]
+    public async Task SetPendingValue_String_ValidValue_Succeeds()
+    {
+        Setting s = Setting.String("test.name", "Name", "test", "default");
+        bool changed = s.SetPendingValue(SettingValue.String("updated"));
+        await Assert.That(changed).IsTrue();
+        s.PendingValue.TryGetAsString(out string pending);
+        await Assert.That(pending).IsEqualTo("updated");
+    }
+
+    [Test]
+    public async Task SetPendingValue_Bytes_ValidValue_Succeeds()
+    {
+        Setting s = Setting.Bytes("test.data", "Data", "test", [1]);
+        bool changed = s.SetPendingValue(SettingValue.Bytes([9, 8]));
+        await Assert.That(changed).IsTrue();
+        s.PendingValue.TryGetAsBytes(out byte[] pending);
+        await Assert.That(pending[0]).IsEqualTo((byte)9);
+    }
+
+    [Test]
+    public async Task SetPendingValue_U64_AboveMax_Fails()
+    {
+        Setting s = Setting.U64("test.port", "Port", "test", 8080, min: 1, max: 65535);
+        _ = Assert.Throws<ValidationSettingsException>(
+            () => s.SetPendingValue(SettingValue.U64(70000)));
+    }
+
+    [Test]
+    public async Task SetPendingValue_U64_WithinRange_Succeeds()
+    {
+        Setting s = Setting.U64("test.port", "Port", "test", 8080, min: 1, max: 65535);
+        bool changed = s.SetPendingValue(SettingValue.U64(9000));
+        await Assert.That(changed).IsTrue();
+    }
+
+    [Test]
+    public async Task SetPendingValue_I64_BelowMin_Fails()
+    {
+        Setting s = Setting.I64("test.offset", "Offset", "test", 0, min: -10, max: 10);
+        _ = Assert.Throws<ValidationSettingsException>(
+            () => s.SetPendingValue(SettingValue.I64(-11)));
+    }
+
+    [Test]
+    public async Task SetPendingValue_I64_AboveMax_Fails()
+    {
+        Setting s = Setting.I64("test.offset", "Offset", "test", 0, min: -10, max: 10);
+        _ = Assert.Throws<ValidationSettingsException>(
+            () => s.SetPendingValue(SettingValue.I64(11)));
+    }
+
+    [Test]
+    public async Task SetPendingValue_I64_WithinRange_Succeeds()
+    {
+        Setting s = Setting.I64("test.offset", "Offset", "test", 0, min: -10, max: 10);
+        bool changed = s.SetPendingValue(SettingValue.I64(5));
+        await Assert.That(changed).IsTrue();
+    }
+
+    [Test]
+    public async Task EnumWithNullMetadata_AcceptsValidPendingValue()
+    {
+        Setting setting = SettingsTestHelpers.CreateSettingForManagerValidationTests(
+            "test.enum",
+            "Enum",
+            "test",
+            SettingType.Enum,
+            SettingValue.Enum("Low", 0),
+            enumMetadata: null);
+
+        bool changed = setting.SetPendingValue(SettingValue.Enum("Low", 0));
+        await Assert.That(changed).IsFalse();
+    }
+
+    [Test]
+    public async Task ToString_IncludesNameTypeAndValue()
+    {
+        Setting s = Setting.Bool("test.flag", "Flag", "test", true);
+        string text = s.ToString();
+        await Assert.That(text).Contains("test.flag");
+        await Assert.That(text).Contains("Bool");
+    }
 }

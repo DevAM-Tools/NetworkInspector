@@ -12,10 +12,15 @@ internal static class ConvertCommand
     /// <summary>Runs the convert command.</summary>
     internal static int Run(string[] args)
     {
-        if (args.Length == 0 || IsHelpFlag(args[0]))
+        if (args.Length == 0 || _IsHelpFlag(args[0]))
         {
-            PrintUsage();
-            return args.Length > 0 && IsHelpFlag(args[0]) ? 0 : 1;
+            _PrintUsage();
+            if (args.Length > 0 && _IsHelpFlag(args[0]))
+            {
+                return 0;
+            }
+
+            return 1;
         }
 
         // Parse arguments
@@ -36,34 +41,34 @@ internal static class ConvertCommand
             switch (args[i].ToUpperInvariant())
             {
                 case "-O" or "--OUTPUT":
-                    outputPath = GetNextArg(args, ref i, "--output");
+                    outputPath = _GetNextArg(args, ref i, "--output");
                     break;
                 case "--OUTPUT-FORMAT" or "--FORMAT" or "-F":
-                    outputFormatSpec = GetNextArg(args, ref i, "--output-format");
+                    outputFormatSpec = _GetNextArg(args, ref i, "--output-format");
                     break;
                 case "--PROFILE":
-                    profileName = GetNextArg(args, ref i, "--profile");
+                    profileName = _GetNextArg(args, ref i, "--profile");
                     break;
                 case "--SETTINGS-PATH":
-                    settingsPath = GetNextArg(args, ref i, "--settings-path");
+                    settingsPath = _GetNextArg(args, ref i, "--settings-path");
                     break;
                 case "-N" or "--MAX-FRAMES":
-                    maxFrames = ParseLong(GetNextArg(args, ref i, "--max-frames"));
+                    maxFrames = _ParseLong(_GetNextArg(args, ref i, "--max-frames"));
                     break;
                 case "--SPLIT-SIZE":
-                    splitSize = ParseLong(GetNextArg(args, ref i, "--split-size"));
+                    splitSize = _ParseLong(_GetNextArg(args, ref i, "--split-size"));
                     break;
                 case "--SPLIT-COUNT":
-                    splitCount = ParseLong(GetNextArg(args, ref i, "--split-count"));
+                    splitCount = _ParseLong(_GetNextArg(args, ref i, "--split-count"));
                     break;
                 case "--PROGRESS":
-                    progressInterval = ParseLong(GetNextArg(args, ref i, "--progress"));
+                    progressInterval = _ParseLong(_GetNextArg(args, ref i, "--progress"));
                     break;
                 case "--TOLERANT":
                     tolerant = true;
                     break;
                 case "--BLF-CACHE-SIZE":
-                    blfCacheSize = ParseLong(GetNextArg(args, ref i, "--blf-cache-size"));
+                    blfCacheSize = _ParseLong(_GetNextArg(args, ref i, "--blf-cache-size"));
                     break;
                 default:
                     sourceSpecs.Add(args[i]);
@@ -83,7 +88,7 @@ internal static class ConvertCommand
             return 1;
         }
 
-        return Execute(
+        return _Execute(
             sourceSpecs,
             outputPath,
             outputFormatSpec,
@@ -97,8 +102,8 @@ internal static class ConvertCommand
             tolerant);
     }
 
-    /// <summary>Executes the conversion pipeline.</summary>
-    private static int Execute(
+    /// <summary>_Executes the conversion pipeline.</summary>
+    private static int _Execute(
         List<string> sourceSpecs,
         string outputPath,
         string? outputFormatSpec,
@@ -178,7 +183,7 @@ internal static class ConvertCommand
         catch (Exception ex)
         {
             Console.Error.WriteLine($"Error opening source: {ex.Message}");
-            DisposeSources(sources);
+            _DisposeSources(sources);
             return 2;
         }
 
@@ -251,7 +256,7 @@ internal static class ConvertCommand
                 }
 
                 // Check if we need to open or rotate the output file
-                if (exporter is null || (splitManager.IsSplitting && NeedsSplit(splitSizeFileInfo, fileFrames, splitManager)))
+                if (exporter is null || (splitManager.IsSplitting && _NeedsSplit(splitSizeFileInfo, fileFrames, splitManager)))
                 {
                     // Finalize the previous exporter before rotating
                     if (exporter is not null)
@@ -332,7 +337,7 @@ internal static class ConvertCommand
         finally
         {
             Console.CancelKeyPress -= cancelHandler;
-            DisposeSources(sources);
+            _DisposeSources(sources);
         }
     }
 
@@ -341,7 +346,7 @@ internal static class ConvertCommand
     /// Refreshes the cached <see cref="FileInfo"/> to get the current on-disk size
     /// instead of allocating a new instance on every frame.
     /// </summary>
-    private static bool NeedsSplit(FileInfo? fileInfo, long fileFrames, SplitOutputManager splitManager)
+    private static bool _NeedsSplit(FileInfo? fileInfo, long fileFrames, SplitOutputManager splitManager)
     {
         long currentSize = 0;
         if (fileInfo is not null)
@@ -358,7 +363,7 @@ internal static class ConvertCommand
     /// If every disposal fails the aggregate is re-thrown so callers are not
     /// silently left with unreleased resources.
     /// </summary>
-    private static void DisposeSources(List<IFrameSource> sources)
+    private static void _DisposeSources(List<IFrameSource> sources)
     {
         List<Exception>? errors = null;
         foreach (IFrameSource source in sources)
@@ -382,11 +387,11 @@ internal static class ConvertCommand
     }
 
     /// <summary>Checks whether a string is a help flag.</summary>
-    private static bool IsHelpFlag(string arg) =>
+    private static bool _IsHelpFlag(string arg) =>
         arg is "--help" or "-h" or "-?" or "/?" or "--HELP" or "-H";
 
     /// <summary>Gets the next argument value, throwing if missing or null.</summary>
-    private static string GetNextArg(string[] args, ref int index, string name)
+    private static string _GetNextArg(string[] args, ref int index, string name)
     {
         index++;
         if (index >= args.Length)
@@ -404,7 +409,7 @@ internal static class ConvertCommand
     }
 
     /// <summary>Parses a long value, throwing a user-friendly message on failure.</summary>
-    private static long ParseLong(string value)
+    private static long _ParseLong(string value)
     {
         if (!long.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out long result) || result < 0)
         {
@@ -415,7 +420,7 @@ internal static class ConvertCommand
     }
 
     /// <summary>Prints usage information for the convert command.</summary>
-    private static void PrintUsage()
+    private static void _PrintUsage()
     {
         Console.Error.WriteLine("Usage: ni convert <sources...> -o <output> [options]");
         Console.Error.WriteLine();

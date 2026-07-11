@@ -9,7 +9,7 @@ namespace NetworkInspector.Exporters;
 public abstract class ExportOutput : IDisposable
 {
     /// <summary>Default buffer size for file output (4 MiB).</summary>
-    private const int DefaultFileBufferSize = 4 * 1024 * 1024;
+    private const int _DefaultFileBufferSize = 4 * 1024 * 1024;
 
     /// <summary>Creates a file-backed output with a 4 MiB write buffer.
     /// The file is not created until the first write; if no data is ever written,
@@ -25,7 +25,7 @@ public abstract class ExportOutput : IDisposable
         // illegal characters, but does not touch the filesystem). This surfaces bad paths
         // at construction time rather than at the first Write call.
         string _ = Path.GetFullPath(path);
-        return new LazyFileExportOutput(path, DefaultFileBufferSize);
+        return new LazyFileExportOutput(path, _DefaultFileBufferSize);
     }
 
     /// <summary>Creates an output that writes to an existing stream.</summary>

@@ -39,18 +39,18 @@ internal abstract class SourceConfig
     internal static SourceConfig Parse(string spec)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(spec);
-        ValidateSourceSpec(spec);
+        _ValidateSourceSpec(spec);
 
         // Check for typed spec (type:key=value)
         // Must not start with a drive letter pattern (e.g., "C:\...")
         int colonIndex = spec.IndexOf(':', StringComparison.Ordinal);
-        if (colonIndex > 0 && !IsDriveLetter(spec, colonIndex))
+        if (colonIndex > 0 && !_IsDriveLetter(spec, colonIndex))
         {
-            return ParseTypedSpec(spec, colonIndex);
+            return _ParseTypedSpec(spec, colonIndex);
         }
 
         // Bare file path — auto-detect by extension
-        return ParseBarePath(spec);
+        return _ParseBarePath(spec);
     }
 
     /// <summary>
@@ -59,7 +59,7 @@ internal abstract class SourceConfig
     /// Defence-in-depth check at the CLI trust boundary (OWASP A06 / CWE-78).
     /// </summary>
     /// <exception cref="ArgumentException">Thrown when a forbidden character is detected.</exception>
-    private static void ValidateSourceSpec(string spec)
+    private static void _ValidateSourceSpec(string spec)
     {
         ReadOnlySpan<char> forbidden = ['|', '&', '>', '<', ';', '`', '(', ')', '{', '}'];
         foreach (char ch in forbidden)
@@ -77,7 +77,7 @@ internal abstract class SourceConfig
     /// Returns <c>true</c> when the colon at <paramref name="colonIndex"/> is a
     /// Windows drive letter separator (e.g., <c>C:\</c>).
     /// </summary>
-    private static bool IsDriveLetter(string spec, int colonIndex)
+    private static bool _IsDriveLetter(string spec, int colonIndex)
     {
         // Drive letter: single alpha char before colon, followed by '\' or '/'
         return colonIndex == 1
@@ -87,7 +87,7 @@ internal abstract class SourceConfig
     }
 
     /// <summary>Parses a bare file path, auto-detecting the source type by extension.</summary>
-    private static SourceConfig ParseBarePath(string path)
+    private static SourceConfig _ParseBarePath(string path)
     {
         if (path.EndsWith(".pcap", StringComparison.OrdinalIgnoreCase)
             || path.EndsWith(".pcapng", StringComparison.OrdinalIgnoreCase))
@@ -111,24 +111,24 @@ internal abstract class SourceConfig
     }
 
     /// <summary>Parses a typed specification like <c>pcap:path=file.pcap</c>.</summary>
-    private static SourceConfig ParseTypedSpec(string spec, int colonIndex)
+    private static SourceConfig _ParseTypedSpec(string spec, int colonIndex)
     {
         string type = spec[..colonIndex];
         string paramString = spec[(colonIndex + 1)..];
-        Dictionary<string, string> parameters = ParseParameters(paramString);
+        Dictionary<string, string> parameters = _ParseParameters(paramString);
 
         return type.ToUpperInvariant() switch
         {
-            "PCAP" or "PCAPNG" => CreatePcapConfig(parameters),
-            "BLF" => CreateBlfConfig(parameters),
-            "ASC" => CreateAscConfig(parameters),
-            "RANDOM" => CreateRandomConfig(parameters),
+            "PCAP" or "PCAPNG" => _CreatePcapConfig(parameters),
+            "BLF" => _CreateBlfConfig(parameters),
+            "ASC" => _CreateAscConfig(parameters),
+            "RANDOM" => _CreateRandomConfig(parameters),
             _ => throw new ArgumentException($"Unknown source type: '{type}'."),
         };
     }
 
     /// <summary>Parses comma-separated key=value parameters.</summary>
-    private static Dictionary<string, string> ParseParameters(string paramString)
+    private static Dictionary<string, string> _ParseParameters(string paramString)
     {
         Dictionary<string, string> result = new(StringComparer.OrdinalIgnoreCase);
         if (string.IsNullOrWhiteSpace(paramString))
@@ -151,7 +151,7 @@ internal abstract class SourceConfig
     }
 
     /// <summary>Creates a <see cref="PcapSourceConfig"/> from typed parameters.</summary>
-    private static PcapSourceConfig CreatePcapConfig(Dictionary<string, string> parameters)
+    private static PcapSourceConfig _CreatePcapConfig(Dictionary<string, string> parameters)
     {
         if (!parameters.TryGetValue("path", out string? path) || string.IsNullOrWhiteSpace(path))
         {
@@ -162,7 +162,7 @@ internal abstract class SourceConfig
     }
 
     /// <summary>Creates a <see cref="BlfSourceConfig"/> from typed parameters.</summary>
-    private static BlfSourceConfig CreateBlfConfig(Dictionary<string, string> parameters)
+    private static BlfSourceConfig _CreateBlfConfig(Dictionary<string, string> parameters)
     {
         if (!parameters.TryGetValue("path", out string? path) || string.IsNullOrWhiteSpace(path))
         {
@@ -173,7 +173,7 @@ internal abstract class SourceConfig
     }
 
     /// <summary>Creates an <see cref="AscSourceConfig"/> from typed parameters.</summary>
-    private static AscSourceConfig CreateAscConfig(Dictionary<string, string> parameters)
+    private static AscSourceConfig _CreateAscConfig(Dictionary<string, string> parameters)
     {
         if (!parameters.TryGetValue("path", out string? path) || string.IsNullOrWhiteSpace(path))
         {
@@ -195,7 +195,7 @@ internal abstract class SourceConfig
     ///   </item>
     /// </list>
     /// </remarks>
-    private static RandomSourceConfig CreateRandomConfig(Dictionary<string, string> parameters)
+    private static RandomSourceConfig _CreateRandomConfig(Dictionary<string, string> parameters)
     {
         int count = 1000;
         ulong seed = 42;

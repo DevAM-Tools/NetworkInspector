@@ -9,4 +9,4 @@ global using Microsoft.CodeAnalysis.CSharp;
 global using NetworkInspector.Generators;
 global using TUnit.Assertions;
 global using TUnit.Assertions.Extensions;
-global using TUnit.Core;
+global using static NetworkInspector.Generators.Tests.TestInfrastructure;

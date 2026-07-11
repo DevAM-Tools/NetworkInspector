@@ -172,12 +172,31 @@ internal sealed class ProtocolTable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal ProtocolId? GetBool(bool key)
     {
-        List<ProtocolId>? list = key ? _BoolTrue : _BoolFalse;
-        return list is not null && list.Count > 0 ? list[0] : null;
+        List<ProtocolId>? list;
+        if (key)
+        {
+            list = _BoolTrue;
+        }
+        else
+        {
+            list = _BoolFalse;
+        }
+        if (list is not null && list.Count > 0)
+        {
+            return list[0];
+        }
+        return null;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal ProtocolId? GetAny() => _AnyList is not null && _AnyList.Count > 0 ? _AnyList[0] : null;
+    internal ProtocolId? GetAny()
+    {
+        if (_AnyList is not null && _AnyList.Count > 0)
+        {
+            return _AnyList[0];
+        }
+        return null;
+    }
 
     #endregion
 
@@ -213,26 +232,84 @@ internal sealed class ProtocolTable
 
     internal ReadOnlySpan<ProtocolId> GetAllBool(bool key)
     {
-        List<ProtocolId>? list = key ? _BoolTrue : _BoolFalse;
-        return list is not null ? CollectionsMarshal.AsSpan(list) : ReadOnlySpan<ProtocolId>.Empty;
+        List<ProtocolId>? list;
+        if (key)
+        {
+            list = _BoolTrue;
+        }
+        else
+        {
+            list = _BoolFalse;
+        }
+        if (list is not null)
+        {
+            return CollectionsMarshal.AsSpan(list);
+        }
+        return ReadOnlySpan<ProtocolId>.Empty;
     }
 
-    internal ReadOnlySpan<ProtocolId> GetAllAny() => _AnyList is not null ? CollectionsMarshal.AsSpan(_AnyList) : ReadOnlySpan<ProtocolId>.Empty;
+    internal ReadOnlySpan<ProtocolId> GetAllAny()
+    {
+        if (_AnyList is not null)
+        {
+            return CollectionsMarshal.AsSpan(_AnyList);
+        }
+        return ReadOnlySpan<ProtocolId>.Empty;
+    }
 
     #endregion
 
     #region Counts and Iterators
 
     // Counts
-    internal int Count => _Info.KeyType switch
+    internal int Count
     {
-        ProtocolTableKeyType.U64 => _U64Map?.Count ?? 0,
-        ProtocolTableKeyType.String => _StringMap?.Count ?? 0,
-        ProtocolTableKeyType.Bytes => _BytesMap?.Count ?? 0,
-        ProtocolTableKeyType.Bool => (_BoolTrue is not null ? 1 : 0) + (_BoolFalse is not null ? 1 : 0),
-        ProtocolTableKeyType.Any => _AnyList?.Count ?? 0,
-        _ => 0,
-    };
+        get
+        {
+            switch (_Info.KeyType)
+            {
+                case ProtocolTableKeyType.U64:
+                    if (_U64Map is not null)
+                    {
+                        return _U64Map.Count;
+                    }
+                    return 0;
+                case ProtocolTableKeyType.String:
+                    if (_StringMap is not null)
+                    {
+                        return _StringMap.Count;
+                    }
+                    return 0;
+                case ProtocolTableKeyType.Bytes:
+                    if (_BytesMap is not null)
+                    {
+                        return _BytesMap.Count;
+                    }
+                    return 0;
+                case ProtocolTableKeyType.Bool:
+                {
+                    int count = 0;
+                    if (_BoolTrue is not null)
+                    {
+                        count++;
+                    }
+                    if (_BoolFalse is not null)
+                    {
+                        count++;
+                    }
+                    return count;
+                }
+                case ProtocolTableKeyType.Any:
+                    if (_AnyList is not null)
+                    {
+                        return _AnyList.Count;
+                    }
+                    return 0;
+                default:
+                    return 0;
+            }
+        }
+    }
 
     internal bool IsEmpty => Count == 0;
 
@@ -278,10 +355,10 @@ internal sealed class ProtocolTable
         {
             return null;
         }
-        return YieldBoolEntries();
+        return _YieldBoolEntries();
     }
 
-    private IEnumerable<KeyValuePair<bool, ReadOnlyMemory<ProtocolId>>> YieldBoolEntries()
+    private IEnumerable<KeyValuePair<bool, ReadOnlyMemory<ProtocolId>>> _YieldBoolEntries()
     {
         if (_BoolFalse is not null && _BoolFalse.Count > 0)
         {
@@ -303,7 +380,11 @@ internal sealed class ProtocolTable
         {
             return null;
         }
-        return _AnyList is not null ? _AnyList.ToArray() : ReadOnlyMemory<ProtocolId>.Empty;
+        if (_AnyList is not null)
+        {
+            return _AnyList.ToArray();
+        }
+        return ReadOnlyMemory<ProtocolId>.Empty;
     }
 
     #endregion
@@ -333,10 +414,30 @@ public readonly struct BytesKey : IEquatable<BytesKey>
     #region Properties
 
     /// <summary>The raw bytes of this key.</summary>
-    public ReadOnlySpan<byte> Span => _Data ?? [];
+    public ReadOnlySpan<byte> Span
+    {
+        get
+        {
+            if (_Data is not null)
+            {
+                return _Data;
+            }
+            return [];
+        }
+    }
 
     /// <summary>Number of bytes in this key.</summary>
-    public int Length => _Data?.Length ?? 0;
+    public int Length
+    {
+        get
+        {
+            if (_Data is not null)
+            {
+                return _Data.Length;
+            }
+            return 0;
+        }
+    }
 
     #endregion
 

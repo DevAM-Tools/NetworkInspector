@@ -53,7 +53,17 @@ public sealed class FrameSourceInfo(FrameSourceId id, IFrameSource? source)
     /// Delegated from <see cref="IFrameSource.UiName"/> if available, otherwise the string
     /// representation of the <see cref="Id"/>.
     /// </summary>
-    public string UiName => Source?.UiName ?? Id.ToString();
+    public string UiName
+    {
+        get
+        {
+            if (Source?.UiName is { } uiName)
+            {
+                return uiName;
+            }
+            return Id.ToString();
+        }
+    }
 
     /// <summary>Optional description text (delegated from <see cref="IFrameSource.Description"/>).</summary>
     public string? Description => Source?.Description;

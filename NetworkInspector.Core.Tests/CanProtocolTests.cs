@@ -12,7 +12,7 @@ internal sealed class CanProtocolTests
     /// <summary>
     /// Builds a stack and parses a SocketCAN frame (link type 227).
     /// </summary>
-    private static (Stack Stack, Packet Packet) BuildAndParse(byte[] frameData)
+    private static (Stack Stack, Packet Packet) _BuildAndParse(byte[] frameData)
     {
         using SettingsManager settingsManager = new();
         StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
@@ -36,7 +36,7 @@ internal sealed class CanProtocolTests
     {
         byte[] frameData = FrameBuilders.GenerateCanFrame(canId: 0x123);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? canIdField = stack.GetFieldId("can.id");
@@ -55,7 +55,7 @@ internal sealed class CanProtocolTests
         byte[] frameData = FrameBuilders.GenerateCanFrame(
             canId: 0x1ABCDEF, isExtended: true);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             // Extended Frame Format flag should be set
@@ -81,7 +81,7 @@ internal sealed class CanProtocolTests
         byte[] frameData = FrameBuilders.GenerateCanFrame(
             canId: 0x100, isRtr: true, payload: []);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? rtrField = stack.GetFieldId("can.flags.rtr");
@@ -100,7 +100,7 @@ internal sealed class CanProtocolTests
         byte[] frameData = FrameBuilders.GenerateCanFrame(
             canId: 0x200, payload: payload);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? dlcField = stack.GetFieldId("can.len");
@@ -119,7 +119,7 @@ internal sealed class CanProtocolTests
         byte[] frameData = FrameBuilders.GenerateCanFrame(
             canId: 0x300, payload: payload);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? dataField = stack.GetFieldId("can.data");
@@ -140,7 +140,7 @@ internal sealed class CanProtocolTests
         byte[] frameData = FrameBuilders.GenerateCanFdFrame(
             canId: 0x1ABCDEF);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? fdfField = stack.GetFieldId("can.flags.fd");
@@ -158,7 +158,7 @@ internal sealed class CanProtocolTests
         byte[] frameData = FrameBuilders.GenerateCanFdFrame(
             canId: 0x100, brs: true);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? brsField = stack.GetFieldId("can.flags.brs");
@@ -176,7 +176,7 @@ internal sealed class CanProtocolTests
         // Only 4 bytes — not enough for SocketCAN header
         byte[] shortFrame = [0x23, 0x01, 0x00, 0x00];
 
-        (Stack stack, Packet packet) = BuildAndParse(shortFrame);
+        (Stack stack, Packet packet) = _BuildAndParse(shortFrame);
         using (stack)
         {
             // CAN ID field should not be present with too-short data
@@ -282,7 +282,7 @@ internal sealed class CanProtocolTests
             FieldId? choiceFieldId = stack.GetFieldId("packet.choice");
             await Assert.That(choiceFieldId).IsNotNull();
 
-            string? choiceLabel = FindCustomText(packet.RootField(), choiceFieldId!.Value);
+            string? choiceLabel = _FindCustomText(packet.RootField(), choiceFieldId!.Value);
             await Assert.That(choiceLabel).IsNotNull();
             // key=0x100=256; TryCallNextProtocolU64 uses key.ToString() for the keyDisplay
             await Assert.That(choiceLabel).IsEqualTo("Choice: can.id: 256");
@@ -291,7 +291,7 @@ internal sealed class CanProtocolTests
 
     /// <summary>Depth-first search for the first field with <paramref name="fieldId"/>;
     /// returns its <c>CustomText.ToString()</c> or <see langword="null"/> if not found.</summary>
-    private static string? FindCustomText(Field field, FieldId fieldId)
+    private static string? _FindCustomText(Field field, FieldId fieldId)
     {
         if (field.FieldId == fieldId && !field.CustomText.IsNull)
         {
@@ -300,7 +300,7 @@ internal sealed class CanProtocolTests
 
         foreach (Field child in field.Children())
         {
-            string? result = FindCustomText(child, fieldId);
+            string? result = _FindCustomText(child, fieldId);
             if (result is not null)
             {
                 return result;

@@ -1,12 +1,5 @@
 ﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
-using System;
-using System.Linq;
-using System.Text;
-using Microsoft.CodeAnalysis;
-using Microsoft.CodeAnalysis.Text;
-using NetworkInspector.Generators.Models;
-
 namespace NetworkInspector.Generators;
 
 /// <summary>
@@ -18,7 +11,7 @@ public sealed partial class ProtocolGenerator
     #region Source Output
 
     /// <summary>Reports diagnostics and, when there are no errors, emits the generated source.</summary>
-    private static void Execute(SourceProductionContext context, ProtocolInfo info)
+    private static void _Execute(SourceProductionContext context, ProtocolInfo info)
     {
         foreach (DiagnosticInfo diag in info.Diagnostics)
         {
@@ -31,7 +24,7 @@ public sealed partial class ProtocolGenerator
             return;
         }
 
-        string source = GenerateSource(info);
+        string source = _GenerateSource(info);
 
         // Include the namespace in the HintName to prevent GEN001 collisions when two
         // protocol classes share the same simple class name but differ in namespace.
@@ -44,7 +37,7 @@ public sealed partial class ProtocolGenerator
     #region Source Emission
 
     /// <summary>Generates the partial class source code for a protocol.</summary>
-    private static string GenerateSource(ProtocolInfo info)
+    private static string _GenerateSource(ProtocolInfo info)
     {
         StringBuilder sb = new();
 
@@ -70,14 +63,14 @@ public sealed partial class ProtocolGenerator
         sb.AppendLine($"    /// reference this constant rather than a raw string literal so that any");
         sb.AppendLine($"    /// future rename is caught at compile time. The value is guaranteed not to");
         sb.AppendLine($"    /// change for a given protocol implementation.</remarks>");
-        sb.AppendLine($"    public const string ProtocolName = \"{EscapeString(info.ProtocolName)}\";");
+        sb.AppendLine($"    public const string ProtocolName = \"{_EscapeString(info.ProtocolName)}\";");
         sb.AppendLine();
         sb.AppendLine($"    /// <summary>Human-readable display name for UI surfaces.</summary>");
         sb.AppendLine($"    /// <remarks>This value is intended for display only and is not a stability");
         sb.AppendLine($"    /// contract. It may change across releases as display requirements evolve.");
         sb.AppendLine($"    /// Do not use it in machine-readable comparisons or persisted data;");
         sb.AppendLine($"    /// use <see cref=\"ProtocolName\"/> instead.</remarks>");
-        sb.AppendLine($"    public const string ProtocolUiName = \"{EscapeString(info.UiName)}\";");
+        sb.AppendLine($"    public const string ProtocolUiName = \"{_EscapeString(info.UiName)}\";");
         sb.AppendLine();
 
         // Index group name constants
@@ -85,9 +78,9 @@ public sealed partial class ProtocolGenerator
         {
             foreach (string group in info.IndexGroups)
             {
-                string constName = IndexGroupConstantName(group);
-                sb.AppendLine($"    /// <summary>Index group name constant for &quot;{EscapeXmlDoc(group)}&quot;.</summary>");
-                sb.AppendLine($"    private const string {constName} = \"{EscapeString(group)}\";");
+                string constName = _IndexGroupConstantName(group);
+                sb.AppendLine($"    /// <summary>Index group name constant for &quot;{_EscapeXmlDoc(group)}&quot;.</summary>");
+                sb.AppendLine($"    private const string {constName} = \"{_EscapeString(group)}\";");
             }
             sb.AppendLine();
         }
@@ -97,12 +90,12 @@ public sealed partial class ProtocolGenerator
         {
             foreach (ProtocolTableInfo table in info.ProtocolTables)
             {
-                string constName = TableNameConstantName(table.Name);
-                sb.AppendLine($"    /// <summary>Dispatch table name constant for &quot;{EscapeXmlDoc(table.Name)}&quot;.</summary>");
+                string constName = _TableNameConstantName(table.Name);
+                sb.AppendLine($"    /// <summary>Dispatch table name constant for &quot;{_EscapeXmlDoc(table.Name)}&quot;.</summary>");
                 sb.AppendLine($"    /// <remarks>This constant is the cross-protocol dispatch contract for this table.");
                 sb.AppendLine($"    /// Other protocols registering into or resolving this table must reference this");
                 sb.AppendLine($"    /// constant (not the raw string) to ensure consistency and compile-time safety.</remarks>");
-                sb.AppendLine($"    public const string {constName} = \"{EscapeString(table.Name)}\";");
+                sb.AppendLine($"    public const string {constName} = \"{_EscapeString(table.Name)}\";");
             }
             sb.AppendLine();
         }
@@ -118,7 +111,7 @@ public sealed partial class ProtocolGenerator
         if (info.Description is not null)
         {
             sb.AppendLine($"    /// <inheritdoc />");
-            sb.AppendLine($"    public string Description => \"{EscapeString(info.Description)}\";");
+            sb.AppendLine($"    public string Description => \"{_EscapeString(info.Description)}\";");
             sb.AppendLine();
         }
 
@@ -134,8 +127,8 @@ public sealed partial class ProtocolGenerator
         // Index group ID fields
         foreach (string group in info.IndexGroups)
         {
-            string fieldName = IndexGroupFieldName(group);
-            sb.AppendLine($"    /// <summary>Index group ID for &quot;{EscapeXmlDoc(group)}&quot;.</summary>");
+            string fieldName = _IndexGroupFieldName(group);
+            sb.AppendLine($"    /// <summary>Index group ID for &quot;{_EscapeXmlDoc(group)}&quot;.</summary>");
             sb.AppendLine($"    private {_GloIndexGroupId} {fieldName};");
         }
         if (info.IndexGroups.Length > 0)
@@ -144,19 +137,19 @@ public sealed partial class ProtocolGenerator
         }
 
         // RegisterFields method
-        GenerateRegisterFieldsMethod(sb, info);
+        _GenerateRegisterFieldsMethod(sb, info);
 
         // Public accessors for protocol tables
         foreach (ProtocolTableInfo table in info.ProtocolTables)
         {
-            string propName = TablePropertyName(table.FieldName);
-            sb.AppendLine($"    /// <summary>The {EscapeXmlDoc(table.UiName)} dispatch table ID for sub-protocol registration.</summary>");
+            string propName = _TablePropertyName(table.FieldName);
+            sb.AppendLine($"    /// <summary>The {_EscapeXmlDoc(table.UiName)} dispatch table ID for sub-protocol registration.</summary>");
             sb.AppendLine($"    public {_GloProtocolTableId} {propName} => {table.FieldName};");
             sb.AppendLine();
         }
 
-        GenerateOnStartMethod(sb);
-        GenerateOnShutdownMethod(sb);
+        _GenerateOnStartMethod(sb);
+        _GenerateOnShutdownMethod(sb);
 
         // Partial hook declarations
         sb.AppendLine("    /// <summary>Called at the end of RegisterFields, after all fields, tables, settings, and dispatch entries are registered"
@@ -164,12 +157,12 @@ public sealed partial class ProtocolGenerator
             + " building lookup dictionaries, registering additional dispatch entries via WhenProtocolTableRegistered,"
             + " resolving cross-protocol field IDs via WhenFieldRegistered). Anything that does not require the frozen Stack"
             + " belongs here, not in OnStartCustom.</summary>");
-        sb.AppendLine($"    partial void RegisterFieldsCustom({_GloIStackBuilder} builder, {_GloProtocolId} protocolId);");
+        sb.AppendLine($"    partial void _RegisterFieldsCustom({_GloIStackBuilder} builder, {_GloProtocolId} protocolId);");
         sb.AppendLine();
         sb.AppendLine("    /// <summary>Called after the stack is built and frozen. Use this hook only for setup that requires the frozen Stack"
             + " (e.g., pre-bound ParseDelegate caches obtained via stack.ResolveParseDelegate)."
             + " Config loading and dispatch registration belong in RegisterFieldsCustom instead.</summary>");
-        sb.AppendLine($"    partial void OnStartCustom({_GloStack} stack);");
+        sb.AppendLine($"    partial void _OnStartCustom({_GloStack} stack);");
         sb.AppendLine();
         sb.AppendLine("    /// <summary>Called before shutdown cleanup. Override in the hand-written partial class to add custom shutdown logic.</summary>");
         sb.AppendLine($"    partial void OnShutdownCustom({_GloStack} stack);");
@@ -181,7 +174,7 @@ public sealed partial class ProtocolGenerator
     }
 
     /// <summary>Emits <c>RegisterFields</c>, including index groups, fields, dispatch tables, settings and dispatch registrations.</summary>
-    private static void GenerateRegisterFieldsMethod(StringBuilder sb, ProtocolInfo info)
+    private static void _GenerateRegisterFieldsMethod(StringBuilder sb, ProtocolInfo info)
     {
         sb.AppendLine("    /// <summary>Registers all fields, dispatch tables, index groups, and settings with the stack builder.</summary>");
         sb.AppendLine($"    public void RegisterFields({_GloIStackBuilder} builder, {_GloProtocolId} protocolId)");
@@ -195,8 +188,8 @@ public sealed partial class ProtocolGenerator
             sb.AppendLine("        // Resolve index groups");
             foreach (string group in info.IndexGroups)
             {
-                string fieldName = IndexGroupFieldName(group);
-                string constName = IndexGroupConstantName(group);
+                string fieldName = _IndexGroupFieldName(group);
+                string constName = _IndexGroupConstantName(group);
                 sb.AppendLine($"        {fieldName} = builder.GetOrCreateIndexGroup({constName});");
             }
             sb.AppendLine();
@@ -210,18 +203,18 @@ public sealed partial class ProtocolGenerator
             {
                 if (field.IndexGroup is not null)
                 {
-                    string groupConst = IndexGroupConstantName(field.IndexGroup);
-                    string desc = field.Description is not null ? $", \"{EscapeString(field.Description)}\"" : "";
+                    string groupConst = _IndexGroupConstantName(field.IndexGroup);
+                    string desc = field.Description is not null ? $", \"{_EscapeString(field.Description)}\"" : "";
                     sb.AppendLine(
-                        $"        {field.FieldName} = builder.RegisterFieldInGroup(protocolId, \"{EscapeString(field.Name)}\","
-                        + $" \"{EscapeString(field.UiName)}\", {field.FieldType}, {groupConst}{desc});");
+                        $"        {field.FieldName} = builder.RegisterFieldInGroup(protocolId, \"{_EscapeString(field.Name)}\","
+                        + $" \"{_EscapeString(field.UiName)}\", {field.FieldType}, {groupConst}{desc});");
                 }
                 else
                 {
-                    string desc = field.Description is not null ? $", \"{EscapeString(field.Description)}\"" : "";
+                    string desc = field.Description is not null ? $", \"{_EscapeString(field.Description)}\"" : "";
                     sb.AppendLine(
-                        $"        {field.FieldName} = builder.RegisterField(protocolId, \"{EscapeString(field.Name)}\","
-                        + $" \"{EscapeString(field.UiName)}\", {field.FieldType}{desc});");
+                        $"        {field.FieldName} = builder.RegisterField(protocolId, \"{_EscapeString(field.Name)}\","
+                        + $" \"{_EscapeString(field.UiName)}\", {field.FieldType}{desc});");
                 }
             }
             sb.AppendLine();
@@ -233,11 +226,11 @@ public sealed partial class ProtocolGenerator
             sb.AppendLine("        // Register protocol dispatch tables");
             foreach (ProtocolTableInfo table in info.ProtocolTables)
             {
-                string tableConst = TableNameConstantName(table.Name);
-                string desc = table.Description is not null ? $", \"{EscapeString(table.Description)}\"" : "";
+                string tableConst = _TableNameConstantName(table.Name);
+                string desc = table.Description is not null ? $", \"{_EscapeString(table.Description)}\"" : "";
                 sb.AppendLine(
                     $"        {table.FieldName} = builder.RegisterProtocolTable({tableConst},"
-                    + $" \"{EscapeString(table.UiName)}\", {_GloTableKeyType}.{table.KeyType}{desc});");
+                    + $" \"{_EscapeString(table.UiName)}\", {_GloTableKeyType}.{table.KeyType}{desc});");
             }
             sb.AppendLine();
         }
@@ -248,7 +241,7 @@ public sealed partial class ProtocolGenerator
             sb.AppendLine("        // Resolve external protocol tables");
             foreach (UsesTableInfo usesTable in info.UsesTables)
             {
-                sb.AppendLine($"        builder.WhenProtocolTableRegistered(\"{EscapeString(usesTable.TableName)}\", id => {usesTable.FieldName} = id);");
+                sb.AppendLine($"        builder.WhenProtocolTableRegistered(\"{_EscapeString(usesTable.TableName)}\", id => {usesTable.FieldName} = id);");
             }
             sb.AppendLine();
         }
@@ -260,7 +253,7 @@ public sealed partial class ProtocolGenerator
             sb.AppendLine($"        {_GloSettingsRegistrar} settings = builder.SettingsRegistrar;");
             foreach (SettingInfo setting in info.Settings)
             {
-                string desc = setting.Description is not null ? $", description: \"{EscapeString(setting.Description)}\"" : "";
+                string desc = setting.Description is not null ? $", description: \"{_EscapeString(setting.Description)}\"" : "";
                 string minMax = "";
                 if (setting.Min is not null)
                 {
@@ -275,32 +268,32 @@ public sealed partial class ProtocolGenerator
                 {
                     case "Bool":
                         sb.AppendLine(
-                            $"        settings.RegisterBoolSetting(\"{EscapeString(setting.Name)}\","
-                            + $" \"{EscapeString(setting.UiName)}\", \"{EscapeString(setting.GroupName)}\","
+                            $"        settings.RegisterBoolSetting(\"{_EscapeString(setting.Name)}\","
+                            + $" \"{_EscapeString(setting.UiName)}\", \"{_EscapeString(setting.GroupName)}\","
                             + $" {setting.DefaultValue}{desc});");
                         break;
                     case "String":
                         sb.AppendLine(
-                            $"        settings.RegisterStringSetting(\"{EscapeString(setting.Name)}\","
-                            + $" \"{EscapeString(setting.UiName)}\", \"{EscapeString(setting.GroupName)}\","
-                            + $" \"{EscapeString(setting.DefaultValue)}\"{desc});");
+                            $"        settings.RegisterStringSetting(\"{_EscapeString(setting.Name)}\","
+                            + $" \"{_EscapeString(setting.UiName)}\", \"{_EscapeString(setting.GroupName)}\","
+                            + $" \"{_EscapeString(setting.DefaultValue)}\"{desc});");
                         break;
                     case "F64":
                         sb.AppendLine(
-                            $"        settings.RegisterF64Setting(\"{EscapeString(setting.Name)}\","
-                            + $" \"{EscapeString(setting.UiName)}\", \"{EscapeString(setting.GroupName)}\","
+                            $"        settings.RegisterF64Setting(\"{_EscapeString(setting.Name)}\","
+                            + $" \"{_EscapeString(setting.UiName)}\", \"{_EscapeString(setting.GroupName)}\","
                             + $" {setting.DefaultValue}{minMax}{desc});");
                         break;
                     case "U64":
                         sb.AppendLine(
-                            $"        settings.RegisterU64Setting(\"{EscapeString(setting.Name)}\","
-                            + $" \"{EscapeString(setting.UiName)}\", \"{EscapeString(setting.GroupName)}\","
+                            $"        settings.RegisterU64Setting(\"{_EscapeString(setting.Name)}\","
+                            + $" \"{_EscapeString(setting.UiName)}\", \"{_EscapeString(setting.GroupName)}\","
                             + $" {setting.DefaultValue}{minMax}{desc});");
                         break;
                     case "I64":
                         sb.AppendLine(
-                            $"        settings.RegisterI64Setting(\"{EscapeString(setting.Name)}\","
-                            + $" \"{EscapeString(setting.UiName)}\", \"{EscapeString(setting.GroupName)}\","
+                            $"        settings.RegisterI64Setting(\"{_EscapeString(setting.Name)}\","
+                            + $" \"{_EscapeString(setting.UiName)}\", \"{_EscapeString(setting.GroupName)}\","
                             + $" {setting.DefaultValue}{minMax}{desc});");
                         break;
                     case "Bytes":
@@ -308,10 +301,10 @@ public sealed partial class ProtocolGenerator
                             // Emit literal byte array from pre-validated DefaultHex string to avoid runtime parsing.
                             string bytesDefault = string.IsNullOrEmpty(setting.DefaultValue)
                                 ? "global::System.Array.Empty<byte>()"
-                                : HexToByteArrayLiteral(setting.DefaultValue);
+                                : _HexToByteArrayLiteral(setting.DefaultValue);
                             sb.AppendLine(
-                                $"        settings.RegisterBytesSetting(\"{EscapeString(setting.Name)}\","
-                                + $" \"{EscapeString(setting.UiName)}\", \"{EscapeString(setting.GroupName)}\","
+                                $"        settings.RegisterBytesSetting(\"{_EscapeString(setting.Name)}\","
+                                + $" \"{_EscapeString(setting.UiName)}\", \"{_EscapeString(setting.GroupName)}\","
                                 + $" {bytesDefault}{desc});");
                             break;
                         }
@@ -320,8 +313,8 @@ public sealed partial class ProtocolGenerator
                             // setting.EnumValues holds pre-validated, pre-formatted C# tuple content from ExtractEnumSettingInfo.
                             string enumPairs = setting.EnumValues ?? "";
                             sb.AppendLine(
-                                $"        settings.RegisterEnumSetting(\"{EscapeString(setting.Name)}\","
-                                + $" \"{EscapeString(setting.UiName)}\", \"{EscapeString(setting.GroupName)}\","
+                                $"        settings.RegisterEnumSetting(\"{_EscapeString(setting.Name)}\","
+                                + $" \"{_EscapeString(setting.UiName)}\", \"{_EscapeString(setting.GroupName)}\","
                                 + $" {setting.DefaultValue}, {_GloEnumMetadata}.FromPairs("
                                 + $"new (string, ulong)[] {{ {enumPairs} }}){desc});");
                             break;
@@ -340,26 +333,26 @@ public sealed partial class ProtocolGenerator
                 switch (reg.KeyType)
                 {
                     case "U64":
-                        sb.AppendLine($"        builder.RegisterParserInU64TableByName(\"{EscapeString(reg.Table)}\", {reg.U64Key}UL, protocolId);");
+                        sb.AppendLine($"        builder.RegisterParserInU64TableByName(\"{_EscapeString(reg.Table)}\", {reg.U64Key}UL, protocolId);");
                         break;
                     case "String":
                         sb.AppendLine(
-                            $"        builder.RegisterParserInStringTableByName(\"{EscapeString(reg.Table)}\","
-                            + $" \"{EscapeString(reg.StringKey!)}\", protocolId);");
+                            $"        builder.RegisterParserInStringTableByName(\"{_EscapeString(reg.Table)}\","
+                            + $" \"{_EscapeString(reg.StringKey!)}\", protocolId);");
                         break;
                     case "Bool":
                         sb.AppendLine(
-                            $"        builder.RegisterParserInBoolTableByName(\"{EscapeString(reg.Table)}\","
+                            $"        builder.RegisterParserInBoolTableByName(\"{_EscapeString(reg.Table)}\","
                             + $" {reg.BoolKey.ToString().ToLowerInvariant()}, protocolId);");
                         break;
                     case "Bytes":
                         // Emit a literal byte array rather than a runtime Convert call for reliability and clarity.
                         sb.AppendLine(
-                            $"        builder.RegisterParserInBytesTableByName(\"{EscapeString(reg.Table)}\","
-                            + $" new {_GloBytesKey}({HexToByteArrayLiteral(reg.BytesKey!)}), protocolId);");
+                            $"        builder.RegisterParserInBytesTableByName(\"{_EscapeString(reg.Table)}\","
+                            + $" new {_GloBytesKey}({_HexToByteArrayLiteral(reg.BytesKey!)}), protocolId);");
                         break;
                     case "Any":
-                        sb.AppendLine($"        builder.RegisterParserInAnyTableByName(\"{EscapeString(reg.Table)}\", protocolId);");
+                        sb.AppendLine($"        builder.RegisterParserInAnyTableByName(\"{_EscapeString(reg.Table)}\", protocolId);");
                         break;
                 }
             }
@@ -370,12 +363,12 @@ public sealed partial class ProtocolGenerator
         if (info.Settings.Length > 0)
         {
             sb.AppendLine("        // Load setting values into backing fields");
-            EmitSettingLoadCode(sb, info);
+            _EmitSettingLoadCode(sb, info);
             sb.AppendLine();
         }
 
         // Custom hook for config-driven registration (no-op if not implemented).
-        sb.AppendLine("        RegisterFieldsCustom(builder, protocolId);");
+        sb.AppendLine("        _RegisterFieldsCustom(builder, protocolId);");
 
         sb.AppendLine("    }");
         sb.AppendLine();
@@ -387,7 +380,7 @@ public sealed partial class ProtocolGenerator
     /// <c>RegisterFields</c> so that <c>RegisterFieldsCustom</c> sees populated
     /// backing fields before the stack is frozen.
     /// </summary>
-    private static void EmitSettingLoadCode(StringBuilder sb, ProtocolInfo info)
+    private static void _EmitSettingLoadCode(StringBuilder sb, ProtocolInfo info)
     {
         // EnumSetting uses GetU64Setting because GetEnumSetting (which returns (string, ulong)?) is not
         // on the IReadOnlySettingsManager interface. Both methods read the same underlying ulong storage.
@@ -397,54 +390,54 @@ public sealed partial class ProtocolGenerator
             {
                 case "Bool":
                     sb.AppendLine(
-                        $"        {setting.FieldName} = builder.Settings.GetBoolSetting(\"{EscapeString(setting.Name)}\")"
+                        $"        {setting.FieldName} = builder.Settings.GetBoolSetting(\"{_EscapeString(setting.Name)}\")"
                         + $" ?? {setting.DefaultValue};");
                     break;
                 case "String":
                     sb.AppendLine(
-                        $"        {setting.FieldName} = builder.Settings.GetStringSetting(\"{EscapeString(setting.Name)}\")"
-                        + $" ?? \"{EscapeString(setting.DefaultValue)}\";");
+                        $"        {setting.FieldName} = builder.Settings.GetStringSetting(\"{_EscapeString(setting.Name)}\")"
+                        + $" ?? \"{_EscapeString(setting.DefaultValue)}\";");
                     break;
                 case "F64":
-                    sb.AppendLine($"        {setting.FieldName} = builder.Settings.GetF64Setting(\"{EscapeString(setting.Name)}\") ?? {setting.DefaultValue};");
+                    sb.AppendLine($"        {setting.FieldName} = builder.Settings.GetF64Setting(\"{_EscapeString(setting.Name)}\") ?? {setting.DefaultValue};");
                     break;
                 case "U64":
-                    sb.AppendLine($"        {setting.FieldName} = builder.Settings.GetU64Setting(\"{EscapeString(setting.Name)}\") ?? {setting.DefaultValue};");
+                    sb.AppendLine($"        {setting.FieldName} = builder.Settings.GetU64Setting(\"{_EscapeString(setting.Name)}\") ?? {setting.DefaultValue};");
                     break;
                 case "I64":
-                    sb.AppendLine($"        {setting.FieldName} = builder.Settings.GetI64Setting(\"{EscapeString(setting.Name)}\") ?? {setting.DefaultValue};");
+                    sb.AppendLine($"        {setting.FieldName} = builder.Settings.GetI64Setting(\"{_EscapeString(setting.Name)}\") ?? {setting.DefaultValue};");
                     break;
                 case "Bytes":
                     {
                         string bytesDefault = string.IsNullOrEmpty(setting.DefaultValue)
                             ? "global::System.Array.Empty<byte>()"
-                            : HexToByteArrayLiteral(setting.DefaultValue);
+                            : _HexToByteArrayLiteral(setting.DefaultValue);
                         sb.AppendLine(
-                            $"        {setting.FieldName} = builder.Settings.GetSetting(\"{EscapeString(setting.Name)}\")"
+                            $"        {setting.FieldName} = builder.Settings.GetSetting(\"{_EscapeString(setting.Name)}\")"
                             + $"?.AsBytes() ?? {bytesDefault};");
                         break;
                     }
                 case "Enum":
-                    sb.AppendLine($"        {setting.FieldName} = builder.Settings.GetU64Setting(\"{EscapeString(setting.Name)}\") ?? {setting.DefaultValue};");
+                    sb.AppendLine($"        {setting.FieldName} = builder.Settings.GetU64Setting(\"{_EscapeString(setting.Name)}\") ?? {setting.DefaultValue};");
                     break;
             }
         }
     }
 
     /// <summary>Emits the boilerplate <c>OnStart(Stack)</c> method that delegates to <c>OnStartCustom</c>.</summary>
-    private static void GenerateOnStartMethod(StringBuilder sb)
+    private static void _GenerateOnStartMethod(StringBuilder sb)
     {
         sb.AppendLine("    /// <summary>Calls the optional OnStartCustom hook."
             + " Setting values are already loaded into backing fields by RegisterFields.</summary>");
         sb.AppendLine($"    public void OnStart({_GloStack} stack)");
         sb.AppendLine("    {");
-        sb.AppendLine("        OnStartCustom(stack);");
+        sb.AppendLine("        _OnStartCustom(stack);");
         sb.AppendLine("    }");
         sb.AppendLine();
     }
 
     /// <summary>Emits the boilerplate <c>OnShutdown(Stack)</c> method that delegates to <c>OnShutdownCustom</c>.</summary>
-    private static void GenerateOnShutdownMethod(StringBuilder sb)
+    private static void _GenerateOnShutdownMethod(StringBuilder sb)
     {
         sb.AppendLine("    /// <summary>Called on session shutdown. Calls the optional OnShutdownCustom hook.</summary>");
         sb.AppendLine($"    public void OnShutdown({_GloStack} stack)");
@@ -463,14 +456,14 @@ public sealed partial class ProtocolGenerator
     /// Uses <see cref="Microsoft.CodeAnalysis.CSharp.SymbolDisplay.FormatLiteral(string, bool)"/> so that all
     /// escape sequences (backslash, quote, newline, null, surrogates, non-printable characters) are handled.
     /// </summary>
-    private static string EscapeString(string value)
+    private static string _EscapeString(string value)
         => Microsoft.CodeAnalysis.CSharp.SymbolDisplay.FormatLiteral(value, quote: false);
 
     /// <summary>
     /// Escapes characters that are invalid inside XML documentation comment text.
     /// Replaces <c>&amp;</c>, <c>&lt;</c>, and <c>&gt;</c> with their XML entity equivalents.
     /// </summary>
-    private static string EscapeXmlDoc(string value)
+    private static string _EscapeXmlDoc(string value)
         => value.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;");
 
     /// <summary>
@@ -478,7 +471,7 @@ public sealed partial class ProtocolGenerator
     /// (e.g., "01AB" → "new byte[] { 0x01, 0xAB }").
     /// Returns <c>global::System.Array.Empty&lt;byte&gt;()</c> for an empty string.
     /// </summary>
-    private static string HexToByteArrayLiteral(string hex)
+    private static string _HexToByteArrayLiteral(string hex)
     {
         if (hex.Length == 0)
         {
@@ -499,7 +492,7 @@ public sealed partial class ProtocolGenerator
     }
 
     /// <summary>Converts index group name to a valid field name (e.g., "eth.type" → "_EthTypeGroupId").</summary>
-    private static string IndexGroupFieldName(string groupName)
+    private static string _IndexGroupFieldName(string groupName)
     {
         // Split by dots, capitalise each segment, then append "GroupId".
         string[] parts = groupName.Split('.');
@@ -521,7 +514,7 @@ public sealed partial class ProtocolGenerator
     }
 
     /// <summary>Converts table field name to a property name (e.g., "_EtherTypeTableId" → "EtherTypeTableId").</summary>
-    private static string TablePropertyName(string fieldName)
+    private static string _TablePropertyName(string fieldName)
     {
         // Remove leading underscore
         if (fieldName.StartsWith("_", StringComparison.Ordinal))
@@ -535,7 +528,7 @@ public sealed partial class ProtocolGenerator
     /// Converts a dotted name to a PascalCase C# identifier (e.g., "eth.type" → "EthType").
     /// If the result starts with a digit, a leading underscore is prepended to ensure a valid C# identifier.
     /// </summary>
-    private static string DottedNameToPascalCase(string name)
+    private static string _DottedNameToPascalCase(string name)
     {
         StringBuilder sb = new();
         foreach (string part in name.Split('.'))
@@ -552,16 +545,21 @@ public sealed partial class ProtocolGenerator
         }
 
         string result = sb.ToString();
-        return result.Length > 0 && char.IsDigit(result[0]) ? "_" + result : result;
+        if (result.Length > 0 && char.IsDigit(result[0]))
+        {
+            return "_" + result;
+        }
+
+        return result;
     }
 
     /// <summary>Converts an index group name to a constant name (e.g., "eth.type" → "IndexGroupEthType").</summary>
-    private static string IndexGroupConstantName(string groupName)
-        => "IndexGroup" + DottedNameToPascalCase(groupName);
+    private static string _IndexGroupConstantName(string groupName)
+        => "IndexGroup" + _DottedNameToPascalCase(groupName);
 
     /// <summary>Converts a table name to a constant name (e.g., "eth.type" → "TableNameEthType").</summary>
-    private static string TableNameConstantName(string tableName)
-        => "TableName" + DottedNameToPascalCase(tableName);
+    private static string _TableNameConstantName(string tableName)
+        => "TableName" + _DottedNameToPascalCase(tableName);
 
     #endregion
 }

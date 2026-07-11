@@ -25,7 +25,7 @@ namespace NetworkInspector.Protocols;
 /// </summary>
 /// <remarks>
 /// <para><b>Thread safety:</b> instances are immutable after registration completes.
-/// All mutable state is initialised inside <c>RegisterFieldsCustom</c> / <c>OnStartCustom</c>
+/// All mutable state is initialised inside <c>RegisterFieldsCustom</c> / <c>_OnStartCustom</c>
 /// (single-threaded build phase) and is read-only thereafter, so <see cref="Parse"/> may
 /// be invoked concurrently from any number of threads on the same instance without external
 /// synchronisation. Per-thread caches (when present) are stored in <c>[ThreadStatic]</c> fields.</para>
@@ -40,35 +40,35 @@ public sealed partial class DtlsProtocol : IProtocol
     public const ulong UdpPortKey = 443;
 
     /// <summary>Index group for always-present DTLS fields.</summary>
-    private const string DtlsIndexGroup = "dtls";
+    private const string _DtlsIndexGroup = "dtls";
 
     #endregion
 
     #region Protocol container
 
-    [BytesField("dtls", "DTLS", IndexGroup = DtlsIndexGroup)]
+    [BytesField("dtls", "DTLS", IndexGroup = _DtlsIndexGroup)]
     private FieldId _ProtocolFieldId;
 
     #endregion
 
     #region Record Layer fields
 
-    [NoneField("dtls.record", "DTLS Record Layer", IndexGroup = DtlsIndexGroup)]
+    [NoneField("dtls.record", "DTLS Record Layer", IndexGroup = _DtlsIndexGroup)]
     private FieldId _RecordFieldId;
 
-    [U64Field("dtls.record.content_type", "Content Type", IndexGroup = DtlsIndexGroup)]
+    [U64Field("dtls.record.content_type", "Content Type", IndexGroup = _DtlsIndexGroup)]
     private FieldId _ContentTypeFieldId;
 
-    [U64Field("dtls.record.version", "Version", IndexGroup = DtlsIndexGroup)]
+    [U64Field("dtls.record.version", "Version", IndexGroup = _DtlsIndexGroup)]
     private FieldId _VersionFieldId;
 
-    [U64Field("dtls.record.epoch", "Epoch", IndexGroup = DtlsIndexGroup)]
+    [U64Field("dtls.record.epoch", "Epoch", IndexGroup = _DtlsIndexGroup)]
     private FieldId _EpochFieldId;
 
-    [U64Field("dtls.record.sequence_number", "Sequence Number", IndexGroup = DtlsIndexGroup)]
+    [U64Field("dtls.record.sequence_number", "Sequence Number", IndexGroup = _DtlsIndexGroup)]
     private FieldId _SeqNumFieldId;
 
-    [U64Field("dtls.record.length", "Length", IndexGroup = DtlsIndexGroup)]
+    [U64Field("dtls.record.length", "Length", IndexGroup = _DtlsIndexGroup)]
     private FieldId _LengthFieldId;
 
     #endregion
@@ -103,10 +103,10 @@ public sealed partial class DtlsProtocol : IProtocol
 
     #region Populators
 
-    // Pre-allocated delegate; wired once in OnStartCustom (build phase, not per packet).
+    // Pre-allocated delegate; wired once in _OnStartCustom (build phase, not per packet).
     private LazyPopulator _Populator = null!;
 
-    partial void OnStartCustom(Stack stack) => _Populator = PopulateDtls;
+    partial void _OnStartCustom(Stack stack) => _Populator = _PopulateDtls;
 
     /// <summary>
     /// Parses DTLS records from the UDP payload. Record-level summary is eager;
@@ -135,7 +135,7 @@ public sealed partial class DtlsProtocol : IProtocol
 
         // Build summary from first record
         string ctText = TlsDisplayTables.GetContentTypeDisplayText(firstRecord.ContentType);
-        string verText = GetDtlsVersionText(firstRecord.Version);
+        string verText = _GetDtlsVersionText(firstRecord.Version);
 
         LazyString summary = ZA.Lazy("DTLS Record Layer: ", ctText, " (", verText, ")");
 
@@ -146,7 +146,7 @@ public sealed partial class DtlsProtocol : IProtocol
         // content type 22 (and ≥ 12 bytes of handshake header), and dtls.handshake.fragment
         // fields only when a handshake message is fragmented. Replicating that walk here keeps
         // the presence index complete and content-consistent (no false positives or negatives).
-        DetectHandshakeGroups(data.Span, out bool hasHandshake, out bool hasHandshakeFragment);
+        _DetectHandshakeGroups(data.Span, out bool hasHandshake, out bool hasHandshakeFragment);
         if (hasHandshake)
         {
             context.RecordGroupPresence(_DtlsHandshakeGroupId);
@@ -171,7 +171,7 @@ public sealed partial class DtlsProtocol : IProtocol
     /// This duplicate walk is the cost of recording content-dependent groups eagerly while keeping
     /// the actual field emission lazy.
     /// </summary>
-    private static void DetectHandshakeGroups(ReadOnlySpan<byte> span, out bool hasHandshake, out bool hasHandshakeFragment)
+    private static void _DetectHandshakeGroups(ReadOnlySpan<byte> span, out bool hasHandshake, out bool hasHandshakeFragment)
     {
         hasHandshake = false;
         hasHandshakeFragment = false;
@@ -196,7 +196,7 @@ public sealed partial class DtlsProtocol : IProtocol
             {
                 ReadOnlySpan<byte> hsData = span[recordStart..recordEnd];
 
-                // ParseHandshake emits handshake fields only when the full 12-byte handshake header fits.
+                // _ParseHandshake emits handshake fields only when the full 12-byte handshake header fits.
                 if (hsData.Length >= 12)
                 {
                     hasHandshake = true;
@@ -222,7 +222,7 @@ public sealed partial class DtlsProtocol : IProtocol
     /// container's children. The <c>dtls.record</c> containers and the handshake
     /// sub-fields are siblings under the <c>dtls</c> container.
     /// </summary>
-    private ParseResult PopulateDtls(in MutField container)
+    private ParseResult _PopulateDtls(in MutField container)
     {
         if (!container.Value.Data.TryGetAsBytes(out ReadOnlyMemory<byte> dtlsData))
         {
@@ -245,7 +245,7 @@ public sealed partial class DtlsProtocol : IProtocol
             }
 
             string ctText = TlsDisplayTables.GetContentTypeDisplayText(record.ContentType);
-            string verText = GetDtlsVersionText(record.Version);
+            string verText = _GetDtlsVersionText(record.Version);
 
             MutField recordContainer = container.AppendWithCustomText(
                 _RecordFieldId, FieldValue.None,
@@ -264,7 +264,7 @@ public sealed partial class DtlsProtocol : IProtocol
 
             if (record.ContentType == 22 && recordEnd > recordStart)
             {
-                ParseHandshake(in container, span[recordStart..recordEnd]);
+                _ParseHandshake(in container, span[recordStart..recordEnd]);
             }
 
             offset = recordEnd;
@@ -276,7 +276,7 @@ public sealed partial class DtlsProtocol : IProtocol
     /// <summary>
     /// Parses a DTLS handshake message header (type + length).
     /// </summary>
-    private void ParseHandshake(in MutField container, ReadOnlySpan<byte> hsData)
+    private void _ParseHandshake(in MutField container, ReadOnlySpan<byte> hsData)
     {
         // DTLS handshake header: type(1) + length(3) + message_seq(2) + fragment_offset(3) + fragment_length(3) = 12 bytes
         if (hsData.Length < 12)
@@ -336,7 +336,7 @@ public sealed partial class DtlsProtocol : IProtocol
     /// Returns display text for DTLS version codes.
     /// DTLS uses inverted version numbers: 0xFEFF = DTLS 1.0, 0xFEFD = DTLS 1.2.
     /// </summary>
-    private static string GetDtlsVersionText(ushort version) =>
+    private static string _GetDtlsVersionText(ushort version) =>
         version switch
         {
             0xFEFF => "DTLS 1.0",

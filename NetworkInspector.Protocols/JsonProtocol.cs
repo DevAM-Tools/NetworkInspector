@@ -24,7 +24,7 @@ namespace NetworkInspector.Protocols;
 /// </summary>
 /// <remarks>
 /// <para><b>Thread safety:</b> instances are immutable after registration completes.
-/// All mutable state is initialised inside <c>RegisterFieldsCustom</c> / <c>OnStartCustom</c>
+/// All mutable state is initialised inside <c>RegisterFieldsCustom</c> / <c>_OnStartCustom</c>
 /// (single-threaded build phase) and is read-only thereafter, so <see cref="Parse"/> may
 /// be invoked concurrently from any number of threads on the same instance without external
 /// synchronisation. Per-thread caches (when present) are stored in <c>[ThreadStatic]</c> fields.</para>
@@ -35,43 +35,43 @@ public sealed partial class JsonProtocol : IProtocol
     #region Constants
 
     /// <summary>Index group for always-present JSON fields.</summary>
-    private const string JsonIndexGroup = "json";
+    private const string _JsonIndexGroup = "json";
 
     /// <summary>Maximum nesting depth to prevent stack overflow.</summary>
-    private const int MaxDepth = 64;
+    private const int _MaxDepth = 64;
 
     /// <summary>Maximum string value length to include in the tree.</summary>
-    private const int MaxStringLength = 65536; // 64 KB
+    private const int _MaxStringLength = 65536; // 64 KB
 
     #endregion
 
     #region Fields
 
-    [NoneField("json", "JSON", IndexGroup = JsonIndexGroup)]
+    [NoneField("json", "JSON", IndexGroup = _JsonIndexGroup)]
     private FieldId _ProtocolFieldId;
 
-    [NoneField("json.object", "Object", IndexGroup = JsonIndexGroup)]
+    [NoneField("json.object", "Object", IndexGroup = _JsonIndexGroup)]
     private FieldId _ObjectFieldId;
 
-    [NoneField("json.array", "Array", IndexGroup = JsonIndexGroup)]
+    [NoneField("json.array", "Array", IndexGroup = _JsonIndexGroup)]
     private FieldId _ArrayFieldId;
 
-    [NoneField("json.member", "Member", IndexGroup = JsonIndexGroup)]
+    [NoneField("json.member", "Member", IndexGroup = _JsonIndexGroup)]
     private FieldId _MemberFieldId;
 
-    [StringField("json.key", "Key", IndexGroup = JsonIndexGroup)]
+    [StringField("json.key", "Key", IndexGroup = _JsonIndexGroup)]
     private FieldId _KeyFieldId;
 
-    [StringField("json.value.string", "String", IndexGroup = JsonIndexGroup)]
+    [StringField("json.value.string", "String", IndexGroup = _JsonIndexGroup)]
     private FieldId _ValueStringFieldId;
 
-    [StringField("json.value.number", "Number", IndexGroup = JsonIndexGroup)]
+    [StringField("json.value.number", "Number", IndexGroup = _JsonIndexGroup)]
     private FieldId _ValueNumberFieldId;
 
-    [BoolField("json.value.true", "True", IndexGroup = JsonIndexGroup)]
+    [BoolField("json.value.true", "True", IndexGroup = _JsonIndexGroup)]
     private FieldId _ValueTrueFieldId;
 
-    [BoolField("json.value.false", "False", IndexGroup = JsonIndexGroup)]
+    [BoolField("json.value.false", "False", IndexGroup = _JsonIndexGroup)]
     private FieldId _ValueFalseFieldId;
 
     [BoolField("json.value.null", "Null", IndexGroup = "json.null")]
@@ -80,8 +80,8 @@ public sealed partial class JsonProtocol : IProtocol
     // Pre-allocated populator
     private LazyPopulator _Populator = null!;
 
-    partial void OnStartCustom(Stack stack) =>
-        _Populator = PopulateJsonFields;
+    partial void _OnStartCustom(Stack stack) =>
+        _Populator = _PopulateJsonFields;
 
     /// <summary>
     /// Parses a JSON payload. Uses lazy population to defer recursive parsing.
@@ -100,7 +100,7 @@ public sealed partial class JsonProtocol : IProtocol
         // document contains a null value token. Per the index-is-authoritative contract the
         // group must be recorded eagerly here, so the presence is decided up front by scanning
         // the raw bytes. This intentionally duplicates the scan the populator performs later.
-        if (JsonContainsNull(data.Span))
+        if (_JsonContainsNull(data.Span))
         {
             context.RecordGroupPresence(_JsonNullGroupId);
         }
@@ -121,7 +121,7 @@ public sealed partial class JsonProtocol : IProtocol
     /// mirrors the populator, which emits json.value.null whenever a value position begins with
     /// the bytes 'n','u','l','l'. Returns true as soon as such a token is found.
     /// </summary>
-    private static bool JsonContainsNull(ReadOnlySpan<byte> span)
+    private static bool _JsonContainsNull(ReadOnlySpan<byte> span)
     {
         int offset = 0;
         while (offset < span.Length)
@@ -168,7 +168,7 @@ public sealed partial class JsonProtocol : IProtocol
     /// <summary>
     /// Populates JSON fields by parsing the stored JSON bytes into a field tree.
     /// </summary>
-    private ParseResult PopulateJsonFields(in MutField container)
+    private ParseResult _PopulateJsonFields(in MutField container)
     {
         if (!container.Value.Data.TryGetAsBytes(out ReadOnlyMemory<byte> jsonData))
         {
@@ -176,14 +176,14 @@ public sealed partial class JsonProtocol : IProtocol
         }
         ReadOnlySpan<byte> span = jsonData.Span;
 
-        int offset = SkipWhitespace(span, 0);
+        int offset = _SkipWhitespace(span, 0);
         if (offset >= span.Length)
         {
             return 0;
         }
 
         // Parse the root value
-        ParseJsonValue(in container, span, ref offset, 0);
+        _ParseJsonValue(in container, span, ref offset, 0);
 
         return 0;
     }
@@ -192,10 +192,10 @@ public sealed partial class JsonProtocol : IProtocol
     /// Parses a single JSON value (object, array, string, number, boolean, null) and
     /// appends appropriate fields to the parent. Recurses for nested structures.
     /// </summary>
-    private void ParseJsonValue(in MutField parent, ReadOnlySpan<byte> span, ref int offset, int depth)
+    private void _ParseJsonValue(in MutField parent, ReadOnlySpan<byte> span, ref int offset, int depth)
     {
-        offset = SkipWhitespace(span, offset);
-        if (offset >= span.Length || depth > MaxDepth)
+        offset = _SkipWhitespace(span, offset);
+        if (offset >= span.Length || depth > _MaxDepth)
         {
             return;
         }
@@ -205,13 +205,13 @@ public sealed partial class JsonProtocol : IProtocol
         switch (ch)
         {
             case (byte)'{':
-                ParseObject(in parent, span, ref offset, depth);
+                _ParseObject(in parent, span, ref offset, depth);
                 break;
             case (byte)'[':
-                ParseArray(in parent, span, ref offset, depth);
+                _ParseArray(in parent, span, ref offset, depth);
                 break;
             case (byte)'"':
-                string strVal = ParseString(span, ref offset);
+                string strVal = _ParseString(span, ref offset);
                 parent.Append(_ValueStringFieldId, FieldValue.NewString(strVal));
                 break;
             case (byte)'t': // true
@@ -255,7 +255,7 @@ public sealed partial class JsonProtocol : IProtocol
                 // Number or invalid — try to parse as number
                 if (ch == '-' || (ch >= '0' && ch <= '9'))
                 {
-                    string numStr = ParseNumber(span, ref offset);
+                    string numStr = _ParseNumber(span, ref offset);
                     parent.Append(_ValueNumberFieldId, FieldValue.NewString(numStr));
                 }
                 else
@@ -269,7 +269,7 @@ public sealed partial class JsonProtocol : IProtocol
     /// <summary>
     /// Parses a JSON object and appends member fields.
     /// </summary>
-    private void ParseObject(in MutField parent, ReadOnlySpan<byte> span, ref int offset, int depth)
+    private void _ParseObject(in MutField parent, ReadOnlySpan<byte> span, ref int offset, int depth)
     {
         offset++; // Skip '{'
         MutField objField = parent.AppendWithCustomText(
@@ -278,7 +278,7 @@ public sealed partial class JsonProtocol : IProtocol
         bool first = true;
         while (offset < span.Length)
         {
-            offset = SkipWhitespace(span, offset);
+            offset = _SkipWhitespace(span, offset);
             if (offset >= span.Length)
             {
                 break;
@@ -295,7 +295,7 @@ public sealed partial class JsonProtocol : IProtocol
                 if (span[offset] == ',')
                 {
                     offset++;
-                    offset = SkipWhitespace(span, offset);
+                    offset = _SkipWhitespace(span, offset);
                 }
                 else
                 {
@@ -310,10 +310,10 @@ public sealed partial class JsonProtocol : IProtocol
             }
 
             // Parse key
-            string key = ParseString(span, ref offset);
+            string key = _ParseString(span, ref offset);
 
             // Skip colon
-            offset = SkipWhitespace(span, offset);
+            offset = _SkipWhitespace(span, offset);
             if (offset < span.Length && span[offset] == ':')
             {
                 offset++;
@@ -327,14 +327,14 @@ public sealed partial class JsonProtocol : IProtocol
             memberField.Append(_KeyFieldId, FieldValue.NewString(key));
 
             // Parse value recursively
-            ParseJsonValue(in memberField, span, ref offset, depth + 1);
+            _ParseJsonValue(in memberField, span, ref offset, depth + 1);
         }
     }
 
     /// <summary>
     /// Parses a JSON array and appends element fields.
     /// </summary>
-    private void ParseArray(in MutField parent, ReadOnlySpan<byte> span, ref int offset, int depth)
+    private void _ParseArray(in MutField parent, ReadOnlySpan<byte> span, ref int offset, int depth)
     {
         offset++; // Skip '['
         MutField arrField = parent.AppendWithCustomText(
@@ -343,7 +343,7 @@ public sealed partial class JsonProtocol : IProtocol
         bool first = true;
         while (offset < span.Length)
         {
-            offset = SkipWhitespace(span, offset);
+            offset = _SkipWhitespace(span, offset);
             if (offset >= span.Length)
             {
                 break;
@@ -368,7 +368,7 @@ public sealed partial class JsonProtocol : IProtocol
             }
             first = false;
 
-            ParseJsonValue(in arrField, span, ref offset, depth + 1);
+            _ParseJsonValue(in arrField, span, ref offset, depth + 1);
         }
     }
 
@@ -376,7 +376,7 @@ public sealed partial class JsonProtocol : IProtocol
     /// Parses a JSON string value, handling escape sequences.
     /// Advances offset past the closing quote.
     /// </summary>
-    private static string ParseString(ReadOnlySpan<byte> span, ref int offset)
+    private static string _ParseString(ReadOnlySpan<byte> span, ref int offset)
     {
         offset++; // Skip opening '"'
 
@@ -402,13 +402,13 @@ public sealed partial class JsonProtocol : IProtocol
         string result;
         if (!hasEscape)
         {
-            int len = Math.Min(offset - start, MaxStringLength);
+            int len = Math.Min(offset - start, _MaxStringLength);
             result = Encoding.UTF8.GetString(span.Slice(start, len));
         }
         else
         {
             // Slow path: decode escape sequences
-            result = DecodeEscapedString(span[start..offset]);
+            result = _DecodeEscapedString(span[start..offset]);
         }
 
         if (offset < span.Length && span[offset] == '"')
@@ -425,10 +425,10 @@ public sealed partial class JsonProtocol : IProtocol
     /// and decoding them as UTF-8 rather than treating each byte as a Latin-1 character.
     /// Uses stackalloc for small strings to avoid StringBuilder allocation.
     /// </summary>
-    private static string DecodeEscapedString(ReadOnlySpan<byte> raw)
+    private static string _DecodeEscapedString(ReadOnlySpan<byte> raw)
     {
         // Upper bound: each byte produces at most one char
-        int maxChars = Math.Min(raw.Length, MaxStringLength);
+        int maxChars = Math.Min(raw.Length, _MaxStringLength);
         Span<char> buffer = maxChars <= 512
             ? stackalloc char[maxChars]
             : new char[maxChars];
@@ -518,7 +518,7 @@ public sealed partial class JsonProtocol : IProtocol
     /// Parses a JSON number (integer, float, negative, scientific notation).
     /// Returns the number as a string to preserve full precision.
     /// </summary>
-    private static string ParseNumber(ReadOnlySpan<byte> span, ref int offset)
+    private static string _ParseNumber(ReadOnlySpan<byte> span, ref int offset)
     {
         int start = offset;
 
@@ -565,7 +565,7 @@ public sealed partial class JsonProtocol : IProtocol
     /// Skips JSON whitespace characters (space, tab, CR, LF).
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static int SkipWhitespace(ReadOnlySpan<byte> span, int offset)
+    private static int _SkipWhitespace(ReadOnlySpan<byte> span, int offset)
     {
         while (offset < span.Length)
         {

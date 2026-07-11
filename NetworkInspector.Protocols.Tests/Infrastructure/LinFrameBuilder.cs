@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Protocols.Tests;
 
@@ -32,11 +32,11 @@ internal static class LinFrameBuilder
             throw new ArgumentOutOfRangeException(nameof(frameId));
         }
 
-        byte pid = WithParity(frameId);
+        byte pid = _WithParity(frameId);
         // Byte 4: payload_length[7:4] | msg_type[3:2] | checksum_type[1:0]
         // msg_type = 0 (Frame), so bits 3-2 are 00.
         byte byte4 = (byte)((data.Length << 4) | (checksumType & 0x03));
-        byte checksum = ComputeChecksum(data, pid, checksumType);
+        byte checksum = _ComputeChecksum(data, pid, checksumType);
 
         byte[] frame = new byte[8 + data.Length];
         frame[0] = 1;       // msg_format_rev = 1
@@ -52,7 +52,7 @@ internal static class LinFrameBuilder
     }
 
     /// <summary>Computes the 8-bit Protected ID (frame id + 2 parity bits per ISO 17987).</summary>
-    private static byte WithParity(byte frameId)
+    private static byte _WithParity(byte frameId)
     {
         int id0 = (frameId >> 0) & 1;
         int id1 = (frameId >> 1) & 1;
@@ -70,7 +70,7 @@ internal static class LinFrameBuilder
     /// Classic (type 1): sums data bytes only.
     /// Enhanced (type 2): includes the PID byte in the sum (ISO 17987).
     /// </summary>
-    private static byte ComputeChecksum(ReadOnlySpan<byte> data, byte pid, byte type)
+    private static byte _ComputeChecksum(ReadOnlySpan<byte> data, byte pid, byte type)
     {
         uint sum = type == 2 ? pid : 0u;
         foreach (byte b in data)

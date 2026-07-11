@@ -12,7 +12,7 @@ internal sealed class LinkLayerProtocolTests
     /// <summary>
     /// Builds a full stack and parses the given frame with the specified link type.
     /// </summary>
-    private static (Stack Stack, Packet Packet) BuildAndParse(byte[] frameData, LinkType linkType)
+    private static (Stack Stack, Packet Packet) _BuildAndParse(byte[] frameData, LinkType linkType)
     {
         using SettingsManager settingsManager = new();
         StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
@@ -32,15 +32,15 @@ internal sealed class LinkLayerProtocolTests
     }
 
     /// <summary>Builds and parses an Ethernet frame (LinkType.Ethernet).</summary>
-    private static (Stack Stack, Packet Packet) BuildAndParseEthernet(byte[] frameData) =>
-        BuildAndParse(frameData, LinkType.Ethernet);
+    private static (Stack Stack, Packet Packet) _BuildAndParseEthernet(byte[] frameData) =>
+        _BuildAndParse(frameData, LinkType.Ethernet);
 
     [Test]
     public async Task Parse_SllFrame_FieldsCorrect()
     {
         byte[] frameData = FrameBuilders.GenerateSllFrame(packetType: 0, etherType: 0x0800);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData, LinkType.LinuxSll);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData, LinkType.LinuxSll);
         using (stack)
         {
             // Verify SLL protocol is detected
@@ -83,7 +83,7 @@ internal sealed class LinkLayerProtocolTests
     {
         byte[] frameData = FrameBuilders.GenerateSllFrame(etherType: 0x0800);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData, LinkType.LinuxSll);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData, LinkType.LinuxSll);
         using (stack)
         {
             // IPv4 should be parsed after SLL
@@ -137,7 +137,7 @@ internal sealed class LinkLayerProtocolTests
         byte[] frameData = FrameBuilders.GenerateSll2Frame(
             etherType: 0x0800, packetType: 0, interfaceIndex: 42);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData, LinkType.LinuxSll2);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData, LinkType.LinuxSll2);
         using (stack)
         {
             // Verify SLL2 protocol is detected
@@ -172,7 +172,7 @@ internal sealed class LinkLayerProtocolTests
     {
         byte[] frameData = FrameBuilders.GenerateSll2Frame(etherType: 0x0800);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData, LinkType.LinuxSll2);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData, LinkType.LinuxSll2);
         using (stack)
         {
             FieldId? ipSrcId = stack.GetFieldId("ip.src");
@@ -188,7 +188,7 @@ internal sealed class LinkLayerProtocolTests
     {
         byte[] frameData = FrameBuilders.GenerateLlcSnapFrame();
 
-        (Stack stack, Packet packet) = BuildAndParseEthernet(frameData);
+        (Stack stack, Packet packet) = _BuildAndParseEthernet(frameData);
         using (stack)
         {
             // Verify LLC protocol is detected
@@ -224,7 +224,7 @@ internal sealed class LinkLayerProtocolTests
     {
         byte[] frameData = FrameBuilders.GenerateLlcSnapFrame();
 
-        (Stack stack, Packet packet) = BuildAndParseEthernet(frameData);
+        (Stack stack, Packet packet) = _BuildAndParseEthernet(frameData);
         using (stack)
         {
             // SNAP Type = 0x0800 (IPv4)
@@ -242,7 +242,7 @@ internal sealed class LinkLayerProtocolTests
     {
         byte[] frameData = FrameBuilders.GenerateLlcSnapFrame();
 
-        (Stack stack, Packet packet) = BuildAndParseEthernet(frameData);
+        (Stack stack, Packet packet) = _BuildAndParseEthernet(frameData);
         using (stack)
         {
             // IPv4 should be dispatched after LLC SNAP

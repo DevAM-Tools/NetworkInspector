@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Protocols.Tests;
 
@@ -10,7 +10,7 @@ namespace NetworkInspector.Protocols.Tests;
 /// </summary>
 internal sealed class DnsMalformedTests
 {
-    private static byte[] WrapDnsUdp(ReadOnlySpan<byte> dnsPayload)
+    private static byte[] _WrapDnsUdp(ReadOnlySpan<byte> dnsPayload)
     {
         EthernetLayer eth = new(
             MacAddress.FromBytes([0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF]),
@@ -21,7 +21,7 @@ internal sealed class DnsMalformedTests
     }
 
     /// <summary>Writes a 12-byte DNS header into <paramref name="dst"/> at offset 0.</summary>
-    private static void WriteDnsHeader(
+    private static void _WriteDnsHeader(
         Span<byte> dst, ushort id, ushort flags,
         ushort qdCount, ushort anCount, ushort nsCount, ushort arCount)
     {
@@ -39,7 +39,7 @@ internal sealed class DnsMalformedTests
         // Only 6 bytes of DNS header — must be tolerated without crash.
         byte[] payload = new byte[6];
         BinaryPrimitives.WriteUInt16BigEndian(payload.AsSpan(0, 2), 0xBEEF);
-        byte[] frame = WrapDnsUdp(payload);
+        byte[] frame = _WrapDnsUdp(payload);
         (Stack stack, _) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         { /* parse succeeded if we got here */
@@ -52,7 +52,7 @@ internal sealed class DnsMalformedTests
         // Hand-craft a payload where the question name is a pointer to itself.
         // Header(12) + ptr(2) [points back to offset 12 = itself] + qtype(2) + qclass(2)
         byte[] payload = new byte[20];
-        WriteDnsHeader(payload, id: 1, flags: 0x0100,
+        _WriteDnsHeader(payload, id: 1, flags: 0x0100,
             qdCount: 1, anCount: 0, nsCount: 0, arCount: 0);
         // Self-referential pointer at offset 12.
         byte[] ptr = DnsLayer.EncodeNamePointer(12);
@@ -60,7 +60,7 @@ internal sealed class DnsMalformedTests
         BinaryPrimitives.WriteUInt16BigEndian(payload.AsSpan(14, 2), DnsLayer.DnsType.A);
         BinaryPrimitives.WriteUInt16BigEndian(payload.AsSpan(16, 2), 1);
 
-        byte[] frame = WrapDnsUdp(payload);
+        byte[] frame = _WrapDnsUdp(payload);
         // Must terminate quickly — TUnit times out otherwise.
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)

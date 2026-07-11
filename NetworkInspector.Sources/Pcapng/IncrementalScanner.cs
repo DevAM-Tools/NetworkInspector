@@ -138,7 +138,7 @@ internal sealed class IncrementalScanner
     /// 16 MiB is still generous enough to accommodate any real-world block while
     /// preventing a single malformed record from causing an OOM condition.
     /// </summary>
-    private const int MaxBlockReadSize = 16 * 1024 * 1024; // 16 MiB
+    private const int _MaxBlockReadSize = 16 * 1024 * 1024; // 16 MiB
 
     #endregion
 
@@ -196,7 +196,7 @@ internal sealed class IncrementalScanner
     internal IncrementalScanner(DataBackend backend, long fileSize)
     {
         _Backend = backend;
-        _Index = new FrameIndex();
+        _Index = new();
 
         // Read the minimum number of bytes needed for format detection.
         ReadOnlySpan<byte> peek = backend.GetScanSpan(0, PcapFormatDetection.MinDetectionBytes);
@@ -208,11 +208,11 @@ internal sealed class IncrementalScanner
 
         if (detection.Format == FileFormat.PcapNg)
         {
-            _Format = InitializePcapNg(detection.ByteSwapped, fileSize);
+            _Format = _InitializePcapNg(detection.ByteSwapped, fileSize);
         }
         else
         {
-            _Format = InitializeLegacyPcap(detection);
+            _Format = _InitializeLegacyPcap(detection);
         }
     }
 
@@ -225,7 +225,7 @@ internal sealed class IncrementalScanner
     /// </summary>
     /// <param name="byteSwapped">Whether the file uses swapped byte order.</param>
     /// <param name="fileSize">Total file size in bytes.</param>
-    private PcapNgFormat InitializePcapNg(bool byteSwapped, long fileSize)
+    private PcapNgFormat _InitializePcapNg(bool byteSwapped, long fileSize)
     {
         // Read just the 8-byte block prefix to obtain blockLength before fetching
         // the full block — this avoids mapping the entire file for initialization.
@@ -243,8 +243,8 @@ internal sealed class IncrementalScanner
             throw new PcapException($"SHB block length {blockLength} is less than minimum {PcapConstants.ShbFixedSize}.");
         }
 
-        // Fetch the complete SHB. Cap to MaxBlockReadSize to guard against corrupt data.
-        int readSize = (int)Math.Min((long)blockLength, MaxBlockReadSize);
+        // Fetch the complete SHB. Cap to _MaxBlockReadSize to guard against corrupt data.
+        int readSize = (int)Math.Min((long)blockLength, _MaxBlockReadSize);
         ReadOnlySpan<byte> shbData = _Backend.GetScanSpan(0, readSize);
 
         if (!SectionHeaderBlock.TryParse(shbData, out SectionHeaderBlock shb, out _))
@@ -283,7 +283,7 @@ internal sealed class IncrementalScanner
     /// Reads the 24-byte legacy PCAP global header via the backend and prepares scanning.
     /// </summary>
     /// <param name="detection">Format detection result containing byte order and timestamp resolution.</param>
-    private LegacyPcapFormat InitializeLegacyPcap(FormatDetectionResult detection)
+    private LegacyPcapFormat _InitializeLegacyPcap(FormatDetectionResult detection)
     {
         ReadOnlySpan<byte> header = _Backend.GetScanSpan(0, PcapConstants.PcapGlobalHeaderSize);
 
@@ -329,10 +329,10 @@ internal sealed class IncrementalScanner
 
         if (_Format is PcapNgFormat pcapng)
         {
-            return NextFramePcapNg(pcapng, out frame);
+            return _NextFramePcapNg(pcapng, out frame);
         }
 
-        return NextFrameLegacy((LegacyPcapFormat)_Format, out frame);
+        return _NextFrameLegacy((LegacyPcapFormat)_Format, out frame);
     }
 
     /// <summary>
@@ -342,7 +342,7 @@ internal sealed class IncrementalScanner
     /// The <c>_Offset</c> field is always a <c>long</c>; no int cast is
     /// performed so files beyond 2 GiB are handled correctly.
     /// </summary>
-    private bool NextFramePcapNg(PcapNgFormat format, out ScannedFrame frame)
+    private bool _NextFramePcapNg(PcapNgFormat format, out ScannedFrame frame)
     {
         long fileSize = _Backend.FileSize;
 
@@ -427,12 +427,12 @@ internal sealed class IncrementalScanner
                 return false;
             }
 
-            // Reject blocks whose declared length exceeds MaxBlockReadSize.
+            // Reject blocks whose declared length exceeds _MaxBlockReadSize.
             // Any block larger than 16 MiB is considered corrupt (even custom block types
             // rarely exceed a few KB; a legitimate EPB is bounded by the snap length).
             // This eliminates the silent-truncation problem: we never read a
             // partial block that appears well-formed but is actually clipped by the cap.
-            if (blockLength > MaxBlockReadSize)
+            if (blockLength > _MaxBlockReadSize)
             {
                 _Exhausted = true;
                 frame = default;
@@ -440,7 +440,7 @@ internal sealed class IncrementalScanner
             }
 
             // Fetch the full block as a windowed span.
-            // blockLength was validated above against MaxBlockReadSize and fileSize,
+            // blockLength was validated above against _MaxBlockReadSize and fileSize,
             // so the cast to int is safe and GetScanSpan must return exactly blockLength bytes.
             int readSize = (int)blockLength;
             ReadOnlySpan<byte> blockData = _Backend.GetScanSpan(_Offset, readSize);
@@ -459,7 +459,7 @@ internal sealed class IncrementalScanner
             // A mismatch indicates a corrupt block boundary; stop scanning to prevent the
             // offset arithmetic from producing a cascade of bad frame positions.
             // Note: legacy PCAP records do not have a trailing length field; this check is
-            // PCAPNG-only (NextFrameLegacy has no equivalent).
+            // PCAPNG-only (_NextFrameLegacy has no equivalent).
             // The trailing field always uses the same byte order as the rest of the block,
             // which for SHB may differ from the surrounding section. For SHB we apply shbSwap;
             // for all other blocks we apply the current section's ByteSwapped flag.
@@ -483,7 +483,7 @@ internal sealed class IncrementalScanner
             switch (blockType)
             {
                 case PcapConstants.BlockTypeSHB:
-                    if (!ProcessSectionHeader(blockData, format, shbSwap, blockLength))
+                    if (!_ProcessSectionHeader(blockData, format, shbSwap, blockLength))
                     {
                         // Section index overflow or parse failure — stop scanning.
                         _Exhausted = true;
@@ -494,12 +494,12 @@ internal sealed class IncrementalScanner
                     continue;
 
                 case PcapConstants.BlockTypeIDB:
-                    ProcessInterfaceDescription(blockData, format, blockLength);
+                    _ProcessInterfaceDescription(blockData, format, blockLength);
                     _Offset = nextOffset;
                     continue;
 
                 case PcapConstants.BlockTypeEPB:
-                    if (TryScanEnhancedPacket(blockData, format, blockLength, out frame))
+                    if (_TryScanEnhancedPacket(blockData, format, blockLength, out frame))
                     {
                         _Offset = nextOffset;
                         return true;
@@ -509,7 +509,7 @@ internal sealed class IncrementalScanner
                     continue;
 
                 case PcapConstants.BlockTypeSPB:
-                    if (TryScanSimplePacket(blockData, format, blockLength, out frame))
+                    if (_TryScanSimplePacket(blockData, format, blockLength, out frame))
                     {
                         _Offset = nextOffset;
                         return true;
@@ -518,7 +518,7 @@ internal sealed class IncrementalScanner
                     continue;
 
                 case PcapConstants.BlockTypePB:
-                    if (TryScanObsoletePacket(blockData, format, blockLength, out frame))
+                    if (_TryScanObsoletePacket(blockData, format, blockLength, out frame))
                     {
                         _Offset = nextOffset;
                         return true;
@@ -539,7 +539,7 @@ internal sealed class IncrementalScanner
     /// the packet data via the backend (windowed I/O).
     /// <c>_Offset</c> is always a <c>long</c>; no int cast is performed.
     /// </summary>
-    private bool NextFrameLegacy(LegacyPcapFormat format, out ScannedFrame frame)
+    private bool _NextFrameLegacy(LegacyPcapFormat format, out ScannedFrame frame)
     {
         long fileSize = _Backend.FileSize;
 
@@ -623,7 +623,7 @@ internal sealed class IncrementalScanner
     }
 
     /// <summary>Processes a Section Header Block — creates a new section.</summary>
-    private static bool ProcessSectionHeader(ReadOnlySpan<byte> blockData, PcapNgFormat format, bool swap, uint blockLength)
+    private static bool _ProcessSectionHeader(ReadOnlySpan<byte> blockData, PcapNgFormat format, bool swap, uint blockLength)
     {
         // CurrentSectionIndex is a ushort (0–65535); adding another section when
         // there are already 65536 sections would silently wrap the section index to 0,
@@ -656,7 +656,7 @@ internal sealed class IncrementalScanner
     }
 
     /// <summary>Processes an Interface Description Block — adds an interface to the current section.</summary>
-    private static void ProcessInterfaceDescription(ReadOnlySpan<byte> blockData, PcapNgFormat format, uint blockLength)
+    private static void _ProcessInterfaceDescription(ReadOnlySpan<byte> blockData, PcapNgFormat format, uint blockLength)
     {
         SectionInfo section = format.CurrentSection;
         EndianReader reader = new(section.ByteSwapped);
@@ -685,7 +685,7 @@ internal sealed class IncrementalScanner
     }
 
     /// <summary>Scans an Enhanced Packet Block.</summary>
-    private bool TryScanEnhancedPacket(ReadOnlySpan<byte> blockData, PcapNgFormat format, uint blockLength, out ScannedFrame frame)
+    private bool _TryScanEnhancedPacket(ReadOnlySpan<byte> blockData, PcapNgFormat format, uint blockLength, out ScannedFrame frame)
     {
         if (blockLength < PcapConstants.EpbFixedSize || blockData.Length < 28)
         {
@@ -774,7 +774,7 @@ internal sealed class IncrementalScanner
     }
 
     /// <summary>Scans a Simple Packet Block.</summary>
-    private bool TryScanSimplePacket(ReadOnlySpan<byte> blockData, PcapNgFormat format, uint blockLength, out ScannedFrame frame)
+    private bool _TryScanSimplePacket(ReadOnlySpan<byte> blockData, PcapNgFormat format, uint blockLength, out ScannedFrame frame)
     {
         if (blockLength < PcapConstants.SpbFixedSize || blockData.Length < 12)
         {
@@ -840,7 +840,7 @@ internal sealed class IncrementalScanner
     }
 
     /// <summary>Scans an Obsolete Packet Block.</summary>
-    private bool TryScanObsoletePacket(ReadOnlySpan<byte> blockData, PcapNgFormat format, uint blockLength, out ScannedFrame frame)
+    private bool _TryScanObsoletePacket(ReadOnlySpan<byte> blockData, PcapNgFormat format, uint blockLength, out ScannedFrame frame)
     {
         if (blockLength < PcapConstants.PbFixedSize || blockData.Length < 28)
         {

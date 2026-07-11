@@ -37,19 +37,19 @@ internal sealed class HttpHeuristicParser(ProtocolId protocolId) : IHeuristicPar
         }
 
         // Check for HTTP methods followed by a space
-        return MatchesMethod(span, "GET "u8)
-            || MatchesMethod(span, "POST "u8)
-            || MatchesMethod(span, "PUT "u8)
-            || MatchesMethod(span, "HEAD "u8)
-            || MatchesMethod(span, "DELETE "u8)
-            || MatchesMethod(span, "OPTIONS "u8)
-            || MatchesMethod(span, "PATCH "u8)
-            || MatchesMethod(span, "CONNECT "u8)
-            || MatchesMethod(span, "TRACE "u8);
+        return _MatchesMethod(span, "GET "u8)
+            || _MatchesMethod(span, "POST "u8)
+            || _MatchesMethod(span, "PUT "u8)
+            || _MatchesMethod(span, "HEAD "u8)
+            || _MatchesMethod(span, "DELETE "u8)
+            || _MatchesMethod(span, "OPTIONS "u8)
+            || _MatchesMethod(span, "PATCH "u8)
+            || _MatchesMethod(span, "CONNECT "u8)
+            || _MatchesMethod(span, "TRACE "u8);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static bool MatchesMethod(ReadOnlySpan<byte> data, ReadOnlySpan<byte> method) =>
+    private static bool _MatchesMethod(ReadOnlySpan<byte> data, ReadOnlySpan<byte> method) =>
         data.Length >= method.Length && data[..method.Length].SequenceEqual(method);
 }
 
@@ -105,7 +105,7 @@ internal sealed class TlsHeuristicParser(ProtocolId protocolId) : IHeuristicPars
 internal sealed class Http2HeuristicParser(ProtocolId protocolId) : IHeuristicParser
 {
     /// <summary>HTTP/2 client connection preface (first 6 bytes are sufficient to identify).</summary>
-    private static ReadOnlySpan<byte> Http2Preface => "PRI * "u8;
+    private static ReadOnlySpan<byte> _Http2Preface => "PRI * "u8;
 
     public ProtocolId ProtocolId { get; } = protocolId;
     public string Name => "http2.heuristic";
@@ -122,7 +122,7 @@ internal sealed class Http2HeuristicParser(ProtocolId protocolId) : IHeuristicPa
         ReadOnlySpan<byte> span = data.Span;
 
         // Check for HTTP/2 client connection preface: "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
-        if (span.Length >= Http2Preface.Length && span[..Http2Preface.Length].SequenceEqual(Http2Preface))
+        if (span.Length >= _Http2Preface.Length && span[.._Http2Preface.Length].SequenceEqual(_Http2Preface))
         {
             return true;
         }

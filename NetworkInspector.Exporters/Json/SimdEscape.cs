@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Exporters.Json;
 
@@ -16,16 +16,16 @@ namespace NetworkInspector.Exporters.Json;
 internal static class SimdEscape
 {
     /// <summary>Pre-built two-character escape sequences for common control characters.</summary>
-    private static ReadOnlySpan<byte> EscapeQuote => "\\\""u8;
-    private static ReadOnlySpan<byte> EscapeBackslash => "\\\\"u8;
-    private static ReadOnlySpan<byte> EscapeNewline => "\\n"u8;
-    private static ReadOnlySpan<byte> EscapeReturn => "\\r"u8;
-    private static ReadOnlySpan<byte> EscapeTab => "\\t"u8;
-    private static ReadOnlySpan<byte> EscapeBackspace => "\\b"u8;
-    private static ReadOnlySpan<byte> EscapeFormFeed => "\\f"u8;
+    private static ReadOnlySpan<byte> _EscapeQuote => "\\\""u8;
+    private static ReadOnlySpan<byte> _EscapeBackslash => "\\\\"u8;
+    private static ReadOnlySpan<byte> _EscapeNewline => "\\n"u8;
+    private static ReadOnlySpan<byte> _EscapeReturn => "\\r"u8;
+    private static ReadOnlySpan<byte> _EscapeTab => "\\t"u8;
+    private static ReadOnlySpan<byte> _EscapeBackspace => "\\b"u8;
+    private static ReadOnlySpan<byte> _EscapeFormFeed => "\\f"u8;
 
     /// <summary>Hex digits for \uXXXX encoding of uncommon control characters.</summary>
-    private static ReadOnlySpan<byte> HexDigits => "0123456789abcdef"u8;
+    private static ReadOnlySpan<byte> _HexDigits => "0123456789abcdef"u8;
 
     /// <summary>
     /// Escapes JSON special characters in the input and appends the result to the buffer.
@@ -43,15 +43,15 @@ internal static class SimdEscape
 
         if (Vector256.IsHardwareAccelerated && input.Length >= 32)
         {
-            EscapeVector256(ref buffer, input);
+            _EscapeVector256(ref buffer, input);
         }
         else if (Vector128.IsHardwareAccelerated && input.Length >= 16)
         {
-            EscapeVector128(ref buffer, input);
+            _EscapeVector128(ref buffer, input);
         }
         else
         {
-            EscapeScalar(ref buffer, input);
+            _EscapeScalar(ref buffer, input);
         }
     }
 
@@ -61,7 +61,7 @@ internal static class SimdEscape
     /// the entire 32-byte block directly. Otherwise, copies the safe prefix
     /// and escapes the first special character, then continues.
     /// </summary>
-    private static void EscapeVector256(ref PooledBuffer buffer, ReadOnlySpan<byte> input)
+    private static void _EscapeVector256(ref PooledBuffer buffer, ReadOnlySpan<byte> input)
     {
         // Comparison vectors for characters requiring JSON escaping
         Vector256<byte> vQuote = Vector256.Create((byte)0x22);     // '"'
@@ -97,7 +97,7 @@ internal static class SimdEscape
                     buffer.Write(input.Slice(i, safeCount));
                 }
                 i += safeCount;
-                WriteEscapedByte(ref buffer, input[i]);
+                _WriteEscapedByte(ref buffer, input[i]);
                 i++;
             }
         }
@@ -105,15 +105,15 @@ internal static class SimdEscape
         // Handle remaining bytes with scalar fallback
         if (i < input.Length)
         {
-            EscapeScalar(ref buffer, input.Slice(i));
+            _EscapeScalar(ref buffer, input.Slice(i));
         }
     }
 
     /// <summary>
     /// Processes 16 bytes at a time using 128-bit vectors.
-    /// Same algorithm as <see cref="EscapeVector256"/> but with half the width.
+    /// Same algorithm as <see cref="_EscapeVector256"/> but with half the width.
     /// </summary>
-    private static void EscapeVector128(ref PooledBuffer buffer, ReadOnlySpan<byte> input)
+    private static void _EscapeVector128(ref PooledBuffer buffer, ReadOnlySpan<byte> input)
     {
         Vector128<byte> vQuote = Vector128.Create((byte)0x22);
         Vector128<byte> vBackslash = Vector128.Create((byte)0x5C);
@@ -145,14 +145,14 @@ internal static class SimdEscape
                     buffer.Write(input.Slice(i, safeCount));
                 }
                 i += safeCount;
-                WriteEscapedByte(ref buffer, input[i]);
+                _WriteEscapedByte(ref buffer, input[i]);
                 i++;
             }
         }
 
         if (i < input.Length)
         {
-            EscapeScalar(ref buffer, input.Slice(i));
+            _EscapeScalar(ref buffer, input.Slice(i));
         }
     }
 
@@ -160,7 +160,7 @@ internal static class SimdEscape
     /// Byte-by-byte scalar fallback for short inputs or remainder after SIMD processing.
     /// Copies safe ranges in bulk where possible to minimize per-byte overhead.
     /// </summary>
-    private static void EscapeScalar(ref PooledBuffer buffer, ReadOnlySpan<byte> input)
+    private static void _EscapeScalar(ref PooledBuffer buffer, ReadOnlySpan<byte> input)
     {
         int start = 0; // start of current safe range
         for (int i = 0; i < input.Length; i++)
@@ -173,7 +173,7 @@ internal static class SimdEscape
                 {
                     buffer.Write(input.Slice(start, i - start));
                 }
-                WriteEscapedByte(ref buffer, b);
+                _WriteEscapedByte(ref buffer, b);
                 start = i + 1;
             }
         }
@@ -191,30 +191,30 @@ internal static class SimdEscape
     /// uncommon control characters get the \u00XX form.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static void WriteEscapedByte(ref PooledBuffer buffer, byte b)
+    private static void _WriteEscapedByte(ref PooledBuffer buffer, byte b)
     {
         switch (b)
         {
             case 0x22:
-                buffer.Write(EscapeQuote);
+                buffer.Write(_EscapeQuote);
                 break;       // "
             case 0x5C:
-                buffer.Write(EscapeBackslash);
+                buffer.Write(_EscapeBackslash);
                 break;   // \.
             case 0x0A:
-                buffer.Write(EscapeNewline);
+                buffer.Write(_EscapeNewline);
                 break;     // \n
             case 0x0D:
-                buffer.Write(EscapeReturn);
+                buffer.Write(_EscapeReturn);
                 break;      // \r
             case 0x09:
-                buffer.Write(EscapeTab);
+                buffer.Write(_EscapeTab);
                 break;         // \t
             case 0x08:
-                buffer.Write(EscapeBackspace);
+                buffer.Write(_EscapeBackspace);
                 break;   // \b
             case 0x0C:
-                buffer.Write(EscapeFormFeed);
+                buffer.Write(_EscapeFormFeed);
                 break;    // \f
             default:
                 // Uncommon control character → \u00XX
@@ -223,8 +223,8 @@ internal static class SimdEscape
                 escape[1] = (byte)'u';
                 escape[2] = (byte)'0';
                 escape[3] = (byte)'0';
-                escape[4] = HexDigits[b >> 4];
-                escape[5] = HexDigits[b & 0x0F];
+                escape[4] = _HexDigits[b >> 4];
+                escape[5] = _HexDigits[b & 0x0F];
                 buffer.Write(escape);
                 break;
         }

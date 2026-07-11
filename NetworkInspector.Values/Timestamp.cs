@@ -14,9 +14,9 @@ public readonly record struct Timestamp
     /// <summary>Maximum formatted length: yyyy-MM-ddTHH:mm:ss.nnnnnnnnnZ = 30.</summary>
     public const int MaxFormattedLength = 30;
 
-    private const long NanosPerSecond = 1_000_000_000;
-    private const long NanosPerMilli = 1_000_000;
-    private const long NanosPerMicro = 1_000;
+    private const long _NanosPerSecond = 1_000_000_000;
+    private const long _NanosPerMilli = 1_000_000;
+    private const long _NanosPerMicro = 1_000;
 
     #endregion
 
@@ -69,25 +69,25 @@ public readonly record struct Timestamp
     public long AsMicros
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _Nanos / NanosPerMicro;
+        get => _Nanos / _NanosPerMicro;
     }
     /// <summary>The value in milliseconds (truncated).</summary>
     public long AsMillis
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _Nanos / NanosPerMilli;
+        get => _Nanos / _NanosPerMilli;
     }
     /// <summary>The whole seconds part.</summary>
     public long Secs
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _Nanos / NanosPerSecond;
+        get => _Nanos / _NanosPerSecond;
     }
     /// <summary>The sub-second nanosecond part.</summary>
     public int SubsecNanos
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => (int)(_Nanos % NanosPerSecond);
+        get => (int)(_Nanos % _NanosPerSecond);
     }
 
     #endregion
@@ -99,17 +99,17 @@ public readonly record struct Timestamp
     public static Timestamp FromNanos(long nanos) => new(nanos);
     /// <summary>Creates a timestamp from microseconds.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static Timestamp FromMicros(long micros) => new(micros * NanosPerMicro);
+    public static Timestamp FromMicros(long micros) => new(micros * _NanosPerMicro);
     /// <summary>Creates a timestamp from milliseconds.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static Timestamp FromMillis(long millis) => new(millis * NanosPerMilli);
+    public static Timestamp FromMillis(long millis) => new(millis * _NanosPerMilli);
     /// <summary>Creates a timestamp from seconds.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static Timestamp FromSecs(long secs) => new(secs * NanosPerSecond);
+    public static Timestamp FromSecs(long secs) => new(secs * _NanosPerSecond);
     /// <summary>Creates a timestamp from seconds and nanoseconds.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Timestamp FromSecsAndNanos(long secs, int nanos) =>
-        new(secs * NanosPerSecond + nanos);
+        new(secs * _NanosPerSecond + nanos);
 
     /// <summary>
     /// Parses a timestamp from ISO 8601 UTC nanosecond format <c>yyyy-MM-ddTHH:mm:ss.nnnnnnnnnZ</c>.
@@ -129,13 +129,13 @@ public readonly record struct Timestamp
         {
             return false;
         }
-        if (!TryParse4Digits(text[0..4], out int year)) { return false; }
-        if (!TryParse2Digits(text[5..7], out int month)) { return false; }
-        if (!TryParse2Digits(text[8..10], out int day)) { return false; }
-        if (!TryParse2Digits(text[11..13], out int hour)) { return false; }
-        if (!TryParse2Digits(text[14..16], out int minute)) { return false; }
-        if (!TryParse2Digits(text[17..19], out int second)) { return false; }
-        if (!TryParse9Digits(text[20..29], out int nanos)) { return false; }
+        if (!_TryParse4Digits(text[0..4], out int year)) { return false; }
+        if (!_TryParse2Digits(text[5..7], out int month)) { return false; }
+        if (!_TryParse2Digits(text[8..10], out int day)) { return false; }
+        if (!_TryParse2Digits(text[11..13], out int hour)) { return false; }
+        if (!_TryParse2Digits(text[14..16], out int minute)) { return false; }
+        if (!_TryParse2Digits(text[17..19], out int second)) { return false; }
+        if (!_TryParse9Digits(text[20..29], out int nanos)) { return false; }
 
         // Validate calendar bounds
         if (month < 1 || month > 12 || day < 1 || day > 31) { return false; }
@@ -152,7 +152,7 @@ public readonly record struct Timestamp
         }
 
         long epochSecs = (dto.Ticks - DateTimeOffset.UnixEpoch.Ticks) / TimeSpan.TicksPerSecond;
-        result = new Timestamp(epochSecs * NanosPerSecond + nanos);
+        result = new Timestamp(epochSecs * _NanosPerSecond + nanos);
         return true;
     }
 
@@ -234,7 +234,7 @@ public readonly record struct Timestamp
 
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public bool TryGetSerializedSize(out int size)
+    public bool TryGetWrittenSize(out int size)
     {
         size = 8;
         return true;
@@ -277,7 +277,7 @@ public readonly record struct Timestamp
         if (nanos < 0)
         {
             secs -= 1;
-            nanos += (int)NanosPerSecond;
+            nanos += (int)_NanosPerSecond;
         }
 
         // Convert to DateTimeOffset for calendar decomposition
@@ -286,26 +286,26 @@ public readonly record struct Timestamp
 
         // Write UTC: yyyy-MM-dd HH:mm:ss.nnnnnnnnn (space separator, no trailing Z)
         int pos = 0;
-        Write4Digits(dto.Year, destination[pos..]);
+        _Write4Digits(dto.Year, destination[pos..]);
         pos += 4;
         destination[pos++] = '-';
-        Write2Digits(dto.Month, destination[pos..]);
+        _Write2Digits(dto.Month, destination[pos..]);
         pos += 2;
         destination[pos++] = '-';
-        Write2Digits(dto.Day, destination[pos..]);
+        _Write2Digits(dto.Day, destination[pos..]);
         pos += 2;
         // ISO 8601 'T' separator between date and time
         destination[pos++] = 'T';
-        Write2Digits(dto.Hour, destination[pos..]);
+        _Write2Digits(dto.Hour, destination[pos..]);
         pos += 2;
         destination[pos++] = ':';
-        Write2Digits(dto.Minute, destination[pos..]);
+        _Write2Digits(dto.Minute, destination[pos..]);
         pos += 2;
         destination[pos++] = ':';
-        Write2Digits(dto.Second, destination[pos..]);
+        _Write2Digits(dto.Second, destination[pos..]);
         pos += 2;
         destination[pos++] = '.';
-        WriteNanos(nanos, destination[pos..]);
+        _WriteNanos(nanos, destination[pos..]);
         pos += 9;
         // Trailing 'Z' indicates UTC (ISO 8601)
         destination[pos++] = 'Z';
@@ -441,7 +441,7 @@ public readonly record struct Timestamp
     #region Private Helpers
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static void Write4Digits(int value, Span<char> dest)
+    private static void _Write4Digits(int value, Span<char> dest)
     {
         dest[0] = (char)('0' + value / 1000);
         dest[1] = (char)('0' + (value / 100) % 10);
@@ -450,14 +450,14 @@ public readonly record struct Timestamp
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static void Write2Digits(int value, Span<char> dest)
+    private static void _Write2Digits(int value, Span<char> dest)
     {
         dest[0] = (char)('0' + value / 10);
         dest[1] = (char)('0' + value % 10);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static void WriteNanos(int nanos, Span<char> dest)
+    private static void _WriteNanos(int nanos, Span<char> dest)
     {
         // Always write exactly 9 digits, zero-padded
         for (int i = 8; i >= 0; i--)
@@ -469,7 +469,7 @@ public readonly record struct Timestamp
 
     // Parse exactly 4 decimal digits.
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static bool TryParse4Digits(ReadOnlySpan<char> s, out int value)
+    private static bool _TryParse4Digits(ReadOnlySpan<char> s, out int value)
     {
         value = 0;
         for (int i = 0; i < 4; i++)
@@ -483,7 +483,7 @@ public readonly record struct Timestamp
 
     // Parse exactly 2 decimal digits.
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static bool TryParse2Digits(ReadOnlySpan<char> s, out int value)
+    private static bool _TryParse2Digits(ReadOnlySpan<char> s, out int value)
     {
         char c0 = s[0]; char c1 = s[1];
         if (c0 < '0' || c0 > '9' || c1 < '0' || c1 > '9') { value = 0; return false; }
@@ -493,7 +493,7 @@ public readonly record struct Timestamp
 
     // Parse exactly 9 decimal digits.
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static bool TryParse9Digits(ReadOnlySpan<char> s, out int value)
+    private static bool _TryParse9Digits(ReadOnlySpan<char> s, out int value)
     {
         value = 0;
         for (int i = 0; i < 9; i++)

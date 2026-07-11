@@ -31,7 +31,7 @@ internal static class RoundtripAssertions
     /// tests are listed; extend as needed when new exporter targets land.
     /// Reference: <c>wiretap/wtap.h</c> in the Wireshark source tree.
     /// </summary>
-    private static int ExpectedTsharkEncap(LinkType linkType) => linkType switch
+    private static int _ExpectedTsharkEncap(LinkType linkType) => linkType switch
     {
         LinkType.Ethernet => 1,    // WTAP_ENCAP_ETHERNET
         LinkType.Flexray => 106,  // WTAP_ENCAP_FLEXRAY
@@ -39,7 +39,7 @@ internal static class RoundtripAssertions
         LinkType.CanSocketcan => 125,  // WTAP_ENCAP_SOCKETCAN
         _ => throw new InvalidOperationException(
             $"No tshark WTAP_ENCAP_* mapping defined for {linkType}. " +
-            "Extend RoundtripAssertions.ExpectedTsharkEncap when adding new exporter link types.")
+            "Extend RoundtripAssertions._ExpectedTsharkEncap when adding new exporter link types.")
     };
 
     /// <summary>
@@ -74,7 +74,7 @@ internal static class RoundtripAssertions
 
             // 1. Encapsulation type — guards against the writer emitting the wrong
             //    DLT/WTAP encap (e.g. SocketCAN frames written with Ethernet header).
-            int expectedEncap = ExpectedTsharkEncap(original.LinkType);
+            int expectedEncap = _ExpectedTsharkEncap(original.LinkType);
             if (rec.EncapType != expectedEncap)
             {
                 throw new InvalidOperationException(

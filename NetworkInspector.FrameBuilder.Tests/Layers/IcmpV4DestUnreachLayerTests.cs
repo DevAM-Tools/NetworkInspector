@@ -8,7 +8,7 @@ namespace NetworkInspector.FrameBuilder.Tests.Layers;
 /// </summary>
 internal sealed class IcmpV4DestUnreachLayerTests
 {
-    private static byte[] WriteHeader(IcmpV4DestUnreachLayer layer)
+    private static byte[] _WriteHeader(IcmpV4DestUnreachLayer layer)
     {
         byte[] buf = new byte[layer.HeaderSize];
         layer.WriteHeader(buf.AsSpan());
@@ -22,7 +22,7 @@ internal sealed class IcmpV4DestUnreachLayerTests
     {
         // RFC 792: Destination Unreachable is ICMP type 3.
         IcmpV4DestUnreachLayer layer = new();
-        byte[] buf = WriteHeader(layer);
+        byte[] buf = _WriteHeader(layer);
 
         await Assert.That(buf[0]).IsEqualTo((byte)3);
     }
@@ -32,7 +32,7 @@ internal sealed class IcmpV4DestUnreachLayerTests
     {
         // The default constructor uses CodePortUnreachable (3).
         IcmpV4DestUnreachLayer layer = new();
-        byte[] buf = WriteHeader(layer);
+        byte[] buf = _WriteHeader(layer);
 
         await Assert.That(buf[1]).IsEqualTo(IcmpV4DestUnreachLayer.CodePortUnreachable);
     }
@@ -48,7 +48,7 @@ internal sealed class IcmpV4DestUnreachLayerTests
     {
         // Each named code constant must equal its documented numeric value and be written to byte 1.
         IcmpV4DestUnreachLayer layer = new(code);
-        byte[] buf = WriteHeader(layer);
+        byte[] buf = _WriteHeader(layer);
 
         await Assert.That((int)buf[1]).IsEqualTo(expectedValue)
             .Because($"code byte must be {expectedValue} for constant value {code}");
@@ -66,7 +66,7 @@ internal sealed class IcmpV4DestUnreachLayerTests
         // which WriteHeader writes as a big-endian uint32 to bytes 4–7.
         const ushort mtu = 1480;
         IcmpV4DestUnreachLayer layer = new(IcmpV4DestUnreachLayer.CodeFragmentationNeeded, nextHopMtu: mtu);
-        byte[] buf = WriteHeader(layer);
+        byte[] buf = _WriteHeader(layer);
 
         ushort actual = BinaryPrimitives.ReadUInt16BigEndian(buf.AsSpan(6, 2));
         await Assert.That(actual).IsEqualTo(mtu);
@@ -77,7 +77,7 @@ internal sealed class IcmpV4DestUnreachLayerTests
     {
         // Per RFC 792, bytes 4–5 (unused/padding) must be zero even for code 4.
         IcmpV4DestUnreachLayer layer = new(IcmpV4DestUnreachLayer.CodeFragmentationNeeded, nextHopMtu: 1500);
-        byte[] buf = WriteHeader(layer);
+        byte[] buf = _WriteHeader(layer);
 
         await Assert.That(buf[4]).IsEqualTo((byte)0).Because("byte 4 is the unused high byte");
         await Assert.That(buf[5]).IsEqualTo((byte)0).Because("byte 5 is the unused high byte");
@@ -88,7 +88,7 @@ internal sealed class IcmpV4DestUnreachLayerTests
     {
         // For codes other than 4, the data field must be all zeros.
         IcmpV4DestUnreachLayer layer = new(IcmpV4DestUnreachLayer.CodePortUnreachable);
-        byte[] buf = WriteHeader(layer);
+        byte[] buf = _WriteHeader(layer);
 
         await Assert.That(BinaryPrimitives.ReadUInt16BigEndian(buf.AsSpan(6, 2))).IsEqualTo((ushort)0)
             .Because("Next-Hop MTU field must be zero when nextHopMtu is not specified");

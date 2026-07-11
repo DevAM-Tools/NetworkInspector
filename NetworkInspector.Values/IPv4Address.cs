@@ -226,7 +226,7 @@ public readonly record struct IPv4Address
 
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public bool TryGetSerializedSize(out int size)
+    public bool TryGetWrittenSize(out int size)
     {
         size = 4;
         return true;
@@ -260,13 +260,13 @@ public readonly record struct IPv4Address
             return false;
         }
         int pos = 0;
-        pos += WriteOctet((byte)(_Value >> 24), destination[pos..]);
+        pos += _WriteOctet((byte)(_Value >> 24), destination[pos..]);
         destination[pos++] = '.';
-        pos += WriteOctet((byte)(_Value >> 16), destination[pos..]);
+        pos += _WriteOctet((byte)(_Value >> 16), destination[pos..]);
         destination[pos++] = '.';
-        pos += WriteOctet((byte)(_Value >> 8), destination[pos..]);
+        pos += _WriteOctet((byte)(_Value >> 8), destination[pos..]);
         destination[pos++] = '.';
-        pos += WriteOctet((byte)_Value, destination[pos..]);
+        pos += _WriteOctet((byte)_Value, destination[pos..]);
         charsWritten = pos;
         return true;
     }
@@ -309,10 +309,10 @@ public readonly record struct IPv4Address
         ReadOnlySpan<char> format, IFormatProvider? provider, out int size)
     {
         // Exact calculation: digit count of each octet + 3 dots
-        size = OctetLength((byte)(_Value >> 24)) + 1 +
-               OctetLength((byte)(_Value >> 16)) + 1 +
-               OctetLength((byte)(_Value >> 8)) + 1 +
-               OctetLength((byte)_Value);
+        size = _OctetLength((byte)(_Value >> 24)) + 1 +
+               _OctetLength((byte)(_Value >> 16)) + 1 +
+               _OctetLength((byte)(_Value >> 8)) + 1 +
+               _OctetLength((byte)_Value);
         return true;
     }
 
@@ -401,7 +401,7 @@ public readonly record struct IPv4Address
     #region Private Helpers
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static int WriteOctet(byte value, Span<char> dest)
+    private static int _WriteOctet(byte value, Span<char> dest)
     {
         if (value >= 100)
         {
@@ -421,7 +421,20 @@ public readonly record struct IPv4Address
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static int OctetLength(byte value) => value >= 100 ? 3 : value >= 10 ? 2 : 1;
+    private static int _OctetLength(byte value)
+    {
+        if (value >= 100)
+        {
+            return 3;
+        }
+
+        if (value >= 10)
+        {
+            return 2;
+        }
+
+        return 1;
+    }
     #endregion
 }
 

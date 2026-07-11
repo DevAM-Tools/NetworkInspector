@@ -2,19 +2,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <RootNamespace>NetworkInspector.Profiling</RootNamespace>
-    <!-- Developer-only profiling harness — not published to NuGet. -->
     <IsPackable>false</IsPackable>
-    <!--
-      Disable AOT / trim analysis for this developer-tool project.
-      Profilers (dotTrace, VS Diagnostic Tools, perf, ETW) require JIT-compiled code
-      and reflection-based tooling; AOT compilation would interfere.
-    -->
-    <IsAotCompatible>false</IsAotCompatible>
-    <IsTrimmable>false</IsTrimmable>
-    <EnableTrimAnalyzer>false</EnableTrimAnalyzer>
-    <JsonSerializerIsReflectionEnabledByDefault>true</JsonSerializerIsReflectionEnabledByDefault>
   </PropertyGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\NetworkInspector.Core\NetworkInspector.Core.csproj" />
     <ProjectReference Include="..\NetworkInspector.Protocols\NetworkInspector.Protocols.csproj" />

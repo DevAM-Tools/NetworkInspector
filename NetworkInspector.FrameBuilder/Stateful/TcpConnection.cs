@@ -232,7 +232,7 @@ public sealed class TcpConnection<TOld, TTail> : IDisposable
         TcpSegmentMutator? effective = mutator ?? OnSegment;
 
         // SYN (client → server)
-        EmitOneSegment(
+        _EmitOneSegment(
             isClient: true,
             phase: TcpLifecycle.Handshake,
             defaultFlags: TcpFlags.Syn,
@@ -246,7 +246,7 @@ public sealed class TcpConnection<TOld, TTail> : IDisposable
         _ServerSession.SetTcpStreamAck(_Options.ClientIsn + 1u);
 
         // SYN+ACK (server → client)
-        EmitOneSegment(
+        _EmitOneSegment(
             isClient: false,
             phase: TcpLifecycle.Handshake,
             defaultFlags: TcpFlags.SynAck,
@@ -260,7 +260,7 @@ public sealed class TcpConnection<TOld, TTail> : IDisposable
         _ClientSession.SetTcpStreamAck(_Options.ServerIsn + 1u);
 
         // ACK (client → server)
-        EmitOneSegment(
+        _EmitOneSegment(
             isClient: true,
             phase: TcpLifecycle.Handshake,
             defaultFlags: TcpFlags.Ack,
@@ -285,34 +285,34 @@ public sealed class TcpConnection<TOld, TTail> : IDisposable
         TcpSegmentMutator? effective = mutator ?? OnSegment;
 
         // FIN+ACK (client → server)
-        EmitOneSegment(true, TcpLifecycle.Fin, TcpFlags.FinAck, ReadOnlySpan<byte>.Empty, 0, 4, sink, effective);
+        _EmitOneSegment(true, TcpLifecycle.Fin, TcpFlags.FinAck, ReadOnlySpan<byte>.Empty, 0, 4, sink, effective);
         // After client FIN: server's expected ACK from client increments by 1 (FIN consumes a SEQ).
         _ServerSession.AdvanceTcpStreamAck(1u);
 
         // ACK (server → client)
-        EmitOneSegment(false, TcpLifecycle.Ack, TcpFlags.Ack, ReadOnlySpan<byte>.Empty, 1, 4, sink, effective);
+        _EmitOneSegment(false, TcpLifecycle.Ack, TcpFlags.Ack, ReadOnlySpan<byte>.Empty, 1, 4, sink, effective);
 
         // FIN+ACK (server → client)
-        EmitOneSegment(false, TcpLifecycle.Fin, TcpFlags.FinAck, ReadOnlySpan<byte>.Empty, 2, 4, sink, effective);
+        _EmitOneSegment(false, TcpLifecycle.Fin, TcpFlags.FinAck, ReadOnlySpan<byte>.Empty, 2, 4, sink, effective);
         _ClientSession.AdvanceTcpStreamAck(1u);
 
         // ACK (client → server)
-        EmitOneSegment(true, TcpLifecycle.Ack, TcpFlags.Ack, ReadOnlySpan<byte>.Empty, 3, 4, sink, effective);
+        _EmitOneSegment(true, TcpLifecycle.Ack, TcpFlags.Ack, ReadOnlySpan<byte>.Empty, 3, 4, sink, effective);
     }
 
     /// <summary>Emits a single RST segment from the client side.</summary>
     public void EmitRstFromClient(FrameSink sink, TcpSegmentMutator? mutator = null)
-        => EmitRst(isClient: true, sink, mutator);
+        => _EmitRst(isClient: true, sink, mutator);
 
     /// <summary>Emits a single RST segment from the server side.</summary>
     public void EmitRstFromServer(FrameSink sink, TcpSegmentMutator? mutator = null)
-        => EmitRst(isClient: false, sink, mutator);
+        => _EmitRst(isClient: false, sink, mutator);
 
-    private void EmitRst(bool isClient, FrameSink sink, TcpSegmentMutator? mutator)
+    private void _EmitRst(bool isClient, FrameSink sink, TcpSegmentMutator? mutator)
     {
         ObjectDisposedException.ThrowIf(_Disposed, this);
         ArgumentNullException.ThrowIfNull(sink);
-        EmitOneSegment(isClient, TcpLifecycle.Rst, TcpFlags.Rst | TcpFlags.Ack, ReadOnlySpan<byte>.Empty,
+        _EmitOneSegment(isClient, TcpLifecycle.Rst, TcpFlags.Rst | TcpFlags.Ack, ReadOnlySpan<byte>.Empty,
             segmentIndex: 0, segmentCount: 1, sink, mutator ?? OnSegment);
     }
 
@@ -322,21 +322,21 @@ public sealed class TcpConnection<TOld, TTail> : IDisposable
 
     /// <summary>Emits a bare ACK segment from the client to the server (no payload, no flag changes).</summary>
     public void EmitAckFromClient(FrameSink sink, TcpSegmentMutator? mutator = null)
-        => EmitBareAck(isClient: true, lifecycle: TcpLifecycle.Ack, window: null, sink, mutator);
+        => _EmitBareAck(isClient: true, lifecycle: TcpLifecycle.Ack, window: null, sink, mutator);
 
     /// <summary>Emits a bare ACK segment from the server to the client (no payload, no flag changes).</summary>
     public void EmitAckFromServer(FrameSink sink, TcpSegmentMutator? mutator = null)
-        => EmitBareAck(isClient: false, lifecycle: TcpLifecycle.Ack, window: null, sink, mutator);
+        => _EmitBareAck(isClient: false, lifecycle: TcpLifecycle.Ack, window: null, sink, mutator);
 
     /// <summary>Emits a window-update segment from the client (bare ACK with a new advertised window).</summary>
     public void EmitWindowUpdateFromClient(ushort newWindow, FrameSink sink, TcpSegmentMutator? mutator = null)
-        => EmitBareAck(isClient: true, lifecycle: TcpLifecycle.WindowUpdate, window: newWindow, sink, mutator);
+        => _EmitBareAck(isClient: true, lifecycle: TcpLifecycle.WindowUpdate, window: newWindow, sink, mutator);
 
     /// <summary>Emits a window-update segment from the server (bare ACK with a new advertised window).</summary>
     public void EmitWindowUpdateFromServer(ushort newWindow, FrameSink sink, TcpSegmentMutator? mutator = null)
-        => EmitBareAck(isClient: false, lifecycle: TcpLifecycle.WindowUpdate, window: newWindow, sink, mutator);
+        => _EmitBareAck(isClient: false, lifecycle: TcpLifecycle.WindowUpdate, window: newWindow, sink, mutator);
 
-    private void EmitBareAck(bool isClient, TcpLifecycle lifecycle, ushort? window, FrameSink sink, TcpSegmentMutator? mutator)
+    private void _EmitBareAck(bool isClient, TcpLifecycle lifecycle, ushort? window, FrameSink sink, TcpSegmentMutator? mutator)
     {
         ObjectDisposedException.ThrowIf(_Disposed, this);
         ArgumentNullException.ThrowIfNull(sink);
@@ -346,7 +346,7 @@ public sealed class TcpConnection<TOld, TTail> : IDisposable
         {
             session.SetTcpStreamWindow(window.Value);
         }
-        EmitOneSegment(isClient, lifecycle, TcpFlags.Ack, ReadOnlySpan<byte>.Empty,
+        _EmitOneSegment(isClient, lifecycle, TcpFlags.Ack, ReadOnlySpan<byte>.Empty,
             segmentIndex: 0, segmentCount: 1, sink, mutator ?? OnSegment);
         if (window.HasValue)
         {
@@ -366,23 +366,23 @@ public sealed class TcpConnection<TOld, TTail> : IDisposable
     /// <param name="mss">Optional per-call MSS override (must be &gt; 0). Defaults to the connection MSS.</param>
     /// <param name="mutator">Optional per-call mutator override.</param>
     public void WriteFromClient(ReadOnlySpan<byte> payload, FrameSink sink, bool push = true, ushort? mss = null, TcpSegmentMutator? mutator = null)
-        => WriteStream(isClient: true, payload, sink, push, mss, mutator);
+        => _WriteStream(isClient: true, payload, sink, push, mss, mutator);
 
     /// <summary>Writes <paramref name="payload"/> as one or more server→client data segments.</summary>
     public void WriteFromServer(ReadOnlySpan<byte> payload, FrameSink sink, bool push = true, ushort? mss = null, TcpSegmentMutator? mutator = null)
-        => WriteStream(isClient: false, payload, sink, push, mss, mutator);
+        => _WriteStream(isClient: false, payload, sink, push, mss, mutator);
 
     /// <summary>Convenience overload: produces an <see cref="IStreamProducer"/>'s wire-form into a pooled buffer and Writes it.</summary>
     public void WriteFromClient<TProducer>(in TProducer producer, FrameSink sink, bool push = true, ushort? mss = null, TcpSegmentMutator? mutator = null)
         where TProducer : struct, IStreamProducer
-        => WriteFromProducer(isClient: true, in producer, sink, push, mss, mutator);
+        => _WriteFromProducer(isClient: true, in producer, sink, push, mss, mutator);
 
     /// <summary>Convenience overload: produces an <see cref="IStreamProducer"/>'s wire-form into a pooled buffer and Writes it.</summary>
     public void WriteFromServer<TProducer>(in TProducer producer, FrameSink sink, bool push = true, ushort? mss = null, TcpSegmentMutator? mutator = null)
         where TProducer : struct, IStreamProducer
-        => WriteFromProducer(isClient: false, in producer, sink, push, mss, mutator);
+        => _WriteFromProducer(isClient: false, in producer, sink, push, mss, mutator);
 
-    private void WriteFromProducer<TProducer>(bool isClient, in TProducer producer, FrameSink sink, bool push, ushort? mss, TcpSegmentMutator? mutator)
+    private void _WriteFromProducer<TProducer>(bool isClient, in TProducer producer, FrameSink sink, bool push, ushort? mss, TcpSegmentMutator? mutator)
         where TProducer : struct, IStreamProducer
     {
         ObjectDisposedException.ThrowIf(_Disposed, this);
@@ -400,10 +400,10 @@ public sealed class TcpConnection<TOld, TTail> : IDisposable
         }
         writer.ResetWrittenCount();
         producer.WriteStream(writer);
-        WriteStream(isClient, writer.WrittenSpan, sink, push, mss, mutator);
+        _WriteStream(isClient, writer.WrittenSpan, sink, push, mss, mutator);
     }
 
-    private void WriteStream(bool isClient, ReadOnlySpan<byte> payload, FrameSink sink, bool push, ushort? mss, TcpSegmentMutator? mutator)
+    private void _WriteStream(bool isClient, ReadOnlySpan<byte> payload, FrameSink sink, bool push, ushort? mss, TcpSegmentMutator? mutator)
     {
         ObjectDisposedException.ThrowIf(_Disposed, this);
         ArgumentNullException.ThrowIfNull(sink);
@@ -421,7 +421,7 @@ public sealed class TcpConnection<TOld, TTail> : IDisposable
             if (push)
             {
                 // Empty Write with push:true → emit a single PSH+ACK with no payload.
-                EmitOneSegment(isClient, TcpLifecycle.Data, TcpFlags.PshAck,
+                _EmitOneSegment(isClient, TcpLifecycle.Data, TcpFlags.PshAck,
                     ReadOnlySpan<byte>.Empty, 0, 1, sink, effective);
             }
             // push:false + empty payload → no segment at all.
@@ -437,7 +437,7 @@ public sealed class TcpConnection<TOld, TTail> : IDisposable
             ReadOnlySpan<byte> slice = payload.Slice(offset, sliceLength);
             bool isLast = i == segmentCount - 1;
             byte flags = (push && isLast) ? TcpFlags.PshAck : TcpFlags.Ack;
-            EmitOneSegment(isClient, TcpLifecycle.Data, flags, slice, i, segmentCount, sink, effective, effectiveMss);
+            _EmitOneSegment(isClient, TcpLifecycle.Data, flags, slice, i, segmentCount, sink, effective, effectiveMss);
             offset += sliceLength;
         }
     }
@@ -455,7 +455,7 @@ public sealed class TcpConnection<TOld, TTail> : IDisposable
     /// the scratch buffer, then forwards the wire bytes to the sink and
     /// updates the peer's expected ACK.
     /// </summary>
-    private void EmitOneSegment(
+    private void _EmitOneSegment(
         bool isClient,
         TcpLifecycle phase,
         byte defaultFlags,
@@ -526,7 +526,7 @@ public sealed class TcpConnection<TOld, TTail> : IDisposable
         // (the TcpStreamLayer keeps segments within MSS), but the carrier can in principle
         // produce more than one frame (e.g. an IPv4 fragmenting layer above the TCP session).
         // Drain every frame so none are silently dropped.
-        EnsureScratch(payloadLength: finalPayload.Length);
+        _EnsureScratch(payloadLength: finalPayload.Length);
         StatefulFrameSequence<Stack<TcpStreamLayer, StatelessStack<TOld, TTail>>, NoTrailer, NoInterceptor> sequence = session.NextPacket(finalPayload);
         bool hasFrame = false;
         while (sequence.MoveNext(_Scratch, out int bytesWritten))
@@ -559,7 +559,7 @@ public sealed class TcpConnection<TOld, TTail> : IDisposable
         }
     }
 
-    private void EnsureScratch(int payloadLength)
+    private void _EnsureScratch(int payloadLength)
     {
         // Exact frame size: carrier headers + TCP header (from _MaxHeaderSize) + payload.
         // No trailer: TcpConnection uses NoTrailer exclusively.

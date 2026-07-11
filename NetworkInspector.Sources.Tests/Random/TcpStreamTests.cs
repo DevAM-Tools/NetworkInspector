@@ -11,16 +11,16 @@ namespace NetworkInspector.Sources.Tests.Random;
 internal sealed class TcpStreamTests
 {
     // ─── TCP flag constants ──────────────────────────────────────────────────
-    private const byte FlagSyn = 0x02;
-    private const byte FlagAck = 0x10;
-    private const byte FlagPsh = 0x08;
-    private const byte FlagFin = 0x01;
-    private const byte FlagSynAck = FlagSyn | FlagAck;
+    private const byte _FlagSyn = 0x02;
+    private const byte _FlagAck = 0x10;
+    private const byte _FlagPsh = 0x08;
+    private const byte _FlagFin = 0x01;
+    private const byte _FlagSynAck = _FlagSyn | _FlagAck;
 
     // ─── Protocol offsets (Ethernet + IPv4) ──────────────────────────────────
-    private const int EthHeaderSize = 14;
-    private const int IPv4HeaderSize = 20;
-    private const int TcpOffset = EthHeaderSize + IPv4HeaderSize;
+    private const int _EthHeaderSize = 14;
+    private const int _IPv4HeaderSize = 20;
+    private const int _TcpOffset = _EthHeaderSize + _IPv4HeaderSize;
 
 
 
@@ -28,32 +28,32 @@ internal sealed class TcpStreamTests
     /// Extracts TCP flags byte from a frame's raw data at the standard
     /// Ethernet + IPv4 + TCP offset (byte 47).
     /// </summary>
-    private static byte GetTcpFlags(ReadOnlySpan<byte> data) =>
-        data[TcpOffset + 13];
+    private static byte _GetTcpFlags(ReadOnlySpan<byte> data) =>
+        data[_TcpOffset + 13];
 
     /// <summary>
     /// Extracts TCP sequence number from a frame.
     /// </summary>
-    private static uint GetTcpSeqNum(ReadOnlySpan<byte> data) =>
-        BinaryPrimitives.ReadUInt32BigEndian(data[(TcpOffset + 4)..]);
+    private static uint _GetTcpSeqNum(ReadOnlySpan<byte> data) =>
+        BinaryPrimitives.ReadUInt32BigEndian(data[(_TcpOffset + 4)..]);
 
     /// <summary>
     /// Extracts TCP acknowledgment number from a frame.
     /// </summary>
-    private static uint GetTcpAckNum(ReadOnlySpan<byte> data) =>
-        BinaryPrimitives.ReadUInt32BigEndian(data[(TcpOffset + 8)..]);
+    private static uint _GetTcpAckNum(ReadOnlySpan<byte> data) =>
+        BinaryPrimitives.ReadUInt32BigEndian(data[(_TcpOffset + 8)..]);
 
     /// <summary>
     /// Extracts TCP source port from a frame.
     /// </summary>
-    private static ushort GetTcpSrcPort(ReadOnlySpan<byte> data) =>
-        BinaryPrimitives.ReadUInt16BigEndian(data[TcpOffset..]);
+    private static ushort _GetTcpSrcPort(ReadOnlySpan<byte> data) =>
+        BinaryPrimitives.ReadUInt16BigEndian(data[_TcpOffset..]);
 
     /// <summary>
     /// Extracts TCP destination port from a frame.
     /// </summary>
-    private static ushort GetTcpDstPort(ReadOnlySpan<byte> data) =>
-        BinaryPrimitives.ReadUInt16BigEndian(data[(TcpOffset + 2)..]);
+    private static ushort _GetTcpDstPort(ReadOnlySpan<byte> data) =>
+        BinaryPrimitives.ReadUInt16BigEndian(data[(_TcpOffset + 2)..]);
 
     // ========================================================================
     // TcpStreamLayout
@@ -212,21 +212,21 @@ internal sealed class TcpStreamTests
         await Assert.That(ack).IsNotNull();
 
         // Verify flags
-        await Assert.That(GetTcpFlags(syn!)).IsEqualTo(FlagSyn);
-        await Assert.That(GetTcpFlags(synAck!)).IsEqualTo(FlagSynAck);
-        await Assert.That(GetTcpFlags(ack!)).IsEqualTo(FlagAck);
+        await Assert.That(_GetTcpFlags(syn!)).IsEqualTo(_FlagSyn);
+        await Assert.That(_GetTcpFlags(synAck!)).IsEqualTo(_FlagSynAck);
+        await Assert.That(_GetTcpFlags(ack!)).IsEqualTo(_FlagAck);
 
         // SYN: ack = 0
-        await Assert.That(GetTcpAckNum(syn!)).IsEqualTo(0u);
+        await Assert.That(_GetTcpAckNum(syn!)).IsEqualTo(0u);
 
         // SYN-ACK: ack = client ISN + 1
-        uint clientIsn = GetTcpSeqNum(syn!);
-        await Assert.That(GetTcpAckNum(synAck!)).IsEqualTo(clientIsn + 1);
+        uint clientIsn = _GetTcpSeqNum(syn!);
+        await Assert.That(_GetTcpAckNum(synAck!)).IsEqualTo(clientIsn + 1);
 
         // ACK: seq = client ISN + 1, ack = server ISN + 1
-        uint serverIsn = GetTcpSeqNum(synAck!);
-        await Assert.That(GetTcpSeqNum(ack!)).IsEqualTo(clientIsn + 1);
-        await Assert.That(GetTcpAckNum(ack!)).IsEqualTo(serverIsn + 1);
+        uint serverIsn = _GetTcpSeqNum(synAck!);
+        await Assert.That(_GetTcpSeqNum(ack!)).IsEqualTo(clientIsn + 1);
+        await Assert.That(_GetTcpAckNum(ack!)).IsEqualTo(serverIsn + 1);
     }
 
     // ========================================================================
@@ -256,24 +256,24 @@ internal sealed class TcpStreamTests
         byte[]? data3 = TcpStreamFrameBuilder.BuildFrame(in layout, options, seed, 6, false);
 
         // SYN establishes the client → server direction
-        ushort clientPort = GetTcpSrcPort(syn!);
-        ushort serverPort = GetTcpDstPort(syn!);
+        ushort clientPort = _GetTcpSrcPort(syn!);
+        ushort serverPort = _GetTcpDstPort(syn!);
 
         // Even data segments: client → server
-        await Assert.That(GetTcpSrcPort(data0!)).IsEqualTo(clientPort);
-        await Assert.That(GetTcpDstPort(data0!)).IsEqualTo(serverPort);
+        await Assert.That(_GetTcpSrcPort(data0!)).IsEqualTo(clientPort);
+        await Assert.That(_GetTcpDstPort(data0!)).IsEqualTo(serverPort);
 
         // Odd data segments: server → client
-        await Assert.That(GetTcpSrcPort(data1!)).IsEqualTo(serverPort);
-        await Assert.That(GetTcpDstPort(data1!)).IsEqualTo(clientPort);
+        await Assert.That(_GetTcpSrcPort(data1!)).IsEqualTo(serverPort);
+        await Assert.That(_GetTcpDstPort(data1!)).IsEqualTo(clientPort);
 
         // Even again
-        await Assert.That(GetTcpSrcPort(data2!)).IsEqualTo(clientPort);
-        await Assert.That(GetTcpDstPort(data2!)).IsEqualTo(serverPort);
+        await Assert.That(_GetTcpSrcPort(data2!)).IsEqualTo(clientPort);
+        await Assert.That(_GetTcpDstPort(data2!)).IsEqualTo(serverPort);
 
         // Odd again
-        await Assert.That(GetTcpSrcPort(data3!)).IsEqualTo(serverPort);
-        await Assert.That(GetTcpDstPort(data3!)).IsEqualTo(clientPort);
+        await Assert.That(_GetTcpSrcPort(data3!)).IsEqualTo(serverPort);
+        await Assert.That(_GetTcpDstPort(data3!)).IsEqualTo(clientPort);
     }
 
     // ========================================================================
@@ -296,9 +296,9 @@ internal sealed class TcpStreamTests
         byte[]? data0 = TcpStreamFrameBuilder.BuildFrame(in layout, options, 42, 3, false);
         byte[]? data1 = TcpStreamFrameBuilder.BuildFrame(in layout, options, 42, 4, false);
 
-        byte expectedFlags = FlagAck | FlagPsh;
-        await Assert.That(GetTcpFlags(data0!)).IsEqualTo(expectedFlags);
-        await Assert.That(GetTcpFlags(data1!)).IsEqualTo(expectedFlags);
+        byte expectedFlags = _FlagAck | _FlagPsh;
+        await Assert.That(_GetTcpFlags(data0!)).IsEqualTo(expectedFlags);
+        await Assert.That(_GetTcpFlags(data1!)).IsEqualTo(expectedFlags);
     }
 
     // ========================================================================
@@ -329,24 +329,24 @@ internal sealed class TcpStreamTests
         byte[]? finAck2 = TcpStreamFrameBuilder.BuildFrame(in layout, options, seed, 7, false);
         byte[]? finalAck = TcpStreamFrameBuilder.BuildFrame(in layout, options, seed, 8, false);
 
-        ushort clientPort = GetTcpSrcPort(syn!);
-        ushort serverPort = GetTcpDstPort(syn!);
+        ushort clientPort = _GetTcpSrcPort(syn!);
+        ushort serverPort = _GetTcpDstPort(syn!);
 
         // Step 0: FIN-ACK client → server
-        await Assert.That(GetTcpFlags(finAck1!)).IsEqualTo((byte)(FlagFin | FlagAck));
-        await Assert.That(GetTcpSrcPort(finAck1!)).IsEqualTo(clientPort);
+        await Assert.That(_GetTcpFlags(finAck1!)).IsEqualTo((byte)(_FlagFin | _FlagAck));
+        await Assert.That(_GetTcpSrcPort(finAck1!)).IsEqualTo(clientPort);
 
         // Step 1: ACK server → client
-        await Assert.That(GetTcpFlags(ackFin!)).IsEqualTo(FlagAck);
-        await Assert.That(GetTcpSrcPort(ackFin!)).IsEqualTo(serverPort);
+        await Assert.That(_GetTcpFlags(ackFin!)).IsEqualTo(_FlagAck);
+        await Assert.That(_GetTcpSrcPort(ackFin!)).IsEqualTo(serverPort);
 
         // Step 2: FIN-ACK server → client
-        await Assert.That(GetTcpFlags(finAck2!)).IsEqualTo((byte)(FlagFin | FlagAck));
-        await Assert.That(GetTcpSrcPort(finAck2!)).IsEqualTo(serverPort);
+        await Assert.That(_GetTcpFlags(finAck2!)).IsEqualTo((byte)(_FlagFin | _FlagAck));
+        await Assert.That(_GetTcpSrcPort(finAck2!)).IsEqualTo(serverPort);
 
         // Step 3: Final ACK client → server
-        await Assert.That(GetTcpFlags(finalAck!)).IsEqualTo(FlagAck);
-        await Assert.That(GetTcpSrcPort(finalAck!)).IsEqualTo(clientPort);
+        await Assert.That(_GetTcpFlags(finalAck!)).IsEqualTo(_FlagAck);
+        await Assert.That(_GetTcpSrcPort(finalAck!)).IsEqualTo(clientPort);
     }
 
     // ========================================================================
@@ -375,36 +375,36 @@ internal sealed class TcpStreamTests
         byte[]? synAck = TcpStreamFrameBuilder.BuildFrame(in layout, options, seed, 1, false);
         byte[]? ack = TcpStreamFrameBuilder.BuildFrame(in layout, options, seed, 2, false);
 
-        uint clientIsn = GetTcpSeqNum(syn!);
-        uint serverIsn = GetTcpSeqNum(synAck!);
+        uint clientIsn = _GetTcpSeqNum(syn!);
+        uint serverIsn = _GetTcpSeqNum(synAck!);
 
         // After handshake: client seq = ISN+1, server seq = ISN+1
-        await Assert.That(GetTcpSeqNum(ack!)).IsEqualTo(clientIsn + 1);
-        await Assert.That(GetTcpAckNum(ack!)).IsEqualTo(serverIsn + 1);
+        await Assert.That(_GetTcpSeqNum(ack!)).IsEqualTo(clientIsn + 1);
+        await Assert.That(_GetTcpAckNum(ack!)).IsEqualTo(serverIsn + 1);
 
         // Data frame 0 (client→server): seq=client ISN+1, payload=100
         byte[]? d0 = TcpStreamFrameBuilder.BuildFrame(in layout, options, seed, 3, false);
-        await Assert.That(GetTcpSeqNum(d0!)).IsEqualTo(clientIsn + 1);
-        await Assert.That(GetTcpAckNum(d0!)).IsEqualTo(serverIsn + 1);
+        await Assert.That(_GetTcpSeqNum(d0!)).IsEqualTo(clientIsn + 1);
+        await Assert.That(_GetTcpAckNum(d0!)).IsEqualTo(serverIsn + 1);
 
         // Data frame 1 (server→client): seq=server ISN+1, ack=client ISN+1+100
         byte[]? d1 = TcpStreamFrameBuilder.BuildFrame(in layout, options, seed, 4, false);
-        await Assert.That(GetTcpSeqNum(d1!)).IsEqualTo(serverIsn + 1);
-        await Assert.That(GetTcpAckNum(d1!)).IsEqualTo(clientIsn + 1 + 100);
+        await Assert.That(_GetTcpSeqNum(d1!)).IsEqualTo(serverIsn + 1);
+        await Assert.That(_GetTcpAckNum(d1!)).IsEqualTo(clientIsn + 1 + 100);
 
         // Data frame 2 (client→server): seq=client ISN+1+100
         byte[]? d2 = TcpStreamFrameBuilder.BuildFrame(in layout, options, seed, 5, false);
-        await Assert.That(GetTcpSeqNum(d2!)).IsEqualTo(clientIsn + 1 + 100);
-        await Assert.That(GetTcpAckNum(d2!)).IsEqualTo(serverIsn + 1 + 100);
+        await Assert.That(_GetTcpSeqNum(d2!)).IsEqualTo(clientIsn + 1 + 100);
+        await Assert.That(_GetTcpAckNum(d2!)).IsEqualTo(serverIsn + 1 + 100);
 
         // Data frame 3 (server→client): seq=server ISN+1+100
         byte[]? d3 = TcpStreamFrameBuilder.BuildFrame(in layout, options, seed, 6, false);
-        await Assert.That(GetTcpSeqNum(d3!)).IsEqualTo(serverIsn + 1 + 100);
-        await Assert.That(GetTcpAckNum(d3!)).IsEqualTo(clientIsn + 1 + 200);
+        await Assert.That(_GetTcpSeqNum(d3!)).IsEqualTo(serverIsn + 1 + 100);
+        await Assert.That(_GetTcpAckNum(d3!)).IsEqualTo(clientIsn + 1 + 200);
 
         // Teardown FIN-ACK (client): seq=client ISN+1+200
         byte[]? fin1 = TcpStreamFrameBuilder.BuildFrame(in layout, options, seed, 7, false);
-        await Assert.That(GetTcpSeqNum(fin1!)).IsEqualTo(clientIsn + 1 + 200);
+        await Assert.That(_GetTcpSeqNum(fin1!)).IsEqualTo(clientIsn + 1 + 200);
     }
 
     // ========================================================================
@@ -483,14 +483,14 @@ internal sealed class TcpStreamTests
         byte[]? syn2 = TcpStreamFrameBuilder.BuildFrame(in layout, options, seed, 10, false);
 
         // All should be SYN frames
-        await Assert.That(GetTcpFlags(syn0!)).IsEqualTo(FlagSyn);
-        await Assert.That(GetTcpFlags(syn1!)).IsEqualTo(FlagSyn);
-        await Assert.That(GetTcpFlags(syn2!)).IsEqualTo(FlagSyn);
+        await Assert.That(_GetTcpFlags(syn0!)).IsEqualTo(_FlagSyn);
+        await Assert.That(_GetTcpFlags(syn1!)).IsEqualTo(_FlagSyn);
+        await Assert.That(_GetTcpFlags(syn2!)).IsEqualTo(_FlagSyn);
 
         // Different connections should use different ports
-        ushort port0 = GetTcpSrcPort(syn0!);
-        ushort port1 = GetTcpSrcPort(syn1!);
-        ushort port2 = GetTcpSrcPort(syn2!);
+        ushort port0 = _GetTcpSrcPort(syn0!);
+        ushort port1 = _GetTcpSrcPort(syn1!);
+        ushort port2 = _GetTcpSrcPort(syn2!);
 
         // With high probability, all 3 random ports differ
         await Assert.That(port0 != port1 || port0 != port2).IsTrue()
@@ -515,7 +515,7 @@ internal sealed class TcpStreamTests
         TcpStreamLayout layout = new(options);
 
         const ulong seed = 42;
-        int ipv6TcpOffset = EthHeaderSize + 40; // IPv6 header = 40 bytes
+        int ipv6_TcpOffset = _EthHeaderSize + 40; // IPv6 header = 40 bytes
 
         byte[]? syn = TcpStreamFrameBuilder.BuildFrame(in layout, options, seed, 0, true);
         await Assert.That(syn).IsNotNull();
@@ -528,7 +528,7 @@ internal sealed class TcpStreamTests
         await Assert.That((syn![14] >> 4)).IsEqualTo(6);
 
         // Verify TCP SYN flag at IPv6 TCP offset
-        await Assert.That(syn[ipv6TcpOffset + 13]).IsEqualTo(FlagSyn);
+        await Assert.That(syn[ipv6_TcpOffset + 13]).IsEqualTo(_FlagSyn);
     }
 
     // ========================================================================
@@ -567,21 +567,21 @@ internal sealed class TcpStreamTests
         await Assert.That(frames.Count).IsEqualTo(10);
 
         // Verify handshake sequence
-        await Assert.That(GetTcpFlags(frames[0].Data.Span)).IsEqualTo(FlagSyn);
-        await Assert.That(GetTcpFlags(frames[1].Data.Span)).IsEqualTo(FlagSynAck);
-        await Assert.That(GetTcpFlags(frames[2].Data.Span)).IsEqualTo(FlagAck);
+        await Assert.That(_GetTcpFlags(frames[0].Data.Span)).IsEqualTo(_FlagSyn);
+        await Assert.That(_GetTcpFlags(frames[1].Data.Span)).IsEqualTo(_FlagSynAck);
+        await Assert.That(_GetTcpFlags(frames[2].Data.Span)).IsEqualTo(_FlagAck);
 
         // Data frames have PSH+ACK
-        byte pshAck = FlagPsh | FlagAck;
-        await Assert.That(GetTcpFlags(frames[3].Data.Span)).IsEqualTo(pshAck);
-        await Assert.That(GetTcpFlags(frames[4].Data.Span)).IsEqualTo(pshAck);
-        await Assert.That(GetTcpFlags(frames[5].Data.Span)).IsEqualTo(pshAck);
+        byte pshAck = _FlagPsh | _FlagAck;
+        await Assert.That(_GetTcpFlags(frames[3].Data.Span)).IsEqualTo(pshAck);
+        await Assert.That(_GetTcpFlags(frames[4].Data.Span)).IsEqualTo(pshAck);
+        await Assert.That(_GetTcpFlags(frames[5].Data.Span)).IsEqualTo(pshAck);
 
         // Teardown
-        await Assert.That(GetTcpFlags(frames[6].Data.Span)).IsEqualTo((byte)(FlagFin | FlagAck));
-        await Assert.That(GetTcpFlags(frames[7].Data.Span)).IsEqualTo(FlagAck);
-        await Assert.That(GetTcpFlags(frames[8].Data.Span)).IsEqualTo((byte)(FlagFin | FlagAck));
-        await Assert.That(GetTcpFlags(frames[9].Data.Span)).IsEqualTo(FlagAck);
+        await Assert.That(_GetTcpFlags(frames[6].Data.Span)).IsEqualTo((byte)(_FlagFin | _FlagAck));
+        await Assert.That(_GetTcpFlags(frames[7].Data.Span)).IsEqualTo(_FlagAck);
+        await Assert.That(_GetTcpFlags(frames[8].Data.Span)).IsEqualTo((byte)(_FlagFin | _FlagAck));
+        await Assert.That(_GetTcpFlags(frames[9].Data.Span)).IsEqualTo(_FlagAck);
     }
 
     [Test]
@@ -704,7 +704,7 @@ internal sealed class TcpStreamTests
         byte[]? d1 = TcpStreamFrameBuilder.BuildFrame(in layout, options, seed, 4, false);
 
         // Frame should be larger than headers alone (14 + 20 + 20 = 54 bytes headers)
-        int minFrameSize = EthHeaderSize + IPv4HeaderSize + 20 + 50; // headers + min payload
+        int minFrameSize = _EthHeaderSize + _IPv4HeaderSize + 20 + 50; // headers + min payload
         await Assert.That(d0!.Length).IsGreaterThanOrEqualTo(minFrameSize);
         await Assert.That(d1!.Length).IsGreaterThanOrEqualTo(minFrameSize);
     }

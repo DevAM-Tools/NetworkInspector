@@ -142,4 +142,32 @@ internal sealed class LengthPrefixDetectorTests
     }
 
     #endregion
+
+    #region Invalid length and boundary states
+
+    [Test]
+    public async Task Detect_InvalidLengthField_ReturnsInvalid()
+    {
+        await Assert.That(PduBoundaryResult.Invalid.IsInvalid).IsTrue();
+        await Assert.That(PduBoundaryResult.Incomplete.IsIncomplete).IsTrue();
+    }
+
+    [Test]
+    public async Task DelimiterDetector_EmptyDelimiter_Throws()
+    {
+        await Assert.That(() => new DelimiterDetector([])).Throws<ArgumentException>();
+    }
+
+    [Test]
+    public async Task DelimiterDetector_FindsCompletePdu()
+    {
+        DelimiterDetector det = new([0x0D, 0x0A]);
+        PduBoundaryResult found = det.Detect([0x48, 0x69, 0x0D, 0x0A, 0xFF]);
+        PduBoundaryResult missing = det.Detect([0x48, 0x69]);
+        await Assert.That(found.IsComplete).IsTrue();
+        await Assert.That(found.Length).IsEqualTo(4);
+        await Assert.That(missing.IsIncomplete).IsTrue();
+    }
+
+    #endregion
 }

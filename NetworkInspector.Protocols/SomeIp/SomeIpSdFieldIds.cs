@@ -4,7 +4,7 @@ namespace NetworkInspector.Protocols.SomeIp;
 
 /// <summary>
 /// Groups all registered field IDs for SOME/IP-SD sub-fields.
-/// Populated in <see cref="SomeIpProtocol.OnStartCustom"/> from attribute-registered field IDs.
+/// Populated in <see cref="SomeIpProtocol._OnStartCustom"/> from attribute-registered field IDs.
 /// </summary>
 internal readonly struct SomeIpSdFieldIds
 {

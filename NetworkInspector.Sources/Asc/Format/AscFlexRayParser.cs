@@ -3,21 +3,21 @@
 namespace NetworkInspector.Sources.Asc.Format;
 
 /// <summary>
-/// Parses an ASC FlexRay message line into a DLT_FLEXRAY binary frame.
+/// Parses an ASC FlexRay message line into a LINKTYPE_FLEXRAY binary frame.
 ///
 /// ASC FlexRay line format:
 ///   &lt;time&gt; Fr &lt;channel&gt; V9 &lt;frame_id&gt; &lt;payload_len&gt; &lt;cycle&gt; &lt;nm&gt;
 ///   &lt;header_crc&gt; &lt;ident&gt; &lt;data_len&gt; &lt;data...&gt; &lt;flags&gt;
 ///
-/// DLT_FLEXRAY frame layout (7-byte header + data):
-///   [channel(1) | type_flags(1) | frame_id_hi(1) | frame_id_lo(1) | cycle(1) | header_crc_hi(1) | header_crc_lo(1) | data...]
+/// LINKTYPE_FLEXRAY frame layout (7-byte header + data):
+///   Measurement header + error flags + ISO 17458-2 frame header + payload.
 /// </summary>
 internal static class AscFlexRayParser
 {
     #region Constants
 
-    /// <summary>DLT_FLEXRAY header size: 7 bytes.</summary>
-    private const int DltFlexRayHeaderSize = 7;
+    /// <summary>LINKTYPE_FLEXRAY header size: 7 bytes.</summary>
+    private const int _LinkTypeFlexRayHeaderSize = FlexRayLinkTypeFrame.MinHeaderSize;
 
     /// <summary>
     /// Maximum FlexRay payload in bytes per the FlexRay specification:
@@ -25,7 +25,7 @@ internal static class AscFlexRayParser
     /// Used to clamp the parsed data length and prevent unbounded allocation
     /// when the ASC line omits an explicit <c>payload_len_words</c> value (i.e. 0).
     /// </summary>
-    private const int MaxFlexRayDataBytes = 254;
+    private const int _MaxFlexRayDataBytes = 254;
 
     #endregion
 
@@ -163,7 +163,7 @@ internal static class AscFlexRayParser
         // Clamp to the FlexRay protocol maximum before allocating: when payloadLenWords is 0
         // (not specified) the guard above does not apply, and a malicious ASC line could
         // declare an arbitrarily large dataLen, triggering an unbounded heap allocation.
-        dataLen = Math.Min(dataLen, MaxFlexRayDataBytes);
+        dataLen = Math.Min(dataLen, _MaxFlexRayDataBytes);
 
         // Parse data bytes (hex pairs, may have spaces)
         byte[] dataBytes = new byte[dataLen];
@@ -214,29 +214,16 @@ internal static class AscFlexRayParser
             }
         }
 
-        // Build DLT_FLEXRAY frame
-        frame = new byte[DltFlexRayHeaderSize + parsedCount];
-
-        // Byte 0: channel (A=0/1, B=1/2)
-        frame[0] = (byte)(channel & 0xFF);
-
-        // Byte 1: type_flags (no flag info from typical ASC lines, set to 0)
-        frame[1] = 0;
-
-        // Bytes 2-3: frame ID (big-endian)
-        BinaryPrimitives.WriteUInt16BigEndian(frame.AsSpan(2), frameId);
-
-        // Byte 4: cycle count
-        frame[4] = cycle;
-
-        // Bytes 5-6: header CRC (big-endian)
-        BinaryPrimitives.WriteUInt16BigEndian(frame.AsSpan(5), headerCrc);
-
-        // Payload
-        if (parsedCount > 0)
-        {
-            dataBytes.AsSpan(0, parsedCount).CopyTo(frame.AsSpan(DltFlexRayHeaderSize));
-        }
+        // Build LINKTYPE_FLEXRAY frame (ASC channel 1 = A, 2 = B).
+        ReadOnlySpan<byte> payloadSpan = parsedCount > 0
+            ? dataBytes.AsSpan(0, parsedCount)
+            : ReadOnlySpan<byte>.Empty;
+        frame = FlexRayLinkTypeFrame.BuildFrame(
+            FlexRayLinkTypeFrame.AscChannelToBusChannel(channel),
+            frameId,
+            cycle,
+            headerCrc,
+            payloadSpan);
 
         return true;
     }
@@ -385,7 +372,7 @@ internal static class AscFlexRayParser
         // Clamp to the FlexRay protocol maximum before allocating: when payloadLenWords is 0
         // (not specified) the guard above does not apply, and a malicious ASC line could
         // declare an arbitrarily large dataLen, triggering an unbounded heap allocation.
-        dataLen = Math.Min(dataLen, MaxFlexRayDataBytes);
+        dataLen = Math.Min(dataLen, _MaxFlexRayDataBytes);
 
         byte[] dataBytes = new byte[dataLen];
         int parsedCount = 0;
@@ -432,17 +419,15 @@ internal static class AscFlexRayParser
             }
         }
 
-        frame = new byte[DltFlexRayHeaderSize + parsedCount];
-        frame[0] = (byte)(channel & 0xFF);
-        frame[1] = 0;
-        BinaryPrimitives.WriteUInt16BigEndian(frame.AsSpan(2), frameId);
-        frame[4] = cycle;
-        BinaryPrimitives.WriteUInt16BigEndian(frame.AsSpan(5), headerCrc);
-
-        if (parsedCount > 0)
-        {
-            dataBytes.AsSpan(0, parsedCount).CopyTo(frame.AsSpan(DltFlexRayHeaderSize));
-        }
+        ReadOnlySpan<byte> payloadSpan = parsedCount > 0
+            ? dataBytes.AsSpan(0, parsedCount)
+            : ReadOnlySpan<byte>.Empty;
+        frame = FlexRayLinkTypeFrame.BuildFrame(
+            FlexRayLinkTypeFrame.AscChannelToBusChannel(channel),
+            frameId,
+            cycle,
+            headerCrc,
+            payloadSpan);
 
         return true;
     }

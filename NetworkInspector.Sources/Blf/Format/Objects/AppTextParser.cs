@@ -30,7 +30,7 @@ internal static class AppTextParser
     #region Constants
 
     /// <summary>Minimum payload size needed to read source, reserved, and textLength fields (3 × 4 bytes).</summary>
-    private const int MinPayloadSize = 12;
+    private const int _MinPayloadSize = 12;
 
     #endregion
 
@@ -68,7 +68,7 @@ internal static class AppTextParser
         busType = 0;
         name = null;
 
-        if (payload.Length < MinPayloadSize)
+        if (payload.Length < _MinPayloadSize)
         {
             return false;
         }
@@ -99,7 +99,7 @@ internal static class AppTextParser
         // and names that would overrun the remaining payload bytes.
         if (textLengthUint == 0
             || textLengthUint > (uint)int.MaxValue
-            || textLengthUint > (uint)(payload.Length - MinPayloadSize))
+            || textLengthUint > (uint)(payload.Length - _MinPayloadSize))
         {
             return false;
         }
@@ -109,7 +109,7 @@ internal static class AppTextParser
         // Decode the UTF-8 channel name. Vector tools write ASCII in practice but the
         // BLF SDK documentation allows UTF-8 for localised names. Strip a trailing NUL
         // terminator if present (Vector tools write null-terminated strings).
-        ReadOnlySpan<byte> textBytes = payload.Slice(MinPayloadSize, textLength);
+        ReadOnlySpan<byte> textBytes = payload.Slice(_MinPayloadSize, textLength);
         if (textBytes.Length > 0 && textBytes[^1] == 0)
         {
             textBytes = textBytes[..^1];

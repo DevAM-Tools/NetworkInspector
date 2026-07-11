@@ -26,7 +26,7 @@ namespace NetworkInspector.Protocols;
 /// </summary>
 /// <remarks>
 /// <para><b>Thread safety:</b> instances are immutable after registration completes.
-/// All mutable state is initialised inside <c>RegisterFieldsCustom</c> / <c>OnStartCustom</c>
+/// All mutable state is initialised inside <c>RegisterFieldsCustom</c> / <c>_OnStartCustom</c>
 /// (single-threaded build phase) and is read-only thereafter, so <see cref="Parse"/> may
 /// be invoked concurrently from any number of threads on the same instance without external
 /// synchronisation. Per-thread caches (when present) are stored in <c>[ThreadStatic]</c> fields.</para>
@@ -47,31 +47,31 @@ public sealed partial class WebSocketProtocol : IProtocol
     public const string PortTableName = "ws.port";
 
     /// <summary>Index group for always-present WebSocket fields.</summary>
-    private const string WsIndexGroup = "websocket";
+    private const string _WsIndexGroup = "websocket";
 
     /// <summary>Index group for masking key (only present in masked frames).</summary>
-    private const string WsMaskKeyGroup = "websocket.masking_key";
+    private const string _WsMaskKeyGroup = "websocket.masking_key";
 
     /// <summary>Index group for payload (only present when payload length > 0).</summary>
-    private const string WsPayloadGroup = "websocket.payload";
+    private const string _WsPayloadGroup = "websocket.payload";
 
     /// <summary>Index group for PMC flag (only present when RSV1 is set).</summary>
-    private const string WsPmcGroup = "websocket.pmc";
+    private const string _WsPmcGroup = "websocket.pmc";
 
     /// <summary>Index group for ping payload.</summary>
-    private const string WsPingGroup = "websocket.ping";
+    private const string _WsPingGroup = "websocket.ping";
 
     /// <summary>Index group for pong payload.</summary>
-    private const string WsPongGroup = "websocket.pong";
+    private const string _WsPongGroup = "websocket.pong";
 
     /// <summary>Index group for text payload.</summary>
-    private const string WsTextGroup = "websocket.payload.text";
+    private const string _WsTextGroup = "websocket.payload.text";
 
     #endregion
 
     #region Protocol container
 
-    [BytesField("websocket", "WebSocket", IndexGroup = WsIndexGroup)]
+    [BytesField("websocket", "WebSocket", IndexGroup = _WsIndexGroup)]
     private FieldId _ProtocolFieldId;
 
     #endregion
@@ -88,62 +88,62 @@ public sealed partial class WebSocketProtocol : IProtocol
 
     #region Frame fields
 
-    [NoneField("websocket.frame", "WebSocket Frame", IndexGroup = WsIndexGroup)]
+    [NoneField("websocket.frame", "WebSocket Frame", IndexGroup = _WsIndexGroup)]
     private FieldId _FrameFieldId;
 
-    [BoolField("websocket.fin", "FIN", IndexGroup = WsIndexGroup)]
+    [BoolField("websocket.fin", "FIN", IndexGroup = _WsIndexGroup)]
     private FieldId _FinFieldId;
 
-    [U64Field("websocket.rsv", "RSV", IndexGroup = WsIndexGroup)]
+    [U64Field("websocket.rsv", "RSV", IndexGroup = _WsIndexGroup)]
     private FieldId _RsvFieldId;
 
-    [U64Field("websocket.opcode", "Opcode", IndexGroup = WsIndexGroup)]
+    [U64Field("websocket.opcode", "Opcode", IndexGroup = _WsIndexGroup)]
     private FieldId _OpcodeFieldId;
 
-    [BoolField("websocket.mask", "Mask", IndexGroup = WsIndexGroup)]
+    [BoolField("websocket.mask", "Mask", IndexGroup = _WsIndexGroup)]
     private FieldId _MaskFieldId;
 
-    [U64Field("websocket.payload_length", "Payload Length", IndexGroup = WsIndexGroup)]
+    [U64Field("websocket.payload_length", "Payload Length", IndexGroup = _WsIndexGroup)]
     private FieldId _PayloadLengthFieldId;
 
-    [U64Field("websocket.masking_key", "Masking Key", IndexGroup = WsMaskKeyGroup)]
+    [U64Field("websocket.masking_key", "Masking Key", IndexGroup = _WsMaskKeyGroup)]
     private FieldId _MaskingKeyFieldId;
 
-    [BytesField("websocket.payload", "Payload", IndexGroup = WsPayloadGroup)]
+    [BytesField("websocket.payload", "Payload", IndexGroup = _WsPayloadGroup)]
     private FieldId _PayloadFieldId;
 
     #endregion
 
     #region Per-message compressed flag (RSV1)
 
-    [BoolField("websocket.pmc", "Per-Message Compressed", IndexGroup = WsPmcGroup)]
+    [BoolField("websocket.pmc", "Per-Message Compressed", IndexGroup = _WsPmcGroup)]
     private FieldId _PmcFieldId;
 
     #endregion
 
     #region Text payload (decoded UTF-8 for text frames)
 
-    [StringField("websocket.payload.text", "Text Payload", IndexGroup = WsTextGroup)]
+    [StringField("websocket.payload.text", "Text Payload", IndexGroup = _WsTextGroup)]
     private FieldId _PayloadTextField;
 
     #endregion
 
     #region Ping/Pong payload
 
-    [BytesField("websocket.payload.ping", "Ping Payload", IndexGroup = WsPingGroup)]
+    [BytesField("websocket.payload.ping", "Ping Payload", IndexGroup = _WsPingGroup)]
     private FieldId _PingPayloadFieldId;
 
-    [BytesField("websocket.payload.pong", "Pong Payload", IndexGroup = WsPongGroup)]
+    [BytesField("websocket.payload.pong", "Pong Payload", IndexGroup = _WsPongGroup)]
     private FieldId _PongPayloadFieldId;
 
     /// <summary>Index group for close frame fields (only present in close frames).</summary>
-    private const string WsCloseGroup = "websocket.close";
+    private const string _WsCloseGroup = "websocket.close";
 
     // Close frame sub-fields (opcode 8): first 2 bytes = status code, rest = reason UTF-8 string
-    [U64Field("websocket.close.code", "Status Code", IndexGroup = WsCloseGroup)]
+    [U64Field("websocket.close.code", "Status Code", IndexGroup = _WsCloseGroup)]
     private FieldId _CloseCodeFieldId;
 
-    [StringField("websocket.close.reason", "Reason", IndexGroup = WsCloseGroup)]
+    [StringField("websocket.close.reason", "Reason", IndexGroup = _WsCloseGroup)]
     private FieldId _CloseReasonFieldId;
 
     #endregion
@@ -175,9 +175,9 @@ public sealed partial class WebSocketProtocol : IProtocol
     /// <summary>Pre-allocated populator delegate to avoid per-frame closure allocation.</summary>
     private LazyPopulator _Populator = null!;
 
-    partial void OnStartCustom(Stack stack)
+    partial void _OnStartCustom(Stack stack)
     {
-        _Populator = PopulateWebSocketFields;
+        _Populator = _PopulateWebSocketFields;
 
         // Resolve Text and Data protocol IDs for payload dispatch fallback
         ProtocolId? textId = stack.GetProtocolId("text");
@@ -273,7 +273,7 @@ public sealed partial class WebSocketProtocol : IProtocol
         // dispatched sub-protocols record their index groups during the index phase (Q6: the
         // index must be complete when the packet is finalized). The lazy populator builds the
         // descriptive frame tree but no longer dispatches.
-        ParseResult dispatchResult = DispatchWebSocketPayloads(in container, data, in context);
+        ParseResult dispatchResult = _DispatchWebSocketPayloads(in container, data, in context);
         if (dispatchResult.IsError)
         {
             return dispatchResult;

@@ -22,7 +22,7 @@ internal sealed class FieldIteratorTests
     //       eth.type
     // =========================================================================
 
-    private static (Stack Stack, MockIterProto Proto, ProtocolId ProtoId) BuildStack()
+    private static (Stack Stack, MockIterProto Proto, ProtocolId ProtoId) _BuildStack()
     {
         using SettingsManager settingsManager = new();
         StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
@@ -33,7 +33,7 @@ internal sealed class FieldIteratorTests
         return (stack, proto, protoId);
     }
 
-    private static Packet ParseFrame(Stack stack, byte[] data, ProtocolId firstProtocolId)
+    private static Packet _ParseFrame(Stack stack, byte[] data, ProtocolId firstProtocolId)
     {
         Frame frame = Frame.Create(
             new FrameId(1),
@@ -57,11 +57,11 @@ internal sealed class FieldIteratorTests
     [Test]
     public async Task Children_DefaultMaterialize_YieldsAllChildren()
     {
-        (Stack? stack, MockIterProto _, ProtocolId protoId) = BuildStack();
+        (Stack? stack, MockIterProto _, ProtocolId protoId) = _BuildStack();
         using (stack)
         {
             byte[] data = new byte[14];
-            Packet packet = ParseFrame(stack, data, protoId);
+            Packet packet = _ParseFrame(stack, data, protoId);
 
             Field root = packet.RootField();
             // Navigate past packet container (first child) to eth container (second child)
@@ -82,11 +82,11 @@ internal sealed class FieldIteratorTests
     [Test]
     public async Task Children_WithMaterialize_MaterializesLazyContainer()
     {
-        (Stack? stack, _, ProtocolId protoId) = BuildStack();
+        (Stack? stack, _, ProtocolId protoId) = _BuildStack();
         using (stack)
         {
             byte[] data = new byte[14];
-            Packet packet = ParseFrame(stack, data, protoId);
+            Packet packet = _ParseFrame(stack, data, protoId);
 
             Field root = packet.RootField();
             // Navigate past packet container to eth container
@@ -109,11 +109,11 @@ internal sealed class FieldIteratorTests
     [Test]
     public async Task Children_WithoutMaterialize_DoesNotPopulateLazy()
     {
-        (Stack? stack, MockIterProto? proto, ProtocolId protoId) = BuildStack();
+        (Stack? stack, MockIterProto? proto, ProtocolId protoId) = _BuildStack();
         using (stack)
         {
             byte[] data = new byte[14];
-            Packet packet = ParseFrame(stack, data, protoId);
+            Packet packet = _ParseFrame(stack, data, protoId);
 
             Field root = packet.RootField();
             // Navigate past packet container to eth container (lazy)
@@ -136,11 +136,11 @@ internal sealed class FieldIteratorTests
     [Test]
     public async Task Children_WithoutMaterialize_YieldsEagerChildren()
     {
-        (Stack? stack, _, ProtocolId protoId) = BuildStack();
+        (Stack? stack, _, ProtocolId protoId) = _BuildStack();
         using (stack)
         {
             byte[] data = new byte[14];
-            Packet packet = ParseFrame(stack, data, protoId);
+            Packet packet = _ParseFrame(stack, data, protoId);
 
             // Root itself is not lazy — iterating its eager children works
             Field root = packet.RootField();
@@ -162,11 +162,11 @@ internal sealed class FieldIteratorTests
     [Test]
     public async Task Descendants_DefaultMaterialize_YieldsAllDescendants()
     {
-        (Stack? stack, _, ProtocolId protoId) = BuildStack();
+        (Stack? stack, _, ProtocolId protoId) = _BuildStack();
         using (stack)
         {
             byte[] data = new byte[14];
-            Packet packet = ParseFrame(stack, data, protoId);
+            Packet packet = _ParseFrame(stack, data, protoId);
 
             Field root = packet.RootField();
             int count = 0;
@@ -183,11 +183,11 @@ internal sealed class FieldIteratorTests
     [Test]
     public async Task Descendants_WithoutMaterialize_OnlyEagerDescendants()
     {
-        (Stack? stack, MockIterProto? proto, ProtocolId protoId) = BuildStack();
+        (Stack? stack, MockIterProto? proto, ProtocolId protoId) = _BuildStack();
         using (stack)
         {
             byte[] data = new byte[14];
-            Packet packet = ParseFrame(stack, data, protoId);
+            Packet packet = _ParseFrame(stack, data, protoId);
 
             Field root = packet.RootField();
             int count = 0;
@@ -205,11 +205,11 @@ internal sealed class FieldIteratorTests
     [Test]
     public async Task Descendants_ExcludesRoot()
     {
-        (Stack? stack, MockIterProto? proto, ProtocolId protoId) = BuildStack();
+        (Stack? stack, MockIterProto? proto, ProtocolId protoId) = _BuildStack();
         using (stack)
         {
             byte[] data = new byte[14];
-            Packet packet = ParseFrame(stack, data, protoId);
+            Packet packet = _ParseFrame(stack, data, protoId);
 
             Field root = packet.RootField();
             bool rootFound = false;
@@ -233,11 +233,11 @@ internal sealed class FieldIteratorTests
     [Test]
     public async Task IterFieldsDfs_DefaultMaterialize_VisitsAllFields()
     {
-        (Stack? stack, _, ProtocolId protoId) = BuildStack();
+        (Stack? stack, _, ProtocolId protoId) = _BuildStack();
         using (stack)
         {
             byte[] data = new byte[14];
-            Packet packet = ParseFrame(stack, data, protoId);
+            Packet packet = _ParseFrame(stack, data, protoId);
 
             int count = 0;
             foreach (Field _ in packet.IterFieldsDfs())
@@ -253,11 +253,11 @@ internal sealed class FieldIteratorTests
     [Test]
     public async Task IterFieldsDfs_WithoutMaterialize_OnlyEagerFields()
     {
-        (Stack? stack, MockIterProto? proto, ProtocolId protoId) = BuildStack();
+        (Stack? stack, MockIterProto? proto, ProtocolId protoId) = _BuildStack();
         using (stack)
         {
             byte[] data = new byte[14];
-            Packet packet = ParseFrame(stack, data, protoId);
+            Packet packet = _ParseFrame(stack, data, protoId);
 
             int count = 0;
             foreach (Field _ in packet.IterFieldsDfs(materialize: false))
@@ -274,11 +274,11 @@ internal sealed class FieldIteratorTests
     [Test]
     public async Task IterFieldsDfs_IncludesRoot()
     {
-        (Stack? stack, _, ProtocolId protoId) = BuildStack();
+        (Stack? stack, _, ProtocolId protoId) = _BuildStack();
         using (stack)
         {
             byte[] data = new byte[14];
-            Packet packet = ParseFrame(stack, data, protoId);
+            Packet packet = _ParseFrame(stack, data, protoId);
 
             bool rootFound = false;
             foreach (Field f in packet.IterFieldsDfs())
@@ -296,11 +296,11 @@ internal sealed class FieldIteratorTests
     [Test]
     public async Task IterFieldsDfs_DfsOrder_ParentBeforeChildren()
     {
-        (Stack? stack, MockIterProto? proto, ProtocolId protoId) = BuildStack();
+        (Stack? stack, MockIterProto? proto, ProtocolId protoId) = _BuildStack();
         using (stack)
         {
             byte[] data = new byte[14];
-            Packet packet = ParseFrame(stack, data, protoId);
+            Packet packet = _ParseFrame(stack, data, protoId);
 
             List<FieldId> order = [];
             foreach (Field f in packet.IterFieldsDfs())
@@ -327,11 +327,11 @@ internal sealed class FieldIteratorTests
     [Test]
     public async Task IterFieldsFlat_DefaultMaterialize_VisitsAllFields()
     {
-        (Stack? stack, _, ProtocolId protoId) = BuildStack();
+        (Stack? stack, _, ProtocolId protoId) = _BuildStack();
         using (stack)
         {
             byte[] data = new byte[14];
-            Packet packet = ParseFrame(stack, data, protoId);
+            Packet packet = _ParseFrame(stack, data, protoId);
 
             int count = 0;
             foreach (Field _ in packet.IterFieldsFlat())
@@ -347,11 +347,11 @@ internal sealed class FieldIteratorTests
     [Test]
     public async Task IterFieldsFlat_WithoutMaterialize_OnlyEagerFields()
     {
-        (Stack? stack, MockIterProto? proto, ProtocolId protoId) = BuildStack();
+        (Stack? stack, MockIterProto? proto, ProtocolId protoId) = _BuildStack();
         using (stack)
         {
             byte[] data = new byte[14];
-            Packet packet = ParseFrame(stack, data, protoId);
+            Packet packet = _ParseFrame(stack, data, protoId);
 
             int count = 0;
             foreach (Field _ in packet.IterFieldsFlat(materialize: false))
@@ -368,11 +368,11 @@ internal sealed class FieldIteratorTests
     [Test]
     public async Task IterFieldsFlat_WithMaterialize_MaterializesLazyFields()
     {
-        (Stack? stack, MockIterProto? proto, ProtocolId protoId) = BuildStack();
+        (Stack? stack, MockIterProto? proto, ProtocolId protoId) = _BuildStack();
         using (stack)
         {
             byte[] data = new byte[14];
-            Packet packet = ParseFrame(stack, data, protoId);
+            Packet packet = _ParseFrame(stack, data, protoId);
 
             foreach (Field _ in packet.IterFieldsFlat())
             {
@@ -386,11 +386,11 @@ internal sealed class FieldIteratorTests
     [Test]
     public async Task IterFieldsFlat_StorageOrder_AllIndicesUnique()
     {
-        (Stack? stack, _, ProtocolId protoId) = BuildStack();
+        (Stack? stack, _, ProtocolId protoId) = _BuildStack();
         using (stack)
         {
             byte[] data = new byte[14];
-            Packet packet = ParseFrame(stack, data, protoId);
+            Packet packet = _ParseFrame(stack, data, protoId);
 
             List<ushort> indices = [];
             foreach (Field f in packet.IterFieldsFlat())
@@ -413,11 +413,11 @@ internal sealed class FieldIteratorTests
     [Test]
     public async Task MutField_Children_DefaultMaterialize_YieldsAllChildren()
     {
-        (Stack? stack, MockIterProto? proto, ProtocolId protoId) = BuildStack();
+        (Stack? stack, MockIterProto? proto, ProtocolId protoId) = _BuildStack();
         using (stack)
         {
             byte[] data = new byte[14];
-            Packet packet = ParseFrame(stack, data, protoId);
+            Packet packet = _ParseFrame(stack, data, protoId);
 
             // Use the packet's root MutField to verify MutField iteration
             // Navigate past packet container to eth container
@@ -435,6 +435,522 @@ internal sealed class FieldIteratorTests
             await Assert.That(count).IsEqualTo(3);
             await Assert.That(proto.PopulateCallCount).IsEqualTo(1);
         }
+    }
+
+    // =========================================================================
+    // Field API — navigation false paths, validity, equality
+    // =========================================================================
+
+    [Test]
+    public async Task Field_Default_IsInvalid()
+    {
+        Field invalid = default;
+
+        await Assert.That(invalid.IsValid).IsFalse();
+    }
+
+    [Test]
+    public async Task Field_Root_HasNoParentOrPrev()
+    {
+        (Stack? stack, _, ProtocolId protoId) = _BuildStack();
+        using (stack)
+        {
+            Packet packet = _ParseFrame(stack, new byte[14], protoId);
+            Field root = packet.RootField();
+
+            await Assert.That(root.TryGetParent(out _)).IsFalse();
+            await Assert.That(root.TryGetPrev(out _)).IsFalse();
+            await Assert.That(root.IsRoot).IsTrue();
+            await Assert.That(root.Packet).IsSameReferenceAs(packet);
+            await Assert.That(root.FieldInfo).IsNotNull();
+        }
+    }
+
+    [Test]
+    public async Task Field_Leaf_HasNoChildrenOrNext()
+    {
+        (Stack? stack, _, ProtocolId protoId) = _BuildStack();
+        using (stack)
+        {
+            Packet packet = _ParseFrame(stack, new byte[14], protoId);
+            Field root = packet.RootField();
+            root.TryGetFirstChild(out Field packetContainer);
+            packetContainer.TryGetNext(out Field container);
+            container.TryGetLastChild(out Field leaf);
+
+            await Assert.That(leaf.TryGetFirstChild(out _)).IsFalse();
+            await Assert.That(leaf.TryGetLastChild(out _)).IsFalse();
+            await Assert.That(leaf.TryGetNext(out _)).IsFalse();
+            await Assert.That(leaf.Value.Type).IsNotEqualTo(FieldType.None);
+        }
+    }
+
+    [Test]
+    public async Task Field_LastChild_AndPrevNavigation()
+    {
+        (Stack? stack, _, ProtocolId protoId) = _BuildStack();
+        using (stack)
+        {
+            Packet packet = _ParseFrame(stack, new byte[14], protoId);
+            Field root = packet.RootField();
+            root.TryGetFirstChild(out Field packetContainer);
+            packetContainer.TryGetNext(out Field container);
+
+            await Assert.That(container.TryGetLastChild(out Field lastChild)).IsTrue();
+            await Assert.That(lastChild.TryGetPrev(out Field prev)).IsTrue();
+            await Assert.That(prev.TryGetNext(out Field next)).IsTrue();
+            await Assert.That(next.FieldId).IsEqualTo(lastChild.FieldId);
+        }
+    }
+
+    [Test]
+    public async Task Field_Equality_OperatorsAndHashCode()
+    {
+        (Stack? stack, _, ProtocolId protoId) = _BuildStack();
+        using (stack)
+        {
+            Packet packet = _ParseFrame(stack, new byte[14], protoId);
+            Field root = packet.RootField();
+            Field same = packet.RootField();
+            Packet otherPacket = _ParseFrame(stack, new byte[14], protoId);
+            Field different = otherPacket.RootField();
+
+            await Assert.That(root == same).IsTrue();
+            await Assert.That(root != different).IsTrue();
+            await Assert.That(root.Equals(same)).IsTrue();
+            await Assert.That(root.Equals((object)same)).IsTrue();
+            await Assert.That(root.Equals((object)"not a field")).IsFalse();
+            await Assert.That(root.GetHashCode()).IsEqualTo(same.GetHashCode());
+        }
+    }
+
+    [Test]
+    public async Task Children_AsIEnumerable_NonGenericGetEnumerator()
+    {
+        (Stack? stack, _, ProtocolId protoId) = _BuildStack();
+        using (stack)
+        {
+            Packet packet = _ParseFrame(stack, new byte[14], protoId);
+            Field root = packet.RootField();
+            root.TryGetFirstChild(out Field packetContainer);
+            packetContainer.TryGetNext(out Field container);
+
+            IEnumerable nonGeneric = container.Children();
+            IEnumerator enumerator = nonGeneric.GetEnumerator();
+            bool moved = enumerator.MoveNext();
+            _ = enumerator.Current;
+            enumerator.Reset();
+            if (enumerator is IDisposable disposable)
+            {
+                disposable.Dispose();
+            }
+
+            await Assert.That(moved).IsTrue();
+        }
+    }
+
+    [Test]
+    public async Task Children_BoxedEnumerator_ExhaustionReturnsFalse()
+    {
+        (Stack? stack, _, ProtocolId protoId) = _BuildStack();
+        using (stack)
+        {
+            Packet packet = _ParseFrame(stack, new byte[14], protoId);
+            Field root = packet.RootField();
+            root.TryGetFirstChild(out Field packetContainer);
+            packetContainer.TryGetNext(out Field container);
+
+            IEnumerable<Field> enumerable = container.Children();
+            using IEnumerator<Field> enumerator = enumerable.GetEnumerator();
+            int count = 0;
+            while (enumerator.MoveNext())
+            {
+                count++;
+            }
+
+            bool exhausted = enumerator.MoveNext();
+            await Assert.That(count).IsEqualTo(3);
+            await Assert.That(exhausted).IsFalse();
+        }
+    }
+
+    [Test]
+    public async Task Children_StructEnumerator_ExhaustionReturnsFalse()
+    {
+        (Stack? stack, _, ProtocolId protoId) = _BuildStack();
+        using (stack)
+        {
+            Packet packet = _ParseFrame(stack, new byte[14], protoId);
+            Field root = packet.RootField();
+            root.TryGetFirstChild(out Field packetContainer);
+            packetContainer.TryGetNext(out Field container);
+
+            FieldChildEnumerator enumerator = container.Children().GetEnumerator();
+            int count = 0;
+            while (enumerator.MoveNext())
+            {
+                count++;
+            }
+
+            bool exhausted = enumerator.MoveNext();
+
+            await Assert.That(count).IsEqualTo(3);
+            await Assert.That(exhausted).IsFalse();
+        }
+    }
+
+    [Test]
+    public async Task Descendants_AsIEnumerable_NonGenericGetEnumerator()
+    {
+        (Stack? stack, _, ProtocolId protoId) = _BuildStack();
+        using (stack)
+        {
+            Packet packet = _ParseFrame(stack, new byte[14], protoId);
+            IEnumerable nonGeneric = packet.RootField().Descendants();
+            IEnumerator enumerator = nonGeneric.GetEnumerator();
+            bool moved = enumerator.MoveNext();
+            if (enumerator is IDisposable disposable)
+            {
+                disposable.Dispose();
+            }
+
+            await Assert.That(moved).IsTrue();
+        }
+    }
+
+    [Test]
+    public async Task IterFieldsDfs_AsIEnumerable_NonGenericGetEnumerator()
+    {
+        (Stack? stack, _, ProtocolId protoId) = _BuildStack();
+        using (stack)
+        {
+            Packet packet = _ParseFrame(stack, new byte[14], protoId);
+            IEnumerable nonGeneric = packet.IterFieldsDfs();
+            IEnumerator enumerator = nonGeneric.GetEnumerator();
+            bool moved = enumerator.MoveNext();
+            if (enumerator is IDisposable disposable)
+            {
+                disposable.Dispose();
+            }
+
+            await Assert.That(moved).IsTrue();
+        }
+    }
+
+    [Test]
+    public async Task IterFieldsFlat_AsIEnumerable_NonGenericGetEnumerator()
+    {
+        (Stack? stack, _, ProtocolId protoId) = _BuildStack();
+        using (stack)
+        {
+            Packet packet = _ParseFrame(stack, new byte[14], protoId);
+            IEnumerable nonGeneric = packet.IterFieldsFlat();
+            IEnumerator enumerator = nonGeneric.GetEnumerator();
+            bool moved = enumerator.MoveNext();
+            if (enumerator is IDisposable disposable)
+            {
+                disposable.Dispose();
+            }
+
+            await Assert.That(moved).IsTrue();
+        }
+    }
+
+    [Test]
+    public async Task InlineStack16_PushSlow_PopHeapPath_AndEmptyThrow()
+    {
+        InlineStack16 stack16 = default;
+        for (int i = 0; i < 17; i++)
+        {
+            stack16.Push((ushort)i);
+        }
+
+        int count = stack16.Count;
+        ushort last = default;
+        while (stack16.Count > 0)
+        {
+            last = stack16.Pop();
+        }
+
+        bool popThrew = false;
+        try
+        {
+            stack16.Pop();
+        }
+        catch (InvalidOperationException)
+        {
+            popThrew = true;
+        }
+
+        await Assert.That(count).IsEqualTo(17);
+        await Assert.That(last).IsEqualTo((ushort)0);
+        await Assert.That(popThrew).IsTrue();
+    }
+
+    // =========================================================================
+
+    [Test]
+    public async Task Children_AsIEnumerable_UsesBoxedEnumerator()
+    {
+        (Stack? stack, _, ProtocolId protoId) = _BuildStack();
+        using (stack)
+        {
+            Packet packet = _ParseFrame(stack, new byte[14], protoId);
+            Field root = packet.RootField();
+            root.TryGetFirstChild(out Field packetContainer);
+            packetContainer.TryGetNext(out Field container);
+
+            IEnumerable<Field> enumerable = container.Children();
+            await Assert.That(enumerable.Count()).IsEqualTo(3);
+
+            using IEnumerator<Field> enumerator = enumerable.GetEnumerator();
+            await Assert.That(enumerator.MoveNext()).IsTrue();
+            Field first = enumerator.Current;
+            object boxed = ((IEnumerator)enumerator).Current;
+            await Assert.That(boxed).IsTypeOf<Field>();
+            await Assert.That(((Field)boxed).FieldId).IsEqualTo(first.FieldId);
+            enumerator.Reset();
+            await Assert.That(enumerator.MoveNext()).IsTrue();
+            ((IDisposable)enumerator).Dispose();
+        }
+    }
+
+    [Test]
+    public async Task Descendants_AsIEnumerable_UsesBoxedEnumerator()
+    {
+        (Stack? stack, _, ProtocolId protoId) = _BuildStack();
+        using (stack)
+        {
+            Packet packet = _ParseFrame(stack, new byte[14], protoId);
+            IEnumerable<Field> enumerable = packet.RootField().Descendants();
+
+            await Assert.That(enumerable.Count()).IsEqualTo(9);
+
+            using IEnumerator<Field> enumerator = enumerable.GetEnumerator();
+            await Assert.That(enumerator.MoveNext()).IsTrue();
+            _ = ((IEnumerator)enumerator).Current;
+            enumerator.Reset();
+            ((IDisposable)enumerator).Dispose();
+        }
+    }
+
+    [Test]
+    public async Task IterFieldsDfs_AsIEnumerable_UsesBoxedEnumerator()
+    {
+        (Stack? stack, _, ProtocolId protoId) = _BuildStack();
+        using (stack)
+        {
+            Packet packet = _ParseFrame(stack, new byte[14], protoId);
+            IEnumerable<Field> enumerable = packet.IterFieldsDfs();
+
+            await Assert.That(enumerable.Count()).IsGreaterThan(5);
+
+            using IEnumerator<Field> enumerator = enumerable.GetEnumerator();
+            await Assert.That(enumerator.MoveNext()).IsTrue();
+            _ = ((IEnumerator)enumerator).Current;
+            enumerator.Reset();
+            ((IDisposable)enumerator).Dispose();
+        }
+    }
+
+    [Test]
+    public async Task IterFieldsFlat_AsIEnumerable_UsesBoxedEnumerator()
+    {
+        (Stack? stack, _, ProtocolId protoId) = _BuildStack();
+        using (stack)
+        {
+            Packet packet = _ParseFrame(stack, new byte[14], protoId);
+            IEnumerable<Field> enumerable = packet.IterFieldsFlat();
+
+            await Assert.That(enumerable.Count()).IsGreaterThan(5);
+
+            using IEnumerator<Field> enumerator = enumerable.GetEnumerator();
+            await Assert.That(enumerator.MoveNext()).IsTrue();
+            _ = ((IEnumerator)enumerator).Current;
+            enumerator.Reset();
+            ((IDisposable)enumerator).Dispose();
+        }
+    }
+
+    // =========================================================================
+    // Struct enumerators — empty children, exhaust, non-generic IEnumerable
+    // =========================================================================
+
+    [Test]
+    public async Task Children_StructEnumerator_EmptyParent_ReturnsFalse()
+    {
+        (Stack? stack, _, ProtocolId protoId) = _BuildStack();
+        using (stack)
+        {
+            Packet packet = _ParseFrame(stack, new byte[14], protoId);
+            Field root = packet.RootField();
+            root.TryGetFirstChild(out Field packetContainer);
+            packetContainer.TryGetNext(out Field container);
+            container.TryGetLastChild(out Field leaf);
+
+            FieldChildEnumerator enumerator = leaf.Children().GetEnumerator();
+            bool first = enumerator.MoveNext();
+            bool second = enumerator.MoveNext();
+
+            await Assert.That(first).IsFalse();
+            await Assert.That(second).IsFalse();
+        }
+    }
+
+    [Test]
+    public async Task Children_BoxedEnumerator_ExhaustsThenReturnsFalse()
+    {
+        (Stack? stack, _, ProtocolId protoId) = _BuildStack();
+        using (stack)
+        {
+            Packet packet = _ParseFrame(stack, new byte[14], protoId);
+            Field root = packet.RootField();
+            root.TryGetFirstChild(out Field packetContainer);
+            packetContainer.TryGetNext(out Field container);
+
+            int count = 0;
+            foreach (Field _ in container.Children())
+            {
+                count++;
+            }
+
+            FieldChildEnumerator tail = container.Children().GetEnumerator();
+            while (tail.MoveNext())
+            {
+            }
+
+            bool afterExhaust = tail.MoveNext();
+            await Assert.That(count).IsEqualTo(3);
+            await Assert.That(afterExhaust).IsFalse();
+        }
+    }
+
+    [Test]
+    public async Task Children_NonGenericIEnumerable_GetEnumerator()
+    {
+        (Stack? stack, _, ProtocolId protoId) = _BuildStack();
+        using (stack)
+        {
+            Packet packet = _ParseFrame(stack, new byte[14], protoId);
+            IEnumerable nonGeneric = packet.RootField().Children();
+            IEnumerator enumerator = nonGeneric.GetEnumerator();
+            bool moved = enumerator.MoveNext();
+            object current = enumerator.Current;
+            enumerator.Reset();
+            if (enumerator is IDisposable disposable)
+            {
+                disposable.Dispose();
+            }
+
+            await Assert.That(moved).IsTrue();
+            await Assert.That(current).IsTypeOf<Field>();
+        }
+    }
+
+    [Test]
+    public async Task Descendants_NonGenericIEnumerable_GetEnumerator()
+    {
+        (Stack? stack, _, ProtocolId protoId) = _BuildStack();
+        using (stack)
+        {
+            Packet packet = _ParseFrame(stack, new byte[14], protoId);
+            IEnumerable nonGeneric = packet.RootField().Descendants();
+            IEnumerator enumerator = nonGeneric.GetEnumerator();
+            bool moved = enumerator.MoveNext();
+            if (enumerator is IDisposable disposable)
+            {
+                disposable.Dispose();
+            }
+
+            await Assert.That(moved).IsTrue();
+        }
+    }
+
+    [Test]
+    public async Task IterFieldsDfs_NonGenericIEnumerable_GetEnumerator()
+    {
+        (Stack? stack, _, ProtocolId protoId) = _BuildStack();
+        using (stack)
+        {
+            Packet packet = _ParseFrame(stack, new byte[14], protoId);
+            IEnumerable nonGeneric = packet.IterFieldsDfs();
+            IEnumerator enumerator = nonGeneric.GetEnumerator();
+            bool moved = enumerator.MoveNext();
+            if (enumerator is IDisposable disposable)
+            {
+                disposable.Dispose();
+            }
+
+            await Assert.That(moved).IsTrue();
+        }
+    }
+
+    [Test]
+    public async Task IterFieldsFlat_NonGenericIEnumerable_GetEnumerator()
+    {
+        (Stack? stack, _, ProtocolId protoId) = _BuildStack();
+        using (stack)
+        {
+            Packet packet = _ParseFrame(stack, new byte[14], protoId);
+            IEnumerable nonGeneric = packet.IterFieldsFlat();
+            IEnumerator enumerator = nonGeneric.GetEnumerator();
+            bool moved = enumerator.MoveNext();
+            if (enumerator is IDisposable disposable)
+            {
+                disposable.Dispose();
+            }
+
+            await Assert.That(moved).IsTrue();
+        }
+    }
+
+    [Test]
+    public async Task Field_HasChildrenAndChildCount_OnContainer()
+    {
+        (Stack? stack, _, ProtocolId protoId) = _BuildStack();
+        using (stack)
+        {
+            Packet packet = _ParseFrame(stack, new byte[14], protoId);
+            Field root = packet.RootField();
+            root.TryGetFirstChild(out Field packetContainer);
+            packetContainer.TryGetNext(out Field container);
+
+            await Assert.That(container.HasChildren).IsTrue();
+            await Assert.That(container.ChildCount).IsEqualTo((ushort)3);
+        }
+    }
+
+    [Test]
+    public async Task InlineStack16_PushBeyondInlineCapacity_UsesSlowPath()
+    {
+        InlineStack16 stack = default;
+        for (int i = 0; i < 20; i++)
+        {
+            stack.Push((ushort)i);
+        }
+
+        int count = stack.Count;
+        ushort top = stack.Pop();
+
+        await Assert.That(count).IsEqualTo(20);
+        await Assert.That(top).IsEqualTo((ushort)19);
+    }
+
+    [Test]
+    public async Task InlineStack16_PopOnEmpty_Throws()
+    {
+        InlineStack16 stack = default;
+        bool threw = false;
+        try
+        {
+            stack.Pop();
+        }
+        catch (InvalidOperationException)
+        {
+            threw = true;
+        }
+
+        await Assert.That(threw).IsTrue();
     }
 
     // =========================================================================

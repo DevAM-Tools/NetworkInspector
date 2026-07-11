@@ -10,7 +10,7 @@ internal sealed class IcmpV4RedirectLayerTests
 {
     private static readonly IPv4Address _Gateway = new(0xC0A80101); // 192.168.1.1
 
-    private static byte[] WriteHeader(IcmpV4RedirectLayer layer)
+    private static byte[] _WriteHeader(IcmpV4RedirectLayer layer)
     {
         byte[] buf = new byte[layer.HeaderSize];
         layer.WriteHeader(buf.AsSpan());
@@ -24,7 +24,7 @@ internal sealed class IcmpV4RedirectLayerTests
     {
         // RFC 792: Redirect is ICMP type 5.
         IcmpV4RedirectLayer layer = new(_Gateway);
-        byte[] buf = WriteHeader(layer);
+        byte[] buf = _WriteHeader(layer);
 
         await Assert.That(buf[0]).IsEqualTo((byte)5);
     }
@@ -34,7 +34,7 @@ internal sealed class IcmpV4RedirectLayerTests
     {
         // The default code is CodeRedirectForHost (1).
         IcmpV4RedirectLayer layer = new(_Gateway);
-        byte[] buf = WriteHeader(layer);
+        byte[] buf = _WriteHeader(layer);
 
         await Assert.That(buf[1]).IsEqualTo(IcmpV4RedirectLayer.CodeRedirectForHost);
     }
@@ -48,7 +48,7 @@ internal sealed class IcmpV4RedirectLayerTests
     {
         // Each named code constant must equal its documented numeric value and be written to byte 1.
         IcmpV4RedirectLayer layer = new(_Gateway, code);
-        byte[] buf = WriteHeader(layer);
+        byte[] buf = _WriteHeader(layer);
 
         await Assert.That((int)buf[1]).IsEqualTo(expectedValue)
             .Because($"code byte must be {expectedValue} for constant value {code}");
@@ -64,7 +64,7 @@ internal sealed class IcmpV4RedirectLayerTests
         // The gateway address occupies bytes 4–7 in big-endian (network) byte order,
         // identical to IPv4Address.RawValue which is already stored as big-endian uint.
         IcmpV4RedirectLayer layer = new(_Gateway);
-        byte[] buf = WriteHeader(layer);
+        byte[] buf = _WriteHeader(layer);
 
         uint rawValue = BinaryPrimitives.ReadUInt32BigEndian(buf.AsSpan(4, 4));
         await Assert.That(rawValue).IsEqualTo(_Gateway.RawValue)
@@ -76,7 +76,7 @@ internal sealed class IcmpV4RedirectLayerTests
     {
         // Cross-check byte-by-byte: 192.168.1.1 = 0xC0 0xA8 0x01 0x01.
         IcmpV4RedirectLayer layer = new(new IPv4Address(0xC0A80101));
-        byte[] buf = WriteHeader(layer);
+        byte[] buf = _WriteHeader(layer);
 
         await Assert.That(buf[4]).IsEqualTo((byte)0xC0);
         await Assert.That(buf[5]).IsEqualTo((byte)0xA8);
@@ -89,7 +89,7 @@ internal sealed class IcmpV4RedirectLayerTests
     {
         // A zero gateway address (0.0.0.0) must produce all-zero bytes 4–7.
         IcmpV4RedirectLayer layer = new(new IPv4Address(0));
-        byte[] buf = WriteHeader(layer);
+        byte[] buf = _WriteHeader(layer);
 
         await Assert.That(buf[4]).IsEqualTo((byte)0);
         await Assert.That(buf[5]).IsEqualTo((byte)0);

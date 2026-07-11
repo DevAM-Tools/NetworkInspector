@@ -59,19 +59,19 @@ internal static class TestStreams
         /// <inheritdoc/>
         public override void Write(byte[] buffer, int offset, int count)
         {
-            CheckThrow(count);
+            _CheckThrow(count);
             _BytesWritten += count;
         }
 
         /// <inheritdoc/>
         public override void Write(ReadOnlySpan<byte> buffer)
         {
-            CheckThrow(buffer.Length);
+            _CheckThrow(buffer.Length);
             _BytesWritten += buffer.Length;
         }
 
         /// <summary>Throws <see cref="IOException"/> when the cumulative byte count would exceed the threshold.</summary>
-        private void CheckThrow(int count)
+        private void _CheckThrow(int count)
         {
             if (_BytesWritten + count > ThrowAfterByte)
             {

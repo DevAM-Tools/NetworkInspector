@@ -155,10 +155,10 @@ internal sealed class MacAddressTests
     // === Binary Serialization ===
 
     [Test]
-    public async Task TryGetSerializedSize_Is6()
+    public async Task TryGetWrittenSize_Is6()
     {
         MacAddress addr = new(0x001122334455UL);
-        bool ok = addr.TryGetSerializedSize(out int size);
+        bool ok = addr.TryGetWrittenSize(out int size);
         await Assert.That(ok).IsTrue();
         await Assert.That(size).IsEqualTo(6);
     }

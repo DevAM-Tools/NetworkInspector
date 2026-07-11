@@ -32,8 +32,8 @@ public interface IConsumesNextProtocolValue : IProtocolLayer
     /// </summary>
     /// <param name="frame">Complete frame buffer.</param>
     /// <param name="myOffset">Offset where this layer’s header starts.</param>
-    /// <param name="next">Protocol-type value supplied by the inner layer.</param>
-    void PatchNextProtocol(scoped Span<byte> frame, int myOffset, ushort next);
+    /// <param name="nextProtocol">Protocol-type value supplied by the inner layer.</param>
+    void PatchNextProtocol(scoped Span<byte> frame, int myOffset, ushort nextProtocol);
 }
 
 /// <summary>

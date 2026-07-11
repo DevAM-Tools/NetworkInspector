@@ -9,7 +9,7 @@ namespace NetworkInspector.Core.Errors;
 /// The only realistic trigger is exceeding the per-packet field limit (65 534).
 /// </para>
 /// <para>
-/// Caught at parse boundaries (<see cref="Packet.ParseFrameInternal"/>,
+/// Caught at parse boundaries (<see cref="Packet._ParseFrameInternal"/>,
 /// <see cref="Packet.MaterializeLazyField"/>)
 /// and converted into a packet-level error string.
 /// </para>

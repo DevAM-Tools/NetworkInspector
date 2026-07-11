@@ -103,9 +103,6 @@ public sealed class PcapngExporter : IFrameListener, IErrorTolerantExporter, IDi
         || (_TargetFrameCount > 0 && FrameCount >= _TargetFrameCount);
 
     /// <inheritdoc/>
-    bool IExporterStatistics.IsFinished => IsFinished;
-
-    /// <inheritdoc/>
     public ErrorToleranceMode ErrorTolerance { get; set; } = ErrorToleranceMode.Tolerant;
 
     /// <inheritdoc/>
@@ -125,12 +122,12 @@ public sealed class PcapngExporter : IFrameListener, IErrorTolerantExporter, IDi
         }
 
         // Lazy initialization: open file and write SHB on first frame
-        if (!_Started && !Start())
+        if (!_Started && !_Start())
         {
             return false;
         }
 
-        return HandleFrame(frame);
+        return _HandleFrame(frame);
     }
 
     /// <inheritdoc/>
@@ -154,7 +151,7 @@ public sealed class PcapngExporter : IFrameListener, IErrorTolerantExporter, IDi
             // Skip if an error already occurred — do not write a partial file.
             if (!_Started && !_HasError && _Output is not null)
             {
-                Start();
+                _Start();
             }
 
             _Writer?.Flush();
@@ -208,7 +205,7 @@ public sealed class PcapngExporter : IFrameListener, IErrorTolerantExporter, IDi
 
     /// <summary>Lazily initializes output and writes the SHB.</summary>
     /// <returns>True if initialization succeeded.</returns>
-    private bool Start()
+    private bool _Start()
     {
         if (_Output is null)
         {
@@ -249,7 +246,7 @@ public sealed class PcapngExporter : IFrameListener, IErrorTolerantExporter, IDi
     }
 
     /// <summary>Processes a single frame: registers interface if new, writes IDB+EPB.</summary>
-    private bool HandleFrame(Frame frame)
+    private bool _HandleFrame(Frame frame)
     {
         if (_TargetFrameCount > 0 && FrameCount >= _TargetFrameCount)
         {
@@ -289,7 +286,7 @@ public sealed class PcapngExporter : IFrameListener, IErrorTolerantExporter, IDi
             ? $"Interface {interfaceId.Value}"
             : null;
 
-        // _Writer is guaranteed non-null after Start() succeeds
+        // _Writer is guaranteed non-null after _Start() succeeds
         try
         {
             if (needsIdb)
@@ -307,7 +304,7 @@ public sealed class PcapngExporter : IFrameListener, IErrorTolerantExporter, IDi
             // Any error during write — skip frame with error reporting.
             // I/O errors map to IoError; other failures map to SerializationError.
             ExportErrorKind kind = ex is IOException ? ExportErrorKind.IoError : ExportErrorKind.SerializationError;
-            return HandleSkip(new ExportErrorEventArgs
+            return _HandleSkip(new ExportErrorEventArgs
             {
                 ItemIndex = FrameCount,
                 Kind = kind,
@@ -323,7 +320,7 @@ public sealed class PcapngExporter : IFrameListener, IErrorTolerantExporter, IDi
     /// Handles a skipped frame: increments counters, fires the event in Tolerant mode,
     /// and returns false to abort in Strict mode.
     /// </summary>
-    private bool HandleSkip(ExportErrorEventArgs error)
+    private bool _HandleSkip(ExportErrorEventArgs error)
     {
         SkippedCount++;
         ErrorCount++;

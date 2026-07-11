@@ -94,7 +94,7 @@ public static class TsharkVerifier
     /// when tshark is missing and the escape hatch is enabled. Throws otherwise so a
     /// release/CI run cannot lose its evidence silently.
     /// </summary>
-    private static bool EnsureAvailableOrAllowed()
+    private static bool _EnsureAvailableOrAllowed()
     {
         if (IsAvailable())
         {
@@ -132,7 +132,12 @@ public static class TsharkVerifier
         string? profileDir = null)
     {
         string?[] values = GetFieldValues(frameData, [tsharkFieldName], dlt, decodeAs, profileDir);
-        return values.Length > 0 ? values[0] : null;
+        if (values.Length == 0)
+        {
+            return null;
+        }
+
+        return values[0];
     }
 
     /// <summary>
@@ -158,10 +163,10 @@ public static class TsharkVerifier
     {
         foreach (string name in tsharkFieldNames)
         {
-            ValidateTsharkFieldName(name);
+            _ValidateTsharkFieldName(name);
         }
 
-        if (!EnsureAvailableOrAllowed())
+        if (!_EnsureAvailableOrAllowed())
         {
             return new string?[tsharkFieldNames.Length];
         }
@@ -183,7 +188,7 @@ public static class TsharkVerifier
                     && stderrOut.Contains("Some fields aren't valid", StringComparison.OrdinalIgnoreCase);
                 if (rejectedDynamicFields)
                 {
-                    return ExtractFieldStringsFromPdml(frameData, tsharkFieldNames, dlt, decodeAs, profileDir);
+                    return _ExtractFieldStringsFromPdml(frameData, tsharkFieldNames, dlt, decodeAs, profileDir);
                 }
 
                 return new string?[tsharkFieldNames.Length];
@@ -204,11 +209,11 @@ public static class TsharkVerifier
         }
         finally
         {
-            TryDelete(tempFile);
+            _TryDelete(tempFile);
         }
     }
 
-    private static string?[] ExtractFieldStringsFromPdml(
+    private static string?[] _ExtractFieldStringsFromPdml(
         byte[] frameData,
         string[] tsharkFieldNames,
         int dlt,
@@ -217,7 +222,7 @@ public static class TsharkVerifier
     {
         List<PdmlField> matched = GetPdmlFields(frameData, tsharkFieldNames, dlt, decodeAs, profileDir);
         // StringComparer.Ordinal is correct — field names are validated lowercase-only by
-        // ValidateTsharkFieldName, and PDML output from tshark uses lowercase names.
+        // _ValidateTsharkFieldName, and PDML output from tshark uses lowercase names.
         Dictionary<string, PdmlField> byName = new(StringComparer.Ordinal);
         foreach (PdmlField f in matched)
         {
@@ -233,21 +238,26 @@ public static class TsharkVerifier
             string name = tsharkFieldNames[i];
             if (byName.TryGetValue(name, out PdmlField pf))
             {
-                result[i] = PdmlComparableString(pf);
+                result[i] = _PdmlComparableString(pf);
             }
         }
 
         return result;
     }
 
-    private static string? PdmlComparableString(PdmlField field)
+    private static string? _PdmlComparableString(PdmlField field)
     {
         if (!string.IsNullOrWhiteSpace(field.Show))
         {
             return field.Show.Trim();
         }
 
-        return string.IsNullOrWhiteSpace(field.Value) ? null : field.Value.Trim();
+        if (string.IsNullOrWhiteSpace(field.Value))
+        {
+            return null;
+        }
+
+        return field.Value.Trim();
     }
 
     /// <summary>
@@ -277,7 +287,12 @@ public static class TsharkVerifier
         string? profileDir = null)
     {
         List<PdmlField> fields = GetPdmlFields(frameData, [tsharkFieldName], dlt, decodeAs, profileDir);
-        return fields.Count > 0 ? fields[0] : null;
+        if (fields.Count == 0)
+        {
+            return null;
+        }
+
+        return fields[0];
     }
 
     /// <summary>
@@ -291,15 +306,15 @@ public static class TsharkVerifier
         string? decodeAs = null,
         string? profileDir = null)
     {
-        if (!EnsureAvailableOrAllowed())
+        if (!_EnsureAvailableOrAllowed())
         {
             return [];
         }
 
-        string output = RunPdml(frameData, dlt, decodeAs, profileDir);
+        string output = _RunPdml(frameData, dlt, decodeAs, profileDir);
         return string.IsNullOrWhiteSpace(output)
             ? []
-            : ParsePdmlFields(output, tsharkFieldNames);
+            : _ParsePdmlFields(output, tsharkFieldNames);
     }
 
     /// <summary>
@@ -318,15 +333,15 @@ public static class TsharkVerifier
         string? decodeAs = null,
         string? profileDir = null)
     {
-        if (!EnsureAvailableOrAllowed())
+        if (!_EnsureAvailableOrAllowed())
         {
             return [];
         }
 
-        string output = RunPdml(frameData, dlt, decodeAs, profileDir);
+        string output = _RunPdml(frameData, dlt, decodeAs, profileDir);
         return string.IsNullOrWhiteSpace(output)
             ? []
-            : ParsePdmlProtocolFields(output, protocolName);
+            : _ParsePdmlProtocolFields(output, protocolName);
     }
 
     /// <summary>
@@ -334,7 +349,7 @@ public static class TsharkVerifier
     /// <c>-T pdml -c 1</c>, and returns the raw PDML XML. Returns an empty string when
     /// tshark fails.
     /// </summary>
-    private static string RunPdml(byte[] frameData, int dlt, string? decodeAs, string? profileDir = null)
+    private static string _RunPdml(byte[] frameData, int dlt, string? decodeAs, string? profileDir = null)
     {
         string tempFile = Path.Combine(Path.GetTempPath(), $"ni_test_{Guid.NewGuid():N}.pcap");
         try
@@ -353,7 +368,7 @@ public static class TsharkVerifier
         }
         finally
         {
-            TryDelete(tempFile);
+            _TryDelete(tempFile);
         }
     }
 
@@ -364,7 +379,7 @@ public static class TsharkVerifier
     /// </summary>
     /// <exception cref="ArgumentException">Thrown when <paramref name="fieldName"/> is empty or
     /// contains characters outside the allowed set.</exception>
-    private static void ValidateTsharkFieldName(string fieldName)
+    private static void _ValidateTsharkFieldName(string fieldName)
     {
         if (string.IsNullOrWhiteSpace(fieldName))
         {
@@ -384,7 +399,7 @@ public static class TsharkVerifier
     }
 
     /// <summary>Best-effort temp file removal that swallows IO errors.</summary>
-    private static void TryDelete(string path)
+    private static void _TryDelete(string path)
     {
         for (int attempt = 0; attempt < 3; attempt++)
         {
@@ -431,10 +446,10 @@ public static class TsharkVerifier
     /// <c>name</c> attribute matches one of <paramref name="fieldNames"/>. Searches
     /// recursively through all nested <c>&lt;field&gt;</c> elements.
     /// </summary>
-    private static List<PdmlField> ParsePdmlFields(string pdmlXml, string[] fieldNames)
+    private static List<PdmlField> _ParsePdmlFields(string pdmlXml, string[] fieldNames)
         => PdmlParser.ParseFields(pdmlXml, fieldNames);
 
-    private static List<PdmlField> ParsePdmlProtocolFields(string pdmlXml, string protocolName)
+    private static List<PdmlField> _ParsePdmlProtocolFields(string pdmlXml, string protocolName)
         => PdmlParser.ParseProtocolFields(pdmlXml, protocolName);
 
     #endregion
@@ -467,10 +482,10 @@ public static class TsharkVerifier
     {
         foreach (string name in tsharkFieldNames)
         {
-            ValidateTsharkFieldName(name);
+            _ValidateTsharkFieldName(name);
         }
 
-        if (!EnsureAvailableOrAllowed())
+        if (!_EnsureAvailableOrAllowed())
         {
             return [];
         }
@@ -515,7 +530,7 @@ public static class TsharkVerifier
         }
         finally
         {
-            TryDelete(tempFile);
+            _TryDelete(tempFile);
         }
     }
 
@@ -536,7 +551,7 @@ public static class TsharkVerifier
         int dlt = 1,
         string? profileDir = null)
     {
-        if (!EnsureAvailableOrAllowed())
+        if (!_EnsureAvailableOrAllowed())
         {
             return string.Empty;
         }
@@ -556,7 +571,7 @@ public static class TsharkVerifier
         }
         finally
         {
-            TryDelete(tempFile);
+            _TryDelete(tempFile);
         }
     }
 
@@ -591,7 +606,7 @@ public static class TsharkVerifier
         int count = 0;
         foreach (string line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries))
         {
-            if (int.TryParse(line.Trim(), out _))
+            if (int.TryParse(line.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out _))
             {
                 count++;
             }
@@ -621,7 +636,7 @@ public static class TsharkVerifier
         }
         if (exit != 0)
         {
-            string copyPath = PreserveCaptureForDiagnostics(filePath);
+            string copyPath = _PreserveCaptureForDiagnostics(filePath);
             throw new InvalidOperationException(
                 $"tshark failed with exit code {exit}: {stderr.Trim()}\n" +
                 $"Capture preserved at: {copyPath}");
@@ -660,7 +675,7 @@ public static class TsharkVerifier
             int encapType;
             try
             {
-                timeNanos = ParseEpochNanos(trimmed[ranges[1]]);
+                timeNanos = _ParseEpochNanos(trimmed[ranges[1]]);
                 frameLen = int.Parse(trimmed[ranges[2]], CultureInfo.InvariantCulture);
                 ReadOnlySpan<char> field4 = trimmed[ranges[4]];
                 ReadOnlySpan<char> field5 = trimmed[ranges[5]];
@@ -670,7 +685,7 @@ public static class TsharkVerifier
             catch (Exception ex) when (ex is FormatException or InvalidOperationException)
             {
                 string rowText = new string(trimmed).Replace("\t", "\\t", StringComparison.Ordinal);
-                string copyPath = PreserveCaptureForDiagnostics(filePath);
+                string copyPath = _PreserveCaptureForDiagnostics(filePath);
                 throw new InvalidOperationException(
                     $"Failed to parse tshark output row #{frameNumber} from '{filePath}': {ex.Message}\n" +
                     $"Row (tab-escaped): '{rowText}'\n" +
@@ -744,7 +759,7 @@ public static class TsharkVerifier
     /// diagnostic name so it survives test cleanup and the developer can re-run tshark
     /// by hand when an assertion fails.
     /// </summary>
-    private static string PreserveCaptureForDiagnostics(string filePath)
+    private static string _PreserveCaptureForDiagnostics(string filePath)
     {
         string copyPath = Path.Combine(
             Path.GetTempPath(),
@@ -766,7 +781,7 @@ public static class TsharkVerifier
     /// fractional digits are zero-padded; extra digits are truncated to nanosecond
     /// precision. Throws with the offending value on empty/unparseable input.
     /// </summary>
-    private static long ParseEpochNanos(ReadOnlySpan<char> value)
+    private static long _ParseEpochNanos(ReadOnlySpan<char> value)
     {
         if (value.IsEmpty)
         {

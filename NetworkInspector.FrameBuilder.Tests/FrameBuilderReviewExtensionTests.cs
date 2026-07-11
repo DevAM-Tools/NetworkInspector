@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.FrameBuilder.Tests;
 
@@ -31,11 +31,11 @@ internal sealed class FrameBuilderReviewExtensionTests
     private static readonly IPv4Address _SrcIp4 = IPv4Address.FromBytes([10, 0, 0, 1]);
     private static readonly IPv4Address _DstIp4 = IPv4Address.FromBytes([10, 0, 0, 2]);
 
-    private const int MtuFrameBytes = 1500;
-    private const int EthHeaderSize = 14;
-    private const int IPv4HeaderSize = 20;
-    private const int UdpHeaderSize = 8;
-    private const int SomeIpTpHeaderSize = 20;
+    private const int _MtuFrameBytes = 1500;
+    private const int _EthHeaderSize = 14;
+    private const int _IPv4HeaderSize = 20;
+    private const int _UdpHeaderSize = 8;
+    private const int _SomeIpTpHeaderSize = 20;
 
     #region #3 SOME/IP-TP fragmentation — F4
 
@@ -48,11 +48,11 @@ internal sealed class FrameBuilderReviewExtensionTests
     [Test]
     public async Task SomeIpTp_OversizePayload_EmitsApplicationSegments_With16ByteAlignment()
     {
-        FB.EthernetLayer eth = new(_DstMac, _SrcMac, maxFrameSize: MtuFrameBytes);
+        FB.EthernetLayer eth = new(_DstMac, _SrcMac, maxFrameSize: _MtuFrameBytes);
         // IPv4 default DF=true: IP fragmentation is forbidden.  SOME/IP-TP
         // (innermost IFragmentable) wins kind selection, alignment 16.
         FB.IPv4Layer ip = new(_SrcIp4, _DstIp4);
-        FB.UdpLayer udp = new(30490, 30490, FB.Auto<ushort>.Explicit(0));
+        FB.UdpLayer udp = new(30490, 30490, FB.Auto.Explicit((ushort)0));
         FB.SomeIpTpLayer tp = new(serviceId: 0x1234, methodId: 0x5678);
 
         FB.CreatedStack<
@@ -86,7 +86,7 @@ internal sealed class FrameBuilderReviewExtensionTests
             FB.NoTrailer, FB.NoInterceptor> seq = stack.Build(payload);
 
         List<byte[]> segments = [];
-        byte[] scratch = new byte[MtuFrameBytes];
+        byte[] scratch = new byte[_MtuFrameBytes];
         while (seq.MoveNext(scratch, out int n))
         {
             byte[] frame = new byte[n];
@@ -98,8 +98,8 @@ internal sealed class FrameBuilderReviewExtensionTests
         await Assert.That(status).IsEqualTo(FB.BuildStatus.Success);
         await Assert.That(segments.Count).IsEqualTo(3);
 
-        const int TpOffsetInFrame = EthHeaderSize + IPv4HeaderSize + UdpHeaderSize;
-        const int PayloadOffsetInFrame = TpOffsetInFrame + SomeIpTpHeaderSize;
+        const int TpOffsetInFrame = _EthHeaderSize + _IPv4HeaderSize + _UdpHeaderSize;
+        const int PayloadOffsetInFrame = TpOffsetInFrame + _SomeIpTpHeaderSize;
 
         // Segment 0: payload offset=0 (TP word upper 28 bits / 16-byte units = 0), MF=1.
         await Assert.That(segments[0].Length).IsEqualTo(PayloadOffsetInFrame + 1424);
@@ -134,8 +134,8 @@ internal sealed class FrameBuilderReviewExtensionTests
         // Per-segment IPv4 total length == segment frame length minus link header.
         for (int i = 0; i < segments.Count; i++)
         {
-            ushort ipTotal = BinaryPrimitives.ReadUInt16BigEndian(segments[i].AsSpan(EthHeaderSize + 2, 2));
-            await Assert.That((int)ipTotal).IsEqualTo(segments[i].Length - EthHeaderSize);
+            ushort ipTotal = BinaryPrimitives.ReadUInt16BigEndian(segments[i].AsSpan(_EthHeaderSize + 2, 2));
+            await Assert.That((int)ipTotal).IsEqualTo(segments[i].Length - _EthHeaderSize);
         }
     }
 
@@ -150,9 +150,9 @@ internal sealed class FrameBuilderReviewExtensionTests
     [Test]
     public async Task IPv4Fragmentation_AppendsValidFcsToEveryFragment()
     {
-        FB.EthernetLayer eth = new(_DstMac, _SrcMac, maxFrameSize: MtuFrameBytes);
+        FB.EthernetLayer eth = new(_DstMac, _SrcMac, maxFrameSize: _MtuFrameBytes);
         FB.IPv4Layer ip = new(_SrcIp4, _DstIp4, dontFragment: false);
-        FB.UdpLayer udp = new(53, 53, FB.Auto<ushort>.Explicit(0));
+        FB.UdpLayer udp = new(53, 53, FB.Auto.Explicit((ushort)0));
 
         FB.CreatedStack<
             FB.StatelessStack<FB.UdpLayer,
@@ -179,7 +179,7 @@ internal sealed class FrameBuilderReviewExtensionTests
             FB.EthernetFcs, FB.NoInterceptor> seq = stack.Build(payload);
 
         List<byte[]> fragments = [];
-        byte[] scratch = new byte[MtuFrameBytes];
+        byte[] scratch = new byte[_MtuFrameBytes];
         while (seq.MoveNext(scratch, out int n))
         {
             byte[] frame = new byte[n];
@@ -193,7 +193,7 @@ internal sealed class FrameBuilderReviewExtensionTests
         foreach (byte[] frag in fragments)
         {
             ReadOnlySpan<byte> data = frag.AsSpan(0, frag.Length - 4);
-            uint expectedCrc = ComputeReferenceCrc32(data);
+            uint expectedCrc = _ComputeReferenceCrc32(data);
             uint actualCrc = BinaryPrimitives.ReadUInt32LittleEndian(frag.AsSpan(frag.Length - 4, 4));
             await Assert.That(actualCrc).IsEqualTo(expectedCrc);
         }
@@ -216,9 +216,9 @@ internal sealed class FrameBuilderReviewExtensionTests
     [Test]
     public async Task Interceptor_OrderingAndCount_AcrossSingleFrameAndFragmentedBuilds()
     {
-        FB.EthernetLayer eth = new(_DstMac, _SrcMac, maxFrameSize: MtuFrameBytes);
+        FB.EthernetLayer eth = new(_DstMac, _SrcMac, maxFrameSize: _MtuFrameBytes);
         FB.IPv4Layer ip = new(_SrcIp4, _DstIp4, dontFragment: false);
-        FB.UdpLayer udp = new(53, 53, FB.Auto<ushort>.Explicit(0));
+        FB.UdpLayer udp = new(53, 53, FB.Auto.Explicit((ushort)0));
 
         CountingInterceptor counter = new();
 
@@ -235,7 +235,7 @@ internal sealed class FrameBuilderReviewExtensionTests
 
         // --- Single-frame build: small payload that fits the MTU. ---
         CountingInterceptor.Reset();
-        byte[] scratch = new byte[MtuFrameBytes];
+        byte[] scratch = new byte[_MtuFrameBytes];
         FB.FrameSequence<
             FB.StatelessStack<FB.UdpLayer,
                 FB.StatelessStack<FB.IPv4Layer,
@@ -309,7 +309,7 @@ internal sealed class FrameBuilderReviewExtensionTests
     {
         FB.EthernetLayer eth = new(_DstMac, _SrcMac);
         FB.IPv4Layer ip = new(_SrcIp4, _DstIp4);
-        FB.UdpLayer udp = new(53, 53, FB.Auto<ushort>.Explicit(0));
+        FB.UdpLayer udp = new(53, 53, FB.Auto.Explicit((ushort)0));
 
         FB.CreatedStack<
             FB.StatelessStack<FB.UdpLayer,
@@ -346,14 +346,14 @@ internal sealed class FrameBuilderReviewExtensionTests
         // Sizes differ by exactly the payload size delta.
         await Assert.That(n2 - n1).IsEqualTo(p2.Length - p1.Length);
         // Payload bytes match the input on each frame.
-        const int PayloadOffset = EthHeaderSize + IPv4HeaderSize + UdpHeaderSize;
+        const int PayloadOffset = _EthHeaderSize + _IPv4HeaderSize + _UdpHeaderSize;
         await Assert.That(out1.AsSpan(PayloadOffset, p1.Length).SequenceEqual(p1)).IsTrue();
         await Assert.That(out2.AsSpan(PayloadOffset, p2.Length).SequenceEqual(p2)).IsTrue();
         // IPv4 total-length field is correct on each frame.
-        ushort ipLen1 = BinaryPrimitives.ReadUInt16BigEndian(out1.AsSpan(EthHeaderSize + 2, 2));
-        ushort ipLen2 = BinaryPrimitives.ReadUInt16BigEndian(out2.AsSpan(EthHeaderSize + 2, 2));
-        await Assert.That((int)ipLen1).IsEqualTo(out1.Length - EthHeaderSize);
-        await Assert.That((int)ipLen2).IsEqualTo(out2.Length - EthHeaderSize);
+        ushort ipLen1 = BinaryPrimitives.ReadUInt16BigEndian(out1.AsSpan(_EthHeaderSize + 2, 2));
+        ushort ipLen2 = BinaryPrimitives.ReadUInt16BigEndian(out2.AsSpan(_EthHeaderSize + 2, 2));
+        await Assert.That((int)ipLen1).IsEqualTo(out1.Length - _EthHeaderSize);
+        await Assert.That((int)ipLen2).IsEqualTo(out2.Length - _EthHeaderSize);
     }
 
     #endregion
@@ -372,7 +372,7 @@ internal sealed class FrameBuilderReviewExtensionTests
         FB.VlanLayer outerVlan = new(vlanId: 100, isQinQ: true);
         FB.VlanLayer innerVlan = new(vlanId: 200);
         FB.IPv4Layer ip = new(_SrcIp4, _DstIp4);
-        FB.UdpLayer udp = new(53, 53, FB.Auto<ushort>.Explicit(0));
+        FB.UdpLayer udp = new(53, 53, FB.Auto.Explicit((ushort)0));
 
         FB.CreatedStack<
             FB.StatelessStack<FB.UdpLayer,
@@ -401,7 +401,7 @@ internal sealed class FrameBuilderReviewExtensionTests
         seq.MoveNext(frame, out int n);
 
         // Two VLAN tags add 8 bytes onto the link header.
-        const int ExpectedHeaderBytes = EthHeaderSize + 4 + 4 + IPv4HeaderSize + UdpHeaderSize;
+        const int ExpectedHeaderBytes = _EthHeaderSize + 4 + 4 + _IPv4HeaderSize + _UdpHeaderSize;
         await Assert.That(n).IsEqualTo(ExpectedHeaderBytes + payload.Length);
 
         // Outer ethertype at 12: 0x88A8 (S-Tag).
@@ -432,7 +432,7 @@ internal sealed class FrameBuilderReviewExtensionTests
         FB.VlanLayer outerVlan = new(vlanId: 10, isQinQ: true);
         FB.VlanLayer innerVlan = new(vlanId: 20);
         FB.IPv4Layer ip = new(_SrcIp4, _DstIp4);
-        FB.UdpLayer udp = new(30490, 30490, FB.Auto<ushort>.Explicit(0));
+        FB.UdpLayer udp = new(30490, 30490, FB.Auto.Explicit((ushort)0));
         FB.SomeIpLayer someIp = new(serviceId: 0xABCD, methodId: 0x0001);
 
         FB.CreatedStack<
@@ -469,7 +469,7 @@ internal sealed class FrameBuilderReviewExtensionTests
             FB.NoTrailer, FB.NoInterceptor> seq = stack.Build(payload);
         seq.MoveNext(frame, out int n);
 
-        const int Headers = EthHeaderSize + 4 + 4 + IPv4HeaderSize + UdpHeaderSize + 16;
+        const int Headers = _EthHeaderSize + 4 + 4 + _IPv4HeaderSize + _UdpHeaderSize + 16;
         await Assert.That(n).IsEqualTo(Headers + payload.Length);
 
         // SOME/IP Length = (header size 16 - 8) + payload = 8 + 64 = 72.
@@ -484,7 +484,7 @@ internal sealed class FrameBuilderReviewExtensionTests
     /// Reference CRC-32 (IEEE 802.3) used to independently verify the FCS the
     /// trailer wrote.
     /// </summary>
-    private static uint ComputeReferenceCrc32(ReadOnlySpan<byte> data)
+    private static uint _ComputeReferenceCrc32(ReadOnlySpan<byte> data)
     {
         const uint Polynomial = 0xEDB88320u;
         uint crc = 0xFFFFFFFFu;
@@ -493,7 +493,14 @@ internal sealed class FrameBuilderReviewExtensionTests
             crc ^= data[i];
             for (int k = 0; k < 8; k++)
             {
-                crc = (crc & 1) != 0 ? Polynomial ^ (crc >> 1) : crc >> 1;
+                if ((crc & 1) != 0)
+                {
+                    crc = Polynomial ^ (crc >> 1);
+                }
+                else
+                {
+                    crc = crc >> 1;
+                }
             }
         }
         return ~crc;

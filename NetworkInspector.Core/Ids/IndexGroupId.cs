@@ -61,7 +61,7 @@ public readonly struct IndexGroupId(int value) : IEquatable<IndexGroupId>, IComp
     public override bool Equals(object? obj) => obj is IndexGroupId other && Equals(other);
 
     /// <inheritdoc/>
-    public override string ToString() => _Value.ToString();
+    public override string ToString() => _Value.ToString(CultureInfo.InvariantCulture);
 
     #endregion
 

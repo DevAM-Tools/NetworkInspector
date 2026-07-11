@@ -65,7 +65,7 @@ internal sealed class RoundRobinSourceIterator
         _ActiveCount--;
         if (_ActiveCount > 0)
         {
-            MoveToNextActive();
+            _MoveToNextActive();
         }
     }
 
@@ -74,7 +74,7 @@ internal sealed class RoundRobinSourceIterator
     /// Must only be called when <see cref="HasActive"/> is <c>true</c>.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal void Advance() => MoveToNextActive();
+    internal void Advance() => _MoveToNextActive();
 
     /// <summary>
     /// Scans forward (wrapping) from the current position until an active slot is found.
@@ -82,7 +82,7 @@ internal sealed class RoundRobinSourceIterator
     /// <see cref="_ActiveCount"/> is greater than zero.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void MoveToNextActive()
+    private void _MoveToNextActive()
     {
         int count = _Sources.Length;
         for (int i = 0; i < count; i++)

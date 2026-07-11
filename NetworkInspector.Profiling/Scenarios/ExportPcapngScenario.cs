@@ -14,10 +14,10 @@ namespace NetworkInspector.Profiling.Scenarios;
 [SuppressMessage("Performance", "CA1812:AvoidUninstantiatedInternalClasses", Justification = "Instantiated via reflection in ScenarioDiscovery.Discover.")]
 internal sealed class ExportPcapngScenario : ExportScenarioBase<Frame>
 {
-    private const int Batch = 10_000;
+    private const int _Batch = 10_000;
 
     /// <inheritdoc/>
-    protected override int BatchSize => Batch;
+    protected override int BatchSize => _Batch;
 
     /// <inheritdoc/>
     protected override int InitialStreamCapacityBytes => 4 * 1024 * 1024; // 4 MiB
@@ -30,7 +30,8 @@ internal sealed class ExportPcapngScenario : ExportScenarioBase<Frame>
 
     /// <inheritdoc/>
     public override string Description =>
-        $"Export {Batch:N0} IPv6/UDP frames as PCAPNG → MemoryStream per iteration.";
+        FormattableString.Invariant(
+            $"Export {_Batch:N0} IPv6/UDP frames as PCAPNG → MemoryStream per iteration.");
 
     /// <inheritdoc/>
     public override string WorkUnitName => "frames";

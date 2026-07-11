@@ -10,10 +10,10 @@ namespace NetworkInspector.Exporters.Pbf.Columnar;
 internal sealed class DictionaryEncoder
 {
     /// <summary>Maximum number of dictionary entries before overflow.</summary>
-    private const int MaxEntries = 256;
+    private const int _MaxEntries = 256;
 
-    private readonly Dictionary<string, byte> _Index = new(MaxEntries);
-    private readonly List<string> _Entries = new(MaxEntries);
+    private readonly Dictionary<string, byte> _Index = new(_MaxEntries);
+    private readonly List<string> _Entries = new(_MaxEntries);
     private bool _Overflowed;
 
     /// <summary>
@@ -34,7 +34,7 @@ internal sealed class DictionaryEncoder
             return existing;
         }
 
-        if (_Entries.Count >= MaxEntries)
+        if (_Entries.Count >= _MaxEntries)
         {
             _Overflowed = true;
             return -1;

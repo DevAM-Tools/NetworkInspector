@@ -8,7 +8,7 @@ namespace NetworkInspector.Profiling.Scenarios;
 /// <para>
 /// <b>Hot path:</b> a single shared Eth/IPv4 prefix is reused as the base of
 /// many distinct UDP stacks (different destination ports).  Each iteration
-/// builds <see cref="StackCount"/> frames using the same cached layer values
+/// builds <see cref="_StackCount"/> frames using the same cached layer values
 /// — measures whether layer values can in fact be shared zero-copy across
 /// many <see cref="CreatedStack{TStack,TTrailer,TInterceptor}"/> instances
 /// without per-build allocation overhead.
@@ -17,8 +17,8 @@ namespace NetworkInspector.Profiling.Scenarios;
 [SuppressMessage("Performance", "CA1812:AvoidUninstantiatedInternalClasses", Justification = "Instantiated via reflection in ScenarioDiscovery.Discover.")]
 internal sealed class FrameBuilderValueReuseScenario : FrameBuilderScenarioBase
 {
-    private const int StackCount = 100;
-    private const int FramesPerStack = 10_000;
+    private const int _StackCount = 100;
+    private const int _FramesPerStack = 10_000;
 
     /// <inheritdoc/>
     protected override int PayloadSize => 32;
@@ -30,10 +30,11 @@ internal sealed class FrameBuilderValueReuseScenario : FrameBuilderScenarioBase
 
     /// <inheritdoc/>
     public override string Description =>
-        $"Build {StackCount:N0} × {FramesPerStack:N0} = {(long)StackCount * FramesPerStack:N0} frames reusing the same Eth/IPv4 layer values across distinct UDP stacks.";
+        FormattableString.Invariant(
+            $"Build {_StackCount:N0} × {_FramesPerStack:N0} = {(long)_StackCount * _FramesPerStack:N0} frames reusing the same Eth/IPv4 layer values across distinct UDP stacks.");
 
     /// <inheritdoc/>
-    public override long WorkUnitsPerIteration => (long)StackCount * FramesPerStack;
+    public override long WorkUnitsPerIteration => (long)_StackCount * _FramesPerStack;
 
     /// <inheritdoc/>
     public override string WorkUnitName => "frames";
@@ -55,7 +56,7 @@ internal sealed class FrameBuilderValueReuseScenario : FrameBuilderScenarioBase
     public override void Run()
     {
         Span<byte> dst = _Buffer;
-        for (int s = 0; s < StackCount; s++)
+        for (int s = 0; s < _StackCount; s++)
         {
             // New UDP layer per stack (different dst port) — shares Eth/IPv4 values.
             UdpLayer udp = new(srcPort: 12345, dstPort: (ushort)(10000 + s));
@@ -66,7 +67,7 @@ internal sealed class FrameBuilderValueReuseScenario : FrameBuilderScenarioBase
                 NoTrailer,
                 NoInterceptor> stack = FrameStack.Start(_Eth).Then(_Ip).Then(udp).CreateWithFixedValues();
 
-            for (int f = 0; f < FramesPerStack; f++)
+            for (int f = 0; f < _FramesPerStack; f++)
             {
                 stack.Build(_Payload).MoveNext(dst, out _);
             }

@@ -12,14 +12,14 @@ namespace NetworkInspector.Protocols.Tests.SignalPdu;
 internal sealed class SignalPduLinTests
 {
     /// <summary>LIN frame ID used for all tests (6-bit, 0–63).</summary>
-    private const byte BenchFrameId = 0x10;
+    private const byte _BenchFrameId = 0x10;
 
     /// <summary>
-    /// Compact 4-byte layout (2 × U16 LE) registered on <c>lin.id</c> at key <see cref="BenchFrameId"/>.
+    /// Compact 4-byte layout (2 × U16 LE) registered on <c>lin.id</c> at key <see cref="_BenchFrameId"/>.
     /// Reuses the shared signal definitions from <see cref="AutomotivePduBench"/> to keep
     /// scaling and expected raw values consistent across the test suite.
     /// </summary>
-    private static SignalPduLayout LinLayout =>
+    private static SignalPduLayout _LinLayout =>
         new()
         {
             PduId = 0x300,
@@ -30,7 +30,7 @@ internal sealed class SignalPduLinTests
                 new DispatchBinding
                 {
                     Table = LinProtocol.IdTableName,
-                    Key = BenchFrameId,
+                    Key = _BenchFrameId,
                 }),
             Mux = null,
             MuxGroups = [],
@@ -45,7 +45,7 @@ internal sealed class SignalPduLinTests
     [Test]
     public async Task Parses_StandardFrame_MatchesExpectedFields()
     {
-        SignalPduLayout layout = LinLayout;
+        SignalPduLayout layout = _LinLayout;
 
         SignalValueSet vals = SignalValueSet.For(layout)
             .Set("EngineRpm", 125.0)
@@ -58,7 +58,7 @@ internal sealed class SignalPduLinTests
         spdu.WriteHeader(signalBytes.AsSpan());
 
         byte[] frame = FrameStack
-            .Start(new LinLayer(BenchFrameId, signalBytes.AsSpan()))
+            .Start(new LinLayer(_BenchFrameId, signalBytes.AsSpan()))
             .CreateWithFixedValues()
             .EmitFrame(ReadOnlySpan<byte>.Empty);
 

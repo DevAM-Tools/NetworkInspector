@@ -23,7 +23,7 @@ namespace NetworkInspector.Profiling.Scenarios;
 internal sealed class ParseRandomFramesScenario : IProfilingScenario
 {
     /// <summary>Number of frames parsed per <see cref="Run"/> call.</summary>
-    private const int BatchSize = 10_000;
+    private const int _BatchSize = 10_000;
 
     private readonly bool _Materialize;
 
@@ -44,16 +44,28 @@ internal sealed class ParseRandomFramesScenario : IProfilingScenario
         _Materialize = materialize;
     }
 
-    /// <inheritdoc/>
-    public string Name => _Materialize ? "parse-random-frames-materialized" : "parse-random-frames";
+    public string Name
+    {
+        get
+        {
+            if (_Materialize)
+            {
+                return "parse-random-frames-materialized";
+            }
+
+            return "parse-random-frames";
+        }
+    }
 
     /// <inheritdoc/>
     public string Description => _Materialize
-        ? $"ParseFrame + MaterializeAll, {BatchSize:N0} IPv6/UDP frames per iteration."
-        : $"ParseFrame only (lazy field tree), {BatchSize:N0} IPv6/UDP frames per iteration.";
+        ? FormattableString.Invariant(
+            $"ParseFrame + MaterializeAll, {_BatchSize:N0} IPv6/UDP frames per iteration.")
+        : FormattableString.Invariant(
+            $"ParseFrame only (lazy field tree), {_BatchSize:N0} IPv6/UDP frames per iteration.");
 
     /// <inheritdoc/>
-    public long WorkUnitsPerIteration => BatchSize;
+    public long WorkUnitsPerIteration => _BatchSize;
 
     /// <inheritdoc/>
     public string WorkUnitName => "packets";
@@ -62,7 +74,7 @@ internal sealed class ParseRandomFramesScenario : IProfilingScenario
     public void Setup()
     {
         _Stack = StackHelper.CreateStack();
-        _Frames = FrameHelper.CreateSharedFrames(BatchSize, _Stack);
+        _Frames = FrameHelper.CreateSharedFrames(_BatchSize, _Stack);
         _PacketCounter = 0;
     }
 
@@ -75,7 +87,7 @@ internal sealed class ParseRandomFramesScenario : IProfilingScenario
 
         if (_Materialize)
         {
-            for (int i = 0; i < BatchSize; i++)
+            for (int i = 0; i < _BatchSize; i++)
             {
                 Packet packet = Packet.ParseFrame(checked((int)(counter + i)), stack, frames[i]);
                 packet.MaterializeAll();
@@ -83,14 +95,14 @@ internal sealed class ParseRandomFramesScenario : IProfilingScenario
         }
         else
         {
-            for (int i = 0; i < BatchSize; i++)
+            for (int i = 0; i < _BatchSize; i++)
             {
                 // Hot path: parse only — the field tree is built but not walked.
                 Packet.ParseFrame(checked((int)(counter + i)), stack, frames[i]);
             }
         }
 
-        _PacketCounter = counter + BatchSize;
+        _PacketCounter = counter + _BatchSize;
     }
 
     /// <inheritdoc/>

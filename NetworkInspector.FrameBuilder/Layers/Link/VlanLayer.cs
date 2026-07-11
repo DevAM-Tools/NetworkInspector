@@ -30,7 +30,7 @@ public readonly struct VlanLayer :
     IProvidesProtocolType, IProvidesNextProtocolValue<EtherTypeKind>, IConsumesNextProtocolValue<EtherTypeKind>
 {
     /// <summary>Byte offset of the inner EtherType field within the VLAN tag.</summary>
-    private const int InnerEtherTypeOffset = 2;
+    private const int _InnerEtherTypeOffset = 2;
 
     private readonly ushort _VlanId;
     private readonly byte _Pcp;
@@ -75,7 +75,15 @@ public readonly struct VlanLayer :
     public ushort ProtocolType
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _IsQinQ ? EtherTypes.QinQ : EtherTypes.VlanTagged;
+        get
+        {
+            if (_IsQinQ)
+            {
+                return EtherTypes.QinQ;
+            }
+
+            return EtherTypes.VlanTagged;
+        }
     }
 
     /// <inheritdoc />
@@ -92,8 +100,8 @@ public readonly struct VlanLayer :
 
     /// <inheritdoc />
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public void PatchNextProtocol(scoped Span<byte> frame, int myOffset, ushort next)
-        => BinaryPrimitives.WriteUInt16BigEndian(frame.Slice(myOffset + InnerEtherTypeOffset, 2), next);
+    public void PatchNextProtocol(scoped Span<byte> frame, int myOffset, ushort nextProtocol)
+        => BinaryPrimitives.WriteUInt16BigEndian(frame.Slice(myOffset + _InnerEtherTypeOffset, 2), nextProtocol);
 
     /// <inheritdoc />
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

@@ -17,7 +17,7 @@ namespace NetworkInspector.FrameBuilder.Tests.Negative;
 internal static class NegativeCompileHarness
 {
     /// <summary>Common preamble injected before every snippet.</summary>
-    private const string SnippetPreamble =
+    private const string _SnippetPreamble =
         "using System;\n" +
         "using NetworkInspector.FrameBuilder;\n" +
         "using NetworkInspector.FrameBuilder.Constants;\n" +
@@ -32,16 +32,16 @@ internal static class NegativeCompileHarness
         "    {\n";
 
     /// <summary>Common epilogue closing the wrapper class and method.</summary>
-    private const string SnippetEpilogue = "    }\n}\n";
+    private const string _SnippetEpilogue = "    }\n}\n";
 
     /// <summary>References used for every snippet compilation.</summary>
-    private static readonly MetadataReference[] _References = BuildReferences();
+    private static readonly MetadataReference[] _References = _BuildReferences();
 
     /// <summary>Loads the snippet resource and returns Roslyn diagnostics.</summary>
     internal static IReadOnlyList<Diagnostic> Compile(string snippetResourceName)
     {
-        string body = LoadSnippet(snippetResourceName);
-        string source = SnippetPreamble + body + SnippetEpilogue;
+        string body = _LoadSnippet(snippetResourceName);
+        string source = _SnippetPreamble + body + _SnippetEpilogue;
 
         SyntaxTree tree = CSharpSyntaxTree.ParseText(source);
         CSharpCompilationOptions options = new(
@@ -64,7 +64,7 @@ internal static class NegativeCompileHarness
     }
 
     /// <summary>Reads an embedded snippet resource by simple file name.</summary>
-    private static string LoadSnippet(string snippetResourceName)
+    private static string _LoadSnippet(string snippetResourceName)
     {
         Assembly asm = typeof(NegativeCompileHarness).Assembly;
         string fullName = asm.GetManifestResourceNames()
@@ -77,7 +77,7 @@ internal static class NegativeCompileHarness
     }
 
     /// <summary>Builds the metadata reference set: BCL + FrameBuilder + Values.</summary>
-    private static MetadataReference[] BuildReferences()
+    private static MetadataReference[] _BuildReferences()
     {
         // Pull in everything currently loaded in the test process; this gives
         // us all transitive BCL assemblies the snippet needs without having

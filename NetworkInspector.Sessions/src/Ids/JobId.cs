@@ -63,4 +63,12 @@ public readonly struct JobId(int value) : IEquatable<JobId>, IComparable<JobId>
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool operator >(JobId left, JobId right) => left._Value > right._Value;
+
+    /// <inheritdoc/>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static bool operator <=(JobId left, JobId right) => left._Value <= right._Value;
+
+    /// <inheritdoc/>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static bool operator >=(JobId left, JobId right) => left._Value >= right._Value;
 }

@@ -113,7 +113,7 @@ internal static class BlfObjectHeaderParser
         skipDistance = totalObjectSize;
 
         // Total data needed: block header + log object header
-        int fullHeaderSize = BlfConstants.BlockHeaderSize + GetLogObjectHeaderSize(blockHeader.HeaderType.Value);
+        int fullHeaderSize = BlfConstants.BlockHeaderSize + _GetLogObjectHeaderSize(blockHeader.HeaderType.Value);
         if (data.Length < fullHeaderSize || data.Length < totalObjectSize)
         {
             return false;
@@ -125,11 +125,11 @@ internal static class BlfObjectHeaderParser
         switch (blockHeader.HeaderType.Value)
         {
             case 1:
-                return TryParseWithV1(logHeaderData, objectType, headerSize, data, out info);
+                return _TryParseWithV1(logHeaderData, objectType, headerSize, data, out info);
             case 2:
-                return TryParseWithV2(logHeaderData, objectType, headerSize, data, out info);
+                return _TryParseWithV2(logHeaderData, objectType, headerSize, data, out info);
             case 3:
-                return TryParseWithV3(logHeaderData, objectType, headerSize, data, out info);
+                return _TryParseWithV3(logHeaderData, objectType, headerSize, data, out info);
             default:
                 // Unknown header type — skip this object
                 return false;
@@ -142,7 +142,7 @@ internal static class BlfObjectHeaderParser
 
     /// <summary>Returns the size of a log object header variant.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static int GetLogObjectHeaderSize(ushort headerType) => headerType switch
+    private static int _GetLogObjectHeaderSize(ushort headerType) => headerType switch
     {
         1 => BlfConstants.LogObjectHeaderType1Size,
         2 => BlfConstants.LogObjectHeaderType2Size,
@@ -151,7 +151,7 @@ internal static class BlfObjectHeaderParser
     };
 
     /// <summary>Parse with V1 log object header.</summary>
-    private static bool TryParseWithV1(
+    private static bool _TryParseWithV1(
         ReadOnlySpan<byte> logHeaderData,
         uint objectType,
         ushort headerSize,
@@ -182,7 +182,7 @@ internal static class BlfObjectHeaderParser
     }
 
     /// <summary>Parse with V2 log object header.</summary>
-    private static bool TryParseWithV2(
+    private static bool _TryParseWithV2(
         ReadOnlySpan<byte> logHeaderData,
         uint objectType,
         ushort headerSize,
@@ -212,7 +212,7 @@ internal static class BlfObjectHeaderParser
     }
 
     /// <summary>Parse with V3 log object header.</summary>
-    private static bool TryParseWithV3(
+    private static bool _TryParseWithV3(
         ReadOnlySpan<byte> logHeaderData,
         uint objectType,
         ushort headerSize,

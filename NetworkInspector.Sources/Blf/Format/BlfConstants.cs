@@ -197,7 +197,7 @@ internal static class BlfConstants
     /// <summary>Lookup: SocketCAN FD payload byte length (index 0..64) → 4‑bit DLC code for BLF CAN FD payloads.</summary>
     internal static ReadOnlySpan<byte> CanFdPayloadLengthToDlc => _CanFdPayloadLengthToDlc;
 
-    private static readonly byte[] _CanFdPayloadLengthToDlc = CreateCanFdPayloadLengthToDlcTable();
+    private static readonly byte[] _CanFdPayloadLengthToDlc = _CreateCanFdPayloadLengthToDlcTable();
 
     /// <summary>Returns the DLC code for a SocketCAN FD <paramref name="payloadByteCount"/> (0–64).</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -207,12 +207,12 @@ internal static class BlfConstants
         return _CanFdPayloadLengthToDlc[payloadByteCount];
     }
 
-    private static byte[] CreateCanFdPayloadLengthToDlcTable()
+    private static byte[] _CreateCanFdPayloadLengthToDlcTable()
     {
         byte[] table = new byte[65];
         for (int len = 0; len <= 64; len++)
         {
-            table[len] = PayloadLengthToCanFdDlcImpl((byte)len);
+            table[len] = _PayloadLengthToCanFdDlcImpl((byte)len);
         }
 
         return table;
@@ -221,7 +221,7 @@ internal static class BlfConstants
     /// <summary>
     /// Maps actual FD payload byte count (0–64) → DLC per CiA 1301 / Vector BLF (same logic as exporters).
     /// </summary>
-    private static byte PayloadLengthToCanFdDlcImpl(byte length)
+    private static byte _PayloadLengthToCanFdDlcImpl(byte length)
     {
         if (length <= 8)
         {
@@ -253,7 +253,11 @@ internal static class BlfConstants
             return 13;
         }
 
-        return length <= 48 ? (byte)14 : (byte)15;
+        if (length <= 48)
+        {
+            return 14;
+        }
+        return 15;
     }
 
     /// <summary>SocketCAN Extended Frame Format flag (bit 31).</summary>

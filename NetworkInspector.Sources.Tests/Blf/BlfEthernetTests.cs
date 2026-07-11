@@ -9,13 +9,13 @@ namespace NetworkInspector.Sources.Tests.Blf;
 internal sealed class BlfEthernetTests
 {
     /// <summary>Common source MAC for tests.</summary>
-    private static readonly byte[] SrcMac = [0x00, 0x11, 0x22, 0x33, 0x44, 0x55];
+    private static readonly byte[] _SrcMac = [0x00, 0x11, 0x22, 0x33, 0x44, 0x55];
 
     /// <summary>Common destination MAC (broadcast) for tests.</summary>
-    private static readonly byte[] DstMac = [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
+    private static readonly byte[] _DstMac = [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
 
     /// <summary>Creates a fully-scanned BlfSource from generated data.</summary>
-    private static BlfSource CreateSource(byte[] blfData) =>
+    private static BlfSource _CreateSource(byte[] blfData) =>
         BlfSource.FromData(blfData, "test.blf", new BlfSourceOptions { ScanMode = ScanMode.Full });
 
 
@@ -27,13 +27,13 @@ internal sealed class BlfEthernetTests
     [Test]
     public async Task SingleEthernetFrame_ParsedCorrectly()
     {
-        byte[] eth = FrameBuilders.BuildEthernetFrame(DstMac, SrcMac, 0x0800, [0xDE, 0xAD, 0xBE, 0xEF]);
+        byte[] eth = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0xDE, 0xAD, 0xBE, 0xEF]);
 
         byte[] blfData = new BlfTestGenerator()
             .AddEthernetFrame(1, eth, 1_000_000)
             .Build();
 
-        using BlfSource source = CreateSource(blfData);
+        using BlfSource source = _CreateSource(blfData);
         await Assert.That(source.EstimatedFrameCount).IsEqualTo(1);
 
         SourceTestFixture.InitializeAndStartSource(source);
@@ -62,12 +62,12 @@ internal sealed class BlfEthernetTests
         for (int i = 0; i < 10; i++)
         {
             byte[] payload = Enumerable.Range(0, 20).Select(j => (byte)((i + j) & 0xFF)).ToArray();
-            byte[] eth = FrameBuilders.BuildEthernetFrame(dstMac, SrcMac, 0x0800, payload);
+            byte[] eth = FrameBuilders.BuildEthernetFrame(dstMac, _SrcMac, 0x0800, payload);
             expected.Add(eth);
             gen.AddEthernetFrame(1, eth, (i + 1) * 1_000_000L);
         }
 
-        using BlfSource source = CreateSource(gen.Build());
+        using BlfSource source = _CreateSource(gen.Build());
         await Assert.That(source.EstimatedFrameCount).IsEqualTo(10);
 
         SourceTestFixture.InitializeAndStartSource(source);
@@ -90,7 +90,7 @@ internal sealed class BlfEthernetTests
     [Test]
     public async Task EthernetFrames_TimestampsStrictlyIncreasing()
     {
-        byte[] eth = FrameBuilders.BuildEthernetFrame(DstMac, SrcMac, 0x0800, [0x00]);
+        byte[] eth = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0x00]);
 
         long[] offsets = [1_000_000, 5_000_000, 10_000_000, 50_000_000, 100_000_000];
         BlfTestGenerator gen = new();
@@ -99,7 +99,7 @@ internal sealed class BlfEthernetTests
             gen.AddEthernetFrame(1, eth, offset);
         }
 
-        using BlfSource source = CreateSource(gen.Build());
+        using BlfSource source = _CreateSource(gen.Build());
         SourceTestFixture.InitializeAndStartSource(source);
 
         long prevTs = long.MinValue;
@@ -142,7 +142,7 @@ internal sealed class BlfEthernetTests
                 .AddEthernetFrame(1, eth, 1_000_000)
                 .Build();
 
-            using BlfSource source = CreateSource(blfData);
+            using BlfSource source = _CreateSource(blfData);
             SourceTestFixture.InitializeAndStartSource(source);
             Frame? frame = source.NextFrame();
 
@@ -159,13 +159,13 @@ internal sealed class BlfEthernetTests
     public async Task EthernetVlanTagged_ParsedWithVlanHeader()
     {
         byte[] vlanFrame = FrameBuilders.BuildVlanEthernetFrame(
-            DstMac, SrcMac, 100, 0x0800, [0xDE, 0xAD, 0xBE, 0xEF]);
+            _DstMac, _SrcMac, 100, 0x0800, [0xDE, 0xAD, 0xBE, 0xEF]);
 
         byte[] blfData = new BlfTestGenerator()
             .AddEthernetFrame(1, vlanFrame, 1_000_000)
             .Build();
 
-        using BlfSource source = CreateSource(blfData);
+        using BlfSource source = _CreateSource(blfData);
         SourceTestFixture.InitializeAndStartSource(source);
         Frame? frame = source.NextFrame();
 
@@ -186,7 +186,7 @@ internal sealed class BlfEthernetTests
     [Test]
     public async Task BlfSource_UiNameMatchesProvided()
     {
-        byte[] eth = FrameBuilders.BuildEthernetFrame(DstMac, SrcMac, 0x0800, [0x00]);
+        byte[] eth = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0x00]);
         byte[] blfData = new BlfTestGenerator().AddEthernetFrame(1, eth, 1_000_000).Build();
 
         using BlfSource source = BlfSource.FromData(blfData, "my_trace.blf");

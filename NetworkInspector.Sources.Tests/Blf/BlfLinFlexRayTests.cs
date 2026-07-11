@@ -12,7 +12,7 @@ internal sealed class BlfLinFlexRayTests
 
 
     /// <summary>Creates a BlfStreamSource from raw bytes.</summary>
-    private static BlfStreamSource CreateSource(byte[] data) =>
+    private static BlfStreamSource _CreateSource(byte[] data) =>
         BlfStreamSource.FromStream(new MemoryStream(data), "test.blf");
 
     // ========================================================================
@@ -28,7 +28,7 @@ internal sealed class BlfLinFlexRayTests
             .AddLinFrame(1, 0x3A, linData, 1_000_000)
             .Build();
 
-        using BlfStreamSource source = CreateSource(blfData);
+        using BlfStreamSource source = _CreateSource(blfData);
         SourceTestFixture.InitializeAndStartSource(source);
         Frame? frame = source.NextFrame();
 
@@ -51,7 +51,7 @@ internal sealed class BlfLinFlexRayTests
             .AddLinFrame(1, 0x30, [0xFF], 3_000_000)
             .Build();
 
-        using BlfStreamSource source = CreateSource(blfData);
+        using BlfStreamSource source = _CreateSource(blfData);
         SourceTestFixture.InitializeAndStartSource(source);
 
         int count = 0;
@@ -77,7 +77,7 @@ internal sealed class BlfLinFlexRayTests
             .AddLinMessage2(1, 0x15, linData, 0xAB, 1_000_000)
             .Build();
 
-        using BlfStreamSource source = CreateSource(blfData);
+        using BlfStreamSource source = _CreateSource(blfData);
         SourceTestFixture.InitializeAndStartSource(source);
         Frame? frame = source.NextFrame();
 
@@ -98,7 +98,7 @@ internal sealed class BlfLinFlexRayTests
             .AddLinMessage2(2, 0x3F, linData, 0xCC, 1_000_000)
             .Build();
 
-        using BlfStreamSource source = CreateSource(blfData);
+        using BlfStreamSource source = _CreateSource(blfData);
         SourceTestFixture.InitializeAndStartSource(source);
         Frame? frame = source.NextFrame();
 
@@ -121,7 +121,7 @@ internal sealed class BlfLinFlexRayTests
             .AddFlexRayFrame(1, 42, 7, 0x1234, frData, 1_000_000)
             .Build();
 
-        using BlfStreamSource source = CreateSource(blfData);
+        using BlfStreamSource source = _CreateSource(blfData);
         SourceTestFixture.InitializeAndStartSource(source);
         Frame? frame = source.NextFrame();
 
@@ -134,6 +134,62 @@ internal sealed class BlfLinFlexRayTests
         await Assert.That(source.HasErrors).IsFalse();
     }
 
+    /// <summary>
+    /// BLF FlexRay objects must be converted to LINKTYPE_FLEXRAY wire format so the
+    /// protocol stack can decode slot, channel, and cycle fields.
+    /// </summary>
+    [Test]
+    public async Task FlexRay_BlfFrame_ParsesThroughProtocolStack()
+    {
+        byte[] frData = [0x11, 0x22, 0x33, 0x44];
+
+        byte[] blfData = new BlfTestGenerator()
+            .AddFlexRayFrame(1, frameId: 42, cycle: 7, headerCrc: 0x1234, frData, 1_000_000)
+            .Build();
+
+        using BlfStreamSource source = _CreateSource(blfData);
+        SourceTestFixture.InitializeAndStartSource(source);
+        Frame? rawFrame = source.NextFrame();
+        await Assert.That(rawFrame).IsNotNull();
+
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        ProtocolRegistration.RegisterStandardProtocols(builder);
+        Stack stack = builder.Build();
+        using (stack)
+        {
+            Frame frame = Frame.Create(
+                new FrameId(0),
+                rawFrame.Value.Timestamp,
+                rawFrame.Value.Data,
+                LinkType.Flexray,
+                FrameInterfaceId.Invalid,
+                stack.FrameInterfaceRegistry).Value;
+
+            Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame);
+
+            FieldId? frameIdField = stack.GetFieldId("flexray.frame_id");
+            FieldId? cycleField = stack.GetFieldId("flexray.cycle");
+            FieldId? channelField = stack.GetFieldId("flexray.channel");
+
+            await Assert.That(frameIdField).IsNotNull();
+            await Assert.That(cycleField).IsNotNull();
+            await Assert.That(channelField).IsNotNull();
+
+            packet.TryGetFieldValue(frameIdField!.Value, out FieldValue frameIdValue);
+            frameIdValue.Data.TryGetAsU64(out ulong frameId);
+            await Assert.That(frameId).IsEqualTo(42UL);
+
+            packet.TryGetFieldValue(cycleField!.Value, out FieldValue cycleValue);
+            cycleValue.Data.TryGetAsU64(out ulong cycle);
+            await Assert.That(cycle).IsEqualTo(7UL);
+
+            packet.TryGetFieldValue(channelField!.Value, out FieldValue channelValue);
+            channelValue.Data.TryGetAsString(out string? channel);
+            await Assert.That(channel).IsEqualTo("Channel A");
+        }
+    }
+
     [Test]
     public async Task FlexRay_MultipleFrames_AllParsed()
     {
@@ -143,7 +199,7 @@ internal sealed class BlfLinFlexRayTests
             .AddFlexRayFrame(1, 30, 2, 0xCCCC, [0x06], 3_000_000)
             .Build();
 
-        using BlfStreamSource source = CreateSource(blfData);
+        using BlfStreamSource source = _CreateSource(blfData);
         SourceTestFixture.InitializeAndStartSource(source);
 
         int count = 0;
@@ -175,7 +231,7 @@ internal sealed class BlfLinFlexRayTests
             .AddLinMessage2(2, 0x20, [0x05, 0x06], 0xDD, 4_000_000)
             .Build();
 
-        using BlfStreamSource source = CreateSource(blfData);
+        using BlfStreamSource source = _CreateSource(blfData);
         SourceTestFixture.InitializeAndStartSource(source);
 
         // First frame — Ethernet
@@ -213,7 +269,7 @@ internal sealed class BlfLinFlexRayTests
             .AddLinFrame(1, 0x00, [], 1_000_000)
             .Build();
 
-        using BlfStreamSource source = CreateSource(blfData);
+        using BlfStreamSource source = _CreateSource(blfData);
         SourceTestFixture.InitializeAndStartSource(source);
         Frame? frame = source.NextFrame();
 
@@ -233,7 +289,7 @@ internal sealed class BlfLinFlexRayTests
             .AddFlexRayFrame(1, 99, 0, 0x0000, [], 1_000_000)
             .Build();
 
-        using BlfStreamSource source = CreateSource(blfData);
+        using BlfStreamSource source = _CreateSource(blfData);
         SourceTestFixture.InitializeAndStartSource(source);
         Frame? frame = source.NextFrame();
 
@@ -260,7 +316,7 @@ internal sealed class BlfLinFlexRayTests
             .AddEthernetFrame(1, ethFrame, 1_000_000)
             .Build();
 
-        using BlfStreamSource source = CreateSource(blfData);
+        using BlfStreamSource source = _CreateSource(blfData);
         FrameInterfaceRegistry registry = new();
         FrameSourceId sourceId = registry.RegisterSource(source);
         source.Start(sourceId, registry);

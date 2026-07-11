@@ -93,7 +93,7 @@ internal sealed class InterceptorTests
 
         // Build with explicit NoInterceptor
         byte[] actual = new byte[expected.Length];
-        FB.FrameStack.Start(eth).Then(ip).Then(tcp).CreateWithFixedValues(new NoInterceptor()).Build(_Payload).MoveNext(actual, out _);
+        FB.FrameStack.Start(eth).Then(ip).Then(tcp).CreateWithFixedValues<FB.NoInterceptor>(new()).Build(_Payload).MoveNext(actual, out _);
 
         await Assert.That(actual.SequenceEqual(expected)).IsTrue();
     }
@@ -129,7 +129,7 @@ internal sealed class InterceptorTests
         TcpLayer tcp = new(1234, 80, flags: TcpFlags.PshAck);
 
         byte[] buf = new byte[eth.HeaderSize + ip.HeaderSize + tcp.HeaderSize + _Payload.Length];
-        FB.FrameStack.Start(eth).Then(ip).Then(tcp).CreateWithFixedValues(new CorruptTcpChecksumInterceptor()).Build(_Payload).MoveNext(buf, out int total);
+        FB.FrameStack.Start(eth).Then(ip).Then(tcp).CreateWithFixedValues<CorruptTcpChecksumInterceptor>(new()).Build(_Payload).MoveNext(buf, out int total);
 
         // Verify the TCP checksum is now invalid
         int ipOffset = EthernetHeader.Size;

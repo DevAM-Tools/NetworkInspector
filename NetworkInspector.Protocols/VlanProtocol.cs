@@ -15,7 +15,7 @@ namespace NetworkInspector.Protocols;
 /// </summary>
 /// <remarks>
 /// <para><b>Thread safety:</b> instances are immutable after registration completes.
-/// All mutable state is initialised inside <c>RegisterFieldsCustom</c> / <c>OnStartCustom</c>
+/// All mutable state is initialised inside <c>RegisterFieldsCustom</c> / <c>_OnStartCustom</c>
 /// (single-threaded build phase) and is read-only thereafter, so <see cref="Parse"/> may
 /// be invoked concurrently from any number of threads on the same instance without external
 /// synchronisation. Per-thread caches (when present) are stored in <c>[ThreadStatic]</c> fields.</para>
@@ -26,7 +26,7 @@ namespace NetworkInspector.Protocols;
 public sealed partial class VlanProtocol : IProtocol
 {
     /// <summary>VLAN tag header size in bytes.</summary>
-    private const int HeaderSize = 4;
+    private const int _HeaderSize = 4;
 
     #region Table Key Constants
 
@@ -41,26 +41,26 @@ public sealed partial class VlanProtocol : IProtocol
     #region Index Group Constants
 
     /// <summary>Index group for always-present VLAN fields.</summary>
-    private const string VlanIndexGroup = "vlan";
+    private const string _VlanIndexGroup = "vlan";
 
     #endregion
 
     #region Fields
 
     // BytesField container carries header byte range for UI highlighting
-    [BytesField("vlan", "VLAN", IndexGroup = VlanIndexGroup)]
+    [BytesField("vlan", "VLAN", IndexGroup = _VlanIndexGroup)]
     private FieldId _ProtocolFieldId;
 
-    [U64Field("vlan.priority", "Priority", IndexGroup = VlanIndexGroup)]
+    [U64Field("vlan.priority", "Priority", IndexGroup = _VlanIndexGroup)]
     private FieldId _PriorityFieldId;
 
-    [BoolField("vlan.dei", "DEI", IndexGroup = VlanIndexGroup)]
+    [BoolField("vlan.dei", "DEI", IndexGroup = _VlanIndexGroup)]
     private FieldId _DeiFieldId;
 
-    [U64Field("vlan.id", "ID", IndexGroup = VlanIndexGroup)]
+    [U64Field("vlan.id", "ID", IndexGroup = _VlanIndexGroup)]
     private FieldId _IdFieldId;
 
-    [U64Field("vlan.etype", "Type", IndexGroup = VlanIndexGroup)]
+    [U64Field("vlan.etype", "Type", IndexGroup = _VlanIndexGroup)]
     private FieldId _EtherTypeFieldId;
 
     // Dispatch using the Ethernet protocol's EtherType table (resolved at registration time)
@@ -69,7 +69,7 @@ public sealed partial class VlanProtocol : IProtocol
 
     #endregion
 
-    #region Pre-allocated populator (created once in OnStartCustom, shared across all packets)
+    #region Pre-allocated populator (created once in _OnStartCustom, shared across all packets)
 
     /// <summary>Pre-allocated delegate for VLAN field population — captures only 'this'.</summary>
     private LazyPopulator _Populator = null!;
@@ -83,9 +83,9 @@ public sealed partial class VlanProtocol : IProtocol
     /// Pre-allocates the lazy-field populator delegate and builds the EtherType dispatch cache.
     /// Neither allocation occurs per packet — both are one-time costs at stack start.
     /// </summary>
-    partial void OnStartCustom(Stack stack)
+    partial void _OnStartCustom(Stack stack)
     {
-        _Populator = PopulateVlanFields;
+        _Populator = _PopulateVlanFields;
         _EtherTypeSparseCache = stack.BuildU64SparseDelegateCache(_EtherTypeTableId);
     }
 
@@ -93,7 +93,7 @@ public sealed partial class VlanProtocol : IProtocol
     /// Populates VLAN child fields at materialisation time.
     /// Re-parses the 4-byte header from the stored bytes to avoid per-packet closures.
     /// </summary>
-    private ParseResult PopulateVlanFields(in MutField container)
+    private ParseResult _PopulateVlanFields(in MutField container)
     {
         if (!container.Value.Data.TryGetAsBytes(out ReadOnlyMemory<byte> headerBytes))
         {
@@ -101,7 +101,7 @@ public sealed partial class VlanProtocol : IProtocol
         }
         if (!VlanHeader.TryParse(headerBytes.Span, out VlanHeader header, out _))
         {
-            return ParseError.InsufficientDataWithInfo(ProtocolName, VlanHeader.HeaderSize, (ulong)headerBytes.Length);
+            return ParseError.InsufficientDataWithInfo(ProtocolName, VlanHeader._HeaderSize, (ulong)headerBytes.Length);
         }
 
         byte pcp = header.Priority;
@@ -131,9 +131,9 @@ public sealed partial class VlanProtocol : IProtocol
     /// <returns>Number of bytes consumed, or a <see cref="ParseError"/> describing the failure.</returns>
     public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
     {
-        if (data.Length < HeaderSize)
+        if (data.Length < _HeaderSize)
         {
-            return ParseError.InsufficientDataWithInfo(ProtocolName, HeaderSize, (ulong)data.Length);
+            return ParseError.InsufficientDataWithInfo(ProtocolName, _HeaderSize, (ulong)data.Length);
         }
 
         // Record presence in index (no-op when no index attached)
@@ -145,7 +145,7 @@ public sealed partial class VlanProtocol : IProtocol
         // Parse header using BinaryParsable-generated parser
         if (!VlanHeader.TryParse(span, out VlanHeader header, out _))
         {
-            return ParseError.InsufficientDataWithInfo(ProtocolName, VlanHeader.HeaderSize, (ulong)data.Length);
+            return ParseError.InsufficientDataWithInfo(ProtocolName, VlanHeader._HeaderSize, (ulong)data.Length);
         }
 
         byte pcp = header.Priority;
@@ -157,17 +157,17 @@ public sealed partial class VlanProtocol : IProtocol
         LazyString summary = ZA.Lazy(
             "802.1Q Virtual LAN, PRI: ", pcp, ", DEI: ", (dei ? 1 : 0), ", ID: ", vid);
 
-        // Store the 4-byte header so PopulateVlanFields can re-parse without captured variables.
-        ReadOnlyMemory<byte> headerBytes = data[..HeaderSize];
+        // Store the 4-byte header so _PopulateVlanFields can re-parse without captured variables.
+        ReadOnlyMemory<byte> headerBytes = data[.._HeaderSize];
         FieldValue headerValue = FieldValue.NewBytes(headerBytes)
             .WithCustomRepresentation(new LazyString("4 bytes"));
         parentField.AppendLazyWithCustomText(_ProtocolFieldId, headerValue, summary, _Populator);
 
         // Dispatch to next protocol on parentField (sibling dispatch)
-        ReadOnlyMemory<byte> payload = data[HeaderSize..];
+        ReadOnlyMemory<byte> payload = data[_HeaderSize..];
         if (_EtherTypeTableId.IsValid)
         {
-            ParseResult dispatchResult = DispatchEtherType(in parentField, etherType, payload, in context);
+            ParseResult dispatchResult = _DispatchEtherType(in parentField, etherType, payload, in context);
             if (dispatchResult.IsError)
             {
                 return dispatchResult;
@@ -182,7 +182,7 @@ public sealed partial class VlanProtocol : IProtocol
     /// Scans the pre-built sparse cache first (typically 4–6 entries, all in L1 D-cache);
     /// falls back to full table dispatch for multi-protocol keys or unknown EtherTypes.
     /// </summary>
-    private ParseResult DispatchEtherType(
+    private ParseResult _DispatchEtherType(
         in MutField parentField, ulong etherType, ReadOnlyMemory<byte> payload, in ParseContext context)
     {
         // Direct delegate call — no ProtocolId resolution, no vtable dispatch.
@@ -240,6 +240,6 @@ internal readonly partial struct VlanHeader
     }
 
     /// <summary>Serialized header size in bytes (4).</summary>
-    internal const int HeaderSize = 4;
+    internal const int _HeaderSize = 4;
     #endregion
 }

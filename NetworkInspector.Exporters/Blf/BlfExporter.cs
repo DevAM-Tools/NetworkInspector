@@ -20,7 +20,7 @@ namespace NetworkInspector.Exporters.Blf;
 public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDisposable
 {
     /// <summary>SocketCAN FD flag: FDF (FD Format indicator) at byte offset 5.</summary>
-    private const byte SocketCanFdFlagFdf = 0x04;
+    private const byte _SocketCanFdFlagFdf = 0x04;
 
     private readonly CancellationToken _CancellationToken;
     private readonly CompressionLevel _Compression;
@@ -105,9 +105,6 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
         || (_TargetFrameCount > 0 && FrameCount >= _TargetFrameCount);
 
     /// <inheritdoc/>
-    bool IExporterStatistics.IsFinished => IsFinished;
-
-    /// <inheritdoc/>
     public ErrorToleranceMode ErrorTolerance { get; set; } = ErrorToleranceMode.Tolerant;
 
     /// <inheritdoc/>
@@ -128,7 +125,7 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
 
         long tsNanos = frame.Timestamp.AsNanos;
         // Only _MinTimestampNs is updated here; _MaxTimestampNs is updated inside
-        // HandleFrame after a successful write so that the BLF end_date only
+        // _HandleFrame after a successful write so that the BLF end_date only
         // reflects frames that were actually exported (not frames rejected by
         // the target-count gate).
         _MinTimestampNs = _MinTimestampNs == long.MaxValue
@@ -141,7 +138,7 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
         {
             _FirstTimestampNs = _MinTimestampNs;
             _LastTimestampNs = tsNanos;
-            if (!Start())
+            if (!_Start())
             {
                 return false;
             }
@@ -152,7 +149,7 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
             _Writer?.TryRealignStartEarlier(_MinTimestampNs);
         }
 
-        return HandleFrame(frame);
+        return _HandleFrame(frame);
     }
 
     /// <inheritdoc/>
@@ -183,7 +180,7 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
                 _LastTimestampNs = 0;
                 _MinTimestampNs = 0;
                 _MaxTimestampNs = 0;
-                Start();
+                _Start();
             }
 
             if (_Writer is not null)
@@ -265,7 +262,7 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
 
     /// <summary>Lazily initializes output and writes the file header.</summary>
     /// <returns>True if initialization succeeded.</returns>
-    private bool Start()
+    private bool _Start()
     {
         if (_Output is null)
         {
@@ -309,7 +306,7 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
     /// builds the payload, and writes the object. Looks up the channel from the
     /// frame's interface info to preserve channel assignment during round-trip export.
     /// </summary>
-    private bool HandleFrame(Frame frame)
+    private bool _HandleFrame(Frame frame)
     {
         if (_TargetFrameCount > 0 && FrameCount >= _TargetFrameCount)
         {
@@ -337,7 +334,7 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
             }
             catch (Exception ex) when (ex is OverflowException or FormatException or InvalidCastException)
             {
-                return HandleSkip(new ExportErrorEventArgs
+                return _HandleSkip(new ExportErrorEventArgs
                 {
                     ItemIndex = currentIndex,
                     Kind = ExportErrorKind.SerializationError,
@@ -360,7 +357,7 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
 
             case LinkType.CanSocketcan:
                 // Check FD flag at byte offset 5 to distinguish CAN classic vs CAN FD
-                if (data.Length > 5 && (data[5] & SocketCanFdFlagFdf) != 0)
+                if (data.Length > 5 && (data[5] & _SocketCanFdFlagFdf) != 0)
                 {
                     objectType = BlfConstants.ObjTypeCanFdMessage;
                     payloadBuilt = BlfObjectPayloads.TryBuildCanFdMessagePayload(
@@ -394,7 +391,7 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
 
             default:
                 // Unsupported link type — skip with error reporting
-                return HandleSkip(new ExportErrorEventArgs
+                return _HandleSkip(new ExportErrorEventArgs
                 {
                     ItemIndex = currentIndex,
                     Kind = ExportErrorKind.UnsupportedType,
@@ -405,7 +402,7 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
         if (!payloadBuilt)
         {
             // Frame too short or malformed — skip with error reporting
-            return HandleSkip(new ExportErrorEventArgs
+            return _HandleSkip(new ExportErrorEventArgs
             {
                 ItemIndex = currentIndex,
                 Kind = ExportErrorKind.MalformedData,
@@ -413,7 +410,7 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
             });
         }
 
-        // _Writer is guaranteed non-null after Start() succeeds.
+        // _Writer is guaranteed non-null after _Start() succeeds.
         // Wrap the actual write so I/O exceptions degrade gracefully to a
         // skipped frame in Tolerant mode rather than tearing down the pipeline.
         try
@@ -440,7 +437,7 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
         }
         catch (Exception ex)
         {
-            return HandleSkip(new ExportErrorEventArgs
+            return _HandleSkip(new ExportErrorEventArgs
             {
                 ItemIndex = currentIndex,
                 Kind = ExportErrorKind.IoError,
@@ -462,7 +459,7 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
     /// Handles a skipped frame: increments counters, fires the event in Tolerant mode,
     /// and returns false to abort in Strict mode.
     /// </summary>
-    private bool HandleSkip(ExportErrorEventArgs error)
+    private bool _HandleSkip(ExportErrorEventArgs error)
     {
         SkippedCount++;
         ErrorCount++;
@@ -481,7 +478,7 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
     /// <summary>
     /// Maps <see cref="BlfCompressionLevel"/> to <see cref="CompressionLevel"/>.
     /// </summary>
-    private static CompressionLevel MapCompression(BlfCompressionLevel level) => level switch
+    private static CompressionLevel _MapCompression(BlfCompressionLevel level) => level switch
     {
         BlfCompressionLevel.None => CompressionLevel.NoCompression,
         BlfCompressionLevel.Fast => CompressionLevel.Fastest,
@@ -581,7 +578,7 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
                 _Output,
                 _UiName,
                 _Description,
-                MapCompression(_Compression),
+                _MapCompression(_Compression),
                 _TargetFrameCount,
                 _CancellationToken);
         }

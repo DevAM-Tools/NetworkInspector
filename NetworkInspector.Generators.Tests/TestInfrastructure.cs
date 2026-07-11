@@ -251,9 +251,9 @@ internal static class TestInfrastructure
         """;
 
     // References built once per test run from the trusted platform assembly list.
-    private static readonly MetadataReference[] DefaultReferences = BuildDefaultReferences();
+    private static readonly MetadataReference[] _DefaultReferences = _BuildDefaultReferences();
 
-    private static MetadataReference[] BuildDefaultReferences()
+    private static MetadataReference[] _BuildDefaultReferences()
     {
         string? platformAssemblies = AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") as string;
         if (string.IsNullOrEmpty(platformAssemblies))
@@ -286,7 +286,7 @@ internal static class TestInfrastructure
         return CSharpCompilation.Create(
             "TestAssembly",
             trees,
-            DefaultReferences,
+            _DefaultReferences,
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
     }
 
@@ -313,7 +313,7 @@ internal static class TestInfrastructure
         CSharpCompilation compilation = CSharpCompilation.Create(
             "TestAssembly",
             trees,
-            DefaultReferences,
+            _DefaultReferences,
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
 
         ProtocolGenerator generator = new();

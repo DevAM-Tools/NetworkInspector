@@ -1,15 +1,5 @@
 ﻿<!-- Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root. -->
 <Project Sdk="Microsoft.NET.Sdk">
-
-  <PropertyGroup>
-    <OutputType>Exe</OutputType>
-    <RootNamespace>NetworkInspector.Exporters.Tests</RootNamespace>
-  </PropertyGroup>
-
-  <ItemGroup>
-    <PackageReference Include="TUnit" />
-  </ItemGroup>
-
   <ItemGroup>
     <ProjectReference Include="..\NetworkInspector.Exporters\NetworkInspector.Exporters.csproj" />
     <ProjectReference Include="..\NetworkInspector.Core\NetworkInspector.Core.csproj" />
@@ -17,5 +7,4 @@
     <ProjectReference Include="..\NetworkInspector.Sources\NetworkInspector.Sources.csproj" />
     <ProjectReference Include="..\NetworkInspector.Testing.Tshark\NetworkInspector.Testing.Tshark.csproj" />
   </ItemGroup>
-
 </Project>

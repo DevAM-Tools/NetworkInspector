@@ -55,7 +55,7 @@ public readonly struct IcmpV4DestUnreachLayer : IStatelessLayer, IPseudoHeaderIn
     /// Default <c>0</c> for all other codes.
     /// </param>
     /// <param name="checksum">
-    /// Checksum field; <see cref="Auto{T}.Compute"/> (default) means auto-compute.
+    /// Checksum field; <see cref="Auto.Compute"/> (default) means auto-compute.
     /// </param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public IcmpV4DestUnreachLayer(byte code = CodePortUnreachable, ushort nextHopMtu = 0, Auto<ushort> checksum = default)

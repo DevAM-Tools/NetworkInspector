@@ -5,8 +5,7 @@ namespace NetworkInspector.Sources.Tests.Asc;
 /// <summary>
 /// Unit tests for <see cref="AscFlexRayParser.TryParse"/> covering FlexRay V9 message parsing,
 /// channel/frame ID/cycle/header CRC extraction, and edge cases.
-/// Verifies the DLT_FLEXRAY binary layout:
-///   [channel(1) | type_flags(1) | frame_id(2BE) | cycle(1) | header_crc(2BE) | data(...)].
+/// Verifies the LINKTYPE_FLEXRAY binary layout (measurement header + ISO 17458-2 header + data).
 /// <para>This type is not thread-safe.</para>
 /// </summary>
 internal sealed class AscFlexRayParserTests
@@ -26,27 +25,17 @@ internal sealed class AscFlexRayParserTests
         await Assert.That(ts).IsEqualTo(0.8).Within(0.0001);
         await Assert.That(ch).IsEqualTo(1);
 
-        // DLT_FLEXRAY header (7 bytes) + data
-        await Assert.That(frame.Length).IsGreaterThanOrEqualTo(7);
-
-        // Byte 0: channel
-        await Assert.That(frame[0]).IsEqualTo((byte)1);
-
-        // Bytes 2-3: frame ID (big-endian) — 0x0A = 10
-        ushort frameId = BinaryPrimitives.ReadUInt16BigEndian(frame.AsSpan(2));
-        await Assert.That(frameId).IsEqualTo((ushort)0x0A);
-
-        // Byte 4: cycle count
-        await Assert.That(frame[4]).IsEqualTo((byte)0);
-
-        // Bytes 5-6: header CRC (big-endian) — 0x1234
-        ushort headerCrc = BinaryPrimitives.ReadUInt16BigEndian(frame.AsSpan(5));
-        await Assert.That(headerCrc).IsEqualTo((ushort)0x1234);
-
-        // Payload: 8 bytes starting at offset 7
-        await Assert.That(frame.Length).IsEqualTo(15);
-        await Assert.That(frame[7]).IsEqualTo((byte)0x01);
-        await Assert.That(frame[14]).IsEqualTo((byte)0x08);
+        await Assert.That(frame.Length).IsGreaterThanOrEqualTo(FlexRayLinkTypeFrame.MinHeaderSize);
+        bool parsed = FlexRayLinkTypeFrame.TryParseDataFrame(frame, out FlexRayLinkTypeFrame.Fields fields, out ReadOnlySpan<byte> payloadSpan);
+        byte[] payload = payloadSpan.ToArray();
+        await Assert.That(parsed).IsTrue();
+        await Assert.That(fields.ChannelB).IsFalse();
+        await Assert.That(fields.FrameId).IsEqualTo((ushort)0x0A);
+        await Assert.That(fields.Cycle).IsEqualTo((byte)0);
+        await Assert.That(fields.HeaderCrc).IsEqualTo((ushort)(0x1234 & 0x7FF));
+        await Assert.That(payload.Length).IsEqualTo(8);
+        await Assert.That(payload[0]).IsEqualTo((byte)0x01);
+        await Assert.That(payload[7]).IsEqualTo((byte)0x08);
     }
 
     // ========================================================================
@@ -62,15 +51,13 @@ internal sealed class AscFlexRayParserTests
 
         await Assert.That(ok).IsTrue();
         await Assert.That(ch).IsEqualTo(2);
-        await Assert.That(frame[0]).IsEqualTo((byte)2);
 
-        ushort frameId = BinaryPrimitives.ReadUInt16BigEndian(frame.AsSpan(2));
-        await Assert.That(frameId).IsEqualTo((ushort)0x10);
-
-        await Assert.That(frame[4]).IsEqualTo((byte)5);
-
-        ushort headerCrc = BinaryPrimitives.ReadUInt16BigEndian(frame.AsSpan(5));
-        await Assert.That(headerCrc).IsEqualTo((ushort)0xABCD);
+        bool parsed = FlexRayLinkTypeFrame.TryParseDataFrame(frame, out FlexRayLinkTypeFrame.Fields fields, out _);
+        await Assert.That(parsed).IsTrue();
+        await Assert.That(fields.ChannelB).IsTrue();
+        await Assert.That(fields.FrameId).IsEqualTo((ushort)0x10);
+        await Assert.That(fields.Cycle).IsEqualTo((byte)5);
+        await Assert.That(fields.HeaderCrc).IsEqualTo((ushort)(0xABCD & 0x7FF));
     }
 
     // ========================================================================
@@ -87,11 +74,10 @@ internal sealed class AscFlexRayParserTests
 
         await Assert.That(ok).IsTrue();
 
-        ushort frameId = BinaryPrimitives.ReadUInt16BigEndian(frame.AsSpan(2));
-        await Assert.That(frameId).IsEqualTo((ushort)10);
-
-        ushort headerCrc = BinaryPrimitives.ReadUInt16BigEndian(frame.AsSpan(5));
-        await Assert.That(headerCrc).IsEqualTo((ushort)100);
+        bool parsed = FlexRayLinkTypeFrame.TryParseDataFrame(frame, out FlexRayLinkTypeFrame.Fields fields, out _);
+        await Assert.That(parsed).IsTrue();
+        await Assert.That(fields.FrameId).IsEqualTo((ushort)10);
+        await Assert.That(fields.HeaderCrc).IsEqualTo((ushort)100);
     }
 
     // ========================================================================
@@ -106,8 +92,7 @@ internal sealed class AscFlexRayParserTests
             16, out _, out _, out byte[] frame);
 
         await Assert.That(ok).IsTrue();
-        // 7-byte header, no payload
-        await Assert.That(frame.Length).IsEqualTo(7);
+        await Assert.That(frame.Length).IsEqualTo(FlexRayLinkTypeFrame.MinHeaderSize);
     }
 
     [Test]
@@ -118,8 +103,7 @@ internal sealed class AscFlexRayParserTests
             16, out _, out _, out byte[] frame);
 
         await Assert.That(ok).IsTrue();
-        // 7 header + 32 data = 39 also check data count from the ASC payload word count
-        await Assert.That(frame.Length - 7).IsGreaterThanOrEqualTo(32);
+        await Assert.That(frame.Length - FlexRayLinkTypeFrame.MinHeaderSize).IsGreaterThanOrEqualTo(32);
     }
 
     // ========================================================================
@@ -156,8 +140,6 @@ internal sealed class AscFlexRayParserTests
     [Test]
     public async Task PayloadLenWordsZero_DataLen255_ByteVariant_ClampedTo254()
     {
-        // Build an ASC line where payloadLenWords=0 and dataLen=255 (decimal,
-        // just one byte over the FlexRay maximum of 254). Provide 255 hex pairs as data.
         System.Text.StringBuilder sb = new("1.000000 Fr 1 V9 01 0 0 0 0000 x 255 ");
         for (int i = 0; i < 255; i++)
         {
@@ -168,8 +150,7 @@ internal sealed class AscFlexRayParserTests
         bool ok = AscFlexRayParser.TryParse(lineBytes, 16, out _, out _, out byte[] frame);
 
         await Assert.That(ok).IsTrue();
-        // Data must be clamped to 254 bytes (FlexRay spec max); 7-byte DLT header included.
-        await Assert.That(frame.Length).IsEqualTo(7 + 254);
+        await Assert.That(frame.Length).IsEqualTo(FlexRayLinkTypeFrame.MinHeaderSize + 254);
     }
 
     /// <summary>
@@ -191,6 +172,6 @@ internal sealed class AscFlexRayParserTests
         bool ok = AscFlexRayParser.TryParse(line.AsSpan(), 16, out _, out _, out byte[] frame);
 
         await Assert.That(ok).IsTrue();
-        await Assert.That(frame.Length).IsEqualTo(7 + 254);
+        await Assert.That(frame.Length).IsEqualTo(FlexRayLinkTypeFrame.MinHeaderSize + 254);
     }
 }

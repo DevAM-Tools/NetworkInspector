@@ -1,29 +1,49 @@
 <!-- Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root. -->
 <Project>
   <PropertyGroup>
-    <!-- Language & Framework -->
+    <RepoRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)'))</RepoRoot>
+
+    <!-- Language & framework -->
     <TargetFramework>net10.0</TargetFramework>
-    <LangVersion>latest</LangVersion>
+    <LangVersion>14</LangVersion>
     <Nullable>enable</Nullable>
     <ImplicitUsings>disable</ImplicitUsings>
+
+    <!-- Analysis -->
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-
-    <Version>0.4.0</Version>
-
-    <!-- Quality -->
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
     <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
-    <AnalysisLevel>latest-all</AnalysisLevel>
+    <AnalysisLevel>10-recommended</AnalysisLevel>
+    <!--
+      CA1711 — Identifiers should not have incorrect suffix
+      https://learn.microsoft.com/dotnet/fundamentals/code-analysis/quality-rules/ca1711
+      Flags type names ending in reserved BCL suffixes (Stack, Delegate, Collection, …).
+      Ignored globally: protocol-stack types (IStack, FrameStack, ParseDelegate, …) use domain
+      names aligned with dissector/stack vocabulary; renaming would break API clarity and parity
+      with generated protocol code.
+    -->
+    <!--
+      CA1720 — Identifier contains type name
+      https://learn.microsoft.com/dotnet/fundamentals/code-analysis/quality-rules/ca1720
+      Flags identifiers that embed CLR type words (String, Signed, Unsigned, Single, …).
+      Ignored globally: field-type and wire-format enums mirror protocol/tshark naming
+      (FieldType.String, DispatchKeyKind.String, SignalPdu signedness, PDU transport modes);
+      alternate names would diverge from dissector labels and user-facing field names.
+    -->
+    <NoWarn>$(NoWarn);CA1711;CA1720</NoWarn>
 
-    <!-- Performance -->
+    <!-- Build -->
+    <Deterministic>true</Deterministic>
+    <DebugType>embedded</DebugType>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <IsAotCompatible>true</IsAotCompatible>
-    <IsTrimmable>true</IsTrimmable>
-    <EnableTrimAnalyzer>true</EnableTrimAnalyzer>
 
-    <!-- NativeAOT / WASM readiness -->
-    <JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
+    <!-- No NativeAOT / trimming in this solution -->
+    <IsAotCompatible>false</IsAotCompatible>
+    <IsTrimmable>false</IsTrimmable>
+    <EnableTrimAnalyzer>false</EnableTrimAnalyzer>
 
-    <!-- Package metadata -->
+    <!-- Version & package metadata -->
+    <Version>0.5.0</Version>
     <Authors>DevAM</Authors>
     <Company>DevAM</Company>
     <Copyright>Copyright © 2026 DevAM. All rights reserved.</Copyright>
@@ -32,16 +52,31 @@
     <PackageProjectUrl>https://github.com/DevAM-Tools/NetworkInspector</PackageProjectUrl>
     <RepositoryUrl>https://github.com/DevAM-Tools/NetworkInspector</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
-
-    <!-- Documentation & symbols -->
-    <!-- Suppress XML doc generation for test projects — they have no public API to document -->
-    <GenerateDocumentationFile Condition="!$(MSBuildProjectName.Contains('.Tests'))">true</GenerateDocumentationFile>
-    <IncludeSymbols>true</IncludeSymbols>
-    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <IncludeSymbols>false</IncludeSymbols>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
   </PropertyGroup>
 
-  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
-		<ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
+  <!-- CI / Release deterministic packages -->
+  <PropertyGroup Condition="'$(Configuration)' == 'Release' or '$(CI)' == 'true'">
+    <ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
   </PropertyGroup>
 
+  <PropertyGroup Condition="'$(Configuration)' == 'Release' or '$(CI)' == 'true'">
+    <PackageOutputPath>$(RepoRoot)artifacts\$(Version)\</PackageOutputPath>
+  </PropertyGroup>
+
+  <!-- Test projects -->
+  <PropertyGroup Condition="$(MSBuildProjectName.EndsWith('.Tests'))">
+    <IsTestProject>true</IsTestProject>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <!-- Exe / test / dev-tool projects do not publish XML docs -->
+  <PropertyGroup Condition="'$(OutputType)' == 'Exe' or '$(IsTestProject)' == 'true' or '$(IsPackable)' == 'false'">
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
 </Project>

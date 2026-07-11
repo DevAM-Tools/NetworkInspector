@@ -18,10 +18,17 @@ global using System.Threading.Tasks;
 #region NetworkInspector.Core
 global using NetworkInspector.Core;
 global using NetworkInspector.Core.Errors;
+global using NetworkInspector.Core.Fields;
 global using NetworkInspector.Core.Ids;
 global using NetworkInspector.Core.Infos;
 global using NetworkInspector.Core.Interfaces;
+global using NetworkInspector.Core.Protocols;
+global using NetworkInspector.Core.Settings;
 global using NetworkInspector.Values;
+#endregion
+
+#region NetworkInspector.Protocols
+global using NetworkInspector.Protocols;
 #endregion
 
 #region NetworkInspector.Sources
@@ -29,9 +36,21 @@ global using NetworkInspector.Sources.Asc;
 global using NetworkInspector.Sources.Asc.Format;
 global using NetworkInspector.Sources.Blf;
 global using NetworkInspector.Sources.Blf.Format;
+global using NetworkInspector.Sources.Blf.Format.Headers;
 global using NetworkInspector.Sources.Cached;
 global using NetworkInspector.Sources.Pcapng;
+global using NetworkInspector.Sources.Pcapng.Format;
 global using NetworkInspector.Sources.Random;
 global using NetworkInspector.Sources.Tests.Generators;
 global using NetworkInspector.Sources.Tests.Helpers;
+#endregion
+
+#region ZeroAlloc
+global using ZeroAlloc;
+#endregion
+
+#region Test Framework
+global using TUnit.Assertions;
+global using TUnit.Assertions.Extensions;
+global using TUnit.Core;
 #endregion

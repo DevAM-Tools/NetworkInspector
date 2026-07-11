@@ -34,7 +34,7 @@ internal sealed class PacketProtocol : IProtocol
     #region Index Group
 
     /// <summary>Index group for always-present packet fields.</summary>
-    private const string PacketIndexGroup = ProtocolName;
+    private const string _PacketIndexGroup = ProtocolName;
 
     #endregion
 
@@ -72,26 +72,26 @@ internal sealed class PacketProtocol : IProtocol
     /// </summary>
     internal void RegisterWith(IStackBuilder builder, ProtocolId protocolId)
     {
-        _PacketGroupId = builder.GetOrCreateIndexGroup(PacketIndexGroup);
+        _PacketGroupId = builder.GetOrCreateIndexGroup(_PacketIndexGroup);
 
         _PacketFieldId = builder.RegisterFieldInGroup(
-            protocolId, "packet", "Packet", FieldType.None, PacketIndexGroup,
+            protocolId, "packet", "Packet", FieldType.None, _PacketIndexGroup,
             "Container for packet-level metadata");
 
         _IdFieldId = builder.RegisterFieldInGroup(
-            protocolId, "packet.id", "Packet Number", FieldType.U64, PacketIndexGroup,
+            protocolId, "packet.id", "Packet Number", FieldType.U64, _PacketIndexGroup,
             "Unique sequential packet identifier");
 
         _TimestampFieldId = builder.RegisterFieldInGroup(
-            protocolId, "packet.timestamp", "Timestamp", FieldType.Timestamp, PacketIndexGroup,
+            protocolId, "packet.timestamp", "Timestamp", FieldType.Timestamp, _PacketIndexGroup,
             "Capture timestamp");
 
         _FrameSourceIdFieldId = builder.RegisterFieldInGroup(
-            protocolId, "packet.frame_source_id", "Frame Source", FieldType.U64, PacketIndexGroup,
+            protocolId, "packet.frame_source_id", "Frame Source", FieldType.U64, _PacketIndexGroup,
             "Frame source identifier");
 
         _InfoFieldId = builder.RegisterFieldInGroup(
-            protocolId, "packet.info", "Info", FieldType.String, PacketIndexGroup,
+            protocolId, "packet.info", "Info", FieldType.String, _PacketIndexGroup,
             "Packet summary/info line set by sub-protocols");
     }
 
@@ -136,7 +136,7 @@ internal sealed class PacketProtocol : IProtocol
             {
                 // Record main-dispatch exception as a packet error using the same
                 // IncludeExceptionStackTrace policy as ParseAndSeal for consistency.
-                packet.SetError(BuildExceptionMessage(ex, stack.IncludeExceptionStackTrace));
+                packet.SetError(_BuildExceptionMessage(ex, stack.IncludeExceptionStackTrace));
             }
         }
 
@@ -158,7 +158,7 @@ internal sealed class PacketProtocol : IProtocol
             }
             catch (Exception ex)
             {
-                packet.SetError(BuildExceptionMessage(ex, stack.IncludeExceptionStackTrace));
+                packet.SetError(_BuildExceptionMessage(ex, stack.IncludeExceptionStackTrace));
             }
         }
 
@@ -181,7 +181,7 @@ internal sealed class PacketProtocol : IProtocol
     /// post-parser exceptions are formatted identically to main-parse exceptions.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static string BuildExceptionMessage(Exception ex, bool includeStackTrace)
+    private static string _BuildExceptionMessage(Exception ex, bool includeStackTrace)
     {
         if (!includeStackTrace || ex.StackTrace is null)
         {

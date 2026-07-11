@@ -26,7 +26,7 @@ public readonly struct IcmpV4EchoLayer : IStatelessLayer, IPseudoHeaderIndepende
     public const byte TypeEchoReply = 0;
 
     /// <summary>Offset of the Checksum field within the ICMPv4 header.</summary>
-    private const int ChecksumOffset = 2;
+    private const int _ChecksumOffset = 2;
 
     private readonly byte _Type;
     private readonly byte _Code;
@@ -45,8 +45,8 @@ public readonly struct IcmpV4EchoLayer : IStatelessLayer, IPseudoHeaderIndepende
     /// <param name="sequenceNumber">Echo sequence number.</param>
     /// <param name="code">ICMP code; default 0.</param>
     /// <param name="checksum">
-    /// Checksum field; <see cref="Auto{T}.Compute"/> (default) means auto-compute over
-    /// the ICMP message.  Use <see cref="Auto{T}.Explicit"/> to pin.
+    /// Checksum field; <see cref="Auto.Compute"/> (default) means auto-compute over
+    /// the ICMP message.  Use <see cref="Auto.Explicit"/> to pin.
     /// </param>
     /// <param name="isReply">
     /// Convenience flag: when <c>true</c> sets type to <see cref="TypeEchoReply"/>,
@@ -110,14 +110,14 @@ public readonly struct IcmpV4EchoLayer : IStatelessLayer, IPseudoHeaderIndepende
 
         if (_ChecksumIsExplicit)
         {
-            BinaryPrimitives.WriteUInt16BigEndian(frame.Slice(myOffset + ChecksumOffset, 2), _ExplicitChecksum);
+            BinaryPrimitives.WriteUInt16BigEndian(frame.Slice(myOffset + _ChecksumOffset, 2), _ExplicitChecksum);
             return;
         }
 
         // Zero the checksum field, then compute over the entire ICMP message.
-        frame[myOffset + ChecksumOffset] = 0;
-        frame[myOffset + ChecksumOffset + 1] = 0;
+        frame[myOffset + _ChecksumOffset] = 0;
+        frame[myOffset + _ChecksumOffset + 1] = 0;
         ushort checksum = ChecksumUtils.OnesComplement(frame.Slice(myOffset, myLength));
-        BinaryPrimitives.WriteUInt16BigEndian(frame.Slice(myOffset + ChecksumOffset, 2), checksum);
+        BinaryPrimitives.WriteUInt16BigEndian(frame.Slice(myOffset + _ChecksumOffset, 2), checksum);
     }
 }

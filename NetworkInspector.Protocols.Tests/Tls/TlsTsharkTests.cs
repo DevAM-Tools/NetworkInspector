@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Protocols.Tests;
 
@@ -7,7 +7,7 @@ namespace NetworkInspector.Protocols.Tests;
 /// </summary>
 internal sealed class TlsTsharkTests
 {
-    private static byte[] BuildClientHelloWithSni(string host)
+    private static byte[] _BuildClientHelloWithSni(string host)
     {
         byte[] sni = TlsRecordLayer.BuildExtension(
             TlsExtensionType.ServerName,
@@ -27,7 +27,7 @@ internal sealed class TlsTsharkTests
     [Test]
     public async Task Tshark_RecordContentType_Handshake()
     {
-        byte[] frame = BuildClientHelloWithSni("example.com");
+        byte[] frame = _BuildClientHelloWithSni("example.com");
         string? value = TsharkVerifier.GetFieldValue(frame, "tls.record.content_type");
         await Assert.That(value).IsNotNull();
         await Assert.That(value).IsEqualTo("22");
@@ -36,7 +36,7 @@ internal sealed class TlsTsharkTests
     [Test]
     public async Task Tshark_HandshakeType_ClientHello()
     {
-        byte[] frame = BuildClientHelloWithSni("example.com");
+        byte[] frame = _BuildClientHelloWithSni("example.com");
         string? value = TsharkVerifier.GetFieldValue(frame, "tls.handshake.type");
         await Assert.That(value).IsNotNull();
         await Assert.That(value).IsEqualTo("1");
@@ -45,7 +45,7 @@ internal sealed class TlsTsharkTests
     [Test]
     public async Task Tshark_Sni_Hostname()
     {
-        byte[] frame = BuildClientHelloWithSni("example.com");
+        byte[] frame = _BuildClientHelloWithSni("example.com");
         // tshark uses an underscore in its display-filter name for this field.
         string? value = TsharkVerifier.GetFieldValue(frame, "tls.handshake.extensions_server_name");
         await Assert.That(value).IsNotNull();

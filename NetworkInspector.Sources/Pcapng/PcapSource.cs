@@ -103,7 +103,7 @@ public sealed class PcapSource : IRandomAccessFrameSource, IErrorTolerantFrameSo
     public static PcapSource Open(string path, PcapSourceOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(path);
-        options ??= new PcapSourceOptions();
+        options ??= new();
 
         string uiName = options.UiName ?? Path.GetFileName(path);
         string? description = null;
@@ -132,10 +132,10 @@ public sealed class PcapSource : IRandomAccessFrameSource, IErrorTolerantFrameSo
 
         if (options.ScanMode == ScanMode.Full)
         {
-            return OpenFullScan(uiName, description, backend);
+            return _OpenFullScan(uiName, description, backend);
         }
 
-        return OpenLazy(uiName, description, backend);
+        return _OpenLazy(uiName, description, backend);
     }
 
     /// <summary>
@@ -157,11 +157,11 @@ public sealed class PcapSource : IRandomAccessFrameSource, IErrorTolerantFrameSo
         // SOURCE_GUIDE §7.3; UiName is taken from the explicit argument.
         _ = options;
         DataBackend backend = DataBackend.FromMemory(data);
-        return OpenFullScan(uiName, null, backend);
+        return _OpenFullScan(uiName, null, backend);
     }
 
     /// <summary>Full scan: scans entire file upfront.</summary>
-    private static PcapSource OpenFullScan(string uiName, string? description, DataBackend backend)
+    private static PcapSource _OpenFullScan(string uiName, string? description, DataBackend backend)
     {
         IncrementalScanner scanner = new(backend, backend.FileSize);
 
@@ -178,7 +178,7 @@ public sealed class PcapSource : IRandomAccessFrameSource, IErrorTolerantFrameSo
     }
 
     /// <summary>Lazy scan: only parses the first header, scans frames on demand.</summary>
-    private static PcapSource OpenLazy(string uiName, string? description, DataBackend backend)
+    private static PcapSource _OpenLazy(string uiName, string? description, DataBackend backend)
     {
         IncrementalScanner scanner = new(backend, backend.FileSize);
 
@@ -196,10 +196,33 @@ public sealed class PcapSource : IRandomAccessFrameSource, IErrorTolerantFrameSo
     public string? Description => _Description;
 
     /// <inheritdoc />
-    public int? EstimatedFrameCount => Volatile.Read(ref _Scanner) == null ? _Index.Count : null;
+    public int? EstimatedFrameCount
+    {
+        get
+        {
+            if (Volatile.Read(ref _Scanner) is null)
+            {
+                return _Index.Count;
+            }
+
+            return null;
+        }
+    }
 
     /// <inheritdoc />
-    public bool IsFrameCountTruncated => Volatile.Read(ref _Scanner)?.IsIndexFull ?? _Index.IsFull;
+    public bool IsFrameCountTruncated
+    {
+        get
+        {
+            IncrementalScanner? scanner = Volatile.Read(ref _Scanner);
+            if (scanner is not null)
+            {
+                return scanner.IsIndexFull;
+            }
+
+            return _Index.IsFull;
+        }
+    }
 
     /// <inheritdoc />
     public bool IsRunning => Volatile.Read(ref _Started) && !Volatile.Read(ref _Disposed);
@@ -237,7 +260,7 @@ public sealed class PcapSource : IRandomAccessFrameSource, IErrorTolerantFrameSo
         // for symmetry with the Volatile.Write in Dispose().
         if (Volatile.Read(ref _Scanner) == null)
         {
-            RegisterAllInterfaces(registry);
+            _RegisterAllInterfaces(registry);
         }
     }
 
@@ -265,10 +288,10 @@ public sealed class PcapSource : IRandomAccessFrameSource, IErrorTolerantFrameSo
         // Read _Scanner with Volatile for symmetry with Dispose()'s Volatile.Write.
         if (Volatile.Read(ref _Scanner) is not null)
         {
-            return NextFrameFromScanner();
+            return _NextFrameFromScanner();
         }
 
-        return NextFrameFromIndex(cancellationToken);
+        return _NextFrameFromIndex(cancellationToken);
     }
 
     #endregion
@@ -308,7 +331,7 @@ public sealed class PcapSource : IRandomAccessFrameSource, IErrorTolerantFrameSo
         ReadOnlyMemory<byte> data = _Backend.ReadFrameData(frameId, offset.FileOffset, offset.CapturedLength);
 
         // Resolve link type and interface ID
-        if (!TryResolveLinkTypeAndInterface(offset.SectionIndex, offset.InterfaceId, out LinkType linkType, out FrameInterfaceId interfaceId))
+        if (!_TryResolveLinkTypeAndInterface(offset.SectionIndex, offset.InterfaceId, out LinkType linkType, out FrameInterfaceId interfaceId))
         {
             return null;
         }
@@ -329,7 +352,12 @@ public sealed class PcapSource : IRandomAccessFrameSource, IErrorTolerantFrameSo
             interfaceId,
             registry);
 
-        return result.IsSuccess ? result.Value : null;
+        if (!result.IsSuccess)
+        {
+            return null;
+        }
+
+        return result.Value;
     }
 
     #endregion
@@ -361,7 +389,7 @@ public sealed class PcapSource : IRandomAccessFrameSource, IErrorTolerantFrameSo
     #region Private helpers
 
     /// <summary>Reads the next frame from the pre-built index (full scan mode).</summary>
-    private Frame? NextFrameFromIndex(CancellationToken cancellationToken = default)
+    private Frame? _NextFrameFromIndex(CancellationToken cancellationToken = default)
     {
         // Snapshot _Registry once for the entire scan pass so a concurrent Dispose()
         // cannot null the field between the per-iteration disposed check and Frame.Create.
@@ -388,9 +416,9 @@ public sealed class PcapSource : IRandomAccessFrameSource, IErrorTolerantFrameSo
 
             ReadOnlyMemory<byte> data = _Backend.ReadFrameData(frameId, offset.FileOffset, offset.CapturedLength);
 
-            if (!TryResolveLinkTypeAndInterface(offset.SectionIndex, offset.InterfaceId, out LinkType linkType, out FrameInterfaceId interfaceId))
+            if (!_TryResolveLinkTypeAndInterface(offset.SectionIndex, offset.InterfaceId, out LinkType linkType, out FrameInterfaceId interfaceId))
             {
-                HandleSkip(new FrameReadErrorEventArgs
+                _HandleSkip(new FrameReadErrorEventArgs
                 {
                     FrameIndex = frameId,
                     FileOffset = offset.FileOffset,
@@ -414,7 +442,7 @@ public sealed class PcapSource : IRandomAccessFrameSource, IErrorTolerantFrameSo
                 return result.Value;
             }
 
-            HandleSkip(new FrameReadErrorEventArgs
+            _HandleSkip(new FrameReadErrorEventArgs
             {
                 FrameIndex = frameId,
                 FileOffset = offset.FileOffset,
@@ -427,7 +455,7 @@ public sealed class PcapSource : IRandomAccessFrameSource, IErrorTolerantFrameSo
     }
 
     /// <summary>Scans and returns the next frame in lazy mode.</summary>
-    private Frame? NextFrameFromScanner()
+    private Frame? _NextFrameFromScanner()
     {
         // Snapshot _Scanner via Volatile.Read so the local strong reference survives
         // a concurrent Dispose() that would otherwise null out the field. The local
@@ -454,14 +482,14 @@ public sealed class PcapSource : IRandomAccessFrameSource, IErrorTolerantFrameSo
             if (!scanner.NextFrame(out ScannedFrame scanned))
             {
                 // Scanning complete — finalize
-                FinishLazyScan(scanner);
+                _FinishLazyScan(scanner);
                 return null;
             }
 
             // Register interfaces that were discovered while scanning this frame.
             // A single call after scanning is sufficient; the helper checks which
             // interfaces are new and skips already-registered ones (O(1) guard).
-            RegisterNewInterfaces();
+            _RegisterNewInterfaces();
 
             // Prefer backend-backed memory: zero-copy for in-memory captures;
             // mmap path allocates once inside ReadFrameData (same as copying the scan span).
@@ -470,9 +498,9 @@ public sealed class PcapSource : IRandomAccessFrameSource, IErrorTolerantFrameSo
                 scanned.FileOffset,
                 scanned.CapturedLength);
 
-            if (!TryResolveLinkTypeAndInterface(scanned.SectionIndex, scanned.InterfaceId, out LinkType linkType, out FrameInterfaceId interfaceId))
+            if (!_TryResolveLinkTypeAndInterface(scanned.SectionIndex, scanned.InterfaceId, out LinkType linkType, out FrameInterfaceId interfaceId))
             {
-                HandleSkip(new FrameReadErrorEventArgs
+                _HandleSkip(new FrameReadErrorEventArgs
                 {
                     FrameIndex = scanned.FrameIndex,
                     FileOffset = -1,
@@ -494,13 +522,13 @@ public sealed class PcapSource : IRandomAccessFrameSource, IErrorTolerantFrameSo
             {
                 Interlocked.Increment(ref _ReadFrameCount);
                 // Track sequential progress so a subsequent NextFrame() after lazy-scan
-                // completion (which switches to NextFrameFromIndex) resumes from the next
+                // completion (which switches to _NextFrameFromIndex) resumes from the next
                 // frame instead of replaying the index from the start.
                 _CurrentFrame = scanned.FrameIndex + 1;
                 return result.Value;
             }
 
-            HandleSkip(new FrameReadErrorEventArgs
+            _HandleSkip(new FrameReadErrorEventArgs
             {
                 FrameIndex = scanned.FrameIndex,
                 FileOffset = -1,
@@ -517,7 +545,7 @@ public sealed class PcapSource : IRandomAccessFrameSource, IErrorTolerantFrameSo
     /// see a consistent post-scan snapshot (<see cref="FrameById"/> uses a <see cref="Volatile"/>
     /// read on <see cref="_Scanner"/> to detect this transition).
     /// </summary>
-    private void FinishLazyScan(IncrementalScanner scanner)
+    private void _FinishLazyScan(IncrementalScanner scanner)
     {
         _Index = scanner.Index;
         _Index.ShrinkToFit();
@@ -531,7 +559,7 @@ public sealed class PcapSource : IRandomAccessFrameSource, IErrorTolerantFrameSo
     /// <summary>
     /// Registers all interfaces from all sections (full-scan mode).
     /// </summary>
-    private void RegisterAllInterfaces(FrameInterfaceRegistry registry)
+    private void _RegisterAllInterfaces(FrameInterfaceRegistry registry)
     {
         if (_Format is PcapNgFormat pcapng)
         {
@@ -540,20 +568,20 @@ public sealed class PcapSource : IRandomAccessFrameSource, IErrorTolerantFrameSo
                 SectionInfo section = pcapng.Sections[s];
                 for (ushort i = 0; i < section.InterfaceCount; i++)
                 {
-                    RegisterInterface(registry, section, s, i);
+                    _RegisterInterface(registry, section, s, i);
                 }
             }
         }
         else if (_Format is LegacyPcapFormat legacy)
         {
-            RegisterLegacyInterface(registry, legacy.Info);
+            _RegisterLegacyInterface(registry, legacy.Info);
         }
     }
 
     /// <summary>
     /// Registers newly discovered interfaces during lazy scanning.
     /// </summary>
-    private void RegisterNewInterfaces()
+    private void _RegisterNewInterfaces()
     {
         if (_Registry == null)
         {
@@ -588,7 +616,7 @@ public sealed class PcapSource : IRandomAccessFrameSource, IErrorTolerantFrameSo
                 {
                     if (current >= _RegisteredInterfaceCount)
                     {
-                        RegisterInterface(_Registry, section, s, i);
+                        _RegisterInterface(_Registry, section, s, i);
                     }
                     current++;
                 }
@@ -598,13 +626,13 @@ public sealed class PcapSource : IRandomAccessFrameSource, IErrorTolerantFrameSo
         }
         else if (format is LegacyPcapFormat legacy && _RegisteredInterfaceCount == 0)
         {
-            RegisterLegacyInterface(_Registry, legacy.Info);
+            _RegisterLegacyInterface(_Registry, legacy.Info);
             _RegisteredInterfaceCount = 1;
         }
     }
 
     /// <summary>Registers a single PCAPNG interface with the stack.</summary>
-    private void RegisterInterface(FrameInterfaceRegistry registry, SectionInfo section, ushort sectionIndex, ushort interfaceId)
+    private void _RegisterInterface(FrameInterfaceRegistry registry, SectionInfo section, ushort sectionIndex, ushort interfaceId)
     {
         InterfaceInfo? info = section.Interface(interfaceId);
         if (info == null)
@@ -619,13 +647,13 @@ public sealed class PcapSource : IRandomAccessFrameSource, IErrorTolerantFrameSo
         }
 
         string name = info.Name ?? $"Interface {interfaceId}";
-        Dictionary<string, object>? props = BuildPcapNgProperties(info, section);
+        Dictionary<string, object>? props = _BuildPcapNgProperties(info, section);
         FrameInterfaceId id = registry.Register(_SourceId, name, info.Description, info.LinkType, props);
         _Interfaces[key] = id;
     }
 
     /// <summary>Registers a legacy PCAP interface with the stack.</summary>
-    private void RegisterLegacyInterface(FrameInterfaceRegistry registry, LegacyPcapInfo info)
+    private void _RegisterLegacyInterface(FrameInterfaceRegistry registry, LegacyPcapInfo info)
     {
         (ushort, ushort) key = (0, 0);
         if (_Interfaces.ContainsKey(key))
@@ -633,7 +661,7 @@ public sealed class PcapSource : IRandomAccessFrameSource, IErrorTolerantFrameSo
             return;
         }
 
-        Dictionary<string, object>? props = BuildLegacyPcapProperties(info);
+        Dictionary<string, object>? props = _BuildLegacyPcapProperties(info);
         FrameInterfaceId id = registry.Register(_SourceId, "Default Interface", null, info.LinkType, props);
         _Interfaces[key] = id;
     }
@@ -642,7 +670,7 @@ public sealed class PcapSource : IRandomAccessFrameSource, IErrorTolerantFrameSo
     /// Builds a properties dictionary from PCAPNG interface and section metadata.
     /// Returns null when no properties are available (avoids empty dictionary allocation).
     /// </summary>
-    private static Dictionary<string, object>? BuildPcapNgProperties(InterfaceInfo info, SectionInfo section)
+    private static Dictionary<string, object>? _BuildPcapNgProperties(InterfaceInfo info, SectionInfo section)
     {
         // RawLinkType and SnapLength are always available — initialize with them
         Dictionary<string, object> props = new()
@@ -690,7 +718,7 @@ public sealed class PcapSource : IRandomAccessFrameSource, IErrorTolerantFrameSo
     /// Builds a properties dictionary from legacy PCAP global header metadata.
     /// Returns null when no properties are available.
     /// </summary>
-    private static Dictionary<string, object>? BuildLegacyPcapProperties(LegacyPcapInfo info)
+    private static Dictionary<string, object>? _BuildLegacyPcapProperties(LegacyPcapInfo info)
     {
         // Legacy PCAP has limited metadata — snap length and raw link type
         Dictionary<string, object> props = new()
@@ -710,7 +738,7 @@ public sealed class PcapSource : IRandomAccessFrameSource, IErrorTolerantFrameSo
     /// Handles a skipped frame by updating statistics and raising the event.
     /// In strict mode, sets the abort flag so subsequent NextFrame calls return null.
     /// </summary>
-    private void HandleSkip(FrameReadErrorEventArgs error)
+    private void _HandleSkip(FrameReadErrorEventArgs error)
     {
         Interlocked.Increment(ref _SkippedFrameCount);
         Interlocked.Increment(ref _ErrorCount);
@@ -728,7 +756,7 @@ public sealed class PcapSource : IRandomAccessFrameSource, IErrorTolerantFrameSo
 
     /// <summary>Resolves the link type and registered interface ID for a frame.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private bool TryResolveLinkTypeAndInterface(ushort sectionIndex, ushort interfaceId, out LinkType linkType, out FrameInterfaceId frameInterfaceId)
+    private bool _TryResolveLinkTypeAndInterface(ushort sectionIndex, ushort interfaceId, out LinkType linkType, out FrameInterfaceId frameInterfaceId)
     {
         if (_Format is PcapNgFormat pcapng)
         {

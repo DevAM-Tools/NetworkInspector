@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Protocols.Tests;
 
@@ -25,7 +25,7 @@ internal sealed class IPv6BasicTests
     /// <summary>
     /// Creates an Ethernet + IPv6 + UDP frame with known values and a small payload.
     /// </summary>
-    private static byte[] BuildIPv6UdpFrame(
+    private static byte[] _BuildIPv6UdpFrame(
         byte[]? srcAddr = null,
         byte[]? dstAddr = null,
         ushort srcPort = 12345,
@@ -46,7 +46,7 @@ internal sealed class IPv6BasicTests
     /// <summary>
     /// Creates an Ethernet + IPv6 + TCP frame.
     /// </summary>
-    private static byte[] BuildIPv6TcpFrame(
+    private static byte[] _BuildIPv6TcpFrame(
         ushort srcPort = 49152,
         ushort dstPort = 443)
     {
@@ -64,7 +64,7 @@ internal sealed class IPv6BasicTests
     [Test]
     public async Task Parse_IPv6_Version()
     {
-        byte[] frame = BuildIPv6UdpFrame();
+        byte[] frame = _BuildIPv6UdpFrame();
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -79,7 +79,7 @@ internal sealed class IPv6BasicTests
     [Test]
     public async Task Parse_IPv6_SourceAddress()
     {
-        byte[] frame = BuildIPv6UdpFrame();
+        byte[] frame = _BuildIPv6UdpFrame();
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -91,7 +91,7 @@ internal sealed class IPv6BasicTests
     [Test]
     public async Task Parse_IPv6_DestinationAddress()
     {
-        byte[] frame = BuildIPv6UdpFrame();
+        byte[] frame = _BuildIPv6UdpFrame();
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -105,7 +105,7 @@ internal sealed class IPv6BasicTests
     {
         // ipv6.addr is a metadata-only alias group ({ ipv6.src, ipv6.dst }); no ipv6.addr
         // field is appended to the parse tree.
-        byte[] frame = BuildIPv6UdpFrame();
+        byte[] frame = _BuildIPv6UdpFrame();
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -150,7 +150,7 @@ internal sealed class IPv6BasicTests
     [Test]
     public async Task Parse_IPv6_HopLimit()
     {
-        byte[] frame = BuildIPv6UdpFrame(hopLimit: 128);
+        byte[] frame = _BuildIPv6UdpFrame(hopLimit: 128);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -161,7 +161,7 @@ internal sealed class IPv6BasicTests
     [Test]
     public async Task Parse_IPv6_NextHeader_UDP()
     {
-        byte[] frame = BuildIPv6UdpFrame();
+        byte[] frame = _BuildIPv6UdpFrame();
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -173,7 +173,7 @@ internal sealed class IPv6BasicTests
     [Test]
     public async Task Parse_IPv6_NextHeader_TCP()
     {
-        byte[] frame = BuildIPv6TcpFrame();
+        byte[] frame = _BuildIPv6TcpFrame();
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -186,7 +186,7 @@ internal sealed class IPv6BasicTests
     public async Task Parse_IPv6_PayloadLength()
     {
         byte[] payload = [0xDE, 0xAD, 0xBE, 0xEF];
-        byte[] frame = BuildIPv6UdpFrame();
+        byte[] frame = _BuildIPv6UdpFrame();
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -198,7 +198,7 @@ internal sealed class IPv6BasicTests
     [Test]
     public async Task Parse_IPv6_TrafficClass_DefaultZero()
     {
-        byte[] frame = BuildIPv6UdpFrame();
+        byte[] frame = _BuildIPv6UdpFrame();
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -209,7 +209,7 @@ internal sealed class IPv6BasicTests
     [Test]
     public async Task Parse_IPv6_FlowLabel_DefaultZero()
     {
-        byte[] frame = BuildIPv6UdpFrame();
+        byte[] frame = _BuildIPv6UdpFrame();
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -224,7 +224,7 @@ internal sealed class IPv6BasicTests
     [Test]
     public async Task Parse_IPv6_DispatchesToUDP()
     {
-        byte[] frame = BuildIPv6UdpFrame(dstPort: 5678);
+        byte[] frame = _BuildIPv6UdpFrame(dstPort: 5678);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -237,7 +237,7 @@ internal sealed class IPv6BasicTests
     [Test]
     public async Task Parse_IPv6_DispatchesToTCP()
     {
-        byte[] frame = BuildIPv6TcpFrame(dstPort: 443);
+        byte[] frame = _BuildIPv6TcpFrame(dstPort: 443);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -257,7 +257,7 @@ internal sealed class IPv6BasicTests
         // Manual construction: Eth(14) + IPv6(40) + HopByHop(8) + UDP(8) + payload(4)
         // IPv6: next header = 0 (Hop-by-Hop), hop limit = 64
         // HopByHop: next = 17 (UDP), length = 0 (8 bytes total), options = PadN(1, 0)
-        byte[] frame = BuildIPv6WithHopByHopPadN();
+        byte[] frame = _BuildIPv6WithHopByHopPadN();
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -272,7 +272,7 @@ internal sealed class IPv6BasicTests
     /// Manually builds an Ethernet + IPv6 frame with a minimal Hop-by-Hop Options header
     /// (PadN option) followed by a UDP payload.
     /// </summary>
-    private static byte[] BuildIPv6WithHopByHopPadN()
+    private static byte[] _BuildIPv6WithHopByHopPadN()
     {
         // Ethernet header (14 bytes)
         // dst MAC:  00:11:22:33:44:55
@@ -357,7 +357,7 @@ internal sealed class IPv6BasicTests
     public async Task Parse_IPv6_FragmentHeader_Present()
     {
         // Build manually: Eth + IPv6 (nxt=44 Fragment) + FragHdr (nxt=17) + UDP + payload
-        byte[] frame = BuildIPv6WithFragmentHeader();
+        byte[] frame = _BuildIPv6WithFragmentHeader();
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -372,7 +372,7 @@ internal sealed class IPv6BasicTests
     /// The fragment is the first (and only) fragment, so the complete payload is present.
     /// Fragment header: nxt=17 (UDP), reserved=0, offset=0, M=0, id=0x12345678.
     /// </summary>
-    private static byte[] BuildIPv6WithFragmentHeader()
+    private static byte[] _BuildIPv6WithFragmentHeader()
     {
         // Layout: Eth(14) + IPv6(40) + FragHdr(8) + UDP(8) + payload(4) = 74 bytes
         byte[] frame = new byte[14 + 40 + 8 + 8 + 4];

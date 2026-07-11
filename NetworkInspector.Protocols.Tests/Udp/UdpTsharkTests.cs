@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Protocols.Tests;
 
@@ -30,7 +30,7 @@ internal sealed class UdpTsharkTests
         [0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x02];
 
     /// <summary>Eth + IPv4 + UDP carrier with a fixed payload.</summary>
-    private static byte[] BuildIPv4UdpFrame(ushort srcPort = 12345, ushort dstPort = 53, int payloadLength = 8)
+    private static byte[] _BuildIPv4UdpFrame(ushort srcPort = 12345, ushort dstPort = 53, int payloadLength = 8)
     {
         EthernetLayer eth = new(_DstMac, _SrcMac);
         IPv4Layer ip = new(new IPv4Address(0xAC100164), new IPv4Address(0xAC100101));
@@ -44,7 +44,7 @@ internal sealed class UdpTsharkTests
     }
 
     /// <summary>Eth + IPv6 + UDP carrier with a fixed payload.</summary>
-    private static byte[] BuildIPv6UdpFrame(ushort srcPort = 49152, ushort dstPort = 53, int payloadLength = 8)
+    private static byte[] _BuildIPv6UdpFrame(ushort srcPort = 49152, ushort dstPort = 53, int payloadLength = 8)
     {
         EthernetLayer eth = new(_DstMac, _SrcMac);
         IPv6Layer ip = new(IPv6Address.FromBytes(_Ipv6Src), IPv6Address.FromBytes(_Ipv6Dst));
@@ -64,7 +64,7 @@ internal sealed class UdpTsharkTests
     [Test]
     public async Task Udp_OverIPv4_AllFieldsMatchTshark()
     {
-        byte[] frame = BuildIPv4UdpFrame();
+        byte[] frame = _BuildIPv4UdpFrame();
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -83,7 +83,7 @@ internal sealed class UdpTsharkTests
     [Test]
     public async Task Udp_OverIPv4_EmptyPayload_LengthMatchesTshark()
     {
-        byte[] frame = BuildIPv4UdpFrame(payloadLength: 0);
+        byte[] frame = _BuildIPv4UdpFrame(payloadLength: 0);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -102,7 +102,7 @@ internal sealed class UdpTsharkTests
     [Test]
     public async Task Udp_OverIPv6_AllFieldsMatchTshark()
     {
-        byte[] frame = BuildIPv6UdpFrame();
+        byte[] frame = _BuildIPv6UdpFrame();
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {

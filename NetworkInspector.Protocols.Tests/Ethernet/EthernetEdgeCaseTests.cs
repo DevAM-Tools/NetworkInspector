@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Protocols.Tests;
 
@@ -13,11 +13,11 @@ internal sealed class EthernetEdgeCaseTests
     #region Helper Methods
 
     /// <summary>Builds a standard Ethernet+IPv4+UDP frame with specific MAC addresses.</summary>
-    private static byte[] BuildEthFrame(MacAddress dst, MacAddress src) =>
-        BuildEthFrameWithPayload(dst, src, [0x01, 0x02, 0x03, 0x04]);
+    private static byte[] _BuildEthFrame(MacAddress dst, MacAddress src) =>
+        _BuildEthFrameWithPayload(dst, src, [0x01, 0x02, 0x03, 0x04]);
 
     /// <summary>Builds a standard Ethernet+IPv4+UDP frame with specific MACs and payload.</summary>
-    private static byte[] BuildEthFrameWithPayload(MacAddress dst, MacAddress src, byte[] payload)
+    private static byte[] _BuildEthFrameWithPayload(MacAddress dst, MacAddress src, byte[] payload)
     {
         EthernetLayer eth = new(dst, src);
         IPv4Layer ip = new(new IPv4Address(0xC0A80101), new IPv4Address(0xC0A80102));
@@ -27,7 +27,7 @@ internal sealed class EthernetEdgeCaseTests
     }
 
     /// <summary>Builds a raw Ethernet header with a custom type/length field and payload.</summary>
-    private static byte[] BuildRawEthFrame(MacAddress dst, MacAddress src, ushort typeOrLen, byte[] payload)
+    private static byte[] _BuildRawEthFrame(MacAddress dst, MacAddress src, ushort typeOrLen, byte[] payload)
     {
         // 6 bytes dst + 6 bytes src + 2 bytes type/len + payload
         byte[] frame = new byte[14 + payload.Length];
@@ -64,7 +64,7 @@ internal sealed class EthernetEdgeCaseTests
     {
         MacAddress dst = MacAddress.FromBytes([0x00, 0x11, 0x22, 0x33, 0x44, 0x55]);
         MacAddress src = MacAddress.FromBytes([0x00, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE]);
-        byte[] frame = BuildEthFrame(dst, src);
+        byte[] frame = _BuildEthFrame(dst, src);
 
         Packet packet = ProtocolTestHelper.ParseWithSharedStack(frame);
         Stack stack = ProtocolTestHelper.SharedStack;
@@ -77,7 +77,7 @@ internal sealed class EthernetEdgeCaseTests
     {
         MacAddress dst = MacAddress.FromBytes([0x01, 0x00, 0x5E, 0x00, 0x00, 0x01]);
         MacAddress src = MacAddress.FromBytes([0x00, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE]);
-        byte[] frame = BuildEthFrame(dst, src);
+        byte[] frame = _BuildEthFrame(dst, src);
 
         Packet packet = ProtocolTestHelper.ParseWithSharedStack(frame);
         Stack stack = ProtocolTestHelper.SharedStack;
@@ -90,7 +90,7 @@ internal sealed class EthernetEdgeCaseTests
     {
         MacAddress dst = MacAddress.FromBytes([0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]);
         MacAddress src = MacAddress.FromBytes([0x00, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE]);
-        byte[] frame = BuildEthFrame(dst, src);
+        byte[] frame = _BuildEthFrame(dst, src);
 
         Packet packet = ProtocolTestHelper.ParseWithSharedStack(frame);
         Stack stack = ProtocolTestHelper.SharedStack;
@@ -104,7 +104,7 @@ internal sealed class EthernetEdgeCaseTests
     {
         MacAddress dst = MacAddress.FromBytes([0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF]);
         MacAddress src = MacAddress.FromBytes([0x00, 0x11, 0x22, 0x33, 0x44, 0x55]);
-        byte[] frame = BuildEthFrame(dst, src);
+        byte[] frame = _BuildEthFrame(dst, src);
 
         Packet packet = ProtocolTestHelper.ParseWithSharedStack(frame);
         Stack stack = ProtocolTestHelper.SharedStack;
@@ -121,7 +121,7 @@ internal sealed class EthernetEdgeCaseTests
     {
         MacAddress dst = MacAddress.FromBytes([0x00, 0x11, 0x22, 0x33, 0x44, 0x55]);
         MacAddress src = MacAddress.FromBytes([0x00, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE]);
-        byte[] frame = BuildEthFrame(dst, src);
+        byte[] frame = _BuildEthFrame(dst, src);
 
         Packet packet = ProtocolTestHelper.ParseWithSharedStack(frame);
         Stack stack = ProtocolTestHelper.SharedStack;
@@ -134,7 +134,7 @@ internal sealed class EthernetEdgeCaseTests
     {
         MacAddress dst = MacAddress.FromBytes([0x02, 0x00, 0x00, 0x00, 0x00, 0x01]);
         MacAddress src = MacAddress.FromBytes([0x00, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE]);
-        byte[] frame = BuildEthFrame(dst, src);
+        byte[] frame = _BuildEthFrame(dst, src);
 
         Packet packet = ProtocolTestHelper.ParseWithSharedStack(frame);
         Stack stack = ProtocolTestHelper.SharedStack;
@@ -147,7 +147,7 @@ internal sealed class EthernetEdgeCaseTests
     {
         MacAddress dst = MacAddress.FromBytes([0x03, 0x00, 0x00, 0x00, 0x00, 0x01]);
         MacAddress src = MacAddress.FromBytes([0x00, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE]);
-        byte[] frame = BuildEthFrame(dst, src);
+        byte[] frame = _BuildEthFrame(dst, src);
 
         Packet packet = ProtocolTestHelper.ParseWithSharedStack(frame);
         Stack stack = ProtocolTestHelper.SharedStack;
@@ -164,7 +164,7 @@ internal sealed class EthernetEdgeCaseTests
     {
         MacAddress dst = MacAddress.FromBytes([0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF]);
         MacAddress src = MacAddress.FromBytes([0x11, 0x22, 0x33, 0x44, 0x55, 0x66]);
-        byte[] frame = BuildEthFrame(dst, src);
+        byte[] frame = _BuildEthFrame(dst, src);
 
         Packet packet = ProtocolTestHelper.ParseWithSharedStack(frame);
         Stack stack = ProtocolTestHelper.SharedStack;
@@ -194,7 +194,7 @@ internal sealed class EthernetEdgeCaseTests
             0xC0, 0xA8, 0x01, 0x02,               // Target IP: 192.168.1.2
         ];
 
-        byte[] frame = BuildRawEthFrame(dst, src, 0x0806, arpPayload);
+        byte[] frame = _BuildRawEthFrame(dst, src, 0x0806, arpPayload);
 
         Packet packet = ProtocolTestHelper.ParseWithSharedStack(frame);
         Stack stack = ProtocolTestHelper.SharedStack;
@@ -215,7 +215,7 @@ internal sealed class EthernetEdgeCaseTests
 
         // Use a small payload since we're testing the boundary condition, not LLC parsing
         byte[] payload = new byte[46]; // minimum payload size
-        byte[] frame = BuildRawEthFrame(dst, src, 0x0005, payload);
+        byte[] frame = _BuildRawEthFrame(dst, src, 0x0005, payload);
 
         Packet packet = ProtocolTestHelper.ParseWithSharedStack(frame);
         Stack stack = ProtocolTestHelper.SharedStack;
@@ -233,7 +233,7 @@ internal sealed class EthernetEdgeCaseTests
         MacAddress src = MacAddress.FromBytes([0x11, 0x22, 0x33, 0x44, 0x55, 0x66]);
 
         byte[] payload = new byte[46];
-        byte[] frame = BuildRawEthFrame(dst, src, 0x0600, payload);
+        byte[] frame = _BuildRawEthFrame(dst, src, 0x0600, payload);
 
         Packet packet = ProtocolTestHelper.ParseWithSharedStack(frame);
         Stack stack = ProtocolTestHelper.SharedStack;
@@ -252,7 +252,7 @@ internal sealed class EthernetEdgeCaseTests
     {
         MacAddress broadcast = MacAddress.FromBytes([0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]);
         MacAddress src = MacAddress.FromBytes([0x11, 0x22, 0x33, 0x44, 0x55, 0x66]);
-        byte[] frame = BuildEthFrame(broadcast, src);
+        byte[] frame = _BuildEthFrame(broadcast, src);
 
         Packet packet = ProtocolTestHelper.ParseWithSharedStack(frame);
         Stack stack = ProtocolTestHelper.SharedStack;
@@ -267,7 +267,7 @@ internal sealed class EthernetEdgeCaseTests
         // All zeros MAC (00:00:00:00:00:00) — valid but unusual
         MacAddress zero = MacAddress.FromBytes([0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
         MacAddress src = MacAddress.FromBytes([0x11, 0x22, 0x33, 0x44, 0x55, 0x66]);
-        byte[] frame = BuildEthFrame(zero, src);
+        byte[] frame = _BuildEthFrame(zero, src);
 
         Packet packet = ProtocolTestHelper.ParseWithSharedStack(frame);
         Stack stack = ProtocolTestHelper.SharedStack;
@@ -303,7 +303,7 @@ internal sealed class EthernetEdgeCaseTests
 
         // Build 60-byte frame: 14 header + 28 ARP + 18 padding = 60
         byte[] frame = new byte[60];
-        byte[] rawFrame = BuildRawEthFrame(dst, src, 0x0806, arpPayload);
+        byte[] rawFrame = _BuildRawEthFrame(dst, src, 0x0806, arpPayload);
         rawFrame.AsSpan().CopyTo(frame.AsSpan());
         // Remaining bytes stay 0x00 — padding
 
@@ -323,7 +323,7 @@ internal sealed class EthernetEdgeCaseTests
 
         // Use a payload large enough so header+payload > 60 bytes (no padding)
         byte[] payload = new byte[100];
-        byte[] frame = BuildEthFrameWithPayload(dst, src, payload);
+        byte[] frame = _BuildEthFrameWithPayload(dst, src, payload);
 
         Packet packet = ProtocolTestHelper.ParseWithSharedStack(frame);
         Stack stack = ProtocolTestHelper.SharedStack;
@@ -343,7 +343,7 @@ internal sealed class EthernetEdgeCaseTests
         // is appended to the parse tree. Both endpoint MACs are exposed via the alias members.
         MacAddress dst = MacAddress.FromBytes([0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF]);
         MacAddress src = MacAddress.FromBytes([0x11, 0x22, 0x33, 0x44, 0x55, 0x66]);
-        byte[] frame = BuildEthFrame(dst, src);
+        byte[] frame = _BuildEthFrame(dst, src);
 
         Packet packet = ProtocolTestHelper.ParseWithSharedStack(frame);
         Stack stack = ProtocolTestHelper.SharedStack;
@@ -392,7 +392,7 @@ internal sealed class EthernetEdgeCaseTests
     {
         MacAddress dst = MacAddress.FromBytes([0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF]);
         MacAddress src = MacAddress.FromBytes([0x11, 0x22, 0x33, 0x44, 0x55, 0x66]);
-        byte[] frame = BuildEthFrame(dst, src);
+        byte[] frame = _BuildEthFrame(dst, src);
 
         Packet packet = ProtocolTestHelper.ParseWithSharedStack(frame);
         Stack stack = ProtocolTestHelper.SharedStack;
@@ -406,7 +406,7 @@ internal sealed class EthernetEdgeCaseTests
     {
         MacAddress dst = MacAddress.FromBytes([0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF]);
         MacAddress src = MacAddress.FromBytes([0x11, 0x22, 0x33, 0x44, 0x55, 0x66]);
-        byte[] frame = BuildEthFrame(dst, src);
+        byte[] frame = _BuildEthFrame(dst, src);
 
         Packet packet = ProtocolTestHelper.ParseWithSharedStack(frame);
         Stack stack = ProtocolTestHelper.SharedStack;
@@ -425,7 +425,7 @@ internal sealed class EthernetEdgeCaseTests
         // By default, eth.assume_fcs = false, so FCS fields should not be present
         MacAddress dst = MacAddress.FromBytes([0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF]);
         MacAddress src = MacAddress.FromBytes([0x11, 0x22, 0x33, 0x44, 0x55, 0x66]);
-        byte[] frame = BuildEthFrame(dst, src);
+        byte[] frame = _BuildEthFrame(dst, src);
 
         Packet packet = ProtocolTestHelper.ParseWithSharedStack(frame);
         Stack stack = ProtocolTestHelper.SharedStack;

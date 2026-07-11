@@ -61,7 +61,7 @@ public readonly struct FrameSourceId(int value) : IEquatable<FrameSourceId>, ICo
     public override bool Equals(object? obj) => obj is FrameSourceId other && Equals(other);
 
     /// <inheritdoc/>
-    public override string ToString() => _Value.ToString();
+    public override string ToString() => _Value.ToString(CultureInfo.InvariantCulture);
 
     #endregion
 

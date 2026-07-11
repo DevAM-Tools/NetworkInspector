@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Protocols.Tests;
 
@@ -10,7 +10,7 @@ namespace NetworkInspector.Protocols.Tests;
 /// <remarks>
 /// <para>
 /// tshark does <b>not</b> auto-dissect port 30490 as SOME/IP without an explicit
-/// Decode-As rule. All calls therefore pass <c>decodeAs: SomeIpDecodeAs</c>
+/// Decode-As rule. All calls therefore pass <c>decodeAs: _SomeIpDecodeAs</c>
 /// (<c>"-d udp.port==30490,someip"</c>) to force dissection.
 /// </para>
 /// <para>
@@ -28,7 +28,7 @@ internal sealed class SomeIpTsharkTests
     /// Without this rule tshark does not recognise port 30490 as SOME/IP, so all
     /// SOME/IP-specific fields are absent from tshark output and every assertion fails.
     /// </remarks>
-    private const string SomeIpDecodeAs = "udp.port==30490,someip";
+    private const string _SomeIpDecodeAs = "udp.port==30490,someip";
 
     #region Shared addresses
 
@@ -45,7 +45,7 @@ internal sealed class SomeIpTsharkTests
     /// Wraps a <see cref="SomeIpLayer"/> in a standard Eth+IPv4+UDP frame on port 30490
     /// so tshark's SOME/IP heuristic triggers without UAT configuration.
     /// </summary>
-    private static byte[] BuildSomeIpUdp(SomeIpLayer someIp, ReadOnlySpan<byte> payload)
+    private static byte[] _BuildSomeIpUdp(SomeIpLayer someIp, ReadOnlySpan<byte> payload)
     {
         EthernetLayer eth = new(_DstMac, _SrcMac);
         IPv4Layer ip = new(_SrcIp, _DstIp);
@@ -56,7 +56,7 @@ internal sealed class SomeIpTsharkTests
     /// <summary>
     /// Wraps a <see cref="SomeIpTpLayer"/> in a standard Eth+IPv4+UDP frame on port 30490.
     /// </summary>
-    private static byte[] BuildSomeIpTpUdp(SomeIpTpLayer tp, ReadOnlySpan<byte> payload)
+    private static byte[] _BuildSomeIpTpUdp(SomeIpTpLayer tp, ReadOnlySpan<byte> payload)
     {
         EthernetLayer eth = new(_DstMac, _SrcMac);
         IPv4Layer ip = new(_SrcIp, _DstIp);
@@ -83,7 +83,7 @@ internal sealed class SomeIpTsharkTests
     /// [24-27] options array length = 0
     /// </code>
     /// </summary>
-    private static byte[] BuildSdOfferServicePayload(
+    private static byte[] _BuildSdOfferServicePayload(
         byte flags,
         ushort serviceId,
         ushort instanceId,
@@ -128,11 +128,11 @@ internal sealed class SomeIpTsharkTests
             clientId: 0x0001,
             sessionId: 0x0010,
             messageType: SomeIpMessageType.Request);
-        byte[] frame = BuildSomeIpUdp(someIp, [0xDE, 0xAD, 0xBE, 0xEF]);
+        byte[] frame = _BuildSomeIpUdp(someIp, [0xDE, 0xAD, 0xBE, 0xEF]);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
-            await TsharkAssert.AssertEquivalentMany(stack, packet, frame, 1, null, SomeIpDecodeAs,
+            await TsharkAssert.AssertEquivalentMany(stack, packet, frame, 1, null, _SomeIpDecodeAs,
                 ("someip.serviceid", "someip.serviceid"),
                 ("someip.methodid", "someip.methodid"),
                 ("someip.length", "someip.length"),
@@ -155,11 +155,11 @@ internal sealed class SomeIpTsharkTests
             serviceId: 0xABCD,
             methodId: 0x0001,
             messageType: SomeIpMessageType.Response);
-        byte[] frame = BuildSomeIpUdp(someIp, []);
+        byte[] frame = _BuildSomeIpUdp(someIp, []);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
-            await TsharkAssert.AssertEquivalentMany(stack, packet, frame, 1, null, SomeIpDecodeAs,
+            await TsharkAssert.AssertEquivalentMany(stack, packet, frame, 1, null, _SomeIpDecodeAs,
                 // NI field: someip.msgtype — tshark 4.6 field: someip.messagetype
                 ("someip.msgtype", "someip.messagetype")).ConfigureAwait(false);
         }
@@ -177,11 +177,11 @@ internal sealed class SomeIpTsharkTests
             methodId: 0x0002,
             messageType: SomeIpMessageType.Error,
             returnCode: 0x05);
-        byte[] frame = BuildSomeIpUdp(someIp, []);
+        byte[] frame = _BuildSomeIpUdp(someIp, []);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
-            await TsharkAssert.AssertEquivalentMany(stack, packet, frame, 1, null, SomeIpDecodeAs,
+            await TsharkAssert.AssertEquivalentMany(stack, packet, frame, 1, null, _SomeIpDecodeAs,
                 // NI field: someip.msgtype — tshark 4.6 field: someip.messagetype
                 ("someip.msgtype", "someip.messagetype"),
                 ("someip.returncode", "someip.returncode")).ConfigureAwait(false);
@@ -199,11 +199,11 @@ internal sealed class SomeIpTsharkTests
             serviceId: 0x4242,
             methodId: 0x8001,
             messageType: SomeIpMessageType.Notification);
-        byte[] frame = BuildSomeIpUdp(someIp, [1, 2, 3]);
+        byte[] frame = _BuildSomeIpUdp(someIp, [1, 2, 3]);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
-            await TsharkAssert.AssertEquivalentMany(stack, packet, frame, 1, null, SomeIpDecodeAs,
+            await TsharkAssert.AssertEquivalentMany(stack, packet, frame, 1, null, _SomeIpDecodeAs,
                 // NI field: someip.msgtype — tshark 4.6 field: someip.messagetype
                 ("someip.msgtype", "someip.messagetype")).ConfigureAwait(false);
         }
@@ -227,11 +227,11 @@ internal sealed class SomeIpTsharkTests
             moreSegments: true);
         // Payload must be a multiple of the 16-byte fragment alignment.
         byte[] payload = new byte[32];
-        byte[] frame = BuildSomeIpTpUdp(tp, payload);
+        byte[] frame = _BuildSomeIpTpUdp(tp, payload);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
-            await TsharkAssert.AssertEquivalentMany(stack, packet, frame, 1, null, SomeIpDecodeAs,
+            await TsharkAssert.AssertEquivalentMany(stack, packet, frame, 1, null, _SomeIpDecodeAs,
                 // NI field: someip.msgtype.tp — tshark 4.6 field: someip.messagetype.tp
                 ("someip.msgtype.tp", "someip.messagetype.tp"),
                 ("someip.tp.offset", "someip.tp.offset"),
@@ -254,11 +254,11 @@ internal sealed class SomeIpTsharkTests
             tpOffsetIn16Bytes: 2,
             moreSegments: false);
         byte[] payload = new byte[32];
-        byte[] frame = BuildSomeIpTpUdp(tp, payload);
+        byte[] frame = _BuildSomeIpTpUdp(tp, payload);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
-            await TsharkAssert.AssertEquivalentMany(stack, packet, frame, 1, null, SomeIpDecodeAs,
+            await TsharkAssert.AssertEquivalentMany(stack, packet, frame, 1, null, _SomeIpDecodeAs,
                 // NI field: someip.tp.more — tshark 4.6 field: someip.tp.flags.more_segments
                 ("someip.tp.more", "someip.tp.flags.more_segments"),
                 ("someip.tp.offset", "someip.tp.offset")).ConfigureAwait(false);
@@ -286,17 +286,17 @@ internal sealed class SomeIpTsharkTests
             methodId: 0x8100,
             messageType: SomeIpMessageType.Notification,
             sessionId: 1);
-        byte[] sdPayload = BuildSdOfferServicePayload(
+        byte[] sdPayload = _BuildSdOfferServicePayload(
             flags: 0xC0,       // reboot=1, unicast=1
             serviceId: 0x0042,
             instanceId: 0x0001,
             majorVer: 1,
             ttl: 3);
-        byte[] frame = BuildSomeIpUdp(someIp, sdPayload);
+        byte[] frame = _BuildSomeIpUdp(someIp, sdPayload);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
-            await TsharkAssert.AssertEquivalentMany(stack, packet, frame, 1, null, SomeIpDecodeAs,
+            await TsharkAssert.AssertEquivalentMany(stack, packet, frame, 1, null, _SomeIpDecodeAs,
                 // NI uses someip_sd.* prefix; tshark 4.6 uses someipsd.* (no underscore)
                 ("someip_sd.flags.reboot", "someipsd.flags.reboot"),
                 ("someip_sd.flags.unicast", "someipsd.flags.unicast"),

@@ -33,7 +33,7 @@ namespace NetworkInspector.Profiling.Scenarios;
 internal sealed class ParseRandomFramesRecycledScenario : IProfilingScenario
 {
     /// <summary>Number of frames parsed per <see cref="Run"/> call.</summary>
-    private const int BatchSize = 10_000;
+    private const int _BatchSize = 10_000;
 
     private readonly bool _Materialize;
 
@@ -67,11 +67,13 @@ internal sealed class ParseRandomFramesRecycledScenario : IProfilingScenario
 
     /// <inheritdoc/>
     public string Description => _Materialize
-        ? $"ParseFrame(recycle) + MaterializeAll, {BatchSize:N0} IPv6/UDP frames per iteration — zero Packet allocations."
-        : $"ParseFrame(recycle) only (lazy field tree), {BatchSize:N0} IPv6/UDP frames per iteration — zero Packet allocations.";
+        ? FormattableString.Invariant(
+            $"ParseFrame(recycle) + MaterializeAll, {_BatchSize:N0} IPv6/UDP frames per iteration — zero Packet allocations.")
+        : FormattableString.Invariant(
+            $"ParseFrame(recycle) only (lazy field tree), {_BatchSize:N0} IPv6/UDP frames per iteration — zero Packet allocations.");
 
     /// <inheritdoc/>
-    public long WorkUnitsPerIteration => BatchSize;
+    public long WorkUnitsPerIteration => _BatchSize;
 
     /// <inheritdoc/>
     public string WorkUnitName => "packets";
@@ -80,7 +82,7 @@ internal sealed class ParseRandomFramesRecycledScenario : IProfilingScenario
     public void Setup()
     {
         _Stack = StackHelper.CreateStack();
-        _Frames = FrameHelper.CreateSharedFrames(BatchSize, _Stack);
+        _Frames = FrameHelper.CreateSharedFrames(_BatchSize, _Stack);
         _PacketCounter = 0;
 
         // Create the initial seed packet that will be recycled throughout all iterations.
@@ -102,7 +104,7 @@ internal sealed class ParseRandomFramesRecycledScenario : IProfilingScenario
         // without allocating a new Packet on the heap.
         if (_Materialize)
         {
-            for (int i = 0; i < BatchSize; i++)
+            for (int i = 0; i < _BatchSize; i++)
             {
                 Packet.ParseFrame(recycle, new PacketId(checked((int)(counter + i))), stack, frames[i]);
                 recycle.MaterializeAll();
@@ -110,13 +112,13 @@ internal sealed class ParseRandomFramesRecycledScenario : IProfilingScenario
         }
         else
         {
-            for (int i = 0; i < BatchSize; i++)
+            for (int i = 0; i < _BatchSize; i++)
             {
                 Packet.ParseFrame(recycle, new PacketId(checked((int)(counter + i))), stack, frames[i]);
             }
         }
 
-        _PacketCounter = counter + BatchSize;
+        _PacketCounter = counter + _BatchSize;
     }
 
     /// <inheritdoc/>

@@ -15,7 +15,7 @@ namespace NetworkInspector.Exporters.Tests.Roundtrip;
 internal sealed class PcapngRoundtripTests
 {
     /// <summary>Reference Unix epoch base for all generated timestamps (April 2026).</summary>
-    private const long EpochBaseNs = 1_777_000_000_000_000_000L;
+    private const long _EpochBaseNs = 1_777_000_000_000_000_000L;
 
     // ========================================================================
     // 1. Empty file (0 frames) — exporter must not crash, tshark sees 0 packets,
@@ -60,7 +60,7 @@ internal sealed class PcapngRoundtripTests
         RoundtripFrameFactory factory = new();
         FrameInterfaceId ifId = factory.AddInterface("eth-snap", LinkType.Ethernet);
         byte[] originalData = FrameGenerators.BuildEthernetIpv4UdpFrame(512);
-        Frame original = factory.Create(ifId, LinkType.Ethernet, EpochBaseNs + 42L, originalData);
+        Frame original = factory.Create(ifId, LinkType.Ethernet, _EpochBaseNs + 42L, originalData);
 
         using (PcapngExporter exporter = PcapngExporter.CreateBuilder()
             .ToFile(path)
@@ -103,14 +103,14 @@ internal sealed class PcapngRoundtripTests
         FrameInterfaceId ifId = factory.AddInterface("eth-test", LinkType.Ethernet);
         Frame[] originals =
         [
-            factory.Create(ifId, LinkType.Ethernet, EpochBaseNs + 123_456_789L,
+            factory.Create(ifId, LinkType.Ethernet, _EpochBaseNs + 123_456_789L,
                 FrameGenerators.BuildEthernetIpv4UdpFrame(64)),
         ];
 
-        ExportAndClose(path, originals);
+        _ExportAndClose(path, originals);
 
         RoundtripAssertions.AssertTsharkMatchesOriginals(path, originals, RoundtripAssertions.ExactNs);
-        ReimportAndAssert(path, originals);
+        _ReimportAndAssert(path, originals);
         await ValueTask.CompletedTask.ConfigureAwait(false);
     }
 
@@ -132,15 +132,15 @@ internal sealed class PcapngRoundtripTests
         for (int i = 0; i < count; i++)
         {
             // Sub-microsecond timestamp deltas to exercise nanosecond resolution.
-            long ts = EpochBaseNs + (i * 1_234L);
+            long ts = _EpochBaseNs + (i * 1_234L);
             byte[] data = FrameGenerators.BuildEthernetIpv4UdpFrame(32 + (i % 16));
             originals[i] = factory.Create(ifId, LinkType.Ethernet, ts, data);
         }
 
-        ExportAndClose(path, originals);
+        _ExportAndClose(path, originals);
 
         RoundtripAssertions.AssertTsharkMatchesOriginals(path, originals, RoundtripAssertions.ExactNs);
-        ReimportAndAssert(path, originals);
+        _ReimportAndAssert(path, originals);
         await ValueTask.CompletedTask.ConfigureAwait(false);
     }
 
@@ -158,16 +158,16 @@ internal sealed class PcapngRoundtripTests
         FrameInterfaceId ifId = factory.AddInterface("fr-test", LinkType.Flexray);
         Frame[] originals =
         [
-            factory.Create(ifId, LinkType.Flexray, EpochBaseNs + 1L,
+            factory.Create(ifId, LinkType.Flexray, _EpochBaseNs + 1L,
                 FlexRayGenerators.BuildFlexRayFrame(0, 10, 3, 0xABCD, [0xDE, 0xAD, 0xBE, 0xEF], sync: true)),
-            factory.Create(ifId, LinkType.Flexray, EpochBaseNs + 2L,
+            factory.Create(ifId, LinkType.Flexray, _EpochBaseNs + 2L,
                 FlexRayGenerators.BuildFlexRayFrame(1, 20, 4, 0x1234, [0x01, 0x02, 0x03, 0x04, 0x05])),
         ];
 
-        ExportAndClose(path, originals);
+        _ExportAndClose(path, originals);
 
         RoundtripAssertions.AssertTsharkMatchesOriginals(path, originals, RoundtripAssertions.ExactNs);
-        ReimportAndAssert(path, originals);
+        _ReimportAndAssert(path, originals);
         await ValueTask.CompletedTask.ConfigureAwait(false);
     }
 
@@ -185,16 +185,16 @@ internal sealed class PcapngRoundtripTests
         FrameInterfaceId ifId = factory.AddInterface("lin-test", LinkType.Lin);
         Frame[] originals =
         [
-            factory.Create(ifId, LinkType.Lin, EpochBaseNs + 100L,
+            factory.Create(ifId, LinkType.Lin, _EpochBaseNs + 100L,
                 LinGenerators.BuildLinFrame(0x05, [0x11, 0x22, 0x33], checksum: 0x42)),
-            factory.Create(ifId, LinkType.Lin, EpochBaseNs + 200L,
+            factory.Create(ifId, LinkType.Lin, _EpochBaseNs + 200L,
                 LinGenerators.BuildLinFrame(0x07, [0xAA, 0xBB, 0xCC, 0xDD], checksum: 0x77)),
         ];
 
-        ExportAndClose(path, originals);
+        _ExportAndClose(path, originals);
 
         RoundtripAssertions.AssertTsharkMatchesOriginals(path, originals, RoundtripAssertions.ExactNs);
-        ReimportAndAssert(path, originals);
+        _ReimportAndAssert(path, originals);
         await ValueTask.CompletedTask.ConfigureAwait(false);
     }
 
@@ -212,20 +212,20 @@ internal sealed class PcapngRoundtripTests
         FrameInterfaceId ifId = factory.AddInterface("can-test", LinkType.CanSocketcan);
         Frame[] originals =
         [
-            factory.Create(ifId, LinkType.CanSocketcan, EpochBaseNs,
+            factory.Create(ifId, LinkType.CanSocketcan, _EpochBaseNs,
                 SocketCanGenerators.BuildCanClassic(0x123, [1, 2, 3, 4])),
-            factory.Create(ifId, LinkType.CanSocketcan, EpochBaseNs + 10L,
+            factory.Create(ifId, LinkType.CanSocketcan, _EpochBaseNs + 10L,
                 SocketCanGenerators.BuildCanClassic(0x1ABCDEF0, [0xAA, 0xBB], extended: true)),
-            factory.Create(ifId, LinkType.CanSocketcan, EpochBaseNs + 20L,
+            factory.Create(ifId, LinkType.CanSocketcan, _EpochBaseNs + 20L,
                 SocketCanGenerators.BuildCanFd(0x456, new byte[16], brs: true)),
-            factory.Create(ifId, LinkType.CanSocketcan, EpochBaseNs + 30L,
+            factory.Create(ifId, LinkType.CanSocketcan, _EpochBaseNs + 30L,
                 SocketCanGenerators.BuildCanFd(0x789, new byte[64], extended: true, brs: true)),
         ];
 
-        ExportAndClose(path, originals);
+        _ExportAndClose(path, originals);
 
         RoundtripAssertions.AssertTsharkMatchesOriginals(path, originals, RoundtripAssertions.ExactNs);
-        ReimportAndAssert(path, originals);
+        _ReimportAndAssert(path, originals);
         await ValueTask.CompletedTask.ConfigureAwait(false);
     }
 
@@ -247,20 +247,20 @@ internal sealed class PcapngRoundtripTests
 
         Frame[] originals =
         [
-            factory.Create(ethId, LinkType.Ethernet, EpochBaseNs + 10L,
+            factory.Create(ethId, LinkType.Ethernet, _EpochBaseNs + 10L,
                 FrameGenerators.BuildEthernetIpv4UdpFrame(32)),
-            factory.Create(frId, LinkType.Flexray, EpochBaseNs + 20L,
+            factory.Create(frId, LinkType.Flexray, _EpochBaseNs + 20L,
                 FlexRayGenerators.BuildFlexRayFrame(0, 5, 1, 0xCAFE, [0xDE, 0xAD])),
-            factory.Create(linId, LinkType.Lin, EpochBaseNs + 30L,
+            factory.Create(linId, LinkType.Lin, _EpochBaseNs + 30L,
                 LinGenerators.BuildLinFrame(0x11, [0x55, 0x66])),
-            factory.Create(canId, LinkType.CanSocketcan, EpochBaseNs + 40L,
+            factory.Create(canId, LinkType.CanSocketcan, _EpochBaseNs + 40L,
                 SocketCanGenerators.BuildCanClassic(0x321, [9, 8, 7])),
             // Second Ethernet frame — must still map to the same tshark interface.
-            factory.Create(ethId, LinkType.Ethernet, EpochBaseNs + 50L,
+            factory.Create(ethId, LinkType.Ethernet, _EpochBaseNs + 50L,
                 FrameGenerators.BuildEthernetIpv4UdpFrame(48)),
         ];
 
-        ExportAndClose(path, originals);
+        _ExportAndClose(path, originals);
 
         RoundtripAssertions.AssertTsharkMatchesOriginals(path, originals, RoundtripAssertions.ExactNs);
 
@@ -268,7 +268,7 @@ internal sealed class PcapngRoundtripTests
         List<string> ifNames = TsharkVerifier.GetInterfaceNames(path);
         await Assert.That(ifNames.Count).IsGreaterThanOrEqualTo(4);
 
-        ReimportAndAssert(path, originals);
+        _ReimportAndAssert(path, originals);
     }
 
     // ========================================================================
@@ -288,15 +288,15 @@ internal sealed class PcapngRoundtripTests
         byte[] jumbo = FrameGenerators.BuildEthernetIpv4UdpFrame(9000);
         Frame[] originals =
         [
-            factory.Create(ifId, LinkType.Ethernet, EpochBaseNs, minimal),
-            factory.Create(ifId, LinkType.Ethernet, EpochBaseNs + 1L, jumbo),
+            factory.Create(ifId, LinkType.Ethernet, _EpochBaseNs, minimal),
+            factory.Create(ifId, LinkType.Ethernet, _EpochBaseNs + 1L, jumbo),
         ];
 
         // Snap length must accommodate the jumbo frame (default is 65535 → fine).
-        ExportAndClose(path, originals);
+        _ExportAndClose(path, originals);
 
         RoundtripAssertions.AssertTsharkMatchesOriginals(path, originals, RoundtripAssertions.ExactNs);
-        ReimportAndAssert(path, originals);
+        _ReimportAndAssert(path, originals);
         await ValueTask.CompletedTask.ConfigureAwait(false);
     }
 
@@ -315,18 +315,18 @@ internal sealed class PcapngRoundtripTests
         FrameInterfaceId ifId = factory.AddInterface("eth-ts", LinkType.Ethernet);
         Frame[] originals =
         [
-            factory.Create(ifId, LinkType.Ethernet, EpochBaseNs + 1_000_000_000L,
+            factory.Create(ifId, LinkType.Ethernet, _EpochBaseNs + 1_000_000_000L,
                 FrameGenerators.BuildEthernetIpv4UdpFrame(8)),
-            factory.Create(ifId, LinkType.Ethernet, EpochBaseNs + 1_000_000_000L,
+            factory.Create(ifId, LinkType.Ethernet, _EpochBaseNs + 1_000_000_000L,
                 FrameGenerators.BuildEthernetIpv4UdpFrame(9)), // identical timestamp
-            factory.Create(ifId, LinkType.Ethernet, EpochBaseNs + 500_000_000L,
+            factory.Create(ifId, LinkType.Ethernet, _EpochBaseNs + 500_000_000L,
                 FrameGenerators.BuildEthernetIpv4UdpFrame(10)), // earlier than previous
         ];
 
-        ExportAndClose(path, originals);
+        _ExportAndClose(path, originals);
 
         RoundtripAssertions.AssertTsharkMatchesOriginals(path, originals, RoundtripAssertions.ExactNs);
-        ReimportAndAssert(path, originals);
+        _ReimportAndAssert(path, originals);
         await ValueTask.CompletedTask.ConfigureAwait(false);
     }
 
@@ -346,7 +346,7 @@ internal sealed class PcapngRoundtripTests
         for (int i = 0; i < originals.Length; i++)
         {
             originals[i] = factory.Create(ifId, LinkType.Ethernet,
-                EpochBaseNs + (i * 1_000L),
+                _EpochBaseNs + (i * 1_000L),
                 FrameGenerators.BuildEthernetIpv4UdpFrame(16 + i));
         }
 
@@ -392,11 +392,11 @@ internal sealed class PcapngRoundtripTests
         for (int i = 0; i < originals.Length; i++)
         {
             originals[i] = factory.Create(ifId, LinkType.Ethernet,
-                EpochBaseNs + (i * 1_000_000L),
+                _EpochBaseNs + (i * 1_000_000L),
                 FrameGenerators.BuildEthernetIpv4UdpFrame(64));
         }
 
-        ExportAndClose(path, originals);
+        _ExportAndClose(path, originals);
 
         RoundtripAssertions.AssertTsharkMatchesOriginals(path, originals, RoundtripAssertions.ExactNs);
 
@@ -434,11 +434,11 @@ internal sealed class PcapngRoundtripTests
         for (int i = 0; i < count; i++)
         {
             originals[i] = factory.Create(ifId, LinkType.Ethernet,
-                EpochBaseNs + (i * 1_000L),
+                _EpochBaseNs + (i * 1_000L),
                 FrameGenerators.BuildEthernetIpv4UdpFrame(24 + i));
         }
 
-        ExportAndClose(path, originals);
+        _ExportAndClose(path, originals);
 
         using PcapSource source = PcapSource.Open(path, new PcapSourceOptions { ScanMode = ScanMode.Full });
         RoundtripAssertions.StartSource(source);
@@ -470,7 +470,7 @@ internal sealed class PcapngRoundtripTests
 
     /// <summary>Writes <paramref name="frames"/> to <paramref name="path"/> with the default
     /// nanosecond-resolution PCAPNG exporter, flushes and disposes.</summary>
-    private static void ExportAndClose(string path, IReadOnlyList<Frame> frames)
+    private static void _ExportAndClose(string path, IReadOnlyList<Frame> frames)
     {
         using PcapngExporter exporter = PcapngExporter.CreateBuilder()
             .ToFile(path)
@@ -486,7 +486,7 @@ internal sealed class PcapngRoundtripTests
 
     /// <summary>Opens a <see cref="PcapSource"/>, drains it sequentially and asserts
     /// every frame matches the originals byte-exact and with nanosecond timestamps.</summary>
-    private static void ReimportAndAssert(string path, IReadOnlyList<Frame> originals)
+    private static void _ReimportAndAssert(string path, IReadOnlyList<Frame> originals)
     {
         using PcapSource source = PcapSource.Open(path);
         FrameInterfaceRegistry registry = RoundtripAssertions.StartSource(source);

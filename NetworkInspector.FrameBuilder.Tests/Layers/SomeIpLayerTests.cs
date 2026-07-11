@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.FrameBuilder.Tests.Layers;
 
@@ -14,13 +14,13 @@ internal sealed class SomeIpLayerTests
     private static readonly IPv4Address _SrcIp = new(0xC0A80001);
     private static readonly IPv4Address _DstIp = new(0xC0A80002);
     private static readonly IPv4Layer _Ip4 = new(_SrcIp, _DstIp);
-    private static readonly UdpLayer _Udp = new(30490, 30490, FB.Auto<ushort>.Explicit(0)); // typical SOME/IP ports
+    private static readonly UdpLayer _Udp = new(30490, 30490, FB.Auto.Explicit((ushort)0)); // typical SOME/IP ports
 
     /// <summary>SOME/IP byte offset in a (Eth + IPv4 + UDP + SOME/IP) frame.</summary>
-    private const int SomeIpOffsetInFrame = 14 + IPv4Header.Size + UdpHeader.Size;
+    private const int _SomeIpOffsetInFrame = 14 + IPv4Header.Size + UdpHeader.Size;
 
     /// <summary>Builds one Eth + IPv4 + UDP + <typeparamref name="TApp"/> frame via the fluent API.</summary>
-    private static byte[] BuildFrame<TApp>(in TApp app, ReadOnlySpan<byte> payload)
+    private static byte[] _BuildFrame<TApp>(in TApp app, ReadOnlySpan<byte> payload)
         where TApp : struct, IStatelessLayer, IPayloadLayer, IPseudoHeaderIndependent
     {
         FB.CreatedStack<
@@ -72,9 +72,9 @@ internal sealed class SomeIpLayerTests
     public async Task SomeIpLayer_ServiceId_WrittenAtOffset0()
     {
         SomeIpLayer someIp = new(serviceId: 0xABCD, methodId: 0x0001);
-        byte[] frame = BuildFrame(in someIp, [1, 2, 3, 4]);
+        byte[] frame = _BuildFrame(in someIp, [1, 2, 3, 4]);
 
-        ushort serviceId = BinaryPrimitives.ReadUInt16BigEndian(frame.AsSpan(SomeIpOffsetInFrame, 2));
+        ushort serviceId = BinaryPrimitives.ReadUInt16BigEndian(frame.AsSpan(_SomeIpOffsetInFrame, 2));
         await Assert.That(serviceId).IsEqualTo((ushort)0xABCD);
     }
 
@@ -82,9 +82,9 @@ internal sealed class SomeIpLayerTests
     public async Task SomeIpLayer_MethodId_WrittenAtOffset2()
     {
         SomeIpLayer someIp = new(serviceId: 0x0001, methodId: 0x8001);
-        byte[] frame = BuildFrame(in someIp, [1, 2, 3, 4]);
+        byte[] frame = _BuildFrame(in someIp, [1, 2, 3, 4]);
 
-        ushort methodId = BinaryPrimitives.ReadUInt16BigEndian(frame.AsSpan(SomeIpOffsetInFrame + 2, 2));
+        ushort methodId = BinaryPrimitives.ReadUInt16BigEndian(frame.AsSpan(_SomeIpOffsetInFrame + 2, 2));
         await Assert.That(methodId).IsEqualTo((ushort)0x8001);
     }
 
@@ -93,9 +93,9 @@ internal sealed class SomeIpLayerTests
     {
         SomeIpLayer someIp = new(serviceId: 0x1234, methodId: 0x0001,
             messageType: SomeIpMessageType.Response);
-        byte[] frame = BuildFrame(in someIp, [1, 2, 3, 4]);
+        byte[] frame = _BuildFrame(in someIp, [1, 2, 3, 4]);
 
-        byte msgType = frame[SomeIpOffsetInFrame + 14];
+        byte msgType = frame[_SomeIpOffsetInFrame + 14];
         await Assert.That(msgType).IsEqualTo(SomeIpMessageType.Response);
     }
 
@@ -108,9 +108,9 @@ internal sealed class SomeIpLayerTests
     {
         // Length = headerSize - 8 = 16 - 8 = 8 (no payload).
         SomeIpLayer someIp = new(serviceId: 0x1234, methodId: 0x0001);
-        byte[] frame = BuildFrame(in someIp, ReadOnlySpan<byte>.Empty);
+        byte[] frame = _BuildFrame(in someIp, ReadOnlySpan<byte>.Empty);
 
-        uint length = BinaryPrimitives.ReadUInt32BigEndian(frame.AsSpan(SomeIpOffsetInFrame + 4, 4));
+        uint length = BinaryPrimitives.ReadUInt32BigEndian(frame.AsSpan(_SomeIpOffsetInFrame + 4, 4));
         await Assert.That(length).IsEqualTo(8u);
     }
 
@@ -119,9 +119,9 @@ internal sealed class SomeIpLayerTests
     {
         SomeIpLayer someIp = new(serviceId: 0x1234, methodId: 0x0001);
         byte[] payload = new byte[100];
-        byte[] frame = BuildFrame(in someIp, payload);
+        byte[] frame = _BuildFrame(in someIp, payload);
 
-        uint length = BinaryPrimitives.ReadUInt32BigEndian(frame.AsSpan(SomeIpOffsetInFrame + 4, 4));
+        uint length = BinaryPrimitives.ReadUInt32BigEndian(frame.AsSpan(_SomeIpOffsetInFrame + 4, 4));
         // Length = 16 - 8 + 100 = 108.
         await Assert.That(length).IsEqualTo(108u);
     }

@@ -9,34 +9,34 @@ namespace NetworkInspector.Protocols.Tcp;
 internal static class TcpFlagsFormatter
 {
     // TCP flag bit positions (in the 8-bit Flags byte)
-    private const byte FinBit = 0x01;
-    private const byte SynBit = 0x02;
-    private const byte RstBit = 0x04;
-    private const byte PshBit = 0x08;
-    private const byte AckBit = 0x10;
-    private const byte UrgBit = 0x20;
-    private const byte EceBit = 0x40;
-    private const byte CwrBit = 0x80;
+    private const byte _FinBit = 0x01;
+    private const byte _SynBit = 0x02;
+    private const byte _RstBit = 0x04;
+    private const byte _PshBit = 0x08;
+    private const byte _AckBit = 0x10;
+    private const byte _UrgBit = 0x20;
+    private const byte _EceBit = 0x40;
+    private const byte _CwrBit = 0x80;
 
-    private static readonly string[] FlagsTable = BuildFlagsTable();
+    private static readonly string[] _FlagsTable = _BuildFlagsTable();
 
     /// <summary>
     /// Returns a display string for the given TCP flags byte,
     /// listing active flag names separated by commas.
     /// </summary>
-    internal static string Format(byte flags) => FlagsTable[flags];
+    internal static string Format(byte flags) => _FlagsTable[flags];
 
-    private static string[] BuildFlagsTable()
+    private static string[] _BuildFlagsTable()
     {
         string[] table = new string[256];
         for (int i = 0; i < 256; i++)
         {
-            table[i] = BuildFlagString((byte)i);
+            table[i] = _BuildFlagString((byte)i);
         }
         return table;
     }
 
-    private static string BuildFlagString(byte flags)
+    private static string _BuildFlagString(byte flags)
     {
         if (flags == 0)
         {
@@ -49,7 +49,7 @@ internal static class TcpFlagsFormatter
         [
             "CWR", "ECE", "URG", "ACK", "PSH", "RST", "SYN", "FIN"
         ];
-        byte[] masks = [CwrBit, EceBit, UrgBit, AckBit, PshBit, RstBit, SynBit, FinBit];
+        byte[] masks = [_CwrBit, _EceBit, _UrgBit, _AckBit, _PshBit, _RstBit, _SynBit, _FinBit];
 
         // First pass: compute total length
         int totalLen = 0;

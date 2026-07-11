@@ -46,7 +46,7 @@ internal sealed class EagerIndexGroupRegistrationTests
     /// ALPN, supported_versions and key_share so the lazy TLS populator emits fields across the full set
     /// of content-dependent <c>tls.*</c> index groups.
     /// </summary>
-    private static byte[] BuildRichTlsClientHelloFrame()
+    private static byte[] _BuildRichTlsClientHelloFrame()
     {
         byte[] sni = TlsRecordLayer.BuildExtension(
             TlsExtensionType.ServerName, TlsRecordLayer.BuildSniExtensionBody("example.com"));
@@ -86,7 +86,7 @@ internal sealed class EagerIndexGroupRegistrationTests
     /// Ethernet + IPv4 + TCP + HTTP POST with a JSON body so the lazy HTTP populator emits header and body
     /// fields across the <c>http.*</c> index groups (and dispatches to JSON).
     /// </summary>
-    private static byte[] BuildHttpJsonFrame()
+    private static byte[] _BuildHttpJsonFrame()
     {
         const string jsonBody = "{\"name\":\"John\",\"age\":30}";
         string httpMessage =
@@ -110,7 +110,7 @@ internal sealed class EagerIndexGroupRegistrationTests
     /// Ethernet + IPv4 + UDP + DNS response (one question + one A answer) so the lazy DNS populator emits
     /// question and resource-record fields across the <c>dns.*</c> index groups.
     /// </summary>
-    private static byte[] BuildDnsResponseFrame()
+    private static byte[] _BuildDnsResponseFrame()
     {
         byte[] dns = DnsPayloadBuilder.BuildResponseSingleRR(
             id: 0x1234,
@@ -136,7 +136,7 @@ internal sealed class EagerIndexGroupRegistrationTests
     private static readonly byte[] _NdpLinkAddr = [0x00, 0x11, 0x22, 0x33, 0x44, 0x55];
 
     /// <summary>Ethernet + IPv6 + UDP with a Hop-by-Hop extension header.</summary>
-    private static byte[] BuildIPv6HopByHopFrame()
+    private static byte[] _BuildIPv6HopByHopFrame()
     {
         EthernetLayer eth = new(_DstMac, _SrcMac);
         IPv6Layer ip = new(IPv6Address.FromBytes(_V6Src), IPv6Address.FromBytes(_V6Dst));
@@ -146,7 +146,7 @@ internal sealed class EagerIndexGroupRegistrationTests
     }
 
     /// <summary>Ethernet + IPv6 + UDP with a Routing extension header.</summary>
-    private static byte[] BuildIPv6RoutingFrame()
+    private static byte[] _BuildIPv6RoutingFrame()
     {
         EthernetLayer eth = new(_DstMac, _SrcMac);
         IPv6Layer ip = new(IPv6Address.FromBytes(_V6Src), IPv6Address.FromBytes(_V6Dst));
@@ -156,7 +156,7 @@ internal sealed class EagerIndexGroupRegistrationTests
     }
 
     /// <summary>Ethernet + IPv6 + UDP with a Destination Options extension header.</summary>
-    private static byte[] BuildIPv6DestinationOptionsFrame()
+    private static byte[] _BuildIPv6DestinationOptionsFrame()
     {
         EthernetLayer eth = new(_DstMac, _SrcMac);
         IPv6Layer ip = new(IPv6Address.FromBytes(_V6Src), IPv6Address.FromBytes(_V6Dst));
@@ -166,7 +166,7 @@ internal sealed class EagerIndexGroupRegistrationTests
     }
 
     /// <summary>Ethernet + IPv6 + UDP with a Fragment extension header (single complete fragment).</summary>
-    private static byte[] BuildIPv6FragmentFrame()
+    private static byte[] _BuildIPv6FragmentFrame()
     {
         EthernetLayer eth = new(_DstMac, _SrcMac);
         IPv6Layer ip = new(IPv6Address.FromBytes(_V6Src), IPv6Address.FromBytes(_V6Dst));
@@ -176,18 +176,19 @@ internal sealed class EagerIndexGroupRegistrationTests
     }
 
     /// <summary>Ethernet + IPv6 + ICMPv6 Router Solicitation (type-only NDP message).</summary>
-    private static byte[] BuildIcmpv6RouterSolicitationFrame()
+    private static byte[] _BuildIcmpv6RouterSolicitationFrame()
     {
         EthernetLayer eth = new(_DstMac, _SrcMac);
         IPv6Layer ip = new(IPv6Address.FromBytes(_V6LinkLocal), IPv6Address.FromBytes(_V6AllNodes));
-        return FrameStack.Start(eth).Then(ip).Then(new IcmpV6RouterSolicitationLayer()).CreateWithFixedValues().EmitFrame([]);
+        IcmpV6RouterSolicitationLayer icmp = new();
+        return FrameStack.Start(eth).Then(ip).Then(icmp).CreateWithFixedValues().EmitFrame([]);
     }
 
     /// <summary>
     /// Ethernet + IPv6 + ICMPv6 Router Advertisement carrying Source Link-Layer Address, Prefix
     /// Information and MTU options so the lazy ICMPv6 populator emits fields across the NDP option groups.
     /// </summary>
-    private static byte[] BuildIcmpv6RouterAdvertisementWithOptionsFrame()
+    private static byte[] _BuildIcmpv6RouterAdvertisementWithOptionsFrame()
     {
         EthernetLayer eth = new(_DstMac, _SrcMac);
         IPv6Layer ip = new(IPv6Address.FromBytes(_V6LinkLocal), IPv6Address.FromBytes(_V6AllNodes));
@@ -195,11 +196,11 @@ internal sealed class EagerIndexGroupRegistrationTests
             curHopLimit: 64, managed: true, other: false,
             routerLifetimeSec: 1800, reachableTimeMs: 30_000, retransTimerMs: 1000);
 
-        byte[] sourceLinkAddr = BuildNdpLinkLayerAddressOption(optType: 1, _NdpLinkAddr);
-        byte[] prefixInfo = BuildNdpPrefixInformationOption(
+        byte[] sourceLinkAddr = _BuildNdpLinkLayerAddressOption(optType: 1, _NdpLinkAddr);
+        byte[] prefixInfo = _BuildNdpPrefixInformationOption(
             prefixLength: 64, onLink: true, autonomous: true,
             validLifetimeSec: 86_400, preferredLifetimeSec: 14_400, _NdpPrefix);
-        byte[] mtu = BuildNdpMtuOption(1500);
+        byte[] mtu = _BuildNdpMtuOption(1500);
         byte[] options = [.. sourceLinkAddr, .. prefixInfo, .. mtu];
 
         return FrameStack.Start(eth).Then(ip).Then(ra).CreateWithFixedValues().EmitFrame(options);
@@ -212,7 +213,7 @@ internal sealed class EagerIndexGroupRegistrationTests
     /// <c>dns.opt.option</c>). This is the corpus frame that exercises the eager RR-group detector whose
     /// guards mirror the populator byte-for-byte.
     /// </summary>
-    private static byte[] BuildDnssecAndOptResponseFrame()
+    private static byte[] _BuildDnssecAndOptResponseFrame()
     {
         byte[] qname = DnsPayloadBuilder.EncodeName("example.com");
         byte[] ownerPtr = DnsPayloadBuilder.EncodeNamePointer(DnsPayloadBuilder.HeaderSize); // points at QNAME
@@ -224,51 +225,51 @@ internal sealed class EagerIndexGroupRegistrationTests
 
         // Question: example.com IN A
         payload.AddRange(qname);
-        AppendU16(payload, DnsPayloadBuilder.Type.A);
-        AppendU16(payload, DnsPayloadBuilder.ClassIn);
+        _AppendU16(payload, DnsPayloadBuilder.Type.A);
+        _AppendU16(payload, DnsPayloadBuilder.ClassIn);
 
         // DS (type 43): Key Tag(2) + Algorithm(1) + Digest Type(1) + Digest — RDLENGTH 8 (>= 4).
-        AppendRr(payload, ownerPtr, 43, DnsPayloadBuilder.ClassIn, 3600, [0x12, 0x34, 0x08, 0x02, 0xAA, 0xBB, 0xCC, 0xDD]);
+        _AppendRr(payload, ownerPtr, 43, DnsPayloadBuilder.ClassIn, 3600, [0x12, 0x34, 0x08, 0x02, 0xAA, 0xBB, 0xCC, 0xDD]);
 
         // RRSIG (type 46): 18-byte fixed header + signer's name (root) + signature — RDLENGTH 23 (>= 18).
         byte[] rrsig = new byte[18 + 1 + 4];
         rrsig[18] = 0x00; // signer's name = root
-        AppendRr(payload, ownerPtr, 46, DnsPayloadBuilder.ClassIn, 3600, rrsig);
+        _AppendRr(payload, ownerPtr, 46, DnsPayloadBuilder.ClassIn, 3600, rrsig);
 
         // NSEC (type 47): next domain name (root) + one type-bitmap window — RDLENGTH 4 (>= 1).
-        AppendRr(payload, ownerPtr, 47, DnsPayloadBuilder.ClassIn, 3600, [0x00, 0x00, 0x01, 0x40]);
+        _AppendRr(payload, ownerPtr, 47, DnsPayloadBuilder.ClassIn, 3600, [0x00, 0x00, 0x01, 0x40]);
 
         // DNSKEY (type 48): Flags(2) + Protocol(1) + Algorithm(1) + Public Key — RDLENGTH 6 (>= 4).
-        AppendRr(payload, ownerPtr, 48, DnsPayloadBuilder.ClassIn, 3600, [0x01, 0x00, 0x03, 0x08, 0xAB, 0xCD]);
+        _AppendRr(payload, ownerPtr, 48, DnsPayloadBuilder.ClassIn, 3600, [0x01, 0x00, 0x03, 0x08, 0xAB, 0xCD]);
 
         // OPT (type 41) pseudo-RR in the additional section: owner = root, CLASS = UDP payload size,
         // RDATA = one option TLV (code(2) + length(2) + data) so dns.opt and dns.opt.option both apply.
-        AppendRr(payload, [0x00], 41, 4096, 0, [0x00, 0x0A, 0x00, 0x02, 0xDE, 0xAD]);
+        _AppendRr(payload, [0x00], 41, 4096, 0, [0x00, 0x0A, 0x00, 0x02, 0xDE, 0xAD]);
 
         return DnsPayloadBuilder.WrapUdp(payload.ToArray());
     }
 
     /// <summary>Appends a big-endian 16-bit value to <paramref name="buffer"/>.</summary>
-    private static void AppendU16(List<byte> buffer, ushort value)
+    private static void _AppendU16(List<byte> buffer, ushort value)
     {
         buffer.Add((byte)(value >> 8));
         buffer.Add((byte)(value & 0xFF));
     }
 
     /// <summary>Appends one resource record (owner name, type, class, TTL, RDLENGTH, RDATA) to the payload.</summary>
-    private static void AppendRr(List<byte> buffer, ReadOnlySpan<byte> ownerName, ushort type, ushort cls, uint ttl, ReadOnlySpan<byte> rdata)
+    private static void _AppendRr(List<byte> buffer, ReadOnlySpan<byte> ownerName, ushort type, ushort cls, uint ttl, ReadOnlySpan<byte> rdata)
     {
         foreach (byte b in ownerName)
         {
             buffer.Add(b);
         }
-        AppendU16(buffer, type);
-        AppendU16(buffer, cls);
+        _AppendU16(buffer, type);
+        _AppendU16(buffer, cls);
         buffer.Add((byte)(ttl >> 24));
         buffer.Add((byte)(ttl >> 16));
         buffer.Add((byte)(ttl >> 8));
         buffer.Add((byte)ttl);
-        AppendU16(buffer, (ushort)rdata.Length);
+        _AppendU16(buffer, (ushort)rdata.Length);
         foreach (byte b in rdata)
         {
             buffer.Add(b);
@@ -276,7 +277,7 @@ internal sealed class EagerIndexGroupRegistrationTests
     }
 
     /// <summary>Builds an NDP Source/Target Link-Layer Address option (RFC 4861 §4.6.1), 8 bytes.</summary>
-    private static byte[] BuildNdpLinkLayerAddressOption(byte optType, ReadOnlySpan<byte> mac6)
+    private static byte[] _BuildNdpLinkLayerAddressOption(byte optType, ReadOnlySpan<byte> mac6)
     {
         byte[] opt = new byte[8];
         opt[0] = optType;
@@ -286,7 +287,7 @@ internal sealed class EagerIndexGroupRegistrationTests
     }
 
     /// <summary>Builds an NDP Prefix Information option (RFC 4861 §4.6.2), 32 bytes.</summary>
-    private static byte[] BuildNdpPrefixInformationOption(
+    private static byte[] _BuildNdpPrefixInformationOption(
         byte prefixLength, bool onLink, bool autonomous,
         uint validLifetimeSec, uint preferredLifetimeSec, ReadOnlySpan<byte> prefix)
     {
@@ -311,7 +312,7 @@ internal sealed class EagerIndexGroupRegistrationTests
     }
 
     /// <summary>Builds an NDP MTU option (RFC 4861 §4.6.4), 8 bytes.</summary>
-    private static byte[] BuildNdpMtuOption(uint mtuBytes)
+    private static byte[] _BuildNdpMtuOption(uint mtuBytes)
     {
         byte[] opt = new byte[8];
         opt[0] = 5; // type
@@ -326,15 +327,15 @@ internal sealed class EagerIndexGroupRegistrationTests
 
     [Test]
     public async Task RichTlsClientHello_AllEmittedFieldGroups_RecordedEagerly()
-        => await AssertAllEmittedFieldGroupsRecordedEagerly(BuildRichTlsClientHelloFrame()).ConfigureAwait(false);
+        => await _AssertAllEmittedFieldGroupsRecordedEagerly(_BuildRichTlsClientHelloFrame()).ConfigureAwait(false);
 
     [Test]
     public async Task HttpJsonBody_AllEmittedFieldGroups_RecordedEagerly()
-        => await AssertAllEmittedFieldGroupsRecordedEagerly(BuildHttpJsonFrame()).ConfigureAwait(false);
+        => await _AssertAllEmittedFieldGroupsRecordedEagerly(_BuildHttpJsonFrame()).ConfigureAwait(false);
 
     [Test]
     public async Task DnsResponse_AllEmittedFieldGroups_RecordedEagerly()
-        => await AssertAllEmittedFieldGroupsRecordedEagerly(BuildDnsResponseFrame()).ConfigureAwait(false);
+        => await _AssertAllEmittedFieldGroupsRecordedEagerly(_BuildDnsResponseFrame()).ConfigureAwait(false);
 
     /// <summary>
     /// Systematic, data-driven enforcement of the same eager-registration invariant across a broad
@@ -348,7 +349,7 @@ internal sealed class EagerIndexGroupRegistrationTests
     public async Task Corpus_AllEmittedFieldGroups_RecordedEagerly(string name, byte[] frame)
     {
         _ = name; // surfaced as the test-case label; the assertion is frame-driven.
-        await AssertAllEmittedFieldGroupsRecordedEagerly(frame).ConfigureAwait(false);
+        await _AssertAllEmittedFieldGroupsRecordedEagerly(frame).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -357,16 +358,16 @@ internal sealed class EagerIndexGroupRegistrationTests
     /// </summary>
     public static IEnumerable<Func<(string, byte[])>> CorpusFrames()
     {
-        yield return static () => ("tls-clienthello", BuildRichTlsClientHelloFrame());
-        yield return static () => ("http-json", BuildHttpJsonFrame());
-        yield return static () => ("dns-a-response", BuildDnsResponseFrame());
-        yield return static () => ("dns-dnssec-opt", BuildDnssecAndOptResponseFrame());
-        yield return static () => ("ipv6-hopbyhop", BuildIPv6HopByHopFrame());
-        yield return static () => ("ipv6-routing", BuildIPv6RoutingFrame());
-        yield return static () => ("ipv6-destopts", BuildIPv6DestinationOptionsFrame());
-        yield return static () => ("ipv6-fragment", BuildIPv6FragmentFrame());
-        yield return static () => ("icmpv6-router-solicitation", BuildIcmpv6RouterSolicitationFrame());
-        yield return static () => ("icmpv6-router-advertisement-options", BuildIcmpv6RouterAdvertisementWithOptionsFrame());
+        yield return static () => ("tls-clienthello", _BuildRichTlsClientHelloFrame());
+        yield return static () => ("http-json", _BuildHttpJsonFrame());
+        yield return static () => ("dns-a-response", _BuildDnsResponseFrame());
+        yield return static () => ("dns-dnssec-opt", _BuildDnssecAndOptResponseFrame());
+        yield return static () => ("ipv6-hopbyhop", _BuildIPv6HopByHopFrame());
+        yield return static () => ("ipv6-routing", _BuildIPv6RoutingFrame());
+        yield return static () => ("ipv6-destopts", _BuildIPv6DestinationOptionsFrame());
+        yield return static () => ("ipv6-fragment", _BuildIPv6FragmentFrame());
+        yield return static () => ("icmpv6-router-solicitation", _BuildIcmpv6RouterSolicitationFrame());
+        yield return static () => ("icmpv6-router-advertisement-options", _BuildIcmpv6RouterAdvertisementWithOptionsFrame());
     }
 
     /// <summary>
@@ -395,7 +396,7 @@ internal sealed class EagerIndexGroupRegistrationTests
     /// index groups before any materialization, then materializes the whole field tree and asserts that
     /// every emitted, group-bearing field's group was already present in the eager snapshot.
     /// </summary>
-    private static async Task AssertAllEmittedFieldGroupsRecordedEagerly(byte[] frame)
+    private static async Task _AssertAllEmittedFieldGroupsRecordedEagerly(byte[] frame)
     {
         using Stack stack = ProtocolTestHelper.BuildStack();
         NetworkInspector.Core.Index.PacketIndex index = new(stack);

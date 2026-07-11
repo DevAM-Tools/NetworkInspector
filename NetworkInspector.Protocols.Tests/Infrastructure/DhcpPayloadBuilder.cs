@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Protocols.Tests;
 
@@ -11,7 +11,7 @@ namespace NetworkInspector.Protocols.Tests;
 internal static class DhcpPayloadBuilder
 {
     /// <summary>BOOTP/DHCP magic cookie placed between the fixed header and the option block.</summary>
-    private const uint MagicCookie = 0x63825363u;
+    private const uint _MagicCookie = 0x63825363u;
 
     /// <summary>Single TLV option for the DHCP option block.</summary>
     internal readonly struct Option(byte type, byte[] data)
@@ -54,7 +54,7 @@ internal static class DhcpPayloadBuilder
         BinaryPrimitives.WriteUInt32BigEndian(buf.AsSpan(24, 4), giaddr.RawValue);
         mac.CopyTo(buf.AsSpan(28));
         // sname (64) and file (128) left zero; they fall between offsets 44 and 236.
-        BinaryPrimitives.WriteUInt32BigEndian(buf.AsSpan(236, 4), MagicCookie);
+        BinaryPrimitives.WriteUInt32BigEndian(buf.AsSpan(236, 4), _MagicCookie);
 
         int idx = 240;
         for (int i = 0; i < options.Count; i++)

@@ -12,10 +12,15 @@ internal static class ExportCommand
     /// <summary>Runs the export command.</summary>
     internal static int Run(string[] args)
     {
-        if (args.Length == 0 || IsHelpFlag(args[0]))
+        if (args.Length == 0 || _IsHelpFlag(args[0]))
         {
-            PrintUsage();
-            return args.Length > 0 && IsHelpFlag(args[0]) ? 0 : 1;
+            _PrintUsage();
+            if (args.Length > 0 && _IsHelpFlag(args[0]))
+            {
+                return 0;
+            }
+
+            return 1;
         }
 
         // Parse arguments
@@ -34,28 +39,28 @@ internal static class ExportCommand
             switch (args[i].ToUpperInvariant())
             {
                 case "-O" or "--OUTPUT":
-                    outputPath = GetNextArg(args, ref i, "--output");
+                    outputPath = _GetNextArg(args, ref i, "--output");
                     break;
                 case "-F" or "--FORMAT":
-                    formatSpec = GetNextArg(args, ref i, "--format");
+                    formatSpec = _GetNextArg(args, ref i, "--format");
                     break;
                 case "-N" or "--MAX-PACKETS":
-                    maxPackets = ParseLong(GetNextArg(args, ref i, "--max-packets"));
+                    maxPackets = _ParseLong(_GetNextArg(args, ref i, "--max-packets"));
                     break;
                 case "--PROGRESS":
-                    progressInterval = ParseLong(GetNextArg(args, ref i, "--progress"));
+                    progressInterval = _ParseLong(_GetNextArg(args, ref i, "--progress"));
                     break;
                 case "--TOLERANT":
                     tolerant = true;
                     break;
                 case "--PROFILE":
-                    profileName = GetNextArg(args, ref i, "--profile");
+                    profileName = _GetNextArg(args, ref i, "--profile");
                     break;
                 case "--SETTINGS-PATH":
-                    settingsPath = GetNextArg(args, ref i, "--settings-path");
+                    settingsPath = _GetNextArg(args, ref i, "--settings-path");
                     break;
                 case "--BLF-CACHE-SIZE":
-                    blfCacheSize = ParseLong(GetNextArg(args, ref i, "--blf-cache-size"));
+                    blfCacheSize = _ParseLong(_GetNextArg(args, ref i, "--blf-cache-size"));
                     break;
                 default:
                     sourceSpecs.Add(args[i]);
@@ -69,7 +74,7 @@ internal static class ExportCommand
             return 1;
         }
 
-        return Execute(
+        return _Execute(
             sourceSpecs,
             outputPath,
             formatSpec,
@@ -81,8 +86,8 @@ internal static class ExportCommand
             tolerant);
     }
 
-    /// <summary>Executes the export pipeline.</summary>
-    private static int Execute(
+    /// <summary>_Executes the export pipeline.</summary>
+    private static int _Execute(
         List<string> sourceSpecs,
         string? outputPath,
         string? formatSpec,
@@ -147,7 +152,7 @@ internal static class ExportCommand
         }
 
         // Build settings manager — load profile if specified
-        SettingsManager? settingsManager = BuildSettingsManager(settingsPath, profileName);
+        SettingsManager? settingsManager = _BuildSettingsManager(settingsPath, profileName);
 
         // Create stack with full protocol parsing
         FrameInterfaceRegistry registry = new();
@@ -189,7 +194,7 @@ internal static class ExportCommand
         catch (Exception ex)
         {
             Console.Error.WriteLine($"Error opening source: {ex.Message}");
-            DisposeSources(sources);
+            _DisposeSources(sources);
             return 2;
         }
 
@@ -225,7 +230,7 @@ internal static class ExportCommand
         }
         finally
         {
-            DisposeSources(sources);
+            _DisposeSources(sources);
         }
     }
 
@@ -338,7 +343,7 @@ internal static class ExportCommand
     /// Constructs a <see cref="SettingsManager"/> using the provided settings path and profile.
     /// Delegates to <see cref="SettingsManagerFactory.Create"/> for consistent path resolution.
     /// </summary>
-    private static SettingsManager BuildSettingsManager(string? settingsPath, string? profileName)
+    private static SettingsManager _BuildSettingsManager(string? settingsPath, string? profileName)
         => SettingsManagerFactory.Create(settingsPath, profileName);
 
     /// <summary>
@@ -346,7 +351,7 @@ internal static class ExportCommand
     /// If every disposal fails the aggregate is re-thrown so callers are not
     /// silently left with unreleased resources.
     /// </summary>
-    private static void DisposeSources(List<IFrameSource> sources)
+    private static void _DisposeSources(List<IFrameSource> sources)
     {
         List<Exception>? errors = null;
         foreach (IFrameSource source in sources)
@@ -370,11 +375,11 @@ internal static class ExportCommand
     }
 
     /// <summary>Checks whether a string is a help flag.</summary>
-    private static bool IsHelpFlag(string arg) =>
+    private static bool _IsHelpFlag(string arg) =>
         arg is "--help" or "-h" or "-?" or "/?" or "--HELP" or "-H";
 
     /// <summary>Gets the next argument value, throwing if missing or null.</summary>
-    private static string GetNextArg(string[] args, ref int index, string name)
+    private static string _GetNextArg(string[] args, ref int index, string name)
     {
         index++;
         if (index >= args.Length)
@@ -392,7 +397,7 @@ internal static class ExportCommand
     }
 
     /// <summary>Parses a long value, throwing a user-friendly message on failure.</summary>
-    private static long ParseLong(string value)
+    private static long _ParseLong(string value)
     {
         if (!long.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out long result) || result < 0)
         {
@@ -403,7 +408,7 @@ internal static class ExportCommand
     }
 
     /// <summary>Prints usage information for the export command.</summary>
-    private static void PrintUsage()
+    private static void _PrintUsage()
     {
         Console.Error.WriteLine("Usage: ni export <sources...> [options]");
         Console.Error.WriteLine();

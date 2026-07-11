@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Protocols.Tests;
 
@@ -16,23 +16,23 @@ internal sealed class TcpChecksumTests
     private static readonly IPv4Address _ClientIp = new(0x0A000001);
     private static readonly IPv4Address _ServerIp = new(0x0A000002);
 
-    private const ushort ClientPort = 49152;
-    private const ushort ServerPort = 80;
+    private const ushort _ClientPort = 49152;
+    private const ushort _ServerPort = 80;
 
     #endregion
 
     #region Helpers
 
-    private static byte[] BuildFrame(ReadOnlySpan<byte> payload = default)
+    private static byte[] _BuildFrame(ReadOnlySpan<byte> payload = default)
     {
         EthernetLayer eth = new(_DstMac, _SrcMac);
         IPv4Layer ip = new(_ClientIp, _ServerIp);
-        TcpLayer tcp = new(ClientPort, ServerPort, seqNum: 1000, ackNum: 0, flags: TcpFlags.Syn);
+        TcpLayer tcp = new(_ClientPort, _ServerPort, seqNum: 1000, ackNum: 0, flags: TcpFlags.Syn);
         return FrameStack.Start(eth).Then(ip).Then(tcp).CreateWithFixedValues().EmitFrame(payload);
     }
 
     /// <summary>Corrupts the TCP checksum by flipping the first byte.</summary>
-    private static void CorruptChecksum(byte[] frame) =>
+    private static void _CorruptChecksum(byte[] frame) =>
         // TCP checksum is at offset 14 (Eth) + 20 (IPv4) + 16 (TCP checksum offset) = 50
         frame[50] ^= 0xFF;
 
@@ -44,7 +44,7 @@ internal sealed class TcpChecksumTests
     public async Task Checksum_FieldPresent()
     {
         using Stack stack = ProtocolTestHelper.BuildStack();
-        byte[] frame = BuildFrame();
+        byte[] frame = _BuildFrame();
         Packet p = ProtocolTestHelper.ParseFrame(stack, frame, 0, Timestamp.FromMillis(0));
 
         // tcp.checksum is always present
@@ -57,7 +57,7 @@ internal sealed class TcpChecksumTests
         using Stack stack = ProtocolTestHelper.BuildStackWithSettings(
             ("tcp.verify_checksum", SettingValue.Bool(true)));
 
-        byte[] frame = BuildFrame();
+        byte[] frame = _BuildFrame();
         Packet p = ProtocolTestHelper.ParseFrame(stack, frame, 0, Timestamp.FromMillis(0));
 
         await ProtocolTestHelper.AssertStringField(stack, p, "tcp.checksum.status", "[Good]").ConfigureAwait(false);
@@ -69,8 +69,8 @@ internal sealed class TcpChecksumTests
         using Stack stack = ProtocolTestHelper.BuildStackWithSettings(
             ("tcp.verify_checksum", SettingValue.Bool(true)));
 
-        byte[] frame = BuildFrame();
-        CorruptChecksum(frame);
+        byte[] frame = _BuildFrame();
+        _CorruptChecksum(frame);
         Packet p = ProtocolTestHelper.ParseFrame(stack, frame, 0, Timestamp.FromMillis(0));
 
         await ProtocolTestHelper.AssertStringField(stack, p, "tcp.checksum.status", "[Bad]").ConfigureAwait(false);
@@ -82,7 +82,7 @@ internal sealed class TcpChecksumTests
         // Checksum verification is disabled by default
         using Stack stack = ProtocolTestHelper.BuildStack();
 
-        byte[] frame = BuildFrame();
+        byte[] frame = _BuildFrame();
         Packet p = ProtocolTestHelper.ParseFrame(stack, frame, 0, Timestamp.FromMillis(0));
 
         // When verification is disabled, status field should not be present
@@ -96,7 +96,7 @@ internal sealed class TcpChecksumTests
             ("tcp.verify_checksum", SettingValue.Bool(true)));
 
         byte[] payload = "Hello, TCP!"u8.ToArray();
-        byte[] frame = BuildFrame(payload);
+        byte[] frame = _BuildFrame(payload);
         Packet p = ProtocolTestHelper.ParseFrame(stack, frame, 0, Timestamp.FromMillis(0));
 
         await ProtocolTestHelper.AssertStringField(stack, p, "tcp.checksum.status", "[Good]").ConfigureAwait(false);

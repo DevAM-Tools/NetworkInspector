@@ -11,10 +11,10 @@ namespace NetworkInspector.Exporters.Tests.Verification;
 internal sealed class BlfStructuralVerifier
 {
     // Magic constants (little-endian u32)
-    private const uint FileMagic = 0x47474F4C;  // "LOGG"
-    private const uint ObjectMagic = 0x4A424F4C; // "LOBJ"
-    private const int FileHeaderMinSize = 144;
-    private const int BlockHeaderSize = 16;
+    private const uint _FileMagic = 0x47474F4C;  // "LOGG"
+    private const uint _ObjectMagic = 0x4A424F4C; // "LOBJ"
+    private const int _FileHeaderMinSize = 144;
+    private const int _BlockHeaderSize = 16;
 
     /// <summary>Total number of objects found (excluding container payloads).</summary>
     internal int ObjectCount
@@ -38,22 +38,22 @@ internal sealed class BlfStructuralVerifier
     {
         byte[] data = File.ReadAllBytes(path);
         BlfStructuralVerifier verifier = new();
-        verifier.Parse(data);
+        verifier._Parse(data);
         return verifier;
     }
 
     /// <summary>
     /// Parses the BLF file structure from raw bytes.
     /// </summary>
-    private void Parse(byte[] data)
+    private void _Parse(byte[] data)
     {
-        if (data.Length < FileHeaderMinSize)
+        if (data.Length < _FileHeaderMinSize)
         {
             throw new InvalidDataException($"BLF file too small: {data.Length} bytes");
         }
 
         uint magic = BinaryPrimitives.ReadUInt32LittleEndian(data);
-        HasValidHeader = magic == FileMagic;
+        HasValidHeader = magic == _FileMagic;
 
         if (!HasValidHeader)
         {
@@ -63,10 +63,10 @@ internal sealed class BlfStructuralVerifier
         uint headerSize = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(4));
         int offset = (int)headerSize;
 
-        while (offset + BlockHeaderSize <= data.Length)
+        while (offset + _BlockHeaderSize <= data.Length)
         {
             uint objMagic = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(offset));
-            if (objMagic != ObjectMagic)
+            if (objMagic != _ObjectMagic)
             {
                 break;
             }

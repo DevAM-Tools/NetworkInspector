@@ -15,7 +15,7 @@ namespace NetworkInspector.Protocols.IPv4;
 internal static class IPv4FlagsFormatter
 {
     // Key packing: bit0=RB (Reserved), bit1=DF (Don't Fragment), bit2=MF (More Fragments).
-    private static readonly string[] FlagsTable = BuildFlagsTable();
+    private static readonly string[] _FlagsTable = _BuildFlagsTable();
 
     /// <summary>
     /// Returns the precomputed display string for the given IPv4 flag combination.
@@ -24,21 +24,21 @@ internal static class IPv4FlagsFormatter
     internal static string Format(bool rb, bool df, bool mf)
     {
         int key = (rb ? 1 : 0) | (df ? 2 : 0) | (mf ? 4 : 0);
-        return FlagsTable[key];
+        return _FlagsTable[key];
     }
 
-    private static string[] BuildFlagsTable()
+    private static string[] _BuildFlagsTable()
     {
         ReadOnlySpan<string> names = ["RB", "DF", "MF"];
         string[] table = new string[8];
         for (int i = 0; i < 8; i++)
         {
-            table[i] = BuildFlagString((byte)i, names);
+            table[i] = _BuildFlagString((byte)i, names);
         }
         return table;
     }
 
-    private static string BuildFlagString(byte flags, ReadOnlySpan<string> names)
+    private static string _BuildFlagString(byte flags, ReadOnlySpan<string> names)
     {
         if (flags == 0)
         {

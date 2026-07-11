@@ -129,7 +129,7 @@ internal sealed class FrameIndex
         IndexArrays arrays = Volatile.Read(ref _Arrays);
         if (count >= arrays.Offsets.Length)
         {
-            arrays = Grow(count);
+            arrays = _Grow(count);
         }
 
         arrays.Offsets[count] = offset;
@@ -167,14 +167,14 @@ internal sealed class FrameIndex
     #region Private Helpers
 
     /// <summary>
-    /// Grows the backing arrays to fit at least <paramref name="required"/> entries.
+    /// _Grows the backing arrays to fit at least <paramref name="required"/> entries.
     /// Creates a new <see cref="IndexArrays"/>, copies all existing data, and
     /// publishes atomically via a single <see cref="Volatile.Write{T}"/>.
-    /// Growth uses doubling (saturating at <see cref="int.MaxValue"/>).
+    /// _Growth uses doubling (saturating at <see cref="int.MaxValue"/>).
     /// </summary>
     /// <param name="required">Minimum number of entries the new arrays must accommodate.</param>
     /// <returns>The newly published <see cref="IndexArrays"/>.</returns>
-    private IndexArrays Grow(int required)
+    private IndexArrays _Grow(int required)
     {
         IndexArrays old = Volatile.Read(ref _Arrays);
         int oldCapacity = old.Offsets.Length;

@@ -10,19 +10,19 @@ namespace NetworkInspector.Sources.Tests.ErrorTolerance;
 /// </summary>
 internal sealed class ErrorToleranceTests
 {
-    private static readonly byte[] SrcMac = [0x00, 0x11, 0x22, 0x33, 0x44, 0x55];
-    private static readonly byte[] DstMac = [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
+    private static readonly byte[] _SrcMac = [0x00, 0x11, 0x22, 0x33, 0x44, 0x55];
+    private static readonly byte[] _DstMac = [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
 
     // ========================================================================
     // Helper methods
     // ========================================================================
 
     /// <summary>Creates a PcapStreamSource from raw bytes.</summary>
-    private static PcapStreamSource CreatePcapSource(byte[] data) =>
+    private static PcapStreamSource _CreatePcapSource(byte[] data) =>
         PcapStreamSource.FromStream(new MemoryStream(data), "truncated.pcapng");
 
     /// <summary>Creates a BlfStreamSource from raw bytes.</summary>
-    private static BlfStreamSource CreateBlfSource(byte[] data) =>
+    private static BlfStreamSource _CreateBlfSource(byte[] data) =>
         BlfStreamSource.FromStream(new MemoryStream(data), "truncated.blf");
 
 
@@ -31,9 +31,9 @@ internal sealed class ErrorToleranceTests
     /// Builds a valid PCAPNG byte array containing the given number of Ethernet frames,
     /// then truncates it at the specified byte position.
     /// </summary>
-    private static byte[] BuildTruncatedPcapNg(int validFrameCount, int truncateAt)
+    private static byte[] _BuildTruncatedPcapNg(int validFrameCount, int truncateAt)
     {
-        byte[] eth = FrameBuilders.BuildEthernetFrame(DstMac, SrcMac, 0x0800, [0xCA, 0xFE]);
+        byte[] eth = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0xCA, 0xFE]);
 
         using PcapNgTestWriter writer = new();
         writer.AddInterface(LinkType.Ethernet);
@@ -54,9 +54,9 @@ internal sealed class ErrorToleranceTests
     /// Builds a valid BLF byte array containing the given number of Ethernet frames,
     /// then truncates it at the specified byte position.
     /// </summary>
-    private static byte[] BuildTruncatedBlf(int validFrameCount, int truncateAt)
+    private static byte[] _BuildTruncatedBlf(int validFrameCount, int truncateAt)
     {
-        byte[] eth = FrameBuilders.BuildEthernetFrame(DstMac, SrcMac, 0x0800, [0xBE, 0xEF]);
+        byte[] eth = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0xBE, 0xEF]);
 
         BlfTestGenerator gen = new();
         for (int i = 0; i < validFrameCount + 1; i++)
@@ -70,7 +70,7 @@ internal sealed class ErrorToleranceTests
     }
 
     /// <summary>Reads all frames from a source until exhaustion, returns count.</summary>
-    private static int DrainFrames(IFrameSource source)
+    private static int _DrainFrames(IFrameSource source)
     {
         int count = 0;
         while (source.NextFrame() is not null)
@@ -88,7 +88,7 @@ internal sealed class ErrorToleranceTests
     public async Task PcapNg_Tolerant_TruncatedStream_RaisesFrameSkipped()
     {
         // Build a file with 2 valid frames + 1 that will be truncated
-        byte[] eth = FrameBuilders.BuildEthernetFrame(DstMac, SrcMac, 0x0800, [0xCA, 0xFE]);
+        byte[] eth = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0xCA, 0xFE]);
 
         using PcapNgTestWriter writer = new();
         writer.AddInterface(LinkType.Ethernet);
@@ -102,14 +102,14 @@ internal sealed class ErrorToleranceTests
         // We want to cut mid-third EPB, so cut a few bytes before end
         byte[] truncated = fullData[..(fullData.Length - 4)];
 
-        using PcapStreamSource source = CreatePcapSource(truncated);
+        using PcapStreamSource source = _CreatePcapSource(truncated);
         source.ErrorTolerance = ErrorToleranceMode.Tolerant;
 
         List<FrameReadErrorEventArgs> errors = [];
         source.FrameSkipped += (_, e) => errors.Add(e);
 
         SourceTestFixture.InitializeAndStartSource(source);
-        int readCount = DrainFrames(source);
+        int readCount = _DrainFrames(source);
 
         // Should have read the 2 valid frames
         await Assert.That(readCount).IsEqualTo(2);
@@ -132,7 +132,7 @@ internal sealed class ErrorToleranceTests
     [Test]
     public async Task PcapNg_Strict_TruncatedStream_StopsImmediately()
     {
-        byte[] eth = FrameBuilders.BuildEthernetFrame(DstMac, SrcMac, 0x0800, [0xCA, 0xFE]);
+        byte[] eth = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0xCA, 0xFE]);
 
         using PcapNgTestWriter writer = new();
         writer.AddInterface(LinkType.Ethernet);
@@ -144,14 +144,14 @@ internal sealed class ErrorToleranceTests
         // Truncate mid-third frame
         byte[] truncated = fullData[..(fullData.Length - 4)];
 
-        using PcapStreamSource source = CreatePcapSource(truncated);
+        using PcapStreamSource source = _CreatePcapSource(truncated);
         source.ErrorTolerance = ErrorToleranceMode.Strict;
 
         List<FrameReadErrorEventArgs> errors = [];
         source.FrameSkipped += (_, e) => errors.Add(e);
 
         SourceTestFixture.InitializeAndStartSource(source);
-        int readCount = DrainFrames(source);
+        int readCount = _DrainFrames(source);
 
         // Should still read the 2 valid frames before hitting truncation
         await Assert.That(readCount).IsEqualTo(2);
@@ -177,7 +177,7 @@ internal sealed class ErrorToleranceTests
     [Test]
     public async Task PcapNg_ValidFile_NoErrors()
     {
-        byte[] eth = FrameBuilders.BuildEthernetFrame(DstMac, SrcMac, 0x0800, [0xAA]);
+        byte[] eth = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0xAA]);
 
         using PcapNgTestWriter writer = new();
         writer.AddInterface(LinkType.Ethernet);
@@ -185,14 +185,14 @@ internal sealed class ErrorToleranceTests
         writer.WriteFrame(0, 2_000_000, eth);
         byte[] pcapData = writer.Build();
 
-        using PcapStreamSource source = CreatePcapSource(pcapData);
+        using PcapStreamSource source = _CreatePcapSource(pcapData);
         source.ErrorTolerance = ErrorToleranceMode.Tolerant;
 
         List<FrameReadErrorEventArgs> errors = [];
         source.FrameSkipped += (_, e) => errors.Add(e);
 
         SourceTestFixture.InitializeAndStartSource(source);
-        int readCount = DrainFrames(source);
+        int readCount = _DrainFrames(source);
 
         await Assert.That(readCount).IsEqualTo(2);
         await Assert.That(source.ReadFrameCount).IsEqualTo(2);
@@ -210,7 +210,7 @@ internal sealed class ErrorToleranceTests
     public async Task PcapNg_TruncatedAtSHB_NoFrames()
     {
         // Build a valid file and truncate within the SHB itself
-        byte[] eth = FrameBuilders.BuildEthernetFrame(DstMac, SrcMac, 0x0800, [0xBB]);
+        byte[] eth = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0xBB]);
 
         using PcapNgTestWriter writer = new();
         writer.AddInterface(LinkType.Ethernet);
@@ -220,11 +220,11 @@ internal sealed class ErrorToleranceTests
         // Truncate within the SHB (first 28 bytes is SHB, cut at 20)
         byte[] truncated = fullData[..20];
 
-        using PcapStreamSource source = CreatePcapSource(truncated);
+        using PcapStreamSource source = _CreatePcapSource(truncated);
         source.ErrorTolerance = ErrorToleranceMode.Tolerant;
 
         SourceTestFixture.InitializeAndStartSource(source);
-        int readCount = DrainFrames(source);
+        int readCount = _DrainFrames(source);
 
         await Assert.That(readCount).IsEqualTo(0);
         await Assert.That(source.ReadFrameCount).IsEqualTo(0);
@@ -237,7 +237,7 @@ internal sealed class ErrorToleranceTests
     [Test]
     public async Task Blf_Tolerant_TruncatedStream_RaisesFrameSkipped()
     {
-        byte[] eth = FrameBuilders.BuildEthernetFrame(DstMac, SrcMac, 0x0800, [0xDE, 0xAD]);
+        byte[] eth = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0xDE, 0xAD]);
 
         BlfTestGenerator gen = new();
         gen.AddEthernetFrame(1, eth, 1_000_000);
@@ -248,14 +248,14 @@ internal sealed class ErrorToleranceTests
         // Truncate mid-third frame
         byte[] truncated = fullData[..(fullData.Length - 4)];
 
-        using BlfStreamSource source = CreateBlfSource(truncated);
+        using BlfStreamSource source = _CreateBlfSource(truncated);
         source.ErrorTolerance = ErrorToleranceMode.Tolerant;
 
         List<FrameReadErrorEventArgs> errors = [];
         source.FrameSkipped += (_, e) => errors.Add(e);
 
         SourceTestFixture.InitializeAndStartSource(source);
-        int readCount = DrainFrames(source);
+        int readCount = _DrainFrames(source);
 
         // Should have read the 2 valid frames
         await Assert.That(readCount).IsEqualTo(2);
@@ -278,7 +278,7 @@ internal sealed class ErrorToleranceTests
     [Test]
     public async Task Blf_Strict_TruncatedStream_StopsImmediately()
     {
-        byte[] eth = FrameBuilders.BuildEthernetFrame(DstMac, SrcMac, 0x0800, [0xDE, 0xAD]);
+        byte[] eth = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0xDE, 0xAD]);
 
         BlfTestGenerator gen = new();
         gen.AddEthernetFrame(1, eth, 1_000_000);
@@ -289,14 +289,14 @@ internal sealed class ErrorToleranceTests
         // Truncate mid-third frame
         byte[] truncated = fullData[..(fullData.Length - 4)];
 
-        using BlfStreamSource source = CreateBlfSource(truncated);
+        using BlfStreamSource source = _CreateBlfSource(truncated);
         source.ErrorTolerance = ErrorToleranceMode.Strict;
 
         List<FrameReadErrorEventArgs> errors = [];
         source.FrameSkipped += (_, e) => errors.Add(e);
 
         SourceTestFixture.InitializeAndStartSource(source);
-        int readCount = DrainFrames(source);
+        int readCount = _DrainFrames(source);
 
         // Should still read the 2 valid frames before truncation
         await Assert.That(readCount).IsEqualTo(2);
@@ -321,21 +321,21 @@ internal sealed class ErrorToleranceTests
     [Test]
     public async Task Blf_ValidFile_NoErrors()
     {
-        byte[] eth = FrameBuilders.BuildEthernetFrame(DstMac, SrcMac, 0x0800, [0xBB]);
+        byte[] eth = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0xBB]);
 
         BlfTestGenerator gen = new();
         gen.AddEthernetFrame(1, eth, 1_000_000);
         gen.AddEthernetFrame(1, eth, 2_000_000);
         byte[] blfData = gen.Build();
 
-        using BlfStreamSource source = CreateBlfSource(blfData);
+        using BlfStreamSource source = _CreateBlfSource(blfData);
         source.ErrorTolerance = ErrorToleranceMode.Tolerant;
 
         List<FrameReadErrorEventArgs> errors = [];
         source.FrameSkipped += (_, e) => errors.Add(e);
 
         SourceTestFixture.InitializeAndStartSource(source);
-        int readCount = DrainFrames(source);
+        int readCount = _DrainFrames(source);
 
         await Assert.That(readCount).IsEqualTo(2);
         await Assert.That(source.ReadFrameCount).IsEqualTo(2);
@@ -352,7 +352,7 @@ internal sealed class ErrorToleranceTests
     [Test]
     public async Task PcapNg_SwitchFromTolerantToStrict_MidRead()
     {
-        byte[] eth = FrameBuilders.BuildEthernetFrame(DstMac, SrcMac, 0x0800, [0xCC]);
+        byte[] eth = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0xCC]);
 
         using PcapNgTestWriter writer = new();
         writer.AddInterface(LinkType.Ethernet);
@@ -362,7 +362,7 @@ internal sealed class ErrorToleranceTests
         writer.WriteFrame(0, 3_000_000, eth);
         byte[] pcapData = writer.Build();
 
-        using PcapStreamSource source = CreatePcapSource(pcapData);
+        using PcapStreamSource source = _CreatePcapSource(pcapData);
         source.ErrorTolerance = ErrorToleranceMode.Tolerant;
 
         SourceTestFixture.InitializeAndStartSource(source);
@@ -392,7 +392,7 @@ internal sealed class ErrorToleranceTests
     [Test]
     public async Task Blf_Tolerant_CountersUpdateCorrectly()
     {
-        byte[] eth = FrameBuilders.BuildEthernetFrame(DstMac, SrcMac, 0x0800, [0x01, 0x02]);
+        byte[] eth = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0x01, 0x02]);
 
         BlfTestGenerator gen = new();
         // Add 5 frames, truncate so last one is incomplete
@@ -403,13 +403,13 @@ internal sealed class ErrorToleranceTests
         byte[] fullData = gen.Build();
         byte[] truncated = fullData[..(fullData.Length - 10)];
 
-        using BlfStreamSource source = CreateBlfSource(truncated);
+        using BlfStreamSource source = _CreateBlfSource(truncated);
         source.ErrorTolerance = ErrorToleranceMode.Tolerant;
 
         SourceTestFixture.InitializeAndStartSource(source);
 
         // Read all available frames
-        int readCount = DrainFrames(source);
+        int readCount = _DrainFrames(source);
 
         // 4 valid frames + 1 truncated = 4 read, >=1 skipped
         await Assert.That(readCount).IsEqualTo(4);
@@ -426,14 +426,14 @@ internal sealed class ErrorToleranceTests
     [Test]
     public async Task PcapNg_DefaultMode_IsTolerant()
     {
-        byte[] eth = FrameBuilders.BuildEthernetFrame(DstMac, SrcMac, 0x0800, [0xAA]);
+        byte[] eth = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0xAA]);
 
         using PcapNgTestWriter writer = new();
         writer.AddInterface(LinkType.Ethernet);
         writer.WriteFrame(0, 1_000_000, eth);
         byte[] pcapData = writer.Build();
 
-        using PcapStreamSource source = CreatePcapSource(pcapData);
+        using PcapStreamSource source = _CreatePcapSource(pcapData);
         // Do NOT set ErrorTolerance — should default to Tolerant
         await Assert.That(source.ErrorTolerance).IsEqualTo(ErrorToleranceMode.Tolerant);
     }
@@ -441,10 +441,10 @@ internal sealed class ErrorToleranceTests
     [Test]
     public async Task Blf_DefaultMode_IsTolerant()
     {
-        byte[] eth = FrameBuilders.BuildEthernetFrame(DstMac, SrcMac, 0x0800, [0xAA]);
+        byte[] eth = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0xAA]);
         byte[] blfData = new BlfTestGenerator().AddEthernetFrame(1, eth, 1_000_000).Build();
 
-        using BlfStreamSource source = CreateBlfSource(blfData);
+        using BlfStreamSource source = _CreateBlfSource(blfData);
         await Assert.That(source.ErrorTolerance).IsEqualTo(ErrorToleranceMode.Tolerant);
     }
 }

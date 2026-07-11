@@ -33,22 +33,22 @@ public readonly struct IPv4Layer :
     IConsumesNextProtocolValue<IpNextProtocolKind>, IProvidesPseudoHeader, IFragmentable
 {
     /// <summary>Offset of the Protocol field within the IPv4 header.</summary>
-    private const int ProtocolFieldOffset = 9;
+    private const int _ProtocolFieldOffset = 9;
 
     /// <summary>Offset of the Source Address field within the IPv4 header.</summary>
-    private const int SrcAddrOffset = 12;
+    private const int _SrcAddrOffset = 12;
 
     /// <summary>Offset of the Destination Address field within the IPv4 header.</summary>
-    private const int DstAddrOffset = 16;
+    private const int _DstAddrOffset = 16;
 
     /// <summary>Offset of the Flags+FragmentOffset combined 16-bit field.</summary>
-    private const int FlagsFragOffsetOffset = 6;
+    private const int _FlagsFragOffsetOffset = 6;
 
     /// <summary>Mask of the MF (More Fragments) flag inside the combined field.</summary>
-    private const ushort MoreFragmentsMask = 0x2000;
+    private const ushort _MoreFragmentsMask = 0x2000;
 
     /// <summary>Mask of the FragmentOffset bits (in 8-octet units).</summary>
-    private const ushort FragmentOffsetMask = 0x1FFF;
+    private const ushort _FragmentOffsetMask = 0x1FFF;
 
     private readonly IPv4Address _SrcAddr;
     private readonly IPv4Address _DstAddr;
@@ -60,7 +60,7 @@ public readonly struct IPv4Layer :
     /// <summary>Explicit Protocol value when the user pinned one; meaningful only when <see cref="_ProtocolIsExplicit"/> is <c>true</c>.</summary>
     private readonly byte _ExplicitProtocol;
 
-    /// <summary><c>true</c> when the caller supplied an explicit Protocol via <see cref="Auto{T}.Explicit"/>.</summary>
+    /// <summary><c>true</c> when the caller supplied an explicit Protocol via <see cref="Auto.Explicit"/>.</summary>
     private readonly bool _ProtocolIsExplicit;
 
     /// <summary>
@@ -83,9 +83,9 @@ public readonly struct IPv4Layer :
     /// Cross-frame counters require the stateful layer variant (see roadmap).
     /// </param>
     /// <param name="protocol">
-    /// IP Protocol field; <see cref="Auto{T}.Compute"/> (default) means auto-patch
+    /// IP Protocol field; <see cref="Auto.Compute"/> (default) means auto-patch
     /// from the inner transport layer's <see cref="IProvidesProtocolType"/>.
-    /// Use <see cref="Auto{T}.Explicit"/> to pin.
+    /// Use <see cref="Auto.Explicit"/> to pin.
     /// </param>
     /// <param name="dontFragment">
     /// Don't-Fragment (DF) flag.  Default <c>true</c> (matches the historical
@@ -132,12 +132,12 @@ public readonly struct IPv4Layer :
 
     /// <inheritdoc />
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public void PatchNextProtocol(scoped Span<byte> frame, int myOffset, ushort next)
+    public void PatchNextProtocol(scoped Span<byte> frame, int myOffset, ushort nextProtocol)
     {
         // The Protocol field is a single byte; ignore the high byte of "next".
         if (!_ProtocolIsExplicit)
         {
-            frame[myOffset + ProtocolFieldOffset] = (byte)next;
+            frame[myOffset + _ProtocolFieldOffset] = (byte)nextProtocol;
         }
     }
 
@@ -153,7 +153,7 @@ public readonly struct IPv4Layer :
                 break;
 
             case FixPhase.PublishPseudoHeader:
-                PublishPseudoHeader(frame, myOffset, myLength, ref ctx);
+                _PublishPseudoHeader(frame, myOffset, myLength, ref ctx);
                 break;
 
             case FixPhase.OuterChecksum:
@@ -176,16 +176,16 @@ public readonly struct IPv4Layer :
     /// this in <see cref="FixPhase.InnerChecksum"/>.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static void PublishPseudoHeader(scoped Span<byte> frame, int myOffset, int myLength, scoped ref PostFixContext ctx)
+    private static void _PublishPseudoHeader(scoped Span<byte> frame, int myOffset, int myLength, scoped ref PostFixContext ctx)
     {
         // Source and destination address copies for the pseudo-header.
-        frame.Slice(myOffset + SrcAddrOffset, 4).CopyTo(ctx.PseudoSrcIp);
-        frame.Slice(myOffset + DstAddrOffset, 4).CopyTo(ctx.PseudoDstIp);
+        frame.Slice(myOffset + _SrcAddrOffset, 4).CopyTo(ctx.PseudoSrcIp);
+        frame.Slice(myOffset + _DstAddrOffset, 4).CopyTo(ctx.PseudoDstIp);
         ctx.PseudoIpLength = 4;
         ctx.PseudoIsIPv6 = false;
 
         // Protocol field has been patched during the write walk.
-        ctx.PseudoProtocol = frame[myOffset + ProtocolFieldOffset];
+        ctx.PseudoProtocol = frame[myOffset + _ProtocolFieldOffset];
 
         // Transport segment offset/end inside the frame.
         ctx.TransportOffset = myOffset + IPv4Header.Size;
@@ -212,13 +212,13 @@ public readonly struct IPv4Layer :
     public void PatchFragmentHeader(scoped Span<byte> frame, int myOffset, int myLength, int fragmentPayloadOffset, bool moreFragments)
     {
         _ = myLength; // Only TotalLength uses it; that field is repatched by FixPhase.Length.
-        ushort fragField = (ushort)((fragmentPayloadOffset >> 3) & FragmentOffsetMask);
+        ushort fragField = (ushort)((fragmentPayloadOffset >> 3) & _FragmentOffsetMask);
         if (moreFragments)
         {
-            fragField |= MoreFragmentsMask;
+            fragField |= _MoreFragmentsMask;
         }
         // The DF bit is implicitly cleared because we rewrite the full 16-bit field;
         // any DF flag that may have been carried over from the cached header is dropped.
-        BinaryPrimitives.WriteUInt16BigEndian(frame.Slice(myOffset + FlagsFragOffsetOffset, 2), fragField);
+        BinaryPrimitives.WriteUInt16BigEndian(frame.Slice(myOffset + _FlagsFragOffsetOffset, 2), fragField);
     }
 }

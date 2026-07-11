@@ -11,7 +11,7 @@ internal sealed class WebSocketProtocolTests
     /// <summary>
     /// Generates a WebSocket frame wrapped in Ethernet + IPv4 + TCP (port 80).
     /// </summary>
-    private static byte[] GenerateWebSocketFrame(
+    private static byte[] _GenerateWebSocketFrame(
         byte opcode = 1,
         bool fin = true,
         bool masked = false,
@@ -80,11 +80,11 @@ internal sealed class WebSocketProtocolTests
             wsFrame.AddRange(payload);
         }
 
-        return WrapInTcpFrame([.. wsFrame], srcPort: 50000, dstPort: 80);
+        return _WrapInTcpFrame([.. wsFrame], srcPort: 50000, dstPort: 80);
     }
 
     /// <summary>Wraps a payload in Ethernet + IPv4 + TCP frame (minimal valid header).</summary>
-    private static byte[] WrapInTcpFrame(byte[] payload, ushort srcPort, ushort dstPort)
+    private static byte[] _WrapInTcpFrame(byte[] payload, ushort srcPort, ushort dstPort)
     {
         const int ethSize = 14;
         const int ipv4Size = 20;
@@ -148,7 +148,7 @@ internal sealed class WebSocketProtocolTests
         return frame;
     }
 
-    private static (Stack Stack, Packet Packet) BuildAndParse(byte[] frameData)
+    private static (Stack Stack, Packet Packet) _BuildAndParse(byte[] frameData)
     {
         using SettingsManager settingsManager = new();
         StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
@@ -177,9 +177,9 @@ internal sealed class WebSocketProtocolTests
     public async Task Parse_TextFrame_OpcodeCorrect()
     {
         byte[] payload = "Hello"u8.ToArray();
-        byte[] frameData = GenerateWebSocketFrame(opcode: 1, fin: true, payload: payload);
+        byte[] frameData = _GenerateWebSocketFrame(opcode: 1, fin: true, payload: payload);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? opcodeField = stack.GetFieldId("websocket.opcode");
@@ -194,9 +194,9 @@ internal sealed class WebSocketProtocolTests
     [Test]
     public async Task Parse_TextFrame_FinFlag()
     {
-        byte[] frameData = GenerateWebSocketFrame(opcode: 1, fin: true, payload: "Hi"u8.ToArray());
+        byte[] frameData = _GenerateWebSocketFrame(opcode: 1, fin: true, payload: "Hi"u8.ToArray());
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? finField = stack.GetFieldId("websocket.fin");
@@ -212,9 +212,9 @@ internal sealed class WebSocketProtocolTests
     public async Task Parse_TextFrame_PayloadLength()
     {
         byte[] payload = new byte[50];
-        byte[] frameData = GenerateWebSocketFrame(opcode: 2, payload: payload);
+        byte[] frameData = _GenerateWebSocketFrame(opcode: 2, payload: payload);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? lenField = stack.GetFieldId("websocket.payload_length");
@@ -230,9 +230,9 @@ internal sealed class WebSocketProtocolTests
     public async Task Parse_MaskedFrame_MaskingKeyPresent()
     {
         byte[] payload = "Hello"u8.ToArray();
-        byte[] frameData = GenerateWebSocketFrame(opcode: 1, masked: true, payload: payload, maskingKey: 0x12345678);
+        byte[] frameData = _GenerateWebSocketFrame(opcode: 1, masked: true, payload: payload, maskingKey: 0x12345678);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? maskField = stack.GetFieldId("websocket.mask");
@@ -257,9 +257,9 @@ internal sealed class WebSocketProtocolTests
         // "Hello" = [0x48, 0x65, 0x6C, 0x6C, 0x6F]
         byte[] payload = "Hello"u8.ToArray();
         uint maskingKey = 0xAABBCCDD;
-        byte[] frameData = GenerateWebSocketFrame(opcode: 1, masked: true, payload: payload, maskingKey: maskingKey);
+        byte[] frameData = _GenerateWebSocketFrame(opcode: 1, masked: true, payload: payload, maskingKey: maskingKey);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? payloadField = stack.GetFieldId("websocket.payload");
@@ -275,9 +275,9 @@ internal sealed class WebSocketProtocolTests
     [Test]
     public async Task Parse_CloseFrame_Opcode()
     {
-        byte[] frameData = GenerateWebSocketFrame(opcode: 8, fin: true);
+        byte[] frameData = _GenerateWebSocketFrame(opcode: 8, fin: true);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? opcodeField = stack.GetFieldId("websocket.opcode");
@@ -294,9 +294,9 @@ internal sealed class WebSocketProtocolTests
     {
         // 200 bytes payload triggers 16-bit extended length (> 125)
         byte[] payload = new byte[200];
-        byte[] frameData = GenerateWebSocketFrame(opcode: 2, payload: payload);
+        byte[] frameData = _GenerateWebSocketFrame(opcode: 2, payload: payload);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? lenField = stack.GetFieldId("websocket.payload_length");
@@ -313,9 +313,9 @@ internal sealed class WebSocketProtocolTests
     {
         // Only 1 byte — need at least 2
         byte[] shortPayload = [0x81]; // Looks like FIN + text opcode but no second byte
-        byte[] frameData = WrapInTcpFrame(shortPayload, 50000, 80);
+        byte[] frameData = _WrapInTcpFrame(shortPayload, 50000, 80);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? opcodeField = stack.GetFieldId("websocket.opcode");
@@ -328,7 +328,7 @@ internal sealed class WebSocketProtocolTests
     [Test]
     public async Task Parse_IndexPresence()
     {
-        byte[] frameData = GenerateWebSocketFrame(opcode: 1, payload: "Hi"u8.ToArray());
+        byte[] frameData = _GenerateWebSocketFrame(opcode: 1, payload: "Hi"u8.ToArray());
 
         using SettingsManager settingsManager = new();
 

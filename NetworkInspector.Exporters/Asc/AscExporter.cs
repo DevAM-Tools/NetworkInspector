@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Exporters.Asc;
 
@@ -31,35 +31,35 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
     #region SocketCAN constants
 
     /// <summary>SocketCAN FD format flag (byte 5, bit 2).</summary>
-    private const byte SocketCanFdfFlag = 0x04;
+    private const byte _SocketCanFdfFlag = 0x04;
 
     /// <summary>SocketCAN FD bit-rate switch flag (byte 5, bit 0).</summary>
-    private const byte SocketCanBrsFlag = 0x01;
+    private const byte _SocketCanBrsFlag = 0x01;
 
     /// <summary>SocketCAN FD error-state indicator flag (byte 5, bit 1).</summary>
-    private const byte SocketCanEsiFlag = 0x02;
+    private const byte _SocketCanEsiFlag = 0x02;
 
     /// <summary>SocketCAN extended frame format flag (bit 31 of ID word).</summary>
-    private const uint SocketCanEffFlag = 0x80000000u;
+    private const uint _SocketCanEffFlag = 0x80000000u;
 
     /// <summary>SocketCAN remote-transmission request flag (bit 30 of ID word).</summary>
-    private const uint SocketCanRtrFlag = 0x40000000u;
+    private const uint _SocketCanRtrFlag = 0x40000000u;
 
     /// <summary>SocketCAN frame header size: id(4) + dlc(1) + flags(1) + reserved(2) = 8 bytes.</summary>
-    private const int SocketCanHeaderSize = 8;
+    private const int _SocketCanHeaderSize = 8;
 
     /// <summary>
     /// CAN XL frame discriminator: byte 4, bit 7. CAN XL frames always set this bit;
     /// classic CAN DLC (0–8) and CAN FD DLC code (0–15) never reach 0x80, so this bit
     /// is a reliable variant indicator shared by both the protocol parser and the exporter.
     /// </summary>
-    private const byte SocketCanXlfFlag = 0x80;
+    private const byte _SocketCanXlfFlag = 0x80;
 
     /// <summary>
     /// DLC-code-to-byte-count mapping for CAN FD (ISO 11898-1 Table 6).
     /// DLC codes 0–8 map to themselves; codes 9–15 map to 12, 16, 20, 24, 32, 48, 64.
     /// </summary>
-    private static ReadOnlySpan<byte> FdDlcToLength =>
+    private static ReadOnlySpan<byte> _FdDlcToLength =>
         [0, 1, 2, 3, 4, 5, 6, 7, 8, 12, 16, 20, 24, 32, 48, 64];
 
     #endregion
@@ -70,13 +70,13 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
     /// DLT_LIN frame header size (BLF-derived format): pid(1) + length(1) = 2 bytes.
     /// Full layout: [pid(1) | length(1) | data(0–8) | checksum(1) | errors(1)].
     /// </summary>
-    private const int LinHeaderSize = 2;
+    private const int _LinHeaderSize = 2;
 
     /// <summary>DLT_LIN frame trailer size: checksum(1) + errors(1) = 2 bytes.</summary>
-    private const int LinTrailerSize = 2;
+    private const int _LinTrailerSize = 2;
 
     /// <summary>Minimum valid DLT_LIN frame: header + trailer, no data.</summary>
-    private const int LinMinSize = LinHeaderSize + LinTrailerSize;
+    private const int _LinMinSize = _LinHeaderSize + _LinTrailerSize;
 
     #endregion
 
@@ -86,7 +86,7 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
     /// DLT_FLEXRAY frame header size: 7 bytes.
     /// Layout: [channel(1) | type_flags(1) | frame_id(2 BE) | cycle(1) | header_crc(2 BE) | data...].
     /// </summary>
-    private const int DltFlexRayHeaderSize = 7;
+    private const int _DltFlexRayHeaderSize = 7;
 
     #endregion
 
@@ -97,7 +97,7 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
     /// Not in <see cref="FrameInterfacePropertyKeys"/> because it is source-specific;
     /// defined locally to avoid a direct dependency on the Sources assembly.
     /// </summary>
-    private const string AscChannelKey = "asc.channel";
+    private const string _AscChannelKey = "asc.channel";
 
     #endregion
 
@@ -114,7 +114,7 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
 
     /// <summary>
     /// Anchor timestamp in nanoseconds for relative-time computation.
-    /// Set to the first frame's timestamp before <see cref="Start"/> is called.
+    /// Set to the first frame's timestamp before <see cref="_Start"/> is called.
     /// Set to 0 for the empty-export case.
     /// </summary>
     private long _AnchorNs;
@@ -172,13 +172,13 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
         if (!_Started)
         {
             _AnchorNs = frame.Timestamp.AsNanos;
-            if (!Start())
+            if (!_Start())
             {
                 return false;
             }
         }
 
-        return HandleFrame(frame);
+        return _HandleFrame(frame);
     }
 
     /// <inheritdoc/>
@@ -197,7 +197,7 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
         if (!_Started && !_HasError && _Output is not null)
         {
             _AnchorNs = 0L;
-            Start();
+            _Start();
         }
 
         // Wrap clean-up in try/finally so resources are always released even when
@@ -297,9 +297,6 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
         || _CancellationToken.IsCancellationRequested
         || (_TargetFrameCount > 0 && FrameCount >= _TargetFrameCount);
 
-    /// <inheritdoc/>
-    bool IExporterStatistics.IsFinished => IsFinished;
-
     #endregion
 
     #region IErrorTolerantExporter
@@ -326,7 +323,7 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
     /// On first call, also writes the ASC file header.
     /// </summary>
     /// <returns><c>true</c> if initialization succeeded; <c>false</c> on I/O failure.</returns>
-    private bool Start()
+    private bool _Start()
     {
         if (_Output is null)
         {
@@ -369,7 +366,7 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
     /// to <see cref="AscWriter"/>. Handles I/O errors and unsupported link types
     /// according to the configured <see cref="ErrorTolerance"/>.
     /// </summary>
-    private bool HandleFrame(Frame frame)
+    private bool _HandleFrame(Frame frame)
     {
         if (_TargetFrameCount > 0 && FrameCount >= _TargetFrameCount)
         {
@@ -384,16 +381,16 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
         {
             case LinkType.CanSocketcan:
             case LinkType.Can20B:
-                return HandleCanFrame(data, timestampNs, currentIndex, frame);
+                return _HandleCanFrame(data, timestampNs, currentIndex, frame);
 
             case LinkType.Lin:
-                return HandleLinFrame(data, timestampNs, currentIndex, frame);
+                return _HandleLinFrame(data, timestampNs, currentIndex, frame);
 
             case LinkType.Flexray:
-                return HandleFlexRayFrame(data, timestampNs, currentIndex);
+                return _HandleFlexRayFrame(data, timestampNs, currentIndex);
 
             default:
-                return HandleSkip(
+                return _HandleSkip(
                     ExportErrorKind.UnsupportedType,
                     $"Unsupported link type: {frame.LinkType}",
                     currentIndex);
@@ -412,32 +409,32 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
     /// classic/FD interpretation can occur.
     /// </para>
     /// </summary>
-    private bool HandleCanFrame(
+    private bool _HandleCanFrame(
         ReadOnlySpan<byte> data, long timestampNs, long currentIndex, Frame frame)
     {
         // CAN XL frames share LinkType.CanSocketcan with classic/FD but are identified by
         // the XLF bit (byte 4, bit 7). The ASC format cannot represent CAN XL, so skip early
-        // before TryParseCanFrame interprets the 12-byte XL header as a classic/FD header.
-        if (data.Length >= SocketCanHeaderSize && (data[4] & SocketCanXlfFlag) != 0)
+        // before _TryParseCanFrame interprets the 12-byte XL header as a classic/FD header.
+        if (data.Length >= _SocketCanHeaderSize && (data[4] & _SocketCanXlfFlag) != 0)
         {
-            return HandleSkip(
+            return _HandleSkip(
                 ExportErrorKind.UnsupportedType,
                 "CAN XL frames are not supported by the ASC format",
                 currentIndex);
         }
 
-        if (!TryParseCanFrame(data,
+        if (!_TryParseCanFrame(data,
             out uint rawCanId, out bool isExtended, out bool isRemote,
             out bool isFd, out bool brs, out bool esi, out byte dlc,
             out ReadOnlySpan<byte> payload))
         {
-            return HandleSkip(
+            return _HandleSkip(
                 ExportErrorKind.MalformedData,
-                $"CAN frame too short ({data.Length} bytes; minimum {SocketCanHeaderSize})",
+                $"CAN frame too short ({data.Length} bytes; minimum {_SocketCanHeaderSize})",
                 currentIndex);
         }
 
-        int channel = GetChannel(frame, 1);
+        int channel = _GetChannel(frame, 1);
 
         try
         {
@@ -452,7 +449,7 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
         }
         catch (Exception ex)
         {
-            return HandleSkip(ExportErrorKind.IoError, $"Write failed: {ex.Message}", currentIndex);
+            return _HandleSkip(ExportErrorKind.IoError, $"Write failed: {ex.Message}", currentIndex);
         }
 
         FrameCount++;
@@ -463,18 +460,18 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
     /// Handles a LIN frame (<see cref="LinkType.Lin"/>).
     /// Parses the BLF-derived DLT_LIN binary format and writes the ASC LIN line.
     /// </summary>
-    private bool HandleLinFrame(
+    private bool _HandleLinFrame(
         ReadOnlySpan<byte> data, long timestampNs, long currentIndex, Frame frame)
     {
-        if (!TryParseLinFrame(data, out byte frameId, out ReadOnlySpan<byte> payload, out byte checksum))
+        if (!_TryParseLinFrame(data, out byte frameId, out ReadOnlySpan<byte> payload, out byte checksum))
         {
-            return HandleSkip(
+            return _HandleSkip(
                 ExportErrorKind.MalformedData,
-                $"LIN frame too short ({data.Length} bytes; minimum {LinMinSize})",
+                $"LIN frame too short ({data.Length} bytes; minimum {_LinMinSize})",
                 currentIndex);
         }
 
-        int channel = GetChannel(frame, 1);
+        int channel = _GetChannel(frame, 1);
 
         try
         {
@@ -482,7 +479,7 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
         }
         catch (Exception ex)
         {
-            return HandleSkip(ExportErrorKind.IoError, $"Write failed: {ex.Message}", currentIndex);
+            return _HandleSkip(ExportErrorKind.IoError, $"Write failed: {ex.Message}", currentIndex);
         }
 
         FrameCount++;
@@ -496,16 +493,16 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
     /// than from the interface property, because byte 0 carries the protocol-level
     /// channel designation rather than the logical interface channel.
     /// </summary>
-    private bool HandleFlexRayFrame(
+    private bool _HandleFlexRayFrame(
         ReadOnlySpan<byte> data, long timestampNs, long currentIndex)
     {
-        if (!TryParseFlexRayFrame(data,
+        if (!_TryParseFlexRayFrame(data,
             out byte channel, out ushort frameId, out byte cycle,
             out ushort headerCrc, out ReadOnlySpan<byte> payload))
         {
-            return HandleSkip(
+            return _HandleSkip(
                 ExportErrorKind.MalformedData,
-                $"FlexRay frame too short ({data.Length} bytes; minimum {DltFlexRayHeaderSize})",
+                $"FlexRay frame too short ({data.Length} bytes; minimum {_DltFlexRayHeaderSize})",
                 currentIndex);
         }
 
@@ -515,7 +512,7 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
         }
         catch (Exception ex)
         {
-            return HandleSkip(ExportErrorKind.IoError, $"Write failed: {ex.Message}", currentIndex);
+            return _HandleSkip(ExportErrorKind.IoError, $"Write failed: {ex.Message}", currentIndex);
         }
 
         FrameCount++;
@@ -530,7 +527,7 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
     /// <c>false</c> in Strict mode (signals the caller to stop sending frames);
     /// <c>true</c> in Tolerant mode (export continues).
     /// </returns>
-    private bool HandleSkip(ExportErrorKind kind, string message, long itemIndex)
+    private bool _HandleSkip(ExportErrorKind kind, string message, long itemIndex)
     {
         SkippedCount++;
         ErrorCount++;
@@ -567,7 +564,7 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
     /// <item>Bytes 8+: Data payload.</item>
     /// </list>
     /// </remarks>
-    private static bool TryParseCanFrame(
+    private static bool _TryParseCanFrame(
         ReadOnlySpan<byte> data,
         out uint rawCanId, out bool isExtended, out bool isRemote,
         out bool isFd, out bool brs, out bool esi, out byte dlc,
@@ -582,36 +579,36 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
         dlc = 0;
         payload = default;
 
-        if (data.Length < SocketCanHeaderSize)
+        if (data.Length < _SocketCanHeaderSize)
         {
             return false;
         }
 
         uint socketCanId = BinaryPrimitives.ReadUInt32BigEndian(data);
         rawCanId = socketCanId & 0x1FFFFFFF;
-        isExtended = (socketCanId & SocketCanEffFlag) != 0;
-        isRemote = (socketCanId & SocketCanRtrFlag) != 0;
+        isExtended = (socketCanId & _SocketCanEffFlag) != 0;
+        isRemote = (socketCanId & _SocketCanRtrFlag) != 0;
 
         dlc = data[4];
         byte fdFlags = data[5];
-        isFd = (fdFlags & SocketCanFdfFlag) != 0;
-        brs = (fdFlags & SocketCanBrsFlag) != 0;
-        esi = (fdFlags & SocketCanEsiFlag) != 0;
+        isFd = (fdFlags & _SocketCanFdfFlag) != 0;
+        brs = (fdFlags & _SocketCanBrsFlag) != 0;
+        esi = (fdFlags & _SocketCanEsiFlag) != 0;
 
-        int available = data.Length - SocketCanHeaderSize;
+        int available = data.Length - _SocketCanHeaderSize;
 
         if (isFd)
         {
             // Look up actual byte count from the DLC code using the CAN FD table.
-            int fdDlc = Math.Min((int)dlc, FdDlcToLength.Length - 1);
-            int actualLen = FdDlcToLength[fdDlc];
-            payload = data.Slice(SocketCanHeaderSize, Math.Min(actualLen, available));
+            int fdDlc = Math.Min((int)dlc, _FdDlcToLength.Length - 1);
+            int actualLen = _FdDlcToLength[fdDlc];
+            payload = data.Slice(_SocketCanHeaderSize, Math.Min(actualLen, available));
         }
         else
         {
             // Classic CAN: DLC code equals byte count (clamped to 8).
             int classicLen = Math.Min((int)dlc, 8);
-            payload = data.Slice(SocketCanHeaderSize, Math.Min(classicLen, available));
+            payload = data.Slice(_SocketCanHeaderSize, Math.Min(classicLen, available));
         }
 
         return true;
@@ -630,7 +627,7 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
     /// <item>Byte (3+len): Error flags (not exported to ASC).</item>
     /// </list>
     /// </remarks>
-    private static bool TryParseLinFrame(
+    private static bool _TryParseLinFrame(
         ReadOnlySpan<byte> data,
         out byte frameId, out ReadOnlySpan<byte> payload, out byte checksum)
     {
@@ -638,7 +635,7 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
         payload = default;
         checksum = 0;
 
-        if (data.Length < LinMinSize)
+        if (data.Length < _LinMinSize)
         {
             return false;
         }
@@ -648,7 +645,7 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
 
         // Clamp length to the bytes actually available between header and trailer.
         int length = data[1];
-        int available = data.Length - LinHeaderSize - LinTrailerSize;
+        int available = data.Length - _LinHeaderSize - _LinTrailerSize;
         if (length > available)
         {
             length = available;
@@ -659,26 +656,24 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
             length = 0;
         }
 
-        payload = data.Slice(LinHeaderSize, length);
-        checksum = data[LinHeaderSize + length];
+        payload = data.Slice(_LinHeaderSize, length);
+        checksum = data[_LinHeaderSize + length];
         return true;
     }
 
     /// <summary>
-    /// Parses a DLT_FLEXRAY binary frame.
+    /// Parses a LINKTYPE_FLEXRAY binary frame.
     /// </summary>
     /// <remarks>
-    /// DLT_FLEXRAY header layout (ISO 17458-2 / pcap LINKTYPE_FLEXRAY):
+    /// LINKTYPE_FLEXRAY layout (tcpdump DLT 210 / ISO 17458-2):
     /// <list type="bullet">
-    /// <item>Byte 0: Physical channel (raw; 0 = Ch-A, 1 = Ch-B in generator convention).</item>
-    /// <item>Byte 1: Type flags — bit 5 = SFI (sync), bit 4 = STFI (startup), etc.; not exported.</item>
-    /// <item>Bytes 2–3: Frame/slot ID (big-endian uint16).</item>
-    /// <item>Byte 4: Cycle counter (0–63).</item>
-    /// <item>Bytes 5–6: Header CRC (big-endian uint16).</item>
+    /// <item>Byte 0: Measurement header — bit 7 = Channel B, bits [6:0] = type index.</item>
+    /// <item>Byte 1: Error flags (not exported to ASC).</item>
+    /// <item>Bytes 2–6: ISO 17458-2 frame header (frame ID, payload length, HCRC, cycle).</item>
     /// <item>Bytes 7+: Data payload (0–254 bytes).</item>
     /// </list>
     /// </remarks>
-    private static bool TryParseFlexRayFrame(
+    private static bool _TryParseFlexRayFrame(
         ReadOnlySpan<byte> data,
         out byte channel, out ushort frameId, out byte cycle,
         out ushort headerCrc, out ReadOnlySpan<byte> payload)
@@ -689,17 +684,15 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
         headerCrc = 0;
         payload = default;
 
-        if (data.Length < DltFlexRayHeaderSize)
+        if (!FlexRayLinkTypeFrame.TryParseDataFrame(data, out FlexRayLinkTypeFrame.Fields fields, out payload))
         {
             return false;
         }
 
-        channel = data[0];
-        // data[1] = type_flags: not needed for ASC line output.
-        frameId = BinaryPrimitives.ReadUInt16BigEndian(data.Slice(2, 2));
-        cycle = data[4];
-        headerCrc = BinaryPrimitives.ReadUInt16BigEndian(data.Slice(5, 2));
-        payload = data[DltFlexRayHeaderSize..];
+        channel = (byte)FlexRayLinkTypeFrame.BusChannelToAscChannel(fields.ChannelB);
+        frameId = fields.FrameId;
+        cycle = fields.Cycle;
+        headerCrc = fields.HeaderCrc;
         return true;
     }
 
@@ -713,7 +706,7 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
     /// <param name="frame">The frame whose interface properties to inspect.</param>
     /// <param name="defaultChannel">Channel to return when no property is found.</param>
     /// <returns>Resolved channel number.</returns>
-    private static int GetChannel(Frame frame, int defaultChannel)
+    private static int _GetChannel(Frame frame, int defaultChannel)
     {
         if (!frame.HasInterface
             || !frame.Registry.TryGet(frame.InterfaceId, out FrameInterfaceInfo? info))
@@ -721,14 +714,14 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
             return defaultChannel;
         }
 
-        if (info.Properties.TryGetValue(AscChannelKey, out object? ascCh)
-            && TryConvertToInt32(ascCh, out int ascChannel))
+        if (info.Properties.TryGetValue(_AscChannelKey, out object? ascCh)
+            && _TryConvertToInt32(ascCh, out int ascChannel))
         {
             return ascChannel;
         }
 
         if (info.Properties.TryGetValue(FrameInterfacePropertyKeys.BlfChannel, out object? blfCh)
-            && TryConvertToInt32(blfCh, out int blfChannel))
+            && _TryConvertToInt32(blfCh, out int blfChannel))
         {
             return blfChannel;
         }
@@ -742,7 +735,7 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
     /// This precheck avoids <c>Convert.ToInt64</c> which throws on type mismatch;
     /// using exceptions for expected fallback paths violates the no-silent-failure policy.
     /// </summary>
-    private static bool TryConvertToInt32(object? value, out int result)
+    private static bool _TryConvertToInt32(object? value, out int result)
     {
         switch (value)
         {

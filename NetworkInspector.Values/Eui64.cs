@@ -71,8 +71,8 @@ public readonly record struct Eui64
         {
             int offset = i * 3;
             if (i > 0 && text[offset - 1] != ':') { return false; }
-            int h = HexDigitValue(text[offset]);
-            int l = HexDigitValue(text[offset + 1]);
+            int h = _HexDigitValue(text[offset]);
+            int l = _HexDigitValue(text[offset + 1]);
             if (h < 0 || l < 0) { return false; }
             value = (value << 8) | (uint)((h << 4) | l);
         }
@@ -141,7 +141,7 @@ public readonly record struct Eui64
 
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public bool TryGetSerializedSize(out int size)
+    public bool TryGetWrittenSize(out int size)
     {
         size = 8;
         return true;
@@ -314,7 +314,7 @@ public readonly record struct Eui64
     #region Private Helpers
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static int HexDigitValue(char c)
+    private static int _HexDigitValue(char c)
     {
         if (c >= '0' && c <= '9') { return c - '0'; }
         if (c >= 'a' && c <= 'f') { return c - 'a' + 10; }

@@ -16,16 +16,16 @@ internal static class AscCanParser
     #region Constants
 
     /// <summary>SocketCAN header: id(4) + dlc(1) + flags(1) + reserved(2).</summary>
-    private const int SocketCanHeaderSize = 8;
+    private const int _SocketCanHeaderSize = 8;
 
     /// <summary>Classic CAN maximum data length.</summary>
-    private const int MaxDataLength = 8;
+    private const int _MaxDataLength = 8;
 
     /// <summary>SocketCAN Extended Frame Format flag (bit 31).</summary>
-    private const uint SocketCanEff = 0x80000000;
+    private const uint _SocketCanEff = 0x80000000;
 
     /// <summary>SocketCAN Remote Transmission Request flag (bit 30).</summary>
-    private const uint SocketCanRtr = 0x40000000;
+    private const uint _SocketCanRtr = 0x40000000;
 
     #endregion
 
@@ -109,21 +109,21 @@ internal static class AscCanParser
         }
 
         // Clamp DLC for classic CAN
-        int dataLength = Math.Min(dlc, MaxDataLength);
+        int dataLength = Math.Min(dlc, _MaxDataLength);
 
         // Build the SocketCAN ID with flags
         uint socketCanId = canId & 0x1FFFFFFF;
         if (isExtended)
         {
-            socketCanId |= SocketCanEff;
+            socketCanId |= _SocketCanEff;
         }
         if (isRemote)
         {
-            socketCanId |= SocketCanRtr;
+            socketCanId |= _SocketCanRtr;
         }
 
         // Parse data bytes
-        Span<byte> dataBytes = stackalloc byte[MaxDataLength];
+        Span<byte> dataBytes = stackalloc byte[_MaxDataLength];
         dataBytes.Clear();
 
         int parsedDataCount = 0;
@@ -160,7 +160,7 @@ internal static class AscCanParser
         }
 
         // Build frame
-        frame = new byte[SocketCanHeaderSize + MaxDataLength];
+        frame = new byte[_SocketCanHeaderSize + _MaxDataLength];
         BinaryPrimitives.WriteUInt32BigEndian(frame, socketCanId);
         frame[4] = (byte)dlc;
         frame[5] = 0; // no FD flags for classic CAN
@@ -168,7 +168,7 @@ internal static class AscCanParser
         frame[7] = 0; // reserved
 
         // Copy data (already padded to 8 by stackalloc clear)
-        dataBytes[..MaxDataLength].CopyTo(frame.AsSpan(SocketCanHeaderSize));
+        dataBytes[.._MaxDataLength].CopyTo(frame.AsSpan(_SocketCanHeaderSize));
 
         return true;
     }
@@ -296,23 +296,23 @@ internal static class AscCanParser
 
         // DLC
         if (!tokenizer.TryNextToken(out ReadOnlySpan<byte> dlcToken)
-            || !TryParseInt(dlcToken, out int dlc))
+            || !_TryParseInt(dlcToken, out int dlc))
         {
             return false;
         }
 
-        int dataLength = Math.Min(dlc, MaxDataLength);
+        int dataLength = Math.Min(dlc, _MaxDataLength);
         uint socketCanId = canId & 0x1FFFFFFF;
         if (isExtended)
         {
-            socketCanId |= SocketCanEff;
+            socketCanId |= _SocketCanEff;
         }
         if (isRemote)
         {
-            socketCanId |= SocketCanRtr;
+            socketCanId |= _SocketCanRtr;
         }
 
-        Span<byte> dataBytes = stackalloc byte[MaxDataLength];
+        Span<byte> dataBytes = stackalloc byte[_MaxDataLength];
         dataBytes.Clear();
 
         if (!isRemote)
@@ -324,7 +324,7 @@ internal static class AscCanParser
                     break;
                 }
 
-                if (dataToken.Length > 2 && IsAsciiLetter(dataToken[0]))
+                if (dataToken.Length > 2 && _IsAsciiLetter(dataToken[0]))
                 {
                     break;
                 }
@@ -340,13 +340,13 @@ internal static class AscCanParser
             }
         }
 
-        frame = new byte[SocketCanHeaderSize + MaxDataLength];
+        frame = new byte[_SocketCanHeaderSize + _MaxDataLength];
         BinaryPrimitives.WriteUInt32BigEndian(frame, socketCanId);
         frame[4] = (byte)dlc;
         frame[5] = 0;
         frame[6] = 0;
         frame[7] = 0;
-        dataBytes[..MaxDataLength].CopyTo(frame.AsSpan(SocketCanHeaderSize));
+        dataBytes[.._MaxDataLength].CopyTo(frame.AsSpan(_SocketCanHeaderSize));
 
         return true;
     }
@@ -414,11 +414,11 @@ internal static class AscCanParser
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static bool TryParseInt(ReadOnlySpan<byte> token, out int value)
+    private static bool _TryParseInt(ReadOnlySpan<byte> token, out int value)
         => System.Buffers.Text.Utf8Parser.TryParse(token, out value, out _);
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static bool IsAsciiLetter(byte b) => (b >= (byte)'A' && b <= (byte)'Z') || (b >= (byte)'a' && b <= (byte)'z');
+    private static bool _IsAsciiLetter(byte b) => (b >= (byte)'A' && b <= (byte)'Z') || (b >= (byte)'a' && b <= (byte)'z');
 
     #endregion
 }

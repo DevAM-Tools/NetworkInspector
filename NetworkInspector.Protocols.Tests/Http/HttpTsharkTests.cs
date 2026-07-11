@@ -36,20 +36,20 @@ internal sealed class HttpTsharkTests
     private static readonly IPv4Address _ClientIp = new(0x0A000001);
     private static readonly IPv4Address _ServerIp = new(0x0A000002);
 
-    private const ushort ClientPort = 49152;
-    private const ushort ServerPort = 80;
+    private const ushort _ClientPort = 49152;
+    private const ushort _ServerPort = 80;
 
     /// <summary>
     /// Builds a single Ethernet + IPv4 + TCP + HTTP frame for single-segment tests.
     /// The TCP destination port is 80 so tshark auto-applies the HTTP dissector.
     /// </summary>
-    private static byte[] BuildHttpFrame(string httpMessage, ushort dstPort = ServerPort)
+    private static byte[] _BuildHttpFrame(string httpMessage, ushort dstPort = _ServerPort)
     {
         byte[] httpBytes = Encoding.ASCII.GetBytes(httpMessage);
         EthernetLayer eth = new(_DstMac, _SrcMac);
         IPv4Layer ip = new(_ClientIp, _ServerIp);
         // seqNum=1 / ackNum=1 so the segment looks like post-handshake data.
-        TcpLayer tcp = new(ClientPort, dstPort, seqNum: 1, ackNum: 1, flags: TcpFlags.PshAck, windowSize: 65535);
+        TcpLayer tcp = new(_ClientPort, dstPort, seqNum: 1, ackNum: 1, flags: TcpFlags.PshAck, windowSize: 65535);
         return FrameStack.Start(eth).Then(ip).Then(tcp).CreateWithFixedValues().EmitFrame(httpBytes);
     }
 
@@ -58,7 +58,7 @@ internal sealed class HttpTsharkTests
     /// (MSS = <paramref name="mss"/>) using <see cref="TcpConnection"/> and returns
     /// the frames in wire order.
     /// </summary>
-    private static List<byte[]> BuildConversation(byte[] request, byte[] response, ushort mss = 200)
+    private static List<byte[]> _BuildConversation(byte[] request, byte[] response, ushort mss = 200)
     {
         EthernetLayer ethC = new(_DstMac, _SrcMac);
         IPv4Layer ipC = new(_ClientIp, _ServerIp);
@@ -77,7 +77,7 @@ internal sealed class HttpTsharkTests
             WindowSize: 65535);
 
         using TcpConnection<IPv4Layer, StatelessStack<EthernetLayer, StackEnd>> conn =
-            TcpConnection.Open(in clientCarrier, in serverCarrier, ClientPort, ServerPort, options);
+            TcpConnection.Open(in clientCarrier, in serverCarrier, _ClientPort, _ServerPort, options);
 
         List<byte[]> frames = [];
         FrameSink sink = f => frames.Add(f.ToArray());
@@ -94,20 +94,20 @@ internal sealed class HttpTsharkTests
     // Test message constants
     // ──────────────────────────────────────────────────────────────
 
-    private const string HttpGetRequest =
+    private const string _HttpGetRequest =
         "GET /index.html HTTP/1.1\r\n" +
         "Host: example.test\r\n" +
         "User-Agent: TestAgent/1.0\r\n" +
         "\r\n";
 
-    private const string Http200Response =
+    private const string _Http200Response =
         "HTTP/1.1 200 OK\r\n" +
         "Content-Type: text/plain\r\n" +
         "Content-Length: 5\r\n" +
         "\r\n" +
         "Hello";
 
-    private const string Http101Response =
+    private const string _Http101Response =
         "HTTP/1.1 101 Switching Protocols\r\n" +
         "Upgrade: websocket\r\n" +
         "Connection: Upgrade\r\n" +
@@ -143,7 +143,7 @@ internal sealed class HttpTsharkTests
     [Test]
     public async Task Http_GetRequest_AllFieldsMatchTshark()
     {
-        byte[] frame = BuildHttpFrame(HttpGetRequest);
+        byte[] frame = _BuildHttpFrame(_HttpGetRequest);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -169,13 +169,13 @@ internal sealed class HttpTsharkTests
     [Test]
     public async Task Http_200Response_AllFieldsMatchTshark()
     {
-        byte[] frame = BuildHttpFrame(Http200Response, dstPort: ServerPort);
+        byte[] frame = _BuildHttpFrame(_Http200Response, dstPort: _ServerPort);
         // Flip src/dst for a server-to-client segment: tshark identifies HTTP
         // responses by the response-line pattern, not port direction.
-        byte[] httpBytes = Encoding.ASCII.GetBytes(Http200Response);
+        byte[] httpBytes = Encoding.ASCII.GetBytes(_Http200Response);
         EthernetLayer eth = new(_SrcMac, _DstMac);
         IPv4Layer ip = new(_ServerIp, _ClientIp);
-        TcpLayer tcp = new(ServerPort, ClientPort, seqNum: 1, ackNum: 1,
+        TcpLayer tcp = new(_ServerPort, _ClientPort, seqNum: 1, ackNum: 1,
             flags: TcpFlags.PshAck, windowSize: 65535);
         byte[] responseFrame = FrameStack.Start(eth).Then(ip).Then(tcp).CreateWithFixedValues().EmitFrame(httpBytes);
 
@@ -196,10 +196,10 @@ internal sealed class HttpTsharkTests
     [Test]
     public async Task Http_101SwitchingProtocols_FieldsMatchTshark()
     {
-        byte[] httpBytes = Encoding.ASCII.GetBytes(Http101Response);
+        byte[] httpBytes = Encoding.ASCII.GetBytes(_Http101Response);
         EthernetLayer eth = new(_SrcMac, _DstMac);
         IPv4Layer ip = new(_ServerIp, _ClientIp);
-        TcpLayer tcp = new(ServerPort, ClientPort, seqNum: 1, ackNum: 1,
+        TcpLayer tcp = new(_ServerPort, _ClientPort, seqNum: 1, ackNum: 1,
             flags: TcpFlags.PshAck, windowSize: 65535);
         byte[] frame = FrameStack.Start(eth).Then(ip).Then(tcp).CreateWithFixedValues().EmitFrame(httpBytes);
 
@@ -234,7 +234,7 @@ internal sealed class HttpTsharkTests
             return;
         }
 
-        List<byte[]> frames = BuildConversation(_LargeGetRequest, _LargeResponse, mss: 200);
+        List<byte[]> frames = _BuildConversation(_LargeGetRequest, _LargeResponse, mss: 200);
 
         // ── NI side: parse all frames sequentially so the reassembly engine
         //             accumulates state and produces HTTP fields on the final
@@ -270,9 +270,9 @@ internal sealed class HttpTsharkTests
             string[] parts = lines[0].Split('\t');
 
             // Extract NI field values inline: same logic as TsharkAssert.TryGetNiValueAsString.
-            string? niMethod = GetNiFieldValue(stack, httpPacket!, "http.request.method");
-            string? niUri = GetNiFieldValue(stack, httpPacket!, "http.request.uri");
-            string? niHost = GetNiFieldValue(stack, httpPacket!, "http.host");
+            string? niMethod = _GetNiFieldValue(stack, httpPacket!, "http.request.method");
+            string? niUri = _GetNiFieldValue(stack, httpPacket!, "http.request.uri");
+            string? niHost = _GetNiFieldValue(stack, httpPacket!, "http.host");
 
             string? tsMethod = parts.Length > 0 ? parts[0] : null;
             string? tsUri = parts.Length > 1 ? parts[1] : null;
@@ -297,7 +297,7 @@ internal sealed class HttpTsharkTests
     /// Returns <see langword="null"/> when the field is absent or not registered.
     /// Mirrors the private <c>TryGetNiValueAsString</c> logic in <see cref="TsharkAssert"/>.
     /// </summary>
-    private static string? GetNiFieldValue(Stack stack, Packet packet, string fieldPath)
+    private static string? _GetNiFieldValue(Stack stack, Packet packet, string fieldPath)
     {
         FieldId? fieldId = stack.GetFieldId(fieldPath);
         if (fieldId is null)

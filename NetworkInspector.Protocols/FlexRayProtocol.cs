@@ -5,7 +5,8 @@ namespace NetworkInspector.Protocols;
 /// <summary>
 /// FlexRay protocol parser (ISO 17458-2) for LINKTYPE_FLEXRAY (link type 210).
 /// Dispatches the frame payload to sub-protocols (e.g. Signal PDU) via the <c>flexray.id</c>
-/// dispatch table, keyed by the 11-bit slot number combined with the channel (bit 11 = Channel B).
+/// dispatch table, keyed by the 11-bit slot number, channel (bit 11 = Channel B), and
+/// 6-bit cycle count (bits [17:12]). See <see cref="FlexRayLinkTypeFrame.EncodeDispatchKey"/>.
 /// <para>LINKTYPE_FLEXRAY capture format (per tcpdump.org specification):</para>
 /// <code>
 /// Byte 0:     Measurement Header ([7] CH, [6:0] Type Index)
@@ -58,149 +59,155 @@ public sealed partial class FlexRayProtocol : IProtocol
     /// <summary>
     /// Minimum size: 1 byte measurement header + 1 byte error flags + 5 bytes frame header = 7.
     /// </summary>
-    private const int MinHeaderSize = 7;
+    private const int _MinHeaderSize = 7;
 
     /// <summary>Index group for always-present FlexRay fields.</summary>
-    private const string FlexRayIndexGroup = "flexray";
+    private const string _FlexRayIndexGroup = "flexray";
 
     /// <summary>Index group for error flag fields (always present but separate for filtering).</summary>
-    private const string FlexRayErrorGroup = "flexray.err";
+    private const string _FlexRayErrorGroup = "flexray.err";
 
     /// <summary>
-    /// Dispatch-table name for sub-protocol lookup by FlexRay slot number and channel.
-    /// Key encoding: bits [10:0] = Frame ID (0–2047); bit 11 = Channel (0 = A, 1 = B).
+    /// Dispatch-table name for sub-protocol lookup by FlexRay slot, channel, and cycle.
+    /// Key encoding: bits [10:0] = Frame ID; bit 11 = Channel B; bits [17:12] = Cycle.
     /// </summary>
     /// <remarks>
-    /// Example: Channel A, slot 42 → key 42; Channel B, slot 42 → key 2090
-    /// (= 42 | <see cref="ChannelBKeyBit"/>).
+    /// Example: Channel A, slot 42, cycle 3 →
+    /// <see cref="FlexRayLinkTypeFrame.EncodeDispatchKey"/>(42, false, 3).
     /// </remarks>
     public const string IdTableName = "flexray.id";
 
     /// <summary>
-    /// Bit 11 of the dispatch key signals Channel B. OR this into the slot number
-    /// to address a Channel B entry in the <c>flexray.id</c> dispatch table.
+    /// Bit 11 of the dispatch key signals Channel B. Delegates to
+    /// <see cref="FlexRayLinkTypeFrame.ChannelBKeyBit"/>.
     /// </summary>
-    public const ulong ChannelBKeyBit = 1UL << 11;
+    public const ulong ChannelBKeyBit = FlexRayLinkTypeFrame.ChannelBKeyBit;
+
+    /// <summary>
+    /// Bit shift for the cycle count in a <c>flexray.id</c> dispatch key.
+    /// Delegates to <see cref="FlexRayLinkTypeFrame.CycleKeyShift"/>.
+    /// </summary>
+    public const int CycleKeyShift = FlexRayLinkTypeFrame.CycleKeyShift;
 
     #endregion
 
     #region Measurement header bit masks
 
     /// <summary>Bit 7 of measurement header: channel (0=A, 1=B).</summary>
-    private const byte ChannelBitMask = 0x80;
+    private const byte _ChannelBitMask = 0x80;
 
     /// <summary>Bits 6-0 of measurement header: type index.</summary>
-    private const byte TypeIndexMask = 0x7F;
+    private const byte _TypeIndexMask = 0x7F;
 
     /// <summary>Type index value for a FlexRay frame.</summary>
-    private const byte TypeIndexFrame = 0x01;
+    private const byte _TypeIndexFrame = 0x01;
 
     #endregion
 
     #region Error flag bit masks (byte 1)
 
-    private const byte FcrcErrMask = 0x10;
-    private const byte HcrcErrMask = 0x08;
-    private const byte FesErrMask = 0x04;
-    private const byte CodErrMask = 0x02;
-    private const byte TssViolMask = 0x01;
+    private const byte _FcrcErrMask = 0x10;
+    private const byte _HcrcErrMask = 0x08;
+    private const byte _FesErrMask = 0x04;
+    private const byte _CodErrMask = 0x02;
+    private const byte _TssViolMask = 0x01;
 
     #endregion
 
     #region Frame header indicator bit masks (byte 2)
 
     /// <summary>Bit 6: Payload Preamble Indicator.</summary>
-    private const byte PpiBitMask = 0x40;
+    private const byte _PpiBitMask = 0x40;
 
     /// <summary>Bit 5: Null Frame Indicator (1 = NOT null frame).</summary>
-    private const byte NfiBitMask = 0x20;
+    private const byte _NfiBitMask = 0x20;
 
     /// <summary>Bit 4: Sync Frame Indicator.</summary>
-    private const byte SfiBitMask = 0x10;
+    private const byte _SfiBitMask = 0x10;
 
     /// <summary>Bit 3: Startup Frame Indicator.</summary>
-    private const byte StfiBitMask = 0x08;
+    private const byte _StfiBitMask = 0x08;
 
     /// <summary>Bits 2-0: high 3 bits of the 11-bit Frame ID.</summary>
-    private const byte FrameIdHighMask = 0x07;
+    private const byte _FrameIdHighMask = 0x07;
 
     #endregion
 
     #region Protocol container
 
-    [BytesField("flexray", "FlexRay", IndexGroup = FlexRayIndexGroup)]
+    [BytesField("flexray", "FlexRay", IndexGroup = _FlexRayIndexGroup)]
     private FieldId _ProtocolFieldId;
 
     #endregion
 
     #region Measurement header fields
 
-    [StringField("flexray.channel", "Channel", IndexGroup = FlexRayIndexGroup)]
+    [StringField("flexray.channel", "Channel", IndexGroup = _FlexRayIndexGroup)]
     private FieldId _ChannelFieldId;
 
     #endregion
 
     #region Frame header fields
 
-    [U64Field("flexray.frame_id", "Frame ID (Slot)", IndexGroup = FlexRayIndexGroup)]
+    [U64Field("flexray.frame_id", "Frame ID (Slot)", IndexGroup = _FlexRayIndexGroup)]
     private FieldId _FrameIdFieldId;
 
-    [U64Field("flexray.payload_length", "Payload Length", IndexGroup = FlexRayIndexGroup)]
+    [U64Field("flexray.payload_length", "Payload Length", IndexGroup = _FlexRayIndexGroup)]
     private FieldId _PayloadLengthFieldId;
 
-    [U64Field("flexray.cycle", "Cycle Count", IndexGroup = FlexRayIndexGroup)]
+    [U64Field("flexray.cycle", "Cycle Count", IndexGroup = _FlexRayIndexGroup)]
     private FieldId _CycleFieldId;
 
-    [U64Field("flexray.hcrc", "Header CRC", IndexGroup = FlexRayIndexGroup)]
+    [U64Field("flexray.hcrc", "Header CRC", IndexGroup = _FlexRayIndexGroup)]
     private FieldId _HeaderCrcFieldId;
 
     #endregion
 
     #region Frame header indicator fields
 
-    [NoneField("flexray.flags", "Flags", IndexGroup = FlexRayIndexGroup)]
+    [NoneField("flexray.flags", "Flags", IndexGroup = _FlexRayIndexGroup)]
     private FieldId _FlagsFieldId;
 
-    [BoolField("flexray.nfi", "Null Frame Indicator", IndexGroup = FlexRayIndexGroup)]
+    [BoolField("flexray.nfi", "Null Frame Indicator", IndexGroup = _FlexRayIndexGroup)]
     private FieldId _NfiFieldId;
 
-    [BoolField("flexray.sfi", "Sync Frame Indicator", IndexGroup = FlexRayIndexGroup)]
+    [BoolField("flexray.sfi", "Sync Frame Indicator", IndexGroup = _FlexRayIndexGroup)]
     private FieldId _SfiFieldId;
 
-    [BoolField("flexray.stfi", "Startup Frame Indicator", IndexGroup = FlexRayIndexGroup)]
+    [BoolField("flexray.stfi", "Startup Frame Indicator", IndexGroup = _FlexRayIndexGroup)]
     private FieldId _StfiFieldId;
 
-    [BoolField("flexray.ppi", "Payload Preamble Indicator", IndexGroup = FlexRayIndexGroup)]
+    [BoolField("flexray.ppi", "Payload Preamble Indicator", IndexGroup = _FlexRayIndexGroup)]
     private FieldId _PpiFieldId;
 
     #endregion
 
     #region Error flag fields
 
-    [NoneField("flexray.err_flags", "Error Flags", IndexGroup = FlexRayErrorGroup)]
+    [NoneField("flexray.err_flags", "Error Flags", IndexGroup = _FlexRayErrorGroup)]
     private FieldId _ErrFlagsFieldId;
 
-    [BoolField("flexray.fcrc_err", "Frame CRC Error", IndexGroup = FlexRayErrorGroup)]
+    [BoolField("flexray.fcrc_err", "Frame CRC Error", IndexGroup = _FlexRayErrorGroup)]
     private FieldId _FcrcErrFieldId;
 
-    [BoolField("flexray.hcrc_err", "Header CRC Error", IndexGroup = FlexRayErrorGroup)]
+    [BoolField("flexray.hcrc_err", "Header CRC Error", IndexGroup = _FlexRayErrorGroup)]
     private FieldId _HcrcErrFieldId;
 
-    [BoolField("flexray.fes_err", "Frame End Sequence Error", IndexGroup = FlexRayErrorGroup)]
+    [BoolField("flexray.fes_err", "Frame End Sequence Error", IndexGroup = _FlexRayErrorGroup)]
     private FieldId _FesErrFieldId;
 
-    [BoolField("flexray.cod_err", "Coding Error", IndexGroup = FlexRayErrorGroup)]
+    [BoolField("flexray.cod_err", "Coding Error", IndexGroup = _FlexRayErrorGroup)]
     private FieldId _CodErrFieldId;
 
-    [BoolField("flexray.tss_viol", "TSS Violation", IndexGroup = FlexRayErrorGroup)]
+    [BoolField("flexray.tss_viol", "TSS Violation", IndexGroup = _FlexRayErrorGroup)]
     private FieldId _TssViolFieldId;
 
     #endregion
 
     #region Payload
 
-    /// <summary>Dispatch table for sub-protocols keyed by encoded FlexRay slot number and channel.</summary>
-    [ProtocolTableU64(IdTableName, "FlexRay Frame ID + Channel")]
+    /// <summary>Dispatch table for sub-protocols keyed by slot, channel, and cycle.</summary>
+    [ProtocolTableU64(IdTableName, "FlexRay Frame ID + Channel + Cycle")]
     private ProtocolTableId _IdTableId;
 
     [BytesField("flexray.data", "Data", IndexGroup = "flexray.data")]
@@ -212,9 +219,9 @@ public sealed partial class FlexRayProtocol : IProtocol
     /// </summary>
     public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
     {
-        if (data.Length < MinHeaderSize)
+        if (data.Length < _MinHeaderSize)
         {
-            return ParseError.InsufficientDataWithInfo(ProtocolName, MinHeaderSize, (ulong)data.Length);
+            return ParseError.InsufficientDataWithInfo(ProtocolName, _MinHeaderSize, (ulong)data.Length);
         }
 
         ReadOnlySpan<byte> span = data.Span;
@@ -228,29 +235,29 @@ public sealed partial class FlexRayProtocol : IProtocol
         #region Measurement Header (byte 0)
         byte measurementHeader = span[0];
         // Bit 7: Channel (0 = Channel A, 1 = Channel B)
-        bool isChannelB = (measurementHeader & ChannelBitMask) != 0;
+        bool isChannelB = (measurementHeader & _ChannelBitMask) != 0;
 
         // Bits 6-0: Type Index (0x01 = standard data frame).
         // Symbol frames and other non-data type indices do not carry a full 5-byte
         // FlexRay frame header or payload. Parsing them as data frames would
         // mis-decode garbage bytes.
-        byte typeIndex = (byte)(measurementHeader & TypeIndexMask);
+        byte typeIndex = (byte)(measurementHeader & _TypeIndexMask);
 
         #endregion
 
         #region Error Flags (byte 1)
         byte errorFlags = span[1];
-        bool fcrcErr = (errorFlags & FcrcErrMask) != 0;
-        bool hcrcErr = (errorFlags & HcrcErrMask) != 0;
-        bool fesErr = (errorFlags & FesErrMask) != 0;
-        bool codErr = (errorFlags & CodErrMask) != 0;
-        bool tssViol = (errorFlags & TssViolMask) != 0;
+        bool fcrcErr = (errorFlags & _FcrcErrMask) != 0;
+        bool hcrcErr = (errorFlags & _HcrcErrMask) != 0;
+        bool fesErr = (errorFlags & _FesErrMask) != 0;
+        bool codErr = (errorFlags & _CodErrMask) != 0;
+        bool tssViol = (errorFlags & _TssViolMask) != 0;
 
         #endregion
 
         // Symbol and event frames: only the 2-byte measurement/error prefix is meaningful.
         // Skip the full frame-header decode to avoid mis-interpreting non-data bytes.
-        if (typeIndex != TypeIndexFrame)
+        if (typeIndex != _TypeIndexFrame)
         {
             MutField symbolContainer = parentField.AppendWithCustomText(
                 _ProtocolFieldId,
@@ -277,13 +284,13 @@ public sealed partial class FlexRayProtocol : IProtocol
         byte headerByte1 = span[3];
 
         // Indicator bits from byte 2
-        bool ppi = (headerByte0 & PpiBitMask) != 0;
-        bool nfi = (headerByte0 & NfiBitMask) != 0;  // 1 = NOT null frame
-        bool sfi = (headerByte0 & SfiBitMask) != 0;
-        bool stfi = (headerByte0 & StfiBitMask) != 0;
+        bool ppi = (headerByte0 & _PpiBitMask) != 0;
+        bool nfi = (headerByte0 & _NfiBitMask) != 0;  // 1 = NOT null frame
+        bool sfi = (headerByte0 & _SfiBitMask) != 0;
+        bool stfi = (headerByte0 & _StfiBitMask) != 0;
 
         // Frame ID: 11 bits (byte 2 bits 2-0 = high 3 bits, byte 3 = low 8 bits)
-        ushort frameId = (ushort)(((headerByte0 & FrameIdHighMask) << 8) | headerByte1);
+        ushort frameId = (ushort)(((headerByte0 & _FrameIdHighMask) << 8) | headerByte1);
 
         // Payload length: 7 bits from byte 4 bits 7-1 (in 16-bit words)
         int payloadWords = (span[4] >> 1) & 0x7F;
@@ -300,7 +307,7 @@ public sealed partial class FlexRayProtocol : IProtocol
         byte cycle = (byte)(span[6] & 0x3F);
 
         // Total consumed: measurement header (2) + frame header (5) + payload
-        int totalConsumed = Math.Min(MinHeaderSize + payloadSize, data.Length);
+        int totalConsumed = Math.Min(_MinHeaderSize + payloadSize, data.Length);
 
         #endregion
 
@@ -367,14 +374,14 @@ public sealed partial class FlexRayProtocol : IProtocol
             tssViol ? "Violation" : "No violation");
 
         // Payload data (optional); dispatch to sub-protocols (e.g. Signal PDU) when present.
-        // Key encodes both the 11-bit slot number and the channel: bits [10:0] = Frame ID, bit 11 = Channel B.
-        if (totalConsumed > MinHeaderSize)
+        // Key encodes slot, channel, and cycle — the three identifiers of a FlexRay message.
+        if (totalConsumed > _MinHeaderSize)
         {
             context.RecordGroupPresence(_FlexrayDataGroupId);
-            ReadOnlyMemory<byte> payload = data[MinHeaderSize..totalConsumed];
+            ReadOnlyMemory<byte> payload = data[_MinHeaderSize..totalConsumed];
             container.Append(_DataFieldId, FieldValue.NewBytes(payload));
 
-            ulong dispatchKey = (ulong)frameId | (isChannelB ? ChannelBKeyBit : 0UL);
+            ulong dispatchKey = FlexRayLinkTypeFrame.EncodeDispatchKey(frameId, isChannelB, cycle);
             ParseResult dispatchResult = container.TryCallNextProtocolU64(_IdTableId, dispatchKey, payload, in context);
             if (dispatchResult.IsError)
             {

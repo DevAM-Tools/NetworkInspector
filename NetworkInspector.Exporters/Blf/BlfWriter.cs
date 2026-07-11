@@ -27,20 +27,20 @@ namespace NetworkInspector.Exporters.Blf;
 internal sealed class BlfWriter
 {
     /// <summary>BLF file header size in bytes.</summary>
-    private const int FileHeaderSize = 144;
+    private const int _FileHeaderSize = 144;
 
     /// <summary>Combined size of block header (16) + log object header V1 (16).</summary>
-    private const int ObjectHeaderTotalSize =
+    private const int _ObjectHeaderTotalSize =
         BlfConstants.BlockHeaderSize + BlfConstants.LogObjectHeaderType1Size; // 32
 
     /// <summary>Maximum uncompressed container buffer size before flushing (10 MB).</summary>
-    private const int MaxContainerBufferSize = BlfConstants.MaxContainerBufferSize;
+    private const int _MaxContainerBufferSize = BlfConstants.MaxContainerBufferSize;
 
     /// <summary>BLF timestamp resolution flag value: 10 µs units.</summary>
-    private const uint TimestampResolution10Us = BlfConstants.TimestampResolution10Us;
+    private const uint _TimestampResolution10Us = BlfConstants.TimestampResolution10Us;
 
     /// <summary>Nanoseconds per 10 µs tick (the BLF timestamp unit).</summary>
-    private const long NanosPerTick = 10_000;
+    private const long _NanosPerTick = 10_000;
 
     private readonly Stream _Stream;
     private long _StartNs;
@@ -76,7 +76,7 @@ internal sealed class BlfWriter
     /// Creates a BLF writer and writes the 144-byte file header immediately.
     /// </summary>
     /// <param name="stream">Target output stream.</param>
-    /// <param name="startNs">Start timestamp in nanoseconds since Unix epoch.</param>
+    /// <param name="startNs">_Start timestamp in nanoseconds since Unix epoch.</param>
     /// <param name="compression">Compression level for container output. Use
     /// <see cref="CompressionLevel.NoCompression"/> to disable compression.</param>
     internal BlfWriter(
@@ -95,8 +95,8 @@ internal sealed class BlfWriter
         // residual sub-ms offset and the round-trip is exact.
         _StartNs = (startNs / 1_000_000L) * 1_000_000L;
         _Compression = compression;
-        _ContainerBuffer = new PooledBuffer(MaxContainerBufferSize);
-        WriteFileHeader(_StartNs);
+        _ContainerBuffer = new PooledBuffer(_MaxContainerBufferSize);
+        _WriteFileHeader(_StartNs);
     }
 
     /// <summary>LOGG <c>start_date</c> anchor used for relative object timestamps (floored to whole milliseconds).</summary>
@@ -118,7 +118,7 @@ internal sealed class BlfWriter
             return false;
         }
 
-        if (!_Stream.CanSeek || _Stream.Position != FileHeaderSize)
+        if (!_Stream.CanSeek || _Stream.Position != _FileHeaderSize)
         {
             return false;
         }
@@ -127,15 +127,15 @@ internal sealed class BlfWriter
         // the position reflects bytes actually written and not bytes pending in a
         // BufferedStream or FileStream internal buffer that hasn't yet been flushed.
         _Stream.Flush();
-        if (_Stream.Position != FileHeaderSize)
+        if (_Stream.Position != _FileHeaderSize)
         {
             return false;
         }
 
         _StartNs = newStart;
         _Stream.Seek(0, SeekOrigin.Begin);
-        WriteFileHeader(_StartNs);
-        return _Stream.Position == FileHeaderSize;
+        _WriteFileHeader(_StartNs);
+        return _Stream.Position == _FileHeaderSize;
     }
 
     /// <summary>
@@ -182,17 +182,17 @@ internal sealed class BlfWriter
             _NonMonotonicTimestampCount++;
             relativeNs = 0;
         }
-        ulong blfTimestamp = (ulong)(relativeNs / NanosPerTick);
+        ulong blfTimestamp = (ulong)(relativeNs / _NanosPerTick);
 
         // Calculate object sizes with 4-byte alignment
-        int rawObjectSize = ObjectHeaderTotalSize + payload.Length;
+        int rawObjectSize = _ObjectHeaderTotalSize + payload.Length;
         int padding = (4 - (rawObjectSize & 3)) & 3;
         int totalObjectSize = rawObjectSize + padding;
 
         // If adding this object would exceed the container limit, flush first.
         // This guarantees no object spans container boundaries.
         if (_ContainerBuffer.Length > 0
-            && _ContainerBuffer.Length + totalObjectSize > MaxContainerBufferSize)
+            && _ContainerBuffer.Length + totalObjectSize > _MaxContainerBufferSize)
         {
             FlushContainer();
         }
@@ -202,7 +202,7 @@ internal sealed class BlfWriter
 
         // -- Block header (16 bytes) --
         BinaryPrimitives.WriteUInt32LittleEndian(buf, BlfConstants.ObjectMagic);               // "LOBJ" signature
-        BinaryPrimitives.WriteUInt16LittleEndian(buf.Slice(4), (ushort)ObjectHeaderTotalSize); // header_size = 32
+        BinaryPrimitives.WriteUInt16LittleEndian(buf.Slice(4), (ushort)_ObjectHeaderTotalSize); // header_size = 32
         BinaryPrimitives.WriteUInt16LittleEndian(buf.Slice(6), 1);                            // header_type = V1
         BinaryPrimitives.WriteUInt32LittleEndian(buf.Slice(8), (uint)rawObjectSize);           // object_length (unpadded)
         BinaryPrimitives.WriteUInt32LittleEndian(buf.Slice(12), objectType);                   // object_type
@@ -211,13 +211,13 @@ internal sealed class BlfWriter
         //   uint32 flags (4) | uint16 client_index (2) | uint16 object_version (2) | uint64 object_timestamp (8)
         // The previous layout (timestamp first) does not match Vector/Wireshark and produces files where
         // tshark cannot derive a usable frame.time_epoch.
-        BinaryPrimitives.WriteUInt32LittleEndian(buf.Slice(16), TimestampResolution10Us);      // flags (resolution = 10 µs)
+        BinaryPrimitives.WriteUInt32LittleEndian(buf.Slice(16), _TimestampResolution10Us);      // flags (resolution = 10 µs)
         BinaryPrimitives.WriteUInt16LittleEndian(buf.Slice(20), 0);                            // client_index
         BinaryPrimitives.WriteUInt16LittleEndian(buf.Slice(22), objectVersion);                // object_version
         BinaryPrimitives.WriteUInt64LittleEndian(buf.Slice(24), blfTimestamp);                 // object_timestamp (10 µs units)
 
         // -- Payload --
-        payload.CopyTo(buf.Slice(ObjectHeaderTotalSize));
+        payload.CopyTo(buf.Slice(_ObjectHeaderTotalSize));
 
         // -- 4-byte alignment padding (zeros) --
         if (padding > 0)
@@ -256,7 +256,7 @@ internal sealed class BlfWriter
             // This avoids the double allocation that MemoryStream.ToArray() caused
             // (the MemoryStream internal buffer plus the extra ToArray copy).
             compressionMethod = BlfConstants.CompressionZlib;
-            CompressWithZlib(_ContainerBuffer.WrittenSpan, _CompressedBuf);
+            _CompressWithZlib(_ContainerBuffer.WrittenSpan, _CompressedBuf);
             compressedLen = _CompressedBuf.Length;
         }
 
@@ -340,30 +340,30 @@ internal sealed class BlfWriter
         _CompressedBuf.Return();
 
         // Build the finalized 144-byte file header with all statistics
-        byte[] finalHeader = new byte[FileHeaderSize];
+        byte[] finalHeader = new byte[_FileHeaderSize];
         Span<byte> h = finalHeader;
         h.Clear();
 
         BinaryPrimitives.WriteUInt32LittleEndian(h, BlfConstants.FileMagic);                    // "LOGG"
-        BinaryPrimitives.WriteUInt32LittleEndian(h.Slice(4), (uint)FileHeaderSize);             // header_length = 144
+        BinaryPrimitives.WriteUInt32LittleEndian(h.Slice(4), (uint)_FileHeaderSize);             // header_length = 144
         // h[8..12] = 0  (api_version, already zeroed)
         // h[12]    = 0  (application, already zeroed)
-        h[13] = CompressionLevelToByte(_Compression);                           // compression_level
+        h[13] = _CompressionLevelToByte(_Compression);                           // compression_level
         // h[14..16] = 0 (application_major, application_minor, already zeroed)
 
-        long totalFileSize = FileHeaderSize + _BytesWritten;
+        long totalFileSize = _FileHeaderSize + _BytesWritten;
         // For an uncompressed file the two sizes are identical. For a compressed file
         // tshark requires len_uncompressed to be the size the file would have if all
         // containers were uncompressed; using the compressed size makes tshark try to
         // read past the actual end and report "appears to have been cut short".
-        long uncompressedFileSize = FileHeaderSize + _UncompressedBytesWritten;
+        long uncompressedFileSize = _FileHeaderSize + _UncompressedBytesWritten;
         BinaryPrimitives.WriteUInt64LittleEndian(h.Slice(16), (ulong)totalFileSize);            // len_compressed
         BinaryPrimitives.WriteUInt64LittleEndian(h.Slice(24), (ulong)uncompressedFileSize);     // len_uncompressed
         BinaryPrimitives.WriteUInt32LittleEndian(h.Slice(32), (uint)_ObjectCount);              // obj_count
         // h[36..40] = 0 (application_build, already zeroed)
 
-        WriteBlfDate(h.Slice(40), _StartNs);                                    // start_date
-        WriteBlfDate(h.Slice(56), endNs);                                       // end_date
+        _WriteBlfDate(h.Slice(40), _StartNs);                                    // start_date
+        _WriteBlfDate(h.Slice(56), endNs);                                       // end_date
         // h[72..76] = 0  (restore_point_offset, already zeroed)
         // h[76..144] = 0 (padding, already zeroed)
 
@@ -375,17 +375,17 @@ internal sealed class BlfWriter
     // ========================================================================
 
     /// <summary>Writes the initial 144-byte BLF file header with placeholder values.</summary>
-    private void WriteFileHeader(long startNs)
+    private void _WriteFileHeader(long startNs)
     {
-        Span<byte> header = stackalloc byte[FileHeaderSize];
+        Span<byte> header = stackalloc byte[_FileHeaderSize];
         header.Clear();
 
         BinaryPrimitives.WriteUInt32LittleEndian(header, BlfConstants.FileMagic);                // "LOGG"
-        BinaryPrimitives.WriteUInt32LittleEndian(header.Slice(4), (uint)FileHeaderSize);         // header_length = 144
+        BinaryPrimitives.WriteUInt32LittleEndian(header.Slice(4), (uint)_FileHeaderSize);         // header_length = 144
         // api_version, application, app_major, app_minor = 0 (already zeroed)
-        header[13] = CompressionLevelToByte(_Compression);                       // compression_level
+        header[13] = _CompressionLevelToByte(_Compression);                       // compression_level
         // len_compressed, len_uncompressed, obj_count, app_build = 0 (placeholder)
-        WriteBlfDate(header.Slice(40), startNs);                                 // start_date
+        _WriteBlfDate(header.Slice(40), startNs);                                 // start_date
         // end_date = 0 (placeholder)
 
         _Stream.Write(header);
@@ -401,7 +401,7 @@ internal sealed class BlfWriter
     /// <c>MemoryStream.ToArray()</c> caused (MEDIUM-6 fix).
     /// </para>
     /// </summary>
-    private void CompressWithZlib(ReadOnlySpan<byte> data, PooledBuffer destination)
+    private void _CompressWithZlib(ReadOnlySpan<byte> data, PooledBuffer destination)
     {
         destination.Reset();
         using MemoryStream ms = new(capacity: data.Length);
@@ -424,7 +424,7 @@ internal sealed class BlfWriter
     /// shift every reported frame timestamp by the local UTC offset.
     /// </para>
     /// </summary>
-    private static void WriteBlfDate(Span<byte> dest, long unixNanos)
+    private static void _WriteBlfDate(Span<byte> dest, long unixNanos)
     {
         if (unixNanos <= 0)
         {
@@ -449,7 +449,7 @@ internal sealed class BlfWriter
     /// Maps <see cref="CompressionLevel"/> to a byte value for the BLF file header.
     /// Corresponds to the zlib compression level (0=off, 1=fast, 6=default, 9=best).
     /// </summary>
-    private static byte CompressionLevelToByte(CompressionLevel level) => level switch
+    private static byte _CompressionLevelToByte(CompressionLevel level) => level switch
     {
         CompressionLevel.NoCompression => 0,
         CompressionLevel.Fastest => 1,

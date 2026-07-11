@@ -48,7 +48,17 @@ internal sealed class RunContainer : IContainer
         }
     }
 
-    public ushort Min => _Count > 0 ? _Runs[0].Start : ushort.MinValue;
+    public ushort Min
+    {
+        get
+        {
+            if (_Count > 0)
+            {
+                return _Runs[0].Start;
+            }
+            return ushort.MinValue;
+        }
+    }
 
     public ushort Max
     {
@@ -122,7 +132,7 @@ internal sealed class RunContainer : IContainer
             {
                 prev.Length++;
                 // Check if we can merge with next run
-                TryMergeAt(idx - 1);
+                _TryMergeAt(idx - 1);
                 return this;
             }
         }
@@ -135,13 +145,13 @@ internal sealed class RunContainer : IContainer
             // Check merge with prev
             if (idx > 0)
             {
-                TryMergeAt(idx - 1);
+                _TryMergeAt(idx - 1);
             }
             return this;
         }
 
         // Insert new run
-        InsertRunAt(idx, value, 0);
+        _InsertRunAt(idx, value, 0);
         return this;
     }
 
@@ -310,7 +320,7 @@ internal sealed class RunContainer : IContainer
         for (int i = 0; i < _Count; i++)
         {
             (ushort Start, ushort Length) = _Runs[i];
-            ApplyRangeMask(bitmap, Start, (ushort)(Start + Length), RangeOp.Or);
+            _ApplyRangeMask(bitmap, Start, (ushort)(Start + Length), RangeOp.Or);
         }
     }
 
@@ -323,7 +333,7 @@ internal sealed class RunContainer : IContainer
         for (int i = 0; i < _Count; i++)
         {
             (ushort Start, ushort Length) = _Runs[i];
-            ApplyRangeMask(bitmap, Start, (ushort)(Start + Length), RangeOp.AndNot);
+            _ApplyRangeMask(bitmap, Start, (ushort)(Start + Length), RangeOp.AndNot);
         }
     }
 
@@ -336,7 +346,7 @@ internal sealed class RunContainer : IContainer
         for (int i = 0; i < _Count; i++)
         {
             (ushort Start, ushort Length) = _Runs[i];
-            ApplyRangeMask(bitmap, Start, (ushort)(Start + Length), RangeOp.Xor);
+            _ApplyRangeMask(bitmap, Start, (ushort)(Start + Length), RangeOp.Xor);
         }
     }
 
@@ -352,7 +362,7 @@ internal sealed class RunContainer : IContainer
     /// <paramref name="endBit"/>] in <paramref name="bitmap"/>. Uses ulong-word masks rather than
     /// per-bit loops, so a 65,536-bit run costs at most ~1024 ulong ops.
     /// </summary>
-    private static void ApplyRangeMask(ulong[] bitmap, int startBit, int endBit, RangeOp op)
+    private static void _ApplyRangeMask(ulong[] bitmap, int startBit, int endBit, RangeOp op)
     {
         // Single-word fast path: compute one mask covering the bit range and apply it.
         int firstWord = startBit >> 6;
@@ -366,7 +376,7 @@ internal sealed class RunContainer : IContainer
             // overflow: when lastBit == 63 and firstBit == 0 the mask must equal ~0UL.
             int width = lastBit - firstBit + 1;
             ulong mask = width == 64 ? ~0UL : ((1UL << width) - 1) << firstBit;
-            ApplyOp(ref bitmap[firstWord], mask, op);
+            _ApplyOp(ref bitmap[firstWord], mask, op);
             return;
         }
 
@@ -374,16 +384,16 @@ internal sealed class RunContainer : IContainer
         ulong firstMask = ~0UL << firstBit;       // high bits of the first word
         ulong lastMask = lastBit == 63 ? ~0UL : (1UL << (lastBit + 1)) - 1; // low bits of the last word
 
-        ApplyOp(ref bitmap[firstWord], firstMask, op);
+        _ApplyOp(ref bitmap[firstWord], firstMask, op);
         for (int w = firstWord + 1; w < lastWord; w++)
         {
-            ApplyOp(ref bitmap[w], ~0UL, op);
+            _ApplyOp(ref bitmap[w], ~0UL, op);
         }
-        ApplyOp(ref bitmap[lastWord], lastMask, op);
+        _ApplyOp(ref bitmap[lastWord], lastMask, op);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static void ApplyOp(ref ulong word, ulong mask, RangeOp op)
+    private static void _ApplyOp(ref ulong word, ulong mask, RangeOp op)
     {
         switch (op)
         {
@@ -403,7 +413,7 @@ internal sealed class RunContainer : IContainer
 
     #region Private Helpers
 
-    private void TryMergeAt(int idx)
+    private void _TryMergeAt(int idx)
     {
         if (idx + 1 >= _Count)
         {
@@ -414,11 +424,11 @@ internal sealed class RunContainer : IContainer
         {
             ushort newEnd = Math.Max(end, (ushort)(_Runs[idx + 1].Start + _Runs[idx + 1].Length));
             _Runs[idx].Length = (ushort)(newEnd - _Runs[idx].Start);
-            RemoveRunAt(idx + 1);
+            _RemoveRunAt(idx + 1);
         }
     }
 
-    private void InsertRunAt(int idx, ushort start, ushort length)
+    private void _InsertRunAt(int idx, ushort start, ushort length)
     {
         if (_Count == _Runs.Length)
         {
@@ -432,7 +442,7 @@ internal sealed class RunContainer : IContainer
         _Count++;
     }
 
-    private void RemoveRunAt(int idx)
+    private void _RemoveRunAt(int idx)
     {
         if (idx < _Count - 1)
         {

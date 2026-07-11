@@ -30,8 +30,8 @@ public static class TsharkEquivalence
             return false;
         }
 
-        string a = Normalize(niValue);
-        string b = Normalize(tsharkValue);
+        string a = _Normalize(niValue);
+        string b = _Normalize(tsharkValue);
         if (a == b)
         {
             return true;
@@ -52,21 +52,21 @@ public static class TsharkEquivalence
         }
 
         // Integer equivalence — both parse as the same numeric value.
-        if (TryParseInteger(a, out long ia) && TryParseInteger(b, out long ib))
+        if (_TryParseInteger(a, out long ia) && _TryParseInteger(b, out long ib))
         {
             return ia == ib;
         }
 
         // IP-address equivalence — canonicalize and compare.
-        if (TryParseIpAddress(a, out IPAddress? ipA) && TryParseIpAddress(b, out IPAddress? ipB))
+        if (_TryParseIpAddress(a, out IPAddress? ipA) && _TryParseIpAddress(b, out IPAddress? ipB))
         {
             return ipA!.Equals(ipB);
         }
 
         // MAC-address equivalence — strip separators and compare hex digits.
-        string macA = StripMacSeparators(a);
-        string macB = StripMacSeparators(b);
-        if (macA.Length == 12 && macB.Length == 12 && IsHex(macA) && IsHex(macB))
+        string macA = _StripMacSeparators(a);
+        string macB = _StripMacSeparators(b);
+        if (macA.Length == 12 && macB.Length == 12 && _IsHex(macA) && _IsHex(macB))
         {
             return string.Equals(macA, macB, StringComparison.OrdinalIgnoreCase);
         }
@@ -76,10 +76,10 @@ public static class TsharkEquivalence
         // formats them with single-space separators ("00 00 00 00…"). Both
         // representations are semantically equal once whitespace and common
         // separators are stripped.
-        string hexA = StripHexSeparators(a);
-        string hexB = StripHexSeparators(b);
+        string hexA = _StripHexSeparators(a);
+        string hexB = _StripHexSeparators(b);
         if (hexA.Length > 0 && hexA.Length == hexB.Length && (hexA.Length & 1) == 0
-            && IsHex(hexA) && IsHex(hexB))
+            && _IsHex(hexA) && _IsHex(hexB))
         {
             return string.Equals(hexA, hexB, StringComparison.OrdinalIgnoreCase);
         }
@@ -149,7 +149,7 @@ public static class TsharkEquivalence
     #region Normalisation helpers
 
     /// <summary>Trims whitespace, strips outer brackets, lower-cases hex prefix.</summary>
-    private static string Normalize(string value)
+    private static string _Normalize(string value)
     {
         string s = value.Trim();
         // Strip surrounding parentheses or square brackets sometimes used in display.
@@ -164,7 +164,7 @@ public static class TsharkEquivalence
         return s;
     }
 
-    private static bool TryParseInteger(string s, out long value)
+    private static bool _TryParseInteger(string s, out long value)
     {
         if (s.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
         {
@@ -173,10 +173,10 @@ public static class TsharkEquivalence
         return long.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out value);
     }
 
-    private static bool TryParseIpAddress(string s, out IPAddress? addr)
+    private static bool _TryParseIpAddress(string s, out IPAddress? addr)
         => IPAddress.TryParse(s, out addr);
 
-    private static string StripMacSeparators(string s)
+    private static string _StripMacSeparators(string s)
     {
         Span<char> buf = stackalloc char[s.Length];
         int len = 0;
@@ -196,7 +196,7 @@ public static class TsharkEquivalence
     /// space-grouped ("00 00 00 00") and contiguous ("00000000") representations
     /// compare equal.
     /// </summary>
-    private static string StripHexSeparators(string s)
+    private static string _StripHexSeparators(string s)
     {
         Span<char> buf = stackalloc char[s.Length];
         int len = 0;
@@ -211,7 +211,7 @@ public static class TsharkEquivalence
         return new string(buf[..len]);
     }
 
-    private static bool IsHex(string s)
+    private static bool _IsHex(string s)
     {
         foreach (char c in s)
         {

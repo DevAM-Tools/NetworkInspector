@@ -19,9 +19,9 @@ namespace NetworkInspector.Protocols.Tests;
 /// </summary>
 internal static class Icmpv6PacketBuilder
 {
-    private const int EthernetHeaderSize = 14; // bytes
-    private const int Ipv6HeaderSize = 40;     // bytes
-    private const int ChecksumOffset = 2;       // within the ICMPv6 header
+    private const int _EthernetHeaderSize = 14; // bytes
+    private const int _Ipv6HeaderSize = 40;     // bytes
+    private const int _ChecksumOffset = 2;       // within the ICMPv6 header
 
     private static readonly MacAddress _DefaultDstMac = MacAddress.FromBytes([0x33, 0x33, 0x00, 0x00, 0x00, 0x01]);
     private static readonly MacAddress _DefaultSrcMac = MacAddress.FromBytes([0x00, 0x11, 0x22, 0x33, 0x44, 0x55]);
@@ -67,14 +67,14 @@ internal static class Icmpv6PacketBuilder
         int len = buffer.Length;
 
         // Patch ICMPv6 checksum over IPv6 pseudo-header (RFC 4443 §2.3).
-        int icmpOffset = EthernetHeaderSize + Ipv6HeaderSize;
+        int icmpOffset = _EthernetHeaderSize + _Ipv6HeaderSize;
         Span<byte> bufferSpan = buffer.AsSpan(0, len);
         // Zero checksum field before computing
-        bufferSpan[icmpOffset + ChecksumOffset] = 0;
-        bufferSpan[icmpOffset + ChecksumOffset + 1] = 0;
+        bufferSpan[icmpOffset + _ChecksumOffset] = 0;
+        bufferSpan[icmpOffset + _ChecksumOffset + 1] = 0;
         ReadOnlySpan<byte> segment = bufferSpan[icmpOffset..];
         ushort checksum = ChecksumUtils.PseudoHeaderIPv6(srcIp, dstIp, IpProtocols.IcmpV6, segment);
-        BinaryPrimitives.WriteUInt16BigEndian(bufferSpan.Slice(icmpOffset + ChecksumOffset, 2), checksum);
+        BinaryPrimitives.WriteUInt16BigEndian(bufferSpan.Slice(icmpOffset + _ChecksumOffset, 2), checksum);
 
         return buffer;
     }
@@ -93,7 +93,7 @@ internal static class Icmpv6PacketBuilder
         byte[] icmpPacket = new byte[icmpLen];
         icmpPacket[0] = type;
         icmpPacket[1] = code;
-        BinaryPrimitives.WriteUInt16BigEndian(icmpPacket.AsSpan(ChecksumOffset, 2), rawChecksum);
+        BinaryPrimitives.WriteUInt16BigEndian(icmpPacket.AsSpan(_ChecksumOffset, 2), rawChecksum);
         body.CopyTo(icmpPacket.AsSpan(4));
 
         EthernetLayer eth = new(_DefaultDstMac, _DefaultSrcMac);

@@ -40,8 +40,8 @@ internal sealed class SessionListenerScenario : IProfilingScenario
 
     /// <inheritdoc/>
     public string Description =>
-        $"Full session pipeline: RandomFrameSource(UdpIPv6) -> parse -> listener iterate, " +
-        $"{FrameCount:N0} frames per iteration.";
+        FormattableString.Invariant(
+            $"Full session pipeline: RandomFrameSource(UdpIPv6) -> parse -> listener iterate, {FrameCount:N0} frames per iteration.");
 
     /// <inheritdoc/>
     public long WorkUnitsPerIteration => FrameCount;

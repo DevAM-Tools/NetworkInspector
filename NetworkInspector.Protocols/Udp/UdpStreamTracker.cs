@@ -26,7 +26,7 @@ internal sealed class UdpStreamTracker
 {
     /// <summary>LRU cache capacity — 4 entries provide a good balance between
     /// hit rate and linear scan cost for typical network traffic patterns.</summary>
-    private const int CacheSize = 4;
+    private const int _CacheSize = 4;
 
     /// <summary>Maps each unique conversation 4-tuple to its stream index.</summary>
     private readonly Dictionary<UdpConnectionKey, uint> _Streams = [];
@@ -35,12 +35,12 @@ internal sealed class UdpStreamTracker
     private uint _NextStreamIndex;
 
     /// <summary>Inline LRU cache — most recently used entry is at index 0.</summary>
-    private readonly UdpConnectionKey[] _CacheKeys = new UdpConnectionKey[CacheSize];
+    private readonly UdpConnectionKey[] _CacheKeys = new UdpConnectionKey[_CacheSize];
 
     /// <summary>Cached stream indices corresponding to <see cref="_CacheKeys"/>.</summary>
-    private readonly uint[] _CacheValues = new uint[CacheSize];
+    private readonly uint[] _CacheValues = new uint[_CacheSize];
 
-    /// <summary>Number of valid entries in the LRU cache (0..CacheSize).</summary>
+    /// <summary>Number of valid entries in the LRU cache (0.._CacheSize).</summary>
     private int _CacheCount;
 
     /// <summary>
@@ -90,7 +90,7 @@ internal sealed class UdpStreamTracker
 
         // Insert at MRU position [0] — shift existing entries toward LRU.
         // Only runs on cache miss, so the shift cost is amortized.
-        int shiftCount = Math.Min(_CacheCount, CacheSize - 1);
+        int shiftCount = Math.Min(_CacheCount, _CacheSize - 1);
         for (int j = shiftCount; j > 0; j--)
         {
             _CacheKeys[j] = _CacheKeys[j - 1];
@@ -100,7 +100,7 @@ internal sealed class UdpStreamTracker
         _CacheKeys[0] = key;
         _CacheValues[0] = index;
 
-        if (_CacheCount < CacheSize)
+        if (_CacheCount < _CacheSize)
         {
             _CacheCount++;
         }
@@ -205,10 +205,10 @@ internal readonly struct UdpConnectionKey : IEquatable<UdpConnectionKey>
         // XOR-rotate mixing: each rotate uses a different prime shift count
         // to minimize collision probability on structured network data.
         ulong h = lo1;
-        h = RotateLeft(h, 5) ^ lo2;
-        h = RotateLeft(h, 7) ^ hi1;
-        h = RotateLeft(h, 11) ^ hi2;
-        h = RotateLeft(h, 13) ^ ports;
+        h = _RotateLeft(h, 5) ^ lo2;
+        h = _RotateLeft(h, 7) ^ hi1;
+        h = _RotateLeft(h, 11) ^ hi2;
+        h = _RotateLeft(h, 13) ^ ports;
 
         // Final avalanche — ensures all bits influence the result
         h ^= h >> 33;
@@ -220,6 +220,6 @@ internal readonly struct UdpConnectionKey : IEquatable<UdpConnectionKey>
 
     /// <summary>Rotates a 64-bit value left by the specified number of bits.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static ulong RotateLeft(ulong value, int shift) =>
+    private static ulong _RotateLeft(ulong value, int shift) =>
         (value << shift) | (value >> (64 - shift));
 }

@@ -24,7 +24,7 @@ internal sealed class ArrayContainer : IContainer
     // Elements ≤ this threshold use SIMD linear scan in Contains instead of binary search.
     // Below ~32 elements SIMD linear scan outperforms binary search because it avoids
     // branch-prediction overhead from the log2(n) comparisons.
-    private const int SimdLinearScanThreshold = 32;
+    private const int _SimdLinearScanThreshold = 32;
 
     private ushort[] _Values;
     private int _Count;
@@ -55,15 +55,15 @@ internal sealed class ArrayContainer : IContainer
 
     /// <summary>
     /// Checks whether <paramref name="value"/> is present.
-    /// Uses SIMD linear scan for small arrays (≤<see cref="SimdLinearScanThreshold"/> elements)
+    /// Uses SIMD linear scan for small arrays (≤<see cref="_SimdLinearScanThreshold"/> elements)
     /// and binary search for larger ones.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool Contains(ushort value)
     {
-        if (_Count <= SimdLinearScanThreshold)
+        if (_Count <= _SimdLinearScanThreshold)
         {
-            return SimdLinearContains(_Values, _Count, value);
+            return _SimdLinearContains(_Values, _Count, value);
         }
 
         return Array.BinarySearch(_Values, 0, _Count, value) >= 0;
@@ -121,7 +121,7 @@ internal sealed class ArrayContainer : IContainer
         if (other is ArrayContainer arr)
         {
             ushort[] result = new ushort[Math.Min(_Count, arr._Count)];
-            int k = SimdIntersect(_Values, _Count, arr._Values, arr._Count, result);
+            int k = _SimdIntersect(_Values, _Count, arr._Values, arr._Count, result);
             return new ArrayContainer(result, k);
         }
 
@@ -144,7 +144,7 @@ internal sealed class ArrayContainer : IContainer
         if (other is ArrayContainer arr)
         {
             ushort[] result = new ushort[_Count + arr._Count];
-            int k = SimdMerge(_Values, _Count, arr._Values, arr._Count, result);
+            int k = _SimdMerge(_Values, _Count, arr._Values, arr._Count, result);
 
             if (k > MaxCapacity)
             {
@@ -175,7 +175,7 @@ internal sealed class ArrayContainer : IContainer
         if (other is ArrayContainer arr)
         {
             ushort[] result = new ushort[_Count];
-            int k = SimdDifference(_Values, _Count, arr._Values, arr._Count, result);
+            int k = _SimdDifference(_Values, _Count, arr._Values, arr._Count, result);
             return new ArrayContainer(result, k);
         }
 
@@ -198,7 +198,7 @@ internal sealed class ArrayContainer : IContainer
         if (other is ArrayContainer arr)
         {
             ushort[] result = new ushort[_Count + arr._Count];
-            int k = SimdSymmetricDifference(_Values, _Count, arr._Values, arr._Count, result);
+            int k = _SimdSymmetricDifference(_Values, _Count, arr._Values, arr._Count, result);
 
             if (k > MaxCapacity)
             {
@@ -238,7 +238,7 @@ internal sealed class ArrayContainer : IContainer
     /// Falls back to scalar loop on platforms without Vector128 support.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static bool SimdLinearContains(ushort[] values, int count, ushort value)
+    private static bool _SimdLinearContains(ushort[] values, int count, ushort value)
     {
         int i = 0;
         if (Vector128.IsHardwareAccelerated)
@@ -298,7 +298,7 @@ internal sealed class ArrayContainer : IContainer
     /// Falls back to scalar two-pointer walk for the tail and on non-SIMD platforms.
     /// <paramref name="result"/> must have capacity ≥ Min(aCount, bCount).
     /// </summary>
-    private static int SimdIntersect(ushort[] a, int aCount, ushort[] b, int bCount, ushort[] result)
+    private static int _SimdIntersect(ushort[] a, int aCount, ushort[] b, int bCount, ushort[] result)
     {
         int i = 0, j = 0, k = 0;
 
@@ -311,7 +311,7 @@ internal sealed class ArrayContainer : IContainer
                 Vector128<ushort> vB = Vector128.LoadUnsafe(ref b[j]);
 
                 // All-pairs comparison: mask[lane] = 0xFFFF iff a[i+lane] is in b[j..j+7]
-                Vector128<ushort> matchMask = ComputeMatchMask(vA, vB);
+                Vector128<ushort> matchMask = _ComputeMatchMask(vA, vB);
 
                 // Extract one bit per ushort lane (bit 15 of each ushort element)
                 uint laneMask = matchMask.ExtractMostSignificantBits();
@@ -367,7 +367,7 @@ internal sealed class ArrayContainer : IContainer
     /// the scalar two-pointer walk (one element per step).
     /// <paramref name="result"/> must have capacity ≥ aCount + bCount.
     /// </summary>
-    private static int SimdMerge(ushort[] a, int aCount, ushort[] b, int bCount, ushort[] result)
+    private static int _SimdMerge(ushort[] a, int aCount, ushort[] b, int bCount, ushort[] result)
     {
         int i = 0, j = 0, k = 0;
 
@@ -455,7 +455,7 @@ internal sealed class ArrayContainer : IContainer
     /// Overlapping regions are handled by the scalar two-pointer walk.
     /// <paramref name="result"/> must have capacity ≥ aCount.
     /// </summary>
-    private static int SimdDifference(ushort[] a, int aCount, ushort[] b, int bCount, ushort[] result)
+    private static int _SimdDifference(ushort[] a, int aCount, ushort[] b, int bCount, ushort[] result)
     {
         int i = 0, j = 0, k = 0;
 
@@ -534,7 +534,7 @@ internal sealed class ArrayContainer : IContainer
     /// Overlapping regions are handled by the scalar two-pointer walk.
     /// <paramref name="result"/> must have capacity ≥ aCount + bCount.
     /// </summary>
-    private static int SimdSymmetricDifference(ushort[] a, int aCount, ushort[] b, int bCount, ushort[] result)
+    private static int _SimdSymmetricDifference(ushort[] a, int aCount, ushort[] b, int bCount, ushort[] result)
     {
         int i = 0, j = 0, k = 0;
 
@@ -622,12 +622,12 @@ internal sealed class ArrayContainer : IContainer
     /// OR-accumulates the results. Each rotation shifts vB by one more ushort position,
     /// so the final mask captures every possible alignment between the two windows.
     /// Rotations are implemented via byte-level shuffles using the precomputed table
-    /// <see cref="RotByteShuffles"/>.
+    /// <see cref="_RotByteShuffles"/>.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static Vector128<ushort> ComputeMatchMask(Vector128<ushort> vA, Vector128<ushort> vB)
+    private static Vector128<ushort> _ComputeMatchMask(Vector128<ushort> vA, Vector128<ushort> vB)
     {
-        ref byte shuffleBase = ref MemoryMarshal.GetReference(RotByteShuffles);
+        ref byte shuffleBase = ref MemoryMarshal.GetReference(_RotByteShuffles);
 
         // Rotation 0: identity — compare vA against vB as-is
         Vector128<ushort> mask = Vector128.Equals(vA, vB);
@@ -655,9 +655,9 @@ internal sealed class ArrayContainer : IContainer
     ///   byte index 2s   = ((s+r) mod 8) * 2
     ///   byte index 2s+1 = ((s+r) mod 8) * 2 + 1
     ///
-    /// Used by <see cref="ComputeMatchMask"/> via <c>Vector128.Shuffle</c>.
+    /// Used by <see cref="_ComputeMatchMask"/> via <c>Vector128.Shuffle</c>.
     /// </summary>
-    private static ReadOnlySpan<byte> RotByteShuffles =>
+    private static ReadOnlySpan<byte> _RotByteShuffles =>
     [
         // Rotation 1: [u1,u2,u3,u4,u5,u6,u7,u0] — byte indices [2,3,4,5,6,7,8,9,10,11,12,13,14,15,0,1]
         2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 0, 1,

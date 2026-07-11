@@ -33,7 +33,7 @@ public sealed class BlfSourceOptions : IFileSourceOptions
         }
     }
 
-    private long _PreloadBudget =
+    private long? _PreloadBudget =
         Environment.Is64BitProcess ? 256L * 1024 * 1024 : 64L * 1024 * 1024;
 
     /// <summary>
@@ -45,18 +45,19 @@ public sealed class BlfSourceOptions : IFileSourceOptions
     /// Default is 256 MiB on 64-bit processes and 64 MiB on 32-bit processes.
     /// </summary>
     /// <exception cref="ArgumentOutOfRangeException">Value is negative.</exception>
-    public long PreloadBudget
+    public long? PreloadBudget
     {
         get => _PreloadBudget;
         init
         {
-            ArgumentOutOfRangeException.ThrowIfNegative(value);
+            if (value.HasValue)
+            {
+                ArgumentOutOfRangeException.ThrowIfNegative(value.Value);
+            }
+
             _PreloadBudget = value;
         }
     }
-
-    /// <inheritdoc/>
-    long? IFileSourceOptions.PreloadBudget => PreloadBudget;
 
     /// <summary>
     /// UI display name for this source.

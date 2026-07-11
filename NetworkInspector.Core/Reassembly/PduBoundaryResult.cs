@@ -18,10 +18,10 @@ public readonly struct PduBoundaryResult
     #region Constants
 
     /// <summary>Sentinel value indicating incomplete data (need more data).</summary>
-    private const int IncompleteSentinel = -1;
+    private const int _IncompleteSentinel = -1;
 
     /// <summary>Sentinel value indicating invalid data (trigger resync).</summary>
-    private const int InvalidSentinel = -2;
+    private const int _InvalidSentinel = -2;
 
     #endregion
 
@@ -42,20 +42,20 @@ public readonly struct PduBoundaryResult
     public bool IsComplete => Length >= 0;
 
     /// <summary>Whether the data is incomplete (need more data).</summary>
-    public bool IsIncomplete => Length == IncompleteSentinel;
+    public bool IsIncomplete => Length == _IncompleteSentinel;
 
     /// <summary>Whether the data is invalid (resync needed).</summary>
-    public bool IsInvalid => Length == InvalidSentinel;
+    public bool IsInvalid => Length == _InvalidSentinel;
 
     #endregion
 
     #region Factory Methods
 
     /// <summary>PDU boundary not yet determined — need more data.</summary>
-    public static PduBoundaryResult Incomplete => new() { Length = IncompleteSentinel };
+    public static PduBoundaryResult Incomplete => new() { Length = _IncompleteSentinel };
 
     /// <summary>Data is invalid at current position — trigger resynchronization.</summary>
-    public static PduBoundaryResult Invalid => new() { Length = InvalidSentinel };
+    public static PduBoundaryResult Invalid => new() { Length = _InvalidSentinel };
 
     /// <summary>A complete PDU of the given length was found.</summary>
     /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="length"/> is negative.</exception>

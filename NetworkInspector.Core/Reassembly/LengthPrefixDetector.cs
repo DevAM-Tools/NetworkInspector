@@ -97,7 +97,7 @@ public sealed class LengthPrefixDetector : IPduBoundaryDetector
             return PduBoundaryResult.Incomplete;
         }
 
-        int pduLength = ReadLength(data.Slice(_LengthOffset, _LengthSize));
+        int pduLength = _ReadLength(data.Slice(_LengthOffset, _LengthSize));
         if (!_LengthIncludesHeader)
         {
             // Effective header size is precomputed in the constructor — keeps Detect branch-free.
@@ -113,7 +113,7 @@ public sealed class LengthPrefixDetector : IPduBoundaryDetector
 
     #region Private Helpers
 
-    private int ReadLength(ReadOnlySpan<byte> data) => _LengthSize switch
+    private int _ReadLength(ReadOnlySpan<byte> data) => _LengthSize switch
     {
         1 => data[0],
         2 => _BigEndian

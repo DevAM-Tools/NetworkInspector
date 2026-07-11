@@ -39,7 +39,7 @@ namespace NetworkInspector.Protocols;
 /// </summary>
 /// <remarks>
 /// <para><b>Thread safety:</b> instances are immutable after registration completes.
-/// All mutable state is initialised inside <c>RegisterFieldsCustom</c> / <c>OnStartCustom</c>
+/// All mutable state is initialised inside <c>RegisterFieldsCustom</c> / <c>_OnStartCustom</c>
 /// (single-threaded build phase) and is read-only thereafter, so <see cref="Parse"/> may
 /// be invoked concurrently from any number of threads on the same instance without external
 /// synchronisation. Per-thread caches (when present) are stored in <c>[ThreadStatic]</c> fields.</para>
@@ -58,80 +58,80 @@ public sealed partial class DnsProtocol : IProtocol
     public const ulong TcpPortKey = 53;
 
     /// <summary>Index group for always-present DNS fields.</summary>
-    private const string DnsIndexGroup = "dns";
+    private const string _DnsIndexGroup = "dns";
 
     // Resource-record TYPE codes and minimum RDLENGTHs for the index-group-bearing record types.
-    // These constants are shared between the eager index detector (DetectRrGroups) and the lazy
-    // populator (ParseResourceRecords/ParseRData) so that the emission guard for each group lives in
+    // These constants are shared between the eager index detector (_DetectRrGroups) and the lazy
+    // populator (_ParseResourceRecords/_ParseRData) so that the emission guard for each group lives in
     // exactly one place — a change here updates both paths simultaneously and prevents the detector
     // from silently drifting away from what the populator actually emits.
-    private const ushort RrTypeOpt = 41;       // EDNS0 OPT (RFC 6891) — always emits dns.opt fields.
-    private const ushort RrTypeDs = 43;        // DS (RFC 4034).
-    private const ushort RrTypeRrsig = 46;     // RRSIG (RFC 4034).
-    private const ushort RrTypeNsec = 47;      // NSEC (RFC 4034).
-    private const ushort RrTypeDnskey = 48;    // DNSKEY (RFC 4034).
-    private const int DsMinRdLength = 4;       // Key Tag(2) + Algorithm(1) + Digest Type(1).
-    private const int RrsigMinRdLength = 18;   // Fixed RRSIG header before signer's name.
-    private const int NsecMinRdLength = 1;     // At least one byte of next-domain/bitmap data.
-    private const int DnskeyMinRdLength = 4;   // Flags(2) + Protocol(1) + Algorithm(1).
+    private const ushort _RrTypeOpt = 41;       // EDNS0 OPT (RFC 6891) — always emits dns.opt fields.
+    private const ushort _RrTypeDs = 43;        // DS (RFC 4034).
+    private const ushort _RrTypeRrsig = 46;     // RRSIG (RFC 4034).
+    private const ushort _RrTypeNsec = 47;      // NSEC (RFC 4034).
+    private const ushort _RrTypeDnskey = 48;    // DNSKEY (RFC 4034).
+    private const int _DsMinRdLength = 4;       // Key Tag(2) + Algorithm(1) + Digest Type(1).
+    private const int _RrsigMinRdLength = 18;   // Fixed RRSIG header before signer's name.
+    private const int _NsecMinRdLength = 1;     // At least one byte of next-domain/bitmap data.
+    private const int _DnskeyMinRdLength = 4;   // Flags(2) + Protocol(1) + Algorithm(1).
 
     #endregion
 
     #region Protocol container
 
-    [BytesField("dns", "Domain Name System", IndexGroup = DnsIndexGroup)]
+    [BytesField("dns", "Domain Name System", IndexGroup = _DnsIndexGroup)]
     private FieldId _ProtocolFieldId;
 
     #endregion
 
     #region Header fields (always present)
 
-    [U64Field("dns.id", "Transaction ID", IndexGroup = DnsIndexGroup)]
+    [U64Field("dns.id", "Transaction ID", IndexGroup = _DnsIndexGroup)]
     private FieldId _IdFieldId;
 
-    [U64Field("dns.flags", "Flags", IndexGroup = DnsIndexGroup)]
+    [U64Field("dns.flags", "Flags", IndexGroup = _DnsIndexGroup)]
     private FieldId _FlagsFieldId;
 
-    [BoolField("dns.flags.response", "Response", IndexGroup = DnsIndexGroup)]
+    [BoolField("dns.flags.response", "Response", IndexGroup = _DnsIndexGroup)]
     private FieldId _FlagsResponseFieldId;
 
-    [U64Field("dns.flags.opcode", "Opcode", IndexGroup = DnsIndexGroup)]
+    [U64Field("dns.flags.opcode", "Opcode", IndexGroup = _DnsIndexGroup)]
     private FieldId _FlagsOpcodeFieldId;
 
-    [BoolField("dns.flags.authoritative", "Authoritative", IndexGroup = DnsIndexGroup)]
+    [BoolField("dns.flags.authoritative", "Authoritative", IndexGroup = _DnsIndexGroup)]
     private FieldId _FlagsAuthFieldId;
 
-    [BoolField("dns.flags.truncated", "Truncated", IndexGroup = DnsIndexGroup)]
+    [BoolField("dns.flags.truncated", "Truncated", IndexGroup = _DnsIndexGroup)]
     private FieldId _FlagsTruncFieldId;
 
-    [BoolField("dns.flags.recdesired", "Recursion desired", IndexGroup = DnsIndexGroup)]
+    [BoolField("dns.flags.recdesired", "Recursion desired", IndexGroup = _DnsIndexGroup)]
     private FieldId _FlagsRdFieldId;
 
-    [BoolField("dns.flags.recavail", "Recursion available", IndexGroup = DnsIndexGroup)]
+    [BoolField("dns.flags.recavail", "Recursion available", IndexGroup = _DnsIndexGroup)]
     private FieldId _FlagsRaFieldId;
 
-    [BoolField("dns.flags.z", "Z (reserved)", IndexGroup = DnsIndexGroup)]
+    [BoolField("dns.flags.z", "Z (reserved)", IndexGroup = _DnsIndexGroup)]
     private FieldId _FlagsZFieldId;
 
-    [BoolField("dns.flags.authenticated", "Answer authenticated", IndexGroup = DnsIndexGroup)]
+    [BoolField("dns.flags.authenticated", "Answer authenticated", IndexGroup = _DnsIndexGroup)]
     private FieldId _FlagsAdFieldId;
 
-    [BoolField("dns.flags.checkdisable", "Non-authenticated data: Acceptable", IndexGroup = DnsIndexGroup)]
+    [BoolField("dns.flags.checkdisable", "Non-authenticated data: Acceptable", IndexGroup = _DnsIndexGroup)]
     private FieldId _FlagsCdFieldId;
 
-    [U64Field("dns.flags.rcode", "Reply code", IndexGroup = DnsIndexGroup)]
+    [U64Field("dns.flags.rcode", "Reply code", IndexGroup = _DnsIndexGroup)]
     private FieldId _FlagsRcodeFieldId;
 
-    [U64Field("dns.count.queries", "Questions", IndexGroup = DnsIndexGroup)]
+    [U64Field("dns.count.queries", "Questions", IndexGroup = _DnsIndexGroup)]
     private FieldId _QdCountFieldId;
 
-    [U64Field("dns.count.answers", "Answer RRs", IndexGroup = DnsIndexGroup)]
+    [U64Field("dns.count.answers", "Answer RRs", IndexGroup = _DnsIndexGroup)]
     private FieldId _AnCountFieldId;
 
-    [U64Field("dns.count.auth_rr", "Authority RRs", IndexGroup = DnsIndexGroup)]
+    [U64Field("dns.count.auth_rr", "Authority RRs", IndexGroup = _DnsIndexGroup)]
     private FieldId _NsCountFieldId;
 
-    [U64Field("dns.count.add_rr", "Additional RRs", IndexGroup = DnsIndexGroup)]
+    [U64Field("dns.count.add_rr", "Additional RRs", IndexGroup = _DnsIndexGroup)]
     private FieldId _ArCountFieldId;
 
     #endregion
@@ -334,8 +334,8 @@ public sealed partial class DnsProtocol : IProtocol
     // Pre-allocated populator
     private LazyPopulator _Populator = null!;
 
-    partial void OnStartCustom(Stack stack) =>
-        _Populator = PopulateDnsFields;
+    partial void _OnStartCustom(Stack stack) =>
+        _Populator = _PopulateDnsFields;
 
     /// <summary>
     /// Parses a Dns protocol unit from the supplied <paramref name="data"/> buffer,
@@ -394,7 +394,7 @@ public sealed partial class DnsProtocol : IProtocol
         // compressed names to advance through the message, so the walk reuses the same name reader
         // the populator uses — keeping the presence index content-consistent with materialization
         // and free of false positives, at the deliberate cost of repeating the record walk.
-        DetectRrGroups(
+        _DetectRrGroups(
             dnsData.Span, in header,
             out bool hasOpt, out bool hasOptOption, out bool hasDs,
             out bool hasRrsig, out bool hasNsec, out bool hasDnskey);
@@ -445,7 +445,7 @@ public sealed partial class DnsProtocol : IProtocol
     /// Populates all DNS fields from the stored packet bytes.
     /// Called lazily on first access of the DNS container's children.
     /// </summary>
-    private ParseResult PopulateDnsFields(in MutField container)
+    private ParseResult _PopulateDnsFields(in MutField container)
     {
         if (!container.Value.Data.TryGetAsBytes(out ReadOnlyMemory<byte> dnsData))
         {
@@ -506,7 +506,7 @@ public sealed partial class DnsProtocol : IProtocol
                 _QueriesContainerFieldId, FieldValue.None,
                 ZA.Lazy("Queries (", header.QuestionCount, ")"));
 
-            ParseQuestions(in queriesContainer, span, ref offset, header.QuestionCount);
+            _ParseQuestions(in queriesContainer, span, ref offset, header.QuestionCount);
         }
 
         // Answers section
@@ -516,7 +516,7 @@ public sealed partial class DnsProtocol : IProtocol
                 _AnswersContainerFieldId, FieldValue.None,
                 ZA.Lazy("Answers (", header.AnswerCount, ")"));
 
-            ParseResourceRecords(in answersContainer, span, dnsData, ref offset, header.AnswerCount);
+            _ParseResourceRecords(in answersContainer, span, dnsData, ref offset, header.AnswerCount);
         }
 
         // Authority section
@@ -526,7 +526,7 @@ public sealed partial class DnsProtocol : IProtocol
                 _AnswersContainerFieldId, FieldValue.None,
                 ZA.Lazy("Authoritative nameservers (", header.AuthorityCount, ")"));
 
-            ParseResourceRecords(in authContainer, span, dnsData, ref offset, header.AuthorityCount);
+            _ParseResourceRecords(in authContainer, span, dnsData, ref offset, header.AuthorityCount);
         }
 
         // Additional section
@@ -536,14 +536,14 @@ public sealed partial class DnsProtocol : IProtocol
                 _AnswersContainerFieldId, FieldValue.None,
                 ZA.Lazy("Additional records (", header.AdditionalCount, ")"));
 
-            ParseResourceRecords(in addContainer, span, dnsData, ref offset, header.AdditionalCount);
+            _ParseResourceRecords(in addContainer, span, dnsData, ref offset, header.AdditionalCount);
         }
 
         return 0;
     }
 
     /// <summary>Parses the question section of a DNS packet.</summary>
-    private void ParseQuestions(
+    private void _ParseQuestions(
         in MutField container, ReadOnlySpan<byte> data, ref int offset, ushort count)
     {
         for (int i = 0; i < count; i++)
@@ -584,7 +584,7 @@ public sealed partial class DnsProtocol : IProtocol
     /// Parses resource records (Answer, Authority, or Additional sections).
     /// Each resource record: Name + Type(2) + Class(2) + TTL(4) + RDLENGTH(2) + RDATA(N).
     /// </summary>
-    private void ParseResourceRecords(
+    private void _ParseResourceRecords(
         in MutField container, ReadOnlySpan<byte> data, ReadOnlyMemory<byte> fullMemory,
         ref int offset, ushort count)
     {
@@ -617,9 +617,9 @@ public sealed partial class DnsProtocol : IProtocol
             ReadOnlySpan<byte> rdata = data[offset..(offset + rdLength)];
 
             // OPT (type 41) uses CLASS/TTL fields with different semantics (RFC 6891)
-            if (rrType == RrTypeOpt)
+            if (rrType == _RrTypeOpt)
             {
-                ParseOptRecord(in container, rrClass, ttl, rdata, fullMemory, offset);
+                _ParseOptRecord(in container, rrClass, ttl, rdata, fullMemory, offset);
                 offset += rdLength;
                 continue;
             }
@@ -638,7 +638,7 @@ public sealed partial class DnsProtocol : IProtocol
             rrField.Append(_RespLenFieldId, FieldValue.NewU64(rdLength));
 
             // Parse type-specific RDATA
-            ParseRData(in rrField, rrType, rdata, data, fullMemory, offset);
+            _ParseRData(in rrField, rrType, rdata, data, fullMemory, offset);
 
             offset += rdLength;
         }
@@ -646,13 +646,13 @@ public sealed partial class DnsProtocol : IProtocol
 
     /// <summary>
     /// Eagerly walks the question and resource-record sections to decide which RR-type dependent
-    /// index groups apply, mirroring <see cref="ParseResourceRecords"/>'s offset advancement and
+    /// index groups apply, mirroring <see cref="_ParseResourceRecords"/>'s offset advancement and
     /// per-type emission guards without building any field. The same compression-aware name reader
     /// is used so the offset progression is identical to the populator's, guaranteeing the recorded
     /// groups match the fields that will be emitted. This duplicates the record walk; that is the
     /// accepted cost of keeping the field tree lazy while the presence index stays content-consistent.
     /// </summary>
-    private static void DetectRrGroups(
+    private static void _DetectRrGroups(
         ReadOnlySpan<byte> span, in DnsHeader header,
         out bool hasOpt, out bool hasOptOption, out bool hasDs,
         out bool hasRrsig, out bool hasNsec, out bool hasDnskey)
@@ -666,7 +666,7 @@ public sealed partial class DnsProtocol : IProtocol
 
         int offset = DnsHeader.Size;
 
-        // Skip the question section exactly as ParseQuestions advances the offset.
+        // Skip the question section exactly as _ParseQuestions advances the offset.
         for (int i = 0; i < header.QuestionCount; i++)
         {
             if (offset >= span.Length)
@@ -706,23 +706,23 @@ public sealed partial class DnsProtocol : IProtocol
 
             switch (rrType)
             {
-                case RrTypeOpt: // OPT (EDNS0) — ParseOptRecord always emits the dns.opt fields.
+                case _RrTypeOpt: // OPT (EDNS0) — _ParseOptRecord always emits the dns.opt fields.
                     hasOpt = true;
-                    if (OptHasOption(span.Slice(offset, rdLength)))
+                    if (_OptHasOption(span.Slice(offset, rdLength)))
                     {
                         hasOptOption = true;
                     }
                     break;
-                case RrTypeDs when rdLength >= DsMinRdLength:
+                case _RrTypeDs when rdLength >= _DsMinRdLength:
                     hasDs = true;
                     break;
-                case RrTypeRrsig when rdLength >= RrsigMinRdLength:
+                case _RrTypeRrsig when rdLength >= _RrsigMinRdLength:
                     hasRrsig = true;
                     break;
-                case RrTypeNsec when rdLength >= NsecMinRdLength:
+                case _RrTypeNsec when rdLength >= _NsecMinRdLength:
                     hasNsec = true;
                     break;
-                case RrTypeDnskey when rdLength >= DnskeyMinRdLength:
+                case _RrTypeDnskey when rdLength >= _DnskeyMinRdLength:
                     hasDnskey = true;
                     break;
             }
@@ -733,10 +733,10 @@ public sealed partial class DnsProtocol : IProtocol
 
     /// <summary>
     /// Returns true when an OPT record's RDATA carries at least one EDNS0 option that the populator
-    /// would emit, mirroring the first TLV guard in <see cref="ParseOptRecord"/> (a 4-byte option
+    /// would emit, mirroring the first TLV guard in <see cref="_ParseOptRecord"/> (a 4-byte option
     /// header followed by its declared option-length within bounds).
     /// </summary>
-    private static bool OptHasOption(ReadOnlySpan<byte> rdata)
+    private static bool _OptHasOption(ReadOnlySpan<byte> rdata)
     {
         if (rdata.Length < 4)
         {
@@ -752,7 +752,7 @@ public sealed partial class DnsProtocol : IProtocol
     /// CLASS = UDP payload size, TTL = extended RCODE + version + flags.
     /// RDATA contains a sequence of {option-code(2), option-length(2), option-data(N)} TLVs.
     /// </summary>
-    private void ParseOptRecord(
+    private void _ParseOptRecord(
         in MutField container, ushort udpPayloadSize, uint ttlField,
         ReadOnlySpan<byte> rdata, ReadOnlyMemory<byte> fullMemory, int rdataOffset)
     {
@@ -812,7 +812,7 @@ public sealed partial class DnsProtocol : IProtocol
     }
 
     /// <summary>Parses type-specific RDATA for common DNS record types.</summary>
-    private void ParseRData(
+    private void _ParseRData(
         in MutField rrField, ushort rrType,
         ReadOnlySpan<byte> rdata, ReadOnlySpan<byte> fullPacket,
         ReadOnlyMemory<byte> fullMemory, int rdataOffset)
@@ -955,7 +955,7 @@ public sealed partial class DnsProtocol : IProtocol
                     break;
                 }
 
-            case RrTypeDs when rdata.Length >= DsMinRdLength: // DS (Delegation Signer, RFC 4034)
+            case _RrTypeDs when rdata.Length >= _DsMinRdLength: // DS (Delegation Signer, RFC 4034)
                 {
                     // Key Tag(2) + Algorithm(1) + Digest Type(1) + Digest(variable)
                     ushort keyTag = BinaryPrimitives.ReadUInt16BigEndian(rdata);
@@ -974,7 +974,7 @@ public sealed partial class DnsProtocol : IProtocol
                     break;
                 }
 
-            case RrTypeRrsig when rdata.Length >= RrsigMinRdLength: // RRSIG (RFC 4034)
+            case _RrTypeRrsig when rdata.Length >= _RrsigMinRdLength: // RRSIG (RFC 4034)
                 {
                     // TypeCovered(2) + Algorithm(1) + Labels(1) + OrigTTL(4) + Expiration(4) +
                     // Inception(4) + KeyTag(2) = 18 bytes fixed, then Signer's Name + Signature
@@ -1012,7 +1012,7 @@ public sealed partial class DnsProtocol : IProtocol
                     break;
                 }
 
-            case RrTypeNsec when rdata.Length >= NsecMinRdLength: // NSEC (RFC 4034)
+            case _RrTypeNsec when rdata.Length >= _NsecMinRdLength: // NSEC (RFC 4034)
                 {
                     // Next Domain Name (DNS-encoded) + Type Bit Maps
                     int pos = rdataOffset;
@@ -1023,13 +1023,13 @@ public sealed partial class DnsProtocol : IProtocol
                     int bitmapOffset = pos - rdataOffset;
                     if (bitmapOffset < rdata.Length)
                     {
-                        string typeList = ParseNsecTypeBitMaps(rdata[bitmapOffset..]);
+                        string typeList = _ParseNsecTypeBitMaps(rdata[bitmapOffset..]);
                         rrField.Append(_NsecTypeBitmapFieldId, FieldValue.NewString(typeList));
                     }
                     break;
                 }
 
-            case RrTypeDnskey when rdata.Length >= DnskeyMinRdLength: // DNSKEY (RFC 4034)
+            case _RrTypeDnskey when rdata.Length >= _DnskeyMinRdLength: // DNSKEY (RFC 4034)
                 {
                     // Flags(2) + Protocol(1) + Algorithm(1) + Public Key(variable)
                     ushort flags = BinaryPrimitives.ReadUInt16BigEndian(rdata);
@@ -1066,7 +1066,7 @@ public sealed partial class DnsProtocol : IProtocol
     /// Parses NSEC/NSEC3 Type Bit Maps into a human-readable comma-separated list of RR type names.
     /// Format: {window(1)} {bitmap_length(1)} {bitmap(N)} repeated.
     /// </summary>
-    private static string ParseNsecTypeBitMaps(ReadOnlySpan<byte> data)
+    private static string _ParseNsecTypeBitMaps(ReadOnlySpan<byte> data)
     {
         List<string> types = [];
         int pos = 0;

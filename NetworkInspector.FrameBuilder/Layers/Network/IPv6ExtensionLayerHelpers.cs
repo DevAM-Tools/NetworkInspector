@@ -68,11 +68,11 @@ internal static class IPv6ExtensionLayerHelpers
 
     /// <summary>Patches the NextHeader byte unless the user pinned it.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal static void PatchNextProtocol(scoped Span<byte> frame, int myOffset, ushort next, bool isExplicit)
+    internal static void PatchNextProtocol(scoped Span<byte> frame, int myOffset, ushort nextProtocol, bool isExplicit)
     {
         if (!isExplicit)
         {
-            frame[myOffset + NextHeaderOffset] = (byte)next;
+            frame[myOffset + NextHeaderOffset] = (byte)nextProtocol;
         }
     }
 }

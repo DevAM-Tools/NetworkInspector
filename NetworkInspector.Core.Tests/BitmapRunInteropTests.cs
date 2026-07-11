@@ -9,7 +9,7 @@ namespace NetworkInspector.Core.Tests;
 /// </summary>
 internal sealed class BitmapRunInteropTests
 {
-    private static BitmapContainer DenseBitmap()
+    private static BitmapContainer _DenseBitmap()
     {
         BitmapContainer b = new();
         // Set every odd value in [0..10000)
@@ -20,7 +20,7 @@ internal sealed class BitmapRunInteropTests
         return b;
     }
 
-    private static RunContainer Runs(params (ushort Start, ushort Length)[] runs)
+    private static RunContainer _Runs(params (ushort Start, ushort Length)[] runs)
     {
         RunContainer r = new();
         foreach ((ushort Start, ushort Length) in runs)
@@ -33,7 +33,7 @@ internal sealed class BitmapRunInteropTests
         return r;
     }
 
-    private static int CountManually(IContainer c)
+    private static int _CountManually(IContainer c)
     {
         int n = 0;
         for (int v = 0; v <= ushort.MaxValue; v++)
@@ -53,8 +53,8 @@ internal sealed class BitmapRunInteropTests
     [Test]
     public async Task Or_BitmapWithRun_SingleRun()
     {
-        BitmapContainer b = DenseBitmap();
-        RunContainer r = Runs((100, 9)); // sets 100..109 (10 values)
+        BitmapContainer b = _DenseBitmap();
+        RunContainer r = _Runs((100, 9)); // sets 100..109 (10 values)
 
         IContainer result = b.Or(r);
         // Expected cardinality: original odd-only bits + new even bits within [100..109]
@@ -73,7 +73,7 @@ internal sealed class BitmapRunInteropTests
         b.Add(50);
         b.Add(70000 % 65536); // 4464
 
-        RunContainer r = Runs((10, 4), (60, 9), (1000, 0));
+        RunContainer r = _Runs((10, 4), (60, 9), (1000, 0));
 
         IContainer result = b.Or(r);
         // Brute-force expected
@@ -101,7 +101,7 @@ internal sealed class BitmapRunInteropTests
         {
             b.Add((ushort)v);
         }
-        RunContainer r = Runs((50, 49)); // 50..99 (50 values)
+        RunContainer r = _Runs((50, 49)); // 50..99 (50 values)
         IContainer result = b.AndNot(r);
         await Assert.That(result.Cardinality).IsEqualTo(201 - 50);
         await Assert.That(result.Contains(50)).IsFalse();
@@ -118,7 +118,7 @@ internal sealed class BitmapRunInteropTests
         {
             b.Add((ushort)v);
         }
-        RunContainer r = Runs((50, 99)); // 50..149
+        RunContainer r = _Runs((50, 99)); // 50..149
         IContainer result = b.Xor(r);
         // [0..49] kept (50), [50..99] toggled off (50 cleared), [100..149] toggled on (50 added)
         await Assert.That(result.Cardinality).IsEqualTo(100);
@@ -133,7 +133,7 @@ internal sealed class BitmapRunInteropTests
     {
         // Force a run aligned to a single 64-bit word
         BitmapContainer b = new();
-        RunContainer r = Runs((0, 63)); // bits 0..63 inclusive — entire first word
+        RunContainer r = _Runs((0, 63)); // bits 0..63 inclusive — entire first word
         IContainer result = b.Or(r);
         await Assert.That(result.Cardinality).IsEqualTo(64);
         for (int v = 0; v <= 63; v++)
@@ -147,7 +147,7 @@ internal sealed class BitmapRunInteropTests
     {
         BitmapContainer b = new();
         // Run from 30..130 — crosses at least two 64-bit word boundaries
-        RunContainer r = Runs((30, 100));
+        RunContainer r = _Runs((30, 100));
         IContainer result = b.Or(r);
         await Assert.That(result.Cardinality).IsEqualTo(101);
         await Assert.That(result.Contains(30)).IsTrue();
@@ -165,8 +165,8 @@ internal sealed class BitmapRunInteropTests
         // started the merge from `this` rather than `Clone()`, causing RunContainer.Add
         // (which is in-place) to silently append the right operand's runs to the left
         // operand. After the fix, `left` must contain only its original values.
-        RunContainer left = Runs((1, 3));    // values 1..4 → 4 values
-        RunContainer right = Runs((10, 3)); // values 10..13 → 4 values
+        RunContainer left = _Runs((1, 3));    // values 1..4 → 4 values
+        RunContainer right = _Runs((10, 3)); // values 10..13 → 4 values
         int cardinalityBefore = left.Cardinality;
 
         IContainer _ = left.Or(right);
@@ -184,7 +184,7 @@ internal sealed class BitmapRunInteropTests
     {
         // Same small-union path is taken when the right operand is an ArrayContainer
         // with few enough values that totalRuns < 16.
-        RunContainer left = Runs((20, 5)); // values 20..25 → 6 values
+        RunContainer left = _Runs((20, 5)); // values 20..25 → 6 values
         ArrayContainer right = new();
         right.Add(100);
         right.Add(101);
@@ -201,7 +201,7 @@ internal sealed class BitmapRunInteropTests
     public async Task RunContainer_Or_BitmapOperand_DoesNotMutateLeftOperand()
     {
         // Verify left operand immutability when right is a BitmapContainer.
-        RunContainer left = Runs((50, 2)); // values 50..52 → 3 values
+        RunContainer left = _Runs((50, 2)); // values 50..52 → 3 values
         BitmapContainer right = new();
         for (int v = 200; v < 210; v++)
         {
@@ -214,5 +214,58 @@ internal sealed class BitmapRunInteropTests
         await Assert.That(left.Cardinality).IsEqualTo(cardinalityBefore);
         await Assert.That(left.Contains(200)).IsFalse();
         await Assert.That(left.Contains(209)).IsFalse();
+    }
+
+    [Test]
+    public async Task BitmapContainer_MinMaxClone_AndInPlaceOps()
+    {
+        BitmapContainer a = new();
+        a.Add(100);
+        a.Add(200);
+        a.Add(300);
+
+        await Assert.That(a.Min).IsEqualTo((ushort)100);
+        await Assert.That(a.Max).IsEqualTo((ushort)300);
+
+        BitmapContainer clone = (BitmapContainer)a.Clone();
+        await Assert.That(clone.Cardinality).IsEqualTo(a.Cardinality);
+
+        BitmapContainer b = new();
+        b.Add(200);
+        b.Add(400);
+        IContainer andResult = a.And(b);
+        IContainer orResult = a.Or(b);
+        IContainer andNotResult = a.AndNot(b);
+        IContainer xorResult = a.Xor(b);
+
+        await Assert.That(andResult.Contains(200)).IsTrue();
+        await Assert.That(orResult.Contains(400)).IsTrue();
+        await Assert.That(andNotResult.Contains(100)).IsTrue();
+        await Assert.That(xorResult.Contains(400)).IsTrue();
+
+        BitmapContainer inPlace = (BitmapContainer)a.Clone();
+        BitmapContainer mask = new();
+        mask.Add(200);
+        inPlace.AndWith(mask);
+        inPlace.OrWith(mask);
+        inPlace.AndNotWith(mask);
+        inPlace.XorWith(mask);
+        await Assert.That(inPlace.Cardinality).IsGreaterThan(0);
+    }
+
+    [Test]
+    public async Task BitmapContainer_SetOps_WithArrayOperand()
+    {
+        BitmapContainer bitmap = new();
+        bitmap.Add(1);
+        bitmap.Add(2);
+        ArrayContainer array = new();
+        array = (ArrayContainer)array.Add(2);
+        array = (ArrayContainer)array.Add(3);
+
+        await Assert.That(bitmap.And(array).Contains(2)).IsTrue();
+        await Assert.That(bitmap.Or(array).Contains(3)).IsTrue();
+        await Assert.That(bitmap.AndNot(array).Contains(1)).IsTrue();
+        await Assert.That(bitmap.Xor(array).Contains(3)).IsTrue();
     }
 }

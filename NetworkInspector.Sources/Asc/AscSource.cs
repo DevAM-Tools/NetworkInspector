@@ -63,14 +63,14 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
     /// <summary>
     /// Maps (busType, channel) → FrameInterfaceId. Pre-populated in <see cref="Start"/>
     /// from the scanned interface set. A lazy fallback path in
-    /// <see cref="RegisterInterface"/> may add entries after Start returns;
+    /// <see cref="_RegisterInterface"/> may add entries after Start returns;
     /// all mutations are guarded by <see cref="_InterfaceLock"/> to preserve
     /// the thread-safety guarantee of <see cref="FrameById"/>.
     /// </summary>
     private readonly Dictionary<(AscBusType, int), FrameInterfaceId> _InterfaceMap = [];
 
     /// <summary>
-    /// Synchronises concurrent <see cref="RegisterInterface"/> calls that arrive via
+    /// Synchronises concurrent <see cref="_RegisterInterface"/> calls that arrive via
     /// the thread-safe <see cref="FrameById"/> path. All writes to <see cref="_InterfaceMap"/>
     /// are guarded by this lock; reads before the lock are a fast-path optimisation
     /// because .NET Dictionary read operations are safe when no concurrent write is
@@ -188,7 +188,7 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
     public static AscSource Open(string path, AscSourceOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(path);
-        options ??= new AscSourceOptions();
+        options ??= new();
         string uiName = options.UiName ?? Path.GetFileName(path);
 
         FileInfo fileInfo = new(path);
@@ -199,18 +199,18 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
 
         long fileSize = fileInfo.Length;
 
-        // Choose backend based on PreloadBudget
-        if (fileSize <= options.PreloadBudget)
+        bool useInMemory = options.PreloadBudget.HasValue && fileSize <= options.PreloadBudget.Value;
+        if (useInMemory)
         {
             // Small file: load all content into memory; split into zero-copy slices for zero-seek random access
             byte[] fileBytes = File.ReadAllBytes(path);
-            ReadOnlyMemory<byte>[] lines = SplitIntoLines(fileBytes);
-            return BuildFromInMemoryLines(lines, options, uiName);
+            ReadOnlyMemory<byte>[] lines = _SplitIntoLines(fileBytes);
+            return _BuildFromInMemoryLines(lines, options, uiName);
         }
         else
         {
             // Large file: scan once to build index (storing byte offsets), re-read on demand
-            return BuildFromDisk(path, options, uiName);
+            return _BuildFromDisk(path, options, uiName);
         }
     }
 
@@ -224,11 +224,11 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
     public static AscSource FromText(string data, string? uiName = null, AscSourceOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(data);
-        options ??= new AscSourceOptions();
+        options ??= new();
         uiName ??= options.UiName ?? "ASC Data";
         byte[] bytes = Encoding.Latin1.GetBytes(data);
-        ReadOnlyMemory<byte>[] lines = SplitIntoLines(bytes);
-        return BuildFromInMemoryLines(lines, options, uiName);
+        ReadOnlyMemory<byte>[] lines = _SplitIntoLines(bytes);
+        return _BuildFromInMemoryLines(lines, options, uiName);
     }
 
     /// <summary>
@@ -240,13 +240,13 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
     /// <returns>A new AscSource ready to be started.</returns>
     public static AscSource FromData(ReadOnlyMemory<byte> data, string? uiName = null, AscSourceOptions? options = null)
     {
-        options ??= new AscSourceOptions();
+        options ??= new();
         uiName ??= options.UiName ?? "ASC Data";
         // data.ToArray() allocates a copy so the backing array lifetime is owned here;
         // the resulting slices keep it alive via ReadOnlyMemory<byte> references.
         byte[] backing = data.ToArray();
-        ReadOnlyMemory<byte>[] lines = SplitIntoLines(backing);
-        return BuildFromInMemoryLines(lines, options, uiName);
+        ReadOnlyMemory<byte>[] lines = _SplitIntoLines(backing);
+        return _BuildFromInMemoryLines(lines, options, uiName);
     }
 
     #endregion
@@ -264,10 +264,10 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
         // Pre-register all interfaces discovered during index building.
         // In the common case every (busType, channel) is seen here, making
         // _InterfaceMap effectively read-only afterwards.  A thread-safe lazy
-        // fallback in RegisterInterface handles any channel missed by the scanner.
+        // fallback in _RegisterInterface handles any channel missed by the scanner.
         foreach ((AscBusType busType, int channel, LinkType linkType) in _DiscoveredInterfaces)
         {
-            RegisterInterface(registry, busType, channel, linkType);
+            _RegisterInterface(registry, busType, channel, linkType);
         }
 
         Volatile.Write(ref _Started, true);
@@ -293,7 +293,7 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
         {
             cancellationToken.ThrowIfCancellationRequested();
             int frameIndex = _NextFrameIndex++;
-            Frame? frame = BuildFrame(frameIndex, reportErrors: true);
+            Frame? frame = _BuildFrame(frameIndex, reportErrors: true);
             if (frame.HasValue)
             {
                 return frame.Value;
@@ -337,7 +337,7 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
             return null;
         }
 
-        return BuildFrame(index, reportErrors: false);
+        return _BuildFrame(index, reportErrors: false);
     }
 
     #endregion
@@ -368,7 +368,7 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
     /// Builds the source from a pre-loaded slice array.
     /// Each element is a zero-copy window into the original backing buffer.
     /// </summary>
-    private static AscSource BuildFromInMemoryLines(ReadOnlyMemory<byte>[] lines, AscSourceOptions options, string uiName)
+    private static AscSource _BuildFromInMemoryLines(ReadOnlyMemory<byte>[] lines, AscSourceOptions options, string uiName)
     {
         AscHeader header = new()
         {
@@ -402,14 +402,14 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
             }
 
             AscLineType lineType = AscLineClassifier.Classify(trimmed);
-            if (!IsFrameProducingType(lineType))
+            if (!_IsFrameProducingType(lineType))
             {
                 continue;
             }
 
             // Collect interface metadata for pre-registration
-            (AscBusType busType, LinkType linkType) = LineTypeToInterface(lineType);
-            int channel = PeekChannel(trimmed, lineType);
+            (AscBusType busType, LinkType linkType) = _LineTypeToInterface(lineType);
+            int channel = _PeekChannel(trimmed, lineType);
             if (channel >= 0)
             {
                 discovered.Add((busType, channel, linkType));
@@ -431,7 +431,7 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
     /// to build an index of line byte offsets, without keeping all lines in memory.
     /// The byte offset of each frame-producing line is stored so it can be re-read on demand.
     /// </summary>
-    private static AscSource BuildFromDisk(string path, AscSourceOptions options, string uiName)
+    private static AscSource _BuildFromDisk(string path, AscSourceOptions options, string uiName)
     {
         AscHeader header = new()
         {
@@ -466,7 +466,7 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
                 // EOF: flush any remaining carry-over bytes as the last (unterminated) line
                 if (carryLen > 0 && !carryTooLong)
                 {
-                    ProcessDiskLine(
+                    _ProcessDiskLine(
                         AscTokenizerBytes.TrimAscii(carryBuffer.AsSpan(0, carryLen)),
                         lineStartOffset,
                         ref header, ref headerDone, entries, discovered, ref truncated);
@@ -526,7 +526,7 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
                         rawLine = rawLine[..^1];
                     }
 
-                    ProcessDiskLine(
+                    _ProcessDiskLine(
                         AscTokenizerBytes.TrimAscii(rawLine),
                         lineStartOffset,
                         ref header, ref headerDone, entries, discovered, ref truncated);
@@ -574,7 +574,7 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
     /// Processes a single trimmed line (as raw bytes) from the disk scan pass.
     /// Updates the header state, or adds an index entry when the line produces a frame.
     /// </summary>
-    private static void ProcessDiskLine(
+    private static void _ProcessDiskLine(
         ReadOnlySpan<byte> trimmed, long lineByteOffset,
         ref AscHeader header, ref bool headerDone,
         List<AscFrameIndexEntry> entries,
@@ -606,13 +606,13 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
         }
 
         AscLineType lineType = AscLineClassifier.Classify(trimmed);
-        if (!IsFrameProducingType(lineType))
+        if (!_IsFrameProducingType(lineType))
         {
             return;
         }
 
-        (AscBusType busType, LinkType linkType) = LineTypeToInterface(lineType);
-        int channel = PeekChannel(trimmed, lineType);
+        (AscBusType busType, LinkType linkType) = _LineTypeToInterface(lineType);
+        int channel = _PeekChannel(trimmed, lineType);
         if (channel >= 0)
         {
             discovered.Add((busType, channel, linkType));
@@ -633,10 +633,10 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
     /// </summary>
     /// <param name="frameIndex">Index into <c>_FrameIndex</c>.</param>
     /// <param name="reportErrors">When <c>true</c>, parse failures route through
-    /// <see cref="HandleSkip"/> (sequential <see cref="NextFrame"/> path). When
+    /// <see cref="_HandleSkip"/> (sequential <see cref="NextFrame"/> path). When
     /// <c>false</c>, failures are silent (random-access <see cref="FrameById"/>
     /// path) and the caller observes them only via the <c>null</c> return.</param>
-    private Frame? BuildFrame(int frameIndex, bool reportErrors)
+    private Frame? _BuildFrame(int frameIndex, bool reportErrors)
     {
         AscFrameIndexEntry entry = _FrameIndex[frameIndex];
 
@@ -644,17 +644,17 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
         {
             // In-memory path: O(1) array lookup — byte span directly from the slice (zero copy)
             ReadOnlySpan<byte> span = AscTokenizerBytes.TrimAscii(_InMemoryLines[(int)entry.Location].Span);
-            return ParseAndBuildFrame(span, entry, frameIndex, reportErrors);
+            return _ParseAndBuildFrame(span, entry, frameIndex, reportErrors);
         }
         else
         {
             // Disk path: seek to stored byte offset and read one line as raw bytes
-            byte[]? lineBytes = ReadLineBytesFromDisk(entry.Location);
+            byte[]? lineBytes = _ReadLineBytesFromDisk(entry.Location);
             if (lineBytes is null)
             {
                 if (reportErrors)
                 {
-                    HandleSkip(new FrameReadErrorEventArgs
+                    _HandleSkip(new FrameReadErrorEventArgs
                     {
                         FrameIndex = frameIndex,
                         FileOffset = entry.Location,
@@ -665,7 +665,7 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
                 return null;
             }
 
-            return ParseAndBuildFrame(
+            return _ParseAndBuildFrame(
                 AscTokenizerBytes.TrimAscii(lineBytes.AsSpan()),
                 entry, frameIndex, reportErrors);
         }
@@ -678,7 +678,7 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
     /// so concurrent random-access reads do not contend on a shared seek position.
     /// Returns <c>null</c> when the offset is beyond EOF.
     /// </summary>
-    private byte[]? ReadLineBytesFromDisk(long byteOffset)
+    private byte[]? _ReadLineBytesFromDisk(long byteOffset)
     {
         SafeFileHandle handle = _DiskHandle!;
         long fileLength = RandomAccess.GetLength(handle);
@@ -726,10 +726,10 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
     /// <param name="entry">Frame index entry that describes the line type and location.</param>
     /// <param name="frameIndex">Zero-based index of the frame within the file index (used for error reporting).</param>
     /// <param name="reportErrors">
-    /// When <c>true</c>, parse failures route through <see cref="HandleSkip"/>; when
+    /// When <c>true</c>, parse failures route through <see cref="_HandleSkip"/>; when
     /// <c>false</c>, failures yield a silent <c>null</c> (random-access path).
     /// </param>
-    private Frame? ParseAndBuildFrame(ReadOnlySpan<byte> span, AscFrameIndexEntry entry, int frameIndex, bool reportErrors)
+    private Frame? _ParseAndBuildFrame(ReadOnlySpan<byte> span, AscFrameIndexEntry entry, int frameIndex, bool reportErrors)
     {
         bool parsed;
         double timestamp;
@@ -783,7 +783,7 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
         {
             if (reportErrors)
             {
-                HandleSkip(new FrameReadErrorEventArgs
+                _HandleSkip(new FrameReadErrorEventArgs
                 {
                     FrameIndex = frameIndex,
                     FileOffset = entry.Location,
@@ -796,11 +796,11 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
 
         long absoluteNanos = (long)((_Header.StartTimeEpoch + timestamp) * 1_000_000_000.0);
 
-        // Always go through RegisterInterface: it performs the locked cache lookup and
+        // Always go through _RegisterInterface: it performs the locked cache lookup and
         // returns the existing ID without registering a duplicate. A bare _InterfaceMap
         // read here would race with concurrent FrameById writers (Dictionary is not safe
         // for a reader during a writer's resize).
-        FrameInterfaceId interfaceId = RegisterInterface(_Registry!, busType, channel, linkType);
+        FrameInterfaceId interfaceId = _RegisterInterface(_Registry!, busType, channel, linkType);
 
         ParseResult<Frame> result = Frame.Create(
             new FrameId(frameIndex),
@@ -821,7 +821,7 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
 
         if (reportErrors)
         {
-            HandleSkip(new FrameReadErrorEventArgs
+            _HandleSkip(new FrameReadErrorEventArgs
             {
                 FrameIndex = frameIndex,
                 FileOffset = entry.Location,
@@ -841,7 +841,7 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
     /// Records a skipped frame, updates statistics, and raises <see cref="FrameSkipped"/>.
     /// In strict mode, sets the abort flag so <see cref="NextFrame"/> stops iteration.
     /// </summary>
-    private void HandleSkip(FrameReadErrorEventArgs error)
+    private void _HandleSkip(FrameReadErrorEventArgs error)
     {
         Interlocked.Increment(ref _SkippedFrameCount);
         Interlocked.Increment(ref _ErrorCount);
@@ -864,13 +864,13 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
     /// <summary>
     /// Registers a single interface with the registry and caches the result.
     /// Called from <see cref="Start"/> (pre-registration) or lazily from
-    /// <see cref="ParseAndBuildFrame"/> for channels not discovered during scanning.
+    /// <see cref="_ParseAndBuildFrame"/> for channels not discovered during scanning.
     /// Thread-safe: both reads and writes of <see cref="_InterfaceMap"/> are guarded by
     /// <see cref="_InterfaceLock"/>. Locking the read path is required because
     /// <see cref="Dictionary{TKey,TValue}"/> is not safe for a concurrent reader during
     /// any mutation — a concurrent resize tears the buckets array.
     /// </summary>
-    private FrameInterfaceId RegisterInterface(FrameInterfaceRegistry registry,
+    private FrameInterfaceId _RegisterInterface(FrameInterfaceRegistry registry,
         AscBusType busType, int channel, LinkType linkType)
     {
         (AscBusType, int) key = (busType, channel);
@@ -909,7 +909,7 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
     /// Returns <c>true</c> when the given line type corresponds to a parseable frame.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static bool IsFrameProducingType(AscLineType lineType) => lineType switch
+    private static bool _IsFrameProducingType(AscLineType lineType) => lineType switch
     {
         AscLineType.CanMessage => true,
         AscLineType.CanFdMessage => true,
@@ -923,7 +923,7 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
     /// Maps a frame-producing line type to its bus type and link type.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static (AscBusType BusType, LinkType LinkType) LineTypeToInterface(AscLineType lineType) =>
+    private static (AscBusType BusType, LinkType LinkType) _LineTypeToInterface(AscLineType lineType) =>
         lineType switch
         {
             AscLineType.CanMessage => (AscBusType.Can, LinkType.CanSocketcan),
@@ -937,10 +937,10 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
     /// <summary>
     /// Quickly extracts the channel number from a trimmed ASC line for interface pre-discovery.
     /// Returns -1 if the channel cannot be determined cheaply.
-    /// A full parse via the individual parsers is done again in <see cref="ParseAndBuildFrame"/>.
+    /// A full parse via the individual parsers is done again in <see cref="_ParseAndBuildFrame"/>.
     /// Byte-span variant for the disk scan path (avoids UTF-16 conversion).
     /// </summary>
-    private static int PeekChannel(ReadOnlySpan<byte> line, AscLineType lineType)
+    private static int _PeekChannel(ReadOnlySpan<byte> line, AscLineType lineType)
     {
         AscTokenizerBytes tok = new(line);
 
@@ -1015,7 +1015,7 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
     /// happens automatically via normal GC reachability.
     /// Handles both LF and CRLF line endings.
     /// </summary>
-    private static ReadOnlyMemory<byte>[] SplitIntoLines(byte[] data)
+    private static ReadOnlyMemory<byte>[] _SplitIntoLines(byte[] data)
     {
         List<ReadOnlyMemory<byte>> lines = [];
         int start = 0;

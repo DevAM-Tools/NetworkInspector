@@ -30,26 +30,26 @@ internal static class LinParser
     /// <summary>
     /// Minimum Type 11 payload size: channel(2) + id(1) + dlc(1) + data(8) = 12 bytes.
     /// </summary>
-    private const int LinMessageV1MinSize = 12;
+    private const int _LinMessageV1MinSize = 12;
 
     /// <summary>
     /// Minimum Type 57 payload size (blf_linmessage2_t — 132-byte packed struct):
     /// The channel is at offset 12, id at 37, dlc at 38, data at 112..120, checksum at 120.
     /// </summary>
-    private const int LinMessageV2MinSize = 121;
+    private const int _LinMessageV2MinSize = 121;
 
     /// <summary>
     /// Minimum LIN V1 error payload size: channel(2) + dlc(1) + id(1) + ... ≥ 4 bytes.
     /// </summary>
-    private const int LinErrorV1MinSize = 4;
+    private const int _LinErrorV1MinSize = 4;
 
     /// <summary>
     /// Minimum LIN V2 error payload size; same nested struct but only channel and id matter.
     /// </summary>
-    private const int LinErrorV2MinSize = 38;
+    private const int _LinErrorV2MinSize = 38;
 
     /// <summary>Maximum LIN data length.</summary>
-    private const int MaxLinDataLength = 8;
+    private const int _MaxLinDataLength = 8;
 
     #endregion
 
@@ -74,7 +74,7 @@ internal static class LinParser
         frame = [];
         channel = 0;
 
-        if (payload.Length < LinMessageV1MinSize)
+        if (payload.Length < _LinMessageV1MinSize)
         {
             return false;
         }
@@ -82,11 +82,11 @@ internal static class LinParser
         channel = BinaryPrimitives.ReadUInt16LittleEndian(payload);
         byte rawId = (byte)(payload[2] & 0x3F); // strip parity if any
         byte dlc = payload[3];
-        int dataLen = Math.Min((int)dlc, MaxLinDataLength);
+        int dataLen = Math.Min((int)dlc, _MaxLinDataLength);
 
-        byte pid = ComputeLinPid(rawId);
+        byte pid = _ComputeLinPid(rawId);
 
-        frame = BuildDltLinFrame(pid, dataLen, payload.Length >= 4 + dataLen
+        frame = _BuildDltLinFrame(pid, dataLen, payload.Length >= 4 + dataLen
             ? payload.Slice(4, dataLen)
             : payload[4..], checksum: 0, errors: 0);
         return true;
@@ -110,7 +110,7 @@ internal static class LinParser
         frame = [];
         channel = 0;
 
-        if (payload.Length < LinMessageV2MinSize)
+        if (payload.Length < _LinMessageV2MinSize)
         {
             return false;
         }
@@ -118,16 +118,16 @@ internal static class LinParser
         channel = BinaryPrimitives.ReadUInt16LittleEndian(payload[12..]);
         byte rawId = (byte)(payload[37] & 0x3F);
         byte dlc = payload[38];
-        int dataLen = Math.Min((int)dlc, MaxLinDataLength);
+        int dataLen = Math.Min((int)dlc, _MaxLinDataLength);
         byte checksum = payload[120];
 
-        byte pid = ComputeLinPid(rawId);
+        byte pid = _ComputeLinPid(rawId);
 
         ReadOnlySpan<byte> data = payload.Length >= 112 + dataLen
             ? payload.Slice(112, dataLen)
             : payload[112..];
 
-        frame = BuildDltLinFrame(pid, dataLen, data, checksum, errors: 0);
+        frame = _BuildDltLinFrame(pid, dataLen, data, checksum, errors: 0);
         return true;
     }
 
@@ -155,17 +155,17 @@ internal static class LinParser
         frame = [];
         channel = 0;
 
-        if (payload.Length < LinErrorV1MinSize)
+        if (payload.Length < _LinErrorV1MinSize)
         {
             return false;
         }
 
         channel = BinaryPrimitives.ReadUInt16LittleEndian(payload);
         byte rawId = (byte)(payload[2] & 0x3F);
-        byte pid = ComputeLinPid(rawId);
+        byte pid = _ComputeLinPid(rawId);
 
         // Error frames have no data; error type goes into the errors field
-        frame = BuildDltLinFrame(pid, dlc: 0, data: [], checksum: 0, errors: errorType);
+        frame = _BuildDltLinFrame(pid, dlc: 0, data: [], checksum: 0, errors: errorType);
         return true;
     }
 
@@ -185,16 +185,16 @@ internal static class LinParser
         frame = [];
         channel = 0;
 
-        if (payload.Length < LinErrorV2MinSize)
+        if (payload.Length < _LinErrorV2MinSize)
         {
             return false;
         }
 
         channel = BinaryPrimitives.ReadUInt16LittleEndian(payload[12..]);
         byte rawId = (byte)(payload[37] & 0x3F);
-        byte pid = ComputeLinPid(rawId);
+        byte pid = _ComputeLinPid(rawId);
 
-        frame = BuildDltLinFrame(pid, dlc: 0, data: [], checksum: 0, errors: errorType);
+        frame = _BuildDltLinFrame(pid, dlc: 0, data: [], checksum: 0, errors: errorType);
         return true;
     }
 
@@ -213,7 +213,7 @@ internal static class LinParser
     /// Bit layout of PID: [P1|P0|ID5|ID4|ID3|ID2|ID1|ID0].
     /// </para>
     /// </summary>
-    private static byte ComputeLinPid(byte id)
+    private static byte _ComputeLinPid(byte id)
     {
         byte id0 = (byte)(id & 0x01);
         byte id1 = (byte)((id >> 1) & 0x01);
@@ -231,7 +231,7 @@ internal static class LinParser
     /// <summary>
     /// Builds a DLT_LIN frame: PID(1) + dlc(1) + data(dlc) + checksum(1) + errors(1).
     /// </summary>
-    private static byte[] BuildDltLinFrame(
+    private static byte[] _BuildDltLinFrame(
         byte pid, int dlc, ReadOnlySpan<byte> data, byte checksum, byte errors)
     {
         int frameLen = 2 + dlc + 2;

@@ -127,7 +127,7 @@ internal sealed class SegmentBuffer
         }
 
         // Materialize a contiguous view of the buffered data
-        PduBoundaryResult result = DetectWithMaterializedView(context);
+        PduBoundaryResult result = _DetectWithMaterializedView(context);
 
         if (result.IsComplete)
         {
@@ -139,7 +139,7 @@ internal sealed class SegmentBuffer
                 return false;
             }
 
-            pdu = ExtractBytes(pduLength);
+            pdu = _ExtractBytes(pduLength);
             _TotalConsumed += pduLength;
             return true;
         }
@@ -147,7 +147,7 @@ internal sealed class SegmentBuffer
         if (result.IsInvalid)
         {
             _State = SegmentBufferState.Resyncing;
-            TryResync(context);
+            _TryResync(context);
         }
 
         // IsIncomplete or failed resync — wait for more data
@@ -168,7 +168,7 @@ internal sealed class SegmentBuffer
     /// Invokes the boundary detector on a materialized contiguous view of all segments.
     /// Uses direct span access for single segments (zero-copy) and ArrayPool for multi-segment.
     /// </summary>
-    private PduBoundaryResult DetectWithMaterializedView(in StreamDetectionContext context)
+    private PduBoundaryResult _DetectWithMaterializedView(in StreamDetectionContext context)
     {
         if (_Segments.Count == 1)
         {
@@ -203,7 +203,7 @@ internal sealed class SegmentBuffer
     }
 
     /// <summary>Extracts <paramref name="length"/> bytes from the front of the segment list.</summary>
-    private ReadOnlyMemory<byte> ExtractBytes(int length)
+    private ReadOnlyMemory<byte> _ExtractBytes(int length)
     {
         if (_Segments.Count == 1 && _Segments[0].Length >= length)
         {
@@ -250,7 +250,7 @@ internal sealed class SegmentBuffer
     }
 
     /// <summary>Attempts resynchronization using the configured heuristic.</summary>
-    private void TryResync(in StreamDetectionContext context)
+    private void _TryResync(in StreamDetectionContext context)
     {
         if (_ResyncHeuristic == null || _TotalLength == 0)
         {
@@ -265,14 +265,14 @@ internal sealed class SegmentBuffer
             if (result.IsSuccess)
             {
                 // Guard against a buggy heuristic returning SkipBytes beyond the buffered data,
-                // which would drive _TotalLength negative in DiscardBytes.
+                // which would drive _TotalLength negative in _DiscardBytes.
                 if (result.SkipBytes > _TotalLength)
                 {
                     _State = SegmentBufferState.Error;
                     return;
                 }
 
-                DiscardBytes(result.SkipBytes);
+                _DiscardBytes(result.SkipBytes);
                 _State = SegmentBufferState.Synchronized;
             }
             else
@@ -297,14 +297,14 @@ internal sealed class SegmentBuffer
             if (result.IsSuccess)
             {
                 // Guard against a buggy heuristic returning SkipBytes beyond the buffered data,
-                // which would drive _TotalLength negative in DiscardBytes.
+                // which would drive _TotalLength negative in _DiscardBytes.
                 if (result.SkipBytes > _TotalLength)
                 {
                     _State = SegmentBufferState.Error;
                     return;
                 }
 
-                DiscardBytes(result.SkipBytes);
+                _DiscardBytes(result.SkipBytes);
                 _State = SegmentBufferState.Synchronized;
             }
             else
@@ -319,7 +319,7 @@ internal sealed class SegmentBuffer
     }
 
     /// <summary>Discards <paramref name="count"/> bytes from the front of the segment list.</summary>
-    private void DiscardBytes(int count)
+    private void _DiscardBytes(int count)
     {
         int remaining = count;
         while (remaining > 0 && _Segments.Count > 0)

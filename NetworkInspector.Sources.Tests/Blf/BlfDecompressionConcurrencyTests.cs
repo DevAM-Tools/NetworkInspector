@@ -44,7 +44,7 @@ internal sealed class BlfDecompressionConcurrencyTests
     /// each with <paramref name="framesPerContainer"/> CAN frames.
     /// Total frames = <paramref name="containerCount"/> × <paramref name="framesPerContainer"/>.
     /// </summary>
-    private static byte[] BuildMultiContainerBlf(
+    private static byte[] _BuildMultiContainerBlf(
         int containerCount,
         int framesPerContainer,
         ushort compressionMethod = 1 /* LZ4 */)
@@ -66,7 +66,7 @@ internal sealed class BlfDecompressionConcurrencyTests
     }
 
     /// <summary>Creates a <see cref="BlfSource"/> with full scan from raw BLF data, using optional custom <paramref name="options"/>.</summary>
-    private static BlfSource CreateSource(byte[] data, BlfSourceOptions? options = null) =>
+    private static BlfSource _CreateSource(byte[] data, BlfSourceOptions? options = null) =>
         BlfSource.FromData(data, "concurrency-test.blf", options ?? new BlfSourceOptions { ScanMode = ScanMode.Full });
 
 
@@ -86,9 +86,9 @@ internal sealed class BlfDecompressionConcurrencyTests
     {
         // One container with 20 frames — every parallel caller races for the same container.
         const int framesPerContainer = 20;
-        byte[] blf = BuildMultiContainerBlf(containerCount: 1, framesPerContainer);
+        byte[] blf = _BuildMultiContainerBlf(containerCount: 1, framesPerContainer);
 
-        using BlfSource source = CreateSource(blf, new BlfSourceOptions { ScanMode = ScanMode.Full });
+        using BlfSource source = _CreateSource(blf, new BlfSourceOptions { ScanMode = ScanMode.Full });
         SourceTestFixture.InitializeAndStartSource(source);
 
         // Establish sequential baseline.
@@ -132,9 +132,9 @@ internal sealed class BlfDecompressionConcurrencyTests
         const int framesPerContainer = 4;
         const int total = containerCount * framesPerContainer;
 
-        byte[] blf = BuildMultiContainerBlf(containerCount, framesPerContainer);
+        byte[] blf = _BuildMultiContainerBlf(containerCount, framesPerContainer);
 
-        using BlfSource source = CreateSource(blf, new BlfSourceOptions
+        using BlfSource source = _CreateSource(blf, new BlfSourceOptions
         {
             ScanMode = ScanMode.Full,
             MaxDecompressionConcurrency = 1,
@@ -179,9 +179,9 @@ internal sealed class BlfDecompressionConcurrencyTests
         const int framesPerContainer = 5;
         const int total = containerCount * framesPerContainer;
 
-        byte[] blf = BuildMultiContainerBlf(containerCount, framesPerContainer);
+        byte[] blf = _BuildMultiContainerBlf(containerCount, framesPerContainer);
 
-        using BlfSource source = CreateSource(blf, new BlfSourceOptions { ScanMode = ScanMode.Full });
+        using BlfSource source = _CreateSource(blf, new BlfSourceOptions { ScanMode = ScanMode.Full });
         SourceTestFixture.InitializeAndStartSource(source);
 
         Parallel.For(0, total * 4, idx => source.FrameById(new FrameId(idx % total)));
@@ -219,7 +219,7 @@ internal sealed class BlfDecompressionConcurrencyTests
         }
 
         byte[] blf = gen.Build();
-        using BlfSource source = CreateSource(blf, new BlfSourceOptions { ScanMode = ScanMode.Full });
+        using BlfSource source = _CreateSource(blf, new BlfSourceOptions { ScanMode = ScanMode.Full });
         SourceTestFixture.InitializeAndStartSource(source);
 
         // The corrupt container entries (if any were indexed) would return null; raw frames return data.

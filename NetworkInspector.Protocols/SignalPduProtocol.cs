@@ -32,7 +32,7 @@ namespace NetworkInspector.Protocols;
 /// </summary>
 /// <remarks>
 /// <para><b>Thread safety:</b> instances are immutable after registration completes.
-/// All mutable state is initialised inside <c>RegisterFieldsCustom</c> / <c>OnStartCustom</c>
+/// All mutable state is initialised inside <c>_RegisterFieldsCustom</c> / <c>_OnStartCustom</c>
 /// (single-threaded build phase) and is read-only thereafter, so <see cref="Parse"/> may
 /// be invoked concurrently from any number of threads on the same instance without external
 /// synchronisation. Per-thread caches (when present) are stored in <c>[ThreadStatic]</c> fields.</para>
@@ -43,40 +43,40 @@ public sealed partial class SignalPduProtocol : IProtocol
     #region Constants
 
     /// <summary>Index group for always-present Signal PDU fields.</summary>
-    private const string SpduIndexGroup = "signal_pdu";
+    private const string _SpduIndexGroup = "signal_pdu";
 
     /// <summary>Index group for mux container.</summary>
-    private const string SpduMuxGroup = "signal_pdu.mux";
+    private const string _SpduMuxGroup = "signal_pdu.mux";
 
     /// <summary>Index group for unparsed payload.</summary>
-    private const string SpduUnparsedGroup = "signal_pdu.unparsed";
+    private const string _SpduUnparsedGroup = "signal_pdu.unparsed";
 
     #endregion
 
     #region Fields
 
-    [NoneField("signal_pdu", "Signal PDU", IndexGroup = SpduIndexGroup)]
+    [NoneField("signal_pdu", "Signal PDU", IndexGroup = _SpduIndexGroup)]
     private FieldId _ProtocolFieldId;
 
-    [U64Field("signal_pdu.pdu_id", "PDU ID", IndexGroup = SpduIndexGroup)]
+    [U64Field("signal_pdu.pdu_id", "PDU ID", IndexGroup = _SpduIndexGroup)]
     private FieldId _PduIdFieldId;
 
-    [StringField("signal_pdu.name", "Name", IndexGroup = SpduIndexGroup)]
+    [StringField("signal_pdu.name", "Name", IndexGroup = _SpduIndexGroup)]
     private FieldId _NameFieldId;
 
-    [NoneField("signal_pdu.signal", "Signal", IndexGroup = SpduIndexGroup)]
+    [NoneField("signal_pdu.signal", "Signal", IndexGroup = _SpduIndexGroup)]
     private FieldId _SignalFieldId;
 
-    [U64Field("signal_pdu.signal.raw", "Raw Value", IndexGroup = SpduIndexGroup)]
+    [U64Field("signal_pdu.signal.raw", "Raw Value", IndexGroup = _SpduIndexGroup)]
     private FieldId _SignalRawFieldId;
 
-    [NoneField("signal_pdu.mux", "Multiplexer", IndexGroup = SpduMuxGroup)]
+    [NoneField("signal_pdu.mux", "Multiplexer", IndexGroup = _SpduMuxGroup)]
     private FieldId _MuxFieldId;
 
-    [U64Field("signal_pdu.mux.value", "Mux Value", IndexGroup = SpduMuxGroup)]
+    [U64Field("signal_pdu.mux.value", "Mux Value", IndexGroup = _SpduMuxGroup)]
     private FieldId _MuxValueFieldId;
 
-    [BytesField("signal_pdu.payload.unparsed", "Unparsed Payload", IndexGroup = SpduUnparsedGroup)]
+    [BytesField("signal_pdu.payload.unparsed", "Unparsed Payload", IndexGroup = _SpduUnparsedGroup)]
     private FieldId _UnparsedFieldId;
 
     #endregion
@@ -100,7 +100,7 @@ public sealed partial class SignalPduProtocol : IProtocol
     /// The composite key eliminates ambiguity when different parent protocols (e.g., CAN and
     /// FlexRay) share the same numeric key value for different PDUs. Populated in
     /// <see cref="IStackBuilder.WhenProtocolTableRegistered"/> callbacks where the
-    /// <see cref="ProtocolTableId"/> is first known, then frozen in <c>OnStartCustom</c>.
+    /// <see cref="ProtocolTableId"/> is first known, then frozen in <c>_OnStartCustom</c>.
     /// </summary>
     private FrozenDictionary<(ProtocolTableId, ulong), uint> _DispatchKeyToPduId
         = FrozenDictionary<(ProtocolTableId, ulong), uint>.Empty;
@@ -109,7 +109,7 @@ public sealed partial class SignalPduProtocol : IProtocol
     /// Mutable accumulator for <see cref="_DispatchKeyToPduId"/> during the build phase.
     /// Entries are added inside <see cref="IStackBuilder.WhenProtocolTableRegistered"/> callbacks
     /// where the <see cref="ProtocolTableId"/> is first available. Frozen and set to
-    /// <see langword="null"/> in <c>OnStartCustom</c> to release the builder memory.
+    /// <see langword="null"/> in <c>_OnStartCustom</c> to release the builder memory.
     /// </summary>
     private Dictionary<(ProtocolTableId, ulong), uint>? _BuildingTableKeyToPduId;
 
@@ -136,7 +136,7 @@ public sealed partial class SignalPduProtocol : IProtocol
     /// which eliminates the need to re-read parent protocol fields from the packet at parse time.
     /// </para>
     /// </summary>
-    partial void RegisterFieldsCustom(IStackBuilder builder, ProtocolId protocolId)
+    partial void _RegisterFieldsCustom(IStackBuilder builder, ProtocolId protocolId)
     {
         // Load configuration
         builder.Settings.TryLoadReferencedJsonConfig(
@@ -179,7 +179,7 @@ public sealed partial class SignalPduProtocol : IProtocol
             // mechanism: fires immediately if the parent table already exists, otherwise queued
             // until that table is registered later in the registration phase.
             // The tableId is captured here so that the composite (tableId, key) lookup in
-            // FindPduByDispatchKey can distinguish keys from different parent protocols.
+            // _FindPduByDispatchKey can distinguish keys from different parent protocols.
             foreach (SignalPduRegistration reg in pdu.RegisterAt)
             {
                 ulong key = reg.Key;
@@ -196,12 +196,12 @@ public sealed partial class SignalPduProtocol : IProtocol
     }
 
     /// <summary>
-    /// Freezes the dispatch key accumulator built during <see cref="RegisterFieldsCustom"/>
+    /// Freezes the dispatch key accumulator built during <see cref="_RegisterFieldsCustom"/>
     /// into <see cref="_DispatchKeyToPduId"/> and releases the builder memory.
     /// Called once after all <see cref="IStackBuilder.WhenProtocolTableRegistered"/> callbacks
     /// have fired, ensuring every <see cref="ProtocolTableId"/> is known before freezing.
     /// </summary>
-    partial void OnStartCustom(Stack stack)
+    partial void _OnStartCustom(Stack stack)
     {
         _DispatchKeyToPduId = _BuildingTableKeyToPduId?.ToFrozenDictionary()
             ?? FrozenDictionary<(ProtocolTableId, ulong), uint>.Empty;
@@ -220,10 +220,10 @@ public sealed partial class SignalPduProtocol : IProtocol
         }
 
         // Primary: resolve PDU definition by parent's dispatch key (CAN ID or PDU Transport ID)
-        SignalPduDefinition? matchedPdu = FindPduByDispatchKey(in context);
+        SignalPduDefinition? matchedPdu = _FindPduByDispatchKey(in context);
 
         // Fallback: match by byte length heuristic if dispatch key lookup failed
-        matchedPdu ??= FindMatchingPdu(data.Length);
+        matchedPdu ??= _FindMatchingPdu(data.Length);
 
         if (matchedPdu is null)
         {
@@ -251,7 +251,7 @@ public sealed partial class SignalPduProtocol : IProtocol
         // Decode static signals (always present)
         foreach (SignalDefinition signal in matchedPdu.Signals)
         {
-            DecodeAndAppendSignal(in container, span, signal, in context);
+            _DecodeAndAppendSignal(in container, span, signal, in context);
         }
 
         // Multiplexer handling
@@ -273,7 +273,7 @@ public sealed partial class SignalPduProtocol : IProtocol
                 {
                     foreach (SignalDefinition signal in group.Signals)
                     {
-                        DecodeAndAppendSignal(in muxField, span, signal, in context);
+                        _DecodeAndAppendSignal(in muxField, span, signal, in context);
                     }
                     break;
                 }
@@ -286,7 +286,7 @@ public sealed partial class SignalPduProtocol : IProtocol
     /// <summary>
     /// Decodes a single signal and appends it to the parent field.
     /// </summary>
-    private void DecodeAndAppendSignal(in MutField parent, ReadOnlySpan<byte> data, SignalDefinition signal, in ParseContext context)
+    private void _DecodeAndAppendSignal(in MutField parent, ReadOnlySpan<byte> data, SignalDefinition signal, in ParseContext context)
     {
         double physicalValue = SignalDecoder.DecodeSignal(data, signal);
         ulong rawValue = SignalDecoder.ExtractRaw(data, signal);
@@ -330,7 +330,7 @@ public sealed partial class SignalPduProtocol : IProtocol
     /// different parent protocols (e.g., CAN and FlexRay) share the same numeric key value.
     /// Returns <see langword="null"/> when no dispatch context is present or the key is not found.
     /// </summary>
-    private SignalPduDefinition? FindPduByDispatchKey(in ParseContext context)
+    private SignalPduDefinition? _FindPduByDispatchKey(in ParseContext context)
     {
         DispatchContext dispatch = context.Dispatch;
         if (!dispatch.TryGetU64(out ulong key))
@@ -347,7 +347,7 @@ public sealed partial class SignalPduProtocol : IProtocol
         return null;
     }
 
-    private SignalPduDefinition? FindMatchingPdu(int dataLength)
+    private SignalPduDefinition? _FindMatchingPdu(int dataLength)
     {
         if (_PduDefinitions.Count == 0)
         {

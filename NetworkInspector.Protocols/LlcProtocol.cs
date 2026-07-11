@@ -33,13 +33,13 @@ public sealed partial class LlcProtocol : IProtocol
     public const ulong Ieee8023Key = 1;
 
     /// <summary>DSAP/SSAP value indicating a SNAP extension follows.</summary>
-    private const byte SnapSap = 0xAA;
+    private const byte _SnapSap = 0xAA;
 
     /// <summary>Minimum LLC header size (DSAP + SSAP + Control).</summary>
-    private const int MinHeaderSize = 3;
+    private const int _MinHeaderSize = 3;
 
     /// <summary>SNAP extension size (3 bytes OUI + 2 bytes Type).</summary>
-    private const int SnapSize = 5;
+    private const int _SnapSize = 5;
 
     /// <summary>Dispatch table name for LLC DSAP-based protocol lookup.</summary>
     public const string DsapTableName = "llc.dsap";
@@ -47,35 +47,35 @@ public sealed partial class LlcProtocol : IProtocol
     #region Index Group Constants
 
     /// <summary>Index group for always-present LLC fields.</summary>
-    private const string LlcIndexGroup = "llc";
+    private const string _LlcIndexGroup = "llc";
 
     /// <summary>Index group for optional SNAP fields (only when DSAP=0xAA).</summary>
-    private const string SnapIndexGroup = "llc.snap";
+    private const string _SnapIndexGroup = "llc.snap";
 
     #endregion
 
     #region Fields (always present)
 
-    [BytesField("llc", "LLC", IndexGroup = LlcIndexGroup)]
+    [BytesField("llc", "LLC", IndexGroup = _LlcIndexGroup)]
     private FieldId _ProtocolFieldId;
 
-    [U64Field("llc.dsap", "DSAP", IndexGroup = LlcIndexGroup)]
+    [U64Field("llc.dsap", "DSAP", IndexGroup = _LlcIndexGroup)]
     private FieldId _DsapFieldId;
 
-    [U64Field("llc.ssap", "SSAP", IndexGroup = LlcIndexGroup)]
+    [U64Field("llc.ssap", "SSAP", IndexGroup = _LlcIndexGroup)]
     private FieldId _SsapFieldId;
 
-    [U64Field("llc.control", "Control", IndexGroup = LlcIndexGroup)]
+    [U64Field("llc.control", "Control", IndexGroup = _LlcIndexGroup)]
     private FieldId _ControlFieldId;
 
     #endregion
 
     #region SNAP-specific fields (optional)
 
-    [BytesField("llc.oui", "Organization Code", IndexGroup = SnapIndexGroup)]
+    [BytesField("llc.oui", "Organization Code", IndexGroup = _SnapIndexGroup)]
     private FieldId _OuiFieldId;
 
-    [U64Field("llc.type", "Type", IndexGroup = SnapIndexGroup)]
+    [U64Field("llc.type", "Type", IndexGroup = _SnapIndexGroup)]
     private FieldId _TypeFieldId;
 
     // Reuse Ethernet's type table for SNAP dispatch
@@ -89,7 +89,7 @@ public sealed partial class LlcProtocol : IProtocol
     // Sparse dispatch cache for EtherType (SNAP) dispatch
     private (ulong Key, ParseDelegate Parse)[] _EtherTypeSparseCache = [];
 
-    partial void OnStartCustom(Stack stack) =>
+    partial void _OnStartCustom(Stack stack) =>
         _EtherTypeSparseCache = stack.BuildU64SparseDelegateCache(_EtherTypeTableId);
 
     /// <summary>
@@ -103,9 +103,9 @@ public sealed partial class LlcProtocol : IProtocol
     /// <returns>Number of bytes consumed, or a <see cref="ParseError"/> describing the failure.</returns>
     public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
     {
-        if (data.Length < MinHeaderSize)
+        if (data.Length < _MinHeaderSize)
         {
-            return ParseError.InsufficientDataWithInfo(ProtocolName, MinHeaderSize, (ulong)data.Length);
+            return ParseError.InsufficientDataWithInfo(ProtocolName, _MinHeaderSize, (ulong)data.Length);
         }
 
         context.RecordProtocolPresence(_ProtocolId);
@@ -123,19 +123,19 @@ public sealed partial class LlcProtocol : IProtocol
         // SNAP always uses the UI (0x03) U-frame, so SNAP detection is not affected.
         bool isUFrame = (control & 0x03) == 0x03;
 
-        // 2-byte control (I/S frames) requires one additional byte beyond MinHeaderSize.
-        if (!isUFrame && data.Length < MinHeaderSize + 1)
+        // 2-byte control (I/S frames) requires one additional byte beyond _MinHeaderSize.
+        if (!isUFrame && data.Length < _MinHeaderSize + 1)
         {
-            return ParseError.InsufficientDataWithInfo(ProtocolName, MinHeaderSize + 1, (ulong)data.Length);
+            return ParseError.InsufficientDataWithInfo(ProtocolName, _MinHeaderSize + 1, (ulong)data.Length);
         }
 
         // Full control field value: 1 byte for U-frames, 2 bytes (LE) for I/S-frames.
         ushort controlValue = isUFrame ? control : BinaryPrimitives.ReadUInt16LittleEndian(span[2..]);
 
         // LLC header occupies 3 bytes for U-frames, 4 bytes for I/S-frames.
-        int llcHeaderSize = isUFrame ? MinHeaderSize : MinHeaderSize + 1;
+        int llcHeaderSize = isUFrame ? _MinHeaderSize : _MinHeaderSize + 1;
 
-        bool isSnap = dsap == SnapSap && ssap == SnapSap && control == 0x03;
+        bool isSnap = dsap == _SnapSap && ssap == _SnapSap && control == 0x03;
 
         int headerSize = llcHeaderSize;
         ushort snapType = 0;
@@ -143,15 +143,15 @@ public sealed partial class LlcProtocol : IProtocol
         if (isSnap)
         {
             // SNAP requires 3 (LLC U-frame) + 5 (SNAP) = 8 bytes minimum
-            if (data.Length < MinHeaderSize + SnapSize)
+            if (data.Length < _MinHeaderSize + _SnapSize)
             {
                 return ParseError.InsufficientDataWithInfo(
-                    ProtocolName, MinHeaderSize + SnapSize, (ulong)data.Length);
+                    ProtocolName, _MinHeaderSize + _SnapSize, (ulong)data.Length);
             }
 
             context.RecordGroupPresence(_LlcSnapGroupId);
             snapType = BinaryPrimitives.ReadUInt16BigEndian(span[6..]);
-            headerSize = MinHeaderSize + SnapSize;
+            headerSize = _MinHeaderSize + _SnapSize;
         }
 
         // Build summary text
@@ -193,7 +193,7 @@ public sealed partial class LlcProtocol : IProtocol
             byte oui2 = span[5];
             if (oui0 == 0 && oui1 == 0 && oui2 == 0)
             {
-                ParseResult result = DispatchEtherType(in parentField, snapType, payload, in context);
+                ParseResult result = _DispatchEtherType(in parentField, snapType, payload, in context);
                 if (result.IsError)
                 {
                     return result;
@@ -219,7 +219,7 @@ public sealed partial class LlcProtocol : IProtocol
     /// Dispatches to the next protocol by EtherType using the sparse cache.
     /// Falls back to full table dispatch for unknown EtherTypes.
     /// </summary>
-    private ParseResult DispatchEtherType(
+    private ParseResult _DispatchEtherType(
         in MutField parentField, ulong etherType, ReadOnlyMemory<byte> payload, in ParseContext context)
     {
         foreach ((ulong key, ParseDelegate parse) in _EtherTypeSparseCache)

@@ -25,7 +25,7 @@ internal sealed class CapabilitySanityTests
     private static readonly string[] _RemovedSlotInterfaces =
         ["ILinkLayer", "INetworkLayer", "ITransportLayer", "IApplicationLayer"];
 
-    private static async Task AssertNoSlotInterfaces(
+    private static async Task _AssertNoSlotInterfaces(
         [System.Diagnostics.CodeAnalysis.DynamicallyAccessedMembers(
             System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.Interfaces)] Type layer)
     {
@@ -40,7 +40,7 @@ internal sealed class CapabilitySanityTests
         }
     }
 
-    private static async Task AssertImplements<TIface>(Type layer)
+    private static async Task _AssertImplements<TIface>(Type layer)
     {
         await Assert.That(typeof(TIface).IsAssignableFrom(layer))
             .IsTrue()
@@ -51,206 +51,206 @@ internal sealed class CapabilitySanityTests
     public async Task EthernetLayer_HasRootAndEtherTypeProvider()
     {
         Type t = typeof(EthernetLayer);
-        await AssertImplements<IRootLayer>(t);
-        await AssertImplements<IConsumesNextProtocolValue<EtherTypeKind>>(t);
-        await AssertImplements<IProvidesMtu>(t);
-        await AssertImplements<IStatelessLayer>(t);
-        await AssertNoSlotInterfaces(t);
+        await _AssertImplements<IRootLayer>(t);
+        await _AssertImplements<IConsumesNextProtocolValue<EtherTypeKind>>(t);
+        await _AssertImplements<IProvidesMtu>(t);
+        await _AssertImplements<IStatelessLayer>(t);
+        await _AssertNoSlotInterfaces(t);
     }
 
     [Test]
     public async Task VlanLayer_BridgesEtherTypeNamespace()
     {
         Type t = typeof(VlanLayer);
-        await AssertImplements<IProvidesNextProtocolValue<EtherTypeKind>>(t);
-        await AssertImplements<IConsumesNextProtocolValue<EtherTypeKind>>(t);
-        await AssertNoSlotInterfaces(t);
+        await _AssertImplements<IProvidesNextProtocolValue<EtherTypeKind>>(t);
+        await _AssertImplements<IConsumesNextProtocolValue<EtherTypeKind>>(t);
+        await _AssertNoSlotInterfaces(t);
     }
 
     [Test]
     public async Task IPv4Layer_IsRootAndCrossesIntoIpNextProtocol()
     {
         Type t = typeof(IPv4Layer);
-        await AssertImplements<IRootLayer>(t);
-        await AssertImplements<IProvidesNextProtocolValue<EtherTypeKind>>(t);
-        await AssertImplements<IConsumesNextProtocolValue<IpNextProtocolKind>>(t);
-        await AssertImplements<IProvidesPseudoHeader>(t);
-        await AssertImplements<IFragmentable>(t);
-        await AssertNoSlotInterfaces(t);
+        await _AssertImplements<IRootLayer>(t);
+        await _AssertImplements<IProvidesNextProtocolValue<EtherTypeKind>>(t);
+        await _AssertImplements<IConsumesNextProtocolValue<IpNextProtocolKind>>(t);
+        await _AssertImplements<IProvidesPseudoHeader>(t);
+        await _AssertImplements<IFragmentable>(t);
+        await _AssertNoSlotInterfaces(t);
     }
 
     [Test]
     public async Task IPv6Layer_IsRootAndCrossesIntoIpNextProtocol()
     {
         Type t = typeof(IPv6Layer);
-        await AssertImplements<IRootLayer>(t);
-        await AssertImplements<IProvidesNextProtocolValue<EtherTypeKind>>(t);
-        await AssertImplements<IConsumesNextProtocolValue<IpNextProtocolKind>>(t);
-        await AssertImplements<IProvidesPseudoHeader>(t);
-        await AssertNoSlotInterfaces(t);
+        await _AssertImplements<IRootLayer>(t);
+        await _AssertImplements<IProvidesNextProtocolValue<EtherTypeKind>>(t);
+        await _AssertImplements<IConsumesNextProtocolValue<IpNextProtocolKind>>(t);
+        await _AssertImplements<IProvidesPseudoHeader>(t);
+        await _AssertNoSlotInterfaces(t);
     }
 
     [Test]
     public async Task ArpLayer_TerminatesEtherTypeChainWithoutPseudoHeader()
     {
         Type t = typeof(ArpLayer);
-        await AssertImplements<IProvidesNextProtocolValue<EtherTypeKind>>(t);
+        await _AssertImplements<IProvidesNextProtocolValue<EtherTypeKind>>(t);
         await Assert.That(typeof(IProvidesPseudoHeader).IsAssignableFrom(t)).IsFalse();
-        await AssertNoSlotInterfaces(t);
+        await _AssertNoSlotInterfaces(t);
     }
 
     [Test]
     public async Task TcpLayer_RequiresIpNextProtocolAndPseudoHeader()
     {
         Type t = typeof(TcpLayer);
-        await AssertImplements<IProvidesNextProtocolValue<IpNextProtocolKind>>(t);
-        await AssertImplements<IRequiresPseudoHeader>(t);
-        await AssertNoSlotInterfaces(t);
+        await _AssertImplements<IProvidesNextProtocolValue<IpNextProtocolKind>>(t);
+        await _AssertImplements<IRequiresPseudoHeader>(t);
+        await _AssertNoSlotInterfaces(t);
     }
 
     [Test]
     public async Task UdpLayer_RequiresIpNextProtocolAndPseudoHeader()
     {
         Type t = typeof(UdpLayer);
-        await AssertImplements<IProvidesNextProtocolValue<IpNextProtocolKind>>(t);
-        await AssertImplements<IRequiresPseudoHeader>(t);
-        await AssertNoSlotInterfaces(t);
+        await _AssertImplements<IProvidesNextProtocolValue<IpNextProtocolKind>>(t);
+        await _AssertImplements<IRequiresPseudoHeader>(t);
+        await _AssertNoSlotInterfaces(t);
     }
 
     [Test]
     public async Task IcmpV4EchoLayer_RequiresIpNextProtocolButNoPseudoHeader()
     {
         Type t = typeof(IcmpV4EchoLayer);
-        await AssertImplements<IProvidesNextProtocolValue<IpNextProtocolKind>>(t);
+        await _AssertImplements<IProvidesNextProtocolValue<IpNextProtocolKind>>(t);
         await Assert.That(typeof(IRequiresPseudoHeader).IsAssignableFrom(t)).IsFalse();
-        await AssertNoSlotInterfaces(t);
+        await _AssertNoSlotInterfaces(t);
     }
 
     [Test]
     public async Task IcmpV6EchoLayer_RequiresIpNextProtocolAndPseudoHeader()
     {
         Type t = typeof(IcmpV6EchoLayer);
-        await AssertImplements<IProvidesNextProtocolValue<IpNextProtocolKind>>(t);
-        await AssertImplements<IRequiresPseudoHeader>(t);
-        await AssertNoSlotInterfaces(t);
+        await _AssertImplements<IProvidesNextProtocolValue<IpNextProtocolKind>>(t);
+        await _AssertImplements<IRequiresPseudoHeader>(t);
+        await _AssertNoSlotInterfaces(t);
     }
 
     [Test]
     public async Task IPv6HopByHopLayer_IsExtensionLayerInIpNextProtocolNamespace()
     {
         Type t = typeof(IPv6HopByHopLayer);
-        await AssertImplements<IIPv6ExtensionLayer>(t);
-        await AssertImplements<IProvidesNextProtocolValue<IpNextProtocolKind>>(t);
-        await AssertImplements<IConsumesNextProtocolValue<IpNextProtocolKind>>(t);
-        await AssertImplements<IProvidesPseudoHeader>(t);
-        await AssertNoSlotInterfaces(t);
+        await _AssertImplements<IIPv6ExtensionLayer>(t);
+        await _AssertImplements<IProvidesNextProtocolValue<IpNextProtocolKind>>(t);
+        await _AssertImplements<IConsumesNextProtocolValue<IpNextProtocolKind>>(t);
+        await _AssertImplements<IProvidesPseudoHeader>(t);
+        await _AssertNoSlotInterfaces(t);
     }
 
     [Test]
     public async Task IPv6RoutingLayer_IsExtensionLayerInIpNextProtocolNamespace()
     {
         Type t = typeof(IPv6RoutingLayer);
-        await AssertImplements<IIPv6ExtensionLayer>(t);
-        await AssertImplements<IProvidesNextProtocolValue<IpNextProtocolKind>>(t);
-        await AssertImplements<IConsumesNextProtocolValue<IpNextProtocolKind>>(t);
-        await AssertNoSlotInterfaces(t);
+        await _AssertImplements<IIPv6ExtensionLayer>(t);
+        await _AssertImplements<IProvidesNextProtocolValue<IpNextProtocolKind>>(t);
+        await _AssertImplements<IConsumesNextProtocolValue<IpNextProtocolKind>>(t);
+        await _AssertNoSlotInterfaces(t);
     }
 
     [Test]
     public async Task IPv6DestinationOptionsLayer_IsExtensionLayerInIpNextProtocolNamespace()
     {
         Type t = typeof(IPv6DestinationOptionsLayer);
-        await AssertImplements<IIPv6ExtensionLayer>(t);
-        await AssertImplements<IProvidesNextProtocolValue<IpNextProtocolKind>>(t);
-        await AssertImplements<IConsumesNextProtocolValue<IpNextProtocolKind>>(t);
-        await AssertNoSlotInterfaces(t);
+        await _AssertImplements<IIPv6ExtensionLayer>(t);
+        await _AssertImplements<IProvidesNextProtocolValue<IpNextProtocolKind>>(t);
+        await _AssertImplements<IConsumesNextProtocolValue<IpNextProtocolKind>>(t);
+        await _AssertNoSlotInterfaces(t);
     }
 
     [Test]
     public async Task IPv6FragmentExtensionLayer_IsFragmentableExtension()
     {
         Type t = typeof(IPv6FragmentExtensionLayer);
-        await AssertImplements<IIPv6ExtensionLayer>(t);
-        await AssertImplements<IFragmentable>(t);
-        await AssertImplements<IProvidesNextProtocolValue<IpNextProtocolKind>>(t);
-        await AssertImplements<IConsumesNextProtocolValue<IpNextProtocolKind>>(t);
-        await AssertNoSlotInterfaces(t);
+        await _AssertImplements<IIPv6ExtensionLayer>(t);
+        await _AssertImplements<IFragmentable>(t);
+        await _AssertImplements<IProvidesNextProtocolValue<IpNextProtocolKind>>(t);
+        await _AssertImplements<IConsumesNextProtocolValue<IpNextProtocolKind>>(t);
+        await _AssertNoSlotInterfaces(t);
     }
 
     [Test]
     public async Task SomeIpLayer_IsPayloadLayer()
     {
         Type t = typeof(SomeIpLayer);
-        await AssertImplements<IPayloadLayer>(t);
+        await _AssertImplements<IPayloadLayer>(t);
         await Assert.That(typeof(IProvidesNextProtocolValue).IsAssignableFrom(t)).IsFalse();
-        await AssertNoSlotInterfaces(t);
+        await _AssertNoSlotInterfaces(t);
     }
 
     [Test]
     public async Task SomeIpTpLayer_IsFragmentablePayloadLayer()
     {
         Type t = typeof(SomeIpTpLayer);
-        await AssertImplements<IPayloadLayer>(t);
-        await AssertImplements<IFragmentable>(t);
-        await AssertNoSlotInterfaces(t);
+        await _AssertImplements<IPayloadLayer>(t);
+        await _AssertImplements<IFragmentable>(t);
+        await _AssertNoSlotInterfaces(t);
     }
 
     [Test]
     public async Task SocketCanLayer_IsRoot()
     {
         Type t = typeof(SocketCanLayer);
-        await AssertImplements<IRootLayer>(t);
-        await AssertNoSlotInterfaces(t);
+        await _AssertImplements<IRootLayer>(t);
+        await _AssertNoSlotInterfaces(t);
     }
 
     [Test]
     public async Task SocketCanFdLayer_IsRoot()
     {
         Type t = typeof(SocketCanFdLayer);
-        await AssertImplements<IRootLayer>(t);
-        await AssertNoSlotInterfaces(t);
+        await _AssertImplements<IRootLayer>(t);
+        await _AssertNoSlotInterfaces(t);
     }
 
     [Test]
     public async Task SocketCanXlLayer_IsRoot()
     {
         Type t = typeof(SocketCanXlLayer);
-        await AssertImplements<IRootLayer>(t);
-        await AssertNoSlotInterfaces(t);
+        await _AssertImplements<IRootLayer>(t);
+        await _AssertNoSlotInterfaces(t);
     }
 
     [Test]
     public async Task IPv4LayerWithAutoIpId_IsStatefulRootInIpNextProtocolNamespace()
     {
         Type t = typeof(IPv4LayerWithAutoIpId);
-        await AssertImplements<IRootLayer>(t);
-        await AssertImplements<IStatefulLayer>(t);
-        await AssertImplements<IProvidesNextProtocolValue<EtherTypeKind>>(t);
-        await AssertImplements<IConsumesNextProtocolValue<IpNextProtocolKind>>(t);
-        await AssertImplements<IProvidesPseudoHeader>(t);
-        await AssertImplements<IFragmentable>(t);
-        await AssertNoSlotInterfaces(t);
+        await _AssertImplements<IRootLayer>(t);
+        await _AssertImplements<IStatefulLayer>(t);
+        await _AssertImplements<IProvidesNextProtocolValue<EtherTypeKind>>(t);
+        await _AssertImplements<IConsumesNextProtocolValue<IpNextProtocolKind>>(t);
+        await _AssertImplements<IProvidesPseudoHeader>(t);
+        await _AssertImplements<IFragmentable>(t);
+        await _AssertNoSlotInterfaces(t);
     }
 
     [Test]
     public async Task TcpLayerWithAutoSequence_IsStatefulIpNextProtocolConsumer()
     {
         Type t = typeof(TcpLayerWithAutoSequence);
-        await AssertImplements<IStatefulLayer>(t);
-        await AssertImplements<IProvidesNextProtocolValue<IpNextProtocolKind>>(t);
-        await AssertImplements<IRequiresPseudoHeader>(t);
-        await AssertNoSlotInterfaces(t);
+        await _AssertImplements<IStatefulLayer>(t);
+        await _AssertImplements<IProvidesNextProtocolValue<IpNextProtocolKind>>(t);
+        await _AssertImplements<IRequiresPseudoHeader>(t);
+        await _AssertNoSlotInterfaces(t);
     }
 
     [Test]
     public async Task IPv6FragmentExtensionLayerWithAutoId_IsStatefulFragmentableExtension()
     {
         Type t = typeof(IPv6FragmentExtensionLayerWithAutoId);
-        await AssertImplements<IIPv6ExtensionLayer>(t);
-        await AssertImplements<IStatefulLayer>(t);
-        await AssertImplements<IFragmentable>(t);
-        await AssertImplements<IProvidesNextProtocolValue<IpNextProtocolKind>>(t);
-        await AssertImplements<IConsumesNextProtocolValue<IpNextProtocolKind>>(t);
-        await AssertNoSlotInterfaces(t);
+        await _AssertImplements<IIPv6ExtensionLayer>(t);
+        await _AssertImplements<IStatefulLayer>(t);
+        await _AssertImplements<IFragmentable>(t);
+        await _AssertImplements<IProvidesNextProtocolValue<IpNextProtocolKind>>(t);
+        await _AssertImplements<IConsumesNextProtocolValue<IpNextProtocolKind>>(t);
+        await _AssertNoSlotInterfaces(t);
     }
 }

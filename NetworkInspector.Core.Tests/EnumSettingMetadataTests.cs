@@ -82,4 +82,19 @@ internal sealed class EnumSettingMetadataTests
         await Assert.That(a.Equals(b)).IsTrue();
         await Assert.That(a.Equals(c)).IsFalse();
     }
+
+    [Test]
+    public async Task EnumSettingValue_ObjectEquals_GetHashCode_ToString_AndOperators()
+    {
+        EnumSettingValue a = new("Medium", 1);
+        EnumSettingValue b = new("Medium", 1);
+        EnumSettingValue c = new("High", 2);
+
+        await Assert.That(a.Equals((object)b)).IsTrue();
+        await Assert.That(a.Equals((object)c)).IsFalse();
+        await Assert.That(a.GetHashCode()).IsEqualTo(b.GetHashCode());
+        await Assert.That(a.ToString()).IsEqualTo("Medium");
+        await Assert.That(a == b).IsTrue();
+        await Assert.That(a != c).IsTrue();
+    }
 }

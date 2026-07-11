@@ -1,10 +1,5 @@
 ﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
-using System.Linq;
-using Microsoft.CodeAnalysis;
-using Microsoft.CodeAnalysis.CSharp.Syntax;
-using NetworkInspector.Generators.Models;
-
 namespace NetworkInspector.Generators;
 
 /// <summary>
@@ -112,13 +107,13 @@ public sealed partial class ProtocolGenerator : IIncrementalGenerator
             .ForAttributeWithMetadataName(
                 _FqnProtocolAttribute,
                 predicate: static (node, _) => node is ClassDeclarationSyntax,
-                transform: static (ctx, _) => ExtractProtocolInfo(
+                transform: static (ctx, _) => _ExtractProtocolInfo(
                     (INamedTypeSymbol)ctx.TargetSymbol, LocationInfo.From(ctx.TargetNode.GetLocation())))
             .WithTrackingName(TrackingNames.ProtocolInfo)
             .Where(static info => info is not null)
             .WithTrackingName(TrackingNames.FilteredProtocolInfo);
 
-        context.RegisterSourceOutput(provider, static (spc, info) => Execute(spc, info!));
+        context.RegisterSourceOutput(provider, static (spc, info) => _Execute(spc, info!));
     }
 
     #endregion

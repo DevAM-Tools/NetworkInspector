@@ -63,14 +63,14 @@ public sealed class RoaringBitmap
         ushort high = (ushort)(value >> 16);
         ushort low = (ushort)(value & 0xFFFF);
 
-        int idx = FindChunk(high);
+        int idx = _FindChunk(high);
         if (idx >= 0)
         {
             _Containers[idx] = _Containers[idx].Add(low);
         }
         else
         {
-            InsertChunk(~idx, high, new ArrayContainer().Add(low));
+            _InsertChunk(~idx, high, new ArrayContainer().Add(low));
         }
     }
 
@@ -81,7 +81,7 @@ public sealed class RoaringBitmap
         ushort high = (ushort)(value >> 16);
         ushort low = (ushort)(value & 0xFFFF);
 
-        int idx = FindChunk(high);
+        int idx = _FindChunk(high);
         return idx >= 0 && _Containers[idx].Contains(low);
     }
 
@@ -95,7 +95,7 @@ public sealed class RoaringBitmap
         {
             if (_Count == 0)
             {
-                ThrowEmpty();
+                _ThrowEmpty();
             }
             return ((uint)_Keys[0] << 16) | _Containers[0].Min;
         }
@@ -111,7 +111,7 @@ public sealed class RoaringBitmap
         {
             if (_Count == 0)
             {
-                ThrowEmpty();
+                _ThrowEmpty();
             }
             return ((uint)_Keys[_Count - 1] << 16) | _Containers[_Count - 1].Max;
         }
@@ -149,7 +149,7 @@ public sealed class RoaringBitmap
 
     [DoesNotReturn]
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private static void ThrowEmpty() =>
+    private static void _ThrowEmpty() =>
         throw new InvalidOperationException("Bitmap is empty.");
 
     /// <summary>
@@ -196,7 +196,7 @@ public sealed class RoaringBitmap
                 IContainer intersected = _Containers[i].And(other._Containers[j]);
                 if (intersected.Cardinality > 0)
                 {
-                    result.InsertChunk(result._Count, _Keys[i], intersected);
+                    result._InsertChunk(result._Count, _Keys[i], intersected);
                 }
                 i++;
                 j++;
@@ -214,29 +214,29 @@ public sealed class RoaringBitmap
         {
             if (_Keys[i] < other._Keys[j])
             {
-                result.InsertChunk(result._Count, _Keys[i], _Containers[i]);
+                result._InsertChunk(result._Count, _Keys[i], _Containers[i]);
                 i++;
             }
             else if (_Keys[i] > other._Keys[j])
             {
-                result.InsertChunk(result._Count, other._Keys[j], other._Containers[j]);
+                result._InsertChunk(result._Count, other._Keys[j], other._Containers[j]);
                 j++;
             }
             else
             {
-                result.InsertChunk(result._Count, _Keys[i], _Containers[i].Or(other._Containers[j]));
+                result._InsertChunk(result._Count, _Keys[i], _Containers[i].Or(other._Containers[j]));
                 i++;
                 j++;
             }
         }
         while (i < _Count)
         {
-            result.InsertChunk(result._Count, _Keys[i], _Containers[i]);
+            result._InsertChunk(result._Count, _Keys[i], _Containers[i]);
             i++;
         }
         while (j < other._Count)
         {
-            result.InsertChunk(result._Count, other._Keys[j], other._Containers[j]);
+            result._InsertChunk(result._Count, other._Keys[j], other._Containers[j]);
             j++;
         }
         return result;
@@ -252,7 +252,7 @@ public sealed class RoaringBitmap
             if (_Keys[i] < other._Keys[j])
             {
                 // Chunk only in this — keep it
-                result.InsertChunk(result._Count, _Keys[i], _Containers[i]);
+                result._InsertChunk(result._Count, _Keys[i], _Containers[i]);
                 i++;
             }
             else if (_Keys[i] > other._Keys[j])
@@ -264,7 +264,7 @@ public sealed class RoaringBitmap
                 IContainer diff = _Containers[i].AndNot(other._Containers[j]);
                 if (diff.Cardinality > 0)
                 {
-                    result.InsertChunk(result._Count, _Keys[i], diff);
+                    result._InsertChunk(result._Count, _Keys[i], diff);
                 }
                 i++;
                 j++;
@@ -273,7 +273,7 @@ public sealed class RoaringBitmap
         // Remaining chunks in this have no match in other — keep them
         while (i < _Count)
         {
-            result.InsertChunk(result._Count, _Keys[i], _Containers[i]);
+            result._InsertChunk(result._Count, _Keys[i], _Containers[i]);
             i++;
         }
         return result;
@@ -288,12 +288,12 @@ public sealed class RoaringBitmap
         {
             if (_Keys[i] < other._Keys[j])
             {
-                result.InsertChunk(result._Count, _Keys[i], _Containers[i]);
+                result._InsertChunk(result._Count, _Keys[i], _Containers[i]);
                 i++;
             }
             else if (_Keys[i] > other._Keys[j])
             {
-                result.InsertChunk(result._Count, other._Keys[j], other._Containers[j]);
+                result._InsertChunk(result._Count, other._Keys[j], other._Containers[j]);
                 j++;
             }
             else
@@ -301,7 +301,7 @@ public sealed class RoaringBitmap
                 IContainer xored = _Containers[i].Xor(other._Containers[j]);
                 if (xored.Cardinality > 0)
                 {
-                    result.InsertChunk(result._Count, _Keys[i], xored);
+                    result._InsertChunk(result._Count, _Keys[i], xored);
                 }
                 i++;
                 j++;
@@ -309,12 +309,12 @@ public sealed class RoaringBitmap
         }
         while (i < _Count)
         {
-            result.InsertChunk(result._Count, _Keys[i], _Containers[i]);
+            result._InsertChunk(result._Count, _Keys[i], _Containers[i]);
             i++;
         }
         while (j < other._Count)
         {
-            result.InsertChunk(result._Count, other._Keys[j], other._Containers[j]);
+            result._InsertChunk(result._Count, other._Keys[j], other._Containers[j]);
             j++;
         }
         return result;
@@ -486,7 +486,7 @@ public sealed class RoaringBitmap
             }
             else if (_Keys[i] == high)
             {
-                rank += ContainerRank(_Containers[i], low);
+                rank += _ContainerRank(_Containers[i], low);
                 break;
             }
             else
@@ -514,7 +514,7 @@ public sealed class RoaringBitmap
             int card = _Containers[i].Cardinality;
             if (remaining < card)
             {
-                ushort low = ContainerSelect(_Containers[i], (int)remaining);
+                ushort low = _ContainerSelect(_Containers[i], (int)remaining);
                 return ((uint)_Keys[i] << 16) | low;
             }
             remaining -= card;
@@ -535,9 +535,9 @@ public sealed class RoaringBitmap
     #region Internal helpers
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private int FindChunk(ushort key) => Array.BinarySearch(_Keys, 0, _Count, key);
+    private int _FindChunk(ushort key) => Array.BinarySearch(_Keys, 0, _Count, key);
 
-    private void InsertChunk(int idx, ushort key, IContainer container)
+    private void _InsertChunk(int idx, ushort key, IContainer container)
     {
         if (_Count == _Keys.Length)
         {
@@ -556,7 +556,7 @@ public sealed class RoaringBitmap
     }
 
     /// <summary>Counts values ≤ threshold in a container.</summary>
-    private static int ContainerRank(IContainer container, ushort threshold)
+    private static int _ContainerRank(IContainer container, ushort threshold)
     {
         if (container is ArrayContainer arr)
         {
@@ -611,7 +611,7 @@ public sealed class RoaringBitmap
     }
 
     /// <summary>Selects the n-th value from a container.</summary>
-    private static ushort ContainerSelect(IContainer container, int n)
+    private static ushort _ContainerSelect(IContainer container, int n)
     {
         if (container is ArrayContainer arr)
         {

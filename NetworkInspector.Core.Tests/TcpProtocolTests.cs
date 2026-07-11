@@ -11,7 +11,7 @@ internal sealed class TcpProtocolTests
     /// <summary>
     /// Builds a full stack and parses the given Ethernet frame data.
     /// </summary>
-    private static (Stack Stack, Packet Packet) BuildAndParse(byte[] frameData)
+    private static (Stack Stack, Packet Packet) _BuildAndParse(byte[] frameData)
     {
         using SettingsManager settingsManager = new();
         StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
@@ -33,10 +33,10 @@ internal sealed class TcpProtocolTests
     [Test]
     public async Task Parse_TcpSyn_FieldsCorrect()
     {
-        byte[] frameData = FrameBuilders.GenerateTcpSynFrame(
+        byte[] frameData = FrameBuilders.Generate_TcpSynFrame(
             srcPort: 12345, dstPort: 80, seq: 1000);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             // Verify TCP protocol is detected
@@ -112,10 +112,10 @@ internal sealed class TcpProtocolTests
     [Test]
     public async Task Parse_TcpSynAck_FlagsCorrect()
     {
-        byte[] frameData = FrameBuilders.GenerateTcpSynAckFrame(
+        byte[] frameData = FrameBuilders.Generate_TcpSynAckFrame(
             srcPort: 80, dstPort: 12345, seq: 2000, ack: 1001);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             // SYN flag
@@ -155,7 +155,7 @@ internal sealed class TcpProtocolTests
         byte[] frameData = FrameBuilders.GenerateTcpDataFrame(
             srcPort: 12345, dstPort: 443, seq: 5000, ack: 6000, payload: payload);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             // Payload length
@@ -193,10 +193,10 @@ internal sealed class TcpProtocolTests
     [Test]
     public async Task Parse_TcpFinAck_FlagsCorrect()
     {
-        byte[] frameData = FrameBuilders.GenerateTcpFinAckFrame(
+        byte[] frameData = FrameBuilders.Generate_TcpFinAckFrame(
             srcPort: 12345, dstPort: 80, seq: 1001, ack: 2001);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? finFlagId = stack.GetFieldId("tcp.flags.fin");
@@ -214,10 +214,10 @@ internal sealed class TcpProtocolTests
     [Test]
     public async Task Parse_TcpRst_FlagCorrect()
     {
-        byte[] frameData = FrameBuilders.GenerateTcpRstFrame(
+        byte[] frameData = FrameBuilders.Generate_TcpRstFrame(
             srcPort: 12345, dstPort: 80, seq: 1001);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? rstFlagId = stack.GetFieldId("tcp.flags.reset");
@@ -252,7 +252,7 @@ internal sealed class TcpProtocolTests
         shortFrame[32] = 1;
         shortFrame[33] = 2;
 
-        (Stack stack, Packet packet) = BuildAndParse(shortFrame);
+        (Stack stack, Packet packet) = _BuildAndParse(shortFrame);
         using (stack)
         {
             // TCP should not have parsed any fields (data too short)
@@ -265,7 +265,7 @@ internal sealed class TcpProtocolTests
     [Test]
     public async Task Parse_TcpFrame_IndexPresence()
     {
-        byte[] frameData = FrameBuilders.GenerateTcpSynFrame();
+        byte[] frameData = FrameBuilders.Generate_TcpSynFrame();
 
         using SettingsManager settingsManager = new();
 
@@ -331,9 +331,9 @@ internal sealed class TcpProtocolTests
     [Test]
     public async Task Parse_TcpSyn_ChecksumFieldPresent()
     {
-        byte[] frameData = FrameBuilders.GenerateTcpSynFrame();
+        byte[] frameData = FrameBuilders.Generate_TcpSynFrame();
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             // Checksum field should always be present

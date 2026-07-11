@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Protocols.Tests;
 
@@ -36,7 +36,7 @@ internal sealed class IPv6TsharkTests
     private static readonly MacAddress _SrcMac = MacAddress.FromBytes([0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB]);
 
     /// <summary>Fixed Ethernet+IPv6+UDP frame; no extension headers.</summary>
-    private static byte[] BuildPlainFrame(byte hopLimit = 64)
+    private static byte[] _BuildPlainFrame(byte hopLimit = 64)
     {
         EthernetLayer eth = new(_DstMac, _SrcMac);
         IPv6Layer ip = new(IPv6Address.FromBytes(_SrcAddrBytes), IPv6Address.FromBytes(_DstAddrBytes), hopLimit: hopLimit);
@@ -46,7 +46,7 @@ internal sealed class IPv6TsharkTests
     }
 
     /// <summary>Frame with an IPv6 Hop-by-Hop extension header (PadN-only minimum form).</summary>
-    private static byte[] BuildHopByHopFrame()
+    private static byte[] _BuildHopByHopFrame()
     {
         EthernetLayer eth = new(_DstMac, _SrcMac);
         IPv6Layer ip = new(IPv6Address.FromBytes(_SrcAddrBytes), IPv6Address.FromBytes(_DstAddrBytes));
@@ -57,7 +57,7 @@ internal sealed class IPv6TsharkTests
     }
 
     /// <summary>Frame with an IPv6 Routing extension header (default zero-segment form).</summary>
-    private static byte[] BuildRoutingFrame()
+    private static byte[] _BuildRoutingFrame()
     {
         EthernetLayer eth = new(_DstMac, _SrcMac);
         IPv6Layer ip = new(IPv6Address.FromBytes(_SrcAddrBytes), IPv6Address.FromBytes(_DstAddrBytes));
@@ -68,7 +68,7 @@ internal sealed class IPv6TsharkTests
     }
 
     /// <summary>Frame with an IPv6 Destination Options extension header.</summary>
-    private static byte[] BuildDestinationOptionsFrame()
+    private static byte[] _BuildDestinationOptionsFrame()
     {
         EthernetLayer eth = new(_DstMac, _SrcMac);
         IPv6Layer ip = new(IPv6Address.FromBytes(_SrcAddrBytes), IPv6Address.FromBytes(_DstAddrBytes));
@@ -79,7 +79,7 @@ internal sealed class IPv6TsharkTests
     }
 
     /// <summary>Frame with an IPv6 Fragment extension header (single, complete fragment).</summary>
-    private static byte[] BuildFragmentFrame()
+    private static byte[] _BuildFragmentFrame()
     {
         EthernetLayer eth = new(_DstMac, _SrcMac);
         IPv6Layer ip = new(IPv6Address.FromBytes(_SrcAddrBytes), IPv6Address.FromBytes(_DstAddrBytes));
@@ -100,7 +100,7 @@ internal sealed class IPv6TsharkTests
     [Test]
     public async Task IPv6_PlainFrame_AllFixedHeaderFieldsMatchTshark()
     {
-        byte[] frame = BuildPlainFrame(hopLimit: 128);
+        byte[] frame = _BuildPlainFrame(hopLimit: 128);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -124,7 +124,7 @@ internal sealed class IPv6TsharkTests
     [Test]
     public async Task IPv6_HopByHopExtension_NextHeaderAndAddressesMatchTshark()
     {
-        byte[] frame = BuildHopByHopFrame();
+        byte[] frame = _BuildHopByHopFrame();
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -140,7 +140,7 @@ internal sealed class IPv6TsharkTests
     [Test]
     public async Task IPv6_RoutingExtension_NextHeaderAndAddressesMatchTshark()
     {
-        byte[] frame = BuildRoutingFrame();
+        byte[] frame = _BuildRoutingFrame();
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -156,7 +156,7 @@ internal sealed class IPv6TsharkTests
     [Test]
     public async Task IPv6_DestinationOptionsExtension_NextHeaderAndAddressesMatchTshark()
     {
-        byte[] frame = BuildDestinationOptionsFrame();
+        byte[] frame = _BuildDestinationOptionsFrame();
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -172,7 +172,7 @@ internal sealed class IPv6TsharkTests
     [Test]
     public async Task IPv6_FragmentExtension_NextHeaderAndAddressesMatchTshark()
     {
-        byte[] frame = BuildFragmentFrame();
+        byte[] frame = _BuildFragmentFrame();
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {

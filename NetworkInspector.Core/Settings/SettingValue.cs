@@ -9,7 +9,7 @@ namespace NetworkInspector.Core.Settings;
 /// NaN-safe f64 comparison is implemented to prevent infinite dirty-tracking loops.
 /// Two <c>F64(NaN)</c> values are considered equal.
 /// </summary>
-public readonly struct SettingValue : IEquatable<SettingValue>
+public readonly struct SettingValue : IEquatable<SettingValue>, ISpanFormattable, IUtf8SpanFormattable
 {
     // Storage layout:
     // Bool:   _Bits = 0 or 1, _ReferenceValue = null
@@ -220,7 +220,7 @@ public readonly struct SettingValue : IEquatable<SettingValue>
             SettingType.I64 => _Bits == other._Bits,
             SettingType.String => string.Equals(
                 (string?)_ReferenceValue, (string?)other._ReferenceValue, StringComparison.Ordinal),
-            SettingType.Bytes => BytesEqual((byte[]?)_ReferenceValue, (byte[]?)other._ReferenceValue),
+            SettingType.Bytes => _BytesEqual((byte[]?)_ReferenceValue, (byte[]?)other._ReferenceValue),
             SettingType.Enum => _Bits == other._Bits &&
                 string.Equals((string?)_ReferenceValue, (string?)other._ReferenceValue, StringComparison.Ordinal),
             _ => false,
@@ -240,23 +240,9 @@ public readonly struct SettingValue : IEquatable<SettingValue>
             SettingType.U64 => HashCode.Combine(_Type, _Bits),
             SettingType.I64 => HashCode.Combine(_Type, _Bits),
             SettingType.String => HashCode.Combine(_Type, _ReferenceValue),
-            SettingType.Bytes => ContentHashBytes((byte[]?)_ReferenceValue),
+            SettingType.Bytes => _ContentHashBytes((byte[]?)_ReferenceValue),
             SettingType.Enum => HashCode.Combine(_Type, _Bits, _ReferenceValue),
             _ => HashCode.Combine(_Type),
-        };
-
-    /// <inheritdoc/>
-    public override string ToString() =>
-        _Type switch
-        {
-            SettingType.Bool => (_Bits != 0).ToString(),
-            SettingType.F64 => BitConverter.Int64BitsToDouble(_Bits).ToString(),
-            SettingType.U64 => ((ulong)_Bits).ToString(),
-            SettingType.I64 => _Bits.ToString(),
-            SettingType.String => (string?)_ReferenceValue ?? "",
-            SettingType.Bytes => $"[{((byte[]?)_ReferenceValue)?.Length ?? 0} bytes]",
-            SettingType.Enum => $"{(string?)_ReferenceValue} ({(ulong)_Bits})",
-            _ => "",
         };
 
     /// <summary>Returns <see langword="true"/> if both values are equal.</summary>
@@ -264,6 +250,211 @@ public readonly struct SettingValue : IEquatable<SettingValue>
 
     /// <summary>Returns <see langword="true"/> if the values are not equal.</summary>
     public static bool operator !=(SettingValue left, SettingValue right) => !left.Equals(right);
+
+    #endregion
+
+    #region ISpanFormattable
+
+    /// <inheritdoc/>
+    public bool TryFormat(
+        Span<char> destination, out int charsWritten, ReadOnlySpan<char> format, IFormatProvider? provider)
+    {
+        switch (_Type)
+        {
+            case SettingType.Bool:
+            {
+                ReadOnlySpan<char> label = _Bits != 0 ? "True" : "False";
+                if (destination.Length < label.Length)
+                {
+                    charsWritten = 0;
+                    return false;
+                }
+                label.CopyTo(destination);
+                charsWritten = label.Length;
+                return true;
+            }
+            case SettingType.F64:
+                return BitConverter.Int64BitsToDouble(_Bits)
+                    .TryFormat(destination, out charsWritten, format, CultureInfo.InvariantCulture);
+            case SettingType.U64:
+                return ((ulong)_Bits).TryFormat(destination, out charsWritten, format, CultureInfo.InvariantCulture);
+            case SettingType.I64:
+                return _Bits.TryFormat(destination, out charsWritten, format, CultureInfo.InvariantCulture);
+            case SettingType.String:
+                if (_ReferenceValue is string str)
+                {
+                    if (destination.Length < str.Length)
+                    {
+                        charsWritten = 0;
+                        return false;
+                    }
+                    str.AsSpan().CopyTo(destination);
+                    charsWritten = str.Length;
+                    return true;
+                }
+                charsWritten = 0;
+                return true;
+            case SettingType.Bytes:
+                if (_ReferenceValue is byte[] bytes)
+                {
+                    return _TryFormatBytesLabel(bytes.Length, destination, out charsWritten);
+                }
+                return _TryFormatBytesLabel(0, destination, out charsWritten);
+            case SettingType.Enum:
+                if (_ReferenceValue is string name)
+                {
+                    return _TryFormatEnumLabel(name, (ulong)_Bits, destination, out charsWritten);
+                }
+                charsWritten = 0;
+                return true;
+            default:
+                charsWritten = 0;
+                return true;
+        }
+    }
+
+    /// <inheritdoc/>
+    public override string ToString()
+    {
+        if (_Type == SettingType.String && _ReferenceValue is string str)
+        {
+            return str;
+        }
+
+        Span<char> buffer = stackalloc char[256];
+        if (TryFormat(buffer, out int written, default, CultureInfo.InvariantCulture))
+        {
+            return buffer[..written].ToString();
+        }
+
+        return "";
+    }
+
+    /// <inheritdoc/>
+    public string ToString(string? format, IFormatProvider? formatProvider)
+    {
+        if (_Type == SettingType.String && _ReferenceValue is string str)
+        {
+            return str;
+        }
+
+        Span<char> buffer = stackalloc char[256];
+        if (TryFormat(buffer, out int written, format, formatProvider ?? CultureInfo.InvariantCulture))
+        {
+            return buffer[..written].ToString();
+        }
+
+        return "";
+    }
+
+    #endregion
+
+    #region IUtf8SpanFormattable
+
+    /// <inheritdoc/>
+    public bool TryFormat(
+        Span<byte> utf8Destination, out int bytesWritten, ReadOnlySpan<char> format, IFormatProvider? provider)
+    {
+        if (_Type == SettingType.String && _ReferenceValue is string str)
+        {
+            int byteCount = Encoding.UTF8.GetByteCount(str);
+            if (utf8Destination.Length < byteCount)
+            {
+                bytesWritten = 0;
+                return false;
+            }
+            bytesWritten = Encoding.UTF8.GetBytes(str, utf8Destination);
+            return true;
+        }
+
+        Span<char> chars = stackalloc char[256];
+        if (!TryFormat(chars, out int charCount, format, provider))
+        {
+            bytesWritten = 0;
+            return false;
+        }
+
+        if (utf8Destination.Length < charCount)
+        {
+            bytesWritten = 0;
+            return false;
+        }
+
+        bytesWritten = Encoding.UTF8.GetBytes(chars[..charCount], utf8Destination);
+        return true;
+    }
+
+    #endregion
+
+    #region Formatting helpers
+
+    private static bool _TryFormatBytesLabel(int byteCount, Span<char> destination, out int charsWritten)
+    {
+        if (destination.IsEmpty)
+        {
+            charsWritten = 0;
+            return false;
+        }
+
+        destination[0] = '[';
+        if (!byteCount.TryFormat(destination[1..], out int digitCount, default, CultureInfo.InvariantCulture))
+        {
+            charsWritten = 0;
+            return false;
+        }
+
+        ReadOnlySpan<char> suffix = " bytes]";
+        int total = 1 + digitCount + suffix.Length;
+        if (destination.Length < total)
+        {
+            charsWritten = 0;
+            return false;
+        }
+
+        suffix.CopyTo(destination[(1 + digitCount)..]);
+        charsWritten = total;
+        return true;
+    }
+
+    private static bool _TryFormatEnumLabel(
+        ReadOnlySpan<char> name, ulong numericValue, Span<char> destination, out int charsWritten)
+    {
+        int pos = 0;
+        if (destination.Length < name.Length)
+        {
+            charsWritten = 0;
+            return false;
+        }
+
+        name.CopyTo(destination);
+        pos = name.Length;
+
+        if (destination.Length < pos + 2)
+        {
+            charsWritten = 0;
+            return false;
+        }
+
+        destination[pos++] = ' ';
+        destination[pos++] = '(';
+
+        if (!numericValue.TryFormat(destination[pos..], out int digitCount, default, CultureInfo.InvariantCulture))
+        {
+            charsWritten = 0;
+            return false;
+        }
+
+        pos += digitCount;
+        if (destination.Length < pos + 1)
+        {
+            charsWritten = 0;
+            return false;
+        }
+
+        destination[pos++] = ')';
+        charsWritten = pos;
+        return true;
+    }
 
     #endregion
 
@@ -287,7 +478,7 @@ public readonly struct SettingValue : IEquatable<SettingValue>
     public static implicit operator SettingValue(ulong value) => U64(value);
 
     /// <summary>Compares two byte arrays for element-wise equality.</summary>
-    private static bool BytesEqual(byte[]? a, byte[]? b)
+    private static bool _BytesEqual(byte[]? a, byte[]? b)
     {
         if (ReferenceEquals(a, b))
         {
@@ -301,7 +492,7 @@ public readonly struct SettingValue : IEquatable<SettingValue>
     }
 
     /// <summary>Computes a content-based hash code for byte array settings.</summary>
-    private static int ContentHashBytes(byte[]? data)
+    private static int _ContentHashBytes(byte[]? data)
     {
         HashCode hash = new();
         hash.Add(SettingType.Bytes);

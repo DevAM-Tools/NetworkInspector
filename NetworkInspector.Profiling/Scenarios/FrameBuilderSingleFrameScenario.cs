@@ -15,7 +15,7 @@ namespace NetworkInspector.Profiling.Scenarios;
 [SuppressMessage("Performance", "CA1812:AvoidUninstantiatedInternalClasses", Justification = "Instantiated via reflection in ScenarioDiscovery.Discover.")]
 internal sealed class FrameBuilderSingleFrameScenario : FrameBuilderScenarioBase
 {
-    private const int FrameCount = 1_000_000;
+    private const int _FrameCount = 1_000_000;
 
     /// <inheritdoc/>
     protected override int PayloadSize => 64;
@@ -31,10 +31,11 @@ internal sealed class FrameBuilderSingleFrameScenario : FrameBuilderScenarioBase
 
     /// <inheritdoc/>
     public override string Description =>
-        $"Build {FrameCount:N0} Eth/IPv4/UDP frames with a {PayloadSize}-byte payload via the new FrameStack API.";
+        FormattableString.Invariant(
+            $"Build {_FrameCount:N0} Eth/IPv4/UDP frames with a {PayloadSize}-byte payload via the new FrameStack API.");
 
     /// <inheritdoc/>
-    public override long WorkUnitsPerIteration => FrameCount;
+    public override long WorkUnitsPerIteration => _FrameCount;
 
     /// <inheritdoc/>
     public override string WorkUnitName => "frames";
@@ -58,7 +59,7 @@ internal sealed class FrameBuilderSingleFrameScenario : FrameBuilderScenarioBase
     public override void Run()
     {
         Span<byte> dst = _Buffer;
-        for (int i = 0; i < FrameCount; i++)
+        for (int i = 0; i < _FrameCount; i++)
         {
             FrameSequence<StatelessStack<UdpLayer, StatelessStack<IPv4Layer, StatelessStack<EthernetLayer, StackEnd>>>, NoTrailer, NoInterceptor> seq
                 = _Stack.Build(_Payload);

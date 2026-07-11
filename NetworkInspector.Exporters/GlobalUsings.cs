@@ -26,6 +26,7 @@ global using NetworkInspector.Core.Fields;
 global using NetworkInspector.Core.Ids;
 global using NetworkInspector.Core.Infos;
 global using NetworkInspector.Core.Interfaces;
+global using NetworkInspector.Core.Protocols;
 global using NetworkInspector.Values;
 #endregion
 

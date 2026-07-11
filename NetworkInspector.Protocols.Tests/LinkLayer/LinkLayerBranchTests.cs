@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Protocols.Tests;
 
@@ -25,7 +25,7 @@ internal sealed class LinkLayerBranchTests
     /// Builds a minimal 16-byte SLL v1 frame. No payload is appended, which is intentional:
     /// the tests only assert on SLL header fields or protocol-dispatch absence.
     /// </summary>
-    private static byte[] BuildSllFrame(ushort haLen, ushort etherType, byte[] addressBytes)
+    private static byte[] _BuildSllFrame(ushort haLen, ushort etherType, byte[] addressBytes)
     {
         byte[] frame = new byte[16]; // SLL header size
         BinaryPrimitives.WriteUInt16BigEndian(frame.AsSpan(0), 0);          // pktType = 0 (unicast)
@@ -41,7 +41,7 @@ internal sealed class LinkLayerBranchTests
     /// <summary>
     /// Builds a minimal 20-byte SLL2 frame with no payload.
     /// </summary>
-    private static byte[] BuildSll2Frame(byte haLen, ushort etherType, byte[] addressBytes)
+    private static byte[] _BuildSll2Frame(byte haLen, ushort etherType, byte[] addressBytes)
     {
         byte[] frame = new byte[20]; // SLL2 header size
         BinaryPrimitives.WriteUInt16BigEndian(frame.AsSpan(0), etherType); // protocol
@@ -60,7 +60,7 @@ internal sealed class LinkLayerBranchTests
     /// Builds an Ethernet 802.3 frame with an LLC U-frame or I/S-frame header.
     /// The Ethernet length field (bytes 12–13) is set to the LLC header size.
     /// </summary>
-    private static byte[] BuildEthernetLlcFrame(byte dsap, byte ssap, byte control1, byte? control2)
+    private static byte[] _BuildEthernetLlcFrame(byte dsap, byte ssap, byte control1, byte? control2)
     {
         // LLC header: 3 bytes for U-frame, 4 bytes for I/S-frame
         int llcSize = control2.HasValue ? 4 : 3;
@@ -89,7 +89,7 @@ internal sealed class LinkLayerBranchTests
     /// <summary>
     /// Builds an Ethernet 802.3 frame with an LLC SNAP header.
     /// </summary>
-    private static byte[] BuildEthernetLlcSnapFrame(byte oui0, byte oui1, byte oui2, ushort snapType)
+    private static byte[] _BuildEthernetLlcSnapFrame(byte oui0, byte oui1, byte oui2, ushort snapType)
     {
         // LLC (3) + SNAP (5) = 8 bytes
         const int llcSnapSize = 8;
@@ -120,7 +120,7 @@ internal sealed class LinkLayerBranchTests
     /// Builds an IEEE 802.3 + LLC SNAP + IPv4 frame with zero OUI (00:00:00) and EtherType 0x0800.
     /// Used to verify that the zero-OUI SNAP path dispatches to IPv4.
     /// </summary>
-    private static byte[] BuildLlcSnapIpv4Frame()
+    private static byte[] _BuildLlcSnapIpv4Frame()
     {
         const int ethSize = 14;
         const int llcSnapSize = 8; // LLC(3) + SNAP(5)
@@ -165,7 +165,7 @@ internal sealed class LinkLayerBranchTests
     {
         // haLen = 0 means no meaningful address bytes → srcMac falls to default (00:00:00:00:00:00)
         // The address bytes are set to non-zero to confirm they are ignored.
-        byte[] frame = BuildSllFrame(haLen: 0, etherType: 0x0000,
+        byte[] frame = _BuildSllFrame(haLen: 0, etherType: 0x0000,
             addressBytes: [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x00, 0x00]);
 
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame, LinkType.LinuxSll);
@@ -180,7 +180,7 @@ internal sealed class LinkLayerBranchTests
     public async Task Parse_SllFrame_HaLenFive_SrcMacIsAllZeros()
     {
         // haLen = 5 (< 6) — still below the threshold; address bytes are non-zero but must be ignored
-        byte[] frame = BuildSllFrame(haLen: 5, etherType: 0x0000,
+        byte[] frame = _BuildSllFrame(haLen: 5, etherType: 0x0000,
             addressBytes: [0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88]);
 
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame, LinkType.LinuxSll);
@@ -197,7 +197,7 @@ internal sealed class LinkLayerBranchTests
     public async Task Parse_SllFrame_EtherTypeAtThreshold0x0600_NoIpv4Dispatch()
     {
         // etherType = 0x0600 is NOT strictly greater than MinEtherType (0x0600), so dispatch is skipped
-        byte[] frame = BuildSllFrame(haLen: 6, etherType: 0x0600,
+        byte[] frame = _BuildSllFrame(haLen: 6, etherType: 0x0600,
             addressBytes: [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x00, 0x00]);
 
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame, LinkType.LinuxSll);
@@ -213,7 +213,7 @@ internal sealed class LinkLayerBranchTests
     public async Task Parse_SllFrame_EtherTypeBelowThreshold0x0001_NoIpv4Dispatch()
     {
         // etherType = 0x0001 is well below 0x0600 — definitely no dispatch
-        byte[] frame = BuildSllFrame(haLen: 6, etherType: 0x0001,
+        byte[] frame = _BuildSllFrame(haLen: 6, etherType: 0x0001,
             addressBytes: [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x00, 0x00]);
 
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame, LinkType.LinuxSll);
@@ -229,7 +229,7 @@ internal sealed class LinkLayerBranchTests
     [Test]
     public async Task Parse_Sll2Frame_HaLenZero_SrcMacIsAllZeros()
     {
-        byte[] frame = BuildSll2Frame(haLen: 0, etherType: 0x0000,
+        byte[] frame = _BuildSll2Frame(haLen: 0, etherType: 0x0000,
             addressBytes: [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x00, 0x00]);
 
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame, LinkType.LinuxSll2);
@@ -243,7 +243,7 @@ internal sealed class LinkLayerBranchTests
     [Test]
     public async Task Parse_Sll2Frame_HaLenFive_SrcMacIsAllZeros()
     {
-        byte[] frame = BuildSll2Frame(haLen: 5, etherType: 0x0000,
+        byte[] frame = _BuildSll2Frame(haLen: 5, etherType: 0x0000,
             addressBytes: [0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88]);
 
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame, LinkType.LinuxSll2);
@@ -259,7 +259,7 @@ internal sealed class LinkLayerBranchTests
     [Test]
     public async Task Parse_Sll2Frame_EtherTypeAtThreshold0x0600_NoIpv4Dispatch()
     {
-        byte[] frame = BuildSll2Frame(haLen: 6, etherType: 0x0600,
+        byte[] frame = _BuildSll2Frame(haLen: 6, etherType: 0x0600,
             addressBytes: [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x00, 0x00]);
 
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame, LinkType.LinuxSll2);
@@ -277,7 +277,7 @@ internal sealed class LinkLayerBranchTests
     {
         // Control1 = 0x00 (bit 0 = 0 → I-frame), Control2 = 0x01
         // controlValue = LE(0x00, 0x01) = 0x0100 = 256
-        byte[] frame = BuildEthernetLlcFrame(dsap: 0x04, ssap: 0x04, control1: 0x00, control2: 0x01);
+        byte[] frame = _BuildEthernetLlcFrame(dsap: 0x04, ssap: 0x04, control1: 0x00, control2: 0x01);
 
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
@@ -296,7 +296,7 @@ internal sealed class LinkLayerBranchTests
     {
         // Control1 = 0x01 (bits [1:0] = 01 → S-frame), Control2 = 0x00
         // controlValue = LE(0x01, 0x00) = 0x0001 = 1
-        byte[] frame = BuildEthernetLlcFrame(dsap: 0x04, ssap: 0x04, control1: 0x01, control2: 0x00);
+        byte[] frame = _BuildEthernetLlcFrame(dsap: 0x04, ssap: 0x04, control1: 0x01, control2: 0x00);
 
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
@@ -313,7 +313,7 @@ internal sealed class LinkLayerBranchTests
     public async Task Parse_LlcSnapNonZeroOui_NoIpv4Dispatch()
     {
         // OUI = 00:00:01 (non-zero) → vendor-specific, no EtherType dispatch even with Type=0x0800
-        byte[] frame = BuildEthernetLlcSnapFrame(oui0: 0x00, oui1: 0x00, oui2: 0x01, snapType: 0x0800);
+        byte[] frame = _BuildEthernetLlcSnapFrame(oui0: 0x00, oui1: 0x00, oui2: 0x01, snapType: 0x0800);
 
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
@@ -331,7 +331,7 @@ internal sealed class LinkLayerBranchTests
     {
         // Zero OUI (00:00:00) + Type=0x0800 MUST dispatch to IPv4.
         // This is the complement to the non-zero OUI test, confirming the branch is taken.
-        byte[] frame = BuildLlcSnapIpv4Frame();
+        byte[] frame = _BuildLlcSnapIpv4Frame();
 
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
@@ -348,7 +348,7 @@ internal sealed class LinkLayerBranchTests
     {
         // DSAP = 0x01 (I/G bit set; raw value differs from dispatch key 0x01 & 0xFE = 0x00).
         // The field must store the raw, unmasked DSAP value 0x01.
-        byte[] frame = BuildEthernetLlcFrame(dsap: 0x01, ssap: 0x00, control1: 0x03, control2: null);
+        byte[] frame = _BuildEthernetLlcFrame(dsap: 0x01, ssap: 0x00, control1: 0x03, control2: null);
 
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)

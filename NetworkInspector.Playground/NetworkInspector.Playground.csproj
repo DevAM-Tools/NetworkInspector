@@ -2,15 +2,10 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <RootNamespace>NetworkInspector.Playground</RootNamespace>
     <AssemblyName>ni-playground</AssemblyName>
-    <!-- Developer-only sandbox — not published to NuGet. -->
     <IsPackable>false</IsPackable>
-    <!-- Playground uses APIs that are not trim/AOT-clean -->
-    <IsAotCompatible>false</IsAotCompatible>
-    <IsTrimmable>false</IsTrimmable>
-    <EnableTrimAnalyzer>false</EnableTrimAnalyzer>
   </PropertyGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\NetworkInspector.Core\NetworkInspector.Core.csproj" />
     <ProjectReference Include="..\NetworkInspector.Protocols\NetworkInspector.Protocols.csproj" />

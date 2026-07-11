@@ -19,7 +19,7 @@ namespace NetworkInspector.Protocols;
 /// </summary>
 /// <remarks>
 /// <para><b>Thread safety:</b> instances are immutable after registration completes.
-/// All mutable state is initialised inside <c>RegisterFieldsCustom</c> / <c>OnStartCustom</c>
+/// All mutable state is initialised inside <c>RegisterFieldsCustom</c> / <c>_OnStartCustom</c>
 /// (single-threaded build phase) and is read-only thereafter, so <see cref="Parse"/> may
 /// be invoked concurrently from any number of threads on the same instance without external
 /// synchronisation. Per-thread caches (when present) are stored in <c>[ThreadStatic]</c> fields.</para>
@@ -34,38 +34,38 @@ public sealed partial class Http2Protocol : IProtocol
     public const ulong TcpPortKey = 8443;
 
     /// <summary>Index group for always-present HTTP/2 fields.</summary>
-    private const string Http2IndexGroup = "http2";
+    private const string _Http2IndexGroup = "http2";
 
     /// <summary>Index group for frame payload (conditional, only when payload length > 0).</summary>
-    private const string Http2PayloadIndexGroup = "http2.payload";
+    private const string _Http2PayloadIndexGroup = "http2.payload";
 
     #endregion
 
     #region Protocol container
 
-    [BytesField("http2", "HTTP/2", IndexGroup = Http2IndexGroup)]
+    [BytesField("http2", "HTTP/2", IndexGroup = _Http2IndexGroup)]
     private FieldId _ProtocolFieldId;
 
     #endregion
 
     #region Frame fields
 
-    [NoneField("http2.frame", "HTTP/2 Frame", IndexGroup = Http2IndexGroup)]
+    [NoneField("http2.frame", "HTTP/2 Frame", IndexGroup = _Http2IndexGroup)]
     private FieldId _FrameFieldId;
 
-    [U64Field("http2.frame.length", "Length", IndexGroup = Http2IndexGroup)]
+    [U64Field("http2.frame.length", "Length", IndexGroup = _Http2IndexGroup)]
     private FieldId _FrameLengthFieldId;
 
-    [U64Field("http2.frame.type", "Type", IndexGroup = Http2IndexGroup)]
+    [U64Field("http2.frame.type", "Type", IndexGroup = _Http2IndexGroup)]
     private FieldId _FrameTypeFieldId;
 
-    [U64Field("http2.frame.flags", "Flags", IndexGroup = Http2IndexGroup)]
+    [U64Field("http2.frame.flags", "Flags", IndexGroup = _Http2IndexGroup)]
     private FieldId _FrameFlagsFieldId;
 
-    [U64Field("http2.frame.stream_id", "Stream Identifier", IndexGroup = Http2IndexGroup)]
+    [U64Field("http2.frame.stream_id", "Stream Identifier", IndexGroup = _Http2IndexGroup)]
     private FieldId _FrameStreamIdFieldId;
 
-    [BytesField("http2.frame.payload", "Payload", IndexGroup = Http2PayloadIndexGroup)]
+    [BytesField("http2.frame.payload", "Payload", IndexGroup = _Http2PayloadIndexGroup)]
     private FieldId _FramePayloadFieldId;
 
     #endregion
@@ -150,7 +150,7 @@ public sealed partial class Http2Protocol : IProtocol
     // Pre-allocated populator
     private LazyPopulator _Populator = null!;
 
-    partial void OnStartCustom(Stack stack) => _Populator = PopulateHttp2Fields;
+    partial void _OnStartCustom(Stack stack) => _Populator = _PopulateHttp2Fields;
 
     /// <summary>
     /// Parses HTTP/2 frames from the TCP segment payload. Uses lazy population.
@@ -185,7 +185,7 @@ public sealed partial class Http2Protocol : IProtocol
         // populator's per-frame emission guards. This keeps the presence index content-consistent
         // with materialization and free of false positives, at the deliberate cost of repeating the
         // frame walk (and HPACK decode) that the populator performs lazily.
-        DetectFrameGroups(
+        _DetectFrameGroups(
             data.Span,
             out bool hasFlags, out bool hasPayload, out bool hasSettings, out bool hasGoaway,
             out bool hasPing, out bool hasWindowUpdate, out bool hasRstStream, out bool hasHeader);
@@ -236,7 +236,7 @@ public sealed partial class Http2Protocol : IProtocol
     /// be emitted. This duplicates the populator's frame walk; that is the accepted cost of keeping
     /// the field materialization lazy while the index stays content-consistent.
     /// </summary>
-    private static void DetectFrameGroups(
+    private static void _DetectFrameGroups(
         ReadOnlySpan<byte> span,
         out bool hasFlags, out bool hasPayload, out bool hasSettings, out bool hasGoaway,
         out bool hasPing, out bool hasWindowUpdate, out bool hasRstStream, out bool hasHeader)
@@ -258,7 +258,7 @@ public sealed partial class Http2Protocol : IProtocol
                 break;
             }
 
-            // AppendFrameFlags emits flag fields for these types regardless of payload length.
+            // _AppendFrameFlags emits flag fields for these types regardless of payload length.
             if (frame.Type is 0 or 1 or 4 or 5 or 6 or 9)
             {
                 hasFlags = true;
@@ -270,7 +270,7 @@ public sealed partial class Http2Protocol : IProtocol
             {
                 ReadOnlySpan<byte> payload = span[payloadStart..payloadEnd];
 
-                // structured == ParseFramePayload's return value: true when the payload is parsed
+                // structured == _ParseFramePayload's return value: true when the payload is parsed
                 // into structured fields (so no raw http2.payload field), false otherwise.
                 bool structured;
                 switch (frame.Type)
@@ -297,7 +297,7 @@ public sealed partial class Http2Protocol : IProtocol
                         break;
                     case 1: // HEADERS
                     case 9: // CONTINUATION
-                        structured = DetectHpackHeaders(frame.Type, frame.Flags, payload, ref hasHeader);
+                        structured = _DetectHpackHeaders(frame.Type, frame.Flags, payload, ref hasHeader);
                         break;
                     default:
                         structured = false;
@@ -317,12 +317,12 @@ public sealed partial class Http2Protocol : IProtocol
     }
 
     /// <summary>
-    /// Mirrors the HEADERS/CONTINUATION branch of <see cref="ParseFramePayload"/> for detection
+    /// Mirrors the HEADERS/CONTINUATION branch of <see cref="_ParseFramePayload"/> for detection
     /// only: returns the same structured/raw decision and sets <paramref name="hasHeader"/> when the
     /// HPACK block decodes to at least one header (the exact condition under which the populator
     /// appends http2.header fields).
     /// </summary>
-    private static bool DetectHpackHeaders(byte frameType, byte flags, ReadOnlySpan<byte> payload, ref bool hasHeader)
+    private static bool _DetectHpackHeaders(byte frameType, byte flags, ReadOnlySpan<byte> payload, ref bool hasHeader)
     {
         int hpackOffset = 0;
         int padLength = 0;
@@ -367,7 +367,7 @@ public sealed partial class Http2Protocol : IProtocol
     /// Populates all HTTP/2 frame fields from the stored data.
     /// Processes multiple frames in the same segment if present.
     /// </summary>
-    private ParseResult PopulateHttp2Fields(in MutField container)
+    private ParseResult _PopulateHttp2Fields(in MutField container)
     {
         if (!container.Value.Data.TryGetAsBytes(out ReadOnlyMemory<byte> http2Data))
         {
@@ -408,7 +408,7 @@ public sealed partial class Http2Protocol : IProtocol
             frameContainer.Append(_FrameStreamIdFieldId, FieldValue.NewU64(frame.StreamId));
 
             // Interpret per-type flags
-            AppendFrameFlags(in frameContainer, frame.Type, frame.Flags);
+            _AppendFrameFlags(in frameContainer, frame.Type, frame.Flags);
 
             // Payload (if any) — parse type-specific content for known frame types
             int payloadStart = offset + Http2FrameHeader.Size;
@@ -419,7 +419,7 @@ public sealed partial class Http2Protocol : IProtocol
                 ReadOnlySpan<byte> payloadSpan = span[payloadStart..payloadEnd];
 
                 // Parse type-specific payloads
-                bool parsed = ParseFramePayload(in frameContainer, frame.Type, frame.Flags, payloadSpan, payloadData);
+                bool parsed = _ParseFramePayload(in frameContainer, frame.Type, frame.Flags, payloadSpan, payloadData);
 
                 // If not parsed as structured data, show raw payload
                 if (!parsed)
@@ -438,7 +438,7 @@ public sealed partial class Http2Protocol : IProtocol
     /// Appends per-type flag sub-fields based on the frame type.
     /// RFC 7540 Section 6 defines which flags are valid for each frame type.
     /// </summary>
-    private void AppendFrameFlags(in MutField frameContainer, byte frameType, byte flags)
+    private void _AppendFrameFlags(in MutField frameContainer, byte frameType, byte flags)
     {
         switch (frameType)
         {
@@ -477,7 +477,7 @@ public sealed partial class Http2Protocol : IProtocol
     /// Parses type-specific payload content for known frame types.
     /// Returns true if the payload was parsed as structured fields.
     /// </summary>
-    private bool ParseFramePayload(
+    private bool _ParseFramePayload(
         in MutField frameContainer, byte frameType, byte flags,
         ReadOnlySpan<byte> payload, ReadOnlyMemory<byte> payloadMemory)
     {
@@ -595,7 +595,7 @@ public sealed partial class Http2Protocol : IProtocol
                     int hpackEnd = payload.Length - padLength;
                     if (hpackOffset < hpackEnd)
                     {
-                        DecodeHpackHeaders(in frameContainer, payload[hpackOffset..hpackEnd]);
+                        _DecodeHpackHeaders(in frameContainer, payload[hpackOffset..hpackEnd]);
                     }
                     return true;
                 }
@@ -609,7 +609,7 @@ public sealed partial class Http2Protocol : IProtocol
     /// Decodes HPACK-encoded headers from a HEADERS or CONTINUATION frame payload
     /// and appends each decoded header as a field to the frame container.
     /// </summary>
-    private void DecodeHpackHeaders(in MutField frameContainer, ReadOnlySpan<byte> hpackBlock)
+    private void _DecodeHpackHeaders(in MutField frameContainer, ReadOnlySpan<byte> hpackBlock)
     {
         List<HpackDecoder.Header> headers = HpackDecoder.Decode(hpackBlock);
 

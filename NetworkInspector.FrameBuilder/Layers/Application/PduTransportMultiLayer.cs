@@ -92,7 +92,18 @@ public readonly struct PduTransportMultiLayer : IStatelessLayer, IPayloadLayer, 
     }
 
     /// <summary>The number of slots this layer encodes.</summary>
-    public int SlotCount => _Slots?.Length ?? 0;
+    public int SlotCount
+    {
+        get
+        {
+            if (_Slots is null)
+            {
+                return 0;
+            }
+
+            return _Slots.Length;
+        }
+    }
 
     /// <summary>Returns the PDU ID of the slot at <paramref name="index"/>.</summary>
     public uint GetSlotPduId(int index) => _Slots[index].PduId;

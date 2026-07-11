@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Protocols.Tests;
 
@@ -29,7 +29,7 @@ internal sealed class Icmpv6NdpTests
         IPv6Address.FromBytes([0xFF, 0x02, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x01]));
 
     /// <summary>Builds an NDP option: Source/Target Link-Layer Address (RFC 4861 §4.6.1).</summary>
-    private static byte[] BuildLinkLayerAddressOption(byte optType, ReadOnlySpan<byte> mac6)
+    private static byte[] _BuildLinkLayerAddressOption(byte optType, ReadOnlySpan<byte> mac6)
     {
         byte[] opt = new byte[8];
         opt[0] = optType;
@@ -39,7 +39,7 @@ internal sealed class Icmpv6NdpTests
     }
 
     /// <summary>Builds an NDP option: Prefix Information (RFC 4861 §4.6.2). Always 32 bytes.</summary>
-    private static byte[] BuildPrefixInformationOption(
+    private static byte[] _BuildPrefixInformationOption(
         byte prefixLength, bool onLink, bool autonomous,
         uint validLifetimeSec, uint preferredLifetimeSec,
         ReadOnlySpan<byte> prefix)
@@ -65,7 +65,7 @@ internal sealed class Icmpv6NdpTests
     }
 
     /// <summary>Builds an NDP option: MTU (RFC 4861 §4.6.4). Always 8 bytes.</summary>
-    private static byte[] BuildMtuOption(uint mtuBytes)
+    private static byte[] _BuildMtuOption(uint mtuBytes)
     {
         byte[] opt = new byte[8];
         opt[0] = 5; // type
@@ -77,7 +77,8 @@ internal sealed class Icmpv6NdpTests
     [Test]
     public async Task Parse_RouterSolicitation_TypeOnly()
     {
-        byte[] frame = FrameStack.Start(_Eth).Then(_Ip).Then(new IcmpV6RouterSolicitationLayer()).CreateWithFixedValues().EmitFrame([]);
+        IcmpV6RouterSolicitationLayer icmp = new();
+        byte[] frame = FrameStack.Start(_Eth).Then(_Ip).Then(icmp).CreateWithFixedValues().EmitFrame([]);
 
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
@@ -110,7 +111,7 @@ internal sealed class Icmpv6NdpTests
     [Test]
     public async Task Parse_RouterAdvertisement_WithSourceLinkAddrOption()
     {
-        byte[] opt = BuildLinkLayerAddressOption(optType: 1 /* source */, _SrcLinkAddr);
+        byte[] opt = _BuildLinkLayerAddressOption(optType: 1 /* source */, _SrcLinkAddr);
         IcmpV6RouterAdvertisementLayer ra = new(
             curHopLimit: 64, managed: false, other: true,
             routerLifetimeSec: 1800, reachableTimeMs: 0, retransTimerMs: 0);
@@ -128,7 +129,7 @@ internal sealed class Icmpv6NdpTests
     [Test]
     public async Task Parse_RouterAdvertisement_WithMtuOption()
     {
-        byte[] opt = BuildMtuOption(mtuBytes: 1500);
+        byte[] opt = _BuildMtuOption(mtuBytes: 1500);
         IcmpV6RouterAdvertisementLayer ra = new(
             curHopLimit: 64, managed: false, other: false,
             routerLifetimeSec: 1800, reachableTimeMs: 0, retransTimerMs: 0);
@@ -145,7 +146,7 @@ internal sealed class Icmpv6NdpTests
     [Test]
     public async Task Parse_RouterAdvertisement_WithPrefixInformationOption()
     {
-        byte[] opt = BuildPrefixInformationOption(
+        byte[] opt = _BuildPrefixInformationOption(
             prefixLength: 64,
             onLink: true,
             autonomous: true,
@@ -187,7 +188,7 @@ internal sealed class Icmpv6NdpTests
     [Test]
     public async Task Parse_NeighborAdvertisement_FlagsAndTarget()
     {
-        byte[] opt = BuildLinkLayerAddressOption(optType: 2 /* target */, _SrcLinkAddr);
+        byte[] opt = _BuildLinkLayerAddressOption(optType: 2 /* target */, _SrcLinkAddr);
         IcmpV6NeighborAdvertisementLayer na = new(
             IPv6Address.FromBytes(_TargetIp), router: true, solicited: true, overrideFlag: false);
         byte[] frame = FrameStack.Start(_Eth).Then(_Ip).Then(na).CreateWithFixedValues().EmitFrame(opt);

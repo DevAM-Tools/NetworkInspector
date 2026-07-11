@@ -8,6 +8,7 @@ global using System.Buffers.Text;
 global using System.Collections.Frozen;
 global using System.Collections.Generic;
 global using System.Diagnostics.CodeAnalysis;
+global using System.Globalization;
 global using System.IO;
 global using System.IO.Compression;
 global using System.Numerics;

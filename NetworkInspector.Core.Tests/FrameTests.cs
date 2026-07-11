@@ -86,6 +86,37 @@ internal sealed class FrameTests
             .Throws<ArgumentNullException>();
     }
 
+    [Test]
+    public async Task ComparisonOperators_OrderByFrameId()
+    {
+        FrameInterfaceRegistry registry = new();
+        Frame low = _CreateFrame(registry, new FrameId(1));
+        Frame high = _CreateFrame(registry, new FrameId(5));
+        Frame same = _CreateFrame(registry, new FrameId(1));
+
+        await Assert.That(low.CompareTo(high)).IsLessThan(0);
+        await Assert.That(low < high).IsTrue();
+        await Assert.That(high > low).IsTrue();
+        await Assert.That(low <= same).IsTrue();
+        await Assert.That(low >= same).IsTrue();
+        await Assert.That(low == same).IsTrue();
+        await Assert.That(low != high).IsTrue();
+        await Assert.That(low.Equals(high)).IsFalse();
+        await Assert.That(low.Equals((object)same)).IsTrue();
+        await Assert.That(low.GetHashCode()).IsEqualTo(same.GetHashCode());
+    }
+
+    private static Frame _CreateFrame(FrameInterfaceRegistry registry, FrameId id)
+    {
+        return Frame.Create(
+            id,
+            Timestamp.FromNanos(0),
+            new byte[] { 0x01 },
+            LinkType.Ethernet,
+            FrameInterfaceId.Invalid,
+            registry).Value;
+    }
+
     private sealed class StubFrameSource : IFrameSource
     {
         public string UiName => "stub";

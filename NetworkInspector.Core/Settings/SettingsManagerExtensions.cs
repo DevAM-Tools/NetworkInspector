@@ -69,7 +69,7 @@ public static class SettingsManagerExtensions
         if (!JsonConfigFile.TryLoad(filePath, typeInfo, out value, out string? error))
         {
             // Derive the group name from the setting name (part before the last dot)
-            string groupName = DeriveGroupName(stringSettingName);
+            string groupName = _DeriveGroupName(stringSettingName);
 
             warning = new SettingsLoadWarning(
                 SettingsLoadWarningKind.ExternalConfigUnavailable,
@@ -92,10 +92,14 @@ public static class SettingsManagerExtensions
     /// For example, <c>"can.config_file"</c> yields <c>"can"</c>.
     /// Falls back to the full name when no dot is present.
     /// </summary>
-    private static string DeriveGroupName(string settingName)
+    private static string _DeriveGroupName(string settingName)
     {
         int dot = settingName.LastIndexOf('.');
-        return dot > 0 ? settingName[..dot] : settingName;
+        if (dot > 0)
+        {
+            return settingName[..dot];
+        }
+        return settingName;
     }
 
     #endregion

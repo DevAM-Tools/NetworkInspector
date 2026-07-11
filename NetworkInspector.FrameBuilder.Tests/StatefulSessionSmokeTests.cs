@@ -21,22 +21,22 @@ internal sealed class StatefulSessionSmokeTests
     private static readonly IPv4Address _SrcIp4 = new(0xC0A80101);
     private static readonly IPv4Address _DstIp4 = new(0xC0A80102);
 
-    private const int IPv4HeaderSize = 20;
-    private const int TcpHeaderSize = 20;
-    private const int EthHeaderSize = 14;
-    private const int UdpHeaderSize = 8;
+    private const int _IPv4HeaderSize = 20;
+    private const int _TcpHeaderSize = 20;
+    private const int _EthHeaderSize = 14;
+    private const int _UdpHeaderSize = 8;
 
     /// <summary>Read the IPv4 Identification field from a frame whose IPv4 header starts at offset 14.</summary>
-    private static ushort ReadIPv4Id(ReadOnlySpan<byte> frame)
-        => BinaryPrimitives.ReadUInt16BigEndian(frame.Slice(EthHeaderSize + 4, 2));
+    private static ushort _ReadIPv4Id(ReadOnlySpan<byte> frame)
+        => BinaryPrimitives.ReadUInt16BigEndian(frame.Slice(_EthHeaderSize + 4, 2));
 
     /// <summary>Read the TCP sequence number from a frame whose TCP header starts at offset 14+20.</summary>
-    private static uint ReadTcpSeq(ReadOnlySpan<byte> frame)
-        => BinaryPrimitives.ReadUInt32BigEndian(frame.Slice(EthHeaderSize + IPv4HeaderSize + 4, 4));
+    private static uint _ReadTcpSeq(ReadOnlySpan<byte> frame)
+        => BinaryPrimitives.ReadUInt32BigEndian(frame.Slice(_EthHeaderSize + _IPv4HeaderSize + 4, 4));
 
     /// <summary>Read the TCP ACK number from a frame.</summary>
-    private static uint ReadTcpAck(ReadOnlySpan<byte> frame)
-        => BinaryPrimitives.ReadUInt32BigEndian(frame.Slice(EthHeaderSize + IPv4HeaderSize + 8, 4));
+    private static uint _ReadTcpAck(ReadOnlySpan<byte> frame)
+        => BinaryPrimitives.ReadUInt32BigEndian(frame.Slice(_EthHeaderSize + _IPv4HeaderSize + 8, 4));
 
     #region IPv4LayerWithAutoIpId
 
@@ -69,7 +69,7 @@ internal sealed class StatefulSessionSmokeTests
             bool wrote = seq.MoveNext(buffer, out int n);
             await Assert.That(wrote).IsTrue();
             await Assert.That(n).IsEqualTo(buffer.Length);
-            ids[i] = ReadIPv4Id(buffer);
+            ids[i] = _ReadIPv4Id(buffer);
         }
 
         await Assert.That(ids[0]).IsEqualTo<ushort>(100);
@@ -100,13 +100,13 @@ internal sealed class StatefulSessionSmokeTests
         StatefulFrameSequence<Stack<UdpLayer, Stack<IPv4LayerWithAutoIpId, StatelessStack<EthernetLayer, StackEnd>>>,
             NoTrailer, NoInterceptor> s1 = session.NextPacket(ReadOnlySpan<byte>.Empty);
         s1.MoveNext(buffer, out _);
-        ushort id1 = ReadIPv4Id(buffer);
+        ushort id1 = _ReadIPv4Id(buffer);
 
         // Frame 2: id wraps to 0
         StatefulFrameSequence<Stack<UdpLayer, Stack<IPv4LayerWithAutoIpId, StatelessStack<EthernetLayer, StackEnd>>>,
             NoTrailer, NoInterceptor> s2 = session.NextPacket(ReadOnlySpan<byte>.Empty);
         s2.MoveNext(buffer, out _);
-        ushort id2 = ReadIPv4Id(buffer);
+        ushort id2 = _ReadIPv4Id(buffer);
 
         await Assert.That(id1).IsEqualTo<ushort>(0xFFFF);
         await Assert.That(id2).IsEqualTo<ushort>(0);
@@ -134,7 +134,7 @@ internal sealed class StatefulSessionSmokeTests
         {
             a.NextPacket(ReadOnlySpan<byte>.Empty).MoveNext(buffer, out _);
             a.NextPacket(ReadOnlySpan<byte>.Empty).MoveNext(buffer, out _);
-            await Assert.That(ReadIPv4Id(buffer)).IsEqualTo<ushort>(43);
+            await Assert.That(_ReadIPv4Id(buffer)).IsEqualTo<ushort>(43);
         }
 
         // Second session — must restart at the seed value.
@@ -142,7 +142,7 @@ internal sealed class StatefulSessionSmokeTests
             NoTrailer, NoInterceptor> b = stack.OpenSession())
         {
             b.NextPacket(ReadOnlySpan<byte>.Empty).MoveNext(buffer, out _);
-            await Assert.That(ReadIPv4Id(buffer)).IsEqualTo<ushort>(42);
+            await Assert.That(_ReadIPv4Id(buffer)).IsEqualTo<ushort>(42);
         }
     }
 
@@ -177,16 +177,16 @@ internal sealed class StatefulSessionSmokeTests
 
         // Frame 1 — seq = 1000, advances by 100 → next 1100.
         session.NextPacket(p1).MoveNext(buf, out int n1);
-        uint seq1 = ReadTcpSeq(buf.AsSpan(0, n1));
-        uint ack1 = ReadTcpAck(buf.AsSpan(0, n1));
+        uint seq1 = _ReadTcpSeq(buf.AsSpan(0, n1));
+        uint ack1 = _ReadTcpAck(buf.AsSpan(0, n1));
 
         // Frame 2 — seq = 1100, advances by 50 → next 1150.
         session.NextPacket(p2).MoveNext(buf, out int n2);
-        uint seq2 = ReadTcpSeq(buf.AsSpan(0, n2));
+        uint seq2 = _ReadTcpSeq(buf.AsSpan(0, n2));
 
         // Frame 3 — seq = 1150, advances by 200.
         session.NextPacket(p3).MoveNext(buf, out int n3);
-        uint seq3 = ReadTcpSeq(buf.AsSpan(0, n3));
+        uint seq3 = _ReadTcpSeq(buf.AsSpan(0, n3));
 
         await Assert.That(seq1).IsEqualTo(1000U);
         await Assert.That(ack1).IsEqualTo(5000U);
@@ -216,11 +216,11 @@ internal sealed class StatefulSessionSmokeTests
 
         // SYN frame — empty payload, but +1 advance.
         session.NextPacket(ReadOnlySpan<byte>.Empty).MoveNext(buf, out _);
-        uint seq1 = ReadTcpSeq(buf);
+        uint seq1 = _ReadTcpSeq(buf);
 
         // Next SYN frame uses the advanced sequence (would be 4243).
         session.NextPacket(ReadOnlySpan<byte>.Empty).MoveNext(buf, out _);
-        uint seq2 = ReadTcpSeq(buf);
+        uint seq2 = _ReadTcpSeq(buf);
 
         await Assert.That(seq1).IsEqualTo(4242U);
         await Assert.That(seq2).IsEqualTo(4243U);
@@ -253,12 +253,12 @@ internal sealed class StatefulSessionSmokeTests
             NoTrailer, NoInterceptor> session = stack.OpenSession();
 
         session.NextPacket(payload).MoveNext(buf, out int n1);
-        ushort id1 = ReadIPv4Id(buf.AsSpan(0, n1));
-        uint seq1 = ReadTcpSeq(buf.AsSpan(0, n1));
+        ushort id1 = _ReadIPv4Id(buf.AsSpan(0, n1));
+        uint seq1 = _ReadTcpSeq(buf.AsSpan(0, n1));
 
         session.NextPacket(payload).MoveNext(buf, out int n2);
-        ushort id2 = ReadIPv4Id(buf.AsSpan(0, n2));
-        uint seq2 = ReadTcpSeq(buf.AsSpan(0, n2));
+        ushort id2 = _ReadIPv4Id(buf.AsSpan(0, n2));
+        uint seq2 = _ReadTcpSeq(buf.AsSpan(0, n2));
 
         await Assert.That(id1).IsEqualTo<ushort>(7);
         await Assert.That(id2).IsEqualTo<ushort>(8);
@@ -306,7 +306,7 @@ internal sealed class StatefulSessionSmokeTests
         using Session<Stack<UdpLayer, Stack<IPv4LayerWithAutoIpId, StatelessStack<EthernetLayer, StackEnd>>>,
             NoTrailer, NoInterceptor> b = stack.OpenSession();
         b.NextPacket([0, 0, 0, 0]).MoveNext(buf, out int nb);
-        ushort id = ReadIPv4Id(buf.AsSpan(0, nb));
+        ushort id = _ReadIPv4Id(buf.AsSpan(0, nb));
         await Assert.That(id).IsEqualTo<ushort>(7);
     }
 
@@ -361,9 +361,13 @@ internal sealed class StatefulSessionSmokeTests
                 Stack<IPv4LayerWithAutoIpId,
                     StatelessStack<EthernetLayer, StackEnd>>>,
             NoTrailer,
-            DisposedThrowsMarkerInterceptor> stack = StatefulFrameStack.CreateForSession(
+            DisposedThrowsMarkerInterceptor> stack = StatefulFrameStack.CreateForSession<
+                Stack<UdpLayer,
+                    Stack<IPv4LayerWithAutoIpId,
+                        StatelessStack<EthernetLayer, StackEnd>>>,
+                DisposedThrowsMarkerInterceptor>(
                 FrameStack.Start(eth).Then(ip).Then(udp),
-                new DisposedThrowsMarkerInterceptor());
+                new());
 
         Session<Stack<UdpLayer, Stack<IPv4LayerWithAutoIpId, StatelessStack<EthernetLayer, StackEnd>>>,
             NoTrailer, DisposedThrowsMarkerInterceptor> session = stack.OpenSession();
@@ -407,9 +411,13 @@ internal sealed class StatefulSessionSmokeTests
                 Stack<IPv4LayerWithAutoIpId,
                     StatelessStack<EthernetLayer, StackEnd>>>,
             NoTrailer,
-            StaleHandleMarkerInterceptor> stack = StatefulFrameStack.CreateForSession(
+            StaleHandleMarkerInterceptor> stack = StatefulFrameStack.CreateForSession<
+                Stack<UdpLayer,
+                    Stack<IPv4LayerWithAutoIpId,
+                        StatelessStack<EthernetLayer, StackEnd>>>,
+                StaleHandleMarkerInterceptor>(
                 FrameStack.Start(eth).Then(ip).Then(udp),
-                new StaleHandleMarkerInterceptor());
+                new());
 
         // Lease A: open and immediately dispose.
         Session<Stack<UdpLayer, Stack<IPv4LayerWithAutoIpId, StatelessStack<EthernetLayer, StackEnd>>>, NoTrailer, StaleHandleMarkerInterceptor> disposedA =

@@ -4,7 +4,7 @@ namespace NetworkInspector.Protocols;
 
 public sealed partial class WebSocketProtocol
 {
-    #region Frame-field population (PopulateWebSocketFields + ParseClosePayload)
+    #region Frame-field population (_PopulateWebSocketFields + _ParseClosePayload)
 
     /// <summary>
     /// Populates all WebSocket frame fields from the stored data.
@@ -25,7 +25,7 @@ public sealed partial class WebSocketProtocol
     /// <para>The loop exits early on truncated data (insufficient bytes for a complete
     /// frame) rather than producing partial output.</para>
     /// </remarks>
-    private ParseResult PopulateWebSocketFields(in MutField container)
+    private ParseResult _PopulateWebSocketFields(in MutField container)
     {
         if (!container.Value.Data.TryGetAsBytes(out ReadOnlyMemory<byte> wsData))
         {
@@ -142,7 +142,7 @@ public sealed partial class WebSocketProtocol
                 if (masked)
                 {
                     // Unmask the payload using the shared 4-byte cyclic XOR helper.
-                    payloadData = UnmaskPayload(span.Slice(offset, payloadLen), maskingKey);
+                    payloadData = _UnmaskPayload(span.Slice(offset, payloadLen), maskingKey);
                 }
                 else
                 {
@@ -157,7 +157,7 @@ public sealed partial class WebSocketProtocol
                 bool isCompressed = (rsv & 0x04) != 0;
                 if (isCompressed)
                 {
-                    ReadOnlyMemory<byte>? decompressed = DecompressPermessageDeflate(payloadData);
+                    ReadOnlyMemory<byte>? decompressed = _DecompressPermessageDeflate(payloadData);
                     if (decompressed is not null)
                     {
                         effectivePayload = decompressed.Value;
@@ -188,7 +188,7 @@ public sealed partial class WebSocketProtocol
                     case 2: // Binary frame — raw payload already appended; dispatch happens eagerly in Parse
                         break;
                     case 8: // Close frame — parse status code and reason
-                        ParseClosePayload(in frameContainer, payloadData);
+                        _ParseClosePayload(in frameContainer, payloadData);
                         break;
                     case 9: // Ping
                         frameContainer.Append(_PingPayloadFieldId, FieldValue.NewBytes(payloadData));
@@ -210,7 +210,7 @@ public sealed partial class WebSocketProtocol
     /// <para>Per RFC 6455 §5.5.1 the first two bytes are a big-endian unsigned status code;
     /// any remaining bytes are a UTF-8 reason string.</para>
     /// </summary>
-    private void ParseClosePayload(in MutField frameContainer, ReadOnlyMemory<byte> payloadData)
+    private void _ParseClosePayload(in MutField frameContainer, ReadOnlyMemory<byte> payloadData)
     {
         ReadOnlySpan<byte> closeData = payloadData.Span;
         if (closeData.Length >= 2)

@@ -19,13 +19,13 @@ public sealed partial class TextProtocol : IProtocol
     #region Constants
 
     /// <summary>Index group for always-present text fields.</summary>
-    private const string TextIndexGroup = "text";
+    private const string _TextIndexGroup = "text";
 
     #endregion
 
     #region Fields
 
-    [StringField("text", "Line-based text data", IndexGroup = TextIndexGroup)]
+    [StringField("text", "Line-based text data", IndexGroup = _TextIndexGroup)]
     private FieldId _TextFieldId;
 
     /// <summary>

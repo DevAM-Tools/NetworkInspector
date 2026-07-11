@@ -54,7 +54,7 @@ internal sealed class ListenerSlot : IDisposable
             jobId,
             listener.UiName,
             $"Listener: {listener.UiName}",
-            RunLoop,
+            _RunLoop,
             onStatusChanged);
         // Create the public view once so the same reference can be registered
         // in the unified Session job list.
@@ -101,7 +101,7 @@ internal sealed class ListenerSlot : IDisposable
     }
     /// <summary>
     /// Invokes <see cref="ISessionListener.OnUnsubscribed"/> at most once.
-    /// Used from <see cref="RunLoop"/> and from the session coordinator when <see cref="Job.Start"/> fails.
+    /// Used from <see cref="_RunLoop"/> and from the session coordinator when <see cref="Job.Start"/> fails.
     /// </summary>
     internal void EnsureOnUnsubscribed()
     {
@@ -153,7 +153,7 @@ internal sealed class ListenerSlot : IDisposable
     /// <para>
     /// <b>Error handling:</b>
     /// Listener callback exceptions are not caught here. They propagate to
-    /// <see cref="Job.RunCore"/> which stores the exception in
+    /// <see cref="Job._RunCore"/> which stores the exception in
     /// <see cref="Job.FailureException"/> and transitions the job to
     /// <see cref="JobStatus.Failed"/>. A faulty listener auto-disconnects;
     /// other listeners and the session continue unaffected.
@@ -165,7 +165,7 @@ internal sealed class ListenerSlot : IDisposable
     /// its cleanup callback, even when a previous callback threw.
     /// </para>
     /// </summary>
-    private void RunLoop(CancellationToken ct)
+    private void _RunLoop(CancellationToken ct)
     {
         try
         {
@@ -174,7 +174,7 @@ internal sealed class ListenerSlot : IDisposable
                 int flags = Interlocked.Exchange(ref Flags, 0);
                 if (flags != 0)
                 {
-                    DispatchFlags((NotifyFlags)flags);
+                    _DispatchFlags((NotifyFlags)flags);
                     continue;
                 }
 
@@ -183,7 +183,7 @@ internal sealed class ListenerSlot : IDisposable
                 flags = Interlocked.Exchange(ref Flags, 0);
                 if (flags != 0)
                 {
-                    DispatchFlags((NotifyFlags)flags);
+                    _DispatchFlags((NotifyFlags)flags);
                     continue;
                 }
 
@@ -193,7 +193,7 @@ internal sealed class ListenerSlot : IDisposable
             int remaining = Interlocked.Exchange(ref Flags, 0);
             if (remaining != 0)
             {
-                DispatchFlags((NotifyFlags)remaining);
+                _DispatchFlags((NotifyFlags)remaining);
             }
         }
         finally
@@ -211,11 +211,11 @@ internal sealed class ListenerSlot : IDisposable
     ///
     /// <para>
     /// Exceptions are not caught — a faulty listener callback propagates through
-    /// <see cref="RunLoop"/> to <see cref="Job.RunCore"/>, which stores the exception
+    /// <see cref="_RunLoop"/> to <see cref="Job._RunCore"/>, which stores the exception
     /// in <see cref="Job.FailureException"/> and transitions the job to Failed.
     /// </para>
     /// </summary>
-    private void DispatchFlags(NotifyFlags notify)
+    private void _DispatchFlags(NotifyFlags notify)
     {
         // ── Stack swap (must precede Packets so cursor reset takes effect) ───
         if ((notify & NotifyFlags.StackChanged) != 0)

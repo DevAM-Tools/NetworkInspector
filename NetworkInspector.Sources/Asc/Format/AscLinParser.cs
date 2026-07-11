@@ -17,13 +17,13 @@ internal static class AscLinParser
     #region Constants
 
     /// <summary>DLT_LIN header: [pid(1) | length(1)].</summary>
-    private const int DltLinHeaderSize = 2;
+    private const int _DltLinHeaderSize = 2;
 
     /// <summary>DLT_LIN trailer: [checksum(1) | errors(1)].</summary>
-    private const int DltLinTrailerSize = 2;
+    private const int _DltLinTrailerSize = 2;
 
     /// <summary>Maximum LIN data length.</summary>
-    private const int MaxLinDataLength = 8;
+    private const int _MaxLinDataLength = 8;
 
     #endregion
 
@@ -90,7 +90,7 @@ internal static class AscLinParser
         }
 
         ReadOnlySpan<char> dlcToken;
-        if (IsLikelyLinDirectionToken(dirOrDlcToken))
+        if (_IsLikelyLinDirectionToken(dirOrDlcToken))
         {
             if (!tokenizer.TryNextToken(out dlcToken))
             {
@@ -107,10 +107,10 @@ internal static class AscLinParser
             return false;
         }
 
-        int dataLength = Math.Min(dlc, MaxLinDataLength);
+        int dataLength = Math.Min(dlc, _MaxLinDataLength);
 
         // Parse data bytes
-        Span<byte> dataBytes = stackalloc byte[MaxLinDataLength];
+        Span<byte> dataBytes = stackalloc byte[_MaxLinDataLength];
         dataBytes.Clear();
         int parsedCount = 0;
 
@@ -163,17 +163,17 @@ internal static class AscLinParser
         byte pid = ComputePid(frameId);
 
         // Build DLT_LIN frame: [pid(1) | length(1) | data(0-8) | checksum(1) | errors(1)]
-        frame = new byte[DltLinHeaderSize + parsedCount + DltLinTrailerSize];
+        frame = new byte[_DltLinHeaderSize + parsedCount + _DltLinTrailerSize];
         frame[0] = pid;
         frame[1] = (byte)parsedCount;
 
         if (parsedCount > 0)
         {
-            dataBytes[..parsedCount].CopyTo(frame.AsSpan(DltLinHeaderSize));
+            dataBytes[..parsedCount].CopyTo(frame.AsSpan(_DltLinHeaderSize));
         }
 
-        frame[DltLinHeaderSize + parsedCount] = checksum;
-        frame[DltLinHeaderSize + parsedCount + 1] = 0; // no errors
+        frame[_DltLinHeaderSize + parsedCount] = checksum;
+        frame[_DltLinHeaderSize + parsedCount + 1] = 0; // no errors
 
         return true;
     }
@@ -182,7 +182,7 @@ internal static class AscLinParser
 
     #region Helpers
 
-    private static bool IsLikelyLinDirectionToken(ReadOnlySpan<char> token) =>
+    private static bool _IsLikelyLinDirectionToken(ReadOnlySpan<char> token) =>
         token.Equals("Tx", StringComparison.OrdinalIgnoreCase)
         || token.Equals("Rx", StringComparison.OrdinalIgnoreCase)
         || token.Equals("Slave", StringComparison.OrdinalIgnoreCase)
@@ -202,13 +202,13 @@ internal static class AscLinParser
         return (byte)(frameId | (p0 << 6) | (p1 << 7));
     }
 
-    private static bool IsLikelyLinDirectionToken(ReadOnlySpan<byte> token) =>
-        AscLinDirectionBytesEqual(token, "Tx"u8)
-        || AscLinDirectionBytesEqual(token, "Rx"u8)
-        || AscLinDirectionBytesEqual(token, "Slave"u8)
-        || AscLinDirectionBytesEqual(token, "Master"u8);
+    private static bool _IsLikelyLinDirectionToken(ReadOnlySpan<byte> token) =>
+        _AscLinDirectionBytesEqual(token, "Tx"u8)
+        || _AscLinDirectionBytesEqual(token, "Rx"u8)
+        || _AscLinDirectionBytesEqual(token, "Slave"u8)
+        || _AscLinDirectionBytesEqual(token, "Master"u8);
 
-    private static bool AscLinDirectionBytesEqual(ReadOnlySpan<byte> token, ReadOnlySpan<byte> ascii) =>
+    private static bool _AscLinDirectionBytesEqual(ReadOnlySpan<byte> token, ReadOnlySpan<byte> ascii) =>
         token.Length == ascii.Length && AscLineClassifier.StartsWithAsciiIgnoreCase(token, ascii);
 
     #endregion
@@ -285,7 +285,7 @@ internal static class AscLinParser
         }
 
         ReadOnlySpan<byte> dlcTokenBytes;
-        if (IsLikelyLinDirectionToken(dirOrDlcToken))
+        if (_IsLikelyLinDirectionToken(dirOrDlcToken))
         {
             if (!tokenizer.TryNextToken(out dlcTokenBytes))
             {
@@ -302,9 +302,9 @@ internal static class AscLinParser
             return false;
         }
 
-        int dataLength = Math.Min(dlc, MaxLinDataLength);
+        int dataLength = Math.Min(dlc, _MaxLinDataLength);
 
-        Span<byte> dataBytes = stackalloc byte[MaxLinDataLength];
+        Span<byte> dataBytes = stackalloc byte[_MaxLinDataLength];
         dataBytes.Clear();
         int parsedCount = 0;
 
@@ -315,7 +315,7 @@ internal static class AscLinParser
                 break;
             }
 
-            if (dataToken.Length > 2 && IsAsciiLetter(dataToken[0]))
+            if (dataToken.Length > 2 && _IsAsciiLetter(dataToken[0]))
             {
                 break;
             }
@@ -334,7 +334,7 @@ internal static class AscLinParser
         // Extract checksum from remaining bytes
         byte checksum = 0;
         ReadOnlySpan<byte> remaining = tokenizer.Remaining;
-        int csIdx = IndexOfAsciiIgnoreCase(remaining, "checksum"u8);
+        int csIdx = _IndexOfAsciiIgnoreCase(remaining, "checksum"u8);
         if (csIdx >= 0)
         {
             ReadOnlySpan<byte> afterCs = AscTokenizerBytes.TrimStartAscii(remaining[(csIdx + 8)..]);
@@ -370,26 +370,26 @@ internal static class AscLinParser
 
         byte pid = ComputePid(frameId);
 
-        frame = new byte[DltLinHeaderSize + parsedCount + DltLinTrailerSize];
+        frame = new byte[_DltLinHeaderSize + parsedCount + _DltLinTrailerSize];
         frame[0] = pid;
         frame[1] = (byte)parsedCount;
 
         if (parsedCount > 0)
         {
-            dataBytes[..parsedCount].CopyTo(frame.AsSpan(DltLinHeaderSize));
+            dataBytes[..parsedCount].CopyTo(frame.AsSpan(_DltLinHeaderSize));
         }
 
-        frame[DltLinHeaderSize + parsedCount] = checksum;
-        frame[DltLinHeaderSize + parsedCount + 1] = 0;
+        frame[_DltLinHeaderSize + parsedCount] = checksum;
+        frame[_DltLinHeaderSize + parsedCount + 1] = 0;
 
         return true;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static bool IsAsciiLetter(byte b) =>
+    private static bool _IsAsciiLetter(byte b) =>
         (b >= (byte)'A' && b <= (byte)'Z') || (b >= (byte)'a' && b <= (byte)'z');
 
-    private static int IndexOfAsciiIgnoreCase(ReadOnlySpan<byte> haystack, ReadOnlySpan<byte> needle)
+    private static int _IndexOfAsciiIgnoreCase(ReadOnlySpan<byte> haystack, ReadOnlySpan<byte> needle)
     {
         if (needle.IsEmpty || haystack.Length < needle.Length)
         {

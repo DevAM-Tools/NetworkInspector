@@ -45,7 +45,7 @@ internal static class IpAddressExtractor
 
             if (fid == ipContainerFieldId && ipContainerFieldId.IsValid)
             {
-                ipv4 = TryExtractIPv4ChildAddresses(current, ipSrcFieldId, ipDstFieldId);
+                ipv4 = _TryExtractIPv4ChildAddresses(current, ipSrcFieldId, ipDstFieldId);
                 if (ipv4.HasValue)
                 {
                     return true;
@@ -54,7 +54,7 @@ internal static class IpAddressExtractor
 
             if (fid == ipv6ContainerFieldId && ipv6ContainerFieldId.IsValid)
             {
-                ipv6 = TryExtractIPv6ChildAddresses(current, ipv6SrcFieldId, ipv6DstFieldId);
+                ipv6 = _TryExtractIPv6ChildAddresses(current, ipv6SrcFieldId, ipv6DstFieldId);
                 if (ipv6.HasValue)
                 {
                     return true;
@@ -71,7 +71,7 @@ internal static class IpAddressExtractor
     /// children of an IPv4 container field. Uses <c>materialize: false</c> to
     /// avoid triggering lazy field population.
     /// </summary>
-    private static (IPv4Address Src, IPv4Address Dst)? TryExtractIPv4ChildAddresses(
+    private static (IPv4Address Src, IPv4Address Dst)? _TryExtractIPv4ChildAddresses(
         Field container, FieldId srcFieldId, FieldId dstFieldId)
     {
         IPv4Address src = default;
@@ -106,7 +106,7 @@ internal static class IpAddressExtractor
     /// children of an IPv6 container field. Uses <c>materialize: false</c> to
     /// avoid triggering lazy field population.
     /// </summary>
-    private static (IPv6Address Src, IPv6Address Dst)? TryExtractIPv6ChildAddresses(
+    private static (IPv6Address Src, IPv6Address Dst)? _TryExtractIPv6ChildAddresses(
         Field container, FieldId srcFieldId, FieldId dstFieldId)
     {
         IPv6Address src = default;

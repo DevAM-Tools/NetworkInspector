@@ -61,7 +61,7 @@ public readonly struct PacketId(int value) : IEquatable<PacketId>, IComparable<P
     public override bool Equals(object? obj) => obj is PacketId other && Equals(other);
 
     /// <inheritdoc/>
-    public override string ToString() => _Value.ToString();
+    public override string ToString() => _Value.ToString(CultureInfo.InvariantCulture);
 
     #endregion
 

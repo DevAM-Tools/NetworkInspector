@@ -40,79 +40,79 @@ public sealed partial class ArpProtocol : IProtocol
     /// hardware and protocol addresses (HTYPE+PTYPE+HLEN+PLEN+OPER = 8 bytes).
     /// Total size = 8 + 2*hwSize + 2*protoSize.
     /// </summary>
-    private const int MinHeaderSize = 8;
+    private const int _MinHeaderSize = 8;
 
     /// <summary>Hardware address size for Ethernet (6 bytes = MAC address).</summary>
-    private const byte EthernetHwSize = 6;
+    private const byte _EthernetHwSize = 6;
 
     /// <summary>Protocol address size for IPv4 (4 bytes).</summary>
-    private const byte IPv4ProtoSize = 4;
+    private const byte _IPv4ProtoSize = 4;
 
     /// <summary>Index group for all ARP fields (always present).</summary>
-    private const string ArpIndexGroup = "arp";
+    private const string _ArpIndexGroup = "arp";
 
     /// <summary>ARP opcode for Request.</summary>
-    private const ushort OpcodeRequest = 1;
+    private const ushort _OpcodeRequest = 1;
 
     /// <summary>ARP opcode for Reply.</summary>
-    private const ushort OpcodeReply = 2;
+    private const ushort _OpcodeReply = 2;
 
     #endregion
 
     #region Fields
 
-    [BytesField("arp", "ARP", IndexGroup = ArpIndexGroup)]
+    [BytesField("arp", "ARP", IndexGroup = _ArpIndexGroup)]
     private FieldId _ProtocolFieldId;
 
-    [U64Field("arp.hw.type", "Hardware type", IndexGroup = ArpIndexGroup)]
+    [U64Field("arp.hw.type", "Hardware type", IndexGroup = _ArpIndexGroup)]
     private FieldId _HwTypeFieldId;
 
-    [U64Field("arp.proto.type", "Protocol type", IndexGroup = ArpIndexGroup)]
+    [U64Field("arp.proto.type", "Protocol type", IndexGroup = _ArpIndexGroup)]
     private FieldId _ProtoTypeFieldId;
 
-    [U64Field("arp.hw.size", "Hardware size", IndexGroup = ArpIndexGroup)]
+    [U64Field("arp.hw.size", "Hardware size", IndexGroup = _ArpIndexGroup)]
     private FieldId _HwSizeFieldId;
 
-    [U64Field("arp.proto.size", "Protocol size", IndexGroup = ArpIndexGroup)]
+    [U64Field("arp.proto.size", "Protocol size", IndexGroup = _ArpIndexGroup)]
     private FieldId _ProtoSizeFieldId;
 
-    [U64Field("arp.opcode", "Opcode", IndexGroup = ArpIndexGroup)]
+    [U64Field("arp.opcode", "Opcode", IndexGroup = _ArpIndexGroup)]
     private FieldId _OpcodeFieldId;
 
-    [MacField("arp.src.hw_mac", "Sender MAC address", IndexGroup = ArpIndexGroup)]
+    [MacField("arp.src.hw_mac", "Sender MAC address", IndexGroup = _ArpIndexGroup)]
     private FieldId _SrcHwMacFieldId;
 
     /// <summary>Raw sender hardware address when <c>arp.hw.size</c> != 6.</summary>
-    [BytesField("arp.src.hw_raw", "Sender hardware address (raw)", IndexGroup = ArpIndexGroup)]
+    [BytesField("arp.src.hw_raw", "Sender hardware address (raw)", IndexGroup = _ArpIndexGroup)]
     private FieldId _SrcHwRawFieldId;
 
-    [IPv4Field("arp.src.proto_ipv4", "Sender IP address", IndexGroup = ArpIndexGroup)]
+    [IPv4Field("arp.src.proto_ipv4", "Sender IP address", IndexGroup = _ArpIndexGroup)]
     private FieldId _SrcProtoIpv4FieldId;
 
     /// <summary>Raw sender protocol address when <c>arp.proto.size</c> != 4.</summary>
-    [BytesField("arp.src.proto_raw", "Sender protocol address (raw)", IndexGroup = ArpIndexGroup)]
+    [BytesField("arp.src.proto_raw", "Sender protocol address (raw)", IndexGroup = _ArpIndexGroup)]
     private FieldId _SrcProtoRawFieldId;
 
-    [MacField("arp.dst.hw_mac", "Target MAC address", IndexGroup = ArpIndexGroup)]
+    [MacField("arp.dst.hw_mac", "Target MAC address", IndexGroup = _ArpIndexGroup)]
     private FieldId _DstHwMacFieldId;
 
     /// <summary>Raw target hardware address when <c>arp.hw.size</c> != 6.</summary>
-    [BytesField("arp.dst.hw_raw", "Target hardware address (raw)", IndexGroup = ArpIndexGroup)]
+    [BytesField("arp.dst.hw_raw", "Target hardware address (raw)", IndexGroup = _ArpIndexGroup)]
     private FieldId _DstHwRawFieldId;
 
-    [IPv4Field("arp.dst.proto_ipv4", "Target IP address", IndexGroup = ArpIndexGroup)]
+    [IPv4Field("arp.dst.proto_ipv4", "Target IP address", IndexGroup = _ArpIndexGroup)]
     private FieldId _DstProtoIpv4FieldId;
 
     /// <summary>Raw target protocol address when <c>arp.proto.size</c> != 4.</summary>
-    [BytesField("arp.dst.proto_raw", "Target protocol address (raw)", IndexGroup = ArpIndexGroup)]
+    [BytesField("arp.dst.proto_raw", "Target protocol address (raw)", IndexGroup = _ArpIndexGroup)]
     private FieldId _DstProtoRawFieldId;
 
     // Gratuitous ARP: sender IP == target IP (used for address announcement or duplicate detection)
-    [BoolField("arp.isgratuitous", "Is gratuitous", IndexGroup = ArpIndexGroup)]
+    [BoolField("arp.isgratuitous", "Is gratuitous", IndexGroup = _ArpIndexGroup)]
     private FieldId _IsGratuitousFieldId;
 
     // ARP probe: sender IP is 0.0.0.0 (RFC 5227 — address conflict detection)
-    [BoolField("arp.isprobe", "Is probe", IndexGroup = ArpIndexGroup)]
+    [BoolField("arp.isprobe", "Is probe", IndexGroup = _ArpIndexGroup)]
     private FieldId _IsProbeFieldId;
 
     /// <summary>
@@ -128,9 +128,9 @@ public sealed partial class ArpProtocol : IProtocol
     /// <returns>Number of bytes consumed, or a <see cref="ParseError"/> describing the failure.</returns>
     public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
     {
-        if (data.Length < MinHeaderSize)
+        if (data.Length < _MinHeaderSize)
         {
-            return ParseError.InsufficientDataWithInfo(ProtocolName, MinHeaderSize, (ulong)data.Length);
+            return ParseError.InsufficientDataWithInfo(ProtocolName, _MinHeaderSize, (ulong)data.Length);
         }
 
         ReadOnlySpan<byte> span = data.Span;
@@ -144,14 +144,14 @@ public sealed partial class ArpProtocol : IProtocol
 
         // Compute and validate the total header size based on the declared address lengths.
         // ARP variable-length layout: 8 + hwSize + protoSize + hwSize + protoSize
-        int totalSize = MinHeaderSize + 2 * hwSize + 2 * protoSize;
+        int totalSize = _MinHeaderSize + 2 * hwSize + 2 * protoSize;
         if (data.Length < totalSize)
         {
             return ParseError.InsufficientDataWithInfo(ProtocolName, (ulong)totalSize, (ulong)data.Length);
         }
 
         // Read sender and target addresses at variable offsets
-        int senderHwOffset = MinHeaderSize;
+        int senderHwOffset = _MinHeaderSize;
         int senderProtoOffset = senderHwOffset + hwSize;
         int targetHwOffset = senderProtoOffset + protoSize;
         int targetProtoOffset = targetHwOffset + hwSize;
@@ -162,19 +162,19 @@ public sealed partial class ArpProtocol : IProtocol
         ReadOnlySpan<byte> targetProtoSpan = span.Slice(targetProtoOffset, protoSize);
 
         // Build typed address values (MAC/IPv4 for standard sizes, raw bytes otherwise)
-        MacAddress senderMac = hwSize == EthernetHwSize ? MacAddress.FromBytes(senderHwSpan) : default;
-        MacAddress targetMac = hwSize == EthernetHwSize ? MacAddress.FromBytes(targetHwSpan) : default;
-        IPv4Address senderIp = protoSize == IPv4ProtoSize
+        MacAddress senderMac = hwSize == _EthernetHwSize ? MacAddress.FromBytes(senderHwSpan) : default;
+        MacAddress targetMac = hwSize == _EthernetHwSize ? MacAddress.FromBytes(targetHwSpan) : default;
+        IPv4Address senderIp = protoSize == _IPv4ProtoSize
             ? new IPv4Address(BinaryPrimitives.ReadUInt32BigEndian(senderProtoSpan)) : default;
-        IPv4Address targetIp = protoSize == IPv4ProtoSize
+        IPv4Address targetIp = protoSize == _IPv4ProtoSize
             ? new IPv4Address(BinaryPrimitives.ReadUInt32BigEndian(targetProtoSpan)) : default;
 
         // Build summary text based on opcode (only for standard Ethernet/IPv4 ARP)
-        bool isStandardArp = hwSize == EthernetHwSize && protoSize == IPv4ProtoSize;
+        bool isStandardArp = hwSize == _EthernetHwSize && protoSize == _IPv4ProtoSize;
         LazyString summary = isStandardArp
-            ? opcode == OpcodeRequest
+            ? opcode == _OpcodeRequest
                 ? ZA.Lazy("Address Resolution Protocol (request), Who has ", targetIp, "? Tell ", senderIp)
-                : opcode == OpcodeReply
+                : opcode == _OpcodeReply
                     ? ZA.Lazy("Address Resolution Protocol (reply), ", senderIp, " is at ", senderMac)
                     : ZA.Lazy("Address Resolution Protocol (opcode ", DisplayTables.GetArpOpcodeDisplayText(opcode), ")")
             : ZA.Lazy("Address Resolution Protocol (opcode ", DisplayTables.GetArpOpcodeDisplayText(opcode), ")");
@@ -182,11 +182,11 @@ public sealed partial class ArpProtocol : IProtocol
         // Set packet info for the info column (standard ARP only)
         if (isStandardArp)
         {
-            if (opcode == OpcodeRequest)
+            if (opcode == _OpcodeRequest)
             {
                 parentField.SetPacketInfo(ZA.Lazy("Who has ", targetIp, "? Tell ", senderIp));
             }
-            else if (opcode == OpcodeReply)
+            else if (opcode == _OpcodeReply)
             {
                 parentField.SetPacketInfo(ZA.Lazy(senderIp, " is at ", senderMac));
             }
@@ -211,7 +211,7 @@ public sealed partial class ArpProtocol : IProtocol
             DisplayTables.GetArpOpcodeDisplayText(opcode));
 
         // Sender hardware address
-        if (hwSize == EthernetHwSize)
+        if (hwSize == _EthernetHwSize)
         {
             container.Append(_SrcHwMacFieldId, FieldValue.NewMacAddress(senderMac));
         }
@@ -221,7 +221,7 @@ public sealed partial class ArpProtocol : IProtocol
         }
 
         // Sender protocol address
-        if (protoSize == IPv4ProtoSize)
+        if (protoSize == _IPv4ProtoSize)
         {
             container.Append(_SrcProtoIpv4FieldId, FieldValue.NewIPv4(senderIp));
         }
@@ -231,7 +231,7 @@ public sealed partial class ArpProtocol : IProtocol
         }
 
         // Target hardware address
-        if (hwSize == EthernetHwSize)
+        if (hwSize == _EthernetHwSize)
         {
             container.Append(_DstHwMacFieldId, FieldValue.NewMacAddress(targetMac));
         }
@@ -241,7 +241,7 @@ public sealed partial class ArpProtocol : IProtocol
         }
 
         // Target protocol address
-        if (protoSize == IPv4ProtoSize)
+        if (protoSize == _IPv4ProtoSize)
         {
             container.Append(_DstProtoIpv4FieldId, FieldValue.NewIPv4(targetIp));
         }

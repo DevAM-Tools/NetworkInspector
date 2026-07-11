@@ -25,7 +25,7 @@ namespace NetworkInspector.Protocols;
 /// </summary>
 /// <remarks>
 /// <para><b>Thread safety:</b> instances are immutable after registration completes.
-/// All mutable state is initialised inside <c>RegisterFieldsCustom</c> / <c>OnStartCustom</c>
+/// All mutable state is initialised inside <c>RegisterFieldsCustom</c> / <c>_OnStartCustom</c>
 /// (single-threaded build phase) and is read-only thereafter, so <see cref="Parse"/> may
 /// be invoked concurrently from any number of threads on the same instance without external
 /// synchronisation. Per-thread caches (when present) are stored in <c>[ThreadStatic]</c> fields.</para>
@@ -40,43 +40,43 @@ public sealed partial class IcmpProtocol : IProtocol
     public const ulong IpProtoKey = 1;
 
     /// <summary>ICMP header size in bytes (always 8).</summary>
-    private const int HeaderSize = 8;
+    private const int _HeaderSize = 8;
 
     /// <summary>Index group for always-present ICMP fields.</summary>
-    private const string IcmpIndexGroup = "icmp";
+    private const string _IcmpIndexGroup = "icmp";
 
     /// <summary>ICMP type: Echo Reply.</summary>
-    private const byte TypeEchoReply = 0;
+    private const byte _TypeEchoReply = 0;
 
     /// <summary>ICMP type: Echo Request.</summary>
-    private const byte TypeEchoRequest = 8;
+    private const byte _TypeEchoRequest = 8;
 
     /// <summary>ICMP type: Destination Unreachable.</summary>
-    private const byte TypeDestUnreach = 3;
+    private const byte _TypeDestUnreach = 3;
 
     /// <summary>ICMP type: Redirect.</summary>
-    private const byte TypeRedirect = 5;
+    private const byte _TypeRedirect = 5;
 
     /// <summary>ICMP type: Time Exceeded.</summary>
-    private const byte TypeTimeExceeded = 11;
+    private const byte _TypeTimeExceeded = 11;
 
     /// <summary>ICMP type: Parameter Problem.</summary>
-    private const byte TypeParamProblem = 12;
+    private const byte _TypeParamProblem = 12;
 
     #endregion
 
     #region Fields
 
-    [BytesField("icmp", "ICMP", IndexGroup = IcmpIndexGroup)]
+    [BytesField("icmp", "ICMP", IndexGroup = _IcmpIndexGroup)]
     private FieldId _ProtocolFieldId;
 
-    [U64Field("icmp.type", "Type", IndexGroup = IcmpIndexGroup)]
+    [U64Field("icmp.type", "Type", IndexGroup = _IcmpIndexGroup)]
     private FieldId _TypeFieldId;
 
-    [U64Field("icmp.code", "Code", IndexGroup = IcmpIndexGroup)]
+    [U64Field("icmp.code", "Code", IndexGroup = _IcmpIndexGroup)]
     private FieldId _CodeFieldId;
 
-    [U64Field("icmp.checksum", "Checksum", IndexGroup = IcmpIndexGroup)]
+    [U64Field("icmp.checksum", "Checksum", IndexGroup = _IcmpIndexGroup)]
     private FieldId _ChecksumFieldId;
 
     // Optional: checksum validation status
@@ -124,21 +124,21 @@ public sealed partial class IcmpProtocol : IProtocol
     // Pre-allocated populator delegate
     private LazyPopulator _Populator = null!;
 
-    partial void OnStartCustom(Stack stack) =>
-        _Populator = PopulateIcmpFields;
+    partial void _OnStartCustom(Stack stack) =>
+        _Populator = _PopulateIcmpFields;
 
     /// <summary>
     /// Populates ICMP child fields lazily from stored datagram bytes.
     /// </summary>
-    private ParseResult PopulateIcmpFields(in MutField container)
+    private ParseResult _PopulateIcmpFields(in MutField container)
     {
         if (!container.Value.Data.TryGetAsBytes(out ReadOnlyMemory<byte> icmpData))
         {
             return ParseError.InvalidData(ProtocolName, "Container value is not of type Bytes");
         }
-        if (icmpData.Length < HeaderSize)
+        if (icmpData.Length < _HeaderSize)
         {
-            return ParseError.InsufficientDataWithInfo(ProtocolName, HeaderSize, (ulong)icmpData.Length);
+            return ParseError.InsufficientDataWithInfo(ProtocolName, _HeaderSize, (ulong)icmpData.Length);
         }
 
         ReadOnlySpan<byte> span = icmpData.Span;
@@ -169,7 +169,7 @@ public sealed partial class IcmpProtocol : IProtocol
         }
 
         // Echo Request/Reply: identifier and sequence number
-        bool isEcho = type == TypeEchoRequest || type == TypeEchoReply;
+        bool isEcho = type == _TypeEchoRequest || type == _TypeEchoReply;
         if (isEcho)
         {
             ushort ident = BinaryPrimitives.ReadUInt16BigEndian(span[4..6]);
@@ -183,24 +183,24 @@ public sealed partial class IcmpProtocol : IProtocol
         }
 
         // Redirect (type 5): Gateway IP address at bytes 4-7
-        if (type == TypeRedirect)
+        if (type == _TypeRedirect)
         {
             IPv4Address gateway = new(BinaryPrimitives.ReadUInt32BigEndian(span[4..8]));
             container.Append(_RedirectGwFieldId, FieldValue.NewIPv4(gateway));
         }
 
         // Error messages (types 3, 5, 11, 12): parse embedded IP header after 8-byte ICMP header
-        bool isErrorType = type == TypeDestUnreach || type == TypeRedirect
-            || type == TypeTimeExceeded || type == TypeParamProblem;
-        if (isErrorType && icmpData.Length > HeaderSize)
+        bool isErrorType = type == _TypeDestUnreach || type == _TypeRedirect
+            || type == _TypeTimeExceeded || type == _TypeParamProblem;
+        if (isErrorType && icmpData.Length > _HeaderSize)
         {
-            AppendEmbeddedIpHeader(in container, span[HeaderSize..]);
+            _AppendEmbeddedIpHeader(in container, span[_HeaderSize..]);
         }
 
         // Payload data (bytes after the 8-byte header, for non-error types)
-        if (!isErrorType && icmpData.Length > HeaderSize)
+        if (!isErrorType && icmpData.Length > _HeaderSize)
         {
-            ReadOnlyMemory<byte> payloadData = icmpData[HeaderSize..];
+            ReadOnlyMemory<byte> payloadData = icmpData[_HeaderSize..];
             container.Append(_DataFieldId, FieldValue.NewBytes(payloadData));
         }
 
@@ -212,7 +212,7 @@ public sealed partial class IcmpProtocol : IProtocol
     /// ICMP error types (3, 5, 11, 12) include the original IP header + 8 bytes of the
     /// original datagram payload after the ICMP header.
     /// </summary>
-    private void AppendEmbeddedIpHeader(in MutField container, ReadOnlySpan<byte> embeddedData)
+    private void _AppendEmbeddedIpHeader(in MutField container, ReadOnlySpan<byte> embeddedData)
     {
         // Minimum IPv4 header is 20 bytes
         const int MinIpHeaderSize = 20;
@@ -256,9 +256,9 @@ public sealed partial class IcmpProtocol : IProtocol
     /// <returns>Number of bytes consumed, or a <see cref="ParseError"/> describing the failure.</returns>
     public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
     {
-        if (data.Length < HeaderSize)
+        if (data.Length < _HeaderSize)
         {
-            return ParseError.InsufficientDataWithInfo(ProtocolName, HeaderSize, (ulong)data.Length);
+            return ParseError.InsufficientDataWithInfo(ProtocolName, _HeaderSize, (ulong)data.Length);
         }
 
         context.RecordProtocolPresence(_ProtocolId);
@@ -269,20 +269,20 @@ public sealed partial class IcmpProtocol : IProtocol
         byte code = span[1];
 
         // Record optional index groups
-        bool isEcho = type == TypeEchoRequest || type == TypeEchoReply;
+        bool isEcho = type == _TypeEchoRequest || type == _TypeEchoReply;
         if (isEcho)
         {
             context.RecordGroupPresence(_IcmpEchoGroupId);
         }
 
-        bool isErrorType = type == TypeDestUnreach || type == TypeRedirect
-            || type == TypeTimeExceeded || type == TypeParamProblem;
-        if (isErrorType && data.Length > HeaderSize)
+        bool isErrorType = type == _TypeDestUnreach || type == _TypeRedirect
+            || type == _TypeTimeExceeded || type == _TypeParamProblem;
+        if (isErrorType && data.Length > _HeaderSize)
         {
             context.RecordGroupPresence(_IcmpResp_in_ipGroupId);
         }
 
-        if (type == TypeRedirect)
+        if (type == _TypeRedirect)
         {
             context.RecordGroupPresence(_IcmpRedirectGroupId);
         }
@@ -292,7 +292,7 @@ public sealed partial class IcmpProtocol : IProtocol
             context.RecordGroupPresence(_IcmpChecksumStatusGroupId);
         }
 
-        if (data.Length > HeaderSize)
+        if (data.Length > _HeaderSize)
         {
             context.RecordGroupPresence(_IcmpDataGroupId);
         }

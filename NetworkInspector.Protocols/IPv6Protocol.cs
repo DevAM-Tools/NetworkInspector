@@ -72,7 +72,7 @@ public sealed partial class IPv6Protocol : IProtocol
     #region Index Group Constants
 
     /// <summary>Index group for always-present IPv6 fields.</summary>
-    private const string Ipv6IndexGroup = "ipv6";
+    private const string _Ipv6IndexGroup = "ipv6";
 
     /// <summary>Maximum number of extension headers to walk before giving up (DoS protection).</summary>
     internal const int MaxExtensionHeaders = 16;
@@ -93,40 +93,40 @@ public sealed partial class IPv6Protocol : IProtocol
     #region Fields
 
     // BytesField container carries header byte range for UI highlighting
-    [BytesField("ipv6", "IPv6", IndexGroup = Ipv6IndexGroup)]
+    [BytesField("ipv6", "IPv6", IndexGroup = _Ipv6IndexGroup)]
     private FieldId _ProtocolFieldId;
 
-    [U64Field("ipv6.version", "Version", IndexGroup = Ipv6IndexGroup)]
+    [U64Field("ipv6.version", "Version", IndexGroup = _Ipv6IndexGroup)]
     private FieldId _VersionFieldId;
 
-    [U64Field("ipv6.tclass", "Traffic Class", IndexGroup = Ipv6IndexGroup)]
+    [U64Field("ipv6.tclass", "Traffic Class", IndexGroup = _Ipv6IndexGroup)]
     private FieldId _TclassFieldId;
 
-    [U64Field("ipv6.tclass.dscp", "DSCP", IndexGroup = Ipv6IndexGroup)]
+    [U64Field("ipv6.tclass.dscp", "DSCP", IndexGroup = _Ipv6IndexGroup)]
     private FieldId _DscpFieldId;
 
-    [U64Field("ipv6.tclass.ecn", "ECN", IndexGroup = Ipv6IndexGroup)]
+    [U64Field("ipv6.tclass.ecn", "ECN", IndexGroup = _Ipv6IndexGroup)]
     private FieldId _EcnFieldId;
 
-    [U64Field("ipv6.flow", "Flow Label", IndexGroup = Ipv6IndexGroup)]
+    [U64Field("ipv6.flow", "Flow Label", IndexGroup = _Ipv6IndexGroup)]
     private FieldId _FlowFieldId;
 
-    [U64Field("ipv6.plen", "Payload Length", IndexGroup = Ipv6IndexGroup)]
+    [U64Field("ipv6.plen", "Payload Length", IndexGroup = _Ipv6IndexGroup)]
     private FieldId _PayloadLenFieldId;
 
-    [U64Field("ipv6.nxt", "Next Header", IndexGroup = Ipv6IndexGroup)]
+    [U64Field("ipv6.nxt", "Next Header", IndexGroup = _Ipv6IndexGroup)]
     private FieldId _NextHeaderFieldId;
 
-    [U64Field("ipv6.hlim", "Hop Limit", IndexGroup = Ipv6IndexGroup)]
+    [U64Field("ipv6.hlim", "Hop Limit", IndexGroup = _Ipv6IndexGroup)]
     private FieldId _HopLimitFieldId;
 
-    [IPv6Field("ipv6.src", "Source", IndexGroup = Ipv6IndexGroup)]
+    [IPv6Field("ipv6.src", "Source", IndexGroup = _Ipv6IndexGroup)]
     private FieldId _SrcFieldId;
 
-    [IPv6Field("ipv6.dst", "Destination", IndexGroup = Ipv6IndexGroup)]
+    [IPv6Field("ipv6.dst", "Destination", IndexGroup = _Ipv6IndexGroup)]
     private FieldId _DstFieldId;
 
-    // Field alias group ID assigned in RegisterFieldsCustom for "ipv6.addr" -> { ipv6.src, ipv6.dst }.
+    // Field alias group ID assigned in _RegisterFieldsCustom for "ipv6.addr" -> { ipv6.src, ipv6.dst }.
     // Alias is metadata-only; GetFieldId("ipv6.addr") never resolves and no ipv6.addr node
     // is appended to the parse tree.
     private FieldAliasGroupId _AddrAliasGroupId;
@@ -315,7 +315,7 @@ public sealed partial class IPv6Protocol : IProtocol
 
     #endregion
 
-    #region Pre-allocated populator (created once in OnStartCustom, shared across all packets)
+    #region Pre-allocated populator (created once in _OnStartCustom, shared across all packets)
 
     /// <summary>Pre-allocated delegate for IPv6 field population — captures only 'this'.</summary>
     private LazyPopulator _Populator = null!;
@@ -325,7 +325,7 @@ public sealed partial class IPv6Protocol : IProtocol
     // lookup per packet. Pre-bound delegates for direct invocation without vtable dispatch.
     private ParseDelegate?[] _IpProtoDelegateCache = [];
 
-    // Pre-allocated extension header field IDs struct, built once in OnStartCustom.
+    // Pre-allocated extension header field IDs struct, built once in _OnStartCustom.
     private ExtHeaderFieldIds _ExtHeaderFieldIds;
 
     // IPv6 fragment reassembly engine — keyed by (src, dst, identification).
@@ -336,10 +336,10 @@ public sealed partial class IPv6Protocol : IProtocol
     /// Pre-allocates the lazy-field populator delegate and builds the next-header dispatch cache.
     /// Neither allocation occurs per packet — both are one-time costs at stack start.
     /// </summary>
-    partial void OnStartCustom(Stack stack)
+    partial void _OnStartCustom(Stack stack)
     {
-        _Populator = PopulateIPv6;
-        _ExtHeaderFieldIds = BuildExtHeaderFieldIds();
+        _Populator = _PopulateIPv6;
+        _ExtHeaderFieldIds = _BuildExtHeaderFieldIds();
         // IPv6 next-header is also an 8-bit IP protocol number; share the same ip.proto table.
         // Delegate cache stores pre-bound ParseDelegate for direct invocation.
         _IpProtoDelegateCache = stack.BuildU64DelegateCache(_IpProtoTableId, 256);
@@ -349,7 +349,7 @@ public sealed partial class IPv6Protocol : IProtocol
     /// Registers protocol-owned alias groups. Adds "ipv6.addr" -> { ipv6.src, ipv6.dst }
     /// as metadata; the alias is reachable only via the alias-group APIs on IStack.
     /// </summary>
-    partial void RegisterFieldsCustom(IStackBuilder builder, ProtocolId protocolId)
+    partial void _RegisterFieldsCustom(IStackBuilder builder, ProtocolId protocolId)
     {
         _AddrAliasGroupId = builder.RegisterFieldAliasGroup(
             protocolId,
@@ -367,7 +367,7 @@ public sealed partial class IPv6Protocol : IProtocol
     /// bytes to avoid per-packet closure allocations. Called on first access of the
     /// IPv6 container's children.
     /// </summary>
-    private ParseResult PopulateIPv6(in MutField container)
+    private ParseResult _PopulateIPv6(in MutField container)
     {
         if (!container.Value.Data.TryGetAsBytes(out ReadOnlyMemory<byte> data))
         {
@@ -411,7 +411,7 @@ public sealed partial class IPv6Protocol : IProtocol
             IPv6ExtensionHeaderParser.Parse(container, extData, nextHeader, in _ExtHeaderFieldIds);
         }
 
-        // ipv6.addr is exposed as an alias group registered in RegisterFieldsCustom;
+        // ipv6.addr is exposed as an alias group registered in _RegisterFieldsCustom;
         // no duplicate ipv6.addr field node is appended to the parse tree.
 
         return 0;
@@ -604,7 +604,7 @@ public sealed partial class IPv6Protocol : IProtocol
         // Eagerly append src/dst as non-lazy children so downstream protocols
         // (e.g., UDP/TCP) can read IPv6 addresses from the tree without materializing.
         // The any-match name "ipv6.addr" is exposed via the alias group registered in
-        // RegisterFieldsCustom; no duplicate field node is appended.
+        // _RegisterFieldsCustom; no duplicate field node is appended.
         protoField.Append(_SrcFieldId, FieldValue.NewIPv6(src));
         protoField.Append(_DstFieldId, FieldValue.NewIPv6(dst));
 
@@ -640,7 +640,7 @@ public sealed partial class IPv6Protocol : IProtocol
                     {
                         // All fragments received — dispatch the reassembled datagram
                         ReadOnlyMemory<byte> reassembledPayload = reassembled;
-                        ParseResult dispatchResult = DispatchNextHeader(
+                        ParseResult dispatchResult = _DispatchNextHeader(
                             in parentField, finalNextHeader, reassembledPayload, in context);
                         if (dispatchResult.IsError)
                         {
@@ -653,7 +653,7 @@ public sealed partial class IPv6Protocol : IProtocol
                 {
                     // unfragmented packet that happens to have a fragment header (offset=0, MF=0)
                     ReadOnlyMemory<byte> payload = data.Slice(payloadStart, payloadLen);
-                    ParseResult dispatchResult = DispatchNextHeader(
+                    ParseResult dispatchResult = _DispatchNextHeader(
                         in parentField, finalNextHeader, payload, in context);
                     if (dispatchResult.IsError)
                     {
@@ -665,7 +665,7 @@ public sealed partial class IPv6Protocol : IProtocol
             {
                 // No fragment header — dispatch directly
                 ReadOnlyMemory<byte> payload = data.Slice(payloadStart, payloadLen);
-                ParseResult dispatchResult = DispatchNextHeader(in parentField, finalNextHeader, payload, in context);
+                ParseResult dispatchResult = _DispatchNextHeader(in parentField, finalNextHeader, payload, in context);
                 if (dispatchResult.IsError)
                 {
                     return dispatchResult;
@@ -682,7 +682,7 @@ public sealed partial class IPv6Protocol : IProtocol
     /// Uses the pre-cached delegate for the common single-protocol case (O(1) array lookup);
     /// falls back to full table dispatch for multi-protocol keys or entries outside the cache.
     /// </summary>
-    private ParseResult DispatchNextHeader(
+    private ParseResult _DispatchNextHeader(
         in MutField parentField, byte nextHeader, ReadOnlyMemory<byte> payload, in ParseContext context)
     {
         // _IpProtoDelegateCache has 256 entries after OnStart; non-null means single registered protocol.
@@ -927,7 +927,7 @@ public sealed partial class IPv6Protocol : IProtocol
     }
 
     /// <summary>Builds the <see cref="ExtHeaderFieldIds"/> struct from the protocol's registered fields.</summary>
-    private ExtHeaderFieldIds BuildExtHeaderFieldIds() => new()
+    private ExtHeaderFieldIds _BuildExtHeaderFieldIds() => new()
     {
         HopoptsFieldId = _HopoptsFieldId,
         HopoptsNxtFieldId = _HopoptsNxtFieldId,

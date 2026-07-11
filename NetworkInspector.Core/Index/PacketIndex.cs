@@ -43,13 +43,13 @@ public sealed class PacketIndex : IPacketIndexReader
         _GroupBitmaps = new RoaringBitmap[groupCount];
         for (int i = 0; i < groupCount; i++)
         {
-            _GroupBitmaps[i] = new RoaringBitmap();
+            _GroupBitmaps[i] = new();
         }
 
         _ProtocolBitmaps = new RoaringBitmap[protoCount];
         for (int i = 0; i < protoCount; i++)
         {
-            _ProtocolBitmaps[i] = new RoaringBitmap();
+            _ProtocolBitmaps[i] = new();
         }
 
         _GroupDedup = new ulong[(groupCount + 63) >> 6];
@@ -129,13 +129,13 @@ public sealed class PacketIndex : IPacketIndexReader
         // Without this check, (uint)(-1) = 4294967295 would be silently inserted into bitmaps.
         if (_CurrentPacketId < 0)
         {
-            ThrowNoActivePacket();
+            _ThrowNoActivePacket();
         }
 
         int id = groupId.Value;
         if ((uint)id >= (uint)_GroupBitmaps.Length)
         {
-            ThrowGroupIdOutOfRange(id);
+            _ThrowGroupIdOutOfRange(id);
         }
         int word = id >> 6;
         ulong bit = 1UL << (id & 63);
@@ -167,13 +167,13 @@ public sealed class PacketIndex : IPacketIndexReader
         // Guard against off-lifecycle calls: same rationale as RecordGroupPresence.
         if (_CurrentPacketId < 0)
         {
-            ThrowNoActivePacket();
+            _ThrowNoActivePacket();
         }
 
         int id = protocolId.Value;
         if ((uint)id >= (uint)_ProtocolBitmaps.Length)
         {
-            ThrowProtocolIdOutOfRange(id);
+            _ThrowProtocolIdOutOfRange(id);
         }
         int word = id >> 6;
         ulong bit = 1UL << (id & 63);
@@ -190,13 +190,13 @@ public sealed class PacketIndex : IPacketIndexReader
 
     /// <summary>Cold-path helper: throws <see cref="InvalidOperationException"/> when a record method is called outside a Begin/EndPacket pair.</summary>
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private static void ThrowNoActivePacket() =>
+    private static void _ThrowNoActivePacket() =>
         throw new InvalidOperationException(
             "RecordGroupPresence/RecordProtocolPresence must be called between BeginPacket and EndPacket.");
 
     /// <summary>Cold-path helper: throws a descriptive <see cref="ArgumentOutOfRangeException"/> for a bad group ID.</summary>
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private void ThrowGroupIdOutOfRange(int id) =>
+    private void _ThrowGroupIdOutOfRange(int id) =>
         throw new ArgumentOutOfRangeException(
             nameof(id),
             id,
@@ -205,7 +205,7 @@ public sealed class PacketIndex : IPacketIndexReader
 
     /// <summary>Cold-path helper: throws a descriptive <see cref="ArgumentOutOfRangeException"/> for a bad protocol ID.</summary>
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private void ThrowProtocolIdOutOfRange(int id) =>
+    private void _ThrowProtocolIdOutOfRange(int id) =>
         throw new ArgumentOutOfRangeException(
             nameof(id),
             id,
@@ -431,7 +431,7 @@ public ref struct PresenceQuery
     public PresenceQuery SelectProtocol(ProtocolId protocolId)
     {
         ReadOnlyRoaringBitmap bitmap = _Index.GetProtocolBitmap(protocolId);
-        ApplyInitialOrAnd(bitmap);
+        _ApplyInitialOrAnd(bitmap);
         return this;
     }
 
@@ -439,7 +439,7 @@ public ref struct PresenceQuery
     public PresenceQuery SelectGroup(IndexGroupId groupId)
     {
         ReadOnlyRoaringBitmap bitmap = _Index.GetGroupBitmap(groupId);
-        ApplyInitialOrAnd(bitmap);
+        _ApplyInitialOrAnd(bitmap);
         return this;
     }
 
@@ -447,7 +447,7 @@ public ref struct PresenceQuery
     public PresenceQuery SelectField(FieldId fieldId)
     {
         ReadOnlyRoaringBitmap bitmap = _Index.GetFieldBitmap(fieldId);
-        ApplyInitialOrAnd(bitmap);
+        _ApplyInitialOrAnd(bitmap);
         return this;
     }
 
@@ -459,7 +459,7 @@ public ref struct PresenceQuery
     public PresenceQuery AndProtocol(ProtocolId protocolId)
     {
         ReadOnlyRoaringBitmap bitmap = _Index.GetProtocolBitmap(protocolId);
-        ApplyInitialOrAnd(bitmap);
+        _ApplyInitialOrAnd(bitmap);
         return this;
     }
 
@@ -467,7 +467,7 @@ public ref struct PresenceQuery
     public PresenceQuery AndGroup(IndexGroupId groupId)
     {
         ReadOnlyRoaringBitmap bitmap = _Index.GetGroupBitmap(groupId);
-        ApplyInitialOrAnd(bitmap);
+        _ApplyInitialOrAnd(bitmap);
         return this;
     }
 
@@ -475,7 +475,7 @@ public ref struct PresenceQuery
     public PresenceQuery AndField(FieldId fieldId)
     {
         ReadOnlyRoaringBitmap bitmap = _Index.GetFieldBitmap(fieldId);
-        ApplyInitialOrAnd(bitmap);
+        _ApplyInitialOrAnd(bitmap);
         return this;
     }
 
@@ -487,7 +487,7 @@ public ref struct PresenceQuery
     public PresenceQuery OrProtocol(ProtocolId protocolId)
     {
         ReadOnlyRoaringBitmap bitmap = _Index.GetProtocolBitmap(protocolId);
-        ApplyOr(bitmap);
+        _ApplyOr(bitmap);
         return this;
     }
 
@@ -495,7 +495,7 @@ public ref struct PresenceQuery
     public PresenceQuery OrGroup(IndexGroupId groupId)
     {
         ReadOnlyRoaringBitmap bitmap = _Index.GetGroupBitmap(groupId);
-        ApplyOr(bitmap);
+        _ApplyOr(bitmap);
         return this;
     }
 
@@ -503,7 +503,7 @@ public ref struct PresenceQuery
     public PresenceQuery OrField(FieldId fieldId)
     {
         ReadOnlyRoaringBitmap bitmap = _Index.GetFieldBitmap(fieldId);
-        ApplyOr(bitmap);
+        _ApplyOr(bitmap);
         return this;
     }
 
@@ -515,7 +515,7 @@ public ref struct PresenceQuery
     public PresenceQuery AndNotProtocol(ProtocolId protocolId)
     {
         ReadOnlyRoaringBitmap bitmap = _Index.GetProtocolBitmap(protocolId);
-        ApplyAndNot(bitmap);
+        _ApplyAndNot(bitmap);
         return this;
     }
 
@@ -523,7 +523,7 @@ public ref struct PresenceQuery
     public PresenceQuery AndNotGroup(IndexGroupId groupId)
     {
         ReadOnlyRoaringBitmap bitmap = _Index.GetGroupBitmap(groupId);
-        ApplyAndNot(bitmap);
+        _ApplyAndNot(bitmap);
         return this;
     }
 
@@ -531,7 +531,7 @@ public ref struct PresenceQuery
     public PresenceQuery AndNotField(FieldId fieldId)
     {
         ReadOnlyRoaringBitmap bitmap = _Index.GetFieldBitmap(fieldId);
-        ApplyAndNot(bitmap);
+        _ApplyAndNot(bitmap);
         return this;
     }
 
@@ -543,7 +543,7 @@ public ref struct PresenceQuery
     public PresenceQuery XorProtocol(ProtocolId protocolId)
     {
         ReadOnlyRoaringBitmap bitmap = _Index.GetProtocolBitmap(protocolId);
-        ApplyXor(bitmap);
+        _ApplyXor(bitmap);
         return this;
     }
 
@@ -551,7 +551,7 @@ public ref struct PresenceQuery
     public PresenceQuery XorGroup(IndexGroupId groupId)
     {
         ReadOnlyRoaringBitmap bitmap = _Index.GetGroupBitmap(groupId);
-        ApplyXor(bitmap);
+        _ApplyXor(bitmap);
         return this;
     }
 
@@ -559,7 +559,7 @@ public ref struct PresenceQuery
     public PresenceQuery XorField(FieldId fieldId)
     {
         ReadOnlyRoaringBitmap bitmap = _Index.GetFieldBitmap(fieldId);
-        ApplyXor(bitmap);
+        _ApplyXor(bitmap);
         return this;
     }
 
@@ -574,7 +574,11 @@ public ref struct PresenceQuery
         {
             return _MutableResult.Cardinality;
         }
-        return _InitialResult?.Cardinality ?? 0;
+        if (_InitialResult is not null)
+        {
+            return _InitialResult.Cardinality;
+        }
+        return 0;
     }
 
     /// <summary>Checks whether a specific packet matches.</summary>
@@ -584,7 +588,11 @@ public ref struct PresenceQuery
         {
             return _MutableResult.Contains(packetId);
         }
-        return _InitialResult?.Contains(packetId) ?? false;
+        if (_InitialResult is not null)
+        {
+            return _InitialResult.Contains(packetId);
+        }
+        return false;
     }
 
     /// <summary>
@@ -599,7 +607,11 @@ public ref struct PresenceQuery
             // Detach so further query chaining cannot mutate the returned bitmap underneath the caller.
             return _MutableResult.Clone();
         }
-        return _InitialResult?.ToBitmap() ?? new RoaringBitmap();
+        if (_InitialResult is not null)
+        {
+            return _InitialResult.ToBitmap();
+        }
+        return new();
     }
 
     /// <summary>
@@ -614,7 +626,11 @@ public ref struct PresenceQuery
             // Detach: caller-visible view must not change as further chained ops mutate _MutableResult.
             return _MutableResult.Clone().AsReadOnly();
         }
-        return _InitialResult ?? ReadOnlyRoaringBitmap.Empty;
+        if (_InitialResult is not null)
+        {
+            return _InitialResult;
+        }
+        return ReadOnlyRoaringBitmap.Empty;
     }
 
     #endregion
@@ -626,7 +642,7 @@ public ref struct PresenceQuery
     /// After this call, <c>_MutableResult</c> is non-null and <c>_InitialResult</c> is null.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void EnsureMutable()
+    private void _EnsureMutable()
     {
         if (_MutableResult is not null)
         {
@@ -639,7 +655,7 @@ public ref struct PresenceQuery
         _InitialResult = null;
     }
 
-    private void ApplyInitialOrAnd(ReadOnlyRoaringBitmap bitmap)
+    private void _ApplyInitialOrAnd(ReadOnlyRoaringBitmap bitmap)
     {
         if (!_HasResult)
         {
@@ -650,11 +666,11 @@ public ref struct PresenceQuery
         }
 
         // Second-or-later op: clone once into _MutableResult, then in-place AND.
-        EnsureMutable();
+        _EnsureMutable();
         _MutableResult!.AndWith(bitmap.Inner);
     }
 
-    private void ApplyOr(ReadOnlyRoaringBitmap bitmap)
+    private void _ApplyOr(ReadOnlyRoaringBitmap bitmap)
     {
         if (!_HasResult)
         {
@@ -663,11 +679,11 @@ public ref struct PresenceQuery
             return;
         }
 
-        EnsureMutable();
+        _EnsureMutable();
         _MutableResult!.OrWith(bitmap.Inner);
     }
 
-    private void ApplyAndNot(ReadOnlyRoaringBitmap bitmap)
+    private void _ApplyAndNot(ReadOnlyRoaringBitmap bitmap)
     {
         if (!_HasResult)
         {
@@ -677,11 +693,11 @@ public ref struct PresenceQuery
             return;
         }
 
-        EnsureMutable();
+        _EnsureMutable();
         _MutableResult!.AndNotWith(bitmap.Inner);
     }
 
-    private void ApplyXor(ReadOnlyRoaringBitmap bitmap)
+    private void _ApplyXor(ReadOnlyRoaringBitmap bitmap)
     {
         if (!_HasResult)
         {
@@ -690,7 +706,7 @@ public ref struct PresenceQuery
             return;
         }
 
-        EnsureMutable();
+        _EnsureMutable();
         _MutableResult!.XorWith(bitmap.Inner);
     }
     #endregion

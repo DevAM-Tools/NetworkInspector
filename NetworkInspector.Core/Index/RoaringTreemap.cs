@@ -55,7 +55,7 @@ public sealed class RoaringTreemap
 
         if (!_Map.TryGetValue(high, out RoaringBitmap? rb))
         {
-            rb = new RoaringBitmap();
+            rb = new();
             _Map[high] = rb;
         }
         rb.Add(low);
@@ -147,7 +147,7 @@ public sealed class RoaringTreemap
         // Fast-path: x ANDNOT x == empty.
         if (ReferenceEquals(this, other))
         {
-            return new RoaringTreemap();
+            return new();
         }
         RoaringTreemap result = new();
         foreach (KeyValuePair<uint, RoaringBitmap> kvp in _Map)
@@ -175,7 +175,7 @@ public sealed class RoaringTreemap
         // Fast-path: x XOR x == empty.
         if (ReferenceEquals(this, other))
         {
-            return new RoaringTreemap();
+            return new();
         }
         RoaringTreemap result = new();
         foreach (KeyValuePair<uint, RoaringBitmap> kvp in _Map)

@@ -48,12 +48,12 @@ internal abstract class ConvertOutputConfig
             paramString = "";
         }
 
-        Dictionary<string, string> parameters = ParseParameters(paramString);
+        Dictionary<string, string> parameters = _ParseParameters(paramString);
 
         return type.ToUpperInvariant() switch
         {
             "PCAPNG" or "PCAP" => new PcapngOutputConfig(),
-            "BLF" => CreateBlfOutputConfig(parameters),
+            "BLF" => _CreateBlfOutputConfig(parameters),
             "ASC" => new AscOutputConfig(),
             _ => throw new ArgumentException($"Unknown output format: '{type}'. Supported: pcapng, blf, asc."),
         };
@@ -86,7 +86,7 @@ internal abstract class ConvertOutputConfig
     }
 
     /// <summary>Parses comma-separated key=value parameters.</summary>
-    private static Dictionary<string, string> ParseParameters(string paramString)
+    private static Dictionary<string, string> _ParseParameters(string paramString)
     {
         Dictionary<string, string> result = new(StringComparer.OrdinalIgnoreCase);
         if (string.IsNullOrWhiteSpace(paramString))
@@ -109,7 +109,7 @@ internal abstract class ConvertOutputConfig
     }
 
     /// <summary>Creates a <see cref="BlfOutputConfig"/> from parsed parameters.</summary>
-    private static BlfOutputConfig CreateBlfOutputConfig(Dictionary<string, string> parameters)
+    private static BlfOutputConfig _CreateBlfOutputConfig(Dictionary<string, string> parameters)
     {
         BlfCompressionLevel level = BlfCompressionLevel.Default;
 

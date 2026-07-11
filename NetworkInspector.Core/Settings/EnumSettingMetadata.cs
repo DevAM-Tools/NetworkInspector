@@ -54,12 +54,24 @@ public sealed class EnumSettingMetadata
     public IReadOnlyList<EnumSettingValue> AllowedValues => _AllowedValues;
 
     /// <summary>Tries to get an enum value by its numeric representation.</summary>
-    public EnumSettingValue? GetByNumeric(ulong value) =>
-        _NumericToIndex.TryGetValue(value, out int index) ? _AllowedValues[index] : null;
+    public EnumSettingValue? GetByNumeric(ulong value)
+    {
+        if (_NumericToIndex.TryGetValue(value, out int index))
+        {
+            return _AllowedValues[index];
+        }
+        return null;
+    }
 
     /// <summary>Tries to get an enum value by its name (case-insensitive).</summary>
-    public EnumSettingValue? GetByName(string name) =>
-        _NameToIndex.TryGetValue(name, out int index) ? _AllowedValues[index] : null;
+    public EnumSettingValue? GetByName(string name)
+    {
+        if (_NameToIndex.TryGetValue(name, out int index))
+        {
+            return _AllowedValues[index];
+        }
+        return null;
+    }
 
     /// <summary>Checks if a numeric value is allowed.</summary>
     public bool IsAllowedNumeric(ulong value) => _NumericToIndex.ContainsKey(value);

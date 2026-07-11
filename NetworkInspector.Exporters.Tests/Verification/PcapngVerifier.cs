@@ -9,10 +9,10 @@ namespace NetworkInspector.Exporters.Tests.Verification;
 internal sealed class PcapngVerifier
 {
     // Block type constants
-    private const uint ShbType = 0x0A0D_0D0A;
-    private const uint IdbType = 0x0000_0001;
-    private const uint EpbType = 0x0000_0006;
-    private const uint ByteOrderMagic = 0x1A2B_3C4D;
+    private const uint _ShbType = 0x0A0D_0D0A;
+    private const uint _IdbType = 0x0000_0001;
+    private const uint _EpbType = 0x0000_0006;
+    private const uint _ByteOrderMagic = 0x1A2B_3C4D;
 
     /// <summary>Number of Section Header Blocks found.</summary>
     internal int SectionCount
@@ -46,7 +46,7 @@ internal sealed class PcapngVerifier
     {
         byte[] data = File.ReadAllBytes(path);
         PcapngVerifier verifier = new();
-        verifier.Parse(data);
+        verifier._Parse(data);
         return verifier;
     }
 
@@ -56,14 +56,14 @@ internal sealed class PcapngVerifier
     internal static PcapngVerifier FromData(byte[] data)
     {
         PcapngVerifier verifier = new();
-        verifier.Parse(data);
+        verifier._Parse(data);
         return verifier;
     }
 
     /// <summary>
     /// Parses all blocks in the PCAPNG data. Throws on structural errors.
     /// </summary>
-    private void Parse(byte[] data)
+    private void _Parse(byte[] data)
     {
         int offset = 0;
 
@@ -90,14 +90,14 @@ internal sealed class PcapngVerifier
 
             switch (blockType)
             {
-                case ShbType:
-                    ParseShb(data, offset, blockLen);
+                case _ShbType:
+                    _ParseShb(data, offset, blockLen);
                     break;
-                case IdbType:
-                    ParseIdb(data, offset, blockLen);
+                case _IdbType:
+                    _ParseIdb(data, offset, blockLen);
                     break;
-                case EpbType:
-                    ParseEpb(data, offset);
+                case _EpbType:
+                    _ParseEpb(data, offset);
                     break;
             }
 
@@ -107,7 +107,7 @@ internal sealed class PcapngVerifier
     }
 
     /// <summary>Parses an Interface Description Block and records interface info.</summary>
-    private void ParseIdb(byte[] data, int offset, uint blockLen)
+    private void _ParseIdb(byte[] data, int offset, uint blockLen)
     {
         if (blockLen < 20)
         {
@@ -122,7 +122,7 @@ internal sealed class PcapngVerifier
     }
 
     /// <summary>Validates the Section Header Block structure.</summary>
-    private void ParseShb(byte[] data, int offset, uint blockLen)
+    private void _ParseShb(byte[] data, int offset, uint blockLen)
     {
         if (blockLen < 28)
         {
@@ -130,7 +130,7 @@ internal sealed class PcapngVerifier
         }
 
         uint magic = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(offset + 8));
-        if (magic != ByteOrderMagic)
+        if (magic != _ByteOrderMagic)
         {
             throw new InvalidDataException(
                 $"Invalid byte order magic 0x{magic:X8} at offset {offset}");
@@ -140,7 +140,7 @@ internal sealed class PcapngVerifier
     }
 
     /// <summary>Parses an Enhanced Packet Block and records frame info.</summary>
-    private void ParseEpb(byte[] data, int offset)
+    private void _ParseEpb(byte[] data, int offset)
     {
         uint interfaceId = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(offset + 8));
         uint tsHigh = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(offset + 12));

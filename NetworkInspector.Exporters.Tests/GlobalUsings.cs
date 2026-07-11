@@ -47,7 +47,14 @@ global using NetworkInspector.Protocols;
 
 #region NetworkInspector.Sources
 global using NetworkInspector.Sources.Blf;
+global using NetworkInspector.Sources.Blf.Format;
+global using NetworkInspector.Sources.Blf.Format.Headers;
 global using NetworkInspector.Sources.Pcapng;
+global using NetworkInspector.Sources.Pcapng.Format;
+#endregion
+
+#region ZeroAlloc
+global using ZeroAlloc;
 #endregion
 
 #region NetworkInspector.Exporters (internal)

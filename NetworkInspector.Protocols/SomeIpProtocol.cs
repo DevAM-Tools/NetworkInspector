@@ -76,13 +76,13 @@ public sealed partial class SomeIpProtocol : IProtocol
     public const string MessageIdTableName = "someip.messageid";
 
     /// <summary>Index group for always-present SOME/IP fields.</summary>
-    private const string SomeIpIndexGroup = "someip";
+    private const string _SomeIpIndexGroup = "someip";
 
     #endregion
 
     #region Protocol container
 
-    [BytesField("someip", "SOME/IP", IndexGroup = SomeIpIndexGroup)]
+    [BytesField("someip", "SOME/IP", IndexGroup = _SomeIpIndexGroup)]
     private FieldId _ProtocolFieldId;
 
     #endregion
@@ -96,160 +96,160 @@ public sealed partial class SomeIpProtocol : IProtocol
 
     #region Header fields (always present)
 
-    [U64Field("someip.messageid", "Message ID", IndexGroup = SomeIpIndexGroup)]
+    [U64Field("someip.messageid", "Message ID", IndexGroup = _SomeIpIndexGroup)]
     private FieldId _MessageIdFieldId;
 
-    [U64Field("someip.serviceid", "Service ID", IndexGroup = SomeIpIndexGroup)]
+    [U64Field("someip.serviceid", "Service ID", IndexGroup = _SomeIpIndexGroup)]
     private FieldId _ServiceIdFieldId;
 
-    [U64Field("someip.methodid", "Method ID", IndexGroup = SomeIpIndexGroup)]
+    [U64Field("someip.methodid", "Method ID", IndexGroup = _SomeIpIndexGroup)]
     private FieldId _MethodIdFieldId;
 
-    [U64Field("someip.length", "Length", IndexGroup = SomeIpIndexGroup)]
+    [U64Field("someip.length", "Length", IndexGroup = _SomeIpIndexGroup)]
     private FieldId _LengthFieldId;
 
-    [U64Field("someip.clientid", "Client ID", IndexGroup = SomeIpIndexGroup)]
+    [U64Field("someip.clientid", "Client ID", IndexGroup = _SomeIpIndexGroup)]
     private FieldId _ClientIdFieldId;
 
-    [U64Field("someip.sessionid", "Session ID", IndexGroup = SomeIpIndexGroup)]
+    [U64Field("someip.sessionid", "Session ID", IndexGroup = _SomeIpIndexGroup)]
     private FieldId _SessionIdFieldId;
 
-    [U64Field("someip.version", "Protocol Version", IndexGroup = SomeIpIndexGroup)]
+    [U64Field("someip.version", "Protocol Version", IndexGroup = _SomeIpIndexGroup)]
     private FieldId _VersionFieldId;
 
-    [U64Field("someip.ifversion", "Interface Version", IndexGroup = SomeIpIndexGroup)]
+    [U64Field("someip.ifversion", "Interface Version", IndexGroup = _SomeIpIndexGroup)]
     private FieldId _IfVersionFieldId;
 
-    [U64Field("someip.msgtype", "Message Type", IndexGroup = SomeIpIndexGroup)]
+    [U64Field("someip.msgtype", "Message Type", IndexGroup = _SomeIpIndexGroup)]
     private FieldId _MsgTypeFieldId;
 
     #endregion
 
     #region Message type sub-fields (ACK and TP flag decomposition)
 
-    [BoolField("someip.msgtype.ack", "ACK Flag", IndexGroup = SomeIpIndexGroup)]
+    [BoolField("someip.msgtype.ack", "ACK Flag", IndexGroup = _SomeIpIndexGroup)]
     private FieldId _MsgTypeAckFieldId;
 
-    [BoolField("someip.msgtype.tp", "TP Flag", IndexGroup = SomeIpIndexGroup)]
+    [BoolField("someip.msgtype.tp", "TP Flag", IndexGroup = _SomeIpIndexGroup)]
     private FieldId _MsgTypeTpFieldId;
 
-    [U64Field("someip.returncode", "Return Code", IndexGroup = SomeIpIndexGroup)]
+    [U64Field("someip.returncode", "Return Code", IndexGroup = _SomeIpIndexGroup)]
     private FieldId _ReturnCodeFieldId;
 
     #endregion
 
     #region SOME/IP-TP fields (conditional, when TP flag is set)
 
-    private const string TpIndexGroup = "someip.tp";
+    private const string _TpIndexGroup = "someip.tp";
 
-    [NoneField("someip.tp", "SOME/IP Transport Protocol", IndexGroup = TpIndexGroup)]
+    [NoneField("someip.tp", "SOME/IP Transport Protocol", IndexGroup = _TpIndexGroup)]
     private FieldId _TpContainerFieldId;
 
-    [U64Field("someip.tp.offset", "Offset", IndexGroup = TpIndexGroup)]
+    [U64Field("someip.tp.offset", "Offset", IndexGroup = _TpIndexGroup)]
     private FieldId _TpOffsetFieldId;
 
-    [BoolField("someip.tp.more", "More Segments", IndexGroup = TpIndexGroup)]
+    [BoolField("someip.tp.more", "More Segments", IndexGroup = _TpIndexGroup)]
     private FieldId _TpMoreFieldId;
 
-    [U64Field("someip.tp.reserved", "Reserved", IndexGroup = TpIndexGroup)]
+    [U64Field("someip.tp.reserved", "Reserved", IndexGroup = _TpIndexGroup)]
     private FieldId _TpReservedFieldId;
 
-    [StringField("someip.tp.dropped", "TP Reassembly Dropped", IndexGroup = TpIndexGroup)]
+    [StringField("someip.tp.dropped", "TP Reassembly Dropped", IndexGroup = _TpIndexGroup)]
     private FieldId _TpDroppedFieldId;
 
     #endregion
 
     #region SOME/IP-SD fields (conditional, when message ID == 0xFFFF8100)
 
-    private const string SdIndexGroup = "someipSd";
-    private const string SdEntriesIndexGroup = "someipSd.entries";
-    private const string SdOptionsIndexGroup = "someipSd.options";
+    private const string _SdIndexGroup = "someipSd";
+    private const string _SdEntriesIndexGroup = "someipSd.entries";
+    private const string _SdOptionsIndexGroup = "someipSd.options";
 
-    [NoneField("someip_sd", "SOME/IP-SD", IndexGroup = SdIndexGroup)]
+    [NoneField("someip_sd", "SOME/IP-SD", IndexGroup = _SdIndexGroup)]
     private FieldId _SdContainerFieldId;
 
-    [U64Field("someip_sd.flags", "Flags", IndexGroup = SdIndexGroup)]
+    [U64Field("someip_sd.flags", "Flags", IndexGroup = _SdIndexGroup)]
     private FieldId _SdFlagsFieldId;
 
-    [BoolField("someip_sd.flags.reboot", "Reboot", IndexGroup = SdIndexGroup)]
+    [BoolField("someip_sd.flags.reboot", "Reboot", IndexGroup = _SdIndexGroup)]
     private FieldId _SdFlagsRebootFieldId;
 
-    [BoolField("someip_sd.flags.unicast", "Unicast", IndexGroup = SdIndexGroup)]
+    [BoolField("someip_sd.flags.unicast", "Unicast", IndexGroup = _SdIndexGroup)]
     private FieldId _SdFlagsUnicastFieldId;
 
-    [BoolField("someip_sd.flags.initial_events", "Explicit Initial Data Events Request", IndexGroup = SdIndexGroup)]
+    [BoolField("someip_sd.flags.initial_events", "Explicit Initial Data Events Request", IndexGroup = _SdIndexGroup)]
     private FieldId _SdFlagsInitialEventsFieldId;
 
-    [NoneField("someip_sd.entries", "Entries Array", IndexGroup = SdEntriesIndexGroup)]
+    [NoneField("someip_sd.entries", "Entries Array", IndexGroup = _SdEntriesIndexGroup)]
     private FieldId _SdEntriesContainerFieldId;
 
-    [NoneField("someip_sd.entry", "Entry", IndexGroup = SdEntriesIndexGroup)]
+    [NoneField("someip_sd.entry", "Entry", IndexGroup = _SdEntriesIndexGroup)]
     private FieldId _SdEntryContainerFieldId;
 
-    [U64Field("someip_sd.entry.type", "Type", IndexGroup = SdEntriesIndexGroup)]
+    [U64Field("someip_sd.entry.type", "Type", IndexGroup = _SdEntriesIndexGroup)]
     private FieldId _SdEntryTypeFieldId;
 
-    [U64Field("someip_sd.entry.index1", "Index 1st Options", IndexGroup = SdEntriesIndexGroup)]
+    [U64Field("someip_sd.entry.index1", "Index 1st Options", IndexGroup = _SdEntriesIndexGroup)]
     private FieldId _SdEntryIndex1FieldId;
 
-    [U64Field("someip_sd.entry.index2", "Index 2nd Options", IndexGroup = SdEntriesIndexGroup)]
+    [U64Field("someip_sd.entry.index2", "Index 2nd Options", IndexGroup = _SdEntriesIndexGroup)]
     private FieldId _SdEntryIndex2FieldId;
 
-    [U64Field("someip_sd.entry.n_opt_1", "Num Options 1", IndexGroup = SdEntriesIndexGroup)]
+    [U64Field("someip_sd.entry.n_opt_1", "Num Options 1", IndexGroup = _SdEntriesIndexGroup)]
     private FieldId _SdEntryNumOpt1FieldId;
 
-    [U64Field("someip_sd.entry.n_opt_2", "Num Options 2", IndexGroup = SdEntriesIndexGroup)]
+    [U64Field("someip_sd.entry.n_opt_2", "Num Options 2", IndexGroup = _SdEntriesIndexGroup)]
     private FieldId _SdEntryNumOpt2FieldId;
 
-    [U64Field("someip_sd.entry.serviceid", "Service ID", IndexGroup = SdEntriesIndexGroup)]
+    [U64Field("someip_sd.entry.serviceid", "Service ID", IndexGroup = _SdEntriesIndexGroup)]
     private FieldId _SdEntryServiceIdFieldId;
 
-    [U64Field("someip_sd.entry.instanceid", "Instance ID", IndexGroup = SdEntriesIndexGroup)]
+    [U64Field("someip_sd.entry.instanceid", "Instance ID", IndexGroup = _SdEntriesIndexGroup)]
     private FieldId _SdEntryInstanceIdFieldId;
 
-    [U64Field("someip_sd.entry.majorver", "Major Version", IndexGroup = SdEntriesIndexGroup)]
+    [U64Field("someip_sd.entry.majorver", "Major Version", IndexGroup = _SdEntriesIndexGroup)]
     private FieldId _SdEntryMajorVerFieldId;
 
-    [U64Field("someip_sd.entry.ttl", "TTL", IndexGroup = SdEntriesIndexGroup)]
+    [U64Field("someip_sd.entry.ttl", "TTL", IndexGroup = _SdEntriesIndexGroup)]
     private FieldId _SdEntryTtlFieldId;
 
-    [U64Field("someip_sd.entry.minorver", "Minor Version", IndexGroup = SdEntriesIndexGroup)]
+    [U64Field("someip_sd.entry.minorver", "Minor Version", IndexGroup = _SdEntriesIndexGroup)]
     private FieldId _SdEntryMinorVerFieldId;
 
-    [U64Field("someip_sd.entry.eventgroupid", "Eventgroup ID", IndexGroup = SdEntriesIndexGroup)]
+    [U64Field("someip_sd.entry.eventgroupid", "Eventgroup ID", IndexGroup = _SdEntriesIndexGroup)]
     private FieldId _SdEntryEventgroupIdFieldId;
 
-    [NoneField("someip_sd.options", "Options Array", IndexGroup = SdOptionsIndexGroup)]
+    [NoneField("someip_sd.options", "Options Array", IndexGroup = _SdOptionsIndexGroup)]
     private FieldId _SdOptionsContainerFieldId;
 
-    [NoneField("someip_sd.option", "Option", IndexGroup = SdOptionsIndexGroup)]
+    [NoneField("someip_sd.option", "Option", IndexGroup = _SdOptionsIndexGroup)]
     private FieldId _SdOptionContainerFieldId;
 
-    [U64Field("someip_sd.option.length", "Length", IndexGroup = SdOptionsIndexGroup)]
+    [U64Field("someip_sd.option.length", "Length", IndexGroup = _SdOptionsIndexGroup)]
     private FieldId _SdOptionLengthFieldId;
 
-    [U64Field("someip_sd.option.type", "Type", IndexGroup = SdOptionsIndexGroup)]
+    [U64Field("someip_sd.option.type", "Type", IndexGroup = _SdOptionsIndexGroup)]
     private FieldId _SdOptionTypeFieldId;
 
-    [IPv4Field("someip_sd.option.ipv4", "IPv4 Address", IndexGroup = SdOptionsIndexGroup)]
+    [IPv4Field("someip_sd.option.ipv4", "IPv4 Address", IndexGroup = _SdOptionsIndexGroup)]
     private FieldId _SdOptionIpv4FieldId;
 
-    [IPv6Field("someip_sd.option.ipv6", "IPv6 Address", IndexGroup = SdOptionsIndexGroup)]
+    [IPv6Field("someip_sd.option.ipv6", "IPv6 Address", IndexGroup = _SdOptionsIndexGroup)]
     private FieldId _SdOptionIpv6FieldId;
 
-    [U64Field("someip_sd.option.proto", "L4 Protocol", IndexGroup = SdOptionsIndexGroup)]
+    [U64Field("someip_sd.option.proto", "L4 Protocol", IndexGroup = _SdOptionsIndexGroup)]
     private FieldId _SdOptionProtoFieldId;
 
-    [U64Field("someip_sd.option.port", "Port", IndexGroup = SdOptionsIndexGroup)]
+    [U64Field("someip_sd.option.port", "Port", IndexGroup = _SdOptionsIndexGroup)]
     private FieldId _SdOptionPortFieldId;
 
-    [StringField("someip_sd.option.config", "Configuration", IndexGroup = SdOptionsIndexGroup)]
+    [StringField("someip_sd.option.config", "Configuration", IndexGroup = _SdOptionsIndexGroup)]
     private FieldId _SdOptionConfigFieldId;
 
-    [U64Field("someip_sd.option.lb_priority", "Priority", IndexGroup = SdOptionsIndexGroup)]
+    [U64Field("someip_sd.option.lb_priority", "Priority", IndexGroup = _SdOptionsIndexGroup)]
     private FieldId _SdOptionLbPriorityFieldId;
 
-    [U64Field("someip_sd.option.lb_weight", "Weight", IndexGroup = SdOptionsIndexGroup)]
+    [U64Field("someip_sd.option.lb_weight", "Weight", IndexGroup = _SdOptionsIndexGroup)]
     private FieldId _SdOptionLbWeightFieldId;
 
     #endregion
@@ -263,12 +263,12 @@ public sealed partial class SomeIpProtocol : IProtocol
 
     #region Service/method name fields (conditional, from config)
 
-    private const string SomeIpNameGroup = "someip.name";
+    private const string _SomeIpNameGroup = "someip.name";
 
-    [StringField("someip.service.name", "Service Name", IndexGroup = SomeIpNameGroup)]
+    [StringField("someip.service.name", "Service Name", IndexGroup = _SomeIpNameGroup)]
     private FieldId _ServiceNameFieldId;
 
-    [StringField("someip.method.name", "Method Name", IndexGroup = SomeIpNameGroup)]
+    [StringField("someip.method.name", "Method Name", IndexGroup = _SomeIpNameGroup)]
     private FieldId _MethodNameFieldId;
 
     #endregion
@@ -303,7 +303,7 @@ public sealed partial class SomeIpProtocol : IProtocol
         get; private set;
     }
 
-    partial void RegisterFieldsCustom(IStackBuilder builder, ProtocolId protocolId)
+    partial void _RegisterFieldsCustom(IStackBuilder builder, ProtocolId protocolId)
     {
         _TpReassembler.Clear();
 
@@ -457,7 +457,7 @@ public sealed partial class SomeIpProtocol : IProtocol
         // sub-protocol presence is recorded in the index. A lazy populator receives no
         // ParseContext and therefore cannot dispatch, so eager construction is required.
         MutField container = parentField.AppendWithCustomText(_ProtocolFieldId, containerValue, summary);
-        ParseResult buildResult = BuildSomeIpFields(in container, in context);
+        ParseResult buildResult = _BuildSomeIpFields(in container, in context);
         if (buildResult.IsError)
         {
             return buildResult;
@@ -471,7 +471,7 @@ public sealed partial class SomeIpProtocol : IProtocol
     /// reassembly, and dispatches any reassembled or tail payload to registered
     /// sub-protocols using the supplied <paramref name="context"/>.
     /// </summary>
-    private ParseResult BuildSomeIpFields(in MutField container, in ParseContext context)
+    private ParseResult _BuildSomeIpFields(in MutField container, in ParseContext context)
     {
         if (!container.Value.Data.TryGetAsBytes(out ReadOnlyMemory<byte> someipData))
         {

@@ -33,10 +33,10 @@ namespace NetworkInspector.FrameBuilder;
 public readonly struct UdpLayer : IStatelessLayer, IInteriorLayer, IProvidesProtocolType, IProvidesNextProtocolValue<IpNextProtocolKind>, IRequiresPseudoHeader
 {
     /// <summary>Offset of the Length field within the UDP header.</summary>
-    private const int LengthOffset = 4;
+    private const int _LengthOffset = 4;
 
     /// <summary>Offset of the Checksum field within the UDP header.</summary>
-    private const int ChecksumOffset = 6;
+    private const int _ChecksumOffset = 6;
 
     private readonly ushort _SrcPort;
     private readonly ushort _DstPort;
@@ -52,16 +52,16 @@ public readonly struct UdpLayer : IStatelessLayer, IInteriorLayer, IProvidesProt
     /// <param name="dstPort">Destination port.</param>
     /// <param name="checksum">
     /// UDP checksum field.
-    /// <para><see cref="Auto{T}.Compute"/> (default) — compute over the IP pseudo-header
+    /// <para><see cref="Auto.Compute"/> (default) — compute over the IP pseudo-header
     /// + UDP segment; an all-zero result is encoded as <c>0xFFFF</c> per RFC 768.</para>
-    /// <para><see cref="Auto{T}.Explicit"/> with value <c>0</c> — emit "no checksum"
+    /// <para><see cref="Auto.Explicit"/> with value <c>0</c> — emit "no checksum"
     /// (IPv4 only; over IPv6 this is a protocol violation).</para>
-    /// <para><see cref="Auto{T}.Explicit"/> with non-zero value — use the supplied
+    /// <para><see cref="Auto.Explicit"/> with non-zero value — use the supplied
     /// value verbatim (corruption / conformance tests).</para>
     /// </param>
     /// <param name="computeChecksum">
     /// Convenience flag: when <c>false</c> disables checksum computation (emits zero).
-    /// Takes effect only when <paramref name="checksum"/> is <see cref="Auto{T}.Compute"/>.
+    /// Takes effect only when <paramref name="checksum"/> is <see cref="Auto.Compute"/>.
     /// </param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public UdpLayer(ushort srcPort, ushort dstPort, Auto<ushort> checksum = default, bool computeChecksum = true)
@@ -111,7 +111,7 @@ public readonly struct UdpLayer : IStatelessLayer, IInteriorLayer, IProvidesProt
         {
             case FixPhase.Length:
                 // UDP Length covers the UDP header plus everything inside it.
-                BinaryPrimitives.WriteUInt16BigEndian(frame.Slice(myOffset + LengthOffset, 2), (ushort)myLength);
+                BinaryPrimitives.WriteUInt16BigEndian(frame.Slice(myOffset + _LengthOffset, 2), (ushort)myLength);
                 break;
 
             case FixPhase.InnerChecksum:
@@ -131,11 +131,11 @@ public readonly struct UdpLayer : IStatelessLayer, IInteriorLayer, IProvidesProt
                         break;
                     }
                     // Caller pinned the checksum; write verbatim.
-                    BinaryPrimitives.WriteUInt16BigEndian(frame.Slice(myOffset + ChecksumOffset, 2), _ExplicitChecksum);
+                    BinaryPrimitives.WriteUInt16BigEndian(frame.Slice(myOffset + _ChecksumOffset, 2), _ExplicitChecksum);
                 }
                 else
                 {
-                    ComputeChecksum(frame, myOffset, myLength, in ctx);
+                    _ComputeChecksum(frame, myOffset, myLength, in ctx);
                 }
                 break;
 
@@ -150,11 +150,11 @@ public readonly struct UdpLayer : IStatelessLayer, IInteriorLayer, IProvidesProt
     /// pseudo-header in <see cref="FixPhase.PublishPseudoHeader"/>.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static void ComputeChecksum(Span<byte> frame, int myOffset, int myLength, in PostFixContext ctx)
+    private static void _ComputeChecksum(Span<byte> frame, int myOffset, int myLength, in PostFixContext ctx)
     {
         // Zero the checksum field before computing.
-        frame[myOffset + ChecksumOffset] = 0;
-        frame[myOffset + ChecksumOffset + 1] = 0;
+        frame[myOffset + _ChecksumOffset] = 0;
+        frame[myOffset + _ChecksumOffset + 1] = 0;
 
         ReadOnlySpan<byte> segment = frame.Slice(myOffset, myLength);
         ReadOnlySpan<byte> srcIp = ctx.PseudoSrcIp[..ctx.PseudoIpLength];
@@ -171,6 +171,6 @@ public readonly struct UdpLayer : IStatelessLayer, IInteriorLayer, IProvidesProt
             checksum = 0xFFFF;
         }
 
-        BinaryPrimitives.WriteUInt16BigEndian(frame.Slice(myOffset + ChecksumOffset, 2), checksum);
+        BinaryPrimitives.WriteUInt16BigEndian(frame.Slice(myOffset + _ChecksumOffset, 2), checksum);
     }
 }

@@ -1,7 +1,5 @@
 // Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
-using System.Globalization;
-using System.Reflection;
 using FieldInfo = System.Reflection.FieldInfo;
 
 namespace NetworkInspector.Sessions.Tests;
@@ -76,7 +74,7 @@ internal sealed class SessionApiTests
         session.WaitForCompletion();
 
         JobInfo sourceJob = session.GetJobs().First(j => j.UiName == source.UiName);
-        WaitForCondition(() => sourceJob.Status is JobStatus.Completed or JobStatus.Cancelled);
+        _WaitForCondition(() => sourceJob.Status is JobStatus.Completed or JobStatus.Cancelled);
 
         bool removed = session.TryRemoveJob(sourceJob);
 
@@ -97,7 +95,7 @@ internal sealed class SessionApiTests
         session.TryStart();
 
         JobInfo sourceJob = session.GetJobs().First(j => j.UiName == source.UiName);
-        WaitForCondition(() => sourceJob.Status == JobStatus.Running);
+        _WaitForCondition(() => sourceJob.Status == JobStatus.Running);
 
         try
         {
@@ -312,7 +310,7 @@ internal sealed class SessionApiTests
         IPacketIndexReader? indexBefore = session.PacketIndex;
         await Assert.That(indexBefore).IsNotNull();
 
-        PacketStore store = GetPacketStore(session);
+        PacketStore store = _GetPacketStore(session);
         store.Clear();
 
         bool found = session.TryGetPacket(new PacketId(0), out Packet? packet);
@@ -342,7 +340,7 @@ internal sealed class SessionApiTests
         }
     }
 
-    private static PacketStore GetPacketStore(Session session)
+    private static PacketStore _GetPacketStore(Session session)
     {
         FieldInfo field = typeof(Session).GetField(
             "_PacketStore",
@@ -350,7 +348,7 @@ internal sealed class SessionApiTests
         return (PacketStore)field.GetValue(session)!;
     }
 
-    private static void WaitForCondition(Func<bool> condition, int timeoutMs = 5000)
+    private static void _WaitForCondition(Func<bool> condition, int timeoutMs = 5000)
     {
         Stopwatch sw = Stopwatch.StartNew();
         SpinWait wait = new();

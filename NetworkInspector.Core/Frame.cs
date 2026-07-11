@@ -121,7 +121,7 @@ public readonly struct Frame : IComparable<Frame>, IEquatable<Frame>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         get
         {
-            ThrowIfInvalid();
+            _ThrowIfInvalid();
             return _Id;
         }
     }
@@ -133,7 +133,7 @@ public readonly struct Frame : IComparable<Frame>, IEquatable<Frame>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         get
         {
-            ThrowIfInvalid();
+            _ThrowIfInvalid();
             return _Timestamp;
         }
     }
@@ -145,7 +145,7 @@ public readonly struct Frame : IComparable<Frame>, IEquatable<Frame>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         get
         {
-            ThrowIfInvalid();
+            _ThrowIfInvalid();
             return _Data;
         }
     }
@@ -157,7 +157,7 @@ public readonly struct Frame : IComparable<Frame>, IEquatable<Frame>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         get
         {
-            ThrowIfInvalid();
+            _ThrowIfInvalid();
             return _LinkType;
         }
     }
@@ -169,7 +169,7 @@ public readonly struct Frame : IComparable<Frame>, IEquatable<Frame>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         get
         {
-            ThrowIfInvalid();
+            _ThrowIfInvalid();
             return _InterfaceId;
         }
     }
@@ -181,7 +181,7 @@ public readonly struct Frame : IComparable<Frame>, IEquatable<Frame>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         get
         {
-            ThrowIfInvalid();
+            _ThrowIfInvalid();
             return _InterfaceId.IsValid;
         }
     }
@@ -196,7 +196,7 @@ public readonly struct Frame : IComparable<Frame>, IEquatable<Frame>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         get
         {
-            ThrowIfInvalid();
+            _ThrowIfInvalid();
             return _Registry;
         }
     }
@@ -208,7 +208,7 @@ public readonly struct Frame : IComparable<Frame>, IEquatable<Frame>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         get
         {
-            ThrowIfInvalid();
+            _ThrowIfInvalid();
             return _Data.IsEmpty;
         }
     }
@@ -220,23 +220,23 @@ public readonly struct Frame : IComparable<Frame>, IEquatable<Frame>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         get
         {
-            ThrowIfInvalid();
+            _ThrowIfInvalid();
             return _Data.Length;
         }
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void ThrowIfInvalid()
+    private void _ThrowIfInvalid()
     {
         if (_Registry is null)
         {
-            ThrowDefault();
+            _ThrowDefault();
         }
     }
 
     [DoesNotReturn]
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private static void ThrowDefault() =>
+    private static void _ThrowDefault() =>
         throw new InvalidOperationException("Frame is the default sentinel; create frames via Frame.Create.");
 
     #endregion

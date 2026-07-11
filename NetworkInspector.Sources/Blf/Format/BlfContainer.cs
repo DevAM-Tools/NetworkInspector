@@ -59,12 +59,12 @@ internal static class BlfContainer
 
         if (compressionMethod == BlfConstants.CompressionLz4)
         {
-            return DecompressLz4(compressedData, uncompressedSize);
+            return _DecompressLz4(compressedData, uncompressedSize);
         }
 
         if (compressionMethod == BlfConstants.CompressionZlib)
         {
-            return DecompressZlib(compressedData, uncompressedSize);
+            return _DecompressZlib(compressedData, uncompressedSize);
         }
 
         throw new BlfException($"Unsupported BLF compression method: {compressionMethod}");
@@ -79,7 +79,7 @@ internal static class BlfContainer
     /// Uses <see cref="Lz4Codec.Decompress"/> which operates
     /// directly on spans without an intermediate allocation.
     /// </summary>
-    private static byte[] DecompressLz4(ReadOnlySpan<byte> compressedData, uint uncompressedSize)
+    private static byte[] _DecompressLz4(ReadOnlySpan<byte> compressedData, uint uncompressedSize)
     {
         byte[] output = new byte[uncompressedSize];
 
@@ -104,7 +104,7 @@ internal static class BlfContainer
     /// Decompresses zlib-compressed data into a buffer of the expected size.
     /// Uses <see cref="ZLibStream"/> with the raw compressed bytes wrapped in a MemoryStream.
     /// </summary>
-    private static byte[] DecompressZlib(ReadOnlySpan<byte> compressedData, uint uncompressedSize)
+    private static byte[] _DecompressZlib(ReadOnlySpan<byte> compressedData, uint uncompressedSize)
     {
         byte[] output = new byte[uncompressedSize];
 

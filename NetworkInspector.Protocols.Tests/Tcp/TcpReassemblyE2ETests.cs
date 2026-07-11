@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Protocols.Tests;
 
@@ -19,8 +19,8 @@ internal sealed class TcpReassemblyE2ETests
     private static readonly MacAddress _SrcMac = MacAddress.FromBytes([0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB]);
     private static readonly IPv4Address _ClientIp = new(0x0A000001); // 10.0.0.1
     private static readonly IPv4Address _ServerIp = new(0x0A000002); // 10.0.0.2
-    private const ushort ClientPort = 52000;
-    private const ushort ServerPort = 53;   // DNS-over-TCP port
+    private const ushort _ClientPort = 52000;
+    private const ushort _ServerPort = 53;   // DNS-over-TCP port
 
     #endregion
 
@@ -31,7 +31,7 @@ internal sealed class TcpReassemblyE2ETests
     /// DNS query for "a.b." of type A, class IN, with the given transaction ID.
     /// Returns the full 25-byte buffer: [len_hi, len_lo, dns_12_bytes, qname_5_bytes, qtype_2_bytes, qclass_2_bytes].
     /// </summary>
-    private static byte[] BuildDnsTcpPdu(ushort txId = 0x1234)
+    private static byte[] _BuildDnsTcpPdu(ushort txId = 0x1234)
     {
         // DNS message is 12 (header) + 5 (QNAME "a.b.") + 2 (QTYPE) + 2 (QCLASS) = 21 bytes
         // TCP length prefix = 0x00 0x15
@@ -68,7 +68,7 @@ internal sealed class TcpReassemblyE2ETests
 
     #region TCP frame helpers
 
-    private static byte[] BuildTcpFrame(
+    private static byte[] _BuildTcpFrame(
         IPv4Address srcIp, IPv4Address dstIp,
         ushort srcPort, ushort dstPort,
         uint seqNum, uint ackNum,
@@ -81,11 +81,11 @@ internal sealed class TcpReassemblyE2ETests
         return FrameStack.Start(eth).Then(ipLayer).Then(tcpLayer).CreateWithFixedValues().EmitFrame(payload);
     }
 
-    private static byte[] ClientFrame(uint seq, uint ack, byte flags, ReadOnlySpan<byte> payload = default)
-        => BuildTcpFrame(_ClientIp, _ServerIp, ClientPort, ServerPort, seq, ack, flags, payload);
+    private static byte[] _ClientFrame(uint seq, uint ack, byte flags, ReadOnlySpan<byte> payload = default)
+        => _BuildTcpFrame(_ClientIp, _ServerIp, _ClientPort, _ServerPort, seq, ack, flags, payload);
 
-    private static byte[] ServerFrame(uint seq, uint ack, byte flags, ReadOnlySpan<byte> payload = default)
-        => BuildTcpFrame(_ServerIp, _ClientIp, ServerPort, ClientPort, seq, ack, flags, payload);
+    private static byte[] _ServerFrame(uint seq, uint ack, byte flags, ReadOnlySpan<byte> payload = default)
+        => _BuildTcpFrame(_ServerIp, _ClientIp, _ServerPort, _ClientPort, seq, ack, flags, payload);
 
     #endregion
 
@@ -103,15 +103,15 @@ internal sealed class TcpReassemblyE2ETests
             uint cIsn = 1000, sIsn = 2000;
 
             // 3-way handshake
-            ProtocolTestHelper.ParseFrame(stack, ClientFrame(cIsn, 0, TcpFlags.Syn), 0, Timestamp.FromMillis(0));
-            ProtocolTestHelper.ParseFrame(stack, ServerFrame(sIsn, cIsn + 1, TcpFlags.SynAck), 1, Timestamp.FromMillis(1));
-            ProtocolTestHelper.ParseFrame(stack, ClientFrame(cIsn + 1, sIsn + 1, TcpFlags.Ack), 2, Timestamp.FromMillis(2));
+            ProtocolTestHelper.ParseFrame(stack, _ClientFrame(cIsn, 0, TcpFlags.Syn), 0, Timestamp.FromMillis(0));
+            ProtocolTestHelper.ParseFrame(stack, _ServerFrame(sIsn, cIsn + 1, TcpFlags.SynAck), 1, Timestamp.FromMillis(1));
+            ProtocolTestHelper.ParseFrame(stack, _ClientFrame(cIsn + 1, sIsn + 1, TcpFlags.Ack), 2, Timestamp.FromMillis(2));
 
             // Single DNS PDU in one TCP segment
-            byte[] pdu = BuildDnsTcpPdu(txId: 0x1234);
+            byte[] pdu = _BuildDnsTcpPdu(txId: 0x1234);
             Packet dataPacket = ProtocolTestHelper.ParseFrame(
                 stack,
-                ClientFrame(cIsn + 1, sIsn + 1, TcpFlags.Psh | TcpFlags.Ack, pdu),
+                _ClientFrame(cIsn + 1, sIsn + 1, TcpFlags.Psh | TcpFlags.Ack, pdu),
                 3, Timestamp.FromMillis(3));
 
             await ProtocolTestHelper.AssertU64Field(stack, dataPacket, "dns.id", 0x1234).ConfigureAwait(false);
@@ -126,14 +126,14 @@ internal sealed class TcpReassemblyE2ETests
         {
             uint cIsn = 3000, sIsn = 4000;
 
-            ProtocolTestHelper.ParseFrame(stack, ClientFrame(cIsn, 0, TcpFlags.Syn), 0, Timestamp.FromMillis(0));
-            ProtocolTestHelper.ParseFrame(stack, ServerFrame(sIsn, cIsn + 1, TcpFlags.SynAck), 1, Timestamp.FromMillis(1));
-            ProtocolTestHelper.ParseFrame(stack, ClientFrame(cIsn + 1, sIsn + 1, TcpFlags.Ack), 2, Timestamp.FromMillis(2));
+            ProtocolTestHelper.ParseFrame(stack, _ClientFrame(cIsn, 0, TcpFlags.Syn), 0, Timestamp.FromMillis(0));
+            ProtocolTestHelper.ParseFrame(stack, _ServerFrame(sIsn, cIsn + 1, TcpFlags.SynAck), 1, Timestamp.FromMillis(1));
+            ProtocolTestHelper.ParseFrame(stack, _ClientFrame(cIsn + 1, sIsn + 1, TcpFlags.Ack), 2, Timestamp.FromMillis(2));
 
-            byte[] pdu = BuildDnsTcpPdu(txId: 0x5678);
+            byte[] pdu = _BuildDnsTcpPdu(txId: 0x5678);
             Packet dataPacket = ProtocolTestHelper.ParseFrame(
                 stack,
-                ClientFrame(cIsn + 1, sIsn + 1, TcpFlags.Psh | TcpFlags.Ack, pdu),
+                _ClientFrame(cIsn + 1, sIsn + 1, TcpFlags.Psh | TcpFlags.Ack, pdu),
                 3, Timestamp.FromMillis(3));
 
             // Flags = 0x0100 (standard query, RD=1)
@@ -155,17 +155,17 @@ internal sealed class TcpReassemblyE2ETests
         {
             uint cIsn = 5000, sIsn = 6000;
 
-            ProtocolTestHelper.ParseFrame(stack, ClientFrame(cIsn, 0, TcpFlags.Syn), 0, Timestamp.FromMillis(0));
-            ProtocolTestHelper.ParseFrame(stack, ServerFrame(sIsn, cIsn + 1, TcpFlags.SynAck), 1, Timestamp.FromMillis(1));
-            ProtocolTestHelper.ParseFrame(stack, ClientFrame(cIsn + 1, sIsn + 1, TcpFlags.Ack), 2, Timestamp.FromMillis(2));
+            ProtocolTestHelper.ParseFrame(stack, _ClientFrame(cIsn, 0, TcpFlags.Syn), 0, Timestamp.FromMillis(0));
+            ProtocolTestHelper.ParseFrame(stack, _ServerFrame(sIsn, cIsn + 1, TcpFlags.SynAck), 1, Timestamp.FromMillis(1));
+            ProtocolTestHelper.ParseFrame(stack, _ClientFrame(cIsn + 1, sIsn + 1, TcpFlags.Ack), 2, Timestamp.FromMillis(2));
 
             // First 8 bytes of the 23-byte PDU
-            byte[] fullPdu = BuildDnsTcpPdu(txId: 0xABCD);
+            byte[] fullPdu = _BuildDnsTcpPdu(txId: 0xABCD);
             ReadOnlySpan<byte> seg1 = fullPdu.AsSpan(0, 8);
 
             Packet firstPacket = ProtocolTestHelper.ParseFrame(
                 stack,
-                ClientFrame(cIsn + 1, sIsn + 1, TcpFlags.Psh | TcpFlags.Ack, seg1),
+                _ClientFrame(cIsn + 1, sIsn + 1, TcpFlags.Psh | TcpFlags.Ack, seg1),
                 3, Timestamp.FromMillis(3));
 
             // DNS must NOT be resolved yet
@@ -189,24 +189,24 @@ internal sealed class TcpReassemblyE2ETests
         {
             uint cIsn = 7000, sIsn = 8000;
 
-            ProtocolTestHelper.ParseFrame(stack, ClientFrame(cIsn, 0, TcpFlags.Syn), 0, Timestamp.FromMillis(0));
-            ProtocolTestHelper.ParseFrame(stack, ServerFrame(sIsn, cIsn + 1, TcpFlags.SynAck), 1, Timestamp.FromMillis(1));
-            ProtocolTestHelper.ParseFrame(stack, ClientFrame(cIsn + 1, sIsn + 1, TcpFlags.Ack), 2, Timestamp.FromMillis(2));
+            ProtocolTestHelper.ParseFrame(stack, _ClientFrame(cIsn, 0, TcpFlags.Syn), 0, Timestamp.FromMillis(0));
+            ProtocolTestHelper.ParseFrame(stack, _ServerFrame(sIsn, cIsn + 1, TcpFlags.SynAck), 1, Timestamp.FromMillis(1));
+            ProtocolTestHelper.ParseFrame(stack, _ClientFrame(cIsn + 1, sIsn + 1, TcpFlags.Ack), 2, Timestamp.FromMillis(2));
 
-            byte[] fullPdu = BuildDnsTcpPdu(txId: 0xDEAD);
+            byte[] fullPdu = _BuildDnsTcpPdu(txId: 0xDEAD);
 
             // Segment 1: first 8 bytes
             ReadOnlySpan<byte> seg1 = fullPdu.AsSpan(0, 8);
             ProtocolTestHelper.ParseFrame(
                 stack,
-                ClientFrame(cIsn + 1, sIsn + 1, TcpFlags.Psh | TcpFlags.Ack, seg1),
+                _ClientFrame(cIsn + 1, sIsn + 1, TcpFlags.Psh | TcpFlags.Ack, seg1),
                 3, Timestamp.FromMillis(3));
 
             // Segment 2: remaining 15 bytes — completes the PDU
             ReadOnlySpan<byte> seg2 = fullPdu.AsSpan(8);
             Packet secondPacket = ProtocolTestHelper.ParseFrame(
                 stack,
-                ClientFrame(cIsn + 1 + (uint)seg1.Length, sIsn + 1, TcpFlags.Psh | TcpFlags.Ack, seg2),
+                _ClientFrame(cIsn + 1 + (uint)seg1.Length, sIsn + 1, TcpFlags.Psh | TcpFlags.Ack, seg2),
                 4, Timestamp.FromMillis(4));
 
             // DNS must be dispatched when reassembly completes
@@ -223,24 +223,24 @@ internal sealed class TcpReassemblyE2ETests
         {
             uint cIsn = 9000, sIsn = 10000;
 
-            ProtocolTestHelper.ParseFrame(stack, ClientFrame(cIsn, 0, TcpFlags.Syn), 0, Timestamp.FromMillis(0));
-            ProtocolTestHelper.ParseFrame(stack, ServerFrame(sIsn, cIsn + 1, TcpFlags.SynAck), 1, Timestamp.FromMillis(1));
-            ProtocolTestHelper.ParseFrame(stack, ClientFrame(cIsn + 1, sIsn + 1, TcpFlags.Ack), 2, Timestamp.FromMillis(2));
+            ProtocolTestHelper.ParseFrame(stack, _ClientFrame(cIsn, 0, TcpFlags.Syn), 0, Timestamp.FromMillis(0));
+            ProtocolTestHelper.ParseFrame(stack, _ServerFrame(sIsn, cIsn + 1, TcpFlags.SynAck), 1, Timestamp.FromMillis(1));
+            ProtocolTestHelper.ParseFrame(stack, _ClientFrame(cIsn + 1, sIsn + 1, TcpFlags.Ack), 2, Timestamp.FromMillis(2));
 
-            byte[] fullPdu = BuildDnsTcpPdu(txId: 0xBEEF);
+            byte[] fullPdu = _BuildDnsTcpPdu(txId: 0xBEEF);
 
             // Segment 1: 12 bytes
             ReadOnlySpan<byte> seg1 = fullPdu.AsSpan(0, 12);
             ProtocolTestHelper.ParseFrame(
                 stack,
-                ClientFrame(cIsn + 1, sIsn + 1, TcpFlags.Psh | TcpFlags.Ack, seg1),
+                _ClientFrame(cIsn + 1, sIsn + 1, TcpFlags.Psh | TcpFlags.Ack, seg1),
                 3, Timestamp.FromMillis(3));
 
             // Segment 2: remaining 11 bytes
             ReadOnlySpan<byte> seg2 = fullPdu.AsSpan(12);
             Packet secondPacket = ProtocolTestHelper.ParseFrame(
                 stack,
-                ClientFrame(cIsn + 1 + (uint)seg1.Length, sIsn + 1, TcpFlags.Psh | TcpFlags.Ack, seg2),
+                _ClientFrame(cIsn + 1 + (uint)seg1.Length, sIsn + 1, TcpFlags.Psh | TcpFlags.Ack, seg2),
                 4, Timestamp.FromMillis(4));
 
             // DNS query name "a.b" must be present

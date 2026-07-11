@@ -35,7 +35,7 @@ namespace NetworkInspector.Protocols;
 /// </summary>
 /// <remarks>
 /// <para><b>Thread safety:</b> instances are immutable after registration completes.
-/// All mutable state is initialised inside <c>RegisterFieldsCustom</c> / <c>OnStartCustom</c>
+/// All mutable state is initialised inside <c>RegisterFieldsCustom</c> / <c>_OnStartCustom</c>
 /// (single-threaded build phase) and is read-only thereafter, so <see cref="Parse"/> may
 /// be invoked concurrently from any number of threads on the same instance without external
 /// synchronisation. Per-thread caches (when present) are stored in <c>[ThreadStatic]</c> fields.</para>
@@ -54,28 +54,28 @@ public sealed partial class HttpProtocol : IProtocol
     public const ulong TcpPort8080 = 8080;
 
     /// <summary>Index group for always-present HTTP fields.</summary>
-    private const string HttpIndexGroup = "http";
+    private const string _HttpIndexGroup = "http";
 
     /// <summary>Protocol table name for content-type–based dispatch.</summary>
     public const string ContentTypeTableName = "http.content_type";
 
     /// <summary>Maximum number of headers to parse (DoS protection).</summary>
-    private const int MaxHeaders = 256;
+    private const int _MaxHeaders = 256;
 
     /// <summary>Maximum header line length in bytes (DoS protection).</summary>
-    private const int MaxLineLength = 8192;
+    private const int _MaxLineLength = 8192;
 
     /// <summary>Protocol table name for HTTP Upgrade dispatch (e.g., WebSocket).</summary>
     public const string UpgradeTableName = "http.upgrade";
 
     /// <summary>Status code for 101 Switching Protocols.</summary>
-    private const ushort SwitchingProtocolsCode = 101;
+    private const ushort _SwitchingProtocolsCode = 101;
 
     #endregion
 
     #region Protocol container
 
-    [BytesField("http", "Hypertext Transfer Protocol", IndexGroup = HttpIndexGroup)]
+    [BytesField("http", "Hypertext Transfer Protocol", IndexGroup = _HttpIndexGroup)]
     private FieldId _ProtocolFieldId;
 
     #endregion
@@ -128,13 +128,13 @@ public sealed partial class HttpProtocol : IProtocol
 
     #region Header fields
 
-    [NoneField("http.header", "Header", IndexGroup = HttpIndexGroup)]
+    [NoneField("http.header", "Header", IndexGroup = _HttpIndexGroup)]
     private FieldId _HeaderFieldId;
 
-    [StringField("http.header.name", "Name", IndexGroup = HttpIndexGroup)]
+    [StringField("http.header.name", "Name", IndexGroup = _HttpIndexGroup)]
     private FieldId _HeaderNameFieldId;
 
-    [StringField("http.header.value", "Value", IndexGroup = HttpIndexGroup)]
+    [StringField("http.header.value", "Value", IndexGroup = _HttpIndexGroup)]
     private FieldId _HeaderValueFieldId;
 
     #endregion
@@ -191,9 +191,9 @@ public sealed partial class HttpProtocol : IProtocol
     /// <summary>
     /// Resolves sub-protocol IDs for content-type dispatch.
     /// </summary>
-    partial void OnStartCustom(Stack stack)
+    partial void _OnStartCustom(Stack stack)
     {
-        _Populator = PopulateHttpFields;
+        _Populator = _PopulateHttpFields;
         _JsonProtocolId = stack.GetProtocolId("json") ?? default;
         _TextProtocolId = stack.GetProtocolId("text") ?? default;
     }
@@ -211,7 +211,7 @@ public sealed partial class HttpProtocol : IProtocol
         ReadOnlySpan<byte> span = data.Span;
 
         // Find the first line (request line or status line)
-        int firstLineEnd = FindLineEnd(span);
+        int firstLineEnd = _FindLineEnd(span);
         if (firstLineEnd < 0)
         {
             return 0; // Not enough data for a complete first line — skip
@@ -221,7 +221,7 @@ public sealed partial class HttpProtocol : IProtocol
 
         // Determine if this is a request or response
         bool isResponse = firstLine.StartsWith("HTTP/"u8);
-        bool isRequest = !isResponse && IsHttpMethod(firstLine);
+        bool isRequest = !isResponse && _IsHttpMethod(firstLine);
 
         if (!isRequest && !isResponse)
         {
@@ -258,7 +258,7 @@ public sealed partial class HttpProtocol : IProtocol
         // when the packet is finalized). Dispatch targets the same container field index the
         // lazy populator builds into, so the dispatched sub-protocol nests under the HTTP
         // container exactly as before — only the timing (eager) and context (real) change.
-        ParseResult dispatchResult = DispatchHttpBody(in container, data, isResponse, in context);
+        ParseResult dispatchResult = _DispatchHttpBody(in container, data, isResponse, in context);
         if (dispatchResult.IsError)
         {
             return dispatchResult;
@@ -273,22 +273,22 @@ public sealed partial class HttpProtocol : IProtocol
     /// content-type table, the built-in JSON/Text fallback, or — for a 101 Switching Protocols
     /// response — the HTTP Upgrade table. All dispatch uses the real <paramref name="context"/>.
     /// </summary>
-    private ParseResult DispatchHttpBody(
+    private ParseResult _DispatchHttpBody(
         in MutField container, ReadOnlyMemory<byte> httpData, bool isResponse, in ParseContext context)
     {
         ReadOnlySpan<byte> span = httpData.Span;
 
-        int firstLineEnd = FindLineEnd(span);
+        int firstLineEnd = _FindLineEnd(span);
         if (firstLineEnd < 0)
         {
             return 0;
         }
 
         ReadOnlySpan<byte> firstLine = span[..firstLineEnd];
-        ushort statusCode = isResponse ? ParseStatusCodeFromLine(firstLine) : (ushort)0;
+        ushort statusCode = isResponse ? _ParseStatusCodeFromLine(firstLine) : (ushort)0;
 
         // Move past the first line + CRLF
-        int offset = SkipPastCrLf(span, firstLineEnd);
+        int offset = _SkipPastCrLf(span, firstLineEnd);
 
         // Scan headers for the values that drive dispatch and for the header-derived index groups —
         // no field tree is built here. This single eager walk both selects the dispatch target and
@@ -297,7 +297,7 @@ public sealed partial class HttpProtocol : IProtocol
         HttpDispatchScan scan = default;
 
         int headerCount = 0;
-        while (offset < span.Length && headerCount < MaxHeaders)
+        while (offset < span.Length && headerCount < _MaxHeaders)
         {
             // Empty line marks end of headers
             if (offset < span.Length - 1 && span[offset] == (byte)'\r' && span[offset + 1] == (byte)'\n')
@@ -311,15 +311,15 @@ public sealed partial class HttpProtocol : IProtocol
                 break;
             }
 
-            int lineEnd = FindLineEnd(span[offset..]);
-            if (lineEnd < 0 || lineEnd > MaxLineLength)
+            int lineEnd = _FindLineEnd(span[offset..]);
+            if (lineEnd < 0 || lineEnd > _MaxLineLength)
             {
                 break; // Unterminated or excessively long header
             }
 
-            ScanHeaderLineForDispatch(span.Slice(offset, lineEnd), ref scan);
+            _ScanHeaderLineForDispatch(span.Slice(offset, lineEnd), ref scan);
 
-            offset = SkipPastCrLf(span, offset + lineEnd);
+            offset = _SkipPastCrLf(span, offset + lineEnd);
             headerCount++;
         }
 
@@ -374,7 +374,7 @@ public sealed partial class HttpProtocol : IProtocol
         bool decoded = false;
         if (scan.IsChunked)
         {
-            ReadOnlyMemory<byte>? dechunked = DechunkBody(body);
+            ReadOnlyMemory<byte>? dechunked = _DechunkBody(body);
             if (dechunked is not null)
             {
                 effectiveBody = dechunked.Value;
@@ -383,7 +383,7 @@ public sealed partial class HttpProtocol : IProtocol
         }
         if (scan.ContentEncoding is not null)
         {
-            ReadOnlyMemory<byte>? decompressed = DecompressBody(effectiveBody, scan.ContentEncoding);
+            ReadOnlyMemory<byte>? decompressed = _DecompressBody(effectiveBody, scan.ContentEncoding);
             if (decompressed is not null)
             {
                 effectiveBody = decompressed.Value;
@@ -402,7 +402,7 @@ public sealed partial class HttpProtocol : IProtocol
         if (scan.ContentType is not null)
         {
             // Extract base content type without parameters (e.g., "application/json" from "application/json; charset=utf-8")
-            string baseType = ExtractBaseContentType(scan.ContentType);
+            string baseType = _ExtractBaseContentType(scan.ContentType);
 
             ParseResult dispatchResult = container.TryCallNextProtocolString(
                 _ContentTypeTableId, baseType, dispatchBody, in context);
@@ -415,12 +415,12 @@ public sealed partial class HttpProtocol : IProtocol
             // Fallback: dispatch known content types to built-in protocols
             if (!dispatched)
             {
-                dispatched = TryDispatchByContentType(in container, baseType, dispatchBody, in context);
+                dispatched = _TryDispatchByContentType(in container, baseType, dispatchBody, in context);
             }
         }
 
         // Handle HTTP 101 Switching Protocols — dispatch remaining data via upgrade table
-        if (!dispatched && isResponse && statusCode == SwitchingProtocolsCode
+        if (!dispatched && isResponse && statusCode == _SwitchingProtocolsCode
             && scan.Upgrade is not null
             && scan.Connection is not null
             && scan.Connection.Contains("Upgrade", StringComparison.OrdinalIgnoreCase))
@@ -445,7 +445,7 @@ public sealed partial class HttpProtocol : IProtocol
     /// Extracts the HTTP status code from a status line (e.g. <c>HTTP/1.1 200 OK</c>) without
     /// building any field. Returns 0 when the line cannot be parsed.
     /// </summary>
-    private static ushort ParseStatusCodeFromLine(ReadOnlySpan<byte> line)
+    private static ushort _ParseStatusCodeFromLine(ReadOnlySpan<byte> line)
     {
         int firstSpace = line.IndexOf((byte)' ');
         if (firstSpace < 0)
@@ -455,8 +455,22 @@ public sealed partial class HttpProtocol : IProtocol
 
         ReadOnlySpan<byte> rest = line[(firstSpace + 1)..];
         int secondSpace = rest.IndexOf((byte)' ');
-        ReadOnlySpan<byte> codeSpan = secondSpace < 0 ? rest : rest[..secondSpace];
-        return TryParseStatusCode(codeSpan, out ushort code) ? code : (ushort)0;
+        ReadOnlySpan<byte> codeSpan;
+        if (secondSpace < 0)
+        {
+            codeSpan = rest;
+        }
+        else
+        {
+            codeSpan = rest[..secondSpace];
+        }
+
+        if (_TryParseStatusCode(codeSpan, out ushort code))
+        {
+            return code;
+        }
+
+        return 0;
     }
 
     /// <summary>
@@ -466,7 +480,7 @@ public sealed partial class HttpProtocol : IProtocol
     /// index records http.content_type / .content_length / .host / .user_agent / .transfer_encoding
     /// / .content_encoding / .upgrade / .connection exactly when the populator emits the field.
     /// </summary>
-    private static void ScanHeaderLineForDispatch(ReadOnlySpan<byte> line, ref HttpDispatchScan scan)
+    private static void _ScanHeaderLineForDispatch(ReadOnlySpan<byte> line, ref HttpDispatchScan scan)
     {
         int colonPos = line.IndexOf((byte)':');
         if (colonPos < 0)
@@ -493,7 +507,7 @@ public sealed partial class HttpProtocol : IProtocol
         {
             // Populator emits http.content_length only when the value parses to a non-negative long.
             // Utf8Parser avoids the intermediate string from Encoding.ASCII.GetString.
-            // FindLineEnd strips the CRLF, so valueSpan contains only the digits after leading-space trim.
+            // _FindLineEnd strips the CRLF, so valueSpan contains only the digits after leading-space trim.
             if (Utf8Parser.TryParse(valueSpan, out long len, out int consumed)
                 && consumed == valueSpan.Length
                 && len >= 0)
@@ -513,7 +527,7 @@ public sealed partial class HttpProtocol : IProtocol
         {
             scan.HasTransferEncoding = true;
             // Byte-level substring scan avoids allocating a string just to check for "chunked".
-            if (ContainsIgnoreAsciiCase(valueSpan, "chunked"u8))
+            if (_ContainsIgnoreAsciiCase(valueSpan, "chunked"u8))
             {
                 scan.IsChunked = true;
             }
@@ -554,7 +568,7 @@ public sealed partial class HttpProtocol : IProtocol
     /// <summary>
     /// Lazily populates all HTTP fields from the stored message data.
     /// </summary>
-    private ParseResult PopulateHttpFields(in MutField container)
+    private ParseResult _PopulateHttpFields(in MutField container)
     {
         if (!container.Value.Data.TryGetAsBytes(out ReadOnlyMemory<byte> httpData))
         {
@@ -562,7 +576,7 @@ public sealed partial class HttpProtocol : IProtocol
         }
         ReadOnlySpan<byte> span = httpData.Span;
 
-        int firstLineEnd = FindLineEnd(span);
+        int firstLineEnd = _FindLineEnd(span);
         if (firstLineEnd < 0)
         {
             return ParseError.InsufficientDataWithInfo(ProtocolName, 1, 0);
@@ -574,15 +588,15 @@ public sealed partial class HttpProtocol : IProtocol
         // Parse and append first line fields
         if (isResponse)
         {
-            ParseStatusLine(in container, firstLine);
+            _ParseStatusLine(in container, firstLine);
         }
         else
         {
-            ParseRequestLine(in container, firstLine);
+            _ParseRequestLine(in container, firstLine);
         }
 
         // Move past the first line + CRLF
-        int offset = SkipPastCrLf(span, firstLineEnd);
+        int offset = _SkipPastCrLf(span, firstLineEnd);
 
         // Parse headers
         string? contentType = null;
@@ -593,7 +607,7 @@ public sealed partial class HttpProtocol : IProtocol
         string? connection = null;
 
         int headerCount = 0;
-        while (offset < span.Length && headerCount < MaxHeaders)
+        while (offset < span.Length && headerCount < _MaxHeaders)
         {
             // Empty line marks end of headers
             if (offset < span.Length - 1 && span[offset] == (byte)'\r' && span[offset + 1] == (byte)'\n')
@@ -607,17 +621,17 @@ public sealed partial class HttpProtocol : IProtocol
                 break;
             }
 
-            int lineEnd = FindLineEnd(span[offset..]);
-            if (lineEnd < 0 || lineEnd > MaxLineLength)
+            int lineEnd = _FindLineEnd(span[offset..]);
+            if (lineEnd < 0 || lineEnd > _MaxLineLength)
             {
                 break; // Unterminated or excessively long header
             }
 
             ReadOnlySpan<byte> headerLine = span.Slice(offset, lineEnd);
-            ParseHeaderLine(in container, headerLine, ref contentType, ref contentLength,
+            _ParseHeaderLine(in container, headerLine, ref contentType, ref contentLength,
                 ref isChunked, ref contentEncoding, ref upgrade, ref connection);
 
-            offset = SkipPastCrLf(span, offset + lineEnd);
+            offset = _SkipPastCrLf(span, offset + lineEnd);
             headerCount++;
         }
 
@@ -641,7 +655,7 @@ public sealed partial class HttpProtocol : IProtocol
             bool decoded = false;
             if (isChunked)
             {
-                ReadOnlyMemory<byte>? dechunked = DechunkBody(body);
+                ReadOnlyMemory<byte>? dechunked = _DechunkBody(body);
                 if (dechunked is not null)
                 {
                     effectiveBody = dechunked.Value;
@@ -652,7 +666,7 @@ public sealed partial class HttpProtocol : IProtocol
             // Step 2: Decompress if Content-Encoding is gzip, deflate, or br
             if (contentEncoding is not null)
             {
-                ReadOnlyMemory<byte>? decompressed = DecompressBody(effectiveBody, contentEncoding);
+                ReadOnlyMemory<byte>? decompressed = _DecompressBody(effectiveBody, contentEncoding);
                 if (decompressed is not null)
                 {
                     effectiveBody = decompressed.Value;
@@ -681,7 +695,7 @@ public sealed partial class HttpProtocol : IProtocol
     /// <summary>
     /// Parses an HTTP request line: METHOD SP URI SP VERSION.
     /// </summary>
-    private void ParseRequestLine(in MutField container, ReadOnlySpan<byte> line)
+    private void _ParseRequestLine(in MutField container, ReadOnlySpan<byte> line)
     {
         container.Append(_RequestFieldId, FieldValue.NewBool(true));
 
@@ -715,7 +729,7 @@ public sealed partial class HttpProtocol : IProtocol
     /// <summary>
     /// Parses an HTTP status line: VERSION SP STATUS SP REASON and appends the response fields.
     /// </summary>
-    private void ParseStatusLine(in MutField container, ReadOnlySpan<byte> line)
+    private void _ParseStatusLine(in MutField container, ReadOnlySpan<byte> line)
     {
         container.Append(_ResponseFieldId, FieldValue.NewBool(true));
 
@@ -735,14 +749,14 @@ public sealed partial class HttpProtocol : IProtocol
         if (secondSpace < 0)
         {
             // Status code only, no reason phrase
-            if (TryParseStatusCode(rest, out ushort code))
+            if (_TryParseStatusCode(rest, out ushort code))
             {
                 container.Append(_ResponseCodeFieldId, FieldValue.NewU64(code));
             }
             return;
         }
 
-        if (TryParseStatusCode(rest[..secondSpace], out ushort statusCode))
+        if (_TryParseStatusCode(rest[..secondSpace], out ushort statusCode))
         {
             container.Append(_ResponseCodeFieldId, FieldValue.NewU64(statusCode));
         }
@@ -755,7 +769,7 @@ public sealed partial class HttpProtocol : IProtocol
     /// Parses a single HTTP header line and appends it to the field tree.
     /// Also extracts well-known header values.
     /// </summary>
-    private void ParseHeaderLine(
+    private void _ParseHeaderLine(
         in MutField container,
         ReadOnlySpan<byte> line,
         ref string? contentType,
@@ -795,7 +809,7 @@ public sealed partial class HttpProtocol : IProtocol
         }
         else if (name.Equals("Content-Length", StringComparison.OrdinalIgnoreCase))
         {
-            if (long.TryParse(value, out long len) && len >= 0)
+            if (long.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out long len) && len >= 0)
             {
                 contentLength = len;
             }
@@ -837,7 +851,7 @@ public sealed partial class HttpProtocol : IProtocol
     /// Attempts to dispatch the body to a known protocol based on content type.
     /// Falls back to JSON protocol for application/json, Text protocol for text/* types.
     /// </summary>
-    private bool TryDispatchByContentType(in MutField container, string baseType, ReadOnlyMemory<byte> body, in ParseContext context)
+    private bool _TryDispatchByContentType(in MutField container, string baseType, ReadOnlyMemory<byte> body, in ParseContext context)
     {
         // JSON content types
         if (baseType.Equals("application/json", StringComparison.OrdinalIgnoreCase) &&
@@ -862,7 +876,7 @@ public sealed partial class HttpProtocol : IProtocol
     /// Finds the end of the current line (position of CR or LF).
     /// Returns -1 if no line ending is found.
     /// </summary>
-    private static int FindLineEnd(ReadOnlySpan<byte> data)
+    private static int _FindLineEnd(ReadOnlySpan<byte> data)
     {
         for (int i = 0; i < data.Length; i++)
         {
@@ -877,7 +891,7 @@ public sealed partial class HttpProtocol : IProtocol
     /// <summary>
     /// Advances past CRLF or LF at the given position.
     /// </summary>
-    private static int SkipPastCrLf(ReadOnlySpan<byte> data, int pos)
+    private static int _SkipPastCrLf(ReadOnlySpan<byte> data, int pos)
     {
         if (pos < data.Length && data[pos] == (byte)'\r')
         {
@@ -893,7 +907,7 @@ public sealed partial class HttpProtocol : IProtocol
     /// <summary>
     /// Checks if the first line looks like an HTTP request by testing for known methods.
     /// </summary>
-    private static bool IsHttpMethod(ReadOnlySpan<byte> line)
+    private static bool _IsHttpMethod(ReadOnlySpan<byte> line)
     {
         return line.StartsWith("GET "u8) ||
                line.StartsWith("POST "u8) ||
@@ -912,7 +926,7 @@ public sealed partial class HttpProtocol : IProtocol
     /// Both spans must contain only ASCII bytes.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static bool ContainsIgnoreAsciiCase(ReadOnlySpan<byte> haystack, ReadOnlySpan<byte> needle)
+    private static bool _ContainsIgnoreAsciiCase(ReadOnlySpan<byte> haystack, ReadOnlySpan<byte> needle)
     {
         if (needle.Length > haystack.Length)
         {
@@ -931,7 +945,7 @@ public sealed partial class HttpProtocol : IProtocol
     /// <summary>
     /// Parses an ASCII status code from the given span.
     /// </summary>
-    private static bool TryParseStatusCode(ReadOnlySpan<byte> data, out ushort code)
+    private static bool _TryParseStatusCode(ReadOnlySpan<byte> data, out ushort code)
     {
         code = 0;
         if (data.Length != 3)
@@ -942,7 +956,7 @@ public sealed partial class HttpProtocol : IProtocol
             {
                 chars[i] = (char)data[i];
             }
-            return ushort.TryParse(chars, out code);
+            return ushort.TryParse(chars, NumberStyles.Integer, CultureInfo.InvariantCulture, out code);
         }
 
         // Fast path for exactly 3 digits
@@ -961,7 +975,7 @@ public sealed partial class HttpProtocol : IProtocol
     /// Extracts the base content type without parameters.
     /// E.g., "application/json; charset=utf-8" → "application/json".
     /// </summary>
-    private static string ExtractBaseContentType(string contentType)
+    private static string _ExtractBaseContentType(string contentType)
     {
         int semicolonPos = contentType.IndexOf(';', StringComparison.Ordinal);
         if (semicolonPos >= 0)
@@ -976,7 +990,7 @@ public sealed partial class HttpProtocol : IProtocol
     /// Format: {hex-size}\r\n{data}\r\n ... 0\r\n\r\n
     /// Returns null if the data does not look like valid chunked encoding.
     /// </summary>
-    private static ReadOnlyMemory<byte>? DechunkBody(ReadOnlyMemory<byte> body)
+    private static ReadOnlyMemory<byte>? _DechunkBody(ReadOnlyMemory<byte> body)
     {
         ReadOnlySpan<byte> span = body.Span;
 
@@ -1003,7 +1017,7 @@ public sealed partial class HttpProtocol : IProtocol
             }
 
             // Parse hex chunk size
-            if (!TryParseHexChunkSize(sizeLine, out int chunkSize))
+            if (!_TryParseHexChunkSize(sizeLine, out int chunkSize))
             {
                 return null; // Not valid hex
             }
@@ -1057,7 +1071,7 @@ public sealed partial class HttpProtocol : IProtocol
                 sizeLine = sizeLine[..semiPos];
             }
 
-            if (!TryParseHexChunkSize(sizeLine, out int chunkSize) || chunkSize == 0)
+            if (!_TryParseHexChunkSize(sizeLine, out int chunkSize) || chunkSize == 0)
             {
                 break;
             }
@@ -1074,7 +1088,7 @@ public sealed partial class HttpProtocol : IProtocol
     /// <summary>
     /// Parses a hexadecimal chunk size from ASCII bytes.
     /// </summary>
-    private static bool TryParseHexChunkSize(ReadOnlySpan<byte> hex, out int size)
+    private static bool _TryParseHexChunkSize(ReadOnlySpan<byte> hex, out int size)
     {
         size = 0;
         if (hex.Length == 0 || hex.Length > 8) // max 8 hex digits (32-bit)
@@ -1116,7 +1130,7 @@ public sealed partial class HttpProtocol : IProtocol
     /// Supports gzip, deflate, and br (Brotli).
     /// Returns null if decompression fails or the encoding is unsupported.
     /// </summary>
-    private static ReadOnlyMemory<byte>? DecompressBody(ReadOnlyMemory<byte> body, string encoding)
+    private static ReadOnlyMemory<byte>? _DecompressBody(ReadOnlyMemory<byte> body, string encoding)
     {
         if (body.Length == 0)
         {

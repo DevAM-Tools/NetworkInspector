@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Protocols.Tests;
 
@@ -8,7 +8,7 @@ namespace NetworkInspector.Protocols.Tests;
 /// </summary>
 internal sealed class TlsBasicTests
 {
-    private static byte[] MakeRandom32(byte seed)
+    private static byte[] _MakeRandom32(byte seed)
     {
         byte[] r = new byte[32];
         for (int i = 0; i < 32; i++)
@@ -47,7 +47,7 @@ internal sealed class TlsBasicTests
             TlsRecordLayer.BuildSniExtensionBody("example.com"));
         byte[] body = TlsRecordLayer.BuildClientHelloBody(
             TlsRecordLayer.Tls12,
-            MakeRandom32(0x10),
+            _MakeRandom32(0x10),
             sessionId: [],
             cipherSuites: [0x1301, 0x1302],
             compressionMethods: [0x00],
@@ -76,7 +76,7 @@ internal sealed class TlsBasicTests
             TlsExtensionType.Alpn,
             TlsRecordLayer.BuildAlpnExtensionBody("h2", "http/1.1"));
         byte[] body = TlsRecordLayer.BuildClientHelloBody(
-            TlsRecordLayer.Tls12, MakeRandom32(0x20), [],
+            TlsRecordLayer.Tls12, _MakeRandom32(0x20), [],
             [0x1301], [0x00], alpn);
         byte[] hs = TlsRecordLayer.BuildHandshakeMessage(TlsHandshakeType.ClientHello, body);
         TlsRecordLayer tls = TlsRecordLayer.BuildRecord(TlsContentType.Handshake, TlsRecordLayer.Tls10, hs);
@@ -100,7 +100,7 @@ internal sealed class TlsBasicTests
             TlsExtensionType.SupportedVersions,
             TlsRecordLayer.BuildSupportedVersionsExtensionBody(TlsRecordLayer.Tls13, TlsRecordLayer.Tls12));
         byte[] body = TlsRecordLayer.BuildClientHelloBody(
-            TlsRecordLayer.Tls12, MakeRandom32(0x30), [],
+            TlsRecordLayer.Tls12, _MakeRandom32(0x30), [],
             [0x1301], [0x00], sv);
         byte[] hs = TlsRecordLayer.BuildHandshakeMessage(TlsHandshakeType.ClientHello, body);
         TlsRecordLayer tls = TlsRecordLayer.BuildRecord(TlsContentType.Handshake, TlsRecordLayer.Tls10, hs);
@@ -121,7 +121,7 @@ internal sealed class TlsBasicTests
     public async Task Parse_ServerHello_CipherSuite()
     {
         byte[] body = TlsRecordLayer.BuildServerHelloBody(
-            TlsRecordLayer.Tls12, MakeRandom32(0x40), [],
+            TlsRecordLayer.Tls12, _MakeRandom32(0x40), [],
             cipherSuite: 0x1301, compressionMethod: 0, extensionsConcatenated: []);
         byte[] hs = TlsRecordLayer.BuildHandshakeMessage(TlsHandshakeType.ServerHello, body);
         TlsRecordLayer tls = TlsRecordLayer.BuildRecord(TlsContentType.Handshake, TlsRecordLayer.Tls12, hs);

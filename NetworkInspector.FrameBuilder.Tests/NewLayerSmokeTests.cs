@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 
 namespace NetworkInspector.FrameBuilder.Tests;
@@ -40,7 +40,7 @@ internal sealed class NewLayerSmokeTests
         FB.EthernetLayer eth = new(_DstMac, _SrcMac);
         FB.VlanLayer vlan = new(vlanId: 100, pcp: 3);
         FB.IPv4Layer ip = new(_SrcIp4, _DstIp4);
-        FB.UdpLayer udp = new(53, 53, FB.Auto<ushort>.Explicit(0));
+        FB.UdpLayer udp = new(53, 53, FB.Auto.Explicit((ushort)0));
 
         FB.CreatedStack<
             FB.StatelessStack<FB.UdpLayer,
@@ -57,7 +57,7 @@ internal sealed class NewLayerSmokeTests
 
         const int ExpectedTotal = 14 + 4 + 20 + 8 + 4; // payload = 4
         byte[] frame = new byte[ExpectedTotal];
-        int written = EmitOnce(in stack, _Payload, frame);
+        int written = _EmitOnce(in stack, _Payload, frame);
 
         await Assert.That(written).IsEqualTo(ExpectedTotal);
 
@@ -82,7 +82,7 @@ internal sealed class NewLayerSmokeTests
         FB.VlanLayer outerTag = new(vlanId: 200, isQinQ: true);
         FB.VlanLayer innerTag = new(vlanId: 100);
         FB.IPv4Layer ip = new(_SrcIp4, _DstIp4);
-        FB.UdpLayer udp = new(53, 53, FB.Auto<ushort>.Explicit(0));
+        FB.UdpLayer udp = new(53, 53, FB.Auto.Explicit((ushort)0));
 
         FB.CreatedStack<
             FB.StatelessStack<FB.UdpLayer,
@@ -100,7 +100,7 @@ internal sealed class NewLayerSmokeTests
                 .CreateWithFixedValues();
 
         byte[] frame = new byte[14 + 4 + 4 + 20 + 8 + _Payload.Length];
-        int written = EmitOnce(in stack, _Payload, frame);
+        int written = _EmitOnce(in stack, _Payload, frame);
         await Assert.That(written).IsEqualTo(frame.Length);
 
         // Eth.EtherType = QinQ (outer tag's TPID).
@@ -140,7 +140,7 @@ internal sealed class NewLayerSmokeTests
 
         const int ExpectedTotal = 14 + 40 + 8 + 4; // payload = 4
         byte[] frame = new byte[ExpectedTotal];
-        int written = EmitOnce(in stack, _Payload, frame);
+        int written = _EmitOnce(in stack, _Payload, frame);
 
         await Assert.That(written).IsEqualTo(ExpectedTotal);
 
@@ -183,7 +183,7 @@ internal sealed class NewLayerSmokeTests
                 .CreateWithFixedValues();
 
         byte[] frame = new byte[14 + 20 + 20 + _Payload.Length];
-        int written = EmitOnce(in stack, _Payload, frame);
+        int written = _EmitOnce(in stack, _Payload, frame);
         await Assert.That(written).IsEqualTo(frame.Length);
 
         // IP.Protocol = TCP (6).
@@ -227,7 +227,7 @@ internal sealed class NewLayerSmokeTests
                 .CreateWithFixedValues();
 
         byte[] frame = new byte[14 + 28];
-        int written = EmitOnce(in stack, ReadOnlySpan<byte>.Empty, frame);
+        int written = _EmitOnce(in stack, ReadOnlySpan<byte>.Empty, frame);
         await Assert.That(written).IsEqualTo(frame.Length);
 
         // Eth.EtherType = ARP (0x0806).
@@ -266,7 +266,7 @@ internal sealed class NewLayerSmokeTests
                 .CreateWithFixedValues();
 
         byte[] frame = new byte[14 + 20 + 8 + _Payload.Length];
-        int written = EmitOnce(in stack, _Payload, frame);
+        int written = _EmitOnce(in stack, _Payload, frame);
         await Assert.That(written).IsEqualTo(frame.Length);
 
         // IP.Protocol = ICMP (1).
@@ -303,7 +303,7 @@ internal sealed class NewLayerSmokeTests
                 .CreateWithFixedValues();
 
         byte[] frame = new byte[14 + 40 + 8 + _Payload.Length];
-        int written = EmitOnce(in stack, _Payload, frame);
+        int written = _EmitOnce(in stack, _Payload, frame);
         await Assert.That(written).IsEqualTo(frame.Length);
 
         // IPv6.NextHeader = ICMPv6 (58).
@@ -329,7 +329,7 @@ internal sealed class NewLayerSmokeTests
         // Router Alert option: type(148)+len(4)+value(0x0000) = 4 bytes (already aligned).
         byte[] options = [148, 4, 0x00, 0x00];
         FB.IPv4LayerWithOptions ip = new(_SrcIp4, _DstIp4, options);
-        FB.UdpLayer udp = new(1000, 53, FB.Auto<ushort>.Explicit(0));
+        FB.UdpLayer udp = new(1000, 53, FB.Auto.Explicit((ushort)0));
 
         FB.CreatedStack<
             FB.StatelessStack<FB.UdpLayer,
@@ -344,7 +344,7 @@ internal sealed class NewLayerSmokeTests
 
         const int IpHeader = 24; // 20 + 4 options
         byte[] frame = new byte[14 + IpHeader + 8 + _Payload.Length];
-        int written = EmitOnce(in stack, _Payload, frame);
+        int written = _EmitOnce(in stack, _Payload, frame);
         await Assert.That(written).IsEqualTo(frame.Length);
 
         // VersionIhl: low nibble = IHL in 32-bit words = 6 (24 bytes).
@@ -394,7 +394,7 @@ internal sealed class NewLayerSmokeTests
 
         const int TcpHeader = 24; // 20 + 4 options
         byte[] frame = new byte[14 + 20 + TcpHeader + _Payload.Length];
-        int written = EmitOnce(in stack, _Payload, frame);
+        int written = _EmitOnce(in stack, _Payload, frame);
         await Assert.That(written).IsEqualTo(frame.Length);
 
         // IP.Protocol = TCP (6).
@@ -420,7 +420,7 @@ internal sealed class NewLayerSmokeTests
     #region Helpers
 
     /// <summary>Sync helper that emits a single frame and returns its byte length.</summary>
-    private static int EmitOnce<TStack, TTrailer, TInterceptor>(
+    private static int _EmitOnce<TStack, TTrailer, TInterceptor>(
         in FB.CreatedStack<TStack, TTrailer, TInterceptor> created,
         ReadOnlySpan<byte> payload,
         Span<byte> dst)

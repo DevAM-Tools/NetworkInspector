@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Core.Tests;
 
@@ -75,10 +75,10 @@ internal sealed class IPv6AddressTests
     // === IBinarySerializable ===
 
     [Test]
-    public async Task TryGetSerializedSize()
+    public async Task TryGetWrittenSize()
     {
         IPv6Address ip = new(1, 2);
-        bool ok = ip.TryGetSerializedSize(out int size);
+        bool ok = ip.TryGetWrittenSize(out int size);
         await Assert.That(ok).IsTrue();
         await Assert.That(size).IsEqualTo(16);
     }

@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Protocols.Tests;
 
@@ -9,7 +9,7 @@ namespace NetworkInspector.Protocols.Tests;
 internal sealed class EthernetBasicTests
 {
     /// <summary>Creates a minimal Ethernet+IPv4+UDP frame for testing.</summary>
-    private static byte[] BuildEthFrame()
+    private static byte[] _BuildEthFrame()
     {
         MacAddress dstMac = MacAddress.FromBytes([0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF]);
         MacAddress srcMac = MacAddress.FromBytes([0x11, 0x22, 0x33, 0x44, 0x55, 0x66]);
@@ -24,7 +24,7 @@ internal sealed class EthernetBasicTests
     [Test]
     public async Task Parse_EthernetFrame_DstMac()
     {
-        byte[] frame = BuildEthFrame();
+        byte[] frame = _BuildEthFrame();
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -43,7 +43,7 @@ internal sealed class EthernetBasicTests
     [Test]
     public async Task Parse_EthernetFrame_SrcMac()
     {
-        byte[] frame = BuildEthFrame();
+        byte[] frame = _BuildEthFrame();
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -62,7 +62,7 @@ internal sealed class EthernetBasicTests
     [Test]
     public async Task Parse_EthernetFrame_EtherTypeIPv4()
     {
-        byte[] frame = BuildEthFrame();
+        byte[] frame = _BuildEthFrame();
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {

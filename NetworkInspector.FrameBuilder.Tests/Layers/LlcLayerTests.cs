@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.FrameBuilder.Tests.Layers;
 
@@ -109,7 +109,7 @@ internal sealed class LlcLayerTests
     public async Task WriteHeader_SnapLlc_ExplicitEtherType_WrittenAtOffset6()
     {
         // An explicit EtherType must appear in bytes 6–7 after WriteHeader.
-        LlcLayer layer = LlcLayer.CreateSnap(etherType: FB.Auto<ushort>.Explicit(0x0800));
+        LlcLayer layer = LlcLayer.CreateSnap(etherType: FB.Auto.Explicit((ushort)0x0800));
         byte[] buf = new byte[8];
 
         layer.WriteHeader(buf.AsSpan());
@@ -130,7 +130,7 @@ internal sealed class LlcLayerTests
         LlcLayer layer = LlcLayer.CreateSnap(); // auto EtherType
         byte[] frame = new byte[32];
 
-        layer.PatchNextProtocol(frame.AsSpan(), myOffset: 0, next: 0x0800);
+        layer.PatchNextProtocol(frame.AsSpan(), myOffset: 0, nextProtocol: 0x0800);
 
         ushort patched = BinaryPrimitives.ReadUInt16BigEndian(frame.AsSpan(6, 2));
         await Assert.That(patched).IsEqualTo((ushort)0x0800);
@@ -140,11 +140,11 @@ internal sealed class LlcLayerTests
     public async Task PatchNextProtocol_SnapExplicitEtherType_DoesNotOverwrite()
     {
         // An explicit EtherType must not be patched over.
-        LlcLayer layer = LlcLayer.CreateSnap(etherType: FB.Auto<ushort>.Explicit(0x0800));
+        LlcLayer layer = LlcLayer.CreateSnap(etherType: FB.Auto.Explicit((ushort)0x0800));
         byte[] frame = new byte[32];
 
         layer.WriteHeader(frame.AsSpan());
-        layer.PatchNextProtocol(frame.AsSpan(), myOffset: 0, next: 0x86DD);
+        layer.PatchNextProtocol(frame.AsSpan(), myOffset: 0, nextProtocol: 0x86DD);
 
         ushort etherType = BinaryPrimitives.ReadUInt16BigEndian(frame.AsSpan(6, 2));
         await Assert.That(etherType).IsEqualTo((ushort)0x0800)
@@ -158,7 +158,7 @@ internal sealed class LlcLayerTests
         LlcLayer layer = new(dsap: 0x00, ssap: 0x00);
         byte[] frame = new byte[32]; // all zeros initially
 
-        layer.PatchNextProtocol(frame.AsSpan(), myOffset: 0, next: 0x0800);
+        layer.PatchNextProtocol(frame.AsSpan(), myOffset: 0, nextProtocol: 0x0800);
 
         // Frame should remain all zeros — no bytes written
         await Assert.That(frame.All(static b => b == 0)).IsTrue()

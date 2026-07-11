@@ -3,6 +3,89 @@
 namespace NetworkInspector.Core.Cache;
 
 /// <summary>
+/// Factory methods for <see cref="TwoQueueCache{TKey, TValue}"/>.
+/// </summary>
+public static class TwoQueueCache
+{
+    /// <summary>
+    /// Creates an unbounded 2Q cache. No eviction will occur.
+    /// The weigher is still called for accurate total-weight reporting.
+    /// </summary>
+    public static TwoQueueCache<TKey, TValue> CreateUnbounded<TKey, TValue>(
+        IWeigher<TKey, TValue>? weigher = null)
+        where TKey : notnull
+        => new(null, null, null, weigher);
+
+    /// <summary>
+    /// Creates a simple weight-bounded cache. Eviction is FIFO-first from A1in with no
+    /// separate A1in budget. Use <see cref="Create2Q"/> for the full scan-resistant algorithm.
+    /// </summary>
+    public static TwoQueueCache<TKey, TValue> CreateBounded<TKey, TValue>(
+        int maxWeight,
+        IWeigher<TKey, TValue>? weigher = null,
+        int? ghostMaxWeight = null)
+        where TKey : notnull
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(maxWeight);
+
+        if (ghostMaxWeight is { } resolvedGhostMaxWeight)
+        {
+            ArgumentOutOfRangeException.ThrowIfNegative(resolvedGhostMaxWeight);
+        }
+
+        int? effectiveGhostMaxWeight = maxWeight == 0 ? null : ghostMaxWeight ?? maxWeight;
+        return new TwoQueueCache<TKey, TValue>(maxWeight, null, effectiveGhostMaxWeight, weigher);
+    }
+
+    /// <summary>
+    /// Creates a bounded 2Q cache with the standard partitioning from the original paper:
+    /// A1in receives 25 % of <paramref name="maxWeight"/> and ghost tracks 50 %.
+    /// </summary>
+    public static TwoQueueCache<TKey, TValue> Create2Q<TKey, TValue>(
+        int maxWeight,
+        IWeigher<TKey, TValue>? weigher = null)
+        where TKey : notnull
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(maxWeight);
+
+        if (maxWeight == 0)
+        {
+            return new TwoQueueCache<TKey, TValue>(0, 0, null, weigher);
+        }
+
+        int a1InMaxWeight = maxWeight / 4;
+        int ghostMaxWeight = maxWeight / 2;
+        return new TwoQueueCache<TKey, TValue>(maxWeight, a1InMaxWeight, ghostMaxWeight, weigher);
+    }
+
+    /// <summary>
+    /// Creates a bounded 2Q cache with explicit partition budgets.
+    /// Use this only when measured workloads require different A1in or ghost ratios.
+    /// </summary>
+    public static TwoQueueCache<TKey, TValue> Create2QCustom<TKey, TValue>(
+        int maxWeight,
+        int a1InMaxWeight,
+        int ghostMaxWeight,
+        IWeigher<TKey, TValue>? weigher = null)
+        where TKey : notnull
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(maxWeight);
+        ArgumentOutOfRangeException.ThrowIfNegative(a1InMaxWeight);
+        ArgumentOutOfRangeException.ThrowIfNegative(ghostMaxWeight);
+
+        if (a1InMaxWeight > maxWeight)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(a1InMaxWeight),
+                a1InMaxWeight,
+                "A1in max weight must not exceed the total max weight.");
+        }
+
+        return new TwoQueueCache<TKey, TValue>(maxWeight, a1InMaxWeight, ghostMaxWeight, weigher);
+    }
+}
+
+/// <summary>
 /// Two-Queue (2Q) eviction cache with weight-based capacity.
 /// <list type="bullet">
 ///   <item><description>A1in: FIFO queue for recently inserted items (first access).</description></item>
@@ -12,9 +95,9 @@ namespace NetworkInspector.Core.Cache;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Use <see cref="CreateBounded"/> for simple weight-capped caching with FIFO-first eviction.
-/// Use <see cref="Create2Q"/> for the default 2Q partitioning (25% A1in, 50% ghost),
-/// <see cref="Create2QCustom"/> for explicit control, or <see cref="CreateUnbounded"/>
+/// Use <see cref="TwoQueueCache.CreateBounded{TKey, TValue}"/> for simple weight-capped caching with FIFO-first eviction.
+/// Use <see cref="TwoQueueCache.Create2Q{TKey, TValue}"/> for the default 2Q partitioning (25% A1in, 50% ghost),
+/// <see cref="TwoQueueCache.Create2QCustom{TKey, TValue}"/> for explicit control, or <see cref="TwoQueueCache.CreateUnbounded{TKey, TValue}"/>
 /// for no eviction.
 /// </para>
 /// <para>
@@ -61,7 +144,7 @@ public sealed class TwoQueueCache<TKey, TValue> where TKey : notnull
     #region Constructors
 
     /// <summary>Private constructor for factory methods with full control.</summary>
-    private TwoQueueCache(
+    internal TwoQueueCache(
         int? maxWeight,
         int? a1InMaxWeight,
         int? ghostMaxWeight,
@@ -74,98 +157,6 @@ public sealed class TwoQueueCache<TKey, TValue> where TKey : notnull
         _A1In = new LinkedMap<TKey, (TValue, int)>(capacity / 2);
         _Am = new LinkedMap<TKey, (TValue, int)>(capacity / 2);
         _Ghost = new GhostSet<TKey>(ghostMaxWeight);
-    }
-
-    #endregion
-
-    #region Factory Methods
-
-    /// <summary>
-    /// Creates an unbounded 2Q cache. No eviction will occur.
-    /// The weigher is still called for accurate <see cref="TotalWeight"/> reporting.
-    /// </summary>
-    public static TwoQueueCache<TKey, TValue> CreateUnbounded(
-        IWeigher<TKey, TValue>? weigher = null) => new(null, null, null, weigher);
-
-    /// <summary>
-    /// Creates a simple weight-bounded cache. Eviction is FIFO-first from A1in with no
-    /// separate A1in budget. Use <see cref="Create2Q"/> for the full scan-resistant algorithm.
-    /// </summary>
-    /// <param name="maxWeight">
-    /// Maximum total weight. A value of zero disables caching while still allowing lookups.
-    /// </param>
-    /// <param name="weigher">Weight calculator for entries. Defaults to unit weigher.</param>
-    /// <param name="ghostMaxWeight">
-    /// Optional ghost-set budget. When null, the ghost budget matches <paramref name="maxWeight"/>.
-    /// Use zero to disable ghost tracking explicitly.
-    /// </param>
-    public static TwoQueueCache<TKey, TValue> CreateBounded(
-        int maxWeight,
-        IWeigher<TKey, TValue>? weigher = null,
-        int? ghostMaxWeight = null)
-    {
-        ArgumentOutOfRangeException.ThrowIfNegative(maxWeight);
-
-        if (ghostMaxWeight is { } resolvedGhostMaxWeight)
-        {
-            ArgumentOutOfRangeException.ThrowIfNegative(resolvedGhostMaxWeight);
-        }
-
-        int? effectiveGhostMaxWeight = maxWeight == 0 ? null : ghostMaxWeight ?? maxWeight;
-        return new TwoQueueCache<TKey, TValue>(maxWeight, null, effectiveGhostMaxWeight, weigher);
-    }
-
-    /// <summary>
-    /// Creates a bounded 2Q cache with the standard partitioning from the original paper:
-    /// A1in receives 25 % of <paramref name="maxWeight"/> and ghost tracks 50 %.
-    /// </summary>
-    /// <param name="maxWeight">
-    /// Maximum total weight. A value of zero disables caching while still allowing lookups.
-    /// </param>
-    /// <param name="weigher">Weight calculator for entries. Defaults to unit weigher.</param>
-    public static TwoQueueCache<TKey, TValue> Create2Q(
-        int maxWeight,
-        IWeigher<TKey, TValue>? weigher = null)
-    {
-        ArgumentOutOfRangeException.ThrowIfNegative(maxWeight);
-
-        if (maxWeight == 0)
-        {
-            return new TwoQueueCache<TKey, TValue>(0, 0, null, weigher);
-        }
-
-        int a1InMaxWeight = maxWeight / 4;
-        int ghostMaxWeight = maxWeight / 2;
-        return new TwoQueueCache<TKey, TValue>(maxWeight, a1InMaxWeight, ghostMaxWeight, weigher);
-    }
-
-    /// <summary>
-    /// Creates a bounded 2Q cache with explicit partition budgets.
-    /// Use this only when measured workloads require different A1in or ghost ratios.
-    /// </summary>
-    /// <param name="maxWeight">Maximum total weight across A1in and Am.</param>
-    /// <param name="a1InMaxWeight">Maximum weight allowed in A1in before phase-1 trimming.</param>
-    /// <param name="ghostMaxWeight">Maximum total weight tracked by the ghost set.</param>
-    /// <param name="weigher">Weight calculator for entries. Defaults to unit weigher.</param>
-    public static TwoQueueCache<TKey, TValue> Create2QCustom(
-        int maxWeight,
-        int a1InMaxWeight,
-        int ghostMaxWeight,
-        IWeigher<TKey, TValue>? weigher = null)
-    {
-        ArgumentOutOfRangeException.ThrowIfNegative(maxWeight);
-        ArgumentOutOfRangeException.ThrowIfNegative(a1InMaxWeight);
-        ArgumentOutOfRangeException.ThrowIfNegative(ghostMaxWeight);
-
-        if (a1InMaxWeight > maxWeight)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(a1InMaxWeight),
-                a1InMaxWeight,
-                "A1in max weight must not exceed the total max weight.");
-        }
-
-        return new TwoQueueCache<TKey, TValue>(maxWeight, a1InMaxWeight, ghostMaxWeight, weigher);
     }
 
     #endregion
@@ -274,7 +265,7 @@ public sealed class TwoQueueCache<TKey, TValue> where TKey : notnull
         if (_Am.TryUpdateAndMoveToFront(key, (value, weight), out (TValue Value, int Weight) amOld))
         {
             _AmWeight = _AmWeight - amOld.Weight + weight;
-            EvictIfNeeded();
+            _EvictIfNeeded();
             return;
         }
 
@@ -282,7 +273,7 @@ public sealed class TwoQueueCache<TKey, TValue> where TKey : notnull
         if (_A1In.TryUpdateInPlace(key, (value, weight), out (TValue Value, int Weight) a1Old))
         {
             _A1InWeight = _A1InWeight - a1Old.Weight + weight;
-            EvictIfNeeded();
+            _EvictIfNeeded();
             return;
         }
 
@@ -291,14 +282,14 @@ public sealed class TwoQueueCache<TKey, TValue> where TKey : notnull
         {
             _Am.InsertFront(key, (value, weight));
             _AmWeight += weight;
-            EvictIfNeeded();
+            _EvictIfNeeded();
             return;
         }
 
         // Case 4: New entry → A1in (first-time access)
         _A1In.InsertFront(key, (value, weight));
         _A1InWeight += weight;
-        EvictIfNeeded();
+        _EvictIfNeeded();
     }
 
     /// <summary>Removes a key from the cache.</summary>
@@ -336,14 +327,14 @@ public sealed class TwoQueueCache<TKey, TValue> where TKey : notnull
     /// Phase 1: Trim A1in to its own limit (when configured via factory methods).
     /// Phase 2: Trim total weight by evicting from the appropriate queue.
     /// </summary>
-    private void EvictIfNeeded()
+    private void _EvictIfNeeded()
     {
         // Phase 1: Trim A1in to its own limit (only when A1in has a separate budget)
         if (_A1InMaxWeight is { } a1InLimit)
         {
             while (_A1InWeight > a1InLimit && !_A1In.IsEmpty)
             {
-                if (!EvictFromA1In())
+                if (!_EvictFromA1In())
                 {
                     break;
                 }
@@ -365,12 +356,12 @@ public sealed class TwoQueueCache<TKey, TValue> where TKey : notnull
             {
                 if (!_Am.IsEmpty)
                 {
-                    if (!EvictFromAm())
+                    if (!_EvictFromAm())
                     {
                         break;
                     }
                 }
-                else if (!EvictFromA1In())
+                else if (!_EvictFromA1In())
                 {
                     break;
                 }
@@ -379,12 +370,12 @@ public sealed class TwoQueueCache<TKey, TValue> where TKey : notnull
             {
                 if (!_A1In.IsEmpty)
                 {
-                    if (!EvictFromA1In())
+                    if (!_EvictFromA1In())
                     {
                         break;
                     }
                 }
-                else if (!EvictFromAm())
+                else if (!_EvictFromAm())
                 {
                     break;
                 }
@@ -393,7 +384,7 @@ public sealed class TwoQueueCache<TKey, TValue> where TKey : notnull
     }
 
     /// <summary>Evicts the tail of A1in and moves the key to the ghost set with its weight.</summary>
-    private bool EvictFromA1In()
+    private bool _EvictFromA1In()
     {
         if (!_A1In.PopBack(out TKey? key, out (TValue Value, int Weight) entry))
         {
@@ -406,7 +397,7 @@ public sealed class TwoQueueCache<TKey, TValue> where TKey : notnull
     }
 
     /// <summary>Evicts the tail of Am (least recently used frequent entry).</summary>
-    private bool EvictFromAm()
+    private bool _EvictFromAm()
     {
         if (!_Am.PopBack(out _, out (TValue Value, int Weight) entry))
         {

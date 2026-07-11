@@ -26,7 +26,7 @@ public readonly struct IcmpV6EchoLayer : IStatelessLayer, IProvidesProtocolType,
     public const byte TypeEchoReply = 129;
 
     /// <summary>Offset of the Checksum field within the ICMPv6 header.</summary>
-    private const int ChecksumOffset = 2;
+    private const int _ChecksumOffset = 2;
 
     private readonly byte _Type;
     private readonly byte _Code;
@@ -45,7 +45,7 @@ public readonly struct IcmpV6EchoLayer : IStatelessLayer, IProvidesProtocolType,
     /// <param name="sequenceNumber">Echo sequence number.</param>
     /// <param name="code">ICMP code; default 0.</param>
     /// <param name="checksum">
-    /// Checksum field; <see cref="Auto{T}.Compute"/> (default) means auto-compute over
+    /// Checksum field; <see cref="Auto.Compute"/> (default) means auto-compute over
     /// the IPv6 pseudo-header + ICMP message.
     /// </param>
     /// <param name="isReply">
@@ -110,19 +110,19 @@ public readonly struct IcmpV6EchoLayer : IStatelessLayer, IProvidesProtocolType,
 
         if (_ChecksumIsExplicit)
         {
-            BinaryPrimitives.WriteUInt16BigEndian(frame.Slice(myOffset + ChecksumOffset, 2), _ExplicitChecksum);
+            BinaryPrimitives.WriteUInt16BigEndian(frame.Slice(myOffset + _ChecksumOffset, 2), _ExplicitChecksum);
             return;
         }
 
         // Zero the checksum field, then compute over IPv6 pseudo-header + ICMPv6 message.
-        frame[myOffset + ChecksumOffset] = 0;
-        frame[myOffset + ChecksumOffset + 1] = 0;
+        frame[myOffset + _ChecksumOffset] = 0;
+        frame[myOffset + _ChecksumOffset + 1] = 0;
 
         ReadOnlySpan<byte> segment = frame.Slice(myOffset, myLength);
         ReadOnlySpan<byte> srcIp = ctx.PseudoSrcIp[..ctx.PseudoIpLength];
         ReadOnlySpan<byte> dstIp = ctx.PseudoDstIp[..ctx.PseudoIpLength];
 
         ushort checksum = ChecksumUtils.PseudoHeaderIPv6(srcIp, dstIp, IpProtocols.IcmpV6, segment);
-        BinaryPrimitives.WriteUInt16BigEndian(frame.Slice(myOffset + ChecksumOffset, 2), checksum);
+        BinaryPrimitives.WriteUInt16BigEndian(frame.Slice(myOffset + _ChecksumOffset, 2), checksum);
     }
 }

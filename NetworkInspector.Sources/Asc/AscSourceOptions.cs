@@ -41,9 +41,9 @@ public sealed class AscSourceOptions : IFileSourceOptions
     /// This property is part of <see cref="IFileSourceOptions"/> for interface uniformity
     /// and always returns <see cref="ScanMode.Full"/>.
     /// </summary>
-    ScanMode IFileSourceOptions.ScanMode => ScanMode.Full;
+    public ScanMode ScanMode { get; } = ScanMode.Full;
 
-    private long _PreloadBudget = DefaultPreloadBudget;
+    private long? _PreloadBudget = DefaultPreloadBudget;
 
     /// <summary>
     /// Maximum file size in bytes that is fully loaded into memory as a
@@ -53,18 +53,19 @@ public sealed class AscSourceOptions : IFileSourceOptions
     /// Must be non-negative. Default matches <see cref="DefaultPreloadBudget"/>.
     /// </summary>
     /// <exception cref="ArgumentOutOfRangeException">Value is negative.</exception>
-    public long PreloadBudget
+    public long? PreloadBudget
     {
         get => _PreloadBudget;
         init
         {
-            ArgumentOutOfRangeException.ThrowIfNegative(value);
+            if (value.HasValue)
+            {
+                ArgumentOutOfRangeException.ThrowIfNegative(value.Value);
+            }
+
             _PreloadBudget = value;
         }
     }
-
-    /// <inheritdoc/>
-    long? IFileSourceOptions.PreloadBudget => PreloadBudget;
 
     /// <summary>
     /// UI display name for this source.

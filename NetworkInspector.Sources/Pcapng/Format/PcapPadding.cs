@@ -29,8 +29,14 @@ internal static class PcapPadding
     /// 4 bytes header + padded value length. Returns 0 for empty values.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal static int OptionSize(int valueLength) =>
-        valueLength == 0 ? 0 : 4 + PaddedLength(valueLength);
+    internal static int OptionSize(int valueLength)
+    {
+        if (valueLength == 0)
+        {
+            return 0;
+        }
+        return 4 + PaddedLength(valueLength);
+    }
 
     /// <summary>
     /// Size of the end-of-options marker (code=0, length=0). Always 4 bytes.

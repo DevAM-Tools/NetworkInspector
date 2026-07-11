@@ -5,8 +5,8 @@ namespace NetworkInspector.Core;
 /// <summary>
 /// Represents a parsed packet with a flat field tree.
 /// Fields are stored in chunk-based <see cref="FieldBody"/> storage with <see cref="ushort"/> linked-list indices.
-/// Each chunk holds <see cref="FieldBodyChunkSize"/> (16) slots. Chunk descriptors are slab-backed
-/// via <see cref="SlabAllocator{T}"/> — initially <see cref="InitialChunkDescriptors"/> (4)
+/// Each chunk holds <see cref="_FieldBodyChunkSize"/> (16) slots. Chunk descriptors are slab-backed
+/// via <see cref="SlabAllocator{T}"/> — initially <see cref="_InitialChunkDescriptors"/> (4)
 /// descriptors (64 fields), doubled on demand.
 /// Only 1 FieldBody chunk is allocated upfront; additional chunks are allocated on demand.
 /// This means packets that are never materialized consume only 16 slab slots.
@@ -35,31 +35,31 @@ public sealed class Packet
 {
     #region Constants & Fields
 
-    private const int MaxFieldCount = ushort.MaxValue - 1;
+    private const int _MaxFieldCount = ushort.MaxValue - 1;
 
     /// <summary>Number of <see cref="FieldBody"/> slots per chunk (must be power of 2).</summary>
-    private const int FieldBodyChunkSize = 16;
+    private const int _FieldBodyChunkSize = 16;
 
-    /// <summary>Log₂ of <see cref="FieldBodyChunkSize"/> for bitwise division: index >> ChunkShift = chunkIdx.</summary>
-    private const int FieldBodyChunkShift = 4;
+    /// <summary>Log₂ of <see cref="_FieldBodyChunkSize"/> for bitwise division: index >> ChunkShift = chunkIdx.</summary>
+    private const int _FieldBodyChunkShift = 4;
 
-    /// <summary>Bitmask for modulo <see cref="FieldBodyChunkSize"/>: index &amp; ChunkMask = slotIdx.</summary>
-    private const int FieldBodyChunkMask = FieldBodyChunkSize - 1;
+    /// <summary>Bitmask for modulo <see cref="_FieldBodyChunkSize"/>: index &amp; ChunkMask = slotIdx.</summary>
+    private const int _FieldBodyChunkMask = _FieldBodyChunkSize - 1;
 
     /// <summary>Default slab capacity for <see cref="FieldBody"/> storage: 1024 slots × ~64 B ≈ 64 KB (below LOH).</summary>
-    private const int FieldBodySlabCapacity = 1024;
+    private const int _FieldBodySlabCapacity = 1024;
 
     /// <summary>Number of chunk descriptors allocated per packet initially (4 × 16 = 64 fields).</summary>
-    private const int InitialChunkDescriptors = 4;
+    private const int _InitialChunkDescriptors = 4;
 
     /// <summary>Default slab capacity for chunk descriptors: 256 × 12 B ≈ 3 KB.</summary>
-    private const int ChunkDescriptorSlabCapacity = 256;
+    private const int _ChunkDescriptorSlabCapacity = 256;
 
     /// <summary>Number of lazy populator slots per initial allocation (covers typical protocol stacks).</summary>
-    private const int LazyPopulatorChunkSize = 8;
+    private const int _LazyPopulatorChunkSize = 8;
 
     /// <summary>Default slab capacity for lazy populators: 512 × 8 B = 4 KB.</summary>
-    private const int LazyPopulatorSlabCapacity = 512;
+    private const int _LazyPopulatorSlabCapacity = 512;
 
     // _Id, _Timestamp, _Frame and _FrameSourceId are not readonly to support PrepareForReuse().
     // _Stack is readonly: recycling requires the same stack (validated in PrepareForReuse).
@@ -89,7 +89,7 @@ public sealed class Packet
     private int _AdditionalBufferCount;
 
     // LazyPopulator storage: slab-backed like FieldBody. On first lazy field,
-    // allocates LazyPopulatorChunkSize (8) slots from the thread-local SlabAllocator.
+    // allocates _LazyPopulatorChunkSize (8) slots from the thread-local SlabAllocator.
     // Growth beyond 8 slots uses Array.Resize (rare).
     private LazyPopulator[]? _LazyPopulators;
     private int _LazyPopulatorOffset;
@@ -106,7 +106,7 @@ public sealed class Packet
     private int _MaterializingFlag;
 
     // Field count uses int for Volatile.Read/Write compatibility (ushort has no overload).
-    // Actual range is [0, MaxFieldCount].
+    // Actual range is [0, _MaxFieldCount].
     private int _FieldCount;
 
     // 0 = not finalized, 1 = finalized.
@@ -148,16 +148,16 @@ public sealed class Packet
         // Validate registry consistency: reference equality — single pointer comparison
         if (!ReferenceEquals(frame.Registry, stack.FrameInterfaceRegistry))
         {
-            ThrowRegistryMismatch();
+            _ThrowRegistryMismatch();
         }
 
         _Id = id;
         _Timestamp = frame.Timestamp;
         _Stack = stack;
         _Frame = frame;
-        _FrameSourceId = DeriveFrameSourceId(frame.InterfaceId, stack.FrameInterfaceRegistry);
-        AllocateFirstChunk();
-        ref FieldBodyChunk firstChunk = ref GetChunk(0);
+        _FrameSourceId = _DeriveFrameSourceId(frame.InterfaceId, stack.FrameInterfaceRegistry);
+        _AllocateFirstChunk();
+        ref FieldBodyChunk firstChunk = ref _GetChunk(0);
         firstChunk.Buffer[firstChunk.Offset] = new FieldBody(stack.RootFieldId);
         _FieldCount = 1;
         _Info = LazyString.Empty;
@@ -218,21 +218,21 @@ public sealed class Packet
         // ── 1. Clear GC-visible references in every active FieldBody chunk ──────────
         // Array.Clear zeroes entire FieldBody structs (including FieldValue and LazyString
         // reference fields) so the GC does not retain stale references after reuse.
-        // All chunks before the last are always completely full (FieldBodyChunkSize slots).
-        // The last chunk is only partially used: its slot count equals (_FieldCount % FieldBodyChunkSize),
-        // or FieldBodyChunkSize when the chunk was exactly filled. Clearing only used slots
+        // All chunks before the last are always completely full (_FieldBodyChunkSize slots).
+        // The last chunk is only partially used: its slot count equals (_FieldCount % _FieldBodyChunkSize),
+        // or _FieldBodyChunkSize when the chunk was exactly filled. Clearing only used slots
         // avoids zeroing unused tail slots — typically saves ~25% of Array.Clear work when
         // the last chunk holds ~12 out of 16 used slots (common for IPv6/UDP packets).
-        int usedInLastChunk = _FieldCount & FieldBodyChunkMask;
+        int usedInLastChunk = _FieldCount & _FieldBodyChunkMask;
         if (usedInLastChunk == 0)
         {
-            usedInLastChunk = FieldBodyChunkSize; // chunk was exactly filled
+            usedInLastChunk = _FieldBodyChunkSize; // chunk was exactly filled
         }
         for (int i = 0; i < _ChunkCount; i++)
         {
-            ref FieldBodyChunk chunk = ref GetChunk(i);
-            // Full chunks: all FieldBodyChunkSize slots. Last (partial) chunk: only used slots.
-            int clearCount = i < _ChunkCount - 1 ? FieldBodyChunkSize : usedInLastChunk;
+            ref FieldBodyChunk chunk = ref _GetChunk(i);
+            // Full chunks: all _FieldBodyChunkSize slots. Last (partial) chunk: only used slots.
+            int clearCount = i < _ChunkCount - 1 ? _FieldBodyChunkSize : usedInLastChunk;
             Array.Clear(chunk.Buffer, chunk.Offset, clearCount);
         }
 
@@ -270,10 +270,10 @@ public sealed class Packet
         _Id = id;
         _Timestamp = frame.Timestamp;
         _Frame = frame;
-        _FrameSourceId = DeriveFrameSourceId(frame.InterfaceId, _Stack.FrameInterfaceRegistry);
+        _FrameSourceId = _DeriveFrameSourceId(frame.InterfaceId, _Stack.FrameInterfaceRegistry);
 
         // ── 5. Re-initialise the root FieldBody in the first slot of the first chunk ─
-        ref FieldBodyChunk firstChunk = ref GetChunk(0);
+        ref FieldBodyChunk firstChunk = ref _GetChunk(0);
         firstChunk.Buffer[firstChunk.Offset] = new FieldBody(_Stack.RootFieldId);
 
         return null; // success
@@ -376,7 +376,11 @@ public sealed class Packet
         }
         // After finalization, volatile read ensures cross-thread visibility.
         // Before finalization, plain read suffices (single-threaded parsing).
-        return Volatile.Read(ref _Finalized) != 0 ? Volatile.Read(ref _FieldCount) : _FieldCount;
+        if (Volatile.Read(ref _Finalized) != 0)
+        {
+            return Volatile.Read(ref _FieldCount);
+        }
+        return _FieldCount;
     }
 
     /// <summary>
@@ -384,7 +388,7 @@ public sealed class Packet
     /// All chunk descriptors are stored in the slab-backed <see cref="_Chunks"/> array.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private ref FieldBodyChunk GetChunk(int chunkIndex) =>
+    private ref FieldBodyChunk _GetChunk(int chunkIndex) =>
         ref _Chunks[_ChunkBaseOffset + chunkIndex];
 
     /// <summary>
@@ -396,9 +400,9 @@ public sealed class Packet
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal ref FieldBody GetFieldRef(int index)
     {
-        int chunkIdx = index >> FieldBodyChunkShift;
-        int slotIdx = index & FieldBodyChunkMask;
-        ref FieldBodyChunk chunk = ref GetChunk(chunkIdx);
+        int chunkIdx = index >> _FieldBodyChunkShift;
+        int slotIdx = index & _FieldBodyChunkMask;
+        ref FieldBodyChunk chunk = ref _GetChunk(chunkIdx);
         return ref chunk.Buffer[chunk.Offset + slotIdx];
     }
 
@@ -505,10 +509,10 @@ public sealed class Packet
         if (_LazyPopulators is null)
         {
             // First lazy field — allocate from thread-local slab (no per-packet alloc)
-            AllocateFromSlab(
-                ref _LazyPopulatorSlab, LazyPopulatorSlabCapacity,
-                LazyPopulatorChunkSize, out _LazyPopulators, out _LazyPopulatorOffset);
-            _LazyPopulatorCapacity = LazyPopulatorChunkSize;
+            _AllocateFromSlab(
+                ref _LazyPopulatorSlab, _LazyPopulatorSlabCapacity,
+                _LazyPopulatorChunkSize, out _LazyPopulators, out _LazyPopulatorOffset);
+            _LazyPopulatorCapacity = _LazyPopulatorChunkSize;
         }
         else if (_LazyPopulatorCount >= _LazyPopulatorCapacity)
         {
@@ -667,11 +671,11 @@ public sealed class Packet
         // concurrent materialization in progress by other threads.
         if (_Finalized == 0)
         {
-            MaterializeAllPreSeal();
+            _MaterializeAllPreSeal();
         }
         else
         {
-            MaterializeAllPostSeal();
+            _MaterializeAllPostSeal();
         }
     }
 
@@ -679,7 +683,7 @@ public sealed class Packet
     /// Pre-Seal materialization: single-threaded, no CAS guard, no Volatile reads in loop.
     /// Delegates to <see cref="MaterializeLazyField"/> which skips the CAS when pre-Seal.
     /// </summary>
-    private void MaterializeAllPreSeal()
+    private void _MaterializeAllPreSeal()
     {
         // Outer loop handles nested lazy fields registered during population
         while (_PendingLazyCount > 0)
@@ -704,7 +708,7 @@ public sealed class Packet
     /// Post-Seal materialization: thread-safe, uses Volatile reads and SpinWait to
     /// coordinate with concurrent threads also materializing fields on the same packet.
     /// </summary>
-    private void MaterializeAllPostSeal()
+    private void _MaterializeAllPostSeal()
     {
         // Outer loop handles nested lazy fields: materializing one container may
         // register new lazy containers. Each pass re-reads _FieldCount so newly
@@ -781,7 +785,7 @@ public sealed class Packet
     /// create self-referencing lazy fields.
     /// The limit is set generously to accommodate future deeply-nested protocols.
     /// </summary>
-    private const int MaxMaterializationDepth = 128;
+    private const int _MaxMaterializationDepth = 128;
 
     /// <summary>
     /// Searches the flat field array for a field with the given ID and returns its value.
@@ -851,7 +855,7 @@ public sealed class Packet
     ///         belonging to the same protocol, materialize it, and scan only the
     ///         newly-appended fields (searchedUpTo..newCount).</item>
     ///   <item>Stop when the field is found, no more matching containers exist, or the
-    ///         safety limit (<see cref="MaxMaterializationDepth"/>) is reached.</item>
+    ///         safety limit (<see cref="_MaxMaterializationDepth"/>) is reached.</item>
     /// </list>
     /// </summary>
     /// <param name="fieldId">The field ID to search for.</param>
@@ -907,7 +911,7 @@ public sealed class Packet
             // materializing one container creates new lazy containers for the same protocol.
             // Each iteration materializes at most one container and re-scans only the
             // newly-appended range (searchedUpTo..newCount).
-            for (int depth = 0; depth < MaxMaterializationDepth; depth++)
+            for (int depth = 0; depth < _MaxMaterializationDepth; depth++)
             {
                 if (!HasUnpopulatedLazyFields)
                 {
@@ -992,30 +996,30 @@ public sealed class Packet
     /// early would let a concurrent reader observe the incremented count (and therefore the
     /// new slot) while the parent's <c>FirstChildIndex</c> / <c>LastChildIndex</c> /
     /// <c>NextIndex</c> / <c>PrevIndex</c> still point to stale neighbours, breaking
-    /// child traversal. Callers post-Seal MUST invoke <see cref="PublishFieldCount"/>
+    /// child traversal. Callers post-Seal MUST invoke <see cref="_PublishFieldCount"/>
     /// after every parent / sibling write that belongs to the same logical insertion.
     /// During parsing (pre-<see cref="Seal"/>), <see cref="Seal"/>'s release fence publishes
     /// every write, so no per-call publication is needed at all.
     /// </para>
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void AddFieldBody(in FieldBody field)
+    private void _AddFieldBody(in FieldBody field)
     {
         int count = _FieldCount;
-        int chunkIdx = count >> FieldBodyChunkShift;
-        int slotIdx = count & FieldBodyChunkMask;
+        int chunkIdx = count >> _FieldBodyChunkShift;
+        int slotIdx = count & _FieldBodyChunkMask;
 
         // Allocate a new chunk if we've exhausted all existing chunks
         if (chunkIdx >= _ChunkCount)
         {
-            AllocateNewChunk();
+            _AllocateNewChunk();
         }
 
-        ref FieldBodyChunk chunk = ref GetChunk(chunkIdx);
+        ref FieldBodyChunk chunk = ref _GetChunk(chunkIdx);
         chunk.Buffer[chunk.Offset + slotIdx] = field;
 
         // Plain advance only — see the remarks above. Post-Seal publication is the
-        // caller's responsibility via PublishFieldCount() after parent fix-ups.
+        // caller's responsibility via _PublishFieldCount() after parent fix-ups.
         _FieldCount = count + 1;
     }
 
@@ -1027,7 +1031,7 @@ public sealed class Packet
     /// will publish everything in bulk.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void PublishFieldCount()
+    private void _PublishFieldCount()
     {
         if (_Finalized != 0)
         {
@@ -1042,7 +1046,7 @@ public sealed class Packet
     /// </summary>
     internal ushort AppendChild(ushort parentIndex, FieldId fieldId, FieldValue value)
     {
-        if (_FieldCount >= MaxFieldCount)
+        if (_FieldCount >= _MaxFieldCount)
         {
             ThrowHelpers.ThrowFieldAppend(ParseError.Custom("packet", "Maximum field count exceeded"));
         }
@@ -1052,7 +1056,7 @@ public sealed class Packet
         {
             ParentIndex = parentIndex
         };
-        AddFieldBody(in newField);
+        _AddFieldBody(in newField);
 
         ref FieldBody parent = ref GetFieldRef(parentIndex);
         if (parent.LastChildIndex == FieldBody.NullIndex)
@@ -1071,7 +1075,7 @@ public sealed class Packet
 
         // Publish AFTER parent / sibling fix-ups so a concurrent reader that observes
         // the incremented _FieldCount also sees the consistent linked-list state.
-        PublishFieldCount();
+        _PublishFieldCount();
         return newIndex;
     }
 
@@ -1083,8 +1087,8 @@ public sealed class Packet
     internal ushort AppendChildWithCustomText(
         ushort parentIndex, FieldId fieldId, FieldValue value, LazyString customText)
     {
-        // Inline AppendChild so we can attach the custom text BEFORE PublishFieldCount.
-        if (_FieldCount >= MaxFieldCount)
+        // Inline AppendChild so we can attach the custom text BEFORE _PublishFieldCount.
+        if (_FieldCount >= _MaxFieldCount)
         {
             ThrowHelpers.ThrowFieldAppend(ParseError.Custom("packet", "Maximum field count exceeded"));
         }
@@ -1094,7 +1098,7 @@ public sealed class Packet
         {
             ParentIndex = parentIndex
         };
-        AddFieldBody(in newField);
+        _AddFieldBody(in newField);
 
         ref FieldBody parent = ref GetFieldRef(parentIndex);
         if (parent.LastChildIndex == FieldBody.NullIndex)
@@ -1112,7 +1116,7 @@ public sealed class Packet
         parent.IncrementChildCount();
         GetFieldRef(newIndex).SetCustomText(customText);
 
-        PublishFieldCount();
+        _PublishFieldCount();
         return newIndex;
     }
 
@@ -1124,8 +1128,8 @@ public sealed class Packet
     internal ushort PrependChildWithCustomText(
         ushort parentIndex, FieldId fieldId, FieldValue value, LazyString customText)
     {
-        // Inline PrependChild so we can attach the custom text BEFORE PublishFieldCount.
-        if (_FieldCount >= MaxFieldCount)
+        // Inline PrependChild so we can attach the custom text BEFORE _PublishFieldCount.
+        if (_FieldCount >= _MaxFieldCount)
         {
             ThrowHelpers.ThrowFieldAppend(ParseError.Custom("packet", "Maximum field count exceeded"));
         }
@@ -1135,7 +1139,7 @@ public sealed class Packet
         {
             ParentIndex = parentIndex
         };
-        AddFieldBody(in newField);
+        _AddFieldBody(in newField);
 
         ref FieldBody parent = ref GetFieldRef(parentIndex);
         if (parent.FirstChildIndex == FieldBody.NullIndex)
@@ -1153,7 +1157,7 @@ public sealed class Packet
         parent.IncrementChildCount();
         GetFieldRef(newIndex).SetCustomText(customText);
 
-        PublishFieldCount();
+        _PublishFieldCount();
         return newIndex;
     }
 
@@ -1165,7 +1169,7 @@ public sealed class Packet
     /// </summary>
     internal ushort PrependChild(ushort parentIndex, FieldId fieldId, FieldValue value)
     {
-        if (_FieldCount >= MaxFieldCount)
+        if (_FieldCount >= _MaxFieldCount)
         {
             ThrowHelpers.ThrowFieldAppend(ParseError.Custom("packet", "Maximum field count exceeded"));
         }
@@ -1175,7 +1179,7 @@ public sealed class Packet
         {
             ParentIndex = parentIndex
         };
-        AddFieldBody(in newField);
+        _AddFieldBody(in newField);
 
         ref FieldBody parent = ref GetFieldRef(parentIndex);
         if (parent.FirstChildIndex == FieldBody.NullIndex)
@@ -1192,7 +1196,7 @@ public sealed class Packet
         }
         parent.IncrementChildCount();
 
-        PublishFieldCount();
+        _PublishFieldCount();
         return newIndex;
     }
 
@@ -1204,8 +1208,8 @@ public sealed class Packet
     internal ushort InsertAfterWithCustomText(
         ushort siblingIndex, FieldId fieldId, FieldValue value, LazyString customText)
     {
-        // Inline InsertAfter so we can attach the custom text BEFORE PublishFieldCount.
-        if (_FieldCount >= MaxFieldCount)
+        // Inline InsertAfter so we can attach the custom text BEFORE _PublishFieldCount.
+        if (_FieldCount >= _MaxFieldCount)
         {
             ThrowHelpers.ThrowFieldAppend(ParseError.Custom("packet", "Maximum field count exceeded"));
         }
@@ -1221,7 +1225,7 @@ public sealed class Packet
         {
             ParentIndex = parentIndex
         };
-        AddFieldBody(in newField);
+        _AddFieldBody(in newField);
 
         ushort nextSibling = GetFieldRef(siblingIndex).NextIndex;
         GetFieldRef(siblingIndex).NextIndex = newIndex;
@@ -1239,7 +1243,7 @@ public sealed class Packet
         GetFieldRef(parentIndex).IncrementChildCount();
         GetFieldRef(newIndex).SetCustomText(customText);
 
-        PublishFieldCount();
+        _PublishFieldCount();
         return newIndex;
     }
 
@@ -1250,7 +1254,7 @@ public sealed class Packet
     /// </summary>
     internal ushort InsertAfter(ushort siblingIndex, FieldId fieldId, FieldValue value)
     {
-        if (_FieldCount >= MaxFieldCount)
+        if (_FieldCount >= _MaxFieldCount)
         {
             ThrowHelpers.ThrowFieldAppend(ParseError.Custom("packet", "Maximum field count exceeded"));
         }
@@ -1266,7 +1270,7 @@ public sealed class Packet
         {
             ParentIndex = parentIndex
         };
-        AddFieldBody(in newField);
+        _AddFieldBody(in newField);
 
         ushort nextSibling = GetFieldRef(siblingIndex).NextIndex;
         GetFieldRef(siblingIndex).NextIndex = newIndex;
@@ -1283,7 +1287,7 @@ public sealed class Packet
         }
         GetFieldRef(parentIndex).IncrementChildCount();
 
-        PublishFieldCount();
+        _PublishFieldCount();
         return newIndex;
     }
 
@@ -1321,51 +1325,51 @@ public sealed class Packet
     #region Private Helpers
     /// <summary>
     /// Allocates the initial chunk descriptor region and the first FieldBody chunk.
-    /// <see cref="InitialChunkDescriptors"/> (4) descriptor slots are reserved
+    /// <see cref="_InitialChunkDescriptors"/> (4) descriptor slots are reserved
     /// from the thread-local chunk descriptor slab, covering up to 64 fields. Only the first
     /// FieldBody chunk (16 slots) is allocated upfront — subsequent chunks are allocated
-    /// on demand by <see cref="AddFieldBody"/> when slots fill up.
+    /// on demand by <see cref="_AddFieldBody"/> when slots fill up.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void AllocateFirstChunk()
+    private void _AllocateFirstChunk()
     {
         // Reserve chunk descriptor slots from the chunk descriptor slab
-        AllocateFromSlab(
-            ref _ChunkDescriptorSlab, ChunkDescriptorSlabCapacity,
-            InitialChunkDescriptors, out _Chunks, out _ChunkBaseOffset);
-        _ChunkCapacity = InitialChunkDescriptors;
+        _AllocateFromSlab(
+            ref _ChunkDescriptorSlab, _ChunkDescriptorSlabCapacity,
+            _InitialChunkDescriptors, out _Chunks, out _ChunkBaseOffset);
+        _ChunkCapacity = _InitialChunkDescriptors;
 
         // Allocate the first FieldBody chunk (16 slots) from the FieldBody slab
         ref FieldBodyChunk first = ref _Chunks[_ChunkBaseOffset];
-        AllocateFromSlab(
-            ref _FieldBodySlab, FieldBodySlabCapacity,
-            FieldBodyChunkSize, out first.Buffer, out first.Offset);
+        _AllocateFromSlab(
+            ref _FieldBodySlab, _FieldBodySlabCapacity,
+            _FieldBodyChunkSize, out first.Buffer, out first.Offset);
         _ChunkCount = 1;
     }
 
     /// <summary>
-    /// Allocates a single chunk of <see cref="FieldBodyChunkSize"/> slots from the
+    /// Allocates a single chunk of <see cref="_FieldBodyChunkSize"/> slots from the
     /// thread-local FieldBody slab. Creates a new slab if the current one is full.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static void AllocateFieldBodyChunk(out FieldBody[] buffer, out int offset) =>
-        AllocateFromSlab(
-            ref _FieldBodySlab, FieldBodySlabCapacity,
-            FieldBodyChunkSize, out buffer, out offset);
+    private static void _AllocateFieldBodyChunk(out FieldBody[] buffer, out int offset) =>
+        _AllocateFromSlab(
+            ref _FieldBodySlab, _FieldBodySlabCapacity,
+            _FieldBodyChunkSize, out buffer, out offset);
 
     /// <summary>
     /// Allocates an additional FieldBody chunk on demand.
     /// If the chunk descriptor array is full, doubles it by allocating a new region
     /// from the chunk descriptor slab and copying existing descriptors (small: count × 12 bytes).
     /// </summary>
-    private void AllocateNewChunk()
+    private void _AllocateNewChunk()
     {
         // Grow chunk descriptor array if capacity is exhausted
         if (_ChunkCount >= _ChunkCapacity)
         {
             int newCapacity = _ChunkCapacity * 2;
-            AllocateFromSlab(
-                ref _ChunkDescriptorSlab, ChunkDescriptorSlabCapacity,
+            _AllocateFromSlab(
+                ref _ChunkDescriptorSlab, _ChunkDescriptorSlabCapacity,
                 newCapacity, out FieldBodyChunk[] newChunks, out int newOffset);
             // Copy existing descriptors (ChunkCount × 12 bytes — negligible)
             _Chunks.AsSpan(_ChunkBaseOffset, _ChunkCount)
@@ -1377,7 +1381,7 @@ public sealed class Packet
 
         // Allocate FieldBody slots for the new chunk from the FieldBody slab
         ref FieldBodyChunk newChunk = ref _Chunks[_ChunkBaseOffset + _ChunkCount];
-        AllocateFieldBodyChunk(out newChunk.Buffer, out newChunk.Offset);
+        _AllocateFieldBodyChunk(out newChunk.Buffer, out newChunk.Offset);
         _ChunkCount++;
     }
 
@@ -1392,7 +1396,7 @@ public sealed class Packet
     /// </para>
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static void AllocateFromSlab<T>(
+    private static void _AllocateFromSlab<T>(
         ref SlabAllocator<T>? slab, int slabCapacity,
         int count, out T[] buffer, out int offset)
     {
@@ -1412,7 +1416,7 @@ public sealed class Packet
     /// O(1) array lookup — called once per packet in the constructor.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static FrameSourceId DeriveFrameSourceId(
+    private static FrameSourceId _DeriveFrameSourceId(
         FrameInterfaceId interfaceId, FrameInterfaceRegistry registry)
     {
         if (!interfaceId.IsValid)
@@ -1421,13 +1425,17 @@ public sealed class Packet
         }
 
         FrameInterfaceInfo? info = registry.Get(interfaceId);
-        return info?.SourceId ?? FrameSourceId.Invalid;
+        if (info is not null)
+        {
+            return info.SourceId;
+        }
+        return FrameSourceId.Invalid;
     }
 
     /// <summary>Throws when a frame's registry does not match the stack's registry.</summary>
     /// <exception cref="ArgumentException">Always thrown.</exception>
     [DoesNotReturn]
-    private static void ThrowRegistryMismatch()
+    private static void _ThrowRegistryMismatch()
     {
         throw new ArgumentException(
             "The frame's FrameInterfaceRegistry does not match the stack's registry. " +
@@ -1442,7 +1450,7 @@ public sealed class Packet
     /// <exception cref="InvalidOperationException">For <see cref="RecycleError.NotFinalized"/> and <see cref="RecycleError.MaterializerActive"/>.</exception>
     /// <exception cref="ArgumentException">For <see cref="RecycleError.RegistryMismatch"/> and <see cref="RecycleError.StackMismatch"/>.</exception>
     [DoesNotReturn]
-    private static void ThrowRecycleError(RecycleError error)
+    private static void _ThrowRecycleError(RecycleError error)
     {
         throw error switch
         {
@@ -1470,7 +1478,7 @@ public sealed class Packet
     /// After this call, the packet is safe for concurrent reads from multiple threads.
     /// <para>
     /// With chunk-based storage, there is no large unused capacity to trim.
-    /// Each chunk holds exactly <see cref="FieldBodyChunkSize"/> (16) slots, and
+    /// Each chunk holds exactly <see cref="_FieldBodyChunkSize"/> (16) slots, and
     /// at most 15 slots in the last chunk may be unused — negligible overhead.
     /// </para>
     /// </summary>
@@ -1499,7 +1507,7 @@ public sealed class Packet
     /// <paramref name="packet"/>. An optional <paramref name="context"/> activates
     /// index and value-cache recording for indexed parses.
     /// </summary>
-    private static void ParseFrameInternal(Packet packet, Frame frame, ParseContext context = default)
+    private static void _ParseFrameInternal(Packet packet, Frame frame, ParseContext context = default)
     {
         ProtocolId packetProtocolId = packet._Stack.PacketProtocolId;
         if (!packetProtocolId.IsValid)
@@ -1508,7 +1516,7 @@ public sealed class Packet
         }
 
         // Ensure the context carries the stack — needed by dispatch methods on MutField.
-        // When called without an indexed context (e.g., from ParseAndSeal), we create a
+        // When called without an indexed context (e.g., from _ParseAndSeal), we create a
         // non-indexed context that only carries the stack reference.
         if (!context.HasStack)
         {
@@ -1530,7 +1538,7 @@ public sealed class Packet
     /// Uses ZeroAlloc for zero-allocation string building in the stack-trace case.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static string BuildExceptionMessage(Exception ex, bool includeStackTrace)
+    private static string _BuildExceptionMessage(Exception ex, bool includeStackTrace)
     {
         if (!includeStackTrace || ex.StackTrace is null)
         {
@@ -1545,19 +1553,19 @@ public sealed class Packet
     // ── Shared lifecycle helpers ──────────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Runs <see cref="ParseFrameInternal"/> inside a protocol-exception guard and seals
+    /// Runs <see cref="_ParseFrameInternal"/> inside a protocol-exception guard and seals
     /// the packet. Any protocol exception is recorded as a field-level error rather than
     /// propagating to the caller.
     /// </summary>
-    private static void ParseAndSeal(Packet packet, Frame frame)
+    private static void _ParseAndSeal(Packet packet, Frame frame)
     {
         try
         {
-            ParseFrameInternal(packet, frame);
+            _ParseFrameInternal(packet, frame);
         }
         catch (Exception ex)
         {
-            packet.SetError(BuildExceptionMessage(ex, packet._Stack.IncludeExceptionStackTrace));
+            packet.SetError(_BuildExceptionMessage(ex, packet._Stack.IncludeExceptionStackTrace));
         }
         packet.Seal();
     }
@@ -1567,7 +1575,7 @@ public sealed class Packet
     /// parse context, runs the protocol-exception-guarded parse, ends the packet in the
     /// index, and seals the packet.
     /// </summary>
-    private static void ParseIndexedAndSeal(Packet packet, Frame frame, PacketIndex index)
+    private static void _ParseIndexedAndSeal(Packet packet, Frame frame, PacketIndex index)
     {
         index.BeginPacket(packet._Id.Value);
 
@@ -1575,11 +1583,11 @@ public sealed class Packet
 
         try
         {
-            ParseFrameInternal(packet, frame, context);
+            _ParseFrameInternal(packet, frame, context);
         }
         catch (Exception ex)
         {
-            packet.SetError(BuildExceptionMessage(ex, packet._Stack.IncludeExceptionStackTrace));
+            packet.SetError(_BuildExceptionMessage(ex, packet._Stack.IncludeExceptionStackTrace));
         }
 
         index.EndPacket();
@@ -1596,7 +1604,7 @@ public sealed class Packet
     public static Packet ParseFrame(PacketId id, Stack stack, Frame frame)
     {
         Packet packet = new(id, stack, frame);
-        ParseAndSeal(packet, frame);
+        _ParseAndSeal(packet, frame);
         return packet;
     }
 
@@ -1610,7 +1618,7 @@ public sealed class Packet
         {
             _FirstProtocolOverride = firstProtocolId
         };
-        ParseAndSeal(packet, frame);
+        _ParseAndSeal(packet, frame);
         return packet;
     }
 
@@ -1619,7 +1627,7 @@ public sealed class Packet
         PacketId id, Stack stack, Frame frame, PacketIndex index)
     {
         Packet packet = new(id, stack, frame);
-        ParseIndexedAndSeal(packet, frame, index);
+        _ParseIndexedAndSeal(packet, frame, index);
         return packet;
     }
 
@@ -1634,7 +1642,7 @@ public sealed class Packet
         {
             _FirstProtocolOverride = firstProtocolId
         };
-        ParseIndexedAndSeal(packet, frame, index);
+        _ParseIndexedAndSeal(packet, frame, index);
         return packet;
     }
 
@@ -1649,7 +1657,7 @@ public sealed class Packet
     /// so the stack reference compare folds into the caller on the hot path.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static RecycleError? TryPrepareForRecycle(Packet recycle, PacketId id, Stack stack, Frame frame)
+    private static RecycleError? _TryPrepareForRecycle(Packet recycle, PacketId id, Stack stack, Frame frame)
     {
         // Stack check first: cheapest, catches the most common cross-stack mistake.
         if (!ReferenceEquals(recycle._Stack, stack))
@@ -1680,12 +1688,12 @@ public sealed class Packet
     /// <returns><see langword="null"/> on success; a <see cref="RecycleError"/> value on precondition failure.</returns>
     public static RecycleError? TryParseFrame(Packet recycle, PacketId id, Stack stack, Frame frame)
     {
-        RecycleError? error = TryPrepareForRecycle(recycle, id, stack, frame);
+        RecycleError? error = _TryPrepareForRecycle(recycle, id, stack, frame);
         if (error is not null)
         {
             return error;
         }
-        ParseAndSeal(recycle, frame);
+        _ParseAndSeal(recycle, frame);
         return null;
     }
 
@@ -1697,13 +1705,13 @@ public sealed class Packet
     public static RecycleError? TryParseFrame(
         Packet recycle, PacketId id, Stack stack, Frame frame, ProtocolId firstProtocolId)
     {
-        RecycleError? error = TryPrepareForRecycle(recycle, id, stack, frame);
+        RecycleError? error = _TryPrepareForRecycle(recycle, id, stack, frame);
         if (error is not null)
         {
             return error;
         }
         recycle._FirstProtocolOverride = firstProtocolId;
-        ParseAndSeal(recycle, frame);
+        _ParseAndSeal(recycle, frame);
         return null;
     }
 
@@ -1715,12 +1723,12 @@ public sealed class Packet
     public static RecycleError? TryParseFrameIndexed(
         Packet recycle, PacketId id, Stack stack, Frame frame, PacketIndex index)
     {
-        RecycleError? error = TryPrepareForRecycle(recycle, id, stack, frame);
+        RecycleError? error = _TryPrepareForRecycle(recycle, id, stack, frame);
         if (error is not null)
         {
             return error;
         }
-        ParseIndexedAndSeal(recycle, frame, index);
+        _ParseIndexedAndSeal(recycle, frame, index);
         return null;
     }
 
@@ -1734,13 +1742,13 @@ public sealed class Packet
         Packet recycle, PacketId id, Stack stack, Frame frame,
         PacketIndex index, ProtocolId firstProtocolId)
     {
-        RecycleError? error = TryPrepareForRecycle(recycle, id, stack, frame);
+        RecycleError? error = _TryPrepareForRecycle(recycle, id, stack, frame);
         if (error is not null)
         {
             return error;
         }
         recycle._FirstProtocolOverride = firstProtocolId;
-        ParseIndexedAndSeal(recycle, frame, index);
+        _ParseIndexedAndSeal(recycle, frame, index);
         return null;
     }
 
@@ -1770,7 +1778,7 @@ public sealed class Packet
         RecycleError? error = TryParseFrame(recycle, id, stack, frame);
         if (error is not null)
         {
-            ThrowRecycleError(error.Value);
+            _ThrowRecycleError(error.Value);
         }
         return recycle;
     }
@@ -1786,7 +1794,7 @@ public sealed class Packet
         RecycleError? error = TryParseFrame(recycle, id, stack, frame, firstProtocolId);
         if (error is not null)
         {
-            ThrowRecycleError(error.Value);
+            _ThrowRecycleError(error.Value);
         }
         return recycle;
     }
@@ -1802,7 +1810,7 @@ public sealed class Packet
         RecycleError? error = TryParseFrameIndexed(recycle, id, stack, frame, index);
         if (error is not null)
         {
-            ThrowRecycleError(error.Value);
+            _ThrowRecycleError(error.Value);
         }
         return recycle;
     }
@@ -1820,7 +1828,7 @@ public sealed class Packet
         RecycleError? error = TryParseFrameIndexed(recycle, id, stack, frame, index, firstProtocolId);
         if (error is not null)
         {
-            ThrowRecycleError(error.Value);
+            _ThrowRecycleError(error.Value);
         }
         return recycle;
     }

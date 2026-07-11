@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Protocols.Tests;
 
@@ -12,7 +12,7 @@ namespace NetworkInspector.Protocols.Tests;
 /// </summary>
 internal sealed class Http2TsharkTests
 {
-    private const string Http2DecodeAs = "tcp.port==8443,http2";
+    private const string _Http2DecodeAs = "tcp.port==8443,http2";
 
     /// <summary>
     /// Sanity check: tshark sees the same TCP destination port we wrote.
@@ -62,12 +62,12 @@ internal sealed class Http2TsharkTests
         string?[] values = TsharkVerifier.GetFieldValues(
             eth,
             ["http2.type", "http2.length", "http2.flags", "http2.streamid"],
-            decodeAs: Http2DecodeAs);
+            decodeAs: _Http2DecodeAs);
 
         await Assert.That(TsharkEquivalence.AreEquivalent(values[0], "4")).IsTrue()
             .Because(TsharkEquivalence.Describe("http2.type", values[0], "4"));
-        await Assert.That(TsharkEquivalence.AreEquivalent(values[1], body.Length.ToString())).IsTrue()
-            .Because(TsharkEquivalence.Describe("http2.length", values[1], body.Length.ToString()));
+        await Assert.That(TsharkEquivalence.AreEquivalent(values[1], body.Length.ToString(CultureInfo.InvariantCulture))).IsTrue()
+            .Because(TsharkEquivalence.Describe("http2.length", values[1], body.Length.ToString(CultureInfo.InvariantCulture)));
         await Assert.That(TsharkEquivalence.AreEquivalent(values[2], "0x00")).IsTrue()
             .Because(TsharkEquivalence.Describe("http2.flags", values[2], "0x00"));
         await Assert.That(TsharkEquivalence.AreEquivalent(values[3], "0")).IsTrue()
@@ -97,7 +97,7 @@ internal sealed class Http2TsharkTests
         string?[] values = TsharkVerifier.GetFieldValues(
             eth,
             ["http2.type", "http2.streamid", "http2.length"],
-            decodeAs: Http2DecodeAs);
+            decodeAs: _Http2DecodeAs);
 
         await Assert.That(TsharkEquivalence.AreEquivalent(values[0], "6")).IsTrue()
             .Because(TsharkEquivalence.Describe("http2.type", values[0], "6"));

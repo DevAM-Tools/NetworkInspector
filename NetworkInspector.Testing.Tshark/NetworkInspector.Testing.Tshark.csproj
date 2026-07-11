@@ -1,23 +1,6 @@
 <!-- Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root. -->
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <RootNamespace>NetworkInspector.Testing.Tshark</RootNamespace>
-    <!-- Test-only helper library. Not published. -->
     <IsPackable>false</IsPackable>
-    <!--
-      tshark interaction allocates and uses Process / XML APIs that are not trim/AOT-clean
-      and not relevant for the test-only consumers. Disable AOT/trim flags inherited from
-      the repository defaults so analyzers do not produce warnings-as-errors here.
-    -->
-    <IsAotCompatible>false</IsAotCompatible>
-    <IsTrimmable>false</IsTrimmable>
-    <EnableTrimAnalyzer>false</EnableTrimAnalyzer>
-    <!--
-      CA1002: this is a test-helper assembly (not part of the shipped public API surface),
-      and the consumer test projects expect mutable List<T> for `[..tshark]` collection
-      expressions and indexed access. Returning Collection<T> would only obscure the
-      intent without any consumer benefit.
-    -->
-    <NoWarn>$(NoWarn);CA1002</NoWarn>
   </PropertyGroup>
 </Project>

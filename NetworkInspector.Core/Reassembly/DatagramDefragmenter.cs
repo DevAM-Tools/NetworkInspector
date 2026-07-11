@@ -33,7 +33,7 @@ public sealed class DatagramDefragmenter<TKey> where TKey : struct, IEquatable<T
     #region Constants
 
     /// <summary>Default maximum number of concurrent in-progress reassembly entries.</summary>
-    private const int DefaultMaxEntries = 1024;
+    private const int _DefaultMaxEntries = 1024;
 
     #endregion
 
@@ -46,7 +46,7 @@ public sealed class DatagramDefragmenter<TKey> where TKey : struct, IEquatable<T
     private readonly Queue<TKey> _InsertionOrder = new();
 
     /// <summary>Maximum concurrent reassembly entries to prevent unbounded memory usage.</summary>
-    private readonly int _MaxEntries = DefaultMaxEntries;
+    private readonly int _MaxEntries = _DefaultMaxEntries;
 
     /// <summary>
     /// When true, overlapping fragments (per RFC 5722) cause the datagram to be discarded.
@@ -69,7 +69,7 @@ public sealed class DatagramDefragmenter<TKey> where TKey : struct, IEquatable<T
 
     /// <summary>
     /// Total number of in-progress reassembly entries that were dropped because the
-    /// pending-entry limit (<see cref="DefaultMaxEntries"/>) was reached. Useful as a
+    /// pending-entry limit (<see cref="_DefaultMaxEntries"/>) was reached. Useful as a
     /// diagnostic counter to detect lost reassembly results upstream.
     /// </summary>
     public long EvictedCount => Interlocked.Read(ref _EvictedCount);
@@ -93,7 +93,7 @@ public sealed class DatagramDefragmenter<TKey> where TKey : struct, IEquatable<T
     /// Maximum number of concurrent in-progress reassembly buffers.
     /// Excess entries are evicted oldest-first to prevent unbounded memory growth.
     /// </param>
-    public DatagramDefragmenter(bool dropOnOverlap = false, int maxEntries = DefaultMaxEntries)
+    public DatagramDefragmenter(bool dropOnOverlap = false, int maxEntries = _DefaultMaxEntries)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxEntries);
         _DropOnOverlap = dropOnOverlap;
@@ -149,10 +149,10 @@ public sealed class DatagramDefragmenter<TKey> where TKey : struct, IEquatable<T
             // This prevents unbounded growth from incomplete fragment sequences.
             if (_Buffers.Count >= _MaxEntries)
             {
-                EvictOldestEntry();
+                _EvictOldestEntry();
             }
 
-            buffer = new DatagramFragmentBuffer();
+            buffer = new();
             _Buffers[key] = buffer;
             _InsertionOrder.Enqueue(key);
         }
@@ -184,7 +184,7 @@ public sealed class DatagramDefragmenter<TKey> where TKey : struct, IEquatable<T
 
         // Datagram complete — reassemble and remove the entry. The corresponding
         // entry in `_InsertionOrder` becomes a stale tombstone and is drained at the
-        // top of the next call (or by `EvictOldestEntry`).
+        // top of the next call (or by `_EvictOldestEntry`).
         byte[]? reassembled = buffer.Reassemble();
         _Buffers.Remove(key);
 
@@ -217,7 +217,7 @@ public sealed class DatagramDefragmenter<TKey> where TKey : struct, IEquatable<T
     /// Uses a FIFO queue for deterministic eviction order that does not depend on
     /// Dictionary implementation details.
     /// </summary>
-    private void EvictOldestEntry()
+    private void _EvictOldestEntry()
     {
         // Drain stale entries that may have already been removed (e.g. completed datagrams).
         // Only count an actual buffer removal as an eviction — stale queue entries are not.

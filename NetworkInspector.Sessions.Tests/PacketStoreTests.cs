@@ -12,7 +12,7 @@ internal sealed class PacketStoreTests
     {
         PacketStore store = new();
         using Stack stack = TestHarness.CreateStack();
-        Packet packet = ParseTestPacket(stack, 0);
+        Packet packet = _ParseTestPacket(stack, 0);
 
         store.Store(packet.Id, packet);
         Packet? result = store.Get(packet.Id);
@@ -49,7 +49,7 @@ internal sealed class PacketStoreTests
         Packet[] packets = new Packet[10];
         for (int i = 0; i < 10; i++)
         {
-            packets[i] = ParseTestPacket(stack, i);
+            packets[i] = _ParseTestPacket(stack, i);
             store.Store(packets[i].Id, packets[i]);
         }
 
@@ -70,7 +70,7 @@ internal sealed class PacketStoreTests
     {
         PacketStore store = new();
         using Stack stack = TestHarness.CreateStack();
-        Packet packet = ParseTestPacket(stack, 0);
+        Packet packet = _ParseTestPacket(stack, 0);
 
         store.Store(packet.Id, packet);
         store.Clear();
@@ -90,7 +90,7 @@ internal sealed class PacketStoreTests
         Packet[] packets = new Packet[count];
         for (int i = 0; i < count; i++)
         {
-            packets[i] = ParseTestPacket(stack, i);
+            packets[i] = _ParseTestPacket(stack, i);
         }
 
         // Store concurrently (each thread stores its own range)
@@ -123,7 +123,7 @@ internal sealed class PacketStoreTests
     }
 
     /// <summary>Creates a test packet by parsing a synthetic UDP frame.</summary>
-    private static Packet ParseTestPacket(Stack stack, int id)
+    private static Packet _ParseTestPacket(Stack stack, int id)
     {
         FrameInterfaceRegistry registry = stack.FrameInterfaceRegistry;
         if (registry.SourceCount == 0)

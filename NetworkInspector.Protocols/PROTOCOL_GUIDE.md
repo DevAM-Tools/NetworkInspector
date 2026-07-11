@@ -2099,6 +2099,8 @@ partial void OnStartCustom(Stack stack)
 | `http.upgrade` | `HttpProtocol` | `string` | `WebSocketProtocol` |
 | `can.id` | `CanProtocol` | `u64` | Signal PDU and sub-protocols by CAN ID / CAN XL priority |
 | `can.extended_id` | `CanProtocol` | `u64` | Extended-frame and CAN XL acceptance-field sub-protocols |
+| `flexray.id` | `FlexRayProtocol` | `u64` (slot + channel + cycle) | Signal PDU and sub-protocols; key = `FlexRayLinkTypeFrame.EncodeDispatchKey(slot, channelB, cycle)` — bits `[10:0]` slot, bit `11` channel B, bits `[17:12]` cycle |
+| `lin.id` | `LinProtocol` | `u64` (6-bit frame ID) | Signal PDU and sub-protocols by LIN protected ID |
 | `someip.messageid` | `SomeIpProtocol` | `u64` | Payload deserializers by SOME/IP Message ID |
 | `tcp.heuristic` | `TcpProtocol` | heuristic | `HttpProtocol`, `TlsProtocol`, `Http2Protocol` (content-based) |
 
@@ -2111,7 +2113,8 @@ Frame ──[frame.link_type]──► Ethernet ──[eth.type]──► IPv4/I
                          │                                │         │
                          └──► CAN ──[can.id/can.extended_id]       │
                          │                              UDP        TCP
-                         └──► FlexRay / LIN              │          │
+                         └──► FlexRay ──[flexray.id]   │          │
+                         └──► LIN ──[lin.id]           │          │
                                                   [udp.port]  [tcp.port / tcp.heuristic]
                                                    │    │      │         │
                                                  DNS  DHCP  HTTP/1.x   TLS

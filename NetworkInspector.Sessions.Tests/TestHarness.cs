@@ -89,7 +89,7 @@ internal static class TestHarness
         frame[ip + 19] = 2; // dst
 
         // IPv4 checksum
-        ushort checksum = CalculateIpv4Checksum(frame.AsSpan(ip, ipv4Size));
+        ushort checksum = _CalculateIpv4Checksum(frame.AsSpan(ip, ipv4Size));
         BinaryPrimitives.WriteUInt16BigEndian(frame.AsSpan(ip + 10), checksum);
 
         // UDP header
@@ -105,7 +105,7 @@ internal static class TestHarness
     /// <summary>
     /// Computes the one's-complement IPv4 header checksum.
     /// </summary>
-    private static ushort CalculateIpv4Checksum(ReadOnlySpan<byte> header)
+    private static ushort _CalculateIpv4Checksum(ReadOnlySpan<byte> header)
     {
         uint sum = 0;
         for (int i = 0; i < header.Length; i += 2)

@@ -9,12 +9,12 @@ internal static class SomeIpDisplayTables
 {
     #region Message Type (byte field)
 
-    private static readonly string[] MsgTypeTable = BuildMsgTypeTable();
+    private static readonly string[] _MsgTypeTable = _BuildMsgTypeTable();
 
     /// <summary>Returns display text for a SOME/IP message type byte.</summary>
-    internal static string GetMsgTypeDisplayText(byte msgType) => MsgTypeTable[msgType];
+    internal static string GetMsgTypeDisplayText(byte msgType) => _MsgTypeTable[msgType];
 
-    private static string[] BuildMsgTypeTable()
+    private static string[] _BuildMsgTypeTable()
     {
         string[] table = new string[256];
         table[0x00] = "REQUEST (0x00)";
@@ -39,12 +39,12 @@ internal static class SomeIpDisplayTables
 
     #region Return Code (byte field)
 
-    private static readonly string[] ReturnCodeTable = BuildReturnCodeTable();
+    private static readonly string[] _ReturnCodeTable = _BuildReturnCodeTable();
 
     /// <summary>Returns display text for a SOME/IP return code byte.</summary>
-    internal static string GetReturnCodeDisplayText(byte code) => ReturnCodeTable[code];
+    internal static string GetReturnCodeDisplayText(byte code) => _ReturnCodeTable[code];
 
-    private static string[] BuildReturnCodeTable()
+    private static string[] _BuildReturnCodeTable()
     {
         string[] table = new string[256];
         table[0x00] = "E_OK (0x00)";

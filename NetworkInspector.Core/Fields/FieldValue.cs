@@ -9,7 +9,7 @@ namespace NetworkInspector.Core.Fields;
 public readonly struct FieldValue : IEquatable<FieldValue>, IComparable<FieldValue>, ISpanFormattable, IUtf8SpanFormattable, IStringSize
 {
     /// <summary>None value constant (container fields).</summary>
-    public static readonly FieldValue None = default;
+    public static readonly FieldValue None;
 
     private readonly FieldValueData _Data;
     private readonly LazyString _CustomRepresentation;
@@ -155,6 +155,15 @@ public readonly struct FieldValue : IEquatable<FieldValue>, IComparable<FieldVal
     /// </summary>
     public int CompareTo(FieldValue other) => _Data.CompareTo(other._Data);
 
+    /// <summary>Returns <see langword="true"/> if <paramref name="left"/> is less than <paramref name="right"/>.</summary>
+    public static bool operator <(FieldValue left, FieldValue right) => left.CompareTo(right) < 0;
+    /// <summary>Returns <see langword="true"/> if <paramref name="left"/> is greater than <paramref name="right"/>.</summary>
+    public static bool operator >(FieldValue left, FieldValue right) => left.CompareTo(right) > 0;
+    /// <summary>Returns <see langword="true"/> if <paramref name="left"/> is less than or equal to <paramref name="right"/>.</summary>
+    public static bool operator <=(FieldValue left, FieldValue right) => left.CompareTo(right) <= 0;
+    /// <summary>Returns <see langword="true"/> if <paramref name="left"/> is greater than or equal to <paramref name="right"/>.</summary>
+    public static bool operator >=(FieldValue left, FieldValue right) => left.CompareTo(right) >= 0;
+
     #endregion
 
     #region ISpanFormattable
@@ -202,8 +211,14 @@ public readonly struct FieldValue : IEquatable<FieldValue>, IComparable<FieldVal
     }
 
     /// <summary>Returns the custom representation if present, otherwise the formatted data value.</summary>
-    public override string ToString() =>
-        !_CustomRepresentation.IsNull ? _CustomRepresentation.AsString : _Data.ToString();
+    public override string ToString()
+    {
+        if (!_CustomRepresentation.IsNull)
+        {
+            return _CustomRepresentation.AsString;
+        }
+        return _Data.ToString();
+    }
 
     /// <summary>Returns the custom representation if present, otherwise the formatted data value.</summary>
     public string ToString(string? format, IFormatProvider? formatProvider) => ToString();
@@ -274,13 +289,25 @@ public readonly struct FieldValue : IEquatable<FieldValue>, IComparable<FieldVal
     /// <summary>Creates an F64 field value.</summary>
     public static implicit operator FieldValue(double value) => NewF64(value);
     /// <summary>Creates a String field value (null produces None).</summary>
-    public static implicit operator FieldValue(string? value) =>
-        value is null ? None : NewString(value);
+    public static implicit operator FieldValue(string? value)
+    {
+        if (value is null)
+        {
+            return None;
+        }
+        return NewString(value);
+    }
     /// <summary>Creates a Bytes field value.</summary>
     public static implicit operator FieldValue(ReadOnlyMemory<byte> value) => NewBytes(value);
     /// <summary>Creates a Bytes field value from a byte array (null produces None).</summary>
-    public static implicit operator FieldValue(byte[]? value) =>
-        value is null ? None : NewBytes(value);
+    public static implicit operator FieldValue(byte[]? value)
+    {
+        if (value is null)
+        {
+            return None;
+        }
+        return NewBytes(value);
+    }
     /// <summary>Creates a MacAddress field value.</summary>
     public static implicit operator FieldValue(MacAddress value) => NewMacAddress(value);
     /// <summary>Creates an IPv4Address field value.</summary>

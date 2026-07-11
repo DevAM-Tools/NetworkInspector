@@ -15,10 +15,10 @@ namespace NetworkInspector.Protocols.SomeIp;
 internal static class SomeIpSdParser
 {
     /// <summary>SD minimum header size: flags(1) + reserved(3) + entries_length(4).</summary>
-    private const int SdMinHeaderSize = 8;
+    private const int _SdMinHeaderSize = 8;
 
     /// <summary>SD entry size in bytes (fixed 16 bytes per entry).</summary>
-    private const int SdEntrySize = 16;
+    private const int _SdEntrySize = 16;
 
     /// <summary>SD message ID (Service 0xFFFF, Method 0x8100).</summary>
     internal const uint SdMessageId = 0xFFFF_8100;
@@ -34,10 +34,10 @@ internal static class SomeIpSdParser
     internal static ParseResult Parse(in MutField parent, ReadOnlySpan<byte> sdData,
         in SomeIpSdFieldIds fieldIds)
     {
-        if (sdData.Length < SdMinHeaderSize)
+        if (sdData.Length < _SdMinHeaderSize)
         {
             return ParseError.InsufficientDataWithInfo("someip_sd",
-                SdMinHeaderSize, (ulong)sdData.Length);
+                _SdMinHeaderSize, (ulong)sdData.Length);
         }
 
         byte flags = sdData[0];
@@ -66,17 +66,17 @@ internal static class SomeIpSdParser
                 "Entries array extends beyond SD payload");
         }
 
-        int entryCount = entriesLength / SdEntrySize;
+        int entryCount = entriesLength / _SdEntrySize;
         MutField entriesField = sdField.AppendWithCustomText(fieldIds.EntriesContainer,
             FieldValue.None,
             entryCount == 1 ? "Entries Array (1 entry)" : ZA.Lazy("Entries Array (", entryCount, " entries)"));
 
         // Parse individual entries
         int offset = entriesStart;
-        while (offset + SdEntrySize <= entriesEnd)
+        while (offset + _SdEntrySize <= entriesEnd)
         {
-            ParseEntry(in entriesField, sdData[offset..(offset + SdEntrySize)], in fieldIds);
-            offset += SdEntrySize;
+            _ParseEntry(in entriesField, sdData[offset..(offset + _SdEntrySize)], in fieldIds);
+            offset += _SdEntrySize;
         }
 
         // -- Options array --
@@ -104,17 +104,17 @@ internal static class SomeIpSdParser
             MutField optionsField = sdField.AppendWithCustomText(fieldIds.OptionsContainer,
                 FieldValue.None, ZA.Lazy("Options Array (", optionsLength, " bytes)"));
 
-            ParseOptions(in optionsField, sdData, optionsStart, optionsEnd, in fieldIds);
+            _ParseOptions(in optionsField, sdData, optionsStart, optionsEnd, in fieldIds);
         }
 
         return 0;
     }
 
     /// <summary>Parses a single 16-byte SD entry.</summary>
-    private static void ParseEntry(in MutField parent, ReadOnlySpan<byte> data,
+    private static void _ParseEntry(in MutField parent, ReadOnlySpan<byte> data,
         in SomeIpSdFieldIds f)
     {
-        if (data.Length < SdEntrySize)
+        if (data.Length < _SdEntrySize)
         {
             return;
         }
@@ -131,7 +131,7 @@ internal static class SomeIpSdParser
         uint ttl = (uint)((data[9] << 16) | (data[10] << 8) | data[11]);
 
         // Display name varies based on entry type and TTL (TTL=0 ? stop/nack)
-        string displayName = GetEntryDisplayName(entryType, ttl);
+        string displayName = _GetEntryDisplayName(entryType, ttl);
 
         MutField entryField = parent.AppendWithCustomText(f.EntryContainer,
             FieldValue.None, displayName);
@@ -177,7 +177,7 @@ internal static class SomeIpSdParser
     /// Entry display name based on type and TTL. TTL=0 changes semantics:
     /// OfferService ? StopOfferService, SubscribeEventgroup ? StopSubscribe, etc.
     /// </summary>
-    private static string GetEntryDisplayName(byte entryType, uint ttl)
+    private static string _GetEntryDisplayName(byte entryType, uint ttl)
     {
         if (ttl == 0)
         {
@@ -194,7 +194,7 @@ internal static class SomeIpSdParser
     }
 
     /// <summary>Parses all options in the options array.</summary>
-    private static void ParseOptions(in MutField parent, ReadOnlySpan<byte> fullData,
+    private static void _ParseOptions(in MutField parent, ReadOnlySpan<byte> fullData,
         int start, int end, in SomeIpSdFieldIds f)
     {
         int offset = start;
@@ -217,14 +217,14 @@ internal static class SomeIpSdParser
                 break;
             }
 
-            ParseSingleOption(in parent, fullData[offset..(offset + totalOptSize)],
+            _ParseSingleOption(in parent, fullData[offset..(offset + totalOptSize)],
                 optLength, optType, in f);
             offset += totalOptSize;
         }
     }
 
     /// <summary>Parses a single SD option.</summary>
-    private static void ParseSingleOption(in MutField parent, ReadOnlySpan<byte> data,
+    private static void _ParseSingleOption(in MutField parent, ReadOnlySpan<byte> data,
         int optLength, byte optType, in SomeIpSdFieldIds f)
     {
         string displayText = SomeIpSdDisplayTables.GetOptionTypeShortName(optType);
@@ -245,12 +245,12 @@ internal static class SomeIpSdParser
         {
             // IPv4 Endpoint / IPv4 Multicast / IPv4 SD Endpoint
             case 0x04 or 0x14 or 0x24:
-                ParseIpv4EndpointOption(in optField, data, payloadStart, in f);
+                _ParseIpv4EndpointOption(in optField, data, payloadStart, in f);
                 break;
 
             // IPv6 Endpoint / IPv6 Multicast / IPv6 SD Endpoint
             case 0x06 or 0x16 or 0x26:
-                ParseIpv6EndpointOption(in optField, data, payloadStart, in f);
+                _ParseIpv6EndpointOption(in optField, data, payloadStart, in f);
                 break;
 
             // Configuration option
@@ -282,7 +282,7 @@ internal static class SomeIpSdParser
     /// <summary>
     /// Parses IPv4 endpoint/multicast option: 4 bytes IPv4 + 1 reserved + 1 protocol + 2 port.
     /// </summary>
-    private static void ParseIpv4EndpointOption(in MutField optField, ReadOnlySpan<byte> data,
+    private static void _ParseIpv4EndpointOption(in MutField optField, ReadOnlySpan<byte> data,
         int payloadStart, in SomeIpSdFieldIds f)
     {
         if (data.Length < payloadStart + 8)
@@ -307,7 +307,7 @@ internal static class SomeIpSdParser
     /// <summary>
     /// Parses IPv6 endpoint/multicast option: 16 bytes IPv6 + 1 reserved + 1 protocol + 2 port.
     /// </summary>
-    private static void ParseIpv6EndpointOption(in MutField optField, ReadOnlySpan<byte> data,
+    private static void _ParseIpv6EndpointOption(in MutField optField, ReadOnlySpan<byte> data,
         int payloadStart, in SomeIpSdFieldIds f)
     {
         if (data.Length < payloadStart + 20)

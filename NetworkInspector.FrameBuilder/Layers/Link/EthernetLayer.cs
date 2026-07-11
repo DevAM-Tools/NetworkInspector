@@ -22,7 +22,7 @@ public readonly struct EthernetLayer :
     IConsumesNextProtocolValue<EtherTypeKind>, IProvidesMtu
 {
     /// <summary>Byte offset of the EtherType field within the Ethernet header.</summary>
-    private const int EtherTypeOffset = 12;
+    private const int _EtherTypeOffset = 12;
 
     private readonly MacAddress _DstMac;
     private readonly MacAddress _SrcMac;
@@ -32,7 +32,7 @@ public readonly struct EthernetLayer :
 
     /// <summary>
     /// <c>true</c> when the caller supplied an explicit EtherType via
-    /// <see cref="Auto{T}.Explicit"/>; <c>false</c> means auto-patch
+    /// <see cref="Auto.Explicit"/>; <c>false</c> means auto-patch
     /// from the inner layer's <see cref="IProvidesProtocolType.ProtocolType"/>.
     /// </summary>
     private readonly bool _EtherTypeIsExplicit;
@@ -55,9 +55,9 @@ public readonly struct EthernetLayer :
     /// <param name="dstMac">Destination MAC.</param>
     /// <param name="srcMac">Source MAC.</param>
     /// <param name="etherType">
-    /// EtherType field; <see cref="Auto{T}.Compute"/> (default) means auto-patch
+    /// EtherType field; <see cref="Auto.Compute"/> (default) means auto-patch
     /// from the inner network layer's <see cref="IProvidesProtocolType"/>.
-    /// <see cref="Auto{T}.Explicit"/> pins the value verbatim, including
+    /// <see cref="Auto.Explicit"/> pins the value verbatim, including
     /// <c>0x0000</c> (which suppresses auto-patching completely).
     /// </param>
     /// <param name="maxFrameSize">
@@ -105,12 +105,12 @@ public readonly struct EthernetLayer :
 
     /// <inheritdoc />
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public void PatchNextProtocol(scoped Span<byte> frame, int myOffset, ushort next)
+    public void PatchNextProtocol(scoped Span<byte> frame, int myOffset, ushort nextProtocol)
     {
         // Only auto-patch if the user did not pin EtherType explicitly.
         if (!_EtherTypeIsExplicit)
         {
-            BinaryPrimitives.WriteUInt16BigEndian(frame.Slice(myOffset + EtherTypeOffset, 2), next);
+            BinaryPrimitives.WriteUInt16BigEndian(frame.Slice(myOffset + _EtherTypeOffset, 2), nextProtocol);
         }
     }
 

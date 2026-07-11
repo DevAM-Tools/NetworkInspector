@@ -47,7 +47,7 @@ internal struct BlfFrameEntry
 }
 
 /// <summary>
-/// Growable index of BLF frame entries stored in a single <see cref="BlfFrameEntry"/> array.
+/// _Growable index of BLF frame entries stored in a single <see cref="BlfFrameEntry"/> array.
 /// Each entry contains both the location metadata and the timestamp, so the array is the
 /// sole authoritative storage — there is no split-array layout.
 /// </summary>
@@ -107,7 +107,7 @@ internal sealed class BlfFrameIndex
 
         if (count == _Entries.Length)
         {
-            Grow();
+            _Grow();
         }
         _Entries[count] = entry;
         Volatile.Write(ref _Count, count + 1);
@@ -139,7 +139,7 @@ internal sealed class BlfFrameIndex
     /// the new array via <see cref="System.Threading.Volatile"/> Write so concurrent readers never observe
     /// a partially copied array.
     /// </summary>
-    private void Grow()
+    private void _Grow()
     {
         long doubled = (long)_Entries.Length * 2;
         long target = Math.Max(doubled, 1024);

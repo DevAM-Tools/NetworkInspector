@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Protocols.Tests;
 
@@ -26,7 +26,7 @@ internal sealed class EthernetTsharkTests
     #region Frame builders
 
     /// <summary>Standard Ethernet+IPv4+UDP frame; large enough to avoid auto-padding.</summary>
-    private static byte[] BuildStandardFrame()
+    private static byte[] _BuildStandardFrame()
     {
         EthernetLayer eth = new(
             MacAddress.FromBytes([0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF]),
@@ -42,7 +42,7 @@ internal sealed class EthernetTsharkTests
     }
 
     /// <summary>ARP request frame to exercise <c>eth.type</c> = 0x0806.</summary>
-    private static byte[] BuildArpFrame()
+    private static byte[] _BuildArpFrame()
     {
         EthernetLayer eth = new(
             MacAddress.FromBytes([0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]),
@@ -61,7 +61,7 @@ internal sealed class EthernetTsharkTests
     /// 802.3 minimum minus the 4-byte FCS). tshark exposes the trailing
     /// zero-bytes via the <c>eth.padding</c> field, which is what we verify.
     /// </summary>
-    private static byte[] BuildShortFrameWithPadding()
+    private static byte[] _BuildShortFrameWithPadding()
     {
         // Eth(14) + IPv4(20) + UDP(8) + payload(4) = 46 bytes raw → pad to 60.
         EthernetLayer eth = new(
@@ -89,13 +89,13 @@ internal sealed class EthernetTsharkTests
     /// does not currently do — so this test verifies the round-trip through our
     /// parser only and pins the FCS bytes against an independent CRC.
     /// </summary>
-    private static byte[] BuildFrameWithFcs(out uint expectedCrc)
+    private static byte[] _BuildFrameWithFcs(out uint expectedCrc)
     {
         EthernetLayer eth = new(
             MacAddress.FromBytes([0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF]),
             MacAddress.FromBytes([0x11, 0x22, 0x33, 0x44, 0x55, 0x66]));
         IPv4Layer ip = new(new IPv4Address(0xC0A80101), new IPv4Address(0xC0A80102));
-        UdpLayer udp = new(53, 53, Auto<ushort>.Explicit(0));
+        UdpLayer udp = new(53, 53, Auto.Explicit((ushort)0));
         byte[] payload = new byte[64];
         for (int i = 0; i < payload.Length; i++)
         {
@@ -126,12 +126,12 @@ internal sealed class EthernetTsharkTests
             NoInterceptor> seq = stack.Build(payload);
         seq.MoveNext(frame, out int written);
         byte[] sized = frame.Length == written ? frame : frame[..written];
-        expectedCrc = ComputeCrc32(sized.AsSpan(0, written - EthernetFcs.Size));
+        expectedCrc = _ComputeCrc32(sized.AsSpan(0, written - EthernetFcs.Size));
         return sized;
     }
 
     /// <summary>Reference IEEE 802.3 CRC-32 — independent of the trailer's implementation.</summary>
-    private static uint ComputeCrc32(ReadOnlySpan<byte> data)
+    private static uint _ComputeCrc32(ReadOnlySpan<byte> data)
     {
         const uint Polynomial = 0xEDB88320u;
         uint crc = 0xFFFFFFFFu;
@@ -154,7 +154,7 @@ internal sealed class EthernetTsharkTests
     [Test]
     public async Task Ethernet_StandardFrame_AllCoreFieldsMatchTshark()
     {
-        byte[] frame = BuildStandardFrame();
+        byte[] frame = _BuildStandardFrame();
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -169,7 +169,7 @@ internal sealed class EthernetTsharkTests
     [Test]
     public async Task Ethernet_ArpFrame_EtherTypeMatchesTshark()
     {
-        byte[] frame = BuildArpFrame();
+        byte[] frame = _BuildArpFrame();
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -188,7 +188,7 @@ internal sealed class EthernetTsharkTests
     [Test]
     public async Task Ethernet_PaddedShortFrame_PaddingMatchesTshark()
     {
-        byte[] frame = BuildShortFrameWithPadding();
+        byte[] frame = _BuildShortFrameWithPadding();
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -215,7 +215,7 @@ internal sealed class EthernetTsharkTests
     [Test]
     public async Task Ethernet_FrameWithFcsTrailer_BytesAndFieldsMatch()
     {
-        byte[] frame = BuildFrameWithFcs(out uint expectedCrc);
+        byte[] frame = _BuildFrameWithFcs(out uint expectedCrc);
 
         // (1) Pin the trailer bytes against an independent CRC-32 implementation.
         uint actualCrc = BinaryPrimitives.ReadUInt32LittleEndian(

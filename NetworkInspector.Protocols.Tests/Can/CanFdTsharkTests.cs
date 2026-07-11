@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Protocols.Tests;
 
@@ -19,11 +19,11 @@ namespace NetworkInspector.Protocols.Tests;
 /// </remarks>
 internal sealed class CanFdTsharkTests
 {
-    private const int DltCanSocketcan = 227;
+    private const int _DltCanSocketcan = 227;
 
     #region Frame builders
 
-    private static byte[] BuildFdFrame(uint canId, ReadOnlySpan<byte> data, bool extended = false, bool brs = false, bool esi = false)
+    private static byte[] _BuildFdFrame(uint canId, ReadOnlySpan<byte> data, bool extended = false, bool brs = false, bool esi = false)
     {
         SocketCanFdLayer canFd = new(canId, data, extended: extended, brs: brs, errorStateIndicator: esi);
         return FrameStack.Start(canFd).CreateWithFixedValues().EmitFrame(ReadOnlySpan<byte>.Empty);
@@ -55,12 +55,12 @@ internal sealed class CanFdTsharkTests
         {
             data[i] = (byte)(0x80 + i);
         }
-        byte[] frame = BuildFdFrame(0x123u, data);
+        byte[] frame = _BuildFdFrame(0x123u, data);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame, LinkType.CanSocketcan);
         using (stack)
         {
             // FDF must be set by construction; BRS and ESI default to false.
-            await TsharkAssert.AssertEquivalentMany(stack, packet, frame, DltCanSocketcan,
+            await TsharkAssert.AssertEquivalentMany(stack, packet, frame, _DltCanSocketcan,
                 ("can.id", "can.id"),
                 ("can.len", "can.len"),
                 ("can.flags.fd", "canfd.flags.fdf"),
@@ -77,11 +77,11 @@ internal sealed class CanFdTsharkTests
     [Test]
     public async Task CanFd_BrsOnly_FlagFieldsMatchTshark()
     {
-        byte[] frame = BuildFdFrame(0x456u, new byte[16], brs: true);
+        byte[] frame = _BuildFdFrame(0x456u, new byte[16], brs: true);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame, LinkType.CanSocketcan);
         using (stack)
         {
-            await TsharkAssert.AssertEquivalentMany(stack, packet, frame, DltCanSocketcan,
+            await TsharkAssert.AssertEquivalentMany(stack, packet, frame, _DltCanSocketcan,
                 ("can.id", "can.id"),
                 ("can.flags.fd", "canfd.flags.fdf"),
                 ("can.flags.brs", "canfd.flags.brs"),
@@ -93,11 +93,11 @@ internal sealed class CanFdTsharkTests
     [Test]
     public async Task CanFd_EsiOnly_FlagFieldsMatchTshark()
     {
-        byte[] frame = BuildFdFrame(0x456u, new byte[16], esi: true);
+        byte[] frame = _BuildFdFrame(0x456u, new byte[16], esi: true);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame, LinkType.CanSocketcan);
         using (stack)
         {
-            await TsharkAssert.AssertEquivalentMany(stack, packet, frame, DltCanSocketcan,
+            await TsharkAssert.AssertEquivalentMany(stack, packet, frame, _DltCanSocketcan,
                 ("can.flags.fd", "canfd.flags.fdf"),
                 ("can.flags.brs", "canfd.flags.brs"),
                 ("can.flags.esi", "canfd.flags.esi")).ConfigureAwait(false);
@@ -108,11 +108,11 @@ internal sealed class CanFdTsharkTests
     [Test]
     public async Task CanFd_BrsAndEsi_FlagFieldsMatchTshark()
     {
-        byte[] frame = BuildFdFrame(0x456u, new byte[16], brs: true, esi: true);
+        byte[] frame = _BuildFdFrame(0x456u, new byte[16], brs: true, esi: true);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame, LinkType.CanSocketcan);
         using (stack)
         {
-            await TsharkAssert.AssertEquivalentMany(stack, packet, frame, DltCanSocketcan,
+            await TsharkAssert.AssertEquivalentMany(stack, packet, frame, _DltCanSocketcan,
                 ("can.id", "can.id"),
                 ("can.len", "can.len"),
                 ("can.flags.fd", "canfd.flags.fdf"),
@@ -128,11 +128,11 @@ internal sealed class CanFdTsharkTests
     [Test]
     public async Task CanFd_ExtendedId_FieldsMatchTshark()
     {
-        byte[] frame = BuildFdFrame(0x1ABCDEFu, [0x01, 0x02, 0x03, 0x04], extended: true);
+        byte[] frame = _BuildFdFrame(0x1ABCDEFu, [0x01, 0x02, 0x03, 0x04], extended: true);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame, LinkType.CanSocketcan);
         using (stack)
         {
-            await TsharkAssert.AssertEquivalentMany(stack, packet, frame, DltCanSocketcan,
+            await TsharkAssert.AssertEquivalentMany(stack, packet, frame, _DltCanSocketcan,
                 ("can.id", "can.id"),
                 ("can.flags.xtd", "can.flags.xtd"),
                 ("can.flags.fd", "canfd.flags.fdf"),

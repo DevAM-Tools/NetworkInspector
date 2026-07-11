@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Protocols.Tests;
 
@@ -10,7 +10,7 @@ namespace NetworkInspector.Protocols.Tests;
 /// <remarks>Thread safety: stateless tests; no shared mutable state.</remarks>
 internal sealed class FlexRayBasicTests
 {
-    private static byte[] BuildFrame(
+    private static byte[] _BuildFrame(
         ushort frameId = 1,
         byte cycleCount = 0,
         bool nfi = false,
@@ -36,7 +36,7 @@ internal sealed class FlexRayBasicTests
     [Test]
     public async Task Parse_FlexRay_IndicatorFlags_DisplayText_None()
     {
-        byte[] frame = BuildFrame();
+        byte[] frame = _BuildFrame();
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame, LinkType.Flexray);
         using (stack)
         {
@@ -47,7 +47,7 @@ internal sealed class FlexRayBasicTests
     [Test]
     public async Task Parse_FlexRay_IndicatorFlags_DisplayText_Nfi()
     {
-        byte[] frame = BuildFrame(nfi: true);
+        byte[] frame = _BuildFrame(nfi: true);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame, LinkType.Flexray);
         using (stack)
         {
@@ -58,7 +58,7 @@ internal sealed class FlexRayBasicTests
     [Test]
     public async Task Parse_FlexRay_IndicatorFlags_DisplayText_SfiAndStfi()
     {
-        byte[] frame = BuildFrame(sfi: true, stfi: true);
+        byte[] frame = _BuildFrame(sfi: true, stfi: true);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame, LinkType.Flexray);
         using (stack)
         {
@@ -73,7 +73,7 @@ internal sealed class FlexRayBasicTests
     [Test]
     public async Task Parse_FlexRay_ErrorFlags_DisplayText_None()
     {
-        byte[] frame = BuildFrame(errorFlags: 0x00);
+        byte[] frame = _BuildFrame(errorFlags: 0x00);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame, LinkType.Flexray);
         using (stack)
         {
@@ -85,7 +85,7 @@ internal sealed class FlexRayBasicTests
     public async Task Parse_FlexRay_ErrorFlags_DisplayText_FcrcErr()
     {
         // FCRC_ERR is at wire bit 4 of the error flags byte (mask 0x10).
-        byte[] frame = BuildFrame(errorFlags: 0x10);
+        byte[] frame = _BuildFrame(errorFlags: 0x10);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame, LinkType.Flexray);
         using (stack)
         {
@@ -97,7 +97,7 @@ internal sealed class FlexRayBasicTests
     public async Task Parse_FlexRay_ErrorFlags_DisplayText_HcrcAndTssViol()
     {
         // HCRC_ERR is wire bit 3 (mask 0x08); TSS_VIOL is wire bit 0 (mask 0x01).
-        byte[] frame = BuildFrame(errorFlags: 0x09);
+        byte[] frame = _BuildFrame(errorFlags: 0x09);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame, LinkType.Flexray);
         using (stack)
         {

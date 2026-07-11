@@ -1,0 +1,33 @@
+---
+description: CopilotAIWorkflow bootstrap — load SSOT instructions from .github/
+alwaysApply: true
+---
+
+# Copilot AI Workflow (Cursor)
+
+Rules and skills are **not** duplicated here. Read SSOT files under `.github/` before plan, implementation, review, or code edits.
+
+## Bootstrap
+
+Read `.github/copilot-instructions.md` and apply fully.
+
+## Workflow triggers
+
+Natural-language equivalents of `/plan`, `/implement`, `/review`, `/review-loop`, `/complex-task` use the same workflow.
+
+| Trigger | SSOT skill |
+|---------|------------|
+| `/plan` | `.github/skills/workflow-plan.md` |
+| `/implement` | `.github/skills/workflow-implement.md` |
+| `/review` | `.github/skills/workflow-review.md` |
+| `/review-loop` | `.github/skills/workflow-review-loop.md` |
+| `/complex-task` | `.github/skills/workflow-complex-task.md` |
+
+On workflow start: read `copilot-instructions.md` plus the matching workflow skill. Run Tech Load Protocol (Section 3) before edits.
+
+## Cursor entry points
+
+- Slash commands: `.cursor/commands/` (thin wrappers, same as `.github/prompts/`)
+- Discoverable skills: `.cursor/skills/` (pointers to `.github/skills/` SSOT)
+
+Do not restate SSOT content in chat when artifacts were written to files; cite paths only.

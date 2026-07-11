@@ -1,7 +1,6 @@
 ﻿<!-- Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root. -->
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <RootNamespace>NetworkInspector.Core</RootNamespace>
     <Description>High-performance protocol analysis stack for network packet dissection. Provides the core framework for protocol registration, field trees, packet parsing, and cross-packet indexing. Includes a Roslyn source generator for declarative protocol definitions.</Description>
     <PackageTags>network;protocol;packet;analysis;dissection;pcap;pcapng;source-generator</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
@@ -12,37 +11,13 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="ZeroAlloc" PrivateAssets="none" />
+    <PackageReference Include="ZeroAlloc"/>
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\NetworkInspector.Values\NetworkInspector.Values.csproj" />
-  </ItemGroup>
-
-  <!-- Bundle the source generator into the NuGet package so consumers get it automatically -->
-  <ItemGroup>
     <ProjectReference Include="..\NetworkInspector.Generators\NetworkInspector.Generators.csproj"
                       OutputItemType="Analyzer"
                       ReferenceOutputAssembly="false" />
-  </ItemGroup>
-
-  <!-- Automatically resolve the generator DLL path and pack it into the standard Roslyn analyzers
-       folder. GetTargetPath returns the output path without rebuilding; the ProjectReference above
-       guarantees the generator is built before packing, so the DLL will exist at pack time.
-       Passing Configuration ensures the correct Debug/Release artifact is selected. -->
-  <Target Name="_PackGenerator" BeforeTargets="_GetPackageFiles">
-    <MSBuild Projects="$(MSBuildProjectDirectory)\..\NetworkInspector.Generators\NetworkInspector.Generators.csproj"
-             Targets="GetTargetPath"
-             Properties="Configuration=$(Configuration)">
-      <Output TaskParameter="TargetOutputs" ItemName="_GeneratorDll" />
-    </MSBuild>
-    <ItemGroup>
-      <None Include="@(_GeneratorDll)" Pack="true" PackagePath="analyzers/dotnet/cs" Visible="false" />
-    </ItemGroup>
-  </Target>
-
-  <!-- Include README in the NuGet package -->
-  <ItemGroup>
-    <None Include="README.md" Pack="true" PackagePath="" />
   </ItemGroup>
 </Project>

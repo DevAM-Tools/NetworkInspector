@@ -28,7 +28,7 @@ internal static class SignalPduConfigBridge
             defs = new SignalDefinition[signals.Length];
             for (int i = 0; i < signals.Length; i++)
             {
-                defs[i] = ConvertSignal(signals[i]);
+                defs[i] = _ConvertSignal(signals[i]);
             }
         }
 
@@ -71,7 +71,7 @@ internal static class SignalPduConfigBridge
             FromLayout(layout),
             SignalPduConfigContext.Default.SignalPduConfig);
 
-    private static SignalDefinition ConvertSignal(in SignalSpec s)
+    private static SignalDefinition _ConvertSignal(in SignalSpec s)
     {
         Dictionary<string, string>? valueNames = null;
         if (s.ValueNames is not null && s.ValueNames.Count > 0)
@@ -79,7 +79,7 @@ internal static class SignalPduConfigBridge
             valueNames = new Dictionary<string, string>(s.ValueNames.Count, StringComparer.Ordinal);
             foreach (KeyValuePair<ulong, string> kvp in s.ValueNames)
             {
-                valueNames[kvp.Key.ToString()] = kvp.Value;
+                valueNames[kvp.Key.ToString(CultureInfo.InvariantCulture)] = kvp.Value;
             }
         }
 

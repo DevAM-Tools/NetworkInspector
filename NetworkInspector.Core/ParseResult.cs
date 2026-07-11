@@ -68,16 +68,32 @@ public readonly struct ParseResult
     public int Value
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _EncodedValue > 0 ? _EncodedValue - 1 : ThrowHelpers.ThrowParseResultNoValue<int>();
+        get
+        {
+            if (_EncodedValue > 0)
+            {
+                return _EncodedValue - 1;
+            }
+            return ThrowHelpers.ThrowParseResultNoValue<int>();
+        }
     }
 
     /// <summary>The parse error. Throws if this is a success result.</summary>
     public ParseError Error
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _EncodedValue <= 0
-            ? (_EncodedValue < 0 ? ParseError.LastError : UninitializedError)
-            : ThrowHelpers.ThrowParseResultNoError<ParseError>();
+        get
+        {
+            if (_EncodedValue <= 0)
+            {
+                if (_EncodedValue < 0)
+                {
+                    return ParseError.LastError;
+                }
+                return _UninitializedError;
+            }
+            return ThrowHelpers.ThrowParseResultNoError<ParseError>();
+        }
     }
 
     #endregion
@@ -100,7 +116,14 @@ public readonly struct ParseResult
         if (_EncodedValue <= 0)
         {
             // Negative = explicit error (TLS), zero = uninitialized (static sentinel)
-            error = _EncodedValue < 0 ? ParseError.LastError : UninitializedError;
+            if (_EncodedValue < 0)
+            {
+                error = ParseError.LastError;
+            }
+            else
+            {
+                error = _UninitializedError;
+            }
             return true;
         }
 
@@ -122,7 +145,7 @@ public readonly struct ParseResult
     {
         if (consumed < 0)
         {
-            ThrowNegativeConsumed(consumed);
+            _ThrowNegativeConsumed(consumed);
         }
         return new(consumed + 1);
     }
@@ -139,21 +162,35 @@ public readonly struct ParseResult
     }
 
     /// <summary>Sentinel error for <c>default(ParseResult)</c> / uninitialized results.</summary>
-    private static readonly ParseError UninitializedError =
+    private static readonly ParseError _UninitializedError =
         ParseError.InternalError("Uninitialized ParseResult (missing return statement or return default)");
 
     /// <summary>Throws <see cref="ArgumentOutOfRangeException"/> for negative consumed byte counts.</summary>
     [DoesNotReturn]
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private static void ThrowNegativeConsumed(int consumed)
+    private static void _ThrowNegativeConsumed(int consumed)
         => throw new ArgumentOutOfRangeException(
             nameof(consumed),
             consumed,
             "ParseResult: consumed bytes must be >= 0. Use ParseError factory methods for errors.");
 
     /// <inheritdoc/>
-    public override string ToString() =>
-        _EncodedValue > 0 ? $"Ok({_EncodedValue - 1})" : $"Error({Error.Message})";
+    public override string ToString()
+    {
+        if (_EncodedValue > 0)
+        {
+            return $"Ok({_EncodedValue - 1})";
+        }
+        return $"Error({Error.Message})";
+    }
+
+    /// <summary>Creates a successful typed result.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static ParseResult<T> Ok<T>(T value) => new(value, default, true);
+
+    /// <summary>Creates a failed typed result.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static ParseResult<T> Fail<T>(ParseError error) => new(default, error, false);
 
     #endregion
 }
@@ -174,7 +211,7 @@ public readonly struct ParseResult<T>
 
     /// <summary>Creates a parse result with the given value, error, and success state.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private ParseResult(T? value, ParseError error, bool isSuccess)
+    internal ParseResult(T? value, ParseError error, bool isSuccess)
     {
         _Value = value;
         _Error = error;
@@ -203,14 +240,28 @@ public readonly struct ParseResult<T>
     public T Value
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _IsSuccess ? _Value! : ThrowHelpers.ThrowParseResultNoValue<T>();
+        get
+        {
+            if (_IsSuccess)
+            {
+                return _Value!;
+            }
+            return ThrowHelpers.ThrowParseResultNoValue<T>();
+        }
     }
 
     /// <summary>The parse error. Throws if this is a success result.</summary>
     public ParseError Error
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => !_IsSuccess ? _Error : ThrowHelpers.ThrowParseResultNoError<ParseError>();
+        get
+        {
+            if (!_IsSuccess)
+            {
+                return _Error;
+            }
+            return ThrowHelpers.ThrowParseResultNoError<ParseError>();
+        }
     }
 
     #endregion
@@ -233,29 +284,27 @@ public readonly struct ParseResult<T>
         return !_IsSuccess;
     }
 
-    /// <summary>Creates a successful result.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static ParseResult<T> Ok(T value) => new(value, default, true);
-
-    /// <summary>Creates a failed result.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static ParseResult<T> Fail(ParseError error) => new(default, error, false);
+    #endregion
 
     /// <inheritdoc/>
-    public override string ToString() =>
-        _IsSuccess ? $"Ok({_Value})" : $"Error({_Error.Message})";
-
-    #endregion
+    public override string ToString()
+    {
+        if (_IsSuccess)
+        {
+            return $"Ok({_Value})";
+        }
+        return $"Error({_Error.Message})";
+    }
 
     #region Conversions
 
     /// <summary>Implicit conversion from value to success result.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static implicit operator ParseResult<T>(T value) => Ok(value);
+    public static implicit operator ParseResult<T>(T value) => ParseResult.Ok(value);
 
     /// <summary>Implicit conversion from ParseError to failed result.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static implicit operator ParseResult<T>(ParseError error) => Fail(error);
+    public static implicit operator ParseResult<T>(ParseError error) => ParseResult.Fail<T>(error);
 
     #endregion
 }

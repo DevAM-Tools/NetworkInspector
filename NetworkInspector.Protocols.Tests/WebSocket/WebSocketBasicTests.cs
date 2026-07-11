@@ -39,10 +39,10 @@ internal sealed class WebSocketBasicTests
     private static readonly IPv4Address _ClientIp = new(0x0A000001);
     private static readonly IPv4Address _ServerIp = new(0x0A000002);
 
-    private const ushort ServerPort = 80;
-    private const ushort ClientPort = 49152;
+    private const ushort _ServerPort = 80;
+    private const ushort _ClientPort = 49152;
 
-    private const string Http101Response =
+    private const string _Http101Response =
         "HTTP/1.1 101 Switching Protocols\r\n" +
         "Upgrade: websocket\r\n" +
         "Connection: Upgrade\r\n" +
@@ -52,7 +52,7 @@ internal sealed class WebSocketBasicTests
     /// Encodes a WebSocket frame using <see cref="WebSocketLayer"/> and returns the raw bytes.
     /// This exercises the FrameBuilder encoder as part of the round-trip test.
     /// </summary>
-    private static byte[] EncodeWsFrame(byte[] payload, byte opcode, WebSocketFrameOptions options = default)
+    private static byte[] _EncodeWsFrame(byte[] payload, byte opcode, WebSocketFrameOptions options = default)
     {
         WebSocketLayer layer = new(payload, opcode, options);
         ArrayBufferWriter<byte> writer = new(initialCapacity: 256);
@@ -66,18 +66,18 @@ internal sealed class WebSocketBasicTests
     /// NI dispatches to HTTP (port 80 matched on low port), HTTP detects the 101 response
     /// and dispatches <paramref name="wsBytes"/> to WebSocket via the http.upgrade table.
     /// </summary>
-    private static byte[] BuildHttpUpgradeWithWebSocketFrame(byte[] wsBytes)
+    private static byte[] _BuildHttpUpgradeWithWebSocketFrame(byte[] wsBytes)
     {
-        byte[] http101 = Encoding.ASCII.GetBytes(Http101Response);
+        byte[] http101 = Encoding.ASCII.GetBytes(_Http101Response);
         byte[] combined = new byte[http101.Length + wsBytes.Length];
         http101.CopyTo(combined, 0);
         wsBytes.CopyTo(combined, http101.Length);
 
-        // Server → client: src port = 80 (server), dst port = ClientPort (client).
+        // Server → client: src port = 80 (server), dst port = _ClientPort (client).
         // TCP dispatches to HTTP using the low port min(80, 49152) = 80.
         EthernetLayer eth = new(_ServerMac, _ClientMac);
         IPv4Layer ip = new(_ServerIp, _ClientIp);
-        TcpLayer tcp = new(ServerPort, ClientPort, seqNum: 1, ackNum: 1, flags: TcpFlags.PshAck, windowSize: 65535);
+        TcpLayer tcp = new(_ServerPort, _ClientPort, seqNum: 1, ackNum: 1, flags: TcpFlags.PshAck, windowSize: 65535);
         return FrameStack.Start(eth).Then(ip).Then(tcp).CreateWithFixedValues().EmitFrame(combined);
     }
 
@@ -85,7 +85,7 @@ internal sealed class WebSocketBasicTests
     /// Encodes a WebSocket close frame payload: 2-byte big-endian status code followed by
     /// optional UTF-8 reason string.
     /// </summary>
-    private static byte[] EncodeClosePayload(ushort statusCode, string reason)
+    private static byte[] _EncodeClosePayload(ushort statusCode, string reason)
     {
         byte[] reasonBytes = Encoding.UTF8.GetBytes(reason);
         byte[] payload = new byte[2 + reasonBytes.Length];
@@ -101,7 +101,7 @@ internal sealed class WebSocketBasicTests
     /// RFC 7692 per-message DEFLATE format expected by <see cref="WebSocketProtocol"/>.
     /// The decompressor appends those 4 bytes itself before inflating.
     /// </summary>
-    private static byte[] DeflateCompressForWebSocket(byte[] data)
+    private static byte[] _DeflateCompressForWebSocket(byte[] data)
     {
         using MemoryStream ms = new();
         using (DeflateStream ds = new(ms, CompressionLevel.Fastest, leaveOpen: true))
@@ -133,12 +133,12 @@ internal sealed class WebSocketBasicTests
     public async Task Parse_WebSocket_UnmaskedTextFrame_AllFieldsPresent()
     {
         const string TextPayload = "Hello WebSocket";
-        byte[] wsBytes = EncodeWsFrame(
+        byte[] wsBytes = _EncodeWsFrame(
             Encoding.UTF8.GetBytes(TextPayload),
             WebSocketOpcode.Text,
             new WebSocketFrameOptions(Fin: true));
 
-        byte[] frame = BuildHttpUpgradeWithWebSocketFrame(wsBytes);
+        byte[] frame = _BuildHttpUpgradeWithWebSocketFrame(wsBytes);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -172,7 +172,7 @@ internal sealed class WebSocketBasicTests
     {
         const string TextPayload = "NI Unmask Me";
         const uint MaskingKey = 0xDEADBEEF;
-        byte[] wsBytes = EncodeWsFrame(
+        byte[] wsBytes = _EncodeWsFrame(
             Encoding.UTF8.GetBytes(TextPayload),
             WebSocketOpcode.Text,
             new WebSocketFrameOptions(Fin: true, MaskingKey: MaskingKey));
@@ -181,7 +181,7 @@ internal sealed class WebSocketBasicTests
         // server src-port 80 so that TCP dispatches to HTTP.  The masking key in the
         // wire frame is what matters for the round-trip test; NI must unmask regardless
         // of the perceived direction at the Ethernet/IP level.
-        byte[] frame = BuildHttpUpgradeWithWebSocketFrame(wsBytes);
+        byte[] frame = _BuildHttpUpgradeWithWebSocketFrame(wsBytes);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -210,9 +210,9 @@ internal sealed class WebSocketBasicTests
     public async Task Parse_WebSocket_BinaryFrame_OpcodeAndLengthPresent()
     {
         byte[] binaryPayload = [0x01, 0x02, 0x03, 0xFF, 0x00];
-        byte[] wsBytes = EncodeWsFrame(binaryPayload, WebSocketOpcode.Binary, new WebSocketFrameOptions(Fin: true));
+        byte[] wsBytes = _EncodeWsFrame(binaryPayload, WebSocketOpcode.Binary, new WebSocketFrameOptions(Fin: true));
 
-        byte[] frame = BuildHttpUpgradeWithWebSocketFrame(wsBytes);
+        byte[] frame = _BuildHttpUpgradeWithWebSocketFrame(wsBytes);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -236,9 +236,9 @@ internal sealed class WebSocketBasicTests
     public async Task Parse_WebSocket_PingFrame_PingPayloadPresent()
     {
         byte[] pingPayload = Encoding.ASCII.GetBytes("ping-data");
-        byte[] wsBytes = EncodeWsFrame(pingPayload, WebSocketOpcode.Ping, new WebSocketFrameOptions(Fin: true));
+        byte[] wsBytes = _EncodeWsFrame(pingPayload, WebSocketOpcode.Ping, new WebSocketFrameOptions(Fin: true));
 
-        byte[] frame = BuildHttpUpgradeWithWebSocketFrame(wsBytes);
+        byte[] frame = _BuildHttpUpgradeWithWebSocketFrame(wsBytes);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -260,9 +260,9 @@ internal sealed class WebSocketBasicTests
     public async Task Parse_WebSocket_PongFrame_PongPayloadPresent()
     {
         byte[] pongPayload = Encoding.ASCII.GetBytes("pong-data");
-        byte[] wsBytes = EncodeWsFrame(pongPayload, WebSocketOpcode.Pong, new WebSocketFrameOptions(Fin: true));
+        byte[] wsBytes = _EncodeWsFrame(pongPayload, WebSocketOpcode.Pong, new WebSocketFrameOptions(Fin: true));
 
-        byte[] frame = BuildHttpUpgradeWithWebSocketFrame(wsBytes);
+        byte[] frame = _BuildHttpUpgradeWithWebSocketFrame(wsBytes);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -286,10 +286,10 @@ internal sealed class WebSocketBasicTests
     {
         const ushort StatusCode = 1000; // Normal Closure
         const string Reason = "Normal Closure";
-        byte[] closePayload = EncodeClosePayload(StatusCode, Reason);
-        byte[] wsBytes = EncodeWsFrame(closePayload, WebSocketOpcode.Close, new WebSocketFrameOptions(Fin: true));
+        byte[] closePayload = _EncodeClosePayload(StatusCode, Reason);
+        byte[] wsBytes = _EncodeWsFrame(closePayload, WebSocketOpcode.Close, new WebSocketFrameOptions(Fin: true));
 
-        byte[] frame = BuildHttpUpgradeWithWebSocketFrame(wsBytes);
+        byte[] frame = _BuildHttpUpgradeWithWebSocketFrame(wsBytes);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -316,13 +316,13 @@ internal sealed class WebSocketBasicTests
     public async Task Parse_WebSocket_FragmentedMessage_ContinuationFieldPresent()
     {
         // First fragment: FIN=false, opcode=Text (starts the fragmented message)
-        byte[] fragment1Bytes = EncodeWsFrame(
+        byte[] fragment1Bytes = _EncodeWsFrame(
             Encoding.UTF8.GetBytes("Hello "),
             WebSocketOpcode.Text,
             new WebSocketFrameOptions(Fin: false));
 
         // Continuation: FIN=true, opcode=Continuation (ends the fragmented message)
-        byte[] fragment2Bytes = EncodeWsFrame(
+        byte[] fragment2Bytes = _EncodeWsFrame(
             Encoding.UTF8.GetBytes("World"),
             WebSocketOpcode.Continuation,
             new WebSocketFrameOptions(Fin: true));
@@ -332,7 +332,7 @@ internal sealed class WebSocketBasicTests
         fragment1Bytes.CopyTo(wsBytes, 0);
         fragment2Bytes.CopyTo(wsBytes, fragment1Bytes.Length);
 
-        byte[] frame = BuildHttpUpgradeWithWebSocketFrame(wsBytes);
+        byte[] frame = _BuildHttpUpgradeWithWebSocketFrame(wsBytes);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -366,9 +366,9 @@ internal sealed class WebSocketBasicTests
             largePayload[i] = (byte)(i & 0xFF);
         }
 
-        byte[] wsBytes = EncodeWsFrame(largePayload, WebSocketOpcode.Binary, new WebSocketFrameOptions(Fin: true));
+        byte[] wsBytes = _EncodeWsFrame(largePayload, WebSocketOpcode.Binary, new WebSocketFrameOptions(Fin: true));
 
-        byte[] frame = BuildHttpUpgradeWithWebSocketFrame(wsBytes);
+        byte[] frame = _BuildHttpUpgradeWithWebSocketFrame(wsBytes);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -393,14 +393,14 @@ internal sealed class WebSocketBasicTests
         // Compress the payload using raw DEFLATE so the decompressor can recover it
         // after the 0x00 0x00 0xFF 0xFF trailer is appended.
         byte[] original = Encoding.UTF8.GetBytes("Per-message DEFLATE payload");
-        byte[] compressedPayload = DeflateCompressForWebSocket(original);
+        byte[] compressedPayload = _DeflateCompressForWebSocket(original);
 
-        byte[] wsBytes = EncodeWsFrame(
+        byte[] wsBytes = _EncodeWsFrame(
             compressedPayload,
             WebSocketOpcode.Binary,
             new WebSocketFrameOptions(Fin: true, Rsv1: true));
 
-        byte[] frame = BuildHttpUpgradeWithWebSocketFrame(wsBytes);
+        byte[] frame = _BuildHttpUpgradeWithWebSocketFrame(wsBytes);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -424,12 +424,12 @@ internal sealed class WebSocketBasicTests
         // Any raw DEFLATE decompressor must reject BTYPE=11 per RFC 1951 §3.2.3.
         byte[] corruptedPayload = [0xFF, 0xFF, 0xFF, 0xFF];
 
-        byte[] wsBytes = EncodeWsFrame(
+        byte[] wsBytes = _EncodeWsFrame(
             corruptedPayload,
             WebSocketOpcode.Binary,
             new WebSocketFrameOptions(Fin: true, Rsv1: true));
 
-        byte[] frame = BuildHttpUpgradeWithWebSocketFrame(wsBytes);
+        byte[] frame = _BuildHttpUpgradeWithWebSocketFrame(wsBytes);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {

@@ -9,7 +9,7 @@ namespace NetworkInspector.Protocols.Helpers;
 internal static class Crc32
 {
     /// <summary>Precomputed lookup table for bytewise CRC-32 computation.</summary>
-    private static readonly uint[] Table = GenerateTable();
+    private static readonly uint[] _Table = _GenerateTable();
 
     /// <summary>
     /// Computes the CRC-32 over a span of bytes.
@@ -22,7 +22,7 @@ internal static class Crc32
         for (int i = 0; i < data.Length; i++)
         {
             byte index = (byte)(crc ^ data[i]);
-            crc = (crc >> 8) ^ Table[index];
+            crc = (crc >> 8) ^ _Table[index];
         }
 
         return crc ^ 0xFFFF_FFFF;
@@ -31,7 +31,7 @@ internal static class Crc32
     /// <summary>
     /// Generates the 256-entry CRC-32 lookup table using the IEEE 802.3 polynomial.
     /// </summary>
-    private static uint[] GenerateTable()
+    private static uint[] _GenerateTable()
     {
         const uint Polynomial = 0xEDB8_8320;
         uint[] table = new uint[256];

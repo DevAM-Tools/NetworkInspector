@@ -30,13 +30,13 @@ public readonly struct IPv6Layer :
     IConsumesNextProtocolValue<IpNextProtocolKind>, IProvidesPseudoHeader
 {
     /// <summary>Offset of the NextHeader field within the IPv6 header.</summary>
-    private const int NextHeaderOffset = 6;
+    private const int _NextHeaderOffset = 6;
 
     /// <summary>Offset of the SrcAddr field within the IPv6 header.</summary>
-    private const int SrcAddrOffset = 8;
+    private const int _SrcAddrOffset = 8;
 
     /// <summary>Offset of the DstAddr field within the IPv6 header.</summary>
-    private const int DstAddrOffset = 24;
+    private const int _DstAddrOffset = 24;
 
     private readonly IPv6Address _SrcAddr;
     private readonly IPv6Address _DstAddr;
@@ -50,7 +50,7 @@ public readonly struct IPv6Layer :
 
     /// <summary>
     /// <c>true</c> when the caller supplied an explicit NextHeader via
-    /// <see cref="Auto{T}.Explicit"/>; <c>false</c> means auto-patch from
+    /// <see cref="Auto.Explicit"/>; <c>false</c> means auto-patch from
     /// the inner layer's protocol type.  This bool flag distinguishes an
     /// explicit <c>0</c> (HopByHop) from "auto".
     /// </summary>
@@ -63,7 +63,15 @@ public readonly struct IPv6Layer :
     public int MaxPayloadSize
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _Mtu == 0 ? int.MaxValue : _Mtu - IPv6Header.Size;
+        get
+        {
+            if (_Mtu == 0)
+            {
+                return int.MaxValue;
+            }
+
+            return _Mtu - IPv6Header.Size;
+        }
     }
 
     /// <summary>Creates an IPv6 layer.  PayloadLength is always patched in post-fix.</summary>
@@ -71,7 +79,7 @@ public readonly struct IPv6Layer :
     /// <param name="dstAddr">Destination address.</param>
     /// <param name="hopLimit">Hop limit; default 64.</param>
     /// <param name="nextHeader">
-    /// NextHeader field; <see cref="Auto{T}.Compute"/> (default) means auto-patch from inner layer.
+    /// NextHeader field; <see cref="Auto.Compute"/> (default) means auto-patch from inner layer.
     /// </param>
     /// <param name="mtu">
     /// IP-layer MTU in bytes (IPv6 header + payload, not including Ethernet).
@@ -112,11 +120,11 @@ public readonly struct IPv6Layer :
 
     /// <inheritdoc />
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public void PatchNextProtocol(scoped Span<byte> frame, int myOffset, ushort next)
+    public void PatchNextProtocol(scoped Span<byte> frame, int myOffset, ushort nextProtocol)
     {
         if (!_NextHeaderIsExplicit)
         {
-            frame[myOffset + NextHeaderOffset] = (byte)next;
+            frame[myOffset + _NextHeaderOffset] = (byte)nextProtocol;
         }
     }
 
@@ -134,7 +142,7 @@ public readonly struct IPv6Layer :
                 break;
 
             case FixPhase.PublishPseudoHeader:
-                PublishPseudoHeader(frame, myOffset, myLength, ref ctx);
+                _PublishPseudoHeader(frame, myOffset, myLength, ref ctx);
                 break;
 
             default:
@@ -144,13 +152,13 @@ public readonly struct IPv6Layer :
 
     /// <summary>Publishes IPv6 addressing and transport extents to the shared <see cref="PostFixContext"/>.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static void PublishPseudoHeader(scoped Span<byte> frame, int myOffset, int myLength, scoped ref PostFixContext ctx)
+    private static void _PublishPseudoHeader(scoped Span<byte> frame, int myOffset, int myLength, scoped ref PostFixContext ctx)
     {
-        frame.Slice(myOffset + SrcAddrOffset, 16).CopyTo(ctx.PseudoSrcIp);
-        frame.Slice(myOffset + DstAddrOffset, 16).CopyTo(ctx.PseudoDstIp);
+        frame.Slice(myOffset + _SrcAddrOffset, 16).CopyTo(ctx.PseudoSrcIp);
+        frame.Slice(myOffset + _DstAddrOffset, 16).CopyTo(ctx.PseudoDstIp);
         ctx.PseudoIpLength = 16;
         ctx.PseudoIsIPv6 = true;
-        ctx.PseudoProtocol = frame[myOffset + NextHeaderOffset];
+        ctx.PseudoProtocol = frame[myOffset + _NextHeaderOffset];
         ctx.TransportOffset = myOffset + IPv6Header.Size;
         ctx.TransportEnd = myOffset + myLength;
     }

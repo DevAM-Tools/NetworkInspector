@@ -68,7 +68,7 @@ internal sealed class LinkedMap<TKey, TValue> where TKey : notnull
             return false;
         }
 
-        int slotIndex = AllocateSlot();
+        int slotIndex = _AllocateSlot();
         Span<Slot> slots = CollectionsMarshal.AsSpan(_Slots);
         ref Slot slot = ref slots[slotIndex];
         slot.IsOccupied = true;
@@ -129,7 +129,7 @@ internal sealed class LinkedMap<TKey, TValue> where TKey : notnull
         Span<Slot> slots = CollectionsMarshal.AsSpan(_Slots);
         oldValue = slots[idx].Value;
         slots[idx].Value = newValue;
-        MoveToFrontInternal(idx);
+        _MoveToFrontInternal(idx);
         return true;
     }
 
@@ -149,7 +149,7 @@ internal sealed class LinkedMap<TKey, TValue> where TKey : notnull
 
         int idx = slotIndex;
         value = _Slots[idx].Value;
-        MoveToFrontInternal(idx);
+        _MoveToFrontInternal(idx);
         return true;
     }
 
@@ -164,8 +164,8 @@ internal sealed class LinkedMap<TKey, TValue> where TKey : notnull
 
         Span<Slot> slots = CollectionsMarshal.AsSpan(_Slots);
         value = slots[slotIndex].Value;
-        UnlinkSlot(slotIndex);
-        FreeSlot(slotIndex);
+        _UnlinkSlot(slotIndex);
+        _FreeSlot(slotIndex);
         _Count--;
         return true;
     }
@@ -186,8 +186,8 @@ internal sealed class LinkedMap<TKey, TValue> where TKey : notnull
         value = slots[tailIndex].Value;
 
         _Index.Remove(key);
-        UnlinkSlot(tailIndex);
-        FreeSlot(tailIndex);
+        _UnlinkSlot(tailIndex);
+        _FreeSlot(tailIndex);
         _Count--;
         return true;
     }
@@ -201,7 +201,7 @@ internal sealed class LinkedMap<TKey, TValue> where TKey : notnull
             return false;
         }
 
-        MoveToFrontInternal(slotIndex);
+        _MoveToFrontInternal(slotIndex);
         return true;
     }
 
@@ -241,7 +241,7 @@ internal sealed class LinkedMap<TKey, TValue> where TKey : notnull
 
     // ----- Internal helpers -----
 
-    private int AllocateSlot()
+    private int _AllocateSlot()
     {
         if (_FreeHead >= 0)
         {
@@ -254,7 +254,7 @@ internal sealed class LinkedMap<TKey, TValue> where TKey : notnull
         return newIdx;
     }
 
-    private void FreeSlot(int index)
+    private void _FreeSlot(int index)
     {
         Span<Slot> slots = CollectionsMarshal.AsSpan(_Slots);
         slots[index].IsOccupied = false;
@@ -264,7 +264,7 @@ internal sealed class LinkedMap<TKey, TValue> where TKey : notnull
         _FreeHead = index;
     }
 
-    private void UnlinkSlot(int index)
+    private void _UnlinkSlot(int index)
     {
         Span<Slot> slots = CollectionsMarshal.AsSpan(_Slots);
         int prev = slots[index].Prev;
@@ -288,7 +288,7 @@ internal sealed class LinkedMap<TKey, TValue> where TKey : notnull
         }
     }
 
-    private void MoveToFrontInternal(int slotIndex)
+    private void _MoveToFrontInternal(int slotIndex)
     {
         if (slotIndex == _Head)
         {
@@ -296,7 +296,7 @@ internal sealed class LinkedMap<TKey, TValue> where TKey : notnull
         } // already at front
 
         // Unlink
-        UnlinkSlot(slotIndex);
+        _UnlinkSlot(slotIndex);
 
         // Re-insert at front
         Span<Slot> slots = CollectionsMarshal.AsSpan(_Slots);

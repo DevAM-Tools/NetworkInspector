@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Protocols.Tests;
 
@@ -9,7 +9,7 @@ namespace NetworkInspector.Protocols.Tests;
 internal sealed class TcpBasicTests
 {
     /// <summary>Creates an Ethernet + IPv4 + TCP frame with known values.</summary>
-    private static byte[] BuildTcpFrame(
+    private static byte[] _BuildTcpFrame(
         ushort srcPort = 49152,
         ushort dstPort = 80,
         uint seqNum = 1000,
@@ -29,7 +29,7 @@ internal sealed class TcpBasicTests
     [Test]
     public async Task Parse_Tcp_SourcePort()
     {
-        byte[] frame = BuildTcpFrame(srcPort: 49152);
+        byte[] frame = _BuildTcpFrame(srcPort: 49152);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -40,7 +40,7 @@ internal sealed class TcpBasicTests
     [Test]
     public async Task Parse_Tcp_DestinationPort()
     {
-        byte[] frame = BuildTcpFrame(dstPort: 443);
+        byte[] frame = _BuildTcpFrame(dstPort: 443);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -51,7 +51,7 @@ internal sealed class TcpBasicTests
     [Test]
     public async Task Parse_Tcp_SequenceNumber()
     {
-        byte[] frame = BuildTcpFrame(seqNum: 123456);
+        byte[] frame = _BuildTcpFrame(seqNum: 123456);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -62,7 +62,7 @@ internal sealed class TcpBasicTests
     [Test]
     public async Task Parse_Tcp_SynFlag_Set()
     {
-        byte[] frame = BuildTcpFrame(flags: TcpFlags.Syn);
+        byte[] frame = _BuildTcpFrame(flags: TcpFlags.Syn);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -75,7 +75,7 @@ internal sealed class TcpBasicTests
     [Test]
     public async Task Parse_Tcp_SynAckFlags()
     {
-        byte[] frame = BuildTcpFrame(flags: TcpFlags.SynAck, ackNum: 5000);
+        byte[] frame = _BuildTcpFrame(flags: TcpFlags.SynAck, ackNum: 5000);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -88,7 +88,7 @@ internal sealed class TcpBasicTests
     [Test]
     public async Task Parse_Tcp_HeaderLength()
     {
-        byte[] frame = BuildTcpFrame();
+        byte[] frame = _BuildTcpFrame();
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -125,7 +125,7 @@ internal sealed class TcpBasicTests
     [Test]
     public async Task TsharkCrossValidation_SourcePort()
     {
-        byte[] frame = BuildTcpFrame(srcPort: 49152);
+        byte[] frame = _BuildTcpFrame(srcPort: 49152);
         string? tsharkValue = TsharkVerifier.GetFieldValue(frame, "tcp.srcport");
         if (tsharkValue is null)
         {
@@ -137,7 +137,7 @@ internal sealed class TcpBasicTests
     [Test]
     public async Task TsharkCrossValidation_DestinationPort()
     {
-        byte[] frame = BuildTcpFrame(dstPort: 443);
+        byte[] frame = _BuildTcpFrame(dstPort: 443);
         string? tsharkValue = TsharkVerifier.GetFieldValue(frame, "tcp.dstport");
         if (tsharkValue is null)
         {
@@ -149,7 +149,7 @@ internal sealed class TcpBasicTests
     [Test]
     public async Task TsharkCrossValidation_SequenceNumber()
     {
-        byte[] frame = BuildTcpFrame(seqNum: 123456);
+        byte[] frame = _BuildTcpFrame(seqNum: 123456);
         string? tsharkValue = TsharkVerifier.GetFieldValue(frame, "tcp.seq_raw");
         if (tsharkValue is null)
         {
@@ -164,7 +164,7 @@ internal sealed class TcpBasicTests
         // tcp.port is a metadata-only alias group ({ tcp.srcport, tcp.dstport }); no tcp.port
         // field is appended to the parse tree. The protocol table name tcp.port (TCP demux)
         // lives in an independent namespace from this alias.
-        byte[] frame = BuildTcpFrame(srcPort: 49152, dstPort: 443);
+        byte[] frame = _BuildTcpFrame(srcPort: 49152, dstPort: 443);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {

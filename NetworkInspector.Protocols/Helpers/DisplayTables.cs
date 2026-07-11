@@ -28,11 +28,11 @@ internal static class DisplayTables
 
     #region DSCP Display Text (64 entries for 6-bit field)
 
-    private static readonly string[] DscpTable = BuildDscpTable();
+    private static readonly string[] _DscpTable = _BuildDscpTable();
 
-    internal static string GetDscpDisplayText(byte dscp) => DscpTable[dscp & 0x3F];
+    internal static string GetDscpDisplayText(byte dscp) => _DscpTable[dscp & 0x3F];
 
-    private static string[] BuildDscpTable()
+    private static string[] _BuildDscpTable()
     {
         string[] table = new string[64];
         // Well-known DSCP values
@@ -62,7 +62,7 @@ internal static class DisplayTables
         // Fill unnamed entries
         for (int i = 0; i < 64; i++)
         {
-            table[i] ??= i.ToString();
+            table[i] ??= i.ToString(CultureInfo.InvariantCulture);
         }
         return table;
     }
@@ -71,7 +71,7 @@ internal static class DisplayTables
 
     #region ECN Display Text (4 entries for 2-bit field)
 
-    private static readonly string[] EcnTable =
+    private static readonly string[] _EcnTable =
     [
         "Not-ECT (0)",
         "ECT(1) (1)",
@@ -79,17 +79,17 @@ internal static class DisplayTables
         "CE (3)"
     ];
 
-    internal static string GetEcnDisplayText(byte ecn) => EcnTable[ecn & 0x03];
+    internal static string GetEcnDisplayText(byte ecn) => _EcnTable[ecn & 0x03];
 
     #endregion
 
     #region IP Protocol Display Text (256 entries for 8-bit field)
 
-    private static readonly string[] IpProtocolTable = BuildIpProtocolTable();
+    private static readonly string[] _IpProtocolTable = _BuildIpProtocolTable();
 
-    internal static string GetIpProtocolDisplayText(byte protocol) => IpProtocolTable[protocol];
+    internal static string GetIpProtocolDisplayText(byte protocol) => _IpProtocolTable[protocol];
 
-    private static string[] BuildIpProtocolTable()
+    private static string[] _BuildIpProtocolTable()
     {
         string[] table = new string[256];
         table[0] = "HOPOPT (0)";
@@ -115,7 +115,7 @@ internal static class DisplayTables
 
         for (int i = 0; i < 256; i++)
         {
-            table[i] ??= i.ToString();
+            table[i] ??= i.ToString(CultureInfo.InvariantCulture);
         }
         return table;
     }
@@ -124,11 +124,11 @@ internal static class DisplayTables
 
     #region EtherType Display Text (65,536 entries for zero-alloc u16 lookup)
 
-    private static readonly string[] EtherTypeTable = BuildEtherTypeTable();
+    private static readonly string[] _EtherTypeTable = _BuildEtherTypeTable();
 
-    internal static string GetEtherTypeDisplayText(ushort etherType) => EtherTypeTable[etherType];
+    internal static string GetEtherTypeDisplayText(ushort etherType) => _EtherTypeTable[etherType];
 
-    private static string[] BuildEtherTypeTable()
+    private static string[] _BuildEtherTypeTable()
     {
         string[] table = new string[65536];
 
@@ -195,11 +195,11 @@ internal static class DisplayTables
 
     #region Hex u16 Display Text (65,536 entries for zero-alloc u16 hex formatting)
 
-    private static readonly string[] HexU16Table = BuildHexU16Table();
+    private static readonly string[] _HexU16Table = _BuildHexU16Table();
 
-    internal static string FormatHexU16(ushort value) => HexU16Table[value];
+    internal static string FormatHexU16(ushort value) => _HexU16Table[value];
 
-    private static string[] BuildHexU16Table()
+    private static string[] _BuildHexU16Table()
     {
         string[] table = new string[65536];
         for (int i = 0; i < 65536; i++)
@@ -222,8 +222,8 @@ internal static class DisplayTables
         {
             span[0] = '0';
             span[1] = 'x';
-            HexU16Table[v >> 16].AsSpan(2).CopyTo(span[2..]);
-            HexU16Table[v & 0xFFFF].AsSpan(2).CopyTo(span[6..]);
+            _HexU16Table[v >> 16].AsSpan(2).CopyTo(span[2..]);
+            _HexU16Table[v & 0xFFFF].AsSpan(2).CopyTo(span[6..]);
         });
 
     /// <summary>
@@ -236,18 +236,18 @@ internal static class DisplayTables
             span[0] = '0';
             span[1] = 'x';
             // Use lower 3 hex digits from the U16 table (skip "0x" prefix + first digit)
-            HexU16Table[v & 0x0FFF].AsSpan(3).CopyTo(span[2..]);
+            _HexU16Table[v & 0x0FFF].AsSpan(3).CopyTo(span[2..]);
         });
 
     #endregion
 
     #region Hex u8 Display Text (256 entries for zero-alloc u8 hex formatting)
 
-    private static readonly string[] HexU8Table = BuildHexU8Table();
+    private static readonly string[] _HexU8Table = _BuildHexU8Table();
 
-    internal static string FormatHexU8(byte value) => HexU8Table[value];
+    internal static string FormatHexU8(byte value) => _HexU8Table[value];
 
-    private static string[] BuildHexU8Table()
+    private static string[] _BuildHexU8Table()
     {
         string[] table = new string[256];
         for (int i = 0; i < 256; i++)
@@ -261,7 +261,7 @@ internal static class DisplayTables
 
     #region IPv4 Header Length Display Text (common IHL*4 values: 20..60)
 
-    private static readonly string[] HeaderLengthTable = BuildHeaderLengthTable();
+    private static readonly string[] _HeaderLengthTable = _BuildHeaderLengthTable();
 
     /// <summary>
     /// Returns precomputed "N bytes" display text for header lengths 0-60.
@@ -269,14 +269,14 @@ internal static class DisplayTables
     /// </summary>
     internal static string GetHeaderLengthDisplayText(int headerLength)
     {
-        if ((uint)headerLength < (uint)HeaderLengthTable.Length)
+        if ((uint)headerLength < (uint)_HeaderLengthTable.Length)
         {
-            return HeaderLengthTable[headerLength];
+            return _HeaderLengthTable[headerLength];
         }
         return $"{headerLength} bytes";
     }
 
-    private static string[] BuildHeaderLengthTable()
+    private static string[] _BuildHeaderLengthTable()
     {
         // Covers IPv4 IHL range: 5*4=20 to 15*4=60
         string[] table = new string[61];
@@ -291,7 +291,7 @@ internal static class DisplayTables
 
     #region VLAN Priority Display Text (8 entries for 3-bit field)
 
-    private static readonly string[] VlanPriorityTable =
+    private static readonly string[] _VlanPriorityTable =
     [
         "Best Effort (0)",
         "Background (1)",
@@ -303,7 +303,7 @@ internal static class DisplayTables
         "Network Control (7)"
     ];
 
-    internal static string GetVlanPriorityDisplayText(byte pcp) => VlanPriorityTable[pcp & 0x07];
+    internal static string GetVlanPriorityDisplayText(byte pcp) => _VlanPriorityTable[pcp & 0x07];
 
     #endregion
 
@@ -324,25 +324,25 @@ internal static class DisplayTables
         7 => "DRARP error (7)",
         8 => "InARP request (8)",
         9 => "InARP reply (9)",
-        _ => opcode.ToString()
+        _ => opcode.ToString(CultureInfo.InvariantCulture)
     };
 
     #endregion
 
     #region ARP Hardware Type Display Text (256 entries for u8 range)
 
-    private static readonly string[] ArpHwTypeTable = BuildArpHwTypeTable();
+    private static readonly string[] _ArpHwTypeTable = _BuildArpHwTypeTable();
 
     internal static string GetArpHwTypeDisplayText(ushort hwType)
     {
-        if (hwType < ArpHwTypeTable.Length)
+        if (hwType < _ArpHwTypeTable.Length)
         {
-            return ArpHwTypeTable[hwType];
+            return _ArpHwTypeTable[hwType];
         }
-        return hwType.ToString();
+        return hwType.ToString(CultureInfo.InvariantCulture);
     }
 
-    private static string[] BuildArpHwTypeTable()
+    private static string[] _BuildArpHwTypeTable()
     {
         string[] table = new string[256];
         table[0] = "Reserved (0)";
@@ -371,7 +371,7 @@ internal static class DisplayTables
 
         for (int i = 0; i < 256; i++)
         {
-            table[i] ??= i.ToString();
+            table[i] ??= i.ToString(CultureInfo.InvariantCulture);
         }
         return table;
     }
@@ -380,11 +380,11 @@ internal static class DisplayTables
 
     #region ICMP Type Display Text (256 entries for u8 type field)
 
-    private static readonly string[] IcmpTypeTable = BuildIcmpTypeTable();
+    private static readonly string[] _IcmpTypeTable = _BuildIcmpTypeTable();
 
-    internal static string GetIcmpTypeDisplayText(byte type) => IcmpTypeTable[type];
+    internal static string GetIcmpTypeDisplayText(byte type) => _IcmpTypeTable[type];
 
-    private static string[] BuildIcmpTypeTable()
+    private static string[] _BuildIcmpTypeTable()
     {
         string[] table = new string[256];
         table[0] = "Echo (ping) reply (0)";
@@ -409,7 +409,7 @@ internal static class DisplayTables
 
         for (int i = 0; i < 256; i++)
         {
-            table[i] ??= i.ToString();
+            table[i] ??= i.ToString(CultureInfo.InvariantCulture);
         }
         return table;
     }
@@ -441,7 +441,7 @@ internal static class DisplayTables
             13 => "Communication administratively prohibited (13)",
             14 => "Host precedence violation (14)",
             15 => "Precedence cutoff in effect (15)",
-            _ => code.ToString()
+            _ => code.ToString(CultureInfo.InvariantCulture)
         },
         5 => code switch // Redirect
         {
@@ -449,33 +449,33 @@ internal static class DisplayTables
             1 => "Redirect for host (1)",
             2 => "Redirect for ToS and network (2)",
             3 => "Redirect for ToS and host (3)",
-            _ => code.ToString()
+            _ => code.ToString(CultureInfo.InvariantCulture)
         },
         11 => code switch // Time Exceeded
         {
             0 => "TTL exceeded in transit (0)",
             1 => "Fragment reassembly time exceeded (1)",
-            _ => code.ToString()
+            _ => code.ToString(CultureInfo.InvariantCulture)
         },
         12 => code switch // Parameter Problem
         {
             0 => "Pointer indicates the error (0)",
             1 => "Missing a required option (1)",
             2 => "Bad length (2)",
-            _ => code.ToString()
+            _ => code.ToString(CultureInfo.InvariantCulture)
         },
-        _ => code.ToString()
+        _ => code.ToString(CultureInfo.InvariantCulture)
     };
 
     #endregion
 
     #region ICMPv6 Type Display Text (256 entries for u8 type field)
 
-    private static readonly string[] Icmpv6TypeTable = BuildIcmpv6TypeTable();
+    private static readonly string[] _Icmpv6TypeTable = _BuildIcmpv6TypeTable();
 
-    internal static string GetIcmpv6TypeDisplayText(byte type) => Icmpv6TypeTable[type];
+    internal static string GetIcmpv6TypeDisplayText(byte type) => _Icmpv6TypeTable[type];
 
-    private static string[] BuildIcmpv6TypeTable()
+    private static string[] _BuildIcmpv6TypeTable()
     {
         string[] table = new string[256];
         // Error messages (0-127)
@@ -504,7 +504,7 @@ internal static class DisplayTables
 
         for (int i = 0; i < 256; i++)
         {
-            table[i] ??= i.ToString();
+            table[i] ??= i.ToString(CultureInfo.InvariantCulture);
         }
         return table;
     }
@@ -531,15 +531,15 @@ internal static class DisplayTables
 
     #region LLC SAP Display Text (256 entries for u8 SAP field)
 
-    private static readonly string[] LlcSapTable = BuildLlcSapTable();
+    private static readonly string[] _LlcSapTable = _BuildLlcSapTable();
 
     /// <summary>
     /// Returns a display string for the LLC SAP field (DSAP or SSAP).
     /// The low bit (I/G for DSAP, C/R for SSAP) is masked out before lookup.
     /// </summary>
-    internal static string GetLlcSapDisplayText(byte sap) => LlcSapTable[sap];
+    internal static string GetLlcSapDisplayText(byte sap) => _LlcSapTable[sap];
 
-    private static string[] BuildLlcSapTable()
+    private static string[] _BuildLlcSapTable()
     {
         string[] table = new string[256];
         table[0x00] = "Null LSAP (0x00)";
@@ -577,12 +577,12 @@ internal static class DisplayTables
 
     #region IPv4 Option Type Name (256 entries for u8 option type byte)
 
-    private static readonly string[] IpOptionNameTable = BuildIpOptionNameTable();
+    private static readonly string[] _IpOptionNameTable = _BuildIpOptionNameTable();
 
     /// <summary>Returns the short name for an IPv4 option type (0-255). Empty string for unknown types.</summary>
-    internal static string GetIpOptionTypeName(byte optType) => IpOptionNameTable[optType];
+    internal static string GetIpOptionTypeName(byte optType) => _IpOptionNameTable[optType];
 
-    private static string[] BuildIpOptionNameTable()
+    private static string[] _BuildIpOptionNameTable()
     {
         string[] table = new string[256];
         table[0x00] = "End of Options List (EOOL)";
@@ -621,19 +621,19 @@ internal static class DisplayTables
 
     #region IPv4 Option Type Display Text (256 entries: "Name (num)" or "num")
 
-    private static readonly string[] IpOptionDisplayTextTable = BuildIpOptionDisplayTextTable();
+    private static readonly string[] _IpOptionDisplayTextTable = _BuildIpOptionDisplayTextTable();
 
     /// <summary>Returns the preformatted display text for an IPv4 option type.</summary>
-    internal static string GetIpOptionTypeDisplayText(byte optType) => IpOptionDisplayTextTable[optType];
+    internal static string GetIpOptionTypeDisplayText(byte optType) => _IpOptionDisplayTextTable[optType];
 
-    private static string[] BuildIpOptionDisplayTextTable()
+    private static string[] _BuildIpOptionDisplayTextTable()
     {
         string[] table = new string[256];
         for (int i = 0; i < 256; i++)
         {
-            string name = IpOptionNameTable[i];
+            string name = _IpOptionNameTable[i];
             // Known options: "Name (num)", unknown options: "num"
-            table[i] = name.Length > 0 ? $"{name} ({i})" : i.ToString();
+            table[i] = name.Length > 0 ? $"{name} ({i})" : i.ToString(CultureInfo.InvariantCulture);
         }
         return table;
     }
@@ -642,7 +642,7 @@ internal static class DisplayTables
 
     #region IPv4 Option Class (4 entries for the 2-bit class field)
 
-    private static readonly string[] IpOptionClassTable =
+    private static readonly string[] _IpOptionClassTable =
     [
         "Control (0)",
         "Reserved (1)",
@@ -652,19 +652,19 @@ internal static class DisplayTables
 
     /// <summary>Returns display text for the 2-bit option class field (0-3).</summary>
     internal static string GetIpOptionClassDisplayText(byte optClass)
-        => IpOptionClassTable[optClass & 0x03];
+        => _IpOptionClassTable[optClass & 0x03];
 
     #endregion
 
     #region IPv4 Timestamp Flag (16 entries for the 4-bit flag field)
 
-    private static readonly string[] IpTimestampFlagTable = BuildIpTimestampFlagTable();
+    private static readonly string[] _IpTimestampFlagTable = _BuildIpTimestampFlagTable();
 
     /// <summary>Returns display text for the 4-bit timestamp flag field.</summary>
     internal static string GetIpTimestampFlagDisplayText(byte flag)
-        => IpTimestampFlagTable[flag & 0x0F];
+        => _IpTimestampFlagTable[flag & 0x0F];
 
-    private static string[] BuildIpTimestampFlagTable()
+    private static string[] _BuildIpTimestampFlagTable()
     {
         string[] table = new string[16];
         table[0] = "Time stamps only (0)";
@@ -701,12 +701,12 @@ internal static class DisplayTables
 
     #region IPv6 Extension Header Option Type Name (256 entries)
 
-    private static readonly string[] Ipv6OptionNameTable = BuildIpv6OptionNameTable();
+    private static readonly string[] _Ipv6OptionNameTable = _BuildIpv6OptionNameTable();
 
     /// <summary>Returns the short name for an IPv6 option type (0-255). Empty string for unknown.</summary>
-    internal static string GetIpv6OptionTypeName(byte optType) => Ipv6OptionNameTable[optType];
+    internal static string GetIpv6OptionTypeName(byte optType) => _Ipv6OptionNameTable[optType];
 
-    private static string[] BuildIpv6OptionNameTable()
+    private static string[] _BuildIpv6OptionNameTable()
     {
         string[] table = new string[256];
         table[0x00] = "Pad1";
@@ -740,18 +740,18 @@ internal static class DisplayTables
 
     #region IPv6 Extension Header Option Type Display Text (256 entries: "Name (num)" or "num")
 
-    private static readonly string[] Ipv6OptionDisplayTextTable = BuildIpv6OptionDisplayTextTable();
+    private static readonly string[] _Ipv6OptionDisplayTextTable = _BuildIpv6OptionDisplayTextTable();
 
     /// <summary>Returns preformatted display text for an IPv6 option type.</summary>
-    internal static string GetIpv6OptionTypeDisplayText(byte optType) => Ipv6OptionDisplayTextTable[optType];
+    internal static string GetIpv6OptionTypeDisplayText(byte optType) => _Ipv6OptionDisplayTextTable[optType];
 
-    private static string[] BuildIpv6OptionDisplayTextTable()
+    private static string[] _BuildIpv6OptionDisplayTextTable()
     {
         string[] table = new string[256];
         for (int i = 0; i < 256; i++)
         {
-            string name = Ipv6OptionNameTable[i];
-            table[i] = name.Length > 0 ? $"{name} ({i})" : i.ToString();
+            string name = _Ipv6OptionNameTable[i];
+            table[i] = name.Length > 0 ? $"{name} ({i})" : i.ToString(CultureInfo.InvariantCulture);
         }
         return table;
     }
@@ -760,7 +760,7 @@ internal static class DisplayTables
 
     #region IPv6 Option Action Display Text (4 entries for 2-bit action field)
 
-    private static readonly string[] Ipv6OptActionTable =
+    private static readonly string[] _Ipv6OptActionTable =
     [
         "Skip and continue (0)",
         "Discard (1)",
@@ -769,18 +769,18 @@ internal static class DisplayTables
     ];
 
     /// <summary>Returns display text for the 2-bit IPv6 option action field.</summary>
-    internal static string GetIpv6OptActionDisplayText(byte action) => Ipv6OptActionTable[action & 0x03];
+    internal static string GetIpv6OptActionDisplayText(byte action) => _Ipv6OptActionTable[action & 0x03];
 
     #endregion
 
     #region IPv6 Routing Type Name (256 entries)
 
-    private static readonly string[] Ipv6RoutingTypeNameTable = BuildIpv6RoutingTypeNameTable();
+    private static readonly string[] _Ipv6RoutingTypeNameTable = _BuildIpv6RoutingTypeNameTable();
 
     /// <summary>Returns the short name for an IPv6 routing header type (0-255). Empty string for unknown.</summary>
-    internal static string GetIpv6RoutingTypeName(byte routingType) => Ipv6RoutingTypeNameTable[routingType];
+    internal static string GetIpv6RoutingTypeName(byte routingType) => _Ipv6RoutingTypeNameTable[routingType];
 
-    private static string[] BuildIpv6RoutingTypeNameTable()
+    private static string[] _BuildIpv6RoutingTypeNameTable()
     {
         string[] table = new string[256];
         table[0] = "Source Route (deprecated)";
@@ -801,18 +801,18 @@ internal static class DisplayTables
 
     #region IPv6 Routing Type Display Text (256 entries: "Name (num)" or "num")
 
-    private static readonly string[] Ipv6RoutingTypeDisplayTextTable = BuildIpv6RoutingTypeDisplayTextTable();
+    private static readonly string[] _Ipv6RoutingTypeDisplayTextTable = _BuildIpv6RoutingTypeDisplayTextTable();
 
     /// <summary>Returns preformatted display text for an IPv6 routing header type.</summary>
-    internal static string GetIpv6RoutingTypeDisplayText(byte routingType) => Ipv6RoutingTypeDisplayTextTable[routingType];
+    internal static string GetIpv6RoutingTypeDisplayText(byte routingType) => _Ipv6RoutingTypeDisplayTextTable[routingType];
 
-    private static string[] BuildIpv6RoutingTypeDisplayTextTable()
+    private static string[] _BuildIpv6RoutingTypeDisplayTextTable()
     {
         string[] table = new string[256];
         for (int i = 0; i < 256; i++)
         {
-            string name = Ipv6RoutingTypeNameTable[i];
-            table[i] = name.Length > 0 ? $"{name} ({i})" : i.ToString();
+            string name = _Ipv6RoutingTypeNameTable[i];
+            table[i] = name.Length > 0 ? $"{name} ({i})" : i.ToString(CultureInfo.InvariantCulture);
         }
         return table;
     }
@@ -843,22 +843,22 @@ internal static class DisplayTables
 
     #region TCP Option Kind Display Text (256 entries for 8-bit field)
 
-    private static readonly string[] TcpOptionNameTable = BuildTcpOptionNameTable();
-    private static readonly string[] TcpOptionDisplayTextTable = BuildTcpOptionDisplayTextTable();
+    private static readonly string[] _TcpOptionNameTable = _BuildTcpOptionNameTable();
+    private static readonly string[] _TcpOptionDisplayTextTable = _BuildTcpOptionDisplayTextTable();
 
     /// <summary>Gets the name of a TCP option kind (e.g., "Maximum Segment Size").</summary>
-    internal static string GetTcpOptionName(byte kind) => TcpOptionNameTable[kind];
+    internal static string GetTcpOptionName(byte kind) => _TcpOptionNameTable[kind];
 
     /// <summary>Gets the display text for a TCP option kind (e.g., "Maximum Segment Size (2)").</summary>
-    internal static string GetTcpOptionDisplayText(byte kind) => TcpOptionDisplayTextTable[kind];
+    internal static string GetTcpOptionDisplayText(byte kind) => _TcpOptionDisplayTextTable[kind];
 
-    private static string[] BuildTcpOptionNameTable()
+    private static string[] _BuildTcpOptionNameTable()
     {
         string[] table = new string[256];
         // Fill with numeric fallback
         for (int i = 0; i < 256; i++)
         {
-            table[i] = i.ToString();
+            table[i] = i.ToString(CultureInfo.InvariantCulture);
         }
 
         // Well-known TCP option kinds (IANA registry)
@@ -893,12 +893,12 @@ internal static class DisplayTables
         return table;
     }
 
-    private static string[] BuildTcpOptionDisplayTextTable()
+    private static string[] _BuildTcpOptionDisplayTextTable()
     {
         string[] table = new string[256];
         for (int i = 0; i < 256; i++)
         {
-            string name = TcpOptionNameTable[i];
+            string name = _TcpOptionNameTable[i];
             table[i] = $"{name} ({i})";
         }
         return table;

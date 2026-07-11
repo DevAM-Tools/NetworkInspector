@@ -152,7 +152,7 @@ internal sealed class ChecksumUtilsTests
         ushort actual = ChecksumUtils.OnesComplement(data);
 
         // Compute with a known-correct reference (pure scalar, no SIMD)
-        ushort expected = ReferenceOnesComplement(data);
+        ushort expected = _ReferenceOnesComplement(data);
 
         await Assert.That(actual).IsEqualTo(expected);
     }
@@ -202,7 +202,7 @@ internal sealed class ChecksumUtilsTests
         Array.Fill(data, (byte)0xFF);
 
         ushort actual = ChecksumUtils.OnesComplement(data);
-        ushort expected = ReferenceOnesComplement(data);
+        ushort expected = _ReferenceOnesComplement(data);
 
         await Assert.That(actual).IsEqualTo(expected);
     }
@@ -211,7 +211,7 @@ internal sealed class ChecksumUtilsTests
     /// Reference scalar implementation of RFC 1071. No SIMD, no unrolling.
     /// Used to validate the SIMD-accelerated production method.
     /// </summary>
-    private static ushort ReferenceOnesComplement(ReadOnlySpan<byte> data)
+    private static ushort _ReferenceOnesComplement(ReadOnlySpan<byte> data)
     {
         uint sum = 0;
         int i = 0;

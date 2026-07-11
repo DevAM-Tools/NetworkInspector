@@ -1,0 +1,52 @@
+<!-- Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root. -->
+<Project>
+  <!--
+    Auto-pack every packable project on Release/CI builds, so `dotnet build -c Release`
+    (solution-wide) produces .nupkg for all packable projects under artifacts/<Version>,
+    not just projects explicitly targeted by `dotnet pack`.
+    Evaluated here (Directory.Build.targets) rather than Directory.Build.props because
+    IsPackable/IsTestProject overrides from the project file are only known by this point.
+  -->
+  <PropertyGroup Condition="('$(Configuration)' == 'Release' or '$(CI)' == 'true') and '$(IsPackable)' != 'false' and '$(IsTestProject)' != 'true'">
+    <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+  </PropertyGroup>
+
+  <!-- CSharpStyleChecker (ExitPoints bundled) on all SDK-style C# consumers -->
+  <PropertyGroup>
+    <ApplyCSharpStyleChecker Condition="'$(ApplyCSharpStyleChecker)' == '' and ('$(TargetFrameworkIdentifier)' == '.NETCoreApp' or '$(TargetFrameworkIdentifier)' == '.NETStandard')">true</ApplyCSharpStyleChecker>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(ApplyCSharpStyleChecker)' == 'true'">
+    <PackageReference Include="CSharpStyleChecker" />
+  </ItemGroup>
+
+  <!-- TUnit on all test projects -->
+  <ItemGroup Condition="'$(IsTestProject)' == 'true'">
+    <PackageReference Include="TUnit" />
+  </ItemGroup>
+
+  <!-- Keep generated source files out of the compile graph -->
+  <PropertyGroup Condition="'$(EmitCompilerGeneratedFiles)' == 'true' and '$(CompilerGeneratedFilesOutputPath)' == ''">
+    <CompilerGeneratedFilesOutputPath>$(BaseIntermediateOutputPath)GeneratedFiles</CompilerGeneratedFilesOutputPath>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Remove="$(MSBuildProjectDirectory)\Generated\**" />
+    <None Remove="$(MSBuildProjectDirectory)\Generated\**" />
+  </ItemGroup>
+
+  <!-- Pack README when configured -->
+  <ItemGroup Condition="'$(PackageReadmeFile)' != ''">
+    <None Include="$(PackageReadmeFile)" Pack="true" PackagePath="" />
+  </ItemGroup>
+
+  <!-- Bundle NetworkInspector.Generators into the Core NuGet package -->
+  <Target Name="_PackGenerator" BeforeTargets="_GetPackageFiles" Condition="'$(MSBuildProjectName)' == 'NetworkInspector.Core'">
+    <MSBuild Projects="$(MSBuildProjectDirectory)\..\NetworkInspector.Generators\NetworkInspector.Generators.csproj"
+             Targets="GetTargetPath"
+             Properties="Configuration=$(Configuration)">
+      <Output TaskParameter="TargetOutputs" ItemName="_GeneratorDll" />
+    </MSBuild>
+    <ItemGroup>
+      <None Include="@(_GeneratorDll)" Pack="true" PackagePath="analyzers/dotnet/cs" Visible="false" />
+    </ItemGroup>
+  </Target>
+</Project>

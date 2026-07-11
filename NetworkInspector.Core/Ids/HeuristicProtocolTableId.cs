@@ -61,7 +61,7 @@ public readonly struct HeuristicProtocolTableId(int value) : IEquatable<Heuristi
     public override bool Equals(object? obj) => obj is HeuristicProtocolTableId other && Equals(other);
 
     /// <inheritdoc/>
-    public override string ToString() => _Value.ToString();
+    public override string ToString() => _Value.ToString(CultureInfo.InvariantCulture);
 
     #endregion
 

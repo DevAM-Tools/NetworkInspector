@@ -35,46 +35,46 @@ internal static class CanParser
     /// Minimum size of a BLF Type 1 / Type 86 CAN message payload:
     /// channel(2) + dlc(1) + flags(1) + id(4) + data(8) = 16 bytes.
     /// </summary>
-    private const int CanMessageMinSize = 16;
+    private const int _CanMessageMinSize = 16;
 
     /// <summary>Minimum size of a BLF Type 2 CAN error payload: channel(2) + length(2) + reserved(4) = 8 bytes.</summary>
-    private const int CanErrorMinSize = 8;
+    private const int _CanErrorMinSize = 8;
 
     /// <summary>Minimum size of a BLF Type 3 CAN overload payload: channel(2) + reserved(2) = 4 bytes.</summary>
-    private const int CanOverloadMinSize = 4;
+    private const int _CanOverloadMinSize = 4;
 
     /// <summary>
     /// Minimum size of a BLF Type 73 CAN error ext payload.
     /// channel(2) + length(2) + flags(4) + ecc(1) + position(1) + dlc(2) +
     /// frameLength(2) + id(2) + extFlags(2) + extEcc(1) + reserved(1) + data(8) = 28 bytes.
     /// </summary>
-    private const int CanErrorExtMinSize = 20;
+    private const int _CanErrorExtMinSize = 20;
 
     /// <summary>
     /// Minimum size of a BLF Type 100 CAN FD message payload (header only, without data):
     /// channel(2) + dlc(1) + validDataBytes(1) + txCount(4) + id(4) +
     /// frameLength(4) + blfFlags(4) + fdFlags(1) + reserved(3) = 24 bytes.
     /// </summary>
-    private const int CanFdMessageHeaderSize = 24;
+    private const int _CanFdMessageHeaderSize = 24;
 
     /// <summary>
     /// Minimum size of a BLF Type 101 CAN FD Message 64 payload (header without data):
     /// channel(1) + dlc(1) + validDataLength(1) + txCount(1) + id(4) +
     /// frameLength(4) + flags(4) + brsDelay(1) + reserved(1) = 18 bytes.
     /// </summary>
-    private const int CanFdMessage64HeaderSize = 18;
+    private const int _CanFdMessage64HeaderSize = 18;
 
     /// <summary>SocketCAN classic frame total size: header(8) + data(8).</summary>
-    private const int SocketCanClassicSize = 16;
+    private const int _SocketCanClassicSize = 16;
 
     /// <summary>SocketCAN FD frame header size (before data).</summary>
-    private const int SocketCanFdHeaderSize = 8;
+    private const int _SocketCanFdHeaderSize = 8;
 
     /// <summary>Classic CAN maximum data length.</summary>
-    private const int CanMaxDataLength = 8;
+    private const int _CanMaxDataLength = 8;
 
     /// <summary>CAN FD maximum data length.</summary>
-    private const int CanFdMaxDataLength = 64;
+    private const int _CanFdMaxDataLength = 64;
 
     #endregion
 
@@ -94,7 +94,7 @@ internal static class CanParser
     /// </summary>
     internal static bool TryParseCanMessage(
         ReadOnlySpan<byte> payload, out byte[] frame, out ushort channel)
-        => TryParseCanMessageCore(payload, out frame, out channel);
+        => _TryParseCanMessageCore(payload, out frame, out channel);
 
     /// <summary>
     /// Parses a BLF Type 86 (CAN_MESSAGE2) payload into a SocketCAN classic frame.
@@ -102,7 +102,7 @@ internal static class CanParser
     /// </summary>
     internal static bool TryParseCanMessage2(
         ReadOnlySpan<byte> payload, out byte[] frame, out ushort channel)
-        => TryParseCanMessageCore(payload, out frame, out channel);
+        => _TryParseCanMessageCore(payload, out frame, out channel);
 
     /// <summary>
     /// Parses a BLF Type 2 (CAN_ERROR) payload into a SocketCAN error frame.
@@ -120,13 +120,13 @@ internal static class CanParser
         frame = [];
         channel = 0;
 
-        if (payload.Length < CanErrorMinSize)
+        if (payload.Length < _CanErrorMinSize)
         {
             return false;
         }
 
         channel = BinaryPrimitives.ReadUInt16LittleEndian(payload);
-        frame = BuildSocketCanErrorFrame(BlfConstants.SocketCanErr);
+        frame = _BuildSocketCanErrorFrame(BlfConstants.SocketCanErr);
         return true;
     }
 
@@ -145,14 +145,14 @@ internal static class CanParser
         frame = [];
         channel = 0;
 
-        if (payload.Length < CanOverloadMinSize)
+        if (payload.Length < _CanOverloadMinSize)
         {
             return false;
         }
 
         channel = BinaryPrimitives.ReadUInt16LittleEndian(payload);
         // CAN overload is a bus-level condition; produce a generic SocketCAN error frame
-        frame = BuildSocketCanErrorFrame(BlfConstants.SocketCanErr);
+        frame = _BuildSocketCanErrorFrame(BlfConstants.SocketCanErr);
         return true;
     }
 
@@ -181,13 +181,13 @@ internal static class CanParser
         frame = [];
         channel = 0;
 
-        if (payload.Length < CanErrorExtMinSize)
+        if (payload.Length < _CanErrorExtMinSize)
         {
             return false;
         }
 
         channel = BinaryPrimitives.ReadUInt16LittleEndian(payload);
-        frame = BuildSocketCanErrorFrame(BlfConstants.SocketCanErr);
+        frame = _BuildSocketCanErrorFrame(BlfConstants.SocketCanErr);
         return true;
     }
 
@@ -218,7 +218,7 @@ internal static class CanParser
         frame = [];
         channel = 0;
 
-        if (payload.Length < CanFdMessageHeaderSize)
+        if (payload.Length < _CanFdMessageHeaderSize)
         {
             return false;
         }
@@ -232,8 +232,8 @@ internal static class CanParser
 
         // Clamp validDataBytes to what is declared and what is present
         byte dataLen = BlfConstants.CanFdDlcToLength[Math.Min(dlc, (byte)15)];
-        int actualDataLen = Math.Min((int)Math.Min(validDataBytes, dataLen), CanFdMaxDataLength);
-        int available = Math.Max(0, payload.Length - CanFdMessageHeaderSize);
+        int actualDataLen = Math.Min((int)Math.Min(validDataBytes, dataLen), _CanFdMaxDataLength);
+        int available = Math.Max(0, payload.Length - _CanFdMessageHeaderSize);
         actualDataLen = Math.Min(actualDataLen, available);
 
         uint socketCanId = rawId & 0x1FFF_FFFF;
@@ -265,7 +265,7 @@ internal static class CanParser
         }
 
         // SocketCAN FD: id(4 BE) + len(1, byte count) + fd_flags(1) + reserved(2) + data(64, zero-padded)
-        frame = new byte[SocketCanFdHeaderSize + CanFdMaxDataLength];
+        frame = new byte[_SocketCanFdHeaderSize + _CanFdMaxDataLength];
         BinaryPrimitives.WriteUInt32BigEndian(frame, socketCanId);
         frame[4] = (byte)actualDataLen;
         frame[5] = socketFdFlags;
@@ -273,7 +273,7 @@ internal static class CanParser
 
         if (actualDataLen > 0)
         {
-            payload.Slice(CanFdMessageHeaderSize, actualDataLen).CopyTo(frame.AsSpan(8));
+            payload.Slice(_CanFdMessageHeaderSize, actualDataLen).CopyTo(frame.AsSpan(8));
         }
 
         return true;
@@ -302,7 +302,7 @@ internal static class CanParser
         frame = [];
         channel = 0;
 
-        if (payload.Length < CanFdMessage64HeaderSize)
+        if (payload.Length < _CanFdMessage64HeaderSize)
         {
             return false;
         }
@@ -315,8 +315,8 @@ internal static class CanParser
         uint flags = BinaryPrimitives.ReadUInt32LittleEndian(payload[12..]);
 
         byte dataLen = BlfConstants.CanFdDlcToLength[Math.Min(dlc, (byte)15)];
-        int actualDataLen = Math.Min((int)Math.Min(validDataLength, dataLen), CanFdMaxDataLength);
-        int available = Math.Max(0, payload.Length - CanFdMessage64HeaderSize);
+        int actualDataLen = Math.Min((int)Math.Min(validDataLength, dataLen), _CanFdMaxDataLength);
+        int available = Math.Max(0, payload.Length - _CanFdMessage64HeaderSize);
         actualDataLen = Math.Min(actualDataLen, available);
 
         uint socketCanId = rawId & 0x1FFF_FFFF;
@@ -342,14 +342,14 @@ internal static class CanParser
             socketFdFlags |= BlfConstants.SocketCanFdEsi;
         }
 
-        frame = new byte[SocketCanFdHeaderSize + CanFdMaxDataLength];
+        frame = new byte[_SocketCanFdHeaderSize + _CanFdMaxDataLength];
         BinaryPrimitives.WriteUInt32BigEndian(frame, socketCanId);
         frame[4] = (byte)actualDataLen;
         frame[5] = socketFdFlags;
 
         if (actualDataLen > 0)
         {
-            payload.Slice(CanFdMessage64HeaderSize, actualDataLen).CopyTo(frame.AsSpan(8));
+            payload.Slice(_CanFdMessage64HeaderSize, actualDataLen).CopyTo(frame.AsSpan(8));
         }
 
         return true;
@@ -366,13 +366,13 @@ internal static class CanParser
         frame = [];
         channel = 0;
 
-        if (payload.Length < CanFdMessage64HeaderSize)
+        if (payload.Length < _CanFdMessage64HeaderSize)
         {
             return false;
         }
 
         channel = payload[0];
-        frame = BuildSocketCanErrorFrame(BlfConstants.SocketCanErr);
+        frame = _BuildSocketCanErrorFrame(BlfConstants.SocketCanErr);
         return true;
     }
 
@@ -384,13 +384,13 @@ internal static class CanParser
     /// Core parser for Type 1 and Type 86 CAN messages (identical first-16-byte layout).
     /// Reads channel, dlc, flags, id, and up to 8 data bytes.
     /// </summary>
-    private static bool TryParseCanMessageCore(
+    private static bool _TryParseCanMessageCore(
         ReadOnlySpan<byte> payload, out byte[] frame, out ushort channel)
     {
         frame = [];
         channel = 0;
 
-        if (payload.Length < CanMessageMinSize)
+        if (payload.Length < _CanMessageMinSize)
         {
             return false;
         }
@@ -417,14 +417,14 @@ internal static class CanParser
         }
 
         // SocketCAN classic frame: id(4 BE) + dlc(1) + fd_flags(0 for classic) + reserved(2) + data(8)
-        frame = new byte[SocketCanClassicSize];
+        frame = new byte[_SocketCanClassicSize];
         BinaryPrimitives.WriteUInt32BigEndian(frame, socketCanId);
         frame[4] = dlc;
         // frame[5] = 0 (fd_flags = classic CAN)
         // frame[6..7] = 0 (reserved)
 
-        // Copy data — payload[8..16] always exists (guaranteed by CanMessageMinSize = 16)
-        int copyLen = Math.Min((int)dataLen, CanMaxDataLength);
+        // Copy data — payload[8..16] always exists (guaranteed by _CanMessageMinSize = 16)
+        int copyLen = Math.Min((int)dataLen, _CanMaxDataLength);
         payload.Slice(8, copyLen).CopyTo(frame.AsSpan(8));
 
         return true;
@@ -433,9 +433,9 @@ internal static class CanParser
     /// <summary>
     /// Builds a minimal 16-byte SocketCAN error frame with the given error flag.
     /// </summary>
-    private static byte[] BuildSocketCanErrorFrame(uint socketCanErrId)
+    private static byte[] _BuildSocketCanErrorFrame(uint socketCanErrId)
     {
-        byte[] errorFrame = new byte[SocketCanClassicSize];
+        byte[] errorFrame = new byte[_SocketCanClassicSize];
         BinaryPrimitives.WriteUInt32BigEndian(errorFrame, socketCanErrId);
         return errorFrame;
     }

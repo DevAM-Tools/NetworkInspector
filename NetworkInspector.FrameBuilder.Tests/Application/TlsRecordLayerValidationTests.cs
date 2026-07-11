@@ -157,7 +157,8 @@ internal sealed class TlsRecordLayerValidationTests
     public async Task DtlsBuildRecord_BodyExceedsUInt16_Throws()
     {
         byte[] body = new byte[65536];
-        await Assert.That(() => DtlsRecordLayer.BuildRecord(TlsContentType.ApplicationData, DtlsRecordLayer.Dtls12, 0, 0, body)).Throws<ArgumentOutOfRangeException>();
+        await Assert.That(() => DtlsRecordLayer.BuildRecord(
+            TlsContentType.ApplicationData, DtlsRecordLayer.Dtls12, 0, 0, body)).Throws<ArgumentOutOfRangeException>();
     }
 
     [Test]

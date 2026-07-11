@@ -122,10 +122,10 @@ internal readonly struct SomeIpTpFragment
 internal sealed class SomeIpTpReassembler
 {
     /// <summary>Maximum number of concurrent reassembly sessions.</summary>
-    private const int MaxSessions = 1024;
+    private const int _MaxSessions = 1024;
 
     /// <summary>Maximum total reassembled message size (1 MiB).</summary>
-    private const int MaxReassembledSize = 1024 * 1024; // bytes
+    private const int _MaxReassembledSize = 1024 * 1024; // bytes
 
     /// <summary>Active reassembly sessions.</summary>
     private readonly Dictionary<SomeIpTpReassemblyKey, ReassemblyState> _Sessions = new();
@@ -158,9 +158,9 @@ internal sealed class SomeIpTpReassembler
         if (!_Sessions.TryGetValue(key, out ReassemblyState? state))
         {
             // At capacity: evict the least-recently-used session before accepting the new one.
-            if (_Sessions.Count >= MaxSessions)
+            if (_Sessions.Count >= _MaxSessions)
             {
-                lruEvicted = EvictLru();
+                lruEvicted = _EvictLru();
             }
 
             state = new ReassemblyState(serial);
@@ -171,7 +171,7 @@ internal sealed class SomeIpTpReassembler
             state.LastSeenSerial = serial;
         }
 
-        if (state.AddFragment(byteOffset, data, moreSegments, MaxReassembledSize))
+        if (state.AddFragment(byteOffset, data, moreSegments, _MaxReassembledSize))
         {
             // Reassembly complete — extract the assembled payload and remove session.
             byte[] assembled = state.Assemble();
@@ -192,7 +192,7 @@ internal sealed class SomeIpTpReassembler
     /// Evicts the session that was last updated the longest time ago (lowest serial).
     /// Returns true if a session was actually evicted.
     /// </summary>
-    private bool EvictLru()
+    private bool _EvictLru()
     {
         SomeIpTpReassemblyKey? victim = null;
         uint lowestSerial = uint.MaxValue;

@@ -27,10 +27,10 @@ internal sealed class TcpConnectionTsharkTests
     private static readonly IPv4Address _ClientIp = new(0x0A000001);   // 10.0.0.1
     private static readonly IPv4Address _ServerIp = new(0x0A000002);   // 10.0.0.2
 
-    private const ushort ClientPort = 49152;
-    private const ushort ServerPort = 80;
-    private const uint ClientIsn = 1000;
-    private const uint ServerIsn = 9000;
+    private const ushort _ClientPort = 49152;
+    private const ushort _ServerPort = 80;
+    private const uint _ClientIsn = 1000;
+    private const uint _ServerIsn = 9000;
 
     private static readonly byte[] _HttpRequest =
         "GET /index.html HTTP/1.1\r\nHost: example.test\r\n\r\n"u8.ToArray();
@@ -39,7 +39,7 @@ internal sealed class TcpConnectionTsharkTests
         "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 13\r\n\r\nHello, world!"u8.ToArray();
 
     /// <summary>Builds the full conversation deterministically and returns the wire frames.</summary>
-    private static List<byte[]> BuildConversation(ushort? mss = null)
+    private static List<byte[]> _BuildConversation(ushort? mss = null)
     {
         EthernetLayer ethC = new(_ServerMac, _ClientMac);
         IPv4Layer ipC = new(_ClientIp, _ServerIp);
@@ -50,13 +50,13 @@ internal sealed class TcpConnectionTsharkTests
         StatelessStack<IPv4Layer, StatelessStack<EthernetLayer, StackEnd>> serverCarrier = FrameStack.Start(ethS).Then(ipS);
 
         TcpConnectionOptions options = new(
-            ClientIsn: ClientIsn,
-            ServerIsn: ServerIsn,
+            ClientIsn: _ClientIsn,
+            ServerIsn: _ServerIsn,
             Mss: mss ?? 1460,
             WindowSize: 65535);
 
         using TcpConnection<IPv4Layer, StatelessStack<EthernetLayer, StackEnd>> conn =
-            TcpConnection.Open(in clientCarrier, in serverCarrier, ClientPort, ServerPort, options);
+            TcpConnection.Open(in clientCarrier, in serverCarrier, _ClientPort, _ServerPort, options);
 
         List<byte[]> frames = [];
         FrameSink sink = f => frames.Add(f.ToArray());
@@ -75,7 +75,7 @@ internal sealed class TcpConnectionTsharkTests
     public async Task Tshark_PerSegment_Flags_Seq_Ack_Match_FrameBuilder()
     {
         TsharkVerifier.RequireAvailable();
-        List<byte[]> frames = BuildConversation();
+        List<byte[]> frames = _BuildConversation();
 
         List<string?[]> rows = TsharkVerifier.GetFieldValuesPerPacket(
             frames,
@@ -132,7 +132,7 @@ internal sealed class TcpConnectionTsharkTests
     public async Task Tshark_TcpChecksum_Status_Is_Good_For_Every_Frame()
     {
         TsharkVerifier.RequireAvailable();
-        List<byte[]> frames = BuildConversation();
+        List<byte[]> frames = _BuildConversation();
 
         List<string?[]> rows = TsharkVerifier.GetFieldValuesPerPacket(
             frames,
@@ -155,7 +155,7 @@ internal sealed class TcpConnectionTsharkTests
     public async Task Tshark_Ip_Checksum_Status_Is_Good_For_Every_Frame()
     {
         TsharkVerifier.RequireAvailable();
-        List<byte[]> frames = BuildConversation();
+        List<byte[]> frames = _BuildConversation();
 
         List<string?[]> rows = TsharkVerifier.GetFieldValuesPerPacket(
             frames,
@@ -179,7 +179,7 @@ internal sealed class TcpConnectionTsharkTests
     public async Task Tshark_All_Frames_Belong_To_Single_Tcp_Stream()
     {
         TsharkVerifier.RequireAvailable();
-        List<byte[]> frames = BuildConversation();
+        List<byte[]> frames = _BuildConversation();
 
         List<string?[]> rows = TsharkVerifier.GetFieldValuesPerPacket(
             frames,
@@ -204,7 +204,7 @@ internal sealed class TcpConnectionTsharkTests
         TsharkVerifier.RequireAvailable();
         // Force MSS = 16 so the HTTP request spans multiple TCP segments,
         // making tshark exercise its TCP-stream reassembly engine.
-        List<byte[]> frames = BuildConversation(mss: 16);
+        List<byte[]> frames = _BuildConversation(mss: 16);
 
         // -2: enable second pass so reassembly is fully resolved.
         // Filter on http.request to pick the (single) reassembled request packet.
@@ -226,7 +226,7 @@ internal sealed class TcpConnectionTsharkTests
     public async Task Tshark_HttpResponse_Status_And_Body_Are_Reassembled()
     {
         TsharkVerifier.RequireAvailable();
-        List<byte[]> frames = BuildConversation(mss: 16);
+        List<byte[]> frames = _BuildConversation(mss: 16);
 
         string output = TsharkVerifier.RunOnFrames(
             frames,

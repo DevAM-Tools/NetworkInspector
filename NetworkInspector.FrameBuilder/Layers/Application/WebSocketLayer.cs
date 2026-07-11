@@ -43,13 +43,13 @@ namespace NetworkInspector.FrameBuilder;
 public readonly struct WebSocketLayer : IStatelessLayer, IPayloadLayer, IStreamProducer, IPseudoHeaderIndependent
 {
     /// <summary>The RFC 6455 base payload-length sentinel indicating 16-bit extended length.</summary>
-    private const byte Len16Sentinel = 126;
+    private const byte _Len16Sentinel = 126;
 
     /// <summary>The RFC 6455 base payload-length sentinel indicating 64-bit extended length.</summary>
-    private const byte Len64Sentinel = 127;
+    private const byte _Len64Sentinel = 127;
 
     /// <summary>Maximum payload length that can be inlined on the stack for masking (avoids heap allocation).</summary>
-    private const int StackMaskThreshold = 125;
+    private const int _StackMaskThreshold = 125;
 
     private readonly ReadOnlyMemory<byte> _Payload;
     private readonly byte _Opcode;
@@ -145,12 +145,12 @@ public readonly struct WebSocketLayer : IStatelessLayer, IPayloadLayer, IStreamP
         }
         else if (payloadLen <= 0xFFFF)
         {
-            b1 = (byte)(maskBit | Len16Sentinel);
+            b1 = (byte)(maskBit | _Len16Sentinel);
             extLenBytes = 2;
         }
         else
         {
-            b1 = (byte)(maskBit | Len64Sentinel);
+            b1 = (byte)(maskBit | _Len64Sentinel);
             extLenBytes = 8;
         }
 
@@ -203,11 +203,11 @@ public readonly struct WebSocketLayer : IStatelessLayer, IPayloadLayer, IStreamP
         uint maskKey = _Options.MaskingKey!.Value;
         Span<byte> dst2 = writer.GetSpan(payloadLen);
 
-        if (payloadLen <= StackMaskThreshold)
+        if (payloadLen <= _StackMaskThreshold)
         {
             // Stack-allocated copy: zero heap allocations.
-            Span<byte> scratch = stackalloc byte[StackMaskThreshold];
-            ApplyMask(payload, scratch[..payloadLen], maskKey);
+            Span<byte> scratch = stackalloc byte[_StackMaskThreshold];
+            _ApplyMask(payload, scratch[..payloadLen], maskKey);
             scratch[..payloadLen].CopyTo(dst2);
         }
         else
@@ -216,7 +216,7 @@ public readonly struct WebSocketLayer : IStatelessLayer, IPayloadLayer, IStreamP
             byte[] rental = ArrayPool<byte>.Shared.Rent(payloadLen);
             try
             {
-                ApplyMask(payload, rental.AsSpan(0, payloadLen), maskKey);
+                _ApplyMask(payload, rental.AsSpan(0, payloadLen), maskKey);
                 rental.AsSpan(0, payloadLen).CopyTo(dst2);
             }
             finally
@@ -238,7 +238,7 @@ public readonly struct WebSocketLayer : IStatelessLayer, IPayloadLayer, IStreamP
     /// so key[0] = bits 31-24, key[1] = bits 23-16, etc.
     /// </remarks>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static void ApplyMask(ReadOnlySpan<byte> src, Span<byte> dst, uint key)
+    private static void _ApplyMask(ReadOnlySpan<byte> src, Span<byte> dst, uint key)
     {
         byte k0 = (byte)(key >> 24);
         byte k1 = (byte)(key >> 16);

@@ -20,7 +20,7 @@ internal sealed class PostParserTests
     /// Creates a valid synthetic Ethernet/IPv4/UDP frame for tests that need real bytes.
     /// The frame has a fixed size and predictable layout so tests can assert specific field values.
     /// </summary>
-    private static byte[] BuildEthernetFrame()
+    private static byte[] _BuildEthernetFrame()
     {
         byte[] frame = new byte[42]; // 14 eth + 20 ip + 8 udp
         // Ethernet header: ethertype = IPv4 (0x0800)
@@ -40,11 +40,11 @@ internal sealed class PostParserTests
     }
 
     /// <summary>Wraps raw bytes into a <see cref="Frame"/> using the given stack's registry.</summary>
-    private static Frame MakeFrame(Stack stack, byte[]? data = null, int frameId = 1) =>
+    private static Frame _MakeFrame(Stack stack, byte[]? data = null, int frameId = 1) =>
         Frame.Create(
             new FrameId(frameId),
             Timestamp.FromSecs(frameId),
-            data ?? BuildEthernetFrame(),
+            data ?? _BuildEthernetFrame(),
             LinkType.Ethernet,
             FrameInterfaceId.Invalid,
             stack.FrameInterfaceRegistry).Value;
@@ -87,7 +87,7 @@ internal sealed class PostParserTests
         Stack stack = builder.Build();
 
         // Act
-        Frame frame = MakeFrame(stack, new byte[42]);
+        Frame frame = _MakeFrame(stack, new byte[42]);
         Packet packet = Packet.ParseFrame(new PacketId(1), stack, frame);
 
         // Assert: execution order matches expected order (by original registration index)
@@ -166,7 +166,7 @@ internal sealed class PostParserTests
         Stack stack = builder.Build();
 
         // Act
-        Frame frame = MakeFrame(stack, new byte[42]);
+        Frame frame = _MakeFrame(stack, new byte[42]);
         Packet.ParseFrame(new PacketId(1), stack, frame);
 
         // Assert: registration order preserved when priority ties
@@ -262,7 +262,7 @@ internal sealed class PostParserTests
         Stack stack = builder.Build();
 
         // Act
-        Frame frame = MakeFrame(stack, new byte[42]);
+        Frame frame = _MakeFrame(stack, new byte[42]);
         Packet packet = Packet.ParseFrame(new PacketId(1), stack, frame);
 
         // Assert: custom field appears in the packet tree
@@ -293,7 +293,7 @@ internal sealed class PostParserTests
         Stack stack = builder.Build();
 
         // Act
-        Frame frame = MakeFrame(stack, new byte[42]);
+        Frame frame = _MakeFrame(stack, new byte[42]);
         Packet packet = Packet.ParseFrame(new PacketId(1), stack, frame);
 
         // Assert: info set by post-parser is captured in packet.info
@@ -322,7 +322,7 @@ internal sealed class PostParserTests
         Stack stack = builder.Build();
 
         // Act: ParseFrame with firstProtocolId that returns an error
-        Frame frame = MakeFrame(stack, new byte[42]);
+        Frame frame = _MakeFrame(stack, new byte[42]);
         Packet packet = Packet.ParseFrame(new PacketId(1), stack, frame, frameId);
 
         // Assert: post-parser ran despite main parse error
@@ -353,7 +353,7 @@ internal sealed class PostParserTests
         Stack stack = builder.Build();
 
         // Act
-        Frame frame = MakeFrame(stack, new byte[42]);
+        Frame frame = _MakeFrame(stack, new byte[42]);
         Packet packet = Packet.ParseFrame(new PacketId(1), stack, frame, frameId);
 
         // Assert: post-parser ran despite main parse exception
@@ -393,7 +393,7 @@ internal sealed class PostParserTests
         Stack stack = builder.Build();
 
         // Act
-        Frame frame = MakeFrame(stack, new byte[42]);
+        Frame frame = _MakeFrame(stack, new byte[42]);
         Packet packet = Packet.ParseFrame(new PacketId(1), stack, frame);
 
         // Assert: pp2 and pp3 ran despite pp1 returning an error
@@ -435,7 +435,7 @@ internal sealed class PostParserTests
         Stack stack = builder.Build();
 
         // Act
-        Frame frame = MakeFrame(stack, new byte[42]);
+        Frame frame = _MakeFrame(stack, new byte[42]);
         Packet packet = Packet.ParseFrame(new PacketId(1), stack, frame);
 
         // Assert: pp2 and pp3 ran despite pp1 throwing
@@ -463,7 +463,7 @@ internal sealed class PostParserTests
         Stack stack = builder.Build();
 
         // Act
-        Frame frame = MakeFrame(stack, new byte[42]);
+        Frame frame = _MakeFrame(stack, new byte[42]);
         Packet packet = Packet.ParseFrame(new PacketId(1), stack, frame);
 
         // Assert: parse completed normally, no errors
@@ -492,11 +492,11 @@ internal sealed class PostParserTests
         Stack stack = builder.Build();
 
         // Act: first parse, then recycle
-        Frame frame1 = MakeFrame(stack, new byte[42], frameId: 1);
+        Frame frame1 = _MakeFrame(stack, new byte[42], frameId: 1);
         Packet packet = Packet.ParseFrame(new PacketId(1), stack, frame1);
         int countAfterFirst = runCount;
 
-        Frame frame2 = MakeFrame(stack, new byte[42], frameId: 2);
+        Frame frame2 = _MakeFrame(stack, new byte[42], frameId: 2);
         Packet.ParseFrame(packet, new PacketId(2), stack, frame2);
         int countAfterSecond = runCount;
 
@@ -525,11 +525,11 @@ internal sealed class PostParserTests
         Stack stack = builder.Build();
 
         // Act
-        Frame frame1 = MakeFrame(stack, new byte[42], frameId: 1);
+        Frame frame1 = _MakeFrame(stack, new byte[42], frameId: 1);
         Packet packet = Packet.ParseFrame(new PacketId(1), stack, frame1);
         ran = false; // reset after first parse
 
-        Frame frame2 = MakeFrame(stack, new byte[42], frameId: 2);
+        Frame frame2 = _MakeFrame(stack, new byte[42], frameId: 2);
         RecycleError? error = Packet.TryParseFrame(packet, new PacketId(2), stack, frame2);
 
         // Assert
@@ -557,7 +557,7 @@ internal sealed class PostParserTests
         Stack stack = builder.Build();
 
         // Act: use overload that specifies first protocol explicitly
-        Frame frame = MakeFrame(stack, new byte[42]);
+        Frame frame = _MakeFrame(stack, new byte[42]);
         Packet packet = Packet.ParseFrame(new PacketId(1), stack, frame, stubId);
 
         // Assert
@@ -585,7 +585,7 @@ internal sealed class PostParserTests
         PacketIndex index = new(stack);
 
         // Act
-        Frame frame = MakeFrame(stack, new byte[42]);
+        Frame frame = _MakeFrame(stack, new byte[42]);
         Packet.ParseFrameIndexed(new PacketId(1), stack, frame, index);
 
         // Assert
@@ -613,11 +613,11 @@ internal sealed class PostParserTests
         PacketIndex index = new(stack);
 
         // Act
-        Frame frame1 = MakeFrame(stack, new byte[42], frameId: 1);
+        Frame frame1 = _MakeFrame(stack, new byte[42], frameId: 1);
         Packet packet = Packet.ParseFrameIndexed(new PacketId(1), stack, frame1, index);
         int afterFirst = runCount;
 
-        Frame frame2 = MakeFrame(stack, new byte[42], frameId: 2);
+        Frame frame2 = _MakeFrame(stack, new byte[42], frameId: 2);
         RecycleError? error = Packet.TryParseFrameIndexed(packet, new PacketId(2), stack, frame2, index);
         int afterSecond = runCount;
 
@@ -651,10 +651,10 @@ internal sealed class PostParserTests
         PacketIndex index = new(stack);
 
         // Act: two indexed parses
-        Frame frame1 = MakeFrame(stack, new byte[42], frameId: 1);
+        Frame frame1 = _MakeFrame(stack, new byte[42], frameId: 1);
         Packet.ParseFrameIndexed(new PacketId(1), stack, frame1, index);
 
-        Frame frame2 = MakeFrame(stack, new byte[42], frameId: 2);
+        Frame frame2 = _MakeFrame(stack, new byte[42], frameId: 2);
         Packet.ParseFrameIndexed(new PacketId(2), stack, frame2, index);
 
         // Assert: post-parser's protocol appears in the index bitmaps for both packets
@@ -692,7 +692,7 @@ internal sealed class PostParserTests
         PacketIndex index = new(stack);
 
         // Act
-        Frame frame = MakeFrame(stack, new byte[42], frameId: 5);
+        Frame frame = _MakeFrame(stack, new byte[42], frameId: 5);
         Packet.ParseFrameIndexed(new PacketId(5), stack, frame, index);
 
         // Assert
@@ -722,10 +722,10 @@ internal sealed class PostParserTests
         PacketIndex index = new(stack);
 
         // Act: non-indexed parse followed by indexed parse to verify separation
-        Frame nonIndexed = MakeFrame(stack, new byte[42], frameId: 99);
+        Frame nonIndexed = _MakeFrame(stack, new byte[42], frameId: 99);
         Packet.ParseFrame(new PacketId(99), stack, nonIndexed);
 
-        Frame indexed = MakeFrame(stack, new byte[42], frameId: 100);
+        Frame indexed = _MakeFrame(stack, new byte[42], frameId: 100);
         Packet.ParseFrameIndexed(new PacketId(100), stack, indexed, index);
 
         // Assert: only the indexed parse (packetId=100) appears in the protocol bitmap
@@ -756,7 +756,7 @@ internal sealed class PostParserTests
         Stack stack = builder.Build();
 
         // Act
-        Frame frame = MakeFrame(stack, new byte[42]);
+        Frame frame = _MakeFrame(stack, new byte[42]);
         Packet packet = Packet.ParseFrame(new PacketId(1), stack, frame);
 
         // Assert: packet.info was captured after post-parser set it

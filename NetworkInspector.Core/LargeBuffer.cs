@@ -37,13 +37,13 @@ public struct LargeBuffer
     /// <summary>
     /// Number of bytes per <see cref="LargeBufferElement"/> (two <c>ulong</c> fields = 16 bytes).
     /// </summary>
-    private const int BytesPerElement = sizeof(ulong) * 2; // 16
+    private const int _BytesPerElement = sizeof(ulong) * 2; // 16
 
-    /// <summary>Right-shift amount equivalent to dividing by <see cref="BytesPerElement"/> (log2(16) = 4).</summary>
-    private const int BytesPerElementShift = 4;
+    /// <summary>Right-shift amount equivalent to dividing by <see cref="_BytesPerElement"/> (log2(16) = 4).</summary>
+    private const int _BytesPerElementShift = 4;
 
-    /// <summary>Bitmask equivalent to modulo <see cref="BytesPerElement"/> (<c>BytesPerElement - 1 = 15</c>).</summary>
-    private const int BytesPerElementMask = BytesPerElement - 1;
+    /// <summary>Bitmask equivalent to modulo <see cref="_BytesPerElement"/> (<c>_BytesPerElement - 1 = 15</c>).</summary>
+    private const int _BytesPerElementMask = _BytesPerElement - 1;
 
     #endregion
 
@@ -76,7 +76,7 @@ public struct LargeBuffer
             ThrowHelpers.ThrowArgumentOutOfRange(nameof(capacity));
         }
 
-        int elementCount = ByteCountToElementCount(capacity);
+        int elementCount = _ByteCountToElementCount(capacity);
         _Data = new LargeBufferElement[elementCount];
         _Length = capacity;
     }
@@ -92,7 +92,7 @@ public struct LargeBuffer
     public static long MaxCapacity
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => (long)Array.MaxLength * BytesPerElement;
+        get => (long)Array.MaxLength * _BytesPerElement;
     }
 
     /// <summary>The logical byte length of the buffer.</summary>
@@ -109,7 +109,7 @@ public struct LargeBuffer
     public readonly long Capacity
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => (long)_Data.Length * BytesPerElement;
+        get => (long)_Data.Length * _BytesPerElement;
     }
 
     /// <summary>True when <see cref="Length"/> is zero.</summary>
@@ -137,8 +137,8 @@ public struct LargeBuffer
             }
 
             // Compute which element contains this byte and its byte offset within the element (0–15).
-            int elementIndex = (int)(index >> BytesPerElementShift);
-            int byteOffset = (int)(index & BytesPerElementMask);
+            int elementIndex = (int)(index >> _BytesPerElementShift);
+            int byteOffset = (int)(index & _BytesPerElementMask);
 
             // Low covers byte offsets 0–7; High covers 8–15.
             ref LargeBufferElement elem = ref _Data[elementIndex];
@@ -155,8 +155,8 @@ public struct LargeBuffer
                 ThrowHelpers.ThrowArgumentOutOfRange(nameof(index));
             }
 
-            int elementIndex = (int)(index >> BytesPerElementShift);
-            int byteOffset = (int)(index & BytesPerElementMask);
+            int elementIndex = (int)(index >> _BytesPerElementShift);
+            int byteOffset = (int)(index & _BytesPerElementMask);
 
             // The shift within the selected ulong uses only the lower 3 bits of byteOffset.
             int shift = (byteOffset & 7) * 8;
@@ -192,8 +192,8 @@ public struct LargeBuffer
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public readonly Span<byte> AsSpan(long offset, int length)
     {
-        ValidateRange(offset, length);
-        return GetByteSpan(offset, length);
+        _ValidateRange(offset, length);
+        return _GetByteSpan(offset, length);
     }
 
     /// <summary>
@@ -208,8 +208,8 @@ public struct LargeBuffer
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public readonly ReadOnlySpan<byte> AsReadOnlySpan(long offset, int length)
     {
-        ValidateRange(offset, length);
-        return GetByteSpan(offset, length);
+        _ValidateRange(offset, length);
+        return _GetByteSpan(offset, length);
     }
 
     #endregion
@@ -551,7 +551,7 @@ public struct LargeBuffer
             ThrowHelpers.ThrowArgumentOutOfRange(nameof(newCapacity));
         }
 
-        int newElementCount = ByteCountToElementCount(newCapacity);
+        int newElementCount = _ByteCountToElementCount(newCapacity);
         LargeBufferElement[] newData = new LargeBufferElement[newElementCount];
 
         // Copy existing data element-wise, preserving all bytes up to the smaller of the two sizes.
@@ -568,17 +568,17 @@ public struct LargeBuffer
 
     /// <summary>
     /// Converts a byte count to the number of <see cref="LargeBufferElement"/> entries needed
-    /// (ceiling division by <see cref="BytesPerElement"/>).
+    /// (ceiling division by <see cref="_BytesPerElement"/>).
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static int ByteCountToElementCount(long byteCount) =>
-        (int)((byteCount + BytesPerElementMask) >> BytesPerElementShift);
+    private static int _ByteCountToElementCount(long byteCount) =>
+        (int)((byteCount + _BytesPerElementMask) >> _BytesPerElementShift);
 
     /// <summary>
     /// Validates that the region <c>[offset, offset + length)</c> is within bounds.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private readonly void ValidateRange(long offset, int length)
+    private readonly void _ValidateRange(long offset, int length)
     {
         // Single unsigned comparison catches negative offset and overflow
         if ((ulong)(offset + length) > (ulong)_Length || offset < 0)
@@ -597,7 +597,7 @@ public struct LargeBuffer
     /// correct byte remainder offset.
     /// </remarks>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private readonly Span<byte> GetByteSpan(long offset, int length)
+    private readonly Span<byte> _GetByteSpan(long offset, int length)
     {
         if (length == 0)
         {
@@ -605,9 +605,9 @@ public struct LargeBuffer
         }
 
         // Determine which LargeBufferElement entries span the requested byte range.
-        long elementStart = offset >> BytesPerElementShift;
-        int byteRemainder = (int)(offset & BytesPerElementMask);
-        int elementsNeeded = (byteRemainder + length + BytesPerElementMask) >> BytesPerElementShift;
+        long elementStart = offset >> _BytesPerElementShift;
+        int byteRemainder = (int)(offset & _BytesPerElementMask);
+        int elementsNeeded = (byteRemainder + length + _BytesPerElementMask) >> _BytesPerElementShift;
 
         // Cast the relevant element slice to bytes, then slice to the exact byte range.
         Span<LargeBufferElement> elemSpan = _Data.AsSpan((int)elementStart, elementsNeeded);

@@ -26,7 +26,7 @@ namespace NetworkInspector.Protocols;
 public sealed partial class Sll2Protocol : IProtocol
 {
     /// <summary>SLL v2 header size in bytes.</summary>
-    private const int HeaderSize = 20;
+    private const int _HeaderSize = 20;
 
     /// <summary>Link type key for Linux Cooked Capture v2.</summary>
     public const ulong LinkTypeKey = (ulong)LinkType.LinuxSll2;
@@ -34,42 +34,42 @@ public sealed partial class Sll2Protocol : IProtocol
     /// <summary>
     /// Minimum value for a real EtherType in Linux Cooked Capture v2.
     /// Values strictly greater than 0x0600 are IEEE 802.3 EtherTypes; 0x0600 itself is
-    /// reserved as a Linux-internal type, so only <c>etherType &gt; MinEtherType</c>
+    /// reserved as a Linux-internal type, so only <c>etherType &gt; _MinEtherType</c>
     /// should trigger protocol dispatch.
     /// </summary>
-    private const ushort MinEtherType = 0x0600;
+    private const ushort _MinEtherType = 0x0600;
 
     #region Index Group Constants
 
     /// <summary>Index group for always-present SLL2 fields.</summary>
-    private const string Sll2IndexGroup = "sll2";
+    private const string _Sll2IndexGroup = "sll2";
 
     #endregion
 
     #region Fields
 
-    [BytesField("sll2", "Linux cooked capture v2", IndexGroup = Sll2IndexGroup)]
+    [BytesField("sll2", "Linux cooked capture v2", IndexGroup = _Sll2IndexGroup)]
     private FieldId _ProtocolFieldId;
 
-    [U64Field("sll2.etype", "Protocol", IndexGroup = Sll2IndexGroup)]
+    [U64Field("sll2.etype", "Protocol", IndexGroup = _Sll2IndexGroup)]
     private FieldId _EtypeFieldId;
 
-    [U64Field("sll2.reserved", "Reserved", IndexGroup = Sll2IndexGroup)]
+    [U64Field("sll2.reserved", "Reserved", IndexGroup = _Sll2IndexGroup)]
     private FieldId _ReservedFieldId;
 
-    [U64Field("sll2.if_index", "Interface index", IndexGroup = Sll2IndexGroup)]
+    [U64Field("sll2.if_index", "Interface index", IndexGroup = _Sll2IndexGroup)]
     private FieldId _IfIndexFieldId;
 
-    [U64Field("sll2.hatype", "Link-layer address type", IndexGroup = Sll2IndexGroup)]
+    [U64Field("sll2.hatype", "Link-layer address type", IndexGroup = _Sll2IndexGroup)]
     private FieldId _HaTypeFieldId;
 
-    [U64Field("sll2.pkttype", "Packet type", IndexGroup = Sll2IndexGroup)]
+    [U64Field("sll2.pkttype", "Packet type", IndexGroup = _Sll2IndexGroup)]
     private FieldId _PktTypeFieldId;
 
-    [U64Field("sll2.halen", "Link-layer address length", IndexGroup = Sll2IndexGroup)]
+    [U64Field("sll2.halen", "Link-layer address length", IndexGroup = _Sll2IndexGroup)]
     private FieldId _HaLenFieldId;
 
-    [MacField("sll2.src.eth", "Source", IndexGroup = Sll2IndexGroup)]
+    [MacField("sll2.src.eth", "Source", IndexGroup = _Sll2IndexGroup)]
     private FieldId _SrcEthFieldId;
 
     // Reuse Ethernet's EtherType table for dispatch
@@ -79,7 +79,7 @@ public sealed partial class Sll2Protocol : IProtocol
     // Sparse dispatch cache (typically 4–6 EtherType entries)
     private (ulong Key, ParseDelegate Parse)[] _EtherTypeSparseCache = [];
 
-    partial void OnStartCustom(Stack stack) =>
+    partial void _OnStartCustom(Stack stack) =>
         _EtherTypeSparseCache = stack.BuildU64SparseDelegateCache(_EtherTypeTableId);
 
     /// <summary>
@@ -93,9 +93,9 @@ public sealed partial class Sll2Protocol : IProtocol
     /// <returns>Number of bytes consumed, or a <see cref="ParseError"/> describing the failure.</returns>
     public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
     {
-        if (data.Length < HeaderSize)
+        if (data.Length < _HeaderSize)
         {
-            return ParseError.InsufficientDataWithInfo(ProtocolName, HeaderSize, (ulong)data.Length);
+            return ParseError.InsufficientDataWithInfo(ProtocolName, _HeaderSize, (ulong)data.Length);
         }
 
         context.RecordProtocolPresence(_ProtocolId);
@@ -121,7 +121,7 @@ public sealed partial class Sll2Protocol : IProtocol
             DisplayTables.GetEtherTypeDisplayText(etherType));
 
         // Append all fields eagerly (only 7 fields, no lazy needed)
-        FieldValue headerValue = FieldValue.NewBytes(data[..HeaderSize]);
+        FieldValue headerValue = FieldValue.NewBytes(data[.._HeaderSize]);
         MutField container = parentField.AppendWithCustomText(_ProtocolFieldId, headerValue, summary);
 
         string etypeText = DisplayTables.GetEtherTypeDisplayText(etherType);
@@ -141,10 +141,10 @@ public sealed partial class Sll2Protocol : IProtocol
 
         // Dispatch to next protocol via EtherType.
         // Only values strictly greater than 0x0600 are genuine Ethernet II EtherTypes.
-        ReadOnlyMemory<byte> payload = data[HeaderSize..];
-        if (etherType > MinEtherType)
+        ReadOnlyMemory<byte> payload = data[_HeaderSize..];
+        if (etherType > _MinEtherType)
         {
-            ParseResult dispatchResult = DispatchEtherType(in parentField, etherType, payload, in context);
+            ParseResult dispatchResult = _DispatchEtherType(in parentField, etherType, payload, in context);
             if (dispatchResult.IsError)
             {
                 return dispatchResult;
@@ -158,7 +158,7 @@ public sealed partial class Sll2Protocol : IProtocol
     /// Dispatches to the next protocol by EtherType using the sparse cache.
     /// Falls back to full table dispatch for unknown EtherTypes.
     /// </summary>
-    private ParseResult DispatchEtherType(
+    private ParseResult _DispatchEtherType(
         in MutField parentField, ulong etherType, ReadOnlyMemory<byte> payload, in ParseContext context)
     {
         foreach ((ulong key, ParseDelegate parse) in _EtherTypeSparseCache)

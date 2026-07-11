@@ -16,25 +16,25 @@ internal static class AscCanFdParser
     #region Constants
 
     /// <summary>SocketCAN header: id(4) + dlc(1) + flags(1) + reserved(2).</summary>
-    private const int SocketCanHeaderSize = 8;
+    private const int _SocketCanHeaderSize = 8;
 
     /// <summary>Maximum CAN FD data length.</summary>
-    private const int MaxDataLength = 64;
+    private const int _MaxDataLength = 64;
 
     /// <summary>SocketCAN Extended Frame Format flag (bit 31).</summary>
-    private const uint SocketCanEff = 0x80000000;
+    private const uint _SocketCanEff = 0x80000000;
 
     /// <summary>SocketCAN FD: FDF (FD Format indicator).</summary>
-    private const byte SocketCanFdFdf = 0x04;
+    private const byte _SocketCanFdFdf = 0x04;
 
     /// <summary>SocketCAN FD: BRS (Bit Rate Switch).</summary>
-    private const byte SocketCanFdBrs = 0x01;
+    private const byte _SocketCanFdBrs = 0x01;
 
     /// <summary>SocketCAN FD: ESI (Error State Indicator).</summary>
-    private const byte SocketCanFdEsi = 0x02;
+    private const byte _SocketCanFdEsi = 0x02;
 
     /// <summary>CAN FD DLC to data length mapping.</summary>
-    private static ReadOnlySpan<byte> DlcToLength =>
+    private static ReadOnlySpan<byte> _DlcToLength =>
         [0, 1, 2, 3, 4, 5, 6, 7, 8, 12, 16, 20, 24, 32, 48, 64];
 
     #endregion
@@ -107,7 +107,7 @@ internal static class AscCanFdParser
 
         // If the token is not "0" or "1", it might be a symbolic name — skip and get next
         ReadOnlySpan<char> brsToken;
-        if (!IsBoolToken(nextToken))
+        if (!_IsBoolToken(nextToken))
         {
             // This was a symbolic name, skip it
             if (!tokenizer.TryNextToken(out brsToken))
@@ -152,28 +152,28 @@ internal static class AscCanFdParser
             return false;
         }
 
-        dataLen = Math.Min(dataLen, MaxDataLength);
+        dataLen = Math.Min(dataLen, _MaxDataLength);
 
         // Build SocketCAN ID
         uint socketCanId = canId & 0x1FFFFFFF;
         if (isExtended)
         {
-            socketCanId |= SocketCanEff;
+            socketCanId |= _SocketCanEff;
         }
 
         // Build FD flags
-        byte fdFlags = SocketCanFdFdf; // Always set for FD frames
+        byte fdFlags = _SocketCanFdFdf; // Always set for FD frames
         if (brs)
         {
-            fdFlags |= SocketCanFdBrs;
+            fdFlags |= _SocketCanFdBrs;
         }
         if (esi)
         {
-            fdFlags |= SocketCanFdEsi;
+            fdFlags |= _SocketCanFdEsi;
         }
 
         // Parse data bytes — use stackalloc to avoid a heap allocation for temporary storage
-        Span<byte> dataBytes = stackalloc byte[MaxDataLength];
+        Span<byte> dataBytes = stackalloc byte[_MaxDataLength];
         dataBytes.Clear();
         int parsedCount = 0;
         for (int i = 0; i < dataLen; i++)
@@ -204,11 +204,11 @@ internal static class AscCanFdParser
 
         // Build frame — DLC-based sizing for SocketCAN compatibility
         int frameDlc = Math.Min(dlc, 15);
-        int socketDataLen = frameDlc < DlcToLength.Length ? DlcToLength[frameDlc] : dataLen;
+        int socketDataLen = frameDlc < _DlcToLength.Length ? _DlcToLength[frameDlc] : dataLen;
         socketDataLen = Math.Max(socketDataLen, dataLen);
-        socketDataLen = Math.Min(socketDataLen, MaxDataLength);
+        socketDataLen = Math.Min(socketDataLen, _MaxDataLength);
 
-        frame = new byte[SocketCanHeaderSize + socketDataLen];
+        frame = new byte[_SocketCanHeaderSize + socketDataLen];
         BinaryPrimitives.WriteUInt32BigEndian(frame, socketCanId);
         frame[4] = (byte)dlc;
         frame[5] = fdFlags;
@@ -217,7 +217,7 @@ internal static class AscCanFdParser
 
         // Copy parsed data
         int copyLen = Math.Min(parsedCount, socketDataLen);
-        dataBytes.Slice(0, copyLen).CopyTo(frame.AsSpan(SocketCanHeaderSize));
+        dataBytes.Slice(0, copyLen).CopyTo(frame.AsSpan(_SocketCanHeaderSize));
 
         return true;
     }
@@ -230,11 +230,11 @@ internal static class AscCanFdParser
     /// Checks if a token is a boolean value (single digit "0" or "1").
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static bool IsBoolToken(ReadOnlySpan<char> token) =>
+    private static bool _IsBoolToken(ReadOnlySpan<char> token) =>
         token.Length == 1 && (token[0] == '0' || token[0] == '1');
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static bool IsBoolToken(ReadOnlySpan<byte> token) =>
+    private static bool _IsBoolToken(ReadOnlySpan<byte> token) =>
         token.Length == 1 && (token[0] == (byte)'0' || token[0] == (byte)'1');
 
     #endregion
@@ -299,7 +299,7 @@ internal static class AscCanFdParser
                 return false;
             }
 
-            if (IsBoolToken(brsToken))
+            if (_IsBoolToken(brsToken))
             {
                 break;
             }
@@ -307,7 +307,7 @@ internal static class AscCanFdParser
 
         bool hasBrs = brsToken[0] == (byte)'1';
 
-        if (!tokenizer.TryNextToken(out ReadOnlySpan<byte> esiToken) || !IsBoolToken(esiToken))
+        if (!tokenizer.TryNextToken(out ReadOnlySpan<byte> esiToken) || !_IsBoolToken(esiToken))
         {
             return false;
         }
@@ -326,25 +326,25 @@ internal static class AscCanFdParser
             return false;
         }
 
-        dataLen = Math.Min(dataLen, MaxDataLength);
+        dataLen = Math.Min(dataLen, _MaxDataLength);
 
         uint socketCanId = canId & 0x1FFFFFFF;
         if (isExtended)
         {
-            socketCanId |= SocketCanEff;
+            socketCanId |= _SocketCanEff;
         }
 
-        byte fdFlags = SocketCanFdFdf;
+        byte fdFlags = _SocketCanFdFdf;
         if (hasBrs)
         {
-            fdFlags |= SocketCanFdBrs;
+            fdFlags |= _SocketCanFdBrs;
         }
         if (hasEsi)
         {
-            fdFlags |= SocketCanFdEsi;
+            fdFlags |= _SocketCanFdEsi;
         }
 
-        Span<byte> dataBytes = stackalloc byte[MaxDataLength];
+        Span<byte> dataBytes = stackalloc byte[_MaxDataLength];
         dataBytes.Clear();
         int parsedCount = 0;
 
@@ -367,11 +367,11 @@ internal static class AscCanFdParser
         }
 
         int frameDlc = Math.Min(dlc, 15);
-        int socketDataLen = frameDlc < DlcToLength.Length ? DlcToLength[frameDlc] : dataLen;
+        int socketDataLen = frameDlc < _DlcToLength.Length ? _DlcToLength[frameDlc] : dataLen;
         socketDataLen = Math.Max(socketDataLen, dataLen);
-        socketDataLen = Math.Min(socketDataLen, MaxDataLength);
+        socketDataLen = Math.Min(socketDataLen, _MaxDataLength);
 
-        frame = new byte[SocketCanHeaderSize + socketDataLen];
+        frame = new byte[_SocketCanHeaderSize + socketDataLen];
         BinaryPrimitives.WriteUInt32BigEndian(frame, socketCanId);
         frame[4] = (byte)dlc;
         frame[5] = fdFlags;
@@ -379,7 +379,7 @@ internal static class AscCanFdParser
         frame[7] = 0;
 
         int copyLen = Math.Min(parsedCount, socketDataLen);
-        dataBytes.Slice(0, copyLen).CopyTo(frame.AsSpan(SocketCanHeaderSize));
+        dataBytes.Slice(0, copyLen).CopyTo(frame.AsSpan(_SocketCanHeaderSize));
 
         return true;
     }

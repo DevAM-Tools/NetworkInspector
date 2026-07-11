@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Core.Tests;
 
@@ -65,6 +65,31 @@ internal sealed class JsonConfigFileTests
     }
 
     [Test]
+    public async Task TryLoad_JsonNullLiteral_ReturnsFalseWithError()
+    {
+        string path = Path.GetTempFileName();
+        try
+        {
+            await File.WriteAllTextAsync(path, "null").ConfigureAwait(false);
+
+            bool result = JsonConfigFile.TryLoad(
+                path,
+                TestJsonContext.Default.TestSimpleConfig,
+                out TestSimpleConfig? value,
+                out string? error);
+
+            await Assert.That(result).IsFalse();
+            await Assert.That(value).IsNull();
+            await Assert.That(error).IsNotNull();
+            await Assert.That(error!).Contains("null result");
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Test]
     public async Task TryLoad_ValidJson_ReturnsTrue_AndDeserializedValue()
     {
         string path = Path.GetTempFileName();
@@ -116,7 +141,7 @@ internal sealed class JsonConfigFileTests
         using SettingsManager mgr = new();
         mgr.RegisterSetting(Setting.String("cfg.path", "Path", "cfg", ""));
 
-        bool result = mgr.TryLoadReferencedJsonConfig(
+        bool result = mgr.ReadOnly.TryLoadReferencedJsonConfig(
             "cfg.path",
             TestJsonContext.Default.TestSimpleConfig,
             out TestSimpleConfig? value,
@@ -134,7 +159,7 @@ internal sealed class JsonConfigFileTests
         // Unregistered setting name → GetStringSetting returns null → treated as empty path
         using SettingsManager mgr = new();
 
-        bool result = mgr.TryLoadReferencedJsonConfig(
+        bool result = mgr.ReadOnly.TryLoadReferencedJsonConfig(
             "cfg.nonexistent",
             TestJsonContext.Default.TestSimpleConfig,
             out TestSimpleConfig? value,
@@ -153,7 +178,7 @@ internal sealed class JsonConfigFileTests
         using SettingsManager mgr = new();
         mgr.RegisterSetting(Setting.String("cfg.path", "Path", "cfg", missingPath));
 
-        bool result = mgr.TryLoadReferencedJsonConfig(
+        bool result = mgr.ReadOnly.TryLoadReferencedJsonConfig(
             "cfg.path",
             TestJsonContext.Default.TestSimpleConfig,
             out TestSimpleConfig? value,
@@ -179,7 +204,7 @@ internal sealed class JsonConfigFileTests
             using SettingsManager mgr = new();
             mgr.RegisterSetting(Setting.String("cfg.path", "Path", "cfg", path));
 
-            bool result = mgr.TryLoadReferencedJsonConfig(
+            bool result = mgr.ReadOnly.TryLoadReferencedJsonConfig(
                 "cfg.path",
                 TestJsonContext.Default.TestSimpleConfig,
                 out TestSimpleConfig? value,
@@ -208,7 +233,7 @@ internal sealed class JsonConfigFileTests
             using SettingsManager mgr = new();
             mgr.RegisterSetting(Setting.String("cfg.path", "Path", "cfg", path));
 
-            bool result = mgr.TryLoadReferencedJsonConfig(
+            bool result = mgr.ReadOnly.TryLoadReferencedJsonConfig(
                 "cfg.path",
                 TestJsonContext.Default.TestSimpleConfig,
                 out _,
@@ -230,7 +255,7 @@ internal sealed class JsonConfigFileTests
         using SettingsManager mgr = new();
         mgr.RegisterSetting(Setting.String("cfg.path", "Path", "cfg", "   "));
 
-        bool result = mgr.TryLoadReferencedJsonConfig(
+        bool result = mgr.ReadOnly.TryLoadReferencedJsonConfig(
             "cfg.path",
             TestJsonContext.Default.TestSimpleConfig,
             out _,
@@ -238,5 +263,24 @@ internal sealed class JsonConfigFileTests
 
         await Assert.That(result).IsFalse();
         await Assert.That(warning).IsNull();
+    }
+
+    [Test]
+    public async Task TryLoadReferencedJsonConfig_SettingWithoutDot_UsesFullNameAsGroup()
+    {
+        string missingPath = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N") + ".json");
+
+        using SettingsManager mgr = new();
+        mgr.RegisterSetting(Setting.String("configfile", "Config", string.Empty, missingPath));
+
+        bool result = mgr.ReadOnly.TryLoadReferencedJsonConfig(
+            "configfile",
+            TestJsonContext.Default.TestSimpleConfig,
+            out _,
+            out SettingsLoadWarning? warning);
+
+        await Assert.That(result).IsFalse();
+        await Assert.That(warning).IsNotNull();
+        await Assert.That(warning!.Value.GroupName).IsEqualTo("configfile");
     }
 }

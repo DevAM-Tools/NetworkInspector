@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Protocols.Tests;
 
@@ -9,7 +9,7 @@ namespace NetworkInspector.Protocols.Tests;
 internal sealed class ArpBasicTests
 {
     /// <summary>Creates an Ethernet + ARP Request frame.</summary>
-    private static byte[] BuildArpRequestFrame()
+    private static byte[] _BuildArpRequestFrame()
     {
         MacAddress dstMac = MacAddress.FromBytes([0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]); // broadcast
         MacAddress srcMac = MacAddress.FromBytes([0x00, 0x11, 0x22, 0x33, 0x44, 0x55]);
@@ -23,7 +23,7 @@ internal sealed class ArpBasicTests
     }
 
     /// <summary>Creates an Ethernet + ARP Reply frame.</summary>
-    private static byte[] BuildArpReplyFrame()
+    private static byte[] _BuildArpReplyFrame()
     {
         MacAddress dstMac = MacAddress.FromBytes([0x00, 0x11, 0x22, 0x33, 0x44, 0x55]);
         MacAddress srcMac = MacAddress.FromBytes([0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF]);
@@ -36,7 +36,7 @@ internal sealed class ArpBasicTests
     [Test]
     public async Task Parse_ArpRequest_Opcode()
     {
-        byte[] frame = BuildArpRequestFrame();
+        byte[] frame = _BuildArpRequestFrame();
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -47,7 +47,7 @@ internal sealed class ArpBasicTests
     [Test]
     public async Task Parse_ArpReply_Opcode()
     {
-        byte[] frame = BuildArpReplyFrame();
+        byte[] frame = _BuildArpReplyFrame();
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -58,7 +58,7 @@ internal sealed class ArpBasicTests
     [Test]
     public async Task Parse_ArpRequest_EtherType()
     {
-        byte[] frame = BuildArpRequestFrame();
+        byte[] frame = _BuildArpRequestFrame();
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -70,7 +70,7 @@ internal sealed class ArpBasicTests
     [Test]
     public async Task Parse_ArpRequest_HardwareType()
     {
-        byte[] frame = BuildArpRequestFrame();
+        byte[] frame = _BuildArpRequestFrame();
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -82,7 +82,7 @@ internal sealed class ArpBasicTests
     [Test]
     public async Task TsharkCrossValidation_ArpOpcode()
     {
-        byte[] frame = BuildArpRequestFrame();
+        byte[] frame = _BuildArpRequestFrame();
         string? tsharkValue = TsharkVerifier.GetFieldValue(frame, "arp.opcode");
         if (tsharkValue is null)
         {
@@ -95,7 +95,7 @@ internal sealed class ArpBasicTests
     public async Task TsharkCrossValidation_SenderProtocolAddress()
     {
         // ARP request sender IP: 192.168.1.100
-        byte[] frame = BuildArpRequestFrame();
+        byte[] frame = _BuildArpRequestFrame();
         string? tsharkValue = TsharkVerifier.GetFieldValue(frame, "arp.src.proto_ipv4");
         if (tsharkValue is null)
         {
@@ -108,7 +108,7 @@ internal sealed class ArpBasicTests
     public async Task TsharkCrossValidation_TargetProtocolAddress()
     {
         // ARP request target IP: 192.168.1.1
-        byte[] frame = BuildArpRequestFrame();
+        byte[] frame = _BuildArpRequestFrame();
         string? tsharkValue = TsharkVerifier.GetFieldValue(frame, "arp.dst.proto_ipv4");
         if (tsharkValue is null)
         {

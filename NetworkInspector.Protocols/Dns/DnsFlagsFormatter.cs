@@ -39,14 +39,14 @@ internal static class DnsFlagsFormatter
     // 256-entry table indexed by the synthetic 8-bit key; stores bracket strings only.
     // Bits 14–11 (Opcode) and 3–0 (RCODE) are excluded; they are multi-bit
     // numeric values rendered separately by the protocol parser.
-    private static readonly string[] FlagsTable = BuildFlagsTable();
+    private static readonly string[] _FlagsTable = _BuildFlagsTable();
 
     /// <summary>
     /// Returns the bracket portion of the display string for the given DNS flags word.
     /// Output examples: <c>[Response, RD, RA]</c>, <c>[None]</c>.
     /// The caller is responsible for prepending the hex value.
     /// </summary>
-    internal static string Format(ushort flags) => FlagsTable[BuildKey(flags)];
+    internal static string Format(ushort flags) => _FlagsTable[_BuildKey(flags)];
 
     /// <summary>
     /// Extracts the eight boolean flag bits from a 16-bit DNS flags word
@@ -54,7 +54,7 @@ internal static class DnsFlagsFormatter
     /// Bits 14–11 (Opcode) and 3–0 (RCODE) are excluded; they are multi-bit
     /// numeric values rendered separately by the protocol parser.
     /// </summary>
-    private static byte BuildKey(ushort flags) =>
+    private static byte _BuildKey(ushort flags) =>
         (byte)(
             ((flags >> 15) & 1) << 7 |  // QR  → key bit 7
             ((flags >> 10) & 1) << 6 |  // AA  → key bit 6
@@ -65,21 +65,21 @@ internal static class DnsFlagsFormatter
             ((flags >> 5) & 1) << 1 |   // AD  → key bit 1
             ((flags >> 4) & 1) << 0);   // CD  → key bit 0
 
-    private static string[] BuildFlagsTable()
+    private static string[] _BuildFlagsTable()
     {
         string[] table = new string[256];
         // Names are ordered by ascending key bit position (bit 0 first).
-        // The array is allocated once here and shared across all 256 BuildBracketString calls
+        // The array is allocated once here and shared across all 256 _BuildBracketString calls
         // to avoid 256 identical ToArray() allocations inside the loop.
         string[] names = ["CD", "AD", "Z", "RA", "RD", "TC", "AA", "Response"];
         for (int i = 0; i < 256; i++)
         {
-            table[i] = BuildBracketString((byte)i, names);
+            table[i] = _BuildBracketString((byte)i, names);
         }
         return table;
     }
 
-    private static string BuildBracketString(byte key, string[] names)
+    private static string _BuildBracketString(byte key, string[] names)
     {
         if (key == 0)
         {

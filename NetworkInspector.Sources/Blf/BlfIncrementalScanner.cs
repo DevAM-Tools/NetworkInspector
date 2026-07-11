@@ -29,7 +29,7 @@ namespace NetworkInspector.Sources.Blf;
 /// <list type="bullet">
 ///   <item>
 ///     <description>
-///       When <see cref="DrainPendingContainer"/> encounters bytes at the end of a
+///       When <see cref="_DrainPendingContainer"/> encounters bytes at the end of a
 ///       container that cannot be parsed as a valid LOBJ header (too few bytes, or
 ///       <see cref="BlfObjectHeaderParser.TryParse"/> fails), it searches for the
 ///       next LOBJ magic within the remaining data.
@@ -57,7 +57,7 @@ namespace NetworkInspector.Sources.Blf;
 ///   (3) the error tolerance mechanism provides visibility into lost frames.
 /// If a future need arises for carry-over support (e.g., recovery of BLF files from
 /// a specific defective writer), the implementation point is at the end of
-/// <see cref="DrainPendingContainer"/> where remaining bytes could be saved to a
+/// <see cref="_DrainPendingContainer"/> where remaining bytes could be saved to a
 /// <c>_CarryOverBuffer</c> and prepended to the next container's decompressed data.
 /// </para>
 /// <para><b>Thread-safety:</b> This class is <b>not</b> thread-safe.
@@ -87,14 +87,14 @@ internal sealed class BlfIncrementalScanner
 
     /// <summary>
     /// Number of containers where the container header offset fell outside the object body.
-    /// Incremented inside <see cref="ProcessContainer"/> on bounds violations.
+    /// Incremented inside <see cref="_ProcessContainer"/> on bounds violations.
     /// BlfSource polls this and forwards each new failure through the error-tolerance pipeline.
     /// </summary>
     private long _CorruptedContainerCount;
 
     /// <summary>
     /// Number of containers that had trailing bytes insufficient for a valid LOBJ header.
-    /// Incremented inside <see cref="DrainPendingContainer"/> when the container tail is
+    /// Incremented inside <see cref="_DrainPendingContainer"/> when the container tail is
     /// too short to hold a complete object header. BlfSource polls this and forwards each
     /// new truncation through the error-tolerance pipeline.
     /// </summary>
@@ -174,7 +174,7 @@ internal sealed class BlfIncrementalScanner
         // First: drain any pending container objects
         if (_PendingContainer is not null)
         {
-            if (DrainPendingContainer())
+            if (_DrainPendingContainer())
             {
                 return true;
             }
@@ -195,7 +195,7 @@ internal sealed class BlfIncrementalScanner
             if (!BlfBlockHeader.TryParse(blockData, out BlfBlockHeader blockHeader, out _))
             {
                 // Try scanning forward for LOBJ magic (corruption recovery)
-                if (!ScanForMagic())
+                if (!_ScanForMagic())
                 {
                     _Exhausted = true;
                 }
@@ -206,7 +206,7 @@ internal sealed class BlfIncrementalScanner
             if (blockHeader.Signature.Value != BlfConstants.ObjectMagic)
             {
                 // Not a valid block — scan forward byte by byte for "LOBJ"
-                if (!ScanForMagic())
+                if (!_ScanForMagic())
                 {
                     _Exhausted = true;
                 }
@@ -228,7 +228,7 @@ internal sealed class BlfIncrementalScanner
             // On any violation, attempt corruption-recovery by scanning for the next LOBJ magic.
             if (headerSz < BlfConstants.BlockHeaderSize)
             {
-                if (!ScanForMagic())
+                if (!_ScanForMagic())
                 {
                     _Exhausted = true;
                 }
@@ -237,7 +237,7 @@ internal sealed class BlfIncrementalScanner
 
             if (objectLength == 0 || objectLength > int.MaxValue)
             {
-                if (!ScanForMagic())
+                if (!_ScanForMagic())
                 {
                     _Exhausted = true;
                 }
@@ -263,8 +263,8 @@ internal sealed class BlfIncrementalScanner
             if (objectType == BlfConstants.ObjTypeLogContainer)
             {
                 // Process container: decompress and set up inner iteration
-                ProcessContainer(fullObjectData, headerSz, currentOffset);
-                if (_PendingContainer is not null && DrainPendingContainer())
+                _ProcessContainer(fullObjectData, headerSz, currentOffset);
+                if (_PendingContainer is not null && _DrainPendingContainer())
                 {
                     return true;
                 }
@@ -274,14 +274,14 @@ internal sealed class BlfIncrementalScanner
             if (objectType == BlfConstants.ObjTypeAppText)
             {
                 // Process AppText for channel names
-                ProcessAppText(fullObjectData);
+                _ProcessAppText(fullObjectData);
                 continue;
             }
 
             // Try to parse as a frame-producing object
             if (BlfConstants.IsFrameProducingType(objectType))
             {
-                ProcessRawObject(fullObjectData, currentOffset);
+                _ProcessRawObject(fullObjectData, currentOffset);
                 return true;
             }
         }
@@ -308,7 +308,7 @@ internal sealed class BlfIncrementalScanner
     /// <summary>
     /// Decompresses a container and sets up the pending container for inner iteration.
     /// </summary>
-    private void ProcessContainer(ReadOnlySpan<byte> objectData, ushort headerSize, long fileOffset)
+    private void _ProcessContainer(ReadOnlySpan<byte> objectData, ushort headerSize, long fileOffset)
     {
         // Container layout: [block header (16B)] [log object header] [container header (16B)] [payload]
         // The log object header size varies; container header starts after headerSize from the beginning.
@@ -370,7 +370,7 @@ internal sealed class BlfIncrementalScanner
     /// Drains objects from the pending decompressed container.
     /// Returns true if at least one frame-producing object was found.
     /// </summary>
-    private bool DrainPendingContainer()
+    private bool _DrainPendingContainer()
     {
         if (_PendingContainer is null)
         {
@@ -388,7 +388,7 @@ internal sealed class BlfIncrementalScanner
                     out BlfObjectInfo objInfo, out int skipDistance))
             {
                 // Try to find next LOBJ magic within container
-                int nextMagic = FindLobjMagic(containerSpan[(_ContainerOffset + 1)..]);
+                int nextMagic = _FindLobjMagic(containerSpan[(_ContainerOffset + 1)..]);
                 if (nextMagic < 0)
                 {
                     // No more objects in this container
@@ -406,7 +406,7 @@ internal sealed class BlfIncrementalScanner
             // Handle AppText within containers
             if (objInfo.ObjectType == BlfConstants.ObjTypeAppText)
             {
-                ProcessAppTextPayload(objInfo.Payload);
+                _ProcessAppTextPayload(objInfo.Payload);
                 continue;
             }
 
@@ -457,7 +457,7 @@ internal sealed class BlfIncrementalScanner
     /// <summary>
     /// Processes a raw (non-container) frame-producing object from the file.
     /// </summary>
-    private void ProcessRawObject(ReadOnlySpan<byte> objectData, long fileOffset)
+    private void _ProcessRawObject(ReadOnlySpan<byte> objectData, long fileOffset)
     {
         if (!BlfObjectHeaderParser.TryParse(objectData, fileOffset,
                 out BlfObjectInfo objInfo, out int skipDistance))
@@ -498,7 +498,7 @@ internal sealed class BlfIncrementalScanner
     /// <summary>
     /// Processes an AppText object for channel name extraction.
     /// </summary>
-    private void ProcessAppText(ReadOnlySpan<byte> objectData)
+    private void _ProcessAppText(ReadOnlySpan<byte> objectData)
     {
         if (!BlfObjectHeaderParser.TryParse(objectData, _FileOffset,
                 out BlfObjectInfo objInfo, out _))
@@ -506,13 +506,13 @@ internal sealed class BlfIncrementalScanner
             return;
         }
 
-        ProcessAppTextPayload(objInfo.Payload);
+        _ProcessAppTextPayload(objInfo.Payload);
     }
 
     /// <summary>
     /// Extracts channel name from AppText payload and stores it.
     /// </summary>
-    private void ProcessAppTextPayload(ReadOnlySpan<byte> payload)
+    private void _ProcessAppTextPayload(ReadOnlySpan<byte> payload)
     {
         if (Format.Objects.AppTextParser.TryParseChannelName(
                 payload, out byte channelNumber, out byte busType, out string? name))
@@ -524,12 +524,12 @@ internal sealed class BlfIncrementalScanner
     /// <summary>
     /// Scans forward from the current file offset for the "LOBJ" magic.
     /// Used for corruption recovery.
-    /// Searches in chunks of <see cref="ScanForMagicChunkSize"/> bytes with a
+    /// Searches in chunks of <see cref="_ScanForMagicChunkSize"/> bytes with a
     /// 3-byte overlap between chunks so that a magic sequence split across a
     /// chunk boundary is not missed.
     /// </summary>
     /// <returns>True if magic was found and <c>_FileOffset</c> was updated.</returns>
-    private bool ScanForMagic()
+    private bool _ScanForMagic()
     {
         // Search starting from the byte after the current position
         long searchFrom = _FileOffset + 1;
@@ -540,10 +540,10 @@ internal sealed class BlfIncrementalScanner
             // Fetch a chunk for magic scanning. The overlap of 3 bytes ensures
             // that a 4-byte magic sequence that spans a chunk boundary is found
             // in the next iteration.
-            int chunkSize = (int)Math.Min(ScanForMagicChunkSize, fileSize - searchFrom);
+            int chunkSize = (int)Math.Min(_ScanForMagicChunkSize, fileSize - searchFrom);
             ReadOnlySpan<byte> chunk = _Backend.GetSpan(searchFrom, chunkSize);
 
-            int found = FindLobjMagic(chunk);
+            int found = _FindLobjMagic(chunk);
             if (found >= 0)
             {
                 _FileOffset = searchFrom + found;
@@ -558,21 +558,21 @@ internal sealed class BlfIncrementalScanner
     }
 
     /// <summary>
-    /// Chunk size used by <see cref="ScanForMagic"/> when scanning for the LOBJ magic.
+    /// Chunk size used by <see cref="_ScanForMagic"/> when scanning for the LOBJ magic.
     /// 64 MiB provides a good balance between I/O granularity and memory pressure for
     /// the corruption-recovery scan. Each chunk is requested from the backend as a
     /// windowed span (zero-copy for in-memory backends, mapped-view for mmap backends).
     /// Decreasing this value reduces per-scan peak memory; increasing it reduces
     /// the number of chunk fetches in files with long corruption gaps.
     /// </summary>
-    private const int ScanForMagicChunkSize = 64 * 1024 * 1024; // 64 MiB
+    private const int _ScanForMagicChunkSize = 64 * 1024 * 1024; // 64 MiB
 
     /// <summary>
     /// Searches for the "LOBJ" byte sequence in data.
     /// Returns the byte offset, or -1 if not found.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static int FindLobjMagic(ReadOnlySpan<byte> data) =>
+    private static int _FindLobjMagic(ReadOnlySpan<byte> data) =>
         data.IndexOf(BlfConstants.ObjectMagicBytes);
 
     #endregion

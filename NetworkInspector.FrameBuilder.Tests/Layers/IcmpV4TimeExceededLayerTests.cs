@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.FrameBuilder.Tests.Layers;
 
@@ -8,7 +8,7 @@ namespace NetworkInspector.FrameBuilder.Tests.Layers;
 /// </summary>
 internal sealed class IcmpV4TimeExceededLayerTests
 {
-    private static byte[] WriteHeader(IcmpV4TimeExceededLayer layer)
+    private static byte[] _WriteHeader(IcmpV4TimeExceededLayer layer)
     {
         byte[] buf = new byte[layer.HeaderSize];
         layer.WriteHeader(buf.AsSpan());
@@ -22,7 +22,7 @@ internal sealed class IcmpV4TimeExceededLayerTests
     {
         // RFC 792: Time Exceeded is ICMP type 11.
         IcmpV4TimeExceededLayer layer = new();
-        byte[] buf = WriteHeader(layer);
+        byte[] buf = _WriteHeader(layer);
 
         await Assert.That(buf[0]).IsEqualTo((byte)11);
     }
@@ -32,7 +32,7 @@ internal sealed class IcmpV4TimeExceededLayerTests
     {
         // The default code is CodeTtlExceeded (0).
         IcmpV4TimeExceededLayer layer = new();
-        byte[] buf = WriteHeader(layer);
+        byte[] buf = _WriteHeader(layer);
 
         await Assert.That(buf[1]).IsEqualTo(IcmpV4TimeExceededLayer.CodeTtlExceeded);
     }
@@ -42,7 +42,7 @@ internal sealed class IcmpV4TimeExceededLayerTests
     {
         // CodeReassemblyTimeout = 1; must be serialized to byte 1.
         IcmpV4TimeExceededLayer layer = new(IcmpV4TimeExceededLayer.CodeReassemblyTimeout);
-        byte[] buf = WriteHeader(layer);
+        byte[] buf = _WriteHeader(layer);
 
         await Assert.That(buf[1]).IsEqualTo(IcmpV4TimeExceededLayer.CodeReassemblyTimeout);
     }
@@ -52,7 +52,7 @@ internal sealed class IcmpV4TimeExceededLayerTests
     {
         // RFC 792: the unused field (bytes 4–7) must be zero for Time Exceeded.
         IcmpV4TimeExceededLayer layer = new();
-        byte[] buf = WriteHeader(layer);
+        byte[] buf = _WriteHeader(layer);
 
         await Assert.That(buf[4]).IsEqualTo((byte)0);
         await Assert.That(buf[5]).IsEqualTo((byte)0);
@@ -70,7 +70,7 @@ internal sealed class IcmpV4TimeExceededLayerTests
         // WriteHeader always leaves the checksum field at zero; it is patched later
         // by ApplyPostFix so that the computation covers the complete ICMP message.
         IcmpV4TimeExceededLayer layer = new();
-        byte[] buf = WriteHeader(layer);
+        byte[] buf = _WriteHeader(layer);
 
         await Assert.That(buf[2]).IsEqualTo((byte)0).Because("checksum high byte must be 0 before PostFix");
         await Assert.That(buf[3]).IsEqualTo((byte)0).Because("checksum low byte must be 0 before PostFix");
@@ -101,7 +101,7 @@ internal sealed class IcmpV4TimeExceededLayerTests
     {
         // When an explicit checksum is supplied, ApplyPostFix must write it without
         // computing anything — this allows crafting intentionally invalid packets in tests.
-        IcmpV4TimeExceededLayer layer = new(checksum: FB.Auto<ushort>.Explicit(0xDEAD));
+        IcmpV4TimeExceededLayer layer = new(checksum: FB.Auto.Explicit((ushort)0xDEAD));
         byte[] frame = new byte[8];
         layer.WriteHeader(frame.AsSpan());
         PostFixContext ctx = default;

@@ -92,7 +92,7 @@ internal sealed class AscHeader
 
         if (line.Length >= 2 && line[0] == (byte)'/' && line[1] == (byte)'/')
         {
-            ParseComment(line);
+            _ParseComment(line);
             return true;
         }
 
@@ -100,7 +100,7 @@ internal sealed class AscHeader
         if (AscLineClassifier.StartsWithAsciiIgnoreCase(line, "date "u8))
         {
             ReadOnlySpan<byte> datePart = AscTokenizerBytes.TrimAscii(line[5..]);
-            DateString = ByteSpanToString(datePart);
+            DateString = _ByteSpanToString(datePart);
             StartTimeEpoch = AscDateParser.TryParseToEpoch(DateString, TimestampTimeZone);
             return true;
         }
@@ -108,12 +108,12 @@ internal sealed class AscHeader
         // "base hex|dec [timestamps absolute|relative]"
         if (AscLineClassifier.StartsWithAsciiIgnoreCase(line, "base "u8))
         {
-            ParseBaseLine(line);
+            _ParseBaseLine(line);
             return true;
         }
 
         // "[no] internal events logged"
-        if (EndsWithAsciiIgnoreCase(line, "internal events logged"u8))
+        if (_EndsWithAsciiIgnoreCase(line, "internal events logged"u8))
         {
             InternalEventsLogged = !AscLineClassifier.StartsWithAsciiIgnoreCase(line, "no "u8);
             return true;
@@ -125,7 +125,7 @@ internal sealed class AscHeader
             ReadOnlySpan<byte> rest = AscTokenizerBytes.TrimStartAscii(line[18..]);
             if (!rest.IsEmpty)
             {
-                string triggerDate = ByteSpanToString(rest);
+                string triggerDate = _ByteSpanToString(rest);
                 double triggerEpoch = AscDateParser.TryParseToEpoch(triggerDate, TimestampTimeZone);
                 if (triggerEpoch > 0)
                 {
@@ -149,7 +149,7 @@ internal sealed class AscHeader
     /// <summary>
     /// Parses the <c>base</c> line: <c>base hex|dec [timestamps absolute|relative]</c>.
     /// </summary>
-    private void ParseBaseLine(ReadOnlySpan<byte> line)
+    private void _ParseBaseLine(ReadOnlySpan<byte> line)
     {
         // Skip "base " and any additional leading whitespace
         ReadOnlySpan<byte> rest = AscTokenizerBytes.TrimStartAscii(line[5..]);
@@ -189,13 +189,13 @@ internal sealed class AscHeader
     /// <summary>
     /// Parses a <c>//</c> comment line for version information.
     /// </summary>
-    private void ParseComment(ReadOnlySpan<byte> line)
+    private void _ParseComment(ReadOnlySpan<byte> line)
     {
         // Skip "//" and leading whitespace
         ReadOnlySpan<byte> content = AscTokenizerBytes.TrimStartAscii(line[2..]);
         if (AscLineClassifier.StartsWithAsciiIgnoreCase(content, "version "u8))
         {
-            Version = ByteSpanToString(AscTokenizerBytes.TrimAscii(content[8..]));
+            Version = _ByteSpanToString(AscTokenizerBytes.TrimAscii(content[8..]));
         }
     }
 
@@ -206,7 +206,7 @@ internal sealed class AscHeader
     /// <summary>
     /// Case-insensitive ASCII suffix check on byte spans.
     /// </summary>
-    private static bool EndsWithAsciiIgnoreCase(ReadOnlySpan<byte> span, ReadOnlySpan<byte> suffix)
+    private static bool _EndsWithAsciiIgnoreCase(ReadOnlySpan<byte> span, ReadOnlySpan<byte> suffix)
     {
         if (span.Length < suffix.Length)
         {
@@ -221,7 +221,7 @@ internal sealed class AscHeader
     /// Called only for header-level strings (date, version) that are allocated once per file open
     /// — the one-time allocation is acceptable here.
     /// </summary>
-    private static string ByteSpanToString(ReadOnlySpan<byte> span) =>
+    private static string _ByteSpanToString(ReadOnlySpan<byte> span) =>
         System.Text.Encoding.ASCII.GetString(span);
 
     #endregion

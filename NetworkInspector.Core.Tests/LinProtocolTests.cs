@@ -10,7 +10,7 @@ internal sealed class LinProtocolTests
     /// <summary>
     /// Builds a stack and parses a LIN frame (link type 212).
     /// </summary>
-    private static (Stack Stack, Packet Packet) BuildAndParse(byte[] frameData)
+    private static (Stack Stack, Packet Packet) _BuildAndParse(byte[] frameData)
     {
         using SettingsManager settingsManager = new();
         StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
@@ -34,7 +34,7 @@ internal sealed class LinProtocolTests
     {
         byte[] frameData = FrameBuilders.GenerateLinFrame(pid: 0x3C);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? pidField = stack.GetFieldId("lin.pid");
@@ -52,7 +52,7 @@ internal sealed class LinProtocolTests
         // PID = 0x3C → Frame ID = 0x3C & 0x3F = 0x3C
         byte[] frameData = FrameBuilders.GenerateLinFrame(pid: 0x3C);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? idField = stack.GetFieldId("lin.id");
@@ -70,7 +70,7 @@ internal sealed class LinProtocolTests
         // PID = 0xFC → Parity = (0xFC >> 6) & 0x03 = 3
         byte[] frameData = FrameBuilders.GenerateLinFrame(pid: 0xFC);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? parityField = stack.GetFieldId("lin.parity");
@@ -88,7 +88,7 @@ internal sealed class LinProtocolTests
         byte[] payload = [0x11, 0x22, 0x33, 0x44];
         byte[] frameData = FrameBuilders.GenerateLinFrame(payload: payload);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? lengthField = stack.GetFieldId("lin.length");
@@ -105,7 +105,7 @@ internal sealed class LinProtocolTests
     {
         byte[] frameData = FrameBuilders.GenerateLinFrame(checksum: 0xAB);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? checksumField = stack.GetFieldId("lin.checksum");
@@ -122,7 +122,7 @@ internal sealed class LinProtocolTests
     {
         byte[] shortFrame = [0x00, 0x3C]; // Only 2 bytes
 
-        (Stack stack, Packet packet) = BuildAndParse(shortFrame);
+        (Stack stack, Packet packet) = _BuildAndParse(shortFrame);
         using (stack)
         {
             FieldId? pidField = stack.GetFieldId("lin.pid");
@@ -168,7 +168,7 @@ internal sealed class LinProtocolTests
         // Default frame generator uses checksum type 2 (enhanced)
         byte[] frameData = FrameBuilders.GenerateLinFrame();
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? field = stack.GetFieldId("lin.checksum_type");
@@ -189,7 +189,7 @@ internal sealed class LinProtocolTests
         // So parity = 0b00, PID upper bits = 0 → parity is correct for 0x3C
         byte[] frameData = FrameBuilders.GenerateLinFrame(pid: 0x3C);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? field = stack.GetFieldId("lin.parity.valid");
@@ -212,7 +212,7 @@ internal sealed class LinProtocolTests
         // Use 0x01 (parity=0b00) which is wrong
         byte[] frameData = FrameBuilders.GenerateLinFrame(pid: 0x01);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? field = stack.GetFieldId("lin.parity.valid");

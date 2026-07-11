@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Exporters.Json;
 
@@ -13,22 +13,22 @@ namespace NetworkInspector.Exporters.Json;
 internal static class CompactWriter
 {
     // Packet-level keys
-    private static ReadOnlySpan<byte> KeyId => "\"ID\":"u8;
-    private static ReadOnlySpan<byte> KeyTs => ",\"TS\":"u8;
-    private static ReadOnlySpan<byte> KeyIn => ",\"IN\":"u8;
-    private static ReadOnlySpan<byte> KeySf => ",\"SF\":"u8;
-    private static ReadOnlySpan<byte> KeyCh => ",\"CH\":["u8;
+    private static ReadOnlySpan<byte> _KeyId => "\"ID\":"u8;
+    private static ReadOnlySpan<byte> _KeyTs => ",\"TS\":"u8;
+    private static ReadOnlySpan<byte> _KeyIn => ",\"IN\":"u8;
+    private static ReadOnlySpan<byte> _KeySf => ",\"SF\":"u8;
+    private static ReadOnlySpan<byte> _KeyCh => ",\"CH\":["u8;
 
     // Field-level keys
-    private static ReadOnlySpan<byte> FieldKeyFi => "\"FI\":"u8;
-    private static ReadOnlySpan<byte> FieldKeyNa => ",\"NA\":"u8;
-    private static ReadOnlySpan<byte> FieldKeyUi => ",\"UI\":"u8;
-    private static ReadOnlySpan<byte> FieldKeyTy => ",\"TY\":"u8;
-    private static ReadOnlySpan<byte> FieldKeyVa => ",\"VA\":"u8;
-    private static ReadOnlySpan<byte> FieldKeyCr => ",\"CR\":"u8;
-    private static ReadOnlySpan<byte> FieldKeyCt => ",\"CT\":"u8;
-    private static ReadOnlySpan<byte> FieldKeySf => ",\"SF\":"u8;
-    private static ReadOnlySpan<byte> FieldKeyCh => ",\"CH\":["u8;
+    private static ReadOnlySpan<byte> _FieldKeyFi => "\"FI\":"u8;
+    private static ReadOnlySpan<byte> _FieldKeyNa => ",\"NA\":"u8;
+    private static ReadOnlySpan<byte> _FieldKeyUi => ",\"UI\":"u8;
+    private static ReadOnlySpan<byte> _FieldKeyTy => ",\"TY\":"u8;
+    private static ReadOnlySpan<byte> _FieldKeyVa => ",\"VA\":"u8;
+    private static ReadOnlySpan<byte> _FieldKeyCr => ",\"CR\":"u8;
+    private static ReadOnlySpan<byte> _FieldKeyCt => ",\"CT\":"u8;
+    private static ReadOnlySpan<byte> _FieldKeySf => ",\"SF\":"u8;
+    private static ReadOnlySpan<byte> _FieldKeyCh => ",\"CH\":["u8;
 
     /// <summary>
     /// Writes a single packet in compact JSON format.
@@ -42,11 +42,11 @@ internal static class CompactWriter
         buffer.WriteByte((byte)'{');
 
         // ID — always present
-        buffer.Write(KeyId);
+        buffer.Write(_KeyId);
         JsonHelpers.WriteI64(ref buffer, packet.Id.Value);
 
         // TS — always present
-        buffer.Write(KeyTs);
+        buffer.Write(_KeyTs);
         JsonHelpers.WriteI64(ref buffer, packet.Timestamp.AsNanos);
 
         // IN — info string with same-as-previous optimization
@@ -61,7 +61,7 @@ internal static class CompactWriter
             }
             else
             {
-                buffer.Write(KeyIn);
+                buffer.Write(_KeyIn);
                 JsonHelpers.WriteJsonString(ref buffer, info);
             }
         }
@@ -70,7 +70,7 @@ internal static class CompactWriter
         // SF — emit packet same-as-previous flags if any
         if (packetSameFlags != 0)
         {
-            buffer.Write(KeySf);
+            buffer.Write(_KeySf);
             JsonHelpers.WriteU64(ref buffer, packetSameFlags);
         }
 
@@ -78,7 +78,7 @@ internal static class CompactWriter
         Field root = packet.RootField();
         if (root.HasChildren)
         {
-            buffer.Write(KeyCh);
+            buffer.Write(_KeyCh);
             bool first = true;
             foreach (Field child in root.Children())
             {
@@ -87,7 +87,7 @@ internal static class CompactWriter
                     buffer.WriteByte((byte)',');
                 }
                 first = false;
-                WriteFieldCompact(child, ref buffer, state);
+                _WriteFieldCompact(child, ref buffer, state);
             }
             buffer.WriteByte((byte)']');
         }
@@ -96,14 +96,14 @@ internal static class CompactWriter
     }
 
     /// <summary>Writes a single field in compact format with deduplication and same-as-previous.</summary>
-    private static void WriteFieldCompact(Field field, ref PooledBuffer buffer, JsonExporterState state)
+    private static void _WriteFieldCompact(Field field, ref PooledBuffer buffer, JsonExporterState state)
     {
         buffer.WriteByte((byte)'{');
 
         int fieldIdValue = field.FieldId.Value;
 
         // FI — always present
-        buffer.Write(FieldKeyFi);
+        buffer.Write(_FieldKeyFi);
         JsonHelpers.WriteI64(ref buffer, fieldIdValue);
 
         // NA, UI, TY — only on first occurrence via bitmask
@@ -113,18 +113,18 @@ internal static class CompactWriter
             FieldInfo? info = field.FieldInfo;
             if (info is not null)
             {
-                buffer.Write(FieldKeyNa);
+                buffer.Write(_FieldKeyNa);
                 JsonHelpers.WriteJsonString(ref buffer, info.Name);
-                buffer.Write(FieldKeyUi);
+                buffer.Write(_FieldKeyUi);
                 JsonHelpers.WriteJsonString(ref buffer, info.UiName);
-                buffer.Write(FieldKeyTy);
+                buffer.Write(_FieldKeyTy);
                 JsonHelpers.WriteU64(ref buffer, (ulong)info.FieldType);
             }
         }
 
         // Compute same-as-previous for field value, value custom text, and custom text
         FieldValue value = field.Value;
-        string? valueStr = value.Type != FieldType.None ? FormatFieldValue(value) : null;
+        string? valueStr = value.Type != FieldType.None ? _FormatFieldValue(value) : null;
         string? valueCustomRepresentation = !value.CustomRepresentation.IsNull ? value.CustomRepresentation.AsString : null;
         LazyString customText = field.CustomText;
         string? customTextStr = !customText.IsNull ? customText.AsString : null;
@@ -137,7 +137,7 @@ internal static class CompactWriter
         {
             if ((fieldSameFlags & SameFlags.FieldSameValue) == 0)
             {
-                buffer.Write(FieldKeyVa);
+                buffer.Write(_FieldKeyVa);
                 JsonHelpers.WriteFieldValue(ref buffer, value);
             }
         }
@@ -145,28 +145,28 @@ internal static class CompactWriter
         // CR — custom representation text of the field value
         if (valueCustomRepresentation is not null && (fieldSameFlags & SameFlags.FieldSameCustomRepresentation) == 0)
         {
-            buffer.Write(FieldKeyCr);
+            buffer.Write(_FieldKeyCr);
             JsonHelpers.WriteJsonString(ref buffer, valueCustomRepresentation);
         }
 
         // CT — custom text
         if (customTextStr is not null && (fieldSameFlags & SameFlags.FieldSameCustomText) == 0)
         {
-            buffer.Write(FieldKeyCt);
+            buffer.Write(_FieldKeyCt);
             JsonHelpers.WriteJsonString(ref buffer, customTextStr);
         }
 
         // SF — field same flags
         if (fieldSameFlags != 0)
         {
-            buffer.Write(FieldKeySf);
+            buffer.Write(_FieldKeySf);
             JsonHelpers.WriteU64(ref buffer, fieldSameFlags);
         }
 
         // CH — children (recursive)
         if (field.HasChildren)
         {
-            buffer.Write(FieldKeyCh);
+            buffer.Write(_FieldKeyCh);
             bool first = true;
             foreach (Field child in field.Children())
             {
@@ -175,7 +175,7 @@ internal static class CompactWriter
                     buffer.WriteByte((byte)',');
                 }
                 first = false;
-                WriteFieldCompact(child, ref buffer, state);
+                _WriteFieldCompact(child, ref buffer, state);
             }
             buffer.WriteByte((byte)']');
         }
@@ -186,5 +186,5 @@ internal static class CompactWriter
     /// <summary>
     /// Formats a field value to a string representation for same-as-previous comparison.
     /// </summary>
-    private static string? FormatFieldValue(FieldValue value) => FieldValueFormatter.Format(value);
+    private static string? _FormatFieldValue(FieldValue value) => FieldValueFormatter.Format(value);
 }

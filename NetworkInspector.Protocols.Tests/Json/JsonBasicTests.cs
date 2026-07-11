@@ -21,7 +21,7 @@ internal sealed class JsonBasicTests
     /// Builds an Ethernet + IPv4 + TCP + HTTP POST frame carrying a JSON body.
     /// The HTTP Content-Type is "application/json" to trigger JSON dispatch.
     /// </summary>
-    private static byte[] BuildJsonHttpFrame(string jsonBody)
+    private static byte[] _BuildJsonHttpFrame(string jsonBody)
     {
         string httpMessage =
             $"POST /api HTTP/1.1\r\n" +
@@ -45,7 +45,7 @@ internal sealed class JsonBasicTests
     [Test]
     public async Task Parse_Json_SimpleObject_KeyPresent()
     {
-        byte[] frame = BuildJsonHttpFrame("{\"name\":\"John\"}");
+        byte[] frame = _BuildJsonHttpFrame("{\"name\":\"John\"}");
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -59,7 +59,7 @@ internal sealed class JsonBasicTests
     [Test]
     public async Task Parse_Json_SimpleObject_KeyValue()
     {
-        byte[] frame = BuildJsonHttpFrame("{\"name\":\"John\"}");
+        byte[] frame = _BuildJsonHttpFrame("{\"name\":\"John\"}");
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -71,7 +71,7 @@ internal sealed class JsonBasicTests
     [Test]
     public async Task Parse_Json_SimpleObject_StringValue()
     {
-        byte[] frame = BuildJsonHttpFrame("{\"name\":\"John\"}");
+        byte[] frame = _BuildJsonHttpFrame("{\"name\":\"John\"}");
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -83,7 +83,7 @@ internal sealed class JsonBasicTests
     [Test]
     public async Task Parse_Json_Object_NumberValue()
     {
-        byte[] frame = BuildJsonHttpFrame("{\"age\":30}");
+        byte[] frame = _BuildJsonHttpFrame("{\"age\":30}");
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -95,7 +95,7 @@ internal sealed class JsonBasicTests
     [Test]
     public async Task Parse_Json_Object_ContainerPresent()
     {
-        byte[] frame = BuildJsonHttpFrame("{\"x\":1}");
+        byte[] frame = _BuildJsonHttpFrame("{\"x\":1}");
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -108,7 +108,7 @@ internal sealed class JsonBasicTests
     [Test]
     public async Task Parse_Json_Object_ObjectFieldPresent()
     {
-        byte[] frame = BuildJsonHttpFrame("{\"x\":1}");
+        byte[] frame = _BuildJsonHttpFrame("{\"x\":1}");
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -120,7 +120,7 @@ internal sealed class JsonBasicTests
     [Test]
     public async Task Parse_Json_Object_MemberFieldPresent()
     {
-        byte[] frame = BuildJsonHttpFrame("{\"x\":1}");
+        byte[] frame = _BuildJsonHttpFrame("{\"x\":1}");
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -136,7 +136,7 @@ internal sealed class JsonBasicTests
     [Test]
     public async Task Parse_Json_BooleanTrue_Present()
     {
-        byte[] frame = BuildJsonHttpFrame("{\"active\":true}");
+        byte[] frame = _BuildJsonHttpFrame("{\"active\":true}");
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -148,7 +148,7 @@ internal sealed class JsonBasicTests
     [Test]
     public async Task Parse_Json_BooleanFalse_Present()
     {
-        byte[] frame = BuildJsonHttpFrame("{\"deleted\":false}");
+        byte[] frame = _BuildJsonHttpFrame("{\"deleted\":false}");
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -160,7 +160,7 @@ internal sealed class JsonBasicTests
     [Test]
     public async Task Parse_Json_Null_Present()
     {
-        byte[] frame = BuildJsonHttpFrame("{\"ptr\":null}");
+        byte[] frame = _BuildJsonHttpFrame("{\"ptr\":null}");
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -176,7 +176,7 @@ internal sealed class JsonBasicTests
     [Test]
     public async Task Parse_Json_Array_ArrayFieldPresent()
     {
-        byte[] frame = BuildJsonHttpFrame("[1,2,3]");
+        byte[] frame = _BuildJsonHttpFrame("[1,2,3]");
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -188,7 +188,7 @@ internal sealed class JsonBasicTests
     [Test]
     public async Task Parse_Json_Array_NumberValue()
     {
-        byte[] frame = BuildJsonHttpFrame("[42]");
+        byte[] frame = _BuildJsonHttpFrame("[42]");
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
@@ -206,7 +206,7 @@ internal sealed class JsonBasicTests
     {
         // Empty JSON body (length = 0)
         // HTTP parses, but JSON is not dispatched for empty payload
-        byte[] frame = BuildJsonHttpFrame(string.Empty);
+        byte[] frame = _BuildJsonHttpFrame(string.Empty);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {

@@ -29,7 +29,7 @@ namespace NetworkInspector.FrameBuilder;
 public readonly struct LinuxSll2Layer : IStatelessLayer, IRootLayer, IInteriorLayer, IPseudoHeaderIndependent, IConsumesNextProtocolValue<EtherTypeKind>
 {
     /// <summary>EtherType field offset within the SLL2 header.</summary>
-    private const int EtherTypeOffset = 0;
+    private const int _EtherTypeOffset = 0;
 
     private readonly uint _IfIndex;
     private readonly ushort _HaType;
@@ -117,11 +117,11 @@ public readonly struct LinuxSll2Layer : IStatelessLayer, IRootLayer, IInteriorLa
 
     /// <inheritdoc />
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public void PatchNextProtocol(scoped Span<byte> frame, int myOffset, ushort next)
+    public void PatchNextProtocol(scoped Span<byte> frame, int myOffset, ushort nextProtocol)
     {
         if (!_EtherTypeIsExplicit)
         {
-            BinaryPrimitives.WriteUInt16BigEndian(frame.Slice(myOffset + EtherTypeOffset, 2), next);
+            BinaryPrimitives.WriteUInt16BigEndian(frame.Slice(myOffset + _EtherTypeOffset, 2), nextProtocol);
         }
     }
 

@@ -61,7 +61,7 @@ public readonly struct PostParserId(int value) : IEquatable<PostParserId>, IComp
     public override bool Equals(object? obj) => obj is PostParserId other && Equals(other);
 
     /// <inheritdoc/>
-    public override string ToString() => _Value.ToString();
+    public override string ToString() => _Value.ToString(CultureInfo.InvariantCulture);
 
     #endregion
 

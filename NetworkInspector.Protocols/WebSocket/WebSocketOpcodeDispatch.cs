@@ -4,7 +4,7 @@ namespace NetworkInspector.Protocols;
 
 public sealed partial class WebSocketProtocol
 {
-    #region Eager opcode-based payload dispatch (DispatchWebSocketPayloads + helpers)
+    #region Eager opcode-based payload dispatch (_DispatchWebSocketPayloads + helpers)
 
     /// <summary>
     /// Eagerly walks every RFC 6455 frame in <paramref name="wsData"/> and dispatches the
@@ -22,7 +22,7 @@ public sealed partial class WebSocketProtocol
     /// <para>Every length/offset is bounds-checked before slicing; a truncated frame ends the
     /// walk rather than producing an out-of-range slice.</para>
     /// </remarks>
-    private ParseResult DispatchWebSocketPayloads(in MutField container, ReadOnlyMemory<byte> wsData, in ParseContext context)
+    private ParseResult _DispatchWebSocketPayloads(in MutField container, ReadOnlyMemory<byte> wsData, in ParseContext context)
     {
         ReadOnlySpan<byte> span = wsData.Span;
         int offset = 0;
@@ -87,7 +87,7 @@ public sealed partial class WebSocketProtocol
             if (payloadLen > 0 && (opcode == 1 || opcode == 2))
             {
                 ReadOnlyMemory<byte> payloadData = masked
-                    ? UnmaskPayload(span.Slice(offset, payloadLen), maskingKey)
+                    ? _UnmaskPayload(span.Slice(offset, payloadLen), maskingKey)
                     : wsData.Slice(offset, payloadLen);
 
                 // RFC 7692: inflate per-message compressed payloads before dispatch so the
@@ -95,7 +95,7 @@ public sealed partial class WebSocketProtocol
                 ReadOnlyMemory<byte> effectivePayload = payloadData;
                 if ((rsv & 0x04) != 0)
                 {
-                    ReadOnlyMemory<byte>? decompressed = DecompressPermessageDeflate(payloadData);
+                    ReadOnlyMemory<byte>? decompressed = _DecompressPermessageDeflate(payloadData);
                     if (decompressed is not null)
                     {
                         effectivePayload = decompressed.Value;
@@ -103,8 +103,8 @@ public sealed partial class WebSocketProtocol
                 }
 
                 ParseResult dispatchResult = opcode == 1
-                    ? DispatchTextPayload(in container, effectivePayload, in context)
-                    : DispatchBinaryPayload(in container, effectivePayload, in context);
+                    ? _DispatchTextPayload(in container, effectivePayload, in context)
+                    : _DispatchBinaryPayload(in container, effectivePayload, in context);
                 if (dispatchResult.IsError)
                 {
                     return dispatchResult;
@@ -121,7 +121,7 @@ public sealed partial class WebSocketProtocol
     /// Dispatches a text-frame payload (opcode 1): first the <c>ws.port</c> table (port-based
     /// sub-protocol override), then a fallback to the registered <c>text</c> protocol.
     /// </summary>
-    private ParseResult DispatchTextPayload(in MutField container, ReadOnlyMemory<byte> payloadData, in ParseContext context)
+    private ParseResult _DispatchTextPayload(in MutField container, ReadOnlyMemory<byte> payloadData, in ParseContext context)
     {
         ParseResult portResult = container.TryCallNextProtocolU64(_PortTableId, 0, payloadData, in context);
         if (portResult.IsError)
@@ -133,14 +133,19 @@ public sealed partial class WebSocketProtocol
             return 0;
         }
 
-        return _TextProtocolId.IsValid ? container.CallProtocol(_TextProtocolId, payloadData, in context) : 0;
+        if (_TextProtocolId.IsValid)
+        {
+            return container.CallProtocol(_TextProtocolId, payloadData, in context);
+        }
+
+        return 0;
     }
 
     /// <summary>
     /// Dispatches a binary-frame payload (opcode 2): first the <c>ws.port</c> table (port-based
     /// sub-protocol override), then a fallback to the registered <c>data</c> protocol.
     /// </summary>
-    private ParseResult DispatchBinaryPayload(in MutField container, ReadOnlyMemory<byte> payloadData, in ParseContext context)
+    private ParseResult _DispatchBinaryPayload(in MutField container, ReadOnlyMemory<byte> payloadData, in ParseContext context)
     {
         ParseResult portResult = container.TryCallNextProtocolU64(_PortTableId, 0, payloadData, in context);
         if (portResult.IsError)
@@ -152,14 +157,19 @@ public sealed partial class WebSocketProtocol
             return 0;
         }
 
-        return _DataProtocolId.IsValid ? container.CallProtocol(_DataProtocolId, payloadData, in context) : 0;
+        if (_DataProtocolId.IsValid)
+        {
+            return container.CallProtocol(_DataProtocolId, payloadData, in context);
+        }
+
+        return 0;
     }
 
     /// <summary>
     /// Unmasks a WebSocket payload into a fresh buffer using the 4-byte cyclic XOR mask
     /// (RFC 6455 §5.3). <c>GC.AllocateUninitializedArray</c> avoids zeroing since every byte is written.
     /// </summary>
-    private static ReadOnlyMemory<byte> UnmaskPayload(ReadOnlySpan<byte> maskedPayload, uint maskingKey)
+    private static ReadOnlyMemory<byte> _UnmaskPayload(ReadOnlySpan<byte> maskedPayload, uint maskingKey)
     {
         byte[] unmasked = GC.AllocateUninitializedArray<byte>(maskedPayload.Length);
 

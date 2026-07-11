@@ -13,7 +13,7 @@ namespace NetworkInspector.FrameBuilder;
 public struct TcpOptionsBuilder
 {
     /// <summary>Maximum TCP option bytes (TCP header max 60 bytes minus 20-byte base).</summary>
-    private const int MaxOptionBytes = 40;
+    private const int _MaxOptionBytes = 40;
 
     private byte[]? _Buffer;
     private int _Length;
@@ -23,8 +23,8 @@ public struct TcpOptionsBuilder
     /// <exception cref="InvalidOperationException">Thrown when the option area would exceed 40 bytes.</exception>
     public void Mss(ushort mss)
     {
-        EnsureBuffer();
-        EnsureCapacity(4);
+        _EnsureBuffer();
+        _EnsureCapacity(4);
         _Buffer![_Length++] = 0x02; // option kind = MSS
         _Buffer![_Length++] = 0x04; // length = 4
         BinaryPrimitives.WriteUInt16BigEndian(_Buffer.AsSpan(_Length, 2), mss);
@@ -39,8 +39,8 @@ public struct TcpOptionsBuilder
     /// <exception cref="InvalidOperationException">Thrown when the option area would exceed 40 bytes.</exception>
     public void SynOptions()
     {
-        EnsureBuffer();
-        EnsureCapacity(22);
+        _EnsureBuffer();
+        _EnsureCapacity(22);
         // MSS: kind=2, len=4, value=1460
         Mss(1460);
         // SACKPermitted: kind=4, len=2
@@ -88,7 +88,13 @@ public struct TcpOptionsBuilder
     }
 
     /// <summary>Allocates the backing buffer on first use.</summary>
-    private void EnsureBuffer() => _Buffer ??= new byte[MaxOptionBytes];
+    private void _EnsureBuffer()
+    {
+        if (_Buffer is null)
+        {
+            _Buffer = new byte[_MaxOptionBytes];
+        }
+    }
 
     /// <summary>
     /// Throws <see cref="InvalidOperationException"/> when appending
@@ -97,12 +103,12 @@ public struct TcpOptionsBuilder
     /// option-emitting method so callers see a clear error instead of an
     /// opaque <see cref="IndexOutOfRangeException"/>.
     /// </summary>
-    private readonly void EnsureCapacity(int additional)
+    private readonly void _EnsureCapacity(int additional)
     {
-        if (_Length + additional > MaxOptionBytes)
+        if (_Length + additional > _MaxOptionBytes)
         {
             throw new InvalidOperationException(
-                $"TCP options would exceed the maximum of {MaxOptionBytes} bytes (current {_Length}, adding {additional}).");
+                $"TCP options would exceed the maximum of {_MaxOptionBytes} bytes (current {_Length}, adding {additional}).");
         }
     }
 }

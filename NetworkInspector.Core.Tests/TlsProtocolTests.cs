@@ -11,7 +11,7 @@ internal sealed class TlsProtocolTests
     /// <summary>
     /// Builds a full stack with standard protocols and parses the given frame data.
     /// </summary>
-    private static (Stack Stack, Packet Packet) BuildAndParse(byte[] frameData)
+    private static (Stack Stack, Packet Packet) _BuildAndParse(byte[] frameData)
     {
         using SettingsManager settingsManager = new();
         StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
@@ -37,7 +37,7 @@ internal sealed class TlsProtocolTests
     {
         byte[] frameData = FrameBuilders.GenerateTlsClientHelloFrame();
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             // TLS protocol detected
@@ -78,7 +78,7 @@ internal sealed class TlsProtocolTests
             serverName: "test.example.com",
             tlsVersion: 0x0303);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             // Handshake type = 1 (Client Hello)
@@ -111,7 +111,7 @@ internal sealed class TlsProtocolTests
         ushort[] suites = [0x1301, 0x1302, 0xC02F];
         byte[] frameData = FrameBuilders.GenerateTlsClientHelloFrame(cipherSuites: suites);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             // Cipher suites length = 6 (3 suites x 2 bytes)
@@ -136,7 +136,7 @@ internal sealed class TlsProtocolTests
         byte[] frameData = FrameBuilders.GenerateTlsClientHelloFrame(
             serverName: "www.github.com");
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? sniField = stack.GetFieldId("tls.handshake.extensions.server_name");
@@ -155,7 +155,7 @@ internal sealed class TlsProtocolTests
             selectedCipherSuite: 0x1301,
             tlsVersion: 0x0303);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             // Handshake type = 2 (Server Hello)
@@ -205,7 +205,7 @@ internal sealed class TlsProtocolTests
         System.Buffers.Binary.BinaryPrimitives.WriteUInt16BigEndian(frame.AsSpan(36), 443);
         frame[46] = 0x50; // TCP data offset
 
-        (Stack stack, Packet packet) = BuildAndParse(frame);
+        (Stack stack, Packet packet) = _BuildAndParse(frame);
         using (stack)
         {
             await Assert.That(packet.IsFinalized).IsTrue();

@@ -14,13 +14,13 @@ namespace NetworkInspector.Sessions.Cache;
 ///
 /// <para>
 /// <b>Data layout:</b>
-/// <c>_Chunks[packetId &gt;&gt; ChunkShift][packetId &amp; ChunkMask]</c>
+/// <c>_Chunks[packetId &gt;&gt; _ChunkShift][packetId &amp; _ChunkMask]</c>
 /// Each slot is a packed <c>long</c>:
 /// <list type="bullet">
 ///   <item>bits 63..32 → <c>FrameId.Value</c> (cast via uint to avoid sign-extension)</item>
 ///   <item>bits 31..0  → <c>FrameSourceId.Value</c></item>
 /// </list>
-/// Unset slots hold <see cref="UnsetEntry"/> (−1L = both IDs invalid).
+/// Unset slots hold <see cref="_UnsetEntry"/> (−1L = both IDs invalid).
 /// </para>
 ///
 /// <para>
@@ -50,18 +50,18 @@ namespace NetworkInspector.Sessions.Cache;
 internal sealed class PacketToFrameMap
 {
     // 2^16 = 65 536 entries per chunk (512 KB per inner array of long).
-    private const int ChunkShift = 16;
-    private const int ChunkSize = 1 << ChunkShift;
-    private const int ChunkMask = ChunkSize - 1;
-    private const int MaxChunks = 2048; // 2048 × 65 536 = 134 M packets
-    private const long UnsetEntry = -1L; // both IDs packed as -1 (Invalid)
+    private const int _ChunkShift = 16;
+    private const int _ChunkSize = 1 << _ChunkShift;
+    private const int _ChunkMask = _ChunkSize - 1;
+    private const int _MaxChunks = 2048; // 2048 × 65 536 = 134 M packets
+    private const long _UnsetEntry = -1L; // both IDs packed as -1 (Invalid)
 
     /// <summary>Maximum number of packets the map can hold (2048 × 65 536 = 134 217 728).</summary>
-    internal const int MaxEntries = MaxChunks * ChunkSize;
+    internal const int MaxEntries = _MaxChunks * _ChunkSize;
 
     // Outer reference array: 2048 × 8 bytes = 16 KB, always allocated.
     // Inner arrays: 65 536 × 8 bytes = 512 KB each, lazily allocated.
-    private readonly long[]?[] _Chunks = new long[]?[MaxChunks];
+    private readonly long[]?[] _Chunks = new long[]?[_MaxChunks];
 
     /// <summary>
     /// Records the mapping from <paramref name="packetId"/> to the frame that produced it.
@@ -71,7 +71,7 @@ internal sealed class PacketToFrameMap
     /// <returns>
     /// <see langword="true"/> if the mapping was recorded successfully;
     /// <see langword="false"/> if the <paramref name="packetId"/> is invalid or
-    /// exceeds the maximum capacity (<see cref="MaxChunks"/> × <see cref="ChunkSize"/>).
+    /// exceeds the maximum capacity (<see cref="_MaxChunks"/> × <see cref="_ChunkSize"/>).
     /// </returns>
     internal bool Record(PacketId packetId, FrameId frameId, FrameSourceId sourceId)
     {
@@ -80,11 +80,11 @@ internal sealed class PacketToFrameMap
             return false;
         }
 
-        int chunkIndex = packetId.Value >> ChunkShift;
-        int slotIndex = packetId.Value & ChunkMask;
+        int chunkIndex = packetId.Value >> _ChunkShift;
+        int slotIndex = packetId.Value & _ChunkMask;
 
         // Guard against exceeding the fixed chunk array capacity.
-        if (chunkIndex >= MaxChunks)
+        if (chunkIndex >= _MaxChunks)
         {
             return false;
         }
@@ -92,9 +92,9 @@ internal sealed class PacketToFrameMap
         long[]? chunk = Volatile.Read(ref _Chunks[chunkIndex]);
         if (chunk is null)
         {
-            // Lazily allocate: fill with UnsetEntry so readers never observe stale zeros.
-            long[] newChunk = new long[ChunkSize];
-            Array.Fill(newChunk, UnsetEntry);
+            // Lazily allocate: fill with _UnsetEntry so readers never observe stale zeros.
+            long[] newChunk = new long[_ChunkSize];
+            Array.Fill(newChunk, _UnsetEntry);
 
             // CAS: one thread wins; the loser discards its allocation (GC reclaims it).
             chunk = Interlocked.CompareExchange(ref _Chunks[chunkIndex], newChunk, null) ?? newChunk;
@@ -123,8 +123,8 @@ internal sealed class PacketToFrameMap
             return false;
         }
 
-        int chunkIndex = packetId.Value >> ChunkShift;
-        int slotIndex = packetId.Value & ChunkMask;
+        int chunkIndex = packetId.Value >> _ChunkShift;
+        int slotIndex = packetId.Value & _ChunkMask;
 
         long[]? chunk = Volatile.Read(ref _Chunks[chunkIndex]);
         if (chunk is null)
@@ -135,7 +135,7 @@ internal sealed class PacketToFrameMap
         }
 
         long entry = Volatile.Read(ref chunk[slotIndex]);
-        if (entry == UnsetEntry)
+        if (entry == _UnsetEntry)
         {
             frameId = FrameId.Invalid;
             sourceId = FrameSourceId.Invalid;
@@ -154,7 +154,7 @@ internal sealed class PacketToFrameMap
     /// </summary>
     internal void Clear()
     {
-        for (int i = 0; i < MaxChunks; i++)
+        for (int i = 0; i < _MaxChunks; i++)
         {
             Volatile.Write(ref _Chunks[i], null);
         }

@@ -10,7 +10,7 @@ namespace NetworkInspector.Sources.Tests.Asc;
 internal sealed class AscStreamSourceTests
 {
     /// <summary>Safety guard to prevent infinite loops in test helpers.</summary>
-    private const int MaxFrameGuard = 10_000;
+    private const int _MaxFrameGuard = 10_000;
 
     #region Helpers
 
@@ -18,7 +18,7 @@ internal sealed class AscStreamSourceTests
     /// Creates an <see cref="AscStreamSource"/> from inline ASC text.
     /// Uses explicit newlines to avoid raw-string-literal indentation ambiguity.
     /// </summary>
-    private static AscStreamSource CreateFromText(string ascContent, AscSourceOptions? options = null)
+    private static AscStreamSource _CreateFromText(string ascContent, AscSourceOptions? options = null)
     {
         byte[] bytes = Encoding.ASCII.GetBytes(ascContent);
         MemoryStream ms = new(bytes, writable: false);
@@ -30,10 +30,10 @@ internal sealed class AscStreamSourceTests
     /// <summary>
     /// Drains all frames from the source with a safety guard against infinite loops.
     /// </summary>
-    private static List<Frame> DrainFrames(AscStreamSource source)
+    private static List<Frame> _DrainFrames(AscStreamSource source)
     {
         List<Frame> frames = [];
-        for (int i = 0; i < MaxFrameGuard; i++)
+        for (int i = 0; i < _MaxFrameGuard; i++)
         {
             Frame? f = source.NextFrame();
             if (!f.HasValue)
@@ -54,7 +54,7 @@ internal sealed class AscStreamSourceTests
     [Test]
     public async Task EmptyStream_ProducesNoFrames()
     {
-        using AscStreamSource source = CreateFromText("");
+        using AscStreamSource source = _CreateFromText("");
         SourceTestFixture.InitializeAndStartSource(source);
 
         Frame? frame = source.NextFrame();
@@ -65,7 +65,7 @@ internal sealed class AscStreamSourceTests
     [Test]
     public async Task HeaderOnly_ProducesNoFrames()
     {
-        using AscStreamSource source = CreateFromText(
+        using AscStreamSource source = _CreateFromText(
             "date Sun Nov 24 11:44:00 AM 2019\n" +
             "base hex timestamps absolute\n" +
             "internal events logged\n");
@@ -83,14 +83,14 @@ internal sealed class AscStreamSourceTests
     [Test]
     public async Task SingleCanMessage_ProducesOneFrame()
     {
-        using AscStreamSource source = CreateFromText(
+        using AscStreamSource source = _CreateFromText(
             "base hex\n" +
             "Begin Triggerblock\n" +
             "0.100000 1 123 Rx d 8 AA BB CC DD EE FF 00 11\n" +
             "End TriggerBlock\n");
         SourceTestFixture.InitializeAndStartSource(source);
 
-        List<Frame> frames = DrainFrames(source);
+        List<Frame> frames = _DrainFrames(source);
 
         await Assert.That(frames.Count).IsEqualTo(1);
         await Assert.That(frames[0].LinkType).IsEqualTo(LinkType.CanSocketcan);
@@ -103,7 +103,7 @@ internal sealed class AscStreamSourceTests
     [Test]
     public async Task MultiBus_AllFramesParsed()
     {
-        using AscStreamSource source = CreateFromText(
+        using AscStreamSource source = _CreateFromText(
             "base hex\n" +
             "Begin Triggerblock\n" +
             "0.100000 1 123 Rx d 8 AA BB CC DD EE FF 00 11\n" +
@@ -114,7 +114,7 @@ internal sealed class AscStreamSourceTests
             "End TriggerBlock\n");
         SourceTestFixture.InitializeAndStartSource(source);
 
-        List<Frame> frames = DrainFrames(source);
+        List<Frame> frames = _DrainFrames(source);
 
         await Assert.That(frames.Count).IsEqualTo(5);
         await Assert.That(frames[0].LinkType).IsEqualTo(LinkType.CanSocketcan);
@@ -131,7 +131,7 @@ internal sealed class AscStreamSourceTests
     [Test]
     public async Task FrameIds_AreSequential()
     {
-        using AscStreamSource source = CreateFromText(
+        using AscStreamSource source = _CreateFromText(
             "base hex\n" +
             "Begin Triggerblock\n" +
             "0.100000 1 100 Rx d 2 01 02\n" +
@@ -140,7 +140,7 @@ internal sealed class AscStreamSourceTests
             "End TriggerBlock\n");
         SourceTestFixture.InitializeAndStartSource(source);
 
-        List<Frame> frames = DrainFrames(source);
+        List<Frame> frames = _DrainFrames(source);
 
         await Assert.That(frames.Count).IsEqualTo(3);
         await Assert.That(frames[0].Id.Value).IsEqualTo(0);
@@ -155,7 +155,7 @@ internal sealed class AscStreamSourceTests
     [Test]
     public async Task DifferentChannels_DifferentInterfaceIds()
     {
-        using AscStreamSource source = CreateFromText(
+        using AscStreamSource source = _CreateFromText(
             "base hex\n" +
             "Begin Triggerblock\n" +
             "0.100000 1 100 Rx d 2 01 02\n" +
@@ -163,7 +163,7 @@ internal sealed class AscStreamSourceTests
             "End TriggerBlock\n");
         SourceTestFixture.InitializeAndStartSource(source);
 
-        List<Frame> frames = DrainFrames(source);
+        List<Frame> frames = _DrainFrames(source);
 
         await Assert.That(frames.Count).IsEqualTo(2);
         await Assert.That(frames[0].InterfaceId).IsNotEqualTo(frames[1].InterfaceId);
@@ -172,7 +172,7 @@ internal sealed class AscStreamSourceTests
     [Test]
     public async Task SameChannel_SameInterfaceId()
     {
-        using AscStreamSource source = CreateFromText(
+        using AscStreamSource source = _CreateFromText(
             "base hex\n" +
             "Begin Triggerblock\n" +
             "0.100000 1 100 Rx d 2 01 02\n" +
@@ -180,7 +180,7 @@ internal sealed class AscStreamSourceTests
             "End TriggerBlock\n");
         SourceTestFixture.InitializeAndStartSource(source);
 
-        List<Frame> frames = DrainFrames(source);
+        List<Frame> frames = _DrainFrames(source);
 
         await Assert.That(frames.Count).IsEqualTo(2);
         await Assert.That(frames[0].InterfaceId).IsEqualTo(frames[1].InterfaceId);
@@ -193,7 +193,7 @@ internal sealed class AscStreamSourceTests
     [Test]
     public async Task CommentsAndEmptyLines_AreSkipped()
     {
-        using AscStreamSource source = CreateFromText(
+        using AscStreamSource source = _CreateFromText(
             "; comment line\n" +
             "// another comment\n" +
             "base hex\n" +
@@ -206,7 +206,7 @@ internal sealed class AscStreamSourceTests
             "End TriggerBlock\n");
         SourceTestFixture.InitializeAndStartSource(source);
 
-        List<Frame> frames = DrainFrames(source);
+        List<Frame> frames = _DrainFrames(source);
 
         await Assert.That(frames.Count).IsEqualTo(2);
     }
@@ -218,7 +218,7 @@ internal sealed class AscStreamSourceTests
     [Test]
     public async Task TolerantMode_SkipsMalformedLines()
     {
-        using AscStreamSource source = CreateFromText(
+        using AscStreamSource source = _CreateFromText(
             "base hex\n" +
             "Begin Triggerblock\n" +
             "0.100000 1 100 Rx d 2 01 02\n" +
@@ -228,7 +228,7 @@ internal sealed class AscStreamSourceTests
             new AscSourceOptions { ErrorTolerance = ErrorToleranceMode.Tolerant });
         SourceTestFixture.InitializeAndStartSource(source);
 
-        List<Frame> frames = DrainFrames(source);
+        List<Frame> frames = _DrainFrames(source);
 
         // The garbage line is not a frame-producing type — it is skipped as unknown
         await Assert.That(frames.Count).IsEqualTo(2);
@@ -241,7 +241,7 @@ internal sealed class AscStreamSourceTests
     [Test]
     public async Task ReadFrameCount_TracksSuccessfulReads()
     {
-        using AscStreamSource source = CreateFromText(
+        using AscStreamSource source = _CreateFromText(
             "base hex\n" +
             "Begin Triggerblock\n" +
             "0.100000 1 100 Rx d 2 01 02\n" +
@@ -249,7 +249,7 @@ internal sealed class AscStreamSourceTests
             "0.300000 1 300 Rx d 2 05 06\n" +
             "End TriggerBlock\n");
         SourceTestFixture.InitializeAndStartSource(source);
-        DrainFrames(source);
+        _DrainFrames(source);
 
         await Assert.That(source.ReadFrameCount).IsEqualTo(3);
     }
@@ -261,7 +261,7 @@ internal sealed class AscStreamSourceTests
     [Test]
     public async Task EstimatedFrameCount_IsNull()
     {
-        using AscStreamSource source = CreateFromText(
+        using AscStreamSource source = _CreateFromText(
             "base hex\n" +
             "0.100000 1 100 Rx d 2 01 02\n");
         SourceTestFixture.InitializeAndStartSource(source);
@@ -276,7 +276,7 @@ internal sealed class AscStreamSourceTests
     [Test]
     public async Task IsRunning_TrueAfterStart_FalseAfterDispose()
     {
-        AscStreamSource source = CreateFromText(
+        AscStreamSource source = _CreateFromText(
             "base hex\n" +
             "0.100000 1 100 Rx d 2 01 02\n");
         SourceTestFixture.InitializeAndStartSource(source);
@@ -295,7 +295,7 @@ internal sealed class AscStreamSourceTests
     [Test]
     public async Task NextFrame_AfterDispose_Throws()
     {
-        AscStreamSource source = CreateFromText(
+        AscStreamSource source = _CreateFromText(
             "base hex\n" +
             "0.100000 1 100 Rx d 2 01 02\n");
         SourceTestFixture.InitializeAndStartSource(source);
@@ -311,14 +311,14 @@ internal sealed class AscStreamSourceTests
     [Test]
     public async Task DecimalBase_DataParsedCorrectly()
     {
-        using AscStreamSource source = CreateFromText(
+        using AscStreamSource source = _CreateFromText(
             "base dec\n" +
             "Begin Triggerblock\n" +
             "0.100000 1 291 Rx d 2 10 20\n" +
             "End TriggerBlock\n");
         SourceTestFixture.InitializeAndStartSource(source);
 
-        List<Frame> frames = DrainFrames(source);
+        List<Frame> frames = _DrainFrames(source);
 
         await Assert.That(frames.Count).IsEqualTo(1);
 
@@ -338,13 +338,13 @@ internal sealed class AscStreamSourceTests
     [Test]
     public async Task NoTriggerBlock_FirstFrameCaptured()
     {
-        using AscStreamSource source = CreateFromText(
+        using AscStreamSource source = _CreateFromText(
             "base hex\n" +
             "0.100000 1 100 Rx d 2 01 02\n" +
             "0.200000 1 200 Rx d 2 03 04\n");
         SourceTestFixture.InitializeAndStartSource(source);
 
-        List<Frame> frames = DrainFrames(source);
+        List<Frame> frames = _DrainFrames(source);
 
         // Both frames should be captured, including the first one
         // parsed during header scanning (stored as _PendingFirstFrame)
@@ -372,7 +372,7 @@ internal sealed class AscStreamSourceTests
     [Test]
     public async Task Dispose_CalledTwice_DoesNotThrow()
     {
-        AscStreamSource source = CreateFromText(
+        AscStreamSource source = _CreateFromText(
             "base hex\n" +
             "0.100000 1 100 Rx d 2 01 02\n");
         SourceTestFixture.InitializeAndStartSource(source);
@@ -400,7 +400,7 @@ internal sealed class AscStreamSourceTests
     [Test]
     public async Task NextFrame_BeforeStart_ThrowsInvalidOperationException()
     {
-        using AscStreamSource source = CreateFromText("base hex\n0.100000 1 100 Rx d 2 01 02\n");
+        using AscStreamSource source = _CreateFromText("base hex\n0.100000 1 100 Rx d 2 01 02\n");
 
         await Assert.That(() => source.NextFrame()).Throws<InvalidOperationException>();
     }
@@ -408,7 +408,7 @@ internal sealed class AscStreamSourceTests
     [Test]
     public async Task Start_NullRegistry_ThrowsArgumentNullException()
     {
-        using AscStreamSource source = CreateFromText("base hex\n");
+        using AscStreamSource source = _CreateFromText("base hex\n");
         FrameInterfaceRegistry registry = new();
         FrameSourceId sourceId = registry.RegisterSource(source);
 

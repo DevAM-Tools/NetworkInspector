@@ -9,11 +9,11 @@ namespace NetworkInspector.Exporters.Tests.Verification;
 internal sealed class PbfVerifier
 {
     /// <summary>Expected magic header/footer (44 bytes).</summary>
-    private static readonly byte[] ExpectedMagic =
+    private static readonly byte[] _ExpectedMagic =
         "NETWORK-INSPECTOR-PBF-FORMAT-v1\0\0\0\0\0\0\0\0\0\0\0\0\0"u8.ToArray();
 
     /// <summary>Magic size in bytes.</summary>
-    private static readonly int MagicSize = ExpectedMagic.Length;
+    private static readonly int _MagicSize = _ExpectedMagic.Length;
 
     /// <summary>Whether the file header magic is valid.</summary>
     internal bool HasValidHeaderMagic
@@ -46,30 +46,30 @@ internal sealed class PbfVerifier
     {
         byte[] data = File.ReadAllBytes(path);
         PbfVerifier verifier = new();
-        verifier.Parse(data);
+        verifier._Parse(data);
         return verifier;
     }
 
     /// <summary>
     /// Parses and validates PBF data from a byte array.
     /// </summary>
-    private void Parse(byte[] data)
+    private void _Parse(byte[] data)
     {
         FileSize = data.Length;
 
         // Minimum valid PBF: header magic + footer trailer size (4B) + footer magic
-        int minSize = MagicSize * 2 + 4;
+        int minSize = _MagicSize * 2 + 4;
         if (data.Length < minSize)
         {
             return;
         }
 
         // Check header magic
-        HasValidHeaderMagic = data.AsSpan(0, MagicSize).SequenceEqual(ExpectedMagic);
+        HasValidHeaderMagic = data.AsSpan(0, _MagicSize).SequenceEqual(_ExpectedMagic);
 
-        // Check footer magic (last MagicSize bytes)
-        HasValidFooterMagic = data.AsSpan(data.Length - MagicSize, MagicSize)
-            .SequenceEqual(ExpectedMagic);
+        // Check footer magic (last _MagicSize bytes)
+        HasValidFooterMagic = data.AsSpan(data.Length - _MagicSize, _MagicSize)
+            .SequenceEqual(_ExpectedMagic);
 
         if (!HasValidHeaderMagic || !HasValidFooterMagic)
         {
@@ -77,13 +77,13 @@ internal sealed class PbfVerifier
         }
 
         // Read trailer size (4 bytes before footer magic, little-endian)
-        int trailerSizeOffset = data.Length - MagicSize - 4;
+        int trailerSizeOffset = data.Length - _MagicSize - 4;
         uint trailerSize = BinaryPrimitives.ReadUInt32LittleEndian(
             data.AsSpan(trailerSizeOffset));
 
         // Count blocks between header region and trailer region
         // Header region: magic + 4-byte header-proto length prefix + header proto
-        int offset = MagicSize;
+        int offset = _MagicSize;
 
         int trailerStart = trailerSizeOffset - (int)trailerSize;
         if (trailerStart < offset)
@@ -91,7 +91,7 @@ internal sealed class PbfVerifier
             return;
         }
 
-        CountBlocks(data, offset, trailerStart);
+        _CountBlocks(data, offset, trailerStart);
     }
 
     /// <summary>
@@ -103,7 +103,7 @@ internal sealed class PbfVerifier
     /// </para>
     /// Block format: <c>[flags(1B)][originalSize(4B LE)][storedSize(4B LE)][data(storedSize bytes)]</c>
     /// </summary>
-    private void CountBlocks(byte[] data, int start, int end)
+    private void _CountBlocks(byte[] data, int start, int end)
     {
         int offset = start;
 

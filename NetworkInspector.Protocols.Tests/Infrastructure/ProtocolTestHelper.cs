@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Protocols.Tests;
 
@@ -377,7 +377,7 @@ internal static class ProtocolTestHelper
         await Assert.That(fieldId).IsNotNull().Because($"Field '{fieldName}' must be registered");
 
         // Search the field tree for the matching node to access its CustomText
-        LazyString customText = FindFieldCustomText(packet, fieldId!.Value, out bool found);
+        LazyString customText = _FindFieldCustomText(packet, fieldId!.Value, out bool found);
         await Assert.That(found).IsTrue().Because($"Packet must contain field '{fieldName}'");
         await Assert.That(customText.IsNull).IsFalse().Because($"Field '{fieldName}' must have custom display text");
         await Assert.That((string)customText).IsEqualTo(expectedDisplayText).Because($"Field '{fieldName}' display text");
@@ -393,7 +393,7 @@ internal static class ProtocolTestHelper
         await Assert.That(fieldId).IsNotNull().Because($"Field '{fieldName}' must be registered");
 
         // Search the field tree for the matching node to access its CustomText
-        LazyString customText = FindFieldCustomText(packet, fieldId!.Value, out bool found);
+        LazyString customText = _FindFieldCustomText(packet, fieldId!.Value, out bool found);
         await Assert.That(found).IsTrue().Because($"Packet must contain field '{fieldName}'");
         await Assert.That(customText.IsNull).IsFalse().Because($"Field '{fieldName}' must have custom display text");
         await Assert.That((string)customText).Contains(expectedSubstring).Because($"Field '{fieldName}' display text should contain '{expectedSubstring}'");
@@ -403,17 +403,17 @@ internal static class ProtocolTestHelper
     /// Scans the packet's field tree (DFS) for the first occurrence of <paramref name="fieldId"/>
     /// and returns its <see cref="Field.CustomText"/>.
     /// </summary>
-    private static LazyString FindFieldCustomText(Packet packet, FieldId fieldId, out bool found)
+    private static LazyString _FindFieldCustomText(Packet packet, FieldId fieldId, out bool found)
     {
         // DFS through the public field tree API
         Field root = packet.RootField();
-        return SearchCustomText(root, fieldId, out found);
+        return _SearchCustomText(root, fieldId, out found);
     }
 
     /// <summary>
     /// Recursively searches for a field by ID in the field tree and returns its custom text.
     /// </summary>
-    private static LazyString SearchCustomText(Field field, FieldId fieldId, out bool found)
+    private static LazyString _SearchCustomText(Field field, FieldId fieldId, out bool found)
     {
         if (field.FieldId == fieldId)
         {
@@ -423,7 +423,7 @@ internal static class ProtocolTestHelper
 
         foreach (Field child in field.Children())
         {
-            LazyString result = SearchCustomText(child, fieldId, out found);
+            LazyString result = _SearchCustomText(child, fieldId, out found);
             if (found)
             {
                 return result;

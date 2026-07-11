@@ -266,11 +266,15 @@ public readonly ref struct MutField
         // Fast path: 0 or 1 match — no string allocation needed
         if (protocols.Length <= 1)
         {
-            return protocols.IsEmpty ? 0 : stack!.CallProtocol(protocols[0], in this, data, in dispatchedContext);
+            if (protocols.IsEmpty)
+            {
+                return 0;
+            }
+            return stack!.CallProtocol(protocols[0], in this, data, in dispatchedContext);
         }
 
         // Slow path: multiple matches — only now allocate the key display string
-        return DispatchMultipleProtocols(protocols, data, in dispatchedContext, table.Name, key.ToString());
+        return _DispatchMultipleProtocols(protocols, data, in dispatchedContext, table.Name, key.ToString(CultureInfo.InvariantCulture));
     }
 
     /// <summary>Dispatches to next protocol by string key lookup.</summary>
@@ -290,10 +294,14 @@ public readonly ref struct MutField
         // Fast path: 0 or 1 match — direct call without multi-match overhead
         if (protocols.Length <= 1)
         {
-            return protocols.IsEmpty ? 0 : stack!.CallProtocol(protocols[0], in this, data, in dispatchedContext);
+            if (protocols.IsEmpty)
+            {
+                return 0;
+            }
+            return stack!.CallProtocol(protocols[0], in this, data, in dispatchedContext);
         }
 
-        return DispatchMultipleProtocols(protocols, data, in dispatchedContext, table.Name, key);
+        return _DispatchMultipleProtocols(protocols, data, in dispatchedContext, table.Name, key);
     }
 
     /// <summary>Dispatches to next protocol by bytes key lookup.</summary>
@@ -313,11 +321,15 @@ public readonly ref struct MutField
         // Fast path: 0 or 1 match — no string allocation needed
         if (protocols.Length <= 1)
         {
-            return protocols.IsEmpty ? 0 : stack!.CallProtocol(protocols[0], in this, data, in dispatchedContext);
+            if (protocols.IsEmpty)
+            {
+                return 0;
+            }
+            return stack!.CallProtocol(protocols[0], in this, data, in dispatchedContext);
         }
 
         // Slow path: multiple matches — only now allocate the key display string
-        return DispatchMultipleProtocols(protocols, data, in dispatchedContext, table.Name, key.ToString() ?? string.Empty);
+        return _DispatchMultipleProtocols(protocols, data, in dispatchedContext, table.Name, key.ToString() ?? string.Empty);
     }
 
     /// <summary>Dispatches to next protocol by bool key lookup.</summary>
@@ -337,11 +349,15 @@ public readonly ref struct MutField
         // Fast path: 0 or 1 match — no string allocation needed
         if (protocols.Length <= 1)
         {
-            return protocols.IsEmpty ? 0 : stack!.CallProtocol(protocols[0], in this, data, in dispatchedContext);
+            if (protocols.IsEmpty)
+            {
+                return 0;
+            }
+            return stack!.CallProtocol(protocols[0], in this, data, in dispatchedContext);
         }
 
         // Slow path: multiple matches — bool.ToString() returns cached string (no allocation)
-        return DispatchMultipleProtocols(protocols, data, in dispatchedContext, table.Name, key.ToString());
+        return _DispatchMultipleProtocols(protocols, data, in dispatchedContext, table.Name, key.ToString(CultureInfo.InvariantCulture));
     }
 
     /// <summary>Dispatches to any protocol registered in the table.</summary>
@@ -361,10 +377,14 @@ public readonly ref struct MutField
         // Fast path: 0 or 1 match — direct call
         if (protocols.Length <= 1)
         {
-            return protocols.IsEmpty ? 0 : stack!.CallProtocol(protocols[0], in this, data, in dispatchedContext);
+            if (protocols.IsEmpty)
+            {
+                return 0;
+            }
+            return stack!.CallProtocol(protocols[0], in this, data, in dispatchedContext);
         }
 
-        return DispatchMultipleProtocols(protocols, data, in dispatchedContext, table.Name, "*");
+        return _DispatchMultipleProtocols(protocols, data, in dispatchedContext, table.Name, "*");
     }
 
     /// <summary>Directly calls a specific protocol.</summary>
@@ -401,7 +421,7 @@ public readonly ref struct MutField
     /// and returns the maximum consumed bytes.
     /// <para>Callers must pre-check for 0/1 matches (fast path) before calling this method.</para>
     /// </summary>
-    private readonly ParseResult DispatchMultipleProtocols(
+    private readonly ParseResult _DispatchMultipleProtocols(
         ReadOnlySpan<ProtocolId> protocols, ReadOnlyMemory<byte> data, in ParseContext context,
         string tableName, string keyDisplay)
     {

@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Protocols.Tests;
 
@@ -23,13 +23,13 @@ internal sealed class CanXlTsharkTests
 {
     #region Frame builders
 
-    private static byte[] BuildXlFrame(uint priority, ReadOnlyMemory<byte> data, byte sdt = 0, uint af = 0, bool sec = false)
+    private static byte[] _BuildXlFrame(uint priority, ReadOnlyMemory<byte> data, byte sdt = 0, uint af = 0, bool sec = false)
     {
         SocketCanXlLayer xl = new(priority, data, sdt: sdt, af: af, sec: sec);
         return FrameStack.Start(xl).CreateWithFixedValues().EmitFrame(ReadOnlySpan<byte>.Empty);
     }
 
-    private static byte[] CreatePayload(int length)
+    private static byte[] _CreatePayload(int length)
     {
         byte[] data = new byte[length];
         for (int i = 0; i < length; i++)
@@ -53,7 +53,7 @@ internal sealed class CanXlTsharkTests
     [Arguments(2048)]
     public async Task CanXl_VariousLengths_RoundTrip(int payloadLength)
     {
-        byte[] frame = BuildXlFrame(0x12345u, CreatePayload(payloadLength));
+        byte[] frame = _BuildXlFrame(0x12345u, _CreatePayload(payloadLength));
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame, LinkType.CanSocketcan);
         using (stack)
         {
@@ -70,7 +70,7 @@ internal sealed class CanXlTsharkTests
     [Test]
     public async Task CanXl_SecFlag_RoundTrip()
     {
-        byte[] frame = BuildXlFrame(0x100u, CreatePayload(64), sec: true);
+        byte[] frame = _BuildXlFrame(0x100u, _CreatePayload(64), sec: true);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame, LinkType.CanSocketcan);
         using (stack)
         {
@@ -88,7 +88,7 @@ internal sealed class CanXlTsharkTests
     [Test]
     public async Task CanXl_SduTypeAndAcceptanceField_RoundTrip()
     {
-        byte[] frame = BuildXlFrame(0x200u, CreatePayload(32), sdt: 0x03, af: 0x12345678u);
+        byte[] frame = _BuildXlFrame(0x200u, _CreatePayload(32), sdt: 0x03, af: 0x12345678u);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame, LinkType.CanSocketcan);
         using (stack)
         {
@@ -107,7 +107,7 @@ internal sealed class CanXlTsharkTests
     public async Task CanXl_FlagsDisplayText_XlfOnly()
     {
         // XLF is structurally always set; no optional SEC or RRS flag set.
-        byte[] frame = BuildXlFrame(0x100u, CreatePayload(8));
+        byte[] frame = _BuildXlFrame(0x100u, _CreatePayload(8));
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame, LinkType.CanSocketcan);
         using (stack)
         {
@@ -119,7 +119,7 @@ internal sealed class CanXlTsharkTests
     public async Task CanXl_FlagsDisplayText_XlfAndSec()
     {
         // SEC flag set in addition to the structural XLF.
-        byte[] frame = BuildXlFrame(0x100u, CreatePayload(8), sec: true);
+        byte[] frame = _BuildXlFrame(0x100u, _CreatePayload(8), sec: true);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame, LinkType.CanSocketcan);
         using (stack)
         {

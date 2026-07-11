@@ -68,10 +68,10 @@ public sealed partial class CanProtocol : IProtocol
     public const ulong LinkTypeSocketCAN = 227;
 
     /// <summary>Minimum SocketCAN classic/FD header size in bytes.</summary>
-    private const int MinHeaderSize = 8;
+    private const int _MinHeaderSize = 8;
 
     /// <summary>Index group for always-present CAN classic/FD fields.</summary>
-    private const string CanIndexGroup = "can";
+    private const string _CanIndexGroup = "can";
 
     /// <summary>Protocol table name for CAN identifier dispatch (standard 11-bit and FD/FD+ 29-bit IDs).</summary>
     public const string IdTableName = "can.id";
@@ -85,48 +85,48 @@ public sealed partial class CanProtocol : IProtocol
     public const string ExtendedIdTableName = "can.extended_id";
 
     // Bit masks for CAN ID field (upper 3 bits of the 32-bit CAN ID)
-    private const uint EFF_FLAG = 0x80000000; // Extended Frame Format
-    private const uint RTR_FLAG = 0x40000000; // Remote Transmission Request
-    private const uint ERR_FLAG = 0x20000000; // Error frame
-    private const uint CAN_ID_MASK_STD = 0x7FF; // 11-bit standard ID
-    private const uint CAN_ID_MASK_EXT = 0x1FFFFFFF; // 29-bit extended ID
+    private const uint _EFF_FLAG = 0x80000000; // Extended Frame Format
+    private const uint _RTR_FLAG = 0x40000000; // Remote Transmission Request
+    private const uint _ERR_FLAG = 0x20000000; // Error frame
+    private const uint _CAN_ID_MASK_STD = 0x7FF; // 11-bit standard ID
+    private const uint _CAN_ID_MASK_EXT = 0x1FFFFFFF; // 29-bit extended ID
 
     // CAN FD flag bits (byte 5) — Linux SocketCAN spec / Wireshark canonical layout.
-    private const byte BRS_FLAG = 0x01; // Bit Rate Switch
-    private const byte ESI_FLAG = 0x02; // Error State Indicator
-    private const byte FDF_FLAG = 0x04; // FD Frame
+    private const byte _BRS_FLAG = 0x01; // Bit Rate Switch
+    private const byte _ESI_FLAG = 0x02; // Error State Indicator
+    private const byte _FDF_FLAG = 0x04; // FD Frame
 
     // CAN XL discriminator (byte 4 bit 7) — shared discriminator used by both parse paths.
     // Classic CAN DLC (0-8) and CAN FD DLC (0-15) never set bit 7; CAN XL always sets it.
-    private const byte XLF_FLAG = 0x80; // CAN XL Frame indicator
+    private const byte _XLF_FLAG = 0x80; // CAN XL Frame indicator
 
     // CAN XL header layout
     /// <summary>CAN XL header size in bytes (before data payload).</summary>
-    private const int XlHeaderSize = 12;
+    private const int _XlHeaderSize = 12;
 
     /// <summary>Maximum CAN XL payload length in bytes (ISO 11898-1:2024).</summary>
-    private const int XlMaxPayloadLength = 2048;
+    private const int _XlMaxPayloadLength = 2048;
 
     // CAN XL flag bits (byte 4)
-    private const byte XlSEC_FLAG = 0x01; // Simple Extended Content
-    private const byte XlRRS_FLAG = 0x02; // Remote Request Substitution
+    private const byte _XlSEC_FLAG = 0x01; // Simple Extended Content
+    private const byte _XlRRS_FLAG = 0x02; // Remote Request Substitution
 
     // CAN XL priority/VCID field masks (32-bit BE word at bytes 0-3)
-    private const uint XlPRIORITY_MASK = 0x7FF; // bits 0-10: 11-bit priority
-    private const int XlVCID_OFFSET = 16;        // bits 16-23: 8-bit VCID
-    private const uint XlVCID_VAL_MASK = 0xFF;   // mask after shifting
+    private const uint _XlPRIORITY_MASK = 0x7FF; // bits 0-10: 11-bit priority
+    private const int _XlVCID_OFFSET = 16;        // bits 16-23: 8-bit VCID
+    private const uint _XlVCID_VAL_MASK = 0xFF;   // mask after shifting
 
     /// <summary>Index group for always-present CAN XL fields.</summary>
-    private const string CanXlIndexGroup = "canxl";
+    private const string _CanXlIndexGroup = "canxl";
 
     /// <summary>Index group for the CAN XL data payload field.</summary>
-    private const string CanXlDataIndexGroup = "canxl.data";
+    private const string _CanXlDataIndexGroup = "canxl.data";
 
     #endregion
 
     #region Protocol container
 
-    [BytesField("can", "Controller Area Network", IndexGroup = CanIndexGroup)]
+    [BytesField("can", "Controller Area Network", IndexGroup = _CanIndexGroup)]
     private FieldId _ProtocolFieldId;
 
     #endregion
@@ -152,22 +152,22 @@ public sealed partial class CanProtocol : IProtocol
 
     #region Fields (always present)
 
-    [U64Field("can.id", "Identifier", IndexGroup = CanIndexGroup)]
+    [U64Field("can.id", "Identifier", IndexGroup = _CanIndexGroup)]
     private FieldId _IdFieldId;
 
-    [NoneField("can.flags", "Flags", IndexGroup = CanIndexGroup)]
+    [NoneField("can.flags", "Flags", IndexGroup = _CanIndexGroup)]
     private FieldId _FlagsFieldId;
 
-    [BoolField("can.flags.xtd", "Extended Frame Format", IndexGroup = CanIndexGroup)]
+    [BoolField("can.flags.xtd", "Extended Frame Format", IndexGroup = _CanIndexGroup)]
     private FieldId _FlagsXtdFieldId;
 
-    [BoolField("can.flags.rtr", "Remote Transmission Request", IndexGroup = CanIndexGroup)]
+    [BoolField("can.flags.rtr", "Remote Transmission Request", IndexGroup = _CanIndexGroup)]
     private FieldId _FlagsRtrFieldId;
 
-    [BoolField("can.flags.err", "Error Frame", IndexGroup = CanIndexGroup)]
+    [BoolField("can.flags.err", "Error Frame", IndexGroup = _CanIndexGroup)]
     private FieldId _FlagsErrFieldId;
 
-    [U64Field("can.len", "Data Length Code", IndexGroup = CanIndexGroup)]
+    [U64Field("can.len", "Data Length Code", IndexGroup = _CanIndexGroup)]
     private FieldId _LenFieldId;
 
     #endregion
@@ -201,45 +201,45 @@ public sealed partial class CanProtocol : IProtocol
 
     #region CAN XL protocol container
 
-    [BytesField("canxl", "CAN XL", IndexGroup = CanXlIndexGroup)]
+    [BytesField("canxl", "CAN XL", IndexGroup = _CanXlIndexGroup)]
     private FieldId _CanxlProtocolFieldId;
 
     #endregion
 
     #region CAN XL fields (always present when frame is CAN XL)
 
-    [U64Field("canxl.priority", "Priority", IndexGroup = CanXlIndexGroup)]
+    [U64Field("canxl.priority", "Priority", IndexGroup = _CanXlIndexGroup)]
     private FieldId _CanxlPriorityFieldId;
 
-    [U64Field("canxl.vcid", "Virtual CAN Network ID", IndexGroup = CanXlIndexGroup)]
+    [U64Field("canxl.vcid", "Virtual CAN Network ID", IndexGroup = _CanXlIndexGroup)]
     private FieldId _CanxlVcidFieldId;
 
-    [NoneField("canxl.flags", "Flags", IndexGroup = CanXlIndexGroup)]
+    [NoneField("canxl.flags", "Flags", IndexGroup = _CanXlIndexGroup)]
     private FieldId _CanxlFlagsFieldId;
 
-    [BoolField("canxl.flags.xlf", "CAN XL Frame", IndexGroup = CanXlIndexGroup)]
+    [BoolField("canxl.flags.xlf", "CAN XL Frame", IndexGroup = _CanXlIndexGroup)]
     private FieldId _CanxlFlagsXlfFieldId;
 
-    [BoolField("canxl.flags.sec", "Simple Extended Content", IndexGroup = CanXlIndexGroup)]
+    [BoolField("canxl.flags.sec", "Simple Extended Content", IndexGroup = _CanXlIndexGroup)]
     private FieldId _CanxlFlagsSecFieldId;
 
-    [BoolField("canxl.flags.rrs", "Remote Request Substitution", IndexGroup = CanXlIndexGroup)]
+    [BoolField("canxl.flags.rrs", "Remote Request Substitution", IndexGroup = _CanXlIndexGroup)]
     private FieldId _CanxlFlagsRrsFieldId;
 
-    [U64Field("canxl.sdu_type", "SDU Type", IndexGroup = CanXlIndexGroup)]
+    [U64Field("canxl.sdu_type", "SDU Type", IndexGroup = _CanXlIndexGroup)]
     private FieldId _CanxlSduTypeFieldId;
 
-    [U64Field("canxl.len", "Payload Length", IndexGroup = CanXlIndexGroup)]
+    [U64Field("canxl.len", "Payload Length", IndexGroup = _CanXlIndexGroup)]
     private FieldId _CanxlLenFieldId;
 
-    [U64Field("canxl.acceptance_field", "Acceptance Field", IndexGroup = CanXlIndexGroup)]
+    [U64Field("canxl.acceptance_field", "Acceptance Field", IndexGroup = _CanXlIndexGroup)]
     private FieldId _CanxlAcceptanceFieldId;
 
     #endregion
 
     #region CAN XL data (conditional — present when payload length > 0)
 
-    [BytesField("canxl.data", "Data", IndexGroup = CanXlDataIndexGroup)]
+    [BytesField("canxl.data", "Data", IndexGroup = _CanXlDataIndexGroup)]
     private FieldId _CanxlDataFieldId;
 
     #endregion
@@ -253,7 +253,7 @@ public sealed partial class CanProtocol : IProtocol
 
     #endregion
 
-    #region Runtime state — populated in RegisterFieldsCustom
+    #region Runtime state — populated in _RegisterFieldsCustom
 
     /// <summary>Message name lookup: CAN ID → display name. Built from config file.</summary>
     private FrozenDictionary<uint, string> _MessageNames = FrozenDictionary<uint, string>.Empty;
@@ -275,7 +275,7 @@ public sealed partial class CanProtocol : IProtocol
     /// configuration state inside the registration phase, so the resulting <c>Stack</c> stays
     /// truly immutable.
     /// </summary>
-    partial void RegisterFieldsCustom(IStackBuilder builder, ProtocolId protocolId)
+    partial void _RegisterFieldsCustom(IStackBuilder builder, ProtocolId protocolId)
     {
         builder.Settings.TryLoadReferencedJsonConfig(
             "can.config_file", CanConfigContext.Default.CanConfig,
@@ -305,37 +305,37 @@ public sealed partial class CanProtocol : IProtocol
     /// </summary>
     public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
     {
-        if (data.Length < MinHeaderSize)
+        if (data.Length < _MinHeaderSize)
         {
-            return ParseError.InsufficientDataWithInfo(ProtocolName, MinHeaderSize, (ulong)data.Length);
+            return ParseError.InsufficientDataWithInfo(ProtocolName, _MinHeaderSize, (ulong)data.Length);
         }
 
         ReadOnlySpan<byte> span = data.Span;
 
-        // CAN XL detection: byte 4 bit 7 (XLF_FLAG) distinguishes CAN XL from classic/FD.
+        // CAN XL detection: byte 4 bit 7 (_XLF_FLAG) distinguishes CAN XL from classic/FD.
         // Classic CAN DLC is 0-8 and CAN FD DLC is 0-15 — neither sets bit 7.
-        if ((span[4] & XLF_FLAG) != 0)
+        if ((span[4] & _XLF_FLAG) != 0)
         {
-            return ParseCanXl(in parentField, data, in context);
+            return _ParseCanXl(in parentField, data, in context);
         }
 
         // Parse 32-bit CAN ID with flags. LINKTYPE_CAN_SOCKETCAN (DLT 227) stores the
         // CAN-ID/flags word in network byte order (big-endian); see
         // https://www.tcpdump.org/linktypes/LINKTYPE_CAN_SOCKETCAN.html.
         uint rawId = BinaryPrimitives.ReadUInt32BigEndian(span);
-        bool isExtended = (rawId & EFF_FLAG) != 0;
-        bool isRtr = (rawId & RTR_FLAG) != 0;
-        bool isError = (rawId & ERR_FLAG) != 0;
-        uint canId = isExtended ? (rawId & CAN_ID_MASK_EXT) : (rawId & CAN_ID_MASK_STD);
+        bool isExtended = (rawId & _EFF_FLAG) != 0;
+        bool isRtr = (rawId & _RTR_FLAG) != 0;
+        bool isError = (rawId & _ERR_FLAG) != 0;
+        uint canId = isExtended ? (rawId & _CAN_ID_MASK_EXT) : (rawId & _CAN_ID_MASK_STD);
 
         // DLC and flags
         byte dlc = span[4];
         byte fdFlags = span[5];
-        bool isFd = (fdFlags & FDF_FLAG) != 0;
+        bool isFd = (fdFlags & _FDF_FLAG) != 0;
 
         // Extract FD-specific flag bits here so they are available for FormatFd below.
-        bool brs = isFd && (fdFlags & BRS_FLAG) != 0;
-        bool esi = isFd && (fdFlags & ESI_FLAG) != 0;
+        bool brs = isFd && (fdFlags & _BRS_FLAG) != 0;
+        bool esi = isFd && (fdFlags & _ESI_FLAG) != 0;
 
         // SocketCAN's struct can_frame.len / canfd_frame.len holds the actual
         // payload byte count (0..8 for classic, 0..64 for FD) — there is no
@@ -344,7 +344,7 @@ public sealed partial class CanProtocol : IProtocol
         int dataLen = isFd ? Math.Min(dlc, (byte)64) : Math.Min(dlc, (byte)8);
 
         // Verify we have enough data
-        int totalLen = MinHeaderSize + dataLen;
+        int totalLen = _MinHeaderSize + dataLen;
         if (data.Length < totalLen)
         {
             return ParseError.InsufficientDataWithInfo(ProtocolName, (ulong)totalLen, (ulong)data.Length);
@@ -408,13 +408,13 @@ public sealed partial class CanProtocol : IProtocol
         if (dataLen > 0)
         {
             context.RecordGroupPresence(_CanDataGroupId);
-            canField.Append(_DataFieldId, FieldValue.NewBytes(data.Slice(MinHeaderSize, dataLen)));
+            canField.Append(_DataFieldId, FieldValue.NewBytes(data.Slice(_MinHeaderSize, dataLen)));
 
             // Dispatch payload to sub-protocols registered on can.id (e.g., Signal PDU).
             // Extended frames (29-bit IDs) are also dispatched via can.extended_id so that
             // sub-protocols can register on the more specific extended-ID table without
             // colliding with standard 11-bit IDs that share the same numeric value.
-            ReadOnlyMemory<byte> payload = data.Slice(MinHeaderSize, dataLen);
+            ReadOnlyMemory<byte> payload = data.Slice(_MinHeaderSize, dataLen);
             ParseResult dispatchResult = canField.TryCallNextProtocolU64(
                 _IdTableId, canId, payload, in context);
             if (dispatchResult.IsError)
@@ -458,12 +458,12 @@ public sealed partial class CanProtocol : IProtocol
     /// <param name="data">Raw frame bytes starting at offset 0 (12-byte header + payload).</param>
     /// <param name="context">Owning stack; passed to sub-protocol dispatch.</param>
     /// <returns>Number of bytes consumed, or a <see cref="ParseError"/>.</returns>
-    private ParseResult ParseCanXl(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
+    private ParseResult _ParseCanXl(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
     {
         // Validate minimum header size
-        if (data.Length < XlHeaderSize)
+        if (data.Length < _XlHeaderSize)
         {
-            return ParseError.InsufficientDataWithInfo(ProtocolName, XlHeaderSize, (ulong)data.Length);
+            return ParseError.InsufficientDataWithInfo(ProtocolName, _XlHeaderSize, (ulong)data.Length);
         }
 
         ReadOnlySpan<byte> span = data.Span;
@@ -474,13 +474,13 @@ public sealed partial class CanProtocol : IProtocol
         // LINKTYPE_CAN_SOCKETCAN captures, for historical reasons."
         // bits 0-10 = priority, bits 16-23 = VCID.
         uint rawPrio = BinaryPrimitives.ReadUInt32BigEndian(span);
-        uint priority = rawPrio & XlPRIORITY_MASK;
-        uint vcid = (rawPrio >> XlVCID_OFFSET) & XlVCID_VAL_MASK;
+        uint priority = rawPrio & _XlPRIORITY_MASK;
+        uint vcid = (rawPrio >> _XlVCID_OFFSET) & _XlVCID_VAL_MASK;
 
         // Flags (byte 4 — XLF is always set; SEC and RRS are optional)
         byte flags = span[4];
-        bool isSec = (flags & XlSEC_FLAG) != 0;
-        bool isRrs = (flags & XlRRS_FLAG) != 0;
+        bool isSec = (flags & _XlSEC_FLAG) != 0;
+        bool isRrs = (flags & _XlRRS_FLAG) != 0;
 
         // SDU type (byte 5)
         byte sduType = span[5];
@@ -489,7 +489,7 @@ public sealed partial class CanProtocol : IProtocol
         // The spec (ISO 11898-1:2024) defines valid range 1-2048; a value of 0 is technically
         // a spec violation but accepted here to allow display of the other header fields.
         // canxl.len always reflects the raw wire value; effectivePayloadLength is additionally
-        // clamped to XlMaxPayloadLength (2048) to guard against malformed frames.
+        // clamped to _XlMaxPayloadLength (2048) to guard against malformed frames.
         ushort payloadLength = BinaryPrimitives.ReadUInt16LittleEndian(span[6..]);
 
         // Acceptance field (little-endian u32, bytes 8-11).
@@ -498,10 +498,10 @@ public sealed partial class CanProtocol : IProtocol
 
         // Clamp payload length to protocol maximum to guard against malformed frames.
         // effectivePayloadLength drives memory slicing; canxl.len records the raw wire value.
-        int effectivePayloadLength = Math.Min((int)payloadLength, XlMaxPayloadLength);
+        int effectivePayloadLength = Math.Min((int)payloadLength, _XlMaxPayloadLength);
 
         // Verify we have enough data for header + payload
-        int totalLen = XlHeaderSize + effectivePayloadLength;
+        int totalLen = _XlHeaderSize + effectivePayloadLength;
         if (data.Length < totalLen)
         {
             return ParseError.InsufficientDataWithInfo(ProtocolName, (ulong)totalLen, (ulong)data.Length);
@@ -556,7 +556,7 @@ public sealed partial class CanProtocol : IProtocol
         if (effectivePayloadLength > 0)
         {
             context.RecordGroupPresence(_CanxlDataGroupId);
-            ReadOnlyMemory<byte> payload = data.Slice(XlHeaderSize, effectivePayloadLength);
+            ReadOnlyMemory<byte> payload = data.Slice(_XlHeaderSize, effectivePayloadLength);
             xlField.Append(_CanxlDataFieldId, FieldValue.NewBytes(payload));
 
             // Dispatch via can.id using priority (11-bit, 0–2047) as the key.

@@ -129,7 +129,11 @@ public static class Lz4Codec
             {
                 return -1;
             }
-            return outputPos <= inputLength ? outputPos : -1;
+            if (outputPos <= inputLength)
+            {
+                return outputPos;
+            }
+            return -1;
         }
 
         // Start one byte in so the first hash probe has a left-neighbour.
@@ -202,7 +206,11 @@ public static class Lz4Codec
             return -1;
         }
 
-        return outputPos <= inputLength ? outputPos : -1;
+        if (outputPos <= inputLength)
+        {
+            return outputPos;
+        }
+        return -1;
     }
 
     /// <summary>

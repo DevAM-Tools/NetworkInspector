@@ -34,10 +34,10 @@ internal static class SignalDecoder
 
         if (bigEndian)
         {
-            return ExtractBigEndian(data, startBit, bitLength);
+            return _ExtractBigEndian(data, startBit, bitLength);
         }
 
-        return ExtractLittleEndian(data, startBit, bitLength);
+        return _ExtractLittleEndian(data, startBit, bitLength);
     }
 
     /// <summary>
@@ -53,7 +53,7 @@ internal static class SignalDecoder
 
         double value = signal.DataType switch
         {
-            string s when s.Equals("signed", StringComparison.OrdinalIgnoreCase) => ApplySigned(raw, signal.BitLength),
+            string s when s.Equals("signed", StringComparison.OrdinalIgnoreCase) => _ApplySigned(raw, signal.BitLength),
             string s when s.Equals("float32", StringComparison.OrdinalIgnoreCase) && signal.BitLength == 32 => BitConverter.Int32BitsToSingle((int)raw),
             string s when s.Equals("float64", StringComparison.OrdinalIgnoreCase) && signal.BitLength == 64 => BitConverter.Int64BitsToDouble((long)raw),
             _ => raw, // "unsigned" or default
@@ -78,7 +78,7 @@ internal static class SignalDecoder
     /// <summary>
     /// Applies sign extension to a raw value based on the bit length.
     /// </summary>
-    private static double ApplySigned(ulong raw, int bitLength)
+    private static double _ApplySigned(ulong raw, int bitLength)
     {
         // Check if the sign bit is set
         if ((raw & (1UL << (bitLength - 1))) != 0)
@@ -95,7 +95,7 @@ internal static class SignalDecoder
     /// In Motorola order, start_bit is the MSB position.
     /// Bit numbering: byte 0 contains bits 7..0, byte 1 contains bits 15..8, etc.
     /// </summary>
-    private static ulong ExtractBigEndian(ReadOnlySpan<byte> data, int startBit, int bitLength)
+    private static ulong _ExtractBigEndian(ReadOnlySpan<byte> data, int startBit, int bitLength)
     {
         // Big-endian (Motorola): start_bit is the MSB position
         // Convert to byte offset and bit offset within that byte
@@ -133,7 +133,7 @@ internal static class SignalDecoder
     /// In Intel order, start_bit is the LSB position.
     /// Bit numbering: bit 0 is the LSB of byte 0, bit 8 is the LSB of byte 1, etc.
     /// </summary>
-    private static ulong ExtractLittleEndian(ReadOnlySpan<byte> data, int startBit, int bitLength)
+    private static ulong _ExtractLittleEndian(ReadOnlySpan<byte> data, int startBit, int bitLength)
     {
         ulong result = 0;
         int currentBit = startBit;

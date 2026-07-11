@@ -9,15 +9,15 @@ namespace NetworkInspector.Sources.Tests.Blf;
 /// </summary>
 internal sealed class BlfLazyScanTests
 {
-    private static readonly byte[] SrcMac = [0x00, 0x11, 0x22, 0x33, 0x44, 0x55];
-    private static readonly byte[] DstMac = [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
+    private static readonly byte[] _SrcMac = [0x00, 0x11, 0x22, 0x33, 0x44, 0x55];
+    private static readonly byte[] _DstMac = [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
 
     /// <summary>Creates a BlfSource in Lazy scan mode from in-memory data.</summary>
-    private static BlfSource CreateLazySource(byte[] data) =>
+    private static BlfSource _CreateLazySource(byte[] data) =>
         BlfSource.FromData(data, "lazy-test.blf", new BlfSourceOptions { ScanMode = ScanMode.Lazy });
 
     /// <summary>Creates a BlfSource in Full scan mode from in-memory data.</summary>
-    private static BlfSource CreateFullSource(byte[] data) =>
+    private static BlfSource _CreateFullSource(byte[] data) =>
         BlfSource.FromData(data, "full-test.blf", new BlfSourceOptions { ScanMode = ScanMode.Full });
 
 
@@ -29,14 +29,14 @@ internal sealed class BlfLazyScanTests
     [Test]
     public async Task LazyMode_EstimatedFrameCount_NullBeforeFullConsumption()
     {
-        byte[] eth = FrameBuilders.BuildEthernetFrame(DstMac, SrcMac, 0x0800, [0xAA]);
+        byte[] eth = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0xAA]);
 
         byte[] blfData = new BlfTestGenerator()
             .AddEthernetFrame(1, eth, 1_000_000)
             .AddEthernetFrame(1, eth, 2_000_000)
             .Build();
 
-        using BlfSource source = CreateLazySource(blfData);
+        using BlfSource source = _CreateLazySource(blfData);
         // Before Start(), EstimatedFrameCount should be null since indexing isn't complete
         await Assert.That(source.EstimatedFrameCount).IsNull();
     }
@@ -48,7 +48,7 @@ internal sealed class BlfLazyScanTests
     [Test]
     public async Task FullMode_EstimatedFrameCount_AvailableImmediately()
     {
-        byte[] eth = FrameBuilders.BuildEthernetFrame(DstMac, SrcMac, 0x0800, [0xAA]);
+        byte[] eth = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0xAA]);
 
         byte[] blfData = new BlfTestGenerator()
             .AddEthernetFrame(1, eth, 1_000_000)
@@ -56,7 +56,7 @@ internal sealed class BlfLazyScanTests
             .AddEthernetFrame(1, eth, 3_000_000)
             .Build();
 
-        using BlfSource source = CreateFullSource(blfData);
+        using BlfSource source = _CreateFullSource(blfData);
         // After full scan, frame count should be known
         await Assert.That(source.EstimatedFrameCount).IsNotNull();
         await Assert.That(source.EstimatedFrameCount!.Value).IsEqualTo(3);
@@ -69,7 +69,7 @@ internal sealed class BlfLazyScanTests
     [Test]
     public async Task LazyMode_NextFrame_ReadsAllFrames()
     {
-        byte[] eth = FrameBuilders.BuildEthernetFrame(DstMac, SrcMac, 0x0800, [0xBB]);
+        byte[] eth = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0xBB]);
 
         byte[] blfData = new BlfTestGenerator()
             .AddEthernetFrame(1, eth, 1_000_000)
@@ -79,7 +79,7 @@ internal sealed class BlfLazyScanTests
             .AddEthernetFrame(1, eth, 5_000_000)
             .Build();
 
-        using BlfSource source = CreateLazySource(blfData);
+        using BlfSource source = _CreateLazySource(blfData);
         SourceTestFixture.InitializeAndStartSource(source);
 
         int count = 0;
@@ -99,7 +99,7 @@ internal sealed class BlfLazyScanTests
     [Test]
     public async Task LazyAndFull_ProduceSameFrameCount()
     {
-        byte[] eth = FrameBuilders.BuildEthernetFrame(DstMac, SrcMac, 0x0800, [0xCC]);
+        byte[] eth = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0xCC]);
 
         byte[] blfData = new BlfTestGenerator()
             .AddEthernetFrame(1, eth, 1_000_000)
@@ -108,7 +108,7 @@ internal sealed class BlfLazyScanTests
             .Build();
 
         // Read all frames in lazy mode
-        using BlfSource lazySource = CreateLazySource(blfData);
+        using BlfSource lazySource = _CreateLazySource(blfData);
         SourceTestFixture.InitializeAndStartSource(lazySource);
         int lazyCount = 0;
         while (lazySource.NextFrame() is not null)
@@ -117,7 +117,7 @@ internal sealed class BlfLazyScanTests
         }
 
         // Read all frames in full mode
-        using BlfSource fullSource = CreateFullSource(blfData);
+        using BlfSource fullSource = _CreateFullSource(blfData);
         SourceTestFixture.InitializeAndStartSource(fullSource);
         int fullCount = 0;
         while (fullSource.NextFrame() is not null)
@@ -136,9 +136,9 @@ internal sealed class BlfLazyScanTests
     [Test]
     public async Task LazyMode_FrameById_WorksAfterSequentialRead()
     {
-        byte[] eth1 = FrameBuilders.BuildEthernetFrame(DstMac, SrcMac, 0x0800, [0x01]);
-        byte[] eth2 = FrameBuilders.BuildEthernetFrame(DstMac, SrcMac, 0x0800, [0x02]);
-        byte[] eth3 = FrameBuilders.BuildEthernetFrame(DstMac, SrcMac, 0x0800, [0x03]);
+        byte[] eth1 = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0x01]);
+        byte[] eth2 = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0x02]);
+        byte[] eth3 = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0x03]);
 
         byte[] blfData = new BlfTestGenerator()
             .AddEthernetFrame(1, eth1, 1_000_000)
@@ -146,7 +146,7 @@ internal sealed class BlfLazyScanTests
             .AddEthernetFrame(1, eth3, 3_000_000)
             .Build();
 
-        using BlfSource source = CreateLazySource(blfData);
+        using BlfSource source = _CreateLazySource(blfData);
         SourceTestFixture.InitializeAndStartSource(source);
 
         // Read all sequentially to populate the index
@@ -176,13 +176,13 @@ internal sealed class BlfLazyScanTests
     [Test]
     public async Task LazyMode_FrameById_OutOfRange_ReturnsNull()
     {
-        byte[] eth = FrameBuilders.BuildEthernetFrame(DstMac, SrcMac, 0x0800, [0xDD]);
+        byte[] eth = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0xDD]);
 
         byte[] blfData = new BlfTestGenerator()
             .AddEthernetFrame(1, eth, 1_000_000)
             .Build();
 
-        using BlfSource source = CreateLazySource(blfData);
+        using BlfSource source = _CreateLazySource(blfData);
         SourceTestFixture.InitializeAndStartSource(source);
 
         // Without reading, random access to an out-of-range ID should be null
@@ -200,7 +200,7 @@ internal sealed class BlfLazyScanTests
         // Build BLF with just a file header, no object data
         byte[] blfData = new BlfTestGenerator().Build();
 
-        using BlfSource source = CreateLazySource(blfData);
+        using BlfSource source = _CreateLazySource(blfData);
         SourceTestFixture.InitializeAndStartSource(source);
 
         await Assert.That(source.NextFrame()).IsNull();

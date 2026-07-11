@@ -21,10 +21,10 @@ namespace NetworkInspector.Exporters.Tests.Roundtrip;
 internal sealed class BlfRoundtripTests
 {
     /// <summary>Reference Unix epoch base in nanoseconds (April 2026, 10 µs aligned).</summary>
-    private const long EpochBaseNs = 1_777_000_000_000_000_000L;
+    private const long _EpochBaseNs = 1_777_000_000_000_000_000L;
 
     /// <summary>10 µs tick in nanoseconds — the BLF native timestamp resolution.</summary>
-    private const long TickNs = 10_000L;
+    private const long _TickNs = 10_000L;
 
     // ========================================================================
     // 1. Empty file (0 frames).
@@ -70,14 +70,14 @@ internal sealed class BlfRoundtripTests
             new Dictionary<string, object> { [FrameInterfacePropertyKeys.BlfChannel] = (ushort)1 });
         Frame[] originals =
         [
-            factory.Create(ifId, LinkType.Ethernet, EpochBaseNs + (123L * TickNs),
+            factory.Create(ifId, LinkType.Ethernet, _EpochBaseNs + (123L * _TickNs),
                 FrameGenerators.BuildEthernetIpv4UdpFrame(64)),
         ];
 
-        ExportAndClose(path, originals);
+        _ExportAndClose(path, originals);
 
         RoundtripAssertions.AssertTsharkMatchesOriginals(path, originals, RoundtripAssertions.ExactNs);
-        ReimportAndAssert(path, originals);
+        _ReimportAndAssert(path, originals);
         await ValueTask.CompletedTask.ConfigureAwait(false);
     }
 
@@ -105,18 +105,18 @@ internal sealed class BlfRoundtripTests
                 data[i] = (byte)(0x10 + i);
             }
             originals.Add(factory.Create(ifId, LinkType.CanSocketcan,
-                EpochBaseNs + (((long)dlc + 1) * TickNs),
+                _EpochBaseNs + (((long)dlc + 1) * _TickNs),
                 SocketCanGenerators.BuildCanClassic((uint)(0x100 + dlc), data)));
         }
         // Extended IDs (29-bit)
         originals.Add(factory.Create(ifId, LinkType.CanSocketcan,
-            EpochBaseNs + (50L * TickNs),
+            _EpochBaseNs + (50L * _TickNs),
             SocketCanGenerators.BuildCanClassic(0x1ABCDEF0, [0xDE, 0xAD, 0xBE, 0xEF], extended: true)));
 
-        ExportAndClose(path, originals);
+        _ExportAndClose(path, originals);
 
         RoundtripAssertions.AssertTsharkMatchesOriginals(path, originals, RoundtripAssertions.ExactNs);
-        ReimportAndAssert(path, originals);
+        _ReimportAndAssert(path, originals);
         await ValueTask.CompletedTask.ConfigureAwait(false);
     }
 
@@ -136,14 +136,14 @@ internal sealed class BlfRoundtripTests
 
         Frame[] originals =
         [
-            factory.Create(ifId, LinkType.CanSocketcan, EpochBaseNs + TickNs,
+            factory.Create(ifId, LinkType.CanSocketcan, _EpochBaseNs + _TickNs,
                 SocketCanGenerators.BuildCanClassic(0x123, [0xAA, 0xBB], extended: true)),
         ];
 
-        ExportAndClose(path, originals);
+        _ExportAndClose(path, originals);
 
         RoundtripAssertions.AssertTsharkMatchesOriginals(path, originals, RoundtripAssertions.ExactNs);
-        ReimportAndAssert(path, originals);
+        _ReimportAndAssert(path, originals);
         await ValueTask.CompletedTask.ConfigureAwait(false);
     }
 
@@ -174,18 +174,18 @@ internal sealed class BlfRoundtripTests
             }
             // Without BRS
             originals[idx++] = factory.Create(ifId, LinkType.CanSocketcan,
-                EpochBaseNs + (((long)idx + 1) * TickNs),
+                _EpochBaseNs + (((long)idx + 1) * _TickNs),
                 SocketCanGenerators.BuildCanFd((uint)(0x200 + i), payload));
             // With BRS + extended id
             originals[idx++] = factory.Create(ifId, LinkType.CanSocketcan,
-                EpochBaseNs + (((long)idx + 1) * TickNs),
+                _EpochBaseNs + (((long)idx + 1) * _TickNs),
                 SocketCanGenerators.BuildCanFd((uint)(0x10000000 + i), payload, extended: true, brs: true));
         }
 
-        ExportAndClose(path, originals);
+        _ExportAndClose(path, originals);
 
         RoundtripAssertions.AssertTsharkMatchesOriginals(path, originals, RoundtripAssertions.ExactNs);
-        ReimportAndAssert(path, originals);
+        _ReimportAndAssert(path, originals);
         await ValueTask.CompletedTask.ConfigureAwait(false);
     }
 
@@ -204,16 +204,16 @@ internal sealed class BlfRoundtripTests
             new Dictionary<string, object> { [FrameInterfacePropertyKeys.BlfChannel] = (ushort)1 });
         Frame[] originals =
         [
-            factory.Create(ifId, LinkType.Lin, EpochBaseNs + TickNs,
+            factory.Create(ifId, LinkType.Lin, _EpochBaseNs + _TickNs,
                 LinGenerators.BuildLinFrame(0x05, [0x11, 0x22, 0x33], checksum: 0x42)),
-            factory.Create(ifId, LinkType.Lin, EpochBaseNs + (2L * TickNs),
+            factory.Create(ifId, LinkType.Lin, _EpochBaseNs + (2L * _TickNs),
                 LinGenerators.BuildLinFrame(0x07, [0xAA, 0xBB, 0xCC, 0xDD], checksum: 0x77)),
         ];
 
-        ExportAndClose(path, originals);
+        _ExportAndClose(path, originals);
 
         RoundtripAssertions.AssertTsharkMatchesOriginals(path, originals, RoundtripAssertions.ExactNs);
-        ReimportAndAssert(path, originals);
+        _ReimportAndAssert(path, originals);
         await ValueTask.CompletedTask.ConfigureAwait(false);
     }
 
@@ -232,16 +232,16 @@ internal sealed class BlfRoundtripTests
             new Dictionary<string, object> { [FrameInterfacePropertyKeys.BlfChannel] = (ushort)1 });
         Frame[] originals =
         [
-            factory.Create(ifId, LinkType.Flexray, EpochBaseNs + TickNs,
+            factory.Create(ifId, LinkType.Flexray, _EpochBaseNs + _TickNs,
                 FlexRayGenerators.BuildFlexRayFrame(0, 10, 3, 0xABCD, [0xDE, 0xAD, 0xBE, 0xEF], sync: true)),
-            factory.Create(ifId, LinkType.Flexray, EpochBaseNs + (2L * TickNs),
+            factory.Create(ifId, LinkType.Flexray, _EpochBaseNs + (2L * _TickNs),
                 FlexRayGenerators.BuildFlexRayFrame(0, 20, 4, 0x1234, [0x01, 0x02, 0x03, 0x04, 0x05])),
         ];
 
-        ExportAndClose(path, originals);
+        _ExportAndClose(path, originals);
 
         RoundtripAssertions.AssertTsharkMatchesOriginals(path, originals, RoundtripAssertions.ExactNs);
-        ReimportAndAssert(path, originals);
+        _ReimportAndAssert(path, originals);
         await ValueTask.CompletedTask.ConfigureAwait(false);
     }
 
@@ -269,25 +269,25 @@ internal sealed class BlfRoundtripTests
 
         Frame[] originals =
         [
-            factory.Create(eth,  LinkType.Ethernet,    EpochBaseNs + (1L * TickNs),
+            factory.Create(eth,  LinkType.Ethernet,    _EpochBaseNs + (1L * _TickNs),
                 FrameGenerators.BuildEthernetIpv4UdpFrame(32)),
-            factory.Create(can1, LinkType.CanSocketcan, EpochBaseNs + (2L * TickNs),
+            factory.Create(can1, LinkType.CanSocketcan, _EpochBaseNs + (2L * _TickNs),
                 SocketCanGenerators.BuildCanClassic(0x111, [1, 2, 3])),
-            factory.Create(can2, LinkType.CanSocketcan, EpochBaseNs + (3L * TickNs),
+            factory.Create(can2, LinkType.CanSocketcan, _EpochBaseNs + (3L * _TickNs),
                 SocketCanGenerators.BuildCanFd(0x222, new byte[16], brs: true)),
-            factory.Create(lin,  LinkType.Lin,         EpochBaseNs + (4L * TickNs),
+            factory.Create(lin,  LinkType.Lin,         _EpochBaseNs + (4L * _TickNs),
                 LinGenerators.BuildLinFrame(0x09, [0x55, 0x66])),
-            factory.Create(fr,   LinkType.Flexray,     EpochBaseNs + (5L * TickNs),
+            factory.Create(fr,   LinkType.Flexray,     _EpochBaseNs + (5L * _TickNs),
                 FlexRayGenerators.BuildFlexRayFrame(0, 5, 1, 0xCAFE, [0xDE, 0xAD])),
             // Second Ethernet on the same channel — must still map consistently.
-            factory.Create(eth,  LinkType.Ethernet,    EpochBaseNs + (6L * TickNs),
+            factory.Create(eth,  LinkType.Ethernet,    _EpochBaseNs + (6L * _TickNs),
                 FrameGenerators.BuildEthernetIpv4UdpFrame(48)),
         ];
 
-        ExportAndClose(path, originals);
+        _ExportAndClose(path, originals);
 
         RoundtripAssertions.AssertTsharkMatchesOriginals(path, originals, RoundtripAssertions.ExactNs);
-        ReimportAndAssert(path, originals);
+        _ReimportAndAssert(path, originals);
         await ValueTask.CompletedTask.ConfigureAwait(false);
     }
 
@@ -309,15 +309,15 @@ internal sealed class BlfRoundtripTests
         Frame[] originals = new Frame[count];
         for (int i = 0; i < count; i++)
         {
-            long ts = EpochBaseNs + ((long)(i + 1) * TickNs);
+            long ts = _EpochBaseNs + ((long)(i + 1) * _TickNs);
             byte[] data = FrameGenerators.BuildEthernetIpv4UdpFrame(32 + (i % 16));
             originals[i] = factory.Create(ifId, LinkType.Ethernet, ts, data);
         }
 
-        ExportAndClose(path, originals);
+        _ExportAndClose(path, originals);
 
         RoundtripAssertions.AssertTsharkMatchesOriginals(path, originals, RoundtripAssertions.ExactNs);
-        ReimportAndAssert(path, originals);
+        _ReimportAndAssert(path, originals);
         await ValueTask.CompletedTask.ConfigureAwait(false);
     }
 
@@ -343,7 +343,7 @@ internal sealed class BlfRoundtripTests
         for (int i = 0; i < originals.Length; i++)
         {
             originals[i] = factory.Create(ifId, LinkType.Ethernet,
-                EpochBaseNs + ((long)(i + 1) * TickNs),
+                _EpochBaseNs + ((long)(i + 1) * _TickNs),
                 FrameGenerators.BuildEthernetIpv4UdpFrame(64 + (i % 32)));
         }
 
@@ -360,7 +360,7 @@ internal sealed class BlfRoundtripTests
         }
 
         RoundtripAssertions.AssertTsharkMatchesOriginals(path, originals, RoundtripAssertions.ExactNs);
-        ReimportAndAssert(path, originals);
+        _ReimportAndAssert(path, originals);
         await ValueTask.CompletedTask.ConfigureAwait(false);
     }
 
@@ -393,16 +393,16 @@ internal sealed class BlfRoundtripTests
         // output with the same absolute time as frame 0.
         Frame[] originals =
         [
-            factory.Create(ifId, LinkType.Ethernet, EpochBaseNs + (500L  * TickNs), data0),
-            factory.Create(ifId, LinkType.Ethernet, EpochBaseNs + (1_000L * TickNs), data1),
-            factory.Create(ifId, LinkType.Ethernet, EpochBaseNs + (250L  * TickNs), data2), // non-monotonic
+            factory.Create(ifId, LinkType.Ethernet, _EpochBaseNs + (500L  * _TickNs), data0),
+            factory.Create(ifId, LinkType.Ethernet, _EpochBaseNs + (1_000L * _TickNs), data1),
+            factory.Create(ifId, LinkType.Ethernet, _EpochBaseNs + (250L  * _TickNs), data2), // non-monotonic
         ];
 
-        ExportAndClose(path, originals);
+        _ExportAndClose(path, originals);
 
         // Build the expected representation after clamping: frame 2 appears with
         // the start-anchor timestamp (= frame 0's timestamp) in the output file.
-        long startAnchorNs = EpochBaseNs + (500L * TickNs);
+        long startAnchorNs = _EpochBaseNs + (500L * _TickNs);
         Frame[] expectedAfterClamping =
         [
             originals[0],
@@ -411,7 +411,7 @@ internal sealed class BlfRoundtripTests
         ];
 
         RoundtripAssertions.AssertTsharkMatchesOriginals(path, expectedAfterClamping, RoundtripAssertions.ExactNs);
-        ReimportAndAssert(path, expectedAfterClamping);
+        _ReimportAndAssert(path, expectedAfterClamping);
         await ValueTask.CompletedTask.ConfigureAwait(false);
     }
 
@@ -432,18 +432,18 @@ internal sealed class BlfRoundtripTests
         // Two frames share the same timestamp; both must round-trip intact.
         Frame[] originals =
         [
-            factory.Create(ifId, LinkType.Ethernet, EpochBaseNs + (500L * TickNs),
+            factory.Create(ifId, LinkType.Ethernet, _EpochBaseNs + (500L * _TickNs),
                 FrameGenerators.BuildEthernetIpv4UdpFrame(8)),
-            factory.Create(ifId, LinkType.Ethernet, EpochBaseNs + (1_000L * TickNs),
+            factory.Create(ifId, LinkType.Ethernet, _EpochBaseNs + (1_000L * _TickNs),
                 FrameGenerators.BuildEthernetIpv4UdpFrame(9)),
-            factory.Create(ifId, LinkType.Ethernet, EpochBaseNs + (1_000L * TickNs),
+            factory.Create(ifId, LinkType.Ethernet, _EpochBaseNs + (1_000L * _TickNs),
                 FrameGenerators.BuildEthernetIpv4UdpFrame(10)), // duplicate of frame 1
         ];
 
-        ExportAndClose(path, originals);
+        _ExportAndClose(path, originals);
 
         RoundtripAssertions.AssertTsharkMatchesOriginals(path, originals, RoundtripAssertions.ExactNs);
-        ReimportAndAssert(path, originals);
+        _ReimportAndAssert(path, originals);
         await ValueTask.CompletedTask.ConfigureAwait(false);
     }
 
@@ -464,7 +464,7 @@ internal sealed class BlfRoundtripTests
         for (int i = 0; i < originals.Length; i++)
         {
             originals[i] = factory.Create(ifId, LinkType.Ethernet,
-                EpochBaseNs + ((long)(i + 1) * TickNs),
+                _EpochBaseNs + ((long)(i + 1) * _TickNs),
                 FrameGenerators.BuildEthernetIpv4UdpFrame(16 + i));
         }
 
@@ -509,11 +509,11 @@ internal sealed class BlfRoundtripTests
         for (int i = 0; i < originals.Length; i++)
         {
             originals[i] = factory.Create(ifId, LinkType.Ethernet,
-                EpochBaseNs + ((long)(i + 1) * 100L * TickNs),
+                _EpochBaseNs + ((long)(i + 1) * 100L * _TickNs),
                 FrameGenerators.BuildEthernetIpv4UdpFrame(64));
         }
 
-        ExportAndClose(path, originals);
+        _ExportAndClose(path, originals);
 
         RoundtripAssertions.AssertTsharkMatchesOriginals(path, originals, RoundtripAssertions.ExactNs);
 
@@ -552,11 +552,11 @@ internal sealed class BlfRoundtripTests
         for (int i = 0; i < count; i++)
         {
             originals[i] = factory.Create(ifId, LinkType.Ethernet,
-                EpochBaseNs + ((long)(i + 1) * TickNs),
+                _EpochBaseNs + ((long)(i + 1) * _TickNs),
                 FrameGenerators.BuildEthernetIpv4UdpFrame(24 + i));
         }
 
-        ExportAndClose(path, originals);
+        _ExportAndClose(path, originals);
 
         // Random access requires the index to be populated → use Full scan.
         using BlfSource source = BlfSource.Open(path, new BlfSourceOptions { ScanMode = ScanMode.Full });
@@ -584,7 +584,7 @@ internal sealed class BlfRoundtripTests
     // Helpers
     // ========================================================================
 
-    private static void ExportAndClose(string path, IReadOnlyList<Frame> frames)
+    private static void _ExportAndClose(string path, IReadOnlyList<Frame> frames)
     {
         using BlfExporter exporter = BlfExporter.CreateBuilder()
             .ToFile(path)
@@ -598,7 +598,7 @@ internal sealed class BlfRoundtripTests
         exporter.OnFinish();
     }
 
-    private static void ReimportAndAssert(string path, IReadOnlyList<Frame> originals)
+    private static void _ReimportAndAssert(string path, IReadOnlyList<Frame> originals)
     {
         using BlfSource source = BlfSource.Open(path);
         FrameInterfaceRegistry registry = RoundtripAssertions.StartSource(source);

@@ -84,7 +84,7 @@ internal sealed class BitmapContainer : IContainer
         if (other is BitmapContainer bmp)
         {
             BitmapContainer result = new();
-            result._Cardinality = SimdAnd(
+            result._Cardinality = _SimdAnd(
                 Bitmap, bmp.Bitmap, result.Bitmap);
 
             // Downgrade to array if sparse
@@ -103,7 +103,7 @@ internal sealed class BitmapContainer : IContainer
         if (other is BitmapContainer bmp)
         {
             BitmapContainer result = new();
-            result._Cardinality = SimdOr(
+            result._Cardinality = _SimdOr(
                 Bitmap, bmp.Bitmap, result.Bitmap);
             return result;
         }
@@ -115,7 +115,7 @@ internal sealed class BitmapContainer : IContainer
             BitmapContainer cloneRun = new();
             Array.Copy(Bitmap, cloneRun.Bitmap, BitmapSize);
             run.SetRangesIn(cloneRun.Bitmap);
-            cloneRun._Cardinality = PopCountAll(cloneRun.Bitmap);
+            cloneRun._Cardinality = _PopCountAll(cloneRun.Bitmap);
             return cloneRun;
         }
 
@@ -142,7 +142,7 @@ internal sealed class BitmapContainer : IContainer
         if (other is BitmapContainer bmp)
         {
             BitmapContainer result = new();
-            result._Cardinality = SimdAndNot(
+            result._Cardinality = _SimdAndNot(
                 Bitmap, bmp.Bitmap, result.Bitmap);
 
             if (result._Cardinality <= ArrayContainer.MaxCapacity)
@@ -158,7 +158,7 @@ internal sealed class BitmapContainer : IContainer
             BitmapContainer cloneRun = new();
             Array.Copy(Bitmap, cloneRun.Bitmap, BitmapSize);
             run.ClearRangesIn(cloneRun.Bitmap);
-            cloneRun._Cardinality = PopCountAll(cloneRun.Bitmap);
+            cloneRun._Cardinality = _PopCountAll(cloneRun.Bitmap);
             if (cloneRun._Cardinality <= ArrayContainer.MaxCapacity)
             {
                 return BitmapToArray(cloneRun);
@@ -200,7 +200,7 @@ internal sealed class BitmapContainer : IContainer
         if (other is BitmapContainer bmp)
         {
             BitmapContainer result = new();
-            result._Cardinality = SimdXor(
+            result._Cardinality = _SimdXor(
                 Bitmap, bmp.Bitmap, result.Bitmap);
 
             if (result._Cardinality <= ArrayContainer.MaxCapacity)
@@ -216,7 +216,7 @@ internal sealed class BitmapContainer : IContainer
             BitmapContainer cloneRun = new();
             Array.Copy(Bitmap, cloneRun.Bitmap, BitmapSize);
             run.ToggleRangesIn(cloneRun.Bitmap);
-            cloneRun._Cardinality = PopCountAll(cloneRun.Bitmap);
+            cloneRun._Cardinality = _PopCountAll(cloneRun.Bitmap);
             if (cloneRun._Cardinality <= ArrayContainer.MaxCapacity)
             {
                 return BitmapToArray(cloneRun);
@@ -258,16 +258,16 @@ internal sealed class BitmapContainer : IContainer
     #region In-place mutation methods
 
     /// <summary>In-place AND. Returns recomputed cardinality.</summary>
-    internal void AndWith(BitmapContainer other) => _Cardinality = SimdAndInPlace(Bitmap, other.Bitmap);
+    internal void AndWith(BitmapContainer other) => _Cardinality = _SimdAndInPlace(Bitmap, other.Bitmap);
 
     /// <summary>In-place OR. Returns recomputed cardinality.</summary>
-    internal void OrWith(BitmapContainer other) => _Cardinality = SimdOrInPlace(Bitmap, other.Bitmap);
+    internal void OrWith(BitmapContainer other) => _Cardinality = _SimdOrInPlace(Bitmap, other.Bitmap);
 
     /// <summary>In-place ANDNOT. Returns recomputed cardinality.</summary>
-    internal void AndNotWith(BitmapContainer other) => _Cardinality = SimdAndNotInPlace(Bitmap, other.Bitmap);
+    internal void AndNotWith(BitmapContainer other) => _Cardinality = _SimdAndNotInPlace(Bitmap, other.Bitmap);
 
     /// <summary>In-place XOR. Returns recomputed cardinality.</summary>
-    internal void XorWith(BitmapContainer other) => _Cardinality = SimdXorInPlace(Bitmap, other.Bitmap);
+    internal void XorWith(BitmapContainer other) => _Cardinality = _SimdXorInPlace(Bitmap, other.Bitmap);
 
     #endregion
 
@@ -277,7 +277,7 @@ internal sealed class BitmapContainer : IContainer
     /// Total population count of all bits set in <paramref name="bitmap"/>. Used by the
     /// Bitmap×Run direct paths to recompute cardinality after applying range masks.
     /// </summary>
-    private static int PopCountAll(ulong[] bitmap)
+    private static int _PopCountAll(ulong[] bitmap)
     {
         int total = 0;
         for (int i = 0; i < bitmap.Length; i++)
@@ -292,7 +292,7 @@ internal sealed class BitmapContainer : IContainer
     /// Uses Vector256 (processes 4 ulongs = 256 bits per iteration).
     /// Falls back to scalar loop on platforms without hardware vectors.
     /// </summary>
-    private static int SimdAnd(ulong[] a, ulong[] b, ulong[] dst)
+    private static int _SimdAnd(ulong[] a, ulong[] b, ulong[] dst)
     {
         int cardinality = 0;
         ReadOnlySpan<ulong> spanA = a.AsSpan();
@@ -346,7 +346,7 @@ internal sealed class BitmapContainer : IContainer
     }
 
     /// <summary>SIMD OR: dst[i] = a[i] | b[i], returns total popcount.</summary>
-    private static int SimdOr(ulong[] a, ulong[] b, ulong[] dst)
+    private static int _SimdOr(ulong[] a, ulong[] b, ulong[] dst)
     {
         int cardinality = 0;
         ReadOnlySpan<ulong> spanA = a.AsSpan();
@@ -397,7 +397,7 @@ internal sealed class BitmapContainer : IContainer
     }
 
     /// <summary>SIMD ANDNOT: dst[i] = a[i] &amp; ~b[i], returns total popcount.</summary>
-    private static int SimdAndNot(ulong[] a, ulong[] b, ulong[] dst)
+    private static int _SimdAndNot(ulong[] a, ulong[] b, ulong[] dst)
     {
         int cardinality = 0;
         ReadOnlySpan<ulong> spanA = a.AsSpan();
@@ -448,7 +448,7 @@ internal sealed class BitmapContainer : IContainer
     }
 
     /// <summary>SIMD XOR: dst[i] = a[i] ^ b[i], returns total popcount.</summary>
-    private static int SimdXor(ulong[] a, ulong[] b, ulong[] dst)
+    private static int _SimdXor(ulong[] a, ulong[] b, ulong[] dst)
     {
         int cardinality = 0;
         ReadOnlySpan<ulong> spanA = a.AsSpan();
@@ -503,7 +503,7 @@ internal sealed class BitmapContainer : IContainer
     #region In-place SIMD operations
 
     /// <summary>In-place AND: this[i] &amp;= other[i], returns total popcount.</summary>
-    private static int SimdAndInPlace(ulong[] data, ulong[] other)
+    private static int _SimdAndInPlace(ulong[] data, ulong[] other)
     {
         int cardinality = 0;
         Span<ulong> spanData = data.AsSpan();
@@ -551,7 +551,7 @@ internal sealed class BitmapContainer : IContainer
     }
 
     /// <summary>In-place OR: this[i] |= other[i], returns total popcount.</summary>
-    private static int SimdOrInPlace(ulong[] data, ulong[] other)
+    private static int _SimdOrInPlace(ulong[] data, ulong[] other)
     {
         int cardinality = 0;
         Span<ulong> spanData = data.AsSpan();
@@ -599,7 +599,7 @@ internal sealed class BitmapContainer : IContainer
     }
 
     /// <summary>In-place ANDNOT: this[i] &amp;= ~other[i], returns total popcount.</summary>
-    private static int SimdAndNotInPlace(ulong[] data, ulong[] other)
+    private static int _SimdAndNotInPlace(ulong[] data, ulong[] other)
     {
         int cardinality = 0;
         Span<ulong> spanData = data.AsSpan();
@@ -647,7 +647,7 @@ internal sealed class BitmapContainer : IContainer
     }
 
     /// <summary>In-place XOR: this[i] ^= other[i], returns total popcount.</summary>
-    private static int SimdXorInPlace(ulong[] data, ulong[] other)
+    private static int _SimdXorInPlace(ulong[] data, ulong[] other)
     {
         int cardinality = 0;
         Span<ulong> spanData = data.AsSpan();

@@ -31,16 +31,16 @@ internal sealed class SessionPoolStressTests
     private static readonly IPv4Address _SrcIp4 = IPv4Address.FromBytes([10, 0, 0, 1]);
     private static readonly IPv4Address _DstIp4 = IPv4Address.FromBytes([10, 0, 0, 2]);
 
-    private const int EthHeaderSize = 14;
-    private const int IPv4HeaderSize = 20;
-    private const int UdpHeaderSize = 8;
+    private const int _EthHeaderSize = 14;
+    private const int _IPv4HeaderSize = 20;
+    private const int _UdpHeaderSize = 8;
 
     [Test]
     public async Task SessionPool_ConcurrentRentAndReturn_ProducesValidFrames()
     {
         EthernetLayer eth = new(_DstMac, _SrcMac);
         IPv4LayerWithAutoIpId ip = new(_SrcIp4, _DstIp4, initialIdentification: 0, dontFragment: true);
-        UdpLayer udp = new(srcPort: 1234, dstPort: 5678, checksum: Auto<ushort>.Explicit(0));
+        UdpLayer udp = new(srcPort: 1234, dstPort: 5678, checksum: Auto.Explicit((ushort)0));
 
         StatefulCreatedStack<
             Stack<UdpLayer,
@@ -66,7 +66,7 @@ internal sealed class SessionPoolStressTests
                 barrier.Wait();
 
                 byte[] payload = [0xDE, 0xAD, 0xBE, 0xEF];
-                int expectedFrameLen = EthHeaderSize + IPv4HeaderSize + UdpHeaderSize + payload.Length;
+                int expectedFrameLen = _EthHeaderSize + _IPv4HeaderSize + _UdpHeaderSize + payload.Length;
                 byte[] buf = new byte[expectedFrameLen];
 
                 for (int i = 0; i < Iterations; i++)
@@ -95,7 +95,7 @@ internal sealed class SessionPoolStressTests
                     }
 
                     // Validate IP version + IHL byte (0x45 = version 4, header length 5).
-                    if (buf[EthHeaderSize] != 0x45)
+                    if (buf[_EthHeaderSize] != 0x45)
                     {
                         Interlocked.Increment(ref failCount);
                     }

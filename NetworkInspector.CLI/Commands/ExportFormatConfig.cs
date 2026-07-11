@@ -59,13 +59,13 @@ internal abstract class ExportFormatConfig
             paramString = "";
         }
 
-        Dictionary<string, string> parameters = ParseParameters(paramString);
+        Dictionary<string, string> parameters = _ParseParameters(paramString);
 
         return type.ToUpperInvariant() switch
         {
-            "JSON" => CreateJsonConfig(parameters),
-            "PBF" => CreatePbfConfig(parameters),
-            "TEXT" => CreateTextConfig(parameters),
+            "JSON" => _CreateJsonConfig(parameters),
+            "PBF" => _CreatePbfConfig(parameters),
+            "TEXT" => _CreateTextConfig(parameters),
             _ => throw new ArgumentException($"Unknown export format: '{type}'. Supported: json, pbf, text."),
         };
     }
@@ -104,7 +104,7 @@ internal abstract class ExportFormatConfig
     /// <c>compressed=true</c>.  This allows shorthands like
     /// <c>pbf:format=columnar,compressed</c>.
     /// </remarks>
-    private static Dictionary<string, string> ParseParameters(string paramString)
+    private static Dictionary<string, string> _ParseParameters(string paramString)
     {
         Dictionary<string, string> result = new(StringComparer.OrdinalIgnoreCase);
         if (string.IsNullOrWhiteSpace(paramString))
@@ -136,7 +136,7 @@ internal abstract class ExportFormatConfig
     }
 
     /// <summary>Creates a JSON format config from parsed parameters.</summary>
-    private static JsonFormatConfig CreateJsonConfig(Dictionary<string, string> parameters)
+    private static JsonFormatConfig _CreateJsonConfig(Dictionary<string, string> parameters)
     {
         JsonExportFormat format = JsonExportFormat.Compact;
 
@@ -155,7 +155,7 @@ internal abstract class ExportFormatConfig
     }
 
     /// <summary>Creates a text format config from parsed parameters.</summary>
-    private static TextFormatConfig CreateTextConfig(Dictionary<string, string> parameters)
+    private static TextFormatConfig _CreateTextConfig(Dictionary<string, string> parameters)
     {
         TextDetailLevel level = TextDetailLevel.Standard;
         int maxTextLength = 256;
@@ -188,7 +188,7 @@ internal abstract class ExportFormatConfig
     }
 
     /// <summary>Creates a PBF format config from parsed parameters.</summary>
-    private static PbfFormatConfig CreatePbfConfig(Dictionary<string, string> parameters)
+    private static PbfFormatConfig _CreatePbfConfig(Dictionary<string, string> parameters)
     {
         PbfExportFormat format = PbfExportFormat.Standard;
         bool compressed = true;

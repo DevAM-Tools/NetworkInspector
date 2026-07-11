@@ -27,7 +27,7 @@ public readonly struct TcpLayer :
     IProvidesNextProtocolValue<IpNextProtocolKind>, IRequiresPseudoHeader, IStreamCarrier
 {
     /// <summary>Offset of the Checksum field within the TCP header.</summary>
-    private const int ChecksumOffset = 16;
+    private const int _ChecksumOffset = 16;
 
     private readonly ushort _SrcPort;
     private readonly ushort _DstPort;
@@ -52,8 +52,8 @@ public readonly struct TcpLayer :
     /// <param name="windowSize">Window size; default 65535.</param>
     /// <param name="urgentPointer">Urgent pointer; default 0.</param>
     /// <param name="checksum">
-    /// Checksum field; <see cref="Auto{T}.Compute"/> (default) means auto-compute over
-    /// the IP pseudo-header + TCP segment.  Use <see cref="Auto{T}.Explicit"/>
+    /// Checksum field; <see cref="Auto.Compute"/> (default) means auto-compute over
+    /// the IP pseudo-header + TCP segment.  Use <see cref="Auto.Explicit"/>
     /// to pin (corruption / conformance tests).
     /// </param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -113,20 +113,20 @@ public readonly struct TcpLayer :
 
         if (_ChecksumIsExplicit)
         {
-            BinaryPrimitives.WriteUInt16BigEndian(frame.Slice(myOffset + ChecksumOffset, 2), _ExplicitChecksum);
+            BinaryPrimitives.WriteUInt16BigEndian(frame.Slice(myOffset + _ChecksumOffset, 2), _ExplicitChecksum);
             return;
         }
 
-        ComputeChecksum(frame, myOffset, myLength, in ctx);
+        _ComputeChecksum(frame, myOffset, myLength, in ctx);
     }
 
     /// <summary>Computes the TCP checksum over the IP pseudo-header plus the TCP segment.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static void ComputeChecksum(Span<byte> frame, int myOffset, int myLength, in PostFixContext ctx)
+    private static void _ComputeChecksum(Span<byte> frame, int myOffset, int myLength, in PostFixContext ctx)
     {
         // Zero the checksum field before computing.
-        frame[myOffset + ChecksumOffset] = 0;
-        frame[myOffset + ChecksumOffset + 1] = 0;
+        frame[myOffset + _ChecksumOffset] = 0;
+        frame[myOffset + _ChecksumOffset + 1] = 0;
 
         ReadOnlySpan<byte> segment = frame.Slice(myOffset, myLength);
         ReadOnlySpan<byte> srcIp = ctx.PseudoSrcIp[..ctx.PseudoIpLength];
@@ -136,6 +136,6 @@ public readonly struct TcpLayer :
             ? ChecksumUtils.PseudoHeaderIPv6(srcIp, dstIp, IpProtocols.Tcp, segment)
             : ChecksumUtils.PseudoHeaderIPv4(srcIp, dstIp, IpProtocols.Tcp, segment);
 
-        BinaryPrimitives.WriteUInt16BigEndian(frame.Slice(myOffset + ChecksumOffset, 2), checksum);
+        BinaryPrimitives.WriteUInt16BigEndian(frame.Slice(myOffset + _ChecksumOffset, 2), checksum);
     }
 }

@@ -82,7 +82,15 @@ public readonly struct SignalPduLayer : IStatelessLayer, IPayloadLayer, IPseudoH
     public int HeaderSize
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _Layout is null ? _RawBytes.Length : _Layout.ByteLength;
+        get
+        {
+            if (_Layout is null)
+            {
+                return _RawBytes.Length;
+            }
+
+            return _Layout.ByteLength;
+        }
     }
 
     /// <inheritdoc />
@@ -103,16 +111,16 @@ public readonly struct SignalPduLayer : IStatelessLayer, IPayloadLayer, IPseudoH
         // Static signals are always rendered.
         foreach (SignalSpec sig in layout.Signals)
         {
-            EncodeSignal(dst, sig, values);
+            _EncodeSignal(dst, sig, values);
         }
 
         // Mux: write the selector, then render only the matching group.
         if (layout.Mux is { } mux)
         {
-            ulong muxRaw = ResolveMuxRaw(mux, values);
+            ulong muxRaw = _ResolveMuxRaw(mux, values);
 
             // Emit selector itself as a virtual unsigned signal.
-            WriteRawBits(dst, mux.StartBit, mux.BitLength, muxRaw, mux.Endian);
+            _WriteRawBits(dst, mux.StartBit, mux.BitLength, muxRaw, mux.Endian);
 
             bool matched = false;
             foreach (MuxGroupSpec group in layout.MuxGroups)
@@ -121,7 +129,7 @@ public readonly struct SignalPduLayer : IStatelessLayer, IPayloadLayer, IPseudoH
                 {
                     foreach (SignalSpec sig in group.Signals)
                     {
-                        EncodeSignal(dst, sig, values);
+                        _EncodeSignal(dst, sig, values);
                     }
                     matched = true;
                     break;
@@ -151,7 +159,7 @@ public readonly struct SignalPduLayer : IStatelessLayer, IPayloadLayer, IPseudoH
     /// the selector itself), and otherwise throws so a missing mux value
     /// fails loudly instead of silently rendering group 0.
     /// </summary>
-    private static ulong ResolveMuxRaw(MuxSpec mux, SignalValueSet values)
+    private static ulong _ResolveMuxRaw(MuxSpec mux, SignalValueSet values)
     {
         if (values.TryGetRaw(mux.Name, out ulong raw))
         {
@@ -170,7 +178,7 @@ public readonly struct SignalPduLayer : IStatelessLayer, IPayloadLayer, IPseudoH
     /// computes the raw bits from the value set, masks to <see cref="SignalSpec.BitLength"/>
     /// and writes them at <see cref="SignalSpec.StartBit"/> with the requested endianness.
     /// </summary>
-    private static void EncodeSignal(scoped Span<byte> dst, SignalSpec sig, SignalValueSet values)
+    private static void _EncodeSignal(scoped Span<byte> dst, SignalSpec sig, SignalValueSet values)
     {
         ulong raw;
 
@@ -181,7 +189,7 @@ public readonly struct SignalPduLayer : IStatelessLayer, IPayloadLayer, IPseudoH
         }
         else if (values.TryGetPhysical(sig.Name, out double physical))
         {
-            raw = ToRawBits(sig, physical);
+            raw = _ToRawBits(sig, physical);
         }
         else
         {
@@ -190,7 +198,7 @@ public readonly struct SignalPduLayer : IStatelessLayer, IPayloadLayer, IPseudoH
             raw = 0;
         }
 
-        WriteRawBits(dst, sig.StartBit, sig.BitLength, raw, sig.Endian);
+        _WriteRawBits(dst, sig.StartBit, sig.BitLength, raw, sig.Endian);
     }
 
     /// <summary>
@@ -198,7 +206,7 @@ public readonly struct SignalPduLayer : IStatelessLayer, IPayloadLayer, IPseudoH
     /// representation per the signal type, then masks to
     /// <see cref="SignalSpec.BitLength"/>.
     /// </summary>
-    private static ulong ToRawBits(SignalSpec sig, double physical)
+    private static ulong _ToRawBits(SignalSpec sig, double physical)
     {
         ulong mask = sig.BitLength == 64 ? ulong.MaxValue : (1UL << sig.BitLength) - 1;
 
@@ -249,7 +257,7 @@ public readonly struct SignalPduLayer : IStatelessLayer, IPayloadLayer, IPseudoH
     /// <c>SignalDecoder.ExtractBigEndian</c>; the little-endian path is the
     /// inverse of <c>SignalDecoder.ExtractLittleEndian</c>.
     /// </summary>
-    private static void WriteRawBits(scoped Span<byte> dst, int startBit, int bitLength, ulong raw, SignalEndian endian)
+    private static void _WriteRawBits(scoped Span<byte> dst, int startBit, int bitLength, ulong raw, SignalEndian endian)
     {
         if (bitLength <= 0 || bitLength > 64)
         {
@@ -258,11 +266,11 @@ public readonly struct SignalPduLayer : IStatelessLayer, IPayloadLayer, IPseudoH
 
         if (endian == SignalEndian.Big)
         {
-            WriteBigEndianBits(dst, startBit, bitLength, raw);
+            _WriteBigEndianBits(dst, startBit, bitLength, raw);
         }
         else
         {
-            WriteLittleEndianBits(dst, startBit, bitLength, raw);
+            _WriteLittleEndianBits(dst, startBit, bitLength, raw);
         }
     }
 
@@ -271,7 +279,7 @@ public readonly struct SignalPduLayer : IStatelessLayer, IPayloadLayer, IPseudoH
     /// MSB position of the field; bits flow from MSB to LSB across byte
     /// boundaries with each new byte starting at bit position 7.
     /// </summary>
-    private static void WriteBigEndianBits(scoped Span<byte> dst, int startBit, int bitLength, ulong raw)
+    private static void _WriteBigEndianBits(scoped Span<byte> dst, int startBit, int bitLength, ulong raw)
     {
         int bytePos = startBit / 8;
         int bitPos = startBit % 8;
@@ -302,7 +310,7 @@ public readonly struct SignalPduLayer : IStatelessLayer, IPayloadLayer, IPseudoH
     /// LSB position of the field; bit i of <paramref name="raw"/> ends up at
     /// (byteIndex = (startBit + i) / 8, bitIndex = (startBit + i) % 8).
     /// </summary>
-    private static void WriteLittleEndianBits(scoped Span<byte> dst, int startBit, int bitLength, ulong raw)
+    private static void _WriteLittleEndianBits(scoped Span<byte> dst, int startBit, int bitLength, ulong raw)
     {
         int currentBit = startBit;
         for (int i = 0; i < bitLength; i++)

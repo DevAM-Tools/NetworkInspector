@@ -10,43 +10,77 @@ namespace NetworkInspector.Protocols.Icmpv6;
 internal static class Icmpv6NdpParser
 {
     // NDP message types
-    private const byte TypeRouterSolicitation = 133;
-    private const byte TypeRouterAdvertisement = 134;
-    private const byte TypeNeighborSolicitation = 135;
-    private const byte TypeNeighborAdvertisement = 136;
-    private const byte TypeRedirect = 137;
+    private const byte _TypeRouterSolicitation = 133;
+    private const byte _TypeRouterAdvertisement = 134;
+    private const byte _TypeNeighborSolicitation = 135;
+    private const byte _TypeNeighborAdvertisement = 136;
+    private const byte _TypeRedirect = 137;
 
     // NDP option types
-    private const byte OptSourceLinkAddr = 1;
-    private const byte OptTargetLinkAddr = 2;
-    private const byte OptPrefixInfo = 3;
-    private const byte OptMtu = 5;
-    private const byte OptRdnss = 25;
+    private const byte _OptSourceLinkAddr = 1;
+    private const byte _OptTargetLinkAddr = 2;
+    private const byte _OptPrefixInfo = 3;
+    private const byte _OptMtu = 5;
+    private const byte _OptRdnss = 25;
 
     /// <summary>
     /// Returns true if the ICMPv6 type is a known NDP message type (133-137).
     /// </summary>
     internal static bool IsNdpType(byte type) =>
-        type is >= TypeRouterSolicitation and <= TypeRedirect;
+        type is >= _TypeRouterSolicitation and <= _TypeRedirect;
 
     /// <summary>
     /// Returns the offset at which NDP options begin for the given message type, or -1 when the
     /// fixed header for that type is truncated. Mirrors the per-type length guards in the emitting
     /// Parse* helpers so the eager detection path agrees with what the populator actually emits.
     /// </summary>
-    private static int OptionsOffset(byte type, int bodyLength) => type switch
+    private static int _OptionsOffset(byte type, int bodyLength)
     {
-        TypeRouterSolicitation => bodyLength >= 4 ? 4 : -1,
-        TypeRouterAdvertisement => bodyLength >= 12 ? 12 : -1,
-        TypeNeighborSolicitation => bodyLength >= 20 ? 20 : -1,
-        TypeNeighborAdvertisement => bodyLength >= 20 ? 20 : -1,
-        TypeRedirect => bodyLength >= 36 ? 36 : -1,
-        _ => -1
-    };
+        switch (type)
+        {
+            case _TypeRouterSolicitation:
+                if (bodyLength >= 4)
+                {
+                    return 4;
+                }
+
+                return -1;
+            case _TypeRouterAdvertisement:
+                if (bodyLength >= 12)
+                {
+                    return 12;
+                }
+
+                return -1;
+            case _TypeNeighborSolicitation:
+                if (bodyLength >= 20)
+                {
+                    return 20;
+                }
+
+                return -1;
+            case _TypeNeighborAdvertisement:
+                if (bodyLength >= 20)
+                {
+                    return 20;
+                }
+
+                return -1;
+            case _TypeRedirect:
+                if (bodyLength >= 36)
+                {
+                    return 36;
+                }
+
+                return -1;
+            default:
+                return -1;
+        }
+    }
 
     /// <summary>
     /// Scans an NDP message body to decide which option-specific presence groups apply, mirroring
-    /// the option walk in <see cref="ParseOptions"/> without emitting any fields. Used by the eager
+    /// the option walk in <see cref="_ParseOptions"/> without emitting any fields. Used by the eager
     /// parse path so the presence index records icmpv6.nd.opt / .prefix / .mtu / .rdnss only when the
     /// lazy populator will actually emit a field in that group (content-consistent, no false positives).
     /// This duplicate walk is the deliberate cost of recording content-dependent groups eagerly while
@@ -61,7 +95,7 @@ internal static class Icmpv6NdpParser
         hasMtu = false;
         hasRdnss = false;
 
-        int optionsOffset = OptionsOffset(type, body.Length);
+        int optionsOffset = _OptionsOffset(type, body.Length);
         if (optionsOffset <= 0 || optionsOffset >= body.Length)
         {
             return;
@@ -76,7 +110,7 @@ internal static class Icmpv6NdpParser
 
             if (optLenUnits == 0)
             {
-                break; // invalid length — matches the ParseOptions guard
+                break; // invalid length — matches the _ParseOptions guard
             }
 
             int optLen = optLenUnits * 8;
@@ -85,20 +119,20 @@ internal static class Icmpv6NdpParser
                 break; // truncated option
             }
 
-            // ParseOptions appends an option container for every in-bounds option.
+            // _ParseOptions appends an option container for every in-bounds option.
             hasAnyOption = true;
 
             // Option-specific helpers emit their fields only when the option is long enough,
             // so the group thresholds here match those guards exactly.
             switch (optType)
             {
-                case OptPrefixInfo when optLen >= 32:
+                case _OptPrefixInfo when optLen >= 32:
                     hasPrefix = true;
                     break;
-                case OptMtu when optLen >= 8:
+                case _OptMtu when optLen >= 8:
                     hasMtu = true;
                     break;
-                case OptRdnss when optLen >= 24:
+                case _OptRdnss when optLen >= 24:
                     hasRdnss = true;
                     break;
             }
@@ -124,25 +158,25 @@ internal static class Icmpv6NdpParser
         // Each NDP message type has a fixed-length header after the 4-byte ICMPv6 header
         int optionsOffset = type switch
         {
-            TypeRouterSolicitation => ParseRouterSolicitation(in container, body, in f),
-            TypeRouterAdvertisement => ParseRouterAdvertisement(in container, body, in f),
-            TypeNeighborSolicitation => ParseNeighborSolicitation(in container, body, in f),
-            TypeNeighborAdvertisement => ParseNeighborAdvertisement(in container, body, in f),
-            TypeRedirect => ParseRedirect(in container, body, in f),
+            _TypeRouterSolicitation => _ParseRouterSolicitation(in container, body, in f),
+            _TypeRouterAdvertisement => _ParseRouterAdvertisement(in container, body, in f),
+            _TypeNeighborSolicitation => _ParseNeighborSolicitation(in container, body, in f),
+            _TypeNeighborAdvertisement => _ParseNeighborAdvertisement(in container, body, in f),
+            _TypeRedirect => _ParseRedirect(in container, body, in f),
             _ => -1 // Should not happen — caller checks IsNdpType first
         };
 
         // Parse NDP options after the fixed header
         if (optionsOffset > 0 && optionsOffset < body.Length)
         {
-            ParseOptions(in container, body[optionsOffset..], in f);
+            _ParseOptions(in container, body[optionsOffset..], in f);
         }
     }
 
     /// <summary>
     /// Router Solicitation (type 133): 4 reserved bytes, then options.
     /// </summary>
-    private static int ParseRouterSolicitation(
+    private static int _ParseRouterSolicitation(
         in MutField container, ReadOnlySpan<byte> body, in Icmpv6NdpFieldIds f)
     {
         // Body: 4 bytes reserved (already consumed as part of body[0..4])
@@ -157,7 +191,7 @@ internal static class Icmpv6NdpParser
     /// Router Advertisement (type 134): cur_hop_limit, M/O flags, router lifetime,
     /// reachable time, retrans timer (12 bytes), then options.
     /// </summary>
-    private static int ParseRouterAdvertisement(
+    private static int _ParseRouterAdvertisement(
         in MutField container, ReadOnlySpan<byte> body, in Icmpv6NdpFieldIds f)
     {
         if (body.Length < 12)
@@ -199,7 +233,7 @@ internal static class Icmpv6NdpParser
     /// <summary>
     /// Neighbor Solicitation (type 135): 4 reserved bytes + 16-byte target address, then options.
     /// </summary>
-    private static int ParseNeighborSolicitation(
+    private static int _ParseNeighborSolicitation(
         in MutField container, ReadOnlySpan<byte> body, in Icmpv6NdpFieldIds f)
     {
         if (body.Length < 20)
@@ -207,14 +241,14 @@ internal static class Icmpv6NdpParser
             return -1;
         }
 
-        AppendIpv6Address(in container, f.TargetAddress, body[4..20], "Target Address");
+        _AppendIpv6Address(in container, f.TargetAddress, body[4..20], "Target Address");
         return 20; // Options start at offset 20
     }
 
     /// <summary>
     /// Neighbor Advertisement (type 136): flags (4 bytes) + 16-byte target address, then options.
     /// </summary>
-    private static int ParseNeighborAdvertisement(
+    private static int _ParseNeighborAdvertisement(
         in MutField container, ReadOnlySpan<byte> body, in Icmpv6NdpFieldIds f)
     {
         if (body.Length < 20)
@@ -234,14 +268,14 @@ internal static class Icmpv6NdpParser
         naFlagsField.Append(f.NaFlagSolicited, FieldValue.NewBool(solicited));
         naFlagsField.Append(f.NaFlagOverride, FieldValue.NewBool(overrideFlag));
 
-        AppendIpv6Address(in container, f.TargetAddress, body[4..20], "Target Address");
+        _AppendIpv6Address(in container, f.TargetAddress, body[4..20], "Target Address");
         return 20; // Options start at offset 20
     }
 
     /// <summary>
     /// Redirect (type 137): 4 reserved bytes + 16-byte target + 16-byte destination, then options.
     /// </summary>
-    private static int ParseRedirect(
+    private static int _ParseRedirect(
         in MutField container, ReadOnlySpan<byte> body, in Icmpv6NdpFieldIds f)
     {
         if (body.Length < 36)
@@ -249,15 +283,15 @@ internal static class Icmpv6NdpParser
             return -1;
         }
 
-        AppendIpv6Address(in container, f.TargetAddress, body[4..20], "Target Address");
-        AppendIpv6Address(in container, f.RedirectDstAddress, body[20..36], "Destination Address");
+        _AppendIpv6Address(in container, f.TargetAddress, body[4..20], "Target Address");
+        _AppendIpv6Address(in container, f.RedirectDstAddress, body[20..36], "Destination Address");
         return 36; // Options start at offset 36
     }
 
     /// <summary>
     /// Parses NDP options (TLV format: type=1 byte, length=1 byte in 8-byte units).
     /// </summary>
-    private static void ParseOptions(
+    private static void _ParseOptions(
         in MutField container, ReadOnlySpan<byte> data, in Icmpv6NdpFieldIds f)
     {
         int offset = 0;
@@ -279,7 +313,7 @@ internal static class Icmpv6NdpParser
             }
 
             ReadOnlySpan<byte> optData = data.Slice(offset, optLen);
-            string optName = GetOptionName(optType);
+            string optName = _GetOptionName(optType);
 
             MutField optField = container.AppendWithCustomText(
                 f.OptContainer, FieldValue.None,
@@ -292,18 +326,18 @@ internal static class Icmpv6NdpParser
             // Parse option-specific data (starts at byte 2 within the option)
             switch (optType)
             {
-                case OptSourceLinkAddr:
-                case OptTargetLinkAddr:
-                    ParseLinkAddrOption(in optField, optData, in f);
+                case _OptSourceLinkAddr:
+                case _OptTargetLinkAddr:
+                    _ParseLinkAddrOption(in optField, optData, in f);
                     break;
-                case OptPrefixInfo:
-                    ParsePrefixInfoOption(in optField, optData, in f);
+                case _OptPrefixInfo:
+                    _ParsePrefixInfoOption(in optField, optData, in f);
                     break;
-                case OptMtu:
-                    ParseMtuOption(in optField, optData, in f);
+                case _OptMtu:
+                    _ParseMtuOption(in optField, optData, in f);
                     break;
-                case OptRdnss:
-                    ParseRdnssOption(in optField, optData, in f);
+                case _OptRdnss:
+                    _ParseRdnssOption(in optField, optData, in f);
                     break;
             }
 
@@ -315,7 +349,7 @@ internal static class Icmpv6NdpParser
     /// Parses Source/Target Link-Layer Address option (type 1/2).
     /// Format: type(1) + len(1) + link-layer addr (6 for Ethernet).
     /// </summary>
-    private static void ParseLinkAddrOption(
+    private static void _ParseLinkAddrOption(
         in MutField optField, ReadOnlySpan<byte> optData, in Icmpv6NdpFieldIds f)
     {
         if (optData.Length >= 8) // 2-byte header + 6-byte MAC
@@ -330,7 +364,7 @@ internal static class Icmpv6NdpParser
     /// Format: type(1) + len(1) + prefix_length(1) + flags(1) +
     /// valid_lifetime(4) + preferred_lifetime(4) + reserved(4) + prefix(16).
     /// </summary>
-    private static void ParsePrefixInfoOption(
+    private static void _ParsePrefixInfoOption(
         in MutField optField, ReadOnlySpan<byte> optData, in Icmpv6NdpFieldIds f)
     {
         if (optData.Length < 32)
@@ -360,14 +394,14 @@ internal static class Icmpv6NdpParser
                 : ZA.Lazy(preferredLifetime, " seconds")); /* seconds */
 
         // Prefix (16 bytes at offset 16)
-        AppendIpv6Address(in optField, f.OptPrefix, optData[16..32], "Prefix");
+        _AppendIpv6Address(in optField, f.OptPrefix, optData[16..32], "Prefix");
     }
 
     /// <summary>
     /// Parses MTU option (type 5, 8 bytes).
     /// Format: type(1) + len(1) + reserved(2) + mtu(4).
     /// </summary>
-    private static void ParseMtuOption(
+    private static void _ParseMtuOption(
         in MutField optField, ReadOnlySpan<byte> optData, in Icmpv6NdpFieldIds f)
     {
         if (optData.Length < 8)
@@ -383,7 +417,7 @@ internal static class Icmpv6NdpParser
     /// Parses Recursive DNS Server option (type 25).
     /// Format: type(1) + len(1) + reserved(2) + lifetime(4) + addresses(16 each).
     /// </summary>
-    private static void ParseRdnssOption(
+    private static void _ParseRdnssOption(
         in MutField optField, ReadOnlySpan<byte> optData, in Icmpv6NdpFieldIds f)
     {
         if (optData.Length < 24) // Minimum: 8-byte header + at least one 16-byte address
@@ -402,7 +436,7 @@ internal static class Icmpv6NdpParser
         int addrOffset = 8;
         while (addrOffset + 16 <= optData.Length)
         {
-            AppendIpv6Address(in optField, f.OptRdnssAddress,
+            _AppendIpv6Address(in optField, f.OptRdnssAddress,
                 optData[addrOffset..(addrOffset + 16)], "DNS Server");
             addrOffset += 16;
         }
@@ -411,13 +445,13 @@ internal static class Icmpv6NdpParser
     /// <summary>
     /// Gets a human-readable name for an NDP option type.
     /// </summary>
-    private static string GetOptionName(byte optType) => optType switch
+    private static string _GetOptionName(byte optType) => optType switch
     {
-        OptSourceLinkAddr => "Source Link-Layer Address",
-        OptTargetLinkAddr => "Target Link-Layer Address",
-        OptPrefixInfo => "Prefix Information",
-        OptMtu => "MTU",
-        OptRdnss => "RDNSS",
+        _OptSourceLinkAddr => "Source Link-Layer Address",
+        _OptTargetLinkAddr => "Target Link-Layer Address",
+        _OptPrefixInfo => "Prefix Information",
+        _OptMtu => "MTU",
+        _OptRdnss => "RDNSS",
         31 => "DNS Search List",
         _ => "Unknown Option"
     };
@@ -425,7 +459,7 @@ internal static class Icmpv6NdpParser
     /// <summary>
     /// Appends an IPv6 address field from a 16-byte span.
     /// </summary>
-    private static void AppendIpv6Address(
+    private static void _AppendIpv6Address(
         in MutField container, FieldId fieldId, ReadOnlySpan<byte> addr, string label)
     {
         // Read 128-bit IPv6 address as two 64-bit halves (big-endian)

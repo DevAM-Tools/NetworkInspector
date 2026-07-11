@@ -18,7 +18,7 @@ namespace NetworkInspector.Protocols;
 /// </summary>
 /// <remarks>
 /// <para><b>Thread safety:</b> instances are immutable after registration completes.
-/// All mutable state is initialised inside <c>RegisterFieldsCustom</c> / <c>OnStartCustom</c>
+/// All mutable state is initialised inside <c>_RegisterFieldsCustom</c> / <c>_OnStartCustom</c>
 /// (single-threaded build phase) and is read-only thereafter, so <see cref="Parse"/> may
 /// be invoked concurrently from any number of threads on the same instance without external
 /// synchronisation. Per-thread caches (when present) are stored in <c>[ThreadStatic]</c> fields.</para>
@@ -33,7 +33,7 @@ public sealed partial class UdpProtocol : IProtocol
     public const ulong IpProtoKey = 17;
 
     /// <summary>IP protocol number value for pseudo-header computation.</summary>
-    private const byte UdpProtocolNumber = 17;
+    private const byte _UdpProtocolNumber = 17;
 
     #endregion
 
@@ -47,33 +47,33 @@ public sealed partial class UdpProtocol : IProtocol
     #region Index Group Constants
 
     /// <summary>Index group for always-present UDP fields.</summary>
-    private const string UdpIndexGroup = "udp";
+    private const string _UdpIndexGroup = "udp";
 
     #endregion
 
     #region Fields
 
     // BytesField container carries header byte range for UI highlighting
-    [BytesField("udp", "UDP", IndexGroup = UdpIndexGroup)]
+    [BytesField("udp", "UDP", IndexGroup = _UdpIndexGroup)]
     private FieldId _ProtocolFieldId;
 
-    [U64Field("udp.srcport", "Source Port", IndexGroup = UdpIndexGroup)]
+    [U64Field("udp.srcport", "Source Port", IndexGroup = _UdpIndexGroup)]
     private FieldId _SrcPortFieldId;
 
-    [U64Field("udp.dstport", "Destination Port", IndexGroup = UdpIndexGroup)]
+    [U64Field("udp.dstport", "Destination Port", IndexGroup = _UdpIndexGroup)]
     private FieldId _DstPortFieldId;
 
-    [U64Field("udp.length", "Length", IndexGroup = UdpIndexGroup)]
+    [U64Field("udp.length", "Length", IndexGroup = _UdpIndexGroup)]
     private FieldId _LengthFieldId;
 
-    [U64Field("udp.checksum", "Checksum", IndexGroup = UdpIndexGroup)]
+    [U64Field("udp.checksum", "Checksum", IndexGroup = _UdpIndexGroup)]
     private FieldId _ChecksumFieldId;
 
     // UDP-02: Checksum validation status (optional, only when verification enabled)
     [StringField("udp.checksum.status", "Checksum Status", IndexGroup = "udp.checksum.status")]
     private FieldId _ChecksumStatusFieldId;
 
-    // Field alias group ID assigned in RegisterFieldsCustom for "udp.port" -> { udp.srcport, udp.dstport }.
+    // Field alias group ID assigned in _RegisterFieldsCustom for "udp.port" -> { udp.srcport, udp.dstport }.
     // Independent of the protocol table also named "udp.port" (PortTableName) — alias / field /
     // table namespaces do not collide. The alias name is metadata-only and never resolves
     // through GetFieldId, and no udp.port node is appended to the parse tree.
@@ -147,7 +147,7 @@ public sealed partial class UdpProtocol : IProtocol
     private readonly UdpStreamTracker _StreamTracker = new();
 
     /// <summary>Resolves cross-protocol field IDs for checksum computation and stream tracking.</summary>
-    partial void OnStartCustom(Stack stack)
+    partial void _OnStartCustom(Stack stack)
     {
         _IpContainerFieldId = stack.GetFieldId("ip") ?? FieldId.Invalid;
         _Ipv6ContainerFieldId = stack.GetFieldId("ipv6") ?? FieldId.Invalid;
@@ -164,7 +164,7 @@ public sealed partial class UdpProtocol : IProtocol
     /// as metadata; the alias is reachable only via the alias-group APIs on IStack and is
     /// independent of the dispatch table also named "udp.port".
     /// </summary>
-    partial void RegisterFieldsCustom(IStackBuilder builder, ProtocolId protocolId)
+    partial void _RegisterFieldsCustom(IStackBuilder builder, ProtocolId protocolId)
     {
         _PortAliasGroupId = builder.RegisterFieldAliasGroup(
             protocolId,
@@ -257,7 +257,7 @@ public sealed partial class UdpProtocol : IProtocol
             parentField.Append(_StreamFieldId, FieldValue.NewU64(streamIndex));
             context.RecordGroupPresence(_UdpStreamGroupId);
         }
-        else if (TryFindPreviousIpAddressesFallback(parentField, out IPv4Address fbSrc4, out IPv4Address fbDst4, in context))
+        else if (_TryFindPreviousIpAddressesFallback(parentField, out IPv4Address fbSrc4, out IPv4Address fbDst4, in context))
         {
             // Fallback: IPv4 via sibling walk (edge case — cache miss)
             UdpConnectionKey connKey = UdpConnectionKey.FromIPv4(fbSrc4.RawValue, fbDst4.RawValue, srcPort, dstPort);
@@ -265,7 +265,7 @@ public sealed partial class UdpProtocol : IProtocol
             parentField.Append(_StreamFieldId, FieldValue.NewU64(streamIndex));
             context.RecordGroupPresence(_UdpStreamGroupId);
         }
-        else if (TryFindPreviousIpv6AddressesFallback(parentField, out IPv6Address fbSrc6, out IPv6Address fbDst6, in context))
+        else if (_TryFindPreviousIpv6AddressesFallback(parentField, out IPv6Address fbSrc6, out IPv6Address fbDst6, in context))
         {
             // Fallback: IPv6 via sibling walk (edge case — cache miss)
             UdpConnectionKey connKey = new(new UInt128(fbSrc6.High, fbSrc6.Low), new UInt128(fbDst6.High, fbDst6.Low), srcPort, dstPort);
@@ -299,7 +299,7 @@ public sealed partial class UdpProtocol : IProtocol
         // UDP is fully eager: every descriptive field is appended during Parse() so that
         // index group recording and downstream filtering never depend on materialisation.
         // The any-match name "udp.port" is exposed via the alias group registered in
-        // RegisterFieldsCustom; no duplicate udp.port field node is appended.
+        // _RegisterFieldsCustom; no duplicate udp.port field node is appended.
         udpContainer.Append(_SrcPortFieldId, FieldValue.NewU64(srcPort));
         udpContainer.Append(_DstPortFieldId, FieldValue.NewU64(dstPort));
 
@@ -308,7 +308,7 @@ public sealed partial class UdpProtocol : IProtocol
 
         if (checksumVerified)
         {
-            bool? checksumValid = ValidateChecksum(in udpContainer, data.Span, length);
+            bool? checksumValid = _ValidateChecksum(in udpContainer, data.Span, length);
             string statusText = checksumValid switch
             {
                 true => "[Good]",
@@ -356,7 +356,7 @@ public sealed partial class UdpProtocol : IProtocol
     /// Returns <see langword="true"/> if valid, <see langword="false"/> if invalid,
     /// or <see langword="null"/> if no IP layer was found.
     /// </summary>
-    private bool? ValidateChecksum(in MutField container, ReadOnlySpan<byte> udpSpan, ushort udpLength)
+    private bool? _ValidateChecksum(in MutField container, ReadOnlySpan<byte> udpSpan, ushort udpLength)
     {
         int segmentLen = Math.Min(udpLength, udpSpan.Length);
 
@@ -375,7 +375,7 @@ public sealed partial class UdpProtocol : IProtocol
         if (ipv4.HasValue)
         {
             pseudoSum = InternetChecksum.ComputeIPv4PseudoHeaderSum(
-                ipv4.Value.Src.RawValue, ipv4.Value.Dst.RawValue, UdpProtocolNumber, udpLength);
+                ipv4.Value.Src.RawValue, ipv4.Value.Dst.RawValue, _UdpProtocolNumber, udpLength);
         }
         else
         {
@@ -383,7 +383,7 @@ public sealed partial class UdpProtocol : IProtocol
             IPv6Address src6 = ipv6!.Value.Src;
             IPv6Address dst6 = ipv6!.Value.Dst;
             pseudoSum = InternetChecksum.ComputeIPv6PseudoHeaderSum(
-                src6.High, src6.Low, dst6.High, dst6.Low, UdpProtocolNumber, udpLength);
+                src6.High, src6.Low, dst6.High, dst6.Low, _UdpProtocolNumber, udpLength);
         }
 
         ushort result = InternetChecksum.ComputeWithPseudoHeader(udpSpan[..segmentLen], pseudoSum);
@@ -398,7 +398,7 @@ public sealed partial class UdpProtocol : IProtocol
     /// Fallback: walks previous siblings to find IPv4 addresses when the
     /// per-protocol thread-local caches do not contain cached data.
     /// </summary>
-    private bool TryFindPreviousIpAddressesFallback(
+    private bool _TryFindPreviousIpAddressesFallback(
         in MutField parentField, out IPv4Address src, out IPv4Address dst, in ParseContext context)
     {
         Field root = parentField.AsField();
@@ -422,7 +422,7 @@ public sealed partial class UdpProtocol : IProtocol
     /// Fallback: walks previous siblings to find IPv6 addresses when the
     /// per-protocol thread-local caches do not contain cached data.
     /// </summary>
-    private bool TryFindPreviousIpv6AddressesFallback(
+    private bool _TryFindPreviousIpv6AddressesFallback(
         in MutField parentField, out IPv6Address src, out IPv6Address dst, in ParseContext context)
     {
         Field root = parentField.AsField();

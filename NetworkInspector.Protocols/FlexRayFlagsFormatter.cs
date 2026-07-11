@@ -26,7 +26,7 @@ internal static class FlexRayFlagsFormatter
     #region Frame indicators (4 flags)
 
     // Key packing: bit0=PPI, bit1=NFI, bit2=SFI, bit3=STFI
-    private static readonly string[] IndicatorFlagsTable = BuildIndicatorFlagsTable();
+    private static readonly string[] _IndicatorFlagsTable = _BuildIndicatorFlagsTable();
 
     /// <summary>
     /// Returns the precomputed display string for the given FlexRay frame indicator combination.
@@ -35,15 +35,15 @@ internal static class FlexRayFlagsFormatter
     internal static string FormatIndicators(bool ppi, bool nfi, bool sfi, bool stfi)
     {
         int key = (ppi ? 1 : 0) | (nfi ? 2 : 0) | (sfi ? 4 : 0) | (stfi ? 8 : 0);
-        return IndicatorFlagsTable[key];
+        return _IndicatorFlagsTable[key];
     }
 
-    private static string[] BuildIndicatorFlagsTable()
+    private static string[] _BuildIndicatorFlagsTable()
     {
         string[] table = new string[16];
         for (int i = 0; i < 16; i++)
         {
-            table[i] = BuildFlagString(
+            table[i] = _BuildFlagString(
                 [(i & 1) != 0, (i & 2) != 0, (i & 4) != 0, (i & 8) != 0],
                 ["PPI", "NFI", "SFI", "STFI"]);
         }
@@ -55,7 +55,7 @@ internal static class FlexRayFlagsFormatter
     #region Error flags (5 flags)
 
     // Key packing: bit0=FCRC_ERR, bit1=HCRC_ERR, bit2=FES_ERR, bit3=COD_ERR, bit4=TSS_VIOL
-    private static readonly string[] ErrorFlagsTable = BuildErrorFlagsTable();
+    private static readonly string[] _ErrorFlagsTable = _BuildErrorFlagsTable();
 
     /// <summary>
     /// Returns the precomputed display string for the given FlexRay error flag combination.
@@ -64,15 +64,15 @@ internal static class FlexRayFlagsFormatter
     internal static string FormatErrors(bool fcrcErr, bool hcrcErr, bool fesErr, bool codErr, bool tssViol)
     {
         int key = (fcrcErr ? 1 : 0) | (hcrcErr ? 2 : 0) | (fesErr ? 4 : 0) | (codErr ? 8 : 0) | (tssViol ? 16 : 0);
-        return ErrorFlagsTable[key];
+        return _ErrorFlagsTable[key];
     }
 
-    private static string[] BuildErrorFlagsTable()
+    private static string[] _BuildErrorFlagsTable()
     {
         string[] table = new string[32];
         for (int i = 0; i < 32; i++)
         {
-            table[i] = BuildFlagString(
+            table[i] = _BuildFlagString(
                 [(i & 1) != 0, (i & 2) != 0, (i & 4) != 0, (i & 8) != 0, (i & 16) != 0],
                 ["FCRC_ERR", "HCRC_ERR", "FES_ERR", "COD_ERR", "TSS_VIOL"]);
         }
@@ -83,7 +83,7 @@ internal static class FlexRayFlagsFormatter
 
     #region Shared string builder
 
-    private static string BuildFlagString(bool[] active, string[] names)
+    private static string _BuildFlagString(bool[] active, string[] names)
     {
         int count = 0;
         for (int i = 0; i < active.Length; i++)

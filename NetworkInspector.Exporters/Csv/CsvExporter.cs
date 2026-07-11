@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Exporters.Csv;
 
@@ -14,9 +14,9 @@ namespace NetworkInspector.Exporters.Csv;
 public sealed class CsvExporter : IPacketListener, IErrorTolerantExporter, IDisposable
 {
     /// <summary>UTF-8 BOM bytes.</summary>
-    private static ReadOnlySpan<byte> Utf8Bom => [0xEF, 0xBB, 0xBF];
+    private static ReadOnlySpan<byte> _Utf8Bom => [0xEF, 0xBB, 0xBF];
 
-    private static ReadOnlySpan<byte> NewLine => "\r\n"u8;
+    private static ReadOnlySpan<byte> _NewLine => "\r\n"u8;
 
     private readonly CancellationToken _CancellationToken;
     private readonly bool _WriteBom;
@@ -32,7 +32,7 @@ public sealed class CsvExporter : IPacketListener, IErrorTolerantExporter, IDisp
     private bool _Started;
     private bool _Finished;
 
-    // Instance UTF-8 scratch buffer for WriteCsvField.
+    // Instance UTF-8 scratch buffer for _WriteCsvField.
     // Grows to the maximum bytes ever needed by this exporter instance and is then
     // reused without allocation. Buffer lifetime is tied to the exporter instance.
     private byte[]? _Utf8Scratch;
@@ -106,9 +106,6 @@ public sealed class CsvExporter : IPacketListener, IErrorTolerantExporter, IDisp
         || (_TargetPacketCount > 0 && PacketCount >= _TargetPacketCount);
 
     /// <inheritdoc/>
-    bool IExporterStatistics.IsFinished => IsFinished;
-
-    /// <inheritdoc/>
     public ErrorToleranceMode ErrorTolerance { get; set; } = ErrorToleranceMode.Tolerant;
 
     /// <inheritdoc/>
@@ -127,12 +124,12 @@ public sealed class CsvExporter : IPacketListener, IErrorTolerantExporter, IDisp
             return false;
         }
 
-        if (!_Started && !Start())
+        if (!_Started && !_Start())
         {
             return false;
         }
 
-        return HandlePacket(packet);
+        return _HandlePacket(packet);
     }
 
     /// <inheritdoc/>
@@ -144,25 +141,25 @@ public sealed class CsvExporter : IPacketListener, IErrorTolerantExporter, IDisp
         }
 
         _Finished = true;
-        FlushAndClose();
+        _FlushAndClose();
     }
 
     /// <inheritdoc/>
     public void Dispose() => OnFinish();
 
     /// <summary>Writes the BOM and header row on first packet.</summary>
-    private bool Start()
+    private bool _Start()
     {
         try
         {
             if (_WriteBom)
             {
-                _Output!.Write(Utf8Bom);
+                _Output!.Write(_Utf8Bom);
             }
 
             if (_WriteHeader)
             {
-                WriteHeaderRow();
+                _WriteHeaderRow();
             }
 
             _Started = true;
@@ -171,17 +168,17 @@ public sealed class CsvExporter : IPacketListener, IErrorTolerantExporter, IDisp
         catch (Exception ex)
         {
             // Bump ErrorCount so HasErrors reflects the failure; in Tolerant mode
-            // the OnError event subscribers see it via ItemSkipped, in Strict mode
+            // the _OnError event subscribers see it via ItemSkipped, in Strict mode
             // the next OnPacket call will be rejected via the _HasError gate.
             ErrorCount++;
             _HasError = true;
-            OnError(0, ExportErrorKind.IoError, ex.Message);
+            _OnError(0, ExportErrorKind.IoError, ex.Message);
             return false;
         }
     }
 
     /// <summary>Writes the column header row.</summary>
-    private void WriteHeaderRow()
+    private void _WriteHeaderRow()
     {
         _Buffer.Reset();
         for (int i = 0; i < _Columns.Length; i++)
@@ -192,15 +189,15 @@ public sealed class CsvExporter : IPacketListener, IErrorTolerantExporter, IDisp
             }
 
             // Header names are escaped in case they contain the delimiter or quotes
-            WriteCsvField(_Columns[i].Header);
+            _WriteCsvField(_Columns[i].Header);
         }
 
-        _Buffer.Write(NewLine);
+        _Buffer.Write(_NewLine);
         _Output!.Write(_Buffer.WrittenSpan);
     }
 
     /// <summary>Handles a single packet, writing one CSV row.</summary>
-    private bool HandlePacket(Packet packet)
+    private bool _HandlePacket(Packet packet)
     {
         if (_TargetPacketCount > 0 && PacketCount >= _TargetPacketCount)
         {
@@ -227,10 +224,10 @@ public sealed class CsvExporter : IPacketListener, IErrorTolerantExporter, IDisp
                 switch (column.Kind)
                 {
                     case CsvColumnKind.PacketNumber:
-                        AppendUtf8Int32(_Buffer, packet.Id.Value);
+                        _AppendUtf8Int32(_Buffer, packet.Id.Value);
                         break;
                     case CsvColumnKind.FrameLength:
-                        AppendUtf8Int32(_Buffer, packet.Frame.Length);
+                        _AppendUtf8Int32(_Buffer, packet.Frame.Length);
                         break;
                     case CsvColumnKind.Timestamp:
                         // Timestamp.TryFormat writes ISO 8601 (e.g. 2024-01-01T12:00:00.000000000Z),
@@ -241,13 +238,13 @@ public sealed class CsvExporter : IPacketListener, IErrorTolerantExporter, IDisp
                         }
                         break;
                     default:
-                        string value = ExtractColumnValue(packet, column);
-                        WriteCsvField(value);
+                        string value = _ExtractColumnValue(packet, column);
+                        _WriteCsvField(value);
                         break;
                 }
             }
 
-            _Buffer.Write(NewLine);
+            _Buffer.Write(_NewLine);
             _Output!.Write(_Buffer.WrittenSpan);
 
             PacketCount++;
@@ -265,13 +262,13 @@ public sealed class CsvExporter : IPacketListener, IErrorTolerantExporter, IDisp
             }
 
             SkippedCount++;
-            OnError(index, ExportErrorKind.SerializationError, ex.Message);
+            _OnError(index, ExportErrorKind.SerializationError, ex.Message);
             return true;
         }
     }
 
     /// <summary>Writes a UTF-8 integer without heap-allocating a <see cref="string"/>.</summary>
-    private static void AppendUtf8Int32(PooledBuffer buffer, int value)
+    private static void _AppendUtf8Int32(PooledBuffer buffer, int value)
     {
         Span<byte> scratch = stackalloc byte[20];
         Utf8Formatter.TryFormat(value, scratch, out int written);
@@ -279,20 +276,32 @@ public sealed class CsvExporter : IPacketListener, IErrorTolerantExporter, IDisp
     }
 
     /// <summary>Extracts the value string for a column from a packet.</summary>
-    private static string ExtractColumnValue(Packet packet, CsvColumnDefinition column)
+    private static string _ExtractColumnValue(Packet packet, CsvColumnDefinition column)
     {
-        return column.Kind switch
+        switch (column.Kind)
         {
-            CsvColumnKind.PacketNumber => packet.Id.Value.ToString(CultureInfo.InvariantCulture),
-            CsvColumnKind.Timestamp => packet.Timestamp.Format(),
-            CsvColumnKind.Info => packet.Info ?? string.Empty,
-            CsvColumnKind.FrameLength => packet.Frame.Length.ToString(CultureInfo.InvariantCulture),
-            CsvColumnKind.Field when column.FieldId.HasValue =>
-                packet.TryGetFieldValue(column.FieldId.Value, out FieldValue value)
-                    ? value.ToString()
-                    : string.Empty,
-            _ => string.Empty,
-        };
+            case CsvColumnKind.PacketNumber:
+                return packet.Id.Value.ToString(CultureInfo.InvariantCulture);
+            case CsvColumnKind.Timestamp:
+                return packet.Timestamp.Format();
+            case CsvColumnKind.Info:
+                if (packet.Info is not null)
+                {
+                    return packet.Info;
+                }
+                return string.Empty;
+            case CsvColumnKind.FrameLength:
+                return packet.Frame.Length.ToString(CultureInfo.InvariantCulture);
+            case CsvColumnKind.Field when column.FieldId.HasValue:
+                if (packet.TryGetFieldValue(column.FieldId.Value, out FieldValue value))
+                {
+                    // FieldValue.ToString() → FieldValueData.ToTempString() → ZA.String (InvariantCulture).
+                    return value.ToString();
+                }
+                return string.Empty;
+            default:
+                return string.Empty;
+        }
     }
 
     /// <summary>
@@ -302,7 +311,7 @@ public sealed class CsvExporter : IPacketListener, IErrorTolerantExporter, IDisp
     /// allocation. Used as the heap fallback in the conditional-stackalloc pattern
     /// for large quoted-field encoding (avoids a per-call heap allocation).
     /// </summary>
-    private Span<byte> GetQuotedScratch(int minSize)
+    private Span<byte> _GetQuotedScratch(int minSize)
     {
         if (_Utf8Scratch is null || _Utf8Scratch.Length < minSize)
         {
@@ -313,7 +322,7 @@ public sealed class CsvExporter : IPacketListener, IErrorTolerantExporter, IDisp
     }
 
     /// <summary>Writes a CSV field with proper escaping (RFC 4180).</summary>
-    private void WriteCsvField(string value)
+    private void _WriteCsvField(string value)
     {
         // Check if quoting is needed
         bool needsQuoting = false;
@@ -366,7 +375,7 @@ public sealed class CsvExporter : IPacketListener, IErrorTolerantExporter, IDisp
         // For large values the instance scratch buffer is used (avoids per-call allocation).
         Span<byte> encoded = quotedMaxBytes <= 512
             ? stackalloc byte[quotedMaxBytes]
-            : GetQuotedScratch(quotedMaxBytes);
+            : _GetQuotedScratch(quotedMaxBytes);
         int writtenBytes = Encoding.UTF8.GetBytes(value, encoded);
         ReadOnlySpan<byte> quotedBytes = encoded[..writtenBytes];
 
@@ -392,7 +401,7 @@ public sealed class CsvExporter : IPacketListener, IErrorTolerantExporter, IDisp
     }
 
     /// <summary>Flushes remaining data and closes the output.</summary>
-    private void FlushAndClose()
+    private void _FlushAndClose()
     {
         // Always return the rented buffer, even on flush/dispose failure.
         try
@@ -453,7 +462,7 @@ public sealed class CsvExporter : IPacketListener, IErrorTolerantExporter, IDisp
     }
 
     /// <summary>Raises the <see cref="ItemSkipped"/> event.</summary>
-    private void OnError(long index, ExportErrorKind kind, string message)
+    private void _OnError(long index, ExportErrorKind kind, string message)
     {
         ItemSkipped?.Invoke(this, new ExportErrorEventArgs
         {

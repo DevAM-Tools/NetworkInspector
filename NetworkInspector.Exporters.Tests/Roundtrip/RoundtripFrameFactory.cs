@@ -27,7 +27,7 @@ internal sealed class RoundtripFrameFactory
     /// </summary>
     internal RoundtripFrameFactory()
     {
-        Registry = new FrameInterfaceRegistry();
+        Registry = new();
         _SourceId = Registry.RegisterSource(StubSource.Instance);
     }
 

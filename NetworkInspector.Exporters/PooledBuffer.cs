@@ -27,7 +27,7 @@ internal sealed class PooledBuffer
     /// write needs to rent a fresh array — never call <see cref="ArrayPool{T}.Return"/>
     /// on this sentinel.
     /// </summary>
-    private static readonly byte[] EmptySentinel = [];
+    private static readonly byte[] _EmptySentinel = [];
 
     private byte[] _Array;
     private int _Length;
@@ -37,7 +37,7 @@ internal sealed class PooledBuffer
     internal PooledBuffer(int capacity)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(capacity);
-        _Array = capacity == 0 ? EmptySentinel : ArrayPool<byte>.Shared.Rent(capacity);
+        _Array = capacity == 0 ? _EmptySentinel : ArrayPool<byte>.Shared.Rent(capacity);
         _Length = 0;
     }
 
@@ -70,7 +70,7 @@ internal sealed class PooledBuffer
         int required = _Length + data.Length;
         if (required > _Array.Length)
         {
-            Grow(required);
+            _Grow(required);
         }
         data.CopyTo(_Array.AsSpan(_Length));
         _Length += data.Length;
@@ -83,7 +83,7 @@ internal sealed class PooledBuffer
     {
         if (_Length >= _Array.Length)
         {
-            Grow(_Length + 1);
+            _Grow(_Length + 1);
         }
         _Array[_Length++] = value;
     }
@@ -97,7 +97,7 @@ internal sealed class PooledBuffer
         int required = _Length + count;
         if (required > _Array.Length)
         {
-            Grow(required);
+            _Grow(required);
         }
         Span<byte> span = _Array.AsSpan(_Length, count);
         _Length += count;
@@ -122,7 +122,7 @@ internal sealed class PooledBuffer
             // Return the rented buffer (no need to clear — caller-supplied bytes only)
             ArrayPool<byte>.Shared.Return(_Array);
         }
-        _Array = EmptySentinel;
+        _Array = _EmptySentinel;
         _Length = 0;
     }
 
@@ -132,7 +132,7 @@ internal sealed class PooledBuffer
     /// and returns the previous array to the pool.
     /// </summary>
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private void Grow(int required)
+    private void _Grow(int required)
     {
         // At least double the current capacity, or the required size — whichever is larger.
         // ArrayPool may return a buffer larger than requested; that is fine and we use the

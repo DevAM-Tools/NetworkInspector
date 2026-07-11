@@ -1,17 +1,11 @@
 <!-- Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information. -->
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <RootNamespace>NetworkInspector.FrameBuilder</RootNamespace>
     <EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>
-    <CompilerGeneratedFilesOutputPath>$(BaseIntermediateOutputPath)\GeneratedFiles</CompilerGeneratedFilesOutputPath>
-    <Description>Typed, allocation-free frame-builder library for NetworkInspector. Compose protocol stacks (Ethernet, VLAN, IPv4, IPv6, UDP, TCP, WebSocket, SOME/IP, CAN, …) using a generic cons-list API and emit RFC-conformant wire frames with zero heap allocations on the hot path.</Description>
+    <Description>Typed, allocation-free frame-builder library for NetworkInspector. Compose protocol stacks and emit RFC-conformant wire frames with zero heap allocations on the hot path.</Description>
     <PackageTags>network;framebuilder;ethernet;ipv4;ipv6;tcp;udp;websocket;someip;can;pcap</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
-  
-  <ItemGroup>
-    <None Include="README.md" Pack="true" PackagePath="" />
-  </ItemGroup>
 
   <ItemGroup>
     <InternalsVisibleTo Include="NetworkInspector.FrameBuilder.Tests" />
@@ -20,7 +14,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="ZeroAlloc" PrivateAssets="none" />
+    <PackageReference Include="ZeroAlloc" />
   </ItemGroup>
 
   <ItemGroup>

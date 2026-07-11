@@ -35,7 +35,7 @@ namespace NetworkInspector.Protocols;
 /// </summary>
 /// <remarks>
 /// <para><b>Thread safety:</b> instances are immutable after registration completes.
-/// All mutable state is initialised inside <c>RegisterFieldsCustom</c> / <c>OnStartCustom</c>
+/// All mutable state is initialised inside <c>RegisterFieldsCustom</c> / <c>_OnStartCustom</c>
 /// (single-threaded build phase) and is read-only thereafter, so <see cref="Parse"/> may
 /// be invoked concurrently from any number of threads on the same instance without external
 /// synchronisation. Per-thread caches (when present) are stored in <c>[ThreadStatic]</c> fields.</para>
@@ -50,29 +50,29 @@ public sealed partial class TlsProtocol : IProtocol
     public const ulong TcpPortKey = 443;
 
     /// <summary>Index group for always-present TLS fields.</summary>
-    private const string TlsIndexGroup = "tls";
+    private const string _TlsIndexGroup = "tls";
 
     #endregion
 
     #region Protocol container
 
-    [BytesField("tls", "Transport Layer Security", IndexGroup = TlsIndexGroup)]
+    [BytesField("tls", "Transport Layer Security", IndexGroup = _TlsIndexGroup)]
     private FieldId _ProtocolFieldId;
 
     #endregion
 
     #region Record Layer fields (always present)
 
-    [NoneField("tls.record", "TLS Record Layer", IndexGroup = TlsIndexGroup)]
+    [NoneField("tls.record", "TLS Record Layer", IndexGroup = _TlsIndexGroup)]
     private FieldId _RecordFieldId;
 
-    [U64Field("tls.record.content_type", "Content Type", IndexGroup = TlsIndexGroup)]
+    [U64Field("tls.record.content_type", "Content Type", IndexGroup = _TlsIndexGroup)]
     private FieldId _ContentTypeFieldId;
 
-    [U64Field("tls.record.version", "Version", IndexGroup = TlsIndexGroup)]
+    [U64Field("tls.record.version", "Version", IndexGroup = _TlsIndexGroup)]
     private FieldId _RecordVersionFieldId;
 
-    [U64Field("tls.record.length", "Length", IndexGroup = TlsIndexGroup)]
+    [U64Field("tls.record.length", "Length", IndexGroup = _TlsIndexGroup)]
     private FieldId _RecordLengthFieldId;
 
     #endregion
@@ -212,10 +212,10 @@ public sealed partial class TlsProtocol : IProtocol
 
     #region Populators
 
-    // Pre-allocated delegate; wired once in OnStartCustom (build phase, not per packet).
+    // Pre-allocated delegate; wired once in _OnStartCustom (build phase, not per packet).
     private LazyPopulator _Populator = null!;
 
-    partial void OnStartCustom(Stack stack) => _Populator = PopulateTls;
+    partial void _OnStartCustom(Stack stack) => _Populator = _PopulateTls;
 
     /// <summary>
     /// Parses TLS records from the given data. Supports multiple records per segment.
@@ -245,7 +245,7 @@ public sealed partial class TlsProtocol : IProtocol
         // record handshake groups for truncated messages. This repeats the record walk to keep the
         // presence index content-consistent with materialization and free of false positives.
         TlsGroupFlags flags = default;
-        DetectTlsGroups(data.Span, ref flags);
+        _DetectTlsGroups(data.Span, ref flags);
 
         if (flags.Handshake)
         {
@@ -312,7 +312,7 @@ public sealed partial class TlsProtocol : IProtocol
     /// first access of the TLS container's children. The <c>tls.record</c> containers
     /// and the handshake/alert sub-fields are siblings under the <c>tls</c> container.
     /// </summary>
-    private ParseResult PopulateTls(in MutField container)
+    private ParseResult _PopulateTls(in MutField container)
     {
         if (!container.Value.Data.TryGetAsBytes(out ReadOnlyMemory<byte> tlsData))
         {
@@ -353,10 +353,10 @@ public sealed partial class TlsProtocol : IProtocol
             switch (record.ContentType)
             {
                 case 22: // Handshake
-                    ParseHandshakeRecords(in container, payload, tlsData, payloadOffset);
+                    _ParseHandshakeRecords(in container, payload, tlsData, payloadOffset);
                     break;
                 case 21: // Alert
-                    ParseAlert(in container, payload);
+                    _ParseAlert(in container, payload);
                     break;
             }
 
@@ -369,7 +369,7 @@ public sealed partial class TlsProtocol : IProtocol
     /// <summary>
     /// Parses one or more handshake messages within a single TLS record.
     /// </summary>
-    private void ParseHandshakeRecords(
+    private void _ParseHandshakeRecords(
         in MutField recordField, ReadOnlySpan<byte> payload,
         ReadOnlyMemory<byte> fullData, int payloadBaseOffset)
     {
@@ -404,13 +404,13 @@ public sealed partial class TlsProtocol : IProtocol
             switch (hsType)
             {
                 case 1: // Client Hello
-                    ParseClientHello(in hsField, hsBody, fullData, payloadBaseOffset + offset);
+                    _ParseClientHello(in hsField, hsBody, fullData, payloadBaseOffset + offset);
                     break;
                 case 2: // Server Hello
-                    ParseServerHello(in hsField, hsBody, fullData, payloadBaseOffset + offset);
+                    _ParseServerHello(in hsField, hsBody, fullData, payloadBaseOffset + offset);
                     break;
                 case 11: // Certificate
-                    ParseCertificate(in hsField, hsBody, fullData, payloadBaseOffset + offset);
+                    _ParseCertificate(in hsField, hsBody, fullData, payloadBaseOffset + offset);
                     break;
             }
 
@@ -421,7 +421,7 @@ public sealed partial class TlsProtocol : IProtocol
     /// <summary>
     /// Parses a TLS Client Hello handshake message.
     /// </summary>
-    private void ParseClientHello(
+    private void _ParseClientHello(
         in MutField hsField, ReadOnlySpan<byte> body,
         ReadOnlyMemory<byte> fullData, int bodyBaseOffset)
     {
@@ -517,13 +517,13 @@ public sealed partial class TlsProtocol : IProtocol
         hsField.Append(_ExtensionsLengthFieldId, FieldValue.NewU64(extensionsLen));
         pos += 2;
 
-        ParseExtensions(in hsField, body, ref pos, extensionsLen, fullData, bodyBaseOffset);
+        _ParseExtensions(in hsField, body, ref pos, extensionsLen, fullData, bodyBaseOffset);
     }
 
     /// <summary>
     /// Parses a TLS Server Hello handshake message.
     /// </summary>
-    private void ParseServerHello(
+    private void _ParseServerHello(
         in MutField hsField, ReadOnlySpan<byte> body,
         ReadOnlyMemory<byte> fullData, int bodyBaseOffset)
     {
@@ -593,7 +593,7 @@ public sealed partial class TlsProtocol : IProtocol
             hsField.Append(_ExtensionsLengthFieldId, FieldValue.NewU64(extensionsLen));
             pos += 2;
 
-            ParseExtensions(in hsField, body, ref pos, extensionsLen, fullData, bodyBaseOffset);
+            _ParseExtensions(in hsField, body, ref pos, extensionsLen, fullData, bodyBaseOffset);
         }
     }
 
@@ -601,7 +601,7 @@ public sealed partial class TlsProtocol : IProtocol
     /// Parses a TLS Certificate handshake message (type 11).
     /// Format: CertificatesLength(3) → [ CertLength(3) CertData(N) ]*
     /// </summary>
-    private void ParseCertificate(
+    private void _ParseCertificate(
         in MutField hsField, ReadOnlySpan<byte> body,
         ReadOnlyMemory<byte> fullData, int bodyBaseOffset)
     {
@@ -649,7 +649,7 @@ public sealed partial class TlsProtocol : IProtocol
     /// <summary>
     /// Parses TLS extensions from a Client Hello or Server Hello.
     /// </summary>
-    private void ParseExtensions(
+    private void _ParseExtensions(
         in MutField parent, ReadOnlySpan<byte> body, ref int pos, ushort extensionsLen,
         ReadOnlyMemory<byte> fullData, int bodyBaseOffset)
     {
@@ -684,7 +684,7 @@ public sealed partial class TlsProtocol : IProtocol
             {
                 // Parse known extension types
                 ReadOnlySpan<byte> extData = body[pos..(pos + extLen)];
-                ParseExtensionData(in extField, extType, extData, fullData, bodyBaseOffset + pos);
+                _ParseExtensionData(in extField, extType, extData, fullData, bodyBaseOffset + pos);
             }
 
             pos += extLen;
@@ -694,29 +694,29 @@ public sealed partial class TlsProtocol : IProtocol
     /// <summary>
     /// Parses data for known TLS extension types (SNI, ALPN).
     /// </summary>
-    private void ParseExtensionData(
+    private void _ParseExtensionData(
         in MutField extField, ushort extType, ReadOnlySpan<byte> extData,
         ReadOnlyMemory<byte> fullData, int dataBaseOffset)
     {
         switch (extType)
         {
             case 0: // server_name (SNI)
-                ParseSni(in extField, extData);
+                _ParseSni(in extField, extData);
                 break;
             case 10: // supported_groups
-                ParseSupportedGroups(in extField, extData);
+                _ParseSupportedGroups(in extField, extData);
                 break;
             case 13: // signature_algorithms
-                ParseSignatureAlgorithms(in extField, extData);
+                _ParseSignatureAlgorithms(in extField, extData);
                 break;
             case 16: // ALPN
-                ParseAlpn(in extField, extData);
+                _ParseAlpn(in extField, extData);
                 break;
             case 43: // supported_versions
-                ParseSupportedVersions(in extField, extData);
+                _ParseSupportedVersions(in extField, extData);
                 break;
             case 51: // key_share
-                ParseKeyShare(in extField, extData, fullData, dataBaseOffset);
+                _ParseKeyShare(in extField, extData, fullData, dataBaseOffset);
                 break;
             default:
                 // Store raw extension data for unknown types
@@ -733,7 +733,7 @@ public sealed partial class TlsProtocol : IProtocol
     /// Parses the Server Name Indication (SNI) extension.
     /// Format: ServerNameList(2) → [ NameType(1) HostNameLength(2) HostName(N) ]*
     /// </summary>
-    private void ParseSni(in MutField extField, ReadOnlySpan<byte> data)
+    private void _ParseSni(in MutField extField, ReadOnlySpan<byte> data)
     {
         if (data.Length < 5)
         {
@@ -768,7 +768,7 @@ public sealed partial class TlsProtocol : IProtocol
     /// Parses the Application-Layer Protocol Negotiation (ALPN) extension.
     /// Format: ALPNProtocolList(2) → [ StringLength(1) ProtocolName(N) ]*
     /// </summary>
-    private void ParseAlpn(in MutField extField, ReadOnlySpan<byte> data)
+    private void _ParseAlpn(in MutField extField, ReadOnlySpan<byte> data)
     {
         if (data.Length < 2)
         {
@@ -792,7 +792,7 @@ public sealed partial class TlsProtocol : IProtocol
     }
 
     /// <summary>Parses a TLS Alert record (2 bytes: level + description).</summary>
-    private void ParseAlert(in MutField recordField, ReadOnlySpan<byte> payload)
+    private void _ParseAlert(in MutField recordField, ReadOnlySpan<byte> payload)
     {
         if (payload.Length < 2)
         {
@@ -814,7 +814,7 @@ public sealed partial class TlsProtocol : IProtocol
     /// Parses the supported_groups extension (type 10, RFC 8422).
     /// Format: NamedGroupList(2) → [ NamedGroup(2) ]*
     /// </summary>
-    private void ParseSupportedGroups(in MutField extField, ReadOnlySpan<byte> data)
+    private void _ParseSupportedGroups(in MutField extField, ReadOnlySpan<byte> data)
     {
         if (data.Length < 2)
         {
@@ -839,7 +839,7 @@ public sealed partial class TlsProtocol : IProtocol
     /// Parses the signature_algorithms extension (type 13, RFC 8446).
     /// Format: SignatureSchemeList(2) → [ SignatureScheme(2) ]*
     /// </summary>
-    private void ParseSignatureAlgorithms(in MutField extField, ReadOnlySpan<byte> data)
+    private void _ParseSignatureAlgorithms(in MutField extField, ReadOnlySpan<byte> data)
     {
         if (data.Length < 2)
         {
@@ -865,7 +865,7 @@ public sealed partial class TlsProtocol : IProtocol
     /// Client Hello format: ListLength(1) → [ ProtocolVersion(2) ]*
     /// Server Hello format: ProtocolVersion(2)
     /// </summary>
-    private void ParseSupportedVersions(in MutField extField, ReadOnlySpan<byte> data)
+    private void _ParseSupportedVersions(in MutField extField, ReadOnlySpan<byte> data)
     {
         if (data.Length == 2)
         {
@@ -902,7 +902,7 @@ public sealed partial class TlsProtocol : IProtocol
     /// Client Hello format: ClientShares(2) → [ NamedGroup(2) KeyExchangeLength(2) KeyExchange(N) ]*
     /// Server Hello format: NamedGroup(2) KeyExchangeLength(2) KeyExchange(N)
     /// </summary>
-    private void ParseKeyShare(
+    private void _ParseKeyShare(
         in MutField extField, ReadOnlySpan<byte> data,
         ReadOnlyMemory<byte> fullData, int dataBaseOffset)
     {
@@ -974,11 +974,11 @@ public sealed partial class TlsProtocol : IProtocol
     }
 
     /// <summary>
-    /// Eagerly walks all TLS records, mirroring <see cref="PopulateTls"/>'s record loop, and sets the
+    /// Eagerly walks all TLS records, mirroring <see cref="_PopulateTls"/>'s record loop, and sets the
     /// content-dependent group flags. Duplicates the record/handshake/extension walk so the index is
     /// complete and content-consistent without forcing field materialization.
     /// </summary>
-    private static void DetectTlsGroups(ReadOnlySpan<byte> span, ref TlsGroupFlags flags)
+    private static void _DetectTlsGroups(ReadOnlySpan<byte> span, ref TlsGroupFlags flags)
     {
         int offset = 0;
 
@@ -1001,9 +1001,9 @@ public sealed partial class TlsProtocol : IProtocol
             switch (record.ContentType)
             {
                 case 22: // Handshake
-                    DetectHandshakeRecords(payload, ref flags);
+                    _DetectHandshakeRecords(payload, ref flags);
                     break;
-                case 21: // Alert — ParseAlert emits when payload has level + description.
+                case 21: // Alert — _ParseAlert emits when payload has level + description.
                     if (payload.Length >= 2)
                     {
                         flags.Alert = true;
@@ -1015,8 +1015,8 @@ public sealed partial class TlsProtocol : IProtocol
         }
     }
 
-    /// <summary>Mirrors <see cref="ParseHandshakeRecords"/> to flag handshake-dependent groups.</summary>
-    private static void DetectHandshakeRecords(ReadOnlySpan<byte> payload, ref TlsGroupFlags flags)
+    /// <summary>Mirrors <see cref="_ParseHandshakeRecords"/> to flag handshake-dependent groups.</summary>
+    private static void _DetectHandshakeRecords(ReadOnlySpan<byte> payload, ref TlsGroupFlags flags)
     {
         int offset = 0;
 
@@ -1039,12 +1039,12 @@ public sealed partial class TlsProtocol : IProtocol
             switch (hsType)
             {
                 case 1: // Client Hello
-                    DetectClientHello(hsBody, ref flags);
+                    _DetectClientHello(hsBody, ref flags);
                     break;
                 case 2: // Server Hello
-                    DetectServerHello(hsBody, ref flags);
+                    _DetectServerHello(hsBody, ref flags);
                     break;
-                case 11: // Certificate — ParseCertificate emits the certificates-length field when body >= 3.
+                case 11: // Certificate — _ParseCertificate emits the certificates-length field when body >= 3.
                     if (hsBody.Length >= 3)
                     {
                         flags.Cert = true;
@@ -1056,8 +1056,8 @@ public sealed partial class TlsProtocol : IProtocol
         }
     }
 
-    /// <summary>Mirrors <see cref="ParseClientHello"/> through the cipher-suite list and extensions.</summary>
-    private static void DetectClientHello(ReadOnlySpan<byte> body, ref TlsGroupFlags flags)
+    /// <summary>Mirrors <see cref="_ParseClientHello"/> through the cipher-suite list and extensions.</summary>
+    private static void _DetectClientHello(ReadOnlySpan<byte> body, ref TlsGroupFlags flags)
     {
         int pos = 0;
 
@@ -1125,11 +1125,11 @@ public sealed partial class TlsProtocol : IProtocol
         flags.Ext = true;
         pos += 2;
 
-        DetectExtensions(body, ref pos, extensionsLen, ref flags);
+        _DetectExtensions(body, ref pos, extensionsLen, ref flags);
     }
 
-    /// <summary>Mirrors <see cref="ParseServerHello"/> through the selected cipher suite and extensions.</summary>
-    private static void DetectServerHello(ReadOnlySpan<byte> body, ref TlsGroupFlags flags)
+    /// <summary>Mirrors <see cref="_ParseServerHello"/> through the selected cipher suite and extensions.</summary>
+    private static void _DetectServerHello(ReadOnlySpan<byte> body, ref TlsGroupFlags flags)
     {
         int pos = 0;
 
@@ -1176,12 +1176,12 @@ public sealed partial class TlsProtocol : IProtocol
             flags.Ext = true;
             pos += 2;
 
-            DetectExtensions(body, ref pos, extensionsLen, ref flags);
+            _DetectExtensions(body, ref pos, extensionsLen, ref flags);
         }
     }
 
-    /// <summary>Mirrors <see cref="ParseExtensions"/>, flagging the extension group and per-extension groups.</summary>
-    private static void DetectExtensions(
+    /// <summary>Mirrors <see cref="_ParseExtensions"/>, flagging the extension group and per-extension groups.</summary>
+    private static void _DetectExtensions(
         ReadOnlySpan<byte> body, ref int pos, ushort extensionsLen, ref TlsGroupFlags flags)
     {
         int extensionsEnd = pos + extensionsLen;
@@ -1206,41 +1206,41 @@ public sealed partial class TlsProtocol : IProtocol
 
             if (extLen > 0)
             {
-                DetectExtensionData(extType, body[pos..(pos + extLen)], ref flags);
+                _DetectExtensionData(extType, body[pos..(pos + extLen)], ref flags);
             }
 
             pos += extLen;
         }
     }
 
-    /// <summary>Mirrors <see cref="ParseExtensionData"/>, flagging the group of each known extension.</summary>
-    private static void DetectExtensionData(ushort extType, ReadOnlySpan<byte> extData, ref TlsGroupFlags flags)
+    /// <summary>Mirrors <see cref="_ParseExtensionData"/>, flagging the group of each known extension.</summary>
+    private static void _DetectExtensionData(ushort extType, ReadOnlySpan<byte> extData, ref TlsGroupFlags flags)
     {
         switch (extType)
         {
-            case 0 when DetectSni(extData): // server_name (SNI)
+            case 0 when _DetectSni(extData): // server_name (SNI)
                 flags.Sni = true;
                 break;
-            case 10 when DetectListHasEntry(extData): // supported_groups
+            case 10 when _DetectListHasEntry(extData): // supported_groups
                 flags.SupportedGroups = true;
                 break;
-            case 13 when DetectListHasEntry(extData): // signature_algorithms
+            case 13 when _DetectListHasEntry(extData): // signature_algorithms
                 flags.SigAlgs = true;
                 break;
-            case 16 when DetectAlpn(extData): // ALPN
+            case 16 when _DetectAlpn(extData): // ALPN
                 flags.Alpn = true;
                 break;
-            case 43 when DetectSupportedVersions(extData): // supported_versions
+            case 43 when _DetectSupportedVersions(extData): // supported_versions
                 flags.SupportedVersions = true;
                 break;
-            case 51 when DetectKeyShare(extData): // key_share
+            case 51 when _DetectKeyShare(extData): // key_share
                 flags.KeyShare = true;
                 break;
         }
     }
 
-    /// <summary>Mirrors <see cref="ParseSni"/>: true when at least one host_name entry would be emitted.</summary>
-    private static bool DetectSni(ReadOnlySpan<byte> data)
+    /// <summary>Mirrors <see cref="_ParseSni"/>: true when at least one host_name entry would be emitted.</summary>
+    private static bool _DetectSni(ReadOnlySpan<byte> data)
     {
         if (data.Length < 5)
         {
@@ -1270,8 +1270,8 @@ public sealed partial class TlsProtocol : IProtocol
         return false;
     }
 
-    /// <summary>Mirrors <see cref="ParseAlpn"/>: true when at least one protocol name would be emitted.</summary>
-    private static bool DetectAlpn(ReadOnlySpan<byte> data)
+    /// <summary>Mirrors <see cref="_ParseAlpn"/>: true when at least one protocol name would be emitted.</summary>
+    private static bool _DetectAlpn(ReadOnlySpan<byte> data)
     {
         if (data.Length < 2)
         {
@@ -1294,10 +1294,10 @@ public sealed partial class TlsProtocol : IProtocol
     }
 
     /// <summary>
-    /// Mirrors the 2-byte-list parsers (<see cref="ParseSupportedGroups"/>, <see cref="ParseSignatureAlgorithms"/>):
+    /// Mirrors the 2-byte-list parsers (<see cref="_ParseSupportedGroups"/>, <see cref="_ParseSignatureAlgorithms"/>):
     /// true when the length-prefixed list holds at least one full 2-byte entry.
     /// </summary>
-    private static bool DetectListHasEntry(ReadOnlySpan<byte> data)
+    private static bool _DetectListHasEntry(ReadOnlySpan<byte> data)
     {
         if (data.Length < 2)
         {
@@ -1309,8 +1309,8 @@ public sealed partial class TlsProtocol : IProtocol
         return 2 + 2 <= end;
     }
 
-    /// <summary>Mirrors <see cref="ParseSupportedVersions"/>: true when at least one version would be emitted.</summary>
-    private static bool DetectSupportedVersions(ReadOnlySpan<byte> data)
+    /// <summary>Mirrors <see cref="_ParseSupportedVersions"/>: true when at least one version would be emitted.</summary>
+    private static bool _DetectSupportedVersions(ReadOnlySpan<byte> data)
     {
         if (data.Length == 2)
         {
@@ -1327,8 +1327,8 @@ public sealed partial class TlsProtocol : IProtocol
         return 1 + 2 <= end;
     }
 
-    /// <summary>Mirrors <see cref="ParseKeyShare"/>: true when at least one key-share entry would be emitted.</summary>
-    private static bool DetectKeyShare(ReadOnlySpan<byte> data)
+    /// <summary>Mirrors <see cref="_ParseKeyShare"/>: true when at least one key-share entry would be emitted.</summary>
+    private static bool _DetectKeyShare(ReadOnlySpan<byte> data)
     {
         int pos = 0;
 

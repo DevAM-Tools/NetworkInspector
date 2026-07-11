@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Protocols.Tests;
 
@@ -11,7 +11,7 @@ internal sealed class VlanQinQTests
     #region Helper Methods
 
     /// <summary>Builds an Ethernet+QinQ+VLAN+IPv4+UDP frame (double-tagged).</summary>
-    private static byte[] BuildQinQFrame(
+    private static byte[] _BuildQinQFrame(
         ushort outerVlanId, ushort innerVlanId,
         byte outerPcp = 0, byte innerPcp = 0)
     {
@@ -34,7 +34,7 @@ internal sealed class VlanQinQTests
     [Test]
     public async Task Parse_QinQ_OuterVlanId()
     {
-        byte[] frame = BuildQinQFrame(100, 200);
+        byte[] frame = _BuildQinQFrame(100, 200);
 
         Packet packet = ProtocolTestHelper.ParseWithSharedStack(frame);
         Stack stack = ProtocolTestHelper.SharedStack;
@@ -46,7 +46,7 @@ internal sealed class VlanQinQTests
     [Test]
     public async Task Parse_QinQ_EtherTypeIs88A8()
     {
-        byte[] frame = BuildQinQFrame(100, 200);
+        byte[] frame = _BuildQinQFrame(100, 200);
 
         Packet packet = ProtocolTestHelper.ParseWithSharedStack(frame);
         Stack stack = ProtocolTestHelper.SharedStack;
@@ -58,7 +58,7 @@ internal sealed class VlanQinQTests
     [Test]
     public async Task Parse_QinQ_VlanProtocolPresent()
     {
-        byte[] frame = BuildQinQFrame(100, 200);
+        byte[] frame = _BuildQinQFrame(100, 200);
 
         Packet packet = ProtocolTestHelper.ParseWithSharedStack(frame);
         Stack stack = ProtocolTestHelper.SharedStack;
@@ -69,7 +69,7 @@ internal sealed class VlanQinQTests
     [Test]
     public async Task Parse_QinQ_IPv4Present()
     {
-        byte[] frame = BuildQinQFrame(100, 200);
+        byte[] frame = _BuildQinQFrame(100, 200);
 
         Packet packet = ProtocolTestHelper.ParseWithSharedStack(frame);
         Stack stack = ProtocolTestHelper.SharedStack;

@@ -1,11 +1,6 @@
 <!-- Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root. -->
 <Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup>
-    <OutputType>Exe</OutputType>
-    <RootNamespace>NetworkInspector.CLI.Tests</RootNamespace>
-  </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="TUnit" />
     <PackageReference Include="ZeroAlloc" />
   </ItemGroup>
   <ItemGroup>

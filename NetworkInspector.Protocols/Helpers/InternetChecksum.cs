@@ -20,18 +20,18 @@ internal static class InternetChecksum
 
         if (Vector256.IsHardwareAccelerated && data.Length >= 64)
         {
-            sum = ComputeVector256(data);
+            sum = _ComputeVector256(data);
         }
         else if (Vector128.IsHardwareAccelerated && data.Length >= 32)
         {
-            sum = ComputeVector128(data);
+            sum = _ComputeVector128(data);
         }
         else
         {
-            sum = ComputeScalar(data);
+            sum = _ComputeScalar(data);
         }
 
-        return FoldAndFinalize(sum);
+        return _FoldAndFinalize(sum);
     }
 
     /// <summary>
@@ -45,19 +45,19 @@ internal static class InternetChecksum
 
         if (Vector256.IsHardwareAccelerated && data.Length >= 64)
         {
-            sum = ComputeVector256(data);
+            sum = _ComputeVector256(data);
         }
         else if (Vector128.IsHardwareAccelerated && data.Length >= 32)
         {
-            sum = ComputeVector128(data);
+            sum = _ComputeVector128(data);
         }
         else
         {
-            sum = ComputeScalar(data);
+            sum = _ComputeScalar(data);
         }
 
         sum += pseudoHeaderSum;
-        return FoldAndFinalize(sum);
+        return _FoldAndFinalize(sum);
     }
 
     /// <summary>
@@ -109,10 +109,10 @@ internal static class InternetChecksum
     {
         // Extract 16-bit words from each 64-bit half via bit-shifts.
         // Each 64-bit value yields 4 × 16-bit words.
-        ulong sum = SumU64AsU16Words(srcHigh)
-                  + SumU64AsU16Words(srcLow)
-                  + SumU64AsU16Words(dstHigh)
-                  + SumU64AsU16Words(dstLow);
+        ulong sum = _SumU64AsU16Words(srcHigh)
+                  + _SumU64AsU16Words(srcLow)
+                  + _SumU64AsU16Words(dstHigh)
+                  + _SumU64AsU16Words(dstLow);
 
         // Upper-layer packet length (32-bit, as two 16-bit words)
         sum += (transportLength >> 16) & 0xFFFF;
@@ -129,11 +129,11 @@ internal static class InternetChecksum
     /// Used for IPv6 pseudo-header computation from raw high/low address components.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static ulong SumU64AsU16Words(ulong value) =>
+    private static ulong _SumU64AsU16Words(ulong value) =>
         (value >> 48) + ((value >> 32) & 0xFFFF) + ((value >> 16) & 0xFFFF) + (value & 0xFFFF);
 
     /// <summary>Scalar one's complement accumulation, processing 4 bytes per iteration.</summary>
-    private static ulong ComputeScalar(ReadOnlySpan<byte> data)
+    private static ulong _ComputeScalar(ReadOnlySpan<byte> data)
     {
         ulong sum = 0;
         int offset = 0;
@@ -168,7 +168,7 @@ internal static class InternetChecksum
     /// Each 256-bit vector holds 16 × u16 values; these are widened to u32 and accumulated
     /// to avoid overflow within the vector lanes.
     /// </summary>
-    private static ulong ComputeVector256(ReadOnlySpan<byte> data)
+    private static ulong _ComputeVector256(ReadOnlySpan<byte> data)
     {
         int offset = 0;
         int length = data.Length;
@@ -215,7 +215,7 @@ internal static class InternetChecksum
     /// <summary>
     /// Vector128 (SSE2/NEON) accelerated accumulation — processes 16 bytes per iteration.
     /// </summary>
-    private static ulong ComputeVector128(ReadOnlySpan<byte> data)
+    private static ulong _ComputeVector128(ReadOnlySpan<byte> data)
     {
         int offset = 0;
         int length = data.Length;
@@ -264,7 +264,7 @@ internal static class InternetChecksum
     /// Repeated folding handles carry chains from very large packets.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static ushort FoldAndFinalize(ulong sum)
+    private static ushort _FoldAndFinalize(ulong sum)
     {
         // Fold 64→32
         sum = (sum >> 32) + (sum & 0xFFFF_FFFF);

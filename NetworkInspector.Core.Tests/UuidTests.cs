@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Core.Tests;
 
@@ -76,10 +76,10 @@ internal sealed class UuidTests
     // === IBinarySerializable ===
 
     [Test]
-    public async Task TryGetSerializedSize()
+    public async Task TryGetWrittenSize()
     {
         Uuid uuid = new(1, 2);
-        bool ok = uuid.TryGetSerializedSize(out int size);
+        bool ok = uuid.TryGetWrittenSize(out int size);
         await Assert.That(ok).IsTrue();
         await Assert.That(size).IsEqualTo(16);
     }

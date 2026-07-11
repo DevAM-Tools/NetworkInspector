@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Exporters.Json;
 
@@ -24,13 +24,13 @@ namespace NetworkInspector.Exporters.Json;
 public sealed class JsonExporter : IPacketListener, IErrorTolerantExporter, IDisposable
 {
     /// <summary>Opening bracket of the JSON array: <c>[</c> + newline.</summary>
-    private static ReadOnlySpan<byte> ArrayOpen => "[\n"u8;
+    private static ReadOnlySpan<byte> _ArrayOpen => "[\n"u8;
 
     /// <summary>Closing bracket of the JSON array: newline + <c>]</c> + newline.</summary>
-    private static ReadOnlySpan<byte> ArrayClose => "\n]\n"u8;
+    private static ReadOnlySpan<byte> _ArrayClose => "\n]\n"u8;
 
     /// <summary>Separator between packets: comma + newline + blank line.</summary>
-    private static ReadOnlySpan<byte> PacketSeparator => ",\n\n"u8;
+    private static ReadOnlySpan<byte> _PacketSeparator => ",\n\n"u8;
 
     private readonly CancellationToken _CancellationToken;
     private readonly JsonExportFormat _Format;
@@ -134,9 +134,6 @@ public sealed class JsonExporter : IPacketListener, IErrorTolerantExporter, IDis
         || (_TargetPacketCount > 0 && PacketCount >= _TargetPacketCount);
 
     /// <inheritdoc/>
-    bool IExporterStatistics.IsFinished => IsFinished;
-
-    /// <inheritdoc/>
     public ErrorToleranceMode ErrorTolerance { get; set; } = ErrorToleranceMode.Tolerant;
 
     /// <inheritdoc/>
@@ -156,12 +153,12 @@ public sealed class JsonExporter : IPacketListener, IErrorTolerantExporter, IDis
         }
 
         // Lazy initialization: open output and write opening bracket on first packet
-        if (!_Started && !Start())
+        if (!_Started && !_Start())
         {
             return false;
         }
 
-        return HandlePacket(packet);
+        return _HandlePacket(packet);
     }
 
     /// <inheritdoc/>
@@ -183,7 +180,7 @@ public sealed class JsonExporter : IPacketListener, IErrorTolerantExporter, IDis
             // If never started, trigger lazy init so empty exports produce "[\n]\n"
             if (!_Started && _Output is not null)
             {
-                Start();
+                _Start();
             }
 
             // Write the closing bracket when it has not been written yet.
@@ -192,7 +189,7 @@ public sealed class JsonExporter : IPacketListener, IErrorTolerantExporter, IDis
             // the underlying stream recovers or is retried by the caller.
             if (!_ClosingBracketWritten && _DirectStream is not null)
             {
-                WriteClosingBracket();
+                _WriteClosingBracket();
                 _ClosingBracketWritten = true;
                 _DirectStream?.Flush();
             }
@@ -264,7 +261,7 @@ public sealed class JsonExporter : IPacketListener, IErrorTolerantExporter, IDis
 
     /// <summary>Lazily initializes output and writes the opening bracket.</summary>
     /// <returns>True if initialization succeeded.</returns>
-    private bool Start()
+    private bool _Start()
     {
         if (_Output is null)
         {
@@ -286,7 +283,7 @@ public sealed class JsonExporter : IPacketListener, IErrorTolerantExporter, IDis
             // Opening bracket write may throw on a broken stream — surface as an
             // export error rather than escaping to the caller.
             _DirectStream = underlyingStream;
-            _DirectStream.Write(ArrayOpen);
+            _DirectStream.Write(_ArrayOpen);
         }
         catch (Exception ex)
         {
@@ -305,7 +302,7 @@ public sealed class JsonExporter : IPacketListener, IErrorTolerantExporter, IDis
     }
 
     /// <summary>Serializes and outputs a single packet.</summary>
-    private bool HandlePacket(Packet packet)
+    private bool _HandlePacket(Packet packet)
     {
         if (_TargetPacketCount > 0 && PacketCount >= _TargetPacketCount)
         {
@@ -317,7 +314,7 @@ public sealed class JsonExporter : IPacketListener, IErrorTolerantExporter, IDis
         // Comma + blank line separator between packets
         if (PacketCount > 0)
         {
-            _Buffer.Write(PacketSeparator);
+            _Buffer.Write(_PacketSeparator);
         }
 
         // Serialize packet using the configured format
@@ -334,7 +331,7 @@ public sealed class JsonExporter : IPacketListener, IErrorTolerantExporter, IDis
                 break;
         }
 
-        // _DirectStream is guaranteed non-null after Start() succeeds
+        // _DirectStream is guaranteed non-null after _Start() succeeds
         try
         {
             _DirectStream!.Write(_Buffer.WrittenSpan);
@@ -349,7 +346,7 @@ public sealed class JsonExporter : IPacketListener, IErrorTolerantExporter, IDis
             // I/O errors map to IoError; other failures (encoding, etc.) map
             // to SerializationError so callers can distinguish the cause.
             ExportErrorKind kind = ex is IOException ? ExportErrorKind.IoError : ExportErrorKind.SerializationError;
-            return HandleSkip(new ExportErrorEventArgs
+            return _HandleSkip(new ExportErrorEventArgs
             {
                 ItemIndex = PacketCount,
                 Kind = kind,
@@ -365,7 +362,7 @@ public sealed class JsonExporter : IPacketListener, IErrorTolerantExporter, IDis
     /// Handles a skipped packet: increments counters, fires the event in Tolerant mode,
     /// and returns false to abort in Strict mode.
     /// </summary>
-    private bool HandleSkip(ExportErrorEventArgs error)
+    private bool _HandleSkip(ExportErrorEventArgs error)
     {
         SkippedCount++;
         ErrorCount++;
@@ -382,9 +379,9 @@ public sealed class JsonExporter : IPacketListener, IErrorTolerantExporter, IDis
     }
 
     /// <summary>Writes the closing bracket to the output.</summary>
-    private void WriteClosingBracket() =>
-        // _DirectStream may be null if Start() was never called (empty export handled in OnFinish)
-        _DirectStream?.Write(ArrayClose);
+    private void _WriteClosingBracket() =>
+        // _DirectStream may be null if _Start() was never called (empty export handled in OnFinish)
+        _DirectStream?.Write(_ArrayClose);
 
     // ========================================================================
     // Builder

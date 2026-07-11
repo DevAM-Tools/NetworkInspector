@@ -13,7 +13,7 @@ namespace NetworkInspector.FrameBuilder;
 public readonly struct TcpOptions
 {
     /// <summary>An empty options value (no TCP options).</summary>
-    public static TcpOptions Empty { get; } = default;
+    public static TcpOptions Empty { get; }
 
     /// <summary>The raw option bytes, already padded to a 4-byte boundary.</summary>
     public ReadOnlyMemory<byte> Data

@@ -15,10 +15,10 @@ namespace NetworkInspector.Profiling.Scenarios;
 [SuppressMessage("Performance", "CA1812:AvoidUninstantiatedInternalClasses", Justification = "Instantiated via reflection in ScenarioDiscovery.Discover.")]
 internal sealed class ReadBlfScenario : ReadScenarioBase
 {
-    private const int Count = 50_000;
+    private const int _Count = 50_000;
 
     /// <inheritdoc/>
-    protected override int FrameCount => Count;
+    protected override int FrameCount => _Count;
 
     /// <inheritdoc/>
     protected override string CreateSampleFile(Frame[] frames)
@@ -29,7 +29,7 @@ internal sealed class ReadBlfScenario : ReadScenarioBase
 
     /// <inheritdoc/>
     public override string Description =>
-        $"Read {Count:N0} frames from a BLF file per iteration.";
+        FormattableString.Invariant($"Read {_Count:N0} frames from a BLF file per iteration.");
 
     /// <inheritdoc/>
     protected override void RunIteration(string filePath)

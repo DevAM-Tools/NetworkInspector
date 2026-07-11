@@ -11,7 +11,7 @@ internal sealed class ArpProtocolTests
     /// <summary>
     /// Builds a full stack with standard protocols and parses the given frame data.
     /// </summary>
-    private static (Stack Stack, Packet Packet) BuildAndParse(byte[] frameData)
+    private static (Stack Stack, Packet Packet) _BuildAndParse(byte[] frameData)
     {
         using SettingsManager settingsManager = new();
         StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
@@ -41,7 +41,7 @@ internal sealed class ArpProtocolTests
         byte[] frameData = FrameBuilders.GenerateArpRequestFrame(
             senderMac, senderIp, targetMac, targetIp);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             // Verify ARP protocol is detected
@@ -117,7 +117,7 @@ internal sealed class ArpProtocolTests
         byte[] frameData = FrameBuilders.GenerateArpReplyFrame(
             senderMac, senderIp, targetMac, targetIp);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? opcodeId = stack.GetFieldId("arp.opcode");
@@ -142,7 +142,7 @@ internal sealed class ArpProtocolTests
         shortFrame[5] = 0xFF;
         System.Buffers.Binary.BinaryPrimitives.WriteUInt16BigEndian(shortFrame.AsSpan(12), 0x0806);
 
-        (Stack stack, Packet packet) = BuildAndParse(shortFrame);
+        (Stack stack, Packet packet) = _BuildAndParse(shortFrame);
         using (stack)
         {
             // Should not crash; ARP fields may not be present due to insufficient data

@@ -104,7 +104,7 @@ public readonly struct LinLayer : IStatelessLayer, IRootLayer
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void WriteHeader(scoped Span<byte> dst)
     {
-        byte pid = WithParity(_FrameId);
+        byte pid = _WithParity(_FrameId);
 
         // Byte 4: payloadLength[7:4] | msgType[3:2] | checksumType[1:0]
         // msgType = 0 (Frame), so bits 3-2 are 00.
@@ -146,7 +146,7 @@ public readonly struct LinLayer : IStatelessLayer, IRootLayer
             dataSlice[7] = _D7;
         }
 
-        byte checksum = ComputeChecksum(dataSlice[.._DataLen], pid, _ChecksumType);
+        byte checksum = _ComputeChecksum(dataSlice[.._DataLen], pid, _ChecksumType);
 
         dst[0] = 1;           // msg_format_rev = 1
         dst[1] = 0;           // reserved
@@ -175,7 +175,7 @@ public readonly struct LinLayer : IStatelessLayer, IRootLayer
 
     /// <summary>Computes the 8-bit Protected ID (frame id + 2 parity bits per ISO 17987).</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static byte WithParity(byte frameId)
+    private static byte _WithParity(byte frameId)
     {
         int id0 = (frameId >> 0) & 1;
         int id1 = (frameId >> 1) & 1;
@@ -194,7 +194,7 @@ public readonly struct LinLayer : IStatelessLayer, IRootLayer
     /// Enhanced (type 2): includes the PID byte in the sum (ISO 17987).
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static byte ComputeChecksum(ReadOnlySpan<byte> data, byte pid, byte type)
+    private static byte _ComputeChecksum(ReadOnlySpan<byte> data, byte pid, byte type)
     {
         uint sum = type == 2 ? pid : 0u;
         foreach (byte b in data)

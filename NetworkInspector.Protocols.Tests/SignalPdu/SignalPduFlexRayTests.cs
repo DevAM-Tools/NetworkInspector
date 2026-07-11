@@ -5,18 +5,27 @@ namespace NetworkInspector.Protocols.Tests.SignalPdu;
 /// <summary>
 /// Parser round-trip coverage for Signal-PDU payloads carried over FlexRay
 /// (LINKTYPE_FLEXRAY, link type 210), dispatched via the <c>flexray.id</c> table.
-/// Tests cover both Channel A and Channel B dispatch, using the channel-encoded key:
-/// bits [10:0] = Frame ID, bit 11 = Channel B (<see cref="FlexRayProtocol.ChannelBKeyBit"/>).
+/// Dispatch key encodes slot (bits [10:0]), channel B (bit 11), and cycle (bits [17:12])
+/// via <see cref="FlexRayLinkTypeFrame.EncodeDispatchKey"/>.
 /// </summary>
 internal sealed class SignalPduFlexRayTests
 {
-    /// <summary>FlexRay Channel A, slot 42.</summary>
-    private const ushort BenchFrameIdChannelA = 42;
+    /// <summary>FlexRay Channel A, slot 42, cycle 0.</summary>
+    private const ushort _BenchFrameIdChannelA = 42;
 
-    /// <summary>FlexRay Channel B, slot 42 — key = 42 | ChannelBKeyBit = 2090.</summary>
-    private const ulong BenchKeyChannelB = BenchFrameIdChannelA | FlexRayProtocol.ChannelBKeyBit;
+    private const byte _BenchCycle = 0;
 
-    private static SignalPduLayout ChannelALayout =>
+    /// <summary>FlexRay Channel A, slot 42, cycle 7.</summary>
+    private const byte _BenchCycleNonZero = 7;
+
+    /// <summary>FlexRay Channel B, slot 42, cycle 0.</summary>
+    private static ulong _BenchKeyChannelB =>
+        FlexRayLinkTypeFrame.EncodeDispatchKey(_BenchFrameIdChannelA, channelB: true, _BenchCycle);
+
+    private static ulong _BenchKeyChannelACycle7 =>
+        FlexRayLinkTypeFrame.EncodeDispatchKey(_BenchFrameIdChannelA, channelB: false, _BenchCycleNonZero);
+
+    private static SignalPduLayout _ChannelALayout =>
         new()
         {
             PduId = 0x200,
@@ -27,13 +36,13 @@ internal sealed class SignalPduFlexRayTests
                 new DispatchBinding
                 {
                     Table = FlexRayProtocol.IdTableName,
-                    Key = BenchFrameIdChannelA,
+                    Key = FlexRayLinkTypeFrame.EncodeDispatchKey(_BenchFrameIdChannelA, channelB: false, _BenchCycle),
                 }),
             Mux = null,
             MuxGroups = [],
         };
 
-    private static SignalPduLayout ChannelBLayout =>
+    private static SignalPduLayout _ChannelBLayout =>
         new()
         {
             PduId = 0x201,
@@ -44,7 +53,7 @@ internal sealed class SignalPduFlexRayTests
                 new DispatchBinding
                 {
                     Table = FlexRayProtocol.IdTableName,
-                    Key = BenchKeyChannelB,
+                    Key = _BenchKeyChannelB,
                 }),
             Mux = null,
             MuxGroups = [],
@@ -59,8 +68,8 @@ internal sealed class SignalPduFlexRayTests
     [Test]
     public async Task Parses_ChannelA_MatchesExpectedFields()
     {
-        SignalPduLayout layout = ChannelALayout;
-        await RunFlexRayRoundTripTest(layout, frameId: BenchFrameIdChannelA, channelB: false).ConfigureAwait(false);
+        SignalPduLayout layout = _ChannelALayout;
+        await _RunFlexRayRoundTripTest(layout, frameId: _BenchFrameIdChannelA, channelB: false, cycle: _BenchCycle).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -70,11 +79,42 @@ internal sealed class SignalPduFlexRayTests
     [Test]
     public async Task Parses_ChannelB_MatchesExpectedFields()
     {
-        SignalPduLayout layout = ChannelBLayout;
-        await RunFlexRayRoundTripTest(layout, frameId: BenchFrameIdChannelA, channelB: true).ConfigureAwait(false);
+        SignalPduLayout layout = _ChannelBLayout;
+        await _RunFlexRayRoundTripTest(layout, frameId: _BenchFrameIdChannelA, channelB: true, cycle: _BenchCycle).ConfigureAwait(false);
     }
 
-    private static async Task RunFlexRayRoundTripTest(SignalPduLayout layout, ushort frameId, bool channelB)
+    /// <summary>
+    /// Dispatch key must include the cycle count in bits [17:12] so that cycle-multiplexed
+    /// PDUs on the same slot resolve to distinct <c>flexray.id</c> entries.
+    /// </summary>
+    [Test]
+    public async Task Parses_ChannelA_NonZeroCycle_MatchesExpectedFields()
+    {
+        SignalPduLayout layout = new()
+        {
+            PduId = 0x202,
+            Name = "FlexRaySignalCycle7",
+            ByteLength = 4,
+            Signals = AutomotivePduBench.TwoSequentialUint16LeLayout.Signals,
+            RegisterAt = ImmutableArray.Create(
+                new DispatchBinding
+                {
+                    Table = FlexRayProtocol.IdTableName,
+                    Key = _BenchKeyChannelACycle7,
+                }),
+            Mux = null,
+            MuxGroups = [],
+        };
+
+        await _RunFlexRayRoundTripTest(
+            layout,
+            frameId: _BenchFrameIdChannelA,
+            channelB: false,
+            cycle: _BenchCycleNonZero).ConfigureAwait(false);
+    }
+
+    private static async Task _RunFlexRayRoundTripTest(
+        SignalPduLayout layout, ushort frameId, bool channelB, byte cycle = 0)
     {
         SignalValueSet vals = SignalValueSet.For(layout)
             .Set("EngineRpm", 125.0)
@@ -87,7 +127,7 @@ internal sealed class SignalPduFlexRayTests
         spdu.WriteHeader(signalBytes.AsSpan());
 
         byte[] frame = FrameStack
-            .Start(new FlexRayLayer(frameId, cycleCount: 0, payload: signalBytes.AsMemory(), channelB: channelB))
+            .Start(new FlexRayLayer(frameId, cycleCount: cycle, payload: signalBytes.AsMemory(), channelB: channelB))
             .CreateWithFixedValues()
             .EmitFrame(ReadOnlySpan<byte>.Empty);
 

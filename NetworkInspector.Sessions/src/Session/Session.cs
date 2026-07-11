@@ -105,7 +105,7 @@ public sealed class Session : ISession, ISessionReader
     private readonly PacketToFrameMap _Mapping = new();
 
     // Roaring Bitmap index populated during parsing (protocol presence, field groups).
-    // Created by StartInternal(), set to null by Restart().
+    // Created by _StartInternal(), set to null by Restart().
     private PacketIndex? _PacketIndex;
 
     // -- Source registry --
@@ -114,11 +114,11 @@ public sealed class Session : ISession, ISessionReader
     private readonly SnapshotList<FrameSourceEntry> _SourceEntries = new();
 
     // Running source jobs (populated at Start() time, replaced on Restart()).
-    // Non-readonly: reassigned by StartInternal() on each start/restart cycle.
+    // Non-readonly: reassigned by _StartInternal() on each start/restart cycle.
     private Job[] _SourceJobs = [];
 
     // Random-access capable sources keyed by FrameSourceId for GetPacket().
-    // Copy-on-write: written only during AddFrameSourceInternal (rare), read during TryGetPacket (hot).
+    // Copy-on-write: written only during _AddFrameSourceInternal (rare), read during TryGetPacket (hot).
     // Volatile reference swap replaces the previous lock(object) pattern for lock-free reads.
     private volatile Dictionary<FrameSourceId, IRandomAccessFrameSource> _RandomAccessSources = new();
 
@@ -138,7 +138,7 @@ public sealed class Session : ISession, ISessionReader
 
     // -- Disposal --
 
-    // Volatile: read by ThrowIfDisposed (any thread), written by Dispose (any thread).
+    // Volatile: read by _ThrowIfDisposed (any thread), written by Dispose (any thread).
     private volatile bool _Disposed;
 
     // Exceptions that occurred during disposal in Shutdown(). Populated by Dispose()
@@ -186,7 +186,7 @@ public sealed class Session : ISession, ISessionReader
     public bool TryAddFrameSource(IFrameSource source, [NotNullWhen(true)] out FrameSourceInfo? info)
     {
         ArgumentNullException.ThrowIfNull(source);
-        ThrowIfDisposed();
+        _ThrowIfDisposed();
 
         if (_State.Phase != SessionPhase.Idle)
         {
@@ -194,7 +194,7 @@ public sealed class Session : ISession, ISessionReader
             return false;
         }
 
-        info = AddFrameSourceInternal(source);
+        info = _AddFrameSourceInternal(source);
         return true;
     }
 
@@ -218,7 +218,7 @@ public sealed class Session : ISession, ISessionReader
     public bool TryAddListener(ISessionListener listener, [NotNullWhen(true)] out ListenerInfo? info)
     {
         ArgumentNullException.ThrowIfNull(listener);
-        ThrowIfDisposed();
+        _ThrowIfDisposed();
 
         if (string.IsNullOrWhiteSpace(listener.UiName))
         {
@@ -239,7 +239,7 @@ public sealed class Session : ISession, ISessionReader
 
         // CA2000: ListenerSlot is stored in _ListenerSlots and disposed during Shutdown().
 #pragma warning disable CA2000
-        ListenerSlot slot = new(jobId, listener, this, OnJobStatusChanged);
+        ListenerSlot slot = new(jobId, listener, this, _OnJobStatusChanged);
 #pragma warning restore CA2000
 
         info = new ListenerInfo()
@@ -264,7 +264,7 @@ public sealed class Session : ISession, ISessionReader
         // can observe listener job status via GetJobs().
         _AllJobs.Add(slot.Info);
 
-        // Start the slot in any non-Idle phase. During Idle, StartInternal()
+        // Start the slot in any non-Idle phase. During Idle, _StartInternal()
         // will start all pending slots. In all active phases (Running,
         // Restarting), immediate start ensures the slot's thread is ready for
         // notifications. Starting during the narrow TOCTOU window where the
@@ -321,8 +321,8 @@ public sealed class Session : ISession, ISessionReader
             Frame? raFrame = raSource.FrameById(frameId);
             if (raFrame is not null)
             {
-                // ParseFrameUnderLock uses ParseFrameIndexed when PacketIndex is active.
-                packet = ParseFrameUnderLock(raFrame.Value, id);
+                // _ParseFrameUnderLock uses ParseFrameIndexed when PacketIndex is active.
+                packet = _ParseFrameUnderLock(raFrame.Value, id);
                 if (packet is not null)
                 {
                     // Cache the re-parsed packet so subsequent lookups avoid re-parsing.
@@ -360,7 +360,7 @@ public sealed class Session : ISession, ISessionReader
         [NotNullWhen(true)] out JobInfo? info)
     {
         ArgumentNullException.ThrowIfNull(work);
-        ThrowIfDisposed();
+        _ThrowIfDisposed();
 
         if (string.IsNullOrWhiteSpace(uiName))
         {
@@ -377,13 +377,13 @@ public sealed class Session : ISession, ISessionReader
         }
 
         JobId jobId = _State.AllocateJobId();
-        Job job = new(jobId, uiName, description, work, OnJobStatusChanged);
+        Job job = new(jobId, uiName, description, work, _OnJobStatusChanged);
         info = new JobInfo(job);
 
         _AllJobs.Add(info);
 
         // Notify listeners about the new job via flags.
-        NotifyAllListeners(NotifyFlags.JobAdded);
+        _NotifyAllListeners(NotifyFlags.JobAdded);
 
         job.Start();
         return true;
@@ -397,7 +397,7 @@ public sealed class Session : ISession, ISessionReader
     public bool TryRemoveJob(JobInfo job)
     {
         ArgumentNullException.ThrowIfNull(job);
-        ThrowIfDisposed();
+        _ThrowIfDisposed();
 
         if (job.Status is JobStatus.Pending or JobStatus.Running)
         {
@@ -409,7 +409,7 @@ public sealed class Session : ISession, ISessionReader
         // Remove from the unified list and notify listeners.
         // If the job is not in the list (e.g. already removed), this is a no-op.
         _AllJobs.Remove(job);
-        NotifyAllListeners(NotifyFlags.JobRemoved);
+        _NotifyAllListeners(NotifyFlags.JobRemoved);
         return true;
     }
 
@@ -417,7 +417,7 @@ public sealed class Session : ISession, ISessionReader
     public bool TryUnsubscribe(JobInfo job)
     {
         ArgumentNullException.ThrowIfNull(job);
-        ThrowIfDisposed();
+        _ThrowIfDisposed();
 
         // Phase guard: unsubscribe only makes sense during Running/Stopped/Restarting.
         // During Idle nothing is running yet; during ShuttingDown the session handles cleanup.
@@ -435,21 +435,21 @@ public sealed class Session : ISession, ISessionReader
 
         // Determine job type by searching registries.
         // Check source entries first (small list, O(n) scan).
-        FrameSourceEntry? sourceEntry = FindSourceEntry(job);
+        FrameSourceEntry? sourceEntry = _FindSourceEntry(job);
         if (sourceEntry is not null)
         {
-            return TryUnsubscribeSource(sourceEntry);
+            return _TryUnsubscribeSource(sourceEntry);
         }
 
         // Check listener slots next.
-        (ListenerSlot? slot, ListenerInfo? info) = FindListenerSlotAndInfo(job);
+        (ListenerSlot? slot, ListenerInfo? info) = _FindListenerSlotAndInfo(job);
         if (slot is not null && info is not null)
         {
-            return TryUnsubscribeListener(slot, info);
+            return _TryUnsubscribeListener(slot, info);
         }
 
         // Must be a user job — cancel it.
-        return TryUnsubscribeUserJob(job);
+        return _TryUnsubscribeUserJob(job);
     }
 
     // ── Unsubscribe helpers ──────────────────────────────────────────────────
@@ -458,7 +458,7 @@ public sealed class Session : ISession, ISessionReader
     /// Finds the <see cref="FrameSourceEntry"/> whose <see cref="FrameSourceEntry.JobInfo"/>
     /// matches the given <paramref name="job"/>. Returns <see langword="null"/> if not found.
     /// </summary>
-    private FrameSourceEntry? FindSourceEntry(JobInfo job)
+    private FrameSourceEntry? _FindSourceEntry(JobInfo job)
     {
         foreach (FrameSourceEntry entry in _SourceEntries.Current)
         {
@@ -476,7 +476,7 @@ public sealed class Session : ISession, ISessionReader
     /// The <see cref="ListenerInfo"/> is retrieved from <see cref="ListenerSlot.ListenerInfo"/>
     /// which is set during <see cref="TryAddListener"/>.
     /// </summary>
-    private (ListenerSlot? Slot, ListenerInfo? Info) FindListenerSlotAndInfo(JobInfo job)
+    private (ListenerSlot? Slot, ListenerInfo? Info) _FindListenerSlotAndInfo(JobInfo job)
     {
         foreach (ListenerSlot slot in _ListenerSlots.Current)
         {
@@ -492,18 +492,18 @@ public sealed class Session : ISession, ISessionReader
     /// Stops a source job. The source thread exits after the current frame.
     /// The source remains available for random access and reparse.
     /// </summary>
-    private bool TryUnsubscribeSource(FrameSourceEntry entry)
+    private bool _TryUnsubscribeSource(FrameSourceEntry entry)
     {
-        // Cancel the source job — sets the CancellationToken that RunSourceLoop observes.
+        // Cancel the source job — sets the CancellationToken that _RunSourceLoop observes.
         entry.Job.Cancel();
 
         // Wait for the source thread to reach a terminal state.
-        // RunSourceLoop's finally block decrements _ActiveSourceCount and
+        // _RunSourceLoop's finally block decrements _ActiveSourceCount and
         // notifies listeners (SourceCompleted, AllSourcesCompleted, PhaseChanged).
         entry.Job.Join();
 
         // Notify listeners that a job changed status.
-        NotifyAllListeners(NotifyFlags.JobStatusChanged);
+        _NotifyAllListeners(NotifyFlags.JobStatusChanged);
         return true;
     }
 
@@ -512,7 +512,7 @@ public sealed class Session : ISession, ISessionReader
     /// waits for the thread to exit (which calls OnUnsubscribed), then removes
     /// the slot from registries and disposes it.
     /// </summary>
-    private bool TryUnsubscribeListener(ListenerSlot slot, ListenerInfo info)
+    private bool _TryUnsubscribeListener(ListenerSlot slot, ListenerInfo info)
     {
         // Set status BEFORE cancel so that OnUnsubscribed (called in RunLoop's
         // finally block) reads the correct status.
@@ -552,7 +552,7 @@ public sealed class Session : ISession, ISessionReader
         slot.Dispose();
 
         // Notify remaining listeners that a job changed status.
-        NotifyAllListeners(NotifyFlags.JobStatusChanged);
+        _NotifyAllListeners(NotifyFlags.JobStatusChanged);
         return true;
     }
 
@@ -560,11 +560,11 @@ public sealed class Session : ISession, ISessionReader
     /// Cancels a user job and waits for it to reach a terminal state.
     /// The job remains in <see cref="_AllJobs"/> for diagnostic inspection.
     /// </summary>
-    private bool TryUnsubscribeUserJob(JobInfo job)
+    private bool _TryUnsubscribeUserJob(JobInfo job)
     {
         job.Cancel();
         job.Join();
-        NotifyAllListeners(NotifyFlags.JobStatusChanged);
+        _NotifyAllListeners(NotifyFlags.JobStatusChanged);
         return true;
     }
 
@@ -573,14 +573,14 @@ public sealed class Session : ISession, ISessionReader
     /// <inheritdoc/>
     public bool TryStart()
     {
-        ThrowIfDisposed();
+        _ThrowIfDisposed();
 
         if (_State.Phase != SessionPhase.Idle)
         {
             return false;
         }
 
-        StartInternal();
+        _StartInternal();
         return true;
     }
 
@@ -612,7 +612,7 @@ public sealed class Session : ISession, ISessionReader
     public void Restart(Func<FrameInterfaceRegistry, Stack> stackFactory)
     {
         ArgumentNullException.ThrowIfNull(stackFactory);
-        ThrowIfDisposed();
+        _ThrowIfDisposed();
 
         if (_State.Phase is SessionPhase.ShuttingDown or SessionPhase.Idle)
         {
@@ -630,7 +630,7 @@ public sealed class Session : ISession, ISessionReader
 
         try
         {
-            RestartCore(stackFactory);
+            _RestartCore(stackFactory);
         }
         finally
         {
@@ -659,7 +659,7 @@ public sealed class Session : ISession, ISessionReader
     /// sources are skipped (their past frames cannot be retrieved).
     /// </para>
     /// </summary>
-    private void RestartCore(Func<FrameInterfaceRegistry, Stack> stackFactory)
+    private void _RestartCore(Func<FrameInterfaceRegistry, Stack> stackFactory)
     {
         // ── Phase 0: Build the new stack (outside any lock) ──────────────────
         Stack newStack = stackFactory(_FrameInterfaceRegistry)
@@ -675,7 +675,7 @@ public sealed class Session : ISession, ISessionReader
 
         // ── Phase 1: Gate source threads and swap the stack ──────────────────
         _State.SetPhase(SessionPhase.Restarting);
-        NotifyAllListeners(NotifyFlags.PhaseChanged);
+        _NotifyAllListeners(NotifyFlags.PhaseChanged);
 
         // Close the gate. Source threads that finish their current NextFrame()
         // call block at _ParseGate.Wait(ct) until we Set() below.
@@ -712,7 +712,7 @@ public sealed class Session : ISession, ISessionReader
             _PacketStore.Clear();
 
             // Create a fresh packet index for the new stack's field definitions.
-            _PacketIndex = CreatePacketIndex(_Stack);
+            _PacketIndex = _CreatePacketIndex(_Stack);
 
             // Reset counters so re-parse fills them from 0.
             Interlocked.Exchange(ref _PacketCount, 0);
@@ -729,11 +729,11 @@ public sealed class Session : ISession, ISessionReader
 
         // ── Phase 2 + 3: Re-parse and resume ─────────────────────────────────
         // Wrapped in try/finally to guarantee the parse gate is reopened even
-        // if ReparseAllFrames throws (OOM, etc.). Without this, source threads
+        // if _ReparseAllFrames throws (OOM, etc.). Without this, source threads
         // would remain parked on the closed gate indefinitely — a deadlock.
         try
         {
-            ReparseAllFrames(totalToReparse);
+            _ReparseAllFrames(totalToReparse);
         }
         finally
         {
@@ -742,7 +742,7 @@ public sealed class Session : ISession, ISessionReader
 
             // Determine the post-reparse phase based on source activity.
             // If all sources have already finished, transition directly to Stopped
-            // instead of Running (mirrors the natural transition in RunSourceLoop).
+            // instead of Running (mirrors the natural transition in _RunSourceLoop).
             bool sourcesStillActive = Volatile.Read(ref _ActiveSourceCount) > 0;
             SessionPhase finalPhase = sourcesStillActive
                 ? SessionPhase.Running
@@ -759,8 +759,8 @@ public sealed class Session : ISession, ISessionReader
 
             // Reset all listener cursors to 0 so OnNewPackets delivers the full
             // re-parsed range, then notify StackChanged + NewPackets + PhaseChanged.
-            ResetAllListenerCursors();
-            NotifyAllListeners(flags);
+            _ResetAllListenerCursors();
+            _NotifyAllListeners(flags);
 
             // Open the gate — source threads resume and parse with the new stack.
             // New frames receive PacketIds starting from totalToReparse.
@@ -777,10 +777,10 @@ public sealed class Session : ISession, ISessionReader
     /// <para>
     /// Called while the <see cref="_ParseGate"/> is closed, so no source thread
     /// is parsing concurrently. Each frame is still parsed under the
-    /// <see cref="_ParseLock"/> via <see cref="ParseFrameUnderLock"/>.
+    /// <see cref="_ParseLock"/> via <see cref="_ParseFrameUnderLock"/>.
     /// </para>
     /// </summary>
-    private void ReparseAllFrames(int count)
+    private void _ReparseAllFrames(int count)
     {
         // Snapshot the random-access sources once.
         Dictionary<FrameSourceId, IRandomAccessFrameSource> raSources = _RandomAccessSources;
@@ -806,7 +806,7 @@ public sealed class Session : ISession, ISessionReader
                 continue;
             }
 
-            Packet packet = ParseFrameUnderLock(frame.Value, packetId: null);
+            Packet packet = _ParseFrameUnderLock(frame.Value, packetId: null);
 
             // Store the re-parsed packet.
             _PacketStore.Store(packet.Id, packet);
@@ -826,7 +826,7 @@ public sealed class Session : ISession, ISessionReader
     /// <see cref="NotifyFlags.NewPackets"/> dispatch delivers all re-parsed
     /// packets from the beginning.
     /// </summary>
-    private void ResetAllListenerCursors()
+    private void _ResetAllListenerCursors()
     {
         ReadOnlySpan<ListenerSlot> slots = _ListenerSlots.Current;
         foreach (ListenerSlot slot in slots)
@@ -860,12 +860,12 @@ public sealed class Session : ISession, ISessionReader
         if (!alreadyStopped)
         {
             _State.SetPhase(SessionPhase.ShuttingDown);
-            NotifyAllListeners(NotifyFlags.PhaseChanged | NotifyFlags.ShuttingDown);
+            _NotifyAllListeners(NotifyFlags.PhaseChanged | NotifyFlags.ShuttingDown);
         }
         else
         {
             // Notify ShuttingDown to any still-running listener slots.
-            NotifyAllListeners(NotifyFlags.ShuttingDown);
+            _NotifyAllListeners(NotifyFlags.ShuttingDown);
         }
 
         // Step 1: Cancel all source jobs. Sources observe this via CancellationToken.
@@ -1056,7 +1056,7 @@ public sealed class Session : ISession, ISessionReader
     /// Registers a new frame source in the registry and creates its job.
     /// Used by <see cref="TryAddFrameSource"/> for initial source registration.
     /// </summary>
-    private FrameSourceInfo AddFrameSourceInternal(IFrameSource source)
+    private FrameSourceInfo _AddFrameSourceInternal(IFrameSource source)
     {
         FrameSourceId sourceId = _Stack.FrameInterfaceRegistry.RegisterSource(source);
         FrameSourceInfo info = _Stack.FrameInterfaceRegistry.GetSource(sourceId)!;
@@ -1067,8 +1067,8 @@ public sealed class Session : ISession, ISessionReader
             _State.AllocateJobId(),
             source.UiName,
             $"Source: {source.UiName}",
-            ct => RunSourceLoop(source, capturedInfo, ct),
-            OnJobStatusChanged);
+            ct => _RunSourceLoop(source, capturedInfo, ct),
+            _OnJobStatusChanged);
 
         // Hold the entry reference so we can also register its JobInfo in the
         // unified job list without creating a second JobInfo wrapper.
@@ -1083,7 +1083,7 @@ public sealed class Session : ISession, ISessionReader
 
         // Register random-access capable sources for GetPacket().
         // Copy-on-write: create a new dictionary with the added entry and publish atomically.
-        // AddFrameSourceInternal is only called during Idle or Restart (single-threaded),
+        // _AddFrameSourceInternal is only called during Idle or Restart (single-threaded),
         // so no CAS retry loop is needed.
         if (source is IRandomAccessFrameSource raSource)
         {
@@ -1095,7 +1095,7 @@ public sealed class Session : ISession, ISessionReader
         }
 
         // Notify existing listeners about the new source.
-        NotifyAllListeners(NotifyFlags.SourceAdded);
+        _NotifyAllListeners(NotifyFlags.SourceAdded);
 
         return info;
     }
@@ -1104,10 +1104,10 @@ public sealed class Session : ISession, ISessionReader
     /// Transitions to Running and launches all source and listener jobs.
     /// Called by <see cref="TryStart"/> during initial start.
     /// </summary>
-    private void StartInternal()
+    private void _StartInternal()
     {
         // Create a fresh packet index for this run.
-        _PacketIndex = CreatePacketIndex(_Stack);
+        _PacketIndex = _CreatePacketIndex(_Stack);
 
         // Re-enable queries (may have been disabled by a previous Restart or Shutdown attempt).
         _QueriesDisabled = false;
@@ -1118,16 +1118,16 @@ public sealed class Session : ISession, ISessionReader
 
         if (entries.Length == 0)
         {
-            StartListenerSlots();
+            _StartListenerSlots();
             _State.SetPhase(SessionPhase.Stopped);
-            NotifyAllListeners(NotifyFlags.AllSourcesCompleted | NotifyFlags.PhaseChanged);
+            _NotifyAllListeners(NotifyFlags.AllSourcesCompleted | NotifyFlags.PhaseChanged);
             return;
         }
 
         _State.SetPhase(SessionPhase.Running);
-        NotifyAllListeners(NotifyFlags.PhaseChanged);
+        _NotifyAllListeners(NotifyFlags.PhaseChanged);
 
-        StartListenerSlots();
+        _StartListenerSlots();
 
         // Start all source jobs. Each start is individually guarded so that
         // a thread-creation failure (e.g. OOM) for one source does not prevent
@@ -1144,16 +1144,16 @@ public sealed class Session : ISession, ISessionReader
                 int remaining = Interlocked.Decrement(ref _ActiveSourceCount);
                 if (remaining == 0)
                 {
-                    NotifyAllListeners(NotifyFlags.AllSourcesCompleted);
+                    _NotifyAllListeners(NotifyFlags.AllSourcesCompleted);
                     _State.SetPhase(SessionPhase.Stopped);
-                    NotifyAllListeners(NotifyFlags.PhaseChanged);
+                    _NotifyAllListeners(NotifyFlags.PhaseChanged);
                 }
             }
         }
     }
 
     /// <summary>Starts all pending listener slots (shared by normal start and zero-source start).</summary>
-    private void StartListenerSlots()
+    private void _StartListenerSlots()
     {
         // Start all listener slots first so they are ready to receive flags.
         // Each Start is individually guarded: a failed listener start does
@@ -1181,7 +1181,7 @@ public sealed class Session : ISession, ISessionReader
     /// <summary>
     /// Creates a <see cref="NetworkInspector.Core.Index.PacketIndex"/> for the given stack.
     /// </summary>
-    private static NetworkInspector.Core.Index.PacketIndex CreatePacketIndex(Stack stack) =>
+    private static NetworkInspector.Core.Index.PacketIndex _CreatePacketIndex(Stack stack) =>
         new(stack);
 
     // -- Source job loop --
@@ -1205,7 +1205,7 @@ public sealed class Session : ISession, ISessionReader
     /// a slow listener sees all accumulated packets in one read.
     /// </para>
     /// </summary>
-    private void RunSourceLoop(
+    private void _RunSourceLoop(
         IFrameSource source,
         FrameSourceInfo sourceInfo,
         CancellationToken ct)
@@ -1231,7 +1231,7 @@ public sealed class Session : ISession, ISessionReader
                 // which recognises it via token comparison and transitions to Cancelled.
                 _ParseGate.Wait(ct);
 
-                Packet packet = ParseFrameUnderLock(capturedFrame, packetId: null);
+                Packet packet = _ParseFrameUnderLock(capturedFrame, packetId: null);
 
                 // Store packet in the shared PacketStore — all listeners read from here.
                 _PacketStore.Store(packet.Id, packet);
@@ -1250,11 +1250,11 @@ public sealed class Session : ISession, ISessionReader
                 Interlocked.Increment(ref _FrameCount);
 
                 // Set NewPackets flag on all listener slots — non-blocking, no copy.
-                NotifyAllListeners(NotifyFlags.NewPackets);
+                _NotifyAllListeners(NotifyFlags.NewPackets);
             }
 
             // Source completed. Set SourceCompleted flag on all listeners.
-            NotifyAllListeners(NotifyFlags.SourceCompleted);
+            _NotifyAllListeners(NotifyFlags.SourceCompleted);
         }
         finally
         {
@@ -1267,14 +1267,14 @@ public sealed class Session : ISession, ISessionReader
             if (remaining == 0)
             {
                 // AllSourcesCompleted: this is the last source thread.
-                NotifyAllListeners(NotifyFlags.AllSourcesCompleted);
+                _NotifyAllListeners(NotifyFlags.AllSourcesCompleted);
 
                 // Transition to Stopped if still Running (Shutdown may have
                 // already changed the phase).
                 if (_State.Phase == SessionPhase.Running)
                 {
                     _State.SetPhase(SessionPhase.Stopped);
-                    NotifyAllListeners(NotifyFlags.PhaseChanged);
+                    _NotifyAllListeners(NotifyFlags.PhaseChanged);
                 }
             }
         }
@@ -1287,7 +1287,7 @@ public sealed class Session : ISession, ISessionReader
     /// When <paramref name="packetId"/> is <see langword="null"/>, allocates the next sequential id.
     /// Uses indexed parsing when <see cref="_PacketIndex"/> is active.
     /// </summary>
-    private Packet ParseFrameUnderLock(Frame frame, PacketId? packetId)
+    private Packet _ParseFrameUnderLock(Frame frame, PacketId? packetId)
     {
         bool lockTaken = false;
         try
@@ -1321,7 +1321,7 @@ public sealed class Session : ISession, ISessionReader
     /// <see cref="NotifyFlags.NewPackets"/> is set once per parsed frame (O(frames × listeners) atomic ORs).
     /// </remarks>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void NotifyAllListeners(NotifyFlags flags)
+    private void _NotifyAllListeners(NotifyFlags flags)
     {
         ReadOnlySpan<ListenerSlot> slots = _ListenerSlots.Current;
         foreach (ListenerSlot slot in slots)
@@ -1336,12 +1336,12 @@ public sealed class Session : ISession, ISessionReader
     /// Called by each <see cref="Job"/> when its status changes.
     /// Sets <see cref="NotifyFlags.JobStatusChanged"/> on all listener slots.
     /// </summary>
-    private void OnJobStatusChanged(Job job, JobStatus status)
-        => NotifyAllListeners(NotifyFlags.JobStatusChanged);
+    private void _OnJobStatusChanged(Job job, JobStatus status)
+        => _NotifyAllListeners(NotifyFlags.JobStatusChanged);
 
     // -- Helper --
 
-    private void ThrowIfDisposed()
+    private void _ThrowIfDisposed()
     {
         if (_Disposed)
         {

@@ -32,16 +32,16 @@ public readonly struct IPv6FragmentExtensionLayer :
     IConsumesNextProtocolValue<IpNextProtocolKind>, IProvidesPseudoHeader, IFragmentable
 {
     /// <summary>Offset of the NextHeader field within the fragment ext header.</summary>
-    private const int NextHeaderOffset = 0;
+    private const int _NextHeaderOffset = 0;
 
     /// <summary>Offset of the FragmentOffset+Flags field within the fragment ext header.</summary>
-    private const int FragmentOffsetAndFlagsOffset = 2;
+    private const int _FragmentOffsetAndFlagsOffset = 2;
 
     /// <summary>Offset of the Identification field within the fragment ext header.</summary>
-    private const int IdentificationOffset = 4;
+    private const int _IdentificationOffset = 4;
 
     /// <summary>Mask of the M (More Fragments) flag inside the packed 16-bit field.</summary>
-    private const ushort MoreFragmentsMask = 0x0001;
+    private const ushort _MoreFragmentsMask = 0x0001;
 
     private readonly byte _ExplicitNextHeader;
     private readonly bool _NextHeaderIsExplicit;
@@ -55,7 +55,7 @@ public readonly struct IPv6FragmentExtensionLayer :
     /// <see cref="Session{TStack,TTrailer,TInterceptor}"/>.
     /// </param>
     /// <param name="nextHeader">
-    /// NextHeader field; <see cref="Auto{T}.Compute"/> (default) means auto-patch
+    /// NextHeader field; <see cref="Auto.Compute"/> (default) means auto-patch
     /// from the inner layer's protocol type.
     /// </param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -103,11 +103,11 @@ public readonly struct IPv6FragmentExtensionLayer :
 
     /// <inheritdoc />
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public void PatchNextProtocol(scoped Span<byte> frame, int myOffset, ushort next)
+    public void PatchNextProtocol(scoped Span<byte> frame, int myOffset, ushort nextProtocol)
     {
         if (!_NextHeaderIsExplicit)
         {
-            frame[myOffset + NextHeaderOffset] = (byte)next;
+            frame[myOffset + _NextHeaderOffset] = (byte)nextProtocol;
         }
     }
 
@@ -123,7 +123,7 @@ public readonly struct IPv6FragmentExtensionLayer :
         // Forward the upper-layer protocol number to the pseudo-header so the
         // transport checksum uses the correct value (RFC 8200 §8.1) and skip
         // past this extension header.
-        ctx.PseudoProtocol = frame[myOffset + NextHeaderOffset];
+        ctx.PseudoProtocol = frame[myOffset + _NextHeaderOffset];
         ctx.TransportOffset = myOffset + IPv6FragmentExtensionHeader.Size;
         _ = myLength;
     }
@@ -164,10 +164,10 @@ public readonly struct IPv6FragmentExtensionLayer :
         ushort word = (ushort)(((fragmentPayloadOffset >> 3) & 0x1FFF) << 3);
         if (moreFragments)
         {
-            word |= MoreFragmentsMask;
+            word |= _MoreFragmentsMask;
         }
-        BinaryPrimitives.WriteUInt16BigEndian(frame.Slice(myOffset + FragmentOffsetAndFlagsOffset, 2), word);
+        BinaryPrimitives.WriteUInt16BigEndian(frame.Slice(myOffset + _FragmentOffsetAndFlagsOffset, 2), word);
         // Identification field stays at the value written into the cached
-        // header (offset IdentificationOffset = 4); nothing to patch here.
+        // header (offset _IdentificationOffset = 4); nothing to patch here.
     }
 }

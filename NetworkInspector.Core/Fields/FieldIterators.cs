@@ -628,7 +628,7 @@ public ref struct FieldFlatEnumerator
 /// </summary>
 internal ref struct InlineStack16
 {
-    private const int InlineCapacity = 16;
+    private const int _InlineCapacity = 16;
 
     private InlineBuffer16 _InlineBuffer;
     private ushort[]? _HeapBuffer;
@@ -645,13 +645,13 @@ internal ref struct InlineStack16
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void Push(ushort value)
     {
-        if (_Count < InlineCapacity)
+        if (_Count < _InlineCapacity)
         {
             _InlineBuffer[_Count] = value;
         }
         else
         {
-            PushSlow(value);
+            _PushSlow(value);
         }
         _Count++;
     }
@@ -675,12 +675,12 @@ internal ref struct InlineStack16
 
     /// <summary>Slow path: spills to heap when inline capacity is exceeded.</summary>
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private void PushSlow(ushort value)
+    private void _PushSlow(ushort value)
     {
         if (_HeapBuffer is null)
         {
             // First overflow: copy inline entries to heap
-            _HeapBuffer = new ushort[InlineCapacity * 2];
+            _HeapBuffer = new ushort[_InlineCapacity * 2];
             ((Span<ushort>)_InlineBuffer).CopyTo(_HeapBuffer);
         }
         else if (_Count >= _HeapBuffer.Length)
@@ -691,7 +691,7 @@ internal ref struct InlineStack16
     }
 
     /// <summary>Inline buffer for 16 ushort entries (32 bytes on stack).</summary>
-    [InlineArray(InlineCapacity)]
+    [InlineArray(_InlineCapacity)]
     private struct InlineBuffer16
     {
         private ushort _Element0;

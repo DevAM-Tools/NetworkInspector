@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Protocols.Tests.Infrastructure;
 
@@ -72,7 +72,7 @@ internal static class TsharkAssert
             return;
         }
 
-        string? niValue = TryGetNiValueAsString(stack, packet, niFieldPath);
+        string? niValue = _TryGetNiValueAsString(stack, packet, niFieldPath);
         await Assert.That(niValue)
             .IsNotNull()
             .Because($"NI field '{niFieldPath}' must be present (tshark reported '{tsharkValue}').");
@@ -212,7 +212,7 @@ internal static class TsharkAssert
     /// sides before comparison so cosmetic differences (case, hex prefixes, IP
     /// canonicalisation) do not cause failures.
     /// </remarks>
-    private static string? TryGetNiValueAsString(Stack stack, Packet packet, string niFieldPath)
+    private static string? _TryGetNiValueAsString(Stack stack, Packet packet, string niFieldPath)
     {
         FieldId? fieldId = stack.GetFieldId(niFieldPath);
         if (fieldId is null)

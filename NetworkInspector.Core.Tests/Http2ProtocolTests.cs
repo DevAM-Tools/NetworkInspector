@@ -11,7 +11,7 @@ internal sealed class Http2ProtocolTests
     /// <summary>
     /// Generates an HTTP/2 frame wrapped in Ethernet + IPv4 + TCP (port 8443).
     /// </summary>
-    private static byte[] GenerateHttp2Frame(
+    private static byte[] _GenerateHttp2Frame(
         byte frameType = 4,
         byte flags = 0,
         uint streamId = 0,
@@ -32,11 +32,11 @@ internal sealed class Http2ProtocolTests
         BinaryPrimitives.WriteUInt32BigEndian(h2Frame.AsSpan(5), streamId & 0x7FFFFFFFU);
         payload.CopyTo(h2Frame.AsSpan(9));
 
-        return WrapInTcpFrame(h2Frame, srcPort: 50000, dstPort: 8443);
+        return _WrapInTcpFrame(h2Frame, srcPort: 50000, dstPort: 8443);
     }
 
     /// <summary>Wraps a payload in Ethernet + IPv4 + TCP frame (minimal valid header).</summary>
-    private static byte[] WrapInTcpFrame(byte[] payload, ushort srcPort, ushort dstPort)
+    private static byte[] _WrapInTcpFrame(byte[] payload, ushort srcPort, ushort dstPort)
     {
         const int ethSize = 14;
         const int ipv4Size = 20;
@@ -103,7 +103,7 @@ internal sealed class Http2ProtocolTests
         return frame;
     }
 
-    private static (Stack Stack, Packet Packet) BuildAndParse(byte[] frameData)
+    private static (Stack Stack, Packet Packet) _BuildAndParse(byte[] frameData)
     {
         using SettingsManager settingsManager = new();
         StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
@@ -126,9 +126,9 @@ internal sealed class Http2ProtocolTests
     public async Task Parse_Http2Settings_TypeCorrect()
     {
         // SETTINGS frame (type=4, stream 0, no payload = empty SETTINGS)
-        byte[] frameData = GenerateHttp2Frame(frameType: 4, streamId: 0);
+        byte[] frameData = _GenerateHttp2Frame(frameType: 4, streamId: 0);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? typeField = stack.GetFieldId("http2.frame.type");
@@ -145,9 +145,9 @@ internal sealed class Http2ProtocolTests
     {
         // HEADERS frame (type=1, stream 1)
         byte[] payload = new byte[10]; // Minimal "header block" (garbage for Phase 1)
-        byte[] frameData = GenerateHttp2Frame(frameType: 1, flags: 0x04, streamId: 1, payload: payload);
+        byte[] frameData = _GenerateHttp2Frame(frameType: 1, flags: 0x04, streamId: 1, payload: payload);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? streamField = stack.GetFieldId("http2.frame.stream_id");
@@ -164,9 +164,9 @@ internal sealed class Http2ProtocolTests
     {
         // DATA frame (type=0, stream 3, 100 bytes payload)
         byte[] payload = new byte[100];
-        byte[] frameData = GenerateHttp2Frame(frameType: 0, streamId: 3, payload: payload);
+        byte[] frameData = _GenerateHttp2Frame(frameType: 0, streamId: 3, payload: payload);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? lenField = stack.GetFieldId("http2.frame.length");
@@ -182,9 +182,9 @@ internal sealed class Http2ProtocolTests
     public async Task Parse_Http2_FlagsCorrect()
     {
         // SETTINGS frame with ACK flag (0x01)
-        byte[] frameData = GenerateHttp2Frame(frameType: 4, flags: 0x01, streamId: 0);
+        byte[] frameData = _GenerateHttp2Frame(frameType: 4, flags: 0x01, streamId: 0);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? flagsField = stack.GetFieldId("http2.frame.flags");
@@ -200,9 +200,9 @@ internal sealed class Http2ProtocolTests
     public async Task Parse_Http2_PayloadExtracted()
     {
         byte[] payload = [0xCA, 0xFE, 0xBA, 0xBE];
-        byte[] frameData = GenerateHttp2Frame(frameType: 0, streamId: 5, payload: payload);
+        byte[] frameData = _GenerateHttp2Frame(frameType: 0, streamId: 5, payload: payload);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? payloadField = stack.GetFieldId("http2.frame.payload");
@@ -219,9 +219,9 @@ internal sealed class Http2ProtocolTests
     {
         // Only 5 bytes of HTTP/2 data — need at least 9 bytes
         byte[] shortPayload = new byte[5];
-        byte[] frameData = WrapInTcpFrame(shortPayload, 50000, 8443);
+        byte[] frameData = _WrapInTcpFrame(shortPayload, 50000, 8443);
 
-        (Stack stack, Packet packet) = BuildAndParse(frameData);
+        (Stack stack, Packet packet) = _BuildAndParse(frameData);
         using (stack)
         {
             FieldId? typeField = stack.GetFieldId("http2.frame.type");
@@ -234,7 +234,7 @@ internal sealed class Http2ProtocolTests
     [Test]
     public async Task Parse_Http2_IndexPresence()
     {
-        byte[] frameData = GenerateHttp2Frame();
+        byte[] frameData = _GenerateHttp2Frame();
 
         using SettingsManager settingsManager = new();
 

@@ -31,7 +31,7 @@ internal sealed class TcpConnectionTracker
 {
     /// <summary>LRU cache capacity — 4 entries provide a good balance between
     /// hit rate and linear scan cost for typical network traffic patterns.</summary>
-    private const int CacheSize = 4;
+    private const int _CacheSize = 4;
 
     /// <summary>All tracked connections keyed by normalized connection key.</summary>
     private readonly Dictionary<TcpConnectionKey, TcpConnectionState> _Connections = [];
@@ -40,12 +40,12 @@ internal sealed class TcpConnectionTracker
     private uint _NextStreamIndex;
 
     /// <summary>Inline LRU cache — most recently used entry is at index 0.</summary>
-    private readonly TcpConnectionKey[] _CacheKeys = new TcpConnectionKey[CacheSize];
+    private readonly TcpConnectionKey[] _CacheKeys = new TcpConnectionKey[_CacheSize];
 
     /// <summary>Cached connection states corresponding to <see cref="_CacheKeys"/>.</summary>
-    private readonly TcpConnectionState?[] _CacheValues = new TcpConnectionState?[CacheSize];
+    private readonly TcpConnectionState?[] _CacheValues = new TcpConnectionState?[_CacheSize];
 
-    /// <summary>Number of valid entries in the LRU cache (0..CacheSize).</summary>
+    /// <summary>Number of valid entries in the LRU cache (0.._CacheSize).</summary>
     private int _CacheCount;
 
     /// <summary>Gets or creates a connection state for the given key.</summary>
@@ -89,7 +89,7 @@ internal sealed class TcpConnectionTracker
         }
 
         // Insert at MRU position [0] — shift existing entries toward LRU.
-        int shiftCount = Math.Min(_CacheCount, CacheSize - 1);
+        int shiftCount = Math.Min(_CacheCount, _CacheSize - 1);
         for (int j = shiftCount; j > 0; j--)
         {
             _CacheKeys[j] = _CacheKeys[j - 1];
@@ -99,7 +99,7 @@ internal sealed class TcpConnectionTracker
         _CacheKeys[0] = key;
         _CacheValues[0] = state;
 
-        if (_CacheCount < CacheSize)
+        if (_CacheCount < _CacheSize)
         {
             _CacheCount++;
         }
@@ -187,7 +187,7 @@ internal sealed class TcpConnectionTracker
         if (isSyn && isAck && !conn.InitialRttSet && reverseFlow.SynTimestamp.HasValue)
         {
             // SYN-ACK seen; compute delta from the original SYN
-            double delta = ComputeTimeDelta(reverseFlow.SynTimestamp.Value, timestamp);
+            double delta = _ComputeTimeDelta(reverseFlow.SynTimestamp.Value, timestamp);
             if (delta >= 0)
             {
                 conn.InitialRttValue = delta;
@@ -202,7 +202,7 @@ internal sealed class TcpConnectionTracker
         if (flow.Seen && segLen > 0 && !isSyn)
         {
             // Check if this segment's data has already been seen
-            if (IsSequenceBefore(endSeq, flow.NextSeq) || endSeq == flow.NextSeq)
+            if (_IsSequenceBefore(endSeq, flow.NextSeq) || endSeq == flow.NextSeq)
             {
                 // end_seq <= next_seq → retransmission
                 if (endSeq != flow.NextSeq || seqNum != flow.NextSeq)
@@ -228,13 +228,13 @@ internal sealed class TcpConnectionTracker
             // already ACKed past its end — the retransmission was unnecessary.
             if ((analysisFlags & (TcpAnalysisFlags.Retransmission | TcpAnalysisFlags.FastRetransmission)) != 0
                 && reverseFlow.Seen
-                && IsSequenceAfter(reverseFlow.LastAck, endSeq))
+                && _IsSequenceAfter(reverseFlow.LastAck, endSeq))
             {
                 analysisFlags |= TcpAnalysisFlags.SpuriousRetransmission;
             }
 
             // Lost segment detection: gap between expected and received
-            if (IsSequenceAfter(seqNum, flow.NextSeq) && !isSyn)
+            if (_IsSequenceAfter(seqNum, flow.NextSeq) && !isSyn)
             {
                 analysisFlags |= TcpAnalysisFlags.LostSegment;
             }
@@ -308,7 +308,7 @@ internal sealed class TcpConnectionTracker
         {
             if (reverseFlow.DataSegmentTimestamps.Remove(ackNum, out Timestamp segTs))
             {
-                double delta = ComputeTimeDelta(segTs, timestamp);
+                double delta = _ComputeTimeDelta(segTs, timestamp);
                 if (delta >= 0)
                 {
                     ackRtt = delta;
@@ -323,8 +323,8 @@ internal sealed class TcpConnectionTracker
         if (flow.Seen && reverseFlow.Seen && segLen > 0)
         {
             // bytes_in_flight = next_seq - reverse.last_ack (using updated next_seq)
-            uint nextSeqUpdated = IsSequenceAfter(endSeq, flow.NextSeq) ? endSeq : flow.NextSeq;
-            if (IsSequenceAfter(nextSeqUpdated, reverseFlow.LastAck))
+            uint nextSeqUpdated = _IsSequenceAfter(endSeq, flow.NextSeq) ? endSeq : flow.NextSeq;
+            if (_IsSequenceAfter(nextSeqUpdated, reverseFlow.LastAck))
             {
                 bytesInFlight = nextSeqUpdated - reverseFlow.LastAck;
             }
@@ -379,11 +379,11 @@ internal sealed class TcpConnectionTracker
         flow.LastWindow = window;
 
         // Update NextSeq and MaxSeq
-        if (!flow.Seen || IsSequenceAfter(endSeq, flow.NextSeq))
+        if (!flow.Seen || _IsSequenceAfter(endSeq, flow.NextSeq))
         {
             flow.NextSeq = endSeq;
         }
-        if (!flow.Seen || IsSequenceAfter(endSeq, flow.MaxSeq))
+        if (!flow.Seen || _IsSequenceAfter(endSeq, flow.MaxSeq))
         {
             flow.MaxSeq = endSeq;
         }
@@ -393,7 +393,7 @@ internal sealed class TcpConnectionTracker
         #endregion
 
         #region Connection state machine transitions (RFC 793)
-        UpdateConnectionPhase(conn, isSyn, isAck, isFin, isRst, isForward);
+        _UpdateConnectionPhase(conn, isSyn, isAck, isFin, isRst, isForward);
 
         #endregion
 
@@ -409,12 +409,12 @@ internal sealed class TcpConnectionTracker
         }
         else
         {
-            timeRelative = ComputeTimeDelta(conn.FirstTimestamp.Value, timestamp);
+            timeRelative = _ComputeTimeDelta(conn.FirstTimestamp.Value, timestamp);
         }
 
         if (conn.LastTimestamp.HasValue)
         {
-            timeDelta = ComputeTimeDelta(conn.LastTimestamp.Value, timestamp);
+            timeDelta = _ComputeTimeDelta(conn.LastTimestamp.Value, timestamp);
         }
         conn.LastTimestamp = timestamp;
 
@@ -467,7 +467,7 @@ internal sealed class TcpConnectionTracker
     /// Uses nanosecond-precision subtraction for accuracy.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static double ComputeTimeDelta(Timestamp t1, Timestamp t2) =>
+    private static double _ComputeTimeDelta(Timestamp t1, Timestamp t2) =>
         // Subtract raw nanosecond values and convert to seconds
         (t2.AsNanos - t1.AsNanos) / 1_000_000_000.0;
 
@@ -476,7 +476,7 @@ internal sealed class TcpConnectionTracker
     /// using 32-bit wrapping arithmetic (handles sequence number wraparound).
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static bool IsSequenceAfter(uint a, uint b) =>
+    private static bool _IsSequenceAfter(uint a, uint b) =>
         // Signed comparison of (a - b) handles 32-bit wraparound
         (int)(a - b) > 0;
 
@@ -485,14 +485,14 @@ internal sealed class TcpConnectionTracker
     /// using 32-bit wrapping arithmetic.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static bool IsSequenceBefore(uint a, uint b) =>
+    private static bool _IsSequenceBefore(uint a, uint b) =>
         (int)(a - b) < 0;
 
     /// <summary>
     /// Updates the TCP connection phase based on the current segment's flags.
     /// Follows the simplified RFC 793 state diagram with tracking for both directions.
     /// </summary>
-    private static void UpdateConnectionPhase(
+    private static void _UpdateConnectionPhase(
         TcpConnectionState conn, bool isSyn, bool isAck, bool isFin, bool isRst, bool isForward)
     {
         if (isRst)

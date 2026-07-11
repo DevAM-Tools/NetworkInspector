@@ -8,11 +8,11 @@ namespace NetworkInspector.Sources.Tests.Pcapng;
 /// </summary>
 internal sealed class PcapStreamSourceTests
 {
-    private static readonly byte[] SrcMac = [0x00, 0x11, 0x22, 0x33, 0x44, 0x55];
-    private static readonly byte[] DstMac = [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
+    private static readonly byte[] _SrcMac = [0x00, 0x11, 0x22, 0x33, 0x44, 0x55];
+    private static readonly byte[] _DstMac = [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
 
     /// <summary>Creates a PcapStreamSource from a MemoryStream backed by the given data.</summary>
-    private static PcapStreamSource CreateSource(byte[] data, string uiName = "test.pcapng", bool leaveOpen = false) =>
+    private static PcapStreamSource _CreateSource(byte[] data, string uiName = "test.pcapng", bool leaveOpen = false) =>
         PcapStreamSource.FromStream(new MemoryStream(data), uiName, leaveOpen);
 
 
@@ -24,14 +24,14 @@ internal sealed class PcapStreamSourceTests
     [Test]
     public async Task SingleFrame_ParsedCorrectly()
     {
-        byte[] eth = FrameBuilders.BuildEthernetFrame(DstMac, SrcMac, 0x0800, [0xDE, 0xAD]);
+        byte[] eth = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0xDE, 0xAD]);
 
         using PcapNgTestWriter writer = new();
         writer.AddInterface(LinkType.Ethernet, nanosecondResolution: true);
         writer.WriteFrame(0, 1_000_000_000, eth);
         byte[] pcapData = writer.Build();
 
-        using PcapStreamSource source = CreateSource(pcapData);
+        using PcapStreamSource source = _CreateSource(pcapData);
         // Stream sources always return null for EstimatedFrameCount
         await Assert.That(source.EstimatedFrameCount).IsNull();
 
@@ -60,12 +60,12 @@ internal sealed class PcapStreamSourceTests
         for (int i = 0; i < 5; i++)
         {
             byte[] payload = [(byte)i, (byte)(i + 1), (byte)(i + 2)];
-            byte[] eth = FrameBuilders.BuildEthernetFrame(DstMac, SrcMac, 0x0800, payload);
+            byte[] eth = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, payload);
             expected.Add(eth);
             writer.WriteFrame(0, (i + 1) * 1_000_000_000L, eth);
         }
 
-        using PcapStreamSource source = CreateSource(writer.Build());
+        using PcapStreamSource source = _CreateSource(writer.Build());
         SourceTestFixture.InitializeAndStartSource(source);
 
         for (int i = 0; i < 5; i++)
@@ -86,7 +86,7 @@ internal sealed class PcapStreamSourceTests
     [Test]
     public async Task Timestamps_StrictlyIncreasing()
     {
-        byte[] eth = FrameBuilders.BuildEthernetFrame(DstMac, SrcMac, 0x0800, [0x00]);
+        byte[] eth = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0x00]);
 
         using PcapNgTestWriter writer = new();
         writer.AddInterface(LinkType.Ethernet, nanosecondResolution: true);
@@ -97,7 +97,7 @@ internal sealed class PcapStreamSourceTests
             writer.WriteFrame(0, ts, eth);
         }
 
-        using PcapStreamSource source = CreateSource(writer.Build());
+        using PcapStreamSource source = _CreateSource(writer.Build());
         SourceTestFixture.InitializeAndStartSource(source);
 
         long prevTs = long.MinValue;
@@ -120,13 +120,13 @@ internal sealed class PcapStreamSourceTests
     [Test]
     public async Task MicrosecondResolution_TimestampConvertedCorrectly()
     {
-        byte[] eth = FrameBuilders.BuildEthernetFrame(DstMac, SrcMac, 0x0800, [0x00]);
+        byte[] eth = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0x00]);
 
         using PcapNgTestWriter writer = new();
         writer.AddInterface(LinkType.Ethernet, nanosecondResolution: false);
         writer.WriteFrame(0, 1_500_000_000, eth);
 
-        using PcapStreamSource source = CreateSource(writer.Build());
+        using PcapStreamSource source = _CreateSource(writer.Build());
         SourceTestFixture.InitializeAndStartSource(source);
 
         Frame? frame = source.NextFrame();
@@ -148,13 +148,13 @@ internal sealed class PcapStreamSourceTests
         writer.AddInterface(LinkType.Ethernet, nanosecondResolution: true);
         writer.AddInterface(LinkType.Ethernet, nanosecondResolution: true);
 
-        byte[] eth0 = FrameBuilders.BuildEthernetFrame(DstMac, SrcMac, 0x0800, [0x00]);
-        byte[] eth1 = FrameBuilders.BuildEthernetFrame(DstMac, SrcMac, 0x0806, [0x01]);
+        byte[] eth0 = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0x00]);
+        byte[] eth1 = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0806, [0x01]);
 
         writer.WriteFrame(0, 1_000_000_000, eth0);
         writer.WriteFrame(1, 2_000_000_000, eth1);
 
-        using PcapStreamSource source = CreateSource(writer.Build());
+        using PcapStreamSource source = _CreateSource(writer.Build());
 
         // Start with fresh registry to verify interface IDs
         FrameInterfaceRegistry registry = new();
@@ -186,7 +186,7 @@ internal sealed class PcapStreamSourceTests
         writer.AddInterface(LinkType.Ethernet);
         byte[] pcapData = writer.Build();
 
-        using PcapStreamSource source = CreateSource(pcapData);
+        using PcapStreamSource source = _CreateSource(pcapData);
         SourceTestFixture.InitializeAndStartSource(source);
 
         await Assert.That(source.NextFrame()).IsNull();
@@ -203,7 +203,7 @@ internal sealed class PcapStreamSourceTests
         writer.AddInterface(LinkType.Ethernet);
         byte[] pcapData = writer.Build();
 
-        using PcapStreamSource source = CreateSource(pcapData, uiName: "MyCapture");
+        using PcapStreamSource source = _CreateSource(pcapData, uiName: "MyCapture");
         await Assert.That(source.UiName).IsEqualTo("MyCapture");
     }
 
@@ -264,7 +264,7 @@ internal sealed class PcapStreamSourceTests
         writer.AddInterface(LinkType.Ethernet);
         byte[] pcapData = writer.Build();
 
-        PcapStreamSource source = CreateSource(pcapData);
+        PcapStreamSource source = _CreateSource(pcapData);
         SourceTestFixture.InitializeAndStartSource(source);
 
         source.Dispose();
@@ -284,7 +284,7 @@ internal sealed class PcapStreamSourceTests
         writer.AddInterface(LinkType.Ethernet);
         byte[] pcapData = writer.Build();
 
-        using PcapStreamSource source = CreateSource(pcapData);
+        using PcapStreamSource source = _CreateSource(pcapData);
         // Calling NextFrame() without Start() must throw — not silently return null.
         await Assert.That(() => source.NextFrame()).Throws<InvalidOperationException>();
     }
@@ -296,7 +296,7 @@ internal sealed class PcapStreamSourceTests
         writer.AddInterface(LinkType.Ethernet);
         byte[] pcapData = writer.Build();
 
-        PcapStreamSource source = CreateSource(pcapData);
+        PcapStreamSource source = _CreateSource(pcapData);
         SourceTestFixture.InitializeAndStartSource(source);
         source.Dispose();
 
@@ -310,7 +310,7 @@ internal sealed class PcapStreamSourceTests
         writer.AddInterface(LinkType.Ethernet);
         byte[] pcapData = writer.Build();
 
-        using PcapStreamSource source = CreateSource(pcapData);
+        using PcapStreamSource source = _CreateSource(pcapData);
         await Assert.That(source.IsRunning).IsFalse();
     }
 
@@ -321,7 +321,7 @@ internal sealed class PcapStreamSourceTests
         writer.AddInterface(LinkType.Ethernet);
         byte[] pcapData = writer.Build();
 
-        PcapStreamSource source = CreateSource(pcapData);
+        PcapStreamSource source = _CreateSource(pcapData);
         SourceTestFixture.InitializeAndStartSource(source);
 
         await Assert.That(source.IsRunning).IsTrue();
@@ -339,7 +339,7 @@ internal sealed class PcapStreamSourceTests
     /// Builds a minimal well-formed legacy PCAP byte array with a single Ethernet frame.
     /// The global header uses little-endian microsecond timestamps (magic 0xA1B2C3D4).
     /// </summary>
-    private static byte[] BuildLegacyPcap(byte[] frameData, uint snapLen = 65535, bool nanoseconds = false)
+    private static byte[] _BuildLegacyPcap(byte[] frameData, uint snapLen = 65535, bool nanoseconds = false)
     {
         byte[] buf = new byte[24 + 16 + frameData.Length];
         Span<byte> h = buf;
@@ -370,7 +370,7 @@ internal sealed class PcapStreamSourceTests
     /// (oversized / corrupt). The stream ends immediately after these 8 EPB header bytes;
     /// no body data is present.
     /// </summary>
-    private static byte[] BuildPcapNgWithOversizedEpb(uint epbBlockLength)
+    private static byte[] _BuildPcapNgWithOversizedEpb(uint epbBlockLength)
     {
         using PcapNgTestWriter writer = new();
         writer.AddInterface(LinkType.Ethernet, nanosecondResolution: true);
@@ -391,7 +391,7 @@ internal sealed class PcapStreamSourceTests
     /// Builds a raw PCAPNG byte array that looks like the first 12 bytes of an SHB
     /// (type + oversized blockLength + byte-order magic), with no further data.
     /// </summary>
-    private static byte[] BuildOversizedShb(uint blockLength)
+    private static byte[] _BuildOversizedShb(uint blockLength)
     {
         byte[] data = new byte[12];
         BinaryPrimitives.WriteUInt32LittleEndian(data, 0x0A0D_0D0Au);      // SHB block type
@@ -416,9 +416,9 @@ internal sealed class PcapStreamSourceTests
     {
         // 3 000 000 000 > int.MaxValue (2 147 483 647) and > MaxBufferSize (268 435 456)
         const uint oversizedBlockLength = 3_000_000_000u;
-        byte[] data = BuildPcapNgWithOversizedEpb(oversizedBlockLength);
+        byte[] data = _BuildPcapNgWithOversizedEpb(oversizedBlockLength);
 
-        using PcapStreamSource source = CreateSource(data, "corrupt.pcapng");
+        using PcapStreamSource source = _CreateSource(data, "corrupt.pcapng");
         source.ErrorTolerance = ErrorToleranceMode.Tolerant;
 
         List<FrameReadErrorEventArgs> errors = [];
@@ -446,9 +446,9 @@ internal sealed class PcapStreamSourceTests
     {
         // 300 000 000 < int.MaxValue but > MaxBufferSize (268 435 456)
         const uint oversizedBlockLength = 300_000_000u;
-        byte[] data = BuildPcapNgWithOversizedEpb(oversizedBlockLength);
+        byte[] data = _BuildPcapNgWithOversizedEpb(oversizedBlockLength);
 
-        using PcapStreamSource source = CreateSource(data, "corrupt.pcapng");
+        using PcapStreamSource source = _CreateSource(data, "corrupt.pcapng");
         source.ErrorTolerance = ErrorToleranceMode.Tolerant;
 
         List<FrameReadErrorEventArgs> errors = [];
@@ -473,9 +473,9 @@ internal sealed class PcapStreamSourceTests
         // 300 000 000 > MaxBufferSize (268 435 456); well below uint.MaxValue so not an
         // overflow case but an "excessively large" case.
         const uint oversizedBlockLength = 300_000_000u;
-        byte[] data = BuildOversizedShb(oversizedBlockLength);
+        byte[] data = _BuildOversizedShb(oversizedBlockLength);
 
-        using PcapStreamSource source = CreateSource(data, "corrupt.pcapng");
+        using PcapStreamSource source = _CreateSource(data, "corrupt.pcapng");
 
         List<FrameReadErrorEventArgs> errors = [];
         source.FrameSkipped += (_, e) => errors.Add(e);
@@ -493,7 +493,7 @@ internal sealed class PcapStreamSourceTests
     /// is set to the given raw value (not matching the actual payload).
     /// The frame data bytes are padding zeros.
     /// </summary>
-    private static byte[] BuildLegacyPcapWithInclLen(uint inclLen, uint snapLen = 65535)
+    private static byte[] _BuildLegacyPcapWithInclLen(uint inclLen, uint snapLen = 65535)
     {
         byte[] buf = new byte[24 + 16]; // header + packet record header, no payload bytes
         Span<byte> h = buf;
@@ -516,10 +516,10 @@ internal sealed class PcapStreamSourceTests
     [Test]
     public async Task LegacyPcap_SingleFrame_ParsedCorrectly()
     {
-        byte[] eth = FrameBuilders.BuildEthernetFrame(DstMac, SrcMac, 0x0800, [0xDE, 0xAD]);
-        byte[] data = BuildLegacyPcap(eth);
+        byte[] eth = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0xDE, 0xAD]);
+        byte[] data = _BuildLegacyPcap(eth);
 
-        using PcapStreamSource source = CreateSource(data, "test.pcap");
+        using PcapStreamSource source = _CreateSource(data, "test.pcap");
         SourceTestFixture.InitializeAndStartSource(source);
 
         Frame? frame = source.NextFrame();
@@ -541,9 +541,9 @@ internal sealed class PcapStreamSourceTests
         // snapLen = 1500; inclLen = 60000 — clearly violates per-packet max.
         const uint snapLen = 1500;
         const uint inclLen = 60000;
-        byte[] data = BuildLegacyPcapWithInclLen(inclLen, snapLen);
+        byte[] data = _BuildLegacyPcapWithInclLen(inclLen, snapLen);
 
-        using PcapStreamSource source = CreateSource(data, "corrupt.pcap");
+        using PcapStreamSource source = _CreateSource(data, "corrupt.pcap");
         source.ErrorTolerance = ErrorToleranceMode.Tolerant;
 
         List<FrameReadErrorEventArgs> errors = [];
@@ -571,9 +571,9 @@ internal sealed class PcapStreamSourceTests
     {
         // 0x80000001 = 2147483649 > int.MaxValue
         const uint inclLen = 0x8000_0001u;
-        byte[] data = BuildLegacyPcapWithInclLen(inclLen, snapLen: 0); // snapLen=0 → DefaultSnapLength
+        byte[] data = _BuildLegacyPcapWithInclLen(inclLen, snapLen: 0); // snapLen=0 → DefaultSnapLength
 
-        using PcapStreamSource source = CreateSource(data, "corrupt.pcap");
+        using PcapStreamSource source = _CreateSource(data, "corrupt.pcap");
         source.ErrorTolerance = ErrorToleranceMode.Tolerant;
 
         List<FrameReadErrorEventArgs> errors = [];
@@ -599,7 +599,7 @@ internal sealed class PcapStreamSourceTests
         using PcapNgTestWriter writer = new();
         writer.AddInterface(LinkType.Ethernet, nanosecondResolution: true);
         byte[] pcapData = writer.Build();
-        using PcapStreamSource source = CreateSource(pcapData);
+        using PcapStreamSource source = _CreateSource(pcapData);
         FrameInterfaceRegistry registry = new();
         FrameSourceId sourceId = registry.RegisterSource(source);
 

@@ -327,6 +327,181 @@ internal sealed class IndexTests
         await Assert.That(bm.Min).IsEqualTo(0u);
         await Assert.That(bm.Max).IsEqualTo(3_000_000u);
     }
+
+    // === Container-level set operations (exit-point coverage) ===
+
+    private static ArrayContainer _Array(params ushort[] values)
+    {
+        ushort[] sorted = values.Order().ToArray();
+        return new ArrayContainer(sorted, sorted.Length);
+    }
+
+    [Test]
+    public async Task ArrayContainer_SimdLinearContains_HitsEarlyExitPaths()
+    {
+        ArrayContainer small = _Array(2, 4, 6, 8, 10, 12, 14, 16, 18, 20);
+        await Assert.That(small.Contains((ushort)6)).IsTrue();
+        await Assert.That(small.Contains((ushort)99)).IsFalse();
+    }
+
+    [Test]
+    public async Task ArrayContainer_SetOps_ArrayAndBitmapFallback()
+    {
+        ArrayContainer a = _Array(1, 3, 5, 7);
+        BitmapContainer b = new();
+        b.Add(3);
+        b.Add(9);
+
+        IContainer andResult = a.And(b);
+        IContainer orResult = a.Or(b);
+        IContainer andNotResult = a.AndNot(b);
+        IContainer xorResult = a.Xor(b);
+
+        await Assert.That(andResult.Cardinality).IsGreaterThanOrEqualTo(1);
+        await Assert.That(orResult.Cardinality).IsGreaterThan(a.Cardinality);
+    }
+
+    [Test]
+    public async Task ArrayContainer_Or_PromotesToBitmapWhenTooLarge()
+    {
+        ushort[] values = new ushort[4090];
+        for (int i = 0; i < values.Length; i++)
+        {
+            values[i] = (ushort)(i * 2);
+        }
+        ArrayContainer left = new(values, values.Length);
+        ArrayContainer right = _Array(8000, 8002, 8004, 8006, 8008, 8010, 8012, 8014);
+        IContainer merged = left.Or(right);
+        await Assert.That(merged.Cardinality).IsGreaterThan(left.Cardinality);
+        await Assert.That(merged.Cardinality).IsGreaterThan(ArrayContainer.MaxCapacity);
+    }
+
+    [Test]
+    public async Task ArrayContainer_Xor_PromotesToBitmapWhenTooLarge()
+    {
+        ushort[] values = new ushort[4090];
+        for (int i = 0; i < values.Length; i++)
+        {
+            values[i] = (ushort)i;
+        }
+        ArrayContainer left = new(values, values.Length);
+        ArrayContainer right = _Array(5000, 5001, 5002, 5003, 5004, 5005, 5006, 5007, 5008);
+        IContainer xor = left.Xor(right);
+        await Assert.That(xor).IsTypeOf<BitmapContainer>();
+    }
+
+    [Test]
+    public async Task RoaringBitmap_TryGetMinMax_ReturnPaths()
+    {
+        RoaringBitmap empty = new();
+        await Assert.That(empty.TryGetMin(out uint min)).IsFalse();
+        await Assert.That(empty.TryGetMax(out uint max)).IsFalse();
+        await Assert.That(min).IsEqualTo(0u);
+        await Assert.That(max).IsEqualTo(0u);
+
+        RoaringBitmap bm = new();
+        bm.Add(42);
+        await Assert.That(bm.TryGetMin(out min)).IsTrue();
+        await Assert.That(bm.TryGetMax(out max)).IsTrue();
+        await Assert.That(min).IsEqualTo(42u);
+        await Assert.That(max).IsEqualTo(42u);
+    }
+
+    [Test]
+    public async Task RoaringBitmap_Select_ReturnsRankedValue()
+    {
+        RoaringBitmap bm = new();
+        bm.Add(10);
+        bm.Add(20);
+        bm.Add(30);
+        await Assert.That(bm.Select(0)).IsEqualTo(10u);
+        await Assert.That(bm.Select(2)).IsEqualTo(30u);
+        await Assert.That(bm.Select(-1)).IsNull();
+        await Assert.That(bm.Select(99)).IsNull();
+    }
+
+    [Test]
+    public async Task RoaringBitmap_Select_CrossChunkContainerRank()
+    {
+        RoaringBitmap bm = new();
+        for (uint i = 0; i < 5000; i++)
+        {
+            bm.Add(i);
+        }
+        bm.Add(70000);
+        await Assert.That(bm.Select(0)).IsEqualTo(0u);
+        await Assert.That(bm.Select(4999)).IsEqualTo(4999u);
+        await Assert.That(bm.Select(5000)).IsEqualTo(70000u);
+    }
+
+    [Test]
+    public async Task RoaringBitmap_OrWith_MergesOtherBitmap()
+    {
+        RoaringBitmap a = new();
+        a.Add(1);
+        RoaringBitmap b = new();
+        b.Add(2);
+        a.OrWith(b);
+        await Assert.That(a.Contains(2)).IsTrue();
+    }
+
+    [Test]
+    public async Task RoaringBitmap_OrWith_SelfNoOpWhenEmptyOther()
+    {
+        RoaringBitmap a = new();
+        a.Add(1);
+        a.Add(2);
+        RoaringBitmap empty = new();
+        a.OrWith(empty);
+        await Assert.That(a.Cardinality).IsEqualTo(2L);
+    }
+
+    [Test]
+    public async Task RunContainer_MinMaxAndRunMetadata()
+    {
+        RunContainer runs = new();
+        runs.Add(10);
+        runs.Add(11);
+        runs.Add(12);
+        runs.Add(50);
+
+        await Assert.That(runs.Min).IsEqualTo((ushort)10);
+        await Assert.That(runs.Max).IsEqualTo((ushort)50);
+        await Assert.That(runs.RunCount).IsEqualTo(2);
+        (ushort start, ushort end) = runs.RunAt(0);
+        await Assert.That(start).IsEqualTo((ushort)10);
+        await Assert.That(end).IsEqualTo((ushort)12);
+    }
+
+    [Test]
+    public async Task RunContainer_SetOps_WithArrayOperand()
+    {
+        RunContainer runs = _RunsForTest((5, 4), (20, 2));
+        ArrayContainer array = _Array(6, 7, 99);
+
+        IContainer andResult = runs.And(array);
+        IContainer orResult = runs.Or(array);
+        IContainer andNotResult = runs.AndNot(array);
+        IContainer xorResult = runs.Xor(array);
+
+        await Assert.That(andResult.Contains(6)).IsTrue();
+        await Assert.That(orResult.Contains(99)).IsTrue();
+        await Assert.That(andNotResult.Contains(5)).IsTrue();
+        await Assert.That(xorResult.Contains(99)).IsTrue();
+    }
+
+    private static RunContainer _RunsForTest(params (ushort Start, ushort Length)[] runs)
+    {
+        RunContainer r = new();
+        foreach ((ushort start, ushort length) in runs)
+        {
+            for (int v = start; v <= start + length; v++)
+            {
+                r.Add((ushort)v);
+            }
+        }
+        return r;
+    }
 }
 
 /// <summary>
@@ -335,7 +510,7 @@ internal sealed class IndexTests
 /// </summary>
 internal sealed class PacketIndexTests
 {
-    private static (Stack Stack, Frame Frame) BuildStackAndFrame()
+    private static (Stack Stack, Frame Frame) _BuildStackAndFrame()
     {
         using SettingsManager settingsManager = new();
         StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
@@ -357,7 +532,7 @@ internal sealed class PacketIndexTests
     [Test]
     public async Task ParseFrameIndexed_RecordsProtocolPresence()
     {
-        (Stack stack, Frame frame) = BuildStackAndFrame();
+        (Stack stack, Frame frame) = _BuildStackAndFrame();
         PacketIndex index = new(stack);
 
         _ = Packet.ParseFrameIndexed(
@@ -380,7 +555,7 @@ internal sealed class PacketIndexTests
     [Test]
     public async Task ParseFrameIndexed_RecordsGroupPresence()
     {
-        (Stack stack, Frame frame) = BuildStackAndFrame();
+        (Stack stack, Frame frame) = _BuildStackAndFrame();
         PacketIndex index = new(stack);
 
         Packet.ParseFrameIndexed(
@@ -397,7 +572,7 @@ internal sealed class PacketIndexTests
     [Test]
     public async Task ParseFrameIndexed_OptionalGroupPresence()
     {
-        (Stack stack, Frame frame) = BuildStackAndFrame();
+        (Stack stack, Frame frame) = _BuildStackAndFrame();
         PacketIndex index = new(stack);
 
         // Frame has payload → udp.payload group should be recorded
@@ -414,7 +589,7 @@ internal sealed class PacketIndexTests
     [Test]
     public async Task ParseFrameIndexed_MultiplePackets()
     {
-        (Stack stack, Frame frame) = BuildStackAndFrame();
+        (Stack stack, Frame frame) = _BuildStackAndFrame();
         PacketIndex index = new(stack);
 
         // Parse 100 packets
@@ -432,7 +607,7 @@ internal sealed class PacketIndexTests
     [Test]
     public async Task ParseFrameIndexed_DedupWithinPacket()
     {
-        (Stack stack, Frame frame) = BuildStackAndFrame();
+        (Stack stack, Frame frame) = _BuildStackAndFrame();
         PacketIndex index = new(stack);
 
         // Parse same packet — each protocol is recorded once per packet
@@ -447,7 +622,7 @@ internal sealed class PacketIndexTests
     [Test]
     public async Task PresenceQuery_SelectProtocolAndGroup()
     {
-        (Stack stack, Frame frame) = BuildStackAndFrame();
+        (Stack stack, Frame frame) = _BuildStackAndFrame();
         PacketIndex index = new(stack);
 
         for (int i = 0; i < 10; i++)
@@ -469,7 +644,7 @@ internal sealed class PacketIndexTests
     [Test]
     public async Task PresenceQuery_AndProtocol()
     {
-        (Stack stack, Frame frame) = BuildStackAndFrame();
+        (Stack stack, Frame frame) = _BuildStackAndFrame();
         PacketIndex index = new(stack);
 
         for (int i = 0; i < 10; i++)
@@ -494,7 +669,7 @@ internal sealed class PacketIndexTests
     public async Task ParseFrameIndexed_NonIndexedParse_Works()
     {
         // Ensure normal (non-indexed) parsing still works fine
-        (Stack stack, Frame frame) = BuildStackAndFrame();
+        (Stack stack, Frame frame) = _BuildStackAndFrame();
 
         Packet packet = Packet.ParseFrame(
             new PacketId(0), stack, frame);
@@ -506,7 +681,7 @@ internal sealed class PacketIndexTests
     [Test]
     public async Task PresenceQuery_OrProtocol()
     {
-        (Stack stack, _) = BuildStackAndFrame();
+        (Stack stack, _) = _BuildStackAndFrame();
         PacketIndex index = new(stack);
 
         // Parse IPv4 frame for packets 0-4

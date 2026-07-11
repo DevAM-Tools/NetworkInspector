@@ -10,10 +10,10 @@ internal static class FrameHelper
 {
     // ── Frame generation constants ────────────────────────────────────────────
 
-    private const int EthSize = 14;   // Ethernet II header
-    private const int Ipv6Size = 40;  // Fixed IPv6 header
-    private const int UdpSize = 8;    // UDP header
-    private const int MinSize = EthSize + Ipv6Size + UdpSize; // 62 bytes
+    private const int _EthSize = 14;   // Ethernet II header
+    private const int _Ipv6Size = 40;  // Fixed IPv6 header
+    private const int _UdpSize = 8;    // UDP header
+    private const int _MinSize = _EthSize + _Ipv6Size + _UdpSize; // 62 bytes
 
     /// <summary>
     /// Generates a single well-formed Ethernet/IPv6/UDP frame.
@@ -22,11 +22,11 @@ internal static class FrameHelper
     /// <param name="totalSize">Total frame size in bytes (minimum 62).</param>
     internal static byte[] GenerateStaticUdpIpv6Frame(int totalSize = 512)
     {
-        totalSize = Math.Max(totalSize, MinSize);
+        totalSize = Math.Max(totalSize, _MinSize);
         byte[] frame = new byte[totalSize];
 
-        int payloadSize = totalSize - MinSize;
-        ushort udpLen = (ushort)(UdpSize + payloadSize);
+        int payloadSize = totalSize - _MinSize;
+        ushort udpLen = (ushort)(_UdpSize + payloadSize);
 
         // ── Ethernet header ──────────────────────────────────────────────────
         // Dst MAC: 00:11:22:33:44:55
@@ -47,7 +47,7 @@ internal static class FrameHelper
         BinaryPrimitives.WriteUInt16BigEndian(frame.AsSpan(12), 0x86DD);
 
         // ── IPv6 header ──────────────────────────────────────────────────────
-        int ip = EthSize;
+        int ip = _EthSize;
         // Version=6, Traffic Class=0, Flow Label=0x12345
         BinaryPrimitives.WriteUInt32BigEndian(frame.AsSpan(ip), 0x60012345);
         // Payload length = UDP header + payload
@@ -70,7 +70,7 @@ internal static class FrameHelper
         frame[ip + 39] = 0x02;
 
         // ── UDP header ───────────────────────────────────────────────────────
-        int udp = ip + Ipv6Size;
+        int udp = ip + _Ipv6Size;
         BinaryPrimitives.WriteUInt16BigEndian(frame.AsSpan(udp), 12345);      // Src port
         BinaryPrimitives.WriteUInt16BigEndian(frame.AsSpan(udp + 2), 54321);  // Dst port (no registered protocol)
         BinaryPrimitives.WriteUInt16BigEndian(frame.AsSpan(udp + 4), udpLen); // Length
@@ -79,7 +79,7 @@ internal static class FrameHelper
         // ── Payload: repeating 0x00-0xFF pattern ─────────────────────────────
         for (int i = 0; i < payloadSize; i++)
         {
-            frame[MinSize + i] = (byte)(i & 0xFF);
+            frame[_MinSize + i] = (byte)(i & 0xFF);
         }
 
         return frame;
@@ -111,7 +111,8 @@ internal static class FrameHelper
             if (!result.TryGetValue(out Frame frame))
             {
                 throw new InvalidOperationException(
-                    $"Failed to create synthetic frame {i}: {result.Error.Message}");
+                    FormattableString.Invariant(
+                        $"Failed to create synthetic frame {i}: {result.Error.Message}"));
             }
 
             frames[i] = frame;

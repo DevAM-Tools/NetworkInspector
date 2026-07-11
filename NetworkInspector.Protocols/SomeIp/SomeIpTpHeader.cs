@@ -20,13 +20,13 @@ internal readonly struct SomeIpTpHeader
     internal const int Size = 4;
 
     /// <summary>Mask for the 28-bit offset field (upper 28 bits).</summary>
-    private const uint OffsetMask = 0xFFFF_FFF0;
+    private const uint _OffsetMask = 0xFFFF_FFF0;
 
     /// <summary>Mask for the More Segments flag (bit 0).</summary>
-    private const uint MoreMask = 0x0000_0001;
+    private const uint _MoreMask = 0x0000_0001;
 
     /// <summary>Mask for the reserved bits (bits 1-3).</summary>
-    private const uint ReservedMask = 0x0000_000E;
+    private const uint _ReservedMask = 0x0000_000E;
 
     /// <summary>
     /// Byte offset in the reassembled message. This is the raw upper 28 bits
@@ -70,9 +70,9 @@ internal readonly struct SomeIpTpHeader
 
         // Byte offset = upper 28 bits (raw & 0xFFFFFFF0). The wire encoding
         // stores the value such that masking gives the byte offset directly.
-        uint byteOffset = raw & OffsetMask;
-        bool more = (raw & MoreMask) != 0;
-        byte reserved = (byte)((raw & ReservedMask) >> 1);
+        uint byteOffset = raw & _OffsetMask;
+        bool more = (raw & _MoreMask) != 0;
+        byte reserved = (byte)((raw & _ReservedMask) >> 1);
 
         header = new SomeIpTpHeader(byteOffset, more, reserved);
         return true;

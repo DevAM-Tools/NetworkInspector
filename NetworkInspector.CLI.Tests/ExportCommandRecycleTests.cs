@@ -1,13 +1,5 @@
 // Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
-using NetworkInspector.Core;
-using NetworkInspector.Core.Ids;
-using NetworkInspector.Core.Interfaces;
-using NetworkInspector.Core.Settings;
-using NetworkInspector.Protocols;
-using NetworkInspector.Sources.Random;
-using System.Threading;
-
 namespace NetworkInspector.CLI.Tests;
 
 /// <summary>
@@ -28,7 +20,7 @@ internal sealed class ExportCommandRecycleTests
     /// Builds a <see cref="Stack"/> wired to <paramref name="registry"/>.
     /// The caller owns the returned <see cref="Stack"/> and must dispose it.
     /// </summary>
-    private static Stack BuildStack(FrameInterfaceRegistry registry)
+    private static Stack _BuildStack(FrameInterfaceRegistry registry)
     {
         using SettingsManager settingsManager = new();
         StackBuilder stackBuilder = new(settingsManager, registry);
@@ -41,7 +33,7 @@ internal sealed class ExportCommandRecycleTests
     /// <paramref name="registry"/>, and calls <see cref="IFrameSource.Start"/> so it is ready for
     /// <see cref="IFrameSource.NextFrame"/> calls.
     /// </summary>
-    private static RandomFrameSource CreateAndStartSource(int count, FrameInterfaceRegistry registry)
+    private static RandomFrameSource _CreateAndStartSource(int count, FrameInterfaceRegistry registry)
     {
         RandomFrameSource source = new(count: count, seed: 42, mode: RandomFrameMode.UdpIPv4);
         FrameSourceId sourceId = registry.RegisterSource(source);
@@ -59,8 +51,8 @@ internal sealed class ExportCommandRecycleTests
     public async Task RunExportLoop_TenFrames_ReturnsPacketCount()
     {
         FrameInterfaceRegistry registry = new();
-        using Stack stack = BuildStack(registry);
-        using RandomFrameSource source = CreateAndStartSource(count: 10, registry);
+        using Stack stack = _BuildStack(registry);
+        using RandomFrameSource source = _CreateAndStartSource(count: 10, registry);
         CapturingExporter exporter = new();
         int counter = 0;
         List<IFrameSource> sources = [source];
@@ -80,8 +72,8 @@ internal sealed class ExportCommandRecycleTests
     public async Task RunExportLoop_TenFrames_PacketIdsAreSequential()
     {
         FrameInterfaceRegistry registry = new();
-        using Stack stack = BuildStack(registry);
-        using RandomFrameSource source = CreateAndStartSource(count: 10, registry);
+        using Stack stack = _BuildStack(registry);
+        using RandomFrameSource source = _CreateAndStartSource(count: 10, registry);
         CapturingExporter exporter = new();
         int counter = 0;
         List<IFrameSource> sources = [source];
@@ -104,8 +96,8 @@ internal sealed class ExportCommandRecycleTests
     public async Task RunExportLoop_MaxPackets_StopsExportEarly()
     {
         FrameInterfaceRegistry registry = new();
-        using Stack stack = BuildStack(registry);
-        using RandomFrameSource source = CreateAndStartSource(count: 10, registry);
+        using Stack stack = _BuildStack(registry);
+        using RandomFrameSource source = _CreateAndStartSource(count: 10, registry);
         CapturingExporter exporter = new();
         int counter = 0;
         List<IFrameSource> sources = [source];
@@ -125,7 +117,7 @@ internal sealed class ExportCommandRecycleTests
     public async Task RunExportLoop_EmptySource_ReturnsZero()
     {
         FrameInterfaceRegistry registry = new();
-        using Stack stack = BuildStack(registry);
+        using Stack stack = _BuildStack(registry);
         using EmptyFrameSource source = new();
         CapturingExporter exporter = new();
         int counter = 0;
@@ -147,8 +139,8 @@ internal sealed class ExportCommandRecycleTests
     public async Task RunExportLoop_ExporterSignalsStop_LoopExitsEarly()
     {
         FrameInterfaceRegistry registry = new();
-        using Stack stack = BuildStack(registry);
-        using RandomFrameSource source = CreateAndStartSource(count: 10, registry);
+        using Stack stack = _BuildStack(registry);
+        using RandomFrameSource source = _CreateAndStartSource(count: 10, registry);
         CapturingExporter exporter = new(stopAfter: 3);
         int counter = 0;
         List<IFrameSource> sources = [source];
@@ -168,8 +160,8 @@ internal sealed class ExportCommandRecycleTests
     public async Task RunExportLoop_PreCancelledToken_ReturnsZeroPackets()
     {
         FrameInterfaceRegistry registry = new();
-        using Stack stack = BuildStack(registry);
-        using RandomFrameSource source = CreateAndStartSource(count: 10, registry);
+        using Stack stack = _BuildStack(registry);
+        using RandomFrameSource source = _CreateAndStartSource(count: 10, registry);
         CapturingExporter exporter = new();
         int counter = 0;
         List<IFrameSource> sources = [source];

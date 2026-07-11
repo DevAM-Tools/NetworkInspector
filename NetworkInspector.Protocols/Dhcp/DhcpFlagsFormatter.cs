@@ -19,12 +19,12 @@ namespace NetworkInspector.Protocols.Dhcp;
 internal static class DhcpFlagsFormatter
 {
     // Index 0 = broadcast flag clear, index 1 = broadcast flag set.
-    private static readonly string[] BracketTable = [" [None]", " [Broadcast]"];
+    private static readonly string[] _BracketTable = [" [None]", " [Broadcast]"];
 
     /// <summary>
     /// Returns the bracket suffix for the given DHCP flags word.
     /// Output examples: <c>" [None]"</c>, <c>" [Broadcast]"</c>.
     /// The caller is responsible for prepending the hex value.
     /// </summary>
-    internal static string Format(ushort flags) => BracketTable[(flags >> 15) & 1];
+    internal static string Format(ushort flags) => _BracketTable[(flags >> 15) & 1];
 }

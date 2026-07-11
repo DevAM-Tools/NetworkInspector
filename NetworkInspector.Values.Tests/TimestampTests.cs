@@ -293,10 +293,10 @@ internal sealed class TimestampTests
     // === Binary Serialization ===
 
     [Test]
-    public async Task TryGetSerializedSize_Is8()
+    public async Task TryGetWrittenSize_Is8()
     {
         Timestamp ts = Timestamp.FromNanos(42L);
-        bool ok = ts.TryGetSerializedSize(out int size);
+        bool ok = ts.TryGetWrittenSize(out int size);
         await Assert.That(ok).IsTrue();
         await Assert.That(size).IsEqualTo(8);
     }

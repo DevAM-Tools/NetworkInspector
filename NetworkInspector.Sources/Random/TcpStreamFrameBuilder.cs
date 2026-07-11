@@ -24,20 +24,20 @@ internal static class TcpStreamFrameBuilder
     #region Constants
 
     // ─── Protocol constants ───────────────────────────────────────────────────
-    private const int EthHeaderSize = 14;   // bytes
-    private const int IPv4HeaderSize = 20;  // bytes
-    private const int IPv6HeaderSize = 40;  // bytes
-    private const int TcpHeaderSize = 20;   // bytes
-    private const ushort EtherTypeIPv4 = 0x0800;
-    private const ushort EtherTypeIPv6 = 0x86DD;
-    private const byte IpProtoTcp = 6;
-    private const byte IPv4VersionIhl = 0x45;
+    private const int _EthHeaderSize = 14;   // bytes
+    private const int _IPv4HeaderSize = 20;  // bytes
+    private const int _IPv6HeaderSize = 40;  // bytes
+    private const int _TcpHeaderSize = 20;   // bytes
+    private const ushort _EtherTypeIPv4 = 0x0800;
+    private const ushort _EtherTypeIPv6 = 0x86DD;
+    private const byte _IpProtoTcp = 6;
+    private const byte _IPv4VersionIhl = 0x45;
 
     // ─── TCP flags ────────────────────────────────────────────────────────────
-    private const byte FlagSyn = 0x02;
-    private const byte FlagAck = 0x10;
-    private const byte FlagPsh = 0x08;
-    private const byte FlagFin = 0x01;
+    private const byte _FlagSyn = 0x02;
+    private const byte _FlagAck = 0x10;
+    private const byte _FlagPsh = 0x08;
+    private const byte _FlagFin = 0x01;
 
     #endregion
 
@@ -75,9 +75,9 @@ internal static class TcpStreamFrameBuilder
 
         return phase switch
         {
-            TcpFramePhase.Handshake => BuildHandshakeFrame(ep, step, isIpv6),
-            TcpFramePhase.Data => BuildDataFrame(layout, options, masterSeed, ep, loc.StreamIndex, step, isIpv6),
-            TcpFramePhase.Teardown => BuildTeardownFrame(layout, options, masterSeed, ep, loc.StreamIndex, step, isIpv6),
+            TcpFramePhase.Handshake => _BuildHandshakeFrame(ep, step, isIpv6),
+            TcpFramePhase.Data => _BuildDataFrame(layout, options, masterSeed, ep, loc.StreamIndex, step, isIpv6),
+            TcpFramePhase.Teardown => _BuildTeardownFrame(layout, options, masterSeed, ep, loc.StreamIndex, step, isIpv6),
             _ => null,
         };
     }
@@ -91,34 +91,34 @@ internal static class TcpStreamFrameBuilder
     /// <summary>
     /// Builds a handshake frame: step 0=SYN, 1=SYN-ACK, 2=ACK.
     /// </summary>
-    private static byte[] BuildHandshakeFrame(
+    private static byte[] _BuildHandshakeFrame(
         in TcpStreamEndpoints ep, int step, bool isIpv6)
     {
         return step switch
         {
             // SYN: client → server, seq=ISN, ack=0
-            0 => AssembleFrame(
+            0 => _AssembleFrame(
                 ep.ClientMac, ep.ServerMac,
                 ep.ClientIp, ep.ServerIp,
                 ep.ClientPort, ep.ServerPort,
                 ep.ClientIsn, 0,
-                FlagSyn, ReadOnlySpan<byte>.Empty, isIpv6),
+                _FlagSyn, ReadOnlySpan<byte>.Empty, isIpv6),
 
             // SYN-ACK: server → client, seq=server ISN, ack=client ISN+1
-            1 => AssembleFrame(
+            1 => _AssembleFrame(
                 ep.ServerMac, ep.ClientMac,
                 ep.ServerIp, ep.ClientIp,
                 ep.ServerPort, ep.ClientPort,
                 ep.ServerIsn, ep.ClientIsn + 1,
-                (byte)(FlagSyn | FlagAck), ReadOnlySpan<byte>.Empty, isIpv6),
+                (byte)(_FlagSyn | _FlagAck), ReadOnlySpan<byte>.Empty, isIpv6),
 
             // ACK: client → server, seq=ISN+1, ack=server ISN+1
-            _ => AssembleFrame(
+            _ => _AssembleFrame(
                 ep.ClientMac, ep.ServerMac,
                 ep.ClientIp, ep.ServerIp,
                 ep.ClientPort, ep.ServerPort,
                 ep.ClientIsn + 1, ep.ServerIsn + 1,
-                FlagAck, ReadOnlySpan<byte>.Empty, isIpv6),
+                _FlagAck, ReadOnlySpan<byte>.Empty, isIpv6),
         };
     }
 
@@ -129,7 +129,7 @@ internal static class TcpStreamFrameBuilder
     /// within the data phase. Computes accumulated sequence numbers by iterating
     /// all prior data segments' payload sizes.
     /// </summary>
-    private static byte[] BuildDataFrame(
+    private static byte[] _BuildDataFrame(
         in TcpStreamLayout layout,
         TcpStreamOptions options,
         ulong masterSeed,
@@ -145,7 +145,7 @@ internal static class TcpStreamFrameBuilder
 
         for (int i = 0; i < dataStep; i++)
         {
-            int priorPayloadSize = DerivePayloadSize(masterSeed, streamIndex, i, options);
+            int priorPayloadSize = _DerivePayloadSize(masterSeed, streamIndex, i, options);
             bool priorIsClientToServer = (i % 2) == 0;
             if (priorIsClientToServer)
             {
@@ -159,26 +159,26 @@ internal static class TcpStreamFrameBuilder
 
         // Current frame direction and payload
         bool clientToServer = (dataStep % 2) == 0;
-        int payloadSize = DerivePayloadSize(masterSeed, streamIndex, dataStep, options);
-        byte[] payload = DerivePayload(masterSeed, streamIndex, dataStep, payloadSize);
+        int payloadSize = _DerivePayloadSize(masterSeed, streamIndex, dataStep, options);
+        byte[] payload = _DerivePayload(masterSeed, streamIndex, dataStep, payloadSize);
 
         if (clientToServer)
         {
-            return AssembleFrame(
+            return _AssembleFrame(
                 ep.ClientMac, ep.ServerMac,
                 ep.ClientIp, ep.ServerIp,
                 ep.ClientPort, ep.ServerPort,
                 clientSeq, serverSeq,
-                (byte)(FlagAck | FlagPsh), payload, isIpv6);
+                (byte)(_FlagAck | _FlagPsh), payload, isIpv6);
         }
         else
         {
-            return AssembleFrame(
+            return _AssembleFrame(
                 ep.ServerMac, ep.ClientMac,
                 ep.ServerIp, ep.ClientIp,
                 ep.ServerPort, ep.ClientPort,
                 serverSeq, clientSeq,
-                (byte)(FlagAck | FlagPsh), payload, isIpv6);
+                (byte)(_FlagAck | _FlagPsh), payload, isIpv6);
         }
     }
 
@@ -189,7 +189,7 @@ internal static class TcpStreamFrameBuilder
     /// 2=FIN-ACK(server→client), 3=final ACK(client→server).
     /// Sequence numbers include all prior data segment payloads.
     /// </summary>
-    private static byte[] BuildTeardownFrame(
+    private static byte[] _BuildTeardownFrame(
         in TcpStreamLayout layout,
         TcpStreamOptions options,
         ulong masterSeed,
@@ -204,7 +204,7 @@ internal static class TcpStreamFrameBuilder
 
         for (int i = 0; i < layout.DataFrames; i++)
         {
-            int size = DerivePayloadSize(masterSeed, streamIndex, i, options);
+            int size = _DerivePayloadSize(masterSeed, streamIndex, i, options);
             if ((i % 2) == 0)
             {
                 clientSeq += (uint)size;
@@ -218,37 +218,37 @@ internal static class TcpStreamFrameBuilder
         return teardownStep switch
         {
             // FIN-ACK: client → server
-            0 => AssembleFrame(
+            0 => _AssembleFrame(
                 ep.ClientMac, ep.ServerMac,
                 ep.ClientIp, ep.ServerIp,
                 ep.ClientPort, ep.ServerPort,
                 clientSeq, serverSeq,
-                (byte)(FlagFin | FlagAck), ReadOnlySpan<byte>.Empty, isIpv6),
+                (byte)(_FlagFin | _FlagAck), ReadOnlySpan<byte>.Empty, isIpv6),
 
             // ACK of client's FIN: server → client
-            1 => AssembleFrame(
+            1 => _AssembleFrame(
                 ep.ServerMac, ep.ClientMac,
                 ep.ServerIp, ep.ClientIp,
                 ep.ServerPort, ep.ClientPort,
                 serverSeq, clientSeq + 1,  // FIN consumes 1 seq
-                FlagAck, ReadOnlySpan<byte>.Empty, isIpv6),
+                _FlagAck, ReadOnlySpan<byte>.Empty, isIpv6),
 
             // FIN-ACK: server → client
-            2 => AssembleFrame(
+            2 => _AssembleFrame(
                 ep.ServerMac, ep.ClientMac,
                 ep.ServerIp, ep.ClientIp,
                 ep.ServerPort, ep.ClientPort,
                 serverSeq, clientSeq + 1,
-                (byte)(FlagFin | FlagAck), ReadOnlySpan<byte>.Empty, isIpv6),
+                (byte)(_FlagFin | _FlagAck), ReadOnlySpan<byte>.Empty, isIpv6),
 
             // Final ACK: client → server
-            _ => AssembleFrame(
+            _ => _AssembleFrame(
                 ep.ClientMac, ep.ServerMac,
                 ep.ClientIp, ep.ServerIp,
                 ep.ClientPort, ep.ServerPort,
                 clientSeq + 1,  // After client's FIN consumed 1
                 serverSeq + 1,  // Server's FIN consumed 1
-                FlagAck, ReadOnlySpan<byte>.Empty, isIpv6),
+                _FlagAck, ReadOnlySpan<byte>.Empty, isIpv6),
         };
     }
 
@@ -258,7 +258,7 @@ internal static class TcpStreamFrameBuilder
     /// Deterministically computes the payload size for data segment <paramref name="dataIndex"/>
     /// in connection <paramref name="streamIndex"/>.
     /// </summary>
-    private static int DerivePayloadSize(
+    private static int _DerivePayloadSize(
         ulong masterSeed, int streamIndex, int dataIndex, TcpStreamOptions options)
     {
         // Seed namespace: high bits for stream, low bits for data index,
@@ -274,7 +274,7 @@ internal static class TcpStreamFrameBuilder
     /// Deterministically produces payload bytes for data segment <paramref name="dataIndex"/>
     /// in connection <paramref name="streamIndex"/>.
     /// </summary>
-    private static byte[] DerivePayload(
+    private static byte[] _DerivePayload(
         ulong masterSeed, int streamIndex, int dataIndex, int size)
     {
         ulong seed = Xoroshiro128PlusPlus.DeriveFrameSeed(
@@ -291,7 +291,7 @@ internal static class TcpStreamFrameBuilder
     /// <summary>
     /// Assembles a complete Ethernet/IP/TCP frame with correct headers and IPv4 checksum.
     /// </summary>
-    private static byte[] AssembleFrame(
+    private static byte[] _AssembleFrame(
         byte[] srcMac, byte[] dstMac,
         byte[] srcIp, byte[] dstIp,
         ushort srcPort, ushort dstPort,
@@ -299,34 +299,34 @@ internal static class TcpStreamFrameBuilder
         byte tcpFlags, ReadOnlySpan<byte> payload,
         bool isIpv6)
     {
-        int ipHeaderSize = isIpv6 ? IPv6HeaderSize : IPv4HeaderSize;
-        int totalSize = EthHeaderSize + ipHeaderSize + TcpHeaderSize + payload.Length;
+        int ipHeaderSize = isIpv6 ? _IPv6HeaderSize : _IPv4HeaderSize;
+        int totalSize = _EthHeaderSize + ipHeaderSize + _TcpHeaderSize + payload.Length;
         byte[] frame = new byte[totalSize];
 
         // ── Ethernet header ──
         dstMac.CopyTo(frame.AsSpan(0));
         srcMac.CopyTo(frame.AsSpan(6));
         BinaryPrimitives.WriteUInt16BigEndian(
-            frame.AsSpan(12), isIpv6 ? EtherTypeIPv6 : EtherTypeIPv4);
+            frame.AsSpan(12), isIpv6 ? _EtherTypeIPv6 : _EtherTypeIPv4);
 
-        int ipOffset = EthHeaderSize;
+        int ipOffset = _EthHeaderSize;
         int tcpOffset = ipOffset + ipHeaderSize;
 
         if (isIpv6)
         {
-            WriteIpv6Header(frame, ipOffset, srcIp, dstIp, payload.Length);
+            _WriteIpv6Header(frame, ipOffset, srcIp, dstIp, payload.Length);
         }
         else
         {
-            WriteIpv4Header(frame, ipOffset, srcIp, dstIp, payload.Length);
+            _WriteIpv4Header(frame, ipOffset, srcIp, dstIp, payload.Length);
         }
 
-        WriteTcpHeader(frame, tcpOffset, srcPort, dstPort, seqNum, ackNum, tcpFlags);
+        _WriteTcpHeader(frame, tcpOffset, srcPort, dstPort, seqNum, ackNum, tcpFlags);
 
         // ── Payload ──
         if (payload.Length > 0)
         {
-            payload.CopyTo(frame.AsSpan(tcpOffset + TcpHeaderSize));
+            payload.CopyTo(frame.AsSpan(tcpOffset + _TcpHeaderSize));
         }
 
         return frame;
@@ -335,26 +335,26 @@ internal static class TcpStreamFrameBuilder
     /// <summary>
     /// Writes a 20-byte IPv4 header with computed checksum.
     /// </summary>
-    private static void WriteIpv4Header(
+    private static void _WriteIpv4Header(
         byte[] frame, int offset, byte[] srcIp, byte[] dstIp, int payloadLength)
     {
-        ushort totalLength = (ushort)(IPv4HeaderSize + TcpHeaderSize + payloadLength);
+        ushort totalLength = (ushort)(_IPv4HeaderSize + _TcpHeaderSize + payloadLength);
 
-        frame[offset] = IPv4VersionIhl;       // Version 4, IHL 5
+        frame[offset] = _IPv4VersionIhl;       // Version 4, IHL 5
         frame[offset + 1] = 0;                // DSCP + ECN
         BinaryPrimitives.WriteUInt16BigEndian(frame.AsSpan(offset + 2), totalLength);
         // Identification (offset+4..5): 0
         frame[offset + 6] = 0x40;             // DF flag
         frame[offset + 7] = 0x00;             // Fragment offset
         frame[offset + 8] = 64;               // TTL
-        frame[offset + 9] = IpProtoTcp;
+        frame[offset + 9] = _IpProtoTcp;
         // Checksum (offset+10..11): computed below
         srcIp.CopyTo(frame.AsSpan(offset + 12));
         dstIp.CopyTo(frame.AsSpan(offset + 16));
 
         // Compute one's-complement checksum
         uint sum = 0;
-        for (int i = 0; i < IPv4HeaderSize; i += 2)
+        for (int i = 0; i < _IPv4HeaderSize; i += 2)
         {
             sum += (uint)(frame[offset + i] << 8 | frame[offset + i + 1]);
         }
@@ -368,15 +368,15 @@ internal static class TcpStreamFrameBuilder
     /// <summary>
     /// Writes a 40-byte IPv6 header.
     /// </summary>
-    private static void WriteIpv6Header(
+    private static void _WriteIpv6Header(
         byte[] frame, int offset, byte[] srcIp, byte[] dstIp, int payloadLength)
     {
-        ushort ipPayloadLength = (ushort)(TcpHeaderSize + payloadLength);
+        ushort ipPayloadLength = (ushort)(_TcpHeaderSize + payloadLength);
 
         frame[offset] = 0x60;                // Version 6
         // Traffic Class + Flow Label: 0
         BinaryPrimitives.WriteUInt16BigEndian(frame.AsSpan(offset + 4), ipPayloadLength);
-        frame[offset + 6] = IpProtoTcp;      // Next header
+        frame[offset + 6] = _IpProtoTcp;      // Next header
         frame[offset + 7] = 64;              // Hop limit
         srcIp.CopyTo(frame.AsSpan(offset + 8));
         dstIp.CopyTo(frame.AsSpan(offset + 24));
@@ -385,7 +385,7 @@ internal static class TcpStreamFrameBuilder
     /// <summary>
     /// Writes a 20-byte TCP header. Checksum is left at 0 (simplified).
     /// </summary>
-    private static void WriteTcpHeader(
+    private static void _WriteTcpHeader(
         byte[] frame, int offset,
         ushort srcPort, ushort dstPort,
         uint seqNum, uint ackNum,

@@ -25,7 +25,7 @@ namespace NetworkInspector.Core.Settings;
 /// is called the instance must not be used from any thread.
 /// </para>
 /// </summary>
-public sealed class SettingsManager : IReadOnlySettingsManager, IDisposable
+public sealed class SettingsManager : IDisposable
 {
     /// <summary>Reusable JSON serializer options for saving settings.</summary>
     private static readonly JsonSerializerOptions _WriteOptions = new()
@@ -57,17 +57,24 @@ public sealed class SettingsManager : IReadOnlySettingsManager, IDisposable
     /// <summary>Guards against double-dispose (0 = live, 1 = disposed). Written via <see cref="Interlocked"/>.</summary>
     private int _Disposed;
 
+    private readonly ReadOnlySettingsView _ReadOnlyView;
+
     /// <summary>Creates a new settings manager without a storage path.</summary>
     public SettingsManager()
     {
         _StoragePath = null;
+        _ReadOnlyView = new ReadOnlySettingsView(this);
     }
 
     /// <summary>Creates a new settings manager with a storage path for JSON persistence.</summary>
     public SettingsManager(string storagePath)
     {
         _StoragePath = storagePath;
+        _ReadOnlyView = new ReadOnlySettingsView(this);
     }
+
+    /// <summary>Gets the read-only view of this manager.</summary>
+    public IReadOnlySettingsManager ReadOnly => _ReadOnlyView;
 
     /// <summary>Gets the storage path, or null if no storage path is configured.</summary>
     public string? StoragePath => _StoragePath;
@@ -205,7 +212,7 @@ public sealed class SettingsManager : IReadOnlySettingsManager, IDisposable
             }
 
             // Ensure group exists
-            EnsureGroupExistsLocked(groupName);
+            _EnsureGroupExistsLocked(groupName);
 
             // Apply any pre-loaded typed value (set via PreloadValue before the setting
             // existed) — takes precedence over orphaned JSON values.
@@ -226,7 +233,7 @@ public sealed class SettingsManager : IReadOnlySettingsManager, IDisposable
             else
             {
                 // Try to load persisted value from orphaned values
-                loadResult = TryLoadPersistedValueLocked(setting);
+                loadResult = _TryLoadPersistedValueLocked(setting);
             }
 
             SettingValue currentValue = setting.Value;
@@ -250,7 +257,7 @@ public sealed class SettingsManager : IReadOnlySettingsManager, IDisposable
     }
 
     /// <summary>Ensures a group exists, creating it implicitly if needed.</summary>
-    private void EnsureGroupExistsLocked(string groupName)
+    private void _EnsureGroupExistsLocked(string groupName)
     {
         if (_GroupsByName.ContainsKey(groupName))
         {
@@ -267,7 +274,7 @@ public sealed class SettingsManager : IReadOnlySettingsManager, IDisposable
     }
 
     /// <summary>Tries to load a persisted value for a setting from orphaned values.</summary>
-    private SettingLoadResult TryLoadPersistedValueLocked(Setting setting)
+    private SettingLoadResult _TryLoadPersistedValueLocked(Setting setting)
     {
         if (!_OrphanedValues.TryGetValue(setting.GroupName, out Dictionary<string, JsonNode>? groupValues))
         {
@@ -280,7 +287,7 @@ public sealed class SettingsManager : IReadOnlySettingsManager, IDisposable
         }
 
         (SettingValue? value, SettingLoadResult parseResult) =
-            JsonToSettingValue(jsonNode, setting.Type, setting.EnumMetadata);
+            _JsonToSettingValue(jsonNode, setting.Type, setting.EnumMetadata);
         if (value is null)
         {
             // Return the specific parse failure reason (TypeMismatch or DeserializationError).
@@ -356,7 +363,11 @@ public sealed class SettingsManager : IReadOnlySettingsManager, IDisposable
         _Lock.EnterReadLock();
         try
         {
-            return _SettingsByName.TryGetValue(name, out Setting? s) ? s : null;
+            if (_SettingsByName.TryGetValue(name, out Setting? s))
+            {
+                return s;
+            }
+            return null;
         }
         finally
         {
@@ -366,6 +377,22 @@ public sealed class SettingsManager : IReadOnlySettingsManager, IDisposable
 
     /// <summary>Gets all settings (snapshot).</summary>
     public IReadOnlyList<Setting> AllSettings
+    {
+        get
+        {
+            _Lock.EnterReadLock();
+            try
+            {
+                return [.. _SettingsList];
+            }
+            finally
+            {
+                _Lock.ExitReadLock();
+            }
+        }
+    }
+
+    private IReadOnlyList<IReadOnlySetting> _AllSettings
     {
         get
         {
@@ -404,7 +431,11 @@ public sealed class SettingsManager : IReadOnlySettingsManager, IDisposable
         _Lock.EnterReadLock();
         try
         {
-            return _GroupsByName.TryGetValue(name, out SettingGroup? g) ? g : null;
+            if (_GroupsByName.TryGetValue(name, out SettingGroup? g))
+            {
+                return g;
+            }
+            return null;
         }
         finally
         {
@@ -418,9 +449,11 @@ public sealed class SettingsManager : IReadOnlySettingsManager, IDisposable
         _Lock.EnterReadLock();
         try
         {
-            return _GroupsByName.TryGetValue(groupName, out SettingGroup? group)
-                ? group.Settings   // already a snapshot; group uses its own internal lock
-                : [];
+            if (_GroupsByName.TryGetValue(groupName, out SettingGroup? group))
+            {
+                return group.Settings;
+            }
+            return [];
         }
         finally
         {
@@ -436,72 +469,78 @@ public sealed class SettingsManager : IReadOnlySettingsManager, IDisposable
     public bool? GetBoolSetting(string name)
     {
         Setting? s = GetSetting(name);
-        return s is not null && s.TryGetAsBool(out bool v) ? v : null;
+        if (s is not null && s.TryGetAsBool(out bool v))
+        {
+            return v;
+        }
+        return null;
     }
 
     /// <summary>Convenience: gets a string setting value by name. Returns null if not found or not a String setting.</summary>
     public string? GetStringSetting(string name)
     {
         Setting? s = GetSetting(name);
-        return s is not null && s.TryGetAsString(out string v) ? v : null;
+        if (s is not null && s.TryGetAsString(out string v))
+        {
+            return v;
+        }
+        return null;
     }
 
     /// <summary>Convenience: gets a double setting value by name. Returns null if not found or not an F64 setting.</summary>
     public double? GetF64Setting(string name)
     {
         Setting? s = GetSetting(name);
-        return s is not null && s.TryGetAsF64(out double v) ? v : null;
+        if (s is not null && s.TryGetAsF64(out double v))
+        {
+            return v;
+        }
+        return null;
     }
 
     /// <summary>Convenience: gets a ulong setting value by name. Returns null if not found or not a U64 setting.</summary>
     public ulong? GetU64Setting(string name)
     {
         Setting? s = GetSetting(name);
-        return s is not null && s.TryGetAsU64(out ulong v) ? v : null;
+        if (s is not null && s.TryGetAsU64(out ulong v))
+        {
+            return v;
+        }
+        return null;
     }
 
     /// <summary>Convenience: gets a long setting value by name. Returns null if not found or not an I64 setting.</summary>
     public long? GetI64Setting(string name)
     {
         Setting? s = GetSetting(name);
-        return s is not null && s.TryGetAsI64(out long v) ? v : null;
+        if (s is not null && s.TryGetAsI64(out long v))
+        {
+            return v;
+        }
+        return null;
     }
 
     /// <summary>Convenience: gets a byte array copy by name. Returns null if not found or not a Bytes setting.</summary>
     public byte[]? GetBytesSetting(string name)
     {
         Setting? s = GetSetting(name);
-        return s is not null && s.TryGetAsBytes(out byte[] v) ? v : null;
+        if (s is not null && s.TryGetAsBytes(out byte[] v))
+        {
+            return v;
+        }
+        return null;
     }
 
     /// <summary>Convenience: gets an enum (name, numeric value) by name. Returns null if not found or not an Enum setting.</summary>
     public (string Name, ulong Value)? GetEnumSetting(string name)
     {
         Setting? s = GetSetting(name);
-        return s is not null && s.TryGetAsEnum(out (string Name, ulong Value) v) ? v : null;
+        if (s is not null && s.TryGetAsEnum(out (string Name, ulong Value) v))
+        {
+            return v;
+        }
+        return null;
     }
-
-    #endregion
-
-    #region IReadOnlySettingsManager Explicit Implementations
-
-    // The concrete public methods above return strongly-typed Setting / SettingGroup objects
-    // so that internal code (ProtocolTestHelper, StackBuilder, etc.) can perform mutation.
-    // The IReadOnlySettingsManager explicit implementations return the read-only interfaces
-    // to prevent UI callers from bypassing the read-only contract.
-
-    /// <inheritdoc/>
-    IReadOnlySetting? IReadOnlySettingsManager.GetSetting(string name) => GetSetting(name);
-
-    /// <inheritdoc/>
-    IReadOnlyList<IReadOnlySetting> IReadOnlySettingsManager.AllSettings => AllSettings;
-
-    /// <inheritdoc/>
-    IReadOnlySettingGroup? IReadOnlySettingsManager.GetGroup(string name) => GetGroup(name);
-
-    /// <inheritdoc/>
-    IReadOnlyList<IReadOnlySetting> IReadOnlySettingsManager.GetSettingsInGroup(string groupName) =>
-        GetSettingsInGroup(groupName);
 
     #endregion
 
@@ -658,7 +697,7 @@ public sealed class SettingsManager : IReadOnlySettingsManager, IDisposable
         {
             foreach (string filePath in Directory.EnumerateFiles(_StoragePath, "*.json"))
             {
-                LoadGroupFile(filePath, warnings);
+                _LoadGroupFile(filePath, warnings);
             }
         }
         catch (IOException ex)
@@ -671,7 +710,7 @@ public sealed class SettingsManager : IReadOnlySettingsManager, IDisposable
     /// <summary>
     /// Loads a single group file and appends any encountered warnings to <paramref name="warnings"/>.
     /// </summary>
-    private void LoadGroupFile(string filePath, List<SettingsLoadWarning> warnings)
+    private void _LoadGroupFile(string filePath, List<SettingsLoadWarning> warnings)
     {
         try
         {
@@ -726,7 +765,7 @@ public sealed class SettingsManager : IReadOnlySettingsManager, IDisposable
                     if (_SettingsByName.TryGetValue(prop.Key, out Setting? setting))
                     {
                         (SettingValue? value, SettingLoadResult parseResult) =
-                            JsonToSettingValue(prop.Value, setting.Type, setting.EnumMetadata);
+                            _JsonToSettingValue(prop.Value, setting.Type, setting.EnumMetadata);
                         if (value is not null)
                         {
                             toApply.Add((setting, value.Value));
@@ -835,7 +874,7 @@ public sealed class SettingsManager : IReadOnlySettingsManager, IDisposable
                         groups[groupName] = obj;
                     }
 
-                    obj[setting.Name] = SettingValueToJson(setting.Value);
+                    obj[setting.Name] = _SettingValueToJson(setting.Value);
                 }
             }
             finally
@@ -874,7 +913,7 @@ public sealed class SettingsManager : IReadOnlySettingsManager, IDisposable
     ///   <item><see cref="SettingLoadResult.DeserializationError"/> — JSON node type matches but content cannot be decoded (e.g. invalid base64).</item>
     /// </list>
     /// </summary>
-    private static (SettingValue? Value, SettingLoadResult Result) JsonToSettingValue(
+    private static (SettingValue? Value, SettingLoadResult Result) _JsonToSettingValue(
         JsonNode node, SettingType type, EnumSettingMetadata? enumMetadata)
     {
         try
@@ -883,17 +922,17 @@ public sealed class SettingsManager : IReadOnlySettingsManager, IDisposable
             {
                 // Bytes parsing is handled separately because the FormatException from
                 // invalid base64 is a DeserializationError, not a TypeMismatch.
-                return TryParseBytesWithResult(node);
+                return _TryParseBytesWithResult(node);
             }
 
             SettingValue? value = type switch
             {
                 SettingType.Bool => (SettingValue?)SettingValue.Bool(node.GetValue<bool>()),
                 SettingType.String => node.GetValue<string>() is { } s ? (SettingValue?)SettingValue.String(s) : null,
-                SettingType.F64 => TryParseFiniteF64(node),
-                SettingType.U64 => TryParseU64(node),
-                SettingType.I64 => TryParseI64(node),
-                SettingType.Enum => TryParseEnum(node),
+                SettingType.F64 => _TryParseFiniteF64(node),
+                SettingType.U64 => _TryParseU64(node),
+                SettingType.I64 => _TryParseI64(node),
+                SettingType.Enum => _TryParseEnum(node),
                 _ => null,
             };
             return (value, value is not null ? SettingLoadResult.Success : SettingLoadResult.TypeMismatch);
@@ -911,7 +950,7 @@ public sealed class SettingsManager : IReadOnlySettingsManager, IDisposable
     }
 
     /// <summary>Tries to parse a finite <see cref="SettingType.F64"/> from a JSON node. Returns null for NaN or Infinity.</summary>
-    private static SettingValue? TryParseFiniteF64(JsonNode node)
+    private static SettingValue? _TryParseFiniteF64(JsonNode node)
     {
         if (node is JsonValue val && val.TryGetValue(out double d) && double.IsFinite(d))
         {
@@ -921,7 +960,7 @@ public sealed class SettingsManager : IReadOnlySettingsManager, IDisposable
     }
 
     /// <summary>Tries to parse a <see cref="SettingType.U64"/> from a JSON node.</summary>
-    private static SettingValue? TryParseU64(JsonNode node)
+    private static SettingValue? _TryParseU64(JsonNode node)
     {
         // Try direct numeric first, then string parsing
         if (node is JsonValue val)
@@ -934,7 +973,8 @@ public sealed class SettingsManager : IReadOnlySettingsManager, IDisposable
             {
                 return SettingValue.U64((ulong)l);
             }
-            if (val.TryGetValue(out string? s) && ulong.TryParse(s, out ulong parsed))
+            if (val.TryGetValue(out string? s)
+                && ulong.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out ulong parsed))
             {
                 return SettingValue.U64(parsed);
             }
@@ -943,7 +983,7 @@ public sealed class SettingsManager : IReadOnlySettingsManager, IDisposable
     }
 
     /// <summary>Tries to parse a <see cref="SettingType.I64"/> from a JSON node.</summary>
-    private static SettingValue? TryParseI64(JsonNode node)
+    private static SettingValue? _TryParseI64(JsonNode node)
     {
         if (node is JsonValue val)
         {
@@ -951,7 +991,8 @@ public sealed class SettingsManager : IReadOnlySettingsManager, IDisposable
             {
                 return SettingValue.I64(l);
             }
-            if (val.TryGetValue(out string? s) && long.TryParse(s, out long parsed))
+            if (val.TryGetValue(out string? s)
+                && long.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out long parsed))
             {
                 return SettingValue.I64(parsed);
             }
@@ -962,7 +1003,7 @@ public sealed class SettingsManager : IReadOnlySettingsManager, IDisposable
     /// <summary>Tries to parse a <see cref="SettingType.Bytes"/> from a base64-encoded JSON string.
     /// Distinguishes <see cref="SettingLoadResult.TypeMismatch"/> (node is not a JSON string)
     /// from <see cref="SettingLoadResult.DeserializationError"/> (string is not valid base64).</summary>
-    private static (SettingValue? Value, SettingLoadResult Result) TryParseBytesWithResult(JsonNode node)
+    private static (SettingValue? Value, SettingLoadResult Result) _TryParseBytesWithResult(JsonNode node)
     {
         if (node is not JsonValue val || !val.TryGetValue(out string? s))
         {
@@ -983,7 +1024,7 @@ public sealed class SettingsManager : IReadOnlySettingsManager, IDisposable
     }
 
     /// <summary>Tries to parse a <see cref="SettingType.Enum"/> from a JSON object with name/value properties.</summary>
-    private static SettingValue? TryParseEnum(JsonNode node)
+    private static SettingValue? _TryParseEnum(JsonNode node)
     {
         // Expect object with "name" and "value" properties
         if (node is not JsonObject obj)
@@ -1014,7 +1055,8 @@ public sealed class SettingsManager : IReadOnlySettingsManager, IDisposable
             return SettingValue.Enum(name, (ulong)longVal);
         }
 
-        if (valueVal.TryGetValue(out string? strVal) && ulong.TryParse(strVal, out ulong parsed))
+        if (valueVal.TryGetValue(out string? strVal)
+            && ulong.TryParse(strVal, NumberStyles.Integer, CultureInfo.InvariantCulture, out ulong parsed))
         {
             return SettingValue.Enum(name, parsed);
         }
@@ -1023,7 +1065,7 @@ public sealed class SettingsManager : IReadOnlySettingsManager, IDisposable
     }
 
     /// <summary>Converts a setting value to a JSON node.</summary>
-    private static JsonNode? SettingValueToJson(SettingValue value)
+    private static JsonNode? _SettingValueToJson(SettingValue value)
     {
         switch (value.Type)
         {
@@ -1034,7 +1076,7 @@ public sealed class SettingsManager : IReadOnlySettingsManager, IDisposable
                 value.TryGetAsString(out string strVal);
                 return JsonValue.Create(strVal);
             case SettingType.F64:
-                return SettingF64ToJson(value);
+                return _SettingF64ToJson(value);
             case SettingType.U64:
                 value.TryGetAsU64(out ulong u64Val);
                 return JsonValue.Create(u64Val);
@@ -1045,14 +1087,14 @@ public sealed class SettingsManager : IReadOnlySettingsManager, IDisposable
                 value.TryGetAsBytes(out byte[] bytesVal);
                 return JsonValue.Create(Convert.ToBase64String(bytesVal));
             case SettingType.Enum:
-                return CreateEnumJson(value);
+                return _CreateEnumJson(value);
             default:
                 return null;
         }
     }
 
     /// <summary>Converts an F64 setting to a JSON value. F64 settings are always finite (enforced at registration and mutation).</summary>
-    private static JsonValue SettingF64ToJson(SettingValue value)
+    private static JsonValue _SettingF64ToJson(SettingValue value)
     {
         value.TryGetAsF64(out double f64);
         // F64 settings are guaranteed finite by Setting.F64() and Setting.ValidateF64().
@@ -1065,7 +1107,7 @@ public sealed class SettingsManager : IReadOnlySettingsManager, IDisposable
     }
 
     /// <summary>Creates a JSON object for an enum setting value.</summary>
-    private static JsonObject CreateEnumJson(SettingValue value)
+    private static JsonObject _CreateEnumJson(SettingValue value)
     {
         value.TryGetAsEnum(out (string name, ulong numericValue) e);
         return new JsonObject
@@ -1104,4 +1146,32 @@ public sealed class SettingsManager : IReadOnlySettingsManager, IDisposable
     /// <summary>Internal alias called by <see cref="Stack.Dispose"/> via the existing disposal path.</summary>
     internal void DisposeResources() => Dispose();
     #endregion
+
+    private sealed class ReadOnlySettingsView(SettingsManager owner) : IReadOnlySettingsManager
+    {
+        public int SettingCount => owner.SettingCount;
+
+        public int GroupCount => owner.GroupCount;
+
+        public IReadOnlySetting? GetSetting(string name) => owner.GetSetting(name);
+
+        public IReadOnlyList<IReadOnlySetting> AllSettings => owner._AllSettings;
+
+        public IReadOnlyList<string> AllGroups => owner.AllGroups;
+
+        public IReadOnlySettingGroup? GetGroup(string name) => owner.GetGroup(name);
+
+        public IReadOnlyList<IReadOnlySetting> GetSettingsInGroup(string groupName) =>
+            owner.GetSettingsInGroup(groupName);
+
+        public bool? GetBoolSetting(string name) => owner.GetBoolSetting(name);
+
+        public string? GetStringSetting(string name) => owner.GetStringSetting(name);
+
+        public double? GetF64Setting(string name) => owner.GetF64Setting(name);
+
+        public ulong? GetU64Setting(string name) => owner.GetU64Setting(name);
+
+        public long? GetI64Setting(string name) => owner.GetI64Setting(name);
+    }
 }

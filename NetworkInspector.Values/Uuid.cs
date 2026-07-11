@@ -86,35 +86,35 @@ public readonly record struct Uuid
         // Parse 8 hex chars (bytes 0-3 of high)
         for (int i = 0; i < 8; i++)
         {
-            int d = HexDigitValue(text[i]);
+            int d = _HexDigitValue(text[i]);
             if (d < 0) { return false; }
             high = (high << 4) | (uint)d;
         }
         // Parse 4 hex chars (bytes 4-5 of high), skip dash at 8
         for (int i = 9; i < 13; i++)
         {
-            int d = HexDigitValue(text[i]);
+            int d = _HexDigitValue(text[i]);
             if (d < 0) { return false; }
             high = (high << 4) | (uint)d;
         }
         // Parse 4 hex chars (bytes 6-7 of high), skip dash at 13
         for (int i = 14; i < 18; i++)
         {
-            int d = HexDigitValue(text[i]);
+            int d = _HexDigitValue(text[i]);
             if (d < 0) { return false; }
             high = (high << 4) | (uint)d;
         }
         // Parse 4 hex chars (bytes 0-1 of low), skip dash at 18
         for (int i = 19; i < 23; i++)
         {
-            int d = HexDigitValue(text[i]);
+            int d = _HexDigitValue(text[i]);
             if (d < 0) { return false; }
             low = (low << 4) | (uint)d;
         }
         // Parse 12 hex chars (bytes 2-7 of low), skip dash at 23
         for (int i = 24; i < 36; i++)
         {
-            int d = HexDigitValue(text[i]);
+            int d = _HexDigitValue(text[i]);
             if (d < 0) { return false; }
             low = (low << 4) | (uint)d;
         }
@@ -184,7 +184,7 @@ public readonly record struct Uuid
 
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public bool TryGetSerializedSize(out int size)
+    public bool TryGetWrittenSize(out int size)
     {
         size = 16;
         return true;
@@ -221,26 +221,26 @@ public readonly record struct Uuid
         // Extract hex nibbles directly from ulong fields using shifts.
         // Avoids intermediate byte array and SpanStringBuilder overhead.
         // Format: XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX
-        WriteHexByte(destination, 0, (int)(_High >> 56));
-        WriteHexByte(destination, 2, (int)(_High >> 48));
-        WriteHexByte(destination, 4, (int)(_High >> 40));
-        WriteHexByte(destination, 6, (int)(_High >> 32));
+        _WriteHexByte(destination, 0, (int)(_High >> 56));
+        _WriteHexByte(destination, 2, (int)(_High >> 48));
+        _WriteHexByte(destination, 4, (int)(_High >> 40));
+        _WriteHexByte(destination, 6, (int)(_High >> 32));
         destination[8] = '-';
-        WriteHexByte(destination, 9, (int)(_High >> 24));
-        WriteHexByte(destination, 11, (int)(_High >> 16));
+        _WriteHexByte(destination, 9, (int)(_High >> 24));
+        _WriteHexByte(destination, 11, (int)(_High >> 16));
         destination[13] = '-';
-        WriteHexByte(destination, 14, (int)(_High >> 8));
-        WriteHexByte(destination, 16, (int)_High);
+        _WriteHexByte(destination, 14, (int)(_High >> 8));
+        _WriteHexByte(destination, 16, (int)_High);
         destination[18] = '-';
-        WriteHexByte(destination, 19, (int)(_Low >> 56));
-        WriteHexByte(destination, 21, (int)(_Low >> 48));
+        _WriteHexByte(destination, 19, (int)(_Low >> 56));
+        _WriteHexByte(destination, 21, (int)(_Low >> 48));
         destination[23] = '-';
-        WriteHexByte(destination, 24, (int)(_Low >> 40));
-        WriteHexByte(destination, 26, (int)(_Low >> 32));
-        WriteHexByte(destination, 28, (int)(_Low >> 24));
-        WriteHexByte(destination, 30, (int)(_Low >> 16));
-        WriteHexByte(destination, 32, (int)(_Low >> 8));
-        WriteHexByte(destination, 34, (int)_Low);
+        _WriteHexByte(destination, 24, (int)(_Low >> 40));
+        _WriteHexByte(destination, 26, (int)(_Low >> 32));
+        _WriteHexByte(destination, 28, (int)(_Low >> 24));
+        _WriteHexByte(destination, 30, (int)(_Low >> 16));
+        _WriteHexByte(destination, 32, (int)(_Low >> 8));
+        _WriteHexByte(destination, 34, (int)_Low);
 
         charsWritten = FormattedLength;
         return true;
@@ -335,7 +335,12 @@ public readonly record struct Uuid
     public int CompareTo(Uuid other)
     {
         int c = _High.CompareTo(other._High);
-        return c != 0 ? c : _Low.CompareTo(other._Low);
+        if (c != 0)
+        {
+            return c;
+        }
+
+        return _Low.CompareTo(other._Low);
     }
 
     /// <inheritdoc/>
@@ -375,18 +380,18 @@ public readonly record struct Uuid
 
     #region Private Helpers
 
-    private const string HexChars = "0123456789ABCDEF";
+    private const string _HexChars = "0123456789ABCDEF";
 
     /// <summary>Writes a single byte as two uppercase hex characters at the given offset.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static void WriteHexByte(Span<char> dest, int offset, int value)
+    private static void _WriteHexByte(Span<char> dest, int offset, int value)
     {
-        dest[offset] = HexChars[(value >> 4) & 0xF];
-        dest[offset + 1] = HexChars[value & 0xF];
+        dest[offset] = _HexChars[(value >> 4) & 0xF];
+        dest[offset + 1] = _HexChars[value & 0xF];
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static int HexDigitValue(char c)
+    private static int _HexDigitValue(char c)
     {
         if (c >= '0' && c <= '9') { return c - '0'; }
         if (c >= 'a' && c <= 'f') { return c - 'a' + 10; }

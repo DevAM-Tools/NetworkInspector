@@ -24,10 +24,10 @@ public readonly struct EthernetFcs : ITrailerLayer
     public const int Size = 4;
 
     /// <summary>IEEE 802.3 CRC-32 polynomial in reversed (LSB-first) form.</summary>
-    private const uint Polynomial = 0xEDB88320u;
+    private const uint _Polynomial = 0xEDB88320u;
 
     /// <summary>Pre-computed 256-entry CRC-32 lookup table (IEEE 802.3 polynomial).</summary>
-    private static readonly uint[] _Table = BuildTable();
+    private static readonly uint[] _Table = _BuildTable();
 
     /// <summary>Default-constructed FCS trailer using IEEE 802.3 CRC-32.</summary>
     public static EthernetFcs Crc32 => default;
@@ -45,13 +45,13 @@ public readonly struct EthernetFcs : ITrailerLayer
     {
         // Compute over everything before the FCS slot, then write LE.
         ReadOnlySpan<byte> data = frame[..payloadEnd];
-        uint crc = ComputeCrc32(data);
+        uint crc = _ComputeCrc32(data);
         BinaryPrimitives.WriteUInt32LittleEndian(frame.Slice(payloadEnd, Size), crc);
     }
 
     /// <summary>Computes the IEEE 802.3 CRC-32 of <paramref name="data"/>.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static uint ComputeCrc32(ReadOnlySpan<byte> data)
+    private static uint _ComputeCrc32(ReadOnlySpan<byte> data)
     {
         uint[] table = _Table;
         uint crc = 0xFFFFFFFFu;
@@ -63,7 +63,7 @@ public readonly struct EthernetFcs : ITrailerLayer
     }
 
     /// <summary>Builds the 256-entry CRC-32 lookup table once at static-init time.</summary>
-    private static uint[] BuildTable()
+    private static uint[] _BuildTable()
     {
         uint[] table = new uint[256];
         for (uint i = 0; i < 256; i++)
@@ -71,7 +71,7 @@ public readonly struct EthernetFcs : ITrailerLayer
             uint c = i;
             for (int k = 0; k < 8; k++)
             {
-                c = (c & 1) != 0 ? Polynomial ^ (c >> 1) : c >> 1;
+                c = (c & 1) != 0 ? _Polynomial ^ (c >> 1) : c >> 1;
             }
             table[i] = c;
         }

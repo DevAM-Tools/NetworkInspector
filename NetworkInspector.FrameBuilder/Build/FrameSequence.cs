@@ -151,11 +151,11 @@ public ref struct FrameSequence<TStack, TTrailer, TInterceptor>
                 return false;
 
             case SequenceState.Fragmenting:
-                return EmitNextFragment(dst, out bytesWritten);
+                return _EmitNextFragment(dst, out bytesWritten);
 
             case SequenceState.NotStarted:
             default:
-                return EmitFirst(dst, out bytesWritten);
+                return _EmitFirst(dst, out bytesWritten);
         }
     }
 
@@ -164,7 +164,7 @@ public ref struct FrameSequence<TStack, TTrailer, TInterceptor>
     /// size, picks the single-frame or multi-fragment path, and emits the
     /// first (and possibly only) frame.
     /// </summary>
-    private bool EmitFirst(Span<byte> dst, out int bytesWritten)
+    private bool _EmitFirst(Span<byte> dst, out int bytesWritten)
     {
         bytesWritten = 0;
 
@@ -184,7 +184,7 @@ public ref struct FrameSequence<TStack, TTrailer, TInterceptor>
         // Single-frame fast path: fits into one frame.
         if (total <= maxFrameLen)
         {
-            return EmitSingleFrame(dst, depth, totalHdr, trailerSize, total, out bytesWritten);
+            return _EmitSingleFrame(dst, depth, totalHdr, trailerSize, total, out bytesWritten);
         }
 
         // Multi-frame path: requires an IFragmentable layer along the stack.
@@ -195,14 +195,14 @@ public ref struct FrameSequence<TStack, TTrailer, TInterceptor>
             return false;
         }
 
-        return BeginFragmenting(dst, depth, totalHdr, trailerSize, total, maxFrameLen, out bytesWritten);
+        return _BeginFragmenting(dst, depth, totalHdr, trailerSize, total, maxFrameLen, out bytesWritten);
     }
 
     /// <summary>
     /// Builds the entire frame in <paramref name="dst"/> in the non-fragmenting
     /// case.  Identical to the previous (M3) behaviour.
     /// </summary>
-    private bool EmitSingleFrame(Span<byte> dst, int depth, int totalHdr, int trailerSize, int total, out int bytesWritten)
+    private bool _EmitSingleFrame(Span<byte> dst, int depth, int totalHdr, int trailerSize, int total, out int bytesWritten)
     {
         bytesWritten = 0;
 
@@ -260,7 +260,7 @@ public ref struct FrameSequence<TStack, TTrailer, TInterceptor>
     /// that the located <see cref="IFragmentable"/> layer permits splitting,
     /// computes the per-fragment slice geometry and emits fragment 0.
     /// </summary>
-    private bool BeginFragmenting(Span<byte> dst, int depth, int totalHdr, int trailerSize, int total, int maxFrameLen, out int bytesWritten)
+    private bool _BeginFragmenting(Span<byte> dst, int depth, int totalHdr, int trailerSize, int total, int maxFrameLen, out int bytesWritten)
     {
         bytesWritten = 0;
 
@@ -290,7 +290,7 @@ public ref struct FrameSequence<TStack, TTrailer, TInterceptor>
             // HasFragmentable was true but no IFragmentable was found —
             // a structural inconsistency that should never occur in practice.
             Status = BuildStatus.InvalidLayerState;
-            FinishFragmenting();
+            _FinishFragmenting();
             return false;
         }
         _ = headerOffset;
@@ -298,14 +298,14 @@ public ref struct FrameSequence<TStack, TTrailer, TInterceptor>
         if (!canFragment)
         {
             Status = BuildStatus.FragmentationRequired;
-            FinishFragmenting();
+            _FinishFragmenting();
             return false;
         }
 
         if (alignment <= 0 || (alignment & (alignment - 1)) != 0)
         {
             Status = BuildStatus.InvalidLayerState;
-            FinishFragmenting();
+            _FinishFragmenting();
             return false;
         }
 
@@ -330,12 +330,12 @@ public ref struct FrameSequence<TStack, TTrailer, TInterceptor>
             if (ctx.Status != BuildStatus.Success)
             {
                 Status = ctx.Status;
-                FinishFragmenting();
+                _FinishFragmenting();
                 return false;
             }
         }
         // OuterChecksum / Trailer for the unfragmented build are intentionally
-        // skipped — they are recomputed per fragment in EmitNextFragment.
+        // skipped — they are recomputed per fragment in _EmitNextFragment.
 
         BuildStatus geoStatus = FragmentGeometryHelper.TryComputeFragmentGeometry(
             canFragment: true, alignment, headerEndOffset, dataLength, maxFrameLen, trailerSize,
@@ -343,7 +343,7 @@ public ref struct FrameSequence<TStack, TTrailer, TInterceptor>
         if (geoStatus != BuildStatus.Success)
         {
             Status = geoStatus;
-            FinishFragmenting();
+            _FinishFragmenting();
             return false;
         }
 
@@ -358,7 +358,7 @@ public ref struct FrameSequence<TStack, TTrailer, TInterceptor>
         _FragKind = kind;
 
         _State = SequenceState.Fragmenting;
-        return EmitNextFragment(dst, out bytesWritten);
+        return _EmitNextFragment(dst, out bytesWritten);
     }
 
     /// <summary>
@@ -368,20 +368,20 @@ public ref struct FrameSequence<TStack, TTrailer, TInterceptor>
     /// <see cref="IFrameInterceptor.OnFrameComplete"/>.  Advances
     /// <see cref="_FragmentCursor"/>.
     /// </summary>
-    private bool EmitNextFragment(Span<byte> dst, out int bytesWritten)
+    private bool _EmitNextFragment(Span<byte> dst, out int bytesWritten)
     {
         bytesWritten = 0;
 
         if (_Scratch is null || _ScratchOffsets is null)
         {
             Status = BuildStatus.InvalidLayerState;
-            FinishFragmenting();
+            _FinishFragmenting();
             return false;
         }
 
         if (_FragmentCursor >= _InnerPayloadLength)
         {
-            FinishFragmenting();
+            _FinishFragmenting();
             return false;
         }
 
@@ -395,7 +395,7 @@ public ref struct FrameSequence<TStack, TTrailer, TInterceptor>
         if (dst.Length < total)
         {
             Status = BuildStatus.BufferTooSmall;
-            FinishFragmenting();
+            _FinishFragmenting();
             return false;
         }
 
@@ -439,7 +439,7 @@ public ref struct FrameSequence<TStack, TTrailer, TInterceptor>
             if (ctx.Status != BuildStatus.Success)
             {
                 Status = ctx.Status;
-                FinishFragmenting();
+                _FinishFragmenting();
                 return false;
             }
 
@@ -466,7 +466,7 @@ public ref struct FrameSequence<TStack, TTrailer, TInterceptor>
         {
             // Last fragment emitted — release the pooled scratch immediately
             // so the next top-level call on this thread reuses it.
-            FinishFragmenting();
+            _FinishFragmenting();
         }
         return true;
     }
@@ -488,7 +488,7 @@ public ref struct FrameSequence<TStack, TTrailer, TInterceptor>
     /// pooled owner.  Idempotent.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void FinishFragmenting()
+    private void _FinishFragmenting()
     {
         if (_OwnsScratch)
         {

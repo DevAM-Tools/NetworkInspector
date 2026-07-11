@@ -274,70 +274,55 @@ internal static class BlfObjectPayloads
     }
 
     /// <summary>
-    /// Builds a FlexRay RcvMessage (Type 50) payload from a DLT_FLEXRAY frame.
+    /// Builds a FlexRay RcvMessage (Type 50) payload from a LINKTYPE_FLEXRAY frame.
     /// <para>
-    /// DLT_FLEXRAY layout:
-    /// <c>channel(1)|type_flags(1)|frame_id(2 BE)|cycle(1)|header_crc(2 BE)|data...</c>.
+    /// LINKTYPE_FLEXRAY layout: measurement header + error flags + ISO 17458-2 header + data.
     /// BLF Type 50 layout:
     /// <c>channel(2 LE)|version(2 LE)|channel_mask(2 LE)|dir(2 LE)|client_idx(4 LE)|
     /// cluster_no(4 LE)|frame_id(2 LE)|header_crc1(2 LE)|header_crc2(2 LE)|
     /// payload_length(2 LE)|cycle(1)|tag(1)|data_flag(1)|frame_flags(1)|data...</c>.
     /// </para>
     /// </summary>
-    /// <param name="dltFlexRayFrame">DLT_FLEXRAY frame bytes (7-byte header + data).</param>
+    /// <param name="linkTypeFlexRayFrame">LINKTYPE_FLEXRAY frame bytes (7-byte header + data).</param>
     /// <param name="channel">BLF channel number to encode into the output payload header.</param>
     /// <param name="output">Buffer to write the payload into (reset before use).</param>
     /// <returns><c>true</c> if the payload was built successfully; <c>false</c> if the frame is too short.</returns>
     internal static bool TryBuildFlexRayRcvMessagePayload(
-        ReadOnlySpan<byte> dltFlexRayFrame, ushort channel, PooledBuffer output)
+        ReadOnlySpan<byte> linkTypeFlexRayFrame, ushort channel, PooledBuffer output)
     {
-        // DLT_FLEXRAY minimum: channel(1) + type_flags(1) + frame_id(2) + cycle(1) + header_crc(2) = 7 bytes
-        if (dltFlexRayFrame.Length < 7)
+        if (!FlexRayLinkTypeFrame.TryParseDataFrame(
+            linkTypeFlexRayFrame, out FlexRayLinkTypeFrame.Fields fields, out ReadOnlySpan<byte> data))
         {
             return false;
         }
 
         output.Reset();
 
-        // NOTE: dltFlexRayFrame[0] holds the FlexRay sub-channel (A=0, B=1) within
-        // the BLF stream. We encode it into channelMask (bit 0 = A, bit 1 = B) per
-        // the Vector spec. The BLF object's `channel` field is the BLF stream
-        // channel coming from the source interface — this keeps all frames on the
-        // same source interface mapped to the same reimport interface.
-        byte flexRaySubChannel = dltFlexRayFrame[0];
+        byte flexRaySubChannel = fields.ChannelB ? (byte)1 : (byte)0;
         ushort channelMask = flexRaySubChannel == 0 ? (ushort)0x0001 : (ushort)0x0002;
-        byte typeFlags = dltFlexRayFrame[1];
-        ushort frameId = BinaryPrimitives.ReadUInt16BigEndian(dltFlexRayFrame.Slice(2));
-        byte cycle = dltFlexRayFrame[4];
-        ushort headerCrc = BinaryPrimitives.ReadUInt16BigEndian(dltFlexRayFrame.Slice(5));
+        ushort frameId = fields.FrameId;
+        byte cycle = fields.Cycle;
+        ushort headerCrc = fields.HeaderCrc;
+        int dataLength = data.Length;
 
-        int dataLength = dltFlexRayFrame.Length - 7;
-        ReadOnlySpan<byte> data = dataLength > 0
-            ? dltFlexRayFrame.Slice(7, dataLength)
-            : ReadOnlySpan<byte>.Empty;
-
-        // Reverse the type_flags → frame_flags mapping from the parser:
-        // Parser: BLF flag 0x01 → DLT bit 7 (payload preamble)
-        //         BLF flag 0x02 → DLT bit 6 (null frame)
-        //         BLF flag 0x04 → DLT bit 5 (sync frame)
-        //         BLF flag 0x08 → DLT bit 4 (startup frame)
+        // Map ISO indicator bits → BLF frame_flags (reverse of FlexRayParser).
         byte frameFlags = 0;
-        if ((typeFlags & 0x80) != 0)
+        if (fields.Ppi)
         {
             frameFlags |= 0x01;
-        } // payload preamble
-        if ((typeFlags & 0x40) != 0)
+        }
+        if (!fields.Nfi)
         {
             frameFlags |= 0x02;
-        } // null frame
-        if ((typeFlags & 0x20) != 0)
+        }
+        if (fields.Sfi)
         {
             frameFlags |= 0x04;
-        } // sync frame
-        if ((typeFlags & 0x10) != 0)
+        }
+        if (fields.Stfi)
         {
             frameFlags |= 0x08;
-        } // startup frame
+        }
 
         // BLF FLEXRAY_RCVMESSAGE (Type 50) — Vector blf_flexrayrcvmessage_t header is
         // 44 bytes packed (matches Wireshark wiretap/blf.h). Field-by-field LE layout:
@@ -380,7 +365,7 @@ internal static class BlfObjectPayloads
     /// <summary>
     /// Maximum LIN data length.
     /// </summary>
-    private const int MaxLinDataLength = 8;
+    private const int _MaxLinDataLength = 8;
 
     /// <summary>
     /// Builds a LIN Message V2 (Type 57) payload from a DLT_LIN frame.
@@ -414,7 +399,7 @@ internal static class BlfObjectPayloads
         byte id = (byte)(pid & 0x3F);
 
         // Clamp DLC to max LIN data length
-        int dataLength = Math.Min((int)dlc, (int)MaxLinDataLength);
+        int dataLength = Math.Min((int)dlc, (int)_MaxLinDataLength);
 
         // Data starts at offset 2, followed by checksum and errors
         // Layout: pid(1)|length(1)|data(dataLength)|checksum(1)|errors(1)
