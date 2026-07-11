@@ -1,6 +1,7 @@
 // Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Sessions.Listeners;
+
 /// <summary>
 /// Session-internal bridge: holds the notification flags and pull cursor
 /// for a single <see cref="ISessionListener"/>.
@@ -25,9 +26,8 @@ namespace NetworkInspector.Sessions.Listeners;
 /// </summary>
 internal sealed class ListenerSlot : IDisposable
 {
-    // ── Atomic flag field ────────────────────────────────────────────────────
-    // Written by producers via Interlocked.Or, read+cleared by consumer via Interlocked.Exchange.
-    // Public (internal) for direct OR access from source threads without method-call overhead.
+    #region Fields
+
     internal int Flags;
     private readonly ISessionListener _Listener;
     private readonly ISessionReader _SessionReader;
@@ -37,6 +37,11 @@ internal sealed class ListenerSlot : IDisposable
     private long _PacketCursor;
     // 0 = OnUnsubscribed not yet invoked; 1 = invoked (RunLoop finally or coordinator fallback).
     private int _OnUnsubscribedInvoked;
+
+    #endregion
+
+    #region Lifecycle
+
     /// <summary>
     /// Creates a listener slot that delivers notifications to <paramref name="listener"/>
     /// and pulls data from <paramref name="sessionReader"/>.
@@ -60,7 +65,11 @@ internal sealed class ListenerSlot : IDisposable
         // in the unified Session job list.
         Info = new JobInfo(_Job);
     }
-    // ── Identity ─────────────────────────────────────────────────────────────
+
+    #endregion
+
+    #region Identity
+
     /// <summary>The underlying job's identifier.</summary>
     internal JobId Id => _Job.Id;
     /// <summary>
@@ -84,7 +93,11 @@ internal sealed class ListenerSlot : IDisposable
     }
     /// <summary>User-visible listener name.</summary>
     internal string UiName => _Listener.UiName;
-    // ── Lifecycle ────────────────────────────────────────────────────────────
+
+    #endregion
+
+    #region Public API
+
     /// <summary>Starts the listener slot's background thread.</summary>
     internal void Start()
     {
@@ -144,7 +157,11 @@ internal sealed class ListenerSlot : IDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void ResetPacketCursor()
         => Volatile.Write(ref _PacketCursor, 0);
-    // ── Event-driven dispatch loop ──────────────────────────────────────────
+
+    #endregion
+
+    #region Private helpers
+
     /// <summary>
     /// The work delegate executed by the underlying <see cref="Job"/> thread.
     /// Waits on <see cref="_Wake"/> when no flags are pending, then dispatches to
@@ -260,5 +277,7 @@ internal sealed class ListenerSlot : IDisposable
             _Listener.OnShuttingDown();
         }
     }
+
+    #endregion
 }
 

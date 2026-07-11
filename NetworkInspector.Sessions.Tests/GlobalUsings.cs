@@ -37,6 +37,7 @@ global using NetworkInspector.Protocols;
 #endregion
 
 #region Test Framework
+global using NetworkInspector.Sessions.Tests.Helpers;
 global using TUnit.Assertions;
 global using TUnit.Assertions.Extensions;
 global using TUnit.Core;

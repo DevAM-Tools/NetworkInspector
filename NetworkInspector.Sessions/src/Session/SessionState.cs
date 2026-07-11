@@ -27,9 +27,25 @@ internal sealed class SessionState
 
     /// <summary>Allocates the next unique job ID. Thread-safe.</summary>
     internal JobId AllocateJobId()
-        => new((int)Interlocked.Increment(ref _NextJobId) - 1);
+    {
+        long next = Interlocked.Increment(ref _NextJobId);
+        if (next > int.MaxValue)
+        {
+            throw new InvalidOperationException("Maximum job ID count exceeded.");
+        }
+
+        return new((int)next - 1);
+    }
 
     /// <summary>Allocates the next unique listener ID. Thread-safe.</summary>
     internal ListenerId AllocateListenerId()
-        => new((int)Interlocked.Increment(ref _NextListenerId) - 1);
+    {
+        long next = Interlocked.Increment(ref _NextListenerId);
+        if (next > int.MaxValue)
+        {
+            throw new InvalidOperationException("Maximum listener ID count exceeded.");
+        }
+
+        return new((int)next - 1);
+    }
 }

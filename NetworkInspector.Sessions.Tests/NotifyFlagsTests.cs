@@ -20,8 +20,10 @@ internal sealed class NotifyFlagsTests
             NotifyFlags.AllSourcesCompleted,
             NotifyFlags.JobAdded,
             NotifyFlags.JobStatusChanged,
+            NotifyFlags.JobRemoved,
             NotifyFlags.PhaseChanged,
             NotifyFlags.ShuttingDown,
+            NotifyFlags.StackChanged,
         ];
 
         for (int i = 0; i < allFlags.Length; i++)

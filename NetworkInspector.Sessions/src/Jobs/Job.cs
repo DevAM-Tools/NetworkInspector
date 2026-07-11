@@ -1,6 +1,7 @@
 // Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Sessions.Jobs;
+
 /// <summary>
 /// Represents a single unit of work in the session.
 /// Each job runs on its own dedicated background thread.
@@ -14,6 +15,8 @@ namespace NetworkInspector.Sessions.Jobs;
 /// </summary>
 internal sealed class Job : IDisposable
 {
+    #region Fields
+
     private readonly Action<CancellationToken> _Work;
     private readonly CancellationTokenSource _Cts = new();
     private readonly Action<Job, JobStatus> _OnStatusChanged;
@@ -34,6 +37,11 @@ internal sealed class Job : IDisposable
     private DateTimeOffset _EndTimeValue;
     private int _EndTimeSet;    // 0 = not set, 1 = set
     private Exception? _FailureException;
+
+    #endregion
+
+    #region Lifecycle
+
     /// <summary>Creates a job with the given identity and work delegate.</summary>
     internal Job(
         JobId id,
@@ -48,7 +56,11 @@ internal sealed class Job : IDisposable
         _Work = work;
         _OnStatusChanged = onStatusChanged;
     }
-    // ── Identity ─────────────────────────────────────────────────────────────
+
+    #endregion
+
+    #region Identity
+
     /// <summary>Unique job identifier within the session.</summary>
     internal JobId Id
     {
@@ -64,7 +76,11 @@ internal sealed class Job : IDisposable
     {
         get;
     }
-    // ── Observable state (thread-safe reads) ─────────────────────────────────
+
+    #endregion
+
+    #region Observable state
+
     /// <summary>Current execution status. Volatile read — always current.</summary>
     internal JobStatus Status => (JobStatus)Volatile.Read(ref _Status);
     /// <summary>When the job thread started. Null if not yet started.</summary>
@@ -95,7 +111,11 @@ internal sealed class Job : IDisposable
     }
     /// <summary>Exception that caused job failure, if any.</summary>
     internal Exception? FailureException => Volatile.Read(ref _FailureException!);
-    // ── Lifecycle ─────────────────────────────────────────────────────────────
+
+    #endregion
+
+    #region Public API
+
     /// <summary>
     /// Starts the job on a new background thread.
     /// Transitions status from <see cref="JobStatus.Pending"/> to <see cref="JobStatus.Running"/>.
@@ -181,9 +201,14 @@ internal sealed class Job : IDisposable
         _Completed.Dispose();
         _Cts.Dispose();
     }
-    // ── Private implementation ────────────────────────────────────────────────
-  private static bool _IsTerminal(JobStatus status) =>
+
+    #endregion
+
+    #region Private helpers
+
+    private static bool _IsTerminal(JobStatus status) =>
         status is JobStatus.Completed or JobStatus.Cancelled or JobStatus.Failed;
+
     /// <summary>
     /// Entry point for the job thread. Executes the work delegate and updates
     /// status regardless of outcome.
@@ -229,5 +254,7 @@ internal sealed class Job : IDisposable
         }
         _OnStatusChanged(this, status);
     }
+
+    #endregion
 }
 

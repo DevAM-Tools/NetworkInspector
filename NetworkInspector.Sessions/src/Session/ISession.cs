@@ -28,7 +28,8 @@ public interface ISession : ISessionReader, IDisposable
 
     /// <summary>
     /// Attempts to register a session listener. May be called while the session is
-    /// <see cref="SessionPhase.Idle"/> or <see cref="SessionPhase.Running"/>.
+    /// <see cref="SessionPhase.Idle"/>, <see cref="SessionPhase.Running"/>, or
+    /// <see cref="SessionPhase.Restarting"/>.
     /// Returns <see langword="false"/> if the session is shutting down or stopped.
     /// </summary>
     /// <exception cref="SessionException">
@@ -178,8 +179,10 @@ public interface ISession : ISessionReader, IDisposable
     /// <para>
     /// If <paramref name="timeout"/> is <see langword="null"/>, waits indefinitely for
     /// graceful completion. If a <see cref="TimeSpan"/> is provided, source jobs are
-    /// given that long to finish before they are force-cancelled.
-    /// <c>Shutdown(TimeSpan.Zero)</c> is equivalent to an immediate forced shutdown.
+    /// given that long to finish before shutdown teardown continues; jobs that are still
+    /// running remain cancelled but may not have exited yet — inspect job status via
+    /// <see cref="ISessionReader.GetJobs"/>. <c>Shutdown(TimeSpan.Zero)</c> skips waiting
+    /// for source completion.
     /// </para>
     ///
     /// <para>Idempotent — safe to call multiple times.</para>

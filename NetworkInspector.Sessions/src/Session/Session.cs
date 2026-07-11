@@ -1381,7 +1381,9 @@ public sealed class Session : ISession, ISessionReader
     /// Non-blocking, lock-free. Safe to call from any thread.
     /// </summary>
     /// <remarks>
-    /// <see cref="NotifyFlags.NewPackets"/> is set once per parsed frame (O(frames × listeners) atomic ORs).
+    /// <see cref="NotifyFlags.NewPackets"/> is set once per parsed frame
+    /// (O(frames × listeners) atomic ORs). Listener slots coalesce duplicate
+    /// flags between wake cycles; each frame still issues one OR per listener.
     /// </remarks>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void _NotifyAllListeners(NotifyFlags flags)

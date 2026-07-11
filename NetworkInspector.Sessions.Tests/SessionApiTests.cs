@@ -74,7 +74,7 @@ internal sealed class SessionApiTests
         session.WaitForCompletion();
 
         JobInfo sourceJob = session.GetJobs().First(j => j.UiName == source.UiName);
-        _WaitForCondition(() => sourceJob.Status is JobStatus.Completed or JobStatus.Cancelled);
+        WaitHelper.WaitUntil(() => sourceJob.Status is JobStatus.Completed or JobStatus.Cancelled);
 
         bool removed = session.TryRemoveJob(sourceJob);
 
@@ -96,7 +96,7 @@ internal sealed class SessionApiTests
         session.WaitForCompletion();
 
         JobInfo sourceJob = session.GetJobs().First(j => j.UiName == source.UiName);
-        _WaitForCondition(() => sourceJob.Status is JobStatus.Completed or JobStatus.Cancelled);
+        WaitHelper.WaitUntil(() => sourceJob.Status is JobStatus.Completed or JobStatus.Cancelled);
 
         await Assert.That(session.TryRemoveJob(sourceJob)).IsTrue();
         await Assert.That(session.TryRemoveJob(sourceJob)).IsFalse();
@@ -136,7 +136,7 @@ internal sealed class SessionApiTests
         session.TryStart();
 
         JobInfo sourceJob = session.GetJobs().First(j => j.UiName == source.UiName);
-        _WaitForCondition(() => sourceJob.Status == JobStatus.Running);
+        WaitHelper.WaitUntil(() => sourceJob.Status == JobStatus.Running);
 
         try
         {
@@ -364,6 +364,34 @@ internal sealed class SessionApiTests
     }
 
     [Test]
+    public async Task AllocateJobId_AtCapacity_ThrowsInvalidOperationException()
+    {
+        using Stack stack = TestHarness.CreateStack();
+        using Session session = new(stack);
+
+        FieldInfo stateField = typeof(Session).GetField(
+            "_State",
+            BindingFlags.Instance | BindingFlags.NonPublic)!;
+        SessionState state = (SessionState)stateField.GetValue(session)!;
+        FieldInfo nextJobIdField = typeof(SessionState).GetField(
+            "_NextJobId",
+            BindingFlags.Instance | BindingFlags.NonPublic)!;
+        nextJobIdField.SetValue(state, (long)int.MaxValue);
+
+        using TestFrameSource source = TestFrameSource.WithUdpFrames(1);
+
+        try
+        {
+            session.TryAddFrameSource(source, out _);
+            throw new InvalidOperationException("Expected InvalidOperationException was not thrown.");
+        }
+        catch (InvalidOperationException ex)
+        {
+            await Assert.That(ex.Message).Contains("job ID");
+        }
+    }
+
+    [Test]
     public async Task UseAfterDispose_ThrowsSessionException()
     {
         using Stack stack = TestHarness.CreateStack();
@@ -387,20 +415,6 @@ internal sealed class SessionApiTests
             "_PacketStore",
             BindingFlags.Instance | BindingFlags.NonPublic)!;
         return (PacketStore)field.GetValue(session)!;
-    }
-
-    private static void _WaitForCondition(Func<bool> condition, int timeoutMs = 5000)
-    {
-        Stopwatch sw = Stopwatch.StartNew();
-        SpinWait wait = new();
-        while (!condition())
-        {
-            if (sw.ElapsedMilliseconds > timeoutMs)
-            {
-                throw new TimeoutException($"Condition was not met within {timeoutMs} ms.");
-            }
-            wait.SpinOnce();
-        }
     }
 
     private sealed class EmptyNameListener : ISessionListener

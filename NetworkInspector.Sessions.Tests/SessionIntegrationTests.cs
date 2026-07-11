@@ -22,7 +22,7 @@ internal sealed class SessionIntegrationTests
         session.WaitForCompletion();
 
         // Give the listener slot time to process remaining flags.
-        _WaitForCondition(() => listener.TotalPacketsSeen >= frameCount);
+        WaitHelper.WaitUntil(() => listener.TotalPacketsSeen >= frameCount);
 
         session.Shutdown();
 
@@ -46,7 +46,7 @@ internal sealed class SessionIntegrationTests
         session.WaitForCompletion();
 
         // Wait for the AllSourcesCompleted flag to propagate.
-        _WaitForCondition(() => listener.AllSourcesCompletedCount > 0);
+        WaitHelper.WaitUntil(() => listener.AllSourcesCompletedCount > 0);
 
         session.Shutdown();
 
@@ -68,7 +68,7 @@ internal sealed class SessionIntegrationTests
         session.WaitForCompletion();
 
         // Wait for the listener to process all flags.
-        _WaitForCondition(() => listener.AllSourcesCompletedCount > 0);
+        WaitHelper.WaitUntil(() => listener.AllSourcesCompletedCount > 0);
 
         session.Shutdown();
 
@@ -91,7 +91,7 @@ internal sealed class SessionIntegrationTests
         session.Shutdown();
 
         // Wait for listener thread to drain.
-        _WaitForCondition(() => listener.UnsubscribedCount > 0);
+        WaitHelper.WaitUntil(() => listener.UnsubscribedCount > 0);
 
         await Assert.That(listener.ShuttingDownCount).IsGreaterThanOrEqualTo(1);
         await Assert.That(listener.UnsubscribedCount).IsEqualTo(1);
@@ -150,7 +150,7 @@ internal sealed class SessionIntegrationTests
         session.WaitForCompletion();
 
         // Wait for listener to catch up.
-        _WaitForCondition(() => listener.TotalPacketsSeen >= frameCount);
+        WaitHelper.WaitUntil(() => listener.TotalPacketsSeen >= frameCount);
 
         await Assert.That(session.PacketCount).IsEqualTo(frameCount);
 
@@ -167,11 +167,11 @@ internal sealed class SessionIntegrationTests
         await Assert.That(session.PacketCount).IsEqualTo(frameCount);
 
         // Listener receives re-parsed packets via StackChanged + NewPackets notification.
-        _WaitForCondition(() => listener.TotalPacketsSeen >= frameCount * 2);
+        WaitHelper.WaitUntil(() => listener.TotalPacketsSeen >= frameCount * 2);
         await Assert.That(listener.TotalPacketsSeen).IsGreaterThanOrEqualTo(frameCount * 2);
 
         // Listener received exactly one OnStackChanged callback.
-        _WaitForCondition(() => listener.StackChangedCount >= 1);
+        WaitHelper.WaitUntil(() => listener.StackChangedCount >= 1);
         await Assert.That(listener.StackChangedCount).IsEqualTo(1);
 
         session.Shutdown();
@@ -217,7 +217,7 @@ internal sealed class SessionIntegrationTests
         session.WaitForCompletion();
 
         // Both listeners should see all packets.
-        _WaitForCondition(() =>
+        WaitHelper.WaitUntil(() =>
             listener1.TotalPacketsSeen >= frameCount &&
             listener2.TotalPacketsSeen >= frameCount);
 
@@ -245,7 +245,7 @@ internal sealed class SessionIntegrationTests
         session.Dispose();
 
         // Listener should have been notified and unsubscribed.
-        _WaitForCondition(() => listener.UnsubscribedCount > 0);
+        WaitHelper.WaitUntil(() => listener.UnsubscribedCount > 0);
         await Assert.That(listener.UnsubscribedCount).IsEqualTo(1);
     }
 
@@ -294,24 +294,5 @@ internal sealed class SessionIntegrationTests
         IReadOnlyList<FrameSourceInfo> sources = session.GetFrameSources();
         await Assert.That(sources.Count).IsEqualTo(1);
         await Assert.That(sources[0].UiName).IsEqualTo("TestSource");
-    }
-
-    /// <summary>
-    /// Spins for up to ~5 seconds until <paramref name="condition"/> returns true.
-    /// Throws <see cref="TimeoutException"/> if the condition is not met.
-    /// </summary>
-    private static void _WaitForCondition(Func<bool> condition, int timeoutMs = 5000)
-    {
-        Stopwatch sw = Stopwatch.StartNew();
-        SpinWait wait = new();
-        while (!condition())
-        {
-            if (sw.ElapsedMilliseconds > timeoutMs)
-            {
-                throw new TimeoutException(
-                    $"Condition was not met within {timeoutMs} ms.");
-            }
-            wait.SpinOnce();
-        }
     }
 }
