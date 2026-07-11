@@ -18,11 +18,12 @@ namespace NetworkInspector.Sessions;
 /// <para>
 /// <b>Listener-thread model (pull-based):</b>
 /// Each <see cref="ISessionListener"/> subscription receives a dedicated
-/// <see cref="ListenerSlot"/> with a SpinWait poll loop. Producers set atomic flags;
-/// the listener thread reads and clears flags via <c>Interlocked.Exchange</c>,
-/// then pulls data from the shared <see cref="ISessionReader"/>. No queues, no
-/// signal objects, no batch copies. Natural coalescing: multiple events between
-/// two poll cycles merge into a single flag read.
+/// <see cref="ListenerSlot"/> with an event-gated wait loop backed by
+/// <see cref="ManualResetEventSlim"/>. Producers set atomic flags and signal the
+/// wake event; the listener thread reads and clears flags via <c>Interlocked.Exchange</c>,
+/// then pulls data from the shared <see cref="ISessionReader"/>. No queues, no batch
+/// copies. Natural coalescing: multiple events between two wake cycles merge into a
+/// single flag read.
 /// </para>
 ///
 /// <para>
@@ -77,9 +78,7 @@ public sealed class Session : ISession, ISessionReader
 
     // SpinLock protects Stack parsing which mutates protocol-instance state.
     // enableThreadOwnerTracking=false removes re-entrancy overhead on hot path.
-#pragma warning disable CA2213 // SpinLock is a mutable value type, not a disposable object
-    private SpinLock _ParseLock = new(enableThreadOwnerTracking: false);
-#pragma warning restore CA2213
+    private SpinLock _ParseLock;
 
     // Globally unique PacketId counter (shared across all source threads).
     // Allocated INSIDE the SpinLock to guarantee correctness after a reparse
@@ -112,6 +111,9 @@ public sealed class Session : ISession, ISessionReader
 
     // Sources registered before Start(). Re-used on Restart().
     private readonly SnapshotList<FrameSourceEntry> _SourceEntries = new();
+
+    // Public read-only views of frame sources for GetFrameSources().
+    private readonly SnapshotList<FrameSourceInfo> _SourceInfos = new();
 
     // Running source jobs (populated at Start() time, replaced on Restart()).
     // Non-readonly: reassigned by _StartInternal() on each start/restart cycle.
@@ -164,6 +166,7 @@ public sealed class Session : ISession, ISessionReader
     {
         _Stack = stack ?? throw new ArgumentNullException(nameof(stack));
         _FrameInterfaceRegistry = stack.FrameInterfaceRegistry;
+        _ParseLock = new(enableThreadOwnerTracking: false);
     }
 
     // -- ISessionReader: Status --
@@ -201,16 +204,8 @@ public sealed class Session : ISession, ISessionReader
     // -- ISessionReader: Source info --
 
     /// <inheritdoc/>
-    public IReadOnlyList<FrameSourceInfo> GetFrameSources()
-    {
-        ReadOnlySpan<FrameSourceEntry> entries = _SourceEntries.Current;
-        FrameSourceInfo[] snapshot = new FrameSourceInfo[entries.Length];
-        for (int i = 0; i < entries.Length; i++)
-        {
-            snapshot[i] = entries[i].Info;
-        }
-        return snapshot;
-    }
+    /// <remarks>Returns the current immutable snapshot array; no per-call allocation copy.</remarks>
+    public IReadOnlyList<FrameSourceInfo> GetFrameSources() => _SourceInfos.CurrentSnapshot;
 
     // -- ISession: Listener management --
 
@@ -237,10 +232,7 @@ public sealed class Session : ISession, ISessionReader
         ListenerId listenerId = _State.AllocateListenerId();
         JobId jobId = _State.AllocateJobId();
 
-        // CA2000: ListenerSlot is stored in _ListenerSlots and disposed during Shutdown().
-#pragma warning disable CA2000
-        ListenerSlot slot = new(jobId, listener, this, _OnJobStatusChanged);
-#pragma warning restore CA2000
+        ListenerSlot slot = _RegisterListenerSlot(jobId, listener);
 
         info = new ListenerInfo()
         {
@@ -256,13 +248,8 @@ public sealed class Session : ISession, ISessionReader
         JobInfo slotJobInfo = slot.Info;
         info.UnsubscribeCallback = () => TryUnsubscribe(slotJobInfo);
 
-        // Add to snapshot list so source threads can set flags on it.
-        _ListenerSlots.Add(slot);
         // Track the public view for GetListeners().
         _ListenerInfos.Add(info);
-        // Register the listener's job in the unified job list so callers
-        // can observe listener job status via GetJobs().
-        _AllJobs.Add(slot.Info);
 
         // Start the slot in any non-Idle phase. During Idle, _StartInternal()
         // will start all pending slots. In all active phases (Running,
@@ -321,15 +308,14 @@ public sealed class Session : ISession, ISessionReader
             Frame? raFrame = raSource.FrameById(frameId);
             if (raFrame is not null)
             {
-                // _ParseFrameUnderLock uses ParseFrameIndexed when PacketIndex is active.
-                packet = _ParseFrameUnderLock(raFrame.Value, id);
-                if (packet is not null)
+                if (!_TryParseFrameUnderLock(raFrame.Value, id, out packet))
                 {
-                    // Cache the re-parsed packet so subsequent lookups avoid re-parsing.
-                    _PacketStore.Store(id, packet);
-                    return true;
+                    return false;
                 }
-                return false;
+
+                // Cache the re-parsed packet so subsequent lookups avoid re-parsing.
+                _PacketStore.Store(id, packet);
+                return true;
             }
         }
 
@@ -1099,6 +1085,7 @@ public sealed class Session : ISession, ISessionReader
         // unified job list without creating a second JobInfo wrapper.
         FrameSourceEntry entry = new(info, source, job);
         _SourceEntries.Add(entry);
+        _SourceInfos.Add(info);
         _AllJobs.Add(entry.JobInfo);
 
         // Wire the convenience API: FrameSourceInfo.Stop() → TryUnsubscribe(job).
@@ -1220,8 +1207,8 @@ public sealed class Session : ISession, ISessionReader
     ///   <item>Start the source and register its capture interface(s).</item>
     ///   <item>Pull frames one by one via <see cref="IFrameSource.NextFrame"/>.</item>
     ///   <item>Parse each frame under the shared <see cref="_ParseLock"/>.</item>
-    ///   <item>Store the packet in the <see cref="PacketStore"/>.</item>
     ///   <item>Record the PacketId -> FrameId mapping.</item>
+    ///   <item>Store the packet in the <see cref="PacketStore"/>.</item>
     ///   <item>Increment global counters and set <see cref="NotifyFlags.NewPackets"/>.</item>
     ///   <item>On source exhaustion: set SourceCompleted and (if last) AllSourcesCompleted flags.</item>
     /// </list>
@@ -1258,9 +1245,6 @@ public sealed class Session : ISession, ISessionReader
 
                 Packet packet = _ParseFrameUnderLock(capturedFrame, packetId: null);
 
-                // Store packet in the shared PacketStore — all listeners read from here.
-                _PacketStore.Store(packet.Id, packet);
-
                 // Record PacketId -> FrameId mapping for random access re-parse.
                 // Failure means the PacketId is invalid or the map capacity is exceeded.
                 if (!_Mapping.Record(packet.Id, capturedFrame.Id, sourceInfo.Id))
@@ -1269,6 +1253,9 @@ public sealed class Session : ISession, ISessionReader
                         $"Failed to record mapping for PacketId {packet.Id.Value}. " +
                         $"The packet map capacity ({PacketToFrameMap.MaxEntries}) may have been exceeded.");
                 }
+
+                // Store packet in the shared PacketStore — all listeners read from here.
+                _PacketStore.Store(packet.Id, packet);
 
                 // Update global atomic counters.
                 Interlocked.Increment(ref _PacketCount);
@@ -1305,7 +1292,58 @@ public sealed class Session : ISession, ISessionReader
         }
     }
 
+    /// <summary>
+    /// Creates a <see cref="ListenerSlot"/> and registers it in session registries.
+    /// Ownership transfers to <see cref="_ListenerSlots"/> before return so disposal is session-managed.
+    /// </summary>
+    private ListenerSlot _RegisterListenerSlot(JobId jobId, ISessionListener listener)
+    {
+        ListenerSlot slot = new(jobId, listener, this, _OnJobStatusChanged);
+        _ListenerSlots.Add(slot);
+        _AllJobs.Add(slot.Info);
+        return slot;
+    }
+
     // -- Parse helper --
+
+    /// <summary>
+    /// Attempts to parse a frame under <see cref="_ParseLock"/> with a fixed <paramref name="packetId"/>.
+    /// Returns <see langword="false"/> without throwing when parsing fails (stale frame, protocol error).
+    /// </summary>
+    private bool _TryParseFrameUnderLock(Frame frame, PacketId packetId, [NotNullWhen(true)] out Packet? packet)
+    {
+        bool lockTaken = false;
+        try
+        {
+            _ParseLock.Enter(ref lockTaken);
+            PacketIndex? index = _PacketIndex;
+            try
+            {
+                if (index is not null)
+                {
+                    packet = Packet.ParseFrameIndexed(packetId, _Stack, frame, index);
+                }
+                else
+                {
+                    packet = Packet.ParseFrame(packetId, _Stack, frame);
+                }
+
+                return true;
+            }
+            catch
+            {
+                packet = null;
+                return false;
+            }
+        }
+        finally
+        {
+            if (lockTaken)
+            {
+                _ParseLock.Exit(useMemoryBarrier: false);
+            }
+        }
+    }
 
     /// <summary>
     /// Parses a frame under <see cref="_ParseLock"/>.
