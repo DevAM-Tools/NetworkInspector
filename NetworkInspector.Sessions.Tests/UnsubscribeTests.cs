@@ -213,15 +213,17 @@ internal sealed class UnsubscribeTests
     public async Task TryUnsubscribe_UserJob_CancelsJob()
     {
         using Stack stack = TestHarness.CreateStack();
-        using TestFrameSource source = TestFrameSource.WithUdpFrames(5);
+        using BlockingTestFrameSource source = new(10);
 
         using Session session = new(stack);
         session.TryAddFrameSource(source, out _);
         session.TryStart();
 
+        _WaitForCondition(() => session.Phase == SessionPhase.Running);
+
         // Add a long-running user job.
         using ManualResetEventSlim gate = new(false);
-        session.TryAddJob("TestJob", "Long running job", ct =>
+        bool added = session.TryAddJob("TestJob", "Long running job", ct =>
         {
             try
             {
@@ -230,6 +232,7 @@ internal sealed class UnsubscribeTests
             catch (OperationCanceledException) { /* expected */ }
         }, out JobInfo? jobInfo);
 
+        await Assert.That(added).IsTrue();
         await Assert.That(jobInfo).IsNotNull();
 
         // Wait for the job to start.
@@ -243,6 +246,7 @@ internal sealed class UnsubscribeTests
         _WaitForCondition(
             () => jobInfo!.Status is JobStatus.Cancelled or JobStatus.Completed);
 
+        source.Release();
         session.Shutdown();
     }
 
@@ -269,6 +273,40 @@ internal sealed class UnsubscribeTests
 
         await Assert.That(result).IsFalse();
 
+        session.Shutdown();
+    }
+
+    [Test]
+    public async Task TryUnsubscribe_ForeignJob_ReturnsFalse()
+    {
+        using Stack stack = TestHarness.CreateStack();
+        using BlockingTestFrameSource source = new(10);
+
+        using Session session = new(stack);
+        session.TryAddFrameSource(source, out _);
+        session.TryStart();
+
+        _WaitForCondition(() => session.Phase == SessionPhase.Running);
+
+        using ManualResetEventSlim gate = new(false);
+        using Job foreignJob = new(
+            new JobId(999),
+            "Foreign",
+            "Not in session",
+            ct => gate.Wait(ct),
+            static (_, _) => { });
+        foreignJob.Start();
+        JobInfo foreignInfo = new(foreignJob);
+
+        bool result = session.TryUnsubscribe(foreignInfo);
+
+        await Assert.That(result).IsFalse();
+        await Assert.That(foreignJob.Status).IsEqualTo(JobStatus.Running);
+
+        gate.Set();
+        foreignJob.Join();
+
+        source.Release();
         session.Shutdown();
     }
 

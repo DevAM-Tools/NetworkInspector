@@ -85,6 +85,47 @@ internal sealed class SessionApiTests
     }
 
     [Test]
+    public async Task TryRemoveJob_AlreadyRemoved_ReturnsFalse()
+    {
+        using Stack stack = TestHarness.CreateStack();
+        using TestFrameSource source = TestFrameSource.WithUdpFrames(3);
+
+        using Session session = new(stack);
+        session.TryAddFrameSource(source, out _);
+        session.TryStart();
+        session.WaitForCompletion();
+
+        JobInfo sourceJob = session.GetJobs().First(j => j.UiName == source.UiName);
+        _WaitForCondition(() => sourceJob.Status is JobStatus.Completed or JobStatus.Cancelled);
+
+        await Assert.That(session.TryRemoveJob(sourceJob)).IsTrue();
+        await Assert.That(session.TryRemoveJob(sourceJob)).IsFalse();
+
+        session.Shutdown();
+    }
+
+    [Test]
+    public async Task TryRemoveJob_ForeignJob_ReturnsFalse()
+    {
+        using Stack stack = TestHarness.CreateStack();
+        using Session session = new(stack);
+
+        using Job foreignJob = new(
+            new JobId(999),
+            "Foreign",
+            "Not in session",
+            _ => { },
+            static (_, _) => { });
+        foreignJob.Start();
+        foreignJob.Join();
+        JobInfo foreignInfo = new(foreignJob);
+
+        bool removed = session.TryRemoveJob(foreignInfo);
+
+        await Assert.That(removed).IsFalse();
+    }
+
+    [Test]
     public async Task TryRemoveJob_RunningJob_ThrowsSessionException()
     {
         using Stack stack = TestHarness.CreateStack();

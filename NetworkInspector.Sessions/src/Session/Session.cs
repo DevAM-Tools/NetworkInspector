@@ -407,8 +407,11 @@ public sealed class Session : ISession, ISessionReader
         }
 
         // Remove from the unified list and notify listeners.
-        // If the job is not in the list (e.g. already removed), this is a no-op.
-        _AllJobs.Remove(job);
+        if (!_AllJobs.Remove(job))
+        {
+            return false;
+        }
+
         _NotifyAllListeners(NotifyFlags.JobRemoved);
         return true;
     }
@@ -448,11 +451,33 @@ public sealed class Session : ISession, ISessionReader
             return _TryUnsubscribeListener(slot, info);
         }
 
-        // Must be a user job — cancel it.
+        // Must be a user job — cancel only if owned by this session.
+        if (!_ContainsJob(job))
+        {
+            return false;
+        }
+
         return _TryUnsubscribeUserJob(job);
     }
 
     // ── Unsubscribe helpers ──────────────────────────────────────────────────
+
+    /// <summary>
+    /// Returns <see langword="true"/> when <paramref name="job"/> is registered in
+    /// <see cref="_AllJobs"/> (reference identity).
+    /// </summary>
+    private bool _ContainsJob(JobInfo job)
+    {
+        foreach (JobInfo entry in _AllJobs.Current)
+        {
+            if (ReferenceEquals(entry, job))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     /// <summary>
     /// Finds the <see cref="FrameSourceEntry"/> whose <see cref="FrameSourceEntry.JobInfo"/>
