@@ -20,7 +20,8 @@ internal static class FrameHelper
     /// The header fields are valid; the payload is a repeating byte pattern.
     /// </summary>
     /// <param name="totalSize">Total frame size in bytes (minimum 62).</param>
-    internal static byte[] GenerateStaticUdpIpv6Frame(int totalSize = 512)
+    /// <param name="udpSrcPort">UDP source port written into the header.</param>
+    internal static byte[] GenerateStaticUdpIpv6Frame(int totalSize = 512, ushort udpSrcPort = 12345)
     {
         totalSize = Math.Max(totalSize, _MinSize);
         byte[] frame = new byte[totalSize];
@@ -71,7 +72,7 @@ internal static class FrameHelper
 
         // ── UDP header ───────────────────────────────────────────────────────
         int udp = ip + _Ipv6Size;
-        BinaryPrimitives.WriteUInt16BigEndian(frame.AsSpan(udp), 12345);      // Src port
+        BinaryPrimitives.WriteUInt16BigEndian(frame.AsSpan(udp), udpSrcPort);
         BinaryPrimitives.WriteUInt16BigEndian(frame.AsSpan(udp + 2), 54321);  // Dst port (no registered protocol)
         BinaryPrimitives.WriteUInt16BigEndian(frame.AsSpan(udp + 4), udpLen); // Length
         BinaryPrimitives.WriteUInt16BigEndian(frame.AsSpan(udp + 6), 0);      // Checksum (optional for UDP)
@@ -83,6 +84,54 @@ internal static class FrameHelper
         }
 
         return frame;
+    }
+
+    /// <summary>
+    /// Builds frames whose UDP source ports follow a deterministic low→high spike pattern for
+    /// flank profiling: most packets stay in <c>[10, 89]</c>, every
+    /// <paramref name="spikePeriod"/>-th packet jumps to <c>&gt;= 200</c>.
+    /// </summary>
+    /// <param name="count">Number of frames to create.</param>
+    /// <param name="stack">Stack whose frame-interface registry is used.</param>
+    /// <param name="spikePeriod">Distance between high-port spikes (must be &gt;= 2).</param>
+    /// <param name="enableSpikes">
+    /// When <see langword="false"/>, every port stays below 100 so a
+    /// <c>from: &lt; 100, to: &gt;= 200</c> flank never fires.
+    /// </param>
+    internal static Frame[] CreateFlankUdpFrames(
+        int count,
+        Stack stack,
+        int spikePeriod = 50,
+        bool enableSpikes = true)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(spikePeriod, 2);
+        Frame[] frames = new Frame[count];
+        for (int i = 0; i < count; i++)
+        {
+            ushort srcPort = enableSpikes && (i % spikePeriod == spikePeriod - 1)
+                ? (ushort)(200 + (i % 17))
+                : (ushort)(10 + (i % 80));
+
+            byte[] frameData = GenerateStaticUdpIpv6Frame(udpSrcPort: srcPort);
+            ParseResult<Frame> result = Frame.Create(
+                new FrameId(i),
+                Timestamp.FromSecs(i),
+                frameData,
+                LinkType.Ethernet,
+                FrameInterfaceId.Invalid,
+                stack.FrameInterfaceRegistry);
+
+            if (!result.TryGetValue(out Frame frame))
+            {
+                throw new InvalidOperationException(
+                    FormattableString.Invariant(
+                        $"Failed to create flank frame {i}: {result.Error.Message}"));
+            }
+
+            frames[i] = frame;
+        }
+
+        return frames;
     }
 
     /// <summary>
@@ -132,7 +181,7 @@ internal static class FrameHelper
         Packet[] packets = new Packet[frames.Length];
         for (int i = 0; i < frames.Length; i++)
         {
-            packets[i] = Packet.ParseFrame(i, stack, frames[i]);
+            packets[i] = Packet.ParseFrame(new PacketId(i), stack, frames[i]);
             packets[i].MaterializeAll();
         }
 

@@ -1,9 +1,9 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Exporters.Tests.Pbf;
 
 /// <summary>
-/// Tests for the <see cref="PbfExporter"/> — validates magic markers, block structure,
+/// Tests for the <see cref="PbfExporter"/> ? validates magic markers, block structure,
 /// compression, and both Standard and Columnar formats.
 /// </summary>
 internal sealed class PbfExporterTests
@@ -544,7 +544,7 @@ internal sealed class PbfExporterTests
         // which other tests have run before this one and extended the field registry.
         Packet[] packets = PacketGenerators.CreateEthernetUdpPackets(4);
 
-        // ── Phase 1: measure bytes for header + first block ──────────────────────
+        // -- Phase 1: measure bytes for header + first block ----------------------
         // Export the first packet to a probe stream (never throws) to learn the
         // exact byte length required for header + one data block.
         long bytesAfterFirstBlock;
@@ -573,7 +573,7 @@ internal sealed class PbfExporterTests
             probeExporter.OnFinish();
         }
 
-        // ── Phase 2: fail on second block, verify index consistency ──────────────
+        // -- Phase 2: fail on second block, verify index consistency --------------
         // Allow exactly the bytes needed for header + first block; the second block
         // write will throw, so it must not be committed to the block index.
         using CountingFailingStream failing = new()

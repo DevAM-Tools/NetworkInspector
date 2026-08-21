@@ -76,10 +76,10 @@ internal sealed class SettingsIntegrationTests
             [("Low", 0), ("Medium", 1), ("High", 2)]);
         builder.SettingsRegistrar.RegisterEnumSetting("test.level", "Level", "test", 1, meta);
         Stack stack = builder.Build();
-        IReadOnlySetting? setting = stack.Settings.GetSetting("test.level");
+        ReadOnlySettingView? setting = stack.Settings.GetSetting("test.level");
         await Assert.That(setting).IsNotNull();
-        await Assert.That(setting!.Type).IsEqualTo(SettingType.Enum);
-        bool enumOk = setting.Value.TryGetAsEnum(out (string Name, ulong Value) e);
+        await Assert.That(setting!.Value.Type).IsEqualTo(SettingType.Enum);
+        bool enumOk = setting.Value.Value.TryGetAsEnum(out (string Name, ulong Value) e);
         await Assert.That(enumOk).IsTrue();
         await Assert.That(e.Name).IsEqualTo("Medium");
     }
@@ -112,7 +112,7 @@ internal sealed class SettingsIntegrationTests
         using SettingsManager settingsManager = new();
         StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
         Stack stack = builder.Build();
-        IReadOnlySetting? setting = stack.Settings.GetSetting("nonexistent");
+        ReadOnlySettingView? setting = stack.Settings.GetSetting("nonexistent");
         await Assert.That(setting).IsNull();
     }
 
@@ -146,7 +146,7 @@ internal sealed class SettingsIntegrationTests
         StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
         builder.SettingsRegistrar.RegisterBoolSetting("test.flag", "Flag", "mygroup", true);
         Stack stack = builder.Build();
-        IReadOnlySettingGroup? group = stack.Settings.GetGroup("mygroup");
+        ReadOnlySettingGroupView? group = stack.Settings.GetGroup("mygroup");
         await Assert.That(group).IsNotNull();
     }
 

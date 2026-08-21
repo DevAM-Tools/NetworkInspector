@@ -10,7 +10,6 @@ internal sealed class HeuristicProtocolTable
 {
     #region Fields
 
-    private readonly HeuristicProtocolTableInfo _Info;
     private readonly List<HeuristicParserEntry> _Entries = [];
 
     #endregion
@@ -20,18 +19,18 @@ internal sealed class HeuristicProtocolTable
     /// <summary>Creates a heuristic table from its metadata.</summary>
     internal HeuristicProtocolTable(HeuristicProtocolTableInfo info)
     {
-        _Info = info;
+        Info = info;
     }
 
     #endregion
 
     #region Properties
 
-    internal HeuristicProtocolTableInfo Info => _Info;
-    internal HeuristicProtocolTableId Id => _Info.Id;
-    internal string Name => _Info.Name;
-    internal string UiName => _Info.UiName;
-    internal string? Description => _Info.Description;
+    internal HeuristicProtocolTableInfo Info { get; }
+    internal HeuristicProtocolTableId Id => Info.Id;
+    internal string Name => Info.Name;
+    internal string UiName => Info.UiName;
+    internal string? Description => Info.Description;
     internal int Count => _Entries.Count;
     internal bool IsEmpty => _Entries.Count == 0;
 

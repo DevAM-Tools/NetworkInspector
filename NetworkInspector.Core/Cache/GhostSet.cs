@@ -37,12 +37,6 @@ internal sealed class GhostSet<TKey> where TKey : notnull
     /// <summary>Key → node mapping for O(1) membership test and O(1) removal.</summary>
     private readonly Dictionary<TKey, LinkedListNode<(TKey Key, int Weight)>> _Index;
 
-    /// <summary>Sum of weights of all tracked ghost entries.</summary>
-    private int _TotalWeight;
-
-    /// <summary>Count of entries that were rejected because their weight exceeded the entire budget.</summary>
-    private long _DroppedCount;
-
     #endregion
 
     #region Constructors
@@ -65,7 +59,7 @@ internal sealed class GhostSet<TKey> where TKey : notnull
     internal int Count => _Index.Count;
 
     /// <summary>Total tracked weight of all ghost entries.</summary>
-    internal int TotalWeight => _TotalWeight;
+    internal int TotalWeight { get; private set; }
 
     /// <summary>Returns true if the ghost set contains no entries.</summary>
     internal bool IsEmpty => _Index.Count == 0;
@@ -74,7 +68,7 @@ internal sealed class GhostSet<TKey> where TKey : notnull
     /// Number of <see cref="Add"/> calls that were rejected because the entry's weight
     /// exceeded the entire ghost budget. Useful diagnostic counter for sizing the budget.
     /// </summary>
-    internal long DroppedCount => _DroppedCount;
+    internal long DroppedCount { get; private set; }
 
     #endregion
 
@@ -101,25 +95,29 @@ internal sealed class GhostSet<TKey> where TKey : notnull
             return;
         }
 
-        // Evict oldest entries until the new entry fits
-        while (_TotalWeight + weight > max && _Order.First is { } oldest)
+        if (weight < 1)
         {
-            _Index.Remove(oldest.Value.Key);
-            _TotalWeight -= oldest.Value.Weight;
-            _Order.RemoveFirst();
+            return;
         }
 
-        // The new entry alone is heavier than the entire budget — drop it and record the event
-        // so callers can detect chronically mis-sized budgets.
-        if (_TotalWeight + weight > max)
+        if (weight > max)
         {
-            _DroppedCount++;
+            DroppedCount++;
             return;
+        }
+
+        // Evict oldest entries until the new entry fits
+        while (TotalWeight > max - weight && _Order.First is not null)
+        {
+            LinkedListNode<(TKey Key, int Weight)> oldest = _Order.First;
+            _Index.Remove(oldest.Value.Key);
+            TotalWeight -= oldest.Value.Weight;
+            _Order.RemoveFirst();
         }
 
         LinkedListNode<(TKey Key, int Weight)> node = _Order.AddLast((key, weight));
         _Index[key] = node;
-        _TotalWeight += weight;
+        TotalWeight += weight;
     }
 
     /// <summary>Removes a key from the ghost set. O(1) via tracked node reference.</summary>
@@ -130,7 +128,7 @@ internal sealed class GhostSet<TKey> where TKey : notnull
             return false;
         }
 
-        _TotalWeight -= node.Value.Weight;
+        TotalWeight -= node.Value.Weight;
         _Order.Remove(node); // O(1) because we have the node reference directly
         return true;
     }
@@ -140,8 +138,8 @@ internal sealed class GhostSet<TKey> where TKey : notnull
     {
         _Index.Clear();
         _Order.Clear();
-        _TotalWeight = 0;
-        _DroppedCount = 0;
+        TotalWeight = 0;
+        DroppedCount = 0;
     }
 
     #endregion

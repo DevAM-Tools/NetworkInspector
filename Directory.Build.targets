@@ -16,7 +16,7 @@
     <ApplyCSharpStyleChecker Condition="'$(ApplyCSharpStyleChecker)' == '' and ('$(TargetFrameworkIdentifier)' == '.NETCoreApp' or '$(TargetFrameworkIdentifier)' == '.NETStandard')">true</ApplyCSharpStyleChecker>
   </PropertyGroup>
   <ItemGroup Condition="'$(ApplyCSharpStyleChecker)' == 'true'">
-    <PackageReference Include="CSharpStyleChecker" />
+    <PackageReference Include="CSharpStyleChecker" PrivateAssets="all" />
   </ItemGroup>
 
   <!-- TUnit on all test projects -->

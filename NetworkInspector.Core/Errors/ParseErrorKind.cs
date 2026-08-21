@@ -19,6 +19,11 @@ public enum ParseErrorKind : byte
     FieldAppendFailed = 4,
     /// <summary>Expected field type does not match actual.</summary>
     FieldTypeMismatch = 5,
+    /// <summary>
+    /// The dispatch table id is invalid or the table is not registered on this stack.
+    /// Distinct from a table lookup that finds zero protocols for a key.
+    /// </summary>
+    ProtocolTableMissing = 6,
 
     #endregion
 }

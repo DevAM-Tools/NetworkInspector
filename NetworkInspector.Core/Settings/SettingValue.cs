@@ -9,7 +9,7 @@ namespace NetworkInspector.Core.Settings;
 /// NaN-safe f64 comparison is implemented to prevent infinite dirty-tracking loops.
 /// Two <c>F64(NaN)</c> values are considered equal.
 /// </summary>
-public readonly struct SettingValue : IEquatable<SettingValue>, ISpanFormattable, IUtf8SpanFormattable
+public readonly struct SettingValue : IEquatable<SettingValue>, ISpanFormattable, IUtf8SpanFormattable, IStringSize
 {
     // Storage layout:
     // Bool:   _Bits = 0 or 1, _ReferenceValue = null
@@ -20,19 +20,18 @@ public readonly struct SettingValue : IEquatable<SettingValue>, ISpanFormattable
     // Bytes:  _Bits = 0, _ReferenceValue = byte[]
     // Enum:   _Bits = numeric value, _ReferenceValue = string (name)
 
-    private readonly SettingType _Type;
+    /// <summary>Returns the type discriminant for this value.</summary>
+    public SettingType Type { get; }
+
     private readonly long _Bits;
     private readonly object? _ReferenceValue;
 
     private SettingValue(SettingType type, long bits, object? referenceValue)
     {
-        _Type = type;
+        Type = type;
         _Bits = bits;
         _ReferenceValue = referenceValue;
     }
-
-    /// <summary>Returns the type discriminant for this value.</summary>
-    public SettingType Type => _Type;
 
     #region Factory Methods
 
@@ -92,7 +91,7 @@ public readonly struct SettingValue : IEquatable<SettingValue>, ISpanFormattable
     /// </summary>
     public bool TryGetAsBool(out bool value)
     {
-        if (_Type == SettingType.Bool)
+        if (Type == SettingType.Bool)
         {
             value = _Bits != 0;
             return true;
@@ -108,7 +107,7 @@ public readonly struct SettingValue : IEquatable<SettingValue>, ISpanFormattable
     /// </summary>
     public bool TryGetAsString(out string value)
     {
-        if (_Type == SettingType.String && _ReferenceValue is string s)
+        if (Type == SettingType.String && _ReferenceValue is string s)
         {
             value = s;
             return true;
@@ -124,7 +123,7 @@ public readonly struct SettingValue : IEquatable<SettingValue>, ISpanFormattable
     /// </summary>
     public bool TryGetAsF64(out double value)
     {
-        if (_Type == SettingType.F64)
+        if (Type == SettingType.F64)
         {
             value = BitConverter.Int64BitsToDouble(_Bits);
             return true;
@@ -140,7 +139,7 @@ public readonly struct SettingValue : IEquatable<SettingValue>, ISpanFormattable
     /// </summary>
     public bool TryGetAsU64(out ulong value)
     {
-        if (_Type == SettingType.U64)
+        if (Type == SettingType.U64)
         {
             value = (ulong)_Bits;
             return true;
@@ -156,7 +155,7 @@ public readonly struct SettingValue : IEquatable<SettingValue>, ISpanFormattable
     /// </summary>
     public bool TryGetAsI64(out long value)
     {
-        if (_Type == SettingType.I64)
+        if (Type == SettingType.I64)
         {
             value = _Bits;
             return true;
@@ -168,12 +167,12 @@ public readonly struct SettingValue : IEquatable<SettingValue>, ISpanFormattable
     /// <summary>
     /// Returns <see langword="true"/> if this value is <see cref="SettingType.Bytes"/> and
     /// writes a <em>defensive copy</em> of the byte array into <paramref name="value"/>;
-    /// otherwise sets <paramref name="value"/> to <see langword="null"/> and returns
+    /// otherwise sets <paramref name="value"/> to an empty array and returns
     /// <see langword="false"/>. The copy prevents callers from mutating internal state.
     /// </summary>
     public bool TryGetAsBytes(out byte[] value)
     {
-        if (_Type == SettingType.Bytes && _ReferenceValue is byte[] stored)
+        if (Type == SettingType.Bytes && _ReferenceValue is byte[] stored)
         {
             // Defensive copy: callers must not be able to mutate internal state.
             value = stored.ToArray();
@@ -190,7 +189,7 @@ public readonly struct SettingValue : IEquatable<SettingValue>, ISpanFormattable
     /// </summary>
     public bool TryGetAsEnum(out (string Name, ulong Value) value)
     {
-        if (_Type == SettingType.Enum && _ReferenceValue is string name)
+        if (Type == SettingType.Enum && _ReferenceValue is string name)
         {
             value = (name, (ulong)_Bits);
             return true;
@@ -206,12 +205,12 @@ public readonly struct SettingValue : IEquatable<SettingValue>, ISpanFormattable
     /// <inheritdoc/>
     public bool Equals(SettingValue other)
     {
-        if (_Type != other._Type)
+        if (Type != other.Type)
         {
             return false;
         }
 
-        return _Type switch
+        return Type switch
         {
             SettingType.Bool => _Bits == other._Bits,
             // NaN-safe: compare bit representations so NaN == NaN
@@ -233,16 +232,16 @@ public readonly struct SettingValue : IEquatable<SettingValue>, ISpanFormattable
 
     /// <inheritdoc/>
     public override int GetHashCode() =>
-        _Type switch
+        Type switch
         {
-            SettingType.Bool => HashCode.Combine(_Type, _Bits),
-            SettingType.F64 => HashCode.Combine(_Type, _Bits),
-            SettingType.U64 => HashCode.Combine(_Type, _Bits),
-            SettingType.I64 => HashCode.Combine(_Type, _Bits),
-            SettingType.String => HashCode.Combine(_Type, _ReferenceValue),
+            SettingType.Bool => HashCode.Combine(Type, _Bits),
+            SettingType.F64 => HashCode.Combine(Type, _Bits),
+            SettingType.U64 => HashCode.Combine(Type, _Bits),
+            SettingType.I64 => HashCode.Combine(Type, _Bits),
+            SettingType.String => HashCode.Combine(Type, _ReferenceValue),
             SettingType.Bytes => _ContentHashBytes((byte[]?)_ReferenceValue),
-            SettingType.Enum => HashCode.Combine(_Type, _Bits, _ReferenceValue),
-            _ => HashCode.Combine(_Type),
+            SettingType.Enum => HashCode.Combine(Type, _Bits, _ReferenceValue),
+            _ => HashCode.Combine(Type),
         };
 
     /// <summary>Returns <see langword="true"/> if both values are equal.</summary>
@@ -259,7 +258,7 @@ public readonly struct SettingValue : IEquatable<SettingValue>, ISpanFormattable
     public bool TryFormat(
         Span<char> destination, out int charsWritten, ReadOnlySpan<char> format, IFormatProvider? provider)
     {
-        switch (_Type)
+        switch (Type)
         {
             case SettingType.Bool:
             {
@@ -314,37 +313,23 @@ public readonly struct SettingValue : IEquatable<SettingValue>, ISpanFormattable
     }
 
     /// <inheritdoc/>
-    public override string ToString()
-    {
-        if (_Type == SettingType.String && _ReferenceValue is string str)
-        {
-            return str;
-        }
-
-        Span<char> buffer = stackalloc char[256];
-        if (TryFormat(buffer, out int written, default, CultureInfo.InvariantCulture))
-        {
-            return buffer[..written].ToString();
-        }
-
-        return "";
-    }
+    public override string ToString() => Format();
 
     /// <inheritdoc/>
     public string ToString(string? format, IFormatProvider? formatProvider)
     {
-        if (_Type == SettingType.String && _ReferenceValue is string str)
+        if (Type == SettingType.String && _ReferenceValue is string str)
         {
             return str;
         }
 
-        Span<char> buffer = stackalloc char[256];
-        if (TryFormat(buffer, out int written, format, formatProvider ?? CultureInfo.InvariantCulture))
+        if (string.IsNullOrEmpty(format))
         {
-            return buffer[..written].ToString();
+            return Format();
         }
 
-        return "";
+        IFormatProvider provider = formatProvider ?? CultureInfo.InvariantCulture;
+        return _FormatToString(format, provider);
     }
 
     #endregion
@@ -355,33 +340,242 @@ public readonly struct SettingValue : IEquatable<SettingValue>, ISpanFormattable
     public bool TryFormat(
         Span<byte> utf8Destination, out int bytesWritten, ReadOnlySpan<char> format, IFormatProvider? provider)
     {
-        if (_Type == SettingType.String && _ReferenceValue is string str)
+        switch (Type)
         {
-            int byteCount = Encoding.UTF8.GetByteCount(str);
-            if (utf8Destination.Length < byteCount)
+            case SettingType.Bool:
             {
-                bytesWritten = 0;
-                return false;
+                ReadOnlySpan<byte> label = _Bits != 0 ? "True"u8 : "False"u8;
+                if (utf8Destination.Length < label.Length)
+                {
+                    bytesWritten = 0;
+                    return false;
+                }
+                label.CopyTo(utf8Destination);
+                bytesWritten = label.Length;
+                return true;
             }
-            bytesWritten = Encoding.UTF8.GetBytes(str, utf8Destination);
-            return true;
+            case SettingType.F64:
+                return BitConverter.Int64BitsToDouble(_Bits)
+                    .TryFormat(utf8Destination, out bytesWritten, format, CultureInfo.InvariantCulture);
+            case SettingType.U64:
+                return ((ulong)_Bits).TryFormat(utf8Destination, out bytesWritten, format, CultureInfo.InvariantCulture);
+            case SettingType.I64:
+                return _Bits.TryFormat(utf8Destination, out bytesWritten, format, CultureInfo.InvariantCulture);
+            case SettingType.String:
+                if (_ReferenceValue is string str)
+                {
+                    return _TryEncodeUtf8(str, utf8Destination, out bytesWritten);
+                }
+                bytesWritten = 0;
+                return true;
+            case SettingType.Bytes:
+                if (_ReferenceValue is byte[] bytes)
+                {
+                    return _TryFormatBytesLabelUtf8(bytes.Length, utf8Destination, out bytesWritten);
+                }
+                return _TryFormatBytesLabelUtf8(0, utf8Destination, out bytesWritten);
+            case SettingType.Enum:
+                if (_ReferenceValue is string name)
+                {
+                    return _TryFormatEnumLabelUtf8(name, (ulong)_Bits, utf8Destination, out bytesWritten);
+                }
+                bytesWritten = 0;
+                return true;
+            default:
+                bytesWritten = 0;
+                return true;
         }
+    }
 
-        Span<char> chars = stackalloc char[256];
-        if (!TryFormat(chars, out int charCount, format, provider))
+    #endregion
+
+    #region IStringSize
+
+    /// <summary>
+    /// Tries to determine the number of characters needed to format this value.
+    /// Returns <see langword="true"/> with an exact count for Bool, String, Bytes, Enum, and
+    /// default-format integers. Returns <see langword="false"/> for <see cref="SettingType.F64"/>
+    /// and for integers when a non-empty format string is supplied, because those lengths depend
+    /// on the value and format.
+    /// </summary>
+    public bool TryGetStringSize(ReadOnlySpan<char> format, IFormatProvider? provider, out int size)
+    {
+        switch (Type)
         {
-            bytesWritten = 0;
-            return false;
+            case SettingType.Bool:
+                size = _Bits != 0 ? 4 : 5;
+                return true;
+            case SettingType.String:
+                size = _ReferenceValue is string str ? str.Length : 0;
+                return true;
+            case SettingType.Bytes:
+                int byteCount = _ReferenceValue is byte[] bytes ? bytes.Length : 0;
+                size = _BytesLabelCharCount(byteCount);
+                return true;
+            case SettingType.Enum:
+                if (_ReferenceValue is string name)
+                {
+                    size = _EnumLabelCharCount(name, (ulong)_Bits);
+                    return true;
+                }
+                size = 0;
+                return true;
+            case SettingType.U64:
+                if (!format.IsEmpty)
+                {
+                    size = 0;
+                    return false;
+                }
+                size = _UInt64DigitCount((ulong)_Bits);
+                return true;
+            case SettingType.I64:
+                if (!format.IsEmpty)
+                {
+                    size = 0;
+                    return false;
+                }
+                size = _Int64FormattedLength(_Bits);
+                return true;
+            case SettingType.F64:
+                size = 0;
+                return false;
+            default:
+                size = 0;
+                return true;
         }
+    }
 
-        if (utf8Destination.Length < charCount)
+    #endregion
+
+    #region Convenience Formatting
+
+    /// <summary>
+    /// Upper bound for default <c>G</c>/<c>R</c> formatting of a <see cref="double"/>.
+    /// <c>-1.7976931348623157E+308</c> is 24 characters; 32 leaves headroom.
+    /// </summary>
+    private const int _F64DefaultMaxChars = 32;
+
+    /// <summary>Stack threshold before switching to a ZeroAlloc-managed buffer.</summary>
+    private const int _StackFormatLimit = 256;
+
+    /// <summary>Writes the formatted label into <paramref name="destination"/>. Returns characters written (0 if the span is too small).</summary>
+    public int FormatInto(Span<char> destination)
+    {
+        TryFormat(destination, out int written, default, CultureInfo.InvariantCulture);
+        return written;
+    }
+
+    /// <summary>Returns a <see cref="TempString"/> backed by a thread-static or pooled buffer.</summary>
+    /// <remarks>
+    /// The underlying buffer is thread-local or pooled. The caller must dispose the returned <see cref="TempString"/>
+    /// before making another <see cref="FormatTemp"/> call on the same thread to avoid overwriting the buffer.
+    /// Do not retain references to the underlying span after disposal.
+    /// </remarks>
+    public TempString FormatTemp()
+    {
+        if (Type == SettingType.String && _ReferenceValue is string str)
         {
-            bytesWritten = 0;
-            return false;
+            if (str.Length == 0)
+            {
+                return new TempString([], 0, false);
+            }
+
+            char[] stringBuffer = ZeroAllocHelper.AcquireCharBuffer(str.Length, out bool stringThreadStatic);
+            str.CopyTo(stringBuffer);
+            return new TempString(stringBuffer, str.Length, stringThreadStatic);
         }
 
-        bytesWritten = Encoding.UTF8.GetBytes(chars[..charCount], utf8Destination);
-        return true;
+        int size;
+        if (!TryGetStringSize(default, CultureInfo.InvariantCulture, out size))
+        {
+            size = _F64DefaultMaxChars;
+        }
+
+        if (size <= 0)
+        {
+            return new TempString([], 0, false);
+        }
+
+        char[] buffer = ZeroAllocHelper.AcquireCharBuffer(size, out bool isThreadStatic);
+        TryFormat(buffer, out int written, default, CultureInfo.InvariantCulture);
+        return new TempString(buffer, written, isThreadStatic);
+    }
+
+    /// <summary>Returns the formatted label as a new string.</summary>
+    /// <remarks>
+    /// String values return the stored instance. Other types allocate a new string.
+    /// Use <see cref="FormatInto"/> or <see cref="FormatTemp"/> for allocation-free hot paths.
+    /// </remarks>
+    public string Format()
+    {
+        if (Type == SettingType.String && _ReferenceValue is string str)
+        {
+            return str;
+        }
+
+        if (TryGetStringSize(default, CultureInfo.InvariantCulture, out int size) && size <= _StackFormatLimit)
+        {
+            if (size == 0)
+            {
+                return "";
+            }
+
+            Span<char> stack = stackalloc char[size];
+            TryFormat(stack, out int written, default, CultureInfo.InvariantCulture);
+            return new string(stack[..written]);
+        }
+
+        using TempString temp = FormatTemp();
+        return temp.ToString();
+    }
+
+    /// <summary>Formats with a non-empty format string into a sized buffer, then allocates the result string.</summary>
+    private string _FormatToString(ReadOnlySpan<char> format, IFormatProvider provider)
+    {
+        if (TryGetStringSize(format, provider, out int size))
+        {
+            return _FormatKnownSizeToString(format, provider, size);
+        }
+
+        Span<char> stack = stackalloc char[_StackFormatLimit];
+        if (TryFormat(stack, out int written, format, provider))
+        {
+            return new string(stack[..written]);
+        }
+
+        string formatString = format.ToString();
+        if (Type == SettingType.F64)
+        {
+            return BitConverter.Int64BitsToDouble(_Bits).ToString(formatString, provider);
+        }
+
+        if (Type == SettingType.U64)
+        {
+            return ((ulong)_Bits).ToString(formatString, provider);
+        }
+
+        return _Bits.ToString(formatString, provider);
+    }
+
+    /// <summary>Formats a value whose character count is already known.</summary>
+    private string _FormatKnownSizeToString(ReadOnlySpan<char> format, IFormatProvider provider, int size)
+    {
+        if (size <= 0)
+        {
+            return "";
+        }
+
+        if (size <= _StackFormatLimit)
+        {
+            Span<char> stack = stackalloc char[size];
+            TryFormat(stack, out int written, format, provider);
+            return new string(stack[..written]);
+        }
+
+        char[] buffer = ZeroAllocHelper.AcquireCharBuffer(size, out bool isThreadStatic);
+        TryFormat(buffer, out int writtenLarge, format, provider);
+        using TempString temp = new(buffer, writtenLarge, isThreadStatic);
+        return temp.ToString();
     }
 
     #endregion
@@ -390,70 +584,182 @@ public readonly struct SettingValue : IEquatable<SettingValue>, ISpanFormattable
 
     private static bool _TryFormatBytesLabel(int byteCount, Span<char> destination, out int charsWritten)
     {
-        if (destination.IsEmpty)
-        {
-            charsWritten = 0;
-            return false;
-        }
-
-        destination[0] = '[';
-        if (!byteCount.TryFormat(destination[1..], out int digitCount, default, CultureInfo.InvariantCulture))
-        {
-            charsWritten = 0;
-            return false;
-        }
-
-        ReadOnlySpan<char> suffix = " bytes]";
-        int total = 1 + digitCount + suffix.Length;
+        int total = _BytesLabelCharCount(byteCount);
         if (destination.Length < total)
         {
             charsWritten = 0;
             return false;
         }
 
-        suffix.CopyTo(destination[(1 + digitCount)..]);
+        destination[0] = '[';
+        byteCount.TryFormat(destination[1..], out int digitCount, default, CultureInfo.InvariantCulture);
+        " bytes]".CopyTo(destination[(1 + digitCount)..]);
         charsWritten = total;
+        return true;
+    }
+
+    private static bool _TryFormatBytesLabelUtf8(int byteCount, Span<byte> destination, out int bytesWritten)
+    {
+        int total = _BytesLabelCharCount(byteCount);
+        if (destination.Length < total)
+        {
+            bytesWritten = 0;
+            return false;
+        }
+
+        destination[0] = (byte)'[';
+        byteCount.TryFormat(destination[1..], out int digitCount, default, CultureInfo.InvariantCulture);
+        " bytes]"u8.CopyTo(destination[(1 + digitCount)..]);
+        bytesWritten = total;
         return true;
     }
 
     private static bool _TryFormatEnumLabel(
         ReadOnlySpan<char> name, ulong numericValue, Span<char> destination, out int charsWritten)
     {
-        int pos = 0;
-        if (destination.Length < name.Length)
+        int total = _EnumLabelCharCount(name, numericValue);
+        if (destination.Length < total)
         {
             charsWritten = 0;
             return false;
         }
 
         name.CopyTo(destination);
-        pos = name.Length;
-
-        if (destination.Length < pos + 2)
-        {
-            charsWritten = 0;
-            return false;
-        }
-
+        int pos = name.Length;
         destination[pos++] = ' ';
         destination[pos++] = '(';
-
-        if (!numericValue.TryFormat(destination[pos..], out int digitCount, default, CultureInfo.InvariantCulture))
-        {
-            charsWritten = 0;
-            return false;
-        }
-
+        numericValue.TryFormat(destination[pos..], out int digitCount, default, CultureInfo.InvariantCulture);
         pos += digitCount;
-        if (destination.Length < pos + 1)
-        {
-            charsWritten = 0;
-            return false;
-        }
-
         destination[pos++] = ')';
         charsWritten = pos;
         return true;
+    }
+
+    private static bool _TryFormatEnumLabelUtf8(
+        ReadOnlySpan<char> name, ulong numericValue, Span<byte> destination, out int bytesWritten)
+    {
+        int digits = _UInt64DigitCount(numericValue);
+        if (System.Text.Ascii.IsValid(name))
+        {
+            int total = name.Length + 3 + digits;
+            if (destination.Length < total)
+            {
+                bytesWritten = 0;
+                return false;
+            }
+
+            int written = _NarrowAscii(name, destination);
+            destination[written++] = (byte)' ';
+            destination[written++] = (byte)'(';
+            numericValue.TryFormat(destination[written..], out int digitCount, default, CultureInfo.InvariantCulture);
+            written += digitCount;
+            destination[written++] = (byte)')';
+            bytesWritten = written;
+            return true;
+        }
+
+        int nameBytes = Encoding.UTF8.GetByteCount(name);
+        int utf8Total = nameBytes + 3 + digits;
+        if (destination.Length < utf8Total)
+        {
+            bytesWritten = 0;
+            return false;
+        }
+
+        int pos = Encoding.UTF8.GetBytes(name, destination);
+        destination[pos++] = (byte)' ';
+        destination[pos++] = (byte)'(';
+        numericValue.TryFormat(destination[pos..], out int utf8Digits, default, CultureInfo.InvariantCulture);
+        pos += utf8Digits;
+        destination[pos++] = (byte)')';
+        bytesWritten = pos;
+        return true;
+    }
+
+    /// <summary>
+    /// Encodes <paramref name="chars"/> as UTF-8. Returns <see langword="false"/> when the
+    /// destination is shorter than the encoded size (does not throw). ASCII text is narrowed
+    /// without going through <see cref="Encoding.UTF8"/>.
+    /// </summary>
+    private static bool _TryEncodeUtf8(ReadOnlySpan<char> chars, Span<byte> utf8Destination, out int bytesWritten)
+    {
+        if (System.Text.Ascii.IsValid(chars))
+        {
+            if (utf8Destination.Length < chars.Length)
+            {
+                bytesWritten = 0;
+                return false;
+            }
+
+            bytesWritten = _NarrowAscii(chars, utf8Destination);
+            return true;
+        }
+
+        int byteCount = Encoding.UTF8.GetByteCount(chars);
+        if (utf8Destination.Length < byteCount)
+        {
+            bytesWritten = 0;
+            return false;
+        }
+
+        bytesWritten = Encoding.UTF8.GetBytes(chars, utf8Destination);
+        return true;
+    }
+
+    /// <summary>Character count of <c>[N bytes]</c> for a non-negative <paramref name="byteCount"/>.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static int _BytesLabelCharCount(int byteCount) =>
+        1 + _UInt64DigitCount((ulong)(uint)byteCount) + 7;
+
+    /// <summary>
+    /// Character count of <c>Name (value)</c>.
+    /// Name length plus 3 plus at most 20 digits cannot overflow a 32-bit signed length for any allocatable string.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static int _EnumLabelCharCount(ReadOnlySpan<char> name, ulong numericValue) =>
+        name.Length + 3 + _UInt64DigitCount(numericValue);
+
+    /// <summary>Narrows already-validated ASCII chars to bytes. Caller guarantees destination is large enough.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static int _NarrowAscii(ReadOnlySpan<char> chars, Span<byte> destination)
+    {
+        for (int i = 0; i < chars.Length; i++)
+        {
+            destination[i] = (byte)chars[i];
+        }
+
+        return chars.Length;
+    }
+
+    /// <summary>Decimal digit count of <paramref name="value"/> (1 for zero). Range 1..20.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static int _UInt64DigitCount(ulong value)
+    {
+        int digits = 1;
+        while (value >= 10UL)
+        {
+            value /= 10UL;
+            digits++;
+        }
+
+        return digits;
+    }
+
+    /// <summary>Decimal character count of <paramref name="value"/> including a leading minus when negative.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static int _Int64FormattedLength(long value)
+    {
+        if (value >= 0)
+        {
+            return _UInt64DigitCount((ulong)value);
+        }
+
+        if (value == long.MinValue)
+        {
+            return 20;
+        }
+
+        return 1 + _UInt64DigitCount((ulong)(-value));
     }
 
     #endregion

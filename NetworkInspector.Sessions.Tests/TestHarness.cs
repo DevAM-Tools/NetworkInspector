@@ -103,6 +103,91 @@ internal static class TestHarness
     }
 
     /// <summary>
+    /// Generates a minimal UDP-over-IPv4-over-Ethernet frame with a caller-chosen destination
+    /// port and TTL, so filter tests can produce frames that differ in exactly one field.
+    /// </summary>
+    internal static byte[] BuildUdpFrame(ushort destinationPort, byte timeToLive = 64)
+    {
+        byte[] frame = GenerateUdpFrame();
+        const int ipOffset = 14;
+        frame[ipOffset + 8] = timeToLive;
+        // The checksum field must read as zero while the header is summed.
+        BinaryPrimitives.WriteUInt16BigEndian(frame.AsSpan(ipOffset + 10), 0);
+        BinaryPrimitives.WriteUInt16BigEndian(
+            frame.AsSpan(ipOffset + 10),
+            _CalculateIpv4Checksum(frame.AsSpan(ipOffset, 20)));
+        BinaryPrimitives.WriteUInt16BigEndian(frame.AsSpan(ipOffset + 20 + 2), destinationPort);
+        return frame;
+    }
+
+    /// <summary>
+    /// Generates a minimal TCP-over-IPv4-over-Ethernet frame. Used to build mixed captures where
+    /// only some packets carry the protocol a filter selects on.
+    /// </summary>
+    internal static byte[] BuildTcpFrame(ushort destinationPort = 80)
+    {
+        const int ethSize = 14;
+        const int ipv4Size = 20;
+        const int tcpSize = 20;
+        byte[] frame = new byte[ethSize + ipv4Size + tcpSize];
+
+        frame[0] = 0x00;
+        frame[1] = 0x11;
+        frame[2] = 0x22;
+        frame[3] = 0x33;
+        frame[4] = 0x44;
+        frame[5] = 0x55;
+        frame[6] = 0x66;
+        frame[7] = 0x77;
+        frame[8] = 0x88;
+        frame[9] = 0x99;
+        frame[10] = 0xAA;
+        frame[11] = 0xBB;
+        BinaryPrimitives.WriteUInt16BigEndian(frame.AsSpan(12), 0x0800);
+
+        int ip = ethSize;
+        frame[ip] = 0x45;
+        BinaryPrimitives.WriteUInt16BigEndian(frame.AsSpan(ip + 2), ipv4Size + tcpSize);
+        BinaryPrimitives.WriteUInt16BigEndian(frame.AsSpan(ip + 4), 0x4321);
+        frame[ip + 8] = 64;
+        frame[ip + 9] = 6; // TCP
+        frame[ip + 12] = 10;
+        frame[ip + 15] = 1;
+        frame[ip + 16] = 10;
+        frame[ip + 19] = 2;
+        BinaryPrimitives.WriteUInt16BigEndian(
+            frame.AsSpan(ip + 10),
+            _CalculateIpv4Checksum(frame.AsSpan(ip, ipv4Size)));
+
+        int tcp = ip + ipv4Size;
+        BinaryPrimitives.WriteUInt16BigEndian(frame.AsSpan(tcp), 40000);
+        BinaryPrimitives.WriteUInt16BigEndian(frame.AsSpan(tcp + 2), destinationPort);
+        frame[tcp + 12] = 0x50; // data offset 5
+        frame[tcp + 13] = 0x02; // SYN
+
+        return frame;
+    }
+
+    /// <summary>
+    /// Parses a frame outside any session, which lets a test drive a filter's internal state
+    /// before handing that filter to a session.
+    /// </summary>
+    internal static Packet ParseStandalone(Stack stack, byte[] frameData, int packetId)
+    {
+        ArgumentNullException.ThrowIfNull(stack);
+
+        Frame frame = Frame.Create(
+            new FrameId(packetId),
+            Timestamp.FromNanos(packetId * 1_000_000L),
+            frameData,
+            LinkType.Ethernet,
+            FrameInterfaceId.Invalid,
+            stack.FrameInterfaceRegistry).Value;
+
+        return Packet.ParseFrame(new PacketId(packetId), stack, frame);
+    }
+
+    /// <summary>
     /// Computes the one's-complement IPv4 header checksum.
     /// </summary>
     private static ushort _CalculateIpv4Checksum(ReadOnlySpan<byte> header)

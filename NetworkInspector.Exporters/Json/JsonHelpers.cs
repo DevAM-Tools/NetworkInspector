@@ -188,6 +188,14 @@ internal static class JsonHelpers
     internal static void WriteColon(ref PooledBuffer buffer) => buffer.WriteByte((byte)':');
 
     /// <summary>
+    /// Writes a field type as a quoted JSON string using the canonical enum name.
+    /// </summary>
+    /// <param name="buffer">Target buffer.</param>
+    /// <param name="type">The field type to serialize.</param>
+    internal static void WriteFieldTypeName(ref PooledBuffer buffer, FieldType type) =>
+        WriteJsonString(ref buffer, FieldTypeFormatter.GetName(type));
+
+    /// <summary>
     /// Writes a field value to the buffer in the appropriate JSON representation.
     /// </summary>
     /// <param name="buffer">Target buffer.</param>

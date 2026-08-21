@@ -32,7 +32,13 @@ internal sealed class Lz4CodecTests
     /// </summary>
     private static byte[] _CompressFull(byte[] input)
     {
-        byte[] buf = new byte[Lz4Codec.MaxCompressedSize(input.Length)];
+        int maxSize = Lz4Codec.MaxCompressedSize(input.Length);
+        if (maxSize < 0)
+        {
+            throw new InvalidOperationException($"Lz4Codec.MaxCompressedSize returned {maxSize} for {input.Length}-byte input");
+        }
+
+        byte[] buf = new byte[maxSize];
         int len = Lz4Codec.Compress(input, buf);
         if (len < 0)
         {
@@ -387,6 +393,30 @@ internal sealed class Lz4CodecTests
         await Assert.That(result).IsEqualTo(-1);
     }
 
+    [Test]
+    public async Task Decompress_LiteralLengthExceedsRemainingInput_ReturnsMinusOne()
+    {
+        // Token 0xF0: extended literal length 100, but only 5 literal bytes follow.
+        byte[] compressed = [0xF0, 85, 0x01, 0x02, 0x03, 0x04, 0x05];
+        byte[] output = new byte[16];
+
+        int result = Lz4Codec.Decompress(compressed, output);
+        await Assert.That(result).IsEqualTo(-1);
+    }
+
+    [Test]
+    public async Task MaxCompressedSize_InvalidInput_ReturnsMinusOne()
+    {
+        await Assert.That(Lz4Codec.MaxCompressedSize(int.MaxValue)).IsEqualTo(-1);
+    }
+
+    [Test]
+    public async Task MaxCompressedSize_MaxBlock_ReturnsPositive()
+    {
+        int size = Lz4Codec.MaxCompressedSize(0x7E000000);
+        await Assert.That(size).IsGreaterThan(0x7E000000);
+    }
+
     // =========================================================================
     // MaxCompressedSize boundary guarantee
     // =========================================================================
@@ -505,5 +535,182 @@ internal sealed class Lz4CodecTests
         byte[] compressed = _CompressFull(input);
         byte[] recovered = _DecompressFull(compressed, input.Length);
         await Assert.That(recovered.AsSpan().SequenceEqual(input)).IsTrue();
+    }
+
+    // =========================================================================
+    // Compress — short input and edge paths
+    // =========================================================================
+
+    [Test]
+    public async Task Compress_ShortInput_ExecutesLiteralsOnlyPath()
+    {
+        byte[] input = [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B];
+        byte[] output = new byte[Lz4Codec.MaxCompressedSize(input.Length)];
+        int len = Lz4Codec.Compress(input, output);
+        await Assert.That(len == -1 || len > 0).IsTrue();
+    }
+
+    [Test]
+    public async Task Compress_OutputTooSmallDuringSequence_ReturnsMinusOne()
+    {
+        byte[] input = new byte[256];
+        for (int i = 0; i < input.Length; i++)
+        {
+            input[i] = (byte)(i & 0xFF);
+        }
+        byte[] output = new byte[8];
+        int len = Lz4Codec.Compress(input, output);
+        await Assert.That(len).IsEqualTo(-1);
+    }
+
+    [Test]
+    public async Task Decompress_TruncatedOffsetField_ReturnsMinusOne()
+    {
+        byte[] compressed = [0x10, 0x41, 0x03];
+        byte[] output = new byte[8];
+        int len = Lz4Codec.Decompress(compressed, output);
+        await Assert.That(len).IsEqualTo(-1);
+    }
+
+    [Test]
+    public async Task Decompress_OutputTooSmallForMatch_ReturnsMinusOne()
+    {
+        byte[] compressed = [0x10, 0x41, 0x01, 0x00];
+        byte[] output = new byte[2];
+        int len = Lz4Codec.Decompress(compressed, output);
+        await Assert.That(len).IsEqualTo(-1);
+    }
+
+    [Test]
+    public async Task Roundtrip_ExtendedLiteralAndMatchLengths_RecoversOriginal()
+    {
+        byte[] input = new byte[512];
+        for (int i = 0; i < input.Length; i++)
+        {
+            input[i] = (byte)(i % 17);
+        }
+        byte[] compressed = _CompressFull(input);
+        byte[] recovered = _DecompressFull(compressed, input.Length);
+        await Assert.That(recovered.AsSpan().SequenceEqual(input)).IsTrue();
+    }
+
+    [Test]
+    public async Task Compress_InputExceedsMaxBlockSize_ReturnsMinusOne()
+    {
+        byte[] input = GC.AllocateUninitializedArray<byte>(0x7E000001);
+        await Assert.That(Lz4Codec.MaxCompressedSize(input.Length)).IsEqualTo(-1);
+        byte[] output = new byte[64];
+        int result = Lz4Codec.Compress(input, output);
+        await Assert.That(result).IsEqualTo(-1);
+    }
+
+    [Test]
+    [Arguments(1)]
+    [Arguments(5)]
+    [Arguments(11)]
+    public async Task Compress_ShortInputWithTinyOutput_ReturnsMinusOne(int inputLength)
+    {
+        byte[] input = new byte[inputLength];
+        for (int i = 0; i < inputLength; i++)
+        {
+            input[i] = (byte)(i + 1);
+        }
+        byte[] output = new byte[1];
+        int result = Lz4Codec.Compress(input, output);
+        await Assert.That(result).IsEqualTo(-1);
+    }
+
+    [Test]
+    public async Task Compress_ShortInputWithinOutputBounds_ReturnsMinusOneWhenNotSmaller()
+    {
+        byte[] input = [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B];
+        byte[] output = new byte[Lz4Codec.MaxCompressedSize(input.Length)];
+        int result = Lz4Codec.Compress(input, output);
+        await Assert.That(result).IsEqualTo(-1);
+    }
+
+    [Test]
+    public async Task PrivateEmitSequence_OverflowPaths_ReturnMinusOne()
+    {
+        byte[] input = new byte[300];
+        for (int i = 0; i < input.Length; i++)
+        {
+            input[i] = (byte)i;
+        }
+
+        int tokenOverflow = Lz4CodecPrivateAccess.EmitSequence(
+            Array.Empty<byte>(), 0, input, 0, 0, 1, 4);
+        int literalExtraOverflow = Lz4CodecPrivateAccess.EmitSequence(
+            new byte[3], 0, input, 0, 20, 1, 4);
+        int literal255LoopOverflow = Lz4CodecPrivateAccess.EmitSequence(
+            new byte[2], 0, input, 0, 525, 1, 4);
+        int literalRemainderOverflow = Lz4CodecPrivateAccess.EmitSequence(
+            new byte[3], 0, input, 0, 525, 1, 4);
+        int literalCopyOverflow = Lz4CodecPrivateAccess.EmitSequence(
+            new byte[4], 0, input, 0, 10, 1, 4);
+        int offsetOverflow = Lz4CodecPrivateAccess.EmitSequence(
+            new byte[3], 0, input, 0, 1, 1, 4);
+        int match255LoopOverflow = Lz4CodecPrivateAccess.EmitSequence(
+            new byte[5], 0, input, 0, 1, 1, 529);
+        int matchExtraOverflow = Lz4CodecPrivateAccess.EmitSequence(
+            new byte[4], 0, input, 0, 1, 1, 20);
+
+        await Assert.That(tokenOverflow).IsEqualTo(-1);
+        await Assert.That(literalExtraOverflow).IsEqualTo(-1);
+        await Assert.That(literal255LoopOverflow).IsEqualTo(-1);
+        await Assert.That(literalRemainderOverflow).IsEqualTo(-1);
+        await Assert.That(literalCopyOverflow).IsEqualTo(-1);
+        await Assert.That(offsetOverflow).IsEqualTo(-1);
+        await Assert.That(match255LoopOverflow).IsEqualTo(-1);
+        await Assert.That(matchExtraOverflow).IsEqualTo(-1);
+    }
+
+    [Test]
+    public async Task PrivateEmitLastLiterals_OverflowPaths_ReturnMinusOne()
+    {
+        byte[] input = new byte[300];
+        for (int i = 0; i < input.Length; i++)
+        {
+            input[i] = (byte)(255 - (i % 17));
+        }
+
+        int zeroLiterals = Lz4CodecPrivateAccess.EmitLastLiterals(input, new byte[4], 0, 0, 0);
+        int tokenOverflow = Lz4CodecPrivateAccess.EmitLastLiterals(input, Array.Empty<byte>(), 0, 0, 1);
+        int extraOverflow = Lz4CodecPrivateAccess.EmitLastLiterals(input, new byte[3], 0, 0, 20);
+        int literal255LoopOverflow = Lz4CodecPrivateAccess.EmitLastLiterals(input, new byte[2], 0, 0, 525);
+        int literalRemainderOverflow = Lz4CodecPrivateAccess.EmitLastLiterals(input, new byte[3], 0, 0, 525);
+        int copyOverflow = Lz4CodecPrivateAccess.EmitLastLiterals(input, new byte[4], 0, 0, 10);
+
+        await Assert.That(zeroLiterals).IsEqualTo(0);
+        await Assert.That(tokenOverflow).IsEqualTo(-1);
+        await Assert.That(extraOverflow).IsEqualTo(-1);
+        await Assert.That(literal255LoopOverflow).IsEqualTo(-1);
+        await Assert.That(literalRemainderOverflow).IsEqualTo(-1);
+        await Assert.That(copyOverflow).IsEqualTo(-1);
+    }
+
+    [Test]
+    public async Task PrivateReadVarLen_AccumulatedOverflow_ReturnsFalse()
+    {
+        byte[] payload = [0xFF];
+        int inputPos = 0;
+        int accumulated = int.MaxValue;
+        bool ok = Lz4CodecPrivateAccess.ReadVarLen(payload, ref inputPos, ref accumulated);
+        await Assert.That(ok).IsFalse();
+    }
+
+    [Test]
+    public async Task Decompress_VarLenAccumulatedOverflow_ReturnsMinusOne()
+    {
+        byte[] payload = new byte[140];
+        payload[0] = 0xF0;
+        for (int i = 1; i < payload.Length; i++)
+        {
+            payload[i] = 0xFF;
+        }
+
+        byte[] output = new byte[1024];
+        int len = Lz4Codec.Decompress(payload, output);
+        await Assert.That(len).IsEqualTo(-1);
     }
 }

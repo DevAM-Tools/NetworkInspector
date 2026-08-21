@@ -18,6 +18,22 @@ internal sealed class SettingGroupTests
     }
 
     [Test]
+    public void Constructor_InvalidGroupName_Throws()
+    {
+        InvalidNameSettingsException ex = Assert.Throws<InvalidNameSettingsException>(
+            () => _ = new SettingGroup("Not Valid", "Display"));
+        _ = ex;
+    }
+
+    [Test]
+    public void Constructor_InvalidUiName_Throws()
+    {
+        InvalidNameSettingsException ex = Assert.Throws<InvalidNameSettingsException>(
+            () => _ = new SettingGroup("valid", ""));
+        _ = ex;
+    }
+
+    [Test]
     public async Task IsDefaultGroup_FalseForNamedGroup()
     {
         SettingGroup group = new("mygroup", "My Group");

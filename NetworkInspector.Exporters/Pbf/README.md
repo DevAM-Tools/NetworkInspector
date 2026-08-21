@@ -6,20 +6,38 @@ Packet binary exporter for compact and high-throughput packet persistence.
 
 ## What This Is
 
-The `PbfExporter` serializes parsed packets through `IPacketListener` into the NetworkInspector PBF format.
+The `PbfExporter` serializes parsed packets through `IPacketListener` into the NetworkInspector PBF
+format (magic `NETWORK-INSPECTOR-PBF-FORMAT-v1`).
 
 ## Why Use It
 
 - More compact than text-oriented formats for large datasets.
 - Supports row-like (`Standard`) and analytics-oriented (`Columnar`) layouts.
 - Optional per-block compression and trailer indexing.
+- `Columnar` blocks share the same `ColumnarPacketBatch` accumulator as the Parquet and DuckDB
+  exporters (typed values, topology, detail flags).
 
 ## Layout Options
 
 | Option | Purpose |
 | --- | --- |
-| `PbfExportFormat.Standard` | Sequential packet-oriented layout |
+| `PbfExportFormat.Standard` | Sequential packet-oriented layout (typed payloads; same-as-previous without string formatting) |
 | `PbfExportFormat.Columnar` | Columnar layout for analytical post-processing |
+
+## Columnar Format
+
+`Columnar` blocks wrap a `ColumnarPacketBatch` (see `NetworkInspector.Exporters/Columnar/`) and
+serialize it to protobuf:
+
+- Packet IDs (delta `sint64`) and timestamps (delta `sint64`), plus optional per-packet info
+  strings and frame bytes.
+- Topology rows (`packet_id`, `node_id`, `field_id`, `parent_node_id`) when
+  `ColumnarDetailFlags.IncludeTopology` is set.
+- One field block per distinct field ID, each carrying typed value columns and optional plain
+  string custom representation/text columns.
+
+Field-number layout is documented in `PbfFieldNumbers.cs`. The per-block field-presence trailer
+(`TrailerFieldBitmap`) unions topology field IDs and field-column bag keys.
 
 ## Quick Start
 
@@ -44,20 +62,6 @@ foreach (Packet packet in packets)
 exporter.OnFinish();
 ```
 
-## Common Tasks
-
-### Maximize Write Throughput
-
-Use `WithCompressed(false)` when CPU is constrained and storage cost is secondary.
-
-### Bound Memory And Flush Cadence
-
-Tune `WithMaxPacketsPerBlock(...)` and `WithMaxBlockSize(...)` for your workload.
-
-### Enable Faster Downstream Seeking
-
-Keep `WithTrailerIndex(true)` for block-level timestamp indexing.
-
 ## Builder Options
 
 | Method | Purpose |
@@ -71,12 +75,13 @@ Keep `WithTrailerIndex(true)` for block-level timestamp indexing.
 | `WithTrailerIndex(include)` | Include block index in trailer |
 | `WithTargetPacketCount(count)` | Stop after N packets (`0` = unlimited) |
 | `WithCancellationToken(token)` | Enable cooperative cancellation |
+| `WithDetailFlags(flags)` | Optional columnar columns (info, frame bytes, customs, topology) |
+| `WithTimestampSorted(sorted)` | Declares packets arrive in non-decreasing timestamp order |
 
 ## Limits And Thread-Safety Notes
 
 - Not thread-safe; call `OnPacket()`/`OnFinish()` sequentially.
 - Format is binary and optimized for tooling, not manual inspection.
-- Use bounded block settings for predictable resource usage in long exports.
 
 ## Links
 

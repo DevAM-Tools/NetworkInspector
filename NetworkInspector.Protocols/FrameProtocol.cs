@@ -264,9 +264,9 @@ public sealed partial class FrameProtocol : IProtocol
 
         // Dispatch to link-layer protocol on parentField (sibling dispatch — all protocols are direct children of root)
         ParseResult dispatchResult = _DispatchLinkType(in parentField, linkTypeValue, data, in context);
-        if (dispatchResult.IsError)
+        if (dispatchResult.TryPropagateError(out ParseResult error))
         {
-            return dispatchResult;
+            return error;
         }
 
         return data.Length;

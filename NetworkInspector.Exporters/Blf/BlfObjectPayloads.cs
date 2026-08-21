@@ -66,6 +66,13 @@ internal static class BlfObjectPayloads
         ReadOnlySpan<byte> payload = frame.Length > payloadOffset
             ? frame.Slice(payloadOffset)
             : ReadOnlySpan<byte>.Empty;
+        // BLF Ethernet Type 71 stores payload_len as u16 — reject oversized payloads
+        // rather than silently truncating jumbo/edge frames.
+        if (payload.Length > ushort.MaxValue)
+        {
+            return false;
+        }
+
         ushort payloadLen = (ushort)payload.Length;
 
         // Vector blf_ethernetframeheader_t (per Wireshark wiretap/blf.h):

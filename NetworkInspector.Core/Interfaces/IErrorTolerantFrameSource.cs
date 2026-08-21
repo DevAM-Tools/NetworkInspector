@@ -19,10 +19,10 @@ namespace NetworkInspector.Core.Interfaces;
 /// </para>
 /// </summary>
 /// <remarks>
-/// This interface extends <see cref="IFrameSourceStatistics"/> because
-/// error tolerance is only meaningful when skipped frames are observable.
+/// This interface extends <see cref="IFrameSource"/> and <see cref="IFrameSourceStatistics"/>
+/// because error tolerance applies to sequential frame reading and skipped frames must be observable.
 /// </remarks>
-public interface IErrorTolerantFrameSource : IFrameSourceStatistics
+public interface IErrorTolerantFrameSource : IFrameSource, IFrameSourceStatistics
 {
     #region Properties
 

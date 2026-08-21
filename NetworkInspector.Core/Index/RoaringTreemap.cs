@@ -6,14 +6,15 @@ namespace NetworkInspector.Core.Index;
 /// Roaring treemap for 64-bit values.
 /// Partitions by high 32 bits, each containing a <see cref="RoaringBitmap"/> for the low 32 bits.
 /// <para>
-/// <b>Aliasing model for set operations:</b> <see cref="And"/>, <see cref="Or"/>,
-/// <see cref="AndNot"/> and <see cref="Xor"/> may share <see cref="RoaringBitmap"/>
-/// references with the operands for chunks that exist in only one of the two operands.
-/// This matches the convention of <see cref="RoaringBitmap"/> itself, which shares
-/// internal <see cref="IContainer"/> references with its operands. The result is therefore
-/// safe to read concurrently, but mutating the result (or either operand) before disposing
-/// the others may corrupt the shared sub-state. Use <see cref="Clone"/> if an independent,
-/// fully detached copy is required.
+/// <b>Aliasing model for set operations:</b> <see cref="Or"/>, <see cref="AndNot"/>, and
+/// <see cref="Xor"/> produce detached results — single-side <see cref="RoaringBitmap"/> entries
+/// are cloned before insert. <see cref="And"/> delegates to <see cref="RoaringBitmap.And"/>,
+/// which always allocates fresh bitmaps.
+/// </para>
+/// <para>
+/// <b>Thread-safety:</b> Not thread-safe for concurrent mutation. After all mutations
+/// happen-before publication, concurrent reads of <see cref="Contains"/> and
+/// <see cref="Cardinality"/> are safe.
 /// </para>
 /// </summary>
 public sealed class RoaringTreemap
@@ -123,19 +124,14 @@ public sealed class RoaringTreemap
             }
             else
             {
-                // Share the bitmap reference — see class doc "Aliasing model".
-                // Cloning here would deep-copy every container in the bitmap (O(cardinality))
-                // for no real isolation benefit, since the analogous RoaringBitmap.Or path
-                // also shares container references with operands.
-                result._Map[kvp.Key] = kvp.Value;
+                result._Map[kvp.Key] = kvp.Value.Clone();
             }
         }
         foreach (KeyValuePair<uint, RoaringBitmap> kvp in other._Map)
         {
             if (!_Map.ContainsKey(kvp.Key))
             {
-                // Share the other operand's bitmap reference — see "Aliasing model".
-                result._Map[kvp.Key] = kvp.Value;
+                result._Map[kvp.Key] = kvp.Value.Clone();
             }
         }
         return result;
@@ -162,8 +158,7 @@ public sealed class RoaringTreemap
             }
             else
             {
-                // Share the bitmap reference — see class doc "Aliasing model".
-                result._Map[kvp.Key] = kvp.Value;
+                result._Map[kvp.Key] = kvp.Value.Clone();
             }
         }
         return result;
@@ -190,16 +185,14 @@ public sealed class RoaringTreemap
             }
             else
             {
-                // Share the bitmap reference — see class doc "Aliasing model".
-                result._Map[kvp.Key] = kvp.Value;
+                result._Map[kvp.Key] = kvp.Value.Clone();
             }
         }
         foreach (KeyValuePair<uint, RoaringBitmap> kvp in other._Map)
         {
             if (!_Map.ContainsKey(kvp.Key))
             {
-                // Share the other operand's bitmap reference — see "Aliasing model".
-                result._Map[kvp.Key] = kvp.Value;
+                result._Map[kvp.Key] = kvp.Value.Clone();
             }
         }
         return result;

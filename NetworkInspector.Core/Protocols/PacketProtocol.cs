@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Core.Protocols;
 
@@ -9,7 +9,8 @@ namespace NetworkInspector.Core.Protocols;
 ///   <item>Appends packet metadata fields (id, timestamp, frame source id) eagerly to the tree.</item>
 ///   <item>Dispatches to the frame protocol (auto-discovered by name "frame" at build time,
 ///         or overridden per-packet via <see cref="Packet.FirstProtocolOverride"/>).</item>
-///   <item>After dispatch completes, appends <c>packet.info</c> as a lazy string value —
+///   <item>After dispatch completes, appends <c>packet.unparsed_data</c> when the frame
+///         protocol left a trailing tail, then <c>packet.info</c> as a lazy string value —
 ///         the summary is deferred until first access (filter, export, or <see cref="Packet.Info"/>)
 ///         and cached in-heap via <see cref="ZeroAlloc.LazyString"/>.</item>
 /// </list>
@@ -19,6 +20,7 @@ namespace NetworkInspector.Core.Protocols;
 /// ├── packet.id: 1
 /// ├── packet.timestamp: 2024-01-15 10:30:00.123456789
 /// ├── packet.frame_source_id: 0
+/// ├── packet.unparsed_data: [trailing bytes]   ← only when the frame protocol left a tail
 /// └── packet.info: "DNS Standard query ..."   ← lazily evaluated on first read
 /// </code>
 /// </summary>
@@ -35,6 +37,9 @@ internal sealed class PacketProtocol : IProtocol
 
     /// <summary>Index group for always-present packet fields.</summary>
     private const string _PacketIndexGroup = ProtocolName;
+
+    /// <summary>Index group for leftover bytes the frame protocol did not consume.</summary>
+    private const string _UnparsedIndexGroup = "packet.unparsed";
 
     #endregion
 
@@ -55,15 +60,26 @@ internal sealed class PacketProtocol : IProtocol
     /// <summary>Packet info/summary string (set by sub-protocols during parsing).</summary>
     private FieldId _InfoFieldId;
 
+    /// <summary>Trailing bytes the frame protocol did not consume.</summary>
+    private FieldId _UnparsedDataFieldId;
+
     /// <summary>Index group ID for cross-packet indexing.</summary>
     private IndexGroupId _PacketGroupId;
+
+    /// <summary>Index group recorded only when <c>packet.unparsed_data</c> is appended.</summary>
+    private IndexGroupId _UnparsedGroupId;
 
     #endregion
 
     #region IProtocol Implementation
 
+    /// <inheritdoc/>
     public string Name => ProtocolName;
+
+    /// <inheritdoc/>
     public string UiName => "Packet";
+
+    /// <inheritdoc/>
     public string? Description => "Top-level packet protocol with metadata fields and frame dispatch";
 
     /// <summary>
@@ -73,13 +89,14 @@ internal sealed class PacketProtocol : IProtocol
     internal void RegisterWith(IStackBuilder builder, ProtocolId protocolId)
     {
         _PacketGroupId = builder.GetOrCreateIndexGroup(_PacketIndexGroup);
+        _UnparsedGroupId = builder.GetOrCreateIndexGroup(_UnparsedIndexGroup);
 
         _PacketFieldId = builder.RegisterFieldInGroup(
             protocolId, "packet", "Packet", FieldType.None, _PacketIndexGroup,
             "Container for packet-level metadata");
 
         _IdFieldId = builder.RegisterFieldInGroup(
-            protocolId, "packet.id", "Packet Number", FieldType.U64, _PacketIndexGroup,
+            protocolId, "packet.id", "Packet Id", FieldType.U64, _PacketIndexGroup,
             "Unique sequential packet identifier");
 
         _TimestampFieldId = builder.RegisterFieldInGroup(
@@ -93,8 +110,13 @@ internal sealed class PacketProtocol : IProtocol
         _InfoFieldId = builder.RegisterFieldInGroup(
             protocolId, "packet.info", "Info", FieldType.String, _PacketIndexGroup,
             "Packet summary/info line set by sub-protocols");
+
+        _UnparsedDataFieldId = builder.RegisterFieldInGroup(
+            protocolId, "packet.unparsed_data", "Unparsed Data", FieldType.Bytes, _UnparsedIndexGroup,
+            "Trailing bytes the frame protocol did not consume");
     }
 
+    /// <inheritdoc/>
     public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
     {
         Packet packet = parentField.Packet;
@@ -119,6 +141,8 @@ internal sealed class PacketProtocol : IProtocol
             ? packet.FirstProtocolOverride
             : stack.FrameProtocolId;
 
+        int frameConsumed = 0;
+        bool frameSucceeded = false;
         if (dispatchTarget.IsValid)
         {
             // Capture main-dispatch errors and exceptions without aborting; post-parsers
@@ -130,6 +154,10 @@ internal sealed class PacketProtocol : IProtocol
                 {
                     // Record as a packet-level error and continue to post-parsers.
                     packet.SetError(dispatchError.ToString());
+                }
+                else if (dispatchResult.TryGetConsumed(out frameConsumed))
+                {
+                    frameSucceeded = true;
                 }
             }
             catch (Exception ex)
@@ -162,8 +190,14 @@ internal sealed class PacketProtocol : IProtocol
             }
         }
 
+        if (frameSucceeded && frameConsumed < data.Length)
+        {
+            context.RecordGroupPresence(_UnparsedGroupId);
+            packetContainer.Append(_UnparsedDataFieldId, FieldValue.NewBytes(data[frameConsumed..]));
+        }
+
         // After dispatch and post-parsers: append packet.info as a lazy string value.
-        // Sub-protocols set Packet._Info (a LazyString) via SetPacketInfo during parsing.
+        // Sub-protocols set Packet.InfoLazy (a LazyString) via SetPacketInfo during parsing.
         // By wrapping it in a LazyStringValue (heap-resident reference type), the factory
         // is not evaluated here — evaluation is deferred to first access via Packet.Info,
         // TryGetFieldValue("packet.info"), or any exporter that reads the field value.

@@ -25,12 +25,12 @@ internal sealed class StandardBlockBuilder
 {
     private PooledBuffer _Buffer;
     private readonly FieldPresence _FieldPresence;
-    private readonly PreviousFieldStore _PreviousFields;
+    private readonly PreviousFieldValueStore _PreviousFields;
     private readonly int _MaxFieldId;
     private string? _PreviousPacketInfo;
     private int _PacketCount;
-    private ulong _MinPacketId;
-    private ulong _MaxPacketId;
+    private int _MinPacketId;
+    private int _MaxPacketId;
     private long _MinTimestamp;
     private long _MaxTimestamp;
     private readonly int _MaxPacketsPerBlock;
@@ -66,7 +66,7 @@ internal sealed class StandardBlockBuilder
         _MaxFieldId = maxFieldId;
         _Buffer = new PooledBuffer(64 * 1024);
         _FieldPresence = new FieldPresence(maxFieldId);
-        _PreviousFields = new PreviousFieldStore(maxFieldId);
+        _PreviousFields = new PreviousFieldValueStore(maxFieldId);
         _MaxPacketsPerBlock = maxPacketsPerBlock;
         _MaxBlockSize = maxBlockSize;
 
@@ -90,11 +90,11 @@ internal sealed class StandardBlockBuilder
     /// <summary>Current serialized size of the block data.</summary>
     internal int CurrentSize => _Buffer.Length;
 
-    /// <summary>Minimum packet ID in this block.</summary>
-    internal ulong MinPacketId => _MinPacketId;
+    /// <summary>Minimum packet ID in this block (same range as <see cref="PacketId"/>).</summary>
+    internal int MinPacketId => _MinPacketId;
 
-    /// <summary>Maximum packet ID in this block.</summary>
-    internal ulong MaxPacketId => _MaxPacketId;
+    /// <summary>Maximum packet ID in this block (same range as <see cref="PacketId"/>).</summary>
+    internal int MaxPacketId => _MaxPacketId;
 
     /// <summary>Minimum timestamp (nanos) in this block.</summary>
     internal long MinTimestamp => _MinTimestamp;
@@ -115,7 +115,7 @@ internal sealed class StandardBlockBuilder
     /// </summary>
     internal bool AddPacket(Packet packet)
     {
-        ulong packetId = (ulong)packet.Id.Value;
+        int packetId = packet.Id.Value;
         long timestamp = packet.Timestamp.AsNanos;
 
         // Track min/max for block metadata
@@ -171,8 +171,8 @@ internal sealed class StandardBlockBuilder
         ref PooledBuffer headerScratch = ref _Scratch[0];
         headerScratch.Reset();
         ProtobufEncoder.WriteVarintField(ref headerScratch, PbfFieldNumbers.BlockPacketCount, (ulong)_PacketCount);
-        ProtobufEncoder.WriteVarintField(ref headerScratch, PbfFieldNumbers.BlockMinPacketId, _MinPacketId);
-        ProtobufEncoder.WriteVarintField(ref headerScratch, PbfFieldNumbers.BlockMaxPacketId, _MaxPacketId);
+        ProtobufEncoder.WriteVarintField(ref headerScratch, PbfFieldNumbers.BlockMinPacketId, (ulong)_MinPacketId);
+        ProtobufEncoder.WriteVarintField(ref headerScratch, PbfFieldNumbers.BlockMaxPacketId, (ulong)_MaxPacketId);
         ProtobufEncoder.WriteSint64(ref headerScratch, PbfFieldNumbers.BlockMinTimestamp, _MinTimestamp);
         ProtobufEncoder.WriteSint64(ref headerScratch, PbfFieldNumbers.BlockMaxTimestamp, _MaxTimestamp);
 
@@ -265,11 +265,12 @@ internal sealed class StandardBlockBuilder
             ProtobufEncoder.WriteVarintField(ref buffer, PbfFieldNumbers.PacketSameFlags, packetSameFlags);
         }
 
-        // Fields (depth 1 for top-level fields, deeper for children)
+        // Fields (depth 1 for top-level fields, deeper for children).
+        // materialize: true — PBF export must include lazy protocol trees.
         Field root = packet.RootField();
-        if (root.HasChildren)
+        if (root.HasChildren(materialize: true))
         {
-            foreach (Field child in root.Children())
+            foreach (Field child in root.Children(materialize: true))
             {
                 _SerializeField(child, depth: 1);
                 ProtobufEncoder.WriteLengthDelimited(ref buffer, PbfFieldNumbers.PacketField, _Scratch[1].WrittenSpan);
@@ -324,33 +325,37 @@ internal sealed class StandardBlockBuilder
             }
         }
 
-        // Field value with same-as-previous
-        FieldValue value = field.Value;
-        string? valueStr = _FormatFieldValue(value);
-        string? valueCustomRepresentation = !value.CustomRepresentation.IsNull
-            ? value.CustomRepresentation.AsString : null;
-        LazyString customText = field.CustomText;
-        string? customTextStr = !customText.IsNull ? customText.AsString : null;
+        // Field value with same-as-previous. Payloads are Core FieldValueData; comparison is
+        // typed via FieldValueData.Equals — never formatted through FieldValueFormatter.
+        ColumnarDetailFlags extractFlags =
+            ColumnarDetailFlags.IncludeCustomRepresentation | ColumnarDetailFlags.IncludeCustomText;
+        FieldValue fieldValue = field.Value;
+        FieldValueData data = fieldValue.Data;
+        bool hasValue = data.Type != FieldType.None;
+        string? customRepresentation = FieldValueMaterializer.GetCustomRepresentation(fieldValue, extractFlags);
+        string? customText = FieldValueMaterializer.GetCustomText(field, extractFlags);
 
         uint fieldSameFlags = _PreviousFields.CompareAndUpdate(
-            fieldIdValue, valueStr, valueCustomRepresentation, customTextStr);
+            fieldIdValue, hasValue, in data, customRepresentation, customText);
 
         // Value
-        if (value.Type != FieldType.None && (fieldSameFlags & SameFlags.FieldSameValue) == 0)
+        if (hasValue && (fieldSameFlags & SameFlags.FieldSameValue) == 0)
         {
-            _WriteFieldValue(ref buffer, value);
+            _WriteFieldValueData(ref buffer, in data);
         }
 
         // Custom representation text
-        if (valueCustomRepresentation is not null && (fieldSameFlags & SameFlags.FieldSameCustomRepresentation) == 0)
+        if (customRepresentation is not null
+            && (fieldSameFlags & SameFlags.FieldSameCustomRepresentation) == 0)
         {
-            ProtobufEncoder.WriteString(ref buffer, PbfFieldNumbers.FieldValueText, valueCustomRepresentation);
+            ProtobufEncoder.WriteString(ref buffer, PbfFieldNumbers.FieldValueText, customRepresentation);
         }
 
         // Custom text
-        if (customTextStr is not null && (fieldSameFlags & SameFlags.FieldSameCustomText) == 0)
+        if (customText is not null
+            && (fieldSameFlags & SameFlags.FieldSameCustomText) == 0)
         {
-            ProtobufEncoder.WriteString(ref buffer, PbfFieldNumbers.FieldCustomText, customTextStr);
+            ProtobufEncoder.WriteString(ref buffer, PbfFieldNumbers.FieldCustomText, customText);
         }
 
         // Same flags
@@ -359,16 +364,17 @@ internal sealed class StandardBlockBuilder
             ProtobufEncoder.WriteVarintField(ref buffer, PbfFieldNumbers.FieldSameFlags, fieldSameFlags);
         }
 
-        // Children (recursive, next depth level)
-        if (field.HasChildren && depth + 1 < _MaxNestingDepth)
+        // Children (recursive, next depth level).
+        // materialize: true — PBF export must include lazy protocol trees.
+        if (field.HasChildren(materialize: true) && depth + 1 < _MaxNestingDepth)
         {
-            foreach (Field child in field.Children())
+            foreach (Field child in field.Children(materialize: true))
             {
                 _SerializeField(child, depth + 1);
                 ProtobufEncoder.WriteLengthDelimited(ref buffer, PbfFieldNumbers.FieldChild, _Scratch[depth + 1].WrittenSpan);
             }
         }
-        else if (field.HasChildren)
+        else if (field.HasChildren(materialize: true))
         {
             // We are at _MaxNestingDepth - 1: children would exceed the depth limit.
             // Count each such field so PbfExporter can report the truncation.
@@ -376,123 +382,104 @@ internal sealed class StandardBlockBuilder
         }
     }
 
-    /// <summary>Writes the field value using the appropriate protobuf encoding.</summary>
-    private static void _WriteFieldValue(ref PooledBuffer buffer, FieldValue value)
+    /// <summary>Writes a Core <see cref="FieldValueData"/> using the appropriate protobuf encoding.</summary>
+    private static void _WriteFieldValueData(ref PooledBuffer buffer, in FieldValueData data)
     {
-        switch (value.Type)
+        switch (data.Type)
         {
             case FieldType.I64:
-                if (!value.Data.TryGetAsI64(out long i64))
-                {
-                    break;
-                }
-                ProtobufEncoder.WriteSint64(ref buffer, PbfFieldNumbers.FieldValue, i64);
+                data.TryGetAsI64(out long i64Value);
+                ProtobufEncoder.WriteSint64(ref buffer, PbfFieldNumbers.FieldValue, i64Value);
                 break;
             case FieldType.U64:
-                if (!value.Data.TryGetAsU64(out ulong u64))
-                {
-                    break;
-                }
-                ProtobufEncoder.WriteVarintField(ref buffer, PbfFieldNumbers.FieldValue, u64);
+                data.TryGetAsU64(out ulong u64Value);
+                ProtobufEncoder.WriteVarintField(ref buffer, PbfFieldNumbers.FieldValue, u64Value);
                 break;
             case FieldType.F64:
-                if (!value.Data.TryGetAsF64(out double f64))
-                {
-                    break;
-                }
-                ProtobufEncoder.WriteDouble(ref buffer, PbfFieldNumbers.FieldValue, f64);
+                data.TryGetAsF64(out double f64Value);
+                ProtobufEncoder.WriteDouble(ref buffer, PbfFieldNumbers.FieldValue, f64Value);
                 break;
             case FieldType.String:
-                if (!value.Data.TryGetAsString(out string str))
+                if (data.TryGetAsString(out string stringValue))
                 {
-                    break;
+                    ProtobufEncoder.WriteString(ref buffer, PbfFieldNumbers.FieldValue, stringValue);
                 }
-                ProtobufEncoder.WriteString(ref buffer, PbfFieldNumbers.FieldValue, str);
                 break;
             case FieldType.Bytes:
-                {
-                    if (!value.Data.TryGetAsBytes(out ReadOnlyMemory<byte> bytesVal))
-                    {
-                        break;
-                    }
-                    ProtobufEncoder.WriteLengthDelimited(ref buffer, PbfFieldNumbers.FieldValue, bytesVal.Span);
-                    break;
-                }
             case FieldType.MacAddress:
-                {
-                    if (!value.Data.TryGetAsMacAddress(out MacAddress mac))
-                    {
-                        break;
-                    }
-                    Span<byte> macBytes = stackalloc byte[6];
-                    mac.ToBytes(macBytes);
-                    ProtobufEncoder.WriteLengthDelimited(ref buffer, PbfFieldNumbers.FieldValue, macBytes);
-                    break;
-                }
             case FieldType.IPv4Address:
-                {
-                    if (!value.Data.TryGetAsIPv4(out IPv4Address ipv4))
-                    {
-                        break;
-                    }
-                    Span<byte> ip = stackalloc byte[4];
-                    ipv4.ToBytes(ip);
-                    ProtobufEncoder.WriteLengthDelimited(ref buffer, PbfFieldNumbers.FieldValue, ip);
-                    break;
-                }
+            case FieldType.IPv6Address:
+            case FieldType.Eui64:
+            case FieldType.Uuid:
+                _WriteBytePayload(ref buffer, in data);
+                break;
             case FieldType.Bool:
-                if (!value.Data.TryGetAsBool(out bool boolVal))
-                {
-                    break;
-                }
-                ProtobufEncoder.WriteBool(ref buffer, PbfFieldNumbers.FieldValue, boolVal);
+                data.TryGetAsBool(out bool boolValue);
+                ProtobufEncoder.WriteBool(ref buffer, PbfFieldNumbers.FieldValue, boolValue);
                 break;
             case FieldType.Timestamp:
-                if (!value.Data.TryGetAsTimestamp(out Timestamp ts))
-                {
-                    break;
-                }
-                ProtobufEncoder.WriteSint64(ref buffer, PbfFieldNumbers.FieldValue, ts.AsNanos);
+                data.TryGetAsTimestamp(out Timestamp timestamp);
+                ProtobufEncoder.WriteSint64(ref buffer, PbfFieldNumbers.FieldValue, timestamp.AsNanos);
                 break;
-            case FieldType.IPv6Address:
-                {
-                    if (!value.Data.TryGetAsIPv6(out IPv6Address ipv6))
-                    {
-                        break;
-                    }
-                    Span<byte> ip6 = stackalloc byte[16];
-                    ipv6.ToBytes(ip6);
-                    ProtobufEncoder.WriteLengthDelimited(ref buffer, PbfFieldNumbers.FieldValue, ip6);
-                    break;
-                }
-            case FieldType.Eui64:
-                {
-                    if (!value.Data.TryGetAsEui64(out Eui64 eui))
-                    {
-                        break;
-                    }
-                    Span<byte> euiBytes = stackalloc byte[8];
-                    eui.ToBytes(euiBytes);
-                    ProtobufEncoder.WriteLengthDelimited(ref buffer, PbfFieldNumbers.FieldValue, euiBytes);
-                    break;
-                }
-            case FieldType.Uuid:
-                {
-                    if (!value.Data.TryGetAsUuid(out Uuid uuid))
-                    {
-                        break;
-                    }
-                    Span<byte> uuidBytes = stackalloc byte[16];
-                    uuid.ToBytes(uuidBytes);
-                    ProtobufEncoder.WriteLengthDelimited(ref buffer, PbfFieldNumbers.FieldValue, uuidBytes);
-                    break;
-                }
             default:
-                // FieldType.None — container/grouping field carries no value.
+                // FieldType.None is filtered by hasValue above.
                 break;
         }
     }
 
-    /// <summary>Formats a field value as string for same-as-previous comparison.</summary>
-    private static string? _FormatFieldValue(FieldValue value) => FieldValueFormatter.Format(value);
+    /// <summary>
+    /// Writes bytes / fixed-size address payloads without a heap clone for fixed sizes
+    /// (stackalloc scratch). Variable <see cref="FieldType.Bytes"/> still copies via
+    /// <see cref="FieldValueMaterializer.ToBytesArray"/> for lifetime safety.
+    /// </summary>
+    private static void _WriteBytePayload(ref PooledBuffer buffer, in FieldValueData data)
+    {
+        switch (data.Type)
+        {
+            case FieldType.Bytes:
+                byte[] bytes = FieldValueMaterializer.ToBytesArray(in data) ?? [];
+                ProtobufEncoder.WriteLengthDelimited(ref buffer, PbfFieldNumbers.FieldValue, bytes);
+                break;
+            case FieldType.MacAddress:
+                if (data.TryGetAsMacAddress(out MacAddress mac))
+                {
+                    Span<byte> scratch = stackalloc byte[6];
+                    mac.ToBytes(scratch);
+                    ProtobufEncoder.WriteLengthDelimited(ref buffer, PbfFieldNumbers.FieldValue, scratch);
+                }
+                break;
+            case FieldType.IPv4Address:
+                if (data.TryGetAsIPv4(out IPv4Address ipv4))
+                {
+                    Span<byte> scratch = stackalloc byte[4];
+                    ipv4.ToBytes(scratch);
+                    ProtobufEncoder.WriteLengthDelimited(ref buffer, PbfFieldNumbers.FieldValue, scratch);
+                }
+                break;
+            case FieldType.IPv6Address:
+                if (data.TryGetAsIPv6(out IPv6Address ipv6))
+                {
+                    Span<byte> scratch = stackalloc byte[16];
+                    ipv6.ToBytes(scratch);
+                    ProtobufEncoder.WriteLengthDelimited(ref buffer, PbfFieldNumbers.FieldValue, scratch);
+                }
+                break;
+            case FieldType.Eui64:
+                if (data.TryGetAsEui64(out Eui64 eui64))
+                {
+                    Span<byte> scratch = stackalloc byte[8];
+                    eui64.ToBytes(scratch);
+                    ProtobufEncoder.WriteLengthDelimited(ref buffer, PbfFieldNumbers.FieldValue, scratch);
+                }
+                break;
+            case FieldType.Uuid:
+                if (data.TryGetAsUuid(out Uuid uuid))
+                {
+                    Span<byte> scratch = stackalloc byte[16];
+                    uuid.ToBytes(scratch);
+                    ProtobufEncoder.WriteLengthDelimited(ref buffer, PbfFieldNumbers.FieldValue, scratch);
+                }
+                break;
+        }
+    }
 }

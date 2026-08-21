@@ -1,6 +1,7 @@
 // Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Sessions.Jobs;
+
 /// <summary>
 /// Represents a single unit of work in the session.
 /// Each job runs on its own dedicated background thread.
@@ -14,26 +15,33 @@ namespace NetworkInspector.Sessions.Jobs;
 /// </summary>
 internal sealed class Job : IDisposable
 {
+    #region Fields
+
     private readonly Action<CancellationToken> _Work;
     private readonly CancellationTokenSource _Cts = new();
     private readonly Action<Job, JobStatus> _OnStatusChanged;
     private readonly ManualResetEventSlim _Completed = new(initialState: false);
     // Status stored as int for Volatile/Interlocked compatibility.
-    private int _Status = (int)JobStatus.Pending;
+    private volatile int _Status = (int)JobStatus.Pending;
     // CAS guard: 0 = not started, 1 = Start() called.
     // Prevents double-start from concurrent callers (e.g. TryAddListener
     // and Shutdown racing to Start the same ListenerSlot).
-    private int _StartAttempted;
+    private volatile int _StartAttempted;
     // Timestamps stored as separate value + flag to support Volatile semantics.
     // Volatile.Read/Write do not have overloads for Nullable<T> (value type).
     // The write sequence is: store value first, then Volatile.Write the flag (release).
     // The read sequence: Volatile.Read the flag (acquire), then read value.
     // This guarantees visibility through the acquire/release memory barrier pair.
     private DateTimeOffset _StartTimeValue;
-    private int _StartTimeSet;  // 0 = not set, 1 = set
+    private volatile int _StartTimeSet;  // 0 = not set, 1 = set
     private DateTimeOffset _EndTimeValue;
-    private int _EndTimeSet;    // 0 = not set, 1 = set
-    private Exception? _FailureException;
+    private volatile int _EndTimeSet;    // 0 = not set, 1 = set
+    private volatile Exception? _FailureException;
+
+    #endregion
+
+    #region Lifecycle
+
     /// <summary>Creates a job with the given identity and work delegate.</summary>
     internal Job(
         JobId id,
@@ -48,7 +56,11 @@ internal sealed class Job : IDisposable
         _Work = work;
         _OnStatusChanged = onStatusChanged;
     }
-    // ── Identity ─────────────────────────────────────────────────────────────
+
+    #endregion
+
+    #region Identity
+
     /// <summary>Unique job identifier within the session.</summary>
     internal JobId Id
     {
@@ -64,15 +76,19 @@ internal sealed class Job : IDisposable
     {
         get;
     }
-    // ── Observable state (thread-safe reads) ─────────────────────────────────
+
+    #endregion
+
+    #region Observable state
+
     /// <summary>Current execution status. Volatile read — always current.</summary>
-    internal JobStatus Status => (JobStatus)Volatile.Read(ref _Status);
+    internal JobStatus Status => (JobStatus)_Status;
     /// <summary>When the job thread started. Null if not yet started.</summary>
     internal DateTimeOffset? StartTime
     {
         get
         {
-            if (Volatile.Read(ref _StartTimeSet) != 0)
+            if (_StartTimeSet != 0)
             {
                 return _StartTimeValue;
             }
@@ -85,7 +101,7 @@ internal sealed class Job : IDisposable
     {
         get
         {
-            if (Volatile.Read(ref _EndTimeSet) != 0)
+            if (_EndTimeSet != 0)
             {
                 return _EndTimeValue;
             }
@@ -94,8 +110,12 @@ internal sealed class Job : IDisposable
         }
     }
     /// <summary>Exception that caused job failure, if any.</summary>
-    internal Exception? FailureException => Volatile.Read(ref _FailureException!);
-    // ── Lifecycle ─────────────────────────────────────────────────────────────
+    internal Exception? FailureException => _FailureException;
+
+    #endregion
+
+    #region Public API
+
     /// <summary>
     /// Starts the job on a new background thread.
     /// Transitions status from <see cref="JobStatus.Pending"/> to <see cref="JobStatus.Running"/>.
@@ -128,7 +148,7 @@ internal sealed class Job : IDisposable
         // Set start time before transitioning to Running so that observers
         // never see Status==Running with a null StartTime.
         _StartTimeValue = DateTimeOffset.UtcNow;
-        Volatile.Write(ref _StartTimeSet, 1);
+        _StartTimeSet = 1;
         _SetStatus(JobStatus.Running);
         try
         {
@@ -138,9 +158,9 @@ internal sealed class Job : IDisposable
         {
             // thread.Start() failed — the thread never ran and never will.
             // Transition to Failed immediately so WaitForCompletion() does not block.
-            Volatile.Write(ref _FailureException, ex);
+            _FailureException = ex;
             _EndTimeValue = DateTimeOffset.UtcNow;
-            Volatile.Write(ref _EndTimeSet, 1);
+            _EndTimeSet = 1;
             _SetStatus(JobStatus.Failed);
             throw;
         }
@@ -181,9 +201,14 @@ internal sealed class Job : IDisposable
         _Completed.Dispose();
         _Cts.Dispose();
     }
-    // ── Private implementation ────────────────────────────────────────────────
-  private static bool _IsTerminal(JobStatus status) =>
+
+    #endregion
+
+    #region Private helpers
+
+    private static bool _IsTerminal(JobStatus status) =>
         status is JobStatus.Completed or JobStatus.Cancelled or JobStatus.Failed;
+
     /// <summary>
     /// Entry point for the job thread. Executes the work delegate and updates
     /// status regardless of outcome.
@@ -194,7 +219,7 @@ internal sealed class Job : IDisposable
         {
             _Work(_Cts.Token);
             _EndTimeValue = DateTimeOffset.UtcNow;
-            Volatile.Write(ref _EndTimeSet, 1);
+            _EndTimeSet = 1;
             _SetStatus(JobStatus.Completed);
         }
         catch (OperationCanceledException oce) when (oce.CancellationToken == _Cts.Token)
@@ -204,14 +229,14 @@ internal sealed class Job : IDisposable
             // token inside the work delegate) is a genuine failure and falls through
             // to the Exception catch below.
             _EndTimeValue = DateTimeOffset.UtcNow;
-            Volatile.Write(ref _EndTimeSet, 1);
+            _EndTimeSet = 1;
             _SetStatus(JobStatus.Cancelled);
         }
         catch (Exception ex)
         {
-            Volatile.Write(ref _FailureException, ex);
+            _FailureException = ex;
             _EndTimeValue = DateTimeOffset.UtcNow;
-            Volatile.Write(ref _EndTimeSet, 1);
+            _EndTimeSet = 1;
             _SetStatus(JobStatus.Failed);
         }
     }
@@ -229,5 +254,7 @@ internal sealed class Job : IDisposable
         }
         _OnStatusChanged(this, status);
     }
+
+    #endregion
 }
 

@@ -483,4 +483,146 @@ internal sealed class SettingTests
         await Assert.That(text).Contains("test.flag");
         await Assert.That(text).Contains("Bool");
     }
+
+    [Test]
+    public async Task SetPendingValue_EnumDisallowedNumeric_Throws()
+    {
+        Setting s = Setting.Enum("test.mode", "Mode", "test", 0UL,
+            [("Low", 0UL), ("High", 1UL)]);
+        ValidationSettingsException ex = Assert.Throws<ValidationSettingsException>(
+            () => s.SetPendingValue(SettingValue.Enum("Low", 99UL)));
+        await Assert.That(ex.Message).Contains("not an allowed enum value");
+    }
+
+    [Test]
+    public async Task ValidateEnum_NullMetadata_ReturnsNull()
+    {
+        Setting setting = SettingsTestHelpers.CreateSettingForManagerValidationTests(
+            "test.enum", "Enum", "test", SettingType.Enum, SettingValue.Enum("Low", 0), enumMetadata: null);
+        MethodInfo? validateEnum = typeof(Setting).GetMethod(
+            "_ValidateEnum", BindingFlags.NonPublic | BindingFlags.Instance);
+        await Assert.That(validateEnum).IsNotNull();
+        string? result = (string?)validateEnum!.Invoke(setting, [SettingValue.Enum("Low", 0)]);
+        await Assert.That(result).IsNull();
+    }
+
+    [Test]
+    public async Task ValidateEnum_InvalidEnumValue_ReturnsErrorMessage()
+    {
+        Setting setting = Setting.Enum("test.mode", "Mode", "test", 0UL, [("Low", 0UL)]);
+        MethodInfo? validateEnum = typeof(Setting).GetMethod(
+            "_ValidateEnum", BindingFlags.NonPublic | BindingFlags.Instance);
+        await Assert.That(validateEnum).IsNotNull();
+        string? result = (string?)validateEnum!.Invoke(setting, [SettingValue.U64(1UL)]);
+        await Assert.That(result).IsEqualTo("Invalid enum value");
+    }
+
+    [Test]
+    public async Task ApplyFromPersistence_TypeMismatch_Throws()
+    {
+        using SettingsManager mgr = new();
+        Setting s = Setting.Bool("test.flag", "Flag", "test", false);
+        mgr.RegisterSetting(s);
+
+        MethodInfo? apply = typeof(Setting).GetMethod(
+            "ApplyFromPersistence", BindingFlags.NonPublic | BindingFlags.Instance);
+        await Assert.That(apply).IsNotNull();
+
+        TargetInvocationException tie = Assert.Throws<TargetInvocationException>(
+            () => apply!.Invoke(s, [SettingValue.U64(1)]));
+        await Assert.That(tie.InnerException).IsTypeOf<TypeMismatchSettingsException>();
+    }
+
+    [Test]
+    public async Task ApplyFromPersistence_ValidationFailed_Throws()
+    {
+        using SettingsManager mgr = new();
+        Setting s = Setting.U64("test.port", "Port", "test", 8080UL, min: 1024UL, max: 65535UL);
+        mgr.RegisterSetting(s);
+
+        MethodInfo? apply = typeof(Setting).GetMethod(
+            "ApplyFromPersistence", BindingFlags.NonPublic | BindingFlags.Instance);
+        await Assert.That(apply).IsNotNull();
+
+        TargetInvocationException tie = Assert.Throws<TargetInvocationException>(
+            () => apply!.Invoke(s, [SettingValue.U64(80UL)]));
+        await Assert.That(tie.InnerException).IsTypeOf<ValidationSettingsException>();
+    }
+
+    [Test]
+    public async Task SetPendingValue_WhileManagerLoading_Throws()
+    {
+        using SettingsManager mgr = new();
+        Setting s = Setting.Bool("test.flag", "Flag", "test", false);
+        mgr.RegisterSetting(s);
+
+        System.Reflection.FieldInfo? loadingField = typeof(SettingsManager).GetField(
+            "_IsLoading", BindingFlags.NonPublic | BindingFlags.Instance);
+        await Assert.That(loadingField).IsNotNull();
+        loadingField!.SetValue(mgr, 1);
+
+        InvalidOperationException ex = Assert.Throws<InvalidOperationException>(
+            () => s.SetPendingValue(SettingValue.Bool(true)));
+        await Assert.That(ex.Message).Contains("Load()");
+    }
+
+    [Test]
+    public async Task Apply_WhileManagerLoading_Throws()
+    {
+        using SettingsManager mgr = new();
+        Setting s = Setting.Bool("test.flag", "Flag", "test", false);
+        mgr.RegisterSetting(s);
+        s.SetPendingValue(SettingValue.Bool(true));
+
+        System.Reflection.FieldInfo? loadingField = typeof(SettingsManager).GetField(
+            "_IsLoading", BindingFlags.NonPublic | BindingFlags.Instance);
+        await Assert.That(loadingField).IsNotNull();
+        loadingField!.SetValue(mgr, 1);
+
+        InvalidOperationException ex = Assert.Throws<InvalidOperationException>(() => s.Apply());
+        await Assert.That(ex.Message).Contains("Load()");
+    }
+
+    [Test]
+    public async Task Reset_WhileManagerLoading_Throws()
+    {
+        using SettingsManager mgr = new();
+        Setting s = Setting.Bool("test.flag", "Flag", "test", false);
+        mgr.RegisterSetting(s);
+        s.SetPendingValue(SettingValue.Bool(true));
+
+        System.Reflection.FieldInfo loadingField = typeof(SettingsManager).GetField(
+            "_IsLoading", BindingFlags.NonPublic | BindingFlags.Instance)!;
+        loadingField.SetValue(mgr, 1);
+        try
+        {
+            InvalidOperationException ex = Assert.Throws<InvalidOperationException>(() => s.Reset());
+            await Assert.That(ex.Message).Contains("Load()");
+        }
+        finally
+        {
+            loadingField.SetValue(mgr, 0);
+        }
+    }
+
+    [Test]
+    public async Task ResetToDefault_WhileManagerLoading_Throws()
+    {
+        using SettingsManager mgr = new();
+        Setting s = Setting.Bool("test.flag", "Flag", "test", false);
+        mgr.RegisterSetting(s);
+
+        System.Reflection.FieldInfo loadingField = typeof(SettingsManager).GetField(
+            "_IsLoading", BindingFlags.NonPublic | BindingFlags.Instance)!;
+        loadingField.SetValue(mgr, 1);
+        try
+        {
+            InvalidOperationException ex = Assert.Throws<InvalidOperationException>(() => s.ResetToDefault());
+            await Assert.That(ex.Message).Contains("Load()");
+        }
+        finally
+        {
+            loadingField.SetValue(mgr, 0);
+        }
+    }
 }

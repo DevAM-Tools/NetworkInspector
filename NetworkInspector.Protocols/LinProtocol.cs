@@ -1,10 +1,10 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Protocols;
 
 /// <summary>
 /// LIN protocol parser (ISO 17987) for DLT_LIN (link type 212).
-/// Dispatches the frame payload to sub-protocols (e.g. Signal PDU) via the <c>lin.id</c>
+/// Dispatches the frame payload to sub-protocols (e.g. Signal Message) via the <c>lin.id</c>
 /// dispatch table, keyed by the 6-bit frame ID. Dispatching applies only to standard
 /// (non-event-triggered) frames.
 /// <para>DLT_LIN capture format (per Wireshark packet-lin.h / packet-lin.c):</para>
@@ -41,7 +41,7 @@ namespace NetworkInspector.Protocols;
 /// ├── lin.checksum.status: [Good]
 /// ├── lin.errors: 0x00
 /// ├── lin.data: (4 bytes)
-/// └── signal_pdu: ...                           [optional, when registered on lin.id]
+/// └── signal_message: ...                     [optional, when registered on lin.id]
 /// </code>
 /// </summary>
 /// <remarks>
@@ -326,9 +326,9 @@ public sealed partial class LinProtocol : IProtocol
             if (msgType != _MsgTypeEvent)
             {
                 ParseResult dispatchResult = container.TryCallNextProtocolU64(_IdTableId, (ulong)frameId, payload, in context);
-                if (dispatchResult.IsError)
+                if (dispatchResult.TryPropagateError(out ParseResult error))
                 {
-                    return dispatchResult;
+                    return error;
                 }
             }
         }

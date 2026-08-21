@@ -45,7 +45,7 @@ internal sealed class CanProtocolXlTests
             FieldId? prioField = stack.GetFieldId("canxl.priority");
             await Assert.That(prioField).IsNotNull();
 
-            bool has = packet.TryGetFieldValue(prioField!.Value, out FieldValue value);
+            bool has = packet.TryGetFieldValue(prioField!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsTrue();
             value.Data.TryGetAsU64(out ulong u64Val);
             await Assert.That(u64Val).IsEqualTo(7UL);
@@ -62,7 +62,7 @@ internal sealed class CanProtocolXlTests
         using (stack)
         {
             FieldId? prioField = stack.GetFieldId("canxl.priority");
-            bool has = packet.TryGetFieldValue(prioField!.Value, out FieldValue value);
+            bool has = packet.TryGetFieldValue(prioField!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsTrue();
             value.Data.TryGetAsU64(out ulong u64Val);
             await Assert.That(u64Val).IsEqualTo(0x7FFUL);
@@ -80,7 +80,7 @@ internal sealed class CanProtocolXlTests
             FieldId? vcidField = stack.GetFieldId("canxl.vcid");
             await Assert.That(vcidField).IsNotNull();
 
-            bool has = packet.TryGetFieldValue(vcidField!.Value, out FieldValue value);
+            bool has = packet.TryGetFieldValue(vcidField!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsTrue();
             value.Data.TryGetAsU64(out ulong u64Val);
             await Assert.That(u64Val).IsEqualTo(0xABUL);
@@ -98,7 +98,7 @@ internal sealed class CanProtocolXlTests
             FieldId? xlfField = stack.GetFieldId("canxl.flags.xlf");
             await Assert.That(xlfField).IsNotNull();
 
-            bool has = packet.TryGetFieldValue(xlfField!.Value, out FieldValue value);
+            bool has = packet.TryGetFieldValue(xlfField!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsTrue();
             value.Data.TryGetAsBool(out bool boolVal);
             await Assert.That(boolVal).IsTrue();
@@ -116,7 +116,7 @@ internal sealed class CanProtocolXlTests
             FieldId? secField = stack.GetFieldId("canxl.flags.sec");
             await Assert.That(secField).IsNotNull();
 
-            bool has = packet.TryGetFieldValue(secField!.Value, out FieldValue value);
+            bool has = packet.TryGetFieldValue(secField!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsTrue();
             value.Data.TryGetAsBool(out bool boolVal);
             await Assert.That(boolVal).IsTrue();
@@ -132,7 +132,7 @@ internal sealed class CanProtocolXlTests
         using (stack)
         {
             FieldId? secField = stack.GetFieldId("canxl.flags.sec");
-            bool has = packet.TryGetFieldValue(secField!.Value, out FieldValue value);
+            bool has = packet.TryGetFieldValue(secField!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsTrue();
             value.Data.TryGetAsBool(out bool boolVal);
             await Assert.That(boolVal).IsFalse();
@@ -150,7 +150,7 @@ internal sealed class CanProtocolXlTests
             FieldId? rrsField = stack.GetFieldId("canxl.flags.rrs");
             await Assert.That(rrsField).IsNotNull();
 
-            bool has = packet.TryGetFieldValue(rrsField!.Value, out FieldValue value);
+            bool has = packet.TryGetFieldValue(rrsField!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsTrue();
             value.Data.TryGetAsBool(out bool boolVal);
             await Assert.That(boolVal).IsTrue();
@@ -168,7 +168,7 @@ internal sealed class CanProtocolXlTests
             FieldId? sduField = stack.GetFieldId("canxl.sdu_type");
             await Assert.That(sduField).IsNotNull();
 
-            bool has = packet.TryGetFieldValue(sduField!.Value, out FieldValue value);
+            bool has = packet.TryGetFieldValue(sduField!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsTrue();
             value.Data.TryGetAsU64(out ulong u64Val);
             await Assert.That(u64Val).IsEqualTo(0x42UL);
@@ -187,7 +187,7 @@ internal sealed class CanProtocolXlTests
             FieldId? lenField = stack.GetFieldId("canxl.len");
             await Assert.That(lenField).IsNotNull();
 
-            bool has = packet.TryGetFieldValue(lenField!.Value, out FieldValue value);
+            bool has = packet.TryGetFieldValue(lenField!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsTrue();
             value.Data.TryGetAsU64(out ulong u64Val);
             await Assert.That(u64Val).IsEqualTo(64UL);
@@ -205,7 +205,7 @@ internal sealed class CanProtocolXlTests
             FieldId? afField = stack.GetFieldId("canxl.acceptance_field");
             await Assert.That(afField).IsNotNull();
 
-            bool has = packet.TryGetFieldValue(afField!.Value, out FieldValue value);
+            bool has = packet.TryGetFieldValue(afField!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsTrue();
             value.Data.TryGetAsU64(out ulong u64Val);
             await Assert.That(u64Val).IsEqualTo(0xDEADBEEFUL);
@@ -224,7 +224,7 @@ internal sealed class CanProtocolXlTests
             FieldId? dataField = stack.GetFieldId("canxl.data");
             await Assert.That(dataField).IsNotNull();
 
-            bool has = packet.TryGetFieldValue(dataField!.Value, out FieldValue value);
+            bool has = packet.TryGetFieldValue(dataField!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsTrue();
 
             value.Data.TryGetAsBytes(out ReadOnlyMemory<byte> data);
@@ -249,7 +249,7 @@ internal sealed class CanProtocolXlTests
         using (stack)
         {
             FieldId? dataField = stack.GetFieldId("canxl.data");
-            bool has = packet.TryGetFieldValue(dataField!.Value, out FieldValue value);
+            bool has = packet.TryGetFieldValue(dataField!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsTrue();
 
             value.Data.TryGetAsBytes(out ReadOnlyMemory<byte> data);
@@ -271,7 +271,7 @@ internal sealed class CanProtocolXlTests
             // Classic CAN fields should still be present
             FieldId? canIdField = stack.GetFieldId("can.id");
             await Assert.That(canIdField).IsNotNull();
-            bool hasCan = packet.TryGetFieldValue(canIdField!.Value, out FieldValue canValue);
+            bool hasCan = packet.TryGetFieldValue(canIdField!.Value, out FieldValue canValue, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasCan).IsTrue();
             canValue.Data.TryGetAsU64(out ulong u64Val);
             await Assert.That(u64Val).IsEqualTo(0x123UL);
@@ -279,7 +279,7 @@ internal sealed class CanProtocolXlTests
             // CAN XL fields should NOT be present
             FieldId? xlPrioField = stack.GetFieldId("canxl.priority");
             await Assert.That(xlPrioField).IsNotNull();
-            bool hasXl = packet.TryGetFieldValue(xlPrioField!.Value, out _);
+            bool hasXl = packet.TryGetFieldValue(xlPrioField!.Value, out _, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasXl).IsFalse();
         }
     }
@@ -296,14 +296,14 @@ internal sealed class CanProtocolXlTests
             // CAN FD fields should still be present
             FieldId? fdField = stack.GetFieldId("can.flags.fd");
             await Assert.That(fdField).IsNotNull();
-            bool hasFd = packet.TryGetFieldValue(fdField!.Value, out FieldValue fdValue);
+            bool hasFd = packet.TryGetFieldValue(fdField!.Value, out FieldValue fdValue, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasFd).IsTrue();
             fdValue.Data.TryGetAsBool(out bool boolVal);
             await Assert.That(boolVal).IsTrue();
 
             // CAN XL fields should NOT be present
             FieldId? xlPrioField = stack.GetFieldId("canxl.priority");
-            bool hasXl = packet.TryGetFieldValue(xlPrioField!.Value, out _);
+            bool hasXl = packet.TryGetFieldValue(xlPrioField!.Value, out _, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasXl).IsFalse();
         }
     }
@@ -321,7 +321,7 @@ internal sealed class CanProtocolXlTests
             // Neither CAN nor CAN XL fields should be present
             FieldId? xlPrioField = stack.GetFieldId("canxl.priority");
             await Assert.That(xlPrioField).IsNotNull();
-            bool has = packet.TryGetFieldValue(xlPrioField!.Value, out _);
+            bool has = packet.TryGetFieldValue(xlPrioField!.Value, out _, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsFalse();
         }
     }
@@ -337,7 +337,7 @@ internal sealed class CanProtocolXlTests
         {
             // CAN XL parsing should fail (insufficient data for 12-byte header)
             FieldId? xlPrioField = stack.GetFieldId("canxl.priority");
-            bool has = packet.TryGetFieldValue(xlPrioField!.Value, out _);
+            bool has = packet.TryGetFieldValue(xlPrioField!.Value, out _, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsFalse();
         }
     }
@@ -391,9 +391,9 @@ internal sealed class CanProtocolXlTests
             FieldId? rrsField = stack.GetFieldId("canxl.flags.rrs");
             FieldId? xlfField = stack.GetFieldId("canxl.flags.xlf");
 
-            bool hasSec = packet.TryGetFieldValue(secField!.Value, out FieldValue secValue);
-            bool hasRrs = packet.TryGetFieldValue(rrsField!.Value, out FieldValue rrsValue);
-            bool hasXlf = packet.TryGetFieldValue(xlfField!.Value, out FieldValue xlfValue);
+            bool hasSec = packet.TryGetFieldValue(secField!.Value, out FieldValue secValue, materialize: true); // materialize: true — need complete field tree for assertion
+            bool hasRrs = packet.TryGetFieldValue(rrsField!.Value, out FieldValue rrsValue, materialize: true); // materialize: true — need complete field tree for assertion
+            bool hasXlf = packet.TryGetFieldValue(xlfField!.Value, out FieldValue xlfValue, materialize: true); // materialize: true — need complete field tree for assertion
 
             await Assert.That(hasSec).IsTrue();
             await Assert.That(hasRrs).IsTrue();
@@ -419,8 +419,8 @@ internal sealed class CanProtocolXlTests
             FieldId? prioField = stack.GetFieldId("canxl.priority");
             FieldId? vcidField = stack.GetFieldId("canxl.vcid");
 
-            bool hasPrio = packet.TryGetFieldValue(prioField!.Value, out FieldValue prioValue);
-            bool hasVcid = packet.TryGetFieldValue(vcidField!.Value, out FieldValue vcidValue);
+            bool hasPrio = packet.TryGetFieldValue(prioField!.Value, out FieldValue prioValue, materialize: true); // materialize: true — need complete field tree for assertion
+            bool hasVcid = packet.TryGetFieldValue(vcidField!.Value, out FieldValue vcidValue, materialize: true); // materialize: true — need complete field tree for assertion
 
             await Assert.That(hasPrio).IsTrue();
             await Assert.That(hasVcid).IsTrue();
@@ -441,7 +441,7 @@ internal sealed class CanProtocolXlTests
         using (stack)
         {
             FieldId? vcidField = stack.GetFieldId("canxl.vcid");
-            bool has = packet.TryGetFieldValue(vcidField!.Value, out FieldValue value);
+            bool has = packet.TryGetFieldValue(vcidField!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsTrue();
             value.Data.TryGetAsU64(out ulong u64Val);
             await Assert.That(u64Val).IsEqualTo(0xFFUL);

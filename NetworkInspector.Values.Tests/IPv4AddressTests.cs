@@ -68,6 +68,34 @@ internal sealed class IPv4AddressTests
         await Assert.That(addr.RawValue).IsEqualTo(0x01020304u);
     }
 
+    [Test]
+    public async Task TryFromBytes_ShortSpan_ReturnsFalse()
+    {
+        await Assert.That(IPv4Address.TryFromBytes(ReadOnlySpan<byte>.Empty, out IPv4Address address)).IsFalse();
+        await Assert.That(address).IsEqualTo(default(IPv4Address));
+    }
+
+    [Test]
+    public async Task FromBytes_ShortSpan_Throws()
+    {
+        await Assert.That(() =>
+        {
+            IPv4Address _ = IPv4Address.FromBytes(ReadOnlySpan<byte>.Empty);
+            return Task.CompletedTask;
+        }).Throws<ArgumentException>();
+    }
+
+    [Test]
+    public async Task TryFormat_MinimalBuffer_FitsZeroAddress()
+    {
+        IPv4Address addr = default;
+        char[] buffer = new char[7];
+        bool ok = addr.TryFormat(buffer, out int written, default, null);
+        await Assert.That(ok).IsTrue();
+        await Assert.That(written).IsEqualTo(7);
+        await Assert.That(new string(buffer, 0, written)).IsEqualTo("0.0.0.0");
+    }
+
     // === Classification ===
 
     [Test]

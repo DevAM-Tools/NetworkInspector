@@ -1,6 +1,6 @@
 # TUnit Testing Rules
 
-Load when test files or test projects are in scope. Implements Section 4.5 in `copilot-instructions.md`.
+Load when `*.Tests.cs` or `.Tests` projects are in scope. Implements Section 4.5 in `copilot-instructions.md`.
 
 ## Scope
 
@@ -9,7 +9,7 @@ Load when test files or test projects are in scope. Implements Section 4.5 in `c
 
 ## Framework
 
-❗ **This repo uses TUnit only.** Do not add or migrate to xUnit, NUnit, MSTest, or FluentAssertions — incompatible with MTP + ExitPointGaps.
+❗ **TUnit only.** Do not add or migrate to xUnit, NUnit, MSTest, or FluentAssertions — incompatible with MTP + ExitPointGaps.
 
 **Minimal stack (nothing else required for unit tests):**
 

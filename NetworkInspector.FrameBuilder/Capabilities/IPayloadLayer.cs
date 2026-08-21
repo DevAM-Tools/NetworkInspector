@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.FrameBuilder;
 
@@ -9,7 +9,7 @@ namespace NetworkInspector.FrameBuilder;
 /// <remarks>
 /// <para>
 /// Used to mark application-level layers (SOME/IP, DNS, DHCP, TLS records,
-/// HTTP, Signal-PDU, …) so the capability-typed payload <c>Then(...)</c>
+/// HTTP, Signal Message, …) so the capability-typed payload <c>Then(...)</c>
 /// overload can attach them onto an outer layer without requiring the outer
 /// layer to publish a next-protocol field.
 /// </para>

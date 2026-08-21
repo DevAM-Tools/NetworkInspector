@@ -20,8 +20,14 @@ namespace NetworkInspector.FrameBuilder;
 /// </remarks>
 public sealed class PduTransportConfigFb
 {
-    private readonly byte _IdFieldSize;
-    private readonly byte _LengthFieldSize;
+    /// <summary>Size of the PDU-ID field in bytes (1, 2 or 4).</summary>
+    public byte IdFieldSize { get; }
+
+    /// <summary>Size of the Length field in bytes (1, 2 or 4).</summary>
+    public byte LengthFieldSize { get; }
+
+    /// <summary>Registered PDU-ID → name mappings.</summary>
+    public ImmutableArray<PduEntry> Pdus { get; }
 
     /// <summary>
     /// Creates a configuration with explicit ID and Length field sizes.
@@ -38,12 +44,14 @@ public sealed class PduTransportConfigFb
         {
             throw new ArgumentOutOfRangeException(nameof(idFieldSize), idFieldSize, "PDU-Transport ID field size must be 1, 2 or 4 bytes.");
         }
+
         if (lengthFieldSize is not (1 or 2 or 4))
         {
             throw new ArgumentOutOfRangeException(nameof(lengthFieldSize), lengthFieldSize, "PDU-Transport Length field size must be 1, 2 or 4 bytes.");
         }
-        _IdFieldSize = idFieldSize;
-        _LengthFieldSize = lengthFieldSize;
+
+        IdFieldSize = idFieldSize;
+        LengthFieldSize = lengthFieldSize;
         Pdus = pdus.IsDefault ? [] : pdus;
     }
 
@@ -55,35 +63,12 @@ public sealed class PduTransportConfigFb
         : this(idFieldSize: 4, lengthFieldSize: 4, pdus)
     {
     }
-
-    /// <summary>Size of the PDU-ID field in bytes (1, 2 or 4).</summary>
-    public byte IdFieldSize => _IdFieldSize;
-
-    /// <summary>Size of the Length field in bytes (1, 2 or 4).</summary>
-    public byte LengthFieldSize => _LengthFieldSize;
-
-    /// <summary>Registered PDU-ID → name mappings.</summary>
-    public ImmutableArray<PduEntry> Pdus
-    {
-        get;
-    }
 }
 
 /// <summary>
 /// One entry in a <see cref="PduTransportConfigFb"/>: maps a PDU identifier
 /// to its human-readable name.
 /// </summary>
-public readonly struct PduEntry
-{
-    /// <summary>Numeric PDU identifier.</summary>
-    public uint PduId
-    {
-        get; init;
-    }
-
-    /// <summary>Human-readable PDU name (also written into parser/UAT config).</summary>
-    public string Name
-    {
-        get; init;
-    }
-}
+/// <param name="PduId">Numeric PDU identifier.</param>
+/// <param name="Name">Human-readable PDU name (also written into parser/UAT config).</param>
+public readonly record struct PduEntry(uint PduId, string Name);

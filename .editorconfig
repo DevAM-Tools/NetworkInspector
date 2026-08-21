@@ -41,3 +41,10 @@ csharp_indent_labels = one_less_than_current
 csharp_indent_block_contents = true
 csharp_indent_braces = false
 csharp_indent_case_contents_when_block = true
+
+#### Analyzer severity ####
+
+# IDE1006 — Naming rule violation (underscore-prefixed private fields/methods).
+# The solution standardizes on _camelCase for private members, backing fields, and
+# internal helpers; see Directory.Build.props for the matching build-time NoWarn entry.
+dotnet_diagnostic.IDE1006.severity = none

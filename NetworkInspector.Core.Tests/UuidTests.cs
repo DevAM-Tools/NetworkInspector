@@ -39,12 +39,16 @@ internal sealed class UuidTests
     }
 
     [Test]
-    public async Task FromBytes_TooShort_ReturnsDefault()
+    public async Task FromBytes_TooShort_Throws()
     {
         byte[] bytes = [0x55, 0x0E];
-        Uuid uuid = Uuid.FromBytes(bytes);
-        await Assert.That(uuid.High).IsEqualTo(0UL);
-        await Assert.That(uuid.Low).IsEqualTo(0UL);
+        await Assert.That(() =>
+        {
+            Uuid _ = Uuid.FromBytes(bytes);
+            return Task.CompletedTask;
+        }).Throws<ArgumentException>();
+        await Assert.That(Uuid.TryFromBytes(bytes, out Uuid uuid)).IsFalse();
+        await Assert.That(uuid).IsEqualTo(default(Uuid));
     }
 
     // === Binary roundtrip ===

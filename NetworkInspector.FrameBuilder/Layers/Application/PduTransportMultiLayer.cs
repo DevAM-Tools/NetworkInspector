@@ -28,17 +28,23 @@ namespace NetworkInspector.FrameBuilder;
 /// </remarks>
 public readonly struct PduTransportMultiLayer : IStatelessLayer, IPayloadLayer, IPseudoHeaderIndependent
 {
-    private readonly byte _IdSize;
-    private readonly byte _LengthSize;
+    /// <summary>Size of the on-the-wire ID field in bytes.</summary>
+    public byte IdSize { get; }
+
+    /// <summary>Size of the on-the-wire Length field in bytes.</summary>
+    public byte LengthSize { get; }
+
+    /// <inheritdoc />
+    public int HeaderSize { get; }
+
     private readonly PduTransportSlot[] _Slots;
-    private readonly int _TotalSize;
 
     private PduTransportMultiLayer(byte idSize, byte lengthSize, PduTransportSlot[] slots, int totalSize)
     {
-        _IdSize = idSize;
-        _LengthSize = lengthSize;
+        IdSize = idSize;
+        LengthSize = lengthSize;
         _Slots = slots;
-        _TotalSize = totalSize;
+        HeaderSize = totalSize;
     }
 
     /// <summary>
@@ -109,18 +115,11 @@ public readonly struct PduTransportMultiLayer : IStatelessLayer, IPayloadLayer, 
     public uint GetSlotPduId(int index) => _Slots[index].PduId;
 
     /// <inheritdoc />
-    public int HeaderSize
-    {
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _TotalSize;
-    }
-
-    /// <inheritdoc />
     public void WriteHeader(scoped Span<byte> dst)
     {
         PduTransportSlot[] slots = _Slots;
-        byte idSize = _IdSize;
-        byte lengthSize = _LengthSize;
+        byte idSize = IdSize;
+        byte lengthSize = LengthSize;
         int offset = 0;
 
         for (int i = 0; i < slots.Length; i++)

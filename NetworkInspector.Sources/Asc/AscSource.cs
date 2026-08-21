@@ -48,13 +48,9 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
     /// <summary>Index of frame-producing lines and their metadata.</summary>
     private readonly AscFrameIndexEntry[] _FrameIndex;
 
-    /// <summary>
-    /// Whether the frame index was truncated at <c>int.MaxValue</c> entries.
-    /// </summary>
-    private readonly bool _FrameCountTruncated;
-
     /// <summary>User-friendly display name.</summary>
-    private readonly string _UiName;
+    /// <inheritdoc />
+    public string UiName { get; }
 
     // ── Interface registration (pre-populated in Start(), read-only afterwards) ──
     private FrameSourceId _SourceId;
@@ -88,14 +84,15 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
     private int _NextFrameIndex;
 
     // ── Cross-thread observable state (use Volatile) ──
-    private bool _Started;
-    private bool _Disposed;
-    private bool _Aborted;
+    private volatile bool _Started;
+    /// <summary>Atomic dispose latch (0 = live, 1 = disposed).</summary>
+    private volatile int _Disposed;
+    private volatile bool _Aborted;
 
-    // ── Error tolerance statistics (use Interlocked / Volatile) ──
-    private long _ReadFrameCount;
-    private long _SkippedFrameCount;
-    private long _ErrorCount;
+    // ── Error tolerance statistics (use Interlocked / saturating volatile counters) ──
+    private volatile int _ReadFrameCount;
+    private readonly SaturatingVolatileCounter _SkippedFrameCount = new();
+    private readonly SaturatingVolatileCounter _ErrorCount = new();
 
     #endregion
 
@@ -106,7 +103,6 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
         string? diskPath,
         AscHeader header,
         AscFrameIndexEntry[] frameIndex,
-        bool frameCountTruncated,
         HashSet<(AscBusType, int, LinkType)> discoveredInterfaces,
         ErrorToleranceMode errorTolerance,
         string uiName)
@@ -120,9 +116,8 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
         }
         _Header = header;
         _FrameIndex = frameIndex;
-        _FrameCountTruncated = frameCountTruncated;
         _DiscoveredInterfaces = discoveredInterfaces;
-        _UiName = uiName;
+        UiName = uiName;
         ErrorTolerance = errorTolerance;
     }
 
@@ -131,37 +126,27 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
     #region Properties
 
     /// <inheritdoc/>
-    public string UiName => _UiName;
-
-    /// <inheritdoc/>
     public string? Description => null;
 
     /// <inheritdoc/>
     public int? EstimatedFrameCount => _FrameIndex.Length;
 
     /// <inheritdoc/>
-    /// <remarks>
-    /// Returns <c>true</c> if the file contained more than <c>int.MaxValue</c> frame-producing
-    /// lines and the index was capped at that limit.
-    /// </remarks>
-    public bool IsFrameCountTruncated => _FrameCountTruncated;
-
-    /// <inheritdoc/>
-    public bool IsRunning => Volatile.Read(ref _Started) && !Volatile.Read(ref _Disposed);
+    public bool IsRunning => _Started && _Disposed == 0;
 
     // ── IErrorTolerantFrameSource / IFrameSourceStatistics ────────────────────
 
     /// <inheritdoc/>
-    public long ReadFrameCount => Volatile.Read(ref _ReadFrameCount);
+    public int ReadFrameCount => _ReadFrameCount;
 
     /// <inheritdoc/>
-    public long SkippedFrameCount => Volatile.Read(ref _SkippedFrameCount);
+    public int SkippedFrameCount => _SkippedFrameCount.Value;
 
     /// <inheritdoc/>
-    public long ErrorCount => Volatile.Read(ref _ErrorCount);
+    public int ErrorCount => _ErrorCount.Value;
 
     /// <inheritdoc/>
-    public bool HasErrors => Volatile.Read(ref _ErrorCount) > 0;
+    public bool HasErrors => _ErrorCount.Value > 0;
 
     /// <inheritdoc/>
     public ErrorToleranceMode ErrorTolerance
@@ -270,20 +255,20 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
             _RegisterInterface(registry, busType, channel, linkType);
         }
 
-        Volatile.Write(ref _Started, true);
+        _Started = true;
     }
 
     /// <inheritdoc/>
     public Frame? NextFrame(CancellationToken cancellationToken = default)
     {
-        ObjectDisposedException.ThrowIf(Volatile.Read(ref _Disposed), this);
+        ObjectDisposedException.ThrowIf(_Disposed != 0, this);
 
-        if (!Volatile.Read(ref _Started))
+        if (!_Started)
         {
             throw new InvalidOperationException("AscSource has not been started. Call Start() first.");
         }
 
-        if (Volatile.Read(ref _Aborted))
+        if (_Aborted)
         {
             return null;
         }
@@ -299,7 +284,7 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
                 return frame.Value;
             }
 
-            if (Volatile.Read(ref _Aborted))
+            if (_Aborted)
             {
                 return null;
             }
@@ -322,9 +307,9 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
     /// </remarks>
     public Frame? FrameById(FrameId id, CancellationToken cancellationToken = default)
     {
-        ObjectDisposedException.ThrowIf(Volatile.Read(ref _Disposed), this);
+        ObjectDisposedException.ThrowIf(_Disposed != 0, this);
 
-        if (!Volatile.Read(ref _Started))
+        if (!_Started)
         {
             throw new InvalidOperationException("AscSource has not been started. Call Start() first.");
         }
@@ -347,12 +332,11 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
     /// <inheritdoc/>
     public void Dispose()
     {
-        if (Volatile.Read(ref _Disposed))
+        if (Interlocked.Exchange(ref _Disposed, 1) != 0)
         {
             return;
         }
 
-        Volatile.Write(ref _Disposed, true);
         _Registry = null;
         // GC.SuppressFinalize is called before the handle disposal so it executes
         // even if _DiskHandle.Dispose() throws, preserving finalizer suppression.
@@ -416,10 +400,11 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
             }
 
             // Location == line index into the byte[][] array
+            ArrayIndexIdRange.ThrowIfInvalidNextIndex(entries.Count, "frame");
             entries.Add(new AscFrameIndexEntry { Location = i, LineType = lineType });
         }
 
-        return new AscSource(lines, null, header, [.. entries], false, discovered, options.ErrorTolerance, uiName);
+        return new AscSource(lines, null, header, [.. entries], discovered, options.ErrorTolerance, uiName);
     }
 
     #endregion
@@ -440,7 +425,6 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
         bool headerDone = false;
         List<AscFrameIndexEntry> entries = [];
         HashSet<(AscBusType, int, LinkType)> discovered = [];
-        bool truncated = false;
 
         // Primary read buffer — raw bytes from disk, no string conversions during the scan pass.
         byte[] buffer = new byte[AscSourceOptions.DiskReadBufferSize];
@@ -469,7 +453,7 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
                     _ProcessDiskLine(
                         AscTokenizerBytes.TrimAscii(carryBuffer.AsSpan(0, carryLen)),
                         lineStartOffset,
-                        ref header, ref headerDone, entries, discovered, ref truncated);
+                        ref header, ref headerDone, entries, discovered);
                 }
 
                 break;
@@ -529,7 +513,7 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
                     _ProcessDiskLine(
                         AscTokenizerBytes.TrimAscii(rawLine),
                         lineStartOffset,
-                        ref header, ref headerDone, entries, discovered, ref truncated);
+                        ref header, ref headerDone, entries, discovered);
                 }
 
                 // Reset carry and advance line pointers
@@ -537,11 +521,6 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
                 carryTooLong = false;
                 inChunkLineStart = i + 1;
                 lineStartOffset = chunkStartOffset + i + 1;
-
-                if (truncated)
-                {
-                    goto done;
-                }
             }
 
             // ── End of chunk reached without a final \n ────────────────────────────
@@ -566,8 +545,7 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
             chunkStartOffset += bytesRead;
         }
 
-    done:
-        return new AscSource(null, path, header, [.. entries], truncated, discovered, options.ErrorTolerance, uiName);
+        return new AscSource(null, path, header, [.. entries], discovered, options.ErrorTolerance, uiName);
     }
 
     /// <summary>
@@ -578,8 +556,7 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
         ReadOnlySpan<byte> trimmed, long lineByteOffset,
         ref AscHeader header, ref bool headerDone,
         List<AscFrameIndexEntry> entries,
-        HashSet<(AscBusType, int, LinkType)> discovered,
-        ref bool truncated)
+        HashSet<(AscBusType, int, LinkType)> discovered)
     {
         if (!headerDone)
         {
@@ -599,11 +576,7 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
             return;
         }
 
-        if (entries.Count >= int.MaxValue)
-        {
-            truncated = true;
-            return;
-        }
+        ArrayIndexIdRange.ThrowIfInvalidNextIndex(entries.Count, "frame");
 
         AscLineType lineType = AscLineClassifier.Classify(trimmed);
         if (!_IsFrameProducingType(lineType))
@@ -843,8 +816,8 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
     /// </summary>
     private void _HandleSkip(FrameReadErrorEventArgs error)
     {
-        Interlocked.Increment(ref _SkippedFrameCount);
-        Interlocked.Increment(ref _ErrorCount);
+        _SkippedFrameCount.Increment();
+        _ErrorCount.Increment();
 
         // Always signal the error so subscribers can log the first offending block
         // regardless of the tolerance mode. In strict mode the source additionally
@@ -853,7 +826,7 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
 
         if (ErrorTolerance == ErrorToleranceMode.Strict)
         {
-            Volatile.Write(ref _Aborted, true);
+            _Aborted = true;
         }
     }
 

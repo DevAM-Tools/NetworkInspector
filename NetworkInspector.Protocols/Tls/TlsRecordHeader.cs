@@ -4,45 +4,20 @@ namespace NetworkInspector.Protocols.Tls;
 
 /// <summary>
 /// TLS Record Layer header (5 bytes, RFC 8446 Section 5.1).
-/// <code>
-/// +---+---+---+---+---+
-/// | CT| Version | Len |
-/// +---+---+---+---+---+
-///   1     2       2
-/// </code>
 /// </summary>
-internal readonly struct TlsRecordHeader
+internal readonly record struct TlsRecordHeader(byte ContentType, ushort Version, ushort Length)
 {
+    #region Constants
+
     /// <summary>Size of the TLS record header in bytes.</summary>
     internal const int Size = 5;
 
     /// <summary>Maximum TLS record payload length (16 KiB + 2 KiB overhead).</summary>
     internal const int MaxRecordLength = 16384 + 2048;
 
-    /// <summary>Content type byte.</summary>
-    internal byte ContentType
-    {
-        get;
-    }
+    #endregion
 
-    /// <summary>Protocol version (e.g., 0x0303 = TLS 1.2).</summary>
-    internal ushort Version
-    {
-        get;
-    }
-
-    /// <summary>Length of the following record payload.</summary>
-    internal ushort Length
-    {
-        get;
-    }
-
-    private TlsRecordHeader(byte contentType, ushort version, ushort length)
-    {
-        ContentType = contentType;
-        Version = version;
-        Length = length;
-    }
+    #region Parsing
 
     /// <summary>
     /// Attempts to parse a TLS record header from the given data.
@@ -63,6 +38,10 @@ internal readonly struct TlsRecordHeader
         return true;
     }
 
+    #endregion
+
+    #region Validation
+
     /// <summary>
     /// Checks if the content type is a known TLS content type (20-23, 25).
     /// </summary>
@@ -74,4 +53,6 @@ internal readonly struct TlsRecordHeader
     /// </summary>
     internal bool IsValidVersion() =>
         Version is 0x0300 or 0x0301 or 0x0302 or 0x0303 or 0x0304;
+
+    #endregion
 }

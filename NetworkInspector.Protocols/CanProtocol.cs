@@ -135,7 +135,7 @@ public sealed partial class CanProtocol : IProtocol
 
     /// <summary>
     /// Dispatch table for standard 11-bit CAN IDs, CAN FD 29-bit IDs, and CAN XL priority (11-bit).
-    /// Sub-protocols (e.g., Signal PDU) register here to be invoked by CAN ID or CAN XL priority.
+    /// Sub-protocols (e.g., Signal Message) register here to be invoked by CAN ID or CAN XL priority.
     /// </summary>
     [ProtocolTableU64(IdTableName, "CAN Identifier")]
     private ProtocolTableId _IdTableId;
@@ -410,25 +410,25 @@ public sealed partial class CanProtocol : IProtocol
             context.RecordGroupPresence(_CanDataGroupId);
             canField.Append(_DataFieldId, FieldValue.NewBytes(data.Slice(_MinHeaderSize, dataLen)));
 
-            // Dispatch payload to sub-protocols registered on can.id (e.g., Signal PDU).
+            // Dispatch payload to sub-protocols registered on can.id (e.g., Signal Message).
             // Extended frames (29-bit IDs) are also dispatched via can.extended_id so that
             // sub-protocols can register on the more specific extended-ID table without
             // colliding with standard 11-bit IDs that share the same numeric value.
             ReadOnlyMemory<byte> payload = data.Slice(_MinHeaderSize, dataLen);
             ParseResult dispatchResult = canField.TryCallNextProtocolU64(
                 _IdTableId, canId, payload, in context);
-            if (dispatchResult.IsError)
+            if (dispatchResult.TryPropagateError(out ParseResult error))
             {
-                return dispatchResult;
+                return error;
             }
 
             if (isExtended)
             {
                 dispatchResult = canField.TryCallNextProtocolU64(
                     _ExtendedIdTableId, canId, payload, in context);
-                if (dispatchResult.IsError)
+                if (dispatchResult.TryPropagateError(out ParseResult extendedError))
                 {
-                    return dispatchResult;
+                    return extendedError;
                 }
             }
         }
@@ -561,16 +561,16 @@ public sealed partial class CanProtocol : IProtocol
 
             // Dispatch via can.id using priority (11-bit, 0–2047) as the key.
             ParseResult dispatchResult = xlField.TryCallNextProtocolU64(_IdTableId, priority, payload, in context);
-            if (dispatchResult.IsError)
+            if (dispatchResult.TryPropagateError(out ParseResult error))
             {
-                return dispatchResult;
+                return error;
             }
 
             // Dispatch via can.extended_id using the acceptance field (32-bit) as the key.
             dispatchResult = xlField.TryCallNextProtocolU64(_ExtendedIdTableId, acceptanceField, payload, in context);
-            if (dispatchResult.IsError)
+            if (dispatchResult.TryPropagateError(out ParseResult extendedError))
             {
-                return dispatchResult;
+                return extendedError;
             }
         }
 

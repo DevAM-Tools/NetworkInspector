@@ -1,6 +1,7 @@
 // Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Sessions.Listeners;
+
 /// <summary>
 /// Session-internal bridge: holds the notification flags and pull cursor
 /// for a single <see cref="ISessionListener"/>.
@@ -25,18 +26,28 @@ namespace NetworkInspector.Sessions.Listeners;
 /// </summary>
 internal sealed class ListenerSlot : IDisposable
 {
-    // ── Atomic flag field ────────────────────────────────────────────────────
-    // Written by producers via Interlocked.Or, read+cleared by consumer via Interlocked.Exchange.
-    // Public (internal) for direct OR access from source threads without method-call overhead.
-    internal int Flags;
+    #region Fields
+
+    internal volatile int Flags;
     private readonly ISessionListener _Listener;
     private readonly ISessionReader _SessionReader;
     private readonly Job _Job;
     private readonly ManualResetEventSlim _Wake = new(initialState: false);
     // Tracks how far this listener has consumed packets from the PacketStore.
-    private long _PacketCursor;
+    private volatile int _PacketCursor;
     // 0 = OnUnsubscribed not yet invoked; 1 = invoked (RunLoop finally or coordinator fallback).
-    private int _OnUnsubscribedInvoked;
+    private volatile int _OnUnsubscribedInvoked;
+    // Pull filter for this listener. Evaluated only on the listener thread, but replaced by the
+    // session coordinator thread during a stack swap, hence volatile.
+    private volatile PacketFilter? _Filter;
+    // Set when a stack swap could not re-bind _Filter to the new stack. Matching reads then fail
+    // with this error instead of silently degrading to "match everything".
+    private volatile FilterError? _FilterFault;
+
+    #endregion
+
+    #region Lifecycle
+
     /// <summary>
     /// Creates a listener slot that delivers notifications to <paramref name="listener"/>
     /// and pulls data from <paramref name="sessionReader"/>.
@@ -60,7 +71,11 @@ internal sealed class ListenerSlot : IDisposable
         // in the unified Session job list.
         Info = new JobInfo(_Job);
     }
-    // ── Identity ─────────────────────────────────────────────────────────────
+
+    #endregion
+
+    #region Identity
+
     /// <summary>The underlying job's identifier.</summary>
     internal JobId Id => _Job.Id;
     /// <summary>
@@ -74,7 +89,7 @@ internal sealed class ListenerSlot : IDisposable
     }
     /// <summary>
     /// The <see cref="ListenerInfo"/> associated with this slot.
-    /// Set by <see cref="Session.TryAddListener"/> after construction so that
+    /// Set by <see cref="Session.TryAddListener(ISessionListener, IFilter?, out ListenerInfo?)"/> after construction so that
     /// <see cref="Session.TryUnsubscribe"/> can locate the matching info without
     /// fragile name-based correlation.
     /// </summary>
@@ -84,7 +99,60 @@ internal sealed class ListenerSlot : IDisposable
     }
     /// <summary>User-visible listener name.</summary>
     internal string UiName => _Listener.UiName;
-    // ── Lifecycle ────────────────────────────────────────────────────────────
+
+    #endregion
+
+    #region Filter
+
+    /// <summary>
+    /// The filter this listener applies to <see cref="PacketReadMode.Matching"/> pulls.
+    /// <see langword="null"/> means "no filter", which behaves exactly like
+    /// <see cref="PacketFilter.AlwaysMatch"/> but skips even the always-match dispatch.
+    /// </summary>
+    internal PacketFilter? Filter => _Filter;
+
+    /// <summary>
+    /// The error from the last failed re-bind of <see cref="Filter"/> to a new stack, or
+    /// <see langword="null"/> when the filter is usable.
+    /// </summary>
+    internal FilterError? FilterFault => _FilterFault;
+
+    /// <summary>Installs the filter for this listener and clears any previous re-bind failure.</summary>
+    internal void SetFilter(IFilter? filter)
+    {
+        if (filter is null)
+        {
+            _Filter = null;
+        }
+        else if (filter is PacketFilter concrete)
+        {
+            _Filter = concrete;
+        }
+        else
+        {
+            throw new ArgumentException(
+                "ListenerSlot only accepts NetworkInspector.Filter.Filter instances.",
+                nameof(filter));
+        }
+
+        _FilterFault = null;
+    }
+
+    /// <summary>
+    /// Drops the filter and records why it could not be re-bound. Dropping the instance is
+    /// deliberate: its field ids belong to the retired stack, so evaluating it would compare
+    /// against the wrong fields.
+    /// </summary>
+    internal void SetFilterFault(FilterError failure)
+    {
+        _Filter = null;
+        _FilterFault = failure;
+    }
+
+    #endregion
+
+    #region Public API
+
     /// <summary>Starts the listener slot's background thread.</summary>
     internal void Start()
     {
@@ -143,8 +211,12 @@ internal sealed class ListenerSlot : IDisposable
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void ResetPacketCursor()
-        => Volatile.Write(ref _PacketCursor, 0);
-    // ── Event-driven dispatch loop ──────────────────────────────────────────
+        => _PacketCursor = 0;
+
+    #endregion
+
+    #region Private helpers
+
     /// <summary>
     /// The work delegate executed by the underlying <see cref="Job"/> thread.
     /// Waits on <see cref="_Wake"/> when no flags are pending, then dispatches to
@@ -222,18 +294,18 @@ internal sealed class ListenerSlot : IDisposable
         {
             // Reset the cursor so the subsequent NewPackets branch delivers
             // all re-parsed packets from index 0.
-            Volatile.Write(ref _PacketCursor, 0);
+            _PacketCursor = 0;
             _Listener.OnStackChanged(_SessionReader);
         }
         // ── Packets ──────────────────────────────────────────────
         if ((notify & NotifyFlags.NewPackets) != 0)
         {
-            long current = _SessionReader.PacketCount;
-            long cursor = Volatile.Read(ref _PacketCursor);
+            int current = _SessionReader.PacketCount;
+            int cursor = _PacketCursor;
             if (current > cursor)
             {
                 _Listener.OnNewPackets(_SessionReader, cursor, current);
-                Volatile.Write(ref _PacketCursor, current);
+                _PacketCursor = current;
             }
         }
         // ── Sources ──────────────────────────────────────────────
@@ -260,5 +332,7 @@ internal sealed class ListenerSlot : IDisposable
             _Listener.OnShuttingDown();
         }
     }
+
+    #endregion
 }
 

@@ -13,7 +13,7 @@ namespace NetworkInspector.Core.Reassembly;
 /// <see cref="Incomplete"/>, and <see cref="Invalid"/>.
 /// </para>
 /// </summary>
-public readonly struct PduBoundaryResult
+public readonly record struct PduBoundaryResult
 {
     #region Constants
 
@@ -27,16 +27,8 @@ public readonly struct PduBoundaryResult
 
     #region Properties
 
-    /// <summary>
-    /// Length of the complete PDU when <see cref="IsComplete"/> is <c>true</c>.
-    /// Otherwise carries an internal sentinel value — callers MUST inspect
-    /// <see cref="IsComplete"/>/<see cref="IsIncomplete"/>/<see cref="IsInvalid"/>
-    /// rather than comparing this value directly.
-    /// </summary>
-    public int Length
-    {
-        get; init;
-    }
+    /// <summary>The PDU length when complete, or a reserved sentinel otherwise.</summary>
+    public int Length { get; }
 
     /// <summary>Whether the data contains a complete PDU.</summary>
     public bool IsComplete => Length >= 0;
@@ -49,23 +41,26 @@ public readonly struct PduBoundaryResult
 
     #endregion
 
+    #region Constructors
+
+    private PduBoundaryResult(int length) => Length = length;
+
+    #endregion
+
     #region Factory Methods
 
     /// <summary>PDU boundary not yet determined — need more data.</summary>
-    public static PduBoundaryResult Incomplete => new() { Length = _IncompleteSentinel };
+    public static PduBoundaryResult Incomplete => new(_IncompleteSentinel);
 
     /// <summary>Data is invalid at current position — trigger resynchronization.</summary>
-    public static PduBoundaryResult Invalid => new() { Length = _InvalidSentinel };
+    public static PduBoundaryResult Invalid => new(_InvalidSentinel);
 
     /// <summary>A complete PDU of the given length was found.</summary>
     /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="length"/> is negative.</exception>
     public static PduBoundaryResult Complete(int length)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(length);
-        return new()
-        {
-            Length = length
-        };
+        return new(length);
     }
 
     #endregion

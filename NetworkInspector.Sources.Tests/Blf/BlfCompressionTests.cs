@@ -490,10 +490,6 @@ internal sealed class BlfCompressionTests
         await Assert.That(source.SkippedFrameCount > 0).IsTrue();
     }
 
-    // ========================================================================
-    // Section 4: MaxUncompressedContainerSize limit
-    // ========================================================================
-
     /// <summary>
     /// When <c>maxUncompressedSize</c> is zero, the limit is inactive and decompression
     /// proceeds normally — no exception is thrown regardless of the uncompressed size.
@@ -750,5 +746,37 @@ internal sealed class BlfCompressionTests
         using BlfStreamSource source = _CreateStreamSource([]);
         await Assert.That(() => source.MaxUncompressedContainerSize = -1)
             .Throws<ArgumentOutOfRangeException>();
+    }
+
+    /// <summary>
+    /// Default <see cref="BlfSourceOptions"/> applies
+    /// <see cref="BlfSourceOptions.DefaultMaxUncompressedContainerSize"/> (128 MiB).
+    /// </summary>
+    [Test]
+    public async Task BlfSourceOptions_DefaultLimit_Is128MiB()
+    {
+        BlfSourceOptions options = new();
+        await Assert.That(options.MaxUncompressedContainerSize)
+            .IsEqualTo(BlfSourceOptions.DefaultMaxUncompressedContainerSize);
+    }
+
+    /// <summary>
+    /// Uncompressed containers (method 0) reject payloads larger than the configured limit.
+    /// </summary>
+    [Test]
+    public async Task Decompress_UncompressedPayloadExceedsLimit_ThrowsLimitException()
+    {
+        byte[] payload = new byte[128];
+        long limit = 64;
+
+        BlfDecompressionLimitExceededException? ex = await Assert.That(
+            () => BlfContainer.Decompress(
+                payload, BlfConstants.CompressionNone, (uint)payload.Length,
+                maxUncompressedSize: limit))
+            .Throws<BlfDecompressionLimitExceededException>();
+
+        await Assert.That(ex).IsNotNull();
+        await Assert.That(ex!.ConfiguredLimit).IsEqualTo(limit);
+        await Assert.That(ex.RequestedSize).IsEqualTo((long)payload.Length);
     }
 }

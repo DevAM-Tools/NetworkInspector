@@ -1,0 +1,24 @@
+<!-- Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root. -->
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>NetworkInspector.Exporters.DuckDb</RootNamespace>
+    <Description>
+      DuckDB packet exporter for NetworkInspector. Writes parsed packets to a single .duckdb file
+      via DuckDBAppender bulk-load. Depends on NetworkInspector.Exporters for the shared columnar batch model.
+    </Description>
+    <PackageTags>network;duckdb;columnar;exporter;packet-export;sql;analytics</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="NetworkInspector.Exporters.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="DuckDB.NET.Data.Full" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\NetworkInspector.Exporters\NetworkInspector.Exporters.csproj" />
+  </ItemGroup>
+</Project>

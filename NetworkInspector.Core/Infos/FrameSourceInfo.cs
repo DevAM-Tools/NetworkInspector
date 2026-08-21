@@ -17,8 +17,8 @@ public sealed class FrameSourceInfo(FrameSourceId id, IFrameSource? source)
 {
     #region Fields
     // Callback set by the session to implement the Stop convenience API.
-    // Invoked at most once; null-guarded for safety.
-    private Action? _StopCallback;
+    // Invoked at most once via Interlocked.Exchange in Stop().
+    private volatile Action? _StopCallback;
 
     #endregion
 
@@ -29,10 +29,14 @@ public sealed class FrameSourceInfo(FrameSourceId id, IFrameSource? source)
     /// Typically wired by the session to unsubscribe the source's job.
     /// </summary>
     /// <param name="callback">The stop callback to register.</param>
+    /// <exception cref="InvalidOperationException">A stop callback is already registered.</exception>
     public void RegisterStopCallback(Action callback)
     {
         ArgumentNullException.ThrowIfNull(callback);
-        _StopCallback = callback;
+        if (Interlocked.CompareExchange(ref _StopCallback, callback, null) is not null)
+        {
+            throw new InvalidOperationException("A stop callback is already registered.");
+        }
     }
 
     #endregion
@@ -57,9 +61,9 @@ public sealed class FrameSourceInfo(FrameSourceId id, IFrameSource? source)
     {
         get
         {
-            if (Source?.UiName is { } uiName)
+            if (Source is not null && Source.UiName is not null)
             {
-                return uiName;
+                return Source.UiName;
             }
             return Id.ToString();
         }
@@ -84,7 +88,7 @@ public sealed class FrameSourceInfo(FrameSourceId id, IFrameSource? source)
     /// Equivalent to calling <c>ISession.TryUnsubscribe</c> with this source's job.
     /// </para>
     /// </summary>
-    public void Stop() => _StopCallback?.Invoke();
+    public void Stop() => Interlocked.Exchange(ref _StopCallback, null)?.Invoke();
 
     #endregion
 }

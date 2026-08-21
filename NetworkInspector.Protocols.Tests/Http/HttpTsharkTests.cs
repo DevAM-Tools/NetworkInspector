@@ -249,7 +249,7 @@ internal sealed class HttpTsharkTests
             for (int i = 0; i < frames.Count; i++)
             {
                 Packet p = ProtocolTestHelper.ParseFrame(stack, frames[i], i, Timestamp.FromMillis(i));
-                if (p.TryGetFieldValue(methodFieldId!.Value, out _))
+                if (p.TryGetFieldValue(methodFieldId!.Value, out _, materialize: true)) // materialize: true — need complete field tree for assertion
                 {
                     httpPacket = p;
                 }
@@ -304,7 +304,7 @@ internal sealed class HttpTsharkTests
         {
             return null;
         }
-        if (!packet.TryGetFieldValue(fieldId.Value, out FieldValue value))
+        if (!packet.TryGetFieldValue(fieldId.Value, out FieldValue value, materialize: true)) // materialize: true — need complete field tree for assertion
         {
             return null;
         }

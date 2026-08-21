@@ -11,8 +11,13 @@ internal sealed class RootProtocol : IProtocol
 {
     #region Properties
 
+    /// <inheritdoc/>
     public string Name => "root";
+
+    /// <inheritdoc/>
     public string UiName => "Root";
+
+    /// <inheritdoc/>
     public string? Description => "Owning protocol for the root field";
 
     #endregion

@@ -79,8 +79,10 @@ internal sealed class PcapSourceMultiInterfaceTests
         SourceTestFixture.InitializeAndStartSource(source);
 
         int count = 0;
-        while (source.NextFrame() is { } frame)
+        Frame? next;
+        while ((next = source.NextFrame()) is not null)
         {
+            Frame frame = next.Value;
             await Assert.That(frame.HasInterface).IsTrue();
             await Assert.That(frame.LinkType).IsEqualTo(LinkType.Ethernet);
             count++;

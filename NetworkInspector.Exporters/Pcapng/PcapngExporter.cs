@@ -8,7 +8,8 @@ namespace NetworkInspector.Exporters.Pcapng;
 /// Implements <see cref="IFrameListener"/> for integration with the capture pipeline.
 /// Supports automatic interface discovery (IDBs written on-demand), lazy initialization
 /// (no file until the first frame), and snap-length truncation.
-/// Unsupported link types are counted in <see cref="IExporterStatistics.SkippedCount"/>.
+/// Link-layer types are written through as PCAPNG DLT values; unknown DLTs are not
+/// filtered here — decoding is left to the consumer (e.g. Wireshark).
 /// </para>
 /// <para>
 /// <b>Thread safety:</b> Not thread-safe. <see cref="OnFrame"/> and <see cref="OnFinish"/>
@@ -22,7 +23,7 @@ public sealed class PcapngExporter : IFrameListener, IErrorTolerantExporter, IDi
     private readonly uint _SnapLength;
     private readonly byte _TsResolution;
     private readonly ShbOptions? _ShbOptions;
-    private readonly long _TargetFrameCount;
+    private readonly int _TargetFrameCount;
 
     // Output target consumed on lazy init
     private ExportOutput? _Output;
@@ -45,7 +46,7 @@ public sealed class PcapngExporter : IFrameListener, IErrorTolerantExporter, IDi
         uint snapLength,
         byte tsResolution,
         ShbOptions? shbOptions,
-        long targetFrameCount,
+        int targetFrameCount,
         CancellationToken cancellationToken)
     {
         _Output = output;
@@ -74,22 +75,37 @@ public sealed class PcapngExporter : IFrameListener, IErrorTolerantExporter, IDi
     }
 
     /// <summary>Number of frames written so far.</summary>
-    public long FrameCount
+    public int FrameCount
     {
         get; private set;
     }
 
     /// <inheritdoc/>
-    public long WrittenCount => FrameCount;
+    public int WrittenCount => FrameCount;
 
     /// <inheritdoc/>
-    public long SkippedCount
+    public long EstimatedOutputBytes
+    {
+        get
+        {
+            PcapngWriter? writer = _Writer;
+            if (writer is null)
+            {
+                return 0L;
+            }
+
+            return writer.EstimatedOutputBytes;
+        }
+    }
+
+    /// <inheritdoc/>
+    public int SkippedCount
     {
         get; private set;
     }
 
     /// <inheritdoc/>
-    public long ErrorCount
+    public int ErrorCount
     {
         get; private set;
     }
@@ -159,7 +175,7 @@ public sealed class PcapngExporter : IFrameListener, IErrorTolerantExporter, IDi
         catch (Exception ex)
         {
             _HasError = true;
-            ErrorCount++;
+            if (ErrorCount < int.MaxValue) ErrorCount++;
             ItemSkipped?.Invoke(this, new ExportErrorEventArgs
             {
                 ItemIndex = FrameCount,
@@ -169,6 +185,9 @@ public sealed class PcapngExporter : IFrameListener, IErrorTolerantExporter, IDi
         }
         finally
         {
+            _Writer?.ReturnBuffers();
+            _Writer = null;
+
             // Surface disposal failures via the error channel rather than discarding them silently.
             // cleanupErrors is declared before the try so the throw can occur after
             // the finally block — CA2219 prohibits throwing from within a finally clause.
@@ -180,7 +199,7 @@ public sealed class PcapngExporter : IFrameListener, IErrorTolerantExporter, IDi
             {
                 cleanupErrors.Add(ex);
                 _HasError = true;
-                ErrorCount++;
+                if (ErrorCount < int.MaxValue) ErrorCount++;
                 ItemSkipped?.Invoke(this, new ExportErrorEventArgs
                 {
                     ItemIndex = FrameCount,
@@ -232,7 +251,7 @@ public sealed class PcapngExporter : IFrameListener, IErrorTolerantExporter, IDi
         catch (Exception ex)
         {
             _HasError = true;
-            ErrorCount++;
+            if (ErrorCount < int.MaxValue) ErrorCount++;
             ItemSkipped?.Invoke(this, new ExportErrorEventArgs
             {
                 ItemIndex = 0,
@@ -322,8 +341,15 @@ public sealed class PcapngExporter : IFrameListener, IErrorTolerantExporter, IDi
     /// </summary>
     private bool _HandleSkip(ExportErrorEventArgs error)
     {
-        SkippedCount++;
-        ErrorCount++;
+        if (SkippedCount < int.MaxValue)
+        {
+            SkippedCount++;
+        }
+
+        if (ErrorCount < int.MaxValue)
+        {
+            ErrorCount++;
+        }
 
         if (ErrorTolerance == ErrorToleranceMode.Strict)
         {
@@ -353,7 +379,7 @@ public sealed class PcapngExporter : IFrameListener, IErrorTolerantExporter, IDi
         private string? _Os;
         private string? _Application;
         private string? _Comment;
-        private long _TargetFrameCount;
+        private int _TargetFrameCount;
 
         /// <summary>Sets the output to a file path with a 4 MiB buffer.</summary>
         public Builder ToFile(string path)
@@ -457,9 +483,18 @@ public sealed class PcapngExporter : IFrameListener, IErrorTolerantExporter, IDi
         /// When the target is reached, <see cref="OnFrame"/> returns <c>false</c> and
         /// <see cref="IsFinished"/> becomes <c>true</c>.
         /// </summary>
-        public Builder WithTargetFrameCount(long count)
+        public Builder WithTargetFrameCount(int count)
         {
             ArgumentOutOfRangeException.ThrowIfNegative(count);
+            if (count > ArrayIndexIdRange.MaxCount)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(count),
+                    count,
+                    $"Target frame count must not exceed {ArrayIndexIdRange.MaxCount.ToString(CultureInfo.InvariantCulture)} " +
+                    $"(Array.MaxLength={Array.MaxLength.ToString(CultureInfo.InvariantCulture)}).");
+            }
+
             _TargetFrameCount = count;
             return this;
         }

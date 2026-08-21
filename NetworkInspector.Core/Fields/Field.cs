@@ -14,21 +14,21 @@ namespace NetworkInspector.Core.Fields;
 public readonly struct Field : IEquatable<Field>
 {
     /// <summary>The owning packet.</summary>
-    private readonly Packet _Packet;
+    public Packet Packet { get; }
 
     /// <summary>Index into the packet's flat field list.</summary>
-    private readonly ushort _Index;
+    internal ushort StorageIndex { get; }
 
-    /// <summary>Cached field identifier — fits in the padding between _Index (2 bytes) and the next 8-byte slot.</summary>
-    private readonly FieldId _FieldId;
+    /// <summary>Cached field identifier — fits in the padding between StorageIndex (2 bytes) and the next 8-byte slot.</summary>
+    public FieldId FieldId { get; }
 
     /// <summary>Creates a field wrapper for the given packet and index.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal Field(Packet packet, ushort index)
     {
-        _Packet = packet;
-        _Index = index;
-        _FieldId = packet.GetFieldRef(index).FieldId;
+        Packet = packet;
+        StorageIndex = index;
+        FieldId = packet.GetFieldRef(index).FieldId;
     }
 
     #region Validity
@@ -37,42 +37,21 @@ public readonly struct Field : IEquatable<Field>
     public bool IsValid
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _Packet is not null && _Index != FieldBody.NullIndex;
+        get => Packet is not null && StorageIndex != FieldBody.NullIndex;
     }
 
     #endregion
 
     #region Public Accessors
 
-    /// <summary>The owning packet.</summary>
-    public Packet Packet
-    {
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _Packet;
-    }
-
-    /// <summary>The storage index within the packet's field list (internal implementation detail).</summary>
-    internal ushort StorageIndex
-    {
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _Index;
-    }
-
-    /// <summary>The field's registered identifier (cached — avoids array indirection).</summary>
-    public FieldId FieldId
-    {
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _FieldId;
-    }
-
     /// <summary>Gets the field's metadata from the stack registry.</summary>
-    public FieldInfo? FieldInfo => _Packet.Stack.GetField(FieldId);
+    public FieldInfo? FieldInfo => Packet.Stack.GetField(FieldId);
 
     /// <summary>The field's value.</summary>
     public FieldValue Value
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _Packet.GetFieldRef(_Index).Value;
+        get => Packet.GetFieldRef(StorageIndex).Value;
     }
 
     /// <summary>
@@ -86,44 +65,54 @@ public readonly struct Field : IEquatable<Field>
     public LazyString CustomText
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _Packet.GetFieldRef(_Index).CustomText;
+        get => Packet.GetFieldRef(StorageIndex).CustomText;
     }
 
     /// <summary>Whether this is the root field (index 0).</summary>
     public bool IsRoot
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _Index == 0;
+        get => StorageIndex == 0;
     }
 
-    /// <summary>Whether this field has child fields.</summary>
-    public bool HasChildren
+    /// <summary>
+    /// Whether this field has child fields.
+    /// When <paramref name="materialize"/> is <see langword="true"/>, lazy children are populated first.
+    /// When <see langword="false"/>, an unmaterialized lazy container reports no children.
+    /// </summary>
+    /// <param name="materialize">Whether to materialize lazy children before checking.</param>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public bool HasChildren(bool materialize)
     {
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get
+        if (materialize)
         {
-            ref readonly FieldBody body = ref _Packet.GetFieldRef(_Index);
+            ref readonly FieldBody body = ref Packet.GetFieldRef(StorageIndex);
             if (body.NeedsMaterialization)
             {
-                _Packet.MaterializeLazyField(_Index);
+                Packet.MaterializeLazyField(StorageIndex);
             }
-            return _Packet.GetFieldRef(_Index).FirstChildIndex != FieldBody.NullIndex;
         }
+        return Packet.GetFieldRef(StorageIndex).FirstChildIndex != FieldBody.NullIndex;
     }
 
-    /// <summary>Number of direct children.</summary>
-    public ushort ChildCount
+    /// <summary>
+    /// Number of direct children.
+    /// When <paramref name="materialize"/> is <see langword="true"/>, lazy children are populated first.
+    /// When <see langword="false"/>, an unmaterialized lazy container reports zero children.
+    /// </summary>
+    /// <param name="materialize">Whether to materialize lazy children before counting.</param>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public ushort ChildCount(bool materialize)
     {
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get
+        if (materialize)
         {
-            ref readonly FieldBody body = ref _Packet.GetFieldRef(_Index);
+            ref readonly FieldBody body = ref Packet.GetFieldRef(StorageIndex);
             if (body.NeedsMaterialization)
             {
-                _Packet.MaterializeLazyField(_Index);
+                Packet.MaterializeLazyField(StorageIndex);
             }
-            return _Packet.GetFieldRef(_Index).ChildCount;
         }
+        return Packet.GetFieldRef(StorageIndex).ChildCount;
     }
 
     /// <summary>Whether this field is lazy (has deferred children that need materialization).
@@ -131,7 +120,7 @@ public readonly struct Field : IEquatable<Field>
     internal bool NeedsLazyMaterialization
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _Packet.GetFieldRef(_Index).NeedsMaterialization;
+        get => Packet.GetFieldRef(StorageIndex).NeedsMaterialization;
     }
 
     #endregion
@@ -141,46 +130,63 @@ public readonly struct Field : IEquatable<Field>
     /// <summary>Tries to get the parent field. Returns false if this is a root field.</summary>
     public bool TryGetParent(out Field parent)
     {
-        ushort parentIdx = _Packet.GetFieldRef(_Index).ParentIndex;
+        ushort parentIdx = Packet.GetFieldRef(StorageIndex).ParentIndex;
         if (parentIdx != FieldBody.NullIndex)
         {
-            parent = new Field(_Packet, parentIdx);
+            parent = new Field(Packet, parentIdx);
             return true;
         }
         parent = default;
         return false;
     }
 
-    /// <summary>Tries to get the first child field. Returns false if there are no children.</summary>
-    public bool TryGetFirstChild(out Field firstChild)
+    /// <summary>
+    /// Tries to get the first child field. Returns false if there are no children.
+    /// When <paramref name="materialize"/> is <see langword="true"/>, lazy children are populated first.
+    /// Parent/sibling navigation does not take this parameter because it only follows index links.
+    /// </summary>
+    /// <param name="firstChild">The first child when present.</param>
+    /// <param name="materialize">Whether to materialize lazy children before reading the child list.</param>
+    public bool TryGetFirstChild(out Field firstChild, bool materialize)
     {
-        ref readonly FieldBody body = ref _Packet.GetFieldRef(_Index);
-        if (body.NeedsMaterialization)
+        if (materialize)
         {
-            _Packet.MaterializeLazyField(_Index);
+            ref readonly FieldBody body = ref Packet.GetFieldRef(StorageIndex);
+            if (body.NeedsMaterialization)
+            {
+                Packet.MaterializeLazyField(StorageIndex);
+            }
         }
-        ushort idx = _Packet.GetFieldRef(_Index).FirstChildIndex;
+        ushort idx = Packet.GetFieldRef(StorageIndex).FirstChildIndex;
         if (idx != FieldBody.NullIndex)
         {
-            firstChild = new Field(_Packet, idx);
+            firstChild = new Field(Packet, idx);
             return true;
         }
         firstChild = default;
         return false;
     }
 
-    /// <summary>Tries to get the last child field. Returns false if there are no children.</summary>
-    public bool TryGetLastChild(out Field lastChild)
+    /// <summary>
+    /// Tries to get the last child field. Returns false if there are no children.
+    /// When <paramref name="materialize"/> is <see langword="true"/>, lazy children are populated first.
+    /// </summary>
+    /// <param name="lastChild">The last child when present.</param>
+    /// <param name="materialize">Whether to materialize lazy children before reading the child list.</param>
+    public bool TryGetLastChild(out Field lastChild, bool materialize)
     {
-        ref readonly FieldBody body = ref _Packet.GetFieldRef(_Index);
-        if (body.NeedsMaterialization)
+        if (materialize)
         {
-            _Packet.MaterializeLazyField(_Index);
+            ref readonly FieldBody body = ref Packet.GetFieldRef(StorageIndex);
+            if (body.NeedsMaterialization)
+            {
+                Packet.MaterializeLazyField(StorageIndex);
+            }
         }
-        ushort idx = _Packet.GetFieldRef(_Index).LastChildIndex;
+        ushort idx = Packet.GetFieldRef(StorageIndex).LastChildIndex;
         if (idx != FieldBody.NullIndex)
         {
-            lastChild = new Field(_Packet, idx);
+            lastChild = new Field(Packet, idx);
             return true;
         }
         lastChild = default;
@@ -190,10 +196,10 @@ public readonly struct Field : IEquatable<Field>
     /// <summary>Tries to get the next sibling field. Returns false if this is the last sibling.</summary>
     public bool TryGetNext(out Field next)
     {
-        ushort idx = _Packet.GetFieldRef(_Index).NextIndex;
+        ushort idx = Packet.GetFieldRef(StorageIndex).NextIndex;
         if (idx != FieldBody.NullIndex)
         {
-            next = new Field(_Packet, idx);
+            next = new Field(Packet, idx);
             return true;
         }
         next = default;
@@ -203,10 +209,10 @@ public readonly struct Field : IEquatable<Field>
     /// <summary>Tries to get the previous sibling field. Returns false if this is the first sibling.</summary>
     public bool TryGetPrev(out Field prev)
     {
-        ushort idx = _Packet.GetFieldRef(_Index).PrevIndex;
+        ushort idx = Packet.GetFieldRef(StorageIndex).PrevIndex;
         if (idx != FieldBody.NullIndex)
         {
-            prev = new Field(_Packet, idx);
+            prev = new Field(Packet, idx);
             return true;
         }
         prev = default;
@@ -219,17 +225,17 @@ public readonly struct Field : IEquatable<Field>
 
     /// <summary>
     /// Iterates direct children of this field.
-    /// When <paramref name="materialize"/> is true (default), lazy children are materialized first.
+    /// When <paramref name="materialize"/> is <see langword="true"/>, lazy children are materialized first.
     /// </summary>
     /// <param name="materialize">Whether to materialize lazy children before iterating.</param>
-    public FieldChildEnumerable Children(bool materialize = true) => new(_Packet, _Index, materialize);
+    public FieldChildEnumerable Children(bool materialize) => new(Packet, StorageIndex, materialize);
 
     /// <summary>
     /// Iterates all descendants in depth-first pre-order.
-    /// When <paramref name="materialize"/> is true (default), lazy fields are materialized during traversal.
+    /// When <paramref name="materialize"/> is <see langword="true"/>, lazy fields are materialized during traversal.
     /// </summary>
     /// <param name="materialize">Whether to materialize lazy fields during traversal.</param>
-    public FieldDescendantEnumerable Descendants(bool materialize = true) => new(_Packet, _Index, materialize);
+    public FieldDescendantEnumerable Descendants(bool materialize) => new(Packet, StorageIndex, materialize);
 
     #endregion
 
@@ -237,13 +243,13 @@ public readonly struct Field : IEquatable<Field>
 
     /// <inheritdoc />
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public bool Equals(Field other) => ReferenceEquals(_Packet, other._Packet) && _Index == other._Index;
+    public bool Equals(Field other) => ReferenceEquals(Packet, other.Packet) && StorageIndex == other.StorageIndex;
 
     /// <inheritdoc />
     public override bool Equals(object? obj) => obj is Field other && Equals(other);
 
     /// <inheritdoc />
-    public override int GetHashCode() => HashCode.Combine(RuntimeHelpers.GetHashCode(_Packet), _Index);
+    public override int GetHashCode() => HashCode.Combine(RuntimeHelpers.GetHashCode(Packet), StorageIndex);
 
     /// <summary>Equality operator.</summary>
     public static bool operator ==(Field left, Field right) => left.Equals(right);

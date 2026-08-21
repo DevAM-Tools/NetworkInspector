@@ -8,7 +8,7 @@ namespace NetworkInspector.Sessions.Tests;
 /// </summary>
 internal sealed class TestSessionListener : ISessionListener
 {
-    private long _TotalPacketsSeen;
+    private volatile int _TotalPacketsSeen;
     private int _SourcesChangedCount;
     private int _AllSourcesCompletedCount;
     private int _JobsChangedCount;
@@ -24,7 +24,7 @@ internal sealed class TestSessionListener : ISessionListener
     public string UiName => "TestListener";
 
     /// <summary>Total number of packets observed via <see cref="OnNewPackets"/>.</summary>
-    internal long TotalPacketsSeen => Interlocked.Read(ref _TotalPacketsSeen);
+    internal int TotalPacketsSeen => _TotalPacketsSeen;
 
     /// <summary>Number of <see cref="OnSourcesChanged"/> calls.</summary>
     internal int SourcesChangedCount => Volatile.Read(ref _SourcesChangedCount);
@@ -63,9 +63,9 @@ internal sealed class TestSessionListener : ISessionListener
     }
 
     /// <inheritdoc/>
-    public void OnNewPackets(ISessionReader session, long fromIndex, long toIndexExclusive)
+    public void OnNewPackets(ISessionReader session, int fromIndex, int toIndexExclusive)
     {
-        long count = toIndexExclusive - fromIndex;
+        int count = toIndexExclusive - fromIndex;
         Interlocked.Add(ref _TotalPacketsSeen, count);
     }
 

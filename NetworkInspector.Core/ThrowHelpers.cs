@@ -10,24 +10,6 @@ internal static class ThrowHelpers
 {
     #region Guard Helpers
 
-    /// <summary>Throws <see cref="ArgumentOutOfRangeException"/>.</summary>
-    [DoesNotReturn]
-    [MethodImpl(MethodImplOptions.NoInlining)]
-    internal static void ThrowArgumentOutOfRange(string paramName)
-        => throw new ArgumentOutOfRangeException(paramName);
-
-    /// <summary>Throws <see cref="ArgumentNullException"/>.</summary>
-    [DoesNotReturn]
-    [MethodImpl(MethodImplOptions.NoInlining)]
-    internal static void ThrowArgumentNull(string paramName)
-        => throw new ArgumentNullException(paramName);
-
-    /// <summary>Throws <see cref="InvalidOperationException"/>.</summary>
-    [DoesNotReturn]
-    [MethodImpl(MethodImplOptions.NoInlining)]
-    internal static void ThrowInvalidOperation(string message)
-        => throw new InvalidOperationException(message);
-
     /// <summary>
     /// Throws a <see cref="Errors.FieldAppendException"/> wrapping the given parse error.
     /// Called when a field tree mutation fails (e.g., maximum field count exceeded).
@@ -53,7 +35,10 @@ internal static class ThrowHelpers
     [DoesNotReturn]
     [MethodImpl(MethodImplOptions.NoInlining)]
     internal static void ThrowNonFiniteF64(double value)
-        => throw new InvalidOperationException($"F64 setting value must be finite, got {value}.");
+        => throw new InvalidOperationException(
+            string.Create(
+                CultureInfo.InvariantCulture,
+                $"F64 setting value must be finite, got {value}."));
 
     #endregion
 

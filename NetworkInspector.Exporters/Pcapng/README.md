@@ -71,7 +71,7 @@ Use SHB metadata options to include capture context:
 ## Limits And Thread-Safety Notes
 
 - Not thread-safe; call `OnFrame()`/`OnFinish()` sequentially.
-- Unsupported or malformed inputs can be skipped and reported through exporter diagnostics.
+- Link types are written through as PCAPNG DLT values (no exporter-side DLT whitelist). Malformed write failures can be skipped and reported through exporter diagnostics.
 - Lazy initialization delays file creation until first write (or explicit finish for empty outputs).
 
 ## Links

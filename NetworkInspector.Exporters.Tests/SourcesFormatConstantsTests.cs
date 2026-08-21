@@ -3,7 +3,8 @@
 namespace NetworkInspector.Exporters.Tests;
 
 /// <summary>
-/// Exit-point coverage for format helpers linked into <see cref="NetworkInspector.Exporters"/>.
+/// Exit-point coverage for format helpers still linked into <see cref="NetworkInspector.Exporters"/>
+/// (<c>BlfConstants</c>, <c>PcapConstants</c>, <c>PcapPadding</c>).
 /// </summary>
 internal sealed class SourcesFormatConstantsTests
 {
@@ -49,63 +50,6 @@ internal sealed class SourcesFormatConstantsTests
     public async Task BlfConstants_IsFrameProducingType_ClassifiesObjectTypes(uint objectType, bool expected)
     {
         await Assert.That(BlfConstants.IsFrameProducingType(objectType)).IsEqualTo(expected);
-    }
-
-    [Test]
-    [Arguments(100UL, BlfConstants.TimestampResolution10Us, 1_000_000L)]
-    [Arguments(42UL, BlfConstants.TimestampResolution1Ns, 42L)]
-    [Arguments(99UL, 0xFFu, 99L)]
-    public async Task BlfTimestamp_ToNanoseconds_ConvertsByResolution(ulong raw, uint flags, long expected)
-    {
-        await Assert.That(BlfTimestamp.ToNanoseconds(raw, flags)).IsEqualTo(expected);
-    }
-
-    [Test]
-    public async Task BlfTimestamp_DateToUnixNanoseconds_ValidUtcDate_ReturnsExpectedNanoseconds()
-    {
-        BlfDate date = new()
-        {
-            Year = new U16LE(2024),
-            Month = new U16LE(1),
-            Day = new U16LE(2),
-            Hour = new U16LE(3),
-            Minute = new U16LE(4),
-            Second = new U16LE(5),
-            Millisecond = new U16LE(6),
-        };
-
-        long nanos = BlfTimestamp.DateToUnixNanoseconds(date, TimeZoneInfo.Utc);
-
-        await Assert.That(nanos).IsGreaterThan(0L);
-    }
-
-    [Test]
-    public async Task BlfTimestamp_DateToUnixNanoseconds_InvalidDate_ReturnsZero()
-    {
-        BlfDate date = default;
-
-        long nanos = BlfTimestamp.DateToUnixNanoseconds(date, TimeZoneInfo.Utc);
-
-        await Assert.That(nanos).IsEqualTo(0L);
-    }
-
-    [Test]
-    public async Task BlfTimestamp_DateToUnixNanoseconds_InvalidCalendarDate_ReturnsZero()
-    {
-        BlfDate date = new()
-        {
-            Year = new U16LE(2024),
-            Month = new U16LE(2),
-            Day = new U16LE(31),
-            Hour = new U16LE(0),
-            Minute = new U16LE(0),
-            Second = new U16LE(0),
-            Millisecond = new U16LE(0),
-        };
-
-        long nanos = BlfTimestamp.DateToUnixNanoseconds(date, TimeZoneInfo.Utc);
-
-        await Assert.That(nanos).IsEqualTo(0L);
     }
 
     [Test]

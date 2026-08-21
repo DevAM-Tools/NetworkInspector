@@ -59,6 +59,59 @@ internal sealed class TimestampTests
         await Assert.That(ts.AsNanos).IsEqualTo(1_500_000_000L);
     }
 
+    [Test]
+    public async Task FromSecs_OverflowingSeconds_ThrowsOverflowException()
+    {
+        long overflowSecs = (long.MaxValue / 1_000_000_000L) + 1L;
+        await Assert.That(() =>
+        {
+            Timestamp _ = Timestamp.FromSecs(overflowSecs);
+            return Task.CompletedTask;
+        }).Throws<OverflowException>();
+    }
+
+    [Test]
+    public async Task TryFromSecs_OverflowingSeconds_ReturnsFalse()
+    {
+        long overflowSecs = (long.MaxValue / 1_000_000_000L) + 1L;
+        await Assert.That(Timestamp.TryFromSecs(overflowSecs, out Timestamp ts)).IsFalse();
+        await Assert.That(ts).IsEqualTo(default(Timestamp));
+    }
+
+    [Test]
+    public async Task TryParse_CalendarMaxIso_ReturnsFalse()
+    {
+        await Assert.That(Timestamp.TryParse("9999-12-31T23:59:59.000000000Z", out Timestamp ts)).IsFalse();
+        await Assert.That(ts).IsEqualTo(default(Timestamp));
+    }
+
+    [Test]
+    public async Task TryFormat_ExtremeValues_CompleteWithoutThrowing()
+    {
+        long[] nanosValues = [long.MinValue, 0L, long.MaxValue];
+        foreach (long nanos in nanosValues)
+        {
+            Timestamp ts = Timestamp.FromNanos(nanos);
+            char[] buffer = new char[Timestamp.MaxFormattedLength];
+            bool ok = ts.TryFormat(buffer, out int written, default, null);
+            await Assert.That(written).IsGreaterThanOrEqualTo(0);
+            if (ok)
+            {
+                await Assert.That(written).IsEqualTo(Timestamp.MaxFormattedLength);
+            }
+        }
+    }
+
+    [Test]
+    public async Task Add_TimeSpanMaxValue_ThrowsOverflowException()
+    {
+        await Assert.That(() =>
+        {
+            Timestamp _ = Timestamp.Add(Timestamp.FromNanos(0), TimeSpan.MaxValue);
+            return Task.CompletedTask;
+        }).Throws<OverflowException>();
+    }
+
     // === Properties ===
 
     [Test]

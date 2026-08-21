@@ -44,7 +44,7 @@ public interface ISessionListener
     /// <param name="session">Read-only session view for pulling packets.</param>
     /// <param name="fromIndex">First new packet index (inclusive).</param>
     /// <param name="toIndexExclusive">One past the last new packet index.</param>
-    void OnNewPackets(ISessionReader session, long fromIndex, long toIndexExclusive);
+    void OnNewPackets(ISessionReader session, int fromIndex, int toIndexExclusive);
 
     // ── Source lifecycle ──────────────────────────────────────────────────────
 

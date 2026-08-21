@@ -2,7 +2,7 @@
 
 namespace NetworkInspector.Core.Tests;
 
-/// <summary>Exit-point coverage for internal <see cref="FieldBody"/> and <see cref="FieldBodySlab"/> types.</summary>
+/// <summary>Exit-point coverage for internal <see cref="FieldBody"/>.</summary>
 internal sealed class FieldBodyTests
 {
     [Test]
@@ -57,29 +57,162 @@ internal sealed class FieldBodyTests
     }
 
     [Test]
-    public async Task FieldBodySlab_TryAllocate_SucceedsWithinCapacity()
+    public async Task FieldBody_LazyIndex_GetSet_Roundtrip()
     {
-        FieldBodySlab slab = new(4);
+        FieldBody body = new(new FieldId(4))
+        {
+            LazyIndex = 7,
+        };
 
-        bool allocated = slab.TryAllocate(2, out FieldBody[] buffer, out int offset);
-
-        await Assert.That(allocated).IsTrue();
-        await Assert.That(buffer.Length).IsEqualTo(4);
-        await Assert.That(offset).IsEqualTo(0);
-
-        bool second = slab.TryAllocate(2, out _, out int secondOffset);
-        await Assert.That(second).IsTrue();
-        await Assert.That(secondOffset).IsEqualTo(2);
+        await Assert.That(body.LazyIndex).IsEqualTo((ushort)7);
     }
 
     [Test]
-    public async Task FieldBodySlab_TryAllocate_FailsWhenFull()
+    public async Task FieldBody_IsLazyMaterializationInProgress_WhenMaterializingBitSet()
     {
-        FieldBodySlab slab = new(2);
+        FieldBody body = new(new FieldId(5))
+        {
+            LazyIndex = (ushort)(3 | FieldBody.LazyIndexMaterializingBit),
+        };
 
-        await Assert.That(slab.TryAllocate(2, out _, out _)).IsTrue();
-        await Assert.That(slab.TryAllocate(1, out FieldBody[] buffer, out int offset)).IsFalse();
-        await Assert.That(buffer).IsNull();
-        await Assert.That(offset).IsEqualTo(0);
+        await Assert.That(body.IsLazyMaterializationInProgress()).IsTrue();
+        await Assert.That(body.NeedsMaterialization).IsFalse();
+    }
+
+    [Test]
+    public async Task FieldBody_TryClaimLazyMaterialization_SucceedsAndSetsMaterializingBit()
+    {
+        FieldBody body = new(new FieldId(6))
+        {
+            LazyIndex = 4,
+        };
+
+        bool claimed = body.TryClaimLazyMaterialization(out ushort populatorIndex);
+
+        await Assert.That(claimed).IsTrue();
+        await Assert.That(populatorIndex).IsEqualTo((ushort)4);
+        await Assert.That(body.IsLazyMaterializationInProgress()).IsTrue();
+    }
+
+    [Test]
+    public async Task FieldBody_TryClaimLazyMaterialization_FailsWhenUnsetOrAlreadyMaterializing()
+    {
+        FieldBody unset = new(new FieldId(7));
+        bool unsetClaim = unset.TryClaimLazyMaterialization(out ushort unsetIndex);
+        await Assert.That(unsetClaim).IsFalse();
+        await Assert.That(unsetIndex).IsEqualTo((ushort)0);
+
+        FieldBody inProgress = new(new FieldId(8))
+        {
+            LazyIndex = (ushort)(2 | FieldBody.LazyIndexMaterializingBit),
+        };
+        bool inProgressClaim = inProgress.TryClaimLazyMaterialization(out ushort inProgressIndex);
+        await Assert.That(inProgressClaim).IsFalse();
+        await Assert.That(inProgressIndex).IsEqualTo((ushort)0);
+    }
+
+    [Test]
+    public async Task FieldBody_TryClaimLazyMaterialization_ConcurrentCasCollision_ReturnsFalse()
+    {
+        FieldBody[] buffer = new FieldBody[4];
+        const int offset = 0;
+        buffer[offset] = new FieldBody(new FieldId(11))
+        {
+            LazyIndex = 7,
+        };
+
+        int casFailures = 0;
+        int successes = 0;
+        for (int attempt = 0; attempt < 512; attempt++)
+        {
+            buffer[offset] = new FieldBody(new FieldId(11))
+            {
+                LazyIndex = 7,
+            };
+            using Barrier start = new(2);
+            int attemptSuccesses = 0;
+            int attemptFailures = 0;
+
+            Task first = Task.Run(() =>
+            {
+                start.SignalAndWait();
+                ref FieldBody body = ref buffer[offset];
+                if (body.TryClaimLazyMaterialization(out _))
+                {
+                    Interlocked.Increment(ref attemptSuccesses);
+                }
+            });
+            Task second = Task.Run(() =>
+            {
+                start.SignalAndWait();
+                ref FieldBody body = ref buffer[offset];
+                if (body.TryClaimLazyMaterialization(out _))
+                {
+                    Interlocked.Increment(ref attemptSuccesses);
+                }
+                else
+                {
+                    Interlocked.Increment(ref attemptFailures);
+                }
+            });
+
+            await Task.WhenAll(first, second);
+            successes += attemptSuccesses;
+            casFailures += attemptFailures;
+        }
+
+        await Assert.That(successes).IsGreaterThan(0);
+        await Assert.That(casFailures).IsGreaterThan(0);
+    }
+
+    [Test]
+    public async Task FieldBody_TryClaimLazyMaterialization_ConcurrentSecondClaim_ReturnsFalse()
+    {
+        FieldBody body = new(new FieldId(9))
+        {
+            LazyIndex = 5,
+        };
+        using ManualResetEventSlim gate = new(false);
+        bool secondClaim = false;
+
+        Task first = Task.Run(() =>
+        {
+            bool claimed = body.TryClaimLazyMaterialization(out ushort index);
+            if (claimed)
+            {
+                gate.Set();
+                Thread.Sleep(50);
+                body.FinishLazyMaterialization();
+            }
+        });
+
+        Task second = Task.Run(() =>
+        {
+            gate.Wait();
+            secondClaim = body.TryClaimLazyMaterialization(out _);
+        });
+
+        await Task.WhenAll(first, second);
+        await Assert.That(secondClaim).IsFalse();
+    }
+
+    [Test]
+    public async Task FieldBody_TryClaimLazyMaterialization_AfterMaterializingBitSet_ReturnsFalse()
+    {
+        FieldBody body = new(new FieldId(10))
+        {
+            LazyIndex = 6,
+        };
+        System.Reflection.FieldInfo? lazyField = typeof(FieldBody).GetField(
+            "_LazyIndex", BindingFlags.NonPublic | BindingFlags.Instance);
+        await Assert.That(lazyField).IsNotNull();
+
+        object boxed = body;
+        lazyField!.SetValue(boxed, (int)(6 | FieldBody.LazyIndexMaterializingBit));
+        body = (FieldBody)boxed;
+
+        bool claimed = body.TryClaimLazyMaterialization(out ushort index);
+        await Assert.That(claimed).IsFalse();
+        await Assert.That(index).IsEqualTo((ushort)0);
     }
 }

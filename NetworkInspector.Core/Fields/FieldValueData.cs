@@ -108,6 +108,7 @@ public readonly struct FieldValueData : IEquatable<FieldValueData>, IComparable<
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static FieldValueData NewBytes(byte[] value)
     {
+        ArgumentNullException.ThrowIfNull(value);
         ulong packed = (ulong)(uint)value.Length << 32;
         return new(packed, value);
     }
@@ -794,8 +795,7 @@ public readonly struct FieldValueData : IEquatable<FieldValueData>, IComparable<
         if (refValue is byte[])
         {
             int length = (int)(_Data >> 32);
-            size = length > 0 ? length * 3 - 1 : 0;
-            return true;
+            return _TryGetHexFormattedByteCharCount(length, out size);
         }
         // Should not happen with well-formed instances
         size = 0;
@@ -870,8 +870,13 @@ public readonly struct FieldValueData : IEquatable<FieldValueData>, IComparable<
 
     private bool _TryFormatBytes(Span<char> destination, out int charsWritten)
     {
+        int length = (int)(_Data >> 32);
+        if (!_TryGetHexFormattedByteCharCount(length, out int required))
+        {
+            charsWritten = 0;
+            return false;
+        }
         ReadOnlySpan<byte> bytes = _ExtractBytesSpan();
-        int required = bytes.Length > 0 ? bytes.Length * 3 - 1 : 0;
         if (destination.Length < required)
         {
             charsWritten = 0;
@@ -923,8 +928,13 @@ public readonly struct FieldValueData : IEquatable<FieldValueData>, IComparable<
 
     private bool _TryFormatBytesUtf8(Span<byte> destination, out int bytesWritten)
     {
+        int length = (int)(_Data >> 32);
+        if (!_TryGetHexFormattedByteCharCount(length, out int required))
+        {
+            bytesWritten = 0;
+            return false;
+        }
         ReadOnlySpan<byte> bytes = _ExtractBytesSpan();
-        int required = bytes.Length > 0 ? bytes.Length * 3 - 1 : 0;
         if (destination.Length < required)
         {
             bytesWritten = 0;
@@ -957,6 +967,29 @@ public readonly struct FieldValueData : IEquatable<FieldValueData>, IComparable<
         int offset = (int)(_Data & 0xFFFFFFFF);
         int length = (int)(_Data >> 32);
         return new ReadOnlySpan<byte>(array, offset, length);
+    }
+
+    /// <summary>
+    /// Computes the character count for space-separated hex formatting of <paramref name="byteCount"/> bytes.
+    /// Returns <c>false</c> when the required size cannot be represented as a 32-bit signed integer.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool _TryGetHexFormattedByteCharCount(int byteCount, out int charCount)
+    {
+        if (byteCount <= 0)
+        {
+            charCount = 0;
+            return true;
+        }
+
+        if (byteCount > (int)(((long)int.MaxValue + 1) / 3))
+        {
+            charCount = 0;
+            return false;
+        }
+
+        charCount = byteCount * 3 - 1;
+        return true;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

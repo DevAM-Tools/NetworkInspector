@@ -26,7 +26,7 @@ public sealed class ListenerInfo
 {
     // Atomic status field. Written via Volatile.Write by the session,
     // read via Volatile.Read from any thread.
-    private int _Status;
+    private volatile int _Status;
 
     // Callback set by the session to implement the Unsubscribe convenience API.
     // Invoked at most once; null-guarded for safety.
@@ -45,7 +45,7 @@ public sealed class ListenerInfo
     public string UiName { get; internal init; } = "";
 
     /// <summary>Current subscription status (thread-safe read).</summary>
-    public SubscriptionStatus Status => (SubscriptionStatus)Volatile.Read(ref _Status);
+    public SubscriptionStatus Status => (SubscriptionStatus)_Status;
 
     /// <summary>
     /// Convenience API: requests that the session unsubscribe this listener.
@@ -64,5 +64,5 @@ public sealed class ListenerInfo
     /// unsubscribe or shutdown. Thread-safe via <c>Volatile.Write</c>.
     /// </summary>
     internal void SetStatus(SubscriptionStatus status)
-        => Volatile.Write(ref _Status, (int)status);
+        => _Status = (int)status;
 }

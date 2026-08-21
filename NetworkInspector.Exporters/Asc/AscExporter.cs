@@ -55,13 +55,6 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
     /// </summary>
     private const byte _SocketCanXlfFlag = 0x80;
 
-    /// <summary>
-    /// DLC-code-to-byte-count mapping for CAN FD (ISO 11898-1 Table 6).
-    /// DLC codes 0–8 map to themselves; codes 9–15 map to 12, 16, 20, 24, 32, 48, 64.
-    /// </summary>
-    private static ReadOnlySpan<byte> _FdDlcToLength =>
-        [0, 1, 2, 3, 4, 5, 6, 7, 8, 12, 16, 20, 24, 32, 48, 64];
-
     #endregion
 
     #region DLT_LIN constants (BLF-derived format)
@@ -104,7 +97,7 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
     #region Instance fields
 
     private readonly CancellationToken _CancellationToken;
-    private readonly long _TargetFrameCount;
+    private readonly int _TargetFrameCount;
 
     /// <summary>Output target. Cleared to <c>null</c> after disposal to prevent double-dispose.</summary>
     private ExportOutput? _Output;
@@ -132,7 +125,7 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
         ExportOutput output,
         string uiName,
         string? description,
-        long targetFrameCount,
+        int targetFrameCount,
         CancellationToken cancellationToken)
     {
         _Output = output;
@@ -212,7 +205,7 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
         catch (Exception ex)
         {
             _HasError = true;
-            ErrorCount++;
+            if (ErrorCount < int.MaxValue) ErrorCount++;
             ItemSkipped?.Invoke(this, new ExportErrorEventArgs
             {
                 ItemIndex = FrameCount,
@@ -234,7 +227,7 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
             {
                 cleanupErrors.Add(ex);
                 _HasError = true;
-                ErrorCount++;
+                if (ErrorCount < int.MaxValue) ErrorCount++;
                 ItemSkipped?.Invoke(this, new ExportErrorEventArgs
                 {
                     ItemIndex = FrameCount,
@@ -251,7 +244,7 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
             {
                 cleanupErrors.Add(ex);
                 _HasError = true;
-                ErrorCount++;
+                if (ErrorCount < int.MaxValue) ErrorCount++;
                 ItemSkipped?.Invoke(this, new ExportErrorEventArgs
                 {
                     ItemIndex = FrameCount,
@@ -273,16 +266,31 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
     #region IExporterStatistics
 
     /// <summary>Number of frames successfully written.</summary>
-    public long FrameCount { get; private set; }
+    public int FrameCount { get; private set; }
 
     /// <inheritdoc/>
-    public long WrittenCount => FrameCount;
+    public int WrittenCount => FrameCount;
 
     /// <inheritdoc/>
-    public long SkippedCount { get; private set; }
+    public long EstimatedOutputBytes
+    {
+        get
+        {
+            AscWriter? writer = _Writer;
+            if (writer is null)
+            {
+                return 0L;
+            }
+
+            return writer.EstimatedOutputBytes;
+        }
+    }
 
     /// <inheritdoc/>
-    public long ErrorCount { get; private set; }
+    public int SkippedCount { get; private set; }
+
+    /// <inheritdoc/>
+    public int ErrorCount { get; private set; }
 
     /// <inheritdoc/>
     public bool HasErrors => ErrorCount > 0;
@@ -347,7 +355,7 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
         catch (Exception ex)
         {
             _HasError = true;
-            ErrorCount++;
+            if (ErrorCount < int.MaxValue) ErrorCount++;
             ItemSkipped?.Invoke(this, new ExportErrorEventArgs
             {
                 ItemIndex = 0,
@@ -375,7 +383,7 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
 
         ReadOnlySpan<byte> data = frame.Data.Span;
         long timestampNs = frame.Timestamp.AsNanos;
-        long currentIndex = FrameCount + SkippedCount;
+        int currentIndex = FrameCount + SkippedCount;
 
         switch (frame.LinkType)
         {
@@ -410,7 +418,7 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
     /// </para>
     /// </summary>
     private bool _HandleCanFrame(
-        ReadOnlySpan<byte> data, long timestampNs, long currentIndex, Frame frame)
+        ReadOnlySpan<byte> data, long timestampNs, int currentIndex, Frame frame)
     {
         // CAN XL frames share LinkType.CanSocketcan with classic/FD but are identified by
         // the XLF bit (byte 4, bit 7). The ASC format cannot represent CAN XL, so skip early
@@ -461,7 +469,7 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
     /// Parses the BLF-derived DLT_LIN binary format and writes the ASC LIN line.
     /// </summary>
     private bool _HandleLinFrame(
-        ReadOnlySpan<byte> data, long timestampNs, long currentIndex, Frame frame)
+        ReadOnlySpan<byte> data, long timestampNs, int currentIndex, Frame frame)
     {
         if (!_TryParseLinFrame(data, out byte frameId, out ReadOnlySpan<byte> payload, out byte checksum))
         {
@@ -494,7 +502,7 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
     /// channel designation rather than the logical interface channel.
     /// </summary>
     private bool _HandleFlexRayFrame(
-        ReadOnlySpan<byte> data, long timestampNs, long currentIndex)
+        ReadOnlySpan<byte> data, long timestampNs, int currentIndex)
     {
         if (!_TryParseFlexRayFrame(data,
             out byte channel, out ushort frameId, out byte cycle,
@@ -527,10 +535,17 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
     /// <c>false</c> in Strict mode (signals the caller to stop sending frames);
     /// <c>true</c> in Tolerant mode (export continues).
     /// </returns>
-    private bool _HandleSkip(ExportErrorKind kind, string message, long itemIndex)
+    private bool _HandleSkip(ExportErrorKind kind, string message, int itemIndex)
     {
-        SkippedCount++;
-        ErrorCount++;
+        if (SkippedCount < int.MaxValue)
+        {
+            SkippedCount++;
+        }
+
+        if (ErrorCount < int.MaxValue)
+        {
+            ErrorCount++;
+        }
 
         if (ErrorTolerance == ErrorToleranceMode.Strict)
         {
@@ -558,11 +573,13 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
     /// SocketCAN frame layout:
     /// <list type="bullet">
     /// <item>Bytes 0–3: CAN ID (big-endian uint32 with flag bits 31–29).</item>
-    /// <item>Byte 4: DLC (classic 0–8; FD DLC code 0–15).</item>
+    /// <item>Byte 4: Payload byte count (classic 0–8; FD 0–64) — not a DLC code.</item>
     /// <item>Byte 5: FD flags — bit 2 = FDF (FD Format), bit 1 = ESI, bit 0 = BRS.</item>
     /// <item>Bytes 6–7: Reserved (ignored).</item>
     /// <item>Bytes 8+: Data payload.</item>
     /// </list>
+    /// The ASC writer expects a DLC code (0–15) for CAN FD lines, so FD byte counts are
+    /// converted via <see cref="BlfConstants.GetCanFdDlcFromPayloadByteCount"/>.
     /// </remarks>
     private static bool _TryParseCanFrame(
         ReadOnlySpan<byte> data,
@@ -589,7 +606,7 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
         isExtended = (socketCanId & _SocketCanEffFlag) != 0;
         isRemote = (socketCanId & _SocketCanRtrFlag) != 0;
 
-        dlc = data[4];
+        byte payloadByteCount = data[4];
         byte fdFlags = data[5];
         isFd = (fdFlags & _SocketCanFdfFlag) != 0;
         brs = (fdFlags & _SocketCanBrsFlag) != 0;
@@ -599,16 +616,20 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
 
         if (isFd)
         {
-            // Look up actual byte count from the DLC code using the CAN FD table.
-            int fdDlc = Math.Min((int)dlc, _FdDlcToLength.Length - 1);
-            int actualLen = _FdDlcToLength[fdDlc];
-            payload = data.Slice(_SocketCanHeaderSize, Math.Min(actualLen, available));
+            // SocketCAN FD stores the actual payload byte count at offset 4 (0–64),
+            // not a DLC code. Convert to ASC DLC (0–15) for the CANFD line syntax.
+            int actualLen = Math.Min((int)payloadByteCount, 64);
+            actualLen = Math.Min(actualLen, available);
+            payload = data.Slice(_SocketCanHeaderSize, actualLen);
+            dlc = BlfConstants.GetCanFdDlcFromPayloadByteCount((byte)actualLen);
         }
         else
         {
-            // Classic CAN: DLC code equals byte count (clamped to 8).
-            int classicLen = Math.Min((int)dlc, 8);
-            payload = data.Slice(_SocketCanHeaderSize, Math.Min(classicLen, available));
+            // Classic CAN: byte count equals DLC (clamped to 8).
+            int classicLen = Math.Min((int)payloadByteCount, 8);
+            classicLen = Math.Min(classicLen, available);
+            payload = data.Slice(_SocketCanHeaderSize, classicLen);
+            dlc = (byte)classicLen;
         }
 
         return true;
@@ -715,58 +736,18 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
         }
 
         if (info.Properties.TryGetValue(_AscChannelKey, out object? ascCh)
-            && _TryConvertToInt32(ascCh, out int ascChannel))
+            && InterfaceChannelConverter.TryConvertToInt32(ascCh, out int ascChannel))
         {
             return ascChannel;
         }
 
         if (info.Properties.TryGetValue(FrameInterfacePropertyKeys.BlfChannel, out object? blfCh)
-            && _TryConvertToInt32(blfCh, out int blfChannel))
+            && InterfaceChannelConverter.TryConvertToInt32(blfCh, out int blfChannel))
         {
             return blfChannel;
         }
 
         return defaultChannel;
-    }
-
-    /// <summary>
-    /// Attempts to convert <paramref name="value"/> to an <see cref="int"/> without relying
-    /// on exception-based control flow. Accepts all integral numeric types and parseable strings.
-    /// This precheck avoids <c>Convert.ToInt64</c> which throws on type mismatch;
-    /// using exceptions for expected fallback paths violates the no-silent-failure policy.
-    /// </summary>
-    private static bool _TryConvertToInt32(object? value, out int result)
-    {
-        switch (value)
-        {
-            case int i:
-                result = i;
-                return true;
-            case long l when l >= int.MinValue && l <= int.MaxValue:
-                result = (int)l;
-                return true;
-            case uint u when u <= (uint)int.MaxValue:
-                result = (int)u;
-                return true;
-            case short s:
-                result = s;
-                return true;
-            case ushort us:
-                result = us;
-                return true;
-            case byte b:
-                result = b;
-                return true;
-            case sbyte sb:
-                result = sb;
-                return true;
-            case string str when int.TryParse(str, NumberStyles.Integer, CultureInfo.InvariantCulture, out int parsed):
-                result = parsed;
-                return true;
-            default:
-                result = 0;
-                return false;
-        }
     }
 
     #endregion
@@ -784,14 +765,14 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
         private string _UiName = "ASC Exporter";
         private string? _Description;
         private CancellationToken _CancellationToken;
-        private long _TargetFrameCount;
+        private int _TargetFrameCount;
 
         #region Output target
 
         /// <summary>
         /// Directs output to a file at the given path.
-        /// The file is created lazily on the first frame; no file is created for empty exports
-        /// unless <see cref="OnFinish"/> is called.
+        /// The file is created lazily on the first successful write path (including empty
+        /// <see cref="OnFinish"/> which still emits a valid ASC header + empty trigger block).
         /// Calling this method more than once replaces the previous output target.
         /// </summary>
         public Builder ToFile(string path)
@@ -857,9 +838,18 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
         /// Pass <c>0</c> (the default) for no limit.
         /// </summary>
         /// <exception cref="ArgumentOutOfRangeException"><paramref name="count"/> is negative.</exception>
-        public Builder WithTargetFrameCount(long count)
+        public Builder WithTargetFrameCount(int count)
         {
             ArgumentOutOfRangeException.ThrowIfNegative(count);
+            if (count > ArrayIndexIdRange.MaxCount)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(count),
+                    count,
+                    $"Target frame count must not exceed {ArrayIndexIdRange.MaxCount.ToString(CultureInfo.InvariantCulture)} " +
+                    $"(Array.MaxLength={Array.MaxLength.ToString(CultureInfo.InvariantCulture)}).");
+            }
+
             _TargetFrameCount = count;
             return this;
         }

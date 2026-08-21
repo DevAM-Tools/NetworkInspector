@@ -29,17 +29,10 @@ public sealed class Stack : IStack, IDisposable
     #region Fields
 
     // Frozen arrays — direct indexing by ID value
-    private readonly ProtocolInfo[] _Protocols;
     private readonly IProtocol[] _ProtocolInstances;
     private readonly ParseDelegate[] _ParseDelegates;
-    private readonly FieldInfo[] _Fields;
     private readonly ProtocolTable[] _ProtocolTables;
-    private readonly ProtocolTableInfo[] _ProtocolTableInfos;
     private readonly HeuristicProtocolTable[] _HeuristicTables;
-    private readonly HeuristicProtocolTableInfo[] _HeuristicTableInfos;
-    private readonly PostParserInfo[] _PostParsers;
-    private readonly IndexGroupInfo[] _IndexGroups;
-    private readonly FieldAliasGroupInfo[] _FieldAliasGroups;
     private readonly SettingsManager _SettingsManager;
 
     // Frozen name→ID maps (FrozenDictionary for O(1) string lookups)
@@ -51,19 +44,6 @@ public sealed class Stack : IStack, IDisposable
     private readonly FrozenDictionary<string, FieldAliasGroupId> _FieldAliasGroupNameMap;
 
     // Built-in IDs
-    private readonly FieldId _RootFieldId;
-    private readonly FieldId _PacketErrorFieldId;
-    private readonly FieldId _PacketChoiceFieldId;
-    private readonly ProtocolId _PacketProtocolId;
-    private readonly ProtocolId _FrameProtocolId;
-    private readonly int _IndexGroupCount;
-
-    /// <summary>Lock-free frame interface registry (shared with StackBuilder).</summary>
-    private readonly FrameInterfaceRegistry _FrameInterfaceRegistry;
-
-    /// <summary>When true, exception error messages include the full stack trace.</summary>
-    private readonly bool _IncludeExceptionStackTrace;
-
     /// <summary>Frozen reassembly configs keyed by protocol ID.</summary>
     private readonly FrozenDictionary<ProtocolId, StreamReassemblyConfig> _ReassemblyConfigs;
 
@@ -73,7 +53,7 @@ public sealed class Stack : IStack, IDisposable
     /// read concurrently by inspectors. Access is via <see cref="System.Threading.Volatile"/>
     /// Read / Write to enforce the publication fence on every site.
     /// </summary>
-    private BuildDiagnostic[] _BuildDiagnostics = [];
+    private volatile BuildDiagnostic[] _BuildDiagnostics = [];
 
     /// <summary>
     /// Exceptions captured during the implicit <see cref="Shutdown"/> performed by
@@ -81,7 +61,7 @@ public sealed class Stack : IStack, IDisposable
     /// <see cref="Shutdown"/> explicitly. Published with <see cref="Volatile.Write{T}(ref T, T)"/>
     /// and read with <see cref="System.Threading.Volatile"/>.
     /// </summary>
-    private Exception[] _ShutdownDiagnostics = [];
+    private volatile Exception[] _ShutdownDiagnostics = [];
 
     /// <summary>
     /// Atomic shutdown latch (0 = live, 1 = shut down). Set by <see cref="Shutdown"/> and checked
@@ -89,13 +69,13 @@ public sealed class Stack : IStack, IDisposable
     /// whether the caller invokes <see cref="Shutdown"/> explicitly or relies on <see cref="Dispose"/>.
     /// Accessed exclusively via <see cref="Interlocked.Exchange(ref int, int)"/>.
     /// </summary>
-    private int _ShutdownFlag;
+    private volatile int _ShutdownFlag;
 
     /// <summary>
     /// Atomic dispose latch (0 = live, 1 = disposed). Used with <see cref="Interlocked.Exchange(ref int, int)"/>
     /// inside <see cref="Dispose"/> so concurrent dispose attempts are race-free.
     /// </summary>
-    private int _DisposedFlag;
+    private volatile int _DisposedFlag;
 
     #endregion
 
@@ -131,32 +111,32 @@ public sealed class Stack : IStack, IDisposable
         FieldAliasGroupInfo[] fieldAliasGroups,
         FrozenDictionary<string, FieldAliasGroupId> fieldAliasGroupNameMap)
     {
-        _Protocols = protocols;
+        Protocols = protocols;
         _ProtocolInstances = protocolInstances;
         _ParseDelegates = parseDelegates;
         _ProtocolNameMap = protocolNameMap;
-        _Fields = fields;
+        Fields = fields;
         _FieldNameMap = fieldNameMap;
         _ProtocolTables = protocolTables;
-        _ProtocolTableInfos = protocolTableInfos;
+        ProtocolTableInfos = protocolTableInfos;
         _ProtocolTableNameMap = protocolTableNameMap;
         _HeuristicTables = heuristicTables;
-        _HeuristicTableInfos = heuristicTableInfos;
+        HeuristicProtocolTableInfos = heuristicTableInfos;
         _HeuristicTableNameMap = heuristicTableNameMap;
-        _PostParsers = postParsers;
+        PostParsers = postParsers;
         _SettingsManager = settingsManager;
-        _RootFieldId = rootFieldId;
-        _PacketErrorFieldId = packetErrorFieldId;
-        _PacketChoiceFieldId = packetChoiceFieldId;
-        _PacketProtocolId = packetProtocolId;
-        _FrameProtocolId = frameProtocolId;
-        _IndexGroupCount = indexGroupCount;
-        _IndexGroups = indexGroups;
+        RootFieldId = rootFieldId;
+        PacketErrorFieldId = packetErrorFieldId;
+        PacketChoiceFieldId = packetChoiceFieldId;
+        PacketProtocolId = packetProtocolId;
+        FrameProtocolId = frameProtocolId;
+        IndexGroupCount = indexGroupCount;
+        IndexGroups = indexGroups;
         _IndexGroupNameMap = indexGroupNameMap;
-        _FrameInterfaceRegistry = frameInterfaceRegistry;
-        _FieldAliasGroups = fieldAliasGroups;
+        FrameInterfaceRegistry = frameInterfaceRegistry;
+        FieldAliasGroups = fieldAliasGroups;
         _FieldAliasGroupNameMap = fieldAliasGroupNameMap;
-        _IncludeExceptionStackTrace = includeExceptionStackTrace;
+        IncludeExceptionStackTrace = includeExceptionStackTrace;
         _ReassemblyConfigs = reassemblyConfigs;
     }
 
@@ -172,18 +152,18 @@ public sealed class Stack : IStack, IDisposable
     #region Built-in IDs
 
     /// <summary>The root field ID (always index 0 in every packet).</summary>
-    internal FieldId RootFieldId => _RootFieldId;
+    internal FieldId RootFieldId { get; }
     /// <summary>Field ID for error annotations.</summary>
-    internal FieldId PacketErrorFieldId => _PacketErrorFieldId;
+    internal FieldId PacketErrorFieldId { get; }
     /// <summary>Field ID for the packet.choice container used when multiple protocols match a dispatch key.</summary>
-    internal FieldId PacketChoiceFieldId => _PacketChoiceFieldId;
+    internal FieldId PacketChoiceFieldId { get; }
     /// <summary>The top-level protocol for packet dispatch.</summary>
-    internal ProtocolId PacketProtocolId => _PacketProtocolId;
+    internal ProtocolId PacketProtocolId { get; }
     /// <summary>The frame protocol auto-discovered by name "frame" during build. Used as default dispatch target by PacketProtocol.</summary>
-    internal ProtocolId FrameProtocolId => _FrameProtocolId;
+    internal ProtocolId FrameProtocolId { get; }
 
     /// <inheritdoc/>
-    public FrameInterfaceRegistry FrameInterfaceRegistry => _FrameInterfaceRegistry;
+    public FrameInterfaceRegistry FrameInterfaceRegistry { get; }
 
     /// <summary>
     /// All non-fatal diagnostics collected during <see cref="StackBuilder.Build"/>.
@@ -191,7 +171,7 @@ public sealed class Stack : IStack, IDisposable
     /// and <see cref="BuildStartupError"/> entries for protocol startup exceptions.
     /// An empty memory means the stack was built without any issues.
     /// </summary>
-    public ReadOnlyMemory<BuildDiagnostic> BuildDiagnostics => Volatile.Read(ref _BuildDiagnostics);
+    public ReadOnlyMemory<BuildDiagnostic> BuildDiagnostics => _BuildDiagnostics;
 
     /// <summary>
     /// Exceptions captured during the implicit <see cref="Shutdown"/> that runs from
@@ -202,14 +182,14 @@ public sealed class Stack : IStack, IDisposable
     /// when callers ran <see cref="Shutdown"/> explicitly before disposal (in which case the
     /// thrown <see cref="AggregateException"/> is the diagnostic surface).
     /// </summary>
-    public ReadOnlyMemory<Exception> ShutdownDiagnostics => Volatile.Read(ref _ShutdownDiagnostics);
+    public ReadOnlyMemory<Exception> ShutdownDiagnostics => _ShutdownDiagnostics;
 
     /// <inheritdoc/>
-    public bool IncludeExceptionStackTrace => _IncludeExceptionStackTrace;
+    public bool IncludeExceptionStackTrace { get; }
 
     /// <summary>Sets all build diagnostics collected during <see cref="StackBuilder.Build"/>.</summary>
     internal void SetBuildDiagnostics(BuildDiagnostic[] diagnostics) =>
-        Volatile.Write(ref _BuildDiagnostics, diagnostics);
+        _BuildDiagnostics = diagnostics;
 
     #endregion
 
@@ -219,9 +199,9 @@ public sealed class Stack : IStack, IDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ProtocolInfo? GetProtocol(ProtocolId id)
     {
-        if (_IsValidIndex(id.Value, _Protocols.Length))
+        if (_IsValidIndex(id.Value, Protocols.Length))
         {
-            return _Protocols[id.Value];
+            return Protocols.Span[id.Value];
         }
         return null;
     }
@@ -238,10 +218,10 @@ public sealed class Stack : IStack, IDisposable
     }
 
     /// <inheritdoc/>
-    public ReadOnlyMemory<ProtocolInfo> Protocols => _Protocols;
+    public ReadOnlyMemory<ProtocolInfo> Protocols { get; }
 
     /// <inheritdoc/>
-    public int ProtocolCount => _Protocols.Length;
+    public int ProtocolCount => Protocols.Length;
 
     #endregion
 
@@ -251,9 +231,9 @@ public sealed class Stack : IStack, IDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public FieldInfo? GetField(FieldId id)
     {
-        if (_IsValidIndex(id.Value, _Fields.Length))
+        if (_IsValidIndex(id.Value, Fields.Length))
         {
-            return _Fields[id.Value];
+            return Fields.Span[id.Value];
         }
         return null;
     }
@@ -270,20 +250,21 @@ public sealed class Stack : IStack, IDisposable
     }
 
     /// <inheritdoc/>
-    public ReadOnlyMemory<FieldInfo> Fields => _Fields;
+    public ReadOnlyMemory<FieldInfo> Fields { get; }
 
     /// <inheritdoc/>
-    public int FieldCount => _Fields.Length;
+    public int FieldCount => Fields.Length;
 
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public IndexGroupId GetFieldIndexGroup(FieldId fieldId)
     {
-        if (_IsValidIndex(fieldId.Value, _Fields.Length))
+        if (_IsValidIndex(fieldId.Value, Fields.Length))
         {
-            if (_Fields[fieldId.Value].IndexGroup is { } indexGroup)
+            IndexGroupId? indexGroup = Fields.Span[fieldId.Value].IndexGroup;
+            if (indexGroup is not null)
             {
-                return indexGroup;
+                return indexGroup.Value;
             }
         }
         return IndexGroupId.Invalid;
@@ -297,9 +278,9 @@ public sealed class Stack : IStack, IDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public FieldAliasGroupInfo? GetFieldAliasGroup(FieldAliasGroupId id)
     {
-        if (_IsValidIndex(id.Value, _FieldAliasGroups.Length))
+        if (_IsValidIndex(id.Value, FieldAliasGroups.Length))
         {
-            return _FieldAliasGroups[id.Value];
+            return FieldAliasGroups.Span[id.Value];
         }
         return null;
     }
@@ -316,10 +297,10 @@ public sealed class Stack : IStack, IDisposable
     }
 
     /// <inheritdoc/>
-    public ReadOnlyMemory<FieldAliasGroupInfo> FieldAliasGroups => _FieldAliasGroups;
+    public ReadOnlyMemory<FieldAliasGroupInfo> FieldAliasGroups { get; }
 
     /// <inheritdoc/>
-    public int FieldAliasGroupCount => _FieldAliasGroups.Length;
+    public int FieldAliasGroupCount => FieldAliasGroups.Length;
 
     #endregion
 
@@ -329,9 +310,9 @@ public sealed class Stack : IStack, IDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public IndexGroupInfo? GetIndexGroup(IndexGroupId id)
     {
-        if (_IsValidIndex(id.Value, _IndexGroups.Length))
+        if (_IsValidIndex(id.Value, IndexGroups.Length))
         {
-            return _IndexGroups[id.Value];
+            return IndexGroups.Span[id.Value];
         }
         return null;
     }
@@ -348,10 +329,10 @@ public sealed class Stack : IStack, IDisposable
     }
 
     /// <inheritdoc/>
-    public ReadOnlyMemory<IndexGroupInfo> IndexGroups => _IndexGroups;
+    public ReadOnlyMemory<IndexGroupInfo> IndexGroups { get; }
 
     /// <inheritdoc/>
-    public int IndexGroupCount => _IndexGroupCount;
+    public int IndexGroupCount { get; }
 
     #endregion
 
@@ -361,9 +342,9 @@ public sealed class Stack : IStack, IDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ProtocolTableInfo? GetProtocolTableInfo(ProtocolTableId id)
     {
-        if (_IsValidIndex(id.Value, _ProtocolTableInfos.Length))
+        if (_IsValidIndex(id.Value, ProtocolTableInfos.Length))
         {
-            return _ProtocolTableInfos[id.Value];
+            return ProtocolTableInfos.Span[id.Value];
         }
         return null;
     }
@@ -380,20 +361,20 @@ public sealed class Stack : IStack, IDisposable
     }
 
     /// <inheritdoc/>
-    public ReadOnlyMemory<ProtocolTableInfo> ProtocolTableInfos => _ProtocolTableInfos;
+    public ReadOnlyMemory<ProtocolTableInfo> ProtocolTableInfos { get; }
 
     /// <inheritdoc/>
-    public int ProtocolTableCount => _ProtocolTableInfos.Length;
+    public int ProtocolTableCount => ProtocolTableInfos.Length;
 
     #endregion
 
     #region Post-Parser Access
 
     /// <inheritdoc/>
-    public ReadOnlyMemory<PostParserInfo> PostParsers => _PostParsers;
+    public ReadOnlyMemory<PostParserInfo> PostParsers { get; }
 
     /// <inheritdoc/>
-    public int PostParserCount => _PostParsers.Length;
+    public int PostParserCount => PostParsers.Length;
 
     #endregion
 
@@ -403,9 +384,9 @@ public sealed class Stack : IStack, IDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public HeuristicProtocolTableInfo? GetHeuristicProtocolTableInfo(HeuristicProtocolTableId id)
     {
-        if (_IsValidIndex(id.Value, _HeuristicTableInfos.Length))
+        if (_IsValidIndex(id.Value, HeuristicProtocolTableInfos.Length))
         {
-            return _HeuristicTableInfos[id.Value];
+            return HeuristicProtocolTableInfos.Span[id.Value];
         }
         return null;
     }
@@ -422,17 +403,17 @@ public sealed class Stack : IStack, IDisposable
     }
 
     /// <inheritdoc/>
-    public ReadOnlyMemory<HeuristicProtocolTableInfo> HeuristicProtocolTableInfos => _HeuristicTableInfos;
+    public ReadOnlyMemory<HeuristicProtocolTableInfo> HeuristicProtocolTableInfos { get; }
 
     /// <inheritdoc/>
-    public int HeuristicProtocolTableCount => _HeuristicTableInfos.Length;
+    public int HeuristicProtocolTableCount => HeuristicProtocolTableInfos.Length;
 
     #endregion
 
     #region Settings Access
 
     /// <inheritdoc/>
-    public IReadOnlySettingsManager Settings => _SettingsManager.ReadOnly;
+    public ReadOnlySettingsManagerView Settings => _SettingsManager.ReadOnly;
 
     #endregion
 
@@ -709,13 +690,13 @@ public sealed class Stack : IStack, IDisposable
             {
                 inner[i] = aggregate.InnerExceptions[i];
             }
-            Volatile.Write(ref _ShutdownDiagnostics, inner);
+            _ShutdownDiagnostics = inner;
         }
         catch (Exception ex)
         {
             // Defensive fallback: any non-AggregateException out of Shutdown is captured
             // identically. Catching base Exception is required by CA1065.
-            Volatile.Write(ref _ShutdownDiagnostics, [ex]);
+            _ShutdownDiagnostics = [ex];
         }
 
         _SettingsManager.DisposeResources();

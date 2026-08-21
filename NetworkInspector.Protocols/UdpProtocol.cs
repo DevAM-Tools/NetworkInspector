@@ -332,18 +332,17 @@ public sealed partial class UdpProtocol : IProtocol
             ushort highPort = Math.Max(srcPort, dstPort);
 
             ParseResult result = parentField.TryCallNextProtocolU64(_PortTableId, lowPort, payloadData, in context);
-            if (result.IsError)
+            if (result.TryPropagateError(out ParseResult error))
             {
-                return result;
+                return error;
             }
 
-            bool dispatched = result.Value > 0;
-            if (!dispatched && lowPort != highPort)
+            if (!result.TryGetConsumed(out _) && lowPort != highPort)
             {
                 ParseResult highResult = parentField.TryCallNextProtocolU64(_PortTableId, highPort, payloadData, in context);
-                if (highResult.IsError)
+                if (highResult.TryPropagateError(out ParseResult highError))
                 {
-                    return highResult;
+                    return highError;
                 }
             }
         }
@@ -361,8 +360,7 @@ public sealed partial class UdpProtocol : IProtocol
         int segmentLen = Math.Min(udpLength, udpSpan.Length);
 
         // Walk previous siblings to find typed IP addresses
-        Field startField = container.AsField();
-        if (!IpAddressExtractor.TryFindPreviousIpAddresses(startField,
+        if (!IpAddressExtractor.TryFindPreviousIpAddresses(in container,
             _IpContainerFieldId, _Ipv6ContainerFieldId,
             _IpSrcFieldId, _IpDstFieldId, _Ipv6SrcFieldId, _Ipv6DstFieldId,
             out (IPv4Address Src, IPv4Address Dst)? ipv4,
@@ -401,9 +399,9 @@ public sealed partial class UdpProtocol : IProtocol
     private bool _TryFindPreviousIpAddressesFallback(
         in MutField parentField, out IPv4Address src, out IPv4Address dst, in ParseContext context)
     {
-        Field root = parentField.AsField();
-        if (root.TryGetLastChild(out Field prev)
-            && IpAddressExtractor.TryFindPreviousIpAddresses(prev,
+        // materialize: false — IP containers are already eager at parse time.
+        if (parentField.TryGetLastChild(out MutField prev, materialize: false)
+            && IpAddressExtractor.TryFindPreviousIpAddresses(in prev,
                 _IpContainerFieldId, _Ipv6ContainerFieldId,
                 _IpSrcFieldId, _IpDstFieldId, _Ipv6SrcFieldId, _Ipv6DstFieldId,
                 out (IPv4Address Src, IPv4Address Dst)? ipv4, out _)
@@ -425,9 +423,9 @@ public sealed partial class UdpProtocol : IProtocol
     private bool _TryFindPreviousIpv6AddressesFallback(
         in MutField parentField, out IPv6Address src, out IPv6Address dst, in ParseContext context)
     {
-        Field root = parentField.AsField();
-        if (root.TryGetLastChild(out Field prev)
-            && IpAddressExtractor.TryFindPreviousIpAddresses(prev,
+        // materialize: false — IP containers are already eager at parse time.
+        if (parentField.TryGetLastChild(out MutField prev, materialize: false)
+            && IpAddressExtractor.TryFindPreviousIpAddresses(in prev,
                 _IpContainerFieldId, _Ipv6ContainerFieldId,
                 _IpSrcFieldId, _IpDstFieldId, _Ipv6SrcFieldId, _Ipv6DstFieldId,
                 out _, out (IPv6Address Src, IPv6Address Dst)? ipv6)

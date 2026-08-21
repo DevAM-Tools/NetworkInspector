@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Core.Tests;
 
@@ -46,28 +46,28 @@ internal sealed class IcmpProtocolTests
 
             // Type = 8 (Echo Request)
             FieldId? typeId = stack.GetFieldId("icmp.type");
-            bool hasType = packet.TryGetFieldValue(typeId!.Value, out FieldValue typeValue);
+            bool hasType = packet.TryGetFieldValue(typeId!.Value, out FieldValue typeValue, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasType).IsTrue();
             typeValue.Data.TryGetAsU64(out ulong u64Val);
             await Assert.That(u64Val).IsEqualTo(8UL);
 
             // Code = 0
             FieldId? codeId = stack.GetFieldId("icmp.code");
-            bool hasCode = packet.TryGetFieldValue(codeId!.Value, out FieldValue codeValue);
+            bool hasCode = packet.TryGetFieldValue(codeId!.Value, out FieldValue codeValue, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasCode).IsTrue();
             codeValue.Data.TryGetAsU64(out ulong u64Val2);
             await Assert.That(u64Val2).IsEqualTo(0UL);
 
             // Identifier
             FieldId? identId = stack.GetFieldId("icmp.ident");
-            bool hasIdent = packet.TryGetFieldValue(identId!.Value, out FieldValue identValue);
+            bool hasIdent = packet.TryGetFieldValue(identId!.Value, out FieldValue identValue, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasIdent).IsTrue();
             identValue.Data.TryGetAsU64(out ulong u64Val3);
             await Assert.That(u64Val3).IsEqualTo(0x1234UL);
 
             // Sequence
             FieldId? seqId = stack.GetFieldId("icmp.seq");
-            bool hasSeq = packet.TryGetFieldValue(seqId!.Value, out FieldValue seqValue);
+            bool hasSeq = packet.TryGetFieldValue(seqId!.Value, out FieldValue seqValue, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasSeq).IsTrue();
             seqValue.Data.TryGetAsU64(out ulong u64Val4);
             await Assert.That(u64Val4).IsEqualTo(1UL);
@@ -86,14 +86,14 @@ internal sealed class IcmpProtocolTests
         {
             // Type = 0 (Echo Reply)
             FieldId? typeId = stack.GetFieldId("icmp.type");
-            bool hasType = packet.TryGetFieldValue(typeId!.Value, out FieldValue typeValue);
+            bool hasType = packet.TryGetFieldValue(typeId!.Value, out FieldValue typeValue, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasType).IsTrue();
             typeValue.Data.TryGetAsU64(out ulong u64Val);
             await Assert.That(u64Val).IsEqualTo(0UL);
 
             // Identifier preserved
             FieldId? identId = stack.GetFieldId("icmp.ident");
-            bool hasIdent = packet.TryGetFieldValue(identId!.Value, out FieldValue identValue);
+            bool hasIdent = packet.TryGetFieldValue(identId!.Value, out FieldValue identValue, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasIdent).IsTrue();
             identValue.Data.TryGetAsU64(out ulong u64Val2);
             await Assert.That(u64Val2).IsEqualTo(0xABCDUL);
@@ -110,21 +110,21 @@ internal sealed class IcmpProtocolTests
         {
             // Type = 3 (Dest Unreachable)
             FieldId? typeId = stack.GetFieldId("icmp.type");
-            bool hasType = packet.TryGetFieldValue(typeId!.Value, out FieldValue typeValue);
+            bool hasType = packet.TryGetFieldValue(typeId!.Value, out FieldValue typeValue, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasType).IsTrue();
             typeValue.Data.TryGetAsU64(out ulong u64Val);
             await Assert.That(u64Val).IsEqualTo(3UL);
 
             // Code = 1 (Host Unreachable)
             FieldId? codeId = stack.GetFieldId("icmp.code");
-            bool hasCode = packet.TryGetFieldValue(codeId!.Value, out FieldValue codeValue);
+            bool hasCode = packet.TryGetFieldValue(codeId!.Value, out FieldValue codeValue, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasCode).IsTrue();
             codeValue.Data.TryGetAsU64(out ulong u64Val2);
             await Assert.That(u64Val2).IsEqualTo(1UL);
 
             // Echo fields should NOT be present for Dest Unreachable
             FieldId? identId = stack.GetFieldId("icmp.ident");
-            bool hasIdent = packet.TryGetFieldValue(identId!.Value, out FieldValue _);
+            bool hasIdent = packet.TryGetFieldValue(identId!.Value, out FieldValue _, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasIdent).IsFalse();
         }
     }
@@ -141,7 +141,7 @@ internal sealed class IcmpProtocolTests
         {
             // Checksum field should be present
             FieldId? checksumId = stack.GetFieldId("icmp.checksum");
-            bool hasChecksum = packet.TryGetFieldValue(checksumId!.Value, out FieldValue checksumValue);
+            bool hasChecksum = packet.TryGetFieldValue(checksumId!.Value, out FieldValue checksumValue, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasChecksum).IsTrue();
             // Value should be non-zero (valid checksum from FrameBuilder)
             checksumValue.Data.TryGetAsU64(out ulong u64Val);

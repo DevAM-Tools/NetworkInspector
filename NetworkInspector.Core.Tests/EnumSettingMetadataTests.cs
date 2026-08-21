@@ -9,6 +9,13 @@ namespace NetworkInspector.Core.Tests;
 internal sealed class EnumSettingMetadataTests
 {
     [Test]
+    public void FromPairs_Null_ThrowsArgumentNullException()
+    {
+        _ = Assert.Throws<ArgumentNullException>(
+            () => EnumSettingMetadata.FromPairs(null!));
+    }
+
+    [Test]
     public async Task FromPairs_CreatesMetadata()
     {
         EnumSettingMetadata meta = EnumSettingMetadata.FromPairs(
@@ -71,6 +78,20 @@ internal sealed class EnumSettingMetadataTests
         await Assert.That(meta.IsAllowedName("Low")).IsTrue();
         await Assert.That(meta.IsAllowedName("low")).IsTrue(); // case-insensitive
         await Assert.That(meta.IsAllowedName("Medium")).IsFalse();
+    }
+
+    [Test]
+    public async Task FromPairs_DuplicateNumeric_Throws()
+    {
+        await Assert.That(() => EnumSettingMetadata.FromPairs([("Low", 0), ("AlsoLow", 0)]))
+            .Throws<ValidationSettingsException>();
+    }
+
+    [Test]
+    public async Task FromPairs_DuplicateName_Throws()
+    {
+        await Assert.That(() => EnumSettingMetadata.FromPairs([("Low", 0), ("low", 1)]))
+            .Throws<ValidationSettingsException>();
     }
 
     [Test]

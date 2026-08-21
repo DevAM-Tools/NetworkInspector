@@ -103,4 +103,56 @@ internal static class FrameGenerators
     /// </summary>
     internal static byte[] BuildSimpleEthernetFrame(ushort etherType, ReadOnlySpan<byte> payload) =>
         BuildEthernetFrame(_BroadcastMac, _TestSrcMac, etherType, payload);
+
+    /// <summary>
+    /// Builds a minimal RFC 1035 DNS "A" query message: a 12-byte header (one question, no
+    /// answers/authority/additional records) followed by a single question for
+    /// <paramref name="domainName"/>.
+    /// </summary>
+    private static byte[] _BuildDnsQuery(string domainName)
+    {
+        string[] labels = domainName.Split('.');
+        int qnameLength = 1; // trailing zero-length root label
+        foreach (string label in labels)
+        {
+            qnameLength += 1 + Encoding.ASCII.GetByteCount(label);
+        }
+
+        byte[] message = new byte[12 + qnameLength + 4]; // header + QNAME + QTYPE(2) + QCLASS(2)
+        BinaryPrimitives.WriteUInt16BigEndian(message.AsSpan(0), 0x1234); // Transaction ID
+        BinaryPrimitives.WriteUInt16BigEndian(message.AsSpan(2), 0x0100); // Standard query, recursion desired
+        BinaryPrimitives.WriteUInt16BigEndian(message.AsSpan(4), 1); // QDCOUNT
+        // ANCOUNT, NSCOUNT, ARCOUNT already zero-initialized.
+
+        int pos = 12;
+        foreach (string label in labels)
+        {
+            byte[] labelBytes = Encoding.ASCII.GetBytes(label);
+            message[pos++] = (byte)labelBytes.Length;
+            labelBytes.CopyTo(message, pos);
+            pos += labelBytes.Length;
+        }
+        message[pos++] = 0; // root label
+
+        BinaryPrimitives.WriteUInt16BigEndian(message.AsSpan(pos), 1); // QTYPE = A
+        BinaryPrimitives.WriteUInt16BigEndian(message.AsSpan(pos + 2), 1); // QCLASS = IN
+
+        return message;
+    }
+
+    /// <summary>
+    /// Builds a complete Ethernet + IPv4 + UDP frame carrying a single-question DNS "A" query
+    /// for <paramref name="domainName"/>, addressed to UDP port 53 so the shared protocol stack
+    /// dispatches it to <c>DnsProtocol</c> and populates the <c>dns.qry.name</c> string field.
+    /// </summary>
+    internal static byte[] BuildDnsQueryFrame(string domainName)
+    {
+        byte[] dnsMessage = _BuildDnsQuery(domainName);
+        ReadOnlySpan<byte> srcIp = [192, 168, 1, 1];
+        ReadOnlySpan<byte> dstIp = [192, 168, 1, 53];
+
+        byte[] udp = BuildUdpDatagram(53000, 53, dnsMessage);
+        byte[] ipv4 = BuildIpv4Packet(srcIp, dstIp, 17, udp); // 17 = UDP
+        return BuildEthernetFrame(_TestDstMac, _TestSrcMac, 0x0800, ipv4);
+    }
 }

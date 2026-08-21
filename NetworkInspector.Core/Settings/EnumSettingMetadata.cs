@@ -10,7 +10,6 @@ public sealed class EnumSettingMetadata
 {
     #region Fields
 
-    private readonly EnumSettingValue[] _AllowedValues;
     private readonly Dictionary<ulong, int> _NumericToIndex;
     private readonly Dictionary<string, int> _NameToIndex;
 
@@ -20,19 +19,34 @@ public sealed class EnumSettingMetadata
 
     /// <summary>Creates new enum metadata from allowed values.</summary>
     /// <exception cref="ArgumentNullException">Thrown when <paramref name="allowedValues"/> is null.</exception>
+    /// <exception cref="ValidationSettingsException">Thrown when duplicate numeric or name values are present.</exception>
     public EnumSettingMetadata(IReadOnlyList<EnumSettingValue> allowedValues)
     {
         ArgumentNullException.ThrowIfNull(allowedValues);
-        _AllowedValues = new EnumSettingValue[allowedValues.Count];
+        EnumSettingValue[] values = new EnumSettingValue[allowedValues.Count];
         _NumericToIndex = new Dictionary<ulong, int>(allowedValues.Count);
         _NameToIndex = new Dictionary<string, int>(allowedValues.Count, StringComparer.OrdinalIgnoreCase);
 
         for (int i = 0; i < allowedValues.Count; i++)
         {
-            _AllowedValues[i] = allowedValues[i];
-            _NumericToIndex[allowedValues[i].NumericValue] = i;
-            _NameToIndex[allowedValues[i].Name] = i;
+            EnumSettingValue entry = allowedValues[i];
+            if (_NumericToIndex.ContainsKey(entry.NumericValue))
+            {
+                throw ValidationSettingsException.For(
+                    $"Duplicate numeric enum value {entry.NumericValue} for name '{entry.Name}'");
+            }
+            if (_NameToIndex.ContainsKey(entry.Name))
+            {
+                throw ValidationSettingsException.For(
+                    $"Duplicate enum name '{entry.Name}'");
+            }
+
+            values[i] = entry;
+            _NumericToIndex[entry.NumericValue] = i;
+            _NameToIndex[entry.Name] = i;
         }
+
+        AllowedValues = values;
     }
 
     #endregion
@@ -40,8 +54,10 @@ public sealed class EnumSettingMetadata
     #region Public API
 
     /// <summary>Creates enum metadata from name-value pairs.</summary>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="pairs"/> is null.</exception>
     public static EnumSettingMetadata FromPairs(IEnumerable<(string Name, ulong Value)> pairs)
     {
+        ArgumentNullException.ThrowIfNull(pairs);
         List<EnumSettingValue> values = [];
         foreach ((string name, ulong value) in pairs)
         {
@@ -51,14 +67,14 @@ public sealed class EnumSettingMetadata
     }
 
     /// <summary>Returns the list of allowed enum values.</summary>
-    public IReadOnlyList<EnumSettingValue> AllowedValues => _AllowedValues;
+    public IReadOnlyList<EnumSettingValue> AllowedValues { get; }
 
     /// <summary>Tries to get an enum value by its numeric representation.</summary>
     public EnumSettingValue? GetByNumeric(ulong value)
     {
         if (_NumericToIndex.TryGetValue(value, out int index))
         {
-            return _AllowedValues[index];
+            return AllowedValues[index];
         }
         return null;
     }
@@ -68,7 +84,7 @@ public sealed class EnumSettingMetadata
     {
         if (_NameToIndex.TryGetValue(name, out int index))
         {
-            return _AllowedValues[index];
+            return AllowedValues[index];
         }
         return null;
     }

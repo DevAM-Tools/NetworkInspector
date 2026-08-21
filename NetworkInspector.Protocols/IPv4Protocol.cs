@@ -359,7 +359,7 @@ public sealed partial class IPv4Protocol : IProtocol
         container.Append(_FragOffsetFieldId, FieldValue.NewU64(fragOffset));
         container.Append(_TtlFieldId, FieldValue.NewU64(ttl));
 
-        // ip.proto is eagerly appended by Parse() for value-cache recording.
+        // ip.proto is eagerly appended by Parse() so it is present without materialising the lazy ip group.
 
         string csumText = DisplayTables.FormatHexU16(checksum);
         container.AppendWithCustomText(_ChecksumFieldId, FieldValue.NewU64(checksum), csumText);
@@ -467,16 +467,14 @@ public sealed partial class IPv4Protocol : IProtocol
 
         // Eagerly append ip.src, ip.dst, and ip.proto as non-lazy children so downstream
         // protocols (e.g., TCP/UDP) can locate IPv4 addresses via IpAddressExtractor
-        // without materialising the lazy ip group, and so that value-cache recording
-        // captures these key fields during the initial parse pass.
+        // without materialising the lazy ip group.
         ipContainer.Append(_SrcFieldId, FieldValue.NewIPv4(src));
         ipContainer.Append(_DstFieldId, FieldValue.NewIPv4(dst));
         ipContainer.AppendWithCustomText(_ProtoFieldId, FieldValue.NewU64(protocol), DisplayTables.GetIpProtocolDisplayText(protocol));
 
         // Cache raw IPv4 addresses in the thread-local field directly on this protocol
         // so downstream transport protocols (TCP, UDP) can read them without
-        // sibling-walk field-tree navigation. ip.src/ip.dst are populated lazily
-        // by PopulateIPv4Fields; the thread-local cache avoids any field-tree walk.
+        // sibling-walk field-tree navigation.
         SetCachedAddresses(parentField.Packet.Id, src, dst);
 
         // Dispatch to next protocol on parentField (sibling dispatch).
@@ -508,9 +506,9 @@ public sealed partial class IPv4Protocol : IProtocol
                     ReadOnlyMemory<byte> reassembledPayload = reassembled;
                     ParseResult dispatchResult = _DispatchIpProtocol(
                         in parentField, protocol, reassembledPayload, in context);
-                    if (dispatchResult.IsError)
+                    if (dispatchResult.TryPropagateError(out ParseResult error))
                     {
-                        return dispatchResult;
+                        return error;
                     }
                 }
                 // Else: fragment stored, waiting for more fragments — no dispatch yet
@@ -521,9 +519,9 @@ public sealed partial class IPv4Protocol : IProtocol
                 ReadOnlyMemory<byte> payload = data.Slice(payloadStart, payloadLen);
                 ParseResult dispatchResult = _DispatchIpProtocol(
                     in parentField, protocol, payload, in context);
-                if (dispatchResult.IsError)
+                if (dispatchResult.TryPropagateError(out ParseResult error))
                 {
-                    return dispatchResult;
+                    return error;
                 }
             }
         }

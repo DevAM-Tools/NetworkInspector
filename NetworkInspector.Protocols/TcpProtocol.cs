@@ -577,8 +577,8 @@ public sealed partial class TcpProtocol : IProtocol
         ushort srcPort = header.SrcPort.Value;
         ushort dstPort = header.DstPort.Value;
 
-        // tcp.srcport and tcp.dstport are eagerly appended by Parse() so that value-cache
-        // recording captures port numbers during the initial parse pass.
+        // tcp.srcport and tcp.dstport are eagerly appended by Parse() so checksum
+        // validation and stream tracking can read ports without materialising the lazy TCP group.
         // The any-match name "tcp.port" is exposed via the alias group registered in
         // _RegisterFieldsCustom; no duplicate tcp.port field node is appended.
 
@@ -660,8 +660,7 @@ public sealed partial class TcpProtocol : IProtocol
         ushort tcpLength = (ushort)tcpData.Length;
 
         // Walk previous siblings to find typed IP addresses
-        Field containerField = container.AsField();
-        if (!IpAddressExtractor.TryFindPreviousIpAddresses(containerField,
+        if (!IpAddressExtractor.TryFindPreviousIpAddresses(in container,
             _IpContainerFieldId, _Ipv6ContainerFieldId,
             _IpSrcFieldId, _IpDstFieldId, _Ipv6SrcFieldId, _Ipv6DstFieldId,
             out (IPv4Address Src, IPv4Address Dst)? ipv4,
@@ -767,8 +766,8 @@ public sealed partial class TcpProtocol : IProtocol
             .WithCustomRepresentation(ZA.Lazy(headerLen, " bytes"));
         MutField tcpContainer = parentField.AppendLazyWithCustomText(_ProtocolFieldId, containerValue, summary, _Populator);
 
-        // Eagerly append tcp.srcport and tcp.dstport so that value-cache recording
-        // captures port numbers during the initial parse pass.
+        // Eagerly append tcp.srcport and tcp.dstport so checksum validation and stream
+        // tracking can read ports without materialising the lazy TCP group.
         tcpContainer.Append(_SrcPortFieldId, FieldValue.NewU64(srcPort));
         tcpContainer.Append(_DstPortFieldId, FieldValue.NewU64(dstPort));
 
@@ -856,9 +855,9 @@ public sealed partial class TcpProtocol : IProtocol
                     {
                         ParseResult pduResult = parentField.CallProtocol(
                             targetProtocol, pdu, in context);
-                        if (pduResult.IsError)
+                        if (pduResult.TryPropagateError(out ParseResult pduError))
                         {
-                            return pduResult;
+                            return pduError;
                         }
                     }
 
@@ -868,28 +867,26 @@ public sealed partial class TcpProtocol : IProtocol
 
             // No reassembly — dispatch raw payload directly
             ParseResult result = _DispatchPort(in parentField, lowPort, payload, in context);
-            if (result.IsError)
+            if (result.TryPropagateError(out ParseResult error))
             {
-                return result;
+                return error;
             }
 
-            // If lowPort didn't match, try highPort
-            if (result.Value == 0 && lowPort != highPort)
+            if (!result.TryGetConsumed(out _) && lowPort != highPort)
             {
                 result = _DispatchPort(in parentField, highPort, payload, in context);
-                if (result.IsError)
+                if (result.TryPropagateError(out ParseResult highError))
                 {
-                    return result;
+                    return highError;
                 }
             }
 
-            // If no port-based match, try heuristic detection as fallback
-            if (result.Value == 0 && _HeuristicTableId.IsValid)
+            if (!result.TryGetConsumed(out _) && _HeuristicTableId.IsValid)
             {
                 result = _TryHeuristicDispatch(in parentField, payload, in context, analysis.ConnectionState);
-                if (result.IsError)
+                if (result.TryPropagateError(out ParseResult heuristicError))
                 {
-                    return result;
+                    return heuristicError;
                 }
             }
         }
@@ -1031,16 +1028,16 @@ public sealed partial class TcpProtocol : IProtocol
             return true;
         }
 
-        // Fallback: walk previous siblings to find typed IP addresses
-        Field root = parentField.AsField();
-        if (!root.TryGetLastChild(out Field prev))
+        // Fallback: walk previous siblings to find typed IP addresses.
+        // materialize: false — IP containers are already eager at parse time.
+        if (!parentField.TryGetLastChild(out MutField prev, materialize: false))
         {
             key = default;
             srcAddr = default;
             return false;
         }
 
-        if (!IpAddressExtractor.TryFindPreviousIpAddresses(prev,
+        if (!IpAddressExtractor.TryFindPreviousIpAddresses(in prev,
             _IpContainerFieldId, _Ipv6ContainerFieldId,
             _IpSrcFieldId, _IpDstFieldId, _Ipv6SrcFieldId, _Ipv6DstFieldId,
             out (IPv4Address Src, IPv4Address Dst)? ipv4,
@@ -1178,9 +1175,9 @@ public sealed partial class TcpProtocol : IProtocol
         TcpConnectionState? connectionState)
     {
         // Level 1: Check per-connection cache for a previously detected protocol
-        if (connectionState?.HeuristicProtocolId is { } cachedId)
+        if (connectionState?.HeuristicProtocolId is not null)
         {
-            return parentField.CallProtocol(cachedId, payload, in context);
+            return parentField.CallProtocol(connectionState.HeuristicProtocolId.Value, payload, in context);
         }
 
         // Level 2: Run the heuristic protocol table to detect the protocol

@@ -15,6 +15,8 @@ namespace NetworkInspector.Core;
 /// </summary>
 public sealed class StackBuilder : IStackBuilder
 {
+    #region Fields
+
     // Registration storage
     private readonly List<ProtocolInfo> _Protocols = [];
     private readonly List<IProtocol> _ProtocolInstances = [];
@@ -28,6 +30,13 @@ public sealed class StackBuilder : IStackBuilder
     private readonly Dictionary<string, FieldAliasGroupId> _FieldAliasGroupNameMap = new(StringComparer.Ordinal);
     // Snapshot cache for FieldAliasGroups property; invalidated on each RegisterFieldAliasGroup call.
     private FieldAliasGroupInfo[]? _FieldAliasGroupsSnapshot;
+    // Snapshot caches for build-phase property getters; invalidated on registration.
+    private ProtocolInfo[]? _ProtocolsSnapshot;
+    private FieldInfo[]? _FieldsSnapshot;
+    private PostParserInfo[]? _PostParsersSnapshot;
+    private ProtocolTableInfo[]? _ProtocolTableInfosSnapshot;
+    private HeuristicProtocolTableInfo[]? _HeuristicTableInfosSnapshot;
+    private IndexGroupInfo[]? _IndexGroupsSnapshot;
 
     private readonly List<ProtocolTable> _ProtocolTables = [];
     private readonly List<ProtocolTableInfo> _ProtocolTableInfos = [];
@@ -48,7 +57,8 @@ public sealed class StackBuilder : IStackBuilder
     private int _NextIndexGroupId;
 
     // Frame interface registry (shared with Stack after Build)
-    private readonly FrameInterfaceRegistry _FrameInterfaceRegistry;
+    /// <inheritdoc/>
+    public FrameInterfaceRegistry FrameInterfaceRegistry { get; }
 
     // Deferred callbacks
     private readonly Dictionary<string, List<Action<ProtocolId>>> _DeferredProtocol = new(StringComparer.Ordinal);
@@ -67,6 +77,10 @@ public sealed class StackBuilder : IStackBuilder
     /// </summary>
     private const string _FrameProtocolName = "frame";
 
+    #endregion
+
+    #region Constructors
+
     /// <inheritdoc/>
     /// <remarks>
     /// Use object initializer syntax (<c>new StackBuilder(sm, reg) { IncludeExceptionStackTrace = true }</c>)
@@ -81,7 +95,7 @@ public sealed class StackBuilder : IStackBuilder
     public StackBuilder(SettingsManager settingsManager, FrameInterfaceRegistry frameInterfaceRegistry)
     {
         _SettingsManager = settingsManager;
-        _FrameInterfaceRegistry = frameInterfaceRegistry;
+        FrameInterfaceRegistry = frameInterfaceRegistry;
 
         // Register built-in protocols:
         // RootProtocol is an empty dummy that owns the root field.
@@ -104,6 +118,8 @@ public sealed class StackBuilder : IStackBuilder
             _PacketProtocolId, "packet.choice", "Choice", FieldType.String,
             "Groups alternative parse results from ambiguous protocol dispatch");
     }
+
+    #endregion
 
     #region Protocol Access
 
@@ -128,7 +144,14 @@ public sealed class StackBuilder : IStackBuilder
     }
 
     /// <inheritdoc/>
-    public ReadOnlyMemory<ProtocolInfo> Protocols => _Protocols.ToArray();
+    public ReadOnlyMemory<ProtocolInfo> Protocols
+    {
+        get
+        {
+            _ProtocolsSnapshot ??= [.. _Protocols];
+            return _ProtocolsSnapshot;
+        }
+    }
 
     /// <inheritdoc/>
     public int ProtocolCount => _Protocols.Count;
@@ -158,7 +181,14 @@ public sealed class StackBuilder : IStackBuilder
     }
 
     /// <inheritdoc/>
-    public ReadOnlyMemory<FieldInfo> Fields => _Fields.ToArray();
+    public ReadOnlyMemory<FieldInfo> Fields
+    {
+        get
+        {
+            _FieldsSnapshot ??= [.. _Fields];
+            return _FieldsSnapshot;
+        }
+    }
 
     /// <inheritdoc/>
     public int FieldCount => _Fields.Count;
@@ -168,9 +198,10 @@ public sealed class StackBuilder : IStackBuilder
     {
         if (_IsValidIndex(fieldId.Value, _Fields.Count))
         {
-            if (_Fields[fieldId.Value].IndexGroup is { } indexGroup)
+            IndexGroupId? indexGroup = _Fields[fieldId.Value].IndexGroup;
+            if (indexGroup is not null)
             {
-                return indexGroup;
+                return indexGroup.Value;
             }
         }
         return IndexGroupId.Invalid;
@@ -250,14 +281,17 @@ public sealed class StackBuilder : IStackBuilder
     {
         get
         {
-            // Build a snapshot from the current map
-            IndexGroupInfo[] infos = new IndexGroupInfo[_IndexGroupMap.Count];
-            int i = 0;
-            foreach (KeyValuePair<string, IndexGroupId> kvp in _IndexGroupMap)
+            if (_IndexGroupsSnapshot is null)
             {
-                infos[i++] = new IndexGroupInfo(kvp.Value, kvp.Key);
+                IndexGroupInfo[] infos = new IndexGroupInfo[_IndexGroupMap.Count];
+                int i = 0;
+                foreach (KeyValuePair<string, IndexGroupId> kvp in _IndexGroupMap)
+                {
+                    infos[i++] = new IndexGroupInfo(kvp.Value, kvp.Key);
+                }
+                _IndexGroupsSnapshot = infos;
             }
-            return infos;
+            return _IndexGroupsSnapshot;
         }
     }
 
@@ -289,7 +323,14 @@ public sealed class StackBuilder : IStackBuilder
     }
 
     /// <inheritdoc/>
-    public ReadOnlyMemory<ProtocolTableInfo> ProtocolTableInfos => _ProtocolTableInfos.ToArray();
+    public ReadOnlyMemory<ProtocolTableInfo> ProtocolTableInfos
+    {
+        get
+        {
+            _ProtocolTableInfosSnapshot ??= [.. _ProtocolTableInfos];
+            return _ProtocolTableInfosSnapshot;
+        }
+    }
 
     /// <inheritdoc/>
     public int ProtocolTableCount => _ProtocolTableInfos.Count;
@@ -303,7 +344,14 @@ public sealed class StackBuilder : IStackBuilder
     /// ascending by <see cref="PostParserInfo.Priority"/>, then ascending by <see cref="PostParserInfo.Id"/>
     /// (registration order) as a stable tie-breaker. The list is re-sorted after every
     /// <see cref="RegisterPostParser"/> call so the order is always up to date.</remarks>
-    public ReadOnlyMemory<PostParserInfo> PostParsers => _PostParsers.ToArray();
+    public ReadOnlyMemory<PostParserInfo> PostParsers
+    {
+        get
+        {
+            _PostParsersSnapshot ??= [.. _PostParsers];
+            return _PostParsersSnapshot;
+        }
+    }
 
     /// <inheritdoc/>
     public int PostParserCount => _PostParsers.Count;
@@ -333,7 +381,14 @@ public sealed class StackBuilder : IStackBuilder
     }
 
     /// <inheritdoc/>
-    public ReadOnlyMemory<HeuristicProtocolTableInfo> HeuristicProtocolTableInfos => _HeuristicTableInfos.ToArray();
+    public ReadOnlyMemory<HeuristicProtocolTableInfo> HeuristicProtocolTableInfos
+    {
+        get
+        {
+            _HeuristicTableInfosSnapshot ??= [.. _HeuristicTableInfos];
+            return _HeuristicTableInfosSnapshot;
+        }
+    }
 
     /// <inheritdoc/>
     public int HeuristicProtocolTableCount => _HeuristicTableInfos.Count;
@@ -343,14 +398,10 @@ public sealed class StackBuilder : IStackBuilder
     #region Settings Access
 
     /// <inheritdoc/>
-    public IReadOnlySettingsManager Settings => _SettingsManager.ReadOnly;
+    public ReadOnlySettingsManagerView Settings => _SettingsManager.ReadOnly;
 
     /// <inheritdoc/>
     public ReadOnlyMemory<BuildDiagnostic> BuildDiagnostics => ReadOnlyMemory<BuildDiagnostic>.Empty;
-
-    #endregion
-
-    #region IStackBuilder Implementation
 
     #endregion
 
@@ -358,6 +409,13 @@ public sealed class StackBuilder : IStackBuilder
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static bool _IsValidIndex(int idValue, int count) => (uint)idValue < (uint)count;
+
+    /// <summary>
+    /// Throws when <paramref name="nextIndex"/> exceeds <see cref="ArrayIndexIdRange.MaxValue"/>.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void _GuardIndexAllocation(int nextIndex, string entityName) =>
+        ArrayIndexIdRange.ThrowIfInvalidNextIndex(nextIndex, entityName);
 
     /// <summary>Throws <see cref="InvalidNameRegistrationException"/> when the name is not a valid dot-separated C-style identifier.</summary>
     private static void _ValidateName(string name)
@@ -377,6 +435,43 @@ public sealed class StackBuilder : IStackBuilder
         }
     }
 
+    /// <summary>
+    /// Invokes deferred registration callbacks for <paramref name="name"/>, collecting every
+    /// exception so all subscribers run before surfacing an <see cref="AggregateException"/>.
+    /// </summary>
+    private static void _InvokeDeferredCallbacks<T>(
+        Dictionary<string, List<Action<T>>> deferred,
+        string name,
+        T id,
+        string callbackKind)
+    {
+        if (!deferred.Remove(name, out List<Action<T>>? callbacks))
+        {
+            return;
+        }
+
+        List<Exception>? errors = null;
+        foreach (Action<T> cb in callbacks)
+        {
+            try
+            {
+                cb(id);
+            }
+            catch (Exception ex)
+            {
+                errors ??= [];
+                errors.Add(ex);
+            }
+        }
+
+        if (errors is not null)
+        {
+            throw new AggregateException(
+                $"One or more When{callbackKind}Registered callbacks failed for '{name}'.",
+                errors);
+        }
+    }
+
     #endregion
 
     #region Protocol Registration
@@ -392,20 +487,15 @@ public sealed class StackBuilder : IStackBuilder
             throw DuplicateNameRegistrationException.For(name);
         }
 
+        _GuardIndexAllocation(_Protocols.Count, "protocol");
         ProtocolId id = new(_Protocols.Count);
         ProtocolInfo info = new(id, name, protocol.UiName, protocol.Description);
         _Protocols.Add(info);
         _ProtocolInstances.Add(protocol);
         _ProtocolNameMap[name] = id;
+        _ProtocolsSnapshot = null;
 
-        // Fire deferred callbacks
-        if (_DeferredProtocol.Remove(name, out List<Action<ProtocolId>>? callbacks))
-        {
-            foreach (Action<ProtocolId> cb in callbacks)
-            {
-                cb(id);
-            }
-        }
+        _InvokeDeferredCallbacks(_DeferredProtocol, name, id, "Protocol");
 
         return id;
     }
@@ -436,18 +526,14 @@ public sealed class StackBuilder : IStackBuilder
             throw DuplicateNameRegistrationException.For(name);
         }
 
+        _GuardIndexAllocation(_Fields.Count, "field");
         FieldId id = new(_Fields.Count);
         FieldInfo info = new(id, protocolId, name, uiName, fieldType, description, null);
         _Fields.Add(info);
         _FieldNameMap[name] = id;
+        _FieldsSnapshot = null;
 
-        if (_DeferredField.Remove(name, out List<Action<FieldId>>? callbacks))
-        {
-            foreach (Action<FieldId> cb in callbacks)
-            {
-                cb(id);
-            }
-        }
+        _InvokeDeferredCallbacks(_DeferredField, name, id, "Field");
 
         return id;
     }
@@ -511,6 +597,7 @@ public sealed class StackBuilder : IStackBuilder
             members[i] = memberId;
         }
 
+        _GuardIndexAllocation(_FieldAliasGroups.Count, "field alias group");
         FieldAliasGroupId id = new(_FieldAliasGroups.Count);
         FieldAliasGroupInfo info = new(id, protocolId, name, description, members);
         _FieldAliasGroups.Add(info);
@@ -539,8 +626,10 @@ public sealed class StackBuilder : IStackBuilder
         // Resolve or create index group
         if (!_IndexGroupMap.TryGetValue(indexGroup, out IndexGroupId groupId))
         {
+            _GuardIndexAllocation(_NextIndexGroupId, "index group");
             groupId = new IndexGroupId(_NextIndexGroupId++);
             _IndexGroupMap[indexGroup] = groupId;
+            _IndexGroupsSnapshot = null;
         }
         _Fields[id.Value].IndexGroup = groupId;
 
@@ -557,8 +646,10 @@ public sealed class StackBuilder : IStackBuilder
         _ValidateName(name);
         if (!_IndexGroupMap.TryGetValue(name, out IndexGroupId groupId))
         {
+            _GuardIndexAllocation(_NextIndexGroupId, "index group");
             groupId = new IndexGroupId(_NextIndexGroupId++);
             _IndexGroupMap[name] = groupId;
+            _IndexGroupsSnapshot = null;
         }
         return groupId;
     }
@@ -578,19 +669,15 @@ public sealed class StackBuilder : IStackBuilder
             throw DuplicateNameRegistrationException.For(name);
         }
 
+        _GuardIndexAllocation(_ProtocolTableInfos.Count, "protocol table");
         ProtocolTableId id = new(_ProtocolTableInfos.Count);
         ProtocolTableInfo info = new(id, name, uiName, keyType, description);
         _ProtocolTableInfos.Add(info);
         _ProtocolTables.Add(new ProtocolTable(info));
         _ProtocolTableNameMap[name] = id;
+        _ProtocolTableInfosSnapshot = null;
 
-        if (_DeferredTable.Remove(name, out List<Action<ProtocolTableId>>? callbacks))
-        {
-            foreach (Action<ProtocolTableId> cb in callbacks)
-            {
-                cb(id);
-            }
-        }
+        _InvokeDeferredCallbacks(_DeferredTable, name, id, "ProtocolTable");
 
         return id;
     }
@@ -703,6 +790,7 @@ public sealed class StackBuilder : IStackBuilder
     public PostParserId RegisterPostParser(
         ProtocolId protocolId, int priority = 0, string? description = null)
     {
+        _GuardIndexAllocation(_PostParsers.Count, "post-parser");
         PostParserId id = new(_PostParsers.Count);
         PostParserInfo info = new(id, priority, protocolId, description);
         _PostParsers.Add(info);
@@ -714,6 +802,7 @@ public sealed class StackBuilder : IStackBuilder
             int cmp = a.Priority.CompareTo(b.Priority);
             return cmp != 0 ? cmp : a.Id.Value.CompareTo(b.Id.Value);
         });
+        _PostParsersSnapshot = null;
         return id;
     }
 
@@ -732,11 +821,13 @@ public sealed class StackBuilder : IStackBuilder
             throw DuplicateNameRegistrationException.For(name);
         }
 
+        _GuardIndexAllocation(_HeuristicTableInfos.Count, "heuristic protocol table");
         HeuristicProtocolTableId id = new(_HeuristicTableInfos.Count);
         HeuristicProtocolTableInfo info = new(id, name, uiName, description, owningProtocolId);
         _HeuristicTableInfos.Add(info);
         _HeuristicTables.Add(new HeuristicProtocolTable(info));
         _HeuristicTableNameMap[name] = id;
+        _HeuristicTableInfosSnapshot = null;
 
         return id;
     }
@@ -812,9 +903,6 @@ public sealed class StackBuilder : IStackBuilder
         }
         list.Add(callback);
     }
-
-    /// <inheritdoc/>
-    public FrameInterfaceRegistry FrameInterfaceRegistry => _FrameInterfaceRegistry;
 
     #endregion
 
@@ -1020,6 +1108,13 @@ public sealed class StackBuilder : IStackBuilder
 
         // Auto-discover the frame protocol by name (if registered)
         ProtocolId frameProtocolId = protocolNameMap.GetValueOrDefault(_FrameProtocolName, ProtocolId.Invalid);
+        if (!frameProtocolId.IsValid)
+        {
+            diagnostics.Add(new BuildCallbackWarning(
+                BuildCallbackWarningKind.MissingFrameProtocol,
+                _FrameProtocolName,
+                0));
+        }
 
         Stack stack = new(
             protocols, protocolInstances, parseDelegates, protocolNameMap,
@@ -1033,7 +1128,7 @@ public sealed class StackBuilder : IStackBuilder
             frameProtocolId,
             _NextIndexGroupId,
             indexGroups, indexGroupNameMap,
-            _FrameInterfaceRegistry,
+            FrameInterfaceRegistry,
             IncludeExceptionStackTrace,
             reassemblyConfigs,
             fieldAliasGroups, fieldAliasGroupNameMap);

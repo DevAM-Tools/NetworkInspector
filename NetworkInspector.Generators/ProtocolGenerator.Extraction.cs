@@ -260,10 +260,11 @@ public sealed partial class ProtocolGenerator
                     FieldInfo? fi = _ExtractFieldInfo(fieldSymbol, attr, attrShortName, className, diagnostics);
                     if (fi is not null)
                     {
-                        fields.Add(fi);
-                        if (fi.IndexGroup is not null && indexGroupSet.Add(fi.IndexGroup))
+                        FieldInfo fieldInfo = fi.Value;
+                        fields.Add(fieldInfo);
+                        if (fieldInfo.IndexGroup is not null && indexGroupSet.Add(fieldInfo.IndexGroup))
                         {
-                            indexGroups.Add(fi.IndexGroup);
+                            indexGroups.Add(fieldInfo.IndexGroup);
                         }
                     }
                 }
@@ -272,7 +273,7 @@ public sealed partial class ProtocolGenerator
                     ProtocolTableInfo? ti = _ExtractProtocolTableInfo(fieldSymbol, attr, "U64", className, diagnostics);
                     if (ti is not null)
                     {
-                        protocolTables.Add(ti);
+                        protocolTables.Add(ti.Value);
                     }
                 }
                 else if (fqn == _FqnProtocolTableStringAttribute)
@@ -280,7 +281,7 @@ public sealed partial class ProtocolGenerator
                     ProtocolTableInfo? ti = _ExtractProtocolTableInfo(fieldSymbol, attr, "String", className, diagnostics);
                     if (ti is not null)
                     {
-                        protocolTables.Add(ti);
+                        protocolTables.Add(ti.Value);
                     }
                 }
                 else if (fqn == _FqnProtocolTableBytesAttribute)
@@ -288,7 +289,7 @@ public sealed partial class ProtocolGenerator
                     ProtocolTableInfo? ti = _ExtractProtocolTableInfo(fieldSymbol, attr, "Bytes", className, diagnostics);
                     if (ti is not null)
                     {
-                        protocolTables.Add(ti);
+                        protocolTables.Add(ti.Value);
                     }
                 }
                 else if (fqn == _FqnProtocolTableBoolAttribute)
@@ -296,7 +297,7 @@ public sealed partial class ProtocolGenerator
                     ProtocolTableInfo? ti = _ExtractProtocolTableInfo(fieldSymbol, attr, "Bool", className, diagnostics);
                     if (ti is not null)
                     {
-                        protocolTables.Add(ti);
+                        protocolTables.Add(ti.Value);
                     }
                 }
                 else if (fqn == _FqnProtocolTableAnyAttribute)
@@ -304,7 +305,7 @@ public sealed partial class ProtocolGenerator
                     ProtocolTableInfo? ti = _ExtractProtocolTableInfo(fieldSymbol, attr, "Any", className, diagnostics);
                     if (ti is not null)
                     {
-                        protocolTables.Add(ti);
+                        protocolTables.Add(ti.Value);
                     }
                 }
                 else if (fqn == _FqnUsesTableAttribute)
@@ -327,7 +328,7 @@ public sealed partial class ProtocolGenerator
                     SettingInfo? si = _ExtractBoolSettingInfo(fieldSymbol, attr, className, diagnostics);
                     if (si is not null)
                     {
-                        settings.Add(si);
+                        settings.Add(si.Value);
                     }
                 }
                 else if (fqn == _FqnStringSettingAttribute)
@@ -335,7 +336,7 @@ public sealed partial class ProtocolGenerator
                     SettingInfo? si = _ExtractStringSettingInfo(fieldSymbol, attr, className, diagnostics);
                     if (si is not null)
                     {
-                        settings.Add(si);
+                        settings.Add(si.Value);
                     }
                 }
                 else if (fqn == _FqnF64SettingAttribute)
@@ -343,7 +344,7 @@ public sealed partial class ProtocolGenerator
                     SettingInfo? si = _ExtractF64SettingInfo(fieldSymbol, attr, className, diagnostics);
                     if (si is not null)
                     {
-                        settings.Add(si);
+                        settings.Add(si.Value);
                     }
                 }
                 else if (fqn == _FqnU64SettingAttribute)
@@ -351,7 +352,7 @@ public sealed partial class ProtocolGenerator
                     SettingInfo? si = _ExtractU64SettingInfo(fieldSymbol, attr, className, diagnostics);
                     if (si is not null)
                     {
-                        settings.Add(si);
+                        settings.Add(si.Value);
                     }
                 }
                 else if (fqn == _FqnI64SettingAttribute)
@@ -359,7 +360,7 @@ public sealed partial class ProtocolGenerator
                     SettingInfo? si = _ExtractI64SettingInfo(fieldSymbol, attr, className, diagnostics);
                     if (si is not null)
                     {
-                        settings.Add(si);
+                        settings.Add(si.Value);
                     }
                 }
                 else if (fqn == _FqnBytesSettingAttribute)
@@ -367,7 +368,7 @@ public sealed partial class ProtocolGenerator
                     SettingInfo? si = _ExtractBytesSettingInfo(fieldSymbol, attr, className, diagnostics);
                     if (si is not null)
                     {
-                        settings.Add(si);
+                        settings.Add(si.Value);
                     }
                 }
                 else if (fqn == _FqnEnumSettingAttribute)
@@ -375,7 +376,7 @@ public sealed partial class ProtocolGenerator
                     SettingInfo? si = _ExtractEnumSettingInfo(fieldSymbol, attr, className, diagnostics);
                     if (si is not null)
                     {
-                        settings.Add(si);
+                        settings.Add(si.Value);
                     }
                 }
             }
@@ -772,7 +773,7 @@ public sealed partial class ProtocolGenerator
         string formattedPairs = _FormatEnumPairs(allowedValues, name, className, diagnostics);
         string defaultStr = defaultValue.ToString(System.Globalization.CultureInfo.InvariantCulture);
 
-        return new SettingInfo(fieldSymbol.Name, name, uiName, groupName, "Enum", defaultStr, desc, enumValues: formattedPairs);
+        return new SettingInfo(fieldSymbol.Name, name, uiName, groupName, "Enum", defaultStr, desc, EnumValues: formattedPairs);
     }
 
     #endregion

@@ -194,9 +194,9 @@ public sealed partial class LlcProtocol : IProtocol
             if (oui0 == 0 && oui1 == 0 && oui2 == 0)
             {
                 ParseResult result = _DispatchEtherType(in parentField, snapType, payload, in context);
-                if (result.IsError)
+                if (result.TryPropagateError(out ParseResult error))
                 {
-                    return result;
+                    return error;
                 }
             }
         }
@@ -206,9 +206,9 @@ public sealed partial class LlcProtocol : IProtocol
             // Mask out the low bit (I/G bit for DSAP) for dispatch
             ParseResult result = parentField.TryCallNextProtocolU64(
                 _DsapTableId, (ulong)(dsap & 0xFE), payload, in context);
-            if (result.IsError)
+            if (result.TryPropagateError(out ParseResult error))
             {
-                return result;
+                return error;
             }
         }
 

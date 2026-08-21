@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 #pragma warning disable CA1303 // Console output in developer-tool does not require localization
 
@@ -272,6 +272,8 @@ internal static class Program
         GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
         GC.WaitForPendingFinalizers();
 
+        scenario.BeginTimedPhase();
+
         _PauseBeforeTimedPhase(manualStart);
 
         // Capture GC baseline before the timed phase.
@@ -455,6 +457,11 @@ internal static class Program
 
         while (timer.ElapsedTicks < endTicks)
         {
+            if (scenario.IsWorkComplete)
+            {
+                break;
+            }
+
             scenario.Run();
             iterations++;
         }

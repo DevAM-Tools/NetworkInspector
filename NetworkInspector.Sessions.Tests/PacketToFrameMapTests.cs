@@ -16,14 +16,14 @@ internal sealed class PacketToFrameMapTests
     }
 
     [Test]
-    public async Task Record_ExceedsCapacity_ReturnsFalse()
+    public async Task Record_OutOfRangePacketId_Throws()
     {
         PacketToFrameMap map = new();
-        PacketId overflow = new(PacketToFrameMap.MaxEntries);
+        int overflow = Array.MaxLength;
 
-        bool recorded = map.Record(overflow, new FrameId(1), new FrameSourceId(0));
-
-        await Assert.That(recorded).IsFalse();
+        await Assert
+            .That(() => map.Record(new PacketId(overflow), new FrameId(1), new FrameSourceId(0)))
+            .Throws<ArgumentOutOfRangeException>();
     }
 
     [Test]
@@ -59,7 +59,7 @@ internal sealed class PacketToFrameMapTests
     public async Task TryGet_UnallocatedChunk_ReturnsFalse()
     {
         PacketToFrameMap map = new();
-        PacketId packetId = new(PacketToFrameMap.MaxEntries - 1);
+        PacketId packetId = new(Array.MaxLength - 1);
 
         bool found = map.TryGet(packetId, out FrameId frameId, out FrameSourceId sourceId);
 

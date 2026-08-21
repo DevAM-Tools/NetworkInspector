@@ -24,12 +24,6 @@ namespace NetworkInspector.Core.Infos;
 /// </summary>
 public sealed class FieldAliasGroupInfo
 {
-    #region Fields
-
-    private readonly FieldId[] _Members;
-
-    #endregion
-
     #region Constructors
 
     /// <summary>Creates field alias group metadata during stack registration.</summary>
@@ -52,7 +46,7 @@ public sealed class FieldAliasGroupInfo
         ProtocolId = protocolId;
         Name = name;
         Description = description;
-        _Members = members;
+        Members = members;
     }
 
     #endregion
@@ -87,10 +81,10 @@ public sealed class FieldAliasGroupInfo
     /// Canonical member field IDs in the order in which they were supplied at registration.
     /// Members may have heterogeneous <see cref="FieldType"/> values.
     /// </summary>
-    public ReadOnlyMemory<FieldId> Members => _Members;
+    public ReadOnlyMemory<FieldId> Members { get; }
 
     /// <summary>Number of canonical member fields in this alias group.</summary>
-    public int MemberCount => _Members.Length;
+    public int MemberCount => Members.Length;
 
     #endregion
 }

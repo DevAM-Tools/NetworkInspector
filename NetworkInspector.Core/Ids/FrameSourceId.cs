@@ -18,26 +18,17 @@ public readonly struct FrameSourceId(int value) : IEquatable<FrameSourceId>, ICo
 
     #endregion
 
-    #region Fields
-
-    private readonly int _Value = value;
-
-    #endregion
-
     #region Properties
 
     /// <summary>The raw numeric value of this identifier.</summary>
-    public int Value
-    {
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _Value;
-    }
+    public int Value { get; } = _StoreValidated(value);
+
 
     /// <summary>Whether this ID represents a valid (assigned) identifier.</summary>
     public bool IsValid
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _Value >= 0;
+        get => ArrayIndexIdRange.IsValidIndex(Value);
     }
 
     #endregion
@@ -46,22 +37,22 @@ public readonly struct FrameSourceId(int value) : IEquatable<FrameSourceId>, ICo
 
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public int CompareTo(FrameSourceId other) => _Value.CompareTo(other._Value);
+    public int CompareTo(FrameSourceId other) => Value.CompareTo(other.Value);
 
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public override int GetHashCode() => _Value;
+    public override int GetHashCode() => Value;
 
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public bool Equals(FrameSourceId other) => _Value == other._Value;
+    public bool Equals(FrameSourceId other) => Value == other.Value;
 
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public override bool Equals(object? obj) => obj is FrameSourceId other && Equals(other);
 
     /// <inheritdoc/>
-    public override string ToString() => _Value.ToString(CultureInfo.InvariantCulture);
+    public override string ToString() => Value.ToString(CultureInfo.InvariantCulture);
 
     #endregion
 
@@ -69,22 +60,37 @@ public readonly struct FrameSourceId(int value) : IEquatable<FrameSourceId>, ICo
 
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static bool operator <(FrameSourceId left, FrameSourceId right) => left._Value < right._Value;
+    public static bool operator <(FrameSourceId left, FrameSourceId right) => left.Value < right.Value;
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static bool operator >(FrameSourceId left, FrameSourceId right) => left._Value > right._Value;
+    public static bool operator >(FrameSourceId left, FrameSourceId right) => left.Value > right.Value;
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static bool operator <=(FrameSourceId left, FrameSourceId right) => left._Value <= right._Value;
+    public static bool operator <=(FrameSourceId left, FrameSourceId right) => left.Value <= right.Value;
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static bool operator >=(FrameSourceId left, FrameSourceId right) => left._Value >= right._Value;
+    public static bool operator >=(FrameSourceId left, FrameSourceId right) => left.Value >= right.Value;
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static bool operator ==(FrameSourceId left, FrameSourceId right) => left._Value == right._Value;
+    public static bool operator ==(FrameSourceId left, FrameSourceId right) => left.Value == right.Value;
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static bool operator !=(FrameSourceId left, FrameSourceId right) => left._Value != right._Value;
+    public static bool operator !=(FrameSourceId left, FrameSourceId right) => left.Value != right.Value;
+
+    #endregion
+
+    #region Private helpers
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static int _StoreValidated(int value)
+    {
+        if (!ArrayIndexIdRange.IsInvalidSentinel(value))
+        {
+            ArrayIndexIdRange.ValidateIndexOrThrow(value, nameof(value));
+        }
+
+        return value;
+    }
 
     #endregion
 }

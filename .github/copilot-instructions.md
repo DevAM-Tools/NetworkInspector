@@ -3,9 +3,9 @@
 ## 1) Scope and Precedence
 
 - Apply these instructions to every change, technology, and workflow phase.
-- Treat natural-language equivalents of `/plan`, `/implement`, `/review`, `/review-loop`, `/complex-task` as the same workflow trigger.
+- Treat natural-language equivalents of `/plan`, `/implement`, `/review`, `/review-loop`, `/complex-task`, `/council` as the same workflow trigger.
 - End every workflow with: status table, release or goal verdict, top risks (≤5 bullets), artifact paths.
-- Do not recap artifact contents in chat.
+- Do not recap artifact contents in chat. Exception: council verdict sections.
 
 ## 2) Terse Communication
 
@@ -19,19 +19,28 @@ Goal: save tokens in chat without losing technical substance.
 - No play-by-play narration. Use sentence fragments when meaning unambiguous.
 - Prefer short words: fix, add, check — not long periphrasis.
 - Keep technical terms, API names, type names, file paths, commands, error text exact and complete.
-- Never abbreviate code symbols, member names, or CLI flags in chat.
+- Never abbreviate code symbols, item names, or CLI flags in chat.
 - Do not repost plan or review finding blocks in chat when output was written to a file; cite artifact path only.
 - In review chat-only mode, output every finding as full Shared Block per workflow-review skill.
 
 ### Full-fidelity output (no compression)
 
-- Write plan steps with full Shared Block quality.
-- Write every review finding (Error, Cosmetic, Refactoring, Performance) with full Shared Block quality.
-- Write code, MSBuild/project files, and commits in normal complete form per tech rules.
+- Never apply chat terse style to plan steps or review findings.
+- Write plan steps and review findings with full Shared Block quality.
+- ❗ Specify the concrete implementation in every plan-step and review-finding `How`. Intent-only, outline-only, or slogan-only `How` is incomplete — expand before emitting the artifact.
+- ❗ Write `How` so another agent can implement without inventing types, items, signatures, algorithms, control flow, or file structure.
+- ❗ Name types, items, visibility, signatures, parameters, return values, call-site edits, validation, error paths, and state changes.
+- ❗ Describe the chosen solution in full, not only the goal. Expand until one implementation is uniquely specified.
+- Write council verdict sections at full fidelity in chat and artifact. Advisor essays stay in the artifact.
+- Put fenced code examples in every plan-step and review-finding `How`. Use Before/After for steps; Problem/Fix for findings. Anchor with path/symbol. Show real signatures and key bodies — not stubs, pseudocode-only, or comments-as-code.
+- Name non-trivial test coverage in every plan step: behaviors, error paths, boundaries, concurrency, security. Do not list only test file names.
+- Cite a concrete source in every plan-step and review-finding `Context` when an external reference exists: URL, official doc title + section, API reference, RFC. Else cite skill/ADR/path/symbol.
+- Write code and build/project files in normal complete form per loaded tech rules.
 
 ### Auto-clarity (never compress)
 
 - Never compress security warnings, destructive operations, or ambiguous multi-step sequences.
+- Never compress plan-step or review-finding `How`.
 - Use full explicit sentences when compression would change technical meaning or execution order.
 
 ## 3) Tech Load Protocol
@@ -42,6 +51,7 @@ Goal: save tokens in chat without losing technical substance.
 - Record loaded skills in plan Context Anchor: `Loaded skills: <list>`.
 - Abort with blocker if scope matches a trigger but skill was not loaded.
 - When uncertain whether a skill applies, load it.
+- Apply only loaded tech skills. Unloaded skills do not apply.
 
 | Trigger | Load skill |
 |---------|------------|
@@ -50,30 +60,34 @@ Goal: save tokens in chat without losing technical substance.
 | `*.razor`, `*.razor.cs`, `*.razor.css` | `tech-blazor.md` |
 | `*Generator*.cs`, `IIncrementalGenerator` | `tech-sourcegen.md` |
 | `*.csproj`, `*.props`, `*.targets` | `tech-solution.md` |
+| `*.rs`, `Cargo.toml`, `Cargo.lock` | `tech-rust.md` |
 
+- When reviewing C# production APIs, also load `tech-tunit.md`.
 - On workflow start, load the matching workflow skill from `.github/skills/`.
 
 ## 4) Always-On Quality Contract
 
+Language-specific mechanisms live in loaded tech skills. This section is intent.
+
 ### 4.1 Correctness
 
 - ❗ Treat warnings as errors; fix root causes; never suppress.
-- ❗ Never fail silently; return or throw meaningful errors.
+- ❗ Never fail silently; return a meaningful error (throw or panic only for bugs and broken invariants).
 - ❗ Validate external input at trust boundaries: content, structure, type, range, encoding, size.
 - ❗ Validate function parameters at entry.
-- ❗ Prefer `Try*` APIs or error-return patterns over exceptions for expected failure paths.
-- ❗ Hot-path APIs must not throw for expected failures; use result types, error codes, or `Try*`.
+- ❗ Prefer result types, error codes, or language-idiomatic try-APIs over throw/panic for expected failure paths.
+- ❗ Hot-path APIs must not throw or panic for expected failures; use result types, error codes, or language-idiomatic try-APIs.
 - List every affected file before any edit: implementation, call sites, tests, config, docs.
 - Keep cross-file changes consistent.
 - Never leave invalid or undefined state after errors; use atomic update, rollback, or compensation.
 - Evaluate return values that may indicate failure.
-- Document omitted parameter validation in XML doc with reason and caller guarantees.
-- Provide `Try*` APIs at public boundaries for expected failure paths.
+- Document omitted parameter validation in the public API docs with reason and caller guarantees.
+- Provide result types or language-idiomatic try-APIs at public boundaries for expected failure paths.
 - Preserve preconditions, postconditions, and interface consistency.
 - Never ship incomplete implementations. Mark incomplete work with `// TODO:` and concrete reason.
-- Never put plan IDs, issue IDs, or tracking IDs in code, comments, or commits.
+- Never put plan IDs, issue IDs, or tracking IDs in code or comments.
 - Guard against off-by-one errors, invalid transitions, and logic regressions.
-- ❗Assess integer ops for overflow/underflow; guard or `checked` when wrap-around would break correctness, security, or invariants.
+- ❗ Assess integer ops for overflow/underflow; guard when wrap-around would break correctness, security, or invariants. Mechanism: loaded tech skill.
 
 ### 4.2 Security
 
@@ -86,56 +100,50 @@ Goal: save tokens in chat without losing technical substance.
 
 ### 4.3 Thread Safety
 
-- ❗ Cross-thread shared fields must be declared with the `volatile` keyword.
-- ❗ Plain volatile read and write are allowed; increment, decrement, and compound assignment on `volatile` fields are Error-class — use `Interlocked` for atomic read-modify-write.
-- Use `Interlocked` when atomic read-modify-write or compare-exchange is required; `Volatile.Read` / `Volatile.Write` remain valid when explicit APIs are preferred.
+- ❗ Shared mutable state across threads requires explicit synchronization; no data races.
 - ❗ Identify race, TOCTOU, async interleaving, lock inversion, and partial-state risks in design.
 - After shared-state changes, verify no new concurrency defects.
-- Document chosen lock primitive and rationale when locking is required.
-- Document thread-safety in XML `<summary>` for non-exempt types.
-- Exempt from thread-safety summary: immutable records, readonly structs, plain DTOs, enums.
-- Prefer `Interlocked` over `lock` when feasible.
+- Document chosen lock or atomic primitive and rationale when synchronization is required.
+- Document thread-safety for non-immutable shared types. Form: loaded tech skill.
 - Prove thread-safety claims with concurrent tests.
+- Synchronization APIs: loaded tech skill.
 
 ### 4.4 Performance
 
-- ❗ Hot-path APIs must not throw for expected failures; use result types, error codes, or `Try*`.
-- ❗ Minimize allocations wherever possible. Reduce GC runs to a minimum.
-- For hot paths, plan allocation order: spans/memory, then pooling, then `[ThreadStatic]` when safe.
-- Compare `[ThreadStatic]` vs pooling: affinity, pressure, lifetime, reuse safety.
-- Return `ArrayPool<T>` rentals in `finally`.
+- ❗ Hot-path APIs must not throw or panic for expected failures; use result types, error codes, or language-idiomatic try-APIs.
+- ❗ Minimize allocations wherever possible.
+- For hot paths, plan allocation order per loaded tech skill.
 - Provide SIMD plus scalar fallback for compute-heavy code.
-- Avoid LINQ in hot paths.
-- Prefer static lambdas.
-- Maximize inlining in measured hot paths; avoid blocking devirtualization.
+- Avoid intermediate allocations and heap-capturing closures on hot paths. Mechanism: loaded tech skill.
+- Maximize inlining in measured hot paths.
 - Minimize cache misses via locality and layout.
 - Prefer abstractions at boundaries; prefer concrete inlinable paths in measured hot paths.
 
 ### 4.5 Testing
 
-- ❗ **TUnit only** for unit tests; Stack: TUnit + NSubstitute + MTP + ExitPointGaps; details `tech-tunit.md`.
-- ❗ Require 100% exit-point coverage on every public or internal API before release; release gate: `exitGapCount == 0`. Branch coverage is not a release gate.
-- ❗ Require **ExitPointGaps** NuGet local tool at version **`1.*`** on every repo with test projects; gate via `dotnet tool run exitpointgaps --repo-root .` until `summary.exitGapCount == 0`. Setup and commands: `tech-tunit.md`.
-- TUnit structure and test authoring: `tech-tunit.md`.
+- ❗ Require tests before release for every public or internal API.
+- Cover happy path, errors, boundaries, concurrency, and security.
+- ❗ Require 100% exit-path coverage on every public or internal API before release. Branch coverage is not a release gate.
+- Test stack and coverage **tool** (if any): loaded tech skill only. When the skill defines a gate, that gate is the release gate. When it does not, every exit path must still have a test.
 
 ### 4.6 Documentation
 
 - ❗ Use inline comments for purpose, motivation, and design decisions.
 - ❗ State why; never restate obvious syntax.
 - Keep comments and docs synchronized with code.
-- Add XML doc on all members.
+- Document every public API item in the language’s canonical doc form. Form: loaded tech skill.
 - Document key algorithm and data-structure decisions.
 
 ### 4.7 Repository
 
 - Support Windows/Linux/macOS on x64/ARM64.
 - Keep Debug and Release behavior identical.
-- Limit line length to 160 in `.cs`, `.razor`, `.razor.cs`, `.css`.
-- Do not put dates in code or commits; copyright year is allowed.
-- Add per-file copyright from `COPYRIGHT` when creating source files.
+- Limit line length to 160.
+- Do not put dates in code; copyright year is allowed.
+- Add per-file copyright from `COPYRIGHT` when creating source files. Syntax: loaded tech skill.
 - Use only MIT, Apache-2.0, or BSD-like dependencies.
-- ❗ Require **CSharpStyleChecker** NuGet at version **`1.*`** on every SDK-style C# consumer (`netstandard2.0` or `net5.0`+), including source generators; `ExitPoints` is bundled — no separate analyzer reference. Install and CPM wiring: `tech-solution.md`.
-- Follow New Dependency Protocol in `tech-solution.md` when packages are in scope.
+- ❗ Require the language’s mandatory style/lint tool per loaded tech skill.
+- Never add a dependency without user approval. Present id, purpose, license (`MIT` / `Apache-2.0` / BSD-like), alternatives. Stack steps: loaded tech skill New Dependency Protocol.
 - Use Mermaid (`TD`, tall layout) instead of ASCII art.
 
 ### 4.8 UI Accessibility
@@ -145,7 +153,7 @@ Goal: save tokens in chat without losing technical substance.
 ### 4.9 Structure
 
 - Use least-required visibility; default private.
-- Keep one or few related types per file.
+- Keep files cohesive; do not mix unrelated types or modules.
 - Remove dead code, stale docs, deprecated patterns in active paths.
 - Keep naming and patterns consistent across touched files.
 - Do not expose internals to other projects.
@@ -156,18 +164,16 @@ Goal: save tokens in chat without losing technical substance.
 
 ### 4.11 Git
 
-- ❗ Require explicit user approval for destructive git commands.
-- Commit after every file-editing request with detailed message.
-- Commit only files in current request scope.
-- Allow `git add` and `git commit` without extra confirmation.
-- Run `git status` before destructive commands; warn on uncommitted changes.
-- Detect and resolve concurrent edit conflicts before commit.
+- ❗ Git is read-only. Never change the repository, index, refs, or working-tree git state.
+- Allow only non-mutating inspection: `git status`, `git diff`, `git log`, `git show`, `git blame`, `git ls-files`, `git rev-parse`, `git branch` (list), `git remote -v`.
+- Never run `git add`, `git commit`, `git push`, `git pull`, `git fetch`, `git checkout`, `git switch`, `git merge`, `git rebase`, `git reset`, `git stash`, `git tag`, `git cherry-pick`, `git revert`, `git clean`, `git rm`, `git mv`, or any other command that writes to the repo.
+- Never create, amend, or rewrite commits.
 
 ### 4.12 API Misuse Prevention
 
 - Design APIs so incorrect use is compile-time impossible or obviously wrong at call sites.
 - Prefer types and states that encode invariants instead of primitive flags or ambiguous combinations.
-- Provide `Try*` APIs or result types at public boundaries for expected failure paths.
+- Provide result types or language-idiomatic try-APIs at public boundaries for expected failure paths.
 - Enumerate misuse and abuse vectors in planning (how can the solution be used wrongly or exploited).
 - Prefer making invalid states unrepresentable over runtime validation alone when cost is reasonable.
 
@@ -186,7 +192,7 @@ Goal: save tokens in chat without losing technical substance.
 
 - Load workflow skill before executing workflow stages.
 - Stop and ask user when out-of-scope work is discovered.
-- Read member/type definitions before use or change.
+- Read definitions of involved types and items before use or change.
 - Analyze and document dependencies between sub-steps in plan Context Anchor.
 
 | Trigger | Workflow skill |
@@ -196,6 +202,8 @@ Goal: save tokens in chat without losing technical substance.
 | `/review` | `workflow-review.md` |
 | `/review-loop` | `workflow-review-loop.md` |
 | `/complex-task` | `workflow-complex-task.md` |
+| `/council` | `workflow-council.md` |
 
+- `/council`, `council this`, `run the council`, `pressure-test this`, `stress-test this` → `workflow-council.md`. Not casual "should I". Sweep on every plan/review. Full council only on `/council` or a blocking Decision Loop fork.
 - Do not start implementation before explicit plan approval.
 - Treat explicit approval and equivalent intent phrases as plan approval signals.

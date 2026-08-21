@@ -17,14 +17,14 @@ internal sealed class PduTransportStandaloneTsharkTests
 
         ReadOnlyMemory<byte> opaque = new byte[] { 0xCA, 0xFE, 0xBE, 0xEF };
 
-        SignalPduLayer rawInner = SignalPduLayer.FromRawBytes(opaque);
+        SignalMessageLayer rawInner = SignalMessageLayer.FromRawBytes(opaque);
 
         byte[] frame = AutomotiveEthUdpFrames.EncapsulatePduTransportSignal(
             udpSrcPort: 18001,
             udpDstPort: AutomotivePduBench.UdpPduTransportDestinationPort,
             pduFb: AutomotivePduBench.PduTransportRegistry,
             pduWireId: AutomotivePduBench.PduTransportWireId,
-            signalPdu: rawInner);
+            signalMessage: rawInner);
 
         string work = Path.Combine(Path.GetTempPath(), "ni_pt_stshark_" + Guid.NewGuid().ToString("N"));
         _ = Directory.CreateDirectory(work);
@@ -50,8 +50,8 @@ internal sealed class PduTransportStandaloneTsharkTests
                 string decodeAs =
                     $"udp.port=={AutomotivePduBench.UdpPduTransportDestinationPort.ToString(System.Globalization.CultureInfo.InvariantCulture)},pdu_transport";
 
-                string profileDir = TsharkPduTransportSignalUatProfile.CreateProfileDirectoryUnderEphemeralPersonalDir(personalRoot, "ni_standalone");
-                TsharkPduTransportSignalUatProfile.EmitPduTransportUdpDescriptors(
+                string profileDir = TsharkPduTransportSignalMessageUatProfile.CreateProfileDirectoryUnderEphemeralPersonalDir(personalRoot, "ni_standalone");
+                TsharkPduTransportSignalMessageUatProfile.EmitPduTransportUdpDescriptors(
                     profileDir, AutomotivePduBench.UdpPduTransportDestinationPort, AutomotivePduBench.PduTransportRegistry);
 
                 await TsharkAssert.AssertEquivalentMany(

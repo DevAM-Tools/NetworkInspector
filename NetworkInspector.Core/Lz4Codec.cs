@@ -42,12 +42,19 @@ namespace NetworkInspector.Core;
 /// <see cref="Decompress"/> concurrently without contention or external
 /// synchronisation.
 /// </para>
+/// <para>
+/// <b>Memory trade-off:</b> The thread-local hash table is 65 536 × 4 bytes (~256 KB)
+/// per thread that ever calls <see cref="Compress"/>. The array is retained until the
+/// thread exits — there is no pool return. This avoids <see cref="ArrayPool{T}"/> rent/return
+/// overhead and stack exhaustion from a 256 KB <c>stackalloc</c>, but increases steady-state
+/// memory when many thread-pool threads compress over their lifetime (~256 KB × active compressors).
+/// Acceptable for dedicated parse/compress worker threads; monitor pool thread count under load.
+/// </para>
 /// </summary>
 public static class Lz4Codec
 {
-    // =========================================================================
-    // LZ4 block-format constants
-    // =========================================================================
+    #region Constants
+
     private const int _MinMatch = 4;          // minimum match length required by the format
     private const int _HashLog = 16;          // hash table: 2^16 = 65 536 entries
     private const int _HashSize = 1 << _HashLog;
@@ -55,9 +62,10 @@ public static class Lz4Codec
     private const int _MFlimit = 12;          // minimum input remaining to enter the main match loop
     private const int _LastLiterals = 5;      // last 5 input bytes are always emitted as literals
 
-    // =========================================================================
-    // Thread-local hash table
-    // =========================================================================
+    #endregion
+
+    #region Fields
+
     // A [ThreadStatic] int[] eliminates a 256 KB stackalloc that would exhaust
     // the default 1 MB thread stack in deeply-nested async state machines.
     //
@@ -70,9 +78,9 @@ public static class Lz4Codec
     [ThreadStatic]
     private static int[]? _HashTable;
 
-    // =========================================================================
-    // Public API
-    // =========================================================================
+    #endregion
+
+    #region Public API
 
     /// <summary>
     /// Returns the maximum possible compressed size for <paramref name="inputSize"/> bytes.
@@ -80,10 +88,19 @@ public static class Lz4Codec
     /// <see cref="Compress"/>.
     /// </summary>
     /// <param name="inputSize">Uncompressed input size in bytes.</param>
-    /// <returns>Upper bound on compressed size in bytes.</returns>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static int MaxCompressedSize(int inputSize) =>
-        inputSize + (inputSize / 255) + 16;
+    /// <returns>
+    /// Upper bound on compressed size in bytes, or <c>-1</c> when
+    /// <paramref name="inputSize"/> exceeds the LZ4 per-block input limit.
+    /// </returns>
+    public static int MaxCompressedSize(int inputSize)
+    {
+        if ((uint)inputSize > (uint)_MaxInputSizePerBlock)
+        {
+            return -1;
+        }
+
+        return inputSize + (inputSize / 255) + 16;
+    }
 
     /// <summary>
     /// Compresses <paramref name="input"/> using the LZ4 block format.
@@ -124,15 +141,13 @@ public static class Lz4Codec
         if (inputLength < _MFlimit)
         {
             // Too short for any match — emit everything as literals.
+            // Non-empty literal-only blocks always expand (token + payload > input size).
             outputPos = _EmitLastLiterals(input, output, outputPos, anchor, inputLength);
             if (outputPos < 0)
             {
                 return -1;
             }
-            if (outputPos <= inputLength)
-            {
-                return outputPos;
-            }
+
             return -1;
         }
 
@@ -263,7 +278,8 @@ public static class Lz4Codec
             // ---------------------------------------------------------------
             if (literalLength > 0)
             {
-                if (inputPos + literalLength > inputLength || outputPos + literalLength > outputLength)
+                if (!_HasInputSpace(inputPos, literalLength, inputLength)
+                    || !_HasOutputSpace(outputPos, literalLength, outputLength))
                 {
                     return -1; // out of bounds
                 }
@@ -288,7 +304,7 @@ public static class Lz4Codec
             // ---------------------------------------------------------------
             // 4. Read 16-bit little-endian match offset.
             // ---------------------------------------------------------------
-            if (inputPos + 2 > inputLength)
+            if (!_HasInputSpace(inputPos, 2, inputLength))
             {
                 return -1;
             }
@@ -313,7 +329,7 @@ public static class Lz4Codec
                 }
             }
 
-            if (outputPos + matchLength > outputLength)
+            if (!_HasOutputSpace(outputPos, matchLength, outputLength))
             {
                 return -1;
             }
@@ -354,9 +370,9 @@ public static class Lz4Codec
         return outputPos;
     }
 
-    // =========================================================================
-    // Private helpers — compression
-    // =========================================================================
+    #endregion
+
+    #region Compression Helpers
 
     /// <summary>
     /// Computes a 16-bit hash index from the 4 bytes starting at <paramref name="pos"/>.
@@ -420,7 +436,7 @@ public static class Lz4Codec
         }
 
         // --- Literal bytes ---
-        if (outputPos + literalLength > output.Length)
+        if (!_HasOutputSpace(outputPos, literalLength, output.Length))
         {
             return -1;
         }
@@ -428,7 +444,7 @@ public static class Lz4Codec
         outputPos += literalLength;
 
         // --- 16-bit little-endian offset ---
-        if (outputPos + 2 > output.Length)
+        if (!_HasOutputSpace(outputPos, 2, output.Length))
         {
             return -1;
         }
@@ -501,7 +517,7 @@ public static class Lz4Codec
             output[outputPos++] = (byte)remaining;
         }
 
-        if (outputPos + literalLength > output.Length)
+        if (!_HasOutputSpace(outputPos, literalLength, output.Length))
         {
             return -1;
         }
@@ -511,9 +527,9 @@ public static class Lz4Codec
         return outputPos;
     }
 
-    // =========================================================================
-    // Private helpers — decompression
-    // =========================================================================
+    #endregion
+
+    #region Decompression Helpers
 
     /// <summary>
     /// Reads the variable-length continuation of a length field.
@@ -548,4 +564,16 @@ public static class Lz4Codec
 
         return true;
     }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool _HasInputSpace(int position, int length, int bufferLength) =>
+        (uint)position <= (uint)bufferLength
+        && (uint)length <= (uint)bufferLength - (uint)position;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool _HasOutputSpace(int position, int length, int bufferLength) =>
+        (uint)position <= (uint)bufferLength
+        && (uint)length <= (uint)bufferLength - (uint)position;
+
+    #endregion
 }

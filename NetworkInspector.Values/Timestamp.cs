@@ -4,10 +4,10 @@ namespace NetworkInspector.Values;
 
 /// <summary>Nanosecond-precision timestamp (nanoseconds since Unix epoch).</summary>
 [StructLayout(LayoutKind.Sequential)]
-public readonly record struct Timestamp
-        : IEquatable<Timestamp>, IComparable<Timestamp>, IComparable,
-      ISpanFormattable, IUtf8SpanFormattable, IStringSize, IBinarySerializable,
-      ISpanParsable<Timestamp>, IParsable<Timestamp>
+public readonly record struct Timestamp :
+    IEquatable<Timestamp>, IComparable<Timestamp>, IComparable,
+    ISpanFormattable, IUtf8SpanFormattable, IStringSize, IBinarySerializable,
+    ISpanParsable<Timestamp>, IParsable<Timestamp>
 {
     #region Constants
 
@@ -24,16 +24,7 @@ public readonly record struct Timestamp
 
     /// <summary>Creates a <see cref="Timestamp"/> from nanoseconds since Unix epoch.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public Timestamp(long nanos)
-    {
-        _Nanos = nanos;
-    }
-
-    #endregion
-
-    #region Fields
-
-    private readonly long _Nanos;
+    public Timestamp(long nanos) => AsNanos = nanos;
 
     #endregion
 
@@ -60,34 +51,30 @@ public readonly record struct Timestamp
     /// Negative values represent timestamps before the Unix epoch (January 1, 1970 UTC).
     /// Hashing and comparison treat negative values correctly (consistent with <see cref="long"/> semantics).
     /// </remarks>
-    public long AsNanos
-    {
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _Nanos;
-    }
+    public long AsNanos { get; }
     /// <summary>The value in microseconds (truncated).</summary>
     public long AsMicros
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _Nanos / _NanosPerMicro;
+        get => AsNanos / _NanosPerMicro;
     }
     /// <summary>The value in milliseconds (truncated).</summary>
     public long AsMillis
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _Nanos / _NanosPerMilli;
+        get => AsNanos / _NanosPerMilli;
     }
     /// <summary>The whole seconds part.</summary>
     public long Secs
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _Nanos / _NanosPerSecond;
+        get => AsNanos / _NanosPerSecond;
     }
     /// <summary>The sub-second nanosecond part.</summary>
     public int SubsecNanos
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => (int)(_Nanos % _NanosPerSecond);
+        get => (int)(AsNanos % _NanosPerSecond);
     }
 
     #endregion
@@ -97,19 +84,114 @@ public readonly record struct Timestamp
     /// <summary>Creates a timestamp from nanoseconds.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Timestamp FromNanos(long nanos) => new(nanos);
+
+    /// <summary>Creates a timestamp from microseconds when representable in nanoseconds.</summary>
+    /// <returns><see langword="false"/> when <paramref name="micros"/> overflows the nanosecond range.</returns>
+    public static bool TryFromMicros(long micros, out Timestamp timestamp)
+    {
+        timestamp = default;
+        try
+        {
+            timestamp = new Timestamp(checked(micros * _NanosPerMicro));
+            return true;
+        }
+        catch (OverflowException)
+        {
+            return false;
+        }
+    }
+
     /// <summary>Creates a timestamp from microseconds.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static Timestamp FromMicros(long micros) => new(micros * _NanosPerMicro);
+    /// <exception cref="OverflowException"><paramref name="micros"/> overflows the nanosecond range.</exception>
+    public static Timestamp FromMicros(long micros)
+    {
+        if (!TryFromMicros(micros, out Timestamp timestamp))
+        {
+            throw new OverflowException("Microseconds overflow the nanosecond timestamp range.");
+        }
+        return timestamp;
+    }
+
+    /// <summary>Creates a timestamp from milliseconds when representable in nanoseconds.</summary>
+    /// <returns><see langword="false"/> when <paramref name="millis"/> overflows the nanosecond range.</returns>
+    public static bool TryFromMillis(long millis, out Timestamp timestamp)
+    {
+        timestamp = default;
+        try
+        {
+            timestamp = new Timestamp(checked(millis * _NanosPerMilli));
+            return true;
+        }
+        catch (OverflowException)
+        {
+            return false;
+        }
+    }
+
     /// <summary>Creates a timestamp from milliseconds.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static Timestamp FromMillis(long millis) => new(millis * _NanosPerMilli);
+    /// <exception cref="OverflowException"><paramref name="millis"/> overflows the nanosecond range.</exception>
+    public static Timestamp FromMillis(long millis)
+    {
+        if (!TryFromMillis(millis, out Timestamp timestamp))
+        {
+            throw new OverflowException("Milliseconds overflow the nanosecond timestamp range.");
+        }
+        return timestamp;
+    }
+
+    /// <summary>Creates a timestamp from seconds when representable in nanoseconds.</summary>
+    /// <returns><see langword="false"/> when <paramref name="secs"/> overflows the nanosecond range.</returns>
+    public static bool TryFromSecs(long secs, out Timestamp timestamp)
+    {
+        timestamp = default;
+        try
+        {
+            timestamp = new Timestamp(checked(secs * _NanosPerSecond));
+            return true;
+        }
+        catch (OverflowException)
+        {
+            return false;
+        }
+    }
+
     /// <summary>Creates a timestamp from seconds.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static Timestamp FromSecs(long secs) => new(secs * _NanosPerSecond);
+    /// <exception cref="OverflowException"><paramref name="secs"/> overflows the nanosecond range.</exception>
+    public static Timestamp FromSecs(long secs)
+    {
+        if (!TryFromSecs(secs, out Timestamp timestamp))
+        {
+            throw new OverflowException("Seconds overflow the nanosecond timestamp range.");
+        }
+        return timestamp;
+    }
+
+    /// <summary>Creates a timestamp from seconds and nanoseconds when representable.</summary>
+    /// <returns><see langword="false"/> when the combined value overflows the nanosecond range.</returns>
+    public static bool TryFromSecsAndNanos(long secs, int nanos, out Timestamp timestamp)
+    {
+        timestamp = default;
+        try
+        {
+            timestamp = new Timestamp(checked(secs * _NanosPerSecond + nanos));
+            return true;
+        }
+        catch (OverflowException)
+        {
+            return false;
+        }
+    }
+
     /// <summary>Creates a timestamp from seconds and nanoseconds.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static Timestamp FromSecsAndNanos(long secs, int nanos) =>
-        new(secs * _NanosPerSecond + nanos);
+    /// <exception cref="OverflowException">The combined value overflows the nanosecond range.</exception>
+    public static Timestamp FromSecsAndNanos(long secs, int nanos)
+    {
+        if (!TryFromSecsAndNanos(secs, nanos, out Timestamp timestamp))
+        {
+            throw new OverflowException("Seconds and nanoseconds overflow the nanosecond timestamp range.");
+        }
+        return timestamp;
+    }
 
     /// <summary>
     /// Parses a timestamp from ISO 8601 UTC nanosecond format <c>yyyy-MM-ddTHH:mm:ss.nnnnnnnnnZ</c>.
@@ -152,8 +234,16 @@ public readonly record struct Timestamp
         }
 
         long epochSecs = (dto.Ticks - DateTimeOffset.UnixEpoch.Ticks) / TimeSpan.TicksPerSecond;
-        result = new Timestamp(epochSecs * _NanosPerSecond + nanos);
-        return true;
+        try
+        {
+            result = new Timestamp(checked(epochSecs * _NanosPerSecond + nanos));
+            return true;
+        }
+        catch (OverflowException)
+        {
+            result = default;
+            return false;
+        }
     }
 
     #endregion
@@ -209,12 +299,21 @@ public readonly record struct Timestamp
 
     /// <summary>Adds a <see cref="TimeSpan"/> to a timestamp.</summary>
     /// <remarks>Uses <c>Ticks * 100</c> for exact nanosecond conversion (1 tick = 100 ns).</remarks>
-    public static Timestamp Add(Timestamp ts, TimeSpan duration) =>
-        new(ts._Nanos + duration.Ticks * 100);
+    /// <exception cref="OverflowException">The result overflows the nanosecond range.</exception>
+    public static Timestamp Add(Timestamp ts, TimeSpan duration)
+    {
+        long deltaNanos = checked(duration.Ticks * 100);
+        return new Timestamp(checked(ts.AsNanos + deltaNanos));
+    }
+
     /// <summary>Subtracts a <see cref="TimeSpan"/> from a timestamp.</summary>
     /// <remarks>Uses <c>Ticks * 100</c> for exact nanosecond conversion (1 tick = 100 ns).</remarks>
-    public static Timestamp Subtract(Timestamp ts, TimeSpan duration) =>
-        new(ts._Nanos - duration.Ticks * 100);
+    /// <exception cref="OverflowException">The result overflows the nanosecond range.</exception>
+    public static Timestamp Subtract(Timestamp ts, TimeSpan duration)
+    {
+        long deltaNanos = checked(duration.Ticks * 100);
+        return new Timestamp(checked(ts.AsNanos - deltaNanos));
+    }
     /// <summary>Returns the duration between two timestamps.</summary>
     /// <remarks>Uses <c>Ticks * 100</c> for exact nanosecond conversion (1 tick = 100 ns).
     /// Throws <see cref="OverflowException"/> when the nanosecond delta exceeds <see cref="long"/> range.</remarks>
@@ -223,7 +322,7 @@ public readonly record struct Timestamp
     {
         checked
         {
-            long delta = a._Nanos - b._Nanos;
+            long delta = a.AsNanos - b.AsNanos;
             return TimeSpan.FromTicks(delta / 100);
         }
     }
@@ -250,7 +349,7 @@ public readonly record struct Timestamp
             bytesWritten = 0;
             return false;
         }
-        BinaryPrimitives.WriteInt64BigEndian(destination, _Nanos);
+        BinaryPrimitives.WriteInt64BigEndian(destination, AsNanos);
         bytesWritten = 8;
         return true;
     }
@@ -280,9 +379,23 @@ public readonly record struct Timestamp
             nanos += (int)_NanosPerSecond;
         }
 
-        // Convert to DateTimeOffset for calendar decomposition
-        long ticks = DateTimeOffset.UnixEpoch.Ticks + secs * TimeSpan.TicksPerSecond;
-        DateTimeOffset dto = new(ticks, TimeSpan.Zero);
+        DateTimeOffset dto;
+        try
+        {
+            long ticks = checked(DateTimeOffset.UnixEpoch.Ticks + checked(secs * TimeSpan.TicksPerSecond));
+            if (ticks < DateTimeOffset.MinValue.Ticks || ticks > DateTimeOffset.MaxValue.Ticks)
+            {
+                charsWritten = 0;
+                return false;
+            }
+
+            dto = new DateTimeOffset(ticks, TimeSpan.Zero);
+        }
+        catch (OverflowException)
+        {
+            charsWritten = 0;
+            return false;
+        }
 
         // Write UTC: yyyy-MM-dd HH:mm:ss.nnnnnnnnn (space separator, no trailing Z)
         int pos = 0;
@@ -401,7 +514,7 @@ public readonly record struct Timestamp
 
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public int CompareTo(Timestamp other) => _Nanos.CompareTo(other._Nanos);
+    public int CompareTo(Timestamp other) => AsNanos.CompareTo(other.AsNanos);
 
     /// <inheritdoc/>
     int IComparable.CompareTo(object? obj)
@@ -419,22 +532,22 @@ public readonly record struct Timestamp
     /// <param name="left">The left operand.</param>
     /// <param name="right">The right operand.</param>
     /// <returns><see langword="true"/> if the condition holds; otherwise <see langword="false"/>.</returns>
-    public static bool operator <(Timestamp left, Timestamp right) => left._Nanos < right._Nanos;
+    public static bool operator <(Timestamp left, Timestamp right) => left.AsNanos < right.AsNanos;
     /// <summary>Returns <see langword="true"/> if <paramref name="left"/> is greater than <paramref name="right"/>.</summary>
     /// <param name="left">The left operand.</param>
     /// <param name="right">The right operand.</param>
     /// <returns><see langword="true"/> if the condition holds; otherwise <see langword="false"/>.</returns>
-    public static bool operator >(Timestamp left, Timestamp right) => left._Nanos > right._Nanos;
+    public static bool operator >(Timestamp left, Timestamp right) => left.AsNanos > right.AsNanos;
     /// <summary>Returns <see langword="true"/> if <paramref name="left"/> is less than or equal to <paramref name="right"/>.</summary>
     /// <param name="left">The left operand.</param>
     /// <param name="right">The right operand.</param>
     /// <returns><see langword="true"/> if the condition holds; otherwise <see langword="false"/>.</returns>
-    public static bool operator <=(Timestamp left, Timestamp right) => left._Nanos <= right._Nanos;
+    public static bool operator <=(Timestamp left, Timestamp right) => left.AsNanos <= right.AsNanos;
     /// <summary>Returns <see langword="true"/> if <paramref name="left"/> is greater than or equal to <paramref name="right"/>.</summary>
     /// <param name="left">The left operand.</param>
     /// <param name="right">The right operand.</param>
     /// <returns><see langword="true"/> if the condition holds; otherwise <see langword="false"/>.</returns>
-    public static bool operator >=(Timestamp left, Timestamp right) => left._Nanos >= right._Nanos;
+    public static bool operator >=(Timestamp left, Timestamp right) => left.AsNanos >= right.AsNanos;
 
     #endregion
 

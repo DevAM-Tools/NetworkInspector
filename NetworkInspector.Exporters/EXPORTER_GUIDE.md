@@ -65,11 +65,16 @@ Exporters fall into two categories based on their input granularity:
 
 | Category | Interface | Input | When to use |
 |----------|-----------|-------|-------------|
-| **Packet-level** | `IPacketListener` | `Packet` (parsed tree) | Formats that need field values (CSV, JSON, PBF) |
-| **Frame-level** | `IFrameListener` | `Frame` (raw bytes) | Formats that need raw frame data (PCAPNG, BLF) |
+| **Packet-level** | `IPacketListener` | `Packet` (parsed tree) | Formats that need field values (CSV, JSON, PBF, Text, Parquet, DuckDB) |
+| **Frame-level** | `IFrameListener` | `Frame` (raw bytes) | Formats that need raw frame data (PCAPNG, BLF, ASC) |
+| **Columnar analytics** (subset of packet-level) | `IPacketListener` | `Packet` | Option-C dataset: one mono-typed table/file per `FieldId` + slim topology (`ParquetExporter`, `DuckDbExporter`, `PbfExporter` Columnar). Shared walk via `ColumnarPacketBatch`. |
 
 All exporters additionally implement `IErrorTolerantExporter` for error handling
 and statistics.
+
+**External validation for columnar exporters:** re-open the output with DuckDB SQL
+(`DuckDbExporter` file directly, or `read_parquet` / `parquet_scan` over a Parquet
+directory) and assert row counts / typed values. Do not rely on string dumps.
 
 ---
 
@@ -89,7 +94,10 @@ IExporterStatistics
 ├── HasErrors       : bool
 └── IsFinished      : bool
 
-IErrorTolerantExporter : IExporterStatistics
+IExportByteProgress
+└── EstimatedOutputBytes : long   // committed + pending buffers; no filesystem probe
+
+IErrorTolerantExporter : IExporterStatistics, IExportByteProgress
 ├── ErrorTolerance  : ErrorToleranceMode   { get; set; }
 └── event ItemSkipped : EventHandler<ExportErrorEventArgs>?
 
@@ -98,7 +106,7 @@ IDisposable
 ```
 
 All exporters implement `IDisposable`, the appropriate listener interface, and
-`IErrorTolerantExporter`.
+`IErrorTolerantExporter` (including live byte progress for size-based CLI splits).
 
 ---
 
@@ -111,15 +119,27 @@ NetworkInspector.Exporters/
     FormatNameWriter.cs                 ← Low-level binary/text writer (optional)
     FormatSpecificHelpers.cs            ← Format-specific utilities (optional)
     README.md                           ← Format documentation
-  Shared/                               ← Cross-exporter utilities (if needed)
-    ExportOutput.cs                     ← Output target abstraction
-    PooledBuffer.cs                     ← Growable byte buffer
-    SameFlags.cs                        ← Same-as-previous bitmask constants
+  Columnar/                             ← Shared Option-C batch model (Parquet/PBF Columnar; also used by NetworkInspector.Exporters.DuckDb)
+    ColumnarPacketBatch.cs
+    FieldColumnBag.cs / FieldValueMaterializer.cs / TopologyNode.cs
+  ExportOutput.cs / PooledBuffer.cs / SameFlags.cs / …  ← Cross-exporter utilities (package root)
+
+NetworkInspector.Exporters.DuckDb/      ← Standalone DuckDB package (native DuckDB runtime)
+  DuckDbExporter.cs
+  DuckDbBulkWriter.cs
+  README.md
 ```
 
-**Namespace:** `NetworkInspector.Exporters.<FormatName>`
+**Namespace:** `NetworkInspector.Exporters.<FormatName>` (columnar shared types:
+`NetworkInspector.Exporters.Columnar`)
 
-Shared utilities live in the root `NetworkInspector.Exporters` namespace.
+Shared utilities live in the root `NetworkInspector.Exporters` namespace (not a physical `Shared/` folder).
+
+**Output targets:** most exporters use `ToFile` / `ToStream` / `ToStdout`. Columnar
+analytics exporters differ:
+- `ParquetExporter` → `ToDirectory(path)` (Option-C directory dataset)
+- `DuckDbExporter` → `ToFile(path.duckdb)` (single database file; package `NetworkInspector.Exporters.DuckDb`)
+- `PbfExporter` Columnar → same file target as Standard PBF
 
 ---
 
@@ -193,7 +213,7 @@ public sealed class XxxExporter : IPacketListener, IErrorTolerantExporter, IDisp
         private string _UiName = "XXX Exporter";
         private string? _Description;
         private CancellationToken _CancellationToken;
-        private long _TargetPacketCount;
+        private int _TargetPacketCount;
 
         // --- Output target (exactly one required) ---
 
@@ -241,9 +261,16 @@ public sealed class XxxExporter : IPacketListener, IErrorTolerantExporter, IDisp
             return this;
         }
 
-        /// <summary>Stops after writing the specified number of items.</summary>
-        public Builder WithTargetPacketCount(long count)
+        /// <summary>Stops after writing the specified number of items (0 … ArrayIndexIdRange.MaxCount).</summary>
+        public Builder WithTargetPacketCount(int count)
         {
+            ArgumentOutOfRangeException.ThrowIfNegative(count);
+            if (count > ArrayIndexIdRange.MaxCount)
+            {
+                throw new ArgumentOutOfRangeException(nameof(count), count,
+                    $"Target packet count must not exceed {ArrayIndexIdRange.MaxCount}.");
+            }
+
             _TargetPacketCount = count;
             return this;
         }
@@ -352,11 +379,15 @@ produce a **valid but empty** output file where the format supports it:
 
 | Format | Empty export result |
 |--------|-------------------|
-| CSV | May produce header-only file or 0-byte file |
+| CSV | May produce header-only file or 0-byte file until first packet |
 | JSON | Valid `[]` or `{}` |
 | PCAPNG | Valid SHB block |
 | BLF | Valid LOGG file header |
+| ASC | Valid header + empty trigger block |
 | PBF | Valid magic + header + trailer + magic |
+| Text | Single newline |
+| Parquet | No directory/files created |
+| DuckDB | No database file created |
 
 ---
 
@@ -564,9 +595,19 @@ Prefer static lookup tables for known value domains.
 
 ### 12.2 Field Value Formatting
 
-When converting `FieldValue` to a string representation, use a shared utility
-method rather than duplicating the formatting logic in each exporter. The conversion
-should handle all `FieldType` variants:
+Path-specific writers format `FieldValue` / `FieldValueData` for text-oriented
+exports — do not introduce a shared stringifier on typed same-as-previous or
+columnar analytics paths:
+
+| Path | Formatter |
+|------|-----------|
+| JSON Pretty / Array | `JsonHelpers.WriteFieldValue` |
+| JSON Compact | Typed SAP via `PreviousFieldStore`; strings only when emitting |
+| CSV / Text | `FieldValue.TryFormat` / `ToString` as needed |
+| Columnar (Parquet / DuckDB / PBF Columnar) | Typed bags via `FieldColumnBag` + `FieldValueMaterializer` for BLOB columns |
+| PBF Standard | Typed `FieldValueData` in `StandardBlockBuilder` |
+
+When a string representation is required, handle all `FieldType` variants:
 
 - `I64`, `U64`, `F64` → numeric string
 - `String` → direct value
@@ -581,14 +622,26 @@ should handle all `FieldType` variants:
 
 ### 13.1 Zero-alloc enumeration
 
-`Field.Children()` returns `FieldChildEnumerable` and `Field.Descendants()` returns
-`FieldDescendantEnumerable`. Both types expose a **public non-interface**
-`GetEnumerator()` that returns a `ref struct`:
+`Field.Children(bool materialize)` returns `FieldChildEnumerable` and
+`Field.Descendants(bool materialize)` returns `FieldDescendantEnumerable`.
+Both types expose a **public non-interface** `GetEnumerator()` that returns a `ref struct`.
+The `materialize` argument is **required** (no default) — pass `true` for full-tree export,
+`false` when lazy containers must stay unpopulated.
+
+The same rule applies to packet-level lookups used by column exporters:
+
+| Packet API | Typical exporter choice |
+|------------|-------------------------|
+| `packet.TryGetFieldValue(id, out value, materialize:)` | `true` — CSV columns may reference lazy fields |
+| `packet.TryGetNextFieldValue(id, ref cookie, out value, materialize:)` | `true` — multi-occurrence export must see the full tree |
+| `packet.FieldCount(materialize:)` / `IterFieldsDfs` / `IterFieldsFlat` | `true` when exporting the complete tree |
 
 | Method | Return type | Enumerator type | Allocation |
 |--------|-------------|-----------------|------------|
-| `field.Children()` | `FieldChildEnumerable` | `ref struct FieldChildEnumerator` | zero |
-| `field.Descendants()` | `FieldDescendantEnumerable` | `ref struct FieldDescendantEnumerator` | zero (inline stack ≤ 16 deep) |
+| `field.Children(materialize:)` | `FieldChildEnumerable` | `ref struct FieldChildEnumerator` | zero |
+| `field.Descendants(materialize:)` | `FieldDescendantEnumerable` | `ref struct FieldDescendantEnumerator` | zero (inline stack ≤ 16 deep) |
+| `field.HasChildren(materialize:)` | `bool` | — | — |
+| `field.ChildCount(materialize:)` | `ushort` | — | — |
 
 C# `foreach` uses **duck-typed pattern matching** — it calls the public `GetEnumerator()`
 method, not the explicit `IEnumerable<Field>` interface. This resolves to the
@@ -599,27 +652,30 @@ no heap allocation on the hot path.
 
 | Scenario | API to use | Why |
 |----------|-----------|-----|
-| Format requires nesting (JSON, PBF rows, indented text) | Recursive `field.Children()` | Each level generates its own output; depth is tracked via call stack |
-| Flat DFS over all descendants (columnar PBF, field lookup) | `field.Descendants()` | Single `FieldDescendantEnumerator` with `InlineStack16`; avoids per-level stack frame growth |
+| Format requires nesting (JSON, PBF rows, indented text) | Recursive `field.Children(materialize: true)` | Each level generates its own output; depth is tracked via call stack |
+| Flat DFS over all descendants (columnar PBF, field lookup) | `field.Descendants(materialize: true)` | Single `FieldDescendantEnumerator` with `InlineStack16`; avoids per-level stack frame growth |
+| Eager-only walk (no lazy population) | `Children`/`HasChildren` with `materialize: false` | Leaves unpopulated lazy containers empty |
 
 ### 13.3 Rules
 
-1. **Always iterate via `foreach (Field child in x.Children())` or
-   `foreach (Field f in x.Descendants())`** — the duck-typed path calls the
+1. **Always iterate via `foreach (Field child in x.Children(materialize: …))` or
+   `foreach (Field f in x.Descendants(materialize: …))`** — the duck-typed path calls the
    zero-alloc `ref struct` enumerator.
 2. **Never assign to `IEnumerable<Field>`** — this forces boxing through the
    allocating `BoxedEnumerator` class.
-3. **Never call LINQ on `Children()` / `Descendants()`** — LINQ operates on
+3. **Never call LINQ on `Children` / `Descendants`** — LINQ operates on
    `IEnumerable<T>` and boxes the enumerator.
-4. **Use `Descendants()` when depth information is not required** — simpler code
+4. **Use `Descendants` when depth information is not required** — simpler code
    and avoids recursion.
-5. **Use `ChildCount`** when you need the number of direct children without iterating.
+5. **Use `ChildCount(materialize:)`** when you need the number of direct children without iterating.
+6. **Always pass `materialize` explicitly** — there is no default on `Field`, `MutField`, or `Packet` materialize APIs.
+7. **Prefer `materialize: true` for exporters** — incomplete lazy trees produce incomplete output. Use `false` only for intentional eager-only diagnostics.
 
 ---
 
 ## 14. Dispose Pattern
 
-### 13.1 Implementation
+### 14.1 Implementation
 
 Exporters implement `IDisposable` by delegating to `OnFinish()`:
 
@@ -632,7 +688,7 @@ This ensures:
 - If `OnFinish()` was already called, the double-finish guard prevents duplicate work.
 - Resources (streams, buffers) are always released.
 
-### 13.2 Rules
+### 14.2 Rules
 
 1. `Dispose()` **must** delegate to `OnFinish()` — do not implement separate cleanup.
 2. `OnFinish()` must be idempotent — safe to call multiple times.
@@ -685,6 +741,9 @@ NetworkInspector.Exporters.Tests/
   PcapngExporterTests.cs
   BlfExporterTests.cs
   PbfExporterTests.cs
+  Parquet/                           ← ParquetExporterTests
+  DuckDb/                            ← DuckDbExporterTests
+  Columnar/                          ← ColumnarPacketBatch unit tests
   TestHarness.cs                     ← Shared protocol stack singleton
   TestDir.cs                         ← Temporary directory with auto-cleanup
 ```
@@ -729,17 +788,18 @@ Where feasible, use external tools to verify exported files:
 - [ ] Implement exporter class with nested `Builder`
 - [ ] Implement appropriate listener interface (`IPacketListener` or `IFrameListener`)
 - [ ] Implement `IErrorTolerantExporter` and `IDisposable`
-- [ ] Add `WithUiName`, `WithDescription`, `WithCancellationToken`, `WithTargetPacketCount` to builder
+- [ ] Add `WithUiName`, `WithDescription`, `WithCancellationToken`, and
+      `WithTargetPacketCount` (packet exporters) or `WithTargetFrameCount` (frame exporters) to builder
 - [ ] Use `ExportOutput` for output targets (`ToFile`, `ToStream`, `ToStdout`)
 - [ ] Use lazy initialisation (open stream on first item)
 - [ ] Implement error tolerance (try/catch in HandlePacket/HandleFrame, `HandleSkip`)
 - [ ] Exporters are single-threaded; use plain reads/writes and `++` for counters (see §10)
-- [ ] Iterate fields with `foreach (Field f in x.Children())` or `foreach (Field f in x.Descendants())` — never assign to `IEnumerable<Field>` or use LINQ (see §13)
+- [ ] Iterate fields with `foreach (Field f in x.Children(materialize: …))` or `foreach (Field f in x.Descendants(materialize: …))` — never assign to `IEnumerable<Field>` or use LINQ (see §13)
 - [ ] Implement `IsFinished` with full compound condition
 - [ ] Implement `Dispose()` delegating to `OnFinish()`
 - [ ] Call `_Buffer.Return()` and `_Output?.Dispose()` in cleanup
 - [ ] Create `README.md` in the exporter folder
 - [ ] Add XML doc comments to all public members
-- [ ] Write tests for all scenarios in §15.2
+- [ ] Write tests for all scenarios in §16.2
 - [ ] Add external validation tests where feasible
 - [ ] Register in project file if needed

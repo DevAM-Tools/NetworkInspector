@@ -1,0 +1,30 @@
+<!-- Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root. -->
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>NetworkInspector.Filter</RootNamespace>
+    <Description>
+      JIT-compiled packet filter expressions for NetworkInspector.
+      Presence-index pruning, bounded flank state, and subtree scope ($Name[i?]{Filter}).
+    </Description>
+    <PackageTags>network;filter;packet;jit;display-filter</PackageTags>
+    <PackageReadmeFile>FILTER_GUIDE.md</PackageReadmeFile>
+    <!-- Runtime codegen (expression trees / DynamicMethod) — not AOT/trim compatible. -->
+    <IsAotCompatible>false</IsAotCompatible>
+    <IsTrimmable>false</IsTrimmable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="FILTER_GUIDE.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="NetworkInspector.Filter.Tests" />
+    <InternalsVisibleTo Include="NetworkInspector.Sessions" />
+    <InternalsVisibleTo Include="NetworkInspector.CLI.Core" />
+    <InternalsVisibleTo Include="NetworkInspector.Profiling" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\NetworkInspector.Core\NetworkInspector.Core.csproj" />
+  </ItemGroup>
+</Project>

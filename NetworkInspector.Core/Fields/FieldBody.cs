@@ -9,11 +9,13 @@ namespace NetworkInspector.Core.Fields;
 [StructLayout(LayoutKind.Sequential)]
 internal struct FieldBody
 {
+    #region Fields
+
     internal const ushort NullIndex = ushort.MaxValue;
 
     private FieldValue _Value;
     private LazyString _CustomText;
-    private readonly FieldId _FieldId;
+    internal readonly FieldId FieldId { get; }
     private ushort _ParentIndex;
     private ushort _FirstChildIndex;
     private ushort _LastChildIndex;
@@ -22,8 +24,16 @@ internal struct FieldBody
     private ushort _ChildCount;
 
     // Lazy field support: 1-based index into Packet._LazyPopulators array.
-    // 0 = not lazy (or already materialized). After materialization, reset to 0.
-    private ushort _LazyIndex;
+    // 0 = not lazy (or already materialized). Bit 15 set = materialization in progress.
+    // Stored as int so Interlocked.CompareExchange works on the volatile field without Unsafe.As.
+    private volatile int _LazyIndex;
+
+    /// <summary>Bit set on <see cref="_LazyIndex"/> while a lazy field is being materialized.</summary>
+    internal const ushort LazyIndexMaterializingBit = 0x8000;
+
+    #endregion
+
+    #region Constructors
 
     /// <summary>Creates a field body node with a value.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -31,7 +41,7 @@ internal struct FieldBody
     {
         _Value = value;
         _CustomText = default;
-        _FieldId = fieldId;
+        FieldId = fieldId;
         _ParentIndex = NullIndex;
         _FirstChildIndex = NullIndex;
         _LastChildIndex = NullIndex;
@@ -47,7 +57,7 @@ internal struct FieldBody
     {
         _Value = FieldValue.None;
         _CustomText = default;
-        _FieldId = fieldId;
+        FieldId = fieldId;
         _ParentIndex = NullIndex;
         _FirstChildIndex = NullIndex;
         _LastChildIndex = NullIndex;
@@ -57,11 +67,8 @@ internal struct FieldBody
         _LazyIndex = 0;
     }
 
-    internal readonly FieldId FieldId
-    {
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _FieldId;
-    }
+    #endregion
+
     internal FieldValue Value
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -69,6 +76,7 @@ internal struct FieldBody
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         set => _Value = value;
     }
+
     /// <summary>
     /// Optional custom display text. Check <see cref="LazyString.IsNull"/> for absence.
     /// <para>
@@ -101,6 +109,15 @@ internal struct FieldBody
         }
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal void SetCustomText(LazyString text) => _CustomText = text;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal void ClearCustomText() => _CustomText = default;
+
+    #region Tree links
+
+    /// <summary>Index of the parent field in the packet tree, or <see cref="NullIndex"/> if none.</summary>
     internal ushort ParentIndex
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -108,6 +125,8 @@ internal struct FieldBody
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         set => _ParentIndex = value;
     }
+
+    /// <summary>Index of the first child field, or <see cref="NullIndex"/> if this node has no children.</summary>
     internal ushort FirstChildIndex
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -115,6 +134,8 @@ internal struct FieldBody
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         set => _FirstChildIndex = value;
     }
+
+    /// <summary>Index of the last child field, or <see cref="NullIndex"/> if this node has no children.</summary>
     internal ushort LastChildIndex
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -122,6 +143,8 @@ internal struct FieldBody
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         set => _LastChildIndex = value;
     }
+
+    /// <summary>Index of the next sibling field, or <see cref="NullIndex"/> if this is the last sibling.</summary>
     internal ushort NextIndex
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -129,6 +152,8 @@ internal struct FieldBody
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         set => _NextIndex = value;
     }
+
+    /// <summary>Index of the previous sibling field, or <see cref="NullIndex"/> if this is the first sibling.</summary>
     internal ushort PrevIndex
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -136,6 +161,8 @@ internal struct FieldBody
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         set => _PrevIndex = value;
     }
+
+    /// <summary>Number of direct child fields linked from this node.</summary>
     internal ushort ChildCount
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -144,10 +171,6 @@ internal struct FieldBody
         set => _ChildCount = value;
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal void SetCustomText(LazyString text) => _CustomText = text;
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal void ClearCustomText() => _CustomText = default;
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void IncrementChildCount()
     {
@@ -158,6 +181,8 @@ internal struct FieldBody
         _ChildCount++;
     }
 
+    #endregion
+
     #region Lazy field support
 
     /// <summary>
@@ -167,18 +192,59 @@ internal struct FieldBody
     internal ushort LazyIndex
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        readonly get => _LazyIndex;
+        readonly get => (ushort)_LazyIndex;
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         set => _LazyIndex = value;
     }
 
     /// <summary>Whether this field needs materialization (lazy and not yet populated).</summary>
-    internal readonly bool NeedsMaterialization
+    internal bool NeedsMaterialization
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _LazyIndex > 0;
+        get
+        {
+            ushort lazyIndex = ReadLazyIndexVolatile();
+            return lazyIndex > 0 && (lazyIndex & LazyIndexMaterializingBit) == 0;
+        }
     }
 
+    /// <summary>Volatile read of the raw lazy-index word (includes materializing marker).</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal ushort ReadLazyIndexVolatile() => (ushort)_LazyIndex;
+
+    /// <summary>Whether another thread is currently materializing this lazy field.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal bool IsLazyMaterializationInProgress() =>
+        (ReadLazyIndexVolatile() & LazyIndexMaterializingBit) != 0;
+
+    /// <summary>
+    /// Atomically claims lazy materialization for this field. Returns the 1-based populator index on success.
+    /// </summary>
+    internal bool TryClaimLazyMaterialization(out ushort lazyPopulatorIndex)
+    {
+        int current = _LazyIndex;
+        if (current == 0 || (current & LazyIndexMaterializingBit) != 0)
+        {
+            lazyPopulatorIndex = 0;
+            return false;
+        }
+
+        int materializing = current | LazyIndexMaterializingBit;
+        if (Interlocked.CompareExchange(ref _LazyIndex, materializing, current) != current)
+        {
+            lazyPopulatorIndex = 0;
+            return false;
+        }
+
+        lazyPopulatorIndex = (ushort)current;
+        return true;
+    }
+
+    /// <summary>Marks lazy materialization complete (populator index cleared).</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal void FinishLazyMaterialization() => _LazyIndex = 0;
+
     internal void AppendCustomText(LazyString suffix) => _CustomText = !_CustomText.IsNull ? _CustomText.Append(suffix) : suffix;
+
     #endregion
 }

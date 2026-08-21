@@ -3,10 +3,11 @@
 namespace NetworkInspector.Core;
 
 /// <summary>
-/// Validates protocol and field names. Names must be C-style identifiers
-/// optionally separated by dots (e.g., "ip.src", "tcp.flags.syn").
+/// Validates protocol and field names. Names must be ASCII C-style identifiers
+/// (<c>[A-Za-z_][A-Za-z0-9_]*</c>) optionally separated by dots (e.g., "ip.src", "tcp.flags.syn").
+/// Unicode letters and digits are rejected so filters, generated identifiers, and config keys stay ASCII.
 /// </summary>
-internal static class NameValidation
+public static class NameValidation
 {
     #region Public Validation API
 
@@ -14,8 +15,9 @@ internal static class NameValidation
     /// Checks whether the given name is a valid protocol/field identifier.
     /// </summary>
     /// <param name="name">The name to validate.</param>
-    /// <returns>True if the name is valid.</returns>
-    internal static bool IsValidName(ReadOnlySpan<char> name)
+    /// <returns>True if the name is a non-empty ASCII C-style identifier, optionally dot-separated.</returns>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static bool IsValidName(ReadOnlySpan<char> name)
     {
         if (name.IsEmpty)
         {
@@ -28,8 +30,8 @@ internal static class NameValidation
             char c = name[i];
             if (expectIdentStart)
             {
-                // First character of segment: letter or underscore
-                if (!char.IsLetter(c) && c != '_')
+                // First character of segment: ASCII letter or underscore (classic C identifier).
+                if (!_IsAsciiLetter(c) && c != '_')
                 {
                     return false;
                 }
@@ -40,7 +42,7 @@ internal static class NameValidation
                 // Dot separator — next must be ident start
                 expectIdentStart = true;
             }
-            else if (!char.IsLetterOrDigit(c) && c != '_')
+            else if (!_IsAsciiLetterOrDigit(c) && c != '_')
             {
                 return false;
             }
@@ -52,12 +54,13 @@ internal static class NameValidation
 
     /// <summary>
     /// Checks whether the given name is a valid setting group name.
-    /// Group names follow the same dot-separated C-style identifier rules as
+    /// Group names follow the same dot-separated ASCII C-style identifier rules as
     /// protocol/field names, but are additionally restricted to lowercase letters,
     /// digits, underscores, and dots — no uppercase letters allowed.
     /// The empty string is a valid group name (the default/root group).
     /// </summary>
-    internal static bool IsValidGroupName(ReadOnlySpan<char> name)
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static bool IsValidGroupName(ReadOnlySpan<char> name)
     {
         // Empty string is the default group — always valid.
         if (name.IsEmpty)
@@ -86,7 +89,8 @@ internal static class NameValidation
     /// <summary>
     /// Checks whether the given UI name is valid (no control characters or line breaks).
     /// </summary>
-    internal static bool IsValidUiName(ReadOnlySpan<char> name)
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static bool IsValidUiName(ReadOnlySpan<char> name)
     {
         if (name.IsEmpty)
         {
@@ -103,6 +107,25 @@ internal static class NameValidation
 
         return true;
     }
+
+    #endregion
+
+    #region Private helpers
+
+    /// <summary>
+    /// ASCII <c>A-Z</c> / <c>a-z</c> only. <see cref="char.IsLetter(char)"/> accepts Unicode letters
+    /// and would disagree with the documented C-style alphabet.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool _IsAsciiLetter(char c) =>
+        (uint)(c - 'A') <= 'Z' - 'A' || (uint)(c - 'a') <= 'z' - 'a';
+
+    /// <summary>
+    /// ASCII letter or <c>0-9</c>. Full-width and other Unicode digits are rejected.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool _IsAsciiLetterOrDigit(char c) =>
+        _IsAsciiLetter(c) || (uint)(c - '0') <= 9;
 
     #endregion
 }

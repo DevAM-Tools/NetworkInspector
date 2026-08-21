@@ -17,6 +17,39 @@ internal sealed class DispatchCacheHelperTests
     }
 
     [Test]
+    public async Task BuildU64DelegateCache_NegativeDomainSize_ThrowsArgumentOutOfRangeException()
+    {
+        using Stack stack = _BuildStackWithU64Table();
+
+        ArgumentOutOfRangeException ex = Assert.Throws<ArgumentOutOfRangeException>(
+            () => stack.BuildU64DelegateCache(ProtocolTableId.Invalid, -1));
+
+        await Assert.That(ex.ParamName).IsEqualTo("domainSize");
+    }
+
+    [Test]
+    public async Task BuildU64DelegateCache_ZeroDomainSize_ThrowsArgumentOutOfRangeException()
+    {
+        using Stack stack = _BuildStackWithU64Table();
+
+        ArgumentOutOfRangeException ex = Assert.Throws<ArgumentOutOfRangeException>(
+            () => stack.BuildU64DelegateCache(ProtocolTableId.Invalid, 0));
+
+        await Assert.That(ex.ParamName).IsEqualTo("domainSize");
+    }
+
+    [Test]
+    public async Task BuildU64DelegateCache_DomainSizeAboveMax_ThrowsArgumentOutOfRangeException()
+    {
+        using Stack stack = _BuildStackWithU64Table();
+
+        ArgumentOutOfRangeException ex = Assert.Throws<ArgumentOutOfRangeException>(
+            () => stack.BuildU64DelegateCache(ProtocolTableId.Invalid, 65_537));
+
+        await Assert.That(ex.ParamName).IsEqualTo("domainSize");
+    }
+
+    [Test]
     public async Task BuildU64DelegateCache_RegisteredKey_ResolvesDelegate()
     {
         using Stack stack = _BuildStackWithU64Table(out ProtocolTableId tableId, out ProtocolId childId);
@@ -58,6 +91,17 @@ internal sealed class DispatchCacheHelperTests
 
         await Assert.That(cache.Length).IsEqualTo(256);
         await Assert.That(cache[0]).IsNull();
+    }
+
+    [Test]
+    public async Task BuildU64IdCache_NegativeDomainSize_ThrowsArgumentOutOfRangeException()
+    {
+        using Stack stack = _BuildStackWithU64Table();
+
+        ArgumentOutOfRangeException ex = Assert.Throws<ArgumentOutOfRangeException>(
+            () => stack.BuildU64IdCache(ProtocolTableId.Invalid, -1));
+
+        await Assert.That(ex.ParamName).IsEqualTo("domainSize");
     }
 
     [Test]

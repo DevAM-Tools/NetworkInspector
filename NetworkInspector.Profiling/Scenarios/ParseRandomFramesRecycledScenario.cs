@@ -47,7 +47,7 @@ internal sealed class ParseRandomFramesRecycledScenario : IProfilingScenario
     private Packet? _RecyclePacket;
 
     /// <summary>Counter for unique <see cref="PacketId"/> values across all iterations.</summary>
-    private long _PacketCounter;
+    private int _PacketCounter;
 
     /// <summary>Creates a recycled parse profiling scenario.</summary>
     /// <param name="materialize">
@@ -96,7 +96,8 @@ internal sealed class ParseRandomFramesRecycledScenario : IProfilingScenario
         Stack stack = _Stack!;
         Frame[] frames = _Frames!;
         Packet recycle = _RecyclePacket!;
-        long counter = _PacketCounter;
+        int counter = _PacketCounter;
+        ArrayIndexIdRange.ThrowIfInvalidNextIndex(counter + _BatchSize - 1, "packet");
 
         // Hot path: reuse the same Packet object for every frame.
         // Each call to ParseFrame(recycle, ...) invokes PrepareForReuse internally,
@@ -106,7 +107,7 @@ internal sealed class ParseRandomFramesRecycledScenario : IProfilingScenario
         {
             for (int i = 0; i < _BatchSize; i++)
             {
-                Packet.ParseFrame(recycle, new PacketId(checked((int)(counter + i))), stack, frames[i]);
+                Packet.ParseFrame(recycle, new PacketId(counter + i), stack, frames[i]);
                 recycle.MaterializeAll();
             }
         }
@@ -114,7 +115,7 @@ internal sealed class ParseRandomFramesRecycledScenario : IProfilingScenario
         {
             for (int i = 0; i < _BatchSize; i++)
             {
-                Packet.ParseFrame(recycle, new PacketId(checked((int)(counter + i))), stack, frames[i]);
+                Packet.ParseFrame(recycle, new PacketId(counter + i), stack, frames[i]);
             }
         }
 

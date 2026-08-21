@@ -43,9 +43,9 @@ internal sealed class CanMessageEntry
         get; set;
     }
 
-    /// <summary>Optional reference to a Signal PDU definition for payload decoding.</summary>
-    [JsonPropertyName("signal_pdu_id")]
-    public uint? SignalPduId
+    /// <summary>Optional reference to a signal-message dispatch key for payload decoding.</summary>
+    [JsonPropertyName("signal_message_id")]
+    public uint? SignalMessageId
     {
         get; set;
     }

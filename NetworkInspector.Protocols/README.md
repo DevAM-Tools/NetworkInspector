@@ -44,7 +44,7 @@ Current built-ins include:
 - Network: IPv4, IPv6, ARP, ICMPv4, ICMPv6.
 - Transport: TCP, UDP.
 - Application: DNS, DHCPv4, DHCPv6, HTTP/1.x, HTTP/2, TLS, DTLS, WebSocket, JSON, Text.
-- Automotive and bus: CAN (classic/FD/XL), FlexRay, LIN, SOME/IP, PDU Transport, Signal PDU.
+- Automotive and bus: CAN (classic/FD/XL), FlexRay, LIN, SOME/IP, PDU Transport, Signal messages (JSON).
 - Fallback: Data.
 
 ## Full Built-In Protocol List
@@ -71,7 +71,7 @@ Current built-ins include:
 | 18 | LinProtocol | Link (Automotive) |
 | 19 | LlcProtocol | Link |
 | 20 | PduTransportProtocol | Automotive |
-| 21 | SignalPduProtocol | Automotive |
+| 21 | Signal messages via `SignalMessageRegistration` | Automotive (per-message protocols) |
 | 22 | Sll2Protocol | Link |
 | 23 | SllProtocol | Link |
 | 24 | SomeIpProtocol | Application |

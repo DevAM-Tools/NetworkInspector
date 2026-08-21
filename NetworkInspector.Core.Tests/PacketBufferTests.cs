@@ -46,9 +46,11 @@ internal sealed class PacketBufferTests
         await Assert.That(packet.Buffer(0)!.Value.Length).IsEqualTo(frameData.Length);
         await Assert.That(buf1).IsNotNull();
         await Assert.That(buf2).IsNotNull();
-        await Assert.That(buf1!.Value.ToArray()).IsEqualTo(extra1);
-        await Assert.That(buf2!.Value.ToArray()).IsEqualTo(extra2);
+        await Assert.That(buf1!.Value.ToArray()).IsEquivalentTo(extra1);
+        await Assert.That(buf2!.Value.ToArray()).IsEquivalentTo(extra2);
         await Assert.That(packet.Buffer(99)).IsNull();
+        await Assert.That(packet.Buffer(-1)).IsNull();
+        await Assert.That(packet.Buffer(int.MinValue)).IsNull();
     }
 
     [Test]
@@ -75,8 +77,8 @@ internal sealed class PacketBufferTests
         Frame frame = _MakeFrame(stack, FrameBuilders.GenerateStaticUdpFrame(128));
         Packet packet = Packet.ParseFrame(new PacketId(1), stack, frame, stack.GetProtocolId("eth")!.Value);
 
-        int eager = packet.FieldCount(materialize: false);
-        int materialized = packet.FieldCount(materialize: true);
+        int eager = packet.FieldCount(materialize: false); // materialize: false — current materialized count only
+        int materialized = packet.FieldCount(materialize: true); // materialize: true — count after full materialization
         await Assert.That(eager).IsGreaterThan(0);
         await Assert.That(materialized).IsGreaterThanOrEqualTo(eager);
     }
@@ -124,7 +126,7 @@ internal sealed class PacketBufferTests
 
         FieldId ethType = stack.GetFieldId("eth.type")!.Value;
         FieldLookupCookie cookie = default;
-        bool found = packet.TryGetNextFieldValue(ethType, ref cookie, out FieldValue value, materialize: true);
+        bool found = packet.TryGetNextFieldValue(ethType, ref cookie, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
         await Assert.That(found).IsTrue();
         await Assert.That(value.Type).IsNotEqualTo(FieldType.None);
     }
@@ -139,7 +141,7 @@ internal sealed class PacketBufferTests
 
         FieldLookupCookie cookie = default;
         bool found = packet.TryGetNextFieldValue(
-            stack.PacketErrorFieldId, ref cookie, out FieldValue err, materialize: true);
+            stack.PacketErrorFieldId, ref cookie, out FieldValue err, materialize: true); // materialize: true — need complete field tree for assertion
         await Assert.That(found).IsTrue();
         err.Data.TryGetAsString(out string msg);
         await Assert.That(msg.Contains("parse failed", StringComparison.Ordinal)).IsTrue();
@@ -192,7 +194,7 @@ internal sealed class PacketBufferTests
         Frame frame = _MakeFrame(stack, FrameBuilders.GenerateStaticUdpFrame(64));
         Packet packet = Packet.ParseFrame(new PacketId(1), stack, frame, stack.GetProtocolId("eth")!.Value);
         packet.SetFieldError(0, "field error");
-        await Assert.That(packet.FieldCount(materialize: true)).IsGreaterThan(1);
+        await Assert.That(packet.FieldCount(materialize: true)).IsGreaterThan(1); // materialize: true — count after full materialization
     }
 
     [Test]
@@ -209,12 +211,26 @@ internal sealed class PacketBufferTests
     }
 
     [Test]
+    public async Task Buffer_NegativeIndex_ReturnsNull()
+    {
+        using Stack stack = _BuildStack();
+        Frame frame = _MakeFrame(stack, FrameBuilders.GenerateStaticUdpFrame(64));
+        Packet packet = Packet.ParseFrame(new PacketId(1), stack, frame, stack.GetProtocolId("eth")!.Value);
+
+        ReadOnlyMemory<byte>? negative = packet.Buffer(-1);
+        ReadOnlyMemory<byte>? minValue = packet.Buffer(int.MinValue);
+
+        await Assert.That(negative).IsNull();
+        await Assert.That(minValue).IsNull();
+    }
+
+    [Test]
     public async Task FieldCount_AfterSeal_UsesVolatilePath()
     {
         using Stack stack = _BuildStack();
         Frame frame = _MakeFrame(stack, FrameBuilders.GenerateStaticUdpFrame(128));
         Packet packet = Packet.ParseFrame(new PacketId(1), stack, frame, stack.GetProtocolId("eth")!.Value);
-        int count = packet.FieldCount();
+        int count = packet.FieldCount(materialize: false); // materialize: false — current materialized count only
         await Assert.That(count).IsGreaterThan(0);
         await Assert.That(packet.Info.Length).IsGreaterThan(0);
     }

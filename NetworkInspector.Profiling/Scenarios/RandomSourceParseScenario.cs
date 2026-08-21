@@ -65,9 +65,11 @@ internal sealed class RandomSourceParseScenario : IProfilingScenario
         source.Start(sourceId, stack.FrameInterfaceRegistry);
 
         int packetId = 0;
-        while (source.NextFrame() is { } frame)
+        Frame? next;
+        while ((next = source.NextFrame()) is not null)
         {
-            Packet packet = Packet.ParseFrame(packetId++, stack, frame);
+            Frame frame = next.Value;
+            Packet packet = Packet.ParseFrame(new PacketId(packetId++), stack, frame);
             packet.MaterializeAll();
         }
     }

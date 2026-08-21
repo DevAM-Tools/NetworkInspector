@@ -85,8 +85,8 @@ public interface IStack
     /// Field alias names (e.g., <c>"eth.addr"</c>, <c>"ip.addr"</c>, <c>"udp.port"</c>) are
     /// <b>never</b> resolved by this method by design; the canonical field namespace and the
     /// alias namespace are independent. Use <see cref="GetFieldAliasGroupId(string)"/> to
-    /// resolve alias names. This separation guarantees value-cache, indexing, and per-packet
-    /// field-lookup paths see only canonical fields and never accidentally observe an alias
+    /// resolve alias names. This separation keeps indexing and per-packet
+    /// field-lookup paths on canonical fields only and never accidentally observes an alias
     /// fallback.
     /// </para>
     /// </summary>
@@ -243,10 +243,12 @@ public interface IStack
     #region Settings Access
 
     /// <summary>
-    /// Read-only view of the settings manager.
-    /// Provides access to all registered settings, groups, and typed accessors.
+    /// Zero-allocation read-only view of the settings manager.
+    /// Keep the compile-time type as <see cref="ReadOnlySettingsManagerView"/> or pass it to a
+    /// generic <c>where TSettings : IReadOnlySettingsManager</c> API. Assigning this value to
+    /// <see cref="IReadOnlySettingsManager"/> boxes.
     /// </summary>
-    IReadOnlySettingsManager Settings
+    ReadOnlySettingsManagerView Settings
     {
         get;
     }

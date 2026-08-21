@@ -81,6 +81,23 @@ internal sealed class IPv6AddressTests
         await Assert.That(addr).IsEqualTo(expected);
     }
 
+    [Test]
+    public async Task TryFromBytes_ShortSpan_ReturnsFalse()
+    {
+        await Assert.That(IPv6Address.TryFromBytes(ReadOnlySpan<byte>.Empty, out IPv6Address address)).IsFalse();
+        await Assert.That(address).IsEqualTo(default(IPv6Address));
+    }
+
+    [Test]
+    public async Task FromBytes_ShortSpan_Throws()
+    {
+        await Assert.That(() =>
+        {
+            IPv6Address _ = IPv6Address.FromBytes(ReadOnlySpan<byte>.Empty);
+            return Task.CompletedTask;
+        }).Throws<ArgumentException>();
+    }
+
     // === GetGroups ===
 
     [Test]
@@ -138,6 +155,17 @@ internal sealed class IPv6AddressTests
         bool ok = addr.TryFormat(buf, out int written, default, null);
         await Assert.That(ok).IsFalse();
         await Assert.That(written).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task TryFormat_MinimalBuffer_FitsLoopback()
+    {
+        await Assert.That(IPv6Address.TryParse("::1", out IPv6Address addr)).IsTrue();
+        char[] buffer = new char[3];
+        bool ok = addr.TryFormat(buffer, out int written, default, null);
+        await Assert.That(ok).IsTrue();
+        await Assert.That(written).IsEqualTo(3);
+        await Assert.That(new string(buffer, 0, written)).IsEqualTo("::1");
     }
 
     [Test]

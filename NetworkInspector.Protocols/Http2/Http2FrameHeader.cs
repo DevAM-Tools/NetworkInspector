@@ -6,42 +6,16 @@ namespace NetworkInspector.Protocols.Http2;
 /// HTTP/2 frame header (RFC 7540 Section 4.1).
 /// 9-byte fixed header: Length(3) + Type(1) + Flags(1) + R(1 bit) + StreamId(31 bits).
 /// </summary>
-internal readonly struct Http2FrameHeader
+internal readonly record struct Http2FrameHeader(int Length, byte Type, byte Flags, uint StreamId)
 {
+    #region Constants
+
     /// <summary>Size of the HTTP/2 frame header in bytes.</summary>
     public const int Size = 9;
 
-    /// <summary>Payload length (24-bit, not including the 9-byte header).</summary>
-    public int Length
-    {
-        get;
-    }
+    #endregion
 
-    /// <summary>Frame type byte (DATA=0, HEADERS=1, etc.).</summary>
-    public byte Type
-    {
-        get;
-    }
-
-    /// <summary>Frame flags byte (type-specific).</summary>
-    public byte Flags
-    {
-        get;
-    }
-
-    /// <summary>Stream identifier (31-bit, high bit reserved and masked off).</summary>
-    public uint StreamId
-    {
-        get;
-    }
-
-    private Http2FrameHeader(int length, byte type, byte flags, uint streamId)
-    {
-        Length = length;
-        Type = type;
-        Flags = flags;
-        StreamId = streamId;
-    }
+    #region Parsing
 
     /// <summary>
     /// Tries to parse the 9-byte HTTP/2 frame header from the given span.
@@ -70,10 +44,15 @@ internal readonly struct Http2FrameHeader
         return true;
     }
 
+    #endregion
+
+    #region Validation
+
     /// <summary>
     /// Checks if this looks like a valid HTTP/2 frame type (0-9 are defined in RFC 7540).
     /// Types 10-255 are extensions (also valid but less common).
     /// </summary>
-    public bool IsKnownFrameType() =>
-        Type <= 9;
+    public bool IsKnownFrameType() => Type <= 9;
+
+    #endregion
 }

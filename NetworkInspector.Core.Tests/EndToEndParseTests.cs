@@ -66,7 +66,7 @@ internal sealed class EndToEndParseTests
             Packet packet = _ParseTestFrame(stack, frameData, ethId);
 
             bool isFinalized = packet.IsFinalized;
-            int fieldCountBeforeMaterialize = packet.FieldCount();
+            int fieldCountBeforeMaterialize = packet.FieldCount(materialize: false); // materialize: false — current materialized count only
 
             // Before materialization: root(1) + packet(1) + packet.id(1) + packet.timestamp(1)
             //   + packet.frame_source_id(1) + packet.info(1) + lazy eth container(1) = 7
@@ -74,7 +74,7 @@ internal sealed class EndToEndParseTests
             await Assert.That(fieldCountBeforeMaterialize).IsEqualTo(7);
 
             // After materialization: 7 + 3 eth fields = 10
-            int fieldCountAfterMaterialize = packet.FieldCount(materialize: true);
+            int fieldCountAfterMaterialize = packet.FieldCount(materialize: true); // materialize: true — count after full materialization
             await Assert.That(fieldCountAfterMaterialize).IsGreaterThanOrEqualTo(10);
         }
     }
@@ -99,9 +99,9 @@ internal sealed class EndToEndParseTests
 
             // Fields are under the eth container (root → packet → ... | root → eth container → fields)
             Field rootField = packet.RootField();
-            rootField.TryGetFirstChild(out Field packetContainer);
+            rootField.TryGetFirstChild(out Field packetContainer, materialize: true); // materialize: true — navigate/populate children including lazy
             packetContainer.TryGetNext(out Field ethContainer);
-            foreach (Field child in ethContainer.Children())
+            foreach (Field child in ethContainer.Children(materialize: true)) // materialize: true — navigate/populate children including lazy
             {
                 if (child.FieldId == eth.DstFieldId)
                 {
@@ -183,8 +183,8 @@ internal sealed class EndToEndParseTests
 
             Field root = packet.RootField();
             bool isRoot = root.IsRoot;
-            bool hasChildren = root.HasChildren;
-            ushort childCount = root.ChildCount;
+            bool hasChildren = root.HasChildren(materialize: true); // materialize: true — navigate/populate children including lazy
+            ushort childCount = root.ChildCount(materialize: true); // materialize: true — navigate/populate children including lazy
 
             await Assert.That(isRoot).IsTrue();
             await Assert.That(hasChildren).IsTrue();
@@ -208,12 +208,12 @@ internal sealed class EndToEndParseTests
 
             Field root = packet.RootField();
             // Root has 2 children: packet container + eth container
-            bool hasPacketContainer = root.TryGetFirstChild(out Field packetContainer);
+            bool hasPacketContainer = root.TryGetFirstChild(out Field packetContainer, materialize: true); // materialize: true — navigate/populate children including lazy
             bool hasEthContainer = packetContainer.TryGetNext(out Field ethContainer);
             bool hasThirdRootChild = ethContainer.TryGetNext(out _);
 
             // Eth container has 3 children (lazy, materialized on access)
-            bool hasFirst = ethContainer.TryGetFirstChild(out Field first);
+            bool hasFirst = ethContainer.TryGetFirstChild(out Field first, materialize: true); // materialize: true — navigate/populate children including lazy
             bool hasSecond = first.TryGetNext(out Field second);
             bool hasThird = second.TryGetNext(out Field third);
             bool hasFourth = third.TryGetNext(out _);
@@ -244,9 +244,9 @@ internal sealed class EndToEndParseTests
             Field root = packet.RootField();
             ushort rootIndex = root.StorageIndex;
             // Navigate to eth container (second child of root) and its first child
-            root.TryGetFirstChild(out Field packetContainer);
+            root.TryGetFirstChild(out Field packetContainer, materialize: true); // materialize: true — navigate/populate children including lazy
             packetContainer.TryGetNext(out Field container);
-            container.TryGetFirstChild(out Field child);
+            container.TryGetFirstChild(out Field child, materialize: true); // materialize: true — navigate/populate children including lazy
             bool hasParent = child.TryGetParent(out Field parent);
             ushort parentIndex = parent.StorageIndex;
             ushort containerIndex = container.StorageIndex;
@@ -322,11 +322,11 @@ internal sealed class EndToEndParseTests
 
             // Before materialization: root(1) + packet(1) + packet.id(1) + packet.timestamp(1)
             //   + packet.frame_source_id(1) + packet.info(1) + lazy eth container(1) = 7
-            int fieldCountLazy = packet.FieldCount();
+            int fieldCountLazy = packet.FieldCount(materialize: false); // materialize: false — current materialized count only
             await Assert.That(fieldCountLazy).IsEqualTo(7);
 
             // After materialization: 7 + 3 eth fields = 10
-            int fieldCountFull = packet.FieldCount(materialize: true);
+            int fieldCountFull = packet.FieldCount(materialize: true); // materialize: true — count after full materialization
             await Assert.That(fieldCountFull).IsGreaterThanOrEqualTo(10);
         }
     }

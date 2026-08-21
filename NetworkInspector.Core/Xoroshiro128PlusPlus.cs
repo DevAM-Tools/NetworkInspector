@@ -42,6 +42,9 @@ public struct Xoroshiro128PlusPlus
     /// <summary>Second state word (s1).</summary>
     private ulong _S1;
 
+    /// <summary>Test hook: forces the scalar bulk-fill branch in <see cref="FillBytes"/>.</summary>
+    internal static bool ForceScalarBulkFillForTesting;
+
     #endregion
 
     #region Constructor
@@ -108,6 +111,8 @@ public struct Xoroshiro128PlusPlus
     /// Returns a uniformly distributed integer in [<paramref name="minInclusive"/>, <paramref name="maxExclusive"/>).
     /// Uses Lemire's nearly-divisionless method (arXiv 1805.10941) — no modulo bias.
     /// Returns <paramref name="minInclusive"/> for degenerate or inverted ranges.
+    /// The full <see cref="int"/> domain is supported, including
+    /// <see cref="int.MinValue"/> … <see cref="int.MaxValue"/>.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public int NextRange(int minInclusive, int maxExclusive)
@@ -117,7 +122,8 @@ public struct Xoroshiro128PlusPlus
             return minInclusive;
         }
 
-        ulong range = (ulong)(maxExclusive - minInclusive);
+        // Widen before subtract: int.MinValue…int.MaxValue overflows in unchecked int arithmetic.
+        ulong range = (ulong)((long)maxExclusive - (long)minInclusive);
         ulong x = NextU64();
         // High 64 bits of (x × range) give a value uniform in [0, range).
         ulong high = Math.BigMul(x, range, out ulong low);
@@ -134,7 +140,8 @@ public struct Xoroshiro128PlusPlus
             }
         }
 
-        return minInclusive + (int)high;
+        // high ∈ [0, range) so minInclusive + high fits in int for any valid int interval.
+        return (int)((long)minInclusive + (long)high);
     }
 
     #endregion
@@ -168,11 +175,11 @@ public struct Xoroshiro128PlusPlus
             out ulong s0D, out ulong s1D);
 
         // All three paths produce identical byte sequences for the same seed.
-        if (Vector256.IsHardwareAccelerated)
+        if (!ForceScalarBulkFillForTesting && Vector256.IsHardwareAccelerated)
         {
             _FillBytesVector256(buffer, s0B, s1B, s0C, s1C, s0D, s1D);
         }
-        else if (Vector128.IsHardwareAccelerated)
+        else if (!ForceScalarBulkFillForTesting && Vector128.IsHardwareAccelerated)
         {
             _FillBytesVector128(buffer, s0B, s1B, s0C, s1C, s0D, s1D);
         }

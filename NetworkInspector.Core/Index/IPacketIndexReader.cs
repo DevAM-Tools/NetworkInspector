@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Core.Index;
 
@@ -9,9 +9,20 @@ namespace NetworkInspector.Core.Index;
 /// through this interface.
 ///
 /// <para>
-/// Intended for external consumers (listeners, tools, UI) that need to query
-/// protocol/field presence across packets without risking accidental modification
-/// of the index state.
+/// <b>Boxing:</b> <see cref="PacketIndex"/> is a class — storing it as this interface does
+/// not allocate. <see cref="PacketIndexReaderView"/> is a struct that implements this
+/// interface; casting the view, storing it in an <see cref="IPacketIndexReader"/> field, or
+/// passing it to a non-generic parameter of this type boxes. Hot-path APIs must take
+/// <c>TIndex where TIndex : IPacketIndexReader</c> (or the concrete <see cref="PacketIndex"/>)
+/// instead.
+/// </para>
+///
+/// <para>
+/// <b>Thread-safety:</b> Views returned by this interface alias the live index bitmaps.
+/// A reader may keep a view and query it while the index continues to grow; newly committed
+/// packet IDs become visible on that same view. Materializing a copy via
+/// <see cref="ReadOnlyRoaringBitmap.ToBitmap"/> or combining bitmaps with set operations
+/// is appropriate only when the index is no longer growing.
 /// </para>
 ///
 /// <para>
@@ -76,9 +87,12 @@ public interface IPacketIndexReader
     /// <summary>
     /// Gets the bitmap of packets containing a specific field by resolving
     /// the field's index group via the stack metadata.
-    /// Returns <see cref="ReadOnlyRoaringBitmap.Empty"/> if the field has no index group.
+    /// Returns <see cref="ReadOnlyRoaringBitmap.Empty"/> if the field is in range but has no index group.
     /// Use <see cref="TryGetFieldBitmap"/> when the ID may be invalid.
     /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// Thrown when <paramref name="fieldId"/> is out of range for this index's <see cref="Stack"/>.
+    /// </exception>
     ReadOnlyRoaringBitmap GetFieldBitmap(FieldId fieldId);
 
     /// <summary>

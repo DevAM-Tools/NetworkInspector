@@ -259,9 +259,9 @@ public sealed partial class HttpProtocol : IProtocol
         // lazy populator builds into, so the dispatched sub-protocol nests under the HTTP
         // container exactly as before — only the timing (eager) and context (real) change.
         ParseResult dispatchResult = _DispatchHttpBody(in container, data, isResponse, in context);
-        if (dispatchResult.IsError)
+        if (dispatchResult.TryPropagateError(out ParseResult error))
         {
-            return dispatchResult;
+            return error;
         }
 
         return data.Length;
@@ -406,11 +406,11 @@ public sealed partial class HttpProtocol : IProtocol
 
             ParseResult dispatchResult = container.TryCallNextProtocolString(
                 _ContentTypeTableId, baseType, dispatchBody, in context);
-            if (dispatchResult.IsError)
+            if (dispatchResult.TryPropagateError(out ParseResult error))
             {
-                return dispatchResult;
+                return error;
             }
-            dispatched = dispatchResult.IsSuccess && dispatchResult.Value > 0;
+            dispatched = dispatchResult.TryGetConsumed(out int consumed) && consumed > 0;
 
             // Fallback: dispatch known content types to built-in protocols
             if (!dispatched)
@@ -432,9 +432,9 @@ public sealed partial class HttpProtocol : IProtocol
 #pragma warning restore CA1308
             ParseResult upgradeResult = container.TryCallNextProtocolString(
                 _UpgradeTableId, upgradeKey, dispatchBody, in context);
-            if (upgradeResult.IsError)
+            if (upgradeResult.TryPropagateError(out ParseResult upgradeError))
             {
-                return upgradeResult;
+                return upgradeError;
             }
         }
 
@@ -858,7 +858,7 @@ public sealed partial class HttpProtocol : IProtocol
             _JsonProtocolId.IsValid)
         {
             ParseResult result = container.CallProtocol(_JsonProtocolId, body, in context);
-            return result.IsSuccess && result.Value > 0;
+            return result.TryGetConsumed(out int jsonConsumed) && jsonConsumed > 0;
         }
 
         // Text content types (text/plain, text/html, text/xml, etc.)
@@ -866,7 +866,7 @@ public sealed partial class HttpProtocol : IProtocol
             _TextProtocolId.IsValid)
         {
             ParseResult result = container.CallProtocol(_TextProtocolId, body, in context);
-            return result.IsSuccess && result.Value > 0;
+            return result.TryGetConsumed(out int textConsumed) && textConsumed > 0;
         }
 
         return false;

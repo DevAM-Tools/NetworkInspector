@@ -8,7 +8,7 @@ namespace NetworkInspector.Protocols;
 public static class ProtocolRegistration
 {
     /// <summary>
-    /// Registers all 30 standard protocols and wires up dispatch tables.
+    /// Registers all standard protocols and wires up dispatch tables.
     /// </summary>
     /// <param name="builder">The stack builder to register protocols with.</param>
     /// <remarks>
@@ -18,7 +18,7 @@ public static class ProtocolRegistration
     ///   <item><b>Network:</b> IPv4 (options + fragmentation), IPv6 (extension headers + fragmentation), ARP, ICMPv4, ICMPv6.</item>
     ///   <item><b>Transport:</b> TCP (options, stateful analysis, heuristic detection, stream reassembly for DNS-over-TCP), UDP.</item>
     ///   <item><b>Application:</b> DNS, DHCPv4, DHCPv6, TLS, DTLS, HTTP/1.x, HTTP/2 (HPACK), WebSocket, SOME/IP, JSON, Text.</item>
-    ///   <item><b>Automotive:</b> CAN (classic / FD / XL), FlexRay, LIN, PDU Transport, Signal PDU.</item>
+    /// <item><b>Automotive:</b> CAN (classic / FD / XL), FlexRay, LIN, PDU Transport, Signal messages (<see cref="SignalMessage.SignalMessageRegistration"/>).</item>
     ///   <item><b>Fallback:</b> Data (raw bytes when no specific dissector applies).</item>
     /// </list>
     /// <para>The frame protocol is auto-discovered by name "frame" during
@@ -188,10 +188,8 @@ public static class ProtocolRegistration
         ProtocolId pduTransportId = builder.RegisterProtocol(pduTransport);
         pduTransport.RegisterFields(builder, pduTransportId);
 
-        // Signal PDU — bit-level signal extraction with config-driven registration
-        SignalPduProtocol signalPdu = new();
-        ProtocolId signalPduId = builder.RegisterProtocol(signalPdu);
-        signalPdu.RegisterFields(builder, signalPduId);
+        // Signal messages — JSON-driven per-message protocols (no meta loader protocol)
+        _ = SignalMessageRegistration.Register(builder);
 
         #region TCP Heuristic Protocol Detection
         // Register the heuristic table on TCP and wire up content-based parsers.

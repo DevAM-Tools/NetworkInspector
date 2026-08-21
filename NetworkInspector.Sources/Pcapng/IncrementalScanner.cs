@@ -166,14 +166,8 @@ internal sealed class IncrementalScanner
     /// <summary>Gets the frame index built so far.</summary>
     internal FrameIndex Index => _Index;
 
-    /// <summary>Whether scanning is complete (end of file or index full).</summary>
-    internal bool IsExhausted => _Exhausted || _Index.IsFull;
-
-    /// <summary>
-    /// Whether the index reached its maximum capacity of <see cref="int.MaxValue"/> entries.
-    /// When <c>true</c>, the file contains more frames than can be indexed.
-    /// </summary>
-    internal bool IsIndexFull => _Index.IsFull;
+    /// <summary>Whether scanning is complete (end of file).</summary>
+    internal bool IsExhausted => _Exhausted;
 
     /// <summary>Gets the scanner format info.</summary>
     internal ScannerFormat Format => _Format;
@@ -593,14 +587,6 @@ internal sealed class IncrementalScanner
 
         int frameIndex = _Index.Push(frameOffset, timestampNanos);
 
-        // M4: when the index is full, stop scanning to avoid wasting CPU
-        if (frameIndex < 0)
-        {
-            _Exhausted = true;
-            frame = default;
-            return false;
-        }
-
         // Fetch the packet data via the backend.
         // For in-memory backends this is a zero-copy slice of the byte array;
         // for mmap backends it is a zero-copy window into the primary view.
@@ -749,16 +735,6 @@ internal sealed class IncrementalScanner
 
         int frameIndex = _Index.Push(frameOffset, timestampNanos);
 
-        // When the index is full, stop scanning to avoid wasting CPU.
-        // IsIndexFull / IsFrameCountTruncated on PcapSource will surface this condition
-        // to callers so they can inform the user that frame count is truncated.
-        if (frameIndex < 0)
-        {
-            _Exhausted = true;
-            frame = default;
-            return false;
-        }
-
         frame = new ScannedFrame
         {
             FrameIndex = frameIndex,
@@ -816,14 +792,6 @@ internal sealed class IncrementalScanner
         };
 
         int frameIndex = _Index.Push(frameOffset, 0);
-
-        // M4: when the index is full, stop scanning to avoid wasting CPU
-        if (frameIndex < 0)
-        {
-            _Exhausted = true;
-            frame = default;
-            return false;
-        }
 
         frame = new ScannedFrame
         {
@@ -887,14 +855,6 @@ internal sealed class IncrementalScanner
         };
 
         int frameIndex = _Index.Push(frameOffset, timestampNanos);
-
-        // M4: when the index is full, stop scanning to avoid wasting CPU
-        if (frameIndex < 0)
-        {
-            _Exhausted = true;
-            frame = default;
-            return false;
-        }
 
         frame = new ScannedFrame
         {

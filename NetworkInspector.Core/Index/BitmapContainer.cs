@@ -12,9 +12,8 @@ internal sealed class BitmapContainer : IContainer
     internal const int BitmapSize = 1024; // 1024 * 64 = 65536 bits
 
     internal readonly ulong[] Bitmap = new ulong[BitmapSize];
-    private int _Cardinality;
 
-    public int Cardinality => _Cardinality;
+    public int Cardinality { get; private set; }
 
     /// <inheritdoc cref="IContainer.Min"/>
     public ushort Min
@@ -54,7 +53,7 @@ internal sealed class BitmapContainer : IContainer
     {
         BitmapContainer copy = new();
         Array.Copy(Bitmap, copy.Bitmap, BitmapSize);
-        copy._Cardinality = _Cardinality;
+        copy.Cardinality = Cardinality;
         return copy;
     }
 
@@ -74,7 +73,7 @@ internal sealed class BitmapContainer : IContainer
         if ((Bitmap[word] & bit) == 0)
         {
             Bitmap[word] |= bit;
-            _Cardinality++;
+            Cardinality++;
         }
         return this;
     }
@@ -84,11 +83,11 @@ internal sealed class BitmapContainer : IContainer
         if (other is BitmapContainer bmp)
         {
             BitmapContainer result = new();
-            result._Cardinality = _SimdAnd(
+            result.Cardinality = _SimdAnd(
                 Bitmap, bmp.Bitmap, result.Bitmap);
 
             // Downgrade to array if sparse
-            if (result._Cardinality <= ArrayContainer.MaxCapacity)
+            if (result.Cardinality <= ArrayContainer.MaxCapacity)
             {
                 return BitmapToArray(result);
             }
@@ -103,7 +102,7 @@ internal sealed class BitmapContainer : IContainer
         if (other is BitmapContainer bmp)
         {
             BitmapContainer result = new();
-            result._Cardinality = _SimdOr(
+            result.Cardinality = _SimdOr(
                 Bitmap, bmp.Bitmap, result.Bitmap);
             return result;
         }
@@ -115,14 +114,14 @@ internal sealed class BitmapContainer : IContainer
             BitmapContainer cloneRun = new();
             Array.Copy(Bitmap, cloneRun.Bitmap, BitmapSize);
             run.SetRangesIn(cloneRun.Bitmap);
-            cloneRun._Cardinality = _PopCountAll(cloneRun.Bitmap);
+            cloneRun.Cardinality = _PopCountAll(cloneRun.Bitmap);
             return cloneRun;
         }
 
         // Clone this, add other's elements
         BitmapContainer clone = new();
         Array.Copy(Bitmap, clone.Bitmap, BitmapSize);
-        clone._Cardinality = _Cardinality;
+        clone.Cardinality = Cardinality;
 
         // Add all values from the other container into this bitmap
         if (other is ArrayContainer arr)
@@ -136,16 +135,20 @@ internal sealed class BitmapContainer : IContainer
         return clone;
     }
 
-    /// <summary>Performs AND-NOT and writes result into <paramref name="other"/>. Counts popcount.</summary>
+    /// <summary>
+    /// Returns a new container with bits set in this and not in <paramref name="other"/>.
+    /// Neither operand is mutated. For in-place AND-NOT against another
+    /// <see cref="BitmapContainer"/>, use <see cref="AndNotWith"/>.
+    /// </summary>
     public IContainer AndNot(IContainer other)
     {
         if (other is BitmapContainer bmp)
         {
             BitmapContainer result = new();
-            result._Cardinality = _SimdAndNot(
+            result.Cardinality = _SimdAndNot(
                 Bitmap, bmp.Bitmap, result.Bitmap);
 
-            if (result._Cardinality <= ArrayContainer.MaxCapacity)
+            if (result.Cardinality <= ArrayContainer.MaxCapacity)
             {
                 return BitmapToArray(result);
             }
@@ -158,8 +161,8 @@ internal sealed class BitmapContainer : IContainer
             BitmapContainer cloneRun = new();
             Array.Copy(Bitmap, cloneRun.Bitmap, BitmapSize);
             run.ClearRangesIn(cloneRun.Bitmap);
-            cloneRun._Cardinality = _PopCountAll(cloneRun.Bitmap);
-            if (cloneRun._Cardinality <= ArrayContainer.MaxCapacity)
+            cloneRun.Cardinality = _PopCountAll(cloneRun.Bitmap);
+            if (cloneRun.Cardinality <= ArrayContainer.MaxCapacity)
             {
                 return BitmapToArray(cloneRun);
             }
@@ -169,7 +172,7 @@ internal sealed class BitmapContainer : IContainer
         // Fallback: clone this and remove other's elements
         BitmapContainer clone = new();
         Array.Copy(Bitmap, clone.Bitmap, BitmapSize);
-        clone._Cardinality = _Cardinality;
+        clone.Cardinality = Cardinality;
         // Remove elements that exist in other
         if (other is ArrayContainer arr)
         {
@@ -182,12 +185,12 @@ internal sealed class BitmapContainer : IContainer
                 if ((clone.Bitmap[w] & bit) != 0)
                 {
                     clone.Bitmap[w] &= ~bit;
-                    clone._Cardinality--;
+                    clone.Cardinality--;
                 }
             }
         }
 
-        if (clone._Cardinality <= ArrayContainer.MaxCapacity)
+        if (clone.Cardinality <= ArrayContainer.MaxCapacity)
         {
             return BitmapToArray(clone);
         }
@@ -200,10 +203,10 @@ internal sealed class BitmapContainer : IContainer
         if (other is BitmapContainer bmp)
         {
             BitmapContainer result = new();
-            result._Cardinality = _SimdXor(
+            result.Cardinality = _SimdXor(
                 Bitmap, bmp.Bitmap, result.Bitmap);
 
-            if (result._Cardinality <= ArrayContainer.MaxCapacity)
+            if (result.Cardinality <= ArrayContainer.MaxCapacity)
             {
                 return BitmapToArray(result);
             }
@@ -216,8 +219,8 @@ internal sealed class BitmapContainer : IContainer
             BitmapContainer cloneRun = new();
             Array.Copy(Bitmap, cloneRun.Bitmap, BitmapSize);
             run.ToggleRangesIn(cloneRun.Bitmap);
-            cloneRun._Cardinality = _PopCountAll(cloneRun.Bitmap);
-            if (cloneRun._Cardinality <= ArrayContainer.MaxCapacity)
+            cloneRun.Cardinality = _PopCountAll(cloneRun.Bitmap);
+            if (cloneRun.Cardinality <= ArrayContainer.MaxCapacity)
             {
                 return BitmapToArray(cloneRun);
             }
@@ -227,7 +230,7 @@ internal sealed class BitmapContainer : IContainer
         // Fallback: clone this and toggle other's elements
         BitmapContainer clone = new();
         Array.Copy(Bitmap, clone.Bitmap, BitmapSize);
-        clone._Cardinality = _Cardinality;
+        clone.Cardinality = Cardinality;
         if (other is ArrayContainer arr)
         {
             for (int i = 0; i < arr.Cardinality; i++)
@@ -238,17 +241,17 @@ internal sealed class BitmapContainer : IContainer
                 if ((clone.Bitmap[w] & bit) != 0)
                 {
                     clone.Bitmap[w] &= ~bit;
-                    clone._Cardinality--;
+                    clone.Cardinality--;
                 }
                 else
                 {
                     clone.Bitmap[w] |= bit;
-                    clone._Cardinality++;
+                    clone.Cardinality++;
                 }
             }
         }
 
-        if (clone._Cardinality <= ArrayContainer.MaxCapacity)
+        if (clone.Cardinality <= ArrayContainer.MaxCapacity)
         {
             return BitmapToArray(clone);
         }
@@ -258,16 +261,16 @@ internal sealed class BitmapContainer : IContainer
     #region In-place mutation methods
 
     /// <summary>In-place AND. Returns recomputed cardinality.</summary>
-    internal void AndWith(BitmapContainer other) => _Cardinality = _SimdAndInPlace(Bitmap, other.Bitmap);
+    internal void AndWith(BitmapContainer other) => Cardinality = _SimdAndInPlace(Bitmap, other.Bitmap);
 
     /// <summary>In-place OR. Returns recomputed cardinality.</summary>
-    internal void OrWith(BitmapContainer other) => _Cardinality = _SimdOrInPlace(Bitmap, other.Bitmap);
+    internal void OrWith(BitmapContainer other) => Cardinality = _SimdOrInPlace(Bitmap, other.Bitmap);
 
     /// <summary>In-place ANDNOT. Returns recomputed cardinality.</summary>
-    internal void AndNotWith(BitmapContainer other) => _Cardinality = _SimdAndNotInPlace(Bitmap, other.Bitmap);
+    internal void AndNotWith(BitmapContainer other) => Cardinality = _SimdAndNotInPlace(Bitmap, other.Bitmap);
 
     /// <summary>In-place XOR. Returns recomputed cardinality.</summary>
-    internal void XorWith(BitmapContainer other) => _Cardinality = _SimdXorInPlace(Bitmap, other.Bitmap);
+    internal void XorWith(BitmapContainer other) => Cardinality = _SimdXorInPlace(Bitmap, other.Bitmap);
 
     #endregion
 
@@ -285,6 +288,19 @@ internal sealed class BitmapContainer : IContainer
             total += BitOperations.PopCount(bitmap[i]);
         }
         return total;
+    }
+
+    /// <summary>
+    /// Recomputes cardinality from bitmap words and downgrades to <see cref="ArrayContainer"/> when sparse.
+    /// </summary>
+    internal static IContainer FromPopcount(BitmapContainer bitmap)
+    {
+        bitmap.Cardinality = _PopCountAll(bitmap.Bitmap);
+        if (bitmap.Cardinality <= ArrayContainer.MaxCapacity)
+        {
+            return BitmapToArray(bitmap);
+        }
+        return bitmap;
     }
 
     /// <summary>
@@ -697,7 +713,7 @@ internal sealed class BitmapContainer : IContainer
     /// <summary>Converts a bitmap container to an array container by extracting all set bits.</summary>
     internal static ArrayContainer BitmapToArray(BitmapContainer bmp)
     {
-        ushort[] values = new ushort[bmp._Cardinality];
+        ushort[] values = new ushort[bmp.Cardinality];
         int idx = 0;
         for (int i = 0; i < BitmapSize; i++)
         {

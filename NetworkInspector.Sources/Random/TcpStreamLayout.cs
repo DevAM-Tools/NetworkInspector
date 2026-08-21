@@ -22,51 +22,30 @@ internal readonly record struct TcpFrameLocation(int StreamIndex, int LocalFrame
 /// making the layout uniform and trivially indexable.
 /// </para>
 /// </summary>
-internal readonly struct TcpStreamLayout
+internal readonly record struct TcpStreamLayout
 {
     #region Properties
 
     /// <summary>Number of handshake frames per connection (0 or 3).</summary>
-    internal int HandshakeFrames
-    {
-        get;
-    }
+    internal int HandshakeFrames { get; }
 
     /// <summary>Number of data frames per connection.</summary>
-    internal int DataFrames
-    {
-        get;
-    }
+    internal int DataFrames { get; }
 
     /// <summary>Number of teardown frames per connection (0 or 4).</summary>
-    internal int TeardownFrames
-    {
-        get;
-    }
+    internal int TeardownFrames { get; }
 
     /// <summary>Total frames per connection (handshake + data + teardown).</summary>
-    internal int FramesPerConnection
-    {
-        get;
-    }
+    internal int FramesPerConnection { get; }
 
     /// <summary>Number of concurrent TCP connections.</summary>
-    internal int StreamCount
-    {
-        get;
-    }
+    internal int StreamCount { get; }
 
     /// <summary>Total frames across all connections.</summary>
-    internal int TotalFrameCount
-    {
-        get;
-    }
+    internal int TotalFrameCount { get; }
 
     /// <summary>Whether frames are interleaved round-robin across connections.</summary>
-    internal bool Interleaved
-    {
-        get;
-    }
+    internal bool Interleaved { get; }
 
     #endregion
 
@@ -92,17 +71,6 @@ internal readonly struct TcpStreamLayout
 
     /// <summary>
     /// Maps a global frame index to a (stream, local position) pair.
-    /// <para>
-    /// <b>Sequential mode:</b> connections are generated one after another.<br/>
-    /// <c>streamIndex = globalIndex / FramesPerConnection</c><br/>
-    /// <c>localIndex  = globalIndex % FramesPerConnection</c>
-    /// </para>
-    /// <para>
-    /// <b>Interleaved mode:</b> frames round-robin across all connections.<br/>
-    /// <c>round       = globalIndex / StreamCount</c><br/>
-    /// <c>streamIndex = globalIndex % StreamCount</c><br/>
-    /// <c>localIndex  = round</c>
-    /// </para>
     /// </summary>
     /// <param name="globalIndex">Zero-based index within the entire frame sequence.</param>
     /// <returns>The stream and local position, or <c>null</c> if the index is out of range.</returns>

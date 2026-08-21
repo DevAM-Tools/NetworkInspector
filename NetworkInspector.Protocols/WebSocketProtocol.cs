@@ -274,9 +274,9 @@ public sealed partial class WebSocketProtocol : IProtocol
         // index must be complete when the packet is finalized). The lazy populator builds the
         // descriptive frame tree but no longer dispatches.
         ParseResult dispatchResult = _DispatchWebSocketPayloads(in container, data, in context);
-        if (dispatchResult.IsError)
+        if (dispatchResult.TryPropagateError(out ParseResult error))
         {
-            return dispatchResult;
+            return error;
         }
 
         return data.Length;

@@ -39,12 +39,16 @@ internal sealed class IPv6AddressTests
     }
 
     [Test]
-    public async Task FromBytes_TooShort_ReturnsDefault()
+    public async Task FromBytes_TooShort_Throws()
     {
         byte[] bytes = [0x20, 0x01, 0x0D];
-        IPv6Address ip = IPv6Address.FromBytes(bytes);
-        await Assert.That(ip.High).IsEqualTo(0UL);
-        await Assert.That(ip.Low).IsEqualTo(0UL);
+        await Assert.That(() =>
+        {
+            IPv6Address _ = IPv6Address.FromBytes(bytes);
+            return Task.CompletedTask;
+        }).Throws<ArgumentException>();
+        await Assert.That(IPv6Address.TryFromBytes(bytes, out IPv6Address ip)).IsFalse();
+        await Assert.That(ip).IsEqualTo(default(IPv6Address));
     }
 
     // === Binary roundtrip ===
@@ -292,10 +296,21 @@ internal sealed class IPv6AddressTests
     public async Task TryFormat_TooShort()
     {
         IPv6Address ip = new(0, 1);
-        char[] small = new char[3];
+        char[] small = new char[2];
         bool ok = ip.TryFormat(small, out int written, default, null);
         await Assert.That(ok).IsFalse();
         await Assert.That(written).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task TryFormat_MinimalBuffer_FitsCompressedLoopback()
+    {
+        IPv6Address ip = new(0, 1);
+        char[] buffer = new char[3];
+        bool ok = ip.TryFormat(buffer, out int written, default, null);
+        await Assert.That(ok).IsTrue();
+        await Assert.That(written).IsEqualTo(3);
+        await Assert.That(new string(buffer, 0, written)).IsEqualTo("::1");
     }
 
     // === TryFormat (UTF-8) ===

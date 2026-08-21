@@ -119,17 +119,21 @@ public sealed class TcpConnection<TOld, TTail> : IDisposable
     private readonly Session<Stack<TcpStreamLayer, StatelessStack<TOld, TTail>>, NoTrailer, NoInterceptor> _ClientSession;
     private readonly Session<Stack<TcpStreamLayer, StatelessStack<TOld, TTail>>, NoTrailer, NoInterceptor> _ServerSession;
     private readonly TcpConnectionOptions _Options;
-    private readonly ushort _ClientPort;
-    private readonly ushort _ServerPort;
+
+    /// <summary>Source port the client side uses.</summary>
+    public ushort ClientPort { get; }
+
+    /// <summary>Source port the server side uses.</summary>
+    public ushort ServerPort { get; }
 
     /// <summary>
-    /// Maximum header-byte count across both sessions (carrier headers + TCP header).
-    /// Derived from <see cref="Session{TStack,TTrailer,TInterceptor}.HeaderSize"/> at
-    /// construction time; used to size the scratch buffer precisely.
+    /// Wire-layer header overhead per segment: carrier headers + TCP header (20 bytes).
+    /// Use <c>HeaderSize + payloadLength</c> to compute the exact scratch-buffer size
+    /// needed for any given segment payload.
     /// </summary>
-    private readonly int _MaxHeaderSize;
+    public int HeaderSize { get; }
 
-    /// <summary>Reusable scratch buffer; sized to <c>_MaxHeaderSize + MSS</c> at construction and grown on demand.</summary>
+    /// <summary>Reusable scratch buffer; sized to <c>HeaderSize + MSS</c> at construction and grown on demand.</summary>
     private byte[] _Scratch;
 
     private bool _Disposed;
@@ -145,36 +149,11 @@ public sealed class TcpConnection<TOld, TTail> : IDisposable
         get; set;
     }
 
-    /// <summary>Source port the client side uses.</summary>
-    public ushort ClientPort
-    {
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _ClientPort;
-    }
-
-    /// <summary>Source port the server side uses.</summary>
-    public ushort ServerPort
-    {
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _ServerPort;
-    }
-
     /// <summary>Effective Maximum Segment Size used for splitting Write payloads.</summary>
     public ushort Mss
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         get => _Options.Mss;
-    }
-
-    /// <summary>
-    /// Wire-layer header overhead per segment: carrier headers + TCP header (20 bytes).
-    /// Use <c>HeaderSize + payloadLength</c> to compute the exact scratch-buffer size
-    /// needed for any given segment payload.
-    /// </summary>
-    public int HeaderSize
-    {
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _MaxHeaderSize;
     }
 
     /// <summary>Sequence number that the next client→server segment will carry.</summary>
@@ -202,13 +181,13 @@ public sealed class TcpConnection<TOld, TTail> : IDisposable
         _ClientSession = clientSession;
         _ServerSession = serverSession;
         _Options = options;
-        _ClientPort = clientPort;
-        _ServerPort = serverPort;
+        ClientPort = clientPort;
+        ServerPort = serverPort;
         // Size the initial scratch buffer exactly: one full header + one MSS-worth of payload.
         // Both sessions must have the same stack shape (same carrier applied to both sides),
         // but take the max in case caller-supplied asymmetric carriers differ in header size.
-        _MaxHeaderSize = Math.Max(clientSession.HeaderSize, serverSession.HeaderSize);
-        _Scratch = new byte[_MaxHeaderSize + options.Mss];
+        HeaderSize = Math.Max(clientSession.HeaderSize, serverSession.HeaderSize);
+        _Scratch = new byte[HeaderSize + options.Mss];
     }
 
     #region Lifecycle: Handshake / Teardown / Reset
@@ -561,9 +540,9 @@ public sealed class TcpConnection<TOld, TTail> : IDisposable
 
     private void _EnsureScratch(int payloadLength)
     {
-        // Exact frame size: carrier headers + TCP header (from _MaxHeaderSize) + payload.
+        // Exact frame size: carrier headers + TCP header (from HeaderSize) + payload.
         // No trailer: TcpConnection uses NoTrailer exclusively.
-        int needed = _MaxHeaderSize + payloadLength;
+        int needed = HeaderSize + payloadLength;
         if (_Scratch.Length < needed)
         {
             _Scratch = new byte[needed];

@@ -125,14 +125,14 @@ internal sealed class PacketRecycleTests
 
         // Fresh parse baseline
         Packet fresh = Packet.ParseFrame(new PacketId(1), stack, freshFrame);
-        int freshCount = fresh.FieldCount(materialize: true);
+        int freshCount = fresh.FieldCount(materialize: true); // materialize: true — count after full materialization
 
         // Seed packet to recycle
         Packet seed = Packet.ParseFrame(new PacketId(10), stack, _MakeFrame(stack, frameData, frameId: 10));
 
         // Recycled parse
         Packet recycled = Packet.ParseFrame(seed, new PacketId(2), stack, recycleFrame);
-        int recycledCount = recycled.FieldCount(materialize: true);
+        int recycledCount = recycled.FieldCount(materialize: true); // materialize: true — count after full materialization
 
         await Assert.That(recycledCount).IsEqualTo(freshCount);
     }
@@ -146,7 +146,7 @@ internal sealed class PacketRecycleTests
         // Parse a first packet to be recycled
         Frame frame1 = _MakeFrame(stack, frameData, frameId: 1);
         Packet packet = Packet.ParseFrame(new PacketId(1), stack, frame1);
-        int firstCount = packet.FieldCount(materialize: true);
+        int firstCount = packet.FieldCount(materialize: true); // materialize: true — count after full materialization
         await Assert.That(firstCount).IsGreaterThan(1);
 
         // Recycle
@@ -157,7 +157,7 @@ internal sealed class PacketRecycleTests
         await Assert.That(recycled.Id).IsEqualTo(new PacketId(2));
 
         // Verify field count is consistent (not accumulated from two parses)
-        int recycledCount = recycled.FieldCount(materialize: true);
+        int recycledCount = recycled.FieldCount(materialize: true); // materialize: true — count after full materialization
         await Assert.That(recycledCount).IsEqualTo(firstCount);
     }
 
@@ -193,7 +193,7 @@ internal sealed class PacketRecycleTests
 
         // Fresh parse for field count baseline
         Packet fresh = Packet.ParseFrame(new PacketId(1), stack, _MakeFrame(stack, frameData));
-        int freshCount = fresh.FieldCount(materialize: true);
+        int freshCount = fresh.FieldCount(materialize: true); // materialize: true — count after full materialization
 
         // Seed + recycle
         Packet seed = Packet.ParseFrame(new PacketId(10), stack, _MakeFrame(stack, frameData, 10));
@@ -201,7 +201,7 @@ internal sealed class PacketRecycleTests
         Packet recycled = Packet.ParseFrame(seed, new PacketId(2), stack, recycleFrame);
         recycled.MaterializeAll();
 
-        await Assert.That(recycled.FieldCount()).IsEqualTo(freshCount);
+        await Assert.That(recycled.FieldCount(materialize: false)).IsEqualTo(freshCount); // materialize: false — current materialized count only
     }
 
     // ── Multiple sequential recycles ─────────────────────────────────────────────────
@@ -214,7 +214,7 @@ internal sealed class PacketRecycleTests
 
         // Establish expected field count
         Packet baseline = Packet.ParseFrame(new PacketId(0), stack, _MakeFrame(stack, frameData, 0));
-        int expected = baseline.FieldCount(materialize: true);
+        int expected = baseline.FieldCount(materialize: true); // materialize: true — count after full materialization
 
         // Recycle the same packet 50 times
         for (int i = 1; i <= 50; i++)
@@ -224,7 +224,7 @@ internal sealed class PacketRecycleTests
 
             await Assert.That(recycled.Id).IsEqualTo(new PacketId(i));
             await Assert.That(recycled.IsFinalized).IsTrue();
-            int count = recycled.FieldCount(materialize: true);
+            int count = recycled.FieldCount(materialize: true); // materialize: true — count after full materialization
             await Assert.That(count).IsEqualTo(expected);
         }
     }
@@ -357,7 +357,7 @@ internal sealed class PacketRecycleTests
     private static List<FieldId> _CollectFieldIds(Packet packet)
     {
         List<FieldId> result = [];
-        foreach (Field field in packet.IterFieldsFlat(materialize: true))
+        foreach (Field field in packet.IterFieldsFlat(materialize: true)) // materialize: true — navigate/populate children including lazy
         {
             result.Add(field.FieldId);
         }

@@ -169,5 +169,69 @@ internal sealed class LengthPrefixDetectorTests
         await Assert.That(missing.IsIncomplete).IsTrue();
     }
 
+    [Test]
+    public async Task DelimiterDetector_MutatingCallerArray_DoesNotAffectDetect()
+    {
+        byte[] delimiter = [0x0A];
+        DelimiterDetector det = new(delimiter);
+        delimiter[0] = 0x00;
+        PduBoundaryResult result = det.Detect([0x48, 0x69, 0x0A, 0xFF]);
+        await Assert.That(result.IsComplete).IsTrue();
+        await Assert.That(result.Length).IsEqualTo(3);
+    }
+
+    #endregion
+
+    #region Hostile length values
+
+    [Test]
+    public async Task Detect_ZeroTotalLength_ReturnsInvalid()
+    {
+        LengthPrefixDetector det = new(0, 2, bigEndian: true, lengthIncludesHeader: true);
+        byte[] data = [0, 0];
+        PduBoundaryResult result = det.Detect(data);
+        await Assert.That(result.IsInvalid).IsTrue();
+    }
+
+    [Test]
+    public async Task Detect_LengthExceedsMaxPduSize_ReturnsInvalid()
+    {
+        LengthPrefixDetector det = new(0, 2, bigEndian: true, maxPduSize: 16);
+        byte[] data = [0, 32];
+        PduBoundaryResult result = det.Detect(data);
+        await Assert.That(result.IsInvalid).IsTrue();
+    }
+
+    [Test]
+    public async Task Detect_FourByteLengthAboveIntMax_ReturnsInvalid()
+    {
+        LengthPrefixDetector det = new(0, 4, bigEndian: true, lengthIncludesHeader: true);
+        byte[] data = [0x7F, 0xFF, 0xFF, 0xFF];
+        PduBoundaryResult result = det.Detect(data);
+        await Assert.That(result.IsInvalid).IsTrue();
+    }
+
+    [Test]
+    public async Task Detect_LengthFieldZeroWithIncludesHeader_ReturnsInvalid()
+    {
+        LengthPrefixDetector det = new(0, 1, lengthIncludesHeader: true);
+        byte[] data = [0];
+        PduBoundaryResult result = det.Detect(data);
+        await Assert.That(result.IsInvalid).IsTrue();
+    }
+
+    [Test]
+    public async Task Detect_InvalidLengthSizeViaReflection_ReturnsInvalid()
+    {
+        LengthPrefixDetector det = new(0, 1);
+        System.Reflection.FieldInfo? lengthSizeField = typeof(LengthPrefixDetector).GetField(
+            "_LengthSize", BindingFlags.NonPublic | BindingFlags.Instance);
+        await Assert.That(lengthSizeField).IsNotNull();
+        lengthSizeField!.SetValue(det, 3);
+
+        PduBoundaryResult result = det.Detect([0x01, 0x02, 0x03]);
+        await Assert.That(result.IsInvalid).IsTrue();
+    }
+
     #endregion
 }

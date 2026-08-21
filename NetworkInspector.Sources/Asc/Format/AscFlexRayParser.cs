@@ -14,21 +14,6 @@ namespace NetworkInspector.Sources.Asc.Format;
 /// </summary>
 internal static class AscFlexRayParser
 {
-    #region Constants
-
-    /// <summary>LINKTYPE_FLEXRAY header size: 7 bytes.</summary>
-    private const int _LinkTypeFlexRayHeaderSize = FlexRayLinkTypeFrame.MinHeaderSize;
-
-    /// <summary>
-    /// Maximum FlexRay payload in bytes per the FlexRay specification:
-    /// 127 payload words × 2 bytes per word = 254 bytes.
-    /// Used to clamp the parsed data length and prevent unbounded allocation
-    /// when the ASC line omits an explicit <c>payload_len_words</c> value (i.e. 0).
-    /// </summary>
-    private const int _MaxFlexRayDataBytes = 254;
-
-    #endregion
-
     #region Public API
 
     /// <summary>
@@ -154,6 +139,11 @@ internal static class AscFlexRayParser
             return false;
         }
 
+        if (dataLen < 0)
+        {
+            return false;
+        }
+
         if (payloadLenWords > 0 && dataLen > payloadLenWords * 2)
         {
             // Payload length in the header is in 16-bit words; declared byte length cannot exceed that.
@@ -163,69 +153,30 @@ internal static class AscFlexRayParser
         // Clamp to the FlexRay protocol maximum before allocating: when payloadLenWords is 0
         // (not specified) the guard above does not apply, and a malicious ASC line could
         // declare an arbitrarily large dataLen, triggering an unbounded heap allocation.
-        dataLen = Math.Min(dataLen, _MaxFlexRayDataBytes);
+        dataLen = Math.Min(dataLen, FlexRayLinkTypeFrame.MaxPayloadBytes);
 
-        // Parse data bytes (hex pairs, may have spaces)
-        byte[] dataBytes = new byte[dataLen];
-        int parsedCount = 0;
-
-        for (int i = 0; i < dataLen; i++)
+        byte[] dataBytes = ArrayPool<byte>.Shared.Rent(dataLen);
+        try
         {
-            if (!tokenizer.TryNextToken(out ReadOnlySpan<char> dataToken))
-            {
-                break;
-            }
+            int parsedCount = _ParseCharDataTokens(ref tokenizer, dataLen, dataBytes);
 
-            // The data might be in hex pairs (e.g., "01d0") — parse two bytes at a time
-            if (dataToken.Length >= 4)
-            {
-                // Could be a hex word (2 bytes), parse byte by byte
-                int bytesInToken = dataToken.Length / 2;
-                for (int j = 0; j < bytesInToken && parsedCount < dataLen; j++)
-                {
-                    ReadOnlySpan<char> byteStr = dataToken.Slice(j * 2, 2);
-                    if (byte.TryParse(byteStr, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out byte b))
-                    {
-                        dataBytes[parsedCount++] = b;
-                    }
-                    else
-                    {
-                        break;
-                    }
-                }
-                // Adjust the loop counter to account for multi-byte tokens
-                i = parsedCount - 1;
-            }
-            else if (dataToken.Length == 2)
-            {
-                if (byte.TryParse(dataToken, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out byte b))
-                {
-                    dataBytes[parsedCount++] = b;
-                }
-                else
-                {
-                    break;
-                }
-            }
-            else
-            {
-                // Might be a flags token or other metadata — stop data parsing
-                break;
-            }
+            // Build LINKTYPE_FLEXRAY frame (ASC channel 1 = A, 2 = B).
+            ReadOnlySpan<byte> payloadSpan = parsedCount > 0
+                ? dataBytes.AsSpan(0, parsedCount)
+                : ReadOnlySpan<byte>.Empty;
+            frame = FlexRayLinkTypeFrame.BuildFrame(
+                FlexRayLinkTypeFrame.AscChannelToBusChannel(channel),
+                frameId,
+                cycle,
+                headerCrc,
+                payloadSpan);
+
+            return true;
         }
-
-        // Build LINKTYPE_FLEXRAY frame (ASC channel 1 = A, 2 = B).
-        ReadOnlySpan<byte> payloadSpan = parsedCount > 0
-            ? dataBytes.AsSpan(0, parsedCount)
-            : ReadOnlySpan<byte>.Empty;
-        frame = FlexRayLinkTypeFrame.BuildFrame(
-            FlexRayLinkTypeFrame.AscChannelToBusChannel(channel),
-            frameId,
-            cycle,
-            headerCrc,
-            payloadSpan);
-
-        return true;
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(dataBytes);
+        }
     }
 
     #endregion
@@ -364,6 +315,11 @@ internal static class AscFlexRayParser
             return false;
         }
 
+        if (dataLen < 0)
+        {
+            return false;
+        }
+
         if (payloadLenWords > 0 && dataLen > payloadLenWords * 2)
         {
             return false;
@@ -372,9 +328,90 @@ internal static class AscFlexRayParser
         // Clamp to the FlexRay protocol maximum before allocating: when payloadLenWords is 0
         // (not specified) the guard above does not apply, and a malicious ASC line could
         // declare an arbitrarily large dataLen, triggering an unbounded heap allocation.
-        dataLen = Math.Min(dataLen, _MaxFlexRayDataBytes);
+        dataLen = Math.Min(dataLen, FlexRayLinkTypeFrame.MaxPayloadBytes);
 
-        byte[] dataBytes = new byte[dataLen];
+        byte[] dataBytes = ArrayPool<byte>.Shared.Rent(dataLen);
+        try
+        {
+            int parsedCount = _ParseByteDataTokens(ref tokenizer, dataLen, dataBytes);
+
+            ReadOnlySpan<byte> payloadSpan = parsedCount > 0
+                ? dataBytes.AsSpan(0, parsedCount)
+                : ReadOnlySpan<byte>.Empty;
+            frame = FlexRayLinkTypeFrame.BuildFrame(
+                FlexRayLinkTypeFrame.AscChannelToBusChannel(channel),
+                frameId,
+                cycle,
+                headerCrc,
+                payloadSpan);
+
+            return true;
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(dataBytes);
+        }
+    }
+
+    #endregion
+
+    #region Private Helpers
+
+    private static int _ParseCharDataTokens(ref AscTokenizer tokenizer, int dataLen, byte[] dataBytes)
+    {
+        int parsedCount = 0;
+
+        for (int i = 0; i < dataLen; i++)
+        {
+            if (!tokenizer.TryNextToken(out ReadOnlySpan<char> dataToken))
+            {
+                break;
+            }
+
+            // The data might be in hex pairs (e.g., "01d0") — parse two bytes at a time
+            if (dataToken.Length >= 4)
+            {
+                // Could be a hex word (2 bytes), parse byte by byte
+                int bytesInToken = dataToken.Length / 2;
+                for (int j = 0; j < bytesInToken && parsedCount < dataLen; j++)
+                {
+                    ReadOnlySpan<char> byteStr = dataToken.Slice(j * 2, 2);
+                    if (byte.TryParse(byteStr, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out byte b))
+                    {
+                        dataBytes[parsedCount++] = b;
+                    }
+                    else
+                    {
+                        break;
+                    }
+                }
+
+                // Adjust the loop counter to account for multi-byte tokens
+                i = parsedCount - 1;
+            }
+            else if (dataToken.Length == 2)
+            {
+                if (byte.TryParse(dataToken, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out byte b))
+                {
+                    dataBytes[parsedCount++] = b;
+                }
+                else
+                {
+                    break;
+                }
+            }
+            else
+            {
+                // Might be a flags token or other metadata — stop data parsing
+                break;
+            }
+        }
+
+        return parsedCount;
+    }
+
+    private static int _ParseByteDataTokens(ref AscTokenizerBytes tokenizer, int dataLen, byte[] dataBytes)
+    {
         int parsedCount = 0;
 
         for (int i = 0; i < dataLen; i++)
@@ -419,17 +456,7 @@ internal static class AscFlexRayParser
             }
         }
 
-        ReadOnlySpan<byte> payloadSpan = parsedCount > 0
-            ? dataBytes.AsSpan(0, parsedCount)
-            : ReadOnlySpan<byte>.Empty;
-        frame = FlexRayLinkTypeFrame.BuildFrame(
-            FlexRayLinkTypeFrame.AscChannelToBusChannel(channel),
-            frameId,
-            cycle,
-            headerCrc,
-            payloadSpan);
-
-        return true;
+        return parsedCount;
     }
 
     #endregion

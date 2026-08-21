@@ -47,7 +47,7 @@ internal sealed class LazyFieldTests
 
             // Before materialization: root(1) + packet(1) + packet.id(1) + packet.timestamp(1)
             //   + packet.frame_source_id(1) + packet.info(1) + lazy container(1) = 7
-            int count = packet.FieldCount();
+            int count = packet.FieldCount(materialize: false); // materialize: false — current materialized count only
             await Assert.That(count).IsEqualTo(7);
         }
     }
@@ -62,7 +62,7 @@ internal sealed class LazyFieldTests
             Packet packet = _ParseFrame(stack, data, protoId);
 
             // After: root(1) + 5 packet fields + container(1) + 3 fields = 10
-            int count = packet.FieldCount(materialize: true);
+            int count = packet.FieldCount(materialize: true); // materialize: true — count after full materialization
             await Assert.That(count).IsEqualTo(10);
         }
     }
@@ -85,7 +85,7 @@ internal sealed class LazyFieldTests
             bool found = false;
             bool containerNeedsMaterialization = false;
             int childIndex = 0;
-            foreach (Field child in root.Children(materialize: false))
+            foreach (Field child in root.Children(materialize: false)) // materialize: false — eager-only; do not populate lazy containers
             {
                 childIndex++;
                 // Second child is the mock protocol's lazy container
@@ -115,13 +115,13 @@ internal sealed class LazyFieldTests
             // Access children through the mock's lazy container — triggers materialization
             // Navigate past the packet container (first child) to reach the mock container (second child)
             Field root = packet.RootField();
-            root.TryGetFirstChild(out Field packetContainer);
+            root.TryGetFirstChild(out Field packetContainer, materialize: true); // materialize: true — navigate/populate children including lazy
             packetContainer.TryGetNext(out Field container);
 
             // Accessing HasChildren triggers materialization
-            bool hasChildren = container.HasChildren;
+            bool hasChildren = container.HasChildren(materialize: true); // materialize: true — navigate/populate children including lazy
             bool materialized = !container.NeedsLazyMaterialization;
-            ushort childCount = container.ChildCount;
+            ushort childCount = container.ChildCount(materialize: true); // materialize: true — navigate/populate children including lazy
 
             await Assert.That(hasChildren).IsTrue();
             await Assert.That(materialized).IsTrue();
@@ -140,7 +140,7 @@ internal sealed class LazyFieldTests
 
             // DFS iterator materializes lazy fields during traversal
             int fieldCount = 0;
-            foreach (Field _ in packet.IterFieldsDfs())
+            foreach (Field _ in packet.IterFieldsDfs(materialize: true)) // materialize: true — navigate/populate children including lazy
             {
                 fieldCount++;
             }
@@ -177,10 +177,10 @@ internal sealed class LazyFieldTests
             byte[] data = new byte[14];
             Packet packet = _ParseFrame(stack, data, protoId);
 
-            int countFirst = packet.FieldCount(materialize: true);
+            int countFirst = packet.FieldCount(materialize: true); // materialize: true — count after full materialization
 
             // Second call should be a no-op (MaterializeAll is idempotent)
-            int countSecond = packet.FieldCount(materialize: true);
+            int countSecond = packet.FieldCount(materialize: true); // materialize: true — count after full materialization
 
             await Assert.That(countFirst).IsEqualTo(countSecond);
             await Assert.That(proto.PopulateCallCount).IsEqualTo(1);
@@ -215,7 +215,7 @@ internal sealed class LazyFieldTests
             string? dstMacStr = null;
             ulong? typeVal = null;
 
-            foreach (Field field in packet.IterFieldsDfs())
+            foreach (Field field in packet.IterFieldsDfs(materialize: true)) // materialize: true — navigate/populate children including lazy
             {
                 if (field.FieldId == proto.DstFieldId)
                 {
@@ -246,7 +246,7 @@ internal sealed class LazyFieldTests
             // Iterate without materialization
             int childCount = 0;
             Field root = packet.RootField();
-            foreach (Field _ in root.Children(materialize: false))
+            foreach (Field _ in root.Children(materialize: false)) // materialize: false — eager-only; do not populate lazy containers
             {
                 childCount++;
             }
@@ -276,7 +276,7 @@ internal sealed class LazyFieldTests
             Packet packet = _ParseFrame(stack, data, protoId);
 
             // Before materialization: root(1) + 5 packet fields + outer lazy(1) = 7
-            await Assert.That(packet.FieldCount()).IsEqualTo(7);
+            await Assert.That(packet.FieldCount(materialize: false)).IsEqualTo(7); // materialize: false — current materialized count only
 
             // MaterializeAll must finish without hanging, even with nested lazy.
             // Run with a cancellation timeout to detect infinite spin.
@@ -291,7 +291,7 @@ internal sealed class LazyFieldTests
             }
 
             // After: root(1) + 5 packet fields + outer(1) + outer-child-A(1) + inner(1) + inner-child(1) = 10
-            await Assert.That(packet.FieldCount()).IsEqualTo(10);
+            await Assert.That(packet.FieldCount(materialize: false)).IsEqualTo(10); // materialize: false — current materialized count only
             await Assert.That(packet.HasUnpopulatedLazyFields).IsFalse();
             await Assert.That(proto.OuterCallCount).IsEqualTo(1);
             await Assert.That(proto.InnerCallCount).IsEqualTo(1);

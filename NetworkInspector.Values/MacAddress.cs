@@ -6,10 +6,10 @@ namespace NetworkInspector.Values;
 /// 48-bit MAC (EUI-48) address stored in the lower 6 bytes of a <see cref="ulong"/>.
 /// </summary>
 [StructLayout(LayoutKind.Sequential)]
-public readonly record struct MacAddress
-        : IEquatable<MacAddress>, IComparable<MacAddress>, IComparable,
-      ISpanFormattable, IUtf8SpanFormattable, IStringSize, IBinarySerializable,
-      ISpanParsable<MacAddress>, IParsable<MacAddress>
+public readonly record struct MacAddress :
+    IEquatable<MacAddress>, IComparable<MacAddress>, IComparable,
+    ISpanFormattable, IUtf8SpanFormattable, IStringSize, IBinarySerializable,
+    ISpanParsable<MacAddress>, IParsable<MacAddress>
 {
     #region Constants
 
@@ -24,27 +24,14 @@ public readonly record struct MacAddress
 
     /// <summary>Creates a <see cref="MacAddress"/> from a raw 64-bit value (only lower 48 bits are used).</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public MacAddress(ulong value)
-    {
-        _Value = value & _Mask48;
-    }
-
-    #endregion
-
-    #region Fields
-
-    private readonly ulong _Value;
+    public MacAddress(ulong value) => RawValue = value & _Mask48;
 
     #endregion
 
     #region Properties
 
     /// <summary>The raw 64-bit value (lower 48 bits contain the MAC address).</summary>
-    public ulong RawValue
-    {
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _Value;
-    }
+    public ulong RawValue { get; }
 
     #endregion
 
@@ -54,13 +41,13 @@ public readonly record struct MacAddress
     public bool IsBroadcast
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _Value == _Mask48;
+        get => RawValue == _Mask48;
     }
     /// <summary>True if the multicast bit (bit 0 of octet 0) is set.</summary>
     public bool IsMulticast
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => (_Value & (1UL << 40)) != 0;
+        get => (RawValue & (1UL << 40)) != 0;
     }
     /// <summary>True if the address is unicast (multicast bit not set).</summary>
     public bool IsUnicast
@@ -72,7 +59,7 @@ public readonly record struct MacAddress
     public bool IsLocal
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => (_Value & (1UL << 41)) != 0;
+        get => (RawValue & (1UL << 41)) != 0;
     }
     /// <summary>True if the address is globally unique.</summary>
     public bool IsGlobal
@@ -84,7 +71,7 @@ public readonly record struct MacAddress
     public bool IsZero
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _Value == 0;
+        get => RawValue == 0;
     }
 
     #endregion
@@ -92,17 +79,34 @@ public readonly record struct MacAddress
     #region Factory Methods
 
     /// <summary>Creates a MAC address from a 6-byte big-endian span.</summary>
+    /// <returns><see langword="false"/> when fewer than 6 bytes are available.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static MacAddress FromBytes(ReadOnlySpan<byte> bytes)
+    public static bool TryFromBytes(ReadOnlySpan<byte> bytes, out MacAddress address)
     {
         if (bytes.Length < 6)
         {
-            return default;
+            address = default;
+            return false;
         }
+
         // BinaryPrimitives has no ReadUInt48 — combine a 2-byte and 4-byte read for portability.
         ulong high = BinaryPrimitives.ReadUInt16BigEndian(bytes);
         ulong low = BinaryPrimitives.ReadUInt32BigEndian(bytes[2..]);
-        return new MacAddress((high << 32) | low);
+        address = new MacAddress((high << 32) | low);
+        return true;
+    }
+
+    /// <summary>Creates a MAC address from a 6-byte big-endian span.</summary>
+    /// <exception cref="ArgumentException">Fewer than 6 bytes are available.</exception>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static MacAddress FromBytes(ReadOnlySpan<byte> bytes)
+    {
+        if (!TryFromBytes(bytes, out MacAddress address))
+        {
+            throw new ArgumentException("MAC address requires at least 6 bytes.", nameof(bytes));
+        }
+
+        return address;
     }
 
     /// <summary>Parses a MAC address from "XX:XX:XX:XX:XX:XX" notation (case-insensitive).</summary>
@@ -185,12 +189,12 @@ public readonly record struct MacAddress
         {
             return 0;
         }
-        destination[0] = (byte)(_Value >> 40);
-        destination[1] = (byte)(_Value >> 32);
-        destination[2] = (byte)(_Value >> 24);
-        destination[3] = (byte)(_Value >> 16);
-        destination[4] = (byte)(_Value >> 8);
-        destination[5] = (byte)_Value;
+        destination[0] = (byte)(RawValue >> 40);
+        destination[1] = (byte)(RawValue >> 32);
+        destination[2] = (byte)(RawValue >> 24);
+        destination[3] = (byte)(RawValue >> 16);
+        destination[4] = (byte)(RawValue >> 8);
+        destination[5] = (byte)RawValue;
         return 6;
     }
 
@@ -243,17 +247,17 @@ public readonly record struct MacAddress
             return false;
         }
         SpanStringBuilder sb = new(destination);
-        sb.AppendHex2((byte)(_Value >> 40));
+        sb.AppendHex2((byte)(RawValue >> 40));
         sb.Append(':');
-        sb.AppendHex2((byte)(_Value >> 32));
+        sb.AppendHex2((byte)(RawValue >> 32));
         sb.Append(':');
-        sb.AppendHex2((byte)(_Value >> 24));
+        sb.AppendHex2((byte)(RawValue >> 24));
         sb.Append(':');
-        sb.AppendHex2((byte)(_Value >> 16));
+        sb.AppendHex2((byte)(RawValue >> 16));
         sb.Append(':');
-        sb.AppendHex2((byte)(_Value >> 8));
+        sb.AppendHex2((byte)(RawValue >> 8));
         sb.Append(':');
-        sb.AppendHex2((byte)_Value);
+        sb.AppendHex2((byte)RawValue);
         charsWritten = sb.Length;
         return true;
     }
@@ -344,7 +348,7 @@ public readonly record struct MacAddress
 
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public int CompareTo(MacAddress other) => _Value.CompareTo(other._Value);
+    public int CompareTo(MacAddress other) => RawValue.CompareTo(other.RawValue);
 
     /// <inheritdoc/>
     int IComparable.CompareTo(object? obj)
@@ -362,22 +366,22 @@ public readonly record struct MacAddress
     /// <param name="left">The left operand.</param>
     /// <param name="right">The right operand.</param>
     /// <returns><see langword="true"/> if the condition holds; otherwise <see langword="false"/>.</returns>
-    public static bool operator <(MacAddress left, MacAddress right) => left._Value < right._Value;
+    public static bool operator <(MacAddress left, MacAddress right) => left.RawValue < right.RawValue;
     /// <summary>Returns <see langword="true"/> if <paramref name="left"/> is greater than <paramref name="right"/>.</summary>
     /// <param name="left">The left operand.</param>
     /// <param name="right">The right operand.</param>
     /// <returns><see langword="true"/> if the condition holds; otherwise <see langword="false"/>.</returns>
-    public static bool operator >(MacAddress left, MacAddress right) => left._Value > right._Value;
+    public static bool operator >(MacAddress left, MacAddress right) => left.RawValue > right.RawValue;
     /// <summary>Returns <see langword="true"/> if <paramref name="left"/> is less than or equal to <paramref name="right"/>.</summary>
     /// <param name="left">The left operand.</param>
     /// <param name="right">The right operand.</param>
     /// <returns><see langword="true"/> if the condition holds; otherwise <see langword="false"/>.</returns>
-    public static bool operator <=(MacAddress left, MacAddress right) => left._Value <= right._Value;
+    public static bool operator <=(MacAddress left, MacAddress right) => left.RawValue <= right.RawValue;
     /// <summary>Returns <see langword="true"/> if <paramref name="left"/> is greater than or equal to <paramref name="right"/>.</summary>
     /// <param name="left">The left operand.</param>
     /// <param name="right">The right operand.</param>
     /// <returns><see langword="true"/> if the condition holds; otherwise <see langword="false"/>.</returns>
-    public static bool operator >=(MacAddress left, MacAddress right) => left._Value >= right._Value;
+    public static bool operator >=(MacAddress left, MacAddress right) => left.RawValue >= right.RawValue;
 
     #endregion
 

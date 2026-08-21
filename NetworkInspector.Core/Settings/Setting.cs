@@ -9,6 +9,14 @@ namespace NetworkInspector.Core.Settings;
 ///
 /// Setting is a reference type so that cloning shares the same mutable state
 /// (equivalent to Rust's <c>Arc&lt;SettingState&gt;</c> pattern).
+/// <para>
+/// <b>Load coordination:</b> After registration with a <see cref="SettingsManager"/>,
+/// <see cref="SetPendingValue"/>, <see cref="Apply"/>, <see cref="Reset"/>, and
+/// <see cref="ResetToDefault"/> reject concurrent calls while
+/// <see cref="SettingsManager.Load"/> is in progress. <see cref="SettingsManager.Load"/>
+/// requires exclusive access to apply persisted values atomically via
+/// <see cref="ApplyFromPersistence"/>.
+/// </para>
 /// </summary>
 public sealed class Setting : IReadOnlySetting
 {
@@ -23,20 +31,17 @@ public sealed class Setting : IReadOnlySetting
         public readonly SettingValue PendingValue = pendingValue;
     }
 
-    private readonly string _Name;
-    private readonly string _UiName;
-    private readonly string? _Description;
-    private readonly string _GroupName;
-    private readonly SettingType _Type;
-    private readonly SettingValue _DefaultValue;
-    private readonly SettingValue? _MinValue;
-    private readonly SettingValue? _MaxValue;
-    private readonly EnumSettingMetadata? _EnumMetadata;
+    /// <summary>
+    /// Owning manager, set at registration for load/mutation coordination.
+    /// <c>volatile</c> so a bind from <see cref="SettingsManager.RegisterSetting"/> is visible
+    /// to other threads that already hold this <see cref="Setting"/> instance.
+    /// </summary>
+    private volatile SettingsManager? _Owner;
 
     // Lock-free reads: readers use Volatile.Read to get a consistent snapshot.
     // Writers hold _WriteLock and atomically swap the snapshot via Volatile.Write.
     private readonly Lock _WriteLock = new();
-    private SettingSnapshot _Snapshot;
+    private volatile SettingSnapshot _Snapshot;
 
     /// <summary>Creates a setting with the specified metadata and value constraints (used by factory methods).</summary>
     /// <exception cref="InvalidNameRegistrationException">Thrown when <paramref name="name"/> is not a valid dot-separated
@@ -65,63 +70,63 @@ public sealed class Setting : IReadOnlySetting
         {
             throw InvalidNameRegistrationException.For(groupName);
         }
-        _Name = name;
-        _UiName = uiName;
-        _Description = description;
-        _GroupName = groupName;
-        _Type = type;
-        _DefaultValue = defaultValue;
-        _MinValue = minValue;
-        _MaxValue = maxValue;
-        _EnumMetadata = enumMetadata;
+        Name = name;
+        UiName = uiName;
+        Description = description;
+        GroupName = groupName;
+        Type = type;
+        DefaultValue = defaultValue;
+        MinValue = minValue;
+        MaxValue = maxValue;
+        EnumMetadata = enumMetadata;
         _Snapshot = new SettingSnapshot(defaultValue, defaultValue);
     }
 
     #region Immutable Metadata
 
     /// <summary>Machine-readable name (e.g., "tcp.check_checksum").</summary>
-    public string Name => _Name;
+    public string Name { get; }
 
     /// <summary>Human-readable display name.</summary>
-    public string UiName => _UiName;
+    public string UiName { get; }
 
     /// <summary>Optional description.</summary>
-    public string? Description => _Description;
+    public string? Description { get; }
 
     /// <summary>Group name for UI organization.</summary>
-    public string GroupName => _GroupName;
+    public string GroupName { get; }
 
     /// <summary>The setting value type.</summary>
-    public SettingType Type => _Type;
+    public SettingType Type { get; }
 
     /// <summary>The default value.</summary>
-    public SettingValue DefaultValue => _DefaultValue;
+    public SettingValue DefaultValue { get; }
 
     /// <summary>Optional minimum value (for numeric types).</summary>
-    public SettingValue? MinValue => _MinValue;
+    public SettingValue? MinValue { get; }
 
     /// <summary>Optional maximum value (for numeric types).</summary>
-    public SettingValue? MaxValue => _MaxValue;
+    public SettingValue? MaxValue { get; }
 
     /// <summary>Enum metadata, if this is an enum setting.</summary>
-    public EnumSettingMetadata? EnumMetadata => _EnumMetadata;
+    public EnumSettingMetadata? EnumMetadata { get; }
 
     #endregion
 
     #region Mutable State
 
     /// <summary>Gets the current (applied) value. Lock-free.</summary>
-    public SettingValue Value => Volatile.Read(ref Unsafe.AsRef(in _Snapshot)).CurrentValue;
+    public SettingValue Value => _Snapshot.CurrentValue;
 
     /// <summary>Gets the pending value. Lock-free.</summary>
-    public SettingValue PendingValue => Volatile.Read(ref Unsafe.AsRef(in _Snapshot)).PendingValue;
+    public SettingValue PendingValue => _Snapshot.PendingValue;
 
     /// <summary>Returns true if the pending value differs from the current value. Lock-free.</summary>
     public bool IsDirty
     {
         get
         {
-            SettingSnapshot snapshot = Volatile.Read(ref Unsafe.AsRef(in _Snapshot));
+            SettingSnapshot snapshot = _Snapshot;
             return snapshot.CurrentValue != snapshot.PendingValue;
         }
     }
@@ -151,20 +156,65 @@ public sealed class Setting : IReadOnlySetting
     /// <summary>Returns <see langword="true"/> if the current value is <see cref="SettingType.Enum"/>. Lock-free.</summary>
     public bool TryGetAsEnum(out (string Name, ulong Value) value) => Value.TryGetAsEnum(out value);
 
+    /// <summary>
+    /// Gets a zero-allocation struct view of this setting.
+    /// Do not assign the result to <see cref="IReadOnlySetting"/> — that boxes.
+    /// </summary>
+    public ReadOnlySettingView AsReadOnlyView() => new(this);
+
     #endregion
 
     #region Mutation
+
+    /// <summary>Associates this setting with its owning manager. Called from <see cref="SettingsManager.RegisterSetting"/>.</summary>
+    internal void BindToManager(SettingsManager owner) => _Owner = owner;
+
+    /// <summary>
+    /// Validates and atomically applies a persisted value during <see cref="SettingsManager.Load"/>.
+    /// Bypasses the load-in-progress guard because the manager holds the write lock.
+    /// </summary>
+    internal void ApplyFromPersistence(SettingValue value)
+    {
+        lock (_WriteLock)
+        {
+            (ValidationErrorKind kind, string? error) = _Validate(value);
+            if (kind == ValidationErrorKind.TypeMismatch)
+            {
+                throw TypeMismatchSettingsException.For(Type, value.Type);
+            }
+            if (kind == ValidationErrorKind.ValidationFailed)
+            {
+                throw ValidationSettingsException.For(error!);
+            }
+
+            _Snapshot = new SettingSnapshot(value, value);
+        }
+    }
+
+    /// <summary>Throws when the owning manager is applying persisted values via <see cref="SettingsManager.Load"/>.</summary>
+    private void _ThrowIfManagerIsLoading()
+    {
+        if (_Owner is not null && _Owner.IsLoading)
+        {
+            throw new InvalidOperationException(
+                "Cannot modify a setting while SettingsManager.Load() is in progress. " +
+                "Load() requires exclusive access to apply persisted values.");
+        }
+    }
 
     /// <summary>
     /// Sets the pending value. Validates the value before storing.
     /// Returns <c>true</c> if changed, <c>false</c> if same.
     /// Throws <see cref="TypeMismatchSettingsException"/> or
     /// <see cref="ValidationSettingsException"/> if validation fails (value is NOT stored).
+    /// Throws <see cref="InvalidOperationException"/> when <see cref="SettingsManager.Load"/> is in progress.
     /// </summary>
     public bool SetPendingValue(SettingValue value)
     {
         lock (_WriteLock)
         {
+            _ThrowIfManagerIsLoading();
+
             SettingSnapshot snapshot = _Snapshot;
             if (snapshot.PendingValue == value)
             {
@@ -175,14 +225,14 @@ public sealed class Setting : IReadOnlySetting
             (ValidationErrorKind kind, string? error) = _Validate(value);
             if (kind == ValidationErrorKind.TypeMismatch)
             {
-                throw TypeMismatchSettingsException.For(_Type, value.Type);
+                throw TypeMismatchSettingsException.For(Type, value.Type);
             }
             if (kind == ValidationErrorKind.ValidationFailed)
             {
                 throw ValidationSettingsException.For(error!);
             }
 
-            Volatile.Write(ref _Snapshot, new SettingSnapshot(snapshot.CurrentValue, value));
+            _Snapshot = new SettingSnapshot(snapshot.CurrentValue, value);
             return true;
         }
     }
@@ -190,37 +240,46 @@ public sealed class Setting : IReadOnlySetting
     /// <summary>
     /// Applies the pending value to the current value.
     /// Returns true if the value was changed.
+    /// Throws <see cref="InvalidOperationException"/> when <see cref="SettingsManager.Load"/> is in progress.
     /// </summary>
     public bool Apply()
     {
         lock (_WriteLock)
         {
+            _ThrowIfManagerIsLoading();
+
             SettingSnapshot snapshot = _Snapshot;
             if (snapshot.CurrentValue == snapshot.PendingValue)
             {
                 return false;
             }
-            Volatile.Write(ref _Snapshot, new SettingSnapshot(snapshot.PendingValue, snapshot.PendingValue));
+            _Snapshot = new SettingSnapshot(snapshot.PendingValue, snapshot.PendingValue);
             return true;
         }
     }
 
     /// <summary>Resets the pending value to the current value.</summary>
+    /// <exception cref="InvalidOperationException">Thrown when <see cref="SettingsManager.Load"/> is in progress.</exception>
     public void Reset()
     {
         lock (_WriteLock)
         {
+            _ThrowIfManagerIsLoading();
+
             SettingSnapshot snapshot = _Snapshot;
-            Volatile.Write(ref _Snapshot, new SettingSnapshot(snapshot.CurrentValue, snapshot.CurrentValue));
+            _Snapshot = new SettingSnapshot(snapshot.CurrentValue, snapshot.CurrentValue);
         }
     }
 
     /// <summary>Resets both current and pending values to the default.</summary>
+    /// <exception cref="InvalidOperationException">Thrown when <see cref="SettingsManager.Load"/> is in progress.</exception>
     public void ResetToDefault()
     {
         lock (_WriteLock)
         {
-            Volatile.Write(ref _Snapshot, new SettingSnapshot(_DefaultValue, _DefaultValue));
+            _ThrowIfManagerIsLoading();
+
+            _Snapshot = new SettingSnapshot(DefaultValue, DefaultValue);
         }
     }
 
@@ -234,7 +293,7 @@ public sealed class Setting : IReadOnlySetting
     /// </summary>
     private (ValidationErrorKind Kind, string? Message) _Validate(SettingValue value)
     {
-        return (_Type, value.Type) switch
+        return (Type, value.Type) switch
         {
             (SettingType.Bool, SettingType.Bool) => (ValidationErrorKind.None, null),
             (SettingType.String, SettingType.String) => (ValidationErrorKind.None, null),
@@ -263,11 +322,11 @@ public sealed class Setting : IReadOnlySetting
         {
             return $"F64 setting value must be finite, got {v}";
         }
-        if (_MinValue is { } min && min.TryGetAsF64(out double minF64) && v < minF64)
+        if (MinValue is not null && MinValue.Value.TryGetAsF64(out double minF64) && v < minF64)
         {
             return $"Value {v} is below minimum {minF64}";
         }
-        if (_MaxValue is { } max && max.TryGetAsF64(out double maxF64) && v > maxF64)
+        if (MaxValue is not null && MaxValue.Value.TryGetAsF64(out double maxF64) && v > maxF64)
         {
             return $"Value {v} is above maximum {maxF64}";
         }
@@ -276,11 +335,11 @@ public sealed class Setting : IReadOnlySetting
 
     private string? _ValidateU64(ulong v)
     {
-        if (_MinValue is { } min && min.TryGetAsU64(out ulong minU64) && v < minU64)
+        if (MinValue is not null && MinValue.Value.TryGetAsU64(out ulong minU64) && v < minU64)
         {
             return $"Value {v} is below minimum {minU64}";
         }
-        if (_MaxValue is { } max && max.TryGetAsU64(out ulong maxU64) && v > maxU64)
+        if (MaxValue is not null && MaxValue.Value.TryGetAsU64(out ulong maxU64) && v > maxU64)
         {
             return $"Value {v} is above maximum {maxU64}";
         }
@@ -289,11 +348,11 @@ public sealed class Setting : IReadOnlySetting
 
     private string? _ValidateI64(long v)
     {
-        if (_MinValue is { } min && min.TryGetAsI64(out long minI64) && v < minI64)
+        if (MinValue is not null && MinValue.Value.TryGetAsI64(out long minI64) && v < minI64)
         {
             return $"Value {v} is below minimum {minI64}";
         }
-        if (_MaxValue is { } max && max.TryGetAsI64(out long maxI64) && v > maxI64)
+        if (MaxValue is not null && MaxValue.Value.TryGetAsI64(out long maxI64) && v > maxI64)
         {
             return $"Value {v} is above maximum {maxI64}";
         }
@@ -302,7 +361,7 @@ public sealed class Setting : IReadOnlySetting
 
     private string? _ValidateEnum(SettingValue value)
     {
-        if (_EnumMetadata is null)
+        if (EnumMetadata is null)
         {
             return null;
         }
@@ -310,7 +369,7 @@ public sealed class Setting : IReadOnlySetting
         {
             return "Invalid enum value";
         }
-        if (!_EnumMetadata.IsAllowedNumeric(e.numericValue))
+        if (!EnumMetadata.IsAllowedNumeric(e.numericValue))
         {
             return $"Value {e.numericValue} is not an allowed enum value";
         }
@@ -500,7 +559,7 @@ public sealed class Setting : IReadOnlySetting
     }
 
     /// <inheritdoc/>
-    public override string ToString() => $"{_Name} ({_Type}: {Value})";
+    public override string ToString() => $"{Name} ({Type}: {Value})";
 
     /// <summary>Discriminates between validation error types.</summary>
     private enum ValidationErrorKind

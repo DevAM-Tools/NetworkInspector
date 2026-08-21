@@ -130,7 +130,7 @@ internal sealed class IPv4BasicTests
         using (stack)
         {
             // Should not crash; frame protocol field always present
-            await Assert.That(packet.FieldCount()).IsGreaterThanOrEqualTo(1);
+            await Assert.That(packet.FieldCount(materialize: false)).IsGreaterThanOrEqualTo(1); // materialize: false — current materialized count only
         }
     }
 
@@ -166,7 +166,7 @@ internal sealed class IPv4BasicTests
             foreach (FieldId memberId in members)
             {
                 FieldLookupCookie cookie = FieldLookupCookie.Start;
-                while (packet.TryGetNextFieldValue(memberId, ref cookie, out FieldValue value))
+                while (packet.TryGetNextFieldValue(memberId, ref cookie, out FieldValue value, materialize: true)) // materialize: true — need complete field tree for assertion
                 {
                     bool ok = value.Data.TryGetAsIPv4(out IPv4Address addr);
                     await Assert.That(ok).IsTrue().Because("alias member values must be IPv4 addresses");

@@ -24,7 +24,7 @@ internal sealed class UnsubscribeTests
         session.TryStart();
 
         // Wait for initial frames to be consumed.
-        _WaitForCondition(() => session.PacketCount >= initialFrames);
+        WaitHelper.WaitUntil(() => session.PacketCount >= initialFrames);
 
         // Unsubscribe the source — should cancel its job.
         JobInfo sourceJob = session.GetJobs().First(
@@ -34,7 +34,7 @@ internal sealed class UnsubscribeTests
         await Assert.That(result).IsTrue();
 
         // Wait for the source job to reach a terminal state.
-        _WaitForCondition(
+        WaitHelper.WaitUntil(
             () => sourceJob.Status is JobStatus.Cancelled or JobStatus.Completed);
 
         // The source should have stopped producing frames shortly after unsubscribe.
@@ -81,7 +81,7 @@ internal sealed class UnsubscribeTests
         session.TryAddListener(listener, out _);
         session.TryStart();
 
-        _WaitForCondition(() => session.PacketCount >= initialFrames);
+        WaitHelper.WaitUntil(() => session.PacketCount >= initialFrames);
 
         // Unsubscribe the only source.
         JobInfo sourceJob = session.GetJobs().First(
@@ -91,7 +91,7 @@ internal sealed class UnsubscribeTests
         await Assert.That(result).IsTrue();
 
         // Session should transition to Stopped since all sources are done.
-        _WaitForCondition(
+        WaitHelper.WaitUntil(
             () => session.Phase == SessionPhase.Stopped);
 
         await Assert.That(session.Phase).IsEqualTo(SessionPhase.Stopped);
@@ -111,14 +111,14 @@ internal sealed class UnsubscribeTests
         session.TryAddFrameSource(source, out FrameSourceInfo? sourceInfo);
         session.TryStart();
 
-        _WaitForCondition(() => session.PacketCount >= initialFrames);
+        WaitHelper.WaitUntil(() => session.PacketCount >= initialFrames);
 
         // Use convenience API.
         await Assert.That(sourceInfo!.IsStoppable).IsTrue();
         sourceInfo.Stop();
 
         // Wait for the source to stop.
-        _WaitForCondition(
+        WaitHelper.WaitUntil(
             () => session.Phase == SessionPhase.Stopped);
 
         await Assert.That(session.PacketCount).IsGreaterThanOrEqualTo(initialFrames);
@@ -141,7 +141,7 @@ internal sealed class UnsubscribeTests
         session.TryAddListener(listener, out ListenerInfo? listenerInfo);
         session.TryStart();
 
-        _WaitForCondition(() => session.PacketCount >= frameCount);
+        WaitHelper.WaitUntil(() => session.PacketCount >= frameCount);
 
         // Find the listener's job.
         JobInfo listenerJob = session.GetJobs().First(
@@ -151,7 +151,7 @@ internal sealed class UnsubscribeTests
         await Assert.That(result).IsTrue();
 
         // OnUnsubscribed should have been called.
-        _WaitForCondition(() => listener.UnsubscribedCount > 0);
+        WaitHelper.WaitUntil(() => listener.UnsubscribedCount > 0);
         await Assert.That(listener.UnsubscribedCount).IsEqualTo(1);
 
         // Status should be Unsubscribed.
@@ -176,13 +176,13 @@ internal sealed class UnsubscribeTests
         session.TryAddListener(listener, out ListenerInfo? listenerInfo);
         session.TryStart();
 
-        _WaitForCondition(() => session.PacketCount >= frameCount);
+        WaitHelper.WaitUntil(() => session.PacketCount >= frameCount);
 
         // Use convenience API.
         listenerInfo!.Unsubscribe();
 
         // OnUnsubscribed should have been called.
-        _WaitForCondition(() => listener.UnsubscribedCount > 0);
+        WaitHelper.WaitUntil(() => listener.UnsubscribedCount > 0);
         await Assert.That(listener.UnsubscribedCount).IsEqualTo(1);
         await Assert.That(listenerInfo.Status).IsEqualTo(SubscriptionStatus.Unsubscribed);
 
@@ -219,7 +219,7 @@ internal sealed class UnsubscribeTests
         session.TryAddFrameSource(source, out _);
         session.TryStart();
 
-        _WaitForCondition(() => session.Phase == SessionPhase.Running);
+        WaitHelper.WaitUntil(() => session.Phase == SessionPhase.Running);
 
         // Add a long-running user job.
         using ManualResetEventSlim gate = new(false);
@@ -236,14 +236,14 @@ internal sealed class UnsubscribeTests
         await Assert.That(jobInfo).IsNotNull();
 
         // Wait for the job to start.
-        _WaitForCondition(() => jobInfo!.Status == JobStatus.Running);
+        WaitHelper.WaitUntil(() => jobInfo!.Status == JobStatus.Running);
 
         // Unsubscribe the user job.
         bool result = session.TryUnsubscribe(jobInfo!);
 
         await Assert.That(result).IsTrue();
 
-        _WaitForCondition(
+        WaitHelper.WaitUntil(
             () => jobInfo!.Status is JobStatus.Cancelled or JobStatus.Completed);
 
         source.Release();
@@ -266,7 +266,7 @@ internal sealed class UnsubscribeTests
         // Source job is already completed.
         JobInfo sourceJob = session.GetJobs().First(
             j => j.UiName == source.UiName);
-        _WaitForCondition(
+        WaitHelper.WaitUntil(
             () => sourceJob.Status is JobStatus.Completed or JobStatus.Cancelled);
 
         bool result = session.TryUnsubscribe(sourceJob);
@@ -286,7 +286,7 @@ internal sealed class UnsubscribeTests
         session.TryAddFrameSource(source, out _);
         session.TryStart();
 
-        _WaitForCondition(() => session.Phase == SessionPhase.Running);
+        WaitHelper.WaitUntil(() => session.Phase == SessionPhase.Running);
 
         using ManualResetEventSlim gate = new(false);
         using Job foreignJob = new(
@@ -326,25 +326,5 @@ internal sealed class UnsubscribeTests
         bool result = session.TryUnsubscribe(sourceJob);
 
         await Assert.That(result).IsFalse();
-    }
-
-    // ── Helpers ───────────────────────────────────────────────────────────────
-
-    /// <summary>
-    /// Spins for up to ~5 seconds until <paramref name="condition"/> returns true.
-    /// </summary>
-    private static void _WaitForCondition(Func<bool> condition, int timeoutMs = 5000)
-    {
-        Stopwatch sw = Stopwatch.StartNew();
-        SpinWait wait = new();
-        while (!condition())
-        {
-            if (sw.ElapsedMilliseconds > timeoutMs)
-            {
-                throw new TimeoutException(
-                    $"Condition was not met within {timeoutMs} ms.");
-            }
-            wait.SpinOnce();
-        }
     }
 }

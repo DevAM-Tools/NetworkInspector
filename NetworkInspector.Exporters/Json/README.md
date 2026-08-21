@@ -22,6 +22,10 @@ The `JsonExporter` serializes parsed packets through `IPacketListener` to JSON o
 | `JsonExportFormat.Pretty` | Human inspection and debugging |
 | `JsonExportFormat.Array` | Flat full-key array output for downstream tooling |
 
+Field metadata key `type` / `TY` uses the numeric `FieldType` enum value in **Compact**
+format and the enum member name (for example `"MacAddress"`, `"U64"`) in **Pretty**
+and **Array** formats.
+
 ## Quick Start
 
 ```csharp

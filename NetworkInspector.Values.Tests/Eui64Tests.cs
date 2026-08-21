@@ -164,10 +164,19 @@ internal sealed class Eui64Tests
     }
 
     [Test]
-    public async Task FromBytes_ShortSpan_ReturnsDefault()
+    public async Task FromBytes_ShortSpan_Throws()
     {
-        Eui64 eui = Eui64.FromBytes([0x01, 0x02, 0x03]);
+        await Assert.That(() =>
+        {
+            Eui64 _ = Eui64.FromBytes([0x01, 0x02, 0x03]);
+            return Task.CompletedTask;
+        }).Throws<ArgumentException>();
+    }
 
+    [Test]
+    public async Task TryFromBytes_ShortSpan_ReturnsFalse()
+    {
+        await Assert.That(Eui64.TryFromBytes([0x01, 0x02, 0x03], out Eui64 eui)).IsFalse();
         await Assert.That(eui).IsEqualTo(default(Eui64));
     }
 

@@ -71,6 +71,30 @@ foreach (RawFrame rawFrame in source)
 
 Use `AscSourceOptions.PreloadBudget` to control in-memory vs disk-backed behavior.
 
+### Handle Large BLF Files (FlexRay, CAN, Ethernet)
+
+BLF log containers are decompressed into memory. Configure `BlfSourceOptions` to bound peak usage:
+
+```csharp
+BlfSourceOptions options = new()
+{
+    // Reject containers larger than 128 MiB before allocation (default).
+    // Set to 0 only when you trust the capture source.
+    MaxUncompressedContainerSize = BlfSourceOptions.DefaultMaxUncompressedContainerSize,
+
+    // Limit simultaneous decompressions (default: ProcessorCount).
+    MaxDecompressionConcurrency = 2,
+
+    // Use mmap instead of full preload for files larger than the budget.
+    PreloadBudget = 64L * 1024 * 1024,
+
+    // Bound the 2Q container cache (default: 32 MiB).
+    CacheBudget = 16 * 1024 * 1024,
+};
+```
+
+For stream-based reading, set `BlfStreamSource.MaxUncompressedContainerSize` before `Start()`.
+
 ### Combine With Parser Stack
 
 Read `RawFrame` instances from sources, then convert them to `Frame` and parse into `Packet` via Core.

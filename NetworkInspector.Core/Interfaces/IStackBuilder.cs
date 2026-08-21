@@ -206,7 +206,7 @@ public interface IStackBuilder : IStack
     /// <c>packet.info</c> is appended, and before the packet is sealed. They receive the packet
     /// root field as their parent, which means their fields appear as root-level siblings —
     /// identical to top-level protocol fields. In the indexed parse path, post-parsers run before
-    /// <see cref="PacketIndex"/> <c>EndPacket</c>, so their index and value-cache contributions
+    /// <see cref="PacketIndex"/> <c>EndPacket</c>, so their index contributions
     /// are treated identically to normal parsers.
     /// </para>
     /// <para>

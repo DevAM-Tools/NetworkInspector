@@ -129,7 +129,7 @@ internal sealed class IPv6BasicTests
             foreach (FieldId memberId in members)
             {
                 FieldLookupCookie cookie = FieldLookupCookie.Start;
-                while (packet.TryGetNextFieldValue(memberId, ref cookie, out FieldValue value))
+                while (packet.TryGetNextFieldValue(memberId, ref cookie, out FieldValue value, materialize: true)) // materialize: true — need complete field tree for assertion
                 {
                     bool ok = value.Data.TryGetAsIPv6(out IPv6Address addr);
                     await Assert.That(ok).IsTrue().Because("alias member values must be IPv6 addresses");
@@ -450,7 +450,7 @@ internal sealed class IPv6BasicTests
         FieldId? srcId = stack.GetFieldId("ipv6.src");
         if (srcId.HasValue)
         {
-            bool found = packet.TryGetFieldValue(srcId.Value, out _);
+            bool found = packet.TryGetFieldValue(srcId.Value, out _, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(found).IsFalse().Because("Truncated frame must not produce ipv6.src");
         }
         else

@@ -46,11 +46,16 @@ internal sealed class ValueTypeTests
     }
 
     [Test]
-    public async Task MacAddress_FromBytesTooShort_ReturnsDefault()
+    public async Task MacAddress_FromBytesTooShort_Throws()
     {
         byte[] bytes = [0x01, 0x02];
-        MacAddress mac = MacAddress.FromBytes(bytes);
-        await Assert.That(mac.RawValue).IsEqualTo(0UL);
+        await Assert.That(() =>
+        {
+            MacAddress _ = MacAddress.FromBytes(bytes);
+            return Task.CompletedTask;
+        }).Throws<ArgumentException>();
+        await Assert.That(MacAddress.TryFromBytes(bytes, out MacAddress mac)).IsFalse();
+        await Assert.That(mac).IsEqualTo(default(MacAddress));
     }
 
     [Test]
@@ -200,11 +205,16 @@ internal sealed class ValueTypeTests
     }
 
     [Test]
-    public async Task IPv4Address_FromBytesTooShort_ReturnsDefault()
+    public async Task IPv4Address_FromBytesTooShort_Throws()
     {
         byte[] bytes = [10, 20];
-        IPv4Address ip = IPv4Address.FromBytes(bytes);
-        await Assert.That(ip.RawValue).IsEqualTo(0u);
+        await Assert.That(() =>
+        {
+            IPv4Address _ = IPv4Address.FromBytes(bytes);
+            return Task.CompletedTask;
+        }).Throws<ArgumentException>();
+        await Assert.That(IPv4Address.TryFromBytes(bytes, out IPv4Address ip)).IsFalse();
+        await Assert.That(ip).IsEqualTo(default(IPv4Address));
     }
 
     [Test]

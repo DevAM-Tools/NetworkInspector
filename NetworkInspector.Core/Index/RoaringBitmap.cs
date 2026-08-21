@@ -7,29 +7,39 @@ namespace NetworkInspector.Core.Index;
 /// Partitions values into 16-bit high chunks, each containing a typed container for the low 16 bits.
 /// Supports AND, OR, XOR, ANDNOT and in-place variants for zero-allocation query paths.
 /// <para>
-/// <b>Aliasing model for set operations:</b> <see cref="Or"/>, <see cref="AndNot"/> and
-/// <see cref="Xor"/> may share <see cref="IContainer"/> references with the operands for
-/// chunks that exist in only one of the two operands (single-side branches). <see cref="And"/>
-/// always allocates fresh containers via <see cref="IContainer.And(IContainer)"/>, so its
-/// result is fully detached. The shared-reference policy keeps the common case zero-allocation;
-/// the result is safe to read concurrently with the operands. However, mutating either the
-/// result or any operand (via <see cref="Add"/>, <c>Remove</c>, or any <c>*With</c>
-/// in-place variant) after such a set operation may corrupt the other side because containers
-/// such as <see cref="ArrayContainer"/> mutate in place. Call <see cref="Clone"/> first when
-/// an independent, fully detached copy is required.
+/// <b>Aliasing model for set operations:</b> Immutable <see cref="Or"/>, <see cref="AndNot"/>,
+/// and <see cref="Xor"/> produce detached results — single-side chunks are cloned before insert.
+/// <see cref="And"/> always allocates fresh containers via <see cref="IContainer.And(IContainer)"/>.
+/// In-place <see cref="AndWith"/> and <see cref="AndNotWith"/> clone <see cref="BitmapContainer"/>
+/// operands before SIMD mutation; <see cref="OrWith"/> and <see cref="XorWith"/> clone chunks
+/// adopted from the other operand only.
 /// </para>
 /// <para>
-/// <b>Thread-safety:</b> instances are not thread-safe for concurrent mutation. After all
-/// mutations have happened-before the publication, multiple threads may read concurrently
-/// (cardinality, contains, set operations producing fresh results).
+/// <b>Thread-safety:</b> Single-writer / multi-reader. Concurrent <see cref="Add"/> from more
+/// than one thread is not supported. Concurrent readers may call <see cref="Contains"/>,
+/// <see cref="Clone"/>, cardinality and rank/select while a single writer is appending.
+/// A seqlock retries the reader when it overlaps an in-flight mutation, so a held
+/// <see cref="ReadOnlyRoaringBitmap"/> view of an index bitmap stays valid as the index grows.
+/// Set operations that allocate a new bitmap (<see cref="And"/>, <see cref="Or"/>, …) copy
+/// containers and are intended for a private result or a bitmap that is no longer growing.
 /// </para>
 /// </summary>
 public sealed class RoaringBitmap
 {
+    #region Fields
+
     // Sorted parallel arrays: keys (high 16 bits) + containers (low 16 bits)
     private ushort[] _Keys;
     private IContainer[] _Containers;
     private int _Count;
+    private long _Cardinality;
+
+    // Even = stable; odd = writer in Add / in-place set op. Readers retry while odd or changed.
+    private int _SeqLock;
+
+    #endregion
+
+    #region Lifecycle
 
     /// <summary>Creates an empty Roaring bitmap.</summary>
     public RoaringBitmap()
@@ -39,38 +49,48 @@ public sealed class RoaringBitmap
         _Count = 0;
     }
 
+    #endregion
+
+    #region Public API
+
     /// <summary>Total number of values stored.</summary>
     public long Cardinality
     {
         get
         {
-            long total = 0;
-            for (int i = 0; i < _Count; i++)
+            while (true)
             {
-                total += _Containers[i].Cardinality;
+                int seq = _ReadSeqLock();
+                if (_IsWriteInProgress(seq))
+                {
+                    Thread.SpinWait(1);
+                    continue;
+                }
+
+                long cardinality = _Cardinality;
+                if (_ReadSeqLock() == seq)
+                {
+                    return cardinality;
+                }
             }
-            return total;
         }
     }
 
     /// <summary>Whether the bitmap is empty.</summary>
-    public bool IsEmpty => _Count == 0;
+    public bool IsEmpty => Cardinality == 0L;
 
     /// <summary>Adds a 32-bit value to the bitmap.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void Add(uint value)
     {
-        ushort high = (ushort)(value >> 16);
-        ushort low = (ushort)(value & 0xFFFF);
-
-        int idx = _FindChunk(high);
-        if (idx >= 0)
+        _BeginWrite();
+        try
         {
-            _Containers[idx] = _Containers[idx].Add(low);
+            _AddUnsynchronized(value);
         }
-        else
+        finally
         {
-            _InsertChunk(~idx, high, new ArrayContainer().Add(low));
+            _EndWrite();
         }
     }
 
@@ -80,9 +100,22 @@ public sealed class RoaringBitmap
     {
         ushort high = (ushort)(value >> 16);
         ushort low = (ushort)(value & 0xFFFF);
+        while (true)
+        {
+            int seq = _ReadSeqLock();
+            if (_IsWriteInProgress(seq))
+            {
+                Thread.SpinWait(1);
+                continue;
+            }
 
-        int idx = _FindChunk(high);
-        return idx >= 0 && _Containers[idx].Contains(low);
+            int idx = _FindChunk(high);
+            bool present = idx >= 0 && _Containers[idx].Contains(low);
+            if (_ReadSeqLock() == seq)
+            {
+                return present;
+            }
+        }
     }
 
     /// <summary>
@@ -93,11 +126,31 @@ public sealed class RoaringBitmap
     {
         get
         {
-            if (_Count == 0)
+            while (true)
             {
-                _ThrowEmpty();
+                int seq = _ReadSeqLock();
+                if (_IsWriteInProgress(seq))
+                {
+                    Thread.SpinWait(1);
+                    continue;
+                }
+
+                if (_Count == 0)
+                {
+                    if (_ReadSeqLock() == seq)
+                    {
+                        _ThrowEmpty();
+                    }
+
+                    continue;
+                }
+
+                uint min = ((uint)_Keys[0] << 16) | _Containers[0].Min;
+                if (_ReadSeqLock() == seq)
+                {
+                    return min;
+                }
             }
-            return ((uint)_Keys[0] << 16) | _Containers[0].Min;
         }
     }
 
@@ -109,11 +162,31 @@ public sealed class RoaringBitmap
     {
         get
         {
-            if (_Count == 0)
+            while (true)
             {
-                _ThrowEmpty();
+                int seq = _ReadSeqLock();
+                if (_IsWriteInProgress(seq))
+                {
+                    Thread.SpinWait(1);
+                    continue;
+                }
+
+                if (_Count == 0)
+                {
+                    if (_ReadSeqLock() == seq)
+                    {
+                        _ThrowEmpty();
+                    }
+
+                    continue;
+                }
+
+                uint max = ((uint)_Keys[_Count - 1] << 16) | _Containers[_Count - 1].Max;
+                if (_ReadSeqLock() == seq)
+                {
+                    return max;
+                }
             }
-            return ((uint)_Keys[_Count - 1] << 16) | _Containers[_Count - 1].Max;
         }
     }
 
@@ -123,13 +196,33 @@ public sealed class RoaringBitmap
     /// </summary>
     public bool TryGetMin(out uint value)
     {
-        if (_Count == 0)
+        while (true)
         {
-            value = 0;
-            return false;
+            int seq = _ReadSeqLock();
+            if (_IsWriteInProgress(seq))
+            {
+                Thread.SpinWait(1);
+                continue;
+            }
+
+            if (_Count == 0)
+            {
+                if (_ReadSeqLock() == seq)
+                {
+                    value = 0;
+                    return false;
+                }
+
+                continue;
+            }
+
+            uint min = ((uint)_Keys[0] << 16) | _Containers[0].Min;
+            if (_ReadSeqLock() == seq)
+            {
+                value = min;
+                return true;
+            }
         }
-        value = ((uint)_Keys[0] << 16) | _Containers[0].Min;
-        return true;
     }
 
     /// <summary>
@@ -138,19 +231,34 @@ public sealed class RoaringBitmap
     /// </summary>
     public bool TryGetMax(out uint value)
     {
-        if (_Count == 0)
+        while (true)
         {
-            value = 0;
-            return false;
-        }
-        value = ((uint)_Keys[_Count - 1] << 16) | _Containers[_Count - 1].Max;
-        return true;
-    }
+            int seq = _ReadSeqLock();
+            if (_IsWriteInProgress(seq))
+            {
+                Thread.SpinWait(1);
+                continue;
+            }
 
-    [DoesNotReturn]
-    [MethodImpl(MethodImplOptions.NoInlining)]
-    private static void _ThrowEmpty() =>
-        throw new InvalidOperationException("Bitmap is empty.");
+            if (_Count == 0)
+            {
+                if (_ReadSeqLock() == seq)
+                {
+                    value = 0;
+                    return false;
+                }
+
+                continue;
+            }
+
+            uint max = ((uint)_Keys[_Count - 1] << 16) | _Containers[_Count - 1].Max;
+            if (_ReadSeqLock() == seq)
+            {
+                value = max;
+                return true;
+            }
+        }
+    }
 
     /// <summary>
     /// Creates a deep copy of this bitmap. All containers are copied independently.
@@ -159,20 +267,45 @@ public sealed class RoaringBitmap
     /// </summary>
     public RoaringBitmap Clone()
     {
-        RoaringBitmap copy = new();
-        if (_Count > 0)
+        while (true)
         {
-            copy._Keys = new ushort[_Count];
-            copy._Containers = new IContainer[_Count];
-            Array.Copy(_Keys, copy._Keys, _Count);
-            for (int i = 0; i < _Count; i++)
+            int seq = _ReadSeqLock();
+            if (_IsWriteInProgress(seq))
             {
-                copy._Containers[i] = _Containers[i].Clone();
+                Thread.SpinWait(1);
+                continue;
             }
-            copy._Count = _Count;
+
+            RoaringBitmap copy = new();
+            if (_Count > 0)
+            {
+                copy._Keys = new ushort[_Count];
+                copy._Containers = new IContainer[_Count];
+                Array.Copy(_Keys, copy._Keys, _Count);
+                for (int i = 0; i < _Count; i++)
+                {
+                    copy._Containers[i] = _Containers[i].Clone();
+                }
+                copy._Count = _Count;
+                copy._Cardinality = _Cardinality;
+            }
+
+            if (_ReadSeqLock() == seq)
+            {
+                return copy;
+            }
         }
-        return copy;
     }
+
+    /// <summary>
+    /// Returns a read-only view over this bitmap (zero-allocation; wraps this instance).
+    /// All queries are delegated to this bitmap — mutations made to this bitmap
+    /// after calling <see cref="AsReadOnly"/> are visible through the returned view.
+    /// To create an isolated snapshot, call <see cref="Clone"/> first.
+    /// </summary>
+    public ReadOnlyRoaringBitmap AsReadOnly() => new(this);
+
+    #endregion
 
     #region Immutable set operations
 
@@ -214,12 +347,12 @@ public sealed class RoaringBitmap
         {
             if (_Keys[i] < other._Keys[j])
             {
-                result._InsertChunk(result._Count, _Keys[i], _Containers[i]);
+                result._InsertChunk(result._Count, _Keys[i], _Containers[i].Clone());
                 i++;
             }
             else if (_Keys[i] > other._Keys[j])
             {
-                result._InsertChunk(result._Count, other._Keys[j], other._Containers[j]);
+                result._InsertChunk(result._Count, other._Keys[j], other._Containers[j].Clone());
                 j++;
             }
             else
@@ -231,12 +364,12 @@ public sealed class RoaringBitmap
         }
         while (i < _Count)
         {
-            result._InsertChunk(result._Count, _Keys[i], _Containers[i]);
+            result._InsertChunk(result._Count, _Keys[i], _Containers[i].Clone());
             i++;
         }
         while (j < other._Count)
         {
-            result._InsertChunk(result._Count, other._Keys[j], other._Containers[j]);
+            result._InsertChunk(result._Count, other._Keys[j], other._Containers[j].Clone());
             j++;
         }
         return result;
@@ -252,7 +385,7 @@ public sealed class RoaringBitmap
             if (_Keys[i] < other._Keys[j])
             {
                 // Chunk only in this — keep it
-                result._InsertChunk(result._Count, _Keys[i], _Containers[i]);
+                result._InsertChunk(result._Count, _Keys[i], _Containers[i].Clone());
                 i++;
             }
             else if (_Keys[i] > other._Keys[j])
@@ -273,7 +406,7 @@ public sealed class RoaringBitmap
         // Remaining chunks in this have no match in other — keep them
         while (i < _Count)
         {
-            result._InsertChunk(result._Count, _Keys[i], _Containers[i]);
+            result._InsertChunk(result._Count, _Keys[i], _Containers[i].Clone());
             i++;
         }
         return result;
@@ -288,12 +421,12 @@ public sealed class RoaringBitmap
         {
             if (_Keys[i] < other._Keys[j])
             {
-                result._InsertChunk(result._Count, _Keys[i], _Containers[i]);
+                result._InsertChunk(result._Count, _Keys[i], _Containers[i].Clone());
                 i++;
             }
             else if (_Keys[i] > other._Keys[j])
             {
-                result._InsertChunk(result._Count, other._Keys[j], other._Containers[j]);
+                result._InsertChunk(result._Count, other._Keys[j], other._Containers[j].Clone());
                 j++;
             }
             else
@@ -309,12 +442,12 @@ public sealed class RoaringBitmap
         }
         while (i < _Count)
         {
-            result._InsertChunk(result._Count, _Keys[i], _Containers[i]);
+            result._InsertChunk(result._Count, _Keys[i], _Containers[i].Clone());
             i++;
         }
         while (j < other._Count)
         {
-            result._InsertChunk(result._Count, other._Keys[j], other._Containers[j]);
+            result._InsertChunk(result._Count, other._Keys[j], other._Containers[j].Clone());
             j++;
         }
         return result;
@@ -331,68 +464,147 @@ public sealed class RoaringBitmap
     /// </summary>
     public void AndWith(RoaringBitmap other)
     {
-        int writePos = 0;
-        int i = 0, j = 0;
-        while (i < _Count && j < other._Count)
+        _BeginWrite();
+        try
         {
-            if (_Keys[i] < other._Keys[j])
+            int writePos = 0;
+            int i = 0, j = 0;
+            while (i < _Count && j < other._Count)
             {
-                i++;
-            }
-            else if (_Keys[i] > other._Keys[j])
-            {
-                j++;
-            }
-            else
-            {
-                IContainer intersected;
-                if (_Containers[i] is BitmapContainer thisBmp
-                    && other._Containers[j] is BitmapContainer otherBmp)
+                if (_Keys[i] < other._Keys[j])
                 {
-                    // SIMD in-place AND on the 8KB bitmap
-                    thisBmp.AndWith(otherBmp);
-                    intersected = thisBmp.Cardinality <= ArrayContainer.MaxCapacity
-                        ? BitmapContainer.BitmapToArray(thisBmp)
-                        : thisBmp;
+                    i++;
+                }
+                else if (_Keys[i] > other._Keys[j])
+                {
+                    j++;
                 }
                 else
                 {
-                    intersected = _Containers[i].And(other._Containers[j]);
-                }
+                    IContainer intersected;
+                    if (_Containers[i] is BitmapContainer thisBmp
+                        && other._Containers[j] is BitmapContainer otherBmp)
+                    {
+                        // Clone before in-place mutation to avoid corrupting aliased operands from Or/AndNot/Xor.
+                        BitmapContainer mutableBmp = (BitmapContainer)thisBmp.Clone();
+                        mutableBmp.AndWith(otherBmp);
+                        intersected = mutableBmp.Cardinality <= ArrayContainer.MaxCapacity
+                            ? BitmapContainer.BitmapToArray(mutableBmp)
+                            : mutableBmp;
+                    }
+                    else
+                    {
+                        intersected = _Containers[i].And(other._Containers[j]);
+                    }
 
-                if (intersected.Cardinality > 0)
-                {
-                    _Keys[writePos] = _Keys[i];
-                    _Containers[writePos] = intersected;
-                    writePos++;
+                    if (intersected.Cardinality > 0)
+                    {
+                        _Keys[writePos] = _Keys[i];
+                        _Containers[writePos] = intersected;
+                        writePos++;
+                    }
+                    i++;
+                    j++;
                 }
-                i++;
-                j++;
             }
+            for (int c = writePos; c < _Count; c++)
+            {
+                _Containers[c] = null!;
+            }
+            _Count = writePos;
+            _RecomputeCachedCardinality();
         }
-        // Clear removed slots to allow GC of old containers
-        for (int c = writePos; c < _Count; c++)
+        finally
         {
-            _Containers[c] = null!;
+            _EndWrite();
         }
-        _Count = writePos;
     }
 
     /// <summary>
     /// In-place OR: adds all values from <paramref name="other"/>.
+    /// Clones chunks adopted from <paramref name="other"/>; this-side chunks are kept in place.
     /// </summary>
     public void OrWith(RoaringBitmap other)
     {
-        if (other._Count == 0)
+        _BeginWrite();
+        try
         {
-            return;
+            if (other._Count == 0)
+            {
+                return;
+            }
+
+            if (_Count == 0)
+            {
+                _AdoptClonedChunks(other);
+                return;
+            }
+
+        ushort[] keys = _Keys;
+        IContainer[] containers = _Containers;
+        int count = _Count;
+        ushort[] newKeys = new ushort[Math.Max(keys.Length, count + other._Count)];
+        IContainer[] newContainers = new IContainer[newKeys.Length];
+        int newCount = 0;
+        int i = 0;
+        int j = 0;
+
+        while (i < count && j < other._Count)
+        {
+            if (keys[i] < other._Keys[j])
+            {
+                newKeys[newCount] = keys[i];
+                newContainers[newCount] = containers[i];
+                newCount++;
+                i++;
+            }
+            else if (keys[i] > other._Keys[j])
+            {
+                newKeys[newCount] = other._Keys[j];
+                newContainers[newCount] = other._Containers[j].Clone();
+                newCount++;
+                j++;
+            }
+            else
+            {
+                newKeys[newCount] = keys[i];
+                newContainers[newCount] = containers[i].Or(other._Containers[j]);
+                newCount++;
+                i++;
+                j++;
+            }
         }
 
-        // OR may add new chunks — use immutable OR then swap
-        RoaringBitmap merged = Or(other);
-        _Keys = merged._Keys;
-        _Containers = merged._Containers;
-        _Count = merged._Count;
+        while (i < count)
+        {
+            newKeys[newCount] = keys[i];
+            newContainers[newCount] = containers[i];
+            newCount++;
+            i++;
+        }
+
+        while (j < other._Count)
+        {
+            newKeys[newCount] = other._Keys[j];
+            newContainers[newCount] = other._Containers[j].Clone();
+            newCount++;
+            j++;
+        }
+
+        for (int c = newCount; c < count; c++)
+        {
+            containers[c] = null!;
+        }
+
+        _Keys = newKeys;
+        _Containers = newContainers;
+        _Count = newCount;
+        _RecomputeCachedCardinality();
+        }
+        finally
+        {
+            _EndWrite();
+        }
     }
 
     /// <summary>
@@ -401,6 +613,9 @@ public sealed class RoaringBitmap
     /// </summary>
     public void AndNotWith(RoaringBitmap other)
     {
+        _BeginWrite();
+        try
+        {
         int writePos = 0;
         int i = 0, j = 0;
         while (i < _Count && j < other._Count)
@@ -422,10 +637,12 @@ public sealed class RoaringBitmap
                 if (_Containers[i] is BitmapContainer thisBmp
                     && other._Containers[j] is BitmapContainer otherBmp)
                 {
-                    thisBmp.AndNotWith(otherBmp);
-                    diff = thisBmp.Cardinality <= ArrayContainer.MaxCapacity
-                        ? BitmapContainer.BitmapToArray(thisBmp)
-                        : thisBmp;
+                    // Clone before in-place mutation to avoid corrupting aliased operands from Or/AndNot/Xor.
+                    BitmapContainer mutableBmp = (BitmapContainer)thisBmp.Clone();
+                    mutableBmp.AndNotWith(otherBmp);
+                    diff = mutableBmp.Cardinality <= ArrayContainer.MaxCapacity
+                        ? BitmapContainer.BitmapToArray(mutableBmp)
+                        : mutableBmp;
                 }
                 else
                 {
@@ -454,15 +671,103 @@ public sealed class RoaringBitmap
             _Containers[c] = null!;
         }
         _Count = writePos;
+        _RecomputeCachedCardinality();
+        }
+        finally
+        {
+            _EndWrite();
+        }
     }
 
-    /// <summary>In-place XOR: toggles all values from <paramref name="other"/>.</summary>
+    /// <summary>
+    /// In-place XOR: toggles all values from <paramref name="other"/>.
+    /// Clones chunks adopted from <paramref name="other"/>; this-side chunks are kept in place.
+    /// </summary>
     public void XorWith(RoaringBitmap other)
     {
-        RoaringBitmap xored = Xor(other);
-        _Keys = xored._Keys;
-        _Containers = xored._Containers;
-        _Count = xored._Count;
+        _BeginWrite();
+        try
+        {
+        if (other._Count == 0)
+        {
+            return;
+        }
+
+        if (_Count == 0)
+        {
+            _AdoptClonedChunks(other);
+            return;
+        }
+
+        ushort[] keys = _Keys;
+        IContainer[] containers = _Containers;
+        int count = _Count;
+        ushort[] newKeys = new ushort[Math.Max(keys.Length, count + other._Count)];
+        IContainer[] newContainers = new IContainer[newKeys.Length];
+        int newCount = 0;
+        int i = 0;
+        int j = 0;
+
+        while (i < count && j < other._Count)
+        {
+            if (keys[i] < other._Keys[j])
+            {
+                newKeys[newCount] = keys[i];
+                newContainers[newCount] = containers[i];
+                newCount++;
+                i++;
+            }
+            else if (keys[i] > other._Keys[j])
+            {
+                newKeys[newCount] = other._Keys[j];
+                newContainers[newCount] = other._Containers[j].Clone();
+                newCount++;
+                j++;
+            }
+            else
+            {
+                IContainer xored = containers[i].Xor(other._Containers[j]);
+                if (xored.Cardinality > 0)
+                {
+                    newKeys[newCount] = keys[i];
+                    newContainers[newCount] = xored;
+                    newCount++;
+                }
+                i++;
+                j++;
+            }
+        }
+
+        while (i < count)
+        {
+            newKeys[newCount] = keys[i];
+            newContainers[newCount] = containers[i];
+            newCount++;
+            i++;
+        }
+
+        while (j < other._Count)
+        {
+            newKeys[newCount] = other._Keys[j];
+            newContainers[newCount] = other._Containers[j].Clone();
+            newCount++;
+            j++;
+        }
+
+        for (int c = newCount; c < count; c++)
+        {
+            containers[c] = null!;
+        }
+
+        _Keys = newKeys;
+        _Containers = newContainers;
+        _Count = newCount;
+        _RecomputeCachedCardinality();
+        }
+        finally
+        {
+            _EndWrite();
+        }
     }
 
     #endregion
@@ -476,25 +781,38 @@ public sealed class RoaringBitmap
     {
         ushort high = (ushort)(value >> 16);
         ushort low = (ushort)(value & 0xFFFF);
-        long rank = 0;
-
-        for (int i = 0; i < _Count; i++)
+        while (true)
         {
-            if (_Keys[i] < high)
+            int seq = _ReadSeqLock();
+            if (_IsWriteInProgress(seq))
             {
-                rank += _Containers[i].Cardinality;
+                Thread.SpinWait(1);
+                continue;
             }
-            else if (_Keys[i] == high)
+
+            long rank = 0;
+            for (int i = 0; i < _Count; i++)
             {
-                rank += _ContainerRank(_Containers[i], low);
-                break;
+                if (_Keys[i] < high)
+                {
+                    rank += _Containers[i].Cardinality;
+                }
+                else if (_Keys[i] == high)
+                {
+                    rank += _ContainerRank(_Containers[i], low);
+                    break;
+                }
+                else
+                {
+                    break;
+                }
             }
-            else
+
+            if (_ReadSeqLock() == seq)
             {
-                break;
+                return rank;
             }
         }
-        return rank;
     }
 
     /// <summary>
@@ -508,31 +826,109 @@ public sealed class RoaringBitmap
             return null;
         }
 
-        long remaining = position;
-        for (int i = 0; i < _Count; i++)
+        while (true)
         {
-            int card = _Containers[i].Cardinality;
-            if (remaining < card)
+            int seq = _ReadSeqLock();
+            if (_IsWriteInProgress(seq))
             {
-                ushort low = _ContainerSelect(_Containers[i], (int)remaining);
-                return ((uint)_Keys[i] << 16) | low;
+                Thread.SpinWait(1);
+                continue;
             }
-            remaining -= card;
+
+            long remaining = position;
+            uint? selected = null;
+            bool found = false;
+            for (int i = 0; i < _Count; i++)
+            {
+                int card = _Containers[i].Cardinality;
+                if (remaining < card)
+                {
+                    ushort low = _ContainerSelect(_Containers[i], (int)remaining);
+                    selected = ((uint)_Keys[i] << 16) | low;
+                    found = true;
+                    break;
+                }
+                remaining -= card;
+            }
+
+            if (_ReadSeqLock() == seq)
+            {
+                if (found)
+                {
+                    return selected;
+                }
+
+                return null;
+            }
         }
-        return null;
     }
 
     #endregion
 
-    /// <summary>
-    /// Returns a read-only view over this bitmap.
-    /// All queries are delegated to this bitmap — mutations made to this bitmap
-    /// after calling <see cref="AsReadOnly"/> are visible through the returned view.
-    /// To create an isolated snapshot, call <see cref="Clone"/> first.
-    /// </summary>
-    public ReadOnlyRoaringBitmap AsReadOnly() => new(this);
-
     #region Internal helpers
+
+    [DoesNotReturn]
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void _ThrowEmpty() =>
+        throw new InvalidOperationException("Bitmap is empty.");
+
+    private void _AdoptClonedChunks(RoaringBitmap other)
+    {
+        _Keys = new ushort[other._Count];
+        _Containers = new IContainer[other._Count];
+        for (int i = 0; i < other._Count; i++)
+        {
+            _Keys[i] = other._Keys[i];
+            _Containers[i] = other._Containers[i].Clone();
+        }
+        _Count = other._Count;
+        _Cardinality = other._Cardinality;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool _IsWriteInProgress(int seq) => (seq & 1) != 0;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private int _ReadSeqLock() => Volatile.Read(ref _SeqLock);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void _BeginWrite()
+    {
+        int seq = Volatile.Read(ref _SeqLock);
+        Volatile.Write(ref _SeqLock, seq + 1);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void _EndWrite()
+    {
+        int seq = Volatile.Read(ref _SeqLock);
+        Volatile.Write(ref _SeqLock, seq + 1);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void _AddUnsynchronized(uint value)
+    {
+        ushort high = (ushort)(value >> 16);
+        ushort low = (ushort)(value & 0xFFFF);
+
+        int idx = _FindChunk(high);
+        if (idx >= 0)
+        {
+            IContainer oldContainer = _Containers[idx];
+            int oldCardinality = oldContainer.Cardinality;
+            IContainer newContainer = oldContainer.Add(low);
+            if (newContainer.Cardinality != oldCardinality)
+            {
+                _Containers[idx] = newContainer;
+                _Cardinality += newContainer.Cardinality - oldCardinality;
+            }
+        }
+        else
+        {
+            IContainer newContainer = new ArrayContainer().Add(low);
+            _InsertChunk(~idx, high, newContainer);
+        }
+    }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private int _FindChunk(ushort key) => Array.BinarySearch(_Keys, 0, _Count, key);
@@ -553,6 +949,17 @@ public sealed class RoaringBitmap
         _Keys[idx] = key;
         _Containers[idx] = container;
         _Count++;
+        _Cardinality += container.Cardinality;
+    }
+
+    private void _RecomputeCachedCardinality()
+    {
+        long total = 0;
+        for (int i = 0; i < _Count; i++)
+        {
+            total += _Containers[i].Cardinality;
+        }
+        _Cardinality = total;
     }
 
     /// <summary>Counts values ≤ threshold in a container.</summary>

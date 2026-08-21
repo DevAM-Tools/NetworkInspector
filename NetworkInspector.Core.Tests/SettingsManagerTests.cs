@@ -44,6 +44,13 @@ internal sealed class SettingsManagerTests
     }
 
     [Test]
+    public void RegisterSetting_Null_ThrowsArgumentNullException()
+    {
+        using SettingsManager mgr = new();
+        _ = Assert.Throws<ArgumentNullException>(() => mgr.RegisterSetting(null!));
+    }
+
+    [Test]
     public void RegisterSetting_InvalidUiName_Throws()
     {
         using SettingsManager mgr = new();
@@ -530,6 +537,30 @@ internal sealed class SettingsManagerTests
         await Assert.That(result).IsNull();
     }
 
+    [Test]
+    public async Task ReadOnly_GetBytesSetting_ReturnsDefensiveCopy()
+    {
+        using SettingsManager mgr = new();
+        mgr.RegisterSetting(Setting.Bytes("test.data", "Data", "test", [1, 2, 3]));
+
+        byte[]? result = mgr.ReadOnly.GetBytesSetting("test.data");
+        await Assert.That(result).IsNotNull();
+        await Assert.That(result!.Length).IsEqualTo(3);
+        await Assert.That(result[0]).IsEqualTo((byte)1);
+    }
+
+    [Test]
+    public async Task ReadOnly_GetEnumSetting_ReturnsNameAndValue()
+    {
+        using SettingsManager mgr = new();
+        mgr.RegisterSetting(Setting.Enum("test.level", "Level", "test", 1UL, [("Low", 0UL), ("Medium", 1UL)]));
+
+        (string Name, ulong Value)? result = mgr.ReadOnly.GetEnumSetting("test.level");
+        await Assert.That(result).IsNotNull();
+        await Assert.That(result!.Value.Name).IsEqualTo("Medium");
+        await Assert.That(result.Value.Value).IsEqualTo(1UL);
+    }
+
     // === SettingsApplied event ===
 
     [Test]
@@ -602,12 +633,12 @@ internal sealed class SettingsManagerTests
         using SettingsManager mgr = new();
         mgr.RegisterSetting(Setting.Bool("test.flag", "Flag", "test", true));
 
-        IReadOnlySettingsManager readOnly = mgr.ReadOnly;
-        IReadOnlySetting? s = readOnly.GetSetting("test.flag");
+        ReadOnlySettingsManagerView readOnly = mgr.ReadOnly;
+        ReadOnlySettingView? s = readOnly.GetSetting("test.flag");
 
         await Assert.That(s).IsNotNull();
-        await Assert.That(s!.Name).IsEqualTo("test.flag");
-        bool ifaceBool = s.TryGetAsBool(out bool ifaceBoolVal);
+        await Assert.That(s!.Value.Name).IsEqualTo("test.flag");
+        bool ifaceBool = s.Value.TryGetAsBool(out bool ifaceBoolVal);
         await Assert.That(ifaceBool).IsTrue();
         await Assert.That(ifaceBoolVal).IsTrue();
     }
@@ -618,12 +649,15 @@ internal sealed class SettingsManagerTests
         using SettingsManager mgr = new();
         mgr.RegisterSetting(Setting.Bool("test.flag", "Flag", "mygroup", true));
 
-        IReadOnlySettingsManager readOnly = mgr.ReadOnly;
-        IReadOnlySettingGroup? group = readOnly.GetGroup("mygroup");
+        ReadOnlySettingsManagerView readOnly = mgr.ReadOnly;
+        ReadOnlySettingGroupView? group = readOnly.GetGroup("mygroup");
 
         await Assert.That(group).IsNotNull();
-        await Assert.That(group!.Name).IsEqualTo("mygroup");
-        await Assert.That(group.SettingCount).IsEqualTo(1);
+        await Assert.That(group!.Value.Name).IsEqualTo("mygroup");
+        await Assert.That(group.Value.SettingCount).IsEqualTo(1);
+        IReadOnlyList<ReadOnlySettingView> groupSettings = group.Value.Settings;
+        await Assert.That(groupSettings.Count).IsEqualTo(1);
+        await Assert.That(groupSettings[0].Name).IsEqualTo("test.flag");
     }
 
     [Test]
@@ -633,8 +667,8 @@ internal sealed class SettingsManagerTests
         mgr.RegisterSetting(Setting.Bool("test.a", "A", "test", true));
         mgr.RegisterSetting(Setting.Bool("test.b", "B", "test", false));
 
-        IReadOnlySettingsManager readOnly = mgr.ReadOnly;
-        IReadOnlyList<IReadOnlySetting> all = readOnly.AllSettings;
+        ReadOnlySettingsManagerView readOnly = mgr.ReadOnly;
+        IReadOnlyList<ReadOnlySettingView> all = readOnly.AllSettings;
 
         await Assert.That(all.Count).IsEqualTo(2);
     }
@@ -647,8 +681,8 @@ internal sealed class SettingsManagerTests
         mgr.RegisterSetting(Setting.Bool("a.y", "Y", "g1", true));
         mgr.RegisterSetting(Setting.Bool("b.z", "Z", "g2", false));
 
-        IReadOnlySettingsManager readOnly = mgr.ReadOnly;
-        IReadOnlyList<IReadOnlySetting> inG1 = readOnly.GetSettingsInGroup("g1");
+        ReadOnlySettingsManagerView readOnly = mgr.ReadOnly;
+        IReadOnlyList<ReadOnlySettingView> inG1 = readOnly.GetSettingsInGroup("g1");
 
         await Assert.That(inG1.Count).IsEqualTo(2);
     }
@@ -1089,6 +1123,42 @@ internal sealed class SettingsManagerTests
     }
 
     [Test]
+    public async Task Load_EnumObject_UnknownNumericValue_ReturnsTypeMismatchWarning()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(dir);
+            await File.WriteAllTextAsync(
+                Path.Combine(dir, "default.json"),
+                """
+                {
+                  "test.level": {"name": "Low", "value": 1}
+                }
+                """).ConfigureAwait(false);
+
+            using SettingsManager mgr = new(dir);
+            EnumSettingMetadata meta = EnumSettingMetadata.FromPairs(
+                [("Low", 0UL), ("High", 2UL)]);
+            Setting level = Setting.EnumWithMetadata("test.level", "Level", string.Empty, 0, meta);
+            mgr.RegisterSetting(level);
+
+            IReadOnlyList<SettingsLoadWarning> warnings = mgr.Load();
+
+            await Assert.That(warnings.Count).IsEqualTo(1);
+            await Assert.That(warnings[0].Kind).IsEqualTo(SettingsLoadWarningKind.TypeMismatch);
+            await Assert.That(warnings[0].SettingName).IsEqualTo("test.level");
+            level.Value.TryGetAsEnum(out (string Name, ulong Value) ev);
+            await Assert.That(ev.Name).IsEqualTo("Low");
+            await Assert.That(ev.Value).IsEqualTo(0UL);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Test]
     public async Task Load_EnumObject_AllNumericFormats_Load()
     {
         string dir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
@@ -1201,9 +1271,11 @@ internal sealed class SettingsManagerTests
             Setting s = Setting.Enum("test.level", "Level", string.Empty, 0UL,
                 [("Low", 0UL), ("High", 1UL)]);
             mgr.RegisterSetting(s);
-            await Assert.That(mgr.Load()).IsEmpty();
+            IReadOnlyList<SettingsLoadWarning> warnings = mgr.Load();
+            await Assert.That(warnings.Count).IsEqualTo(1);
+            await Assert.That(warnings[0].Kind).IsEqualTo(SettingsLoadWarningKind.EnumNameMismatch);
             s.Value.TryGetAsEnum(out (string Name, ulong Value) ev);
-            await Assert.That(ev.Name).IsEqualTo("High");
+            await Assert.That(ev.Name).IsEqualTo("Low");
             await Assert.That(ev.Value).IsEqualTo(0UL);
         }
         finally
@@ -1245,9 +1317,12 @@ internal sealed class SettingsManagerTests
     {
         System.Reflection.MethodInfo? parseU64 = typeof(SettingsManager).GetMethod(
             "_TryParseU64", BindingFlags.NonPublic | BindingFlags.Static);
+        System.Reflection.MethodInfo? parseEnumNumeric = typeof(SettingsManager).GetMethod(
+            "_TryGetEnumNumericValue", BindingFlags.NonPublic | BindingFlags.Static);
         System.Reflection.MethodInfo? parseEnum = typeof(SettingsManager).GetMethod(
-            "_TryParseEnum", BindingFlags.NonPublic | BindingFlags.Static);
+            "_TryParseEnumWithMetadata", BindingFlags.NonPublic | BindingFlags.Static);
         await Assert.That(parseU64).IsNotNull();
+        await Assert.That(parseEnumNumeric).IsNotNull();
         await Assert.That(parseEnum).IsNotNull();
 
         JsonNode longOnly = JsonNode.Parse("-0")!;
@@ -1258,10 +1333,18 @@ internal sealed class SettingsManagerTests
         await Assert.That(parsed).IsEqualTo(0UL);
 
         JsonNode enumLong = JsonNode.Parse("""{"name": "Zero", "value": -0}""")!;
-        SettingValue? enumValue = parseEnum!.Invoke(null, [enumLong]) as SettingValue?;
-        await Assert.That(enumValue).IsNotNull();
-        SettingValue enumVal = enumValue!.Value;
-        enumVal.TryGetAsEnum(out (string Name, ulong Value) ev);
+        JsonValue enumValueNode = (JsonValue)enumLong["value"]!;
+        ulong? numeric = parseEnumNumeric!.Invoke(null, [enumValueNode]) as ulong?;
+        await Assert.That(numeric).IsEqualTo(0UL);
+
+        object? enumParseResult = parseEnum!.Invoke(
+            null,
+            [enumLong, null, string.Empty, "test.level"]);
+        await Assert.That(enumParseResult).IsNotNull();
+        (SettingValue? Value, SettingLoadResult Result, SettingsLoadWarning? Warning) enumTuple =
+            ((SettingValue? Value, SettingLoadResult Result, SettingsLoadWarning? Warning))enumParseResult!;
+        await Assert.That(enumTuple.Value).IsNotNull();
+        enumTuple.Value!.Value.TryGetAsEnum(out (string Name, ulong Value) ev);
         await Assert.That(ev.Name).IsEqualTo("Zero");
         await Assert.That(ev.Value).IsEqualTo(0UL);
     }
@@ -1328,6 +1411,455 @@ internal sealed class SettingsManagerTests
             result.TryGetAsBool(out bool value);
             await Assert.That(value).IsTrue();
             await Assert.That(mgr.OrphanedEntryCount).IsEqualTo(0);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Test]
+    public async Task TryLoadPersistedValueLocked_NoOrphanGroup_ReturnsNoPersistedValue()
+    {
+        using SettingsManager mgr = new();
+        Setting setting = Setting.Bool("orphan.flag", "Flag", "missing.group", false);
+        SettingLoadResult loadResult = _InvokeTryLoadPersistedValueLocked(mgr, setting);
+        await Assert.That(loadResult).IsEqualTo(SettingLoadResult.NoPersistedValue);
+    }
+
+    [Test]
+    public async Task TryLoadPersistedValueLocked_MissingSettingInGroup_ReturnsNoPersistedValue()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(dir);
+            await File.WriteAllTextAsync(
+                Path.Combine(dir, "test.group.json"),
+                """{"other.flag": true}""").ConfigureAwait(false);
+
+            using SettingsManager mgr = new(dir);
+            mgr.Load();
+            Setting setting = Setting.Bool("missing.flag", "Flag", "test.group", false);
+            SettingLoadResult loadResult = _InvokeTryLoadPersistedValueLocked(mgr, setting);
+            await Assert.That(loadResult).IsEqualTo(SettingLoadResult.NoPersistedValue);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Test]
+    public async Task TryLoadPersistedValueLocked_TypeMismatch_ReturnsTypeMismatch()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(dir);
+            await File.WriteAllTextAsync(
+                Path.Combine(dir, "default.json"),
+                """{"typed.flag": "not-a-bool"}""").ConfigureAwait(false);
+
+            using SettingsManager mgr = new(dir);
+            mgr.Load();
+            Setting setting = Setting.Bool("typed.flag", "Flag", string.Empty, false);
+            SettingLoadResult loadResult = _InvokeTryLoadPersistedValueLocked(mgr, setting);
+            await Assert.That(loadResult).IsEqualTo(SettingLoadResult.TypeMismatch);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Test]
+    public async Task TryLoadPersistedValueLocked_OutOfRange_ReturnsOutOfRange()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(dir);
+            await File.WriteAllTextAsync(
+                Path.Combine(dir, "default.json"),
+                """{"test.port": 80}""").ConfigureAwait(false);
+
+            using SettingsManager mgr = new(dir);
+            mgr.Load();
+            Setting setting = Setting.U64("test.port", "Port", string.Empty, 8080UL, min: 1024UL, max: 65535UL);
+            SettingLoadResult loadResult = _InvokeTryLoadPersistedValueLocked(mgr, setting);
+            await Assert.That(loadResult).IsEqualTo(SettingLoadResult.OutOfRange);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Test]
+    public async Task TryLoadPersistedValueLocked_InvalidBase64_ReturnsDeserializationError()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(dir);
+            await File.WriteAllTextAsync(
+                Path.Combine(dir, "default.json"),
+                """{"test.blob": "!!!"}""").ConfigureAwait(false);
+
+            using SettingsManager mgr = new(dir);
+            mgr.Load();
+            Setting setting = Setting.Bytes("test.blob", "Blob", string.Empty, [1]);
+            SettingLoadResult loadResult = _InvokeTryLoadPersistedValueLocked(mgr, setting);
+            await Assert.That(loadResult).IsEqualTo(SettingLoadResult.DeserializationError);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Test]
+    public async Task Load_I64FromJsonNumber_ParsesDirectNumeric()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(dir);
+            await File.WriteAllTextAsync(
+                Path.Combine(dir, "default.json"),
+                """{"test.offset": -42}""").ConfigureAwait(false);
+
+            using SettingsManager mgr = new(dir);
+            Setting s = Setting.I64("test.offset", "Offset", string.Empty, 0);
+            mgr.RegisterSetting(s);
+            await Assert.That(mgr.Load()).IsEmpty();
+            s.Value.TryGetAsI64(out long value);
+            await Assert.That(value).IsEqualTo(-42L);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Test]
+    public async Task PrivateParsers_EnumWithMetadata_BranchCoverage()
+    {
+        MethodInfo? parseEnum = typeof(SettingsManager).GetMethod(
+            "_TryParseEnumWithMetadata", BindingFlags.NonPublic | BindingFlags.Static);
+        MethodInfo? parseNumeric = typeof(SettingsManager).GetMethod(
+            "_TryGetEnumNumericValue", BindingFlags.NonPublic | BindingFlags.Static);
+        await Assert.That(parseEnum).IsNotNull();
+        await Assert.That(parseNumeric).IsNotNull();
+
+        EnumSettingMetadata meta = EnumSettingMetadata.FromPairs([("Low", 0UL), ("High", 1UL)]);
+
+        await Assert.That(_InvokeEnumParseResult(parseEnum!, JsonNode.Parse("[]")!, meta))
+            .IsEqualTo(SettingLoadResult.TypeMismatch);
+
+        JsonObject missingName = new() { ["value"] = 0 };
+        await Assert.That(_InvokeEnumParseResult(parseEnum!, missingName, meta))
+            .IsEqualTo(SettingLoadResult.TypeMismatch);
+
+        JsonObject missingValue = new() { ["name"] = "Low" };
+        await Assert.That(_InvokeEnumParseResult(parseEnum!, missingValue, meta))
+            .IsEqualTo(SettingLoadResult.TypeMismatch);
+
+        JsonObject badNumeric = new() { ["name"] = "Low", ["value"] = true };
+        await Assert.That(_InvokeEnumParseResult(parseEnum!, badNumeric, meta))
+            .IsEqualTo(SettingLoadResult.TypeMismatch);
+
+        JsonObject unknownNumeric = new() { ["name"] = "Low", ["value"] = 99 };
+        await Assert.That(_InvokeEnumParseResult(parseEnum!, unknownNumeric, meta))
+            .IsEqualTo(SettingLoadResult.TypeMismatch);
+
+        JsonValue directUlong = (JsonValue)JsonNode.Parse("1")!;
+        ulong? parsedUlong = parseNumeric!.Invoke(null, [directUlong]) as ulong?;
+        await Assert.That(parsedUlong).IsEqualTo(1UL);
+    }
+
+    [Test]
+    public async Task Load_EnumWrongNameWithValidNumeric_EmitsNameMismatchWarning()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(dir);
+            await File.WriteAllTextAsync(
+                Path.Combine(dir, "default.json"),
+                """{"test.level": {"name": "Wrong", "value": 0}}""").ConfigureAwait(false);
+
+            using SettingsManager mgr = new(dir);
+            Setting s = Setting.Enum("test.level", "Level", string.Empty, 1UL,
+                [("Low", 0UL), ("High", 1UL)]);
+            mgr.RegisterSetting(s);
+            IReadOnlyList<SettingsLoadWarning> warnings = mgr.Load();
+            await Assert.That(warnings.Count).IsEqualTo(1);
+            await Assert.That(warnings[0].Kind).IsEqualTo(SettingsLoadWarningKind.EnumNameMismatch);
+            s.Value.TryGetAsEnum(out (string Name, ulong Value) ev);
+            await Assert.That(ev.Name).IsEqualTo("Low");
+            await Assert.That(ev.Value).IsEqualTo(0UL);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Test]
+    public async Task PrivateParsers_SettingValueToJson_NonFiniteF64_Throws()
+    {
+        MethodInfo? toJson = typeof(SettingsManager).GetMethod(
+            "_SettingValueToJson", BindingFlags.NonPublic | BindingFlags.Static);
+        await Assert.That(toJson).IsNotNull();
+
+        SettingValue nonFinite = SettingValue.F64(double.PositiveInfinity);
+        TargetInvocationException tie = Assert.Throws<TargetInvocationException>(
+            () => toJson!.Invoke(null, [nonFinite]));
+        await Assert.That(tie.InnerException).IsTypeOf<InvalidOperationException>();
+        await Assert.That(tie.InnerException!.Message).Contains("finite");
+    }
+
+    [Test]
+    public async Task PrivateParsers_TryParseI64_InvalidNode_ReturnsNull()
+    {
+        MethodInfo? parseI64 = typeof(SettingsManager).GetMethod(
+            "_TryParseI64", BindingFlags.NonPublic | BindingFlags.Static);
+        await Assert.That(parseI64).IsNotNull();
+
+        JsonNode node = JsonValue.Create(true)!;
+        SettingValue? value = parseI64!.Invoke(null, [node]) as SettingValue?;
+        await Assert.That(value).IsNull();
+    }
+
+    [Test]
+    public async Task PrivateParsers_TryParseEnumWithMetadata_InvalidName_ReturnsTypeMismatch()
+    {
+        MethodInfo? parseEnum = typeof(SettingsManager).GetMethod(
+            "_TryParseEnumWithMetadata", BindingFlags.NonPublic | BindingFlags.Static);
+        await Assert.That(parseEnum).IsNotNull();
+
+        EnumSettingMetadata meta = EnumSettingMetadata.FromPairs([("Low", 0UL)]);
+        JsonObject obj = new() { ["name"] = 1, ["value"] = 0 };
+        SettingLoadResult result = _InvokeEnumParseResult(parseEnum!, obj, meta);
+        await Assert.That(result).IsEqualTo(SettingLoadResult.TypeMismatch);
+    }
+
+    [Test]
+    public async Task PrivateParsers_TryParseEnumWithMetadata_UnknownNumeric_ReturnsTypeMismatch()
+    {
+        MethodInfo? parseEnum = typeof(SettingsManager).GetMethod(
+            "_TryParseEnumWithMetadata", BindingFlags.NonPublic | BindingFlags.Static);
+        await Assert.That(parseEnum).IsNotNull();
+
+        EnumSettingMetadata meta = EnumSettingMetadata.FromPairs([("Low", 0UL)]);
+        JsonObject obj = new() { ["name"] = "Low", ["value"] = 99 };
+        SettingLoadResult result = _InvokeEnumParseResult(parseEnum!, obj, meta);
+        await Assert.That(result).IsEqualTo(SettingLoadResult.TypeMismatch);
+    }
+
+    [Test]
+    public async Task PrivateParsers_SettingValueToJson_Bool_ReturnsJsonValue()
+    {
+        MethodInfo? toJson = typeof(SettingsManager).GetMethod(
+            "_SettingValueToJson", BindingFlags.NonPublic | BindingFlags.Static);
+        await Assert.That(toJson).IsNotNull();
+
+        JsonNode? node = toJson!.Invoke(null, [SettingValue.Bool(true)]) as JsonNode;
+        await Assert.That(node).IsNotNull();
+        await Assert.That(node!.GetValue<bool>()).IsTrue();
+    }
+
+    [Test]
+    public async Task PrivateParsers_SettingValueToJson_UnknownType_ReturnsNull()
+    {
+        MethodInfo? toJson = typeof(SettingsManager).GetMethod(
+            "_SettingValueToJson", BindingFlags.NonPublic | BindingFlags.Static);
+        await Assert.That(toJson).IsNotNull();
+
+        SettingValue unknown = SettingsTestHelpers.WithSettingValueField(
+            SettingValue.Bool(true), "_Type", (SettingType)99);
+        JsonNode? node = toJson!.Invoke(null, [unknown]) as JsonNode;
+        await Assert.That(node).IsNull();
+    }
+
+    [Test]
+    public async Task PrivateParsers_TryParseEnumWithMetadata_UnknownCanonicalNumeric_ReturnsTypeMismatch()
+    {
+        MethodInfo? parseEnum = typeof(SettingsManager).GetMethod(
+            "_TryParseEnumWithMetadata", BindingFlags.NonPublic | BindingFlags.Static);
+        await Assert.That(parseEnum).IsNotNull();
+
+        EnumSettingMetadata meta = EnumSettingMetadata.FromPairs([("Low", 0UL), ("High", 2UL)]);
+        JsonObject obj = new() { ["name"] = "Low", ["value"] = 1 };
+        SettingLoadResult result = _InvokeEnumParseResult(parseEnum!, obj, meta);
+        await Assert.That(result).IsEqualTo(SettingLoadResult.TypeMismatch);
+    }
+
+    private static SettingLoadResult _InvokeTryLoadPersistedValueLocked(SettingsManager mgr, Setting setting)
+    {
+        System.Reflection.FieldInfo lockField = typeof(SettingsManager).GetField(
+            "_Lock", BindingFlags.NonPublic | BindingFlags.Instance)!;
+        ReaderWriterLockSlim rwLock = (ReaderWriterLockSlim)lockField.GetValue(mgr)!;
+        MethodInfo loadMethod = typeof(SettingsManager).GetMethod(
+            "_TryLoadPersistedValueLocked", BindingFlags.NonPublic | BindingFlags.Instance)!;
+
+        rwLock.EnterWriteLock();
+        try
+        {
+            return (SettingLoadResult)loadMethod.Invoke(mgr, [setting])!;
+        }
+        finally
+        {
+            rwLock.ExitWriteLock();
+        }
+    }
+
+    private static SettingLoadResult _InvokeEnumParseResult(
+        MethodInfo parseEnum, JsonNode node, EnumSettingMetadata? metadata)
+    {
+        object? boxed = parseEnum.Invoke(null, [node, metadata, string.Empty, "test.enum"]);
+        (_, SettingLoadResult result, _) =
+            ((SettingValue?, SettingLoadResult, SettingsLoadWarning?))boxed!;
+        return result;
+    }
+
+    [Test]
+    public void Load_WhenAlreadyLoading_ThrowsInvalidOperationException()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            using SettingsManager mgr = new(dir);
+            System.Reflection.FieldInfo loadingField = typeof(SettingsManager).GetField(
+                "_IsLoading", BindingFlags.NonPublic | BindingFlags.Instance)!;
+            loadingField.SetValue(mgr, 1);
+            try
+            {
+                _ = Assert.Throws<InvalidOperationException>(() => mgr.Load());
+            }
+            finally
+            {
+                loadingField.SetValue(mgr, 0);
+            }
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Test]
+    public async Task Load_OversizedFile_SkipsWithWarning()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            string path = Path.Combine(dir, "default.json");
+            await using (FileStream stream = new(path, FileMode.Create, FileAccess.Write, FileShare.Read))
+            {
+                stream.SetLength(SettingsFileAccess.MaxFileBytes + 1);
+            }
+
+            using SettingsManager mgr = new(dir);
+            mgr.RegisterSetting(Setting.Bool("test.flag", "Flag", string.Empty, false));
+            IReadOnlyList<SettingsLoadWarning> warnings = mgr.Load();
+
+            await Assert.That(warnings.Count).IsEqualTo(1);
+            await Assert.That(warnings[0].Kind).IsEqualTo(SettingsLoadWarningKind.InvalidGroupFileShape);
+            await Assert.That(warnings[0].Message).Contains("exceeds");
+            await Assert.That(mgr.GetBoolSetting("test.flag")).IsFalse();
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Test]
+    public async Task Save_UnrelatedSidecarJson_IsNotDeleted()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        string sidecar = Path.Combine(dir, "sidecar.json");
+        try
+        {
+            await File.WriteAllTextAsync(sidecar, "{\"keep\":true}").ConfigureAwait(false);
+
+            using (SettingsManager first = new(dir))
+            {
+                first.RegisterSetting(Setting.Bool("test.flag", "Flag", "test", true));
+                first.Save();
+            }
+
+            await Assert.That(File.Exists(sidecar)).IsTrue();
+            await Assert.That(File.Exists(Path.Combine(dir, "test.json"))).IsTrue();
+
+            using (SettingsManager second = new(dir))
+            {
+                second.RegisterSetting(Setting.Bool("other.flag", "Other", string.Empty, false));
+                second.Save();
+            }
+
+            await Assert.That(File.Exists(sidecar)).IsTrue();
+            await Assert.That(File.Exists(Path.Combine(dir, "test.json"))).IsFalse();
+            await Assert.That(File.Exists(Path.Combine(dir, "default.json"))).IsTrue();
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Test]
+    public async Task Save_OversizedOwnedManifest_DoesNotDeleteSidecar()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        string sidecar = Path.Combine(dir, "sidecar.json");
+        string manifest = Path.Combine(dir, SettingsFileAccess.OwnedGroupManifestFileName);
+        try
+        {
+            await File.WriteAllTextAsync(sidecar, "{\"keep\":true}").ConfigureAwait(false);
+            await using (FileStream stream = new(manifest, FileMode.Create, FileAccess.Write, FileShare.Read))
+            {
+                stream.SetLength(SettingsFileAccess.MaxFileBytes + 1);
+            }
+
+            using SettingsManager mgr = new(dir);
+            mgr.RegisterSetting(Setting.Bool("test.flag", "Flag", "test", true));
+            mgr.Save();
+
+            await Assert.That(File.Exists(sidecar)).IsTrue();
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Test]
+    public async Task ReadOwnedGroupFiles_SharingViolation_ReturnsEmpty()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        string dir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        string manifest = Path.Combine(dir, SettingsFileAccess.OwnedGroupManifestFileName);
+        try
+        {
+            await File.WriteAllTextAsync(manifest, "test.json\n").ConfigureAwait(false);
+            using FileStream locked = new(manifest, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+            MethodInfo read = typeof(SettingsManager).GetMethod(
+                "_ReadOwnedGroupFiles", BindingFlags.NonPublic | BindingFlags.Static)!;
+            HashSet<string> owned = (HashSet<string>)read.Invoke(null, [manifest])!;
+            await Assert.That(owned.Count).IsEqualTo(0);
         }
         finally
         {

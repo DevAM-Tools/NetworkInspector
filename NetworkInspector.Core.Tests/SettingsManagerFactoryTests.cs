@@ -178,7 +178,7 @@ internal sealed class SettingsManagerFactoryTests
 
     /// <summary>
     /// Documents the current accepted character set for profileName:
-    /// alphanumeric, hyphens, underscores, and dots (but not "..").
+    /// alphanumeric, hyphens, and underscores.
     /// This test acts as a living contract that fails if the implementation
     /// silently accepts or rejects inputs differently than documented.
     /// </summary>
@@ -188,12 +188,23 @@ internal sealed class SettingsManagerFactoryTests
     [Arguments("mixed123")]
     [Arguments("with-hyphen")]
     [Arguments("with_underscore")]
-    [Arguments("v1.2.3")]
     public async Task ResolvePath_AcceptedProfileNames_DoNotThrow(string profile)
     {
         // Act / Assert — should not throw
         string result = SettingsManagerFactory.ResolvePath(Path.GetTempPath(), profile);
         await Assert.That(result).IsNotNull();
+    }
+
+    [Test]
+    [Arguments("foo bar")]
+    [Arguments("foo@bar")]
+    [Arguments("v1.2.3")]
+    public async Task ResolvePath_ProfileWithDisallowedCharacters_ThrowsArgumentException(string profile)
+    {
+        ArgumentException ex = Assert.Throws<ArgumentException>(
+            () => SettingsManagerFactory.ResolvePath(Path.GetTempPath(), profile));
+
+        await Assert.That(ex.ParamName).IsEqualTo("profileName");
     }
 
     #endregion

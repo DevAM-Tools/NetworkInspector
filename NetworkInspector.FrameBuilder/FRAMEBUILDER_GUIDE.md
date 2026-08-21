@@ -7,7 +7,7 @@
 >
 > Derived from the modernised application layers
 > (`PduTransportLayer`, `PduTransportMultiLayer`, `PduTransportConfigFb`,
-> `SignalPduLayer`, `SignalPduLayout`, `SignalValueSet`) and the established
+> `SignalMessageLayer`, `SignalMessageLayout`, `SignalMessageValueSet`) and the established
 > patterns of the link, network, transport and bus layers
 > (`EthernetLayer`, `IPv4Layer`, `IPv6Layer`, `ArpLayer`, `UdpLayer`,
 > `TcpLayer`, `SocketCanLayer`, `SomeIpLayer`, `SomeIpTpLayer`, …).
@@ -114,7 +114,7 @@ the smallest MTU asserted along the cons-list and the stack contains an
 | Network | `IInteriorLayer`, `IProvidesProtocolType`, optionally `IProvidesPseudoHeader`, optionally `IFragmentable` | `IPv4Layer`, `IPv6Layer` |
 | Transport (checksum-bearing) | `IRequiresPseudoHeader`, `IProvidesProtocolType` | `UdpLayer`, `TcpLayer`, `IcmpV6EchoLayer` |
 | Application interior | `IInteriorLayer`, `IPseudoHeaderIndependent` | `PduTransportLayer` |
-| Application terminal | `IPayloadLayer`, `IPseudoHeaderIndependent` | `SomeIpLayer`, `SomeIpTpLayer`, `SignalPduLayer`, `PduTransportMultiLayer` |
+| Application terminal | `IPayloadLayer`, `IPseudoHeaderIndependent` | `SomeIpLayer`, `SomeIpTpLayer`, `SignalMessageLayer`, `PduTransportMultiLayer` |
 | Pure terminal (no payload coupling) | neither `IInteriorLayer` nor `IPayloadLayer` | `ArpLayer`, `IcmpV4EchoLayer` |
 | Trailer | `ITrailerLayer` (orthogonal — attached via `WithTrailer`) | `EthernetFcs`, `NoTrailer` |
 
@@ -150,7 +150,7 @@ which `Then(...)` overloads match at the call site.
 |--------|---------|----------------|
 | `IRootLayer` | May be the root of a frame (passed to `FrameStack.Start`). | Link/bus layers, raw-IP roots. |
 | `IInteriorLayer` | Accepts an inner layer beneath it. May be the outer operand of `Then(...)`. | Most non-terminal layers. |
-| `IPayloadLayer` | Pure terminal payload carrier; outer needs no next-protocol patch. | `SomeIpLayer`, `SignalPduLayer`, … |
+| `IPayloadLayer` | Pure terminal payload carrier; outer needs no next-protocol patch. | `SomeIpLayer`, `SignalMessageLayer`, … |
 | `IRequiresPseudoHeader` | Needs an outer `IProvidesPseudoHeader` for transport-checksum. | `UdpLayer`, `TcpLayer`, `IcmpV6EchoLayer`. |
 | `IPseudoHeaderIndependent` | Needs no pseudo-header from the outer. | Everything that is *not* `IRequiresPseudoHeader`. |
 
@@ -243,7 +243,7 @@ NetworkInspector.FrameBuilder/
     Application/                            ← AUTOSAR / SOME-IP / SignalPDU
       SomeIpLayer.cs / SomeIpTpLayer.cs
       PduTransportLayer.cs / PduTransportMultiLayer.cs / PduTransportConfigFb.cs
-      SignalPduLayer.cs / SignalPduLayout.cs / SignalValueSet.cs
+      SignalMessageLayer.cs / SignalMessageLayout.cs / SignalMessageValueSet.cs
   Stack/                                    ← Cons-list infrastructure
     FrameStack.cs / Stack.cs / StatelessStack.cs / StackEnd.cs
     CreatedStack.cs / TrailerStack.cs / FrameLimits.cs
@@ -278,9 +278,8 @@ layer's file.  Examples:
 - `PduTransportLayer.cs` contains `PduTransportLayer` and
   `PduTransportEncoding` (the shared big-endian writer used by both
   PDU-Transport variants).
-- `SignalPduLayout.cs` contains `SignalPduLayout`, `SignalSpec`,
-  `MuxSpec`, `MuxGroupSpec`, `DispatchBinding`, `SignalEndian`,
-  `SignalType` — the entire layout vocabulary.
+- `SignalMessageLayout.cs` contains `SignalMessageLayout`, `SignalSpec`,
+  `MuxSpec`, `MuxGroupSpec`, `DispatchBinding`, `SignalEndian` — the entire layout vocabulary.
 
 ---
 
@@ -288,20 +287,20 @@ layer's file.  Examples:
 
 | Element | Pattern | Examples |
 |---------|---------|----------|
-| Layer struct | `XxxLayer` | `EthernetLayer`, `UdpLayer`, `SignalPduLayer` |
+| Layer struct | `XxxLayer` | `EthernetLayer`, `UdpLayer`, `SignalMessageLayer` |
 | Specialised stateful variant | `XxxLayerWithAutoYyy` | `IPv4LayerWithAutoIpId`, `TcpLayerWithAutoSequence` |
 | Multi-element variant | `XxxMultiLayer` | `PduTransportMultiLayer` |
 | Header struct | `XxxHeader` | `UdpHeader`, `EthernetHeader` |
 | Trailer struct | `XxxFcs` / `XxxTrailer` | `EthernetFcs`, `NoTrailer` |
 | Configuration object | `XxxConfigFb` (when paired with parser-side config) or `XxxConfig` | `PduTransportConfigFb` |
-| Layout object | `XxxLayout` | `SignalPduLayout` |
-| Per-frame value bag | `XxxValueSet` | `SignalValueSet` |
+| Layout object | `XxxLayout` | `SignalMessageLayout` |
+| Per-frame value bag | `XxxValueSet` | `SignalMessageValueSet` |
 | Capability marker | `IXxx` | `IRootLayer`, `IPayloadLayer` |
 | Phantom-type kind | `XxxKind` | `EtherTypeKind`, `IpNextProtocolKind` |
 | Constants class | `XxxTypes` / `XxxFlags` / `XxxProtocols` | `EtherTypes`, `TcpFlags`, `IpProtocols` |
 | Private fields | `_PascalCase` | `_SrcPort`, `_PduId` |
 | Local layer-internal const | `private const … XxxOffset / XxxMask / XxxSize` | `LengthOffset`, `MoreFragmentsMask` |
-| Factory method (struct layer) | `Single(...)` / `Create(...)` / `FromXxx(...)` | `PduTransportLayer.Single`, `PduTransportMultiLayer.Create`, `SignalPduLayer.FromRawBytes` |
+| Factory method (struct layer) | `Single(...)` / `Create(...)` / `FromXxx(...)` | `PduTransportLayer.Single`, `PduTransportMultiLayer.Create`, `SignalMessageLayer.FromRawBytes` |
 
 **Unit naming**: do **not** encode physical units in identifiers; put the
 unit in a comment instead (e.g. `private readonly int _SegmentOffset; // 16-byte units`).
@@ -395,7 +394,7 @@ internal readonly struct XxxLayer :
   - `PduTransportMultiLayer.Create(config, slots)` — validates non-empty
     `slots`, range-checks every payload size against the configured
     `Length` field, performs a defensive copy of the slot array.
-  - `SignalPduLayer.FromRawBytes(bytes)` — sentinel factory for the
+  - `SignalMessageLayer.FromRawBytes(bytes)` — sentinel factory for the
     legacy raw-payload mode.
 
 > **Rule**: factories must be named after their semantic intent
@@ -906,20 +905,20 @@ frame, separate the **what** from the **how-much**:
 ### 15.1 Construction Pattern
 
 ```csharp
-SignalPduLayout layout = new()
+SignalMessageLayout layout = new()
 {
     PduId = 0x42, Name = "Engine", ByteLength = 8,
     Signals = ImmutableArray.Create(
         new SignalSpec { Name = "Rpm",  StartBit = 0,  BitLength = 16, Endian = SignalEndian.Big,
-                         Type = SignalType.Unsigned, Factor = 0.25, Offset = 0, Unit = "rpm" }),
-    RegisterAt = ImmutableArray.Create(new DispatchBinding { Table = "udp.port", Key = 30490 }),
+                         Factor = 0.25, Offset = 0, Unit = "rpm" }),
+    DispatchBindings = ImmutableArray.Create(new DispatchBinding { Table = "udp.port", Key = 30490 }),
 };
 
-SignalValueSet values = SignalValueSet
+SignalMessageValueSet values = SignalMessageValueSet
     .For(layout)
     .Set("Rpm", 1500.0);
 
-SignalPduLayer layer = new(layout, values);
+SignalMessageLayer layer = new(layout, values);
 ```
 
 ### 15.2 Rules
@@ -941,7 +940,7 @@ SignalPduLayer layer = new(layout, values);
    spec's `Name`, then renders only the matching `MuxGroupSpec`.  A
    missing selector value must throw — silent fallback to "group 0" is
    a footgun.
-6. **Dispatch bindings (`RegisterAt`) are pass-through**: the
+6. **Dispatch bindings (`DispatchBindings`) are pass-through**: the
    FrameBuilder itself does not consume them.  The test bridge writes
    them into the parser JSON and the tshark UAT profile.
 
@@ -983,7 +982,7 @@ cannot be deferred to construction time belongs in the factory; once
 the struct is constructed, every method is allowed to assume valid
 inputs.
 
-The single exception today is `SignalPduLayer.WriteHeader` which throws
+The single exception today is `SignalMessageLayer.WriteHeader` which throws
 `InvalidOperationException` when the active mux selector value matches
 no configured group — a structural mismatch that cannot be caught at
 construction time but should also never occur in well-formed test data.
@@ -1042,8 +1041,8 @@ strict.
 | Stateful layer struct | Immutable; per-frame state lives in `SessionState`. | One `Session<>` per producer thread. |
 | `SessionState` | `ref struct`; lives on the stack. | Single-threaded by construction. |
 | `FrameSequence<>` / `StatefulFrameSequence<>` | Single-use, single-thread. | Never share an iterator. |
-| `SignalPduLayout`, `PduTransportConfigFb`, `SignalValueSet` (read-only consumption) | Immutable. | None. |
-| `SignalValueSet` (mutation) | Not thread-safe. | One value set per emitted frame. |
+| `SignalMessageLayout`, `PduTransportConfigFb`, `SignalMessageValueSet` (read-only consumption) | Immutable. | None. |
+| `SignalMessageValueSet` (mutation) | Not thread-safe. | One value set per emitted frame. |
 
 Document these guarantees in the type's XML `<remarks>` block; every
 modernised layer follows the convention with an explicit *"Thread
@@ -1062,7 +1061,7 @@ Every layer's XML doc must contain:
    (one bullet per phase with a short description).
 3. A *Thread safety* paragraph.
 4. For variable-format layers, a wire-format diagram in `<code>` /
-   `<list>` form (see `PduTransportLayer` and `SignalPduLayer`).
+   `<list>` form (see `PduTransportLayer` and `SignalMessageLayer`).
 
 Header structs document their layout in a single-line `<summary>` plus
 optional ASCII-art diagram.
@@ -1168,7 +1167,7 @@ guarantees that cannot be exercised at runtime.
 - ❌ Don't make a layer both `IStatelessLayer` and `IStatefulLayer`.
 - ❌ Don't allocate inside `WriteHeader` / `ApplyPostFix`.
 - ❌ Don't throw inside `ApplyPostFix` (a single documented exception
-  exists in `SignalPduLayer.WriteHeader` for unmatched mux groups —
+  exists in `SignalMessageLayer.WriteHeader` for unmatched mux groups —
   document any future exception explicitly).
 - ❌ Don't use "value 0 means auto" — track a separate explicit bool.
 - ❌ Don't store mutable per-frame state on the layer struct.

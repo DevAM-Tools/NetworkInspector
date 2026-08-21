@@ -6,32 +6,15 @@ namespace NetworkInspector.Sources.Blf.Format;
 /// Result of parsing a BLF object into a network frame.
 /// Contains the reconstructed frame data, link type, and channel information.
 /// </summary>
-internal readonly struct BlfFrameResult
-{
-    /// <summary>Reconstructed frame data (Ethernet, SocketCAN, DLT_LIN, or DLT_FLEXRAY).</summary>
-    internal byte[] FrameData
-    {
-        get; init;
-    }
-
-    /// <summary>Link type for the reconstructed frame.</summary>
-    internal LinkType LinkType
-    {
-        get; init;
-    }
-
-    /// <summary>Channel number (BLF-level, used for interface registration).</summary>
-    internal ushort Channel
-    {
-        get; init;
-    }
-
-    /// <summary>Object type that produced this frame (for bus type classification).</summary>
-    internal uint ObjectType
-    {
-        get; init;
-    }
-}
+/// <param name="FrameData">Reconstructed frame data (Ethernet, SocketCAN, DLT_LIN, or DLT_FLEXRAY).</param>
+/// <param name="LinkType">Link type for the reconstructed frame.</param>
+/// <param name="Channel">Channel number (BLF-level, used for interface registration).</param>
+/// <param name="ObjectType">Object type that produced this frame (for bus type classification).</param>
+internal readonly record struct BlfFrameResult(
+    byte[] FrameData,
+    LinkType LinkType,
+    ushort Channel,
+    uint ObjectType);
 
 /// <summary>
 /// Dispatches BLF object payloads to the appropriate protocol parser

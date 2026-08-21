@@ -69,7 +69,7 @@ public readonly struct IPv4Layer :
     /// emits DF=1 (the conventional safe default — the layer is normally
     /// constructed via the explicit constructor below).
     /// </summary>
-    private readonly bool _AllowFragmentation;
+    public bool CanFragment { get; }
 
     /// <summary>
     /// Creates an IPv4 layer.  TotalLength and HeaderChecksum are always
@@ -103,7 +103,7 @@ public readonly struct IPv4Layer :
         _ProtocolIsExplicit = protocol.TryGetExplicit(out byte p);
         _ExplicitProtocol = p;
         // Store "fragmentation allowed" so the struct's default(IPv4Layer) emits DF=1.
-        _AllowFragmentation = !dontFragment;
+        CanFragment = !dontFragment;
     }
 
     /// <inheritdoc />
@@ -126,7 +126,7 @@ public readonly struct IPv4Layer :
     {
         IPv4Header hdr = IPv4Header.Create(
             _SrcAddr, _DstAddr, _ExplicitProtocol, _Ttl, _Identification,
-            dontFragment: !_AllowFragmentation);
+            dontFragment: !CanFragment);
         _ = ((IBinarySerializable)hdr).TryWrite(dst, out _);
     }
 
@@ -190,13 +190,6 @@ public readonly struct IPv4Layer :
         // Transport segment offset/end inside the frame.
         ctx.TransportOffset = myOffset + IPv4Header.Size;
         ctx.TransportEnd = myOffset + myLength;
-    }
-
-    /// <inheritdoc />
-    public bool CanFragment
-    {
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _AllowFragmentation; // i.e. !DontFragment
     }
 
     /// <inheritdoc />

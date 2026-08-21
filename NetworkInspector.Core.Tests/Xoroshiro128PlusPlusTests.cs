@@ -132,7 +132,7 @@ internal sealed class Xoroshiro128PlusPlusTests
     }
 
     [Test]
-    public async Task FillBytes_LargeBuffer_UsesMultiStreamInterleaving()
+    public async Task FillBytes_LargeSpan_UsesMultiStreamInterleaving()
     {
         // FillBytes for buffers >= 32 uses 4 independent streams for parallelism.
         // This means the output is NOT the same as calling NextU64() sequentially.
@@ -262,6 +262,42 @@ internal sealed class Xoroshiro128PlusPlusTests
         Xoroshiro128PlusPlus rng = new(1UL);
         int value = rng.NextRange(10, 5);
         await Assert.That(value).IsEqualTo(10);
+    }
+
+    [Test]
+    public async Task NextRange_FullIntDomain_StaysBelowMaxExclusive()
+    {
+        Xoroshiro128PlusPlus rng = new(1UL);
+        bool allInRange = true;
+        for (int i = 0; i < 10_000; i++)
+        {
+            int value = rng.NextRange(int.MinValue, int.MaxValue);
+            if (value == int.MaxValue)
+            {
+                allInRange = false;
+                break;
+            }
+        }
+
+        await Assert.That(allInRange).IsTrue();
+    }
+
+    [Test]
+    public async Task NextRange_NegativeOneToIntMax_StaysInRange()
+    {
+        Xoroshiro128PlusPlus rng = new(2UL);
+        bool allInRange = true;
+        for (int i = 0; i < 10_000; i++)
+        {
+            int value = rng.NextRange(-1, int.MaxValue);
+            if (value < -1 || value == int.MaxValue)
+            {
+                allInRange = false;
+                break;
+            }
+        }
+
+        await Assert.That(allInRange).IsTrue();
     }
 
     [Test]
@@ -412,7 +448,182 @@ internal sealed class Xoroshiro128PlusPlusTests
         else
         {
             int trivialPass = 1;
-            await Assert.That(trivialPass).IsEqualTo(1); // trivially pass for very short buffers
+            await Assert.That(trivialPass).IsEqualTo(1);
         }
+    }
+
+    [Test]
+    public async Task FillBytes_LargeSpan_CompletesBulkPath()
+    {
+        Xoroshiro128PlusPlus rng = new(0x123456789ABCDEFUL);
+        byte[] buf = new byte[128];
+        rng.FillBytes(buf);
+        bool anyNonZero = false;
+        foreach (byte b in buf)
+        {
+            if (b != 0)
+            {
+                anyNonZero = true;
+                break;
+            }
+        }
+        await Assert.That(anyNonZero).IsTrue();
+    }
+
+    [Test]
+    public async Task FillBytes_LargeSpan_FillsNonZeroBytes()
+    {
+        Xoroshiro128PlusPlus rng = new(888UL);
+        byte[] buffer = new byte[64];
+        rng.FillBytes(buffer);
+        bool anyNonZero = false;
+        foreach (byte b in buffer)
+        {
+            if (b != 0)
+            {
+                anyNonZero = true;
+                break;
+            }
+        }
+        await Assert.That(anyNonZero).IsTrue();
+    }
+
+    [Test]
+    public async Task FillBytes_ExactlyBulkThreshold_IsDeterministic()
+    {
+        Xoroshiro128PlusPlus rngA = new(999UL);
+        Xoroshiro128PlusPlus rngB = new(999UL);
+        byte[] bufA = new byte[32];
+        byte[] bufB = new byte[32];
+        rngA.FillBytes(bufA);
+        rngB.FillBytes(bufB);
+        await Assert.That(bufA.AsSpan().SequenceEqual(bufB)).IsTrue();
+    }
+
+    [Test]
+    public async Task PrivateFillBytesVector128_FillsBuffer()
+    {
+        Xoroshiro128PlusPlus rng = new(123UL);
+        MethodInfo? derive = typeof(Xoroshiro128PlusPlus).GetMethod(
+            "_DeriveSubStreams", BindingFlags.NonPublic | BindingFlags.Instance);
+        await Assert.That(derive).IsNotNull();
+
+        object?[] deriveArgs = [null!, null!, null!, null!, null!, null!];
+        derive!.Invoke(rng, deriveArgs);
+        byte[] buffer = new byte[64];
+        Xoroshiro128PlusPlusPrivateAccess.FillBytesVector128(
+            rng,
+            buffer,
+            (ulong)deriveArgs[0]!,
+            (ulong)deriveArgs[1]!,
+            (ulong)deriveArgs[2]!,
+            (ulong)deriveArgs[3]!,
+            (ulong)deriveArgs[4]!,
+            (ulong)deriveArgs[5]!);
+
+        bool anyNonZero = false;
+        foreach (byte b in buffer)
+        {
+            if (b != 0)
+            {
+                anyNonZero = true;
+                break;
+            }
+        }
+        await Assert.That(anyNonZero).IsTrue();
+    }
+
+    [Test]
+    public async Task FillBytes_ForceScalarBulkPath_FillsBuffer()
+    {
+        Xoroshiro128PlusPlus rng = new(42UL);
+        byte[] buffer = new byte[256];
+        Xoroshiro128PlusPlus.ForceScalarBulkFillForTesting = true;
+        try
+        {
+            rng.FillBytes(buffer);
+        }
+        finally
+        {
+            Xoroshiro128PlusPlus.ForceScalarBulkFillForTesting = false;
+        }
+
+        bool anyNonZero = false;
+        foreach (byte b in buffer)
+        {
+            if (b != 0)
+            {
+                anyNonZero = true;
+                break;
+            }
+        }
+
+        await Assert.That(anyNonZero).IsTrue();
+    }
+
+    [Test]
+    public async Task FillBytes_ScalarPathViaPrivateAccessor_FillsBuffer()
+    {
+        Xoroshiro128PlusPlus rng = new(321UL);
+        MethodInfo? derive = typeof(Xoroshiro128PlusPlus).GetMethod(
+            "_DeriveSubStreams", BindingFlags.NonPublic | BindingFlags.Instance);
+        await Assert.That(derive).IsNotNull();
+
+        object?[] deriveArgs = [null!, null!, null!, null!, null!, null!];
+        derive!.Invoke(rng, deriveArgs);
+        byte[] buffer = new byte[64];
+        Xoroshiro128PlusPlusPrivateAccess.FillBytesScalar4(
+            rng,
+            buffer,
+            (ulong)deriveArgs[0]!,
+            (ulong)deriveArgs[1]!,
+            (ulong)deriveArgs[2]!,
+            (ulong)deriveArgs[3]!,
+            (ulong)deriveArgs[4]!,
+            (ulong)deriveArgs[5]!);
+
+        bool anyNonZero = false;
+        foreach (byte b in buffer)
+        {
+            if (b != 0)
+            {
+                anyNonZero = true;
+                break;
+            }
+        }
+        await Assert.That(anyNonZero).IsTrue();
+    }
+
+    [Test]
+    public async Task PrivateRotateLeft128_RotatesLanes()
+    {
+        MethodInfo? rotate = typeof(Xoroshiro128PlusPlus).GetMethod(
+            "_RotateLeft128", BindingFlags.NonPublic | BindingFlags.Static);
+        await Assert.That(rotate).IsNotNull();
+
+        Vector128<ulong> input = Vector128.Create(1UL, 2UL);
+        Vector128<ulong> rotated = (Vector128<ulong>)rotate!.Invoke(null, [input, 17])!;
+        Vector128<ulong> expected = Vector128.BitwiseOr(
+            Vector128.ShiftLeft(input, 17),
+            Vector128.ShiftRightLogical(input, 64 - 17));
+        await Assert.That(rotated).IsEqualTo(expected);
+    }
+
+    [Test]
+    public async Task FillBytes_SmallBuffer_HitsSequentialEarlyReturn()
+    {
+        Xoroshiro128PlusPlus rng = new(77UL);
+        byte[] buffer = new byte[8];
+        rng.FillBytes(buffer);
+        bool anyNonZero = false;
+        foreach (byte b in buffer)
+        {
+            if (b != 0)
+            {
+                anyNonZero = true;
+                break;
+            }
+        }
+        await Assert.That(anyNonZero).IsTrue();
     }
 }

@@ -21,7 +21,8 @@ namespace NetworkInspector.FrameBuilder;
 public readonly struct IcmpV6RouterAdvertisementLayer :
     IStatelessLayer, IProvidesProtocolType, IProvidesNextProtocolValue<IpNextProtocolKind>, IRequiresPseudoHeader
 {
-    private const int _HeaderBytes = 16;
+    /// <summary>Header size in bytes.</summary>
+    public const int HeaderBytes = 16;
 
     private readonly byte _CurHopLimit;
     private readonly byte _Flags;
@@ -68,11 +69,7 @@ public readonly struct IcmpV6RouterAdvertisementLayer :
     }
 
     /// <inheritdoc />
-    public int HeaderSize
-    {
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _HeaderBytes;
-    }
+    public int HeaderSize => HeaderBytes;
 
     /// <inheritdoc />
     public ushort ProtocolType

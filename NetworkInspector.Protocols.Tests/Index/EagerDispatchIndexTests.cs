@@ -10,7 +10,7 @@ namespace NetworkInspector.Protocols.Tests.Index;
 ///
 /// <para>
 /// This is the load-bearing guarantee that allows the presence index to be the single reliable
-/// filtering layer: a filter that asks "does this packet contain JSON / a Signal-PDU?" must get a
+/// filtering layer: a filter that asks "does this packet contain JSON / a Signal Message?" must get a
 /// correct answer from the index alone, even though the human-readable fields of the carrying
 /// protocol (HTTP, PDU-Transport) are only built lazily on demand.
 /// </para>
@@ -83,50 +83,50 @@ internal sealed class EagerDispatchIndexTests
 
         // The lazy JSON descriptive field tree must NOT have been materialized yet: querying without
         // materialization must report the field as absent.
-        bool jsonKeyBeforeMaterialize = packet.TryGetFieldValue(jsonKeyFieldId!.Value, out _, materialize: false);
+        bool jsonKeyBeforeMaterialize = packet.TryGetFieldValue(jsonKeyFieldId!.Value, out _, materialize: false); // materialize: false — prove field absent without triggering lazy
         await Assert.That(jsonKeyBeforeMaterialize).IsFalse()
             .Because("index presence must be recorded without materializing the lazy JSON field tree");
 
         // After explicit materialization, the lazy field tree becomes available.
         packet.MaterializeAll();
-        bool jsonKeyAfterMaterialize = packet.TryGetFieldValue(jsonKeyFieldId!.Value, out _, materialize: false);
+        bool jsonKeyAfterMaterialize = packet.TryGetFieldValue(jsonKeyFieldId!.Value, out _, materialize: false); // materialize: false — already MaterializeAll(); lookup only
         await Assert.That(jsonKeyAfterMaterialize).IsTrue()
             .Because("materialization must build the previously deferred JSON fields");
     }
 
     #endregion
 
-    #region PDU-Transport → Signal-PDU
+    #region PDU-Transport → Signal Message
 
     [Test]
     public async Task PduTransportSignal_SubProtocolPresence_QueryableFromIndexWithoutMaterialization()
     {
-        SignalPduLayout layout = AutomotivePduBench.TwoSequentialUint16LeLayout;
-        SignalValueSet vals = SignalValueSet.For(layout).Set("EngineRpm", 125.0).Set("Thr", 555);
-        SignalPduLayer inner = new(layout, vals);
+        SignalMessageLayout layout = AutomotivePduBench.TwoSequentialUint16LeLayout;
+        SignalMessageValueSet vals = SignalMessageValueSet.For(layout).Set("EngineRpm", 125.0).Set("Thr", 555);
+        SignalMessageLayer inner = new(layout, vals);
 
         byte[] frame = AutomotiveEthUdpFrames.EncapsulatePduTransportSignal(
             udpSrcPort: 15001,
             udpDstPort: AutomotivePduBench.UdpPduTransportDestinationPort,
             pduFb: AutomotivePduBench.PduTransportRegistry,
             pduWireId: AutomotivePduBench.PduTransportWireId,
-            signalPdu: inner);
+            signalMessage: inner);
 
         string work = Path.Combine(Path.GetTempPath(), "ni_pdu_idx_" + Guid.NewGuid().ToString("N"));
         _ = Directory.CreateDirectory(work);
         string pduJson = Path.Combine(work, "pdutr.json");
-        string sigJson = Path.Combine(work, "signal_pdu.json");
+        string sigJson = Path.Combine(work, "signal_message.json");
         try
         {
             await File.WriteAllTextAsync(pduJson, PduTransportConfigBridge.SerializeJson(AutomotivePduBench.PduTransportRegistry))
                 .ConfigureAwait(false);
-            await File.WriteAllTextAsync(sigJson, SignalPduConfigBridge.SerializeJson(layout)).ConfigureAwait(false);
+            await File.WriteAllTextAsync(sigJson, SignalMessageConfigBridge.SerializeJson(layout)).ConfigureAwait(false);
 
             using Stack stack = ProtocolTestHelper.BuildStack(sm =>
             {
                 sm.PreloadValue("pdu_transport.config_file", pduJson);
                 sm.PreloadValue("pdu_transport.udp_dispatch_port", (ulong)AutomotivePduBench.UdpPduTransportDestinationPort);
-                sm.PreloadValue("signal_pdu.config_file", sigJson);
+                sm.PreloadValue("signal_message.config_file", sigJson);
             });
 
             NetworkInspector.Core.Index.PacketIndex index = new(stack);
@@ -141,30 +141,30 @@ internal sealed class EagerDispatchIndexTests
 
             Packet packet = Packet.ParseFrameIndexed(new PacketId(0), stack, parsedFrame, index);
 
-            ProtocolId? signalPduId = stack.GetProtocolId("signal_pdu");
-            await Assert.That(signalPduId).IsNotNull().Because("Signal-PDU protocol must be registered");
+            ProtocolId? messageId = stack.GetProtocolId("fixture_message");
+            await Assert.That(messageId).IsNotNull().Because("Signal message protocol must be registered");
 
-            IndexGroupId? signalPduGroupId = stack.GetIndexGroupId("signal_pdu");
-            await Assert.That(signalPduGroupId).IsNotNull().Because("Signal-PDU index group must be registered");
+            IndexGroupId? messageGroupId = stack.GetIndexGroupId("fixture_message");
+            await Assert.That(messageGroupId).IsNotNull().Because("Signal message index group must be registered");
 
             FieldId? pduTransportIdField = stack.GetFieldId("pdu_transport.id");
             await Assert.That(pduTransportIdField).IsNotNull().Because("pdu_transport.id field must be registered");
 
-            // The dispatched Signal-PDU sub-protocol must be queryable from the index BEFORE any
+            // The dispatched message protocol must be queryable from the index BEFORE any
             // materialization, proving PDU-Transport dispatch ran eagerly during ParseFrameIndexed.
-            await Assert.That(index.GetProtocolBitmap(signalPduId!.Value).Contains(0)).IsTrue()
-                .Because("eager PDU-Transport dispatch must record Signal-PDU protocol presence in the index");
-            await Assert.That(index.GetGroupBitmap(signalPduGroupId!.Value).Contains(0)).IsTrue()
-                .Because("eager PDU-Transport dispatch must record the Signal-PDU index group in the index");
+            await Assert.That(index.GetProtocolBitmap(messageId!.Value).Contains(0)).IsTrue()
+                .Because("eager PDU-Transport dispatch must record message protocol presence in the index");
+            await Assert.That(index.GetGroupBitmap(messageGroupId!.Value).Contains(0)).IsTrue()
+                .Because("eager PDU-Transport dispatch must record the message index group in the index");
 
             // The lazy PDU-Transport descriptive field tree must NOT have been materialized yet.
-            bool pduIdBeforeMaterialize = packet.TryGetFieldValue(pduTransportIdField!.Value, out _, materialize: false);
+            bool pduIdBeforeMaterialize = packet.TryGetFieldValue(pduTransportIdField!.Value, out _, materialize: false); // materialize: false — prove field absent without triggering lazy
             await Assert.That(pduIdBeforeMaterialize).IsFalse()
                 .Because("index presence must be recorded without materializing the lazy PDU-Transport field tree");
 
             // After explicit materialization, the lazy PDU-Transport descriptive fields become available.
             packet.MaterializeAll();
-            bool pduIdAfterMaterialize = packet.TryGetFieldValue(pduTransportIdField!.Value, out FieldValue pduIdValue, materialize: false);
+            bool pduIdAfterMaterialize = packet.TryGetFieldValue(pduTransportIdField!.Value, out FieldValue pduIdValue, materialize: false); // materialize: false — already MaterializeAll(); lookup only
             await Assert.That(pduIdAfterMaterialize).IsTrue()
                 .Because("materialization must build the previously deferred PDU-Transport fields");
             bool isU64 = pduIdValue.Data.TryGetAsU64(out ulong pduIdNumeric);

@@ -19,5 +19,11 @@ public enum BuildCallbackWarningKind
     /// <summary>A protocol table referenced via <c>WhenProtocolTableRegistered</c> was never registered.</summary>
     ProtocolTable,
 
+    /// <summary>
+    /// Required frame protocol (<c>"frame"</c>) was not registered during
+    /// <see cref="StackBuilder.Build"/>; link-layer parsing will be skipped.
+    /// </summary>
+    MissingFrameProtocol,
+
     #endregion
 }

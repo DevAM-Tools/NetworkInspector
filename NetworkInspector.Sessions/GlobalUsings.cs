@@ -21,6 +21,14 @@ global using NetworkInspector.Core.Infos;
 global using NetworkInspector.Core.Interfaces;
 #endregion
 
+#region NetworkInspector.Filter
+global using NetworkInspector.Filter;
+global using NetworkInspector.Filter.Errors;
+// The namespace NetworkInspector.Filter shadows its own Filter type from inside
+// NetworkInspector.Sessions, so the concrete filter needs an unambiguous alias.
+global using PacketFilter = NetworkInspector.Filter.Filter;
+#endregion
+
 #region NetworkInspector.Sessions
 global using NetworkInspector.Sessions.Cache;
 global using NetworkInspector.Sessions.Ids;

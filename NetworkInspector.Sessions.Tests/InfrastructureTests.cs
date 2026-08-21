@@ -84,7 +84,7 @@ internal sealed class InfrastructureTests
     {
         public string UiName => "DefaultOnly";
 
-        public void OnNewPackets(ISessionReader session, long fromIndex, long toIndexExclusive)
+        public void OnNewPackets(ISessionReader session, int fromIndex, int toIndexExclusive)
         {
         }
     }

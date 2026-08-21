@@ -484,6 +484,57 @@ internal sealed class StackBuilderTests
         await Assert.That(capturedId!.Value).IsEqualTo(tableId);
     }
 
+    [Test]
+    public async Task Builder_WhenProtocolRegistered_ThrowingCallbackStillRunsRemainingCallbacks()
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        int secondRan = 0;
+        builder.WhenProtocolRegistered("throws.proto", static _ => throw new InvalidOperationException("first"));
+        builder.WhenProtocolRegistered("throws.proto", _ => secondRan++);
+
+        AggregateException ex = Assert.Throws<AggregateException>(
+            () => builder.RegisterProtocol(new StubProtocol("throws.proto", "Throws")));
+
+        await Assert.That(ex.InnerExceptions.Count).IsEqualTo(1);
+        await Assert.That(ex.InnerExceptions[0]).IsTypeOf<InvalidOperationException>();
+        await Assert.That(ex.Message).Contains("throws.proto");
+        await Assert.That(secondRan).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task Builder_WhenFieldRegistered_ThrowingCallbackStillRunsRemainingCallbacks()
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        ProtocolId protoId = builder.RegisterProtocol(new StubProtocol("p", "P"));
+        int secondRan = 0;
+        builder.WhenFieldRegistered("p.throws", static _ => throw new InvalidOperationException("first"));
+        builder.WhenFieldRegistered("p.throws", _ => secondRan++);
+
+        AggregateException ex = Assert.Throws<AggregateException>(
+            () => builder.RegisterField(protoId, "p.throws", "Throws", FieldType.U64));
+
+        await Assert.That(ex.InnerExceptions.Count).IsEqualTo(1);
+        await Assert.That(secondRan).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task Builder_WhenProtocolTableRegistered_ThrowingCallbackStillRunsRemainingCallbacks()
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        int secondRan = 0;
+        builder.WhenProtocolTableRegistered("throws.table", static _ => throw new InvalidOperationException("first"));
+        builder.WhenProtocolTableRegistered("throws.table", _ => secondRan++);
+
+        AggregateException ex = Assert.Throws<AggregateException>(
+            () => builder.RegisterProtocolTable("throws.table", "Throws", ProtocolTableKeyType.U64));
+
+        await Assert.That(ex.InnerExceptions.Count).IsEqualTo(1);
+        await Assert.That(secondRan).IsEqualTo(1);
+    }
+
     // === Build ===
 
     [Test]
@@ -501,10 +552,10 @@ internal sealed class StackBuilderTests
         // 2 built-in protocols (root, packet) + 1 custom protocol (eth) = 3
         await Assert.That(stack.ProtocolCount).IsEqualTo(3);
         // 3 built-in fields (root, packet.error, packet.choice)
-        // + 5 packet protocol fields (packet, packet.id, packet.timestamp, packet.frame_source_id, packet.info)
+        // + 6 packet protocol fields (packet, packet.id, packet.timestamp, packet.frame_source_id, packet.info, packet.unparsed_data)
         // + 2 custom fields (eth.dst, eth.src)
-        // = 10
-        await Assert.That(stack.FieldCount).IsEqualTo(10);
+        // = 11
+        await Assert.That(stack.FieldCount).IsEqualTo(11);
     }
 
     [Test]
@@ -572,6 +623,7 @@ internal sealed class StackBuilderTests
             throwOnStart: true));
         _ = builder.RegisterProtocol(new LifecycleProtocol("later", "Later", started, shutdown));
 
+        _RegisterStubFrameIfMissing(builder);
         using Stack stack = builder.Build();
 
         await Assert.That(started.Count).IsEqualTo(3);
@@ -599,6 +651,7 @@ internal sealed class StackBuilderTests
         StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
         _ = builder.RegisterProtocol(new LifecycleProtocol("first", "First", [], []));
 
+        _RegisterStubFrameIfMissing(builder);
         using Stack stack = builder.Build();
 
         await Assert.That(stack.BuildDiagnostics.Length).IsEqualTo(0);
@@ -797,6 +850,7 @@ internal sealed class StackBuilderTests
         StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
         builder.WhenProtocolRegistered("never.exists", static _ => { });
 
+        _RegisterStubFrameIfMissing(builder);
         // Act
         using Stack stack = builder.Build();
 
@@ -818,6 +872,7 @@ internal sealed class StackBuilderTests
         StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
         builder.WhenFieldRegistered("ghost.field", static _ => { });
 
+        _RegisterStubFrameIfMissing(builder);
         // Act
         using Stack stack = builder.Build();
 
@@ -839,6 +894,7 @@ internal sealed class StackBuilderTests
         StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
         builder.WhenProtocolTableRegistered("missing.table", static _ => { });
 
+        _RegisterStubFrameIfMissing(builder);
         // Act
         using Stack stack = builder.Build();
 
@@ -862,6 +918,7 @@ internal sealed class StackBuilderTests
         builder.WhenFieldRegistered("unresolved.field", static _ => { });
         builder.WhenProtocolTableRegistered("unresolved.table", static _ => { });
 
+        _RegisterStubFrameIfMissing(builder);
         // Act
         using Stack stack = builder.Build();
 
@@ -886,6 +943,7 @@ internal sealed class StackBuilderTests
         builder.WhenProtocolRegistered("multi.proto", static _ => { });
         builder.WhenProtocolRegistered("multi.proto", static _ => { });
 
+        _RegisterStubFrameIfMissing(builder);
         // Act
         using Stack stack = builder.Build();
 
@@ -909,6 +967,7 @@ internal sealed class StackBuilderTests
         // Register "resolved.proto" so its callback fires immediately
         builder.RegisterProtocol(new StubProtocol("resolved.proto", "Resolved"));
 
+        _RegisterStubFrameIfMissing(builder);
         // Act
         using Stack stack = builder.Build();
 
@@ -936,6 +995,7 @@ internal sealed class StackBuilderTests
         builder.RegisterField(protoId, "ok.field", "OK Field", FieldType.U64);
         builder.RegisterProtocolTable("ok.table", "OK Table", ProtocolTableKeyType.U64);
 
+        _RegisterStubFrameIfMissing(builder);
         // Act
         using Stack stack = builder.Build();
 
@@ -1292,7 +1352,16 @@ internal sealed class StackBuilderTests
         await Assert.That(builder.GetBoolTableEntries(boolean)!.Any()).IsTrue();
         await Assert.That(builder.GetAnyTableProtocolIds(any)!.Value.Length).IsEqualTo(1);
         bool invalidU64Empty = builder.GetProtocolsFromU64ProtocolTable(ProtocolTableId.Invalid, 0).IsEmpty;
+        bool invalidStrEmpty = builder.GetProtocolsFromStringProtocolTable(ProtocolTableId.Invalid, "k").IsEmpty;
+        bool invalidBytesEmpty = builder.GetProtocolsFromBytesProtocolTable(ProtocolTableId.Invalid, new BytesKey([0x01])).IsEmpty;
+        bool invalidBoolEmpty = builder.GetProtocolsFromBoolProtocolTable(ProtocolTableId.Invalid, true).IsEmpty;
+        bool invalidAnyEmpty = builder.GetProtocolsFromAnyProtocolTable(ProtocolTableId.Invalid).IsEmpty;
+
         await Assert.That(invalidU64Empty).IsTrue();
+        await Assert.That(invalidStrEmpty).IsTrue();
+        await Assert.That(invalidBytesEmpty).IsTrue();
+        await Assert.That(invalidBoolEmpty).IsTrue();
+        await Assert.That(invalidAnyEmpty).IsTrue();
         await Assert.That(builder.GetU64TableEntries(ProtocolTableId.Invalid)).IsNull();
     }
 
@@ -1369,8 +1438,33 @@ internal sealed class StackBuilderTests
         using SettingsManager settingsManager = new();
         StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
         await Assert.That(builder.BuildDiagnostics.Length).IsEqualTo(0);
+        _RegisterStubFrameIfMissing(builder);
         using Stack stack = builder.Build();
         await Assert.That(stack.BuildDiagnostics.Length).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task Build_MissingFrameProtocol_ProducesFrameWarning()
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        _ = builder.RegisterProtocol(new StubProtocol("custom", "Custom"));
+
+        using Stack stack = builder.Build();
+
+        BuildDiagnostic[] diagnostics = stack.BuildDiagnostics.Span.ToArray();
+        await Assert.That(diagnostics.Length).IsEqualTo(1);
+        BuildCallbackWarning warning = (BuildCallbackWarning)diagnostics[0];
+        await Assert.That(warning.EntityKind).IsEqualTo(BuildCallbackWarningKind.MissingFrameProtocol);
+        await Assert.That(warning.Name).IsEqualTo("frame");
+    }
+
+    private static void _RegisterStubFrameIfMissing(StackBuilder builder)
+    {
+        if (builder.GetProtocolId("frame") is null)
+        {
+            builder.RegisterProtocol(new StubProtocol("frame", "Frame Stub"));
+        }
     }
 
     [Test]
@@ -1405,6 +1499,92 @@ internal sealed class StackBuilderTests
         await Assert.That(builder.GetProtocolTableId("missing.table")).IsNull();
         await Assert.That(builder.GetHeuristicProtocolTableId("missing.heur")).IsNull();
         await Assert.That(builder.GetHeuristicProtocolTableInfo(new HeuristicProtocolTableId(99))).IsNull();
+    }
+
+    [Test]
+    public async Task Builder_GetIndexGroup_ValidIndexMissingFromMap_ReturnsNull()
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        ProtocolId owner = builder.RegisterProtocol(new StubProtocol("owner", "Owner"));
+        FieldId field = builder.RegisterFieldInGroup(owner, "owner.f", "F", FieldType.U64, "idx.group");
+        IndexGroupId existing = builder.GetFieldIndexGroup(field);
+
+        System.Reflection.FieldInfo? nextIdField = typeof(StackBuilder).GetField(
+            "_NextIndexGroupId", BindingFlags.NonPublic | BindingFlags.Instance);
+        await Assert.That(nextIdField).IsNotNull();
+        nextIdField!.SetValue(builder, existing.Value + 2);
+
+        IndexGroupInfo? missing = builder.GetIndexGroup(new IndexGroupId(existing.Value + 1));
+        await Assert.That(missing).IsNull();
+    }
+
+    [Test]
+    public async Task Builder_GetHeuristicProtocolTableInfo_ReturnsInfoForRegisteredTable()
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        ProtocolId owner = builder.RegisterProtocol(new StubProtocol("owner", "Owner"));
+        HeuristicProtocolTableId tableId = builder.RegisterHeuristicProtocolTable(owner, "h.tbl", "Heuristic", "desc");
+
+        HeuristicProtocolTableInfo? info = builder.GetHeuristicProtocolTableInfo(tableId);
+        await Assert.That(info).IsNotNull();
+        await Assert.That(info!.Name).IsEqualTo("h.tbl");
+        await Assert.That(info.Description).IsEqualTo("desc");
+        await Assert.That(builder.GetHeuristicProtocolTableId("h.tbl")).IsEqualTo(tableId);
+    }
+
+    [Test]
+    public async Task Builder_GuardIndexAllocation_ThrowsWhenLimitExceeded()
+    {
+        MethodInfo? guard = typeof(StackBuilder).GetMethod(
+            "_GuardIndexAllocation", BindingFlags.NonPublic | BindingFlags.Static);
+        await Assert.That(guard).IsNotNull();
+
+        TargetInvocationException tie = Assert.Throws<TargetInvocationException>(
+            () => guard!.Invoke(null, [Ids.ArrayIndexIdRange.MaxValue + 1, "protocol"]));
+        await Assert.That(tie.InnerException).IsTypeOf<InvalidOperationException>();
+        await Assert.That(tie.InnerException!.Message).Contains("protocol");
+    }
+
+    [Test]
+    public async Task Builder_EmptyRegisteredTables_ReturnEmptyLookupsAndNullCrossTypeEntries()
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        ProtocolTableId u64 = builder.RegisterProtocolTable("empty.u64", "U64", ProtocolTableKeyType.U64);
+        ProtocolTableId str = builder.RegisterProtocolTable("empty.str", "Str", ProtocolTableKeyType.String);
+        ProtocolTableId bytes = builder.RegisterProtocolTable("empty.bytes", "Bytes", ProtocolTableKeyType.Bytes);
+        ProtocolTableId boolean = builder.RegisterProtocolTable("empty.bool", "Bool", ProtocolTableKeyType.Bool);
+        ProtocolTableId any = builder.RegisterProtocolTable("empty.any", "Any", ProtocolTableKeyType.Any);
+
+        bool u64Empty = builder.GetProtocolsFromU64ProtocolTable(u64, 1).IsEmpty;
+        bool strEmpty = builder.GetProtocolsFromStringProtocolTable(str, "missing").IsEmpty;
+        bool bytesEmpty = builder.GetProtocolsFromBytesProtocolTable(bytes, new BytesKey([0x01])).IsEmpty;
+        bool boolEmpty = builder.GetProtocolsFromBoolProtocolTable(boolean, true).IsEmpty;
+        bool anyEmpty = builder.GetProtocolsFromAnyProtocolTable(any).IsEmpty;
+
+        await Assert.That(u64Empty).IsTrue();
+        await Assert.That(strEmpty).IsTrue();
+        await Assert.That(bytesEmpty).IsTrue();
+        await Assert.That(boolEmpty).IsTrue();
+        await Assert.That(anyEmpty).IsTrue();
+        await Assert.That(builder.GetU64TableEntries(u64)!.Any()).IsFalse();
+        await Assert.That(builder.GetStringTableEntries(str)!.Any()).IsFalse();
+        await Assert.That(builder.GetBytesTableEntries(bytes)!.Any()).IsFalse();
+        await Assert.That(builder.GetBoolTableEntries(boolean)!.Any()).IsFalse();
+        ReadOnlyMemory<ProtocolId>? anyIds = builder.GetAnyTableProtocolIds(any);
+        await Assert.That(anyIds).IsNotNull();
+        await Assert.That(anyIds!.Value.IsEmpty).IsTrue();
+        await Assert.That(builder.GetStringTableEntries(u64)).IsNull();
+        await Assert.That(builder.GetBytesTableEntries(str)).IsNull();
+        await Assert.That(builder.GetBoolTableEntries(bytes)).IsNull();
+        await Assert.That(builder.GetAnyTableProtocolIds(u64)).IsNull();
+        await Assert.That(builder.GetU64TableEntries(ProtocolTableId.Invalid)).IsNull();
+        await Assert.That(builder.GetStringTableEntries(ProtocolTableId.Invalid)).IsNull();
+        await Assert.That(builder.GetBytesTableEntries(ProtocolTableId.Invalid)).IsNull();
+        await Assert.That(builder.GetBoolTableEntries(ProtocolTableId.Invalid)).IsNull();
+        await Assert.That(builder.GetAnyTableProtocolIds(ProtocolTableId.Invalid)).IsNull();
     }
 
     // === Stub protocol for test use ===

@@ -7,6 +7,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\NetworkInspector.Core\NetworkInspector.Core.csproj" />
+    <ProjectReference Include="..\NetworkInspector.Filter\NetworkInspector.Filter.csproj" />
     <ProjectReference Include="..\NetworkInspector.Protocols\NetworkInspector.Protocols.csproj" />
     <ProjectReference Include="..\NetworkInspector.Exporters\NetworkInspector.Exporters.csproj" />
     <ProjectReference Include="..\NetworkInspector.Sources\NetworkInspector.Sources.csproj" />

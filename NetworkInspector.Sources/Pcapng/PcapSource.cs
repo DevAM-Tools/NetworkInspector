@@ -24,7 +24,8 @@ public sealed class PcapSource : IRandomAccessFrameSource, IErrorTolerantFrameSo
     #region Fields
 
     /// <summary>User-friendly display name.</summary>
-    private readonly string _UiName;
+    /// <inheritdoc />
+    public string UiName { get; }
 
     /// <summary>Optional description.</summary>
     private readonly string? _Description;
@@ -39,7 +40,7 @@ public sealed class PcapSource : IRandomAccessFrameSource, IErrorTolerantFrameSo
     private ScannerFormat _Format;
 
     /// <summary>Scanner for lazy mode (null after full scan or when lazy scan completes).</summary>
-    private IncrementalScanner? _Scanner;
+    private volatile IncrementalScanner? _Scanner;
 
     /// <summary>Sequential frame counter for NextFrame().</summary>
     private int _CurrentFrame;
@@ -54,22 +55,22 @@ public sealed class PcapSource : IRandomAccessFrameSource, IErrorTolerantFrameSo
     private FrameSourceId _SourceId;
 
     /// <summary>Registry reference for lazy interface registration.</summary>
-    private FrameInterfaceRegistry? _Registry;
+    private volatile FrameInterfaceRegistry? _Registry;
 
     /// <summary>Whether the source has been started.</summary>
-    private bool _Started;
+    private volatile bool _Started;
 
-    /// <summary>Whether the source has been disposed.</summary>
-    private bool _Disposed;
+    /// <summary>Atomic dispose latch (0 = live, 1 = disposed).</summary>
+    private volatile int _Disposed;
 
     #endregion
 
     #region Error Tolerance Fields
 
-    private long _ReadFrameCount;
-    private long _SkippedFrameCount;
-    private long _ErrorCount;
-    private bool _Aborted;
+    private volatile int _ReadFrameCount;
+    private readonly SaturatingVolatileCounter _SkippedFrameCount = new();
+    private readonly SaturatingVolatileCounter _ErrorCount = new();
+    private volatile bool _Aborted;
 
     #endregion
 
@@ -80,7 +81,7 @@ public sealed class PcapSource : IRandomAccessFrameSource, IErrorTolerantFrameSo
     /// </summary>
     private PcapSource(string uiName, string? description, DataBackend backend, FrameIndex index, ScannerFormat format, IncrementalScanner? scanner)
     {
-        _UiName = uiName;
+        UiName = uiName;
         _Description = description;
         _Backend = backend;
         _Index = index;
@@ -190,9 +191,6 @@ public sealed class PcapSource : IRandomAccessFrameSource, IErrorTolerantFrameSo
     #region IFrameSource implementation
 
     /// <inheritdoc />
-    public string UiName => _UiName;
-
-    /// <inheritdoc />
     public string? Description => _Description;
 
     /// <inheritdoc />
@@ -200,7 +198,7 @@ public sealed class PcapSource : IRandomAccessFrameSource, IErrorTolerantFrameSo
     {
         get
         {
-            if (Volatile.Read(ref _Scanner) is null)
+            if (_Scanner is null)
             {
                 return _Index.Count;
             }
@@ -210,36 +208,21 @@ public sealed class PcapSource : IRandomAccessFrameSource, IErrorTolerantFrameSo
     }
 
     /// <inheritdoc />
-    public bool IsFrameCountTruncated
-    {
-        get
-        {
-            IncrementalScanner? scanner = Volatile.Read(ref _Scanner);
-            if (scanner is not null)
-            {
-                return scanner.IsIndexFull;
-            }
-
-            return _Index.IsFull;
-        }
-    }
-
-    /// <inheritdoc />
-    public bool IsRunning => Volatile.Read(ref _Started) && !Volatile.Read(ref _Disposed);
+    public bool IsRunning => _Started && _Disposed == 0;
 
     // ── IErrorTolerantFrameSource / IFrameSourceStatistics ────────────────────
 
     /// <inheritdoc/>
-    public long ReadFrameCount => Volatile.Read(ref _ReadFrameCount);
+    public int ReadFrameCount => _ReadFrameCount;
 
     /// <inheritdoc/>
-    public long SkippedFrameCount => Volatile.Read(ref _SkippedFrameCount);
+    public int SkippedFrameCount => _SkippedFrameCount.Value;
 
     /// <inheritdoc/>
-    public long ErrorCount => Volatile.Read(ref _ErrorCount);
+    public int ErrorCount => _ErrorCount.Value;
 
     /// <inheritdoc/>
-    public bool HasErrors => Volatile.Read(ref _ErrorCount) > 0;
+    public bool HasErrors => _ErrorCount.Value > 0;
 
     /// <inheritdoc/>
     public ErrorToleranceMode ErrorTolerance { get; set; } = ErrorToleranceMode.Tolerant;
@@ -254,11 +237,11 @@ public sealed class PcapSource : IRandomAccessFrameSource, IErrorTolerantFrameSo
         _SourceId = sourceId;
         _Registry = registry;
         _CurrentFrame = 0;
-        Volatile.Write(ref _Started, true);
+        _Started = true;
 
-        // For full scan mode, register all interfaces now. Read _Scanner via Volatile
-        // for symmetry with the Volatile.Write in Dispose().
-        if (Volatile.Read(ref _Scanner) == null)
+        // For full scan mode, register all interfaces now. Read _Scanner
+        // for symmetry with the null write in Dispose().
+        if (_Scanner == null)
         {
             _RegisterAllInterfaces(registry);
         }
@@ -271,22 +254,22 @@ public sealed class PcapSource : IRandomAccessFrameSource, IErrorTolerantFrameSo
     /// </remarks>
     public Frame? NextFrame(CancellationToken cancellationToken = default)
     {
-        ObjectDisposedException.ThrowIf(Volatile.Read(ref _Disposed), this);
+        ObjectDisposedException.ThrowIf(_Disposed != 0, this);
 
-        if (!Volatile.Read(ref _Started))
+        if (!_Started)
         {
             throw new InvalidOperationException($"{UiName} has not been started.");
         }
 
-        if (Volatile.Read(ref _Aborted))
+        if (_Aborted)
         {
             return null;
         }
 
         cancellationToken.ThrowIfCancellationRequested();
 
-        // Read _Scanner with Volatile for symmetry with Dispose()'s Volatile.Write.
-        if (Volatile.Read(ref _Scanner) is not null)
+        // Read _Scanner for symmetry with Dispose()'s null write.
+        if (_Scanner is not null)
         {
             return _NextFrameFromScanner();
         }
@@ -308,11 +291,11 @@ public sealed class PcapSource : IRandomAccessFrameSource, IErrorTolerantFrameSo
     /// </remarks>
     public Frame? FrameById(FrameId id, CancellationToken cancellationToken = default)
     {
-        ObjectDisposedException.ThrowIf(Volatile.Read(ref _Disposed), this);
+        ObjectDisposedException.ThrowIf(_Disposed != 0, this);
 
         // While a lazy scan is still in progress, the frame index, _Interfaces, and _Format
         // are not yet stable. Returning null avoids a race with the single scanning thread.
-        if (Volatile.Read(ref _Scanner) is not null)
+        if (_Scanner is not null)
         {
             return null;
         }
@@ -338,7 +321,7 @@ public sealed class PcapSource : IRandomAccessFrameSource, IErrorTolerantFrameSo
 
         // Snapshot _Registry so a concurrent Dispose() nulling the field cannot
         // produce a NullReferenceException between the disposed check and Frame.Create.
-        FrameInterfaceRegistry? registry = Volatile.Read(ref _Registry);
+        FrameInterfaceRegistry? registry = _Registry;
         if (registry is null)
         {
             return null;
@@ -367,15 +350,14 @@ public sealed class PcapSource : IRandomAccessFrameSource, IErrorTolerantFrameSo
     /// <inheritdoc />
     public void Dispose()
     {
-        if (Volatile.Read(ref _Disposed))
+        if (Interlocked.Exchange(ref _Disposed, 1) != 0)
         {
             return;
         }
 
-        Volatile.Write(ref _Disposed, true);
         // _Scanner is read by FrameById and other public surface from any
         // thread; publish the null write with a release barrier (SOURCE_GUIDE §13.3).
-        Volatile.Write(ref _Scanner, null);
+        _Scanner = null;
         // Clear the registry reference so the session can be GC'd after Dispose().
         _Registry = null;
         // GC.SuppressFinalize is called before the backend disposal so it executes
@@ -393,7 +375,7 @@ public sealed class PcapSource : IRandomAccessFrameSource, IErrorTolerantFrameSo
     {
         // Snapshot _Registry once for the entire scan pass so a concurrent Dispose()
         // cannot null the field between the per-iteration disposed check and Frame.Create.
-        FrameInterfaceRegistry? registry = Volatile.Read(ref _Registry);
+        FrameInterfaceRegistry? registry = _Registry;
         if (registry is null)
         {
             return null;
@@ -405,7 +387,7 @@ public sealed class PcapSource : IRandomAccessFrameSource, IErrorTolerantFrameSo
 
             // Abort early if another thread disposed the source mid-iteration; the
             // backend may have already released its mmap pointer.
-            if (Volatile.Read(ref _Disposed) || Volatile.Read(ref _Aborted))
+            if (_Disposed != 0 || _Aborted)
             {
                 return null;
             }
@@ -457,14 +439,14 @@ public sealed class PcapSource : IRandomAccessFrameSource, IErrorTolerantFrameSo
     /// <summary>Scans and returns the next frame in lazy mode.</summary>
     private Frame? _NextFrameFromScanner()
     {
-        // Snapshot _Scanner via Volatile.Read so the local strong reference survives
+        // Snapshot _Scanner so the local strong reference survives
         // a concurrent Dispose() that would otherwise null out the field. The local
         // is non-null only because NextFrame() rejected the disposed/un-scanned case.
-        IncrementalScanner scanner = Volatile.Read(ref _Scanner)!;
+        IncrementalScanner scanner = _Scanner!;
 
         // Snapshot _Registry for the same reason: Dispose() can null it between the
         // disposed check in NextFrame() and the Frame.Create call below.
-        FrameInterfaceRegistry? registry = Volatile.Read(ref _Registry);
+        FrameInterfaceRegistry? registry = _Registry;
         if (registry is null)
         {
             return null;
@@ -474,7 +456,7 @@ public sealed class PcapSource : IRandomAccessFrameSource, IErrorTolerantFrameSo
         {
             // Abort early if Dispose() was called from another thread mid-scan; the
             // backend pointer might already be released.
-            if (Volatile.Read(ref _Disposed) || Volatile.Read(ref _Aborted))
+            if (_Disposed != 0 || _Aborted)
             {
                 return null;
             }
@@ -553,7 +535,7 @@ public sealed class PcapSource : IRandomAccessFrameSource, IErrorTolerantFrameSo
         // _Scanner is the publication marker observed by FrameById. Clearing it last
         // (with a release-style store) ensures _Index/_Format updates above are visible
         // to threads that subsequently observe _Scanner == null.
-        Volatile.Write(ref _Scanner, null);
+        _Scanner = null;
     }
 
     /// <summary>
@@ -583,14 +565,15 @@ public sealed class PcapSource : IRandomAccessFrameSource, IErrorTolerantFrameSo
     /// </summary>
     private void _RegisterNewInterfaces()
     {
-        if (_Registry == null)
+        FrameInterfaceRegistry? registry = _Registry;
+        if (registry is null)
         {
             return;
         }
 
-        // Read _Scanner via Volatile so a parallel Dispose() can never present us with
+        // Snapshot _Scanner so a parallel Dispose() can never present us with
         // a torn null reference between the null-check and the dereference.
-        IncrementalScanner? scanner = Volatile.Read(ref _Scanner);
+        IncrementalScanner? scanner = _Scanner;
         ScannerFormat format = scanner?.Format ?? _Format;
 
         if (format is PcapNgFormat pcapng)
@@ -616,7 +599,7 @@ public sealed class PcapSource : IRandomAccessFrameSource, IErrorTolerantFrameSo
                 {
                     if (current >= _RegisteredInterfaceCount)
                     {
-                        _RegisterInterface(_Registry, section, s, i);
+                        _RegisterInterface(registry, section, s, i);
                     }
                     current++;
                 }
@@ -626,7 +609,7 @@ public sealed class PcapSource : IRandomAccessFrameSource, IErrorTolerantFrameSo
         }
         else if (format is LegacyPcapFormat legacy && _RegisteredInterfaceCount == 0)
         {
-            _RegisterLegacyInterface(_Registry, legacy.Info);
+            _RegisterLegacyInterface(registry, legacy.Info);
             _RegisteredInterfaceCount = 1;
         }
     }
@@ -740,8 +723,8 @@ public sealed class PcapSource : IRandomAccessFrameSource, IErrorTolerantFrameSo
     /// </summary>
     private void _HandleSkip(FrameReadErrorEventArgs error)
     {
-        Interlocked.Increment(ref _SkippedFrameCount);
-        Interlocked.Increment(ref _ErrorCount);
+        _SkippedFrameCount.Increment();
+        _ErrorCount.Increment();
 
         // Always signal the error so subscribers can log the first offending block
         // regardless of the tolerance mode. In strict mode the source additionally
@@ -750,7 +733,7 @@ public sealed class PcapSource : IRandomAccessFrameSource, IErrorTolerantFrameSo
 
         if (ErrorTolerance == ErrorToleranceMode.Strict)
         {
-            Volatile.Write(ref _Aborted, true);
+            _Aborted = true;
         }
     }
 

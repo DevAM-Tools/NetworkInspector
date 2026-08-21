@@ -1,10 +1,10 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Protocols;
 
 /// <summary>
 /// FlexRay protocol parser (ISO 17458-2) for LINKTYPE_FLEXRAY (link type 210).
-/// Dispatches the frame payload to sub-protocols (e.g. Signal PDU) via the <c>flexray.id</c>
+/// Dispatches the frame payload to sub-protocols (e.g. Signal Message) via the <c>flexray.id</c>
 /// dispatch table, keyed by the 11-bit slot number, channel (bit 11 = Channel B), and
 /// 6-bit cycle count (bits [17:12]). See <see cref="FlexRayLinkTypeFrame.EncodeDispatchKey"/>.
 /// <para>LINKTYPE_FLEXRAY capture format (per tcpdump.org specification):</para>
@@ -40,7 +40,7 @@ namespace NetworkInspector.Protocols;
 /// │   ├── flexray.cod_err: Not set
 /// │   └── flexray.tss_viol: Not set
 /// ├── flexray.data: (32 bytes)
-/// └── signal_pdu: ...                           [optional, when registered on flexray.id]
+/// └── signal_message: ...                     [optional, when registered on flexray.id]
 /// </code>
 /// </summary>
 /// <remarks>
@@ -373,7 +373,7 @@ public sealed partial class FlexRayProtocol : IProtocol
             FieldValue.NewBool(tssViol),
             tssViol ? "Violation" : "No violation");
 
-        // Payload data (optional); dispatch to sub-protocols (e.g. Signal PDU) when present.
+        // Payload data (optional); dispatch to sub-protocols (e.g. Signal Message) when present.
         // Key encodes slot, channel, and cycle — the three identifiers of a FlexRay message.
         if (totalConsumed > _MinHeaderSize)
         {
@@ -383,9 +383,9 @@ public sealed partial class FlexRayProtocol : IProtocol
 
             ulong dispatchKey = FlexRayLinkTypeFrame.EncodeDispatchKey(frameId, isChannelB, cycle);
             ParseResult dispatchResult = container.TryCallNextProtocolU64(_IdTableId, dispatchKey, payload, in context);
-            if (dispatchResult.IsError)
+            if (dispatchResult.TryPropagateError(out ParseResult error))
             {
-                return dispatchResult;
+                return error;
             }
         }
 

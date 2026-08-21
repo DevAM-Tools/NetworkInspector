@@ -413,8 +413,8 @@ public sealed partial class ProtocolGenerator
                             ? "global::System.Array.Empty<byte>()"
                             : _HexToByteArrayLiteral(setting.DefaultValue);
                         sb.AppendLine(
-                            $"        {setting.FieldName} = builder.Settings.GetSetting(\"{_EscapeString(setting.Name)}\")"
-                            + $"?.AsBytes() ?? {bytesDefault};");
+                            $"        {setting.FieldName} = builder.Settings.GetBytesSetting(\"{_EscapeString(setting.Name)}\")"
+                            + $" ?? {bytesDefault};");
                         break;
                     }
                 case "Enum":

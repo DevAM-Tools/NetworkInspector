@@ -112,7 +112,7 @@ internal sealed class Icmpv6BasicTests
             // The exact checksum depends on payload — just check the field exists and is non-zero.
             FieldId? id = stack.GetFieldId("icmpv6.checksum");
             await Assert.That(id).IsNotNull();
-            bool found = packet.TryGetFieldValue(id!.Value, out FieldValue value);
+            bool found = packet.TryGetFieldValue(id!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(found).IsTrue();
             await Assert.That(value.Data.TryGetAsU64(out ulong cs)).IsTrue();
             await Assert.That(cs).IsNotEqualTo((ulong)0).Because("checksum was patched by IcmpV6Fixup");

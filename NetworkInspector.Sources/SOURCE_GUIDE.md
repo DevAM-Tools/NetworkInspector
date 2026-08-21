@@ -78,7 +78,7 @@ Special-purpose sources:
 
 ```
 IFrameSource : IDisposable
-├── UiName, Description, EstimatedFrameCount, IsFrameCountTruncated, IsRunning
+├── UiName, Description, EstimatedFrameCount, IsRunning
 ├── Start(FrameSourceId, FrameInterfaceRegistry)
 └── NextFrame() → Frame?
 
@@ -397,7 +397,7 @@ return result.Value;
 **Rules:**
 - Never construct `Frame` directly — always use `Frame.Create()`
 - Handle `ParseResult` failures — do not discard errors silently
-- The `FrameId` value is the zero-based sequential index of the frame
+- The `FrameId` value is the zero-based sequential index of the frame (valid range: `0 … Array.MaxLength - 1`; see `ArrayIndexIdRange` in Core)
 
 ---
 
@@ -430,6 +430,8 @@ File-based source:
 | Context | Default | Source |
 |---------|---------|--------|
 | PreloadBudget | 256 MiB (64-bit) / 64 MiB (32-bit) | All file sources |
+| MaxUncompressedContainerSize | 128 MiB (`BlfSourceOptions.DefaultMaxUncompressedContainerSize`; `0` disables) | BlfSource, BlfStreamSource |
+| MaxDecompressionConcurrency | `ProcessorCount` | BlfSource |
 | Disk read buffer | 4 MiB | AscSource, AscStreamSource |
 | Container cache (2Q) | 32 MiB | BlfSource |
 | Mmap slot count | `ProcessorCount` | PcapSource, BlfSource |
@@ -543,19 +545,24 @@ private void HandleSkip(int frameIndex, long fileOffset, FrameReadErrorKind kind
 
 | Counter | Increment Method | Visibility |
 |---------|-----------------|------------|
-| `_ReadFrameCount` | `Interlocked.Increment` | `Volatile.Read` in getter |
-| `_SkippedFrameCount` | `Interlocked.Increment` | `Volatile.Read` in getter |
-| `_ErrorCount` | `Interlocked.Increment` | `Volatile.Read` in getter |
+| `_ReadFrameCount` | `Interlocked.Increment` | volatile field read in getter |
+| `_SkippedFrameCount` | `SaturatingVolatileCounter.Increment` | `.Value` in getter |
+| `_ErrorCount` | `SaturatingVolatileCounter.Increment` | `.Value` in getter |
 
 ### 12.4 Statistics Properties
 
 ```csharp
-public long ReadFrameCount => Volatile.Read(ref _ReadFrameCount);
-public long SkippedFrameCount => Volatile.Read(ref _SkippedFrameCount);
-public long ErrorCount => Volatile.Read(ref _ErrorCount);
-public bool HasErrors => Volatile.Read(ref _ErrorCount) > 0;
+private volatile int _ReadFrameCount;
+private readonly SaturatingVolatileCounter _SkippedFrameCount = new();
+private readonly SaturatingVolatileCounter _ErrorCount = new();
+
+public int ReadFrameCount => _ReadFrameCount;
+public int SkippedFrameCount => _SkippedFrameCount.Value;
+public int ErrorCount => _ErrorCount.Value;
+public bool HasErrors => _ErrorCount.Value > 0;
 ```
 
+Capacity: allocating a frame ID beyond `ArrayIndexIdRange.MaxValue` throws `InvalidOperationException` (no silent truncation).
 ---
 
 ## 13. Thread Safety
@@ -576,10 +583,10 @@ public bool HasErrors => Volatile.Read(ref _ErrorCount) > 0;
 All cross-thread observable fields must use `Volatile.Read`/`Volatile.Write`:
 
 ```csharp
-private bool _Started;
-private bool _Disposed;
-private bool _Aborted;
-private long _ReadFrameCount;
+private volatile bool _Started;
+private volatile bool _Disposed;
+private volatile bool _Aborted;
+private volatile int _ReadFrameCount;
 private long _SkippedFrameCount;
 private long _ErrorCount;
 ```
@@ -763,12 +770,12 @@ public sealed class XxxSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
 
     private FrameSourceId _SourceId;
     private FrameInterfaceRegistry _Registry;
-    private bool _Started;
-    private bool _Disposed;
-    private bool _Aborted;
-    private long _ReadFrameCount;
-    private long _SkippedFrameCount;
-    private long _ErrorCount;
+    private volatile bool _Started;
+    private volatile bool _Disposed;
+    private volatile bool _Aborted;
+    private volatile int _ReadFrameCount;
+    private volatile int _SkippedFrameCount;
+    private volatile int _ErrorCount;
     private int _NextFrameIndex;
 
     private readonly Dictionary<(LinkType, int), FrameInterfaceId> _InterfaceMap = new();
@@ -788,22 +795,19 @@ public sealed class XxxSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
     public int? EstimatedFrameCount => _Index.Count;
 
     /// <inheritdoc />
-    public bool IsFrameCountTruncated => false;
+    public bool IsRunning => _Started && !_Disposed;
 
     /// <inheritdoc />
-    public bool IsRunning => Volatile.Read(ref _Started) && !Volatile.Read(ref _Disposed);
+    public int ReadFrameCount => _ReadFrameCount;
 
     /// <inheritdoc />
-    public long ReadFrameCount => Volatile.Read(ref _ReadFrameCount);
+    public int SkippedFrameCount => _SkippedFrameCount;
 
     /// <inheritdoc />
-    public long SkippedFrameCount => Volatile.Read(ref _SkippedFrameCount);
+    public int ErrorCount => _ErrorCount;
 
     /// <inheritdoc />
-    public long ErrorCount => Volatile.Read(ref _ErrorCount);
-
-    /// <inheritdoc />
-    public bool HasErrors => Volatile.Read(ref _ErrorCount) > 0;
+    public bool HasErrors => _ErrorCount > 0;
 
     /// <inheritdoc />
     public ErrorToleranceMode ErrorTolerance { get; set; }
@@ -970,12 +974,12 @@ public sealed class XxxStreamSource : IFrameSource, IErrorTolerantFrameSource
 
     private FrameSourceId _SourceId;
     private FrameInterfaceRegistry _Registry;
-    private bool _Started;
-    private bool _Disposed;
-    private bool _Exhausted;
-    private long _ReadFrameCount;
-    private long _SkippedFrameCount;
-    private long _ErrorCount;
+    private volatile bool _Started;
+    private volatile bool _Disposed;
+    private volatile bool _Exhausted;
+    private volatile int _ReadFrameCount;
+    private volatile int _SkippedFrameCount;
+    private volatile int _ErrorCount;
     private int _NextFrameIndex;
 
     private readonly Stream _Stream;
@@ -997,19 +1001,19 @@ public sealed class XxxStreamSource : IFrameSource, IErrorTolerantFrameSource
     public int? EstimatedFrameCount => null;
 
     /// <inheritdoc />
-    public bool IsRunning => Volatile.Read(ref _Started) && !Volatile.Read(ref _Disposed);
+    public bool IsRunning => _Started && !_Disposed;
 
     /// <inheritdoc />
-    public long ReadFrameCount => Volatile.Read(ref _ReadFrameCount);
+    public int ReadFrameCount => _ReadFrameCount;
 
     /// <inheritdoc />
-    public long SkippedFrameCount => Volatile.Read(ref _SkippedFrameCount);
+    public int SkippedFrameCount => _SkippedFrameCount;
 
     /// <inheritdoc />
-    public long ErrorCount => Volatile.Read(ref _ErrorCount);
+    public int ErrorCount => _ErrorCount;
 
     /// <inheritdoc />
-    public bool HasErrors => Volatile.Read(ref _ErrorCount) > 0;
+    public bool HasErrors => _ErrorCount > 0;
 
     /// <inheritdoc />
     public ErrorToleranceMode ErrorTolerance { get; set; }

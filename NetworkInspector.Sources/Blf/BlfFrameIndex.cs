@@ -64,8 +64,8 @@ internal sealed class BlfFrameIndex
 {
     #region Fields
 
-    private BlfFrameEntry[] _Entries;
-    private int _Count;
+    private volatile BlfFrameEntry[] _Entries;
+    private volatile int _Count;
 
     #endregion
 
@@ -83,10 +83,7 @@ internal sealed class BlfFrameIndex
     #region Properties
 
     /// <summary>Number of indexed frames. Safe for concurrent readers.</summary>
-    internal int Count => Volatile.Read(ref _Count);
-
-    /// <summary>Whether the index has reached its maximum capacity of <see cref="int.MaxValue"/> entries.</summary>
-    internal bool IsFull => Volatile.Read(ref _Count) == int.MaxValue;
+    internal int Count => _Count;
 
     #endregion
 
@@ -94,29 +91,28 @@ internal sealed class BlfFrameIndex
 
     /// <summary>
     /// Appends a frame entry to the index. Single-writer only.
-    /// Returns <c>false</c> if the index is full (<see cref="int.MaxValue"/> entries).
     /// </summary>
+    /// <exception cref="InvalidOperationException">
+    /// The next frame index would exceed <see cref="ArrayIndexIdRange.MaxValue"/>.
+    /// </exception>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal bool Push(in BlfFrameEntry entry)
     {
         int count = _Count;
-        if (count == int.MaxValue)
-        {
-            return false;
-        }
+        ArrayIndexIdRange.ThrowIfInvalidNextIndex(count, "frame");
 
         if (count == _Entries.Length)
         {
             _Grow();
         }
         _Entries[count] = entry;
-        Volatile.Write(ref _Count, count + 1);
+        _Count = count + 1;
         return true;
     }
 
     /// <summary>Returns a readonly reference to the entry at the given frame index. Safe for concurrent readers.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal ref readonly BlfFrameEntry GetEntry(int index) => ref Volatile.Read(ref _Entries)[index];
+    internal ref readonly BlfFrameEntry GetEntry(int index) => ref _Entries[index];
 
     /// <summary>Trims the internal array to exactly fit the current count. Single-writer only.</summary>
     internal void ShrinkToFit()
@@ -126,7 +122,7 @@ internal sealed class BlfFrameIndex
         {
             BlfFrameEntry[] trimmed = new BlfFrameEntry[count];
             Array.Copy(_Entries, trimmed, count);
-            Volatile.Write(ref _Entries, trimmed);
+            _Entries = trimmed;
         }
     }
 
@@ -135,7 +131,7 @@ internal sealed class BlfFrameIndex
     #region Private Helpers
 
     /// <summary>
-    /// Doubles the internal capacity (saturating at <see cref="int.MaxValue"/>) and publishes
+    /// Doubles the internal capacity (saturating at <see cref="ArrayIndexIdRange.MaxCount"/>) and publishes
     /// the new array via <see cref="System.Threading.Volatile"/> Write so concurrent readers never observe
     /// a partially copied array.
     /// </summary>
@@ -143,10 +139,10 @@ internal sealed class BlfFrameIndex
     {
         long doubled = (long)_Entries.Length * 2;
         long target = Math.Max(doubled, 1024);
-        int newCapacity = (int)Math.Min(target, int.MaxValue);
+        int newCapacity = (int)Math.Min(target, ArrayIndexIdRange.MaxCount);
         BlfFrameEntry[] newEntries = new BlfFrameEntry[newCapacity];
         Array.Copy(_Entries, newEntries, _Count);
-        Volatile.Write(ref _Entries, newEntries);
+        _Entries = newEntries;
     }
 
     #endregion

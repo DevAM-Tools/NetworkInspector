@@ -4,7 +4,7 @@ namespace NetworkInspector.Protocols.Helpers;
 
 /// <summary>
 /// Shared utility for loading JSON configuration files used by
-/// config-driven protocols (CAN, Signal PDU, PDU Transport, SOME/IP).
+/// config-driven protocols (CAN, Signal Message, PDU Transport, SOME/IP).
 /// <para>
 /// Protocols store a file path in a string setting, then call
 /// <see cref="Load{T}"/> during <c>OnStartCustom</c> to deserialize the JSON.

@@ -5,12 +5,17 @@ namespace NetworkInspector.Core.Index;
 /// <summary>
 /// Common interface for Roaring Bitmap containers.
 /// Each container covers a 16-bit range (up to 65536 values).
+/// <para>
+/// Set operations (<see cref="And"/>, <see cref="Or"/>, <see cref="AndNot"/>, <see cref="Xor"/>)
+/// return a (possibly new) container and must not mutate either operand.
+/// <see cref="Add"/> may mutate <see langword="this"/>.
+/// </para>
 /// </summary>
 internal interface IContainer
 {
     #region Methods
 
-    /// <summary>Adds a value to the container.</summary>
+    /// <summary>Adds a value to the container. May mutate <see langword="this"/>.</summary>
     IContainer Add(ushort value);
 
     /// <summary>Checks if a value is present.</summary>
@@ -22,16 +27,32 @@ internal interface IContainer
         get;
     }
 
-    /// <summary>AND (intersection) with another container.</summary>
+    /// <summary>
+    /// AND (intersection) with another container.
+    /// Must not mutate <see langword="this"/> or <paramref name="other"/>;
+    /// return a new container or a clone when in-place <see cref="Add"/> would alias an operand.
+    /// </summary>
     IContainer And(IContainer other);
 
-    /// <summary>OR (union) with another container.</summary>
+    /// <summary>
+    /// OR (union) with another container.
+    /// Must not mutate <see langword="this"/> or <paramref name="other"/>;
+    /// return a new container or a clone when in-place <see cref="Add"/> would alias an operand.
+    /// </summary>
     IContainer Or(IContainer other);
 
-    /// <summary>ANDNOT (difference): this AND NOT other.</summary>
+    /// <summary>
+    /// ANDNOT (difference): this AND NOT other.
+    /// Must not mutate <see langword="this"/> or <paramref name="other"/>;
+    /// return a new container or a clone when in-place <see cref="Add"/> would alias an operand.
+    /// </summary>
     IContainer AndNot(IContainer other);
 
-    /// <summary>XOR (symmetric difference) with another container.</summary>
+    /// <summary>
+    /// XOR (symmetric difference) with another container.
+    /// Must not mutate <see langword="this"/> or <paramref name="other"/>;
+    /// return a new container or a clone when in-place <see cref="Add"/> would alias an operand.
+    /// </summary>
     IContainer Xor(IContainer other);
 
     /// <summary>Creates a deep copy of this container. The copy is fully independent.</summary>

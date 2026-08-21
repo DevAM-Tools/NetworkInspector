@@ -79,6 +79,12 @@ internal sealed class FieldValueTests
     }
 
     [Test]
+    public async Task FieldValueData_NewBytes_NullArray_ThrowsArgumentNullException()
+    {
+        await Assert.That(() => FieldValueData.NewBytes((byte[])null!)).Throws<ArgumentNullException>();
+    }
+
+    [Test]
     public async Task FieldValueData_MacAddress_Roundtrip()
     {
         MacAddress mac = MacAddress.FromBytes([0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF]);
@@ -870,6 +876,33 @@ internal sealed class FieldValueTests
     }
 
     [Test]
+    public async Task FieldValueData_IStringSize_Bytes_OverflowLength_ReturnsFalse()
+    {
+        FieldValueData val = _WithBytesPackedLength(FieldValueData.NewBytes([0x01]), ((long)int.MaxValue + 1) / 3 + 1);
+
+        bool result = val.TryGetStringSize(default, null, out int size);
+
+        await Assert.That(result).IsFalse();
+        await Assert.That(size).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task FieldValueData_TryFormat_Bytes_OverflowLength_ReturnsFalse()
+    {
+        FieldValueData val = _WithBytesPackedLength(FieldValueData.NewBytes([0x01]), ((long)int.MaxValue + 1) / 3 + 1);
+        Span<char> charBuf = stackalloc char[16];
+        byte[] utf8Buf = new byte[16];
+
+        bool charOk = val.TryFormat(charBuf, out int charWritten, default, null);
+        bool utf8Ok = val.TryFormat(utf8Buf, out int utf8Written, default, null);
+
+        await Assert.That(charOk).IsFalse();
+        await Assert.That(charWritten).IsEqualTo(0);
+        await Assert.That(utf8Ok).IsFalse();
+        await Assert.That(utf8Written).IsEqualTo(0);
+    }
+
+    [Test]
     public async Task FieldValueData_IStringSize_MacAddress_ReturnsExactLength()
     {
         MacAddress mac = new(0x112233445566UL);
@@ -1555,6 +1588,17 @@ internal sealed class FieldValueTests
             "_Ref",
             System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
         field.SetValue(boxed, refValue);
+        return (FieldValueData)boxed;
+    }
+
+    private static FieldValueData _WithBytesPackedLength(FieldValueData value, long length)
+    {
+        object boxed = value;
+        System.Reflection.FieldInfo dataField = typeof(FieldValueData).GetField(
+            "_Data",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+        ulong packed = (ulong)(uint)length << 32;
+        dataField.SetValue(boxed, packed);
         return (FieldValueData)boxed;
     }
 

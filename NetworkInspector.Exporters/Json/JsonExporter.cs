@@ -35,7 +35,7 @@ public sealed class JsonExporter : IPacketListener, IErrorTolerantExporter, IDis
     private readonly CancellationToken _CancellationToken;
     private readonly JsonExportFormat _Format;
     private readonly bool _FlushPerPacket;
-    private readonly long _TargetPacketCount;
+    private readonly int _TargetPacketCount;
 
     // Output target consumed on lazy init
     private ExportOutput? _Output;
@@ -56,6 +56,7 @@ public sealed class JsonExporter : IPacketListener, IErrorTolerantExporter, IDis
     // and `ref readonly` would prevent in-place writes through PooledBuffer's mutable methods.
     private PooledBuffer _Buffer = new(4096);
 
+    private long _CommittedBytes;
     private bool _HasError;
     private bool _Started;
     private bool _Finished;
@@ -71,7 +72,7 @@ public sealed class JsonExporter : IPacketListener, IErrorTolerantExporter, IDis
         string? description,
         JsonExportFormat format,
         bool flushPerPacket,
-        long targetPacketCount,
+        int targetPacketCount,
         CancellationToken cancellationToken)
     {
         _Output = output;
@@ -105,22 +106,25 @@ public sealed class JsonExporter : IPacketListener, IErrorTolerantExporter, IDis
     }
 
     /// <summary>Number of packets written so far.</summary>
-    public long PacketCount
+    public int PacketCount
     {
         get; private set;
     }
 
     /// <inheritdoc/>
-    public long WrittenCount => PacketCount;
+    public int WrittenCount => PacketCount;
 
     /// <inheritdoc/>
-    public long SkippedCount
+    public long EstimatedOutputBytes => _CommittedBytes + _Buffer.Length;
+
+    /// <inheritdoc/>
+    public int SkippedCount
     {
         get; private set;
     }
 
     /// <inheritdoc/>
-    public long ErrorCount
+    public int ErrorCount
     {
         get; private set;
     }
@@ -197,7 +201,7 @@ public sealed class JsonExporter : IPacketListener, IErrorTolerantExporter, IDis
         catch (Exception ex)
         {
             _HasError = true;
-            ErrorCount++;
+            if (ErrorCount < int.MaxValue) ErrorCount++;
             ItemSkipped?.Invoke(this, new ExportErrorEventArgs
             {
                 ItemIndex = PacketCount,
@@ -219,7 +223,7 @@ public sealed class JsonExporter : IPacketListener, IErrorTolerantExporter, IDis
             {
                 cleanupErrors.Add(ex);
                 _HasError = true;
-                ErrorCount++;
+                if (ErrorCount < int.MaxValue) ErrorCount++;
                 ItemSkipped?.Invoke(this, new ExportErrorEventArgs
                 {
                     ItemIndex = PacketCount,
@@ -235,7 +239,7 @@ public sealed class JsonExporter : IPacketListener, IErrorTolerantExporter, IDis
             {
                 cleanupErrors.Add(ex);
                 _HasError = true;
-                ErrorCount++;
+                if (ErrorCount < int.MaxValue) ErrorCount++;
                 ItemSkipped?.Invoke(this, new ExportErrorEventArgs
                 {
                     ItemIndex = PacketCount,
@@ -283,12 +287,12 @@ public sealed class JsonExporter : IPacketListener, IErrorTolerantExporter, IDis
             // Opening bracket write may throw on a broken stream — surface as an
             // export error rather than escaping to the caller.
             _DirectStream = underlyingStream;
-            _DirectStream.Write(_ArrayOpen);
+            _WriteDirect(_ArrayOpen);
         }
         catch (Exception ex)
         {
             _HasError = true;
-            ErrorCount++;
+            if (ErrorCount < int.MaxValue) ErrorCount++;
             ItemSkipped?.Invoke(this, new ExportErrorEventArgs
             {
                 ItemIndex = 0,
@@ -334,10 +338,10 @@ public sealed class JsonExporter : IPacketListener, IErrorTolerantExporter, IDis
         // _DirectStream is guaranteed non-null after _Start() succeeds
         try
         {
-            _DirectStream!.Write(_Buffer.WrittenSpan);
+            _WriteDirect(_Buffer.WrittenSpan);
             if (_FlushPerPacket)
             {
-                _DirectStream.Flush();
+                _DirectStream?.Flush();
             }
         }
         catch (Exception ex)
@@ -364,8 +368,15 @@ public sealed class JsonExporter : IPacketListener, IErrorTolerantExporter, IDis
     /// </summary>
     private bool _HandleSkip(ExportErrorEventArgs error)
     {
-        SkippedCount++;
-        ErrorCount++;
+        if (SkippedCount < int.MaxValue)
+        {
+            SkippedCount++;
+        }
+
+        if (ErrorCount < int.MaxValue)
+        {
+            ErrorCount++;
+        }
 
         if (ErrorTolerance == ErrorToleranceMode.Strict)
         {
@@ -378,10 +389,22 @@ public sealed class JsonExporter : IPacketListener, IErrorTolerantExporter, IDis
         return true;
     }
 
+    /// <summary>Writes bytes to the direct stream and updates <see cref="_CommittedBytes"/>.</summary>
+    private void _WriteDirect(ReadOnlySpan<byte> data)
+    {
+        if (_DirectStream is null)
+        {
+            return;
+        }
+
+        _DirectStream.Write(data);
+        _CommittedBytes += data.Length;
+    }
+
     /// <summary>Writes the closing bracket to the output.</summary>
     private void _WriteClosingBracket() =>
         // _DirectStream may be null if _Start() was never called (empty export handled in OnFinish)
-        _DirectStream?.Write(_ArrayClose);
+        _WriteDirect(_ArrayClose);
 
     // ========================================================================
     // Builder
@@ -396,7 +419,7 @@ public sealed class JsonExporter : IPacketListener, IErrorTolerantExporter, IDis
         private CancellationToken _CancellationToken;
         private JsonExportFormat _Format = JsonExportFormat.Compact;
         private bool _FlushPerPacket;
-        private long _TargetPacketCount;
+        private int _TargetPacketCount;
 
         /// <summary>Sets the output to a file path with a 4 MiB buffer.</summary>
         public Builder ToFile(string path)
@@ -454,9 +477,18 @@ public sealed class JsonExporter : IPacketListener, IErrorTolerantExporter, IDis
         }
 
         /// <summary>Stops after writing the specified number of packets. 0 means unlimited.</summary>
-        public Builder WithTargetPacketCount(long count)
+        public Builder WithTargetPacketCount(int count)
         {
             ArgumentOutOfRangeException.ThrowIfNegative(count);
+            if (count > ArrayIndexIdRange.MaxCount)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(count),
+                    count,
+                    $"Target packet count must not exceed {ArrayIndexIdRange.MaxCount.ToString(CultureInfo.InvariantCulture)} " +
+                    $"(Array.MaxLength={Array.MaxLength.ToString(CultureInfo.InvariantCulture)}).");
+            }
+
             _TargetPacketCount = count;
             return this;
         }

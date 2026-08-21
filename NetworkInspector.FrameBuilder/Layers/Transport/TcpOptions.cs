@@ -10,26 +10,23 @@ namespace NetworkInspector.FrameBuilder;
 /// Use <see cref="Empty"/> when no options are needed.
 /// <para>Thread safety: immutable; safe for concurrent use.</para>
 /// </remarks>
-public readonly struct TcpOptions
+/// <param name="Data">The raw option bytes, already padded to a 4-byte boundary.</param>
+public readonly record struct TcpOptions(ReadOnlyMemory<byte> Data)
 {
+    #region Sentinels
+
     /// <summary>An empty options value (no TCP options).</summary>
     public static TcpOptions Empty { get; }
 
-    /// <summary>The raw option bytes, already padded to a 4-byte boundary.</summary>
-    public ReadOnlyMemory<byte> Data
-    {
-        get;
-    }
+    #endregion
 
-    /// <summary>Creates a <see cref="TcpOptions"/> wrapping the given bytes.</summary>
-    public TcpOptions(ReadOnlyMemory<byte> data)
-    {
-        Data = data;
-    }
+    #region Conversions
 
     /// <summary>Implicitly wraps a byte array as <see cref="TcpOptions"/>.</summary>
     public static implicit operator TcpOptions(byte[] data) => new(data);
 
     /// <summary>Implicitly wraps a <see cref="ReadOnlyMemory{T}"/> as <see cref="TcpOptions"/>.</summary>
     public static implicit operator TcpOptions(ReadOnlyMemory<byte> data) => new(data);
+
+    #endregion
 }

@@ -274,13 +274,13 @@ public sealed partial class PduTransportProtocol : IProtocol
 
                 ParseResult dispatchResult = container.TryCallNextProtocolU64(
                     _IdTableId, pduId, payloadData, in context);
-                if (dispatchResult.IsError)
+                if (dispatchResult.TryPropagateError(out ParseResult error))
                 {
-                    return dispatchResult;
+                    return error;
                 }
 
                 // If no sub-protocol consumed the payload, append raw bytes.
-                if (!dispatchResult.IsSuccess || dispatchResult.Value == 0)
+                if (!dispatchResult.TryGetConsumed(out int consumed) || consumed == 0)
                 {
                     context.RecordGroupPresence(_Pdu_transportPayloadGroupId);
                     container.Append(_PayloadFieldId, FieldValue.NewBytes(payloadData));

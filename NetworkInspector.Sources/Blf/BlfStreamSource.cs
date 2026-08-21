@@ -26,7 +26,8 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
     private readonly Stream _Stream;
 
     /// <summary>User-friendly display name.</summary>
-    private readonly string _UiName;
+    /// <inheritdoc />
+    public string UiName { get; }
 
     /// <summary>Whether to leave the stream open on Dispose.</summary>
     private readonly bool _LeaveOpen;
@@ -44,13 +45,13 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
     private bool _Initialized;
 
     /// <summary>Whether the stream is exhausted or stopped.</summary>
-    private bool _Exhausted;
+    private volatile bool _Exhausted;
 
     /// <summary>Whether Start() has been called.</summary>
-    private bool _Started;
+    private volatile bool _Started;
 
-    /// <summary>Whether Dispose() has been called.</summary>
-    private bool _Disposed;
+    /// <summary>Atomic dispose latch (0 = live, 1 = disposed).</summary>
+    private volatile int _Disposed;
 
     /// <summary>Sequential frame counter for FrameId assignment.</summary>
     private int _FrameIndex;
@@ -94,15 +95,16 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
     #endregion
 
     #region Error tolerance statistics
-    private long _ReadFrameCount;
-    private long _SkippedFrameCount;
-    private long _ErrorCount;
+    private volatile int _ReadFrameCount;
+    private readonly SaturatingVolatileCounter _SkippedFrameCount = new();
+    private readonly SaturatingVolatileCounter _ErrorCount = new();
 
     #endregion
 
     #region Decompression limit
 
-    private long _MaxUncompressedContainerSize;
+    // `volatile` is illegal on long; cross-thread access uses Volatile.Read / Volatile.Write.
+    private long _MaxUncompressedContainerSize = BlfSourceOptions.DefaultMaxUncompressedContainerSize;
 
     /// <summary>
     /// Maximum allowed uncompressed size in bytes for a single BLF log container.
@@ -110,8 +112,8 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
     /// <see cref="Format.BlfDecompressionLimitExceededException"/> is thrown before any
     /// allocation is attempted.
     /// <para>
-    /// A value of <c>0</c> disables the check (default). When the limit is active it
-    /// must be positive.
+    /// A value of <c>0</c> disables the check. Default matches
+    /// <see cref="BlfSourceOptions.DefaultMaxUncompressedContainerSize"/> (128 MiB).
     /// </para>
     /// <para>
     /// Must be set before <see cref="Start"/> is called; changes after start have no effect.
@@ -135,7 +137,7 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
     private BlfStreamSource(Stream stream, string uiName, bool leaveOpen, TimeZoneInfo timestampTimeZone)
     {
         _Stream = stream;
-        _UiName = uiName;
+        UiName = uiName;
         _LeaveOpen = leaveOpen;
         _TimestampTimeZone = timestampTimeZone;
     }
@@ -178,9 +180,6 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
     #region IFrameSource
 
     /// <inheritdoc />
-    public string UiName => _UiName;
-
-    /// <inheritdoc />
     public string? Description => null;
 
     /// <inheritdoc />
@@ -188,21 +187,21 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
     public int? EstimatedFrameCount => null;
 
     /// <inheritdoc />
-    public bool IsRunning => Volatile.Read(ref _Started) && !Volatile.Read(ref _Disposed);
+    public bool IsRunning => _Started && _Disposed == 0;
 
     // ── IErrorTolerantFrameSource / IFrameSourceStatistics ────────────────────
 
     /// <inheritdoc/>
-    public long ReadFrameCount => Volatile.Read(ref _ReadFrameCount);
+    public int ReadFrameCount => _ReadFrameCount;
 
     /// <inheritdoc/>
-    public long SkippedFrameCount => Volatile.Read(ref _SkippedFrameCount);
+    public int SkippedFrameCount => _SkippedFrameCount.Value;
 
     /// <inheritdoc/>
-    public long ErrorCount => Volatile.Read(ref _ErrorCount);
+    public int ErrorCount => _ErrorCount.Value;
 
     /// <inheritdoc/>
-    public bool HasErrors => Volatile.Read(ref _ErrorCount) > 0;
+    public bool HasErrors => _ErrorCount.Value > 0;
 
     /// <inheritdoc/>
     public ErrorToleranceMode ErrorTolerance { get; set; } = ErrorToleranceMode.Tolerant;
@@ -216,7 +215,7 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
         ArgumentNullException.ThrowIfNull(registry);
         _SourceId = sourceId;
         _Registry = registry;
-        Volatile.Write(ref _Started, true);
+        _Started = true;
         _FrameIndex = 0;
     }
 
@@ -227,14 +226,14 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
     /// </remarks>
     public Frame? NextFrame(CancellationToken cancellationToken = default)
     {
-        ObjectDisposedException.ThrowIf(Volatile.Read(ref _Disposed), this);
+        ObjectDisposedException.ThrowIf(_Disposed != 0, this);
 
-        if (!Volatile.Read(ref _Started))
+        if (!_Started)
         {
             throw new InvalidOperationException($"{UiName} has not been started. Call Start() first.");
         }
 
-        if (Volatile.Read(ref _Exhausted))
+        if (_Exhausted)
         {
             return null;
         }
@@ -253,12 +252,12 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
             {
                 // Header parse failed catastrophically: ensure subsequent NextFrame()
                 // calls don't re-enter the parser with corrupt state.
-                Volatile.Write(ref _Exhausted, true);
+                _Exhausted = true;
                 throw;
             }
             if (!initialized)
             {
-                Volatile.Write(ref _Exhausted, true);
+                _Exhausted = true;
                 return null;
             }
             _Initialized = true;
@@ -275,12 +274,11 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
     /// <inheritdoc />
     public void Dispose()
     {
-        if (Volatile.Read(ref _Disposed))
+        if (Interlocked.Exchange(ref _Disposed, 1) != 0)
         {
             return;
         }
 
-        Volatile.Write(ref _Disposed, true);
         // Clear the registry reference so the session can be GC'd after Dispose().
         _Registry = null;
         _PendingContainer = null;
@@ -347,7 +345,7 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
     /// </summary>
     private Frame? _ReadNextFrame()
     {
-        while (!Volatile.Read(ref _Exhausted))
+        while (!_Exhausted)
         {
             // Level 1: drain pending container objects
             if (_PendingContainer is not null)
@@ -363,7 +361,7 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
             // Level 2: read next LOBJ block from stream
             if (!_ReadNextOuterBlock())
             {
-                Volatile.Write(ref _Exhausted, true);
+                _Exhausted = true;
                 return null;
             }
 
@@ -716,11 +714,8 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
     /// </summary>
     private Frame? _BuildFrame(BlfFrameResult frameResult, long timestampNanos)
     {
-        // Enforce maximum frame count — FrameId is int-based
-        if (_FrameIndex == int.MaxValue)
-        {
-            return null;
-        }
+        // Enforce maximum frame count — FrameId is array-index-based
+        ArrayIndexIdRange.ThrowIfInvalidNextIndex(_FrameIndex, "frame");
 
         LinkType linkType = _GetLinkTypeForObjectType(frameResult.ObjectType);
         FrameInterfaceId interfaceId = _GetOrRegisterInterface(frameResult.ObjectType, frameResult.Channel);
@@ -764,8 +759,8 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
     /// </summary>
     private void _HandleSkip(FrameReadErrorEventArgs error)
     {
-        Interlocked.Increment(ref _SkippedFrameCount);
-        Interlocked.Increment(ref _ErrorCount);
+        _SkippedFrameCount.Increment();
+        _ErrorCount.Increment();
 
         // Always signal the error so subscribers can log the first offending object
         // regardless of the tolerance mode. In strict mode the source additionally
@@ -774,7 +769,7 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
 
         if (ErrorTolerance == ErrorToleranceMode.Strict)
         {
-            Volatile.Write(ref _Exhausted, true);
+            _Exhausted = true;
         }
     }
 

@@ -54,9 +54,6 @@ internal static class FlexRayParser
     /// </summary>
     private const int _FlexRayRcvMessageExMinSize = 60;
 
-    /// <summary>LINKTYPE_FLEXRAY fixed header size (measurement + ISO header).</summary>
-    private const int _LinkTypeFlexRayHeaderSize = FlexRayLinkTypeFrame.MinHeaderSize;
-
     #endregion
 
     #region Public API
@@ -96,10 +93,16 @@ internal static class FlexRayParser
         byte subChannel = (mux & 0x02) != 0 ? (byte)1 : (byte)0;
 
         int available = Math.Max(0, payload.Length - _FlexRayDataMinSize);
-        int actualDataLen = Math.Min(dataLen, available);
+        if (!_TryResolvePayloadLength(dataLen, available, out int actualDataLen))
+        {
+            return false;
+        }
+
         ReadOnlySpan<byte> data = payload.Slice(_FlexRayDataMinSize, actualDataLen);
 
-        frame = _BuildLinkTypeFrame(subChannel, typeFlags: 0, frameId, cycle: 0, headerCrc, data);
+        frame = _BuildLinkTypeFrame(
+            subChannel, ppi: false, nfi: true, sfi: false, stfi: false,
+            frameId, cycle: 0, headerCrc, data);
         return true;
     }
 
@@ -144,35 +147,16 @@ internal static class FlexRayParser
         byte cycle = payload[27];
         byte headerBitMask = payload[28];
 
-        // Map headerBitMask flags → DLT_FLEXRAY type_flags
-        // headerBitMask: bit 1 = payload preamble, bit 2 = null frame,
-        //                bit 3 = sync, bit 4 = startup
-        byte typeFlags = 0;
-        if ((headerBitMask & 0x02) != 0)
-        {
-            typeFlags |= 0x80; // payload preamble
-        }
-
-        if ((headerBitMask & 0x04) != 0)
-        {
-            typeFlags |= 0x40; // null frame
-        }
-
-        if ((headerBitMask & 0x08) != 0)
-        {
-            typeFlags |= 0x20; // sync frame
-        }
-
-        if ((headerBitMask & 0x10) != 0)
-        {
-            typeFlags |= 0x10; // startup frame
-        }
+        FlexRayLinkTypeFrame.MapBlfHeaderBitMask(headerBitMask, out bool ppi, out bool nfi, out bool sfi, out bool stfi);
 
         int available = Math.Max(0, payload.Length - _FlexRayMessageMinSize);
-        int actualDataLen = Math.Min(dataLen, available);
+        if (!_TryResolvePayloadLength(dataLen, available, out int actualDataLen))
+        {
+            return false;
+        }
 
         frame = _BuildLinkTypeFrame(
-            subChannel: 0, typeFlags, frameId, cycle, headerCrc,
+            subChannel: 0, ppi, nfi, sfi, stfi, frameId, cycle, headerCrc,
             payload.Slice(_FlexRayMessageMinSize, actualDataLen));
         return true;
     }
@@ -223,33 +207,16 @@ internal static class FlexRayParser
         // Determine sub-channel from channelMask (bit 0 = A, bit 1 = B)
         byte subChannel = (channelMask & 0x02) != 0 ? (byte)1 : (byte)0;
 
-        // Map frameFlags → DLT_FLEXRAY type_flags (reverse of exporter)
-        byte typeFlags = 0;
-        if ((frameFlags & 0x01) != 0)
-        {
-            typeFlags |= 0x80; // payload preamble
-        }
-
-        if ((frameFlags & 0x02) != 0)
-        {
-            typeFlags |= 0x40; // null frame
-        }
-
-        if ((frameFlags & 0x04) != 0)
-        {
-            typeFlags |= 0x20; // sync frame
-        }
-
-        if ((frameFlags & 0x08) != 0)
-        {
-            typeFlags |= 0x10; // startup frame
-        }
+        FlexRayLinkTypeFrame.MapBlfFrameFlags(frameFlags, out bool ppi, out bool nfi, out bool sfi, out bool stfi);
 
         int available = Math.Max(0, payload.Length - _FlexRayRcvMessageHeaderSize);
-        int actualDataLen = Math.Min(payloadLength, available);
+        if (!_TryResolvePayloadLength(payloadLength, available, out int actualDataLen))
+        {
+            return false;
+        }
 
         frame = _BuildLinkTypeFrame(
-            subChannel, typeFlags, frameId, cycle, headerCrc,
+            subChannel, ppi, nfi, sfi, stfi, frameId, cycle, headerCrc,
             payload.Slice(_FlexRayRcvMessageHeaderSize, actualDataLen));
         return true;
     }
@@ -302,32 +269,16 @@ internal static class FlexRayParser
 
         byte subChannel = (channelMask & 0x02) != 0 ? (byte)1 : (byte)0;
 
-        byte typeFlags = 0;
-        if ((frameFlags & 0x01) != 0)
-        {
-            typeFlags |= 0x80;
-        }
-
-        if ((frameFlags & 0x02) != 0)
-        {
-            typeFlags |= 0x40;
-        }
-
-        if ((frameFlags & 0x04) != 0)
-        {
-            typeFlags |= 0x20;
-        }
-
-        if ((frameFlags & 0x08) != 0)
-        {
-            typeFlags |= 0x10;
-        }
+        FlexRayLinkTypeFrame.MapBlfFrameFlags(frameFlags, out bool ppi, out bool nfi, out bool sfi, out bool stfi);
 
         int available = Math.Max(0, payload.Length - _FlexRayRcvMessageExMinSize);
-        int actualDataLen = Math.Min(payloadLength, available);
+        if (!_TryResolvePayloadLength(payloadLength, available, out int actualDataLen))
+        {
+            return false;
+        }
 
         frame = _BuildLinkTypeFrame(
-            subChannel, typeFlags, frameId, cycle, headerCrc,
+            subChannel, ppi, nfi, sfi, stfi, frameId, cycle, headerCrc,
             payload.Slice(_FlexRayRcvMessageExMinSize, actualDataLen));
         return true;
     }
@@ -337,13 +288,30 @@ internal static class FlexRayParser
     #region Private Helpers
 
     /// <summary>
-    /// Builds a LINKTYPE_FLEXRAY frame from BLF sub-channel and legacy type-flag bytes.
+    /// Validates a declared FlexRay payload length against the protocol maximum and
+    /// clamps the copy length to available bytes.
+    /// </summary>
+    private static bool _TryResolvePayloadLength(int declaredLength, int available, out int actualDataLen)
+    {
+        actualDataLen = 0;
+
+        if (declaredLength > FlexRayLinkTypeFrame.MaxPayloadBytes)
+        {
+            return false;
+        }
+
+        actualDataLen = Math.Min(declaredLength, available);
+        actualDataLen = Math.Min(actualDataLen, FlexRayLinkTypeFrame.MaxPayloadBytes);
+        return true;
+    }
+
+    /// <summary>
+    /// Builds a LINKTYPE_FLEXRAY frame from BLF sub-channel and ISO indicator bits.
     /// </summary>
     private static byte[] _BuildLinkTypeFrame(
-        byte subChannel, byte typeFlags, ushort frameId, byte cycle,
-        ushort headerCrc, ReadOnlySpan<byte> data)
+        byte subChannel, bool ppi, bool nfi, bool sfi, bool stfi,
+        ushort frameId, byte cycle, ushort headerCrc, ReadOnlySpan<byte> data)
     {
-        FlexRayLinkTypeFrame.MapLegacyTypeFlags(typeFlags, out bool ppi, out bool nfi, out bool sfi, out bool stfi);
         bool channelB = subChannel != 0;
         return FlexRayLinkTypeFrame.BuildFrame(
             channelB, frameId, cycle, headerCrc, data,

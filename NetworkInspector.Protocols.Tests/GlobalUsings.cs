@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 #region System
 global using System;
@@ -30,6 +30,7 @@ global using ZeroAlloc;
 #endregion
 
 #region NetworkInspector.FrameBuilder
+global using FrameDispatchBinding = NetworkInspector.FrameBuilder.DispatchBinding;
 global using NetworkInspector.FrameBuilder;
 global using NetworkInspector.FrameBuilder.Constants;
 global using NetworkInspector.FrameBuilder.Core;
@@ -46,7 +47,7 @@ global using NetworkInspector.Protocols.Http2;
 global using NetworkInspector.Protocols.Icmpv6;
 global using NetworkInspector.Protocols.IPv4;
 global using NetworkInspector.Protocols.PduTransport;
-global using NetworkInspector.Protocols.SignalPdu;
+global using NetworkInspector.Protocols.SignalMessage;
 global using NetworkInspector.Protocols.Tcp;
 global using NetworkInspector.Protocols.Tests.Infrastructure.Bridges;
 global using NetworkInspector.Protocols.Tests.Infrastructure.TsharkUat;

@@ -45,8 +45,8 @@ internal sealed class MmapPool : IDisposable
     /// <summary>Total file size in bytes.</summary>
     private readonly long _FileSize;
 
-    /// <summary>Whether this instance has been disposed.</summary>
-    private bool _Disposed;
+    /// <summary>Atomic dispose latch (0 = live, 1 = disposed).</summary>
+    private volatile int _Disposed;
 
     /// <summary>
     /// Number of exceptions swallowed during <see cref="Dispose"/>.
@@ -54,7 +54,7 @@ internal sealed class MmapPool : IDisposable
     /// released even when one step throws. Failures are counted here so callers
     /// can detect that resource cleanup was not fully clean.
     /// </summary>
-    private int _DisposeErrors;
+    private volatile int _DisposeErrors;
 
     #endregion
 
@@ -195,12 +195,10 @@ internal sealed class MmapPool : IDisposable
     /// <inheritdoc />
     public void Dispose()
     {
-        if (Volatile.Read(ref _Disposed))
+        if (Interlocked.Exchange(ref _Disposed, 1) != 0)
         {
             return;
         }
-
-        Volatile.Write(ref _Disposed, true);
 
         // Release the lifetime-pinned primary pointer before disposing the accessor.
         // Each step is wrapped independently so that a failure in one step does not

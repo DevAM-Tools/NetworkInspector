@@ -6,7 +6,7 @@ namespace NetworkInspector.Core.Protocols;
 /// Carries the dispatch table, key, and caller identity that caused the current protocol to be invoked.
 /// Embedded directly inside <see cref="ParseContext"/> and propagated through the parse chain.
 /// <para>
-/// <b>Schreibschutz:</b> The <c>internal static</c> factory methods
+/// <b>Write protection:</b> The <c>internal static</c> factory methods
 /// (<see cref="ForU64"/>, <see cref="ForString"/>, <see cref="ForBytes"/>,
 /// <see cref="ForBool"/>, <see cref="ForAny"/>) are accessible only within
 /// <c>NetworkInspector.Core</c>. Protocol implementations in other assemblies can only
@@ -14,8 +14,9 @@ namespace NetworkInspector.Core.Protocols;
 /// </para>
 /// <para>
 /// Layout: ~32 bytes. Embedded as a value type in <see cref="ParseContext"/> (a
-/// <see langword="readonly ref struct"/>), so no heap allocation occurs. The
-/// <c>default</c> instance has <see cref="Kind"/> = <see cref="DispatchKeyKind.None"/>
+/// <see langword="readonly ref struct"/>), so no heap allocation occurs. Bytes keys store
+/// their backing <see cref="byte"/> array in <c>_RefKey</c> (already a heap object — no boxing).
+/// The <c>default</c> instance has <see cref="Kind"/> = <see cref="DispatchKeyKind.None"/>
 /// and <see cref="HasDispatch"/> = <see langword="false"/>.
 /// </para>
 /// <para>
@@ -28,7 +29,7 @@ public readonly struct DispatchContext
     #region Fields
 
     // Layout chosen to minimise padding on a 64-bit runtime:
-    //   offset 0  : object? _RefKey       (8 bytes, reference — placed first to avoid gap after ulong)
+    //   offset 0  : object? _RefKey       (8 bytes — string, or BytesKey's byte[])
     //   offset 8  : ulong _NumericKey     (8 bytes)
     //   offset 16 : ProtocolTableId _TableId (int, 4 bytes)
     //   offset 20 : ProtocolId _CallerProtocolId (int, 4 bytes)
@@ -39,9 +40,6 @@ public readonly struct DispatchContext
 
     private readonly object? _RefKey;
     private readonly ulong _NumericKey;
-    private readonly ProtocolTableId _TableId;
-    private readonly ProtocolId _CallerProtocolId;
-    private readonly DispatchKeyKind _Kind;
 
     #endregion
 
@@ -49,15 +47,27 @@ public readonly struct DispatchContext
 
     /// <summary>
     /// Full private constructor. All factory methods funnel through here so that
-    /// the invariant <c>_Kind != None ⇔ _TableId.IsValid</c> is enforced in one place.
+    /// the invariant <c>Kind != None ⇔ TableId.IsValid</c> is enforced in one place.
     /// </summary>
     private DispatchContext(DispatchKeyKind kind, ProtocolTableId tableId, ulong numericKey, object? refKey, ProtocolId callerProtocolId)
     {
-        _Kind = kind;
-        _TableId = tableId;
+        if (kind == DispatchKeyKind.None)
+        {
+            if (tableId.IsValid)
+            {
+                throw new ArgumentException("None dispatch must use an invalid table id.", nameof(tableId));
+            }
+        }
+        else if (!tableId.IsValid)
+        {
+            throw new ArgumentOutOfRangeException(nameof(tableId), "Non-None dispatch requires a valid table id.");
+        }
+
+        Kind = kind;
+        TableId = tableId;
         _NumericKey = numericKey;
         _RefKey = refKey;
-        _CallerProtocolId = callerProtocolId;
+        CallerProtocolId = callerProtocolId;
     }
 
     #endregion
@@ -89,7 +99,7 @@ public readonly struct DispatchContext
     /// <param name="callerProtocolId">The <see cref="ProtocolId"/> of the protocol that triggered the dispatch.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static DispatchContext ForBytes(ProtocolTableId tableId, BytesKey key, ProtocolId callerProtocolId)
-        => new(DispatchKeyKind.Bytes, tableId, 0, key, callerProtocolId);  // BytesKey is a struct → boxed once
+        => new(DispatchKeyKind.Bytes, tableId, 0, key.Data, callerProtocolId);
 
     /// <summary>Creates a dispatch context for a <see cref="bool"/> key dispatch.</summary>
     /// <param name="tableId">The dispatch table used for this lookup.</param>
@@ -118,25 +128,17 @@ public readonly struct DispatchContext
     public bool HasDispatch
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _Kind != DispatchKeyKind.None;
+        get => Kind != DispatchKeyKind.None;
     }
 
     /// <summary>The key type used for the dispatch that invoked this protocol.</summary>
-    public DispatchKeyKind Kind
-    {
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _Kind;
-    }
+    public DispatchKeyKind Kind { get; }
 
     /// <summary>
     /// The dispatch table that invoked this protocol.
     /// Only meaningful when <see cref="HasDispatch"/> is <see langword="true"/>.
     /// </summary>
-    public ProtocolTableId TableId
-    {
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _TableId;
-    }
+    public ProtocolTableId TableId { get; }
 
     /// <summary>
     /// The protocol that triggered this dispatch (i.e., the parent protocol that called
@@ -149,11 +151,7 @@ public readonly struct DispatchContext
     /// register on <c>ip.proto</c>).
     /// </para>
     /// </summary>
-    public ProtocolId CallerProtocolId
-    {
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _CallerProtocolId;
-    }
+    public ProtocolId CallerProtocolId { get; }
 
     #endregion
 
@@ -167,7 +165,7 @@ public readonly struct DispatchContext
     public bool TryGetU64(out ulong key)
     {
         key = _NumericKey;
-        return _Kind == DispatchKeyKind.U64;
+        return Kind == DispatchKeyKind.U64;
     }
 
     /// <summary>
@@ -178,7 +176,7 @@ public readonly struct DispatchContext
     public bool TryGetString(out string? key)
     {
         key = _RefKey as string;
-        return _Kind == DispatchKeyKind.String;
+        return Kind == DispatchKeyKind.String;
     }
 
     /// <summary>
@@ -188,13 +186,15 @@ public readonly struct DispatchContext
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool TryGetBytes(out BytesKey key)
     {
-        if (_Kind == DispatchKeyKind.Bytes && _RefKey is BytesKey bk)
+        if (Kind != DispatchKeyKind.Bytes)
         {
-            key = bk;
-            return true;
+            key = default;
+            return false;
         }
-        key = default;
-        return false;
+
+        // _RefKey is the BytesKey backing array (or null for empty). Reconstruct without copy or box.
+        key = new BytesKey((byte[]?)_RefKey);
+        return true;
     }
 
     /// <summary>
@@ -205,7 +205,7 @@ public readonly struct DispatchContext
     public bool TryGetBool(out bool key)
     {
         key = _NumericKey != 0;
-        return _Kind == DispatchKeyKind.Bool;
+        return Kind == DispatchKeyKind.Bool;
     }
 
     #endregion

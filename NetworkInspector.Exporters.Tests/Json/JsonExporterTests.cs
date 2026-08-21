@@ -346,4 +346,115 @@ internal sealed class JsonExporterTests
 
         await Assert.That(exporter.Description).IsEqualTo("JSON packet dump");
     }
+
+    [Test]
+    public async Task PrettyFormat_FieldType_IsTextualName()
+    {
+        using MemoryStream ms = new();
+        using JsonExporter exporter = JsonExporter.CreateBuilder()
+            .ToStream(ms)
+            .WithFormat(JsonExportFormat.Pretty)
+            .Build();
+
+        Packet[] packets = PacketGenerators.CreateEthernetUdpPackets(1);
+        exporter.OnPacket(packets[0]);
+        exporter.OnFinish();
+
+        JsonVerifier verifier = JsonVerifier.FromStream(ms);
+        JsonElement typeElement = _FindFieldTypeByName(verifier.Root[0], "eth.dst", "type");
+        await Assert.That(typeElement.ValueKind).IsEqualTo(JsonValueKind.String);
+        await Assert.That(typeElement.GetString()).IsEqualTo("MacAddress");
+        verifier.Dispose();
+    }
+
+    [Test]
+    public async Task ArrayFormat_FieldType_IsTextualName()
+    {
+        using MemoryStream ms = new();
+        using JsonExporter exporter = JsonExporter.CreateBuilder()
+            .ToStream(ms)
+            .WithFormat(JsonExportFormat.Array)
+            .Build();
+
+        Packet[] packets = PacketGenerators.CreateEthernetUdpPackets(1);
+        exporter.OnPacket(packets[0]);
+        exporter.OnFinish();
+
+        JsonVerifier verifier = JsonVerifier.FromStream(ms);
+        JsonElement typeElement = _FindFieldTypeByName(verifier.Root[0], "eth.dst", "type");
+        await Assert.That(typeElement.ValueKind).IsEqualTo(JsonValueKind.String);
+        await Assert.That(typeElement.GetString()).IsEqualTo("MacAddress");
+        verifier.Dispose();
+    }
+
+    [Test]
+    public async Task CompactFormat_FieldType_IsNumericEnumValue()
+    {
+        using MemoryStream ms = new();
+        using JsonExporter exporter = JsonExporter.CreateBuilder()
+            .ToStream(ms)
+            .WithFormat(JsonExportFormat.Compact)
+            .Build();
+
+        Packet[] packets = PacketGenerators.CreateEthernetUdpPackets(1);
+        exporter.OnPacket(packets[0]);
+        exporter.OnFinish();
+
+        JsonVerifier verifier = JsonVerifier.FromStream(ms);
+        JsonElement typeElement = _FindFieldTypeByName(verifier.Root[0], "eth.dst", "TY");
+        await Assert.That(typeElement.ValueKind).IsEqualTo(JsonValueKind.Number);
+        await Assert.That(typeElement.GetInt32()).IsEqualTo((int)FieldType.MacAddress);
+        verifier.Dispose();
+    }
+
+    /// <summary>
+    /// Finds the type metadata element for a field identified by its protocol name.
+    /// </summary>
+    private static JsonElement _FindFieldTypeByName(JsonElement packet, string fieldName, string typeKey)
+    {
+        if (!packet.TryGetProperty("fields", out JsonElement fields)
+            && !packet.TryGetProperty("CH", out fields))
+        {
+            throw new InvalidOperationException("Packet has no field array.");
+        }
+
+        if (!_TryFindFieldTypeByName(fields, fieldName, typeKey, out JsonElement typeElement))
+        {
+            throw new InvalidOperationException($"Field '{fieldName}' with key '{typeKey}' not found.");
+        }
+
+        return typeElement;
+    }
+
+    private static bool _TryFindFieldTypeByName(
+        JsonElement fields,
+        string fieldName,
+        string typeKey,
+        out JsonElement typeElement)
+    {
+        foreach (JsonElement field in fields.EnumerateArray())
+        {
+            if (field.TryGetProperty("name", out JsonElement nameElement)
+                || field.TryGetProperty("NA", out nameElement))
+            {
+                if (string.Equals(nameElement.GetString(), fieldName, StringComparison.Ordinal)
+                    && field.TryGetProperty(typeKey, out typeElement))
+                {
+                    return true;
+                }
+            }
+
+            if (field.TryGetProperty("children", out JsonElement children)
+                || field.TryGetProperty("CH", out children))
+            {
+                if (_TryFindFieldTypeByName(children, fieldName, typeKey, out typeElement))
+                {
+                    return true;
+                }
+            }
+        }
+
+        typeElement = default;
+        return false;
+    }
 }

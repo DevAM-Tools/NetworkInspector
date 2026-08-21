@@ -21,53 +21,39 @@ namespace NetworkInspector.Core.Fields;
 /// </summary>
 public readonly ref struct MutField
 {
-    private readonly Packet _Packet;
-    private readonly ushort _Index;
-    /// <summary>Cached field identifier — fits in the 4-byte slot between _Index (2 B) and alignment padding.</summary>
-    private readonly FieldId _FieldId;
+    /// <summary>The owning packet.</summary>
+    public readonly Packet Packet { get; }
+    internal readonly ushort StorageIndex { get; }
+    /// <summary>Cached field identifier — fits in the 4-byte slot between StorageIndex (2 B) and alignment padding.</summary>
+    public readonly FieldId FieldId { get; }
 
     /// <summary>Creates a mutable field handle with a known field ID (avoids array lookup on the hot path).</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal MutField(Packet packet, ushort index, FieldId fieldId)
     {
-        _Packet = packet;
-        _Index = index;
-        _FieldId = fieldId;
+        Packet = packet;
+        StorageIndex = index;
+        FieldId = fieldId;
     }
 
     #region Read Accessors
 
-    /// <summary>The storage index within the packet's field list (internal implementation detail).</summary>
-    internal readonly ushort StorageIndex
+    /// <summary>Whether this field reference points to a valid packet and index.</summary>
+    public readonly bool IsValid
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _Index;
-    }
-
-    /// <summary>The owning packet.</summary>
-    public readonly Packet Packet
-    {
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _Packet;
-    }
-
-    /// <summary>The field's registered identifier (cached — avoids array indirection).</summary>
-    public readonly FieldId FieldId
-    {
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _FieldId;
+        get => Packet is not null && StorageIndex != FieldBody.NullIndex;
     }
 
     /// <summary>Gets the field's metadata from the stack registry.</summary>
-    public readonly FieldInfo? FieldInfo => _Packet.Stack.GetField(FieldId);
+    public readonly FieldInfo? FieldInfo => Packet.Stack.GetField(FieldId);
 
     /// <summary>The field's value.</summary>
     public readonly FieldValue Value
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _Packet.GetFieldRef(_Index).Value;
+        get => Packet.GetFieldRef(StorageIndex).Value;
     }
-
 
     /// <summary>
     /// Optional custom display text (check <see cref="LazyString.IsNull"/> for absence).
@@ -76,7 +62,62 @@ public readonly ref struct MutField
     public readonly LazyString CustomText
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _Packet.GetFieldRef(_Index).CustomText;
+        get => Packet.GetFieldRef(StorageIndex).CustomText;
+    }
+
+    /// <summary>Whether this is the root field (index 0).</summary>
+    public readonly bool IsRoot
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        get => StorageIndex == 0;
+    }
+
+    /// <summary>
+    /// Whether this field has child fields.
+    /// When <paramref name="materialize"/> is <see langword="true"/>, lazy children are populated first.
+    /// When <see langword="false"/>, an unmaterialized lazy container reports no children.
+    /// </summary>
+    /// <param name="materialize">Whether to materialize lazy children before checking.</param>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public readonly bool HasChildren(bool materialize)
+    {
+        if (materialize)
+        {
+            ref readonly FieldBody body = ref Packet.GetFieldRef(StorageIndex);
+            if (body.NeedsMaterialization)
+            {
+                Packet.MaterializeLazyField(StorageIndex);
+            }
+        }
+        return Packet.GetFieldRef(StorageIndex).FirstChildIndex != FieldBody.NullIndex;
+    }
+
+    /// <summary>
+    /// Number of direct children.
+    /// When <paramref name="materialize"/> is <see langword="true"/>, lazy children are populated first.
+    /// When <see langword="false"/>, an unmaterialized lazy container reports zero children.
+    /// </summary>
+    /// <param name="materialize">Whether to materialize lazy children before counting.</param>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public readonly ushort ChildCount(bool materialize)
+    {
+        if (materialize)
+        {
+            ref readonly FieldBody body = ref Packet.GetFieldRef(StorageIndex);
+            if (body.NeedsMaterialization)
+            {
+                Packet.MaterializeLazyField(StorageIndex);
+            }
+        }
+        return Packet.GetFieldRef(StorageIndex).ChildCount;
+    }
+
+    /// <summary>Whether this field is lazy (has deferred children that need materialization).
+    /// Internal so the lazy mechanism stays transparent to external consumers.</summary>
+    internal readonly bool NeedsLazyMaterialization
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        get => Packet.GetFieldRef(StorageIndex).NeedsMaterialization;
     }
 
     #endregion
@@ -86,34 +127,34 @@ public readonly ref struct MutField
 
     /// <summary>Sets the field value.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public readonly void SetValue(FieldValue value) => _Packet.GetFieldRef(_Index).Value = value;
+    public readonly void SetValue(FieldValue value) => Packet.GetFieldRef(StorageIndex).Value = value;
 
     /// <summary>Sets custom display text.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public readonly void SetCustomText(LazyString text) => _Packet.GetFieldRef(_Index).SetCustomText(text);
+    public readonly void SetCustomText(LazyString text) => Packet.GetFieldRef(StorageIndex).SetCustomText(text);
 
     /// <summary>Clears custom display text.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public readonly void ClearCustomText() => _Packet.GetFieldRef(_Index).ClearCustomText();
+    public readonly void ClearCustomText() => Packet.GetFieldRef(StorageIndex).ClearCustomText();
 
     /// <summary>Appends to custom display text.</summary>
-    public readonly void AppendCustomText(LazyString suffix) => _Packet.GetFieldRef(_Index).AppendCustomText(suffix);
+    public readonly void AppendCustomText(LazyString suffix) => Packet.GetFieldRef(StorageIndex).AppendCustomText(suffix);
 
     #endregion
 
     #region Packet Info
 
     /// <summary>Sets the packet info/summary string.</summary>
-    public readonly void SetPacketInfo(LazyString info) => _Packet.SetInfo(info);
+    public readonly void SetPacketInfo(LazyString info) => Packet.SetInfo(info);
 
     /// <summary>Appends to the packet info/summary string.</summary>
-    public readonly void AppendToPacketInfo(LazyString suffix) => _Packet.AppendToInfo(suffix);
+    public readonly void AppendToPacketInfo(LazyString suffix) => Packet.AppendToInfo(suffix);
 
     /// <summary>Prepends to the packet info/summary string.</summary>
-    public readonly void PrependToPacketInfo(LazyString prefix) => _Packet.PrependToInfo(prefix);
+    public readonly void PrependToPacketInfo(LazyString prefix) => Packet.PrependToInfo(prefix);
 
     /// <summary>The current packet info/summary string.</summary>
-    public readonly string PacketInfo => _Packet.Info;
+    public readonly string PacketInfo => Packet.Info;
 
     #endregion
 
@@ -122,37 +163,37 @@ public readonly ref struct MutField
     /// <summary>Appends a child field. Throws <see cref="Errors.FieldAppendException"/> on failure.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public readonly MutField Append(FieldId fieldId, FieldValue value)
-        => new(_Packet, _Packet.AppendChild(_Index, fieldId, value), fieldId);
+        => new(Packet, Packet.AppendChild(StorageIndex, fieldId, value), fieldId);
 
     /// <summary>Appends a child field with custom display text. Throws <see cref="Errors.FieldAppendException"/> on failure.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public readonly MutField AppendWithCustomText(FieldId fieldId, FieldValue value, LazyString customText)
-        => new(_Packet, _Packet.AppendChildWithCustomText(_Index, fieldId, value, customText), fieldId);
+        => new(Packet, Packet.AppendChildWithCustomText(StorageIndex, fieldId, value, customText), fieldId);
 
     /// <summary>Prepends a child field (inserts before all existing children). Throws <see cref="Errors.FieldAppendException"/> on failure.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public readonly MutField Prepend(FieldId fieldId, FieldValue value)
-        => new(_Packet, _Packet.PrependChild(_Index, fieldId, value), fieldId);
+        => new(Packet, Packet.PrependChild(StorageIndex, fieldId, value), fieldId);
 
     /// <summary>Prepends a child field with custom display text. Throws <see cref="Errors.FieldAppendException"/> on failure.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public readonly MutField PrependWithCustomText(FieldId fieldId, FieldValue value, LazyString customText)
-        => new(_Packet, _Packet.PrependChildWithCustomText(_Index, fieldId, value, customText), fieldId);
+        => new(Packet, Packet.PrependChildWithCustomText(StorageIndex, fieldId, value, customText), fieldId);
 
     /// <summary>Inserts a field after the current field (as sibling). Throws <see cref="Errors.FieldAppendException"/> on failure.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public readonly MutField InsertAfter(FieldId fieldId, FieldValue value)
-        => new(_Packet, _Packet.InsertAfter(_Index, fieldId, value), fieldId);
+        => new(Packet, Packet.InsertAfter(StorageIndex, fieldId, value), fieldId);
 
     /// <summary>Inserts a field after the current field (as sibling) with custom display text.
     /// Throws <see cref="Errors.FieldAppendException"/> on failure.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public readonly MutField InsertAfterWithCustomText(FieldId fieldId, FieldValue value, LazyString customText)
-        => new(_Packet, _Packet.InsertAfterWithCustomText(_Index, fieldId, value, customText), fieldId);
+        => new(Packet, Packet.InsertAfterWithCustomText(StorageIndex, fieldId, value, customText), fieldId);
 
     /// <summary>Creates a MutField for a child at the given storage index (internal implementation detail).</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal readonly MutField ChildMut(ushort index) => new(_Packet, index, _Packet.GetFieldRef(index).FieldId);
+    internal readonly MutField ChildMut(ushort index) => new(Packet, index, Packet.GetFieldRef(index).FieldId);
 
     #endregion
 
@@ -169,11 +210,11 @@ public readonly ref struct MutField
     public readonly MutField AppendLazy(
         FieldId fieldId, FieldValue value, LazyPopulator populator)
     {
-        ushort newIndex = _Packet.AppendChild(_Index, fieldId, value);
-        _Packet.RegisterLazyPopulator(newIndex, populator);
+        ushort newIndex = Packet.AppendChild(StorageIndex, fieldId, value);
+        Packet.RegisterLazyPopulator(newIndex, populator);
         // The populator is invoked later via MaterializeLazyField without a ParseContext
         // (ref struct cannot be captured in closures) — intentionally preventing deferred index recording.
-        return new MutField(_Packet, newIndex, fieldId);
+        return new MutField(Packet, newIndex, fieldId);
     }
 
     /// <summary>
@@ -183,9 +224,9 @@ public readonly ref struct MutField
     public readonly MutField AppendLazyWithCustomText(
         FieldId fieldId, FieldValue value, LazyString customText, LazyPopulator populator)
     {
-        ushort newIndex = _Packet.AppendChildWithCustomText(_Index, fieldId, value, customText);
-        _Packet.RegisterLazyPopulator(newIndex, populator);
-        return new MutField(_Packet, newIndex, fieldId);
+        ushort newIndex = Packet.AppendChildWithCustomText(StorageIndex, fieldId, value, customText);
+        Packet.RegisterLazyPopulator(newIndex, populator);
+        return new MutField(Packet, newIndex, fieldId);
     }
 
     /// <summary>
@@ -195,9 +236,9 @@ public readonly ref struct MutField
     public readonly MutField PrependLazy(
         FieldId fieldId, FieldValue value, LazyPopulator populator)
     {
-        ushort newIndex = _Packet.PrependChild(_Index, fieldId, value);
-        _Packet.RegisterLazyPopulator(newIndex, populator);
-        return new MutField(_Packet, newIndex, fieldId);
+        ushort newIndex = Packet.PrependChild(StorageIndex, fieldId, value);
+        Packet.RegisterLazyPopulator(newIndex, populator);
+        return new MutField(Packet, newIndex, fieldId);
     }
 
     /// <summary>
@@ -207,9 +248,9 @@ public readonly ref struct MutField
     public readonly MutField PrependLazyWithCustomText(
         FieldId fieldId, FieldValue value, LazyString customText, LazyPopulator populator)
     {
-        ushort newIndex = _Packet.PrependChildWithCustomText(_Index, fieldId, value, customText);
-        _Packet.RegisterLazyPopulator(newIndex, populator);
-        return new MutField(_Packet, newIndex, fieldId);
+        ushort newIndex = Packet.PrependChildWithCustomText(StorageIndex, fieldId, value, customText);
+        Packet.RegisterLazyPopulator(newIndex, populator);
+        return new MutField(Packet, newIndex, fieldId);
     }
 
     /// <summary>
@@ -219,9 +260,9 @@ public readonly ref struct MutField
     public readonly MutField InsertAfterLazy(
         FieldId fieldId, FieldValue value, LazyPopulator populator)
     {
-        ushort newIndex = _Packet.InsertAfter(_Index, fieldId, value);
-        _Packet.RegisterLazyPopulator(newIndex, populator);
-        return new MutField(_Packet, newIndex, fieldId);
+        ushort newIndex = Packet.InsertAfter(StorageIndex, fieldId, value);
+        Packet.RegisterLazyPopulator(newIndex, populator);
+        return new MutField(Packet, newIndex, fieldId);
     }
 
     /// <summary>
@@ -231,9 +272,9 @@ public readonly ref struct MutField
     public readonly MutField InsertAfterLazyWithCustomText(
         FieldId fieldId, FieldValue value, LazyString customText, LazyPopulator populator)
     {
-        ushort newIndex = _Packet.InsertAfterWithCustomText(_Index, fieldId, value, customText);
-        _Packet.RegisterLazyPopulator(newIndex, populator);
-        return new MutField(_Packet, newIndex, fieldId);
+        ushort newIndex = Packet.InsertAfterWithCustomText(StorageIndex, fieldId, value, customText);
+        Packet.RegisterLazyPopulator(newIndex, populator);
+        return new MutField(Packet, newIndex, fieldId);
     }
 
     /// <summary>
@@ -243,172 +284,273 @@ public readonly ref struct MutField
     /// Returns true if materialization was performed, false if already populated or not lazy.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public readonly bool MaterializeIfLazy() => _Packet.MaterializeLazyField(_Index);
+    public readonly bool MaterializeIfLazy() => Packet.MaterializeLazyField(StorageIndex);
 
     #endregion
 
     #region Protocol Dispatch
 
-    /// <summary>Dispatches to next protocol by u64 key lookup.</summary>
+    /// <summary>Error when <see cref="ParseContext.Stack"/> is null (configuration fault, not a key miss).</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static ParseResult _MissingStack() =>
+        ParseError.InternalError("ParseContext has no Stack");
+
+    /// <summary>Error when the dispatch table id is valid but not registered on this stack.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static ParseResult _MissingTable() =>
+        ParseError.ProtocolTableMissing(null, "Dispatch table is not registered on this stack.");
+
+    /// <summary>Error when the dispatch table id is invalid.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static ParseResult _InvalidTableId() =>
+        ParseError.ProtocolTableMissing(null, "Dispatch table id is invalid.");
+
+    /// <summary>
+    /// Dispatches to the next protocol by u64 key lookup.
+    /// Returns Ok from the callee, <see cref="ParseResult.NotDispatched"/> when the table exists
+    /// and the key has no protocol, or Error when the stack/table is missing or the callee errors.
+    /// </summary>
     public readonly ParseResult TryCallNextProtocolU64(
         ProtocolTableId tableId, ulong key, ReadOnlyMemory<byte> data, in ParseContext context)
     {
         Stack? stack = context.Stack;
-        ProtocolTable? table = stack?.GetProtocolTable(tableId);
+        if (stack is null)
+        {
+            return _MissingStack();
+        }
+
+        if (!tableId.IsValid)
+        {
+            return _InvalidTableId();
+        }
+
+        ProtocolTable? table = stack.GetProtocolTable(tableId);
         if (table is null)
         {
-            return 0;
+            return _MissingTable();
         }
 
         ReadOnlySpan<ProtocolId> protocols = table.GetAllU64(key);
         ParseContext dispatchedContext = context.WithDispatch(DispatchContext.ForU64(tableId, key, context.SelfProtocolId));
-
-        // Fast path: 0 or 1 match — no string allocation needed
         if (protocols.Length <= 1)
         {
             if (protocols.IsEmpty)
             {
-                return 0;
+                return ParseResult.NotDispatched;
             }
-            return stack!.CallProtocol(protocols[0], in this, data, in dispatchedContext);
+
+            return stack.CallProtocol(protocols[0], in this, data, in dispatchedContext);
         }
 
-        // Slow path: multiple matches — only now allocate the key display string
         return _DispatchMultipleProtocols(protocols, data, in dispatchedContext, table.Name, key.ToString(CultureInfo.InvariantCulture));
     }
 
-    /// <summary>Dispatches to next protocol by string key lookup.</summary>
+    /// <summary>
+    /// Dispatches to the next protocol by string key lookup.
+    /// Returns Ok from the callee, <see cref="ParseResult.NotDispatched"/> when the table exists
+    /// and the key has no protocol, or Error when the stack/table is missing or the callee errors.
+    /// </summary>
     public readonly ParseResult TryCallNextProtocolString(
         ProtocolTableId tableId, string key, ReadOnlyMemory<byte> data, in ParseContext context)
     {
         Stack? stack = context.Stack;
-        ProtocolTable? table = stack?.GetProtocolTable(tableId);
+        if (stack is null)
+        {
+            return _MissingStack();
+        }
+
+        if (!tableId.IsValid)
+        {
+            return _InvalidTableId();
+        }
+
+        ProtocolTable? table = stack.GetProtocolTable(tableId);
         if (table is null)
         {
-            return 0;
+            return _MissingTable();
         }
 
         ReadOnlySpan<ProtocolId> protocols = table.GetAllString(key);
         ParseContext dispatchedContext = context.WithDispatch(DispatchContext.ForString(tableId, key, context.SelfProtocolId));
-
-        // Fast path: 0 or 1 match — direct call without multi-match overhead
         if (protocols.Length <= 1)
         {
             if (protocols.IsEmpty)
             {
-                return 0;
+                return ParseResult.NotDispatched;
             }
-            return stack!.CallProtocol(protocols[0], in this, data, in dispatchedContext);
+
+            return stack.CallProtocol(protocols[0], in this, data, in dispatchedContext);
         }
 
         return _DispatchMultipleProtocols(protocols, data, in dispatchedContext, table.Name, key);
     }
 
-    /// <summary>Dispatches to next protocol by bytes key lookup.</summary>
+    /// <summary>
+    /// Dispatches to the next protocol by bytes key lookup.
+    /// Returns Ok from the callee, <see cref="ParseResult.NotDispatched"/> when the table exists
+    /// and the key has no protocol, or Error when the stack/table is missing or the callee errors.
+    /// </summary>
     public readonly ParseResult TryCallNextProtocolBytes(
         ProtocolTableId tableId, BytesKey key, ReadOnlyMemory<byte> data, in ParseContext context)
     {
         Stack? stack = context.Stack;
-        ProtocolTable? table = stack?.GetProtocolTable(tableId);
+        if (stack is null)
+        {
+            return _MissingStack();
+        }
+
+        if (!tableId.IsValid)
+        {
+            return _InvalidTableId();
+        }
+
+        ProtocolTable? table = stack.GetProtocolTable(tableId);
         if (table is null)
         {
-            return 0;
+            return _MissingTable();
         }
 
         ReadOnlySpan<ProtocolId> protocols = table.GetAllBytes(key);
         ParseContext dispatchedContext = context.WithDispatch(DispatchContext.ForBytes(tableId, key, context.SelfProtocolId));
-
-        // Fast path: 0 or 1 match — no string allocation needed
         if (protocols.Length <= 1)
         {
             if (protocols.IsEmpty)
             {
-                return 0;
+                return ParseResult.NotDispatched;
             }
-            return stack!.CallProtocol(protocols[0], in this, data, in dispatchedContext);
+
+            return stack.CallProtocol(protocols[0], in this, data, in dispatchedContext);
         }
 
-        // Slow path: multiple matches — only now allocate the key display string
         return _DispatchMultipleProtocols(protocols, data, in dispatchedContext, table.Name, key.ToString() ?? string.Empty);
     }
 
-    /// <summary>Dispatches to next protocol by bool key lookup.</summary>
+    /// <summary>
+    /// Dispatches to the next protocol by bool key lookup.
+    /// Returns Ok from the callee, <see cref="ParseResult.NotDispatched"/> when the table exists
+    /// and the key has no protocol, or Error when the stack/table is missing or the callee errors.
+    /// </summary>
     public readonly ParseResult TryCallNextProtocolBool(
         ProtocolTableId tableId, bool key, ReadOnlyMemory<byte> data, in ParseContext context)
     {
         Stack? stack = context.Stack;
-        ProtocolTable? table = stack?.GetProtocolTable(tableId);
+        if (stack is null)
+        {
+            return _MissingStack();
+        }
+
+        if (!tableId.IsValid)
+        {
+            return _InvalidTableId();
+        }
+
+        ProtocolTable? table = stack.GetProtocolTable(tableId);
         if (table is null)
         {
-            return 0;
+            return _MissingTable();
         }
 
         ReadOnlySpan<ProtocolId> protocols = table.GetAllBool(key);
         ParseContext dispatchedContext = context.WithDispatch(DispatchContext.ForBool(tableId, key, context.SelfProtocolId));
-
-        // Fast path: 0 or 1 match — no string allocation needed
         if (protocols.Length <= 1)
         {
             if (protocols.IsEmpty)
             {
-                return 0;
+                return ParseResult.NotDispatched;
             }
-            return stack!.CallProtocol(protocols[0], in this, data, in dispatchedContext);
+
+            return stack.CallProtocol(protocols[0], in this, data, in dispatchedContext);
         }
 
-        // Slow path: multiple matches — bool.ToString() returns cached string (no allocation)
         return _DispatchMultipleProtocols(protocols, data, in dispatchedContext, table.Name, key.ToString(CultureInfo.InvariantCulture));
     }
 
-    /// <summary>Dispatches to any protocol registered in the table.</summary>
+    /// <summary>
+    /// Dispatches to any protocol registered in the table.
+    /// Returns Ok from the callee, <see cref="ParseResult.NotDispatched"/> when the table exists
+    /// and has zero protocols, or Error when the stack/table is missing or the callee errors.
+    /// </summary>
     public readonly ParseResult TryCallNextProtocolAny(
         ProtocolTableId tableId, ReadOnlyMemory<byte> data, in ParseContext context)
     {
         Stack? stack = context.Stack;
-        ProtocolTable? table = stack?.GetProtocolTable(tableId);
+        if (stack is null)
+        {
+            return _MissingStack();
+        }
+
+        if (!tableId.IsValid)
+        {
+            return _InvalidTableId();
+        }
+
+        ProtocolTable? table = stack.GetProtocolTable(tableId);
         if (table is null)
         {
-            return 0;
+            return _MissingTable();
         }
 
         ReadOnlySpan<ProtocolId> protocols = table.GetAllAny();
         ParseContext dispatchedContext = context.WithDispatch(DispatchContext.ForAny(tableId, context.SelfProtocolId));
-
-        // Fast path: 0 or 1 match — direct call
         if (protocols.Length <= 1)
         {
             if (protocols.IsEmpty)
             {
-                return 0;
+                return ParseResult.NotDispatched;
             }
-            return stack!.CallProtocol(protocols[0], in this, data, in dispatchedContext);
+
+            return stack.CallProtocol(protocols[0], in this, data, in dispatchedContext);
         }
 
         return _DispatchMultipleProtocols(protocols, data, in dispatchedContext, table.Name, "*");
     }
 
-    /// <summary>Directly calls a specific protocol.</summary>
+    /// <summary>
+    /// Directly calls a specific protocol. Returns InternalError when <see cref="ParseContext.Stack"/>
+    /// is null; never <see cref="ParseResult.NotDispatched"/>.
+    /// </summary>
     public readonly ParseResult CallProtocol(ProtocolId protocolId, ReadOnlyMemory<byte> data, in ParseContext context)
-        => context.Stack!.CallProtocol(protocolId, in this, data, in context);
+    {
+        Stack? stack = context.Stack;
+        if (stack is null)
+        {
+            return _MissingStack();
+        }
+        return stack.CallProtocol(protocolId, in this, data, in context);
+    }
 
-    /// <summary>Dispatches using heuristic matching.</summary>
+    /// <summary>
+    /// Dispatches using heuristic matching.
+    /// Returns Ok from the callee, <see cref="ParseResult.NotDispatched"/> when the table exists
+    /// and <c>TryMatch</c> finds nothing, or Error when the stack/table is missing or the callee errors.
+    /// </summary>
     public readonly ParseResult TryCallHeuristicProtocol(
         HeuristicProtocolTableId tableId, ReadOnlyMemory<byte> data, in ParseContext context)
     {
         Stack? stack = context.Stack;
-        HeuristicProtocolTable? table = stack?.GetHeuristicProtocolTable(tableId);
+        if (stack is null)
+        {
+            return _MissingStack();
+        }
+
+        if (!tableId.IsValid)
+        {
+            return _InvalidTableId();
+        }
+
+        HeuristicProtocolTable? table = stack.GetHeuristicProtocolTable(tableId);
         if (table is null)
         {
-            return 0;
+            return _MissingTable();
         }
 
         ProtocolId? match = table.TryMatch(data);
         if (match is null)
         {
-            return 0;
+            return ParseResult.NotDispatched;
         }
 
-        return stack!.CallProtocol(match.Value, in this, data, in context);
+        return stack.CallProtocol(match.Value, in this, data, in context);
     }
 
     #endregion
@@ -436,7 +578,7 @@ public readonly ref struct MutField
         for (int i = 0; i < protocols.Length; i++)
         {
             ParseResult result = context.Stack!.CallProtocol(protocols[i], in choiceField, data, in context);
-            if (result.TryGetValue(out int consumed))
+            if (result.TryGetConsumed(out int consumed))
             {
                 maxConsumed = Math.Max(maxConsumed, consumed);
             }
@@ -450,24 +592,133 @@ public readonly ref struct MutField
 
     #endregion
 
-    #region Read-only Navigation
+    #region Tree Navigation
 
-    /// <summary>Converts to a read-only <see cref="Field"/>.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public readonly Field AsField() => new(_Packet, _Index);
+    /// <summary>Tries to get the parent field. Returns false if this is a root field.</summary>
+    public readonly bool TryGetParent(out MutField parent)
+    {
+        ushort parentIdx = Packet.GetFieldRef(StorageIndex).ParentIndex;
+        if (parentIdx != FieldBody.NullIndex)
+        {
+            parent = new MutField(Packet, parentIdx, Packet.GetFieldRef(parentIdx).FieldId);
+            return true;
+        }
+        parent = default;
+        return false;
+    }
 
     /// <summary>
-    /// Iterates direct children (read-only).
-    /// When <paramref name="materialize"/> is true (default), lazy children are materialized first.
+    /// Tries to get the first child field. Returns false if there are no children.
+    /// When <paramref name="materialize"/> is <see langword="true"/>, lazy children are populated first.
+    /// Parent/sibling navigation does not take this parameter because it only follows index links.
+    /// </summary>
+    /// <param name="firstChild">The first child when present.</param>
+    /// <param name="materialize">Whether to materialize lazy children before reading the child list.</param>
+    public readonly bool TryGetFirstChild(out MutField firstChild, bool materialize)
+    {
+        if (materialize)
+        {
+            ref readonly FieldBody body = ref Packet.GetFieldRef(StorageIndex);
+            if (body.NeedsMaterialization)
+            {
+                Packet.MaterializeLazyField(StorageIndex);
+            }
+        }
+        ushort idx = Packet.GetFieldRef(StorageIndex).FirstChildIndex;
+        if (idx != FieldBody.NullIndex)
+        {
+            firstChild = new MutField(Packet, idx, Packet.GetFieldRef(idx).FieldId);
+            return true;
+        }
+        firstChild = default;
+        return false;
+    }
+
+    /// <summary>
+    /// Tries to get the last child field. Returns false if there are no children.
+    /// When <paramref name="materialize"/> is <see langword="true"/>, lazy children are populated first.
+    /// </summary>
+    /// <param name="lastChild">The last child when present.</param>
+    /// <param name="materialize">Whether to materialize lazy children before reading the child list.</param>
+    public readonly bool TryGetLastChild(out MutField lastChild, bool materialize)
+    {
+        if (materialize)
+        {
+            ref readonly FieldBody body = ref Packet.GetFieldRef(StorageIndex);
+            if (body.NeedsMaterialization)
+            {
+                Packet.MaterializeLazyField(StorageIndex);
+            }
+        }
+        ushort idx = Packet.GetFieldRef(StorageIndex).LastChildIndex;
+        if (idx != FieldBody.NullIndex)
+        {
+            lastChild = new MutField(Packet, idx, Packet.GetFieldRef(idx).FieldId);
+            return true;
+        }
+        lastChild = default;
+        return false;
+    }
+
+    /// <summary>Tries to get the next sibling field. Returns false if this is the last sibling.</summary>
+    public readonly bool TryGetNext(out MutField next)
+    {
+        ushort idx = Packet.GetFieldRef(StorageIndex).NextIndex;
+        if (idx != FieldBody.NullIndex)
+        {
+            next = new MutField(Packet, idx, Packet.GetFieldRef(idx).FieldId);
+            return true;
+        }
+        next = default;
+        return false;
+    }
+
+    /// <summary>Tries to get the previous sibling field. Returns false if this is the first sibling.</summary>
+    public readonly bool TryGetPrev(out MutField prev)
+    {
+        ushort idx = Packet.GetFieldRef(StorageIndex).PrevIndex;
+        if (idx != FieldBody.NullIndex)
+        {
+            prev = new MutField(Packet, idx, Packet.GetFieldRef(idx).FieldId);
+            return true;
+        }
+        prev = default;
+        return false;
+    }
+
+    #endregion
+
+    #region Iterators
+
+    /// <summary>
+    /// Iterates direct children as mutable cursors.
+    /// When <paramref name="materialize"/> is <see langword="true"/>, lazy children are materialized first.
     /// </summary>
     /// <param name="materialize">Whether to materialize lazy children before iterating.</param>
-    public readonly FieldChildEnumerable Children(bool materialize = true) => new(_Packet, _Index, materialize);
+    public readonly MutFieldChildEnumerable Children(bool materialize) => new(Packet, StorageIndex, materialize);
 
     /// <summary>
-    /// Iterates all descendants (read-only, DFS pre-order).
-    /// When <paramref name="materialize"/> is true (default), lazy fields are materialized during traversal.
+    /// Iterates all descendants as mutable cursors (DFS pre-order).
+    /// When <paramref name="materialize"/> is <see langword="true"/>, lazy fields are materialized during traversal.
     /// </summary>
     /// <param name="materialize">Whether to materialize lazy fields during traversal.</param>
-    public readonly FieldDescendantEnumerable Descendants(bool materialize = true) => new(_Packet, _Index, materialize);
+    public readonly MutFieldDescendantEnumerable Descendants(bool materialize) => new(Packet, StorageIndex, materialize);
+
+    #endregion
+
+    #region Conversion
+
+    /// <summary>Converts to a read-only <see cref="Field"/> snapshot of the same storage index.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public readonly Field AsField() => new(Packet, StorageIndex);
+
+    #endregion
+
+    #region Equality
+
+    /// <summary>Value equality by packet identity and storage index.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public readonly bool Equals(MutField other) => ReferenceEquals(Packet, other.Packet) && StorageIndex == other.StorageIndex;
+
     #endregion
 }

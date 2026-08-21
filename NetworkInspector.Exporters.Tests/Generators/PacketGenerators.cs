@@ -51,6 +51,24 @@ internal static class PacketGenerators
     }
 
     /// <summary>
+    /// Creates an array of parsed Ethernet + IPv4 + UDP + DNS "A" query packets, one per entry in
+    /// <paramref name="domainNames"/>, with sequential IDs. Useful for exercising string-typed
+    /// fields (<c>dns.qry.name</c>) and their dictionary encoding in columnar exporters.
+    /// </summary>
+    /// <param name="domainNames">Domain name to query for each generated packet.</param>
+    internal static Packet[] CreateDnsQueryPackets(params string[] domainNames)
+    {
+        Packet[] packets = new Packet[domainNames.Length];
+        for (int i = 0; i < domainNames.Length; i++)
+        {
+            byte[] frameData = FrameGenerators.BuildDnsQueryFrame(domainNames[i]);
+            packets[i] = CreateParsedPacket(i, frameData, (long)i * 1_000_000);
+        }
+
+        return packets;
+    }
+
+    /// <summary>
     /// Creates an array of <see cref="Frame"/> instances for frame-level exporters (PCAPNG, BLF).
     /// </summary>
     /// <param name="count">Number of frames to generate.</param>

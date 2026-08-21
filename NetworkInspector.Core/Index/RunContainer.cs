@@ -5,13 +5,19 @@ namespace NetworkInspector.Core.Index;
 /// <summary>
 /// Run-length encoded container. Efficient for dense sequential ranges.
 /// Stores sorted (start, length) pairs where each run covers [start, start+length].
+/// <para>
+/// <b>Thread-safety:</b> Not thread-safe. <see cref="Add"/> mutates in place and returns
+/// <see langword="this"/>. Set operations must clone before calling <see cref="Add"/>
+/// on a result that aliases an operand.
+/// </para>
 /// </summary>
 internal sealed class RunContainer : IContainer
 {
     #region Fields
 
     private (ushort Start, ushort Length)[] _Runs;
-    private int _Count;
+
+    internal int RunCount { get; private set; }
 
     #endregion
 
@@ -21,14 +27,14 @@ internal sealed class RunContainer : IContainer
     internal RunContainer()
     {
         _Runs = new (ushort, ushort)[4];
-        _Count = 0;
+        RunCount = 0;
     }
 
     /// <summary>Creates a run container from existing runs (used by Clone).</summary>
     private RunContainer((ushort Start, ushort Length)[] runs, int count)
     {
         _Runs = runs;
-        _Count = count;
+        RunCount = count;
     }
 
     #endregion
@@ -40,7 +46,7 @@ internal sealed class RunContainer : IContainer
         get
         {
             int total = 0;
-            for (int i = 0; i < _Count; i++)
+            for (int i = 0; i < RunCount; i++)
             {
                 total += _Runs[i].Length + 1;
             }
@@ -52,7 +58,7 @@ internal sealed class RunContainer : IContainer
     {
         get
         {
-            if (_Count > 0)
+            if (RunCount > 0)
             {
                 return _Runs[0].Start;
             }
@@ -64,11 +70,11 @@ internal sealed class RunContainer : IContainer
     {
         get
         {
-            if (_Count == 0)
+            if (RunCount == 0)
             {
                 return ushort.MinValue;
             }
-            (ushort Start, ushort Length) = _Runs[_Count - 1];
+            (ushort Start, ushort Length) = _Runs[RunCount - 1];
             return (ushort)(Start + Length);
         }
     }
@@ -80,7 +86,7 @@ internal sealed class RunContainer : IContainer
     public bool Contains(ushort value)
     {
         // Binary search for the run containing value
-        int lo = 0, hi = _Count - 1;
+        int lo = 0, hi = RunCount - 1;
         while (lo <= hi)
         {
             int mid = (lo + hi) >>> 1;
@@ -104,9 +110,9 @@ internal sealed class RunContainer : IContainer
 
     public IContainer Clone()
     {
-        (ushort Start, ushort Length)[] runsCopy = new (ushort, ushort)[_Count];
-        Array.Copy(_Runs, runsCopy, _Count);
-        return new RunContainer(runsCopy, _Count);
+        (ushort Start, ushort Length)[] runsCopy = new (ushort, ushort)[RunCount];
+        Array.Copy(_Runs, runsCopy, RunCount);
+        return new RunContainer(runsCopy, RunCount);
     }
 
     public IContainer Add(ushort value)
@@ -118,7 +124,7 @@ internal sealed class RunContainer : IContainer
 
         // Find insertion point
         int idx = 0;
-        while (idx < _Count && _Runs[idx].Start < value)
+        while (idx < RunCount && _Runs[idx].Start < value)
         {
             idx++;
         }
@@ -138,7 +144,7 @@ internal sealed class RunContainer : IContainer
         }
 
         // Check if can extend next run
-        if (idx < _Count && _Runs[idx].Start == value + 1)
+        if (idx < RunCount && _Runs[idx].Start == value + 1)
         {
             _Runs[idx].Start = value;
             _Runs[idx].Length++;
@@ -157,10 +163,27 @@ internal sealed class RunContainer : IContainer
 
     public IContainer And(IContainer other)
     {
-        // Convert to array for simplicity
+        if (other is RunContainer otherRun)
+        {
+            return _AndRunContainer(otherRun);
+        }
+
+        if (other is BitmapContainer bmp)
+        {
+            BitmapContainer selfBmp = new();
+            SetRangesIn(selfBmp.Bitmap);
+            return selfBmp.And(bmp);
+        }
+
+        if (other is ArrayContainer arr)
+        {
+            return _AndArrayContainer(arr);
+        }
+
+        // Fallback: probe other container value-by-value
         ArrayContainer result = new();
         IContainer r = result;
-        for (int i = 0; i < _Count; i++)
+        for (int i = 0; i < RunCount; i++)
         {
             ushort start = _Runs[i].Start;
             ushort end = (ushort)(start + _Runs[i].Length);
@@ -179,6 +202,78 @@ internal sealed class RunContainer : IContainer
         return r;
     }
 
+    /// <summary>
+    /// Range-based intersection for two sorted run lists — O(runs) without per-value iteration.
+    /// </summary>
+    private RunContainer _AndRunContainer(RunContainer other)
+    {
+        RunContainer result = new();
+        int i = 0;
+        int j = 0;
+        while (i < RunCount && j < other.RunCount)
+        {
+            (ushort aStart, ushort aLen) = _Runs[i];
+            (ushort bStart, ushort bLen) = other._Runs[j];
+            int aEnd = aStart + aLen;
+            int bEnd = bStart + bLen;
+            int intersectStart = Math.Max(aStart, bStart);
+            int intersectEnd = Math.Min(aEnd, bEnd);
+            if (intersectStart <= intersectEnd)
+            {
+                result._InsertRunAt(result.RunCount, (ushort)intersectStart, (ushort)(intersectEnd - intersectStart));
+            }
+
+            if (aEnd < bEnd)
+            {
+                i++;
+            }
+            else if (bEnd < aEnd)
+            {
+                j++;
+            }
+            else
+            {
+                i++;
+                j++;
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Intersect each run with a sorted array via binary search on run bounds — avoids full run expansion.
+    /// </summary>
+    private IContainer _AndArrayContainer(ArrayContainer arr)
+    {
+        ArrayContainer result = new();
+        IContainer r = result;
+        for (int i = 0; i < RunCount; i++)
+        {
+            ushort start = _Runs[i].Start;
+            ushort end = (ushort)(start + _Runs[i].Length);
+            int lo = 0;
+            int hi = arr.Cardinality - 1;
+            while (lo <= hi)
+            {
+                int mid = (lo + hi) >>> 1;
+                if (arr.ValueAt(mid) < start)
+                {
+                    lo = mid + 1;
+                }
+                else
+                {
+                    hi = mid - 1;
+                }
+            }
+            for (int k = lo; k < arr.Cardinality && arr.ValueAt(k) <= end; k++)
+            {
+                r = r.Add(arr.ValueAt(k));
+            }
+        }
+        return r;
+    }
+
     public IContainer Or(IContainer other)
     {
         // Convert to bitmap for large unions, add both sides
@@ -186,7 +281,7 @@ internal sealed class RunContainer : IContainer
         {
             BitmapContainer bitmap = new();
             IContainer b = bitmap;
-            for (int i = 0; i < _Count; i++)
+            for (int i = 0; i < RunCount; i++)
             {
                 ushort start = _Runs[i].Start;
                 ushort end = (ushort)(start + _Runs[i].Length);
@@ -216,7 +311,7 @@ internal sealed class RunContainer : IContainer
         else if (other is RunContainer run)
         {
             // Iterate all runs and add each value
-            for (int i = 0; i < run._Count; i++)
+            for (int i = 0; i < run.RunCount; i++)
             {
                 ushort start = run._Runs[i].Start;
                 ushort end = (ushort)(start + run._Runs[i].Length);
@@ -249,10 +344,25 @@ internal sealed class RunContainer : IContainer
 
     public IContainer AndNot(IContainer other)
     {
-        // Materialize as array, removing elements present in other
+        if (other is RunContainer otherRun)
+        {
+            BitmapContainer bitmap = new();
+            SetRangesIn(bitmap.Bitmap);
+            otherRun.ClearRangesIn(bitmap.Bitmap);
+            return BitmapContainer.FromPopcount(bitmap);
+        }
+
+        if (other is BitmapContainer bmp)
+        {
+            BitmapContainer selfBmp = new();
+            SetRangesIn(selfBmp.Bitmap);
+            return selfBmp.AndNot(bmp);
+        }
+
+        // Fallback: materialize as array, removing elements present in other
         ArrayContainer result = new();
         IContainer r = result;
-        for (int i = 0; i < _Count; i++)
+        for (int i = 0; i < RunCount; i++)
         {
             ushort start = _Runs[i].Start;
             ushort end = (ushort)(start + _Runs[i].Length);
@@ -275,7 +385,7 @@ internal sealed class RunContainer : IContainer
     {
         // Materialize to bitmap for XOR — symmetric difference is complex with runs
         BitmapContainer bitmap = new();
-        for (int i = 0; i < _Count; i++)
+        for (int i = 0; i < RunCount; i++)
         {
             ushort start = _Runs[i].Start;
             ushort end = (ushort)(start + _Runs[i].Length);
@@ -296,12 +406,6 @@ internal sealed class RunContainer : IContainer
     #region Internal helpers (Bitmap interop)
 
     /// <summary>
-    /// Number of runs currently stored. Internal accessor used by sibling containers
-    /// to choose dispatch strategy (e.g. tight loop vs. word-level set operations).
-    /// </summary>
-    internal int RunCount => _Count;
-
-    /// <summary>
     /// Returns the i-th run as <c>(start, end)</c> where <c>end</c> is inclusive.
     /// </summary>
     internal (ushort Start, ushort End) RunAt(int index)
@@ -317,7 +421,7 @@ internal sealed class RunContainer : IContainer
     /// </summary>
     internal void SetRangesIn(ulong[] bitmap)
     {
-        for (int i = 0; i < _Count; i++)
+        for (int i = 0; i < RunCount; i++)
         {
             (ushort Start, ushort Length) = _Runs[i];
             _ApplyRangeMask(bitmap, Start, (ushort)(Start + Length), RangeOp.Or);
@@ -330,7 +434,7 @@ internal sealed class RunContainer : IContainer
     /// </summary>
     internal void ClearRangesIn(ulong[] bitmap)
     {
-        for (int i = 0; i < _Count; i++)
+        for (int i = 0; i < RunCount; i++)
         {
             (ushort Start, ushort Length) = _Runs[i];
             _ApplyRangeMask(bitmap, Start, (ushort)(Start + Length), RangeOp.AndNot);
@@ -343,7 +447,7 @@ internal sealed class RunContainer : IContainer
     /// </summary>
     internal void ToggleRangesIn(ulong[] bitmap)
     {
-        for (int i = 0; i < _Count; i++)
+        for (int i = 0; i < RunCount; i++)
         {
             (ushort Start, ushort Length) = _Runs[i];
             _ApplyRangeMask(bitmap, Start, (ushort)(Start + Length), RangeOp.Xor);
@@ -415,7 +519,7 @@ internal sealed class RunContainer : IContainer
 
     private void _TryMergeAt(int idx)
     {
-        if (idx + 1 >= _Count)
+        if (idx + 1 >= RunCount)
         {
             return;
         }
@@ -430,25 +534,25 @@ internal sealed class RunContainer : IContainer
 
     private void _InsertRunAt(int idx, ushort start, ushort length)
     {
-        if (_Count == _Runs.Length)
+        if (RunCount == _Runs.Length)
         {
             Array.Resize(ref _Runs, _Runs.Length * 2);
         }
-        if (idx < _Count)
+        if (idx < RunCount)
         {
-            Array.Copy(_Runs, idx, _Runs, idx + 1, _Count - idx);
+            Array.Copy(_Runs, idx, _Runs, idx + 1, RunCount - idx);
         }
         _Runs[idx] = (start, length);
-        _Count++;
+        RunCount++;
     }
 
     private void _RemoveRunAt(int idx)
     {
-        if (idx < _Count - 1)
+        if (idx < RunCount - 1)
         {
-            Array.Copy(_Runs, idx + 1, _Runs, idx, _Count - idx - 1);
+            Array.Copy(_Runs, idx + 1, _Runs, idx, RunCount - idx - 1);
         }
-        _Count--;
+        RunCount--;
     }
 
     #endregion

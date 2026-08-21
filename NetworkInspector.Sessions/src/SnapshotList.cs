@@ -15,18 +15,18 @@ namespace NetworkInspector.Sessions;
 /// <typeparam name="T">Element type.</typeparam>
 internal sealed class SnapshotList<T>
 {
-    private T[] _Snapshot = [];
+    private volatile T[] _Snapshot = [];
 
     /// <summary>
     /// The current snapshot as a span. O(1), no allocation, no lock.
     /// </summary>
-    internal ReadOnlySpan<T> Current => Volatile.Read(ref _Snapshot);
+    internal ReadOnlySpan<T> Current => _Snapshot;
 
     /// <summary>
     /// The current snapshot array reference. O(1), no copy.
     /// Treat as immutable for the lifetime of this snapshot; a concurrent write may publish a newer array.
     /// </summary>
-    internal T[] CurrentSnapshot => Volatile.Read(ref _Snapshot);
+    internal T[] CurrentSnapshot => _Snapshot;
 
     /// <summary>
     /// Appends <paramref name="item"/> to the list. Thread-safe via CAS retry loop.
@@ -37,7 +37,7 @@ internal sealed class SnapshotList<T>
         T[] updated;
         do
         {
-            current = Volatile.Read(ref _Snapshot);
+            current = _Snapshot;
             updated = new T[current.Length + 1];
             current.CopyTo(updated, 0);
             updated[current.Length] = item;
@@ -56,7 +56,7 @@ internal sealed class SnapshotList<T>
         T[] updated;
         do
         {
-            current = Volatile.Read(ref _Snapshot);
+            current = _Snapshot;
             int idx = Array.IndexOf(current, item);
             if (idx < 0)
             {
@@ -76,10 +76,10 @@ internal sealed class SnapshotList<T>
     /// Not safe to call concurrently with Add/Remove — intended for use during
     /// session restart when no source jobs are active.
     /// </summary>
-    internal void Clear() => Volatile.Write(ref _Snapshot, []);
+    internal void Clear() => _Snapshot = [];
 
     /// <summary>
     /// Returns the number of elements in the current snapshot.
     /// </summary>
-    internal int Count => Volatile.Read(ref _Snapshot).Length;
+    internal int Count => _Snapshot.Length;
 }

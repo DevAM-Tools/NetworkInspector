@@ -3,28 +3,37 @@
 namespace NetworkInspector.Core.Reassembly;
 
 /// <summary>Result of resynchronization heuristic.</summary>
-public readonly struct ResyncResult
+public readonly record struct ResyncResult
 {
     #region Properties
 
-    /// <summary>Number of bytes to skip, or -1 if cannot resync.</summary>
-    public int SkipBytes
-    {
-        get; init;
-    }
+    /// <summary>Number of bytes to skip on success, or -1 when resynchronization failed.</summary>
+    public int SkipBytes { get; }
 
     /// <summary>Whether resynchronization was successful.</summary>
     public bool IsSuccess => SkipBytes >= 0;
 
     #endregion
 
+    #region Constructors
+
+    private ResyncResult(int skipBytes) => SkipBytes = skipBytes;
+
+    #endregion
+
     #region Factory Methods
 
     /// <summary>Resynchronization failed — no valid sync point found.</summary>
-    public static ResyncResult Failure => new() { SkipBytes = -1 };
+    public static ResyncResult Failure => new(-1);
 
     /// <summary>Skip the given number of bytes to resynchronize.</summary>
-    public static ResyncResult Skip(int bytes) => new() { SkipBytes = bytes };
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="bytes"/> is negative.</exception>
+    public static ResyncResult Skip(int bytes)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(bytes);
+        return new(bytes);
+    }
+
     #endregion
 }
 

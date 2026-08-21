@@ -1,0 +1,26 @@
+<!-- Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root. -->
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>NetworkInspector.CLI</RootNamespace>
+    <Description>
+      Core CLI application logic for Network Inspector (convert/export).
+      Separated from the ni executable so ExitPointGaps can gate class-library coverage.
+    </Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="NetworkInspector.CLI.Tests" />
+    <!-- PackAsTool host assembly name is "ni" (see NetworkInspector.CLI.csproj AssemblyName). -->
+    <InternalsVisibleTo Include="ni" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\NetworkInspector.Core\NetworkInspector.Core.csproj" />
+    <ProjectReference Include="..\NetworkInspector.Filter\NetworkInspector.Filter.csproj" />
+    <ProjectReference Include="..\NetworkInspector.Protocols\NetworkInspector.Protocols.csproj" />
+    <ProjectReference Include="..\NetworkInspector.Sources\NetworkInspector.Sources.csproj" />
+    <ProjectReference Include="..\NetworkInspector.Exporters\NetworkInspector.Exporters.csproj" />
+    <ProjectReference Include="..\NetworkInspector.Exporters.DuckDb\NetworkInspector.Exporters.DuckDb.csproj" />
+  </ItemGroup>
+</Project>

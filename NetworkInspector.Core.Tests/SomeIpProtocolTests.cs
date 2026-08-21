@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Core.Tests;
 
@@ -41,7 +41,7 @@ internal sealed class SomeIpProtocolTests
         {
             FieldId? serviceIdField = stack.GetFieldId("someip.serviceid");
             await Assert.That(serviceIdField).IsNotNull();
-            bool has = packet.TryGetFieldValue(serviceIdField!.Value, out FieldValue value);
+            bool has = packet.TryGetFieldValue(serviceIdField!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsTrue();
             value.Data.TryGetAsU64(out ulong u64Val);
             await Assert.That(u64Val).IsEqualTo(0x0123UL);
@@ -59,7 +59,7 @@ internal sealed class SomeIpProtocolTests
         {
             FieldId? methodIdField = stack.GetFieldId("someip.methodid");
             await Assert.That(methodIdField).IsNotNull();
-            bool has = packet.TryGetFieldValue(methodIdField!.Value, out FieldValue value);
+            bool has = packet.TryGetFieldValue(methodIdField!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsTrue();
             value.Data.TryGetAsU64(out ulong u64Val);
             await Assert.That(u64Val).IsEqualTo(0x1234UL);
@@ -77,7 +77,7 @@ internal sealed class SomeIpProtocolTests
         {
             FieldId? msgIdField = stack.GetFieldId("someip.messageid");
             await Assert.That(msgIdField).IsNotNull();
-            bool has = packet.TryGetFieldValue(msgIdField!.Value, out FieldValue value);
+            bool has = packet.TryGetFieldValue(msgIdField!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsTrue();
             value.Data.TryGetAsU64(out ulong u64Val);
             await Assert.That(u64Val).IsEqualTo(0x01234567UL);
@@ -94,7 +94,7 @@ internal sealed class SomeIpProtocolTests
         {
             FieldId? msgTypeField = stack.GetFieldId("someip.msgtype");
             await Assert.That(msgTypeField).IsNotNull();
-            bool has = packet.TryGetFieldValue(msgTypeField!.Value, out FieldValue value);
+            bool has = packet.TryGetFieldValue(msgTypeField!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsTrue();
             value.Data.TryGetAsU64(out ulong u64Val);
             await Assert.That(u64Val).IsEqualTo(0x80UL);
@@ -111,7 +111,7 @@ internal sealed class SomeIpProtocolTests
         {
             FieldId? returnCodeField = stack.GetFieldId("someip.returncode");
             await Assert.That(returnCodeField).IsNotNull();
-            bool has = packet.TryGetFieldValue(returnCodeField!.Value, out FieldValue value);
+            bool has = packet.TryGetFieldValue(returnCodeField!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsTrue();
             value.Data.TryGetAsU64(out ulong u64Val);
             await Assert.That(u64Val).IsEqualTo(0x01UL);
@@ -129,7 +129,7 @@ internal sealed class SomeIpProtocolTests
         {
             FieldId? payloadField = stack.GetFieldId("someip.payload");
             await Assert.That(payloadField).IsNotNull();
-            bool has = packet.TryGetFieldValue(payloadField!.Value, out FieldValue value);
+            bool has = packet.TryGetFieldValue(payloadField!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsTrue();
 
             value.Data.TryGetAsBytes(out ReadOnlyMemory<byte> bytesVal);
@@ -155,7 +155,7 @@ internal sealed class SomeIpProtocolTests
             // SOME/IP service ID should not be present (data too short)
             FieldId? serviceIdField = stack.GetFieldId("someip.serviceid");
             await Assert.That(serviceIdField).IsNotNull();
-            bool has = packet.TryGetFieldValue(serviceIdField!.Value, out _);
+            bool has = packet.TryGetFieldValue(serviceIdField!.Value, out _, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsFalse();
         }
     }
@@ -211,7 +211,7 @@ internal sealed class SomeIpProtocolTests
         {
             FieldId? ackField = stack.GetFieldId("someip.msgtype.ack");
             await Assert.That(ackField).IsNotNull();
-            bool has = packet.TryGetFieldValue(ackField!.Value, out FieldValue value);
+            bool has = packet.TryGetFieldValue(ackField!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsTrue();
             value.Data.TryGetAsBool(out bool boolVal);
             await Assert.That(boolVal).IsTrue();
@@ -228,7 +228,7 @@ internal sealed class SomeIpProtocolTests
         {
             FieldId? tpField = stack.GetFieldId("someip.msgtype.tp");
             await Assert.That(tpField).IsNotNull();
-            bool has = packet.TryGetFieldValue(tpField!.Value, out FieldValue value);
+            bool has = packet.TryGetFieldValue(tpField!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsTrue();
             value.Data.TryGetAsBool(out bool boolVal);
             await Assert.That(boolVal).IsFalse();
@@ -251,7 +251,7 @@ internal sealed class SomeIpProtocolTests
         {
             FieldId? offsetField = stack.GetFieldId("someip.tp.offset");
             await Assert.That(offsetField).IsNotNull();
-            bool has = packet.TryGetFieldValue(offsetField!.Value, out FieldValue value);
+            bool has = packet.TryGetFieldValue(offsetField!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsTrue();
             value.Data.TryGetAsU64(out ulong u64Val);
             await Assert.That(u64Val).IsEqualTo(0x100UL);
@@ -268,7 +268,7 @@ internal sealed class SomeIpProtocolTests
         {
             FieldId? moreField = stack.GetFieldId("someip.tp.more");
             await Assert.That(moreField).IsNotNull();
-            bool has = packet.TryGetFieldValue(moreField!.Value, out FieldValue value);
+            bool has = packet.TryGetFieldValue(moreField!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsTrue();
             value.Data.TryGetAsBool(out bool boolVal);
             await Assert.That(boolVal).IsTrue();
@@ -285,7 +285,7 @@ internal sealed class SomeIpProtocolTests
         {
             FieldId? moreField = stack.GetFieldId("someip.tp.more");
             await Assert.That(moreField).IsNotNull();
-            bool has = packet.TryGetFieldValue(moreField!.Value, out FieldValue value);
+            bool has = packet.TryGetFieldValue(moreField!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsTrue();
             value.Data.TryGetAsBool(out bool boolVal);
             await Assert.That(boolVal).IsFalse();
@@ -303,7 +303,7 @@ internal sealed class SomeIpProtocolTests
             // TP flag should be set in message type decomposition
             FieldId? tpField = stack.GetFieldId("someip.msgtype.tp");
             await Assert.That(tpField).IsNotNull();
-            bool has = packet.TryGetFieldValue(tpField!.Value, out FieldValue value);
+            bool has = packet.TryGetFieldValue(tpField!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsTrue();
             value.Data.TryGetAsBool(out bool boolVal);
             await Assert.That(boolVal).IsTrue();
@@ -340,7 +340,7 @@ internal sealed class SomeIpProtocolTests
         {
             FieldId? flagsField = stack.GetFieldId("someip_sd.flags");
             await Assert.That(flagsField).IsNotNull();
-            bool has = packet.TryGetFieldValue(flagsField!.Value, out FieldValue value);
+            bool has = packet.TryGetFieldValue(flagsField!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsTrue();
             value.Data.TryGetAsU64(out ulong u64Val);
             await Assert.That(u64Val).IsEqualTo(0xC0UL);
@@ -357,7 +357,7 @@ internal sealed class SomeIpProtocolTests
         {
             FieldId? rebootField = stack.GetFieldId("someip_sd.flags.reboot");
             await Assert.That(rebootField).IsNotNull();
-            bool has = packet.TryGetFieldValue(rebootField!.Value, out FieldValue value);
+            bool has = packet.TryGetFieldValue(rebootField!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsTrue();
             value.Data.TryGetAsBool(out bool boolVal);
             await Assert.That(boolVal).IsTrue();
@@ -374,7 +374,7 @@ internal sealed class SomeIpProtocolTests
         {
             FieldId? unicastField = stack.GetFieldId("someip_sd.flags.unicast");
             await Assert.That(unicastField).IsNotNull();
-            bool has = packet.TryGetFieldValue(unicastField!.Value, out FieldValue value);
+            bool has = packet.TryGetFieldValue(unicastField!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsTrue();
             value.Data.TryGetAsBool(out bool boolVal);
             await Assert.That(boolVal).IsTrue();
@@ -392,7 +392,7 @@ internal sealed class SomeIpProtocolTests
         {
             FieldId? serviceIdField = stack.GetFieldId("someip_sd.entry.serviceid");
             await Assert.That(serviceIdField).IsNotNull();
-            bool has = packet.TryGetFieldValue(serviceIdField!.Value, out FieldValue value);
+            bool has = packet.TryGetFieldValue(serviceIdField!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsTrue();
             value.Data.TryGetAsU64(out ulong u64Val);
             await Assert.That(u64Val).IsEqualTo(0xABCDUL);
@@ -410,7 +410,7 @@ internal sealed class SomeIpProtocolTests
         {
             FieldId? ttlField = stack.GetFieldId("someip_sd.entry.ttl");
             await Assert.That(ttlField).IsNotNull();
-            bool has = packet.TryGetFieldValue(ttlField!.Value, out FieldValue value);
+            bool has = packet.TryGetFieldValue(ttlField!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsTrue();
             value.Data.TryGetAsU64(out ulong u64Val);
             await Assert.That(u64Val).IsEqualTo(86400UL);
@@ -428,7 +428,7 @@ internal sealed class SomeIpProtocolTests
         {
             FieldId? typeField = stack.GetFieldId("someip_sd.entry.type");
             await Assert.That(typeField).IsNotNull();
-            bool has = packet.TryGetFieldValue(typeField!.Value, out FieldValue value);
+            bool has = packet.TryGetFieldValue(typeField!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsTrue();
             value.Data.TryGetAsU64(out ulong u64Val);
             await Assert.That(u64Val).IsEqualTo(0x01UL); // OfferService
@@ -446,7 +446,7 @@ internal sealed class SomeIpProtocolTests
         {
             FieldId? portField = stack.GetFieldId("someip_sd.option.port");
             await Assert.That(portField).IsNotNull();
-            bool has = packet.TryGetFieldValue(portField!.Value, out FieldValue value);
+            bool has = packet.TryGetFieldValue(portField!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsTrue();
             value.Data.TryGetAsU64(out ulong u64Val);
             await Assert.That(u64Val).IsEqualTo(30490UL);
@@ -464,7 +464,7 @@ internal sealed class SomeIpProtocolTests
         {
             FieldId? protoField = stack.GetFieldId("someip_sd.option.proto");
             await Assert.That(protoField).IsNotNull();
-            bool has = packet.TryGetFieldValue(protoField!.Value, out FieldValue value);
+            bool has = packet.TryGetFieldValue(protoField!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsTrue();
             value.Data.TryGetAsU64(out ulong u64Val);
             await Assert.That(u64Val).IsEqualTo(6UL); // TCP
@@ -482,7 +482,7 @@ internal sealed class SomeIpProtocolTests
         {
             FieldId? payloadField = stack.GetFieldId("someip.payload");
             await Assert.That(payloadField).IsNotNull();
-            bool has = packet.TryGetFieldValue(payloadField!.Value, out _);
+            bool has = packet.TryGetFieldValue(payloadField!.Value, out _, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsFalse();
         }
     }

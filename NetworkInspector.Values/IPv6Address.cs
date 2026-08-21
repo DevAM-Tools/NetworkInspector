@@ -22,33 +22,18 @@ public readonly record struct IPv6Address
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public IPv6Address(ulong high, ulong low)
     {
-        _High = high;
-        _Low = low;
+        High = high;
+        Low = low;
     }
-
-    #endregion
-
-    #region Fields
-
-    private readonly ulong _High; // bits 127..64
-    private readonly ulong _Low;  // bits 63..0
 
     #endregion
 
     #region Properties
 
     /// <summary>The upper 64 bits (bits 127..64).</summary>
-    public ulong High
-    {
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _High;
-    }
+    public ulong High { get; }
     /// <summary>The lower 64 bits (bits 63..0).</summary>
-    public ulong Low
-    {
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _Low;
-    }
+    public ulong Low { get; }
 
     #endregion
 
@@ -58,37 +43,37 @@ public readonly record struct IPv6Address
     public bool IsLoopback
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _High == 0 && _Low == 1;
+        get => High == 0 && Low == 1;
     }
     /// <summary>True if this is a multicast address (ff00::/8).</summary>
     public bool IsMulticast
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => (_High >> 56) == 0xFF;
+        get => (High >> 56) == 0xFF;
     }
     /// <summary>True if this is a link-local address (fe80::/10).</summary>
     public bool IsLinkLocal
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => (_High >> 54) == (0xFE80UL >> 6);
+        get => (High >> 54) == (0xFE80UL >> 6);
     }
     /// <summary>True if this is a unique local address (fc00::/7).</summary>
     public bool IsUniqueLocal
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => (_High >> 57) == (0xFC00UL >> 9);
+        get => (High >> 57) == (0xFC00UL >> 9);
     }
     /// <summary>True if this is the unspecified address (::).</summary>
     public bool IsUnspecified
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _High == 0 && _Low == 0;
+        get => High == 0 && Low == 0;
     }
     /// <summary>True if this is an IPv4-mapped address (::ffff:x.x.x.x).</summary>
     public bool IsIPv4Mapped
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _High == 0 && (_Low >> 32) == 0xFFFF;
+        get => High == 0 && (Low >> 32) == 0xFFFF;
     }
 
     #endregion
@@ -96,15 +81,31 @@ public readonly record struct IPv6Address
     #region Factory Methods
 
     /// <summary>Creates an IPv6 address from a 16-byte big-endian span.</summary>
-    public static IPv6Address FromBytes(ReadOnlySpan<byte> bytes)
+    /// <returns><see langword="false"/> when fewer than 16 bytes are available.</returns>
+    public static bool TryFromBytes(ReadOnlySpan<byte> bytes, out IPv6Address address)
     {
         if (bytes.Length < 16)
         {
-            return default;
+            address = default;
+            return false;
         }
+
         ulong high = BinaryPrimitives.ReadUInt64BigEndian(bytes);
         ulong low = BinaryPrimitives.ReadUInt64BigEndian(bytes[8..]);
-        return new IPv6Address(high, low);
+        address = new IPv6Address(high, low);
+        return true;
+    }
+
+    /// <summary>Creates an IPv6 address from a 16-byte big-endian span.</summary>
+    /// <exception cref="ArgumentException">Fewer than 16 bytes are available.</exception>
+    public static IPv6Address FromBytes(ReadOnlySpan<byte> bytes)
+    {
+        if (!TryFromBytes(bytes, out IPv6Address address))
+        {
+            throw new ArgumentException("IPv6 address requires at least 16 bytes.", nameof(bytes));
+        }
+
+        return address;
     }
 
     /// <summary>
@@ -219,8 +220,8 @@ public readonly record struct IPv6Address
         {
             return 0;
         }
-        BinaryPrimitives.WriteUInt64BigEndian(destination, _High);
-        BinaryPrimitives.WriteUInt64BigEndian(destination[8..], _Low);
+        BinaryPrimitives.WriteUInt64BigEndian(destination, High);
+        BinaryPrimitives.WriteUInt64BigEndian(destination[8..], Low);
         return 16;
     }
 
@@ -279,14 +280,14 @@ public readonly record struct IPv6Address
     public bool TryGetGroups(Span<ushort> groups)
     {
         if (groups.Length < 8) { return false; }
-        groups[0] = (ushort)(_High >> 48);
-        groups[1] = (ushort)(_High >> 32);
-        groups[2] = (ushort)(_High >> 16);
-        groups[3] = (ushort)_High;
-        groups[4] = (ushort)(_Low >> 48);
-        groups[5] = (ushort)(_Low >> 32);
-        groups[6] = (ushort)(_Low >> 16);
-        groups[7] = (ushort)_Low;
+        groups[0] = (ushort)(High >> 48);
+        groups[1] = (ushort)(High >> 32);
+        groups[2] = (ushort)(High >> 16);
+        groups[3] = (ushort)High;
+        groups[4] = (ushort)(Low >> 48);
+        groups[5] = (ushort)(Low >> 32);
+        groups[6] = (ushort)(Low >> 16);
+        groups[7] = (ushort)Low;
         return true;
     }
 
@@ -299,7 +300,7 @@ public readonly record struct IPv6Address
         Span<char> destination, out int charsWritten,
         ReadOnlySpan<char> format, IFormatProvider? provider)
     {
-        if (destination.Length < MaxFormattedLength)
+        if (!TryGetStringSize(format, provider, out int needed) || destination.Length < needed)
         {
             charsWritten = 0;
             return false;
@@ -442,13 +443,13 @@ public readonly record struct IPv6Address
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public int CompareTo(IPv6Address other)
     {
-        int c = _High.CompareTo(other._High);
+        int c = High.CompareTo(other.High);
         if (c != 0)
         {
             return c;
         }
 
-        return _Low.CompareTo(other._Low);
+        return Low.CompareTo(other.Low);
     }
 
     /// <inheritdoc/>

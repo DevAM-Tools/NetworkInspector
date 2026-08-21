@@ -37,7 +37,7 @@ public readonly struct ParseError
     /// Human-readable error message. Pre-computed at construction time.
     /// This is acceptable because <see cref="ParseError"/> is only constructed on the
     /// error path, which is rare — the success path never touches this field.
-    /// Returns <see cref="ParseErrorKind"/> name for default-constructed instances.
+    /// Returns <see cref="ParseErrorKind"/> name when unset (default instance or empty message).
     /// </summary>
     public string Message
     {
@@ -48,12 +48,12 @@ public readonly struct ParseError
 
     #region Constructors
 
-    /// <summary>Creates a parse error with the specified details.</summary>
-    private ParseError(ParseErrorKind kind, string? protocolName, string message)
+    /// <summary>Creates a parse error with the specified details. Null <paramref name="message"/> is stored as empty.</summary>
+    private ParseError(ParseErrorKind kind, string? protocolName, string? message)
     {
         Kind = kind;
         ProtocolName = protocolName;
-        Message = message;
+        Message = message ?? string.Empty;
     }
 
     #endregion
@@ -62,7 +62,7 @@ public readonly struct ParseError
 
     /// <summary>
     /// Retrieves the most recent error stored by an implicit conversion to <see cref="ParseResult"/>.
-    /// Only meaningful when <see cref="ParseResult.IsError"/> is <see langword="true"/>
+    /// Meaningful only when <see cref="ParseResult.IsError"/> is <see langword="true"/>
     /// and the result was created via a <see cref="ParseError"/> factory method.
     /// <para>
     /// <b>Thread-safety:</b> Error details are stored in thread-local storage. This property
@@ -87,35 +87,61 @@ public readonly struct ParseError
     /// <summary>
     /// Stores the error in thread-local storage. Called by the implicit
     /// <see cref="ParseResult"/> conversion operator on the error path.
+    /// <para>
+    /// <b>Overwrites</b> any prior unread error on this thread. Not safe across
+    /// <c>await</c> / thread-pool boundaries — read <see cref="LastError"/> synchronously
+    /// on the same thread that produced the <see cref="ParseResult"/>.
+    /// </para>
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static void SetLastError(ParseError error) => _LastError = error;
 
     /// <summary>Creates an insufficient data error.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static ParseError InsufficientData(string protocolName) =>
-        new(ParseErrorKind.InsufficientData, protocolName, "Insufficient data");
+    public static ParseError InsufficientData(string protocolName)
+    {
+        ArgumentNullException.ThrowIfNull(protocolName);
+        return new(ParseErrorKind.InsufficientData, protocolName, "Insufficient data");
+    }
 
     /// <summary>Creates an insufficient data error with expected/actual sizes.</summary>
     // Not inlined — string interpolation on the rare error path should stay out of hot code.
     [MethodImpl(MethodImplOptions.NoInlining)]
-    public static ParseError InsufficientDataWithInfo(string protocolName, ulong expected, ulong actual) =>
-        new(ParseErrorKind.InsufficientData, protocolName,
-            $"Insufficient data: expected {expected} bytes, got {actual}");
+    public static ParseError InsufficientDataWithInfo(string protocolName, ulong expected, ulong actual)
+    {
+        ArgumentNullException.ThrowIfNull(protocolName);
+        return new(
+            ParseErrorKind.InsufficientData,
+            protocolName,
+            string.Create(
+                CultureInfo.InvariantCulture,
+                $"Insufficient data: expected {expected} bytes, got {actual}"));
+    }
 
     /// <summary>Creates an invalid data error.</summary>
+    /// <param name="protocolName">Protocol that produced the error.</param>
+    /// <param name="message">Detail text; <see langword="null"/> is stored as empty.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static ParseError InvalidData(string protocolName, string message) =>
-        new(ParseErrorKind.InvalidData, protocolName, message);
+    public static ParseError InvalidData(string protocolName, string? message)
+    {
+        ArgumentNullException.ThrowIfNull(protocolName);
+        return new(ParseErrorKind.InvalidData, protocolName, message);
+    }
 
     /// <summary>Creates a custom error.</summary>
+    /// <param name="protocolName">Protocol that produced the error.</param>
+    /// <param name="message">Detail text; <see langword="null"/> is stored as empty.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static ParseError Custom(string protocolName, string message) =>
-        new(ParseErrorKind.Custom, protocolName, message);
+    public static ParseError Custom(string protocolName, string? message)
+    {
+        ArgumentNullException.ThrowIfNull(protocolName);
+        return new(ParseErrorKind.Custom, protocolName, message);
+    }
 
     /// <summary>Creates an internal error.</summary>
+    /// <param name="message">Detail text; <see langword="null"/> is stored as empty.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static ParseError InternalError(string message) =>
+    public static ParseError InternalError(string? message) =>
         new(ParseErrorKind.InternalError, null, message);
 
     /// <summary>Creates a field append failed error.</summary>
@@ -127,9 +153,26 @@ public readonly struct ParseError
     /// <summary>Creates a field type mismatch error.</summary>
     // Not inlined — string interpolation on the rare error path should stay out of hot code.
     [MethodImpl(MethodImplOptions.NoInlining)]
-    public static ParseError FieldTypeMismatch(string fieldName, FieldType expected, FieldType actual) =>
-        new(ParseErrorKind.FieldTypeMismatch, null,
-            $"Field type mismatch for '{fieldName}': expected {expected}, got {actual}");
+    public static ParseError FieldTypeMismatch(string fieldName, FieldType expected, FieldType actual)
+    {
+        ArgumentNullException.ThrowIfNull(fieldName);
+        return new(
+            ParseErrorKind.FieldTypeMismatch,
+            null,
+            string.Create(
+                CultureInfo.InvariantCulture,
+                $"Field type mismatch for '{fieldName}': expected {expected}, got {actual}"));
+    }
+
+    /// <summary>
+    /// Creates an error when a dispatch table cannot be resolved (invalid id or not registered on the stack).
+    /// This is not used for "table exists, key has no protocol".
+    /// </summary>
+    /// <param name="protocolName">Optional protocol context.</param>
+    /// <param name="message">Detail text; <see langword="null"/> is stored as empty.</param>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static ParseError ProtocolTableMissing(string? protocolName, string? message) =>
+        new(ParseErrorKind.ProtocolTableMissing, protocolName, message);
 
     #endregion
 
@@ -138,10 +181,11 @@ public readonly struct ParseError
     /// <inheritdoc/>
     public override string ToString()
     {
-        if (Message is not null)
+        if (!string.IsNullOrEmpty(Message))
         {
             return Message;
         }
+
         return Kind.ToString();
     }
 

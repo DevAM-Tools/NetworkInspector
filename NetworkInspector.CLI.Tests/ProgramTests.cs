@@ -3,7 +3,7 @@
 namespace NetworkInspector.CLI.Tests;
 
 /// <summary>
-/// Unit tests for <see cref="Program.Main"/>.
+/// Unit tests for <see cref="CliEntry.Run"/>.
 /// <para>
 /// Only short-circuit paths that return immediately (no I/O or network activity) are tested
 /// here. Paths that require open files or running sources are left to integration testing.
@@ -44,7 +44,7 @@ internal sealed class ProgramTests
     [MethodDataSource(nameof(Main_ExitCode_Data))]
     public async Task Main_ExitCode_MatchesExpected(string[] args, int expected, string because)
     {
-        int exitCode = Program.Main(args);
+        int exitCode = CliEntry.Run(args);
 
         await Assert.That(exitCode).IsEqualTo(expected).Because(because);
     }

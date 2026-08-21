@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Protocols.Tests.Infrastructure.TsharkUat;
 
@@ -16,7 +16,7 @@ internal static class WiresharkProfilePreferences
         */
         ReadOnlySpan<string> appendedLines =
         [
-            "# Network Inspector tests — deterministic Signal-PDU subtree visibility.",
+            "# Network Inspector tests — deterministic Signal Message subtree visibility.",
             "# signal_pdu.payload_dissector_hide_raw_values",
             "signal_pdu.payload_dissector_hide_raw_values: FALSE",
         ];

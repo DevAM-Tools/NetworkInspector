@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Protocols.Tests;
 
@@ -25,7 +25,7 @@ internal sealed class VlanMalformedTests
         {
             // Ethernet should parse, but VLAN may not fully parse
             await ProtocolTestHelper.AssertProtocolPresent(stack, packet, "eth").ConfigureAwait(false);
-            await Assert.That(packet.FieldCount()).IsGreaterThanOrEqualTo(1);
+            await Assert.That(packet.FieldCount(materialize: false)).IsGreaterThanOrEqualTo(1); // materialize: false — current materialized count only
         }
     }
 

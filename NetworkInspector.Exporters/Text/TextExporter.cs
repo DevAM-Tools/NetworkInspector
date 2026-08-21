@@ -53,7 +53,7 @@ public sealed class TextExporter : IPacketListener, IErrorTolerantExporter, IDis
 
     /// <summary>Maximum characters for string/bytes values. 0 = unlimited.</summary>
     private readonly int _MaxTextLength;
-    private readonly long _TargetPacketCount;
+    private readonly int _TargetPacketCount;
 
     private ExportOutput? _Output;
     private readonly PooledBuffer _Buffer = new(16384);
@@ -78,7 +78,7 @@ public sealed class TextExporter : IPacketListener, IErrorTolerantExporter, IDis
         string? description,
         TextDetailLevel detailLevel,
         int maxTextLength,
-        long targetPacketCount,
+        int targetPacketCount,
         CancellationToken cancellationToken)
     {
         _Output = output;
@@ -110,22 +110,26 @@ public sealed class TextExporter : IPacketListener, IErrorTolerantExporter, IDis
     }
 
     /// <summary>Number of packets successfully written.</summary>
-    public long PacketCount
+    public int PacketCount
     {
         get; private set;
     }
 
     /// <inheritdoc/>
-    public long WrittenCount => PacketCount;
+    public int WrittenCount => PacketCount;
 
     /// <inheritdoc/>
-    public long SkippedCount
+    public long EstimatedOutputBytes =>
+        (_Output?.AcceptedBytes ?? 0L) + _Buffer.Length;
+
+    /// <inheritdoc/>
+    public int SkippedCount
     {
         get; private set;
     }
 
     /// <inheritdoc/>
-    public long ErrorCount
+    public int ErrorCount
     {
         get; private set;
     }
@@ -167,9 +171,8 @@ public sealed class TextExporter : IPacketListener, IErrorTolerantExporter, IDis
     /// <inheritdoc/>
     /// <remarks>
     /// If no packets were written before <see cref="OnFinish"/> is called, the output
-    /// will be empty (zero bytes) — no header or placeholder is written. This is valid
-    /// behavior; callers that need a non-empty output must check
-    /// <see cref="IExporterStatistics.WrittenCount"/> before use.
+    /// is a single newline (valid empty text export). Callers that need packet content must
+    /// check <see cref="IExporterStatistics.WrittenCount"/> before use.
     /// </remarks>
     public void OnFinish()
     {
@@ -196,10 +199,10 @@ public sealed class TextExporter : IPacketListener, IErrorTolerantExporter, IDis
         try
         {
             _Started = true;
-            packet.MaterializeAll();
+            // Visit-time materialize via Children/HasChildren — avoid full-tree MaterializeAll.
             _Buffer.Reset();
 
-            long packetNumber = PacketCount + 1;
+            int packetNumber = PacketCount + 1;
             _WritePacketHeader(packet, packetNumber);
             _WriteFieldTree(packet);
             _WriteSeparator();
@@ -211,8 +214,8 @@ public sealed class TextExporter : IPacketListener, IErrorTolerantExporter, IDis
         }
         catch (Exception ex)
         {
-            ErrorCount++;
-            long index = PacketCount;
+            if (ErrorCount < int.MaxValue) ErrorCount++;
+            int index = PacketCount;
 
             if (ErrorTolerance == ErrorToleranceMode.Strict)
             {
@@ -220,7 +223,7 @@ public sealed class TextExporter : IPacketListener, IErrorTolerantExporter, IDis
                 return false;
             }
 
-            SkippedCount++;
+            if (SkippedCount < int.MaxValue) SkippedCount++;
             _RaiseItemSkipped(index, ExportErrorKind.SerializationError, ex.Message);
             return true;
         }
@@ -235,7 +238,7 @@ public sealed class TextExporter : IPacketListener, IErrorTolerantExporter, IDis
     /// </summary>
     /// <param name="packet">The packet to describe.</param>
     /// <param name="packetNumber">1-based packet number, pre-computed by the caller.</param>
-    private void _WritePacketHeader(Packet packet, long packetNumber)
+    private void _WritePacketHeader(Packet packet, int packetNumber)
     {
         // "Packet "
         _Buffer.Write("Packet "u8);
@@ -276,13 +279,14 @@ public sealed class TextExporter : IPacketListener, IErrorTolerantExporter, IDis
     private void _WriteFieldTree(Packet packet)
     {
         Field root = packet.RootField();
-        if (!root.IsValid || !root.HasChildren)
+        // Full text dump must include lazy protocol trees (same policy as JSON/PBF).
+        if (!root.IsValid || !root.HasChildren(materialize: true))
         {
             return;
         }
 
         // Root (depth 0) is skipped in output; recurse into its children at depth 1
-        foreach (Field child in root.Children(materialize: false))
+        foreach (Field child in root.Children(materialize: true))
         {
             _WriteField(child, depth: 1);
         }
@@ -321,10 +325,11 @@ public sealed class TextExporter : IPacketListener, IErrorTolerantExporter, IDis
         // Write this field's line
         _WriteFieldLine(field, fieldType, depth);
 
-        // Recurse into children unless Summary mode suppresses sub-fields
-        if (field.HasChildren && _DetailLevel != TextDetailLevel.Summary)
+        // Recurse into children unless Summary mode suppresses sub-fields.
+        // materialize: true — full text dump must include lazy protocol trees.
+        if (field.HasChildren(materialize: true) && _DetailLevel != TextDetailLevel.Summary)
         {
-            foreach (Field child in field.Children(materialize: false))
+            foreach (Field child in field.Children(materialize: true))
             {
                 _WriteField(child, depth + 1);
             }
@@ -623,7 +628,7 @@ public sealed class TextExporter : IPacketListener, IErrorTolerantExporter, IDis
                 catch (Exception ex)
                 {
                     _HasError = true;
-                    ErrorCount++;
+                    if (ErrorCount < int.MaxValue) ErrorCount++;
                     ItemSkipped?.Invoke(this, new ExportErrorEventArgs
                     {
                         ItemIndex = 0,
@@ -644,7 +649,7 @@ public sealed class TextExporter : IPacketListener, IErrorTolerantExporter, IDis
                 // handler is invoked with an IO/Serialization classification so
                 // it is never lost silently.
                 _HasError = true;
-                ErrorCount++;
+                if (ErrorCount < int.MaxValue) ErrorCount++;
                 ItemSkipped?.Invoke(this, new ExportErrorEventArgs
                 {
                     ItemIndex = PacketCount,
@@ -667,7 +672,7 @@ public sealed class TextExporter : IPacketListener, IErrorTolerantExporter, IDis
             if (disposalError is not null)
             {
                 _HasError = true;
-                ErrorCount++;
+                if (ErrorCount < int.MaxValue) ErrorCount++;
                 ItemSkipped?.Invoke(this, new ExportErrorEventArgs
                 {
                     ItemIndex = PacketCount,
@@ -684,7 +689,7 @@ public sealed class TextExporter : IPacketListener, IErrorTolerantExporter, IDis
     }
 
     /// <summary>Raises the <see cref="ItemSkipped"/> event.</summary>
-    private void _RaiseItemSkipped(long index, ExportErrorKind kind, string message)
+    private void _RaiseItemSkipped(int index, ExportErrorKind kind, string message)
     {
         ItemSkipped?.Invoke(this, new ExportErrorEventArgs
         {
@@ -709,7 +714,7 @@ public sealed class TextExporter : IPacketListener, IErrorTolerantExporter, IDis
 
         /// <summary>Maximum characters for string/bytes display values. 0 = unlimited. Default: 256.</summary>
         private int _MaxTextLength = 256;
-        private long _TargetPacketCount;
+        private int _TargetPacketCount;
 
         /// <summary>Sets the output to a file path.</summary>
         public Builder ToFile(string path)
@@ -768,9 +773,18 @@ public sealed class TextExporter : IPacketListener, IErrorTolerantExporter, IDis
         }
 
         /// <summary>Stops after writing the specified number of packets. 0 means unlimited.</summary>
-        public Builder WithTargetPacketCount(long count)
+        public Builder WithTargetPacketCount(int count)
         {
             ArgumentOutOfRangeException.ThrowIfNegative(count);
+            if (count > ArrayIndexIdRange.MaxCount)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(count),
+                    count,
+                    $"Target packet count must not exceed {ArrayIndexIdRange.MaxCount.ToString(CultureInfo.InvariantCulture)} " +
+                    $"(Array.MaxLength={Array.MaxLength.ToString(CultureInfo.InvariantCulture)}).");
+            }
+
             _TargetPacketCount = count;
             return this;
         }

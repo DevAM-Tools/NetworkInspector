@@ -3,10 +3,9 @@
 namespace NetworkInspector.Exporters.Tests.Pbf;
 
 /// <summary>
-/// Tests for internal PBF types: <see cref="PreviousFieldStore"/> (sparse mode),
-/// <see cref="DictionaryEncoder"/> (overflow), <see cref="ColumnarBlockBuilder"/>
-/// (MaxBlockSize flush), and <see cref="Lz4Compressor"/> (incompressible data).
-/// These complement the higher-level <see cref="PbfExporterTests"/>.
+/// Tests for internal exporter types: typed <see cref="PreviousFieldStore"/> (sparse mode),
+/// <see cref="ColumnarBlockBuilder"/> (MaxBlockSize flush), and <see cref="Lz4Compressor"/>
+/// (incompressible data). These complement the higher-level <see cref="PbfExporterTests"/>.
 /// </summary>
 internal sealed class PbfInternalTests
 {
@@ -25,12 +24,13 @@ internal sealed class PbfInternalTests
         // fieldCount > 2048 forces sparse mode
         PreviousFieldStore store = new(4096);
         int fieldId = 3000;
+        FieldValue hello = FieldValue.NewString("hello");
 
         // First call — nothing stored yet, no same flags
-        uint flags1 = store.CompareAndUpdate(fieldId, "hello", null, null);
+        uint flags1 = store.CompareAndUpdate(fieldId, hello, default, default);
 
         // Second call with same value — should detect SameValue
-        uint flags2 = store.CompareAndUpdate(fieldId, "hello", null, null);
+        uint flags2 = store.CompareAndUpdate(fieldId, hello, default, default);
 
         await Assert.That((flags1 & SameFlags.FieldSameValue) != 0).IsFalse();
         await Assert.That((flags2 & SameFlags.FieldSameValue) != 0).IsTrue();
@@ -42,8 +42,8 @@ internal sealed class PbfInternalTests
         PreviousFieldStore store = new(4096);
         int fieldId = 3000;
 
-        store.CompareAndUpdate(fieldId, "hello", null, null);
-        uint flags = store.CompareAndUpdate(fieldId, "world", null, null);
+        store.CompareAndUpdate(fieldId, FieldValue.NewString("hello"), default, default);
+        uint flags = store.CompareAndUpdate(fieldId, FieldValue.NewString("world"), default, default);
 
         await Assert.That((flags & SameFlags.FieldSameValue) != 0).IsFalse();
     }
@@ -53,72 +53,14 @@ internal sealed class PbfInternalTests
     {
         PreviousFieldStore store = new(4096);
         int fieldId = 3000;
-        store.CompareAndUpdate(fieldId, "hello", null, null);
+        FieldValue hello = FieldValue.NewString("hello");
+        store.CompareAndUpdate(fieldId, hello, default, default);
 
         store.Reset();
 
         // After reset the value should appear new again
-        uint flags = store.CompareAndUpdate(fieldId, "hello", null, null);
+        uint flags = store.CompareAndUpdate(fieldId, hello, default, default);
         await Assert.That((flags & SameFlags.FieldSameValue) != 0).IsFalse();
-    }
-
-    // ========================================================================
-    // DictionaryEncoder overflow (insert 257 unique strings)
-    // ========================================================================
-
-    /// <summary>
-    /// After 256 unique strings the encoder must overflow and return -1
-    /// for any new entry.
-    /// </summary>
-    [Test]
-    public async Task DictionaryEncoder_Overflow_ReturnsMinusOne()
-    {
-        DictionaryEncoder encoder = new();
-
-        // Fill the dictionary to capacity (256 entries, indices 0..255)
-        for (int i = 0; i < 256; i++)
-        {
-            int idx = encoder.TryAdd($"value_{i}");
-            await Assert.That(idx).IsEqualTo(i);
-        }
-
-        // 257th unique entry must overflow
-        int overflowIdx = encoder.TryAdd("overflow_value");
-        await Assert.That(overflowIdx).IsEqualTo(-1);
-    }
-
-    [Test]
-    public async Task DictionaryEncoder_Overflow_AllSubsequentNewEntries_ReturnMinusOne()
-    {
-        DictionaryEncoder encoder = new();
-
-        for (int i = 0; i < 256; i++)
-        {
-            encoder.TryAdd($"v_{i}");
-        }
-
-        // Once overflowed, all new entries return -1
-        await Assert.That(encoder.TryAdd("a")).IsEqualTo(-1);
-        await Assert.That(encoder.TryAdd("b")).IsEqualTo(-1);
-    }
-
-    [Test]
-    public async Task DictionaryEncoder_ExistingEntry_AfterOverflow_ReturnsMinusOne()
-    {
-        // Once overflowed, TryAdd returns -1 for all calls — including entries that
-        // were already present. The encoder does not provide a separate lookup path;
-        // callers must fall back to direct encoding when -1 is returned.
-        DictionaryEncoder encoder = new();
-
-        encoder.TryAdd("existing");  // index 0
-        for (int i = 0; i < 256; i++)
-        {
-            encoder.TryAdd($"fill_{i}");
-        }
-
-        // After overflow, even a previously seen entry returns -1
-        int result = encoder.TryAdd("existing");
-        await Assert.That(result).IsEqualTo(-1);
     }
 
     // ========================================================================

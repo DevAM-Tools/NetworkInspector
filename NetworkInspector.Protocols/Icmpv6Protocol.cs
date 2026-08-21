@@ -200,7 +200,26 @@ public sealed partial class Icmpv6Protocol : IProtocol
     #endregion
 
     #region Cross-Protocol Field References
+    // Resolved during OnStart for checksum pseudo-header lookup via sibling walk
+    // (same path as UDP/TCP — first occurrence in the flat array would be the outermost
+    // tunneled IPv6 header, which is the wrong address pair).
+
+    /// <summary>FieldId of the IPv4 container field ("ip").</summary>
+    private FieldId _IpContainerFieldId;
+
+    /// <summary>FieldId of the IPv6 container field ("ipv6").</summary>
+    private FieldId _Ipv6ContainerFieldId;
+
+    /// <summary>FieldId of ip.src (resolved at startup).</summary>
+    private FieldId _IpSrcFieldId;
+
+    /// <summary>FieldId of ip.dst (resolved at startup).</summary>
+    private FieldId _IpDstFieldId;
+
+    /// <summary>FieldId of ipv6.src (resolved at startup).</summary>
     private FieldId _Ipv6SrcFieldId;
+
+    /// <summary>FieldId of ipv6.dst (resolved at startup).</summary>
     private FieldId _Ipv6DstFieldId;
 
     // Pre-allocated populator delegate
@@ -211,8 +230,12 @@ public sealed partial class Icmpv6Protocol : IProtocol
 
     partial void _OnStartCustom(Stack stack)
     {
-        _Ipv6SrcFieldId = stack.GetFieldId("ipv6.src") ?? default;
-        _Ipv6DstFieldId = stack.GetFieldId("ipv6.dst") ?? default;
+        _IpContainerFieldId = stack.GetFieldId("ip") ?? FieldId.Invalid;
+        _Ipv6ContainerFieldId = stack.GetFieldId("ipv6") ?? FieldId.Invalid;
+        _IpSrcFieldId = stack.GetFieldId("ip.src") ?? FieldId.Invalid;
+        _IpDstFieldId = stack.GetFieldId("ip.dst") ?? FieldId.Invalid;
+        _Ipv6SrcFieldId = stack.GetFieldId("ipv6.src") ?? FieldId.Invalid;
+        _Ipv6DstFieldId = stack.GetFieldId("ipv6.dst") ?? FieldId.Invalid;
         _Populator = _PopulateIcmpv6Fields;
 
         // Populate NDP field IDs struct
@@ -446,27 +469,28 @@ public sealed partial class Icmpv6Protocol : IProtocol
     }
 
     /// <summary>
-    /// Validates the ICMPv6 checksum using IPv6 pseudo-header.
-    /// ICMPv6 checksum is mandatory and uses the IPv6 pseudo-header (src, dst, length, next header).
+    /// Validates the ICMPv6 checksum using the IPv6 pseudo-header of the innermost enclosing
+    /// IPv6 layer (sibling walk, same contract as UDP/TCP). A flat <c>TryGetFieldValue</c>
+    /// scan would pick the first <c>ipv6.src</c>/<c>ipv6.dst</c> in storage order — the
+    /// outermost header in a tunnel — and compute the wrong checksum.
+    /// Returns <see langword="false"/> when no IPv6 layer is found or the checksum is bad.
     /// </summary>
     private bool _ValidateChecksum(in MutField container, ReadOnlySpan<byte> icmpSpan)
     {
-        Packet packet = container.Packet;
-
-        if (!_Ipv6SrcFieldId.IsValid
-            || !packet.TryGetFieldValue(_Ipv6SrcFieldId, out FieldValue ipv6Src)
-            || !packet.TryGetFieldValue(_Ipv6DstFieldId, out FieldValue ipv6Dst)
-            || ipv6Src.Type != FieldType.IPv6Address
-            || ipv6Dst.Type != FieldType.IPv6Address)
+        // Walk previous siblings to find typed IP addresses. ICMPv6 checksums are IPv6-only;
+        // an innermost IPv4 layer is treated as "no IPv6 layer".
+        if (!IpAddressExtractor.TryFindPreviousIpAddresses(in container,
+            _IpContainerFieldId, _Ipv6ContainerFieldId,
+            _IpSrcFieldId, _IpDstFieldId, _Ipv6SrcFieldId, _Ipv6DstFieldId,
+            out _,
+            out (IPv6Address Src, IPv6Address Dst)? ipv6)
+            || !ipv6.HasValue)
         {
-            return false; // No IPv6 layer found
+            return false;
         }
 
-        if (!ipv6Src.Data.TryGetAsIPv6(out IPv6Address srcAddr)
-            || !ipv6Dst.Data.TryGetAsIPv6(out IPv6Address dstAddr))
-        {
-            return false; // Type mismatch — cannot extract addresses
-        }
+        IPv6Address srcAddr = ipv6.Value.Src;
+        IPv6Address dstAddr = ipv6.Value.Dst;
 
         // Compute pseudo-header sum directly from ulong high/low halves (no stackalloc / byte conversion)
         ushort icmpLen = (ushort)icmpSpan.Length;

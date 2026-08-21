@@ -2,12 +2,6 @@
 	"folders": [
 		{
 			"path": "."
-		},
-		{
-			"path": "../NetworkInspectorDev"
-		},
-		{
-			"path": "../ZeroAlloc"
 		}
 	],
 	"settings": {}

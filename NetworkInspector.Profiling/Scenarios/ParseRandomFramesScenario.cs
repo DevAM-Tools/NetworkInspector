@@ -31,7 +31,7 @@ internal sealed class ParseRandomFramesScenario : IProfilingScenario
     private Frame[]? _Frames;
 
     /// <summary>Counter for unique <see cref="PacketId"/> values across all iterations.</summary>
-    private long _PacketCounter;
+    private int _PacketCounter;
 
     /// <summary>Creates a parse-random-frames profiling scenario.</summary>
     /// <param name="materialize">
@@ -83,13 +83,14 @@ internal sealed class ParseRandomFramesScenario : IProfilingScenario
     {
         Stack stack = _Stack!;
         Frame[] frames = _Frames!;
-        long counter = _PacketCounter;
+        int counter = _PacketCounter;
+        ArrayIndexIdRange.ThrowIfInvalidNextIndex(counter + _BatchSize - 1, "packet");
 
         if (_Materialize)
         {
             for (int i = 0; i < _BatchSize; i++)
             {
-                Packet packet = Packet.ParseFrame(checked((int)(counter + i)), stack, frames[i]);
+                Packet packet = Packet.ParseFrame(new PacketId(counter + i), stack, frames[i]);
                 packet.MaterializeAll();
             }
         }
@@ -98,7 +99,7 @@ internal sealed class ParseRandomFramesScenario : IProfilingScenario
             for (int i = 0; i < _BatchSize; i++)
             {
                 // Hot path: parse only — the field tree is built but not walked.
-                Packet.ParseFrame(checked((int)(counter + i)), stack, frames[i]);
+                Packet.ParseFrame(new PacketId(counter + i), stack, frames[i]);
             }
         }
 

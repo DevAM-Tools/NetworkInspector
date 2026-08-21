@@ -3,14 +3,16 @@
 namespace NetworkInspector.Core.Fields;
 
 /// <summary>
-/// Internal marker objects used by the 16-byte <see cref="FieldValueData"/> layout.
-/// Each sealed class acts as a type discriminant: the <see cref="FieldValueData._Ref"/> field
-/// points to one of these singletons for inline value types (Bool, I64, U64, F64, Mac, IPv4,
-/// Eui64, Timestamp). Reference-carrying types (String, Bytes, IPv6, Uuid) use their actual
-/// payload object directly, and None uses <c>null</c>.
+/// Internal marker singletons used by the 24-byte <see cref="FieldValueData"/> layout
+/// (<c>_Data</c> + <c>_Data1</c> + <c>_Ref</c> on x64).
+/// Each sealed class acts as a type discriminant: the reference field points to one of these
+/// singletons for inline scalar types (Bool, I64, U64, F64, Mac, IPv4, Eui64, Timestamp).
+/// IPv6 and Uuid use their marker plus inline payload in <c>_Data</c>/<c>_Data1</c>.
+/// String and Bytes use their actual payload object (<c>string</c>, <c>byte[]</c>, or boxed
+/// <see cref="LazyString"/>). <see cref="FieldType.None"/> uses <c>null</c>.
 /// <para>
-/// The marker approach eliminates the explicit <see cref="FieldType"/> byte field, saving 8 bytes
-/// of padding on x64 and reducing the struct from 24 to 16 bytes.
+/// The marker approach eliminates a separate stored <see cref="FieldType"/> field; type is
+/// inferred from reference identity at read time.
 /// </para>
 /// </summary>
 internal static class FieldTypeMarkers
@@ -59,17 +61,6 @@ internal static class FieldTypeMarkers
     internal sealed class UuidMarker
     {
         internal static readonly UuidMarker Instance = new();
-    }
-
-    /// <summary>
-    /// Sentinel for <see cref="FieldValueData.NewString(string)"/> when the underlying
-    /// <see cref="LazyString.RawValue"/> is <c>null</c> (default LazyString).
-    /// Without this, a default-constructed string value would be indistinguishable
-    /// from <see cref="FieldType.None"/> (both would have <c>_Ref == null</c>).
-    /// </summary>
-    internal sealed class EmptyStringMarker
-    {
-        internal static readonly EmptyStringMarker Instance = new();
     }
 
     #endregion

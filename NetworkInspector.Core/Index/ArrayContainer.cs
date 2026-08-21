@@ -27,27 +27,27 @@ internal sealed class ArrayContainer : IContainer
     private const int _SimdLinearScanThreshold = 32;
 
     private ushort[] _Values;
-    private int _Count;
+
+    public int Cardinality { get; private set; }
 
     /// <summary>Creates an empty array container with default capacity.</summary>
     internal ArrayContainer()
     {
         _Values = new ushort[4];
-        _Count = 0;
+        Cardinality = 0;
     }
 
     /// <summary>Creates an array container from existing sorted values.</summary>
     internal ArrayContainer(ushort[] values, int count)
     {
         _Values = values;
-        _Count = count;
+        Cardinality = count;
     }
 
-    public int Cardinality => _Count;
     /// <inheritdoc cref="IContainer.Min"/>
     public ushort Min => _Values[0]; // caller must ensure Cardinality > 0
     /// <inheritdoc cref="IContainer.Max"/>
-    public ushort Max => _Values[_Count - 1]; // caller must ensure Cardinality > 0
+    public ushort Max => _Values[Cardinality - 1]; // caller must ensure Cardinality > 0
 
     /// <summary>Returns the value at the given index (unchecked for speed).</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -61,27 +61,27 @@ internal sealed class ArrayContainer : IContainer
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool Contains(ushort value)
     {
-        if (_Count <= _SimdLinearScanThreshold)
+        if (Cardinality <= _SimdLinearScanThreshold)
         {
-            return _SimdLinearContains(_Values, _Count, value);
+            return _SimdLinearContains(_Values, Cardinality, value);
         }
 
-        return Array.BinarySearch(_Values, 0, _Count, value) >= 0;
+        return Array.BinarySearch(_Values, 0, Cardinality, value) >= 0;
     }
 
     public IContainer Add(ushort value)
     {
-        int idx = Array.BinarySearch(_Values, 0, _Count, value);
+        int idx = Array.BinarySearch(_Values, 0, Cardinality, value);
         if (idx >= 0)
         {
             return this;
         } // already present
 
         // Promote to bitmap at threshold
-        if (_Count >= MaxCapacity)
+        if (Cardinality >= MaxCapacity)
         {
             BitmapContainer bitmap = new();
-            for (int i = 0; i < _Count; i++)
+            for (int i = 0; i < Cardinality; i++)
             {
                 bitmap.Add(_Values[i]);
             }
@@ -92,43 +92,43 @@ internal sealed class ArrayContainer : IContainer
         int insertAt = ~idx;
 
         // Grow if needed
-        if (_Count == _Values.Length)
+        if (Cardinality == _Values.Length)
         {
             int newCap = Math.Min(_Values.Length * 2, MaxCapacity + 1);
             Array.Resize(ref _Values, newCap);
         }
 
         // Shift elements right
-        if (insertAt < _Count)
+        if (insertAt < Cardinality)
         {
-            Array.Copy(_Values, insertAt, _Values, insertAt + 1, _Count - insertAt);
+            Array.Copy(_Values, insertAt, _Values, insertAt + 1, Cardinality - insertAt);
         }
         _Values[insertAt] = value;
-        _Count++;
+        Cardinality++;
 
         return this;
     }
 
     public IContainer Clone()
     {
-        ushort[] valueCopy = new ushort[_Count];
-        Array.Copy(_Values, valueCopy, _Count);
-        return new ArrayContainer(valueCopy, _Count);
+        ushort[] valueCopy = new ushort[Cardinality];
+        Array.Copy(_Values, valueCopy, Cardinality);
+        return new ArrayContainer(valueCopy, Cardinality);
     }
 
     public IContainer And(IContainer other)
     {
         if (other is ArrayContainer arr)
         {
-            ushort[] result = new ushort[Math.Min(_Count, arr._Count)];
-            int k = _SimdIntersect(_Values, _Count, arr._Values, arr._Count, result);
+            ushort[] result = new ushort[Math.Min(Cardinality, arr.Cardinality)];
+            int k = _SimdIntersect(_Values, Cardinality, arr._Values, arr.Cardinality, result);
             return new ArrayContainer(result, k);
         }
 
         // Fallback: probe other container
-        ushort[] res = new ushort[_Count];
+        ushort[] res = new ushort[Cardinality];
         int cnt = 0;
-        for (int i = 0; i < _Count; i++)
+        for (int i = 0; i < Cardinality; i++)
         {
             if (other.Contains(_Values[i]))
             {
@@ -143,8 +143,8 @@ internal sealed class ArrayContainer : IContainer
     {
         if (other is ArrayContainer arr)
         {
-            ushort[] result = new ushort[_Count + arr._Count];
-            int k = _SimdMerge(_Values, _Count, arr._Values, arr._Count, result);
+            ushort[] result = new ushort[Cardinality + arr.Cardinality];
+            int k = _SimdMerge(_Values, Cardinality, arr._Values, arr.Cardinality, result);
 
             if (k > MaxCapacity)
             {
@@ -160,9 +160,9 @@ internal sealed class ArrayContainer : IContainer
             return new ArrayContainer(result, k);
         }
 
-        // Fallback
-        IContainer merged = other;
-        for (int i = 0; i < _Count; i++)
+        // Fallback: clone first — BitmapContainer.Add and RunContainer.Add mutate in place.
+        IContainer merged = other.Clone();
+        for (int i = 0; i < Cardinality; i++)
         {
             merged = merged.Add(_Values[i]);
         }
@@ -174,15 +174,15 @@ internal sealed class ArrayContainer : IContainer
     {
         if (other is ArrayContainer arr)
         {
-            ushort[] result = new ushort[_Count];
-            int k = _SimdDifference(_Values, _Count, arr._Values, arr._Count, result);
+            ushort[] result = new ushort[Cardinality];
+            int k = _SimdDifference(_Values, Cardinality, arr._Values, arr.Cardinality, result);
             return new ArrayContainer(result, k);
         }
 
         // Fallback: probe other container
-        ushort[] res = new ushort[_Count];
+        ushort[] res = new ushort[Cardinality];
         int cnt = 0;
-        for (int i = 0; i < _Count; i++)
+        for (int i = 0; i < Cardinality; i++)
         {
             if (!other.Contains(_Values[i]))
             {
@@ -197,8 +197,8 @@ internal sealed class ArrayContainer : IContainer
     {
         if (other is ArrayContainer arr)
         {
-            ushort[] result = new ushort[_Count + arr._Count];
-            int k = _SimdSymmetricDifference(_Values, _Count, arr._Values, arr._Count, result);
+            ushort[] result = new ushort[Cardinality + arr.Cardinality];
+            int k = _SimdSymmetricDifference(_Values, Cardinality, arr._Values, arr.Cardinality, result);
 
             if (k > MaxCapacity)
             {
@@ -216,7 +216,7 @@ internal sealed class ArrayContainer : IContainer
 
         // Fallback: use bitmap for complex XOR
         BitmapContainer bmp = new();
-        for (int i = 0; i < _Count; i++)
+        for (int i = 0; i < Cardinality; i++)
         {
             bmp.Add(_Values[i]);
         }

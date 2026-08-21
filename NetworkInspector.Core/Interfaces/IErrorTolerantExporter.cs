@@ -15,7 +15,7 @@ namespace NetworkInspector.Core.Interfaces;
 /// <c>OnFrame</c>/<c>OnPacket</c> returns <c>false</c> (unsubscribes).
 /// </para>
 /// </summary>
-public interface IErrorTolerantExporter : IExporterStatistics
+public interface IErrorTolerantExporter : IExporterStatistics, IExportByteProgress
 {
     #region Properties
 

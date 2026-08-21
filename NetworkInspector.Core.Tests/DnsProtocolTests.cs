@@ -50,21 +50,21 @@ internal sealed class DnsProtocolTests
             // Transaction ID
             FieldId? idField = stack.GetFieldId("dns.id");
             await Assert.That(idField).IsNotNull();
-            bool hasId = packet.TryGetFieldValue(idField!.Value, out FieldValue idValue);
+            bool hasId = packet.TryGetFieldValue(idField!.Value, out FieldValue idValue, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasId).IsTrue();
             idValue.Data.TryGetAsU64(out ulong u64Val);
             await Assert.That(u64Val).IsEqualTo(0xABCDUL);
 
             // Question count
             FieldId? qdCount = stack.GetFieldId("dns.count.queries");
-            bool hasQd = packet.TryGetFieldValue(qdCount!.Value, out FieldValue qdValue);
+            bool hasQd = packet.TryGetFieldValue(qdCount!.Value, out FieldValue qdValue, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasQd).IsTrue();
             qdValue.Data.TryGetAsU64(out ulong u64Val2);
             await Assert.That(u64Val2).IsEqualTo(1UL);
 
             // Answer count = 0
             FieldId? anCount = stack.GetFieldId("dns.count.answers");
-            bool hasAn = packet.TryGetFieldValue(anCount!.Value, out FieldValue anValue);
+            bool hasAn = packet.TryGetFieldValue(anCount!.Value, out FieldValue anValue, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasAn).IsTrue();
             anValue.Data.TryGetAsU64(out ulong u64Val3);
             await Assert.That(u64Val3).IsEqualTo(0UL);
@@ -82,35 +82,35 @@ internal sealed class DnsProtocolTests
         {
             // QR flag = false (query)
             FieldId? responseFlag = stack.GetFieldId("dns.flags.response");
-            bool hasResponse = packet.TryGetFieldValue(responseFlag!.Value, out FieldValue responseValue);
+            bool hasResponse = packet.TryGetFieldValue(responseFlag!.Value, out FieldValue responseValue, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasResponse).IsTrue();
             responseValue.Data.TryGetAsBool(out bool boolVal);
             await Assert.That(boolVal).IsFalse();
 
             // Opcode = 0 (standard query)
             FieldId? opcodeFlag = stack.GetFieldId("dns.flags.opcode");
-            bool hasOpcode = packet.TryGetFieldValue(opcodeFlag!.Value, out FieldValue opcodeValue);
+            bool hasOpcode = packet.TryGetFieldValue(opcodeFlag!.Value, out FieldValue opcodeValue, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasOpcode).IsTrue();
             opcodeValue.Data.TryGetAsU64(out ulong u64Val);
             await Assert.That(u64Val).IsEqualTo(0UL);
 
             // Recursion desired = true
             FieldId? rdFlag = stack.GetFieldId("dns.flags.recdesired");
-            bool hasRd = packet.TryGetFieldValue(rdFlag!.Value, out FieldValue rdValue);
+            bool hasRd = packet.TryGetFieldValue(rdFlag!.Value, out FieldValue rdValue, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasRd).IsTrue();
             rdValue.Data.TryGetAsBool(out bool boolVal2);
             await Assert.That(boolVal2).IsTrue();
 
             // Recursion available = false (query)
             FieldId? raFlag = stack.GetFieldId("dns.flags.recavail");
-            bool hasRa = packet.TryGetFieldValue(raFlag!.Value, out FieldValue raValue);
+            bool hasRa = packet.TryGetFieldValue(raFlag!.Value, out FieldValue raValue, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasRa).IsTrue();
             raValue.Data.TryGetAsBool(out bool boolVal3);
             await Assert.That(boolVal3).IsFalse();
 
             // Truncated = false
             FieldId? tcFlag = stack.GetFieldId("dns.flags.truncated");
-            bool hasTc = packet.TryGetFieldValue(tcFlag!.Value, out FieldValue tcValue);
+            bool hasTc = packet.TryGetFieldValue(tcFlag!.Value, out FieldValue tcValue, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasTc).IsTrue();
             tcValue.Data.TryGetAsBool(out bool boolVal4);
             await Assert.That(boolVal4).IsFalse();
@@ -131,28 +131,28 @@ internal sealed class DnsProtocolTests
             // Query name
             FieldId? qryName = stack.GetFieldId("dns.qry.name");
             await Assert.That(qryName).IsNotNull();
-            bool hasName = packet.TryGetFieldValue(qryName!.Value, out FieldValue nameValue);
+            bool hasName = packet.TryGetFieldValue(qryName!.Value, out FieldValue nameValue, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasName).IsTrue();
             nameValue.Data.TryGetAsString(out string strVal);
             await Assert.That(strVal).IsEqualTo("www.example.com");
 
             // Query type = A (1)
             FieldId? qryType = stack.GetFieldId("dns.qry.type");
-            bool hasType = packet.TryGetFieldValue(qryType!.Value, out FieldValue typeValue);
+            bool hasType = packet.TryGetFieldValue(qryType!.Value, out FieldValue typeValue, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasType).IsTrue();
             typeValue.Data.TryGetAsU64(out ulong u64Val);
             await Assert.That(u64Val).IsEqualTo(1UL);
 
             // Query class = IN (1)
             FieldId? qryClass = stack.GetFieldId("dns.qry.class");
-            bool hasClass = packet.TryGetFieldValue(qryClass!.Value, out FieldValue classValue);
+            bool hasClass = packet.TryGetFieldValue(qryClass!.Value, out FieldValue classValue, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasClass).IsTrue();
             classValue.Data.TryGetAsU64(out ulong u64Val2);
             await Assert.That(u64Val2).IsEqualTo(1UL);
 
             // Query name length
             FieldId? qryNameLen = stack.GetFieldId("dns.qry.name.len");
-            bool hasLen = packet.TryGetFieldValue(qryNameLen!.Value, out FieldValue lenValue);
+            bool hasLen = packet.TryGetFieldValue(qryNameLen!.Value, out FieldValue lenValue, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasLen).IsTrue();
             lenValue.Data.TryGetAsU64(out ulong u64Val3);
             await Assert.That(u64Val3).IsEqualTo(15UL); // "www.example.com".Length
@@ -173,48 +173,48 @@ internal sealed class DnsProtocolTests
         {
             // Transaction ID
             FieldId? idField = stack.GetFieldId("dns.id");
-            bool hasId = packet.TryGetFieldValue(idField!.Value, out FieldValue idValue);
+            bool hasId = packet.TryGetFieldValue(idField!.Value, out FieldValue idValue, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasId).IsTrue();
             idValue.Data.TryGetAsU64(out ulong u64Val);
             await Assert.That(u64Val).IsEqualTo(0x5678UL);
 
             // QR flag = true (response)
             FieldId? responseFlag = stack.GetFieldId("dns.flags.response");
-            bool hasResponse = packet.TryGetFieldValue(responseFlag!.Value, out FieldValue responseValue);
+            bool hasResponse = packet.TryGetFieldValue(responseFlag!.Value, out FieldValue responseValue, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasResponse).IsTrue();
             responseValue.Data.TryGetAsBool(out bool boolVal);
             await Assert.That(boolVal).IsTrue();
 
             // Recursion desired = true
             FieldId? rdFlag = stack.GetFieldId("dns.flags.recdesired");
-            bool hasRd = packet.TryGetFieldValue(rdFlag!.Value, out FieldValue rdValue);
+            bool hasRd = packet.TryGetFieldValue(rdFlag!.Value, out FieldValue rdValue, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasRd).IsTrue();
             rdValue.Data.TryGetAsBool(out bool boolVal2);
             await Assert.That(boolVal2).IsTrue();
 
             // Recursion available = true (in response)
             FieldId? raFlag = stack.GetFieldId("dns.flags.recavail");
-            bool hasRa = packet.TryGetFieldValue(raFlag!.Value, out FieldValue raValue);
+            bool hasRa = packet.TryGetFieldValue(raFlag!.Value, out FieldValue raValue, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasRa).IsTrue();
             raValue.Data.TryGetAsBool(out bool boolVal3);
             await Assert.That(boolVal3).IsTrue();
 
             // RCODE = 0 (no error)
             FieldId? rcodeFlag = stack.GetFieldId("dns.flags.rcode");
-            bool hasRcode = packet.TryGetFieldValue(rcodeFlag!.Value, out FieldValue rcodeValue);
+            bool hasRcode = packet.TryGetFieldValue(rcodeFlag!.Value, out FieldValue rcodeValue, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasRcode).IsTrue();
             rcodeValue.Data.TryGetAsU64(out ulong u64Val2);
             await Assert.That(u64Val2).IsEqualTo(0UL);
 
             // Section counts
             FieldId? qdCount = stack.GetFieldId("dns.count.queries");
-            bool hasQd = packet.TryGetFieldValue(qdCount!.Value, out FieldValue qdValue);
+            bool hasQd = packet.TryGetFieldValue(qdCount!.Value, out FieldValue qdValue, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasQd).IsTrue();
             qdValue.Data.TryGetAsU64(out ulong u64Val3);
             await Assert.That(u64Val3).IsEqualTo(1UL);
 
             FieldId? anCount = stack.GetFieldId("dns.count.answers");
-            bool hasAn = packet.TryGetFieldValue(anCount!.Value, out FieldValue anValue);
+            bool hasAn = packet.TryGetFieldValue(anCount!.Value, out FieldValue anValue, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasAn).IsTrue();
             anValue.Data.TryGetAsU64(out ulong u64Val4);
             await Assert.That(u64Val4).IsEqualTo(1UL);
@@ -235,7 +235,7 @@ internal sealed class DnsProtocolTests
             // Answer name
             FieldId? respName = stack.GetFieldId("dns.resp.name");
             await Assert.That(respName).IsNotNull();
-            bool hasName = packet.TryGetFieldValue(respName!.Value, out FieldValue nameValue);
+            bool hasName = packet.TryGetFieldValue(respName!.Value, out FieldValue nameValue, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasName).IsTrue();
             // Name comes via compression pointer — should resolve to same query name
             nameValue.Data.TryGetAsString(out string strVal);
@@ -243,28 +243,28 @@ internal sealed class DnsProtocolTests
 
             // Answer type = A (1)
             FieldId? respType = stack.GetFieldId("dns.resp.type");
-            bool hasType = packet.TryGetFieldValue(respType!.Value, out FieldValue typeValue);
+            bool hasType = packet.TryGetFieldValue(respType!.Value, out FieldValue typeValue, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasType).IsTrue();
             typeValue.Data.TryGetAsU64(out ulong u64Val);
             await Assert.That(u64Val).IsEqualTo(1UL);
 
             // Answer class = IN (1)
             FieldId? respClass = stack.GetFieldId("dns.resp.class");
-            bool hasClass = packet.TryGetFieldValue(respClass!.Value, out FieldValue classValue);
+            bool hasClass = packet.TryGetFieldValue(respClass!.Value, out FieldValue classValue, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasClass).IsTrue();
             classValue.Data.TryGetAsU64(out ulong u64Val2);
             await Assert.That(u64Val2).IsEqualTo(1UL);
 
             // TTL
             FieldId? respTtl = stack.GetFieldId("dns.resp.ttl");
-            bool hasTtl = packet.TryGetFieldValue(respTtl!.Value, out FieldValue ttlValue);
+            bool hasTtl = packet.TryGetFieldValue(respTtl!.Value, out FieldValue ttlValue, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasTtl).IsTrue();
             ttlValue.Data.TryGetAsU64(out ulong u64Val3);
             await Assert.That(u64Val3).IsEqualTo(300UL);
 
             // RDLENGTH = 4
             FieldId? respLen = stack.GetFieldId("dns.resp.len");
-            bool hasLen = packet.TryGetFieldValue(respLen!.Value, out FieldValue lenValue);
+            bool hasLen = packet.TryGetFieldValue(respLen!.Value, out FieldValue lenValue, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasLen).IsTrue();
             lenValue.Data.TryGetAsU64(out ulong u64Val4);
             await Assert.That(u64Val4).IsEqualTo(4UL);
@@ -272,7 +272,7 @@ internal sealed class DnsProtocolTests
             // A record address
             FieldId? aField = stack.GetFieldId("dns.a");
             await Assert.That(aField).IsNotNull();
-            bool hasA = packet.TryGetFieldValue(aField!.Value, out FieldValue aValue);
+            bool hasA = packet.TryGetFieldValue(aField!.Value, out FieldValue aValue, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasA).IsTrue();
             aValue.Data.TryGetAsIPv4(out IPv4Address ipv4Val);
             await Assert.That(ipv4Val.Format()).IsEqualTo("93.184.216.34");
@@ -387,7 +387,7 @@ internal sealed class DnsProtocolTests
         using (stack)
         {
             FieldId? qryType = stack.GetFieldId("dns.qry.type");
-            bool hasType = packet.TryGetFieldValue(qryType!.Value, out FieldValue typeValue);
+            bool hasType = packet.TryGetFieldValue(qryType!.Value, out FieldValue typeValue, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasType).IsTrue();
             typeValue.Data.TryGetAsU64(out ulong u64Val);
             await Assert.That(u64Val).IsEqualTo(28UL);
@@ -407,7 +407,7 @@ internal sealed class DnsProtocolTests
             using (stack)
             {
                 FieldId? qryName = stack.GetFieldId("dns.qry.name");
-                bool hasName = packet.TryGetFieldValue(qryName!.Value, out FieldValue nameValue);
+                bool hasName = packet.TryGetFieldValue(qryName!.Value, out FieldValue nameValue, materialize: true); // materialize: true — need complete field tree for assertion
                 await Assert.That(hasName).IsTrue();
                 nameValue.Data.TryGetAsString(out string strVal);
                 await Assert.That(strVal).IsEqualTo(domain);

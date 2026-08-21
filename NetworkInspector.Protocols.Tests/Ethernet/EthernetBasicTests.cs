@@ -31,7 +31,7 @@ internal sealed class EthernetBasicTests
             FieldId? id = stack.GetFieldId("eth.dst");
             await Assert.That(id).IsNotNull();
 
-            bool found = packet.TryGetFieldValue(id!.Value, out FieldValue value);
+            bool found = packet.TryGetFieldValue(id!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(found).IsTrue();
 
             bool ok = value.Data.TryGetAsMacAddress(out MacAddress mac);
@@ -50,7 +50,7 @@ internal sealed class EthernetBasicTests
             FieldId? id = stack.GetFieldId("eth.src");
             await Assert.That(id).IsNotNull();
 
-            bool found = packet.TryGetFieldValue(id!.Value, out FieldValue value);
+            bool found = packet.TryGetFieldValue(id!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(found).IsTrue();
 
             bool ok = value.Data.TryGetAsMacAddress(out MacAddress mac);
@@ -80,7 +80,7 @@ internal sealed class EthernetBasicTests
         using (stack)
         {
             // Packet should exist (frame protocol always runs), but Ethernet fields may not
-            await Assert.That(packet.FieldCount()).IsGreaterThanOrEqualTo(1);
+            await Assert.That(packet.FieldCount(materialize: false)).IsGreaterThanOrEqualTo(1); // materialize: false — current materialized count only
         }
     }
 

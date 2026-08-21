@@ -23,9 +23,6 @@ namespace NetworkInspector.Core;
 /// invoked concurrently from any number of threads.
 /// </para>
 /// </remarks>
-/// <remarks>
-/// Creates an <see cref="EndianReader"/> from a byte-swap detection flag.
-/// </remarks>
 /// <param name="byteSwapped">
 /// True when the source byte order differs from the machine byte order.
 /// For PCAP/PCAPNG this is determined from the magic number during format detection.

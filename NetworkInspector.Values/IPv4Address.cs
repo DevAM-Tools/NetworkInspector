@@ -20,27 +20,14 @@ public readonly record struct IPv4Address
 
     /// <summary>Creates an <see cref="IPv4Address"/> from a raw 32-bit value in network byte order.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public IPv4Address(uint value)
-    {
-        _Value = value;
-    }
-
-    #endregion
-
-    #region Fields
-
-    private readonly uint _Value;
+    public IPv4Address(uint value) => RawValue = value;
 
     #endregion
 
     #region Properties
 
     /// <summary>The raw 32-bit value in network byte order.</summary>
-    public uint RawValue
-    {
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _Value;
-    }
+    public uint RawValue { get; }
 
     #endregion
 
@@ -52,43 +39,43 @@ public readonly record struct IPv4Address
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         get =>
-        ((_Value & 0xFF000000) == 0x0A000000) || // 10.0.0.0/8
-        ((_Value & 0xFFF00000) == 0xAC100000) || // 172.16.0.0/12
-        ((_Value & 0xFFFF0000) == 0xC0A80000);   // 192.168.0.0/16
+        ((RawValue & 0xFF000000) == 0x0A000000) || // 10.0.0.0/8
+        ((RawValue & 0xFFF00000) == 0xAC100000) || // 172.16.0.0/12
+        ((RawValue & 0xFFFF0000) == 0xC0A80000);   // 192.168.0.0/16
     }
     /// <summary>True if the address is in the loopback range (127.0.0.0/8).</summary>
     /// <remarks>Result is bit-pattern based; assumes a validly constructed IPv4 address.</remarks>
     public bool IsLoopback
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => (_Value & 0xFF000000) == 0x7F000000;
+        get => (RawValue & 0xFF000000) == 0x7F000000;
     }
     /// <summary>True if the address is in the multicast range (224.0.0.0/4).</summary>
     /// <remarks>Result is bit-pattern based; assumes a validly constructed IPv4 address.</remarks>
     public bool IsMulticast
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => (_Value & 0xF0000000) == 0xE0000000;
+        get => (RawValue & 0xF0000000) == 0xE0000000;
     }
     /// <summary>True if the address is in the link-local range (169.254.0.0/16).</summary>
     /// <remarks>Result is bit-pattern based; assumes a validly constructed IPv4 address.</remarks>
     public bool IsLinkLocal
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => (_Value & 0xFFFF0000) == 0xA9FE0000;
+        get => (RawValue & 0xFFFF0000) == 0xA9FE0000;
     }
     /// <summary>True if the address is the broadcast address (255.255.255.255).</summary>
     /// <remarks>Result is bit-pattern based; assumes a validly constructed IPv4 address.</remarks>
     public bool IsBroadcast
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _Value == 0xFFFFFFFF;
+        get => RawValue == 0xFFFFFFFF;
     }
     /// <summary>True if the address is all zeros.</summary>
     public bool IsZero
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _Value == 0;
+        get => RawValue == 0;
     }
 
     #endregion
@@ -96,14 +83,31 @@ public readonly record struct IPv4Address
     #region Factory Methods
 
     /// <summary>Creates an IPv4 address from a 4-byte big-endian span.</summary>
+    /// <returns><see langword="false"/> when fewer than 4 bytes are available.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static IPv4Address FromBytes(ReadOnlySpan<byte> bytes)
+    public static bool TryFromBytes(ReadOnlySpan<byte> bytes, out IPv4Address address)
     {
         if (bytes.Length < 4)
         {
-            return default;
+            address = default;
+            return false;
         }
-        return new IPv4Address(BinaryPrimitives.ReadUInt32BigEndian(bytes));
+
+        address = new IPv4Address(BinaryPrimitives.ReadUInt32BigEndian(bytes));
+        return true;
+    }
+
+    /// <summary>Creates an IPv4 address from a 4-byte big-endian span.</summary>
+    /// <exception cref="ArgumentException">Fewer than 4 bytes are available.</exception>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static IPv4Address FromBytes(ReadOnlySpan<byte> bytes)
+    {
+        if (!TryFromBytes(bytes, out IPv4Address address))
+        {
+            throw new ArgumentException("IPv4 address requires at least 4 bytes.", nameof(bytes));
+        }
+
+        return address;
     }
 
     /// <summary>Parses an IPv4 address from dotted-decimal notation.</summary>
@@ -205,10 +209,10 @@ public readonly record struct IPv4Address
         {
             return 0;
         }
-        destination[0] = (byte)(_Value >> 24);
-        destination[1] = (byte)(_Value >> 16);
-        destination[2] = (byte)(_Value >> 8);
-        destination[3] = (byte)_Value;
+        destination[0] = (byte)(RawValue >> 24);
+        destination[1] = (byte)(RawValue >> 16);
+        destination[2] = (byte)(RawValue >> 8);
+        destination[3] = (byte)RawValue;
         return 4;
     }
 
@@ -254,19 +258,19 @@ public readonly record struct IPv4Address
         Span<char> destination, out int charsWritten,
         ReadOnlySpan<char> format, IFormatProvider? provider)
     {
-        if (destination.Length < MaxFormattedLength)
+        if (!TryGetStringSize(format, provider, out int needed) || destination.Length < needed)
         {
             charsWritten = 0;
             return false;
         }
         int pos = 0;
-        pos += _WriteOctet((byte)(_Value >> 24), destination[pos..]);
+        pos += _WriteOctet((byte)(RawValue >> 24), destination[pos..]);
         destination[pos++] = '.';
-        pos += _WriteOctet((byte)(_Value >> 16), destination[pos..]);
+        pos += _WriteOctet((byte)(RawValue >> 16), destination[pos..]);
         destination[pos++] = '.';
-        pos += _WriteOctet((byte)(_Value >> 8), destination[pos..]);
+        pos += _WriteOctet((byte)(RawValue >> 8), destination[pos..]);
         destination[pos++] = '.';
-        pos += _WriteOctet((byte)_Value, destination[pos..]);
+        pos += _WriteOctet((byte)RawValue, destination[pos..]);
         charsWritten = pos;
         return true;
     }
@@ -309,10 +313,10 @@ public readonly record struct IPv4Address
         ReadOnlySpan<char> format, IFormatProvider? provider, out int size)
     {
         // Exact calculation: digit count of each octet + 3 dots
-        size = _OctetLength((byte)(_Value >> 24)) + 1 +
-               _OctetLength((byte)(_Value >> 16)) + 1 +
-               _OctetLength((byte)(_Value >> 8)) + 1 +
-               _OctetLength((byte)_Value);
+        size = _OctetLength((byte)(RawValue >> 24)) + 1 +
+               _OctetLength((byte)(RawValue >> 16)) + 1 +
+               _OctetLength((byte)(RawValue >> 8)) + 1 +
+               _OctetLength((byte)RawValue);
         return true;
     }
 
@@ -361,7 +365,7 @@ public readonly record struct IPv4Address
 
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public int CompareTo(IPv4Address other) => _Value.CompareTo(other._Value);
+    public int CompareTo(IPv4Address other) => RawValue.CompareTo(other.RawValue);
 
     /// <inheritdoc/>
     int IComparable.CompareTo(object? obj)
@@ -379,22 +383,22 @@ public readonly record struct IPv4Address
     /// <param name="left">The left operand.</param>
     /// <param name="right">The right operand.</param>
     /// <returns><see langword="true"/> if the condition holds; otherwise <see langword="false"/>.</returns>
-    public static bool operator <(IPv4Address left, IPv4Address right) => left._Value < right._Value;
+    public static bool operator <(IPv4Address left, IPv4Address right) => left.RawValue < right.RawValue;
     /// <summary>Returns <see langword="true"/> if <paramref name="left"/> is greater than <paramref name="right"/>.</summary>
     /// <param name="left">The left operand.</param>
     /// <param name="right">The right operand.</param>
     /// <returns><see langword="true"/> if the condition holds; otherwise <see langword="false"/>.</returns>
-    public static bool operator >(IPv4Address left, IPv4Address right) => left._Value > right._Value;
+    public static bool operator >(IPv4Address left, IPv4Address right) => left.RawValue > right.RawValue;
     /// <summary>Returns <see langword="true"/> if <paramref name="left"/> is less than or equal to <paramref name="right"/>.</summary>
     /// <param name="left">The left operand.</param>
     /// <param name="right">The right operand.</param>
     /// <returns><see langword="true"/> if the condition holds; otherwise <see langword="false"/>.</returns>
-    public static bool operator <=(IPv4Address left, IPv4Address right) => left._Value <= right._Value;
+    public static bool operator <=(IPv4Address left, IPv4Address right) => left.RawValue <= right.RawValue;
     /// <summary>Returns <see langword="true"/> if <paramref name="left"/> is greater than or equal to <paramref name="right"/>.</summary>
     /// <param name="left">The left operand.</param>
     /// <param name="right">The right operand.</param>
     /// <returns><see langword="true"/> if the condition holds; otherwise <see langword="false"/>.</returns>
-    public static bool operator >=(IPv4Address left, IPv4Address right) => left._Value >= right._Value;
+    public static bool operator >=(IPv4Address left, IPv4Address right) => left.RawValue >= right.RawValue;
 
     #endregion
 

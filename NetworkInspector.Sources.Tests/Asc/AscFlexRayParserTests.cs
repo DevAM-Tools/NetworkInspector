@@ -135,7 +135,7 @@ internal sealed class AscFlexRayParserTests
     /// the guard <c>dataLen &gt; payloadLenWords * 2</c> is always false and does not
     /// constrain <c>dataLen</c>. Without the clamp a malicious ASC line could declare an
     /// arbitrarily large data length, causing an unbounded heap allocation.
-    /// The clamp must cap the resulting frame data to at most MaxFlexRayDataBytes = 254.
+    /// The clamp must cap the resulting frame data to at most MaxPayloadBytes = 254.
     /// </summary>
     [Test]
     public async Task PayloadLenWordsZero_DataLen255_ByteVariant_ClampedTo254()
@@ -150,7 +150,7 @@ internal sealed class AscFlexRayParserTests
         bool ok = AscFlexRayParser.TryParse(lineBytes, 16, out _, out _, out byte[] frame);
 
         await Assert.That(ok).IsTrue();
-        await Assert.That(frame.Length).IsEqualTo(FlexRayLinkTypeFrame.MinHeaderSize + 254);
+        await Assert.That(frame.Length).IsEqualTo(FlexRayLinkTypeFrame.MinHeaderSize + FlexRayLinkTypeFrame.MaxPayloadBytes);
     }
 
     /// <summary>
@@ -172,6 +172,32 @@ internal sealed class AscFlexRayParserTests
         bool ok = AscFlexRayParser.TryParse(line.AsSpan(), 16, out _, out _, out byte[] frame);
 
         await Assert.That(ok).IsTrue();
-        await Assert.That(frame.Length).IsEqualTo(FlexRayLinkTypeFrame.MinHeaderSize + 254);
+        await Assert.That(frame.Length).IsEqualTo(FlexRayLinkTypeFrame.MinHeaderSize + FlexRayLinkTypeFrame.MaxPayloadBytes);
+    }
+
+    /// <summary>
+    /// Negative <c>dataLen</c> must return <c>false</c> without throwing.
+    /// </summary>
+    [Test]
+    public async Task NegativeDataLen_ReturnsFalse()
+    {
+        bool ok = AscFlexRayParser.TryParse(
+            "1.000000 Fr 1 V9 01 0 0 0 0000 x -1"u8,
+            16, out _, out _, out _);
+
+        await Assert.That(ok).IsFalse();
+    }
+
+    /// <summary>
+    /// Negative <c>dataLen</c> on the char overload must return <c>false</c> without throwing.
+    /// </summary>
+    [Test]
+    public async Task NegativeDataLen_CharVariant_ReturnsFalse()
+    {
+        bool ok = AscFlexRayParser.TryParse(
+            "1.000000 Fr 1 V9 01 0 0 0 0000 x -1".AsSpan(),
+            16, out _, out _, out _);
+
+        await Assert.That(ok).IsFalse();
     }
 }

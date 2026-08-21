@@ -9,8 +9,19 @@
     <NoWarn>$(NoWarn);1570;1584;1658</NoWarn>
   </PropertyGroup>
 
+  <!--
+    FlexRayLinkTypeFrame is internal. Consumers that reference this assembly (not the
+    link-compiled copy) need InternalsVisibleTo to use it from tests:
+      - Protocols.Tests — protocol-layer tests (FlexRayProtocol, Signal Message, …)
+      - Core.Tests — FlexRayLinkTypeFrameTests (references Protocols for this type only)
+    Sources and Exporters do NOT belong here: they link-compile the same .cs file into
+    their own assembly and expose it to their test projects via their own InternalsVisibleTo.
+    Granting IVT to Sources/Exporters would only matter if they referenced Protocols.dll,
+    which they intentionally do not (Core-only dependency; see link-compile comments there).
+  -->
   <ItemGroup>
     <InternalsVisibleTo Include="NetworkInspector.Protocols.Tests" />
+    <InternalsVisibleTo Include="NetworkInspector.Core.Tests" />
   </ItemGroup>
 
   <ItemGroup>

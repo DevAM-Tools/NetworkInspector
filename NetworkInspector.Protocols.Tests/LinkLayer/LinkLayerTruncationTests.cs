@@ -24,7 +24,7 @@ internal sealed class LinkLayerTruncationTests
         FieldId? id = stack.GetFieldId("sll.pkttype");
         if (id.HasValue)
         {
-            bool found = packet.TryGetFieldValue(id.Value, out _);
+            bool found = packet.TryGetFieldValue(id.Value, out _, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(found).IsFalse()
                 .Because("SLL: truncated frame (1 byte) must not produce sll.pkttype");
         }
@@ -46,7 +46,7 @@ internal sealed class LinkLayerTruncationTests
         FieldId? id = stack.GetFieldId("sll.pkttype");
         if (id.HasValue)
         {
-            bool found = packet.TryGetFieldValue(id.Value, out _);
+            bool found = packet.TryGetFieldValue(id.Value, out _, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(found).IsFalse()
                 .Because("SLL: 15-byte frame (one short of header) must not produce sll.pkttype");
         }
@@ -87,7 +87,7 @@ internal sealed class LinkLayerTruncationTests
         FieldId? id = stack.GetFieldId("sll2.pkttype");
         if (id.HasValue)
         {
-            bool found = packet.TryGetFieldValue(id.Value, out _);
+            bool found = packet.TryGetFieldValue(id.Value, out _, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(found).IsFalse()
                 .Because("SLL2: truncated frame (1 byte) must not produce sll2.pkttype");
         }
@@ -105,7 +105,7 @@ internal sealed class LinkLayerTruncationTests
         FieldId? id = stack.GetFieldId("sll2.pkttype");
         if (id.HasValue)
         {
-            bool found = packet.TryGetFieldValue(id.Value, out _);
+            bool found = packet.TryGetFieldValue(id.Value, out _, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(found).IsFalse()
                 .Because("SLL2: 19-byte frame (one short of header) must not produce sll2.pkttype");
         }
@@ -150,7 +150,7 @@ internal sealed class LinkLayerTruncationTests
         FieldId? id = stack.GetFieldId("llc.dsap");
         if (id.HasValue)
         {
-            bool found = packet.TryGetFieldValue(id.Value, out _);
+            bool found = packet.TryGetFieldValue(id.Value, out _, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(found).IsFalse()
                 .Because("LLC: empty payload must not produce llc.dsap");
         }
@@ -169,7 +169,7 @@ internal sealed class LinkLayerTruncationTests
         FieldId? id = stack.GetFieldId("llc.dsap");
         if (id.HasValue)
         {
-            bool found = packet.TryGetFieldValue(id.Value, out _);
+            bool found = packet.TryGetFieldValue(id.Value, out _, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(found).IsFalse()
                 .Because("LLC: 2-byte payload (missing Control) must not produce llc.dsap");
         }

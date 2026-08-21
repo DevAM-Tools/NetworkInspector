@@ -6,16 +6,11 @@ namespace NetworkInspector.Protocols.SomeIp;
 /// SOME/IP Transport Protocol (TP) header (4 bytes).
 /// When the TP flag (bit 5) is set in the SOME/IP message type, the first
 /// 4 bytes of the payload contain the TP header.
-/// <code>
-/// | Bits 31-4   | Bits 3-1  | Bit 0         |
-/// | Offset (28) | Reserved  | More Segments |
-/// </code>
-/// The offset value represents the byte position in the reassembled message
-/// (the upper 28 bits of the raw 32-bit value, i.e., the raw value with
-/// lower 4 bits masked off, giving 16-byte granularity).
 /// </summary>
-internal readonly struct SomeIpTpHeader
+internal readonly record struct SomeIpTpHeader(uint ByteOffset, bool MoreSegments, byte Reserved)
 {
+    #region Constants
+
     /// <summary>Size of the SOME/IP-TP header in bytes.</summary>
     internal const int Size = 4;
 
@@ -28,34 +23,9 @@ internal readonly struct SomeIpTpHeader
     /// <summary>Mask for the reserved bits (bits 1-3).</summary>
     private const uint _ReservedMask = 0x0000_000E;
 
-    /// <summary>
-    /// Byte offset in the reassembled message. This is the raw upper 28 bits
-    /// masked directly — the value equals the byte offset (16-byte granularity
-    /// is encoded in the wire format).
-    /// </summary>
-    internal uint ByteOffset
-    {
-        get;
-    }
+    #endregion
 
-    /// <summary>True if more segments follow this one.</summary>
-    internal bool MoreSegments
-    {
-        get;
-    }
-
-    /// <summary>Reserved bits (should be 0 in valid packets).</summary>
-    internal byte Reserved
-    {
-        get;
-    }
-
-    private SomeIpTpHeader(uint byteOffset, bool moreSegments, byte reserved)
-    {
-        ByteOffset = byteOffset;
-        MoreSegments = moreSegments;
-        Reserved = reserved;
-    }
+    #region Parsing
 
     /// <summary>Attempts to parse a 4-byte SOME/IP-TP header.</summary>
     internal static bool TryParse(ReadOnlySpan<byte> data, out SomeIpTpHeader header)
@@ -77,4 +47,6 @@ internal readonly struct SomeIpTpHeader
         header = new SomeIpTpHeader(byteOffset, more, reserved);
         return true;
     }
+
+    #endregion
 }

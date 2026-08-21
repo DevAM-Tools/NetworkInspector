@@ -8,65 +8,15 @@ namespace NetworkInspector.Sources.Cached;
 /// lock-free chunked array.
 ///
 /// <para>
-/// <b>Use case:</b> Sources that do not natively support random access (e.g., streams,
-/// pipes, live captures) can be wrapped to enable <see cref="IRandomAccessFrameSource.FrameById"/>.
-/// The session uses this wrapper to provide <c>GetPacket</c> random-access even for
-/// stream-based sources.
-/// </para>
-///
-/// <para>
-/// <b>Thread safety:</b>
-/// <list type="bullet">
-///   <item><see cref="NextFrame"/> is single-threaded (called by the source job thread).</item>
-///   <item><see cref="FrameById"/> is thread-safe for concurrent reads from any thread
-///         (UI, export, random access) via <see cref="Volatile"/> reads.</item>
-///   <item>No locks are used. The only synchronisation is <see cref="Volatile.Write{T}"/>
-///         for publishing new chunks and <see cref="Volatile.Read{T}"/> for consuming them.</item>
-/// </list>
-/// </para>
-///
-/// <para>
-/// <b>Memory layout:</b>
-/// Frames are stored in a chunked array identical in structure to <c>PacketToFrameMap</c>.
-/// Each chunk holds 16384 frames. Chunks are allocated lazily on first write.
-/// With 8192 maximum chunks, the cache supports up to ~134 million frames.
-/// A frame reference is 8 bytes (reference to boxed <see cref="Frame"/>? or struct wrapper),
-/// so each chunk consumes ~128 KB of reference storage.
-/// The actual frame data (<see cref="ReadOnlyMemory{T}"/>) is owned by the underlying source.
-/// </para>
-///
-/// <para>
-/// <b>Cache cap:</b> When more than
-/// <c>_MaxChunks × _ChunkSize</c> (≈ 134 217 728) frames are observed, additional frames are
-/// still returned by <see cref="NextFrame"/> (delegated to the inner source) but cannot
-/// be cached. <see cref="FrameById"/> for those IDs returns <see langword="null"/>, and
-/// <see cref="IsCacheCapped"/> becomes <see langword="true"/> on the first overflow so
-/// hosts can surface a diagnostic. This avoids a silent contract violation while keeping
-/// the steady-state cache lock-free.
+/// <b>Capacity:</b> Supports all valid <see cref="FrameId"/> values
+/// (<c>0 … Array.MaxLength - 1</c>). Chunks are allocated lazily on demand.
 /// </para>
 /// </summary>
 public sealed class CachedFrameSource : IRandomAccessFrameSource, IErrorTolerantFrameSource
 {
     #region Constants
 
-    // 2^14 = 16384 slots per chunk, ~128 KB of references per chunk.
     private const int _ChunkShift = 14;
-    private const int _ChunkSize = 1 << _ChunkShift;  // 16384
-    private const int _ChunkMask = _ChunkSize - 1;
-    private const int _MaxChunks = 8192;              // 8192 × 16384 = ~134M frames
-
-    /// <summary>
-    /// Default maximum memory budget for cached frame structs: 512 MiB on 64-bit
-    /// processes, 64 MiB on 32-bit to avoid address-space exhaustion.
-    /// The budget covers only the <see cref="Frame"/> structs stored in the chunk
-    /// arrays (8 bytes each), not the underlying packet data referenced by
-    /// <see cref="Frame.Data"/>.
-    /// </summary>
-    public static long DefaultMaxCacheMemoryBytes { get; } =
-        Environment.Is64BitProcess ? 512L * 1024 * 1024 : 64L * 1024 * 1024;
-
-    /// <summary>Approximate byte size of a <see cref="Frame"/> struct reference stored in a chunk slot.</summary>
-    private const int _FrameSlotBytes = 8;
 
     #endregion
 
@@ -77,35 +27,20 @@ public sealed class CachedFrameSource : IRandomAccessFrameSource, IErrorTolerant
     /// <summary>Inner source cast to IErrorTolerantFrameSource, or null if not supported.</summary>
     private readonly IErrorTolerantFrameSource? _InnerErrorTolerant;
 
-    // Outer array of chunk references. Inner arrays are allocated lazily.
-    // Writes: source thread only (single writer per chunk slot).
-    // Reads: any thread via Volatile.Read on the chunk reference + validity flag.
-    private readonly Frame[][] _Chunks = new Frame[_MaxChunks][];
-    private readonly bool[][] _Valid = new bool[_MaxChunks][];
-
-    /// <summary>Maximum number of frame-struct bytes to cache before switching to pass-through mode.</summary>
-    private readonly long _MaxCacheMemoryBytes;
-
-    /// <summary>Running count of bytes allocated for frame structs in chunk arrays.</summary>
-    private long _CacheMemoryBytes;
-
-    // ── Own lifecycle state (Volatile R/W for cross-thread visibility) ─────────
+    private readonly Core.Collections.ChunkedOuterArray<Frame[]> _FrameChunks = new(_ChunkShift);
+    private readonly Core.Collections.ChunkedOuterArray<bool[]> _ValidChunks = new(_ChunkShift);
 
     /// <summary>Whether <see cref="Start"/> has been called on this wrapper.</summary>
-    private bool _Started;
+    private volatile bool _Started;
 
-    /// <summary>Whether <see cref="Dispose"/> has been called on this wrapper.</summary>
-    private bool _Disposed;
+    /// <summary>Atomic dispose latch (0 = live, 1 = disposed).</summary>
+    private volatile int _Disposed;
 
     /// <summary>
-    /// Set to <see langword="true"/> the first time <see cref="_CacheFrame"/> is asked to
-    /// store a frame whose <see cref="FrameId"/> exceeds the cache capacity
-    /// (<see cref="_MaxChunks"/> × <see cref="_ChunkSize"/>), or when the memory budget
-    /// (<see cref="_MaxCacheMemoryBytes"/>) is reached, or when an
-    /// <see cref="OutOfMemoryException"/> occurs during chunk allocation.
+    /// Set when an <see cref="OutOfMemoryException"/> occurs during chunk allocation.
     /// Inspected via <see cref="IsCacheCapped"/>.
     /// </summary>
-    private bool _CacheCapped;
+    private volatile bool _CacheCapped;
 
     #endregion
 
@@ -116,14 +51,9 @@ public sealed class CachedFrameSource : IRandomAccessFrameSource, IErrorTolerant
     /// </summary>
     /// <param name="inner">
     /// The underlying frame source to wrap. Must not be <see langword="null"/>.
-    /// Must not already implement <see cref="IRandomAccessFrameSource"/>
-    /// (use the original source directly instead).
+    /// Must not already implement <see cref="IRandomAccessFrameSource"/>.
     /// </param>
-    /// <param name="maxCacheMemoryBytes">
-    /// Maximum number of bytes to use for cached <see cref="Frame"/> structs.
-    /// Defaults to <see cref="DefaultMaxCacheMemoryBytes"/> when <c>null</c>.
-    /// </param>
-    public CachedFrameSource(IFrameSource inner, long? maxCacheMemoryBytes = null)
+    public CachedFrameSource(IFrameSource inner)
     {
         ArgumentNullException.ThrowIfNull(inner);
 
@@ -135,20 +65,13 @@ public sealed class CachedFrameSource : IRandomAccessFrameSource, IErrorTolerant
                 nameof(inner));
         }
 
-        long budget = maxCacheMemoryBytes ?? DefaultMaxCacheMemoryBytes;
-        if (budget <= 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(maxCacheMemoryBytes), budget, "Cache memory budget must be positive.");
-        }
-
         _Inner = inner;
         _InnerErrorTolerant = inner as IErrorTolerantFrameSource;
-        _MaxCacheMemoryBytes = budget;
     }
+
     #endregion
 
     #region IFrameSource Implementation
-    // ── IFrameSource delegation ───────────────────────────────────────────────
 
     /// <inheritdoc/>
     public string UiName => _Inner.UiName;
@@ -160,37 +83,30 @@ public sealed class CachedFrameSource : IRandomAccessFrameSource, IErrorTolerant
     public int? EstimatedFrameCount => _Inner.EstimatedFrameCount;
 
     /// <inheritdoc/>
-    public bool IsRunning => Volatile.Read(ref _Started) && !Volatile.Read(ref _Disposed);
+    public bool IsRunning => _Started && _Disposed == 0;
 
     /// <summary>
-    /// <see langword="true"/> if at least one frame has been observed whose
-    /// <see cref="FrameId"/> exceeds the cache capacity (~134 M). In that case
-    /// <see cref="FrameById"/> for the affected IDs returns <see langword="null"/>;
-    /// <see cref="NextFrame"/> still delivers them.
+    /// <see langword="true"/> if caching was disabled after an
+    /// <see cref="OutOfMemoryException"/> during chunk allocation.
     /// </summary>
-    public bool IsCacheCapped => Volatile.Read(ref _CacheCapped);
+    public bool IsCacheCapped => _CacheCapped;
 
     /// <inheritdoc/>
     public void Start(FrameSourceId sourceId, FrameInterfaceRegistry registry)
     {
-        ObjectDisposedException.ThrowIf(Volatile.Read(ref _Disposed), this);
+        ObjectDisposedException.ThrowIf(_Disposed != 0, this);
         ArgumentNullException.ThrowIfNull(registry);
 
         _Inner.Start(sourceId, registry);
-        Volatile.Write(ref _Started, true);
+        _Started = true;
     }
 
     /// <inheritdoc/>
-    /// <remarks>
-    /// Reads the next frame from the underlying source and caches it for later
-    /// random access via <see cref="FrameById"/>. The frame is stored in a
-    /// lock-free chunked array indexed by <see cref="FrameId"/>.
-    /// </remarks>
     public Frame? NextFrame(CancellationToken cancellationToken = default)
     {
-        ObjectDisposedException.ThrowIf(Volatile.Read(ref _Disposed), this);
+        ObjectDisposedException.ThrowIf(_Disposed != 0, this);
 
-        if (!Volatile.Read(ref _Started))
+        if (!_Started)
         {
             throw new InvalidOperationException("CachedFrameSource.Start() must be called before NextFrame().");
         }
@@ -208,21 +124,13 @@ public sealed class CachedFrameSource : IRandomAccessFrameSource, IErrorTolerant
     }
 
     /// <inheritdoc/>
-    /// <remarks>
-    /// Disposes the inner source via <see cref="IDisposable"/> (inherited from <see cref="IFrameSource"/>).
-    /// This ensures that file handles, memory-mapped views, and other native
-    /// resources held by the wrapped source are released properly.
-    /// </remarks>
     public void Dispose()
     {
-        if (Volatile.Read(ref _Disposed))
+        if (Interlocked.Exchange(ref _Disposed, 1) != 0)
         {
             return;
         }
 
-        Volatile.Write(ref _Disposed, true);
-        // GC.SuppressFinalize is called before the inner-source disposal so it executes
-        // even if _Inner.Dispose() throws, preserving finalizer suppression.
         GC.SuppressFinalize(this);
         _Inner.Dispose();
     }
@@ -230,10 +138,9 @@ public sealed class CachedFrameSource : IRandomAccessFrameSource, IErrorTolerant
     #endregion
 
     #region IErrorTolerantFrameSource Implementation
-    // ── IErrorTolerantFrameSource delegation ──────────────────────────────────
 
     /// <inheritdoc/>
-    public long ReadFrameCount
+    public int ReadFrameCount
     {
         get
         {
@@ -247,7 +154,7 @@ public sealed class CachedFrameSource : IRandomAccessFrameSource, IErrorTolerant
     }
 
     /// <inheritdoc/>
-    public long SkippedFrameCount
+    public int SkippedFrameCount
     {
         get
         {
@@ -261,7 +168,7 @@ public sealed class CachedFrameSource : IRandomAccessFrameSource, IErrorTolerant
     }
 
     /// <inheritdoc/>
-    public long ErrorCount
+    public int ErrorCount
     {
         get
         {
@@ -310,12 +217,6 @@ public sealed class CachedFrameSource : IRandomAccessFrameSource, IErrorTolerant
     }
 
     /// <inheritdoc/>
-    /// <remarks>
-    /// Throws <see cref="InvalidOperationException"/> when the wrapped source does
-    /// not implement <see cref="IErrorTolerantFrameSource"/>: silently no-op'ing
-    /// add/remove would let callers believe their handler is registered when it
-    /// can never fire, which violates the "never fail silently" rule.
-    /// </remarks>
     public event EventHandler<FrameReadErrorEventArgs>? FrameSkipped
     {
         add
@@ -339,22 +240,15 @@ public sealed class CachedFrameSource : IRandomAccessFrameSource, IErrorTolerant
             _InnerErrorTolerant.FrameSkipped -= value;
         }
     }
+
     #endregion
 
     #region IRandomAccessFrameSource Implementation
-    // ── IRandomAccessFrameSource ──────────────────────────────────────────────
 
     /// <inheritdoc/>
-    /// <remarks>
-    /// Retrieves a previously cached frame by its <see cref="FrameId"/>.
-    /// Lock-free: uses <see cref="Volatile.Read{T}"/> on the chunk reference and
-    /// a validity flag to ensure cross-thread visibility.
-    /// Returns <see langword="null"/> if the frame was never read through
-    /// <see cref="NextFrame"/> or the ID is invalid.
-    /// </remarks>
     public Frame? FrameById(FrameId id, CancellationToken cancellationToken = default)
     {
-        ObjectDisposedException.ThrowIf(Volatile.Read(ref _Disposed), this);
+        ObjectDisposedException.ThrowIf(_Disposed != 0, this);
 
         if (!id.IsValid)
         {
@@ -363,25 +257,15 @@ public sealed class CachedFrameSource : IRandomAccessFrameSource, IErrorTolerant
 
         cancellationToken.ThrowIfCancellationRequested();
 
-        int chunkIdx = id.Value >> _ChunkShift;
-        int slotIdx = id.Value & _ChunkMask;
+        (int chunkIdx, int slotIdx) = _FrameChunks.DecomposeIndex(id.Value);
 
-        // Bounds check: FrameId beyond supported range.
-        if ((uint)chunkIdx >= _MaxChunks)
-        {
-            return null;
-        }
-
-        // Read the chunk reference with acquire semantics.
-        Frame[]? chunk = Volatile.Read(ref _Chunks[chunkIdx]);
+        Frame[]? chunk = _FrameChunks.GetChunk(chunkIdx);
         if (chunk is null)
         {
             return null;
         }
 
-        // Read the validity flag. The write side ensures the frame data is fully
-        // visible before the flag is set (Volatile.Write acts as a release fence).
-        bool[]? validChunk = Volatile.Read(ref _Valid[chunkIdx]);
+        bool[]? validChunk = _ValidChunks.GetChunk(chunkIdx);
         if (validChunk is null || !Volatile.Read(ref validChunk[slotIdx]))
         {
             return null;
@@ -389,98 +273,38 @@ public sealed class CachedFrameSource : IRandomAccessFrameSource, IErrorTolerant
 
         return chunk[slotIdx];
     }
+
     #endregion
 
     #region Private Helpers
-    // ── Internal helpers ──────────────────────────────────────────────────────
 
-    /// <summary>
-    /// Stores a frame in the chunked cache. Called only from the source thread
-    /// (single writer). Chunks are allocated lazily on first access.
-    ///
-    /// <para>
-    /// <b>Memory ordering:</b> The frame struct is written to the slot first,
-    /// then the validity flag is set with <see cref="Volatile.Write{T}(ref T, T)"/>
-    /// which acts as a release fence. Readers see the flag only after the frame
-    /// data is fully committed.
-    /// </para>
-    ///
-    /// <para>
-    /// <b>Memory cap:</b> Once <see cref="_MaxCacheMemoryBytes"/> is exceeded,
-    /// or an <see cref="OutOfMemoryException"/> is thrown during chunk allocation,
-    /// <see cref="_CacheCapped"/> is set and all subsequent frames are forwarded
-    /// without being stored. <see cref="FrameById"/> for uncached IDs returns
-    /// <see langword="null"/>.
-    /// </para>
-    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void _CacheFrame(Frame frame)
     {
-        // Guard against invalid frame IDs (negative values would produce wrong chunk index)
-        if (!frame.Id.IsValid)
+        if (!frame.Id.IsValid || _CacheCapped)
         {
             return;
         }
 
-        // Once capped, skip all caching to keep the pass-through path fast.
-        if (Volatile.Read(ref _CacheCapped))
+        (int chunkIdx, int slotIdx) = _FrameChunks.DecomposeIndex(frame.Id.Value);
+
+        try
         {
-            return;
+            Frame[] chunk = _FrameChunks.GetOrAllocateChunk(
+                chunkIdx,
+                () => new Frame[_FrameChunks.ChunkSize]);
+
+            bool[] validChunk = _ValidChunks.GetOrAllocateChunk(
+                chunkIdx,
+                () => new bool[_ValidChunks.ChunkSize]);
+
+            chunk[slotIdx] = frame;
+            Volatile.Write(ref validChunk[slotIdx], true);
         }
-
-        int chunkIdx = frame.Id.Value >> _ChunkShift;
-        int slotIdx = frame.Id.Value & _ChunkMask;
-
-        // Beyond supported range — the wrapped source returned a frame whose ID
-        // is past the cache capacity (~134 M frames). The frame itself is still
-        // delivered to the caller of NextFrame() unchanged; only the cache copy
-        // is dropped. Surface IsCacheCapped so hosts can warn the user.
-        if ((uint)chunkIdx >= _MaxChunks)
+        catch (OutOfMemoryException)
         {
-            Volatile.Write(ref _CacheCapped, true);
-            return;
+            _CacheCapped = true;
         }
-
-        Frame[]? chunk = _Chunks[chunkIdx];
-        bool[]? validChunk = _Valid[chunkIdx];
-
-        if (chunk is null)
-        {
-            // Check memory budget before allocating a new chunk.
-            // Each chunk holds _ChunkSize frames; account for both the frame array and
-            // the parallel validity boolean array.
-            long chunkBytes = (long)_ChunkSize * (_FrameSlotBytes + sizeof(bool));
-            if (_CacheMemoryBytes + chunkBytes > _MaxCacheMemoryBytes)
-            {
-                Volatile.Write(ref _CacheCapped, true);
-                return;
-            }
-
-            // Catch OutOfMemoryException during lazy chunk allocation.
-            // Rather than crashing the source job, switch to pass-through mode.
-            try
-            {
-                // Lazy allocation. Single writer per source thread, so no CAS needed.
-                chunk = new Frame[_ChunkSize];
-                validChunk = new bool[_ChunkSize];
-            }
-            catch (OutOfMemoryException)
-            {
-                Volatile.Write(ref _CacheCapped, true);
-                return;
-            }
-
-            _CacheMemoryBytes += chunkBytes;
-
-            // Publish the chunks atomically so readers see fully initialised arrays.
-            Volatile.Write(ref _Chunks[chunkIdx], chunk);
-            Volatile.Write(ref _Valid[chunkIdx], validChunk);
-        }
-
-        // Write the frame data first, then set the validity flag (release fence).
-        // Readers check the flag before accessing the frame data.
-        chunk[slotIdx] = frame;
-        Volatile.Write(ref validChunk![slotIdx], true);
     }
 
     #endregion

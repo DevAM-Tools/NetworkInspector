@@ -45,11 +45,11 @@ public readonly struct EthernetLayer :
     /// (1500 byte MAC client data + 14 byte header + 4 byte FCS).
     /// <para>
     /// Note: this is <b>not</b> the L3 MTU. The classic "MTU 1500" maps to a
-    /// <see cref="_LinkMtu"/> of 1518 here. Naming kept as <c>_LinkMtu</c> to
+    /// <see cref="LinkMtu"/> of 1518 here. Naming kept as <c>LinkMtu</c> to
     /// match the <see cref="IProvidesMtu"/> contract surfaced to fragmenters.
     /// </para>
     /// </summary>
-    private readonly ushort _LinkMtu;
+    public ushort LinkMtu { get; }
 
     /// <summary>Creates an Ethernet layer.</summary>
     /// <param name="dstMac">Destination MAC.</param>
@@ -72,7 +72,7 @@ public readonly struct EthernetLayer :
         _SrcMac = srcMac;
         _EtherTypeIsExplicit = etherType.TryGetExplicit(out ushort v);
         _ExplicitEtherType = v;
-        _LinkMtu = maxFrameSize;
+        LinkMtu = maxFrameSize;
     }
 
     /// <inheritdoc />
@@ -80,13 +80,6 @@ public readonly struct EthernetLayer :
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         get => EthernetHeader.Size;
-    }
-
-    /// <inheritdoc />
-    public ushort LinkMtu
-    {
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _LinkMtu;
     }
 
     /// <inheritdoc />

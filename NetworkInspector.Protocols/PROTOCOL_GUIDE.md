@@ -91,10 +91,13 @@ root
     ├── udp.srcport: 12345
     ├── udp.dstport: 53
     └── ...
+├── <message>: …                    // e.g. signal-message protocol selected by udp.port
 ```
 
 > Sub-protocols are **siblings** of their parent protocol, not children.
 > Dispatch always happens on `parentField`, not inside a protocol's container field.
+> When the frame protocol consumes less than the capture buffer, the tail is
+> `packet.unparsed_data` under the packet container (§8). Ethernet padding stays on `eth`.
 
 ---
 
@@ -406,15 +409,17 @@ At parse time, read eagerly-appended fields from the packet tree:
 
 ```csharp
 if (_IpSrcFieldId.IsValid
-    && packet.TryFindFieldValue(_IpSrcFieldId, out FieldValue ipv4Src)
+    && packet.TryGetFieldValue(_IpSrcFieldId, out FieldValue ipv4Src, materialize: false)
     && ipv4Src.Type == FieldType.IPv4Address)
 {
-    // Use ipv4Src — no lazy materialization triggered
+    // Use ipv4Src — materialize: false keeps sibling lazy containers untouched
 }
 ```
 
 > **Important:** This only works if the upstream protocol **eagerly appends** the
 > field (not deferred inside a lazy populator). See §9.5 for the eager-append pattern.
+> Pass `materialize: false` on the parse hot path; use `materialize: true` only when
+> the caller intentionally needs lazy field trees (exporters, assertions, full dumps).
 
 ### Thread-Local Address Caches
 
@@ -523,7 +528,7 @@ else
 |----------|---------|
 | Hot path, same-assembly protocols, unconditionally produced per packet | `[ThreadStatic]` cache (zero allocation, O(1)) |
 | Edge cases, custom stacks, unusual encapsulations | Sibling walk via `IpAddressExtractor` fallback |
-| Cross-assembly or external consumers | Eagerly-appended field + `packet.TryFindFieldValue()` (§7.4) |
+| Cross-assembly or external consumers | Eagerly-appended field + `packet.TryGetFieldValue(..., materialize: false)` (§7 Reading Fields) |
 
 ---
 
@@ -622,19 +627,18 @@ public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in 
 
         ParseResult result = parentField.TryCallNextProtocolU64(
             _PortTableId, lowPort, payloadData, in context);
-        if (result.IsError)
+        if (result.TryPropagateError(out ParseResult error))
         {
-            return result;
+            return error;
         }
 
-        bool dispatched = result.Value > 0;
-        if (!dispatched && lowPort != highPort)
+        if (!result.TryGetConsumed(out _) && lowPort != highPort)
         {
             ParseResult highResult = parentField.TryCallNextProtocolU64(
                 _PortTableId, highPort, payloadData, in context);
-            if (highResult.IsError)
+            if (highResult.TryPropagateError(out ParseResult highError))
             {
-                return highResult;
+                return highError;
             }
         }
     }
@@ -651,8 +655,35 @@ public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in 
 3. **All `context.RecordGroupPresence()` calls happen eagerly in Parse()** — never inside
    a lazy populator.
 4. **Guard against negative payload lengths** with `Math.Max(0, ...)`.
-5. **Propagate dispatch errors** — check `result.IsError` after every
-   `TryCallNextProtocol*()` call.
+5. **Propagate dispatch errors** — call `TryPropagateError` after every
+   `TryCallNextProtocol*()` call and `return` the `out` result when it is
+   `true`. After a false `TryPropagateError`, a false `TryGetConsumed` is
+   exactly `NotDispatched` (try another key or stop). Ok(0) returns `true`
+   from `TryGetConsumed` with `consumed == 0` and must not be treated as a miss.
+
+### Leftover bytes (`packet.unparsed_data`)
+
+When the **frame** protocol returns success with `consumed < frame.Length`,
+`PacketProtocol` appends `packet.unparsed_data` (Bytes) under the packet
+container and records the optional index group `packet.unparsed`. Inner
+protocols do **not** insert a leftover `data` PDU. Ethernet uses the child’s
+consumed count to append padding/trailer and then returns `data.Length`, so a
+typical Ethernet/SLL stack never produces `packet.unparsed_data`.
+
+**Author rules:**
+
+1. Return the bytes this PDU actually used, not always `data.Length`, when the
+   PDU length is known and shorter than the buffer.
+2. Do **not** wrap every `TryCallNextProtocol*` with leftover handling. Link-layer
+   padding and trailers stay with the frame protocol
+   (`EthernetProtocol._AppendPaddingAndTrailer`).
+3. Tails **inside** a fully consumed frame (for example UDP payload after a
+   signal message that returned `RequiredByteLength`) are not `packet.unparsed_data`
+   — they are not at the end of the capture buffer. Store only the bytes the
+   PDU needs; the rest of that payload is not shown as a sibling protocol.
+
+`DataProtocol` (`Name = "data"`) remains a normal dissector for registered
+payloads (HTTP content-type, WebSocket, …). It is not the leftover fallback.
 
 ---
 
@@ -817,16 +848,18 @@ FieldValue containerValue = FieldValue.NewBytes(data).WithCustomRepresentation(s
 parentField.AppendLazyWithCustomText(_ProtocolFieldId, containerValue, summary, _Populator);
 ```
 
-**Step 2 — Read back in the populator via `AsField()` + `TryGetPrev()`:**
+**Step 2 — Read back in the populator via MutField navigation:**
 
 ```csharp
-private ParseResult PopulateMyProtocolFields(in LazyField container)
+private ParseResult PopulateMyProtocolFields(in MutField container)
 {
-    // Get a read-only Field view of the container to navigate siblings.
-    Field self = container.AsField();
-
-    // Walk previous siblings to find pre-computed values (e.g., IP addresses)
-    // for checksum validation via IpAddressExtractor.
+    // Walk previous siblings with MutField APIs (no AsField conversion required).
+    // Use materialize: false so sibling lazy containers are not populated.
+    MutField current = container;
+    while (current.TryGetPrev(out current))
+    {
+        // Read FieldId / Value of eagerly-appended helper fields only.
+    }
 
     // Append remaining fields ...
     container.Append(_MyFieldId, FieldValue.NewU64(value));
@@ -834,24 +867,33 @@ private ParseResult PopulateMyProtocolFields(in LazyField container)
 }
 ```
 
-**Field navigation API on `Field` (read-only view):**
+**Tree navigation API (Field and MutField are parallel; MutField returns `MutField`):**
 
-| Method | Returns | Description |
-|--------|---------|-------------|
-| `mutField.AsField()` | `Field` | Snapshot of the current `MutField` as an immutable `Field` |
-| `field.TryGetPrev(out Field prev)` | `bool` | Previous sibling (earlier in the field list) |
-| `field.TryGetNext(out Field next)` | `bool` | Next sibling (later in the field list) |
-| `field.TryGetLastChild(out Field child)` | `bool` | Last eagerly-appended child |
-| `field.FieldId` | `FieldId` | ID of this field |
-| `field.Value` | `FieldValue` | Value stored in this field |
+| Method | Materialize arg? | Description |
+|--------|------------------|-------------|
+| `IsValid` | — | Whether the cursor/reference is usable |
+| `IsRoot` | — | Whether this is the packet root |
+| `TryGetParent(out …)` | no | Parent field; false on root |
+| `TryGetPrev(out …)` / `TryGetNext(out …)` | no | Previous / next sibling |
+| `TryGetFirstChild(out …, bool materialize)` | **required** | First child; `false` skips lazy population |
+| `TryGetLastChild(out …, bool materialize)` | **required** | Last child; `false` skips lazy population |
+| `HasChildren(bool materialize)` | **required** | Whether direct children exist |
+| `ChildCount(bool materialize)` | **required** | Number of direct children |
+| `Children(bool materialize)` | **required** | Direct children enumerator |
+| `Descendants(bool materialize)` | **required** | DFS pre-order descendants |
+| `mutField.AsField()` | — | Read-only `Field` snapshot (optional) |
 
 > **Rules:**
+> - Read accessors and tree navigation are equivalent on `Field` and `MutField`.
+> - Only `MutField` may mutate the tree (`Append`/`Prepend`/`InsertAfter`, lazy registration,
+>   value/custom-text setters, packet-info helpers, protocol dispatch).
 > - The populator **must not** trigger lazy materialization of sibling containers —
->   only read `FieldId` and `Value` of eagerly-appended fields.
+>   pass `materialize: false` and only read `FieldId` / `Value` of eagerly-appended fields.
 > - The walk length must be bounded (e.g., `maxWalk = 3`) — helper fields are
 >   always placed immediately before the container, so longer walks indicate a bug.
 > - `context.RecordGroupPresence()` must NOT be called inside the populator —
 >   all presence recording belongs in `Parse()`.
+> - There are **no default values** for `materialize` — callers must choose explicitly.
 
 ---
 
@@ -904,10 +946,10 @@ parentField.TryCallNextProtocolAny(tableId, data, in context)
 parentField.CallProtocol(protocolId, data, in context)
 ```
 
-All return `ParseResult`:
-- **Value > 0**: a protocol consumed that many bytes.
-- **Value == 0**: no protocol matched (or matched protocols consumed 0 bytes).
-- **IsError**: an error occurred — propagate it.
+All return `ParseResult`. Consume with exactly two methods:
+- **`TryPropagateError`**: `true` ⇔ Error — `return` the `out` result immediately.
+- **`TryGetConsumed`**: `true` ⇔ Ok (including Ok(0)); `false` after a prior
+  false `TryPropagateError` ⇔ `NotDispatched`, and `consumed` is then 0.
 
 ### 10.4 Multi-Protocol Keys
 
@@ -927,13 +969,12 @@ ushort lowPort = Math.Min(srcPort, dstPort);
 ushort highPort = Math.Max(srcPort, dstPort);
 
 ParseResult result = parentField.TryCallNextProtocolU64(_PortTableId, lowPort, payload, in context);
-if (result.IsError) { return result; }
+if (result.TryPropagateError(out ParseResult error)) { return error; }
 
-bool dispatched = result.Value > 0;
-if (!dispatched && lowPort != highPort)
+if (!result.TryGetConsumed(out _) && lowPort != highPort)
 {
     ParseResult highResult = parentField.TryCallNextProtocolU64(_PortTableId, highPort, payload, in context);
-    if (highResult.IsError) { return highResult; }
+    if (highResult.TryPropagateError(out ParseResult highError)) { return highError; }
 }
 ```
 
@@ -1001,30 +1042,57 @@ header or walking the field tree.
 | `context.Dispatch.TryGetBytes(out BytesKey key)` | `bool` | Reads the key when `Kind == Bytes` |
 | `context.Dispatch.TryGetBool(out bool key)` | `bool` | Reads the key when `Kind == Bool` |
 
-**Example — config lookup by dispatch key (`SignalPduProtocol`)**:
+**Example — config-driven signal messages (`SignalMessageRegistration`)**:
 
-When a protocol is registered in multiple dispatch tables for different CAN IDs,
-`dispatch.TableId + key` uniquely identifies the PDU definition without any
-additional header parsing:
+There is no meta loader protocol. `SignalMessageRegistration.Register(builder)` reads
+JSON (`signal_message.config_file`), compiles each message, and registers one
+`SignalMessageProtocol` instance per successful message. Each instance is wired into
+parent tables (`can.id`, `lin.id`, `flexray.id`, `pdu_transport.id`, `udp.port`, …)
+via `dispatch_bindings`. Parse needs **no dispatch-key lookup** — the table already
+selected the correct protocol instance.
 
-```csharp
-private SignalPduDefinition? FindPduByDispatchKey(in ParseContext context)
-{
-    DispatchContext dispatch = context.Dispatch;
-    if (!dispatch.TryGetU64(out ulong key))
-    {
-        return null;
-    }
+See schema: `NetworkInspector.Protocols/Schemas/signal-message-config.schema.json`.
 
-    if (_DispatchKeyToPduId.TryGetValue((dispatch.TableId, key), out uint pduId)
-        && _PduDefinitions.TryGetValue(pduId, out SignalPduDefinition? pdu))
-    {
-        return pdu;
-    }
+**Best effort:** Signal Message shows as much as it can. Invalid or colliding **signals**
+(and invalid mux selectors / mux groups) are skipped with a warning; siblings in the
+same message still register. A **message** is skipped only when its protocol identity
+(`name` / `ui_name`) or declared `byte_length` is unusable. Name collisions are
+detected and never throw. A faulty signal does not take down the rest of that message.
 
-    return null;
-}
-```
+**Compile vs runtime**
+
+| JSON / compile | Runtime |
+|----------------|---------|
+| `byte_length` | Compile-only floor: must be `>= RequiredByteLength` of the **remaining** signals after per-signal skips (max exclusive end byte over static + mux + mux-group signals). Not stored on `CompiledSignalMessage`. |
+| Signal `name` / `ui_name` | JSON values are the registered field name / UI name. The parser does not prefix `{message}.`. Optional protocol suffixes `.raw`, `.enum`, and mux `.value` are appended to that name. Invalid or duplicate names skip that signal. Config providers (e.g. the FrameBuilder test bridge) may write `{message}.{signal}` as the JSON `name`. |
+| CustomText cache | Signal bit length `<= 12` precomputes `{ui_name}: {phys:F}[ {unit}] ({raw})[ [{enum}]]` for every raw value at registration (4096 strings at 12 bits). Wider signals format on materialize. |
+| `byte_order` | Required (`little_endian` / `big_endian`). Null/whitespace skips that signal with a warning; later signals and messages still compile. |
+| `mux_signal` / `mux_groups` | Invalid mux selector skips mux and groups, static signals remain. `mux_groups` without `mux_signal` are ignored with a warning. Duplicate or out-of-range `mux_value` skips that group. Selector bit length `<= 8` builds a dense `muxValue → SignalInfo[]` table (256 slots at 8 bits). Wider selectors keep a linear group scan. |
+
+**Hot-path contract for message `Parse`:**
+
+1. One length check: `data.Length >= RequiredByteLength`.
+2. Record protocol/group presence; append **lazy** message container
+   (`AppendLazyWithCustomText` + `FieldValue.NewBytes(data[..RequiredByteLength])`
+   + container populator).
+3. **Return `RequiredByteLength`** — not `data.Length`. Inner leftover is not
+   turned into a sibling `data` protocol; frame-level tails become
+   `packet.unparsed_data` (§8).
+4. Inside the container populator: unchecked `ulong` extract per signal
+   (`SignalMessageBits.ExtractRawUnchecked`; raw is always unsigned).
+   Byte-aligned little-endian 8/16/32/64-bit signals use a single load
+   (`BinaryPrimitives`); unaligned 64-bit LE uses two `ulong`s (low 8 bytes +
+   9th byte), never `UInt128` and never `ulong << 64`.
+5. Append each signal under the container: **`FieldValue` = physical F64**
+   (`raw × factor + offset`). `FieldInfo.FieldType` is `F64` for the parent
+   signal, `U64` for optional `.raw`, `String` for optional `.enum`.
+   CustomText is `{ui_name}: {phys:F}[ {unit}] ({raw})[ [{enum}]]`
+   (invariant culture). For bit length `<= 12` that string is looked up from
+   a table built at registration; wider signals call `_BuildCustomText`.
+   Enum name lookup on materialize runs only when CustomText is not cached
+   and `signal.Enums.Kind != None`, or when a `.enum` child is registered.
+
+---
 
 ### 10.8 Accessing the Stack and Index from Context
 
@@ -1089,13 +1157,15 @@ builder.RegisterHeuristicParser(heuristicTableId, new TlsHeuristicParser());
 ```csharp
 // Try table-based dispatch first
 ParseResult result = parentField.TryCallNextProtocolU64(_PortTableId, port, payload, in context);
-if (result.IsError) { return result; }
+if (result.TryPropagateError(out ParseResult error)) { return error; }
 
-// If no table match, try heuristic fallback
-if (result.Value == 0)
+// If no table match, try heuristic fallback. Only a false TryGetConsumed after
+// a false TryPropagateError is a miss — Ok(0) means a protocol ran and consumed
+// zero bytes; do not fall through.
+if (!result.TryGetConsumed(out _))
 {
-    result = parentField.TryCallHeuristicProtocol(_HeuristicTableId, payload, stack);
-    if (result.IsError) { return result; }
+    result = parentField.TryCallHeuristicProtocol(_HeuristicTableId, payload, in context);
+    if (result.TryPropagateError(out ParseResult heuristicError)) { return heuristicError; }
 }
 ```
 
@@ -1314,8 +1384,8 @@ of physically appending a duplicate field (`eth.addr` appended as a child of bot
 - **Alias names and canonical field names live in independent namespaces.**
   `stack.GetFieldId("eth.addr")` returns `null` by design. Always use
   `stack.GetFieldAliasGroupId("eth.addr")` to resolve alias names. The
-  separation guarantees value-cache, indexing, and per-packet field-lookup paths
-  see only canonical fields.
+  separation keeps indexing and per-packet field-lookup paths
+  on canonical fields only.
 - **Alias members may have mixed `FieldType` values.** The registry stores
   member `FieldId`s only; consumers query each member by its own type.
 
@@ -1363,7 +1433,8 @@ if (aliasId is { } id)
     foreach (FieldId memberId in info.Members.Span)
     {
         FieldLookupCookie cookie = FieldLookupCookie.Start;
-        while (packet.TryGetNextFieldValue(memberId, ref cookie, out FieldValue value))
+        // materialize: true — consumer enumeration must see lazy member fields too
+        while (packet.TryGetNextFieldValue(memberId, ref cookie, out FieldValue value, materialize: true))
         {
             // process value per member type
         }
@@ -1408,6 +1479,7 @@ container — there is no nested `*.hdr` intermediate container.
 | `tcp`    | —             | ports, checksum, seq/ack, hdr_len, flags (+ sub-flags), window, urgent ptr, options, len, payload |
 | `tls`    | —             | per record: `tls.record` (content_type, version, length) followed by handshake/alert as siblings |
 | `dtls`   | —             | per record: `dtls.record` (content_type, version, epoch, seq, length) followed by handshake as siblings |
+| signal message (`SignalMessageProtocol`) | — | static signals (physical F64); mux container + `.value` + matching mux-group signals; optional `.raw` / `.enum` |
 
 ### 13b.2 Implementation Sketch
 
@@ -1753,9 +1825,9 @@ if (data.Length < HeaderSize)
 
 // ✅ GOOD — propagate dispatch errors
 ParseResult result = parentField.TryCallNextProtocolU64(_TableId, key, payload, in context);
-if (result.IsError)
+if (result.TryPropagateError(out ParseResult error))
 {
-    return result;
+    return error;
 }
 
 // ❌ BAD — exception on the hot path
@@ -1779,15 +1851,27 @@ Always pass `ProtocolName` (the auto-generated constant) as the first argument.
 
 ### 15.4 Error Propagation from Dispatch
 
-All `TryCallNextProtocol*()` return `ParseResult`. Check and propagate errors:
+All `TryCallNextProtocol*()` return `ParseResult` with three named variants:
+**Ok** (consumed bytes, including Ok(0)), **NotDispatched** (table present, no protocol
+for this key — not an error and not Ok(0)), and **Error**. Consume with two methods
+in this order: `TryPropagateError` first, then `TryGetConsumed`. After a false
+`TryPropagateError`, a false `TryGetConsumed` is exactly `NotDispatched`.
 
 ```csharp
 ParseResult result = parentField.TryCallNextProtocolU64(_TableId, key, payload, in context);
-if (result.IsError)
+if (result.TryPropagateError(out ParseResult error))
 {
-    return result;  // Propagate error to caller
+    return error;
 }
-// result.Value contains consumed bytes (0 if no protocol matched)
+
+if (!result.TryGetConsumed(out int consumed))
+{
+    // no protocol for this key — try another key or stop
+}
+else
+{
+    // Ok, including Ok(0) when consumed == 0
+}
 ```
 
 ---
@@ -1961,6 +2045,14 @@ public static void RegisterStandardProtocols(this IStackBuilder builder)
 }
 ```
 
+The production helper also registers `DataProtocol` (`Name = "data"`) for
+registered raw payloads (HTTP content-type, WebSocket, …) and
+`SignalMessageRegistration.Register`. Frame-level leftover bytes are
+`packet.unparsed_data` on `PacketProtocol` (§8), not a `data` protocol.
+`SignalMessageRegistration.Register` **returns** `IReadOnlyList<SettingsLoadWarning>`;
+`RegisterStandardProtocols` is `void` and currently discards that list
+(`todos/todo_registration-error-handling.md`).
+
 ### 18.2 Registration Order
 
 Registration order does not affect dispatch table resolution. The `[UsesTable]`
@@ -2097,10 +2189,10 @@ partial void OnStartCustom(Stack stack)
 | `udp.port` | `UdpProtocol` | `u64` (port number) | `DnsProtocol`, `DhcpProtocol`, `Dhcpv6Protocol`, `DtlsProtocol`, `SomeIpProtocol`, … |
 | `http.content_type` | `HttpProtocol` | `string` | `JsonProtocol`, `TextProtocol` |
 | `http.upgrade` | `HttpProtocol` | `string` | `WebSocketProtocol` |
-| `can.id` | `CanProtocol` | `u64` | Signal PDU and sub-protocols by CAN ID / CAN XL priority |
+| `can.id` | `CanProtocol` | `u64` | Signal Message and sub-protocols by CAN ID / CAN XL priority |
 | `can.extended_id` | `CanProtocol` | `u64` | Extended-frame and CAN XL acceptance-field sub-protocols |
-| `flexray.id` | `FlexRayProtocol` | `u64` (slot + channel + cycle) | Signal PDU and sub-protocols; key = `FlexRayLinkTypeFrame.EncodeDispatchKey(slot, channelB, cycle)` — bits `[10:0]` slot, bit `11` channel B, bits `[17:12]` cycle |
-| `lin.id` | `LinProtocol` | `u64` (6-bit frame ID) | Signal PDU and sub-protocols by LIN protected ID |
+| `flexray.id` | `FlexRayProtocol` | `u64` (slot + channel + cycle) | Signal Message and sub-protocols; key = `FlexRayLinkTypeFrame.EncodeDispatchKey(slot, channelB, cycle)` — bits `[10:0]` slot, bit `11` channel B, bits `[17:12]` cycle |
+| `lin.id` | `LinProtocol` | `u64` (6-bit frame ID) | Signal Message and sub-protocols by LIN protected ID |
 | `someip.messageid` | `SomeIpProtocol` | `u64` | Payload deserializers by SOME/IP Message ID |
 | `tcp.heuristic` | `TcpProtocol` | heuristic | `HttpProtocol`, `TlsProtocol`, `Http2Protocol` (content-based) |
 
@@ -2164,15 +2256,16 @@ Frame ──[frame.link_type]──► Ethernet ──[eth.type]──► IPv4/I
 - [ ] If the dispatch key is needed without re-parsing: use `context.Dispatch.TryGetU64()` / `TryGetString()` (§10.7)
 - [ ] If work is index-only (expensive derived fields): guard with `context.HasIndex` (§10.8)
 - [ ] Dispatch on `parentField` (siblings) — **not** on container
-- [ ] Propagate dispatch errors (`result.IsError`)
+- [ ] Propagate dispatch errors (`TryPropagateError`)
 - [ ] Append trailing fields after dispatch (padding, trailer)
-- [ ] Return consumed bytes
+- [ ] Return consumed bytes (the PDU length this protocol used, not always `data.Length`)
+- [ ] Do **not** insert leftover `data` PDUs. Frame-level tails are `packet.unparsed_data` on `PacketProtocol` (§8). Frame padding/trailer stay with the frame protocol.
 
 ### Lazy Populator
 
 - [ ] Pre-allocate delegate in `OnStartCustom()` (captures only `this`)
 - [ ] Re-parse header from `container.Value.Data.AsBytes()`
-- [ ] Read pre-computed helper fields via `container.AsField()` + `TryGetPrev()` (bounded walk)
+- [ ] Read pre-computed helper fields via `TryGetPrev` on `MutField` with `materialize: false` (bounded walk)
 - [ ] Append all child fields via `container.Append()` / `container.AppendWithCustomText()`
 - [ ] May call `TryCallNextProtocol*()` dispatch methods
 - [ ] Do NOT call `context.RecordGroupPresence()` inside the populator

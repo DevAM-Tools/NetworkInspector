@@ -4,6 +4,6 @@
     <PackageReference Include="ZeroAlloc" />
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="..\NetworkInspector.CLI\NetworkInspector.CLI.csproj" />
+    <ProjectReference Include="..\NetworkInspector.CLI.Core\NetworkInspector.CLI.Core.csproj" />
   </ItemGroup>
 </Project>

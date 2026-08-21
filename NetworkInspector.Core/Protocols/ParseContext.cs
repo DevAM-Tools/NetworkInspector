@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Core.Protocols;
 
@@ -28,32 +28,6 @@ public readonly ref struct ParseContext
 
     private readonly PacketIndex? _Index;
 
-    /// <summary>
-    /// The dispatch context for the current parse invocation.
-    /// Set to <see langword="default"/> (<see cref="DispatchContext.HasDispatch"/> = <see langword="false"/>)
-    /// when no dispatch table was involved (e.g., root-level parse, direct <c>CallProtocol</c>).
-    /// Populated by <c>MutField.TryCallNextProtocol</c> overloads before calling the child protocol.
-    /// </summary>
-    private readonly DispatchContext _Dispatch;
-
-    /// <summary>
-    /// The protocol stack that owns this parse invocation.
-    /// Carries the stack through the parse chain so that <see cref="MutField"/> dispatch
-    /// methods no longer need a separate <c>Stack</c> parameter. <see langword="null"/> only
-    /// for the default/empty context — all real parse calls populate this field.
-    /// </summary>
-    private readonly Stack? _Stack;
-
-    /// <summary>
-    /// The <see cref="ProtocolId"/> of the protocol currently executing its
-    /// <see cref="IProtocol.Parse"/> method. Set automatically by
-    /// <see cref="Stack.CallProtocol"/> before every parse invocation so that protocols
-    /// never need to pass their own ID explicitly.
-    /// Equals <see cref="ProtocolId.Invalid"/> for the default/empty context and for
-    /// lazy populators (which cannot carry a ref-struct context).
-    /// </summary>
-    private readonly ProtocolId _SelfProtocolId;
-
     #endregion
 
     #region Constructors
@@ -65,27 +39,27 @@ public readonly ref struct ParseContext
     internal ParseContext(Stack stack)
     {
         _Index = null;
-        _Dispatch = default;
-        _Stack = stack;
-        _SelfProtocolId = ProtocolId.Invalid;
+        Dispatch = default;
+        Stack = stack;
+        SelfProtocolId = ProtocolId.Invalid;
     }
 
     /// <summary>Creates a parse context with the given packet index and stack.</summary>
     internal ParseContext(PacketIndex index, Stack stack)
     {
         _Index = index;
-        _Dispatch = default;
-        _Stack = stack;
-        _SelfProtocolId = ProtocolId.Invalid;
+        Dispatch = default;
+        Stack = stack;
+        SelfProtocolId = ProtocolId.Invalid;
     }
 
     /// <summary>Full private constructor used by <see cref="WithDispatch"/> and <see cref="WithSelfProtocol"/> to produce updated copies.</summary>
     private ParseContext(PacketIndex? index, DispatchContext dispatch, Stack? stack, ProtocolId selfProtocolId)
     {
         _Index = index;
-        _Dispatch = dispatch;
-        _Stack = stack;
-        _SelfProtocolId = selfProtocolId;
+        Dispatch = dispatch;
+        Stack = stack;
+        SelfProtocolId = selfProtocolId;
     }
 
     #endregion
@@ -103,18 +77,14 @@ public readonly ref struct ParseContext
     public bool HasStack
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _Stack is not null;
+        get => Stack is not null;
     }
 
     /// <summary>
     /// The protocol stack for this parse invocation.
     /// <see langword="null"/> only for the default/empty context — all real parse calls carry the stack.
     /// </summary>
-    public Stack? Stack
-    {
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _Stack;
-    }
+    public Stack? Stack { get; }
 
     /// <summary>
     /// The <see cref="ProtocolId"/> of the protocol whose <see cref="IProtocol.Parse"/> is
@@ -128,11 +98,7 @@ public readonly ref struct ParseContext
     /// <c>TryCallNextProtocol*</c>.
     /// </para>
     /// </summary>
-    public ProtocolId SelfProtocolId
-    {
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _SelfProtocolId;
-    }
+    public ProtocolId SelfProtocolId { get; }
 
     /// <summary>
     /// The dispatch context for the protocol currently being parsed.
@@ -140,15 +106,11 @@ public readonly ref struct ParseContext
     /// was not invoked via a dispatch table lookup (e.g., root frame protocol, direct call).
     /// <para>
     /// Protocol implementations use this to identify which table and key triggered them —
-    /// for example, Signal PDU uses it to select the correct PDU definition without
+    /// for example, Signal Message uses it to select the correct PDU definition without
     /// inspecting individual parent-protocol fields.
     /// </para>
     /// </summary>
-    public DispatchContext Dispatch
-    {
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _Dispatch;
-    }
+    public DispatchContext Dispatch { get; }
 
     #endregion
 
@@ -168,7 +130,7 @@ public readonly ref struct ParseContext
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal ParseContext WithDispatch(DispatchContext dispatch)
-        => new(_Index, dispatch, _Stack, _SelfProtocolId);
+        => new(_Index, dispatch, Stack, SelfProtocolId);
 
     /// <summary>
     /// Returns a copy of this context with <see cref="SelfProtocolId"/> set to
@@ -178,7 +140,7 @@ public readonly ref struct ParseContext
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal ParseContext WithSelfProtocol(ProtocolId protocolId)
-        => new(_Index, _Dispatch, _Stack, protocolId);
+        => new(_Index, Dispatch, Stack, protocolId);
 
     /// <summary>
     /// Records that the current packet contains the given index group.

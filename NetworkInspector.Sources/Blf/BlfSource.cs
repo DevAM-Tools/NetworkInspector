@@ -21,7 +21,8 @@ public sealed partial class BlfSource : IRandomAccessFrameSource, IErrorTolerant
     private readonly BlfFileInfo _FileInfo;
     private readonly BlfFrameIndex _Index;
     private readonly BlfSourceOptions _Options;
-    private readonly string _UiName;
+    /// <inheritdoc />
+    public string UiName { get; }
 
     // Container cache for random access (2Q algorithm from Stack project).
     // The cache itself is not thread-safe; all accesses are guarded by _ContainerCacheLock.
@@ -35,14 +36,14 @@ public sealed partial class BlfSource : IRandomAccessFrameSource, IErrorTolerant
     /// </summary>
     private readonly Lock _ContainerCacheLock = new();
 
-    // Scanner for lazy/incremental scanning. Read with Volatile.Read(ref _Scanner) so a
-    // null write from Dispose() is observed promptly by sequential / random-access paths.
-    private BlfIncrementalScanner? _Scanner;
-    private bool _FullyScanned;
+    // Scanner for lazy/incremental scanning. Declared volatile so a null write from
+    // Dispose() is observed promptly by sequential / random-access paths.
+    private volatile BlfIncrementalScanner? _Scanner;
+    private volatile bool _FullyScanned;
 
     // Interface registration
     private FrameSourceId _SourceId;
-    private FrameInterfaceRegistry? _Registry;
+    private volatile FrameInterfaceRegistry? _Registry;
     private readonly Dictionary<(uint ObjectType, ushort Channel), FrameInterfaceId> _InterfaceMap = new();
 
     /// <summary>
@@ -58,14 +59,15 @@ public sealed partial class BlfSource : IRandomAccessFrameSource, IErrorTolerant
 
     // Sequential read state
     private int _NextFrameIndex;
-    private bool _Started;
-    private bool _Disposed;
+    private volatile bool _Started;
+    /// <summary>Atomic dispose latch (0 = live, 1 = disposed).</summary>
+    private volatile int _Disposed;
 
     // Error tolerance statistics
-    private long _ReadFrameCount;
-    private long _SkippedFrameCount;
-    private long _ErrorCount;
-    private bool _Aborted;
+    private volatile int _ReadFrameCount;
+    private readonly SaturatingVolatileCounter _SkippedFrameCount = new();
+    private readonly SaturatingVolatileCounter _ErrorCount = new();
+    private volatile bool _Aborted;
 
     /// <summary>Tracks scanner decompression failures already reported via HandleSkip.</summary>
     private long _LastReportedDecompressionFailures;
@@ -87,7 +89,7 @@ public sealed partial class BlfSource : IRandomAccessFrameSource, IErrorTolerant
     /// </summary>
     [SuppressMessage("Reliability", "CA2213:Disposable fields should be disposed",
         Justification = "Intentionally not disposed. Disposing the lock while a concurrent FrameById caller " +
-                        "may still be entering the read lock (they observe _Disposed == true and exit, " +
+                        "may still be entering the read lock (they observe _Disposed != 0 and exit, " +
                         "but the window is not zero) would cause SynchronizationLockException. " +
                         "The lock holds only managed state that the GC collects once BlfSource is unreachable.")]
     private readonly ReaderWriterLockSlim _LifetimeLock = new(LockRecursionPolicy.NoRecursion);
@@ -125,7 +127,7 @@ public sealed partial class BlfSource : IRandomAccessFrameSource, IErrorTolerant
         _FileInfo = fileInfo;
         _Index = new();
         _Options = options;
-        _UiName = uiName;
+        UiName = uiName;
         ErrorTolerance = options.ErrorTolerance;
         _ContainerCache = TwoQueueCache.Create2Q<long, byte[]>(
             options.CacheBudget,
@@ -140,9 +142,6 @@ public sealed partial class BlfSource : IRandomAccessFrameSource, IErrorTolerant
     #region Properties
 
     /// <inheritdoc/>
-    public string UiName => _UiName;
-
-    /// <inheritdoc/>
     public string? Description => null;
 
     /// <inheritdoc/>
@@ -150,7 +149,7 @@ public sealed partial class BlfSource : IRandomAccessFrameSource, IErrorTolerant
     {
         get
         {
-            if (Volatile.Read(ref _FullyScanned))
+            if (_FullyScanned)
             {
                 return _Index.Count;
             }
@@ -160,36 +159,21 @@ public sealed partial class BlfSource : IRandomAccessFrameSource, IErrorTolerant
     }
 
     /// <inheritdoc/>
-    public bool IsFrameCountTruncated
-    {
-        get
-        {
-            BlfIncrementalScanner? scanner = Volatile.Read(ref _Scanner);
-            if (scanner is not null)
-            {
-                return scanner.IsIndexFull;
-            }
-
-            return _Index.IsFull;
-        }
-    }
-
-    /// <inheritdoc/>
-    public bool IsRunning => Volatile.Read(ref _Started) && !Volatile.Read(ref _Disposed);
+    public bool IsRunning => _Started && _Disposed == 0;
 
     // ── IErrorTolerantFrameSource / IFrameSourceStatistics ────────────────────
 
     /// <inheritdoc/>
-    public long ReadFrameCount => Volatile.Read(ref _ReadFrameCount);
+    public int ReadFrameCount => _ReadFrameCount;
 
     /// <inheritdoc/>
-    public long SkippedFrameCount => Volatile.Read(ref _SkippedFrameCount);
+    public int SkippedFrameCount => _SkippedFrameCount.Value;
 
     /// <inheritdoc/>
-    public long ErrorCount => Volatile.Read(ref _ErrorCount);
+    public int ErrorCount => _ErrorCount.Value;
 
     /// <inheritdoc/>
-    public bool HasErrors => Volatile.Read(ref _ErrorCount) > 0;
+    public bool HasErrors => _ErrorCount.Value > 0;
 
     /// <summary>
     /// Number of silent random-access read failures accumulated by <see cref="FrameById"/> calls.
@@ -310,14 +294,14 @@ public sealed partial class BlfSource : IRandomAccessFrameSource, IErrorTolerant
         _SourceId = sourceId;
         _Registry = registry;
         _NextFrameIndex = 0;
-        Volatile.Write(ref _Started, true);
+        _Started = true;
 
         // If fully scanned, store discovered channel names for interface naming.
-        // Read _Scanner via Volatile so a parallel Dispose() (allowed by SOURCE_GUIDE
+        // Read _Scanner so a parallel Dispose() (allowed by SOURCE_GUIDE
         // §13.1) can never present us with a torn null reference between the
         // null-check and the dereference.
-        BlfIncrementalScanner? scanner = Volatile.Read(ref _Scanner);
-        if (Volatile.Read(ref _FullyScanned) && scanner is not null)
+        BlfIncrementalScanner? scanner = _Scanner;
+        if (_FullyScanned && scanner is not null)
         {
             _ChannelNames = scanner.ChannelNames;
         }
@@ -330,24 +314,24 @@ public sealed partial class BlfSource : IRandomAccessFrameSource, IErrorTolerant
     /// </remarks>
     public Frame? NextFrame(CancellationToken cancellationToken = default)
     {
-        ObjectDisposedException.ThrowIf(Volatile.Read(ref _Disposed), this);
+        ObjectDisposedException.ThrowIf(_Disposed != 0, this);
 
-        if (!Volatile.Read(ref _Started))
+        if (!_Started)
         {
             throw new InvalidOperationException("BlfSource has not been started.");
         }
 
-        if (Volatile.Read(ref _Aborted))
+        if (_Aborted)
         {
             return null;
         }
 
-        // If not fully scanned, try to scan more. Snapshot _Scanner via Volatile.Read
+        // If not fully scanned, try to scan more. Snapshot _Scanner
         // so a concurrent Dispose() does not null out the reference between checks.
         // NextFrame() is single-threaded by contract (SOURCE_GUIDE §13.1) but Dispose()
-        // is not; the snapshot makes the read symmetric with Dispose's Volatile.Write.
-        BlfIncrementalScanner? scanner = Volatile.Read(ref _Scanner);
-        if (!Volatile.Read(ref _FullyScanned) && scanner is not null)
+        // is not; the snapshot makes the read symmetric with Dispose's null write.
+        BlfIncrementalScanner? scanner = _Scanner;
+        if (!_FullyScanned && scanner is not null)
         {
             while (_NextFrameIndex >= _Index.Count && !scanner.IsExhausted)
             {
@@ -367,7 +351,7 @@ public sealed partial class BlfSource : IRandomAccessFrameSource, IErrorTolerant
                         Message = $"Container decompression failed (failure #{_LastReportedDecompressionFailures})."
                     });
 
-                    if (Volatile.Read(ref _Aborted))
+                    if (_Aborted)
                     {
                         return null;
                     }
@@ -386,7 +370,7 @@ public sealed partial class BlfSource : IRandomAccessFrameSource, IErrorTolerant
                         Message = $"Container header offset out of bounds (corrupted container #{_LastReportedCorruptedContainerCount})."
                     });
 
-                    if (Volatile.Read(ref _Aborted))
+                    if (_Aborted)
                     {
                         return null;
                     }
@@ -405,16 +389,16 @@ public sealed partial class BlfSource : IRandomAccessFrameSource, IErrorTolerant
                         Message = $"Truncated BLF object at container boundary (dropped #{_LastReportedTruncatedObjectCount})."
                     });
 
-                    if (Volatile.Read(ref _Aborted))
+                    if (_Aborted)
                     {
                         return null;
                     }
                 }
             }
 
-            if (scanner.IsExhausted && !Volatile.Read(ref _FullyScanned))
+            if (scanner.IsExhausted && !_FullyScanned)
             {
-                Volatile.Write(ref _FullyScanned, true);
+                _FullyScanned = true;
                 _Index.ShrinkToFit();
                 _ChannelNames = scanner.ChannelNames;
             }
@@ -435,7 +419,7 @@ public sealed partial class BlfSource : IRandomAccessFrameSource, IErrorTolerant
             // BuildFrame returned null — frame could not be constructed.
             // HandleSkip was already called inside BuildFrame for specific error causes.
             // If we're aborted (strict mode), stop here.
-            if (Volatile.Read(ref _Aborted))
+            if (_Aborted)
             {
                 return null;
             }
@@ -467,20 +451,20 @@ public sealed partial class BlfSource : IRandomAccessFrameSource, IErrorTolerant
         _LifetimeLock.EnterReadLock();
         try
         {
-            if (Volatile.Read(ref _Disposed))
+            if (_Disposed != 0)
             {
                 ObjectDisposedException.ThrowIf(true, this);
             }
 
             // Reject before Start(): _Registry is null and BuildFrame would NRE.
-            if (!Volatile.Read(ref _Started))
+            if (!_Started)
             {
                 throw new InvalidOperationException("BlfSource has not been started.");
             }
 
             // While a lazy scan is still appending entries the index / channel map
             // are not stable; mirror PcapSource.FrameById and refuse the call.
-            if (!Volatile.Read(ref _FullyScanned))
+            if (!_FullyScanned)
             {
                 return null;
             }
@@ -508,45 +492,37 @@ public sealed partial class BlfSource : IRandomAccessFrameSource, IErrorTolerant
     /// <inheritdoc/>
     public void Dispose()
     {
-        if (Volatile.Read(ref _Disposed))
+        if (Interlocked.Exchange(ref _Disposed, 1) != 0)
         {
             return;
         }
 
         // Acquire the write lock before touching the backend so that any concurrent
         // FrameById readers holding the read lock can finish consuming their mmap spans
-        // before the primary pointer is released. The double-checked pattern inside the
-        // lock handles the race where two threads enter Dispose simultaneously.
+        // before the primary pointer is released.
         _LifetimeLock.EnterWriteLock();
         try
         {
-            if (Volatile.Read(ref _Disposed))
-            {
-                return;
-            }
-
-            Volatile.Write(ref _Disposed, true);
             // _Started intentionally left set: it is a one-shot "has Start been called"
-            // latch (see SOURCE_GUIDE §13.3). IsRunning combines it with !_Disposed.
+            // latch (see SOURCE_GUIDE §13.3). IsRunning combines it with _Disposed == 0.
             // Clear the registry reference so the session can be GC'd after Dispose().
-            // Volatile.Write ensures the null store is not reordered before the
-            // _Disposed = true store on weakly-ordered architectures (ARM/Apple Silicon).
-            // TryBuildFrame reads _Registry with Volatile.Read; the write must be
-            // equivalently fenced so a concurrent reader cannot observe null without
-            // also observing _Disposed == true.
-            Volatile.Write(ref _Registry, null);
+            // The volatile store on _Registry must not be reordered before the
+            // _Disposed latch store on weakly-ordered architectures (ARM/Apple Silicon).
+            // TryBuildFrame reads _Registry; the write must be equivalently fenced so a
+            // concurrent reader cannot observe null without also observing _Disposed != 0.
+            _Registry = null;
             lock (_ContainerCacheLock)
             {
                 _ContainerCache.Clear();
             }
-            Volatile.Write(ref _Scanner, null);
+            _Scanner = null;
             // Wrapped so that a backend disposal failure does not prevent the write lock
             // from being released by the finally block.
             try
             {
                 _Backend.Dispose();
             }
-            catch (Exception) { Interlocked.Increment(ref _ErrorCount); }
+            catch (Exception) { _ErrorCount.Increment(); }
         }
         finally
         {
@@ -556,7 +532,7 @@ public sealed partial class BlfSource : IRandomAccessFrameSource, IErrorTolerant
         // _LifetimeLock is intentionally NOT disposed here. It holds only managed state
         // that the GC will collect once BlfSource is unreachable. Disposing it while
         // concurrent FrameById callers may still be entering the read lock (they observe
-        // _Disposed == true and exit, but the window is not zero) would cause a
+        // _Disposed != 0 and exit, but the window is not zero) would cause a
         // SynchronizationLockException. Leaving it undisposed is safe and correct.
         _DecompressionSemaphore.Dispose();
         GC.SuppressFinalize(this);

@@ -4,6 +4,8 @@ namespace NetworkInspector.Sessions;
 
 /// <summary>
 /// Spin-then-sleep wait helpers for non-hot-path blocking (job join, shutdown drain).
+/// <see cref="Session"/> uses a tight <see cref="SpinWait"/> loop for concurrent
+/// <see cref="Session.Shutdown"/> callers where minimal latency is preferred.
 /// Caps busy-spin before yielding to avoid burning a core when work is slow or stuck.
 /// </summary>
 internal static class ThreadWaitHelper

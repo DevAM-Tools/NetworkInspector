@@ -27,10 +27,14 @@
       https://learn.microsoft.com/dotnet/fundamentals/code-analysis/quality-rules/ca1720
       Flags identifiers that embed CLR type words (String, Signed, Unsigned, Single, …).
       Ignored globally: field-type and wire-format enums mirror protocol/tshark naming
-      (FieldType.String, DispatchKeyKind.String, SignalPdu signedness, PDU transport modes);
+      (FieldType.String, DispatchKeyKind.String, Signal Message signedness, PDU transport modes);
       alternate names would diverge from dissector labels and user-facing field names.
     -->
-    <NoWarn>$(NoWarn);CA1711;CA1720</NoWarn>
+    <!--
+      IDE1006 — Naming rule violation (e.g. underscore-prefixed private fields/methods).
+      Ignored globally: the solution uses _camelCase for private members and helpers by convention.
+    -->
+    <NoWarn>$(NoWarn);CA1711;CA1720;IDE1006</NoWarn>
 
     <!-- Build -->
     <Deterministic>true</Deterministic>
@@ -43,7 +47,7 @@
     <EnableTrimAnalyzer>false</EnableTrimAnalyzer>
 
     <!-- Version & package metadata -->
-    <Version>0.5.0</Version>
+    <Version>0.6.0</Version>
     <Authors>DevAM</Authors>
     <Company>DevAM</Company>
     <Copyright>Copyright © 2026 DevAM. All rights reserved.</Copyright>

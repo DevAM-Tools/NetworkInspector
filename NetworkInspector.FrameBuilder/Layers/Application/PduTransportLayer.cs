@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.FrameBuilder;
 
@@ -16,7 +16,7 @@ namespace NetworkInspector.FrameBuilder;
 /// <para>Capabilities:</para>
 /// <list type="bullet">
 ///   <item><see cref="IInteriorLayer"/> — sub-layer (e.g.
-///   <see cref="SignalPduLayer"/>) chains beneath it; mutually exclusive
+///   <see cref="SignalMessageLayer"/>) chains beneath it; mutually exclusive
 ///   with <see cref="IPayloadLayer"/> per the capability contract.</item>
 ///   <item><see cref="IStatelessLayer"/> — no per-frame mutable state.</item>
 ///   <item><see cref="IPseudoHeaderIndependent"/> — needs no transport pseudo
@@ -40,9 +40,14 @@ namespace NetworkInspector.FrameBuilder;
 /// </remarks>
 public readonly struct PduTransportLayer : IStatelessLayer, IInteriorLayer, IPseudoHeaderIndependent
 {
-    private readonly uint _PduId;
-    private readonly byte _IdSize;
-    private readonly byte _LengthSize;
+    /// <summary>The PDU identifier this layer encodes.</summary>
+    public uint PduId { get; }
+
+    /// <summary>Size of the on-the-wire ID field in bytes.</summary>
+    public byte IdSize { get; }
+
+    /// <summary>Size of the on-the-wire Length field in bytes.</summary>
+    public byte LengthSize { get; }
 
     /// <summary>
     /// Creates a single-PDU PDU-Transport header layer that emits one
@@ -59,47 +64,26 @@ public readonly struct PduTransportLayer : IStatelessLayer, IInteriorLayer, IPse
 
     private PduTransportLayer(uint pduId, byte idSize, byte lengthSize)
     {
-        _PduId = pduId;
-        _IdSize = idSize;
-        _LengthSize = lengthSize;
-    }
-
-    /// <summary>The PDU identifier this layer encodes.</summary>
-    public uint PduId
-    {
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _PduId;
-    }
-
-    /// <summary>Size of the on-the-wire ID field in bytes.</summary>
-    public byte IdSize
-    {
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _IdSize;
-    }
-
-    /// <summary>Size of the on-the-wire Length field in bytes.</summary>
-    public byte LengthSize
-    {
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _LengthSize;
+        PduId = pduId;
+        IdSize = idSize;
+        LengthSize = lengthSize;
     }
 
     /// <inheritdoc />
     public int HeaderSize
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _IdSize + _LengthSize;
+        get => IdSize + LengthSize;
     }
 
     /// <inheritdoc />
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void WriteHeader(scoped Span<byte> dst)
     {
-        PduTransportEncoding.WriteBigEndian(dst[.._IdSize], _PduId, _IdSize);
+        PduTransportEncoding.WriteBigEndian(dst[..IdSize], PduId, IdSize);
         // Length stays zero; patched in FixPhase.Length once the inner layer's
         // contribution is known.
-        dst.Slice(_IdSize, _LengthSize).Clear();
+        dst.Slice(IdSize, LengthSize).Clear();
     }
 
     /// <inheritdoc />
@@ -113,7 +97,7 @@ public readonly struct PduTransportLayer : IStatelessLayer, IInteriorLayer, IPse
 
         // myLength = ID + Length + payload; we want only the payload count.
         uint payloadLength = (uint)(myLength - HeaderSize);
-        PduTransportEncoding.WriteBigEndian(frame.Slice(myOffset + _IdSize, _LengthSize), payloadLength, _LengthSize);
+        PduTransportEncoding.WriteBigEndian(frame.Slice(myOffset + IdSize, LengthSize), payloadLength, LengthSize);
     }
 }
 

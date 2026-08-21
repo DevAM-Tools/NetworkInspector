@@ -4,7 +4,7 @@ namespace NetworkInspector.Core.Tests;
 
 /// <summary>
 /// Tests for the post-parser pipeline: build-time sort order, runtime execution lifecycle,
-/// error and exception handling, indexed-parse integration, and value-cache integration.
+/// error and exception handling, and indexed-parse integration.
 /// </summary>
 internal sealed class PostParserTests
 {
@@ -266,7 +266,7 @@ internal sealed class PostParserTests
         Packet packet = Packet.ParseFrame(new PacketId(1), stack, frame);
 
         // Assert: custom field appears in the packet tree
-        bool found = packet.TryGetFieldValue(customFieldId, out FieldValue value);
+        bool found = packet.TryGetFieldValue(customFieldId, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
         await Assert.That(found).IsTrue();
         bool asU64 = value.Data.TryGetAsU64(out ulong u64Value);
         await Assert.That(asU64).IsTrue();
@@ -329,7 +329,7 @@ internal sealed class PostParserTests
         await Assert.That(postParserRan).IsTrue();
 
         // Assert: main parse error was recorded
-        bool hasError = packet.TryGetFieldValue(stack.PacketErrorFieldId, out _);
+        bool hasError = packet.TryGetFieldValue(stack.PacketErrorFieldId, out _, materialize: true); // materialize: true — need complete field tree for assertion
         await Assert.That(hasError).IsTrue();
 
         stack.Dispose();
@@ -360,7 +360,7 @@ internal sealed class PostParserTests
         await Assert.That(postParserRan).IsTrue();
 
         // Assert: main exception was recorded as packet error
-        bool hasError = packet.TryGetFieldValue(stack.PacketErrorFieldId, out _);
+        bool hasError = packet.TryGetFieldValue(stack.PacketErrorFieldId, out _, materialize: true); // materialize: true — need complete field tree for assertion
         await Assert.That(hasError).IsTrue();
 
         stack.Dispose();
@@ -402,7 +402,7 @@ internal sealed class PostParserTests
         await Assert.That(ran[1]).IsEqualTo("pp3");
 
         // Assert: pp1's error was recorded
-        bool hasError = packet.TryGetFieldValue(stack.PacketErrorFieldId, out _);
+        bool hasError = packet.TryGetFieldValue(stack.PacketErrorFieldId, out _, materialize: true); // materialize: true — need complete field tree for assertion
         await Assert.That(hasError).IsTrue();
 
         stack.Dispose();
@@ -444,7 +444,7 @@ internal sealed class PostParserTests
         await Assert.That(ran[1]).IsEqualTo("pp3");
 
         // Assert: pp1's exception was recorded as packet error
-        bool hasError = packet.TryGetFieldValue(stack.PacketErrorFieldId, out _);
+        bool hasError = packet.TryGetFieldValue(stack.PacketErrorFieldId, out _, materialize: true); // materialize: true — need complete field tree for assertion
         await Assert.That(hasError).IsTrue();
 
         stack.Dispose();
@@ -468,7 +468,7 @@ internal sealed class PostParserTests
 
         // Assert: parse completed normally, no errors
         await Assert.That(packet.IsFinalized).IsTrue();
-        bool hasError = packet.TryGetFieldValue(stack.PacketErrorFieldId, out _);
+        bool hasError = packet.TryGetFieldValue(stack.PacketErrorFieldId, out _, materialize: true); // materialize: true — need complete field tree for assertion
         await Assert.That(hasError).IsFalse();
 
         stack.Dispose();
@@ -629,7 +629,7 @@ internal sealed class PostParserTests
         stack.Dispose();
     }
 
-    // ── Index and value-cache integration ─────────────────────────────────────────────
+    // ── Index integration ──────────────────────────────────────────────────────────────
 
     [Test]
     public async Task PostParsers_RecordProtocolPresence_AppearsInProtocolBitmap()

@@ -109,18 +109,19 @@ public sealed class RandomFrameSource(RandomSourceOptions options, string? uiNam
     private Timestamp _BaseTimestamp;
 
     /// <summary>User-friendly source name.</summary>
-    private readonly string _UiName = uiName ?? _BuildDefaultName(options);
+    /// <inheritdoc />
+    public string UiName { get; } = uiName ?? _BuildDefaultName(options);
 
     // ─── Runtime state ────────────────────────────────────────────────────────
 
     /// <summary>Zero-based index of the next frame to produce.</summary>
-    private int _FrameIndex;
+    private volatile int _FrameIndex;
 
     /// <summary>Whether <see cref="Start"/> has been called.</summary>
-    private bool _Started;
+    private volatile bool _Started;
 
-    /// <summary>Whether this instance has been disposed.</summary>
-    private bool _Disposed;
+    /// <summary>Atomic dispose latch (0 = live, 1 = disposed).</summary>
+    private volatile int _Disposed;
 
     /// <summary>Registry supplied by Start.</summary>
     private FrameInterfaceRegistry? _Registry;
@@ -162,27 +163,24 @@ public sealed class RandomFrameSource(RandomSourceOptions options, string? uiNam
     // ─── IFrameSource ─────────────────────────────────────────────────────────
 
     /// <inheritdoc/>
-    public string UiName => _UiName;
-
-    /// <inheritdoc/>
     public string? Description =>
         $"Synthetic random frame source — mode={_Options.Mode}, " +
-        $"seed={(_Options.Seed.HasValue ? _Options.Seed.Value.ToString(CultureInfo.InvariantCulture) : (Volatile.Read(ref _Started) ? _MasterSeed.ToString(CultureInfo.InvariantCulture) : "<entropy>"))}, " +
+        $"seed={(_Options.Seed.HasValue ? _Options.Seed.Value.ToString(CultureInfo.InvariantCulture) : (_Started ? _MasterSeed.ToString(CultureInfo.InvariantCulture) : "<entropy>"))}, " +
         $"count={_Options.FrameCount}";
 
     /// <inheritdoc/>
     public int? EstimatedFrameCount =>
-        _TcpStreamLayout is { } layout
-            ? (_Options.FrameCount > 0 ? Math.Min(_Options.FrameCount, layout.TotalFrameCount) : layout.TotalFrameCount)
+        _TcpStreamLayout is not null
+            ? (_Options.FrameCount > 0 ? Math.Min(_Options.FrameCount, _TcpStreamLayout.Value.TotalFrameCount) : _TcpStreamLayout.Value.TotalFrameCount)
             : (_Options.FrameCount > 0 ? _Options.FrameCount : null);
 
     /// <inheritdoc/>
-    public bool IsRunning => Volatile.Read(ref _Started) && !Volatile.Read(ref _Disposed);
+    public bool IsRunning => _Started && _Disposed == 0;
 
     /// <inheritdoc/>
     public void Start(FrameSourceId sourceId, FrameInterfaceRegistry registry)
     {
-        ObjectDisposedException.ThrowIf(Volatile.Read(ref _Disposed), this);
+        ObjectDisposedException.ThrowIf(_Disposed != 0, this);
         ArgumentNullException.ThrowIfNull(registry);
 
         // Options were validated at construction time; re-validate is unnecessary.
@@ -211,26 +209,32 @@ public sealed class RandomFrameSource(RandomSourceOptions options, string? uiNam
             _TcpStreamLayout = new TcpStreamLayout(_Options.TcpStreamOptions);
         }
 
-        Volatile.Write(ref _Started, true);
+        _Started = true;
     }
+
+    /// <summary>
+    /// Test seam: sets the next frame index after <see cref="Start"/>.
+    /// Visible to <c>NetworkInspector.Sources.Tests</c> via InternalsVisibleTo.
+    /// </summary>
+    internal void SetFrameIndexForTests(int index) => _FrameIndex = index;
 
     /// <inheritdoc/>
     public Frame? NextFrame(CancellationToken cancellationToken = default)
     {
-        ObjectDisposedException.ThrowIf(Volatile.Read(ref _Disposed), this);
+        ObjectDisposedException.ThrowIf(_Disposed != 0, this);
 
-        if (!Volatile.Read(ref _Started))
+        if (!_Started)
         {
             throw new InvalidOperationException("RandomFrameSource.Start() must be called before NextFrame().");
         }
 
         cancellationToken.ThrowIfCancellationRequested();
 
-        // Read _FrameIndex via Volatile.Read so that any compiler or JIT
+        // Read _FrameIndex so that any compiler or JIT
         // reordering of the load relative to the _Started/_Disposed checks above is
         // prevented.  The increment uses Volatile.Write for the same reason, and for
         // consistency with other IFrameSource implementations in this codebase.
-        int currentIndex = Volatile.Read(ref _FrameIndex);
+        int currentIndex = _FrameIndex;
 
         if (_Options.FrameCount > 0 && currentIndex >= _Options.FrameCount)
         {
@@ -238,12 +242,15 @@ public sealed class RandomFrameSource(RandomSourceOptions options, string? uiNam
         }
 
         // TCP stream modes use stateless layout-based generation
-        if (_TcpStreamLayout is { } layout)
+        if (_TcpStreamLayout is not null)
         {
+            TcpStreamLayout layout = _TcpStreamLayout.Value;
             if (currentIndex >= layout.TotalFrameCount)
             {
                 return null;
             }
+
+            ArrayIndexIdRange.ThrowIfInvalidNextIndex(currentIndex, "frame");
 
             bool isIpv6 = _Options.Mode == RandomFrameMode.TcpStreamIPv6;
             byte[]? streamData = TcpStreamFrameBuilder.BuildFrame(
@@ -269,26 +276,27 @@ public sealed class RandomFrameSource(RandomSourceOptions options, string? uiNam
                     $"RandomFrameSource failed to create TCP stream frame at index {currentIndex}: {streamResult.Error}");
             }
 
-            Volatile.Write(ref _FrameIndex, currentIndex + 1);
+            _FrameIndex = currentIndex + 1;
             return streamResult.Value;
         }
 
+        ArrayIndexIdRange.ThrowIfInvalidNextIndex(currentIndex, "frame");
+
         Frame frame = _GenerateFrameByIndex(currentIndex);
-        Volatile.Write(ref _FrameIndex, currentIndex + 1);
+        _FrameIndex = currentIndex + 1;
         return frame;
     }
 
     /// <inheritdoc/>
     public void Dispose()
     {
-        if (Volatile.Read(ref _Disposed))
+        if (Interlocked.Exchange(ref _Disposed, 1) != 0)
         {
             return;
         }
 
-        Volatile.Write(ref _Disposed, true);
         // _Started intentionally left set: it is a one-shot "has Start been called"
-        // latch (see SOURCE_GUIDE §13.3). IsRunning combines it with !_Disposed.
+        // latch (see SOURCE_GUIDE §13.3). IsRunning combines it with _Disposed == 0.
         // Clear the registry reference so the session can be GC'd after Dispose().
         _Registry = null;
 

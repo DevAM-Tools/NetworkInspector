@@ -81,17 +81,17 @@ internal sealed class FrameIndex
     /// Readers: take one <see cref="System.Threading.Volatile"/> Read snapshot
     /// per logical operation and use that snapshot throughout.
     /// </summary>
-    private IndexArrays _Arrays;
+    private volatile IndexArrays _Arrays;
 
     /// <summary>Number of frames currently stored. Published with <see cref="System.Threading.Volatile"/> Write.</summary>
-    private int _Count;
+    private volatile int _Count;
 
     #endregion
 
     #region Properties
 
     /// <summary>Gets the number of frames in the index. Safe to call from any thread.</summary>
-    internal int Count => Volatile.Read(ref _Count);
+    internal int Count => _Count;
 
     #endregion
 
@@ -108,25 +108,21 @@ internal sealed class FrameIndex
 
     #region Public API
 
-    /// <summary>Whether the index has reached its maximum capacity of <see cref="int.MaxValue"/> entries.</summary>
-    internal bool IsFull => Volatile.Read(ref _Count) == int.MaxValue;
-
     /// <summary>
-    /// Adds a frame to the index. Returns the zero-based frame index,
-    /// or <c>-1</c> if the index is full (<see cref="int.MaxValue"/> entries).
+    /// Adds a frame to the index. Returns the zero-based frame index.
     /// Single-writer only.
     /// </summary>
+    /// <exception cref="InvalidOperationException">
+    /// The next frame index would exceed <see cref="ArrayIndexIdRange.MaxValue"/>.
+    /// </exception>
     internal int Push(FrameOffset offset, long timestampNanos)
     {
         int count = _Count;
-        if (count == int.MaxValue)
-        {
-            return -1;
-        }
+        ArrayIndexIdRange.ThrowIfInvalidNextIndex(count, "frame");
 
         // Snapshot the current arrays (single-writer; no concurrent write possible here,
         // but Volatile.Read is used for consistency with the reader-side contract).
-        IndexArrays arrays = Volatile.Read(ref _Arrays);
+        IndexArrays arrays = _Arrays;
         if (count >= arrays.Offsets.Length)
         {
             arrays = _Grow(count);
@@ -136,29 +132,29 @@ internal sealed class FrameIndex
         arrays.Timestamps[count] = timestampNanos;
         // Publish the new count after the entry is fully written so concurrent readers
         // never observe a count that exceeds initialised data.
-        Volatile.Write(ref _Count, count + 1);
+        _Count = count + 1;
         return count;
     }
 
     /// <summary>Gets the frame offset at the given index. Safe for concurrent readers.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal ref readonly FrameOffset GetOffset(int index) => ref Volatile.Read(ref _Arrays).Offsets[index];
+    internal ref readonly FrameOffset GetOffset(int index) => ref _Arrays.Offsets[index];
 
     /// <summary>Gets the timestamp (nanoseconds) at the given index. Safe for concurrent readers.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal long GetTimestamp(int index) => Volatile.Read(ref _Arrays).Timestamps[index];
+    internal long GetTimestamp(int index) => _Arrays.Timestamps[index];
 
     /// <summary>Trims excess capacity to match the actual count. Single-writer only.</summary>
     internal void ShrinkToFit()
     {
         int count = _Count;
-        IndexArrays arrays = Volatile.Read(ref _Arrays);
+        IndexArrays arrays = _Arrays;
         if (count < arrays.Offsets.Length)
         {
             IndexArrays trimmed = new(count);
             Array.Copy(arrays.Offsets, trimmed.Offsets, count);
             Array.Copy(arrays.Timestamps, trimmed.Timestamps, count);
-            Volatile.Write(ref _Arrays, trimmed);
+            _Arrays = trimmed;
         }
     }
 
@@ -170,20 +166,20 @@ internal sealed class FrameIndex
     /// _Grows the backing arrays to fit at least <paramref name="required"/> entries.
     /// Creates a new <see cref="IndexArrays"/>, copies all existing data, and
     /// publishes atomically via a single <see cref="Volatile.Write{T}"/>.
-    /// _Growth uses doubling (saturating at <see cref="int.MaxValue"/>).
+    /// _Growth uses doubling (saturating at <see cref="ArrayIndexIdRange.MaxCount"/>).
     /// </summary>
     /// <param name="required">Minimum number of entries the new arrays must accommodate.</param>
     /// <returns>The newly published <see cref="IndexArrays"/>.</returns>
     private IndexArrays _Grow(int required)
     {
-        IndexArrays old = Volatile.Read(ref _Arrays);
+        IndexArrays old = _Arrays;
         int oldCapacity = old.Offsets.Length;
 
         // Doubling with overflow guard: a 64-bit intermediate keeps the math safe for
-        // the upper bound of int.MaxValue entries.
+        // the upper bound of ArrayIndexIdRange.MaxCount entries.
         long doubled = (long)oldCapacity * 2;
         long target = Math.Max(Math.Max(doubled, required), 1024);
-        int newCapacity = (int)Math.Min(target, int.MaxValue);
+        int newCapacity = (int)Math.Min(target, ArrayIndexIdRange.MaxCount);
 
         // Build new arrays, copy existing data, then publish atomically as a unit.
         // Readers who concurrently take a snapshot will see either the old or the new
@@ -192,7 +188,7 @@ internal sealed class FrameIndex
         int count = _Count;
         Array.Copy(old.Offsets, grown.Offsets, count);
         Array.Copy(old.Timestamps, grown.Timestamps, count);
-        Volatile.Write(ref _Arrays, grown);
+        _Arrays = grown;
         return grown;
     }
 

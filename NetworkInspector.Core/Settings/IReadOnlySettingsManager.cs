@@ -27,15 +27,28 @@ public interface IReadOnlySettingsManager
         get;
     }
 
+    /// <summary>
+    /// Gets the storage path used for JSON persistence, or <see langword="null"/> when
+    /// no storage path is configured.
+    /// </summary>
+    string? StoragePath
+    {
+        get;
+    }
+
     #endregion
 
     #region Querying
 
-    /// <summary>Gets a setting by name. Returns <c>null</c> if not found.</summary>
-    IReadOnlySetting? GetSetting(string name);
+    /// <summary>
+    /// Gets a setting by name. Returns <c>null</c> if not found.
+    /// Keep the compile-time type as <see cref="ReadOnlySettingView"/>; assigning to
+    /// <see cref="IReadOnlySetting"/> boxes.
+    /// </summary>
+    ReadOnlySettingView? GetSetting(string name);
 
-    /// <summary>Gets all settings (snapshot).</summary>
-    IReadOnlyList<IReadOnlySetting> AllSettings
+    /// <summary>Gets all settings as read-only struct views (snapshot).</summary>
+    IReadOnlyList<ReadOnlySettingView> AllSettings
     {
         get;
     }
@@ -46,11 +59,15 @@ public interface IReadOnlySettingsManager
         get;
     }
 
-    /// <summary>Gets a group by name. Returns <c>null</c> if not found.</summary>
-    IReadOnlySettingGroup? GetGroup(string name);
+    /// <summary>
+    /// Gets a group by name. Returns <c>null</c> if not found.
+    /// Keep the compile-time type as <see cref="ReadOnlySettingGroupView"/>; assigning to
+    /// <see cref="IReadOnlySettingGroup"/> boxes.
+    /// </summary>
+    ReadOnlySettingGroupView? GetGroup(string name);
 
-    /// <summary>Gets all settings in a group (snapshot).</summary>
-    IReadOnlyList<IReadOnlySetting> GetSettingsInGroup(string groupName);
+    /// <summary>Gets all settings in a group as read-only struct views (snapshot).</summary>
+    IReadOnlyList<ReadOnlySettingView> GetSettingsInGroup(string groupName);
 
     #endregion
 
@@ -70,5 +87,19 @@ public interface IReadOnlySettingsManager
 
     /// <summary>Convenience: gets a long setting value by name.</summary>
     long? GetI64Setting(string name);
+
+    /// <summary>
+    /// Convenience: gets a byte array setting value by name.
+    /// Returns a defensive copy of the stored bytes, or <see langword="null"/> when the
+    /// name is unregistered or the setting is not <see cref="SettingType.Bytes"/>.
+    /// </summary>
+    byte[]? GetBytesSetting(string name);
+
+    /// <summary>
+    /// Convenience: gets an enum setting (name, numeric value) by name.
+    /// Returns <see langword="null"/> when the name is unregistered or the setting is not
+    /// <see cref="SettingType.Enum"/>.
+    /// </summary>
+    (string Name, ulong Value)? GetEnumSetting(string name);
     #endregion
 }

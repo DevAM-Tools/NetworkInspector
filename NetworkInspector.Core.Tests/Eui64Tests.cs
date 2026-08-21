@@ -35,11 +35,16 @@ internal sealed class Eui64Tests
     }
 
     [Test]
-    public async Task FromBytes_TooShort_ReturnsDefault()
+    public async Task FromBytes_TooShort_Throws()
     {
         byte[] bytes = [0x00, 0x11, 0x22];
-        Eui64 eui = Eui64.FromBytes(bytes);
-        await Assert.That(eui.RawValue).IsEqualTo(0UL);
+        await Assert.That(() =>
+        {
+            Eui64 _ = Eui64.FromBytes(bytes);
+            return Task.CompletedTask;
+        }).Throws<ArgumentException>();
+        await Assert.That(Eui64.TryFromBytes(bytes, out Eui64 eui)).IsFalse();
+        await Assert.That(eui).IsEqualTo(default(Eui64));
     }
 
     // === Binary roundtrip ===

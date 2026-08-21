@@ -13,7 +13,7 @@ internal sealed class StackEnumerationTests
         ProtocolTableId AnyTable, IndexGroupId IndexGroup, FieldAliasGroupId AliasGroup)
         _BuildRichBuilder()
     {
-        using SettingsManager settingsManager = new();
+        SettingsManager settingsManager = new();
         StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
 
         ProtocolId child1 = builder.RegisterProtocol(new StubProtocol("child1", "Child 1"));
@@ -166,7 +166,7 @@ internal sealed class StackEnumerationTests
         await Assert.That(anyIds!.Value.Length).IsEqualTo(2);
         await Assert.That(stack.GetU64TableEntries(ProtocolTableId.Invalid)).IsNull();
         await Assert.That(stack.IncludeExceptionStackTrace).IsFalse();
-        await Assert.That(stack.Settings).IsNotNull();
+        await Assert.That(stack.Settings.SettingCount).IsEqualTo(0);
     }
 
     private sealed class StubProtocol(string name, string uiName) : IProtocol

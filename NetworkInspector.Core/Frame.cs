@@ -21,6 +21,16 @@ namespace NetworkInspector.Core;
 /// the sentinel before access.
 /// </para>
 /// <para>
+/// <b>Equality contract:</b> <see cref="Equals(Frame)"/>, <see cref="operator=="/>, ordering,
+/// and <see cref="GetHashCode"/> compare <see cref="IsValid"/> then <see cref="FrameId"/> —
+/// not <see cref="Data"/>, <see cref="Timestamp"/>, <see cref="LinkType"/>, or
+/// <see cref="InterfaceId"/>. Two valid frames with the same ID are equal even when their
+/// payloads differ. <c>default(Frame)</c> / <see cref="Invalid"/> is not equal to a created
+/// frame with <see cref="FrameId"/> 0. Two sentinels are equal to each other.
+/// This matches capture pipelines where <see cref="FrameId"/> is the unique key among valid
+/// frames. Use explicit field comparison when payload identity matters.
+/// </para>
+/// <para>
 /// <b>Thread-safety:</b> <see cref="Frame"/> is an immutable value type — every field is
 /// <see langword="readonly"/> and the wrapped <see cref="ReadOnlyMemory{T}"/> guarantees
 /// read-only access to the payload. Instances are safe to share across any number of threads
@@ -243,31 +253,45 @@ public readonly struct Frame : IComparable<Frame>, IEquatable<Frame>
 
     #region Comparison
 
+    /// <summary>
+    /// Compares frames by <see cref="IsValid"/> then <see cref="FrameId"/> (payload and metadata are ignored).
+    /// Sentinels sort before valid frames.
+    /// </summary>
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public int CompareTo(Frame other) => _Id.CompareTo(other._Id);
+    public int CompareTo(Frame other)
+    {
+        int valid = IsValid.CompareTo(other.IsValid);
+        if (valid != 0)
+        {
+            return valid;
+        }
 
-    /// <summary>Compares frames by <see cref="FrameId"/>.</summary>
-    public static bool operator <(Frame left, Frame right) => left._Id < right._Id;
-    /// <summary>Compares frames by <see cref="FrameId"/>.</summary>
-    public static bool operator >(Frame left, Frame right) => left._Id > right._Id;
-    /// <summary>Compares frames by <see cref="FrameId"/>.</summary>
-    public static bool operator <=(Frame left, Frame right) => left._Id <= right._Id;
-    /// <summary>Compares frames by <see cref="FrameId"/>.</summary>
-    public static bool operator >=(Frame left, Frame right) => left._Id >= right._Id;
-    /// <summary>Checks equality by <see cref="FrameId"/>.</summary>
-    public static bool operator ==(Frame left, Frame right) => left._Id == right._Id;
-    /// <summary>Checks inequality by <see cref="FrameId"/>.</summary>
-    public static bool operator !=(Frame left, Frame right) => left._Id != right._Id;
+        return _Id.CompareTo(other._Id);
+    }
 
+    /// <summary>Compares frames by <see cref="IsValid"/> then <see cref="FrameId"/>.</summary>
+    public static bool operator <(Frame left, Frame right) => left.CompareTo(right) < 0;
+    /// <summary>Compares frames by <see cref="IsValid"/> then <see cref="FrameId"/>.</summary>
+    public static bool operator >(Frame left, Frame right) => left.CompareTo(right) > 0;
+    /// <summary>Compares frames by <see cref="IsValid"/> then <see cref="FrameId"/>.</summary>
+    public static bool operator <=(Frame left, Frame right) => left.CompareTo(right) <= 0;
+    /// <summary>Compares frames by <see cref="IsValid"/> then <see cref="FrameId"/>.</summary>
+    public static bool operator >=(Frame left, Frame right) => left.CompareTo(right) >= 0;
+    /// <summary>Checks equality by <see cref="IsValid"/> then <see cref="FrameId"/>.</summary>
+    public static bool operator ==(Frame left, Frame right) => left.Equals(right);
+    /// <summary>Checks inequality by <see cref="IsValid"/> then <see cref="FrameId"/>.</summary>
+    public static bool operator !=(Frame left, Frame right) => !left.Equals(right);
+
+    /// <summary>Compares by <see cref="IsValid"/> then <see cref="FrameId"/> (payload and metadata are ignored).</summary>
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public bool Equals(Frame other) => _Id == other._Id;
+    public bool Equals(Frame other) => IsValid == other.IsValid && _Id == other._Id;
 
     /// <inheritdoc/>
     public override bool Equals(object? obj) => obj is Frame other && Equals(other);
 
     /// <inheritdoc/>
-    public override int GetHashCode() => _Id.GetHashCode();
+    public override int GetHashCode() => HashCode.Combine(IsValid, _Id);
     #endregion
 }

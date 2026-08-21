@@ -28,9 +28,9 @@ public static class TwoQueueCache
     {
         ArgumentOutOfRangeException.ThrowIfNegative(maxWeight);
 
-        if (ghostMaxWeight is { } resolvedGhostMaxWeight)
+        if (ghostMaxWeight is not null)
         {
-            ArgumentOutOfRangeException.ThrowIfNegative(resolvedGhostMaxWeight);
+            ArgumentOutOfRangeException.ThrowIfNegative(ghostMaxWeight.Value);
         }
 
         int? effectiveGhostMaxWeight = maxWeight == 0 ? null : ghostMaxWeight ?? maxWeight;
@@ -330,8 +330,9 @@ public sealed class TwoQueueCache<TKey, TValue> where TKey : notnull
     private void _EvictIfNeeded()
     {
         // Phase 1: Trim A1in to its own limit (only when A1in has a separate budget)
-        if (_A1InMaxWeight is { } a1InLimit)
+        if (_A1InMaxWeight is not null)
         {
+            int a1InLimit = _A1InMaxWeight.Value;
             while (_A1InWeight > a1InLimit && !_A1In.IsEmpty)
             {
                 if (!_EvictFromA1In())

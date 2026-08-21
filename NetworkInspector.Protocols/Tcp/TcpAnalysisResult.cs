@@ -59,121 +59,84 @@ internal enum TcpAnalysisFlags : uint
 /// Result of TCP segment analysis. Captures all detected conditions and metrics
 /// for a single segment, produced during Parse() and consumed during lazy population.
 /// </summary>
-internal readonly struct TcpAnalysisResult
+internal readonly record struct TcpAnalysisResult
 {
+    #region Properties
+
     /// <summary>Bitmask of detected analysis conditions.</summary>
-    internal TcpAnalysisFlags Flags
-    {
-        get; init;
-    }
+    internal TcpAnalysisFlags Flags { get; init; }
 
     /// <summary>Stream index for this connection (0-based).</summary>
-    internal uint StreamIndex
-    {
-        get; init;
-    }
+    internal uint StreamIndex { get; init; }
 
     /// <summary>Duplicate ACK count (only valid when <see cref="TcpAnalysisFlags.DuplicateAck"/> is set).</summary>
-    internal uint DupAckNum
-    {
-        get; init;
-    }
+    internal uint DupAckNum { get; init; }
 
     /// <summary>Bytes currently in flight (unacknowledged). 0 if not applicable.</summary>
-    internal ulong BytesInFlight
-    {
-        get; init;
-    }
+    internal ulong BytesInFlight { get; init; }
 
     /// <summary>Initial RTT in seconds (SYN → SYN-ACK delta). NaN if not measured.</summary>
-    internal double InitialRtt
-    {
-        get; init;
-    }
+    internal double InitialRtt { get; init; }
 
     /// <summary>ACK RTT in seconds (data → ACK delta). NaN if not measured.</summary>
-    internal double AckRtt
-    {
-        get; init;
-    }
+    internal double AckRtt { get; init; }
 
     /// <summary>Time since first packet in this stream, in seconds. NaN if not measured.</summary>
-    internal double TimeRelative
-    {
-        get; init;
-    }
+    internal double TimeRelative { get; init; }
 
     /// <summary>Time since previous packet in this stream, in seconds. NaN if not measured.</summary>
-    internal double TimeDelta
-    {
-        get; init;
-    }
+    internal double TimeDelta { get; init; }
 
     /// <summary>
     /// Calculated (scaled) window size. Zero means not computed.
     /// <c>window_size_value &lt;&lt; window_scale</c> when the scale factor is known.
     /// </summary>
-    internal ulong ScaledWindowSize
-    {
-        get; init;
-    }
+    internal ulong ScaledWindowSize { get; init; }
 
     /// <summary>
     /// Window scale factor for the sender of this segment, or -1 if unknown.
     /// The sender's window_size_value should be shifted left by the *receiver's* scale factor.
     /// </summary>
-    internal int WindowScaleFactor
-    {
-        get; init;
-    }
+    internal int WindowScaleFactor { get; init; }
+
     /// <summary>
     /// <see langword="true"/> when no enclosing IPv4/IPv6 layer was found, preventing
     /// stream tracking and analysis. The caller should append a diagnostic error field.
     /// </summary>
-    internal bool NoIpLayer
-    {
-        get; init;
-    }
+    internal bool NoIpLayer { get; init; }
+
     /// <summary>
     /// Reference to the connection state for this segment's TCP stream.
     /// Used for heuristic protocol caching — once a protocol is detected by payload inspection,
     /// subsequent segments on the same connection reuse the cached protocol ID.
     /// Null when no IP layer is found (no connection tracking).
     /// </summary>
-    internal TcpConnectionState? ConnectionState
-    {
-        get; init;
-    }
+    internal TcpConnectionState? ConnectionState { get; init; }
 
     /// <summary>
     /// Current TCP connection phase (state machine state) after processing this segment.
     /// </summary>
-    internal TcpConnectionPhase Phase
-    {
-        get; init;
-    }
+    internal TcpConnectionPhase Phase { get; init; }
 
     /// <summary>
     /// The normalized connection key for this segment's TCP stream.
     /// Used by the reassembly engine to look up per-connection stream state.
     /// Default when no IP layer is found.
     /// </summary>
-    internal TcpConnectionKey ConnectionKey
-    {
-        get; init;
-    }
+    internal TcpConnectionKey ConnectionKey { get; init; }
 
     /// <summary>
     /// Source IP address as UInt128 for direction detection in the reassembly engine.
     /// Default when no IP layer is found.
     /// </summary>
-    internal UInt128 SrcAddr
-    {
-        get; init;
-    }
+    internal UInt128 SrcAddr { get; init; }
 
     /// <summary>Whether any analysis flag is set.</summary>
     internal bool HasAnyFlag => Flags != TcpAnalysisFlags.None;
+
+    #endregion
+
+    #region Sentinels
 
     /// <summary>Default result with no flags and NaN RTT values.</summary>
     internal static TcpAnalysisResult Empty => new()
@@ -185,4 +148,6 @@ internal readonly struct TcpAnalysisResult
         TimeDelta = double.NaN,
         WindowScaleFactor = -1,
     };
+
+    #endregion
 }

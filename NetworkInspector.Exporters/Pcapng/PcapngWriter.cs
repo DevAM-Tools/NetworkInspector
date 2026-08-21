@@ -6,31 +6,19 @@ namespace NetworkInspector.Exporters.Pcapng;
 /// Options for the Section Header Block (SHB).
 /// These are written once at the start of the file.
 /// </summary>
-internal sealed class ShbOptions
+internal sealed record ShbOptions
 {
     /// <summary>Hardware description string.</summary>
-    internal string? Hardware
-    {
-        get; init;
-    }
+    internal string? Hardware { get; init; }
 
     /// <summary>Operating system description string.</summary>
-    internal string? Os
-    {
-        get; init;
-    }
+    internal string? Os { get; init; }
 
     /// <summary>User application name string.</summary>
-    internal string? Application
-    {
-        get; init;
-    }
+    internal string? Application { get; init; }
 
     /// <summary>Optional comment string.</summary>
-    internal string? Comment
-    {
-        get; init;
-    }
+    internal string? Comment { get; init; }
 
     /// <summary>Returns true if any option is set.</summary>
     internal bool HasOptions =>
@@ -107,8 +95,14 @@ internal sealed class PcapngWriter
 
     private readonly Stream _Stream;
 
-    /// <summary>Reusable scratch buffer for block header serialization (max EPB = 28 bytes).</summary>
-    private readonly byte[] _HeaderBuf = new byte[32];
+    /// <summary>
+    /// Reusable block assembly buffer for atomic IDB/EPB writes (header + options/data + trailer).
+    /// Avoids partial blocks on mid-write I/O failure and coalesces into a single stream write.
+    /// </summary>
+    private readonly PooledBuffer _BlockBuffer = new(4096);
+
+    /// <summary>Bytes written to <see cref="_Stream"/> (committed output).</summary>
+    private long _BytesWritten;
 
     /// <summary>Creates a new PCAPNG writer wrapping the given stream.</summary>
     /// <param name="stream">The output stream.</param>
@@ -116,6 +110,14 @@ internal sealed class PcapngWriter
     {
         _Stream = stream;
     }
+
+    /// <summary>Returns rented block buffers to the pool.</summary>
+    internal void ReturnBuffers() => _BlockBuffer.Return();
+
+    /// <summary>
+    /// Approximate output size if the block buffer were flushed now.
+    /// </summary>
+    internal long EstimatedOutputBytes => _BytesWritten + _BlockBuffer.Length;
 
     /// <summary>
     /// Writes the Section Header Block (SHB).
@@ -190,7 +192,7 @@ internal sealed class PcapngWriter
         BinaryPrimitives.WriteUInt32LittleEndian(trailing, blockTotalLength);
 
         // All bytes are in the buffer and validated — write atomically.
-        _Stream.Write(shbBuffer.WrittenSpan);
+        _WriteToStream(shbBuffer.WrittenSpan);
         }
         finally
         {
@@ -218,26 +220,27 @@ internal sealed class PcapngWriter
 
         uint blockTotalLength = (uint)(_IdbHeaderSize + optionsSize + _TrailingLengthSize);
 
-        // Write the fixed header (16 bytes)
-        Span<byte> header = _HeaderBuf.AsSpan(0, _IdbHeaderSize);
-        BinaryPrimitives.WriteUInt32LittleEndian(header, PcapConstants.BlockTypeIDB);       // Block Type
-        BinaryPrimitives.WriteUInt32LittleEndian(header[4..], blockTotalLength);             // Block Total Length
-        BinaryPrimitives.WriteUInt16LittleEndian(header[8..], (ushort)linkType);             // Link Type
-        BinaryPrimitives.WriteUInt16LittleEndian(header[10..], 0);                           // Reserved
-        BinaryPrimitives.WriteUInt32LittleEndian(header[12..], snapLength);                  // Snap Length
-        _Stream.Write(_HeaderBuf, 0, _IdbHeaderSize);
+        // Assemble the full IDB before touching the stream so a mid-write failure
+        // cannot leave a truncated block on disk.
+        _BlockBuffer.Reset();
+        Span<byte> header = _BlockBuffer.Reserve(_IdbHeaderSize);
+        BinaryPrimitives.WriteUInt32LittleEndian(header, PcapConstants.BlockTypeIDB);
+        BinaryPrimitives.WriteUInt32LittleEndian(header[4..], blockTotalLength);
+        BinaryPrimitives.WriteUInt16LittleEndian(header[8..], (ushort)linkType);
+        BinaryPrimitives.WriteUInt16LittleEndian(header[10..], 0);
+        BinaryPrimitives.WriteUInt32LittleEndian(header[12..], snapLength);
 
-        // Write options
         if (name is not null)
         {
-            _WriteOption(PcapConstants.OptIfName, name);
+            _WriteOptionToBuffer(_BlockBuffer, PcapConstants.OptIfName, name);
         }
-        // if_tsresol (1-byte option value)
-        _WriteOptionRaw(PcapConstants.OptIfTsResol, [tsResolution]);
-        _WriteEndOfOptions();
+        _WriteOptionRawToBuffer(_BlockBuffer, PcapConstants.OptIfTsResol, [tsResolution]);
+        _WriteEndOfOptionsToBuffer(_BlockBuffer);
 
-        // Write trailing Block Total Length
-        _WriteTrailingLength(blockTotalLength);
+        Span<byte> trailing = _BlockBuffer.Reserve(_TrailingLengthSize);
+        BinaryPrimitives.WriteUInt32LittleEndian(trailing, blockTotalLength);
+
+        _WriteToStream(_BlockBuffer.WrittenSpan);
     }
 
     /// <summary>
@@ -270,29 +273,29 @@ internal sealed class PcapngWriter
         uint timestampHigh = (uint)(tsValue >> 32);
         uint timestampLow = (uint)tsValue;
 
-        // Write the fixed header (28 bytes)
-        Span<byte> header = _HeaderBuf.AsSpan(0, _EpbHeaderSize);
-        BinaryPrimitives.WriteUInt32LittleEndian(header, PcapConstants.BlockTypeEPB);        // Block Type
-        BinaryPrimitives.WriteUInt32LittleEndian(header[4..], blockTotalLength);              // Block Total Length
-        BinaryPrimitives.WriteUInt32LittleEndian(header[8..], interfaceId);                   // Interface ID
-        BinaryPrimitives.WriteUInt32LittleEndian(header[12..], timestampHigh);                // Timestamp High
-        BinaryPrimitives.WriteUInt32LittleEndian(header[16..], timestampLow);                 // Timestamp Low
-        BinaryPrimitives.WriteUInt32LittleEndian(header[20..], capturedLength);                // Captured Length
-        BinaryPrimitives.WriteUInt32LittleEndian(header[24..], originalPacketLength);          // Original Length
-        _Stream.Write(_HeaderBuf, 0, _EpbHeaderSize);
+        // Assemble the full EPB, then one stream write — fewer syscalls and no
+        // partial EPB if the write fails mid-block.
+        _BlockBuffer.Reset();
+        Span<byte> header = _BlockBuffer.Reserve(_EpbHeaderSize);
+        BinaryPrimitives.WriteUInt32LittleEndian(header, PcapConstants.BlockTypeEPB);
+        BinaryPrimitives.WriteUInt32LittleEndian(header[4..], blockTotalLength);
+        BinaryPrimitives.WriteUInt32LittleEndian(header[8..], interfaceId);
+        BinaryPrimitives.WriteUInt32LittleEndian(header[12..], timestampHigh);
+        BinaryPrimitives.WriteUInt32LittleEndian(header[16..], timestampLow);
+        BinaryPrimitives.WriteUInt32LittleEndian(header[20..], capturedLength);
+        BinaryPrimitives.WriteUInt32LittleEndian(header[24..], originalPacketLength);
 
-        // Write packet data
-        _Stream.Write(data);
-
-        // Write padding to align to 4-byte boundary
+        _BlockBuffer.Write(data);
         int padding = PcapPadding.PaddingFor(data.Length);
         if (padding > 0)
         {
-            _Stream.Write(_ZeroPadding, 0, padding);
+            _BlockBuffer.Write(_ZeroPadding.AsSpan(0, padding));
         }
 
-        // Write trailing Block Total Length
-        _WriteTrailingLength(blockTotalLength);
+        Span<byte> trailing = _BlockBuffer.Reserve(_TrailingLengthSize);
+        BinaryPrimitives.WriteUInt32LittleEndian(trailing, blockTotalLength);
+
+        _WriteToStream(_BlockBuffer.WrittenSpan);
     }
 
     /// <summary>Flushes the underlying stream.</summary>
@@ -301,6 +304,13 @@ internal sealed class PcapngWriter
     // ========================================================================
     // Private helpers
     // ========================================================================
+
+    /// <summary>Writes bytes to the stream and updates <see cref="_BytesWritten"/>.</summary>
+    private void _WriteToStream(ReadOnlySpan<byte> data)
+    {
+        _Stream.Write(data);
+        _BytesWritten += data.Length;
+    }
 
     /// <summary>
     /// Converts a nanosecond timestamp to the target resolution.
@@ -339,14 +349,45 @@ internal sealed class PcapngWriter
         }
     }
 
-    /// <summary>Computes 10^exponent for small exponents.</summary>
+    /// <summary>Computes 10^exponent for small exponents via lookup (exponents 0–18 cover PCAPNG resol range).</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static ulong _Pow10(uint exponent)
     {
-        ulong result = 1;
-        for (uint i = 0; i < exponent; i++)
+        ReadOnlySpan<ulong> powers =
+        [
+            1UL,
+            10UL,
+            100UL,
+            1_000UL,
+            10_000UL,
+            100_000UL,
+            1_000_000UL,
+            10_000_000UL,
+            100_000_000UL,
+            1_000_000_000UL,
+            10_000_000_000UL,
+            100_000_000_000UL,
+            1_000_000_000_000UL,
+            10_000_000_000_000UL,
+            100_000_000_000_000UL,
+            1_000_000_000_000_000UL,
+            10_000_000_000_000_000UL,
+            100_000_000_000_000_000UL,
+            1_000_000_000_000_000_000UL,
+        ];
+        if (exponent < (uint)powers.Length)
         {
-            result *= 10;
+            return powers[(int)exponent];
+        }
+
+        // Rare out-of-range resol: match prior unchecked iterative overflow behavior.
+        ulong result = powers[^1];
+        unchecked
+        {
+            for (uint i = (uint)(powers.Length - 1); i < exponent; i++)
+            {
+                result *= 10UL;
+            }
         }
         return result;
     }
@@ -386,57 +427,5 @@ internal sealed class PcapngWriter
         Span<byte> eoo = buffer.Reserve(_OptionHeaderSize);
         BinaryPrimitives.WriteUInt16LittleEndian(eoo, PcapConstants.OptEndOfOpt);
         BinaryPrimitives.WriteUInt16LittleEndian(eoo[2..], 0);
-    }
-
-    /// <summary>Writes a PCAPNG option with a UTF-8 string value.</summary>
-    private void _WriteOption(ushort code, string value)
-    {
-        int maxBytes = Encoding.UTF8.GetMaxByteCount(value.Length);
-        Span<byte> utf8 = maxBytes <= 256 ? stackalloc byte[maxBytes] : new byte[maxBytes];
-        int written = Encoding.UTF8.GetBytes(value, utf8);
-        _WriteOptionRaw(code, utf8[..written]);
-    }
-
-    /// <summary>Writes a PCAPNG option with raw byte value.</summary>
-    private void _WriteOptionRaw(ushort code, ReadOnlySpan<byte> value)
-    {
-        if (value.Length > ushort.MaxValue)
-        {
-            throw new ArgumentOutOfRangeException(nameof(value),
-                $"PCAPNG option value length {value.Length} exceeds the 16-bit limit ({ushort.MaxValue}).");
-        }
-
-        // Write option header: code (2) + length (2)
-        Span<byte> optHeader = _HeaderBuf.AsSpan(0, _OptionHeaderSize);
-        BinaryPrimitives.WriteUInt16LittleEndian(optHeader, code);
-        BinaryPrimitives.WriteUInt16LittleEndian(optHeader[2..], (ushort)value.Length);
-        _Stream.Write(_HeaderBuf, 0, _OptionHeaderSize);
-
-        // Write option value
-        _Stream.Write(value);
-
-        // Pad to 4-byte alignment
-        int padding = PcapPadding.PaddingFor(value.Length);
-        if (padding > 0)
-        {
-            _Stream.Write(_ZeroPadding, 0, padding);
-        }
-    }
-
-    /// <summary>Writes the end-of-options marker (code=0, length=0).</summary>
-    private void _WriteEndOfOptions()
-    {
-        Span<byte> eoo = _HeaderBuf.AsSpan(0, _OptionHeaderSize);
-        BinaryPrimitives.WriteUInt16LittleEndian(eoo, PcapConstants.OptEndOfOpt);
-        BinaryPrimitives.WriteUInt16LittleEndian(eoo[2..], 0);
-        _Stream.Write(_HeaderBuf, 0, _OptionHeaderSize);
-    }
-
-    /// <summary>Writes a trailing 32-bit block length.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void _WriteTrailingLength(uint blockTotalLength)
-    {
-        BinaryPrimitives.WriteUInt32LittleEndian(_HeaderBuf.AsSpan(0, 4), blockTotalLength);
-        _Stream.Write(_HeaderBuf, 0, 4);
     }
 }

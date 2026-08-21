@@ -145,9 +145,9 @@ public sealed partial class Sll2Protocol : IProtocol
         if (etherType > _MinEtherType)
         {
             ParseResult dispatchResult = _DispatchEtherType(in parentField, etherType, payload, in context);
-            if (dispatchResult.IsError)
+            if (dispatchResult.TryPropagateError(out ParseResult error))
             {
-                return dispatchResult;
+                return error;
             }
         }
 

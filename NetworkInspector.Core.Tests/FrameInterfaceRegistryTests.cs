@@ -129,6 +129,44 @@ internal sealed class FrameInterfaceRegistryTests
             registry.Register(new FrameSourceId(0), "eth0"));
     }
 
+    [Test]
+    public async Task Register_NullUiName_ThrowsArgumentNullException()
+    {
+        FrameInterfaceRegistry registry = new();
+        using StubFrameSource source = new("S");
+        FrameSourceId sourceId = registry.RegisterSource(source);
+
+        await Assert.That(() => registry.Register(sourceId, null!)).Throws<ArgumentNullException>();
+    }
+
+    [Test]
+    public async Task Register_EmptyUiName_ThrowsArgumentException()
+    {
+        FrameInterfaceRegistry registry = new();
+        using StubFrameSource source = new("S");
+        FrameSourceId sourceId = registry.RegisterSource(source);
+
+        await Assert.That(() => registry.Register(sourceId, "")).Throws<ArgumentException>();
+    }
+
+    [Test]
+    public async Task Register_UiNameWithControlCharacters_ThrowsArgumentException()
+    {
+        FrameInterfaceRegistry registry = new();
+        using StubFrameSource source = new("S");
+        FrameSourceId sourceId = registry.RegisterSource(source);
+
+        await Assert.That(() => registry.Register(sourceId, "eth\n0")).Throws<ArgumentException>();
+    }
+
+    [Test]
+    public async Task RegisterSource_NullSource_ThrowsArgumentNullException()
+    {
+        FrameInterfaceRegistry registry = new();
+
+        await Assert.That(() => registry.RegisterSource(null!)).Throws<ArgumentNullException>();
+    }
+
     // === Interface lookup ===
 
     [Test]
@@ -207,6 +245,44 @@ internal sealed class FrameInterfaceRegistryTests
     }
 
     // === Minimal stub for IFrameSource ===
+
+    [Test]
+    public async Task Register_OversizedInterfaceArray_Throws()
+    {
+        FrameInterfaceRegistry registry = new();
+        System.Reflection.FieldInfo? interfacesField = typeof(FrameInterfaceRegistry).GetField(
+            "_Interfaces", BindingFlags.NonPublic | BindingFlags.Instance);
+        await Assert.That(interfacesField).IsNotNull();
+
+        FrameInterfaceInfo[] oversized = GC.AllocateUninitializedArray<FrameInterfaceInfo>(
+            ArrayIndexIdRange.MaxValue + 1);
+        interfacesField!.SetValue(registry, oversized);
+
+        using StubFrameSource source = new("S");
+        FrameSourceId sourceId = registry.RegisterSource(source);
+
+        InvalidOperationException ex = Assert.Throws<InvalidOperationException>(
+            () => registry.Register(sourceId, "eth0"));
+        await Assert.That(ex.Message).Contains("Maximum frame interface count exceeded");
+    }
+
+    [Test]
+    public async Task RegisterSource_OversizedSourceArray_Throws()
+    {
+        FrameInterfaceRegistry registry = new();
+        System.Reflection.FieldInfo? sourcesField = typeof(FrameInterfaceRegistry).GetField(
+            "_Sources", BindingFlags.NonPublic | BindingFlags.Instance);
+        await Assert.That(sourcesField).IsNotNull();
+
+        FrameSourceInfo[] oversized = GC.AllocateUninitializedArray<FrameSourceInfo>(
+            ArrayIndexIdRange.MaxValue + 1);
+        sourcesField!.SetValue(registry, oversized);
+
+        using StubFrameSource source = new("S");
+        InvalidOperationException ex = Assert.Throws<InvalidOperationException>(
+            () => registry.RegisterSource(source));
+        await Assert.That(ex.Message).Contains("Maximum frame source count exceeded");
+    }
 
     private sealed class StubFrameSource(string uiName) : IFrameSource
     {

@@ -4,59 +4,25 @@ namespace NetworkInspector.Protocols.Dtls;
 
 /// <summary>
 /// DTLS Record Layer header (13 bytes, RFC 6347 Section 4.1).
-/// <code>
-/// +---+---+---+---+---+---+---+---+---+---+---+---+---+
-/// | CT| Version |  Epoch  |     Sequence (6 bytes)      | Len |
-/// +---+---+---+---+---+---+---+---+---+---+---+---+---+
-///   1     2        2              6                       2
-/// </code>
 /// </summary>
-internal readonly struct DtlsRecordHeader
+internal readonly record struct DtlsRecordHeader(
+    byte ContentType,
+    ushort Version,
+    ushort Epoch,
+    ulong SequenceNumber,
+    ushort Length)
 {
+    #region Constants
+
     /// <summary>Size of the DTLS record header in bytes.</summary>
     internal const int Size = 13;
 
     /// <summary>Maximum DTLS record payload length.</summary>
     internal const int MaxRecordLength = 16384 + 2048;
 
-    /// <summary>Content type byte.</summary>
-    internal byte ContentType
-    {
-        get;
-    }
+    #endregion
 
-    /// <summary>Protocol version (e.g., 0xFEFD = DTLS 1.2).</summary>
-    internal ushort Version
-    {
-        get;
-    }
-
-    /// <summary>DTLS epoch for key material tracking.</summary>
-    internal ushort Epoch
-    {
-        get;
-    }
-
-    /// <summary>48-bit sequence number within the epoch.</summary>
-    internal ulong SequenceNumber
-    {
-        get;
-    }
-
-    /// <summary>Length of the following record payload.</summary>
-    internal ushort Length
-    {
-        get;
-    }
-
-    private DtlsRecordHeader(byte contentType, ushort version, ushort epoch, ulong sequenceNumber, ushort length)
-    {
-        ContentType = contentType;
-        Version = version;
-        Epoch = epoch;
-        SequenceNumber = sequenceNumber;
-        Length = length;
-    }
+    #region Parsing
 
     /// <summary>
     /// Attempts to parse a DTLS record header from the given data.
@@ -87,6 +53,10 @@ internal readonly struct DtlsRecordHeader
         return true;
     }
 
+    #endregion
+
+    #region Validation
+
     /// <summary>
     /// Checks if the content type is a known DTLS content type (20-23, 25).
     /// Same types as TLS.
@@ -100,4 +70,6 @@ internal readonly struct DtlsRecordHeader
     /// </summary>
     internal bool IsValidVersion() =>
         Version is 0xFEFF or 0xFEFD;
+
+    #endregion
 }

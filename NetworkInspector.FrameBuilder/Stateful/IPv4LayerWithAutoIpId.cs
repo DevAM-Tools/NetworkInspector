@@ -50,7 +50,7 @@ public readonly struct IPv4LayerWithAutoIpId :
     private readonly byte _ExplicitProtocol;
 
     /// <summary>See <see cref="IPv4Layer"/> for the negation rationale.</summary>
-    private readonly bool _ClearDontFragment;
+    public bool CanFragment { get; }
 
     /// <summary>Creates a stateful auto-IPID IPv4 layer.</summary>
     /// <param name="srcAddr">Source address.</param>
@@ -79,7 +79,7 @@ public readonly struct IPv4LayerWithAutoIpId :
         _Ttl = ttl;
         _SeedIdentification = initialIdentification;
         _ExplicitProtocol = protocol.TryGetExplicit(out byte p) ? p : (byte)0;
-        _ClearDontFragment = !dontFragment;
+        CanFragment = !dontFragment;
     }
 
     /// <inheritdoc />
@@ -117,7 +117,7 @@ public readonly struct IPv4LayerWithAutoIpId :
 
         IPv4Header hdr = IPv4Header.Create(
             _SrcAddr, _DstAddr, _ExplicitProtocol, _Ttl, id,
-            dontFragment: !_ClearDontFragment);
+            dontFragment: !CanFragment);
         _ = ((IBinarySerializable)hdr).TryWrite(dst, out _);
     }
 
@@ -174,20 +174,6 @@ public readonly struct IPv4LayerWithAutoIpId :
     /// <remarks>
     /// Fragmentation capability is determined by the DF flag.  Mirrors
     /// <see cref="IPv4Layer.CanFragment"/>.
-    /// </remarks>
-    public bool CanFragment
-    {
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _ClearDontFragment;
-    }
-
-    /// <inheritdoc />
-    /// <remarks>
-    /// Patches the IPv4 Flags+FragmentOffset 16-bit field with the per-fragment
-    /// MF flag and the FragmentOffset (in 8-octet units) and clears the DF bit.
-    /// TotalLength and the header checksum are recomputed by the regular
-    /// <see cref="FixPhase.Length"/> and <see cref="FixPhase.OuterChecksum"/>
-    /// phases that the fragmenting loop re-runs over each fragment.
     /// </remarks>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void PatchFragmentHeader(scoped Span<byte> frame, int myOffset, int myLength, int fragmentPayloadOffset, bool moreFragments)

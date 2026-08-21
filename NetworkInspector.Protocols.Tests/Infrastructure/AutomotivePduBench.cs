@@ -3,8 +3,8 @@
 namespace NetworkInspector.Protocols.Tests.Infrastructure;
 
 /// <summary>
-/// Shared deterministic carrier port, PDU wiring and Signal-PDU layout for AUTOSAR-style
-/// Ethernet → IPv4 → UDP → PDU-Transport → Signal-PDU symmetry tests.
+/// Shared deterministic carrier port, PDU wiring and Signal Message layout for AUTOSAR-style
+/// Ethernet → IPv4 → UDP → PDU-Transport → Signal Message symmetry tests.
 /// </summary>
 internal static class AutomotivePduBench
 {
@@ -12,7 +12,7 @@ internal static class AutomotivePduBench
 
     internal const uint PduTransportWireId = 0x20;
 
-    internal const uint SignalPduMessageId = 0x100;
+    internal const uint SignalMessageBenchId = 0x100;
 
     internal static PduTransportConfigFb PduTransportRegistry
     {
@@ -26,22 +26,23 @@ internal static class AutomotivePduBench
                     Name = "BenchPdu",
                 }));
 
-    internal static SignalPduLayout TwoSequentialUint16LeLayout
+    internal static SignalMessageLayout TwoSequentialUint16LeLayout
     {
         get;
     } = new()
     {
-        PduId = SignalPduMessageId,
-        Name = "FixturePdu",
+        PduId = SignalMessageBenchId,
+        Name = "fixture_message",
+        UiName = "Fixture PDU",
         ByteLength = 4,
         Signals = ImmutableArray.Create(
             new SignalSpec
             {
                 Name = "EngineRpm",
+                UiName = "Engine RPM",
                 StartBit = 0,
                 BitLength = 16,
                 Endian = SignalEndian.Little,
-                Type = SignalType.Unsigned,
                 Factor = 0.25,
                 Offset = 100.0,
                 Unit = string.Empty,
@@ -49,16 +50,16 @@ internal static class AutomotivePduBench
             new SignalSpec
             {
                 Name = "Thr",
+                UiName = "Throttle",
                 StartBit = 16,
                 BitLength = 16,
                 Endian = SignalEndian.Little,
-                Type = SignalType.Unsigned,
                 Factor = 1.0,
                 Offset = 0.0,
                 Unit = string.Empty,
             }),
-        RegisterAt = ImmutableArray.Create(
-            new DispatchBinding
+        DispatchBindings = ImmutableArray.Create(
+            new FrameDispatchBinding
             {
                 Table = PduTransportProtocol.IdTableName,
                 Key = PduTransportWireId,

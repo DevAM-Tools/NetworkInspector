@@ -25,7 +25,8 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
     private readonly Stream _Stream;
 
     /// <summary>User-friendly display name.</summary>
-    private readonly string _UiName;
+    /// <inheritdoc />
+    public string UiName { get; }
 
     /// <summary>Whether to leave the stream open on Dispose.</summary>
     private readonly bool _LeaveOpen;
@@ -39,13 +40,13 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
     /// every read uses <see cref="System.Threading.Volatile"/> Read and every write uses
     /// <see cref="System.Threading.Volatile"/> Write.
     /// </summary>
-    private bool _Exhausted;
+    private volatile bool _Exhausted;
 
     /// <summary>Whether Start() has been called.</summary>
-    private bool _Started;
+    private volatile bool _Started;
 
-    /// <summary>Whether Dispose() has been called.</summary>
-    private bool _Disposed;
+    /// <summary>Atomic dispose latch (0 = live, 1 = disposed).</summary>
+    private volatile int _Disposed;
 
     /// <summary>Sequential frame counter for FrameId assignment.</summary>
     private int _FrameIndex;
@@ -93,9 +94,9 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
     #endregion
 
     #region Error tolerance statistics
-    private long _ReadFrameCount;
-    private long _SkippedFrameCount;
-    private long _ErrorCount;
+    private volatile int _ReadFrameCount;
+    private readonly SaturatingVolatileCounter _SkippedFrameCount = new();
+    private readonly SaturatingVolatileCounter _ErrorCount = new();
 
     #endregion
 
@@ -104,7 +105,7 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
     private PcapStreamSource(Stream stream, string uiName, bool leaveOpen)
     {
         _Stream = stream;
-        _UiName = uiName;
+        UiName = uiName;
         _LeaveOpen = leaveOpen;
     }
 
@@ -137,9 +138,6 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
     #region IFrameSource
 
     /// <inheritdoc />
-    public string UiName => _UiName;
-
-    /// <inheritdoc />
     public string? Description => null;
 
     /// <inheritdoc />
@@ -147,21 +145,21 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
     public int? EstimatedFrameCount => null;
 
     /// <inheritdoc />
-    public bool IsRunning => Volatile.Read(ref _Started) && !Volatile.Read(ref _Disposed);
+    public bool IsRunning => _Started && _Disposed == 0;
 
     // ── IErrorTolerantFrameSource / IFrameSourceStatistics ────────────────────
 
     /// <inheritdoc/>
-    public long ReadFrameCount => Volatile.Read(ref _ReadFrameCount);
+    public int ReadFrameCount => _ReadFrameCount;
 
     /// <inheritdoc/>
-    public long SkippedFrameCount => Volatile.Read(ref _SkippedFrameCount);
+    public int SkippedFrameCount => _SkippedFrameCount.Value;
 
     /// <inheritdoc/>
-    public long ErrorCount => Volatile.Read(ref _ErrorCount);
+    public int ErrorCount => _ErrorCount.Value;
 
     /// <inheritdoc/>
-    public bool HasErrors => Volatile.Read(ref _ErrorCount) > 0;
+    public bool HasErrors => _ErrorCount.Value > 0;
 
     /// <inheritdoc/>
     public ErrorToleranceMode ErrorTolerance { get; set; } = ErrorToleranceMode.Tolerant;
@@ -175,7 +173,7 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
         ArgumentNullException.ThrowIfNull(registry);
         _SourceId = sourceId;
         _Registry = registry;
-        Volatile.Write(ref _Started, true);
+        _Started = true;
         _FrameIndex = 0;
     }
 
@@ -186,14 +184,14 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
     /// </remarks>
     public Frame? NextFrame(CancellationToken cancellationToken = default)
     {
-        ObjectDisposedException.ThrowIf(Volatile.Read(ref _Disposed), this);
+        ObjectDisposedException.ThrowIf(_Disposed != 0, this);
 
-        if (!Volatile.Read(ref _Started))
+        if (!_Started)
         {
             throw new InvalidOperationException($"{UiName} has not been started. Call Start() first.");
         }
 
-        if (Volatile.Read(ref _Exhausted))
+        if (_Exhausted)
         {
             return null;
         }
@@ -213,12 +211,12 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
                 // Initialization failed catastrophically: prevent re-entry into the parser
                 // with corrupt state when a caller swallows the exception and calls NextFrame()
                 // again.
-                Volatile.Write(ref _Exhausted, true);
+                _Exhausted = true;
                 throw;
             }
             if (!initialized)
             {
-                Volatile.Write(ref _Exhausted, true);
+                _Exhausted = true;
                 return null;
             }
             _Initialized = true;
@@ -239,12 +237,11 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
     /// <inheritdoc />
     public void Dispose()
     {
-        if (Volatile.Read(ref _Disposed))
+        if (Interlocked.Exchange(ref _Disposed, 1) != 0)
         {
             return;
         }
 
-        Volatile.Write(ref _Disposed, true);
         // Clear the registry reference so the session can be GC'd after Dispose().
         _Registry = null;
         if (!_LeaveOpen)
@@ -399,7 +396,7 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
             // Step 1: Read block type (4 bytes) + block total length (4 bytes)
             if (!_TryReadExact(headerBytes))
             {
-                Volatile.Write(ref _Exhausted, true);
+                _Exhausted = true;
                 return null;
             }
 
@@ -424,7 +421,7 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
                         Kind = FrameReadErrorKind.TruncatedStream,
                         Message = "Stream truncated while reading SHB byte-order magic."
                     });
-                    Volatile.Write(ref _Exhausted, true);
+                    _Exhausted = true;
                     return null;
                 }
 
@@ -446,7 +443,7 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
                         Kind = FrameReadErrorKind.TruncatedStream,
                         Message = $"Stream truncated while reading SHB body (block length {blockLength})."
                     });
-                    Volatile.Write(ref _Exhausted, true);
+                    _Exhausted = true;
                     return null;
                 }
                 continue;
@@ -464,7 +461,7 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
                     Kind = FrameReadErrorKind.CorruptedBlock,
                     Message = "Non-SHB block encountered before any Section Header Block; stream may be corrupt."
                 });
-                Volatile.Write(ref _Exhausted, true);
+                _Exhausted = true;
                 return null;
             }
 
@@ -485,7 +482,7 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
                     Kind = FrameReadErrorKind.CorruptedBlock,
                     Message = $"Block length {blockLength} is below the minimum allowed ({PcapConstants.MinBlockSize}); stream may be corrupt."
                 });
-                Volatile.Write(ref _Exhausted, true);
+                _Exhausted = true;
                 return null;
             }
 
@@ -503,7 +500,7 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
                     Kind = FrameReadErrorKind.CorruptedBlock,
                     Message = $"Block length {blockLength} exceeds the {_MaxBufferSize / (1024 * 1024)} MiB safety cap; the stream data may be corrupt."
                 });
-                Volatile.Write(ref _Exhausted, true);
+                _Exhausted = true;
                 return null;
             }
 
@@ -520,7 +517,7 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
                     Kind = FrameReadErrorKind.CorruptedBlock,
                     Message = $"Block body size {bodySize} exceeds the {_MaxBufferSize / (1024 * 1024)} MiB safety cap; the stream data may be corrupt."
                 });
-                Volatile.Write(ref _Exhausted, true);
+                _Exhausted = true;
                 return null;
             }
 
@@ -534,7 +531,7 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
                     Kind = FrameReadErrorKind.TruncatedStream,
                     Message = $"Stream truncated while reading block body (type=0x{blockType:X}, expected {bodySize} bytes)."
                 });
-                Volatile.Write(ref _Exhausted, true);
+                _Exhausted = true;
                 return null;
             }
 
@@ -826,7 +823,7 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
         if (!_TryReadExact(headerBuf))
         {
             // Natural EOF between frames — no event needed
-            Volatile.Write(ref _Exhausted, true);
+            _Exhausted = true;
             return null;
         }
 
@@ -851,7 +848,7 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
                 Kind = FrameReadErrorKind.MalformedHeader,
                 Message = $"Legacy PCAP incl_len {inclLen} exceeds int.MaxValue; malformed header."
             });
-            Volatile.Write(ref _Exhausted, true);
+            _Exhausted = true;
             return null;
         }
 
@@ -874,7 +871,7 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
                     : $"Legacy PCAP incl_len {inclLen} exceeds the default cap {PcapConstants.DefaultSnapLength};"
                         + " set an explicit snaplen in the global header to allow larger packets."
             });
-            Volatile.Write(ref _Exhausted, true);
+            _Exhausted = true;
             return null;
         }
 
@@ -895,7 +892,7 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
                 Kind = FrameReadErrorKind.Other,
                 Message = $"OutOfMemoryException allocating {inclLen}-byte buffer for legacy PCAP frame."
             });
-            Volatile.Write(ref _Exhausted, true);
+            _Exhausted = true;
             return null;
         }
 
@@ -910,7 +907,7 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
                 Kind = FrameReadErrorKind.TruncatedStream,
                 Message = $"Stream truncated while reading frame data (expected {inclLen} bytes)."
             });
-            Volatile.Write(ref _Exhausted, true);
+            _Exhausted = true;
             return null;
         }
 
@@ -1069,8 +1066,8 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
     /// </summary>
     private void _HandleSkip(FrameReadErrorEventArgs error)
     {
-        Interlocked.Increment(ref _SkippedFrameCount);
-        Interlocked.Increment(ref _ErrorCount);
+        _SkippedFrameCount.Increment();
+        _ErrorCount.Increment();
 
         // Always signal the error so subscribers can log the first offending block
         // regardless of the tolerance mode. In strict mode the source additionally
@@ -1079,7 +1076,7 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
 
         if (ErrorTolerance == ErrorToleranceMode.Strict)
         {
-            Volatile.Write(ref _Exhausted, true);
+            _Exhausted = true;
         }
     }
 
@@ -1089,11 +1086,8 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
     /// </summary>
     private Frame? _CreateTrackedFrame(ushort sectionIndex, ushort interfaceId, long timestampNanos, byte[] frameData)
     {
-        // Enforce maximum frame count — FrameId is int-based
-        if (_FrameIndex == int.MaxValue)
-        {
-            return null;
-        }
+        // Enforce maximum frame count — FrameId is array-index-based
+        ArrayIndexIdRange.ThrowIfInvalidNextIndex(_FrameIndex, "frame");
 
         if (!_TryResolveInterface(sectionIndex, interfaceId, out LinkType linkType, out FrameInterfaceId frameInterfaceId))
         {

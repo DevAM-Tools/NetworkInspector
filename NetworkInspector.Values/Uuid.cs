@@ -4,10 +4,10 @@ namespace NetworkInspector.Values;
 
 /// <summary>128-bit UUID stored as two <see cref="ulong"/> fields.</summary>
 [StructLayout(LayoutKind.Sequential)]
-public readonly record struct Uuid
-        : IEquatable<Uuid>, IComparable<Uuid>, IComparable,
-      ISpanFormattable, IUtf8SpanFormattable, IStringSize, IBinarySerializable,
-      ISpanParsable<Uuid>, IParsable<Uuid>
+public readonly record struct Uuid :
+    IEquatable<Uuid>, IComparable<Uuid>, IComparable,
+    ISpanFormattable, IUtf8SpanFormattable, IStringSize, IBinarySerializable,
+    ISpanParsable<Uuid>, IParsable<Uuid>
 {
     #region Constants
 
@@ -22,48 +22,49 @@ public readonly record struct Uuid
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public Uuid(ulong high, ulong low)
     {
-        _High = high;
-        _Low = low;
+        High = high;
+        Low = low;
     }
-
-    #endregion
-
-    #region Fields
-
-    private readonly ulong _High;
-    private readonly ulong _Low;
 
     #endregion
 
     #region Properties
 
     /// <summary>The upper 64 bits.</summary>
-    public ulong High
-    {
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _High;
-    }
+    public ulong High { get; }
     /// <summary>The lower 64 bits.</summary>
-    public ulong Low
-    {
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _Low;
-    }
+    public ulong Low { get; }
 
     #endregion
 
     #region Factory Methods
 
     /// <summary>Creates a UUID from a 16-byte big-endian span.</summary>
-    public static Uuid FromBytes(ReadOnlySpan<byte> bytes)
+    /// <returns><see langword="false"/> when fewer than 16 bytes are available.</returns>
+    public static bool TryFromBytes(ReadOnlySpan<byte> bytes, out Uuid uuid)
     {
         if (bytes.Length < 16)
         {
-            return default;
+            uuid = default;
+            return false;
         }
+
         ulong high = BinaryPrimitives.ReadUInt64BigEndian(bytes);
         ulong low = BinaryPrimitives.ReadUInt64BigEndian(bytes[8..]);
-        return new Uuid(high, low);
+        uuid = new Uuid(high, low);
+        return true;
+    }
+
+    /// <summary>Creates a UUID from a 16-byte big-endian span.</summary>
+    /// <exception cref="ArgumentException">Fewer than 16 bytes are available.</exception>
+    public static Uuid FromBytes(ReadOnlySpan<byte> bytes)
+    {
+        if (!TryFromBytes(bytes, out Uuid uuid))
+        {
+            throw new ArgumentException("UUID requires at least 16 bytes.", nameof(bytes));
+        }
+
+        return uuid;
     }
 
     /// <summary>
@@ -173,8 +174,8 @@ public readonly record struct Uuid
         {
             return 0;
         }
-        BinaryPrimitives.WriteUInt64BigEndian(destination, _High);
-        BinaryPrimitives.WriteUInt64BigEndian(destination[8..], _Low);
+        BinaryPrimitives.WriteUInt64BigEndian(destination, High);
+        BinaryPrimitives.WriteUInt64BigEndian(destination[8..], Low);
         return 16;
     }
 
@@ -221,26 +222,26 @@ public readonly record struct Uuid
         // Extract hex nibbles directly from ulong fields using shifts.
         // Avoids intermediate byte array and SpanStringBuilder overhead.
         // Format: XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX
-        _WriteHexByte(destination, 0, (int)(_High >> 56));
-        _WriteHexByte(destination, 2, (int)(_High >> 48));
-        _WriteHexByte(destination, 4, (int)(_High >> 40));
-        _WriteHexByte(destination, 6, (int)(_High >> 32));
+        _WriteHexByte(destination, 0, (int)(High >> 56));
+        _WriteHexByte(destination, 2, (int)(High >> 48));
+        _WriteHexByte(destination, 4, (int)(High >> 40));
+        _WriteHexByte(destination, 6, (int)(High >> 32));
         destination[8] = '-';
-        _WriteHexByte(destination, 9, (int)(_High >> 24));
-        _WriteHexByte(destination, 11, (int)(_High >> 16));
+        _WriteHexByte(destination, 9, (int)(High >> 24));
+        _WriteHexByte(destination, 11, (int)(High >> 16));
         destination[13] = '-';
-        _WriteHexByte(destination, 14, (int)(_High >> 8));
-        _WriteHexByte(destination, 16, (int)_High);
+        _WriteHexByte(destination, 14, (int)(High >> 8));
+        _WriteHexByte(destination, 16, (int)High);
         destination[18] = '-';
-        _WriteHexByte(destination, 19, (int)(_Low >> 56));
-        _WriteHexByte(destination, 21, (int)(_Low >> 48));
+        _WriteHexByte(destination, 19, (int)(Low >> 56));
+        _WriteHexByte(destination, 21, (int)(Low >> 48));
         destination[23] = '-';
-        _WriteHexByte(destination, 24, (int)(_Low >> 40));
-        _WriteHexByte(destination, 26, (int)(_Low >> 32));
-        _WriteHexByte(destination, 28, (int)(_Low >> 24));
-        _WriteHexByte(destination, 30, (int)(_Low >> 16));
-        _WriteHexByte(destination, 32, (int)(_Low >> 8));
-        _WriteHexByte(destination, 34, (int)_Low);
+        _WriteHexByte(destination, 24, (int)(Low >> 40));
+        _WriteHexByte(destination, 26, (int)(Low >> 32));
+        _WriteHexByte(destination, 28, (int)(Low >> 24));
+        _WriteHexByte(destination, 30, (int)(Low >> 16));
+        _WriteHexByte(destination, 32, (int)(Low >> 8));
+        _WriteHexByte(destination, 34, (int)Low);
 
         charsWritten = FormattedLength;
         return true;
@@ -334,13 +335,13 @@ public readonly record struct Uuid
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public int CompareTo(Uuid other)
     {
-        int c = _High.CompareTo(other._High);
+        int c = High.CompareTo(other.High);
         if (c != 0)
         {
             return c;
         }
 
-        return _Low.CompareTo(other._Low);
+        return Low.CompareTo(other.Low);
     }
 
     /// <inheritdoc/>

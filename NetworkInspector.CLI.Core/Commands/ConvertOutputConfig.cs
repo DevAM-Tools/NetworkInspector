@@ -1,0 +1,185 @@
+﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+
+namespace NetworkInspector.CLI.Commands;
+
+/// <summary>
+/// Parses output format specifications for frame-level conversion
+/// and creates the appropriate <see cref="IFrameListener"/> exporter.
+/// Supports BLF and PCAPNG output formats with per-format options.
+/// </summary>
+internal abstract class ConvertOutputConfig
+{
+    #region Public API
+
+    /// <summary>
+    /// Creates the frame listener targeting a file path.
+    /// </summary>
+    /// <param name="path">Output file path.</param>
+    /// <param name="settings">
+    /// Read-only view of the active CLI profile settings. Available for exporters that
+    /// need profile-backed configuration; ignored by exporters that do not use settings yet.
+    /// </param>
+    internal abstract IFrameListener CreateExporter(string path, ReadOnlySettingsManagerView settings);
+
+    /// <summary>
+    /// Parses an output format specification string.
+    /// </summary>
+    /// <remarks>
+    /// Supported formats:
+    /// <list type="bullet">
+    ///   <item><c>pcapng</c> — PCAPNG format (default)</item>
+    ///   <item><c>blf</c> — BLF with default compression</item>
+    ///   <item><c>blf:compression=off|none</c> — BLF, no compression</item>
+    ///   <item><c>blf:compression=fast</c> — BLF, fastest compression</item>
+    ///   <item><c>blf:compression=default</c> — BLF, default compression</item>
+    ///   <item><c>blf:compression=best|high</c> — BLF, best compression</item>
+    ///   <item><c>asc</c> — CANalyzer ASCII log (CAN, CAN FD, LIN, FlexRay)</item>
+    /// </list>
+    /// </remarks>
+    internal static ConvertOutputConfig Parse(string spec)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(spec);
+
+        int colonIndex = spec.IndexOf(':', StringComparison.Ordinal);
+        string type;
+        string paramString;
+
+        if (colonIndex > 0)
+        {
+            type = spec[..colonIndex];
+            paramString = spec[(colonIndex + 1)..];
+        }
+        else
+        {
+            type = spec;
+            paramString = "";
+        }
+
+        Dictionary<string, string> parameters = _ParseParameters(paramString);
+
+        return type.ToUpperInvariant() switch
+        {
+            "PCAPNG" or "PCAP" => new PcapngOutputConfig(),
+            "BLF" => _CreateBlfOutputConfig(parameters),
+            "ASC" => new AscOutputConfig(),
+            _ => throw new ArgumentException($"Unknown output format: '{type}'. Supported: pcapng, blf, asc."),
+        };
+    }
+
+    /// <summary>
+    /// Auto-detects the output format from a file extension.
+    /// Empty or unknown extensions default to PCAPNG (matches help text “other”).
+    /// </summary>
+    internal static ConvertOutputConfig FromExtension(string extension)
+    {
+        if (string.IsNullOrEmpty(extension)
+            || extension.Equals(".pcapng", StringComparison.OrdinalIgnoreCase)
+            || extension.Equals(".pcap", StringComparison.OrdinalIgnoreCase))
+        {
+            return new PcapngOutputConfig();
+        }
+
+        if (extension.Equals(".blf", StringComparison.OrdinalIgnoreCase))
+        {
+            return new BlfOutputConfig(BlfCompressionLevel.Default);
+        }
+
+        if (extension.Equals(".asc", StringComparison.OrdinalIgnoreCase))
+        {
+            return new AscOutputConfig();
+        }
+
+        // Unknown extension (e.g. ".out", directory stem with no extension): default PCAPNG.
+        return new PcapngOutputConfig();
+    }
+
+    #endregion
+
+    #region Private Helpers
+
+    /// <summary>Parses comma-separated key=value parameters.</summary>
+    private static Dictionary<string, string> _ParseParameters(string paramString)
+    {
+        Dictionary<string, string> result = new(StringComparer.OrdinalIgnoreCase);
+        if (string.IsNullOrWhiteSpace(paramString))
+        {
+            return result;
+        }
+
+        foreach (string pair in paramString.Split(','))
+        {
+            int eqIndex = pair.IndexOf('=', StringComparison.Ordinal);
+            if (eqIndex > 0)
+            {
+                string key = pair[..eqIndex].Trim();
+                string value = pair[(eqIndex + 1)..].Trim();
+                result[key] = value;
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>Creates a <see cref="BlfOutputConfig"/> from parsed parameters.</summary>
+    private static BlfOutputConfig _CreateBlfOutputConfig(Dictionary<string, string> parameters)
+    {
+        BlfCompressionLevel level = BlfCompressionLevel.Default;
+
+        if (parameters.TryGetValue("compression", out string? compressionStr))
+        {
+            level = compressionStr.ToUpperInvariant() switch
+            {
+                "NONE" or "OFF" or "NO" => BlfCompressionLevel.None,
+                "FAST" => BlfCompressionLevel.Fast,
+                "DEFAULT" or "NORMAL" => BlfCompressionLevel.Default,
+                "BEST" or "HIGH" or "MAX" => BlfCompressionLevel.Best,
+                _ => throw new ArgumentException(
+                    $"Unknown BLF compression level: '{compressionStr}'. " +
+                    "Supported: off, fast, default, best."),
+            };
+        }
+
+        return new BlfOutputConfig(level);
+    }
+
+    #endregion
+}
+
+/// <summary>PCAPNG output format configuration.</summary>
+internal sealed class PcapngOutputConfig : ConvertOutputConfig
+{
+    /// <inheritdoc/>
+    internal override IFrameListener CreateExporter(string path, ReadOnlySettingsManagerView settings)
+    {
+        _ = settings;
+        return PcapngExporter.CreateBuilder().ToFile(path).Build();
+    }
+}
+
+/// <summary>BLF output format configuration.</summary>
+internal sealed class BlfOutputConfig(BlfCompressionLevel compression) : ConvertOutputConfig
+{
+    /// <summary>Compression level for the BLF output container.</summary>
+    private readonly BlfCompressionLevel _Compression = compression;
+
+    /// <inheritdoc/>
+    internal override IFrameListener CreateExporter(string path, ReadOnlySettingsManagerView settings)
+    {
+        _ = settings;
+        return BlfExporter.CreateBuilder()
+            .ToFile(path)
+            .WithCompressionLevel(_Compression)
+            .Build();
+    }
+}
+
+/// <summary>ASC (CANalyzer ASCII log) output format configuration.</summary>
+internal sealed class AscOutputConfig : ConvertOutputConfig
+{
+    /// <inheritdoc/>
+    internal override IFrameListener CreateExporter(string path, ReadOnlySettingsManagerView settings)
+    {
+        _ = settings;
+        return AscExporter.CreateBuilder().ToFile(path).Build();
+    }
+}

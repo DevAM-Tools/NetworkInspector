@@ -1,39 +1,36 @@
 ﻿<!-- Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root. -->
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <Description>Frame exporter implementations for NetworkInspector. Writes captured frames and parsed packets to PCAPNG, BLF, CSV, JSON, PBF, and plain-text formats.</Description>
-    <PackageTags>network;pcapng;blf;csv;json;pbf;exporter;packet-export;capture</PackageTags>
+    <Description>Frame and packet exporter implementations for NetworkInspector. Writes captured frames and parsed packets to PCAPNG, BLF, ASC, CSV, JSON, PBF, Text, and Parquet formats.</Description>
+    <PackageTags>network;pcapng;blf;asc;csv;json;pbf;parquet;columnar;exporter;packet-export;capture</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- Exposes this assembly's link-compiled internal types (e.g. FlexRayLinkTypeFrame) to tests. -->
     <InternalsVisibleTo Include="NetworkInspector.Exporters.Tests" />
-    <InternalsVisibleTo Include="NetworkInspector.Protocols.Tests" />
+    <!-- Companion DuckDB package consumes the internal ColumnarPacketBatch / IColumnarBatchSink contract. -->
+    <InternalsVisibleTo Include="NetworkInspector.Exporters.DuckDb" />
   </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="ZeroAlloc" />
+    <PackageReference Include="Parquet.Net" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\NetworkInspector.Core\NetworkInspector.Core.csproj" />
   </ItemGroup>
 
+  <!--
+    Shared wire-format constants compiled into this assembly (same pattern as PcapConstants).
+    FlexRayLinkTypeFrame: see Sources.csproj for the full rationale (Core-only deps,
+    internal per-assembly copy). Exporters.Tests reaches this copy via InternalsVisibleTo above.
+  -->
   <ItemGroup>
     <Compile Include="..\NetworkInspector.Sources\Pcapng\Format\PcapConstants.cs" Link="Shared\Pcapng\PcapConstants.cs" />
     <Compile Include="..\NetworkInspector.Sources\Pcapng\Format\PcapPadding.cs" Link="Shared\Pcapng\PcapPadding.cs" />
-    <Compile Include="..\NetworkInspector.Sources\Pcapng\Format\Blocks\SectionHeaderBlock.cs" Link="Shared\Pcapng\Blocks\SectionHeaderBlock.cs" />
-    <Compile Include="..\NetworkInspector.Sources\Pcapng\Format\Blocks\InterfaceDescriptionBlock.cs" Link="Shared\Pcapng\Blocks\InterfaceDescriptionBlock.cs" />
-    <Compile Include="..\NetworkInspector.Sources\Pcapng\Format\Blocks\EnhancedPacketBlock.cs" Link="Shared\Pcapng\Blocks\EnhancedPacketBlock.cs" />
-    <Compile Include="..\NetworkInspector.Sources\Pcapng\Format\Blocks\OptionHeader.cs" Link="Shared\Pcapng\Blocks\OptionHeader.cs" />
     <Compile Include="..\NetworkInspector.Sources\Blf\Format\BlfConstants.cs" Link="Shared\Blf\BlfConstants.cs" />
-    <Compile Include="..\NetworkInspector.Sources\Blf\Format\BlfTimestamp.cs" Link="Shared\Blf\BlfTimestamp.cs" />
-    <Compile Include="..\NetworkInspector.Sources\Blf\Format\Headers\BlfFileHeaderPrefix.cs" Link="Shared\Blf\Headers\BlfFileHeaderPrefix.cs" />
-    <Compile Include="..\NetworkInspector.Sources\Blf\Format\Headers\BlfBlockHeader.cs" Link="Shared\Blf\Headers\BlfBlockHeader.cs" />
-    <Compile Include="..\NetworkInspector.Sources\Blf\Format\Headers\BlfLogObjectHeaderV1.cs" Link="Shared\Blf\Headers\BlfLogObjectHeaderV1.cs" />
-    <Compile Include="..\NetworkInspector.Sources\Blf\Format\Headers\BlfLogObjectHeaderV2.cs" Link="Shared\Blf\Headers\BlfLogObjectHeaderV2.cs" />
-    <Compile Include="..\NetworkInspector.Sources\Blf\Format\Headers\BlfLogObjectHeaderV3.cs" Link="Shared\Blf\Headers\BlfLogObjectHeaderV3.cs" />
-    <Compile Include="..\NetworkInspector.Sources\Blf\Format\Headers\BlfContainerHeader.cs" Link="Shared\Blf\Headers\BlfContainerHeader.cs" />
-    <Compile Include="..\NetworkInspector.Sources\Blf\Format\Headers\BlfDate.cs" Link="Shared\Blf\Headers\BlfDate.cs" />
+    <Compile Include="..\NetworkInspector.Protocols\FlexRayLinkTypeFrame.cs" Link="Shared\FlexRay\FlexRayLinkTypeFrame.cs" />
   </ItemGroup>
 </Project>

@@ -572,6 +572,591 @@ internal sealed class SettingValueTests
         await Assert.That(left == right).IsTrue();
     }
 
+    [Test]
+    public async Task BytesOneNullReference_AreNotEqual()
+    {
+        SettingValue withNull = SettingsTestHelpers.WithSettingValueField<object?>(
+            SettingValue.Bytes([1, 2]), "_ReferenceValue", null);
+        SettingValue withData = SettingValue.Bytes([1, 2]);
+        await Assert.That(withNull == withData).IsFalse();
+        await Assert.That(withNull.GetHashCode()).IsNotEqualTo(withData.GetHashCode());
+    }
+
+    [Test]
+    public async Task Equals_UnknownType_ReturnsFalse()
+    {
+        SettingValue unknown = SettingsTestHelpers.WithSettingValueField(
+            SettingValue.Bool(true), "_Type", (SettingType)99);
+        await Assert.That(unknown.Equals(SettingValue.Bool(true))).IsFalse();
+        await Assert.That(unknown.GetHashCode()).IsEqualTo(HashCode.Combine((SettingType)99));
+    }
+
+    [Test]
+    public async Task Equals_UnknownTypeSameType_UsesDefaultArm()
+    {
+        SettingValue left = SettingsTestHelpers.WithSettingValueField(
+            SettingValue.Bool(true), "_Type", (SettingType)99);
+        SettingValue right = SettingsTestHelpers.WithSettingValueField(
+            SettingValue.Bool(false), "_Type", (SettingType)99);
+        await Assert.That(left.Equals(right)).IsFalse();
+    }
+
+    [Test]
+    public async Task ToString_LongEnumName_UsesHeapFallback()
+    {
+        string longName = new('Z', 300);
+        SettingValue v = SettingValue.Enum(longName, 1);
+        string text = v.ToString();
+        await Assert.That(text.StartsWith(longName, StringComparison.Ordinal)).IsTrue();
+        await Assert.That(v.ToString("G", CultureInfo.InvariantCulture).StartsWith(longName, StringComparison.Ordinal)).IsTrue();
+    }
+
+    [Test]
+    public async Task ToString_VeryLongEnumName_FormatsFully()
+    {
+        string longName = new('Z', 5000);
+        SettingValue v = SettingValue.Enum(longName, 1);
+        string expected = longName + " (1)";
+        await Assert.That(v.ToString()).IsEqualTo(expected);
+        await Assert.That(v.ToString("G", CultureInfo.InvariantCulture)).IsEqualTo(expected);
+    }
+
+    [Test]
+    public async Task GetHashCode_EqualValues_ShareHashCode_AllNumericArms()
+    {
+        SettingValue u64A = SettingValue.U64(123);
+        SettingValue u64B = SettingValue.U64(123);
+        SettingValue i64A = SettingValue.I64(-55);
+        SettingValue i64B = SettingValue.I64(-55);
+        SettingValue enumA = SettingValue.Enum("Mid", 1);
+        SettingValue enumB = SettingValue.Enum("Mid", 1);
+
+        await Assert.That(u64A.GetHashCode()).IsEqualTo(u64B.GetHashCode());
+        await Assert.That(i64A.GetHashCode()).IsEqualTo(i64B.GetHashCode());
+        await Assert.That(enumA.GetHashCode()).IsEqualTo(enumB.GetHashCode());
+    }
+
+    [Test]
+    public async Task Equality_DifferentU64AndI64_AreNotEqual()
+    {
+        await Assert.That(SettingValue.U64(1) != SettingValue.U64(2)).IsTrue();
+        await Assert.That(SettingValue.I64(1) != SettingValue.I64(2)).IsTrue();
+        await Assert.That(SettingValue.Enum("A", 0) != SettingValue.Enum("B", 0)).IsTrue();
+        await Assert.That(SettingValue.Enum("A", 0) != SettingValue.Enum("A", 1)).IsTrue();
+    }
+
+    [Test]
+    public async Task TryFormat_StringNullReference_ReturnsTrueWithZeroWritten()
+    {
+        SettingValue v = SettingsTestHelpers.WithSettingValueField<object?>(
+            SettingValue.String("ignored"), "_ReferenceValue", null);
+        Span<char> buffer = stackalloc char[8];
+        bool ok = v.TryFormat(buffer, out int written, default, CultureInfo.InvariantCulture);
+        await Assert.That(ok).IsTrue();
+        await Assert.That(written).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task TryFormat_EnumNullReference_ReturnsTrueWithZeroWritten()
+    {
+        SettingValue v = SettingsTestHelpers.WithSettingValueField<object?>(
+            SettingValue.Enum("High", 1), "_ReferenceValue", null);
+        Span<char> buffer = stackalloc char[8];
+        bool ok = v.TryFormat(buffer, out int written, default, CultureInfo.InvariantCulture);
+        await Assert.That(ok).IsTrue();
+        await Assert.That(written).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task TryFormat_UnknownType_ReturnsTrueWithZeroWritten()
+    {
+        SettingValue v = SettingsTestHelpers.WithSettingValueField(
+            SettingValue.Bool(false), "_Type", (SettingType)99);
+        Span<char> buffer = stackalloc char[8];
+        bool ok = v.TryFormat(buffer, out int written, default, CultureInfo.InvariantCulture);
+        await Assert.That(ok).IsTrue();
+        await Assert.That(written).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task TryFormat_BytesLabel_DigitBufferTooSmall_ReturnsFalse()
+    {
+        SettingValue v = SettingValue.Bytes(new byte[5000]);
+        Span<char> buffer = stackalloc char[1];
+        bool ok = v.TryFormat(buffer, out int written, default, CultureInfo.InvariantCulture);
+        await Assert.That(ok).IsFalse();
+        await Assert.That(written).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task TryFormat_BytesLabel_SuffixBufferTooSmall_ReturnsFalse()
+    {
+        SettingValue v = SettingValue.Bytes(new byte[12]);
+        Span<char> buffer = stackalloc char[4];
+        bool ok = v.TryFormat(buffer, out int written, default, CultureInfo.InvariantCulture);
+        await Assert.That(ok).IsFalse();
+        await Assert.That(written).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task TryFormat_EnumLabel_DigitBufferTooSmall_ReturnsFalse()
+    {
+        SettingValue v = SettingValue.Enum("X", ulong.MaxValue);
+        Span<char> buffer = stackalloc char[5];
+        bool ok = v.TryFormat(buffer, out int written, default, CultureInfo.InvariantCulture);
+        await Assert.That(ok).IsFalse();
+        await Assert.That(written).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task TryFormat_Utf8_NonStringCharFallbackInsufficientBuffer_ReturnsFalse()
+    {
+        SettingValue v = SettingValue.Enum(new string('E', 240), 1);
+        Span<byte> buffer = stackalloc byte[8];
+        bool ok = v.TryFormat(buffer, out int written, default, CultureInfo.InvariantCulture);
+        await Assert.That(ok).IsFalse();
+        await Assert.That(written).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task Equals_MismatchedUnknownType_ReturnsFalse()
+    {
+        SettingValue left = SettingsTestHelpers.WithSettingValueField(
+            SettingValue.Bool(true), "_Type", (SettingType)99);
+        SettingValue right = SettingsTestHelpers.WithSettingValueField(
+            SettingValue.Bool(false), "_Type", (SettingType)98);
+        await Assert.That(left.Equals(right)).IsFalse();
+    }
+
+    [Test]
+    public async Task TryFormat_BytesNullReference_UsesZeroByteLabel()
+    {
+        SettingValue v = SettingsTestHelpers.WithSettingValueField<object?>(
+            SettingValue.Bytes([1]), "_ReferenceValue", null);
+        char[] buffer = new char[16];
+        bool ok = v.TryFormat(buffer.AsSpan(), out int written, default, CultureInfo.InvariantCulture);
+        await Assert.That(ok).IsTrue();
+        await Assert.That(new string(buffer, 0, written)).IsEqualTo("[0 bytes]");
+    }
+
+    [Test]
+    public async Task ToString_WhenFormattedValueEmpty_ReturnsEmptyString()
+    {
+        SettingValue v = SettingsTestHelpers.WithSettingValueField(
+            SettingValue.String("x"), "_Type", (SettingType)99);
+        await Assert.That(v.ToString()).IsEqualTo("");
+        await Assert.That(v.ToString("G", CultureInfo.InvariantCulture)).IsEqualTo("");
+    }
+
+    [Test]
+    public async Task TryFormat_Utf8_LongEnumName_HeapFallbackSucceeds()
+    {
+        string longName = new('Z', 300);
+        SettingValue v = SettingValue.Enum(longName, 1);
+        byte[] buffer = new byte[1024];
+        bool ok = v.TryFormat(buffer.AsSpan(), out int written, default, CultureInfo.InvariantCulture);
+        await Assert.That(ok).IsTrue();
+        await Assert.That(written).IsGreaterThan(300);
+    }
+
+    [Test]
+    public async Task TryFormat_Utf8_WhenCharTryFormatFails_ReturnsFalse()
+    {
+        SettingValue v = SettingValue.Enum(new string('Z', 5000), 1);
+        Span<byte> buffer = stackalloc byte[8];
+        bool ok = v.TryFormat(buffer, out int written, default, CultureInfo.InvariantCulture);
+        await Assert.That(ok).IsFalse();
+        await Assert.That(written).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task TryFormat_Utf8_NonAsciiEnum_DestinationEqualToCharCount_ReturnsFalse()
+    {
+        SettingValue v = SettingValue.Enum("Größe", 1UL);
+        Span<char> chars = stackalloc char[64];
+        bool charOk = v.TryFormat(chars, out int charCount, default, CultureInfo.InvariantCulture);
+        await Assert.That(charOk).IsTrue();
+
+        Span<byte> utf8 = stackalloc byte[charCount];
+        bool utf8Ok = v.TryFormat(utf8, out int written, default, CultureInfo.InvariantCulture);
+        await Assert.That(utf8Ok).IsFalse();
+        await Assert.That(written).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task TryFormat_Utf8_NonAsciiString_DestinationEqualToCharCount_ReturnsFalse()
+    {
+        SettingValue v = SettingValue.String("Größe");
+        Span<char> chars = stackalloc char[16];
+        bool charOk = v.TryFormat(chars, out int charCount, default, CultureInfo.InvariantCulture);
+        await Assert.That(charOk).IsTrue();
+
+        Span<byte> utf8 = stackalloc byte[charCount];
+        bool utf8Ok = v.TryFormat(utf8, out int written, default, CultureInfo.InvariantCulture);
+        await Assert.That(utf8Ok).IsFalse();
+        await Assert.That(written).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task TryFormatEnumLabel_NameBufferTooSmall_ReturnsFalse()
+    {
+        SettingValue v = SettingValue.Enum("TooLongName", 1);
+        char[] buffer = new char[4];
+        bool ok = v.TryFormat(buffer.AsSpan(), out int written, default, CultureInfo.InvariantCulture);
+        await Assert.That(ok).IsFalse();
+        await Assert.That(written).IsEqualTo(0);
+    }
+
+    // === IStringSize / ZeroAlloc convenience ===
+
+    [Test]
+    public async Task IStringSize_Bool_True_ReturnsFour()
+    {
+        bool ok = SettingValue.Bool(true).TryGetStringSize(default, null, out int size);
+        await Assert.That(ok).IsTrue();
+        await Assert.That(size).IsEqualTo(4);
+    }
+
+    [Test]
+    public async Task IStringSize_Bool_False_ReturnsFive()
+    {
+        bool ok = SettingValue.Bool(false).TryGetStringSize(default, null, out int size);
+        await Assert.That(ok).IsTrue();
+        await Assert.That(size).IsEqualTo(5);
+    }
+
+    [Test]
+    public async Task IStringSize_String_ReturnsExactLength()
+    {
+        bool ok = SettingValue.String("hello").TryGetStringSize(default, null, out int size);
+        await Assert.That(ok).IsTrue();
+        await Assert.That(size).IsEqualTo(5);
+    }
+
+    [Test]
+    public async Task IStringSize_Bytes_ReturnsExactLabelLength()
+    {
+        bool ok = SettingValue.Bytes([1, 2, 3]).TryGetStringSize(default, null, out int size);
+        await Assert.That(ok).IsTrue();
+        await Assert.That(size).IsEqualTo("[3 bytes]".Length);
+    }
+
+    [Test]
+    public async Task IStringSize_Enum_ReturnsExactLabelLength()
+    {
+        bool ok = SettingValue.Enum("High", 2).TryGetStringSize(default, null, out int size);
+        await Assert.That(ok).IsTrue();
+        await Assert.That(size).IsEqualTo("High (2)".Length);
+    }
+
+    [Test]
+    public async Task IStringSize_U64_ReturnsExactDigitCount()
+    {
+        bool ok = SettingValue.U64(ulong.MaxValue).TryGetStringSize(default, null, out int size);
+        await Assert.That(ok).IsTrue();
+        await Assert.That(size).IsEqualTo(20);
+        await Assert.That(size).IsEqualTo(SettingValue.U64(ulong.MaxValue).ToString().Length);
+    }
+
+    [Test]
+    public async Task IStringSize_I64_MinValue_ReturnsTwenty()
+    {
+        bool ok = SettingValue.I64(long.MinValue).TryGetStringSize(default, null, out int size);
+        await Assert.That(ok).IsTrue();
+        await Assert.That(size).IsEqualTo(20);
+        await Assert.That(size).IsEqualTo(SettingValue.I64(long.MinValue).ToString().Length);
+    }
+
+    [Test]
+    public async Task IStringSize_F64_ReturnsFalse()
+    {
+        bool ok = SettingValue.F64(3.14).TryGetStringSize(default, null, out int size);
+        await Assert.That(ok).IsFalse();
+        await Assert.That(size).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task IStringSize_U64_WithFormat_ReturnsFalse()
+    {
+        bool ok = SettingValue.U64(42).TryGetStringSize("X", CultureInfo.InvariantCulture, out int size);
+        await Assert.That(ok).IsFalse();
+        await Assert.That(size).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task IStringSize_I64_WithFormat_ReturnsFalse()
+    {
+        bool ok = SettingValue.I64(-7).TryGetStringSize("D", CultureInfo.InvariantCulture, out int size);
+        await Assert.That(ok).IsFalse();
+        await Assert.That(size).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task IStringSize_NullReferences_ReturnZeroOrEmptyLabel()
+    {
+        SettingValue nullString = SettingsTestHelpers.WithSettingValueField<object?>(
+            SettingValue.String("ignored"), "_ReferenceValue", null);
+        bool stringOk = nullString.TryGetStringSize(default, null, out int stringSize);
+        await Assert.That(stringOk).IsTrue();
+        await Assert.That(stringSize).IsEqualTo(0);
+
+        SettingValue nullEnum = SettingsTestHelpers.WithSettingValueField<object?>(
+            SettingValue.Enum("High", 1), "_ReferenceValue", null);
+        bool enumOk = nullEnum.TryGetStringSize(default, null, out int enumSize);
+        await Assert.That(enumOk).IsTrue();
+        await Assert.That(enumSize).IsEqualTo(0);
+
+        SettingValue nullBytes = SettingsTestHelpers.WithSettingValueField<object?>(
+            SettingValue.Bytes([1]), "_ReferenceValue", null);
+        bool bytesOk = nullBytes.TryGetStringSize(default, null, out int bytesSize);
+        await Assert.That(bytesOk).IsTrue();
+        await Assert.That(bytesSize).IsEqualTo("[0 bytes]".Length);
+    }
+
+    [Test]
+    public async Task IStringSize_UnknownType_ReturnsZero()
+    {
+        SettingValue v = SettingsTestHelpers.WithSettingValueField(
+            SettingValue.Bool(true), "_Type", (SettingType)99);
+        bool ok = v.TryGetStringSize(default, null, out int size);
+        await Assert.That(ok).IsTrue();
+        await Assert.That(size).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task FormatInto_WritesExpectedText()
+    {
+        char[] buffer = new char[16];
+        int written = SettingValue.U64(42).FormatInto(buffer);
+        await Assert.That(written).IsEqualTo(2);
+        await Assert.That(new string(buffer, 0, written)).IsEqualTo("42");
+    }
+
+    [Test]
+    public async Task FormatInto_InsufficientBuffer_ReturnsZero()
+    {
+        char[] tiny = new char[1];
+        int written = SettingValue.Bool(true).FormatInto(tiny);
+        await Assert.That(written).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task Format_String_ReturnsStoredInstance()
+    {
+        string stored = "plain";
+        SettingValue v = SettingValue.String(stored);
+        await Assert.That(ReferenceEquals(v.Format(), stored)).IsTrue();
+        string fromTemp;
+        using (TempString temp = v.FormatTemp())
+        {
+            fromTemp = temp.AsSpan().ToString();
+        }
+        await Assert.That(fromTemp).IsEqualTo(stored);
+    }
+
+    [Test]
+    public async Task FormatTemp_EmptyString_ReturnsEmpty()
+    {
+        int length;
+        using (TempString temp = SettingValue.String("").FormatTemp())
+        {
+            length = temp.AsSpan().Length;
+        }
+        await Assert.That(length).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task TryFormat_Utf8_NullReferences_WriteEmptyOrZeroBytesLabel()
+    {
+        SettingValue nullString = SettingsTestHelpers.WithSettingValueField<object?>(
+            SettingValue.String("ignored"), "_ReferenceValue", null);
+        byte[] buffer = new byte[16];
+        bool stringOk = nullString.TryFormat(buffer.AsSpan(), out int stringWritten, default, CultureInfo.InvariantCulture);
+        await Assert.That(stringOk).IsTrue();
+        await Assert.That(stringWritten).IsEqualTo(0);
+
+        SettingValue nullEnum = SettingsTestHelpers.WithSettingValueField<object?>(
+            SettingValue.Enum("High", 1), "_ReferenceValue", null);
+        bool enumOk = nullEnum.TryFormat(buffer.AsSpan(), out int enumWritten, default, CultureInfo.InvariantCulture);
+        await Assert.That(enumOk).IsTrue();
+        await Assert.That(enumWritten).IsEqualTo(0);
+
+        SettingValue unknown = SettingsTestHelpers.WithSettingValueField(
+            SettingValue.Bool(false), "_Type", (SettingType)99);
+        bool unknownOk = unknown.TryFormat(buffer.AsSpan(), out int unknownWritten, default, CultureInfo.InvariantCulture);
+        await Assert.That(unknownOk).IsTrue();
+        await Assert.That(unknownWritten).IsEqualTo(0);
+
+        SettingValue nullBytes = SettingsTestHelpers.WithSettingValueField<object?>(
+            SettingValue.Bytes([1]), "_ReferenceValue", null);
+        bool bytesOk = nullBytes.TryFormat(buffer.AsSpan(), out int bytesWritten, default, CultureInfo.InvariantCulture);
+        string bytesLabel = Encoding.UTF8.GetString(buffer.AsSpan(0, bytesWritten));
+        await Assert.That(bytesOk).IsTrue();
+        await Assert.That(bytesLabel).IsEqualTo("[0 bytes]");
+    }
+
+    [Test]
+    public async Task FormatTemp_MatchesToString_AllTypes()
+    {
+        SettingValue[] values =
+        [
+            SettingValue.Bool(true),
+            SettingValue.Bool(false),
+            SettingValue.F64(3.5),
+            SettingValue.U64(42),
+            SettingValue.I64(-9),
+            SettingValue.String("hello"),
+            SettingValue.Bytes([1, 2, 3]),
+            SettingValue.Enum("High", 2),
+        ];
+
+        foreach (SettingValue v in values)
+        {
+            string fromTemp;
+            using (TempString temp = v.FormatTemp())
+            {
+                fromTemp = temp.AsSpan().ToString();
+            }
+            await Assert.That(fromTemp).IsEqualTo(v.ToString());
+        }
+    }
+
+    [Test]
+    public async Task FormatTemp_UnknownType_ReturnsEmpty()
+    {
+        SettingValue v = SettingsTestHelpers.WithSettingValueField(
+            SettingValue.Bool(true), "_Type", (SettingType)99);
+        int length;
+        using (TempString temp = v.FormatTemp())
+        {
+            length = temp.AsSpan().Length;
+        }
+        await Assert.That(length).IsEqualTo(0);
+        await Assert.That(v.Format()).IsEqualTo("");
+    }
+
+    [Test]
+    public async Task ToString_NullOrEmptyFormat_UsesDefaultFormat()
+    {
+        SettingValue v = SettingValue.U64(42);
+        await Assert.That(v.ToString(null, CultureInfo.InvariantCulture)).IsEqualTo("42");
+        await Assert.That(v.ToString("", CultureInfo.InvariantCulture)).IsEqualTo("42");
+        await Assert.That(v.ToString("G", null)).IsEqualTo("42");
+    }
+
+    [Test]
+    public async Task ToString_UnknownType_WithFormat_ReturnsEmpty()
+    {
+        SettingValue v = SettingsTestHelpers.WithSettingValueField(
+            SettingValue.Bool(true), "_Type", (SettingType)99);
+        await Assert.That(v.ToString("G", CultureInfo.InvariantCulture)).IsEqualTo("");
+    }
+
+    [Test]
+    public async Task ToString_F64_CustomFormat_UsesHeapWhenLongerThanStack()
+    {
+        SettingValue v = SettingValue.F64(1.0);
+        string text = v.ToString("F300", CultureInfo.InvariantCulture);
+        await Assert.That(text.StartsWith("1.", StringComparison.Ordinal)).IsTrue();
+        await Assert.That(text.Length).IsEqualTo(302);
+    }
+
+    [Test]
+    public async Task ToString_Integer_CustomFormat_UsesBclWhenLongerThanStack()
+    {
+        string u64Text = SettingValue.U64(1).ToString("D300", CultureInfo.InvariantCulture);
+        await Assert.That(u64Text.Length).IsEqualTo(300);
+        await Assert.That(u64Text.EndsWith('1')).IsTrue();
+
+        string i64Text = SettingValue.I64(-1).ToString("D300", CultureInfo.InvariantCulture);
+        await Assert.That(i64Text.Length).IsEqualTo(301);
+        await Assert.That(i64Text.StartsWith('-')).IsTrue();
+    }
+
+    [Test]
+    public async Task ToString_Enum_WithFormat_UsesKnownSizePath()
+    {
+        SettingValue v = SettingValue.Enum("High", 2);
+        await Assert.That(v.ToString("G", CultureInfo.InvariantCulture)).IsEqualTo("High (2)");
+    }
+
+    [Test]
+    public async Task TryFormat_Utf8_NonAsciiEnum_SucceedsWhenDestIsLargeEnough()
+    {
+        SettingValue v = SettingValue.Enum("Größe", 1UL);
+        byte[] expected = Encoding.UTF8.GetBytes("Größe (1)");
+        byte[] buffer = new byte[32];
+        bool ok = v.TryFormat(buffer.AsSpan(), out int written, default, CultureInfo.InvariantCulture);
+        string actual = Encoding.UTF8.GetString(buffer.AsSpan(0, written));
+        await Assert.That(ok).IsTrue();
+        await Assert.That(written).IsEqualTo(expected.Length);
+        await Assert.That(actual).IsEqualTo("Größe (1)");
+    }
+
+    [Test]
+    public async Task TryFormat_Utf8_Bool_InsufficientBuffer_ReturnsFalse()
+    {
+        SettingValue v = SettingValue.Bool(true);
+        byte[] tiny = new byte[3];
+        bool ok = v.TryFormat(tiny.AsSpan(), out int written, default, CultureInfo.InvariantCulture);
+        await Assert.That(ok).IsFalse();
+        await Assert.That(written).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task TryFormat_Utf8_Bytes_InsufficientBuffer_ReturnsFalse()
+    {
+        SettingValue v = SettingValue.Bytes([]);
+        byte[] tiny = new byte[1];
+        bool ok = v.TryFormat(tiny.AsSpan(), out int written, default, CultureInfo.InvariantCulture);
+        await Assert.That(ok).IsFalse();
+        await Assert.That(written).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task TryFormat_Utf8_AsciiEnum_InsufficientBuffer_ReturnsFalse()
+    {
+        SettingValue v = SettingValue.Enum("High", 2);
+        byte[] tiny = new byte[3];
+        bool ok = v.TryFormat(tiny.AsSpan(), out int written, default, CultureInfo.InvariantCulture);
+        await Assert.That(ok).IsFalse();
+        await Assert.That(written).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task TryFormat_Utf8_NonAsciiString_SucceedsWhenDestIsLargeEnough()
+    {
+        SettingValue v = SettingValue.String("Größe");
+        byte[] expected = Encoding.UTF8.GetBytes("Größe");
+        byte[] buffer = new byte[16];
+        bool ok = v.TryFormat(buffer.AsSpan(), out int written, default, CultureInfo.InvariantCulture);
+        string actual = Encoding.UTF8.GetString(buffer.AsSpan(0, written));
+        await Assert.That(ok).IsTrue();
+        await Assert.That(written).IsEqualTo(expected.Length);
+        await Assert.That(actual).IsEqualTo("Größe");
+    }
+
+    [Test]
+    public async Task IStringSize_I64_Negative_IncludesSign()
+    {
+        bool negativeOk = SettingValue.I64(-42).TryGetStringSize(default, null, out int negativeSize);
+        await Assert.That(negativeOk).IsTrue();
+        await Assert.That(negativeSize).IsEqualTo(3);
+
+        bool zeroOk = SettingValue.I64(0).TryGetStringSize(default, null, out int zeroSize);
+        await Assert.That(zeroOk).IsTrue();
+        await Assert.That(zeroSize).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task TryFormat_Utf8_NumericAndBool_Roundtrip()
+    {
+        await _AssertUtf8TryFormat(SettingValue.Bool(false), "False"u8.ToArray());
+        await _AssertUtf8TryFormat(SettingValue.I64(-9), "-9"u8.ToArray());
+        await _AssertUtf8TryFormat(SettingValue.F64(3.5), "3.5"u8.ToArray());
+        await _AssertUtf8TryFormat(SettingValue.Enum("High", 2), "High (2)"u8.ToArray());
+    }
+
     private static async Task _AssertTryFormat(SettingValue v, string expected)
     {
         char[] buffer = new char[64];

@@ -6,9 +6,11 @@ namespace NetworkInspector.Core.Settings;
 /// Read-only view of a setting group.
 /// <para>
 /// Exposes group metadata and setting enumeration without allowing mutation
-/// (no <see cref="SettingGroup.AddSetting"/>).
-/// Returned by <see cref="IReadOnlySettingsManager"/> so consumers cannot
-/// modify groups through the read-only surface.
+/// (no <see cref="SettingGroup.AddSetting"/>, and settings are returned as
+/// <see cref="ReadOnlySettingView"/> so <see cref="Setting.SetPendingValue"/> is not
+/// reachable). Returned as <see cref="ReadOnlySettingGroupView"/> by
+/// <see cref="IReadOnlySettingsManager"/> so consumers cannot modify groups through
+/// the read-only surface.
 /// </para>
 /// </summary>
 public interface IReadOnlySettingGroup
@@ -43,8 +45,8 @@ public interface IReadOnlySettingGroup
         get;
     }
 
-    /// <summary>Gets a snapshot of all settings in this group.</summary>
-    IReadOnlyList<Setting> Settings
+    /// <summary>Gets a snapshot of all settings in this group as read-only struct views.</summary>
+    IReadOnlyList<ReadOnlySettingView> Settings
     {
         get;
     }

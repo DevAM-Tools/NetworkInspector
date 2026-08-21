@@ -36,6 +36,12 @@ internal sealed class BlfWriter
     /// <summary>Maximum uncompressed container buffer size before flushing (10 MB).</summary>
     private const int _MaxContainerBufferSize = BlfConstants.MaxContainerBufferSize;
 
+    /// <summary>
+    /// Initial container capacity. Grows toward <see cref="_MaxContainerBufferSize"/> on demand
+    /// so tiny exports do not rent a full 10 MiB buffer up front.
+    /// </summary>
+    private const int _InitialContainerBufferSize = 256 * 1024;
+
     /// <summary>BLF timestamp resolution flag value: 10 µs units.</summary>
     private const uint _TimestampResolution10Us = BlfConstants.TimestampResolution10Us;
 
@@ -95,7 +101,7 @@ internal sealed class BlfWriter
         // residual sub-ms offset and the round-trip is exact.
         _StartNs = (startNs / 1_000_000L) * 1_000_000L;
         _Compression = compression;
-        _ContainerBuffer = new PooledBuffer(_MaxContainerBufferSize);
+        _ContainerBuffer = new PooledBuffer(_InitialContainerBufferSize);
         _WriteFileHeader(_StartNs);
     }
 
@@ -148,6 +154,12 @@ internal sealed class BlfWriter
 
     /// <summary>Number of objects written so far.</summary>
     internal int ObjectCount => _ObjectCount;
+
+    /// <summary>
+    /// Approximate output size if the container buffer were flushed now.
+    /// </summary>
+    internal long EstimatedOutputBytes =>
+        _FileHeaderSize + _BytesWritten + _ContainerBuffer.Length;
 
     /// <summary>
     /// Writes a raw BLF object into the container buffer.
@@ -395,23 +407,17 @@ internal sealed class BlfWriter
     /// Compresses <paramref name="data"/> with zlib and writes the result into
     /// <paramref name="destination"/>, which is reset before writing.
     /// <para>
-    /// Uses <see cref="MemoryStream.GetBuffer"/> to access the internal buffer of the
-    /// intermediate <see cref="MemoryStream"/> directly (no extra copy), then copies
-    /// into <paramref name="destination"/>. This eliminates the second allocation that
-    /// <c>MemoryStream.ToArray()</c> caused (MEDIUM-6 fix).
+    /// Compresses directly into <paramref name="destination"/> via
+    /// <see cref="PooledBufferWriteStream"/> so each container flush reuses the
+    /// destination array instead of allocating a <see cref="MemoryStream"/>.
     /// </para>
     /// </summary>
     private void _CompressWithZlib(ReadOnlySpan<byte> data, PooledBuffer destination)
     {
         destination.Reset();
-        using MemoryStream ms = new(capacity: data.Length);
-        using (ZLibStream zlib = new(ms, _Compression, leaveOpen: true))
-        {
-            zlib.Write(data);
-        }
-        // GetBuffer() returns the raw internal array (may be larger than written data);
-        // use ms.Length to get the number of valid bytes — no copy to a new array.
-        destination.Write(ms.GetBuffer().AsSpan(0, (int)ms.Length));
+        using PooledBufferWriteStream destStream = new(destination);
+        using ZLibStream zlib = new(destStream, _Compression, leaveOpen: true);
+        zlib.Write(data);
     }
 
     /// <summary>

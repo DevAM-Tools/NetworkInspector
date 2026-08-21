@@ -40,7 +40,7 @@ internal sealed class ErrorToleranceTests
 
         await Assert.That(skippedRaised).IsGreaterThanOrEqualTo(1);
         await Assert.That(exporter.HasErrors).IsTrue();
-        await Assert.That(exporter.WrittenCount).IsEqualTo(0L);
+        await Assert.That(exporter.WrittenCount).IsEqualTo(0);
     }
 
     [Test]

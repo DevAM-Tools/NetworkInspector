@@ -275,4 +275,95 @@ internal sealed class ProtocolTableTests
         ProtocolTable any = _CreateTable(ProtocolTableKeyType.Any);
         await Assert.That(any.IterU64Entries()).IsNull();
     }
+
+    [Test]
+    public async Task Count_PerKeyType_UsesCorrectBackingStore()
+    {
+        ProtocolTable u64 = _CreateTable(ProtocolTableKeyType.U64);
+        ProtocolTable str = _CreateTable(ProtocolTableKeyType.String, "str.table");
+        ProtocolTable bytes = _CreateTable(ProtocolTableKeyType.Bytes, "bytes.table");
+        ProtocolTable boolean = _CreateTable(ProtocolTableKeyType.Bool, "bool.table");
+        ProtocolTable any = _CreateTable(ProtocolTableKeyType.Any, "any.table");
+        ProtocolId p = _Proto(1);
+
+        u64.RegisterU64(1, p);
+        str.RegisterString("a", p);
+        str.RegisterString("b", p);
+        bytes.RegisterBytes(new BytesKey([1]), p);
+        boolean.RegisterBool(true, p);
+        any.RegisterAny(p);
+
+        await Assert.That(u64.Count).IsEqualTo(1);
+        await Assert.That(str.Count).IsEqualTo(2);
+        await Assert.That(bytes.Count).IsEqualTo(1);
+        await Assert.That(boolean.Count).IsEqualTo(1);
+        await Assert.That(any.Count).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task GetAllAny_WhenBackingListNull_ReturnsEmptySpan()
+    {
+        ProtocolTable table = _CreateTable(ProtocolTableKeyType.Any, "any.null");
+        System.Reflection.FieldInfo? anyListField = typeof(ProtocolTable).GetField(
+            "_AnyList", BindingFlags.NonPublic | BindingFlags.Instance);
+        await Assert.That(anyListField).IsNotNull();
+        anyListField!.SetValue(table, null);
+
+        ReadOnlySpan<ProtocolId> all = table.GetAllAny();
+        await Assert.That(all.IsEmpty).IsTrue();
+        ReadOnlyMemory<ProtocolId>? ids = table.GetAnyProtocolIds();
+        await Assert.That(ids).IsNotNull();
+        await Assert.That(ids!.Value.Length).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task GetAnyProtocolIds_WhenPopulated_ReturnsMemory()
+    {
+        ProtocolTable table = _CreateTable(ProtocolTableKeyType.Any, "any.ids");
+        ProtocolId p = _Proto(4);
+        table.RegisterAny(p);
+
+        ReadOnlyMemory<ProtocolId>? ids = table.GetAnyProtocolIds();
+        await Assert.That(ids).IsNotNull();
+        await Assert.That(ids!.Value.Length).IsEqualTo(1);
+        await Assert.That(ids.Value.Span[0]).IsEqualTo(p);
+    }
+
+    [Test]
+    public async Task Count_WhenBackingMapsNull_ReturnsZero()
+    {
+        ProtocolTable u64 = _CreateTable(ProtocolTableKeyType.U64, "null.u64");
+        ProtocolTable str = _CreateTable(ProtocolTableKeyType.String, "null.str");
+        ProtocolTable bytes = _CreateTable(ProtocolTableKeyType.Bytes, "null.bytes");
+        ProtocolTable boolean = _CreateTable(ProtocolTableKeyType.Bool, "null.bool");
+        ProtocolTable any = _CreateTable(ProtocolTableKeyType.Any, "null.any");
+
+        u64.GetType().GetField("_U64Map", BindingFlags.NonPublic | BindingFlags.Instance)!.SetValue(u64, null);
+        str.GetType().GetField("_StringMap", BindingFlags.NonPublic | BindingFlags.Instance)!.SetValue(str, null);
+        bytes.GetType().GetField("_BytesMap", BindingFlags.NonPublic | BindingFlags.Instance)!.SetValue(bytes, null);
+        boolean.GetType().GetField("_BoolTrue", BindingFlags.NonPublic | BindingFlags.Instance)!.SetValue(boolean, null);
+        boolean.GetType().GetField("_BoolFalse", BindingFlags.NonPublic | BindingFlags.Instance)!.SetValue(boolean, null);
+        any.GetType().GetField("_AnyList", BindingFlags.NonPublic | BindingFlags.Instance)!.SetValue(any, null);
+
+        await Assert.That(u64.Count).IsEqualTo(0);
+        await Assert.That(str.Count).IsEqualTo(0);
+        await Assert.That(bytes.Count).IsEqualTo(0);
+        await Assert.That(boolean.Count).IsEqualTo(0);
+        await Assert.That(any.Count).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task Count_UnknownKeyType_ReturnsZero()
+    {
+        ProtocolTable table = _CreateTable(ProtocolTableKeyType.U64, "unknown.count");
+        System.Reflection.FieldInfo? infoField = typeof(ProtocolTable).GetField(
+            "<Info>k__BackingField", BindingFlags.NonPublic | BindingFlags.Instance);
+        await Assert.That(infoField).IsNotNull();
+        ProtocolTableInfo info = (ProtocolTableInfo)infoField!.GetValue(table)!;
+        ProtocolTableInfo mutated = new(
+            info.Id, info.Name, info.UiName, (ProtocolTableKeyType)99, info.Description);
+        infoField.SetValue(table, mutated);
+
+        await Assert.That(table.Count).IsEqualTo(0);
+    }
 }

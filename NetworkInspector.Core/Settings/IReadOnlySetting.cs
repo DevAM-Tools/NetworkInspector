@@ -8,8 +8,8 @@ namespace NetworkInspector.Core.Settings;
 /// Exposes all metadata and value accessors without allowing mutation
 /// (no <see cref="Setting.SetPendingValue"/>, <see cref="Setting.Apply"/>,
 /// or <see cref="Setting.Reset"/>).
-/// Returned by <see cref="IReadOnlySettingsManager"/> so consumers cannot
-/// modify settings through the read-only surface.
+/// Returned as <see cref="ReadOnlySettingView"/> by <see cref="IReadOnlySettingsManager"/>
+/// so consumers cannot modify settings through the read-only surface.
 /// </para>
 /// </summary>
 public interface IReadOnlySetting

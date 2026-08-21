@@ -5,6 +5,7 @@ global using System;
 global using System.Buffers.Binary;
 global using System.Collections.Generic;
 global using System.Diagnostics;
+global using System.Globalization;
 global using System.IO;
 global using System.Linq;
 global using System.Runtime.CompilerServices;
@@ -58,7 +59,16 @@ global using ZeroAlloc;
 #endregion
 
 #region NetworkInspector.Exporters (internal)
+global using NetworkInspector.Exporters.Columnar;
+global using NetworkInspector.Exporters.DuckDb;
+global using NetworkInspector.Exporters.Parquet;
 global using NetworkInspector.Exporters.Pbf.Columnar;
+#endregion
+
+#region External Dependencies (test read-back)
+global using DuckDB.NET.Data;
+global using Parquet;
+global using Parquet.Schema;
 #endregion
 
 #region Test Framework

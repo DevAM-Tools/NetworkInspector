@@ -42,10 +42,30 @@ internal sealed class AscWriter
     private readonly Stream _Stream;
 
     /// <summary>
-    /// Per-line build buffer. Content is flushed to <see cref="_Stream"/> and reset
-    /// after every line so that peak memory use is proportional to the longest single line.
+    /// Per-line build buffer. Content is appended into <see cref="_OutputBuffer"/> and reset
+    /// after every line so that peak per-line memory use is proportional to the longest single line.
     /// </summary>
     private readonly PooledBuffer _LineBuffer = new(256);
+
+    /// <summary>
+    /// Accumulates multiple ASC lines before writing to <see cref="_Stream"/>, reducing
+    /// stream write crossings (BufferedStream still helps, but this batches at the writer layer).
+    /// Flushed when full, on <see cref="Finish"/>, or when a write would exceed capacity.
+    /// </summary>
+    private readonly PooledBuffer _OutputBuffer = new(65_536);
+
+    /// <summary>Bytes written to <see cref="_Stream"/> (committed output).</summary>
+    private long _BytesWritten;
+
+    #endregion
+
+    #region Properties
+
+    /// <summary>
+    /// Approximate output size if all line and output buffers were flushed now.
+    /// </summary>
+    internal long EstimatedOutputBytes =>
+        _BytesWritten + _OutputBuffer.Length + _LineBuffer.Length;
 
     #endregion
 
@@ -304,15 +324,20 @@ internal sealed class AscWriter
         _LineBuffer.Write("End TriggerBlock"u8);
         _LineBuffer.Write(_CrLf);
         _FlushLine();
+        _FlushOutputBuffer();
         _Stream.Flush();
     }
 
     /// <summary>
-    /// Returns the internal <see cref="PooledBuffer"/> to the array pool.
+    /// Returns the internal buffers to the array pool.
     /// Must be called when the writer is no longer needed (from the owner's cleanup).
     /// Idempotent.
     /// </summary>
-    internal void Return() => _LineBuffer.Return();
+    internal void Return()
+    {
+        _LineBuffer.Return();
+        _OutputBuffer.Return();
+    }
 
     #endregion
 
@@ -464,21 +489,55 @@ internal sealed class AscWriter
     }
 
     /// <summary>
-    /// Flushes the content of <see cref="_LineBuffer"/> to the stream and resets it.
-    /// The reset is guaranteed by a <c>finally</c> block so stale data cannot accumulate
-    /// when the stream write throws.
+    /// Appends the content of <see cref="_LineBuffer"/> into <see cref="_OutputBuffer"/> and
+    /// resets the line buffer. Flushes the output buffer to the stream when it is full.
+    /// The line-buffer reset is guaranteed by a <c>finally</c> block so stale data cannot
+    /// accumulate when a write throws.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void _FlushLine()
     {
         try
         {
-            _Stream.Write(_LineBuffer.WrittenSpan);
+            ReadOnlySpan<byte> line = _LineBuffer.WrittenSpan;
+            if (_OutputBuffer.Length + line.Length > _OutputBuffer.Capacity
+                && _OutputBuffer.Length > 0)
+            {
+                _FlushOutputBuffer();
+            }
+
+            _OutputBuffer.Write(line);
+
+            // Very long single lines / full buffer: flush so stream write crossings stay batched.
+            if (_OutputBuffer.Length >= 65_536)
+            {
+                _FlushOutputBuffer();
+            }
         }
         finally
         {
             // Always reset so partial/failed lines do not corrupt subsequent writes.
             _LineBuffer.Reset();
+        }
+    }
+
+    /// <summary>Writes accumulated output bytes to the stream and resets the output buffer.</summary>
+    private void _FlushOutputBuffer()
+    {
+        if (_OutputBuffer.Length == 0)
+        {
+            return;
+        }
+
+        try
+        {
+            ReadOnlySpan<byte> written = _OutputBuffer.WrittenSpan;
+            _Stream.Write(written);
+            _BytesWritten += written.Length;
+        }
+        finally
+        {
+            _OutputBuffer.Reset();
         }
     }
 

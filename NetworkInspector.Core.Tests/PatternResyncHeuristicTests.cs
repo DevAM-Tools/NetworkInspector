@@ -102,4 +102,11 @@ internal sealed class PatternResyncHeuristicTests
         ResyncResult result = h.Resync([0xAA]);
         await Assert.That(result.IsSuccess).IsFalse();
     }
+
+    [Test]
+    public async Task Skip_NegativeBytes_ThrowsArgumentOutOfRangeException()
+    {
+        await Assert.That(() => ResyncResult.Skip(-1)).Throws<ArgumentOutOfRangeException>();
+        await Assert.That(ResyncResult.Failure.IsSuccess).IsFalse();
+    }
 }

@@ -74,13 +74,13 @@ internal static class CompactWriter
             JsonHelpers.WriteU64(ref buffer, packetSameFlags);
         }
 
-        // CH — children (fields)
+        // CH — children (fields); materialize: true so lazy protocol trees are exported.
         Field root = packet.RootField();
-        if (root.HasChildren)
+        if (root.HasChildren(materialize: true))
         {
             buffer.Write(_KeyCh);
             bool first = true;
-            foreach (Field child in root.Children())
+            foreach (Field child in root.Children(materialize: true))
             {
                 if (!first)
                 {
@@ -118,19 +118,18 @@ internal static class CompactWriter
                 buffer.Write(_FieldKeyUi);
                 JsonHelpers.WriteJsonString(ref buffer, info.UiName);
                 buffer.Write(_FieldKeyTy);
+                // Compact format keeps the numeric enum value for minimum payload size.
                 JsonHelpers.WriteU64(ref buffer, (ulong)info.FieldType);
             }
         }
 
-        // Compute same-as-previous for field value, value custom text, and custom text
+        // Compute same-as-previous with typed FieldValue + LazyString (no AsString until emit).
         FieldValue value = field.Value;
-        string? valueStr = value.Type != FieldType.None ? _FormatFieldValue(value) : null;
-        string? valueCustomRepresentation = !value.CustomRepresentation.IsNull ? value.CustomRepresentation.AsString : null;
+        LazyString valueCustomRepresentation = value.CustomRepresentation;
         LazyString customText = field.CustomText;
-        string? customTextStr = !customText.IsNull ? customText.AsString : null;
 
         uint fieldSameFlags = state.PreviousFields.CompareAndUpdate(
-            fieldIdValue, valueStr, valueCustomRepresentation, customTextStr);
+            fieldIdValue, value, valueCustomRepresentation, customText);
 
         // VA — value (only if not same as previous)
         if (value.Type != FieldType.None)
@@ -142,18 +141,18 @@ internal static class CompactWriter
             }
         }
 
-        // CR — custom representation text of the field value
-        if (valueCustomRepresentation is not null && (fieldSameFlags & SameFlags.FieldSameCustomRepresentation) == 0)
+        // CR — custom representation text of the field value (materialize only when emitting)
+        if (!valueCustomRepresentation.IsNull && (fieldSameFlags & SameFlags.FieldSameCustomRepresentation) == 0)
         {
             buffer.Write(_FieldKeyCr);
-            JsonHelpers.WriteJsonString(ref buffer, valueCustomRepresentation);
+            JsonHelpers.WriteJsonString(ref buffer, valueCustomRepresentation.AsString);
         }
 
         // CT — custom text
-        if (customTextStr is not null && (fieldSameFlags & SameFlags.FieldSameCustomText) == 0)
+        if (!customText.IsNull && (fieldSameFlags & SameFlags.FieldSameCustomText) == 0)
         {
             buffer.Write(_FieldKeyCt);
-            JsonHelpers.WriteJsonString(ref buffer, customTextStr);
+            JsonHelpers.WriteJsonString(ref buffer, customText.AsString);
         }
 
         // SF — field same flags
@@ -163,12 +162,12 @@ internal static class CompactWriter
             JsonHelpers.WriteU64(ref buffer, fieldSameFlags);
         }
 
-        // CH — children (recursive)
-        if (field.HasChildren)
+        // CH — children (recursive); materialize: true so nested lazy fields are exported.
+        if (field.HasChildren(materialize: true))
         {
             buffer.Write(_FieldKeyCh);
             bool first = true;
-            foreach (Field child in field.Children())
+            foreach (Field child in field.Children(materialize: true))
             {
                 if (!first)
                 {
@@ -182,9 +181,4 @@ internal static class CompactWriter
 
         buffer.WriteByte((byte)'}');
     }
-
-    /// <summary>
-    /// Formats a field value to a string representation for same-as-previous comparison.
-    /// </summary>
-    private static string? _FormatFieldValue(FieldValue value) => FieldValueFormatter.Format(value);
 }

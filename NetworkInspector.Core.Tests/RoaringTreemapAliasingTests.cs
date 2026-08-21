@@ -63,6 +63,21 @@ internal sealed class RoaringTreemapAliasingTests
     }
 
     [Test]
+    public async Task Or_ThenAdd_DoesNotCorruptOperand()
+    {
+        RoaringTreemap left = _Build(1UL, 2UL);
+        RoaringTreemap right = _Build(0x1_0000_0001UL);
+
+        RoaringTreemap result = left.Or(right);
+        result.Add(0x1_0000_0002UL);
+
+        await Assert.That(right.Contains(0x1_0000_0002UL)).IsFalse();
+        await Assert.That(right.Contains(0x1_0000_0001UL)).IsTrue();
+        await Assert.That(left.Contains(0x1_0000_0002UL)).IsFalse();
+        await Assert.That(result.Contains(0x1_0000_0002UL)).IsTrue();
+    }
+
+    [Test]
     public async Task Clone_ProducesIndependentCopy()
     {
         RoaringTreemap a = _Build(1UL, 2UL);

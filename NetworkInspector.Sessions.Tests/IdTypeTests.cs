@@ -62,6 +62,24 @@ internal sealed class IdTypeTests
         await Assert.That(low != high).IsTrue();
     }
 
+    [Test]
+    public async Task JobId_MaxValue_IsValid()
+    {
+        int maxId = Array.MaxLength - 1;
+        JobId id = new(maxId);
+        await Assert.That(id.IsValid).IsTrue();
+        await Assert.That(id.Value).IsEqualTo(maxId);
+    }
+
+    [Test]
+    public async Task JobId_OutOfRangeConstruction_Throws()
+    {
+        int overflow = Array.MaxLength;
+        await Assert
+            .That(() => new JobId(overflow))
+            .Throws<ArgumentOutOfRangeException>();
+    }
+
     // === ListenerId ===
 
     [Test]
@@ -116,5 +134,23 @@ internal sealed class IdTypeTests
         await Assert.That(low >= sameAsLow).IsTrue();
         await Assert.That(low == high).IsFalse();
         await Assert.That(low != high).IsTrue();
+    }
+
+    [Test]
+    public async Task ListenerId_MaxValue_IsValid()
+    {
+        int maxId = Array.MaxLength - 1;
+        ListenerId id = new(maxId);
+        await Assert.That(id.IsValid).IsTrue();
+        await Assert.That(id.Value).IsEqualTo(maxId);
+    }
+
+    [Test]
+    public async Task ListenerId_OutOfRangeConstruction_Throws()
+    {
+        int overflow = Array.MaxLength;
+        await Assert
+            .That(() => new ListenerId(overflow))
+            .Throws<ArgumentOutOfRangeException>();
     }
 }

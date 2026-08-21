@@ -14,7 +14,7 @@ public interface IFrameSourceStatistics
     /// <summary>
     /// Number of frames successfully read and returned via <see cref="IFrameSource.NextFrame"/>.
     /// </summary>
-    long ReadFrameCount
+    int ReadFrameCount
     {
         get;
     }
@@ -22,8 +22,9 @@ public interface IFrameSourceStatistics
     /// <summary>
     /// Number of frames that were skipped due to recoverable errors
     /// (e.g., corrupted block, decompression failure, unresolved interface).
+    /// Saturates at <see cref="int.MaxValue"/> when multiple errors map to one frame.
     /// </summary>
-    long SkippedFrameCount
+    int SkippedFrameCount
     {
         get;
     }
@@ -31,8 +32,9 @@ public interface IFrameSourceStatistics
     /// <summary>
     /// Number of non-fatal errors encountered during reading.
     /// Multiple errors may be counted for a single skipped frame.
+    /// Saturates at <see cref="int.MaxValue"/>.
     /// </summary>
-    long ErrorCount
+    int ErrorCount
     {
         get;
     }

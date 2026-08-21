@@ -10,7 +10,6 @@ internal sealed class ProtocolTable
 {
     #region Fields
 
-    private readonly ProtocolTableInfo _Info;
     private readonly Dictionary<ulong, List<ProtocolId>>? _U64Map;
     private readonly Dictionary<string, List<ProtocolId>>? _StringMap;
     private readonly Dictionary<BytesKey, List<ProtocolId>>? _BytesMap;
@@ -25,7 +24,7 @@ internal sealed class ProtocolTable
     /// <summary>Creates a protocol dispatch table from its metadata.</summary>
     internal ProtocolTable(ProtocolTableInfo info)
     {
-        _Info = info;
+        Info = info;
         switch (info.KeyType)
         {
             case ProtocolTableKeyType.U64:
@@ -49,12 +48,12 @@ internal sealed class ProtocolTable
 
     #region Properties
 
-    internal ProtocolTableInfo Info => _Info;
-    internal ProtocolTableId Id => _Info.Id;
-    internal string Name => _Info.Name;
-    internal string UiName => _Info.UiName;
-    internal ProtocolTableKeyType KeyType => _Info.KeyType;
-    internal string? Description => _Info.Description;
+    internal ProtocolTableInfo Info { get; }
+    internal ProtocolTableId Id => Info.Id;
+    internal string Name => Info.Name;
+    internal string UiName => Info.UiName;
+    internal ProtocolTableKeyType KeyType => Info.KeyType;
+    internal string? Description => Info.Description;
 
     #endregion
 
@@ -181,7 +180,7 @@ internal sealed class ProtocolTable
         {
             list = _BoolFalse;
         }
-        if (list is not null && list.Count > 0)
+        if (list?.Count > 0)
         {
             return list[0];
         }
@@ -191,7 +190,7 @@ internal sealed class ProtocolTable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal ProtocolId? GetAny()
     {
-        if (_AnyList is not null && _AnyList.Count > 0)
+        if (_AnyList?.Count > 0)
         {
             return _AnyList[0];
         }
@@ -266,7 +265,7 @@ internal sealed class ProtocolTable
     {
         get
         {
-            switch (_Info.KeyType)
+            switch (Info.KeyType)
             {
                 case ProtocolTableKeyType.U64:
                     if (_U64Map is not null)
@@ -351,7 +350,7 @@ internal sealed class ProtocolTable
     /// </summary>
     internal IEnumerable<KeyValuePair<bool, ReadOnlyMemory<ProtocolId>>>? IterBoolEntries()
     {
-        if (_Info.KeyType != ProtocolTableKeyType.Bool)
+        if (Info.KeyType != ProtocolTableKeyType.Bool)
         {
             return null;
         }
@@ -360,11 +359,11 @@ internal sealed class ProtocolTable
 
     private IEnumerable<KeyValuePair<bool, ReadOnlyMemory<ProtocolId>>> _YieldBoolEntries()
     {
-        if (_BoolFalse is not null && _BoolFalse.Count > 0)
+        if (_BoolFalse?.Count > 0)
         {
             yield return new KeyValuePair<bool, ReadOnlyMemory<ProtocolId>>(false, _BoolFalse.ToArray());
         }
-        if (_BoolTrue is not null && _BoolTrue.Count > 0)
+        if (_BoolTrue?.Count > 0)
         {
             yield return new KeyValuePair<bool, ReadOnlyMemory<ProtocolId>>(true, _BoolTrue.ToArray());
         }
@@ -376,7 +375,7 @@ internal sealed class ProtocolTable
     /// </summary>
     internal ReadOnlyMemory<ProtocolId>? GetAnyProtocolIds()
     {
-        if (_Info.KeyType != ProtocolTableKeyType.Any)
+        if (Info.KeyType != ProtocolTableKeyType.Any)
         {
             return null;
         }
@@ -395,18 +394,24 @@ internal sealed class ProtocolTable
 /// </summary>
 public readonly struct BytesKey : IEquatable<BytesKey>
 {
-    #region Fields
 
-    private readonly byte[] _Data;
-
-    #endregion
 
     #region Constructors
 
     /// <summary>Creates a bytes key by copying the given span.</summary>
     public BytesKey(ReadOnlySpan<byte> data)
     {
-        _Data = data.ToArray();
+        Data = data.ToArray();
+    }
+
+    /// <summary>
+    /// Wraps an existing array without copying. The array must not be mutated after wrap.
+    /// Used by <see cref="DispatchContext"/> to store the backing array in an <see cref="object"/>
+    /// slot (already a heap reference) instead of boxing this struct.
+    /// </summary>
+    internal BytesKey(byte[]? data)
+    {
+        Data = data;
     }
 
     #endregion
@@ -418,11 +423,8 @@ public readonly struct BytesKey : IEquatable<BytesKey>
     {
         get
         {
-            if (_Data is not null)
-            {
-                return _Data;
-            }
-            return [];
+            return Data ??
+                [];
         }
     }
 
@@ -431,13 +433,20 @@ public readonly struct BytesKey : IEquatable<BytesKey>
     {
         get
         {
-            if (_Data is not null)
+            if (Data is not null)
             {
-                return _Data.Length;
+                return Data.Length;
             }
             return 0;
         }
     }
+
+    /// <summary>
+    /// Backing array, or <see langword="null"/> when empty.
+    /// Shared with <see cref="DispatchContext"/> so the bytes key can occupy the existing
+    /// reference slot without boxing this struct.
+    /// </summary>
+    internal byte[]? Data { get; }
 
     #endregion
 
@@ -445,7 +454,7 @@ public readonly struct BytesKey : IEquatable<BytesKey>
 
     /// <inheritdoc/>
     public bool Equals(BytesKey other) =>
-        (_Data ?? []).AsSpan().SequenceEqual((other._Data ?? []).AsSpan());
+        (Data ?? []).AsSpan().SequenceEqual((other.Data ?? []).AsSpan());
 
     /// <inheritdoc/>
     public override bool Equals(object? obj) => obj is BytesKey other && Equals(other);
@@ -454,7 +463,7 @@ public readonly struct BytesKey : IEquatable<BytesKey>
     public override int GetHashCode()
     {
         HashCode hash = new();
-        hash.AddBytes((_Data ?? []).AsSpan());
+        hash.AddBytes((Data ?? []).AsSpan());
         return hash.ToHashCode();
     }
 

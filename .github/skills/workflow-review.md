@@ -19,34 +19,35 @@ Load on `/review`. Apply `copilot-instructions.md` Sections 2–4.
 ## Stage 2 — Load Rules
 
 - Run Tech Load Protocol per `copilot-instructions.md` Section 3.
+- Load Sweep Mode from `workflow-council.md`.
 
 ## Stage 3 — Gather Context
 
 - Enumerate in-scope files.
 - Read in-scope files, related tests, direct dependencies.
-- Read definition and docs for involved members and types.
+- Read definition and docs for involved types and items.
 - Build coverage checklist: file × criterion.
 - Build test-coverage matrix; list gaps explicitly.
-- Load `tech-tunit.md` when exit-point coverage verification is required.
-- Record exit-gap count from ExitPointGaps per `tech-tunit.md` when production code is in scope.
-- C# in scope: run `dotnet build` on the solution.
+- Load matching skills per Tech Load Protocol, including the test/coverage skill when tests or production APIs are in scope.
+- Apply the coverage gate and build command from loaded tech skills.
 
 ## Stage 4 — Review
 
-- **Consistency first:** cross-check plan, request, code, tests, docs, and XML/comments for mismatches (e.g. documented behavior ≠ implementation, `Verify` ≠ reality, API contract ≠ call sites).
+- **Consistency first:** cross-check plan, request, code, tests, docs, and comments for mismatches (e.g. documented behavior ≠ implementation, `Verify` ≠ reality, API contract ≠ call sites).
 - Fix cross-file drift in finding `How` when source-of-truth is clear; cite `C{n}` when plan already chose. Undocumented mismatch → Error.
-- Competing goals without recorded preference → Error; require user decision before release verdict.
 - Review exhaustively and adversarially.
 - Evaluate all in-scope files against `copilot-instructions.md` Section 4 criteria plus loaded tech-skill rules.
 - Compare requested target vs observed result.
 - Evaluate test coverage for behaviors, errors, boundaries.
-- Require 100% exit-point coverage.
+- Require 100% exit-path coverage per Section 4.5 and the loaded tech skill’s gate (if any).
 - Flag missing misuse/abuse analysis in plan as Error when new public APIs are introduced.
 - Evaluate interface vs hot-path concrete decisions.
-- For hot paths, evaluate `[ThreadStatic]` vs pooling per Section 4.4.
+- For hot paths, evaluate allocation strategy per Section 4.4 and the loaded tech skill.
 - Never stop after first N findings.
 - Flag missing tech-skill load as Error when triggered files are in scope.
-- Flag new dependency added without user approval as Error per `tech-solution.md`.
+- Flag new dependency added without user approval as Error per the loaded tech skill New Dependency Protocol.
+- Sweep per `workflow-council.md`. Skip none. Lens defect → finding; cite lens in `Context`.
+- Competing goals without recorded preference → Error; user decision before release verdict. High-stakes fork: recommend `/council` in `How`. Do not auto-run Full unless asked.
 
 ## Stage 5 — Output
 
@@ -56,12 +57,16 @@ Use the templates below for all findings output.
 
 Field order: `What` → `Why` → `How` → `[Context]` → `[Where]` → `Verify` → `[If it fails]`.
 Always require `What`, `Why`, `How`, `Verify`.
-Omit `Context` when no non-obvious constraint exists. Omit `Where` when no file is touched.
+Omit `Context` only when neither constraints nor sources exist. Omit `Where` when no file is touched.
 Require `If it fails` for schema, state, or external-system risks.
-Make `How` a standalone fix recipe: APIs, validation, error paths, thread-safety/performance/security constraints, prerequisite state.
+❗Specify the concrete fix. Intent-only, outline-only, or slogan-only `How` is incomplete.
+❗Write `How` so another agent can implement the fix without inventing types, items, signatures, algorithms, control flow, or file structure.
+Make `How` a standalone, exhaustive fix recipe: types, items, visibility, signatures, parameters, return values, call-site edits, validation, error paths, control flow, data flow, thread-safety/performance/security constraints, prerequisite state, decision rationale, and important edge cases.
+❗Include fenced **Problem** and **Fix** code in every finding `How` — current code, then target code with real signatures and key bodies; anchor with path/symbol. Do not substitute stubs, pseudocode-only, or comments-as-code for the solution.
+❗Cite a concrete source in every finding `Context` when an external reference exists: URL, official doc title + section, API reference, RFC. Else cite skill/ADR/path/symbol.
 Put `Where` as path, approximate line numbers, and searchable symbol anchor.
-Put `Verify` as exact command (`-c Release` when applicable) and expected result.
-Use bullets in `How` where possible; avoid redundant prose.
+Put `Verify` as exact command in optimized/Release configuration per loaded tech skill, and expected result.
+Use bullets in `How`. Prefer implementation detail over brevity. Do not compress `How`.
 
 ```markdown
 ## {ID} - {Title}
@@ -89,19 +94,20 @@ List every finding in one row: ID, bucket prefix (`E`/`C`/`R`/`P`), title, one-s
 
 **File mode** (default under `/complex-task`): write to `reviews/review_<slug>_<iteration>.md`. Put Findings Overview at top. Every finding as full Shared Block under its bucket section. In chat: output compact summary only — bucket counts, release verdict, artifact path, prioritized action list. Do not repost Shared Block contents in chat.
 
-**Chat-only mode** (no review file): output Findings Overview table and every finding as full Shared Block in chat. Overview before bucket sections; Priority Action List after all findings.
+**Chat-only mode** (no review file): output Findings Overview table, Perspective Sweep table, and every finding as full Shared Block in chat. Overview, then Sweep, then bucket sections; Priority Action List after all findings.
 
 ### Review File Sections
 
 1. Findings Overview (top)
 2. Summary
 3. Scope
-4. Errors
-5. Cosmetic Issues
-6. Refactoring Opportunities
-7. Performance and Allocations
-8. Closing Assessment
-9. Priority Action List
+4. Perspective Sweep (table; every lens filled; finding IDs or `none`)
+5. Errors
+6. Cosmetic Issues
+7. Refactoring Opportunities
+8. Performance and Allocations
+9. Closing Assessment
+10. Priority Action List
 
 ## Finding Buckets
 
@@ -116,14 +122,15 @@ Assign exactly one bucket per finding.
 
 Bucket-specific `How` / `Why` / `Context` requirements:
 
-- **Error:** include Severity (High/Medium/Low) in status line; include before/after in `How`; name OWASP category for security; specify missing boundary and guard for validation gaps.
-- **Cosmetic:** reference exact style rule in `How`; include before/after when non-obvious.
-- **Refactoring:** state unchanged behavior in `Why`; name extract/move/split in `How`.
-- **Performance:** reference Section 4.4 in `How`; include frequency, allocation pressure, cache behavior, and exception-throwing paths in `Context`.
+- **Error:** include Severity (High/Medium/Low) in status line; show Problem/Fix code in `How`; name OWASP category for security; specify missing boundary and guard for validation gaps.
+- **Cosmetic:** reference exact style rule in `How`; show Problem/Fix code in `How`.
+- **Refactoring:** state unchanged behavior in `Why`; name extract/move/split in `How`; show Problem/Fix code in `How`.
+- **Performance:** reference Section 4.4 in `How`; show Problem/Fix code in `How`; include frequency, allocation pressure, cache behavior, and throw/panic / error-return paths in `Context`.
 
 ## Closing Assessment
 
 - Include architecture quality, dominant error themes, thread-safety posture, allocation profile.
+- Confirm Sweep covered all five lenses; unused lens = `none`.
 - State explicit release verdict: `Ready for public release` or prioritized blocker IDs.
 - List top 3 priority actions by finding ID.
 

@@ -409,4 +409,75 @@ internal sealed class BlfExporterTests
 
         await Assert.That(exporter.Description).IsEqualTo("Binary Logging Format export");
     }
+
+    [Test]
+    public async Task EthernetPayloadLongerThanUInt16_IsSkippedAsMalformed()
+    {
+        using MemoryStream ms = new();
+        using BlfExporter exporter = BlfExporter.CreateBuilder().ToStream(ms).Build();
+        exporter.ErrorTolerance = ErrorToleranceMode.Tolerant;
+
+        // dst(6)+src(6)+ethertype(2) + payload larger than ushort.MaxValue
+        byte[] oversized = new byte[14 + ushort.MaxValue + 1];
+        oversized.AsSpan(12, 2).Clear();
+        BinaryPrimitives.WriteUInt16BigEndian(oversized.AsSpan(12), 0x0800);
+
+        Frame frame = TestHarness.CreateFrame(new FrameId(0), 1_000_000_000L, oversized, LinkType.Ethernet);
+        bool cont = exporter.OnFrame(frame);
+        exporter.OnFinish();
+
+        await Assert.That(cont).IsTrue();
+        await Assert.That(exporter.FrameCount).IsEqualTo(0);
+        await Assert.That(exporter.SkippedCount).IsEqualTo(1);
+        await Assert.That(exporter.ErrorCount).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task CanXlFrame_TolerantMode_Skipped()
+    {
+        // CAN XL shares LinkType.CanSocketcan with classic/FD but sets XLF (byte 4, bit 7).
+        // BLF has no CAN XL object type in this exporter — must skip, not write classic CAN.
+        using TestDir dir = new("blf_canxl");
+        string path = dir.FilePath("output.blf");
+
+        using BlfExporter exporter = BlfExporter.CreateBuilder().ToFile(path).Build();
+        exporter.ErrorTolerance = ErrorToleranceMode.Tolerant;
+
+        ExportErrorKind? reportedKind = null;
+        exporter.ItemSkipped += (_, e) => reportedKind = e.Kind;
+
+        byte[] xlData = SocketCanGenerators.BuildCanXl(0x01, [0xAA, 0xBB, 0xCC, 0xDD]);
+        bool accepted = exporter.OnFrame(
+            TestHarness.CreateFrame(new FrameId(0), 1_000_000_000L, xlData, LinkType.CanSocketcan));
+        exporter.OnFinish();
+
+        await Assert.That(accepted).IsTrue();
+        await Assert.That(reportedKind).IsEqualTo(ExportErrorKind.UnsupportedType);
+        await Assert.That(exporter.SkippedCount).IsEqualTo(1);
+        await Assert.That(exporter.FrameCount).IsEqualTo(0);
+        await Assert.That(exporter.HasErrors).IsTrue();
+
+        BlfStructuralVerifier verifier = BlfStructuralVerifier.Open(path);
+        // File header only — no classic/FD CAN log objects from the XL frame.
+        await Assert.That(verifier.HasValidHeader).IsTrue();
+        await Assert.That(verifier.ObjectCount).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task CanXlFrame_StrictMode_AbortsExport()
+    {
+        using MemoryStream ms = new();
+        using BlfExporter exporter = BlfExporter.CreateBuilder().ToStream(ms).Build();
+        exporter.ErrorTolerance = ErrorToleranceMode.Strict;
+
+        byte[] xlData = SocketCanGenerators.BuildCanXl(0x01, [0xAA, 0xBB, 0xCC, 0xDD]);
+        bool accepted = exporter.OnFrame(
+            TestHarness.CreateFrame(new FrameId(0), 1_000_000_000L, xlData, LinkType.CanSocketcan));
+        exporter.OnFinish();
+
+        await Assert.That(accepted).IsFalse();
+        await Assert.That(exporter.HasErrors).IsTrue();
+        await Assert.That(exporter.IsFinished).IsTrue();
+        await Assert.That(exporter.FrameCount).IsEqualTo(0);
+    }
 }

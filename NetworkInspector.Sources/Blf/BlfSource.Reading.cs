@@ -11,10 +11,11 @@ public sealed partial class BlfSource
     /// </summary>
     private void _ScanFull()
     {
-        _Scanner = new BlfIncrementalScanner(_Backend, _FileInfo, _Index, _Options.MaxUncompressedContainerSize);
-        _Scanner.ScanToEnd();
+        BlfIncrementalScanner scanner = new(_Backend, _FileInfo, _Index, _Options.MaxUncompressedContainerSize);
+        _Scanner = scanner;
+        scanner.ScanToEnd();
         _Index.ShrinkToFit();
-        Volatile.Write(ref _FullyScanned, true);
+        _FullyScanned = true;
     }
 
     /// <summary>
@@ -24,8 +25,9 @@ public sealed partial class BlfSource
     /// </summary>
     private void _InitializeLazyScanner()
     {
-        _Scanner = new BlfIncrementalScanner(_Backend, _FileInfo, _Index, _Options.MaxUncompressedContainerSize);
-        _ChannelNames = _Scanner.ChannelNames;
+        BlfIncrementalScanner scanner = new(_Backend, _FileInfo, _Index, _Options.MaxUncompressedContainerSize);
+        _Scanner = scanner;
+        _ChannelNames = scanner.ChannelNames;
     }
 
     /// <summary>
@@ -56,7 +58,7 @@ public sealed partial class BlfSource
 
         // Snapshot _Registry once (see snapshot invariant in XML remarks above).
         // Dispose() can null _Registry between the disposed check in FrameById() and here.
-        FrameInterfaceRegistry? registry = Volatile.Read(ref _Registry);
+        FrameInterfaceRegistry? registry = _Registry;
         if (registry is null)
         {
             return null;
@@ -146,7 +148,7 @@ public sealed partial class BlfSource
 
         // Snapshot _Registry; Dispose() can null it between the disposed check in
         // NextFrame() and this Frame.Create call.
-        FrameInterfaceRegistry? registry = Volatile.Read(ref _Registry);
+        FrameInterfaceRegistry? registry = _Registry;
         if (registry is null)
         {
             return null;
@@ -665,8 +667,8 @@ public sealed partial class BlfSource
     /// </summary>
     private void _HandleSkip(FrameReadErrorEventArgs error)
     {
-        Interlocked.Increment(ref _SkippedFrameCount);
-        Interlocked.Increment(ref _ErrorCount);
+        _SkippedFrameCount.Increment();
+        _ErrorCount.Increment();
 
         // Always signal the error so subscribers can log the first offending block
         // regardless of the tolerance mode. In strict mode the source additionally
@@ -675,7 +677,7 @@ public sealed partial class BlfSource
 
         if (ErrorTolerance == ErrorToleranceMode.Strict)
         {
-            Volatile.Write(ref _Aborted, true);
+            _Aborted = true;
         }
     }
 

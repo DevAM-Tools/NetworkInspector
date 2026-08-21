@@ -25,19 +25,20 @@ public sealed class AscStreamSource : IFrameSource, IErrorTolerantFrameSource
     private readonly Stream _Stream;
 
     /// <summary>User-friendly display name.</summary>
-    private readonly string _UiName;
+    /// <inheritdoc />
+    public string UiName { get; }
 
     /// <summary>Whether to leave the stream open on Dispose.</summary>
     private readonly bool _LeaveOpen;
 
     /// <summary>Whether <see cref="Start"/> has been called.</summary>
-    private bool _Started;
+    private volatile bool _Started;
 
-    /// <summary>Whether <see cref="Dispose"/> has been called.</summary>
-    private bool _Disposed;
+    /// <summary>Atomic dispose latch (0 = live, 1 = disposed).</summary>
+    private volatile int _Disposed;
 
     /// <summary>Whether the stream is exhausted or strict-mode abort was triggered.</summary>
-    private bool _Exhausted;
+    private volatile bool _Exhausted;
 
     /// <summary>Whether the header has been parsed.</summary>
     private bool _Initialized;
@@ -113,9 +114,9 @@ public sealed class AscStreamSource : IFrameSource, IErrorTolerantFrameSource
 
     #region Error tolerance statistics
 
-    private long _ReadFrameCount;
-    private long _SkippedFrameCount;
-    private long _ErrorCount;
+    private volatile int _ReadFrameCount;
+    private readonly SaturatingVolatileCounter _SkippedFrameCount = new();
+    private readonly SaturatingVolatileCounter _ErrorCount = new();
 
     #endregion
 
@@ -125,7 +126,7 @@ public sealed class AscStreamSource : IFrameSource, IErrorTolerantFrameSource
         ErrorToleranceMode errorTolerance, TimeZoneInfo timestampTimeZone)
     {
         _Stream = stream;
-        _UiName = uiName;
+        UiName = uiName;
         _LeaveOpen = leaveOpen;
         ErrorTolerance = errorTolerance;
         _TimestampTimeZone = timestampTimeZone;
@@ -166,9 +167,6 @@ public sealed class AscStreamSource : IFrameSource, IErrorTolerantFrameSource
     #region IFrameSource
 
     /// <inheritdoc />
-    public string UiName => _UiName;
-
-    /// <inheritdoc />
     public string? Description => null;
 
     /// <inheritdoc />
@@ -176,21 +174,21 @@ public sealed class AscStreamSource : IFrameSource, IErrorTolerantFrameSource
     public int? EstimatedFrameCount => null;
 
     /// <inheritdoc />
-    public bool IsRunning => Volatile.Read(ref _Started) && !Volatile.Read(ref _Disposed);
+    public bool IsRunning => _Started && _Disposed == 0;
 
     // ── IErrorTolerantFrameSource / IFrameSourceStatistics ────────────────────
 
     /// <inheritdoc/>
-    public long ReadFrameCount => Volatile.Read(ref _ReadFrameCount);
+    public int ReadFrameCount => _ReadFrameCount;
 
     /// <inheritdoc/>
-    public long SkippedFrameCount => Volatile.Read(ref _SkippedFrameCount);
+    public int SkippedFrameCount => _SkippedFrameCount.Value;
 
     /// <inheritdoc/>
-    public long ErrorCount => Volatile.Read(ref _ErrorCount);
+    public int ErrorCount => _ErrorCount.Value;
 
     /// <inheritdoc/>
-    public bool HasErrors => Volatile.Read(ref _ErrorCount) > 0;
+    public bool HasErrors => _ErrorCount.Value > 0;
 
     /// <inheritdoc/>
     public ErrorToleranceMode ErrorTolerance
@@ -207,7 +205,7 @@ public sealed class AscStreamSource : IFrameSource, IErrorTolerantFrameSource
         ArgumentNullException.ThrowIfNull(registry);
         _SourceId = sourceId;
         _Registry = registry;
-        Volatile.Write(ref _Started, true);
+        _Started = true;
         _FrameIndex = 0;
         // Note: we deliberately do NOT reset ErrorTolerance here. The construction-time
         // value is applied directly in the private ctor (FromStream forwards the option),
@@ -218,14 +216,14 @@ public sealed class AscStreamSource : IFrameSource, IErrorTolerantFrameSource
     /// <inheritdoc />
     public Frame? NextFrame(CancellationToken cancellationToken = default)
     {
-        ObjectDisposedException.ThrowIf(Volatile.Read(ref _Disposed), this);
+        ObjectDisposedException.ThrowIf(_Disposed != 0, this);
 
-        if (!Volatile.Read(ref _Started))
+        if (!_Started)
         {
             throw new InvalidOperationException($"{UiName} has not been started. Call Start() first.");
         }
 
-        if (Volatile.Read(ref _Exhausted))
+        if (_Exhausted)
         {
             return null;
         }
@@ -244,7 +242,7 @@ public sealed class AscStreamSource : IFrameSource, IErrorTolerantFrameSource
                 // Match the PCAP/BLF stream-source contract: a failed deferred
                 // initialization permanently exhausts the source and rethrows
                 // so the caller cannot re-enter with partial state.
-                Volatile.Write(ref _Exhausted, true);
+                _Exhausted = true;
                 _Initialized = true;
                 throw;
             }
@@ -258,7 +256,7 @@ public sealed class AscStreamSource : IFrameSource, IErrorTolerantFrameSource
                 return f;
             }
 
-            if (Volatile.Read(ref _Exhausted))
+            if (_Exhausted)
             {
                 return null;
             }
@@ -274,12 +272,11 @@ public sealed class AscStreamSource : IFrameSource, IErrorTolerantFrameSource
     /// <inheritdoc />
     public void Dispose()
     {
-        if (Volatile.Read(ref _Disposed))
+        if (Interlocked.Exchange(ref _Disposed, 1) != 0)
         {
             return;
         }
 
-        Volatile.Write(ref _Disposed, true);
         _Registry = null;
 
         // GC.SuppressFinalize is called before the conditional stream disposal so it
@@ -313,7 +310,7 @@ public sealed class AscStreamSource : IFrameSource, IErrorTolerantFrameSource
             if (!_TryReadNextLine(out ReadOnlySpan<byte> lineBytes))
             {
                 // Stream exhausted before or during header parsing
-                Volatile.Write(ref _Exhausted, true);
+                _Exhausted = true;
                 break;
             }
 
@@ -468,17 +465,13 @@ public sealed class AscStreamSource : IFrameSource, IErrorTolerantFrameSource
     /// </summary>
     private Frame? _ReadNextFrame()
     {
-        while (!Volatile.Read(ref _Exhausted))
+        while (!_Exhausted)
         {
-            if (_FrameIndex == int.MaxValue)
-            {
-                Volatile.Write(ref _Exhausted, true);
-                return null;
-            }
+            ArrayIndexIdRange.ThrowIfInvalidNextIndex(_FrameIndex, "frame");
 
             if (!_TryReadNextLine(out ReadOnlySpan<byte> lineBytes))
             {
-                Volatile.Write(ref _Exhausted, true);
+                _Exhausted = true;
                 return null;
             }
 
@@ -503,7 +496,7 @@ public sealed class AscStreamSource : IFrameSource, IErrorTolerantFrameSource
 
             // _ParseLine has already reported any skip via _HandleSkip; do not double-report
             // here. If strict mode flipped the exhausted flag, abort the loop.
-            if (Volatile.Read(ref _Exhausted))
+            if (_Exhausted)
             {
                 return null;
             }
@@ -622,8 +615,8 @@ public sealed class AscStreamSource : IFrameSource, IErrorTolerantFrameSource
     /// </summary>
     private void _HandleSkip(FrameReadErrorEventArgs error)
     {
-        Interlocked.Increment(ref _SkippedFrameCount);
-        Interlocked.Increment(ref _ErrorCount);
+        _SkippedFrameCount.Increment();
+        _ErrorCount.Increment();
 
         // Always signal the error so subscribers can log the first offending line
         // regardless of the tolerance mode. In strict mode the source additionally
@@ -632,7 +625,7 @@ public sealed class AscStreamSource : IFrameSource, IErrorTolerantFrameSource
 
         if (ErrorTolerance == ErrorToleranceMode.Strict)
         {
-            Volatile.Write(ref _Exhausted, true);
+            _Exhausted = true;
         }
     }
 

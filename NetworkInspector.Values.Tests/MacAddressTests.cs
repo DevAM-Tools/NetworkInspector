@@ -67,6 +67,23 @@ internal sealed class MacAddressTests
         await Assert.That(addr.RawValue).IsEqualTo(0x001122334455UL);
     }
 
+    [Test]
+    public async Task TryFromBytes_ShortSpan_ReturnsFalse()
+    {
+        await Assert.That(MacAddress.TryFromBytes(ReadOnlySpan<byte>.Empty, out MacAddress address)).IsFalse();
+        await Assert.That(address).IsEqualTo(default(MacAddress));
+    }
+
+    [Test]
+    public async Task FromBytes_ShortSpan_Throws()
+    {
+        await Assert.That(() =>
+        {
+            MacAddress _ = MacAddress.FromBytes(ReadOnlySpan<byte>.Empty);
+            return Task.CompletedTask;
+        }).Throws<ArgumentException>();
+    }
+
     // === Formatting ===
 
     [Test]

@@ -7,6 +7,9 @@ namespace NetworkInspector.Core.Cache;
 /// Provides O(1) insert, remove, move-to-front, and pop-back.
 /// Uses <see cref="CollectionsMarshal.GetValueRefOrNullRef{TKey, TValue}"/>
 /// for single-lookup dictionary access in hot paths.
+/// <para>
+/// <b>Thread-safety:</b> Not thread-safe. Caller synchronization required.
+/// </para>
 /// </summary>
 internal sealed class LinkedMap<TKey, TValue> where TKey : notnull
 {

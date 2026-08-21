@@ -5,9 +5,8 @@ namespace NetworkInspector.Core.Reassembly;
 /// <summary>
 /// Delimiter-based PDU boundary detection.
 /// Finds a specific byte sequence that terminates a PDU.
+/// <para><b>Thread-safety:</b> Immutable after construction; safe to share across threads.</para>
 /// </summary>
-/// <remarks>Creates a delimiter-based PDU boundary detector.</remarks>
-/// <exception cref="ArgumentException">Thrown when <c>delimiter</c> is null or empty.</exception>
 public sealed class DelimiterDetector : IPduBoundaryDetector
 {
     #region Fields
@@ -18,7 +17,10 @@ public sealed class DelimiterDetector : IPduBoundaryDetector
 
     #region Constructors
 
-    /// <summary>Creates a delimiter-based PDU boundary detector.</summary>
+    /// <summary>Creates a delimiter-based PDU boundary detector. The array is copied defensively.</summary>
+    /// <param name="delimiter">The byte sequence that terminates a PDU.</param>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="delimiter"/> is null.</exception>
+    /// <exception cref="ArgumentException">Thrown when <paramref name="delimiter"/> is empty.</exception>
     public DelimiterDetector(byte[] delimiter)
     {
         ArgumentNullException.ThrowIfNull(delimiter);
@@ -26,7 +28,7 @@ public sealed class DelimiterDetector : IPduBoundaryDetector
         {
             throw new ArgumentException("Delimiter must not be empty.", nameof(delimiter));
         }
-        _Delimiter = delimiter;
+        _Delimiter = (byte[])delimiter.Clone();
     }
 
     #endregion

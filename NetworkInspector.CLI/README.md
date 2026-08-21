@@ -11,13 +11,15 @@ The executable name is `ni`.
 
 `NetworkInspector.CLI` provides two production-oriented commands:
 
-- `ni convert` for frame-level format conversion (PCAP/PCAPNG/BLF workflows).
-- `ni export` for protocol parsing and packet-level export (JSON/PBF/Text workflows).
+- `ni convert` for frame-level format conversion (PCAP/PCAPNG/BLF/ASC workflows).
+- `ni export` for protocol parsing and packet-level export (JSON/PBF/Text/Parquet/DuckDB workflows).
+
+Application logic lives in the `NetworkInspector.CLI.Core` class library (tested and gated by ExitPointGaps). The `ni` executable is a thin host that forwards to `CliEntry.Run`.
 
 ## Why It Stands Out
 
 - One CLI for both format conversion and parsed packet export.
-- Stream-friendly operation for pipelines and automation.
+- File-based workflows with optional size/count splitting for large captures.
 - Tolerant mode and progress reporting for large or imperfect captures.
 - Stable exit-code contract for scripts and CI jobs.
 
@@ -50,10 +52,10 @@ Convert a BLF capture to PCAPNG:
 ni convert capture.blf --output capture.pcapng
 ```
 
-Export packets as compact JSON to stdout:
+Export packets as compact JSON to a file:
 
 ```bash
-ni export capture.pcapng --format json
+ni export capture.pcapng --format json --output capture.json
 ```
 
 Export text output to a file:
@@ -81,16 +83,21 @@ ni convert <input> [<input2> ...] --output <path> [options]
 
 Common options:
 
-- `--output`, `-o` Output path (`-` for stdout stream).
+- `--output`, `-o` Output file path (required).
 - `--output-format`, `--format`, `-f` Explicit output format spec (overrides extension).
-- `--profile <name>` Profile name accepted for script compatibility with `export`.
-- `--settings-path <dir>` Settings root accepted for script compatibility with `export`.
+- `--profile <name>` Settings profile (available to sources and exporters).
+- `--settings-path <dir>` Base directory for settings storage.
 - `--max-frames`, `-n` Maximum number of frames to process.
 - `--split-size <MB>` Split output at this size in MiB.
 - `--split-count <N>` Split output every N frames.
+- `--filter <expr>` Only keep frames whose packet matches the expression.
 - `--blf-cache-size <MB>` BLF cache budget in MiB.
-- `--progress <N>` Report progress every N frames.
+- `--progress <N>` Report progress every N frames (stderr).
 - `--tolerant` Skip malformed frames instead of aborting.
+
+Conversion is frame-level by default: no protocol stack is built and no frame is parsed. Passing a
+non-empty `--filter` changes that, because each frame has to be parsed before it can be judged. An
+omitted, empty, or whitespace-only `--filter` keeps the fast frame-copy path.
 
 Format variants:
 
@@ -98,6 +105,7 @@ Format variants:
 | --- | --- |
 | `pcapng` | `pcapng` (default), `pcap` |
 | `blf` | `blf` (default compression), `blf:compression=off`, `blf:compression=fast`, `blf:compression=default`, `blf:compression=best` |
+| `asc` | `asc` |
 
 Examples:
 
@@ -105,14 +113,14 @@ Examples:
 # Convert BLF to PCAPNG
 ni convert capture.blf --output capture.pcapng
 
-# Split a large file into 100 MiB chunks
-ni convert big.pcapng --output split/ --split-size 100
+# Split a large file into 100 MiB chunks (base name + numbered suffix)
+ni convert big.pcapng --output split/part.pcapng --split-size 100
 
 # Convert multiple sources into one output
 ni convert a.blf b.blf --output merged.pcapng
 
-# Stream converted output to stdout
-ni convert capture.pcapng --output - --format pcapng
+# Keep only DNS traffic (parses frames, unlike the plain conversion above)
+ni convert capture.pcapng --output dns.pcapng --filter "udp.dstport == 53"
 ```
 
 ## ni export
@@ -120,21 +128,24 @@ ni convert capture.pcapng --output - --format pcapng
 Parse frames through the protocol stack and export one record per packet.
 
 ```text
-ni export <input> [<input2> ...] [--format <fmt>] [--output <path>] [options]
+ni export <input> [<input2> ...] --output <path> [--format <fmt>] [options]
 ```
 
 Common options:
 
+- `--output`, `-o` Output file path (required).
 - `--format`, `-f` Export format spec.
-- `--output`, `-o` Output path (omit or use `-` for stdout).
 - `--max-packets`, `-n` Maximum packets to export.
+- `--split-size <MB>` Split when live `EstimatedOutputBytes` reaches this size (MiB; no filesystem probe).
+- `--split-count <N>` Split output every N packets (numbered files, or sibling Parquet directories).
+- `--filter <expr>` Only export packets matching the expression.
 - `--profile <name>` Settings profile name.
 - `--settings-path <dir>` Base directory for settings storage.
 - `--blf-cache-size <MB>` BLF cache budget in MiB.
-- `--progress <N>` Report progress every N packets.
+- `--progress <N>` Report progress every N packets (stderr).
 - `--tolerant` Skip malformed frames instead of aborting.
 
-If `--format` is omitted, format is chosen from `--output` extension when possible. For stdout workflows, compact JSON is used by default.
+If `--format` is omitted, format is chosen from `--output` extension when possible.
 
 Format variants:
 
@@ -143,14 +154,16 @@ Format variants:
 | `json` | `json:style=compact` (default), `json:style=pretty`, `json:style=array` |
 | `pbf` | `pbf:format=standard` (default), `pbf:format=columnar`, `pbf:format=columnar,compressed`, `pbf:format=columnar,nocompress` |
 | `text` | `text:level=summary`, `text:level=standard` (default), `text:level=full`, `text:truncate=<N>` |
+| `parquet` | `parquet` (directory dataset; `-o <dir>`; splits become sibling dirs `base_00001`, …) |
+| `duckdb` | `duckdb` (file; `-o <file>.duckdb`; splits become `base_00001.duckdb`, …) |
 
 For PBF, compression is enabled by default unless `nocompress` is specified.
 
 Examples:
 
 ```bash
-# Compact JSON to stdout
-ni export capture.pcapng --format json
+# Compact JSON to file
+ni export capture.pcapng --format json --output capture.json
 
 # Pretty JSON to file
 ni export capture.pcapng --format json:style=pretty --output capture.json
@@ -161,9 +174,39 @@ ni export capture.pcapng --format text --output capture.txt
 # Columnar PBF with compression
 ni export capture.pcapng --format pbf:format=columnar,compressed --output capture.pbf
 
+# Split export every 10_000 packets
+ni export capture.pcapng --format json --output split/part.json --split-count 10000
+
+# Parquet dataset directory
+ni export capture.pcapng --format parquet --output out_parquet
+
+# Split Parquet into sibling dataset directories every 50_000 packets
+ni export capture.pcapng --format parquet --output out_parquet --split-count 50000
+
+# DuckDB file (also supports --split-count / --split-size)
+ni export capture.pcapng --format duckdb --output out.duckdb
+
 # Tolerant export with progress checkpoints
 ni export unknown-input.blf --format text --output output.txt --tolerant --progress 50000
+
+# Only HTTPS packets
+ni export capture.pcapng --format json --output tls.json --filter "tcp.port == 443"
 ```
+
+### Filtering
+
+Both commands accept the same expression language, documented in
+[`FILTER_GUIDE.md`](../NetworkInspector.Filter/FILTER_GUIDE.md).
+
+Behavior shared by `convert` and `export`:
+
+- A packet is judged before any output is opened, so a filter that matches nothing writes no file
+  and no dataset directory at all.
+- An expression that does not compile exits with the usage/validation code (`1`) and names the
+  position of the problem on stderr.
+- An expression that fails to evaluate aborts with the runtime code (`3`) rather than writing a
+  partially filtered output.
+- `--max-frames` / `--max-packets` count what is written, so they cap matching records.
 
 ## Exit Codes
 
@@ -186,16 +229,17 @@ ni export unknown-input.blf --format text --output output.txt --tolerant --progr
 ## Operational Notes
 
 - Output uses UTF-8 console encoding.
+- Progress and diagnostics go to stderr.
 - `Ctrl+C` triggers cooperative cancellation for long-running operations.
-- Use `-` for stream-oriented workflows where supported.
+- Output path (`-o` / `--output`) is always required; stdout (`-`) is not supported.
 
 ## Links
 
 - [GitHub repository](https://github.com/DevAM-Tools/NetworkInspector)
 - [NuGet package](https://www.nuget.org/packages/NetworkInspector.CLI)
 - [Source folder](https://github.com/DevAM-Tools/NetworkInspector/tree/main/NetworkInspector.CLI)
-- [Issue tracker](https://github.com/DevAM-Tools/NetworkInspector/issues)
 - [Root overview](../README.md)
+- [Issue tracker](https://github.com/DevAM-Tools/NetworkInspector/issues)
 
 ## License
 

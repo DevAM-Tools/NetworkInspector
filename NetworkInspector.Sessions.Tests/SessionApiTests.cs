@@ -74,7 +74,7 @@ internal sealed class SessionApiTests
         session.WaitForCompletion();
 
         JobInfo sourceJob = session.GetJobs().First(j => j.UiName == source.UiName);
-        _WaitForCondition(() => sourceJob.Status is JobStatus.Completed or JobStatus.Cancelled);
+        WaitHelper.WaitUntil(() => sourceJob.Status is JobStatus.Completed or JobStatus.Cancelled);
 
         bool removed = session.TryRemoveJob(sourceJob);
 
@@ -96,7 +96,7 @@ internal sealed class SessionApiTests
         session.WaitForCompletion();
 
         JobInfo sourceJob = session.GetJobs().First(j => j.UiName == source.UiName);
-        _WaitForCondition(() => sourceJob.Status is JobStatus.Completed or JobStatus.Cancelled);
+        WaitHelper.WaitUntil(() => sourceJob.Status is JobStatus.Completed or JobStatus.Cancelled);
 
         await Assert.That(session.TryRemoveJob(sourceJob)).IsTrue();
         await Assert.That(session.TryRemoveJob(sourceJob)).IsFalse();
@@ -136,7 +136,7 @@ internal sealed class SessionApiTests
         session.TryStart();
 
         JobInfo sourceJob = session.GetJobs().First(j => j.UiName == source.UiName);
-        _WaitForCondition(() => sourceJob.Status == JobStatus.Running);
+        WaitHelper.WaitUntil(() => sourceJob.Status == JobStatus.Running);
 
         try
         {
@@ -348,8 +348,9 @@ internal sealed class SessionApiTests
         session.TryStart();
         session.WaitForCompletion();
 
-        IPacketIndexReader? indexBefore = session.PacketIndex;
+        PacketIndexReaderView? indexBefore = session.PacketIndex;
         await Assert.That(indexBefore).IsNotNull();
+        await Assert.That(indexBefore!.Value.Source).IsNotNull();
 
         PacketStore store = _GetPacketStore(session);
         store.Clear();
@@ -361,6 +362,106 @@ internal sealed class SessionApiTests
         await Assert.That(session.PacketIndex).IsNotNull();
 
         session.Shutdown();
+    }
+
+    [Test]
+    public async Task AllocateJobId_AtCapacity_ThrowsSessionException()
+    {
+        using Stack stack = TestHarness.CreateStack();
+        using Session session = new(stack);
+
+        SessionState state = _GetState(session);
+        _SetPrivateInt(state, "_NextJobId", int.MinValue);
+
+        using TestFrameSource source = TestFrameSource.WithUdpFrames(1);
+
+        try
+        {
+            session.TryAddFrameSource(source, out _);
+            throw new InvalidOperationException("Expected SessionException was not thrown.");
+        }
+        catch (SessionException ex)
+        {
+            await Assert.That(ex.Code).IsEqualTo(SessionErrorCode.JobIdExhausted);
+        }
+    }
+
+    /// <summary>
+    /// The very last ID in the range is still handed out; only the allocation after it fails. This
+    /// covers the boundary between "usable" and "exhausted".
+    /// </summary>
+    [Test]
+    public async Task AllocateJobId_LastId_IsHandedOutThenExhausted()
+    {
+        using Stack stack = TestHarness.CreateStack();
+        using Session session = new(stack);
+
+        SessionState state = _GetState(session);
+        _SetPrivateInt(state, "_NextJobId", ArrayIndexIdRange.MaxValue);
+
+        using TestFrameSource first = TestFrameSource.WithUdpFrames(1);
+        using TestFrameSource second = TestFrameSource.WithUdpFrames(1);
+
+        bool added = session.TryAddFrameSource(first, out FrameSourceInfo? info);
+
+        await Assert.That(added).IsTrue();
+        await Assert.That(info).IsNotNull();
+
+        try
+        {
+            session.TryAddFrameSource(second, out _);
+            throw new InvalidOperationException("Expected SessionException was not thrown.");
+        }
+        catch (SessionException ex)
+        {
+            await Assert.That(ex.Code).IsEqualTo(SessionErrorCode.JobIdExhausted);
+        }
+    }
+
+    /// <summary>Same boundary as for job IDs, but for listener IDs.</summary>
+    [Test]
+    public async Task AllocateListenerId_LastId_IsHandedOutThenExhausted()
+    {
+        using Stack stack = TestHarness.CreateStack();
+        using Session session = new(stack);
+
+        SessionState state = _GetState(session);
+        _SetPrivateInt(state, "_NextListenerId", ArrayIndexIdRange.MaxValue);
+
+        bool added = session.TryAddListener(new TestSessionListener(), out ListenerInfo? info);
+
+        await Assert.That(added).IsTrue();
+        await Assert.That(info!.Id.Value).IsEqualTo(ArrayIndexIdRange.MaxValue);
+
+        try
+        {
+            session.TryAddListener(new TestSessionListener(), out _);
+            throw new InvalidOperationException("Expected SessionException was not thrown.");
+        }
+        catch (SessionException ex)
+        {
+            await Assert.That(ex.Code).IsEqualTo(SessionErrorCode.ListenerIdExhausted);
+        }
+
+        session.Shutdown();
+    }
+
+    /// <summary>Reads the private <c>_State</c> field of <paramref name="session"/>.</summary>
+    private static SessionState _GetState(Session session)
+    {
+        FieldInfo stateField = typeof(Session).GetField(
+            "_State",
+            BindingFlags.Instance | BindingFlags.NonPublic)!;
+        return (SessionState)stateField.GetValue(session)!;
+    }
+
+    /// <summary>Overwrites a private int field so ID-range boundaries can be reached in a test.</summary>
+    private static void _SetPrivateInt(SessionState state, string fieldName, int value)
+    {
+        FieldInfo field = typeof(SessionState).GetField(
+            fieldName,
+            BindingFlags.Instance | BindingFlags.NonPublic)!;
+        field.SetValue(state, value);
     }
 
     [Test]
@@ -389,25 +490,11 @@ internal sealed class SessionApiTests
         return (PacketStore)field.GetValue(session)!;
     }
 
-    private static void _WaitForCondition(Func<bool> condition, int timeoutMs = 5000)
-    {
-        Stopwatch sw = Stopwatch.StartNew();
-        SpinWait wait = new();
-        while (!condition())
-        {
-            if (sw.ElapsedMilliseconds > timeoutMs)
-            {
-                throw new TimeoutException($"Condition was not met within {timeoutMs} ms.");
-            }
-            wait.SpinOnce();
-        }
-    }
-
     private sealed class EmptyNameListener : ISessionListener
     {
         public string UiName => "   ";
 
-        public void OnNewPackets(ISessionReader session, long fromIndex, long toIndexExclusive)
+        public void OnNewPackets(ISessionReader session, int fromIndex, int toIndexExclusive)
         {
         }
     }

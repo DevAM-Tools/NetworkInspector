@@ -14,19 +14,25 @@ public interface IExporterStatistics
     #region Properties
 
     /// <summary>Number of frames/packets successfully written.</summary>
-    long WrittenCount
+    int WrittenCount
     {
         get;
     }
 
-    /// <summary>Number of frames/packets skipped due to errors or unsupported types.</summary>
-    long SkippedCount
+    /// <summary>
+    /// Number of frames/packets skipped due to errors or unsupported types.
+    /// Saturates at <see cref="int.MaxValue"/>.
+    /// </summary>
+    int SkippedCount
     {
         get;
     }
 
-    /// <summary>Number of errors encountered (may be greater than <see cref="SkippedCount"/>).</summary>
-    long ErrorCount
+    /// <summary>
+    /// Number of errors encountered (may be greater than <see cref="SkippedCount"/>).
+    /// Saturates at <see cref="int.MaxValue"/>.
+    /// </summary>
+    int ErrorCount
     {
         get;
     }

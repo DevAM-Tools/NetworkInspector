@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Profiling.Scenarios;
 
@@ -88,6 +88,20 @@ internal interface IProfilingScenario
     /// <see cref="WorkUnitsPerIteration"/> to provide a domain-specific label.
     /// </remarks>
     string WorkUnitName => "items";
+
+    /// <summary>
+    /// Called once after warm-up completes and before the timed phase begins.
+    /// Override to reset cursors or switch to a dedicated timed-phase workload.
+    /// </summary>
+    void BeginTimedPhase()
+    {
+    }
+
+    /// <summary>
+    /// When <see langword="true"/>, the runner stops the current phase early because the
+    /// scenario has no remaining pre-built work. Default: never complete early.
+    /// </summary>
+    bool IsWorkComplete => false;
 
     /// <summary>
     /// The hot path: called repeatedly during both warm-up and timed phases.

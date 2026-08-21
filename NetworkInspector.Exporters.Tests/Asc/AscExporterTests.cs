@@ -143,6 +143,56 @@ internal sealed class AscExporterTests
         await Assert.That(content).Contains("1 1");
     }
 
+    [Test]
+    [Arguments(12, 9)]   // DLC code 9 → 12 bytes
+    [Arguments(16, 10)]  // DLC code 10 → 16 bytes
+    [Arguments(64, 15)]  // DLC code 15 → 64 bytes
+    public async Task CanFdPayloadByteCount_MapsToCorrectAscDlcAndDlen(int payloadLen, int expectedDlc)
+    {
+        using MemoryStream ms = new();
+        using AscExporter exporter = AscExporter.CreateBuilder().ToStream(ms).Build();
+
+        byte[] payload = new byte[payloadLen];
+        for (int i = 0; i < payloadLen; i++)
+        {
+            payload[i] = (byte)(i + 1);
+        }
+
+        byte[] canData = SocketCanGenerators.BuildCanFd(0x200, payload);
+        Frame frame = TestHarness.CreateFrame(new FrameId(0), 0L, canData, LinkType.CanSocketcan);
+        exporter.OnFrame(frame);
+        exporter.OnFinish();
+
+        string content = Encoding.UTF8.GetString(ms.ToArray());
+        await Assert.That(content).Contains("CANFD");
+
+        // CANFD line: "... Rx 200 0 0 {dlc} {dlen} {data...}"
+        string[] lines = content.Split(["\r\n", "\n"], StringSplitOptions.RemoveEmptyEntries);
+        string? canFdLine = null;
+        foreach (string line in lines)
+        {
+            if (line.Contains("CANFD", StringComparison.Ordinal))
+            {
+                canFdLine = line;
+                break;
+            }
+        }
+
+        await Assert.That(canFdLine).IsNotNull();
+        string[] tokens = canFdLine!.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        // tokens: ts, CANFD, ch, Rx, id, brs, esi, dlc, dlen, data...
+        int canFdIdx = Array.IndexOf(tokens, "CANFD");
+        await Assert.That(canFdIdx).IsGreaterThanOrEqualTo(0);
+        int dlcToken = int.Parse(tokens[canFdIdx + 6], CultureInfo.InvariantCulture);
+        int dlenToken = int.Parse(tokens[canFdIdx + 7], CultureInfo.InvariantCulture);
+        await Assert.That(dlcToken).IsEqualTo(expectedDlc);
+        await Assert.That(dlenToken).IsEqualTo(payloadLen);
+
+        // First and last payload bytes present (no zero-pad inflation from wrong DLC table)
+        await Assert.That(canFdLine).Contains("01");
+        await Assert.That(canFdLine).Contains(payload[^1].ToString("X2", CultureInfo.InvariantCulture));
+    }
+
     // ========================================================================
     // LIN
     // ========================================================================
@@ -355,7 +405,7 @@ internal sealed class AscExporterTests
 
         exporter.OnFinish();
 
-        await Assert.That(exporter.WrittenCount).IsEqualTo(3L);
+        await Assert.That(exporter.WrittenCount).IsEqualTo(3);
     }
 
     [Test]
@@ -432,7 +482,7 @@ internal sealed class AscExporterTests
         exporter.OnFinish();
 
         await Assert.That(exporter.IsFinished).IsTrue();
-        await Assert.That(exporter.WrittenCount).IsEqualTo(1L);
+        await Assert.That(exporter.WrittenCount).IsEqualTo(1);
     }
 
     // ========================================================================
@@ -464,9 +514,9 @@ internal sealed class AscExporterTests
 
         exporter.OnFinish();
 
-        await Assert.That(exporter.WrittenCount).IsEqualTo(3L);
-        await Assert.That(exporter.SkippedCount).IsEqualTo(2L);
-        await Assert.That(exporter.ErrorCount).IsEqualTo(2L);
+        await Assert.That(exporter.WrittenCount).IsEqualTo(3);
+        await Assert.That(exporter.SkippedCount).IsEqualTo(2);
+        await Assert.That(exporter.ErrorCount).IsEqualTo(2);
         await Assert.That(exporter.HasErrors).IsTrue();
     }
 
@@ -531,7 +581,7 @@ internal sealed class AscExporterTests
         exporter.OnFrame(TestHarness.CreateFrame(new FrameId(0), 0L, ethData));
         exporter.OnFinish();
 
-        await Assert.That(exporter.SkippedCount).IsEqualTo(1L);
+        await Assert.That(exporter.SkippedCount).IsEqualTo(1);
         await Assert.That(skippedRaised).IsEqualTo(1);
     }
 
@@ -555,8 +605,8 @@ internal sealed class AscExporterTests
         // Tolerant mode: caller is told to continue, frame is counted as skipped, not written.
         await Assert.That(accepted).IsTrue();
         await Assert.That(reportedKind).IsEqualTo(ExportErrorKind.UnsupportedType);
-        await Assert.That(exporter.SkippedCount).IsEqualTo(1L);
-        await Assert.That(exporter.WrittenCount).IsEqualTo(0L);
+        await Assert.That(exporter.SkippedCount).IsEqualTo(1);
+        await Assert.That(exporter.WrittenCount).IsEqualTo(0);
         await Assert.That(exporter.HasErrors).IsTrue();
     }
 
@@ -656,7 +706,7 @@ internal sealed class AscExporterTests
 
         string content = Encoding.UTF8.GetString(ms.ToArray());
 
-        await Assert.That(exporter.WrittenCount).IsEqualTo(4L);
+        await Assert.That(exporter.WrittenCount).IsEqualTo(4);
         await Assert.That(content).Contains("Rx d");
         await Assert.That(content).Contains("CANFD");
         await Assert.That(content).Contains("CSM = enhanced");

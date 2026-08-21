@@ -18,11 +18,12 @@ namespace NetworkInspector.Sessions;
 /// <para>
 /// <b>Listener-thread model (pull-based):</b>
 /// Each <see cref="ISessionListener"/> subscription receives a dedicated
-/// <see cref="ListenerSlot"/> with a SpinWait poll loop. Producers set atomic flags;
-/// the listener thread reads and clears flags via <c>Interlocked.Exchange</c>,
-/// then pulls data from the shared <see cref="ISessionReader"/>. No queues, no
-/// signal objects, no batch copies. Natural coalescing: multiple events between
-/// two poll cycles merge into a single flag read.
+/// <see cref="ListenerSlot"/> with an event-gated wait loop backed by
+/// <see cref="ManualResetEventSlim"/>. Producers set atomic flags and signal the
+/// wake event; the listener thread reads and clears flags via <c>Interlocked.Exchange</c>,
+/// then pulls data from the shared <see cref="ISessionReader"/>. No queues, no batch
+/// copies. Natural coalescing: multiple events between two wake cycles merge into a
+/// single flag read.
 /// </para>
 ///
 /// <para>
@@ -39,19 +40,20 @@ namespace NetworkInspector.Sessions;
 ///   <item><c>TryAddFrameSource</c> -- safe before <c>TryStart</c> on any thread.</item>
 ///   <item><c>TryAddListener</c> -- safe before or after <c>TryStart</c>.</item>
 ///   <item><c>TryStart</c> -- safe once; transitions phase to Running.</item>
-///   <item><c>PacketCount</c>, <c>FrameCount</c> -- Interlocked reads, always current.</item>
+///   <item><c>PacketCount</c>, <c>FrameCount</c> -- volatile reads, always current.</item>
 ///   <item><c>TryGetPacket</c> -- safe from any thread (PacketStore + re-parse).</item>
 ///   <item><c>TryAddJob</c> -- safe from any thread.</item>
 ///   <item><c>Shutdown</c> / <c>Dispose</c> -- safe to call from any thread.</item>
 /// </list>
 /// </para>
 /// </summary>
-public sealed class Session : ISession, ISessionReader
+/// <remarks>Creates a new session bound to <paramref name="stack"/>.</remarks>
+public sealed class Session(Stack stack) : ISession, ISessionReader
 {
     // -- Configuration --
 
     // Non-readonly: Restart() swaps the stack for a new one.
-    private Stack _Stack;
+    private Stack _Stack = stack ?? throw new ArgumentNullException(nameof(stack));
 
     // True when the session created the stack via factory (Restart). False for the
     // initial stack passed to the constructor (caller manages its lifetime).
@@ -59,32 +61,30 @@ public sealed class Session : ISession, ISessionReader
 
     // Session-owned registry: shared across all stacks. Extracted from the
     // initial stack so that source and interface IDs remain stable across restarts.
-    private readonly FrameInterfaceRegistry _FrameInterfaceRegistry;
+    private readonly FrameInterfaceRegistry _FrameInterfaceRegistry = stack.FrameInterfaceRegistry;
 
     // -- State --
 
     private readonly SessionState _State = new();
 
     // Global atomic counters readable from any thread.
-    private long _PacketCount;
-    private long _FrameCount;
+    private volatile int _PacketCount;
+    private volatile int _FrameCount;
 
     // Number of source jobs that have not yet finished.
     // Transitions to 0 means all sources are done.
-    private int _ActiveSourceCount;
+    private volatile int _ActiveSourceCount;
 
     // -- Parse lock --
 
     // SpinLock protects Stack parsing which mutates protocol-instance state.
     // enableThreadOwnerTracking=false removes re-entrancy overhead on hot path.
-#pragma warning disable CA2213 // SpinLock is a mutable value type, not a disposable object
     private SpinLock _ParseLock = new(enableThreadOwnerTracking: false);
-#pragma warning restore CA2213
 
     // Globally unique PacketId counter (shared across all source threads).
     // Allocated INSIDE the SpinLock to guarantee correctness after a reparse
     // (which resets the counter under the lock).
-    private int _NextPacketId;
+    private volatile int _NextPacketId;
 
     // Kernel-level gate that blocks source threads during a stack-swap reparse.
     // Initially signalled (open): Wait() returns immediately during normal parsing.
@@ -94,7 +94,7 @@ public sealed class Session : ISession, ISessionReader
 
     // Guards against concurrent Restart() calls.
     // 0 = idle, 1 = restart in progress.
-    private int _RestartInProgress;
+    private volatile int _RestartInProgress;
 
     // -- Shared stores --
 
@@ -112,6 +112,9 @@ public sealed class Session : ISession, ISessionReader
 
     // Sources registered before Start(). Re-used on Restart().
     private readonly SnapshotList<FrameSourceEntry> _SourceEntries = new();
+
+    // Public read-only views of frame sources for GetFrameSources().
+    private readonly SnapshotList<FrameSourceInfo> _SourceInfos = new();
 
     // Running source jobs (populated at Start() time, replaced on Restart()).
     // Non-readonly: reassigned by _StartInternal() on each start/restart cycle.
@@ -144,27 +147,18 @@ public sealed class Session : ISession, ISessionReader
     // Exceptions that occurred during disposal in Shutdown(). Populated by Dispose()
     // when Shutdown() throws an AggregateException. Callers can inspect this after
     // Dispose() returns to detect cleanup failures without Dispose() throwing.
-    private AggregateException? _ShutdownErrors;
+    private volatile AggregateException? _ShutdownErrors;
 
     // Guards against double shutdown (Shutdown() called explicitly then via Dispose()).
     // Accessed atomically via Interlocked — multiple threads may call Shutdown() concurrently.
-    private int _ListenersTornDown; // 0 = false, 1 = true
+    private volatile int _ListenersTornDown; // 0 = false, 1 = true
 
     // Ensures only one thread executes the shutdown body. Others wait for completion.
-    private int _ShutdownStarted; // 0 = not started, 1 = started
+    private volatile int _ShutdownStarted; // 0 = not started, 1 = started
 
     // When true, TryGetPacket and ReadPackets return immediately without data.
     // Set during shutdown after source jobs finish, cleared on restart.
     private volatile bool _QueriesDisabled;
-
-    // -- Constructor --
-
-    /// <summary>Creates a new session bound to <paramref name="stack"/>.</summary>
-    public Session(Stack stack)
-    {
-        _Stack = stack ?? throw new ArgumentNullException(nameof(stack));
-        _FrameInterfaceRegistry = stack.FrameInterfaceRegistry;
-    }
 
     // -- ISessionReader: Status --
 
@@ -172,13 +166,13 @@ public sealed class Session : ISession, ISessionReader
     public SessionPhase Phase => _State.Phase;
 
     /// <inheritdoc/>
-    public long PacketCount => Interlocked.Read(ref _PacketCount);
+    public int PacketCount => _PacketCount;
 
     /// <inheritdoc/>
-    public long FrameCount => Interlocked.Read(ref _FrameCount);
+    public int FrameCount => _FrameCount;
 
     /// <inheritdoc/>
-    public bool MorePacketsExpected => Volatile.Read(ref _ActiveSourceCount) > 0;
+    public bool MorePacketsExpected => _ActiveSourceCount > 0;
 
     // -- ISession: Source management --
 
@@ -201,21 +195,41 @@ public sealed class Session : ISession, ISessionReader
     // -- ISessionReader: Source info --
 
     /// <inheritdoc/>
-    public IReadOnlyList<FrameSourceInfo> GetFrameSources()
-    {
-        ReadOnlySpan<FrameSourceEntry> entries = _SourceEntries.Current;
-        FrameSourceInfo[] snapshot = new FrameSourceInfo[entries.Length];
-        for (int i = 0; i < entries.Length; i++)
-        {
-            snapshot[i] = entries[i].Info;
-        }
-        return snapshot;
-    }
+    /// <remarks>Returns the current immutable snapshot array; no per-call allocation copy.</remarks>
+    public IReadOnlyList<FrameSourceInfo> GetFrameSources() => _SourceInfos.CurrentSnapshot;
 
     // -- ISession: Listener management --
 
     /// <inheritdoc/>
-    public bool TryAddListener(ISessionListener listener, [NotNullWhen(true)] out ListenerInfo? info)
+    public bool TryAddListener(ISessionListener listener, [NotNullWhen(true)] out ListenerInfo? info) =>
+        TryAddListener(listener, filter: null, out info);
+
+    /// <inheritdoc/>
+    public bool TryAddListener(
+        ISessionListener listener,
+        string? filterExpression,
+        [NotNullWhen(true)] out ListenerInfo? info,
+        out FilterError? filterFailure)
+    {
+        ArgumentNullException.ThrowIfNull(listener);
+        _ThrowIfDisposed();
+
+        // Compile before allocating any listener state so a bad expression leaves the session
+        // exactly as it was.
+        FilterResult<PacketFilter> compiled = PacketFilter.Compile(filterExpression ?? string.Empty, _Stack);
+        if (!compiled.TryGetValue(out PacketFilter? filter))
+        {
+            info = null;
+            filterFailure = compiled.Error;
+            return false;
+        }
+
+        filterFailure = null;
+        return TryAddListener(listener, filter, out info);
+    }
+
+    /// <inheritdoc/>
+    public bool TryAddListener(ISessionListener listener, IFilter? filter, [NotNullWhen(true)] out ListenerInfo? info)
     {
         ArgumentNullException.ThrowIfNull(listener);
         _ThrowIfDisposed();
@@ -237,10 +251,8 @@ public sealed class Session : ISession, ISessionReader
         ListenerId listenerId = _State.AllocateListenerId();
         JobId jobId = _State.AllocateJobId();
 
-        // CA2000: ListenerSlot is stored in _ListenerSlots and disposed during Shutdown().
-#pragma warning disable CA2000
-        ListenerSlot slot = new(jobId, listener, this, _OnJobStatusChanged);
-#pragma warning restore CA2000
+        ListenerSlot slot = _RegisterListenerSlot(jobId, listener);
+        slot.SetFilter(filter);
 
         info = new ListenerInfo()
         {
@@ -256,13 +268,8 @@ public sealed class Session : ISession, ISessionReader
         JobInfo slotJobInfo = slot.Info;
         info.UnsubscribeCallback = () => TryUnsubscribe(slotJobInfo);
 
-        // Add to snapshot list so source threads can set flags on it.
-        _ListenerSlots.Add(slot);
         // Track the public view for GetListeners().
         _ListenerInfos.Add(info);
-        // Register the listener's job in the unified job list so callers
-        // can observe listener job status via GetJobs().
-        _AllJobs.Add(slot.Info);
 
         // Start the slot in any non-Idle phase. During Idle, _StartInternal()
         // will start all pending slots. In all active phases (Running,
@@ -321,15 +328,14 @@ public sealed class Session : ISession, ISessionReader
             Frame? raFrame = raSource.FrameById(frameId);
             if (raFrame is not null)
             {
-                // _ParseFrameUnderLock uses ParseFrameIndexed when PacketIndex is active.
-                packet = _ParseFrameUnderLock(raFrame.Value, id);
-                if (packet is not null)
+                if (!_TryParseFrameUnderLock(raFrame.Value, id, out packet))
                 {
-                    // Cache the re-parsed packet so subsequent lookups avoid re-parsing.
-                    _PacketStore.Store(id, packet);
-                    return true;
+                    return false;
                 }
-                return false;
+
+                // Cache the re-parsed packet so subsequent lookups avoid re-parsing.
+                _PacketStore.Store(id, packet);
+                return true;
             }
         }
 
@@ -339,7 +345,7 @@ public sealed class Session : ISession, ISessionReader
     }
 
     /// <inheritdoc/>
-    public int ReadPackets(long fromIndex, Span<Packet?> buffer)
+    public int ReadPackets(int fromIndex, Span<Packet?> buffer)
     {
         if (_QueriesDisabled)
         {
@@ -348,10 +354,162 @@ public sealed class Session : ISession, ISessionReader
         return _PacketStore.ReadRange(fromIndex, buffer);
     }
 
+    /// <inheritdoc/>
+    public int ReadPackets(int startId, Span<PacketRef> destination, out PacketIdLayout idLayout)
+    {
+        idLayout = PacketIdLayout.Contiguous;
+        if (_QueriesDisabled)
+        {
+            return 0;
+        }
+
+        return _PacketStore.ReadRange(startId, destination);
+    }
+
+    /// <inheritdoc/>
+    public bool TryReadPackets(
+        ListenerId listenerId,
+        int startId,
+        Span<PacketRef> destination,
+        PacketReadMode mode,
+        out int count,
+        out PacketIdLayout idLayout,
+        [NotNullWhen(false)] out FilterError? failure)
+    {
+        count = 0;
+        idLayout = PacketIdLayout.Contiguous;
+        failure = null;
+
+        ListenerSlot slot = _FindListenerSlot(listenerId)
+            ?? throw new SessionException(
+                SessionErrorCode.ListenerNotFound,
+                $"No listener is registered with id {listenerId.Value.ToString(CultureInfo.InvariantCulture)}.");
+
+        if (_QueriesDisabled)
+        {
+            return true;
+        }
+
+        if (mode == PacketReadMode.All)
+        {
+            count = _PacketStore.ReadRange(startId, destination);
+            return true;
+        }
+
+        // A failed re-bind after a stack swap must not degrade into "match everything":
+        // the caller has to learn that its filter is gone.
+        if (slot.FilterFault is FilterError fault)
+        {
+            failure = fault;
+            return false;
+        }
+
+        PacketFilter? filter = slot.Filter;
+        if (filter is null || filter.IsAlwaysMatch)
+        {
+            count = _PacketStore.ReadRange(startId, destination);
+            return true;
+        }
+
+        return _TryReadMatching(filter, startId, destination, out count, out idLayout, out failure);
+    }
+
+    /// <summary>
+    /// Scans <c>[startId, PacketCount)</c> and fills <paramref name="destination"/> with the packets
+    /// that <paramref name="filter"/> accepts.
+    ///
+    /// <para>
+    /// Presence pruning uses <see cref="IFilter.TryIsPresenceCandidate"/> on the live index:
+    /// each packet id is tested with <see cref="ReadOnlyRoaringBitmap.Contains"/> so the index
+    /// can keep growing without cloning bitmaps. Packets outside the prune set are skipped
+    /// without touching the field tree. Survivors reach <see cref="IFilter.TryIsMatch"/>.
+    /// </para>
+    /// </summary>
+    private bool _TryReadMatching(
+        PacketFilter filter,
+        int startId,
+        Span<PacketRef> destination,
+        out int count,
+        out PacketIdLayout idLayout,
+        [NotNullWhen(false)] out FilterError? failure)
+    {
+        count = 0;
+        idLayout = PacketIdLayout.Contiguous;
+        failure = null;
+
+        if (filter.PoisonError is FilterError poison)
+        {
+            failure = poison;
+            return false;
+        }
+
+        PacketIndexReaderView? indexView = _PacketIndex?.AsReadOnlyView();
+        int limit = _PacketCount;
+        int first = Math.Max(startId, 0);
+        bool skipped = false;
+        int filled = 0;
+
+        for (int id = first; id < limit && filled < destination.Length; id++)
+        {
+            if (indexView is not null
+                && filter.TryIsPresenceCandidate(indexView.Value, (uint)id, out bool isCandidate)
+                && !isCandidate)
+            {
+                skipped = true;
+                continue;
+            }
+
+            PacketId packetId = new((int)id);
+            Packet? packet = _PacketStore.Get(packetId);
+            if (packet is null)
+            {
+                skipped = true;
+                continue;
+            }
+
+            if (!filter.TryIsMatch(packet, _PacketIndex, out bool matched, out FilterError? evalFailure))
+            {
+                count = 0;
+                failure = evalFailure;
+                return false;
+            }
+
+            if (!matched)
+            {
+                skipped = true;
+                continue;
+            }
+
+            destination[filled] = new PacketRef(packetId, packet);
+            filled++;
+        }
+
+        count = filled;
+        idLayout = skipped ? PacketIdLayout.Gapped : PacketIdLayout.Contiguous;
+        return true;
+    }
+
+    /// <summary>
+    /// Finds the slot of a registered listener, or <see langword="null"/> when the id is unknown.
+    /// Linear over the listener snapshot — listener counts are small and the scan is lock-free.
+    /// </summary>
+    private ListenerSlot? _FindListenerSlot(ListenerId listenerId)
+    {
+        foreach (ListenerSlot slot in _ListenerSlots.Current)
+        {
+            if (slot.ListenerInfo is ListenerInfo info && info.Id == listenerId)
+            {
+                return slot;
+            }
+        }
+
+        return null;
+    }
+
     // -- ISessionReader: Index --
 
     /// <inheritdoc/>
-    public IPacketIndexReader? PacketIndex => _PacketIndex;
+    public PacketIndexReaderView? PacketIndex => _PacketIndex?.AsReadOnlyView();
 
     // -- ISession: Job management --
 
@@ -499,7 +657,7 @@ public sealed class Session : ISession, ISessionReader
     /// Finds the <see cref="ListenerSlot"/> and its corresponding <see cref="ListenerInfo"/>
     /// whose job matches the given <paramref name="job"/>. Returns nulls if not found.
     /// The <see cref="ListenerInfo"/> is retrieved from <see cref="ListenerSlot.ListenerInfo"/>
-    /// which is set during <see cref="TryAddListener"/>.
+    /// which is set during <see cref="TryAddListener(ISessionListener, IFilter?, out ListenerInfo?)"/>.
     /// </summary>
     private (ListenerSlot? Slot, ListenerInfo? Info) _FindListenerSlotAndInfo(JobInfo job)
     {
@@ -659,7 +817,7 @@ public sealed class Session : ISession, ISessionReader
         }
         finally
         {
-            Volatile.Write(ref _RestartInProgress, 0);
+            _RestartInProgress = 0;
         }
     }
 
@@ -718,7 +876,7 @@ public sealed class Session : ISession, ISessionReader
             // still in NextFrame or blocked on the gate).
             _ParseLock.Enter(ref lockTaken);
 
-            totalToReparse = Volatile.Read(ref _NextPacketId);
+            totalToReparse = _NextPacketId;
 
             // Dispose the old stack if the session owns it (factory-created).
             Stack oldStack = _Stack;
@@ -762,13 +920,18 @@ public sealed class Session : ISession, ISessionReader
         }
         finally
         {
+            // Re-bind every listener filter to the new stack while pull queries are still
+            // disabled. A filter carries field ids resolved against the retired stack, so it must
+            // be replaced before any listener can pull again.
+            _DeriveListenerFilters();
+
             // Re-enable queries — the store contains all (or partially) re-parsed packets.
             _QueriesDisabled = false;
 
             // Determine the post-reparse phase based on source activity.
             // If all sources have already finished, transition directly to Stopped
             // instead of Running (mirrors the natural transition in _RunSourceLoop).
-            bool sourcesStillActive = Volatile.Read(ref _ActiveSourceCount) > 0;
+            bool sourcesStillActive = _ActiveSourceCount > 0;
             SessionPhase finalPhase = sourcesStillActive
                 ? SessionPhase.Running
                 : SessionPhase.Stopped;
@@ -846,6 +1009,39 @@ public sealed class Session : ISession, ISessionReader
     }
 
     /// <summary>
+    /// Re-binds every listener filter to the current <see cref="_Stack"/> after a stack swap.
+    ///
+    /// <para>
+    /// <see cref="IFilter.TryDerive"/> produces a new instance from the same parsed expression with
+    /// empty flank state, an empty match cache, and no poison — the old instance is left untouched
+    /// and simply dropped. A filter that cannot be re-bound (for example because the new stack no
+    /// longer defines a referenced field) is removed and the failure is recorded on the slot, so
+    /// the next <see cref="PacketReadMode.Matching"/> pull reports the error instead of silently
+    /// returning every packet.
+    /// </para>
+    /// </summary>
+    private void _DeriveListenerFilters()
+    {
+        ReadOnlySpan<ListenerSlot> slots = _ListenerSlots.Current;
+        foreach (ListenerSlot slot in slots)
+        {
+            PacketFilter? filter = slot.Filter;
+            if (filter is null)
+            {
+                continue;
+            }
+
+            if (filter.TryDerive(_Stack, out PacketFilter? derived, out FilterError? failure))
+            {
+                slot.SetFilter(derived);
+                continue;
+            }
+
+            slot.SetFilterFault(failure);
+        }
+    }
+
+    /// <summary>
     /// Resets the packet cursor of all active listener slots to 0.
     /// Called during a stack-swap reparse so that the subsequent
     /// <see cref="NotifyFlags.NewPackets"/> dispatch delivers all re-parsed
@@ -869,7 +1065,7 @@ public sealed class Session : ISession, ISessionReader
         {
             // Another thread is performing or has completed shutdown — wait for it.
             SpinWait spinner = new();
-            while (Volatile.Read(ref _ListenersTornDown) == 0)
+            while (_ListenersTornDown == 0)
             {
                 spinner.SpinOnce();
             }
@@ -1028,7 +1224,7 @@ public sealed class Session : ISession, ISessionReader
         _ParseGate.Dispose();
 
         // Signal completion so concurrent callers waiting on the CAS gate can proceed.
-        Volatile.Write(ref _ListenersTornDown, 1);
+        _ListenersTornDown = 1;
 
         // Surface all cleanup failures as a single AggregateException.
         // This ensures no disposal error is silently swallowed.
@@ -1063,6 +1259,7 @@ public sealed class Session : ISession, ISessionReader
         }
         catch (AggregateException ex)
         {
+    // Publish shutdown errors with a release fence so post-Dispose readers observe them.
             _ShutdownErrors = ex;
         }
     }
@@ -1099,6 +1296,7 @@ public sealed class Session : ISession, ISessionReader
         // unified job list without creating a second JobInfo wrapper.
         FrameSourceEntry entry = new(info, source, job);
         _SourceEntries.Add(entry);
+        _SourceInfos.Add(info);
         _AllJobs.Add(entry.JobInfo);
 
         // Wire the convenience API: FrameSourceInfo.Stop() → TryUnsubscribe(job).
@@ -1139,7 +1337,7 @@ public sealed class Session : ISession, ISessionReader
 
         ReadOnlySpan<FrameSourceEntry> entries = _SourceEntries.Current;
         _SourceJobs = new Job[entries.Length];
-        Volatile.Write(ref _ActiveSourceCount, entries.Length);
+        _ActiveSourceCount = entries.Length;
 
         if (entries.Length == 0)
         {
@@ -1220,8 +1418,8 @@ public sealed class Session : ISession, ISessionReader
     ///   <item>Start the source and register its capture interface(s).</item>
     ///   <item>Pull frames one by one via <see cref="IFrameSource.NextFrame"/>.</item>
     ///   <item>Parse each frame under the shared <see cref="_ParseLock"/>.</item>
-    ///   <item>Store the packet in the <see cref="PacketStore"/>.</item>
     ///   <item>Record the PacketId -> FrameId mapping.</item>
+    ///   <item>Store the packet in the <see cref="PacketStore"/>.</item>
     ///   <item>Increment global counters and set <see cref="NotifyFlags.NewPackets"/>.</item>
     ///   <item>On source exhaustion: set SourceCompleted and (if last) AllSourcesCompleted flags.</item>
     /// </list>
@@ -1258,17 +1456,15 @@ public sealed class Session : ISession, ISessionReader
 
                 Packet packet = _ParseFrameUnderLock(capturedFrame, packetId: null);
 
-                // Store packet in the shared PacketStore — all listeners read from here.
-                _PacketStore.Store(packet.Id, packet);
-
                 // Record PacketId -> FrameId mapping for random access re-parse.
-                // Failure means the PacketId is invalid or the map capacity is exceeded.
+                // Failure means the PacketId is invalid (should not happen after allocation).
                 if (!_Mapping.Record(packet.Id, capturedFrame.Id, sourceInfo.Id))
                 {
-                    throw new InvalidOperationException(
-                        $"Failed to record mapping for PacketId {packet.Id.Value}. " +
-                        $"The packet map capacity ({PacketToFrameMap.MaxEntries}) may have been exceeded.");
+                    ThrowMappingRecordFailed(packet.Id);
                 }
+
+                // Store packet in the shared PacketStore — all listeners read from here.
+                _PacketStore.Store(packet.Id, packet);
 
                 // Update global atomic counters.
                 Interlocked.Increment(ref _PacketCount);
@@ -1305,7 +1501,96 @@ public sealed class Session : ISession, ISessionReader
         }
     }
 
+    /// <summary>
+    /// Creates a <see cref="ListenerSlot"/> and registers it in session registries.
+    /// Ownership transfers to <see cref="_ListenerSlots"/> before return so disposal is session-managed.
+    /// </summary>
+    private ListenerSlot _RegisterListenerSlot(JobId jobId, ISessionListener listener)
+    {
+        ListenerSlot slot = new(jobId, listener, this, _OnJobStatusChanged);
+        _ListenerSlots.Add(slot);
+        _AllJobs.Add(slot.Info);
+        return slot;
+    }
+
     // -- Parse helper --
+
+    /// <summary>
+    /// Fail-closed path when a freshly allocated packet id cannot be recorded in the map.
+    /// Extracted so ExitPointGaps can exercise the throw without corrupting a live source loop.
+    /// </summary>
+    internal static void ThrowMappingRecordFailed(PacketId packetId)
+    {
+        throw new InvalidOperationException(
+            $"Failed to record mapping for PacketId {packetId.Value.ToString(CultureInfo.InvariantCulture)}. " +
+            "The packet ID is invalid.");
+    }
+
+    /// <summary>
+    /// Allocates the next sequential <see cref="PacketId"/> under <see cref="_ParseLock"/>.
+    /// </summary>
+    /// <exception cref="SessionException">
+    /// Thrown when the next ID would exceed <see cref="Core.Ids.ArrayIndexIdRange.MaxValue"/>.
+    /// </exception>
+    private PacketId _AllocateNextPacketId()
+    {
+        int next = Interlocked.Increment(ref _NextPacketId);
+        int idValue = next - 1;
+        if (!Core.Ids.ArrayIndexIdRange.IsValidIndex(idValue))
+        {
+            throw new SessionException(
+                SessionErrorCode.PacketIdExhausted,
+                $"Maximum packet ID count exceeded. Valid packet IDs are 0..{Core.Ids.ArrayIndexIdRange.MaxValue.ToString(CultureInfo.InvariantCulture)} " +
+                $"(Array.MaxLength={Array.MaxLength.ToString(CultureInfo.InvariantCulture)}).");
+        }
+
+        return new PacketId(idValue);
+    }
+
+    /// <summary>
+    /// Parses a frame with the active stack and optional packet index.
+    /// Caller must hold <see cref="_ParseLock"/>.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private Packet _ParseFrameCore(PacketId id, Frame frame, PacketIndex? index)
+    {
+        if (index is not null)
+        {
+            return Packet.ParseFrameIndexed(id, _Stack, frame, index);
+        }
+
+        return Packet.ParseFrame(id, _Stack, frame);
+    }
+
+    /// <summary>
+    /// Attempts to parse a frame under <see cref="_ParseLock"/> with a fixed <paramref name="packetId"/>.
+    /// Returns <see langword="false"/> without throwing when parsing fails (stale frame, protocol error).
+    /// </summary>
+    private bool _TryParseFrameUnderLock(Frame frame, PacketId packetId, [NotNullWhen(true)] out Packet? packet)
+    {
+        bool lockTaken = false;
+        try
+        {
+            _ParseLock.Enter(ref lockTaken);
+            try
+            {
+                packet = _ParseFrameCore(packetId, frame, _PacketIndex);
+                return true;
+            }
+            catch
+            {
+                packet = null;
+                return false;
+            }
+        }
+        finally
+        {
+            if (lockTaken)
+            {
+                _ParseLock.Exit(useMemoryBarrier: false);
+            }
+        }
+    }
 
     /// <summary>
     /// Parses a frame under <see cref="_ParseLock"/>.
@@ -1318,14 +1603,8 @@ public sealed class Session : ISession, ISessionReader
         try
         {
             _ParseLock.Enter(ref lockTaken);
-            PacketId id = packetId ?? new PacketId(Interlocked.Increment(ref _NextPacketId) - 1);
-            PacketIndex? index = _PacketIndex;
-            if (index is not null)
-            {
-                return Packet.ParseFrameIndexed(id, _Stack, frame, index);
-            }
-
-            return Packet.ParseFrame(id, _Stack, frame);
+            PacketId id = packetId ?? _AllocateNextPacketId();
+            return _ParseFrameCore(id, frame, _PacketIndex);
         }
         finally
         {
@@ -1343,7 +1622,9 @@ public sealed class Session : ISession, ISessionReader
     /// Non-blocking, lock-free. Safe to call from any thread.
     /// </summary>
     /// <remarks>
-    /// <see cref="NotifyFlags.NewPackets"/> is set once per parsed frame (O(frames × listeners) atomic ORs).
+    /// <see cref="NotifyFlags.NewPackets"/> is set once per parsed frame
+    /// (O(frames × listeners) atomic ORs). Listener slots coalesce duplicate
+    /// flags between wake cycles; each frame still issues one OR per listener.
     /// </remarks>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void _NotifyAllListeners(NotifyFlags flags)

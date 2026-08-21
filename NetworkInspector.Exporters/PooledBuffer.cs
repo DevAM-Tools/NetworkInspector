@@ -30,7 +30,9 @@ internal sealed class PooledBuffer
     private static readonly byte[] _EmptySentinel = [];
 
     private byte[] _Array;
-    private int _Length;
+
+    /// <summary>Number of bytes written.</summary>
+    internal int Length { get; private set; }
 
     /// <summary>Creates a buffer with the specified initial capacity.</summary>
     /// <param name="capacity">Initial capacity in bytes (0 is allowed and rents lazily).</param>
@@ -38,21 +40,14 @@ internal sealed class PooledBuffer
     {
         ArgumentOutOfRangeException.ThrowIfNegative(capacity);
         _Array = capacity == 0 ? _EmptySentinel : ArrayPool<byte>.Shared.Rent(capacity);
-        _Length = 0;
+        Length = 0;
     }
 
     /// <summary>The written portion of the buffer.</summary>
     internal ReadOnlySpan<byte> WrittenSpan
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _Array.AsSpan(0, _Length);
-    }
-
-    /// <summary>Number of bytes written.</summary>
-    internal int Length
-    {
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _Length;
+        get => _Array.AsSpan(0, Length);
     }
 
     /// <summary>Current allocated capacity.</summary>
@@ -67,13 +62,13 @@ internal sealed class PooledBuffer
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void Write(ReadOnlySpan<byte> data)
     {
-        int required = _Length + data.Length;
+        int required = Length + data.Length;
         if (required > _Array.Length)
         {
             _Grow(required);
         }
-        data.CopyTo(_Array.AsSpan(_Length));
-        _Length += data.Length;
+        data.CopyTo(_Array.AsSpan(Length));
+        Length += data.Length;
     }
 
     /// <summary>Appends a single byte to the buffer.</summary>
@@ -81,11 +76,11 @@ internal sealed class PooledBuffer
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void WriteByte(byte value)
     {
-        if (_Length >= _Array.Length)
+        if (Length >= _Array.Length)
         {
-            _Grow(_Length + 1);
+            _Grow(Length + 1);
         }
-        _Array[_Length++] = value;
+        _Array[Length++] = value;
     }
 
     /// <summary>Reserves space in the buffer and returns a span to write into.</summary>
@@ -94,19 +89,19 @@ internal sealed class PooledBuffer
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal Span<byte> Reserve(int count)
     {
-        int required = _Length + count;
+        int required = Length + count;
         if (required > _Array.Length)
         {
             _Grow(required);
         }
-        Span<byte> span = _Array.AsSpan(_Length, count);
-        _Length += count;
+        Span<byte> span = _Array.AsSpan(Length, count);
+        Length += count;
         return span;
     }
 
     /// <summary>Resets the write position to zero without releasing the array.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal void Reset() => _Length = 0;
+    internal void Reset() => Length = 0;
 
     /// <summary>
     /// Returns the underlying array to the pool and resets the buffer to empty.
@@ -123,7 +118,7 @@ internal sealed class PooledBuffer
             ArrayPool<byte>.Shared.Return(_Array);
         }
         _Array = _EmptySentinel;
-        _Length = 0;
+        Length = 0;
     }
 
     /// <summary>
@@ -145,9 +140,9 @@ internal sealed class PooledBuffer
         // the pre-growth state.
         try
         {
-            if (_Length > 0)
+            if (Length > 0)
             {
-                _Array.AsSpan(0, _Length).CopyTo(newArray);
+                _Array.AsSpan(0, Length).CopyTo(newArray);
             }
         }
         catch

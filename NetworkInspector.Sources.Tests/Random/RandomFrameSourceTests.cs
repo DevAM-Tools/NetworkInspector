@@ -289,6 +289,21 @@ internal sealed class RandomFrameSourceTests
     }
 
     // ========================================================================
+    // Capacity guard
+    // ========================================================================
+
+    [Test]
+    public async Task NextFrame_IndexAboveMaxValue_ThrowsInvalidOperationException()
+    {
+        using RandomFrameSource source = new(
+            new RandomSourceOptions { FrameCount = 0, Seed = 42 });
+        SourceTestFixture.InitializeAndStartSource(source);
+        source.SetFrameIndexForTests(ArrayIndexIdRange.MaxValue + 1);
+
+        await Assert.That(() => source.NextFrame()).Throws<InvalidOperationException>();
+    }
+
+    // ========================================================================
     // Lifecycle guards — null-registry contract
     // ========================================================================
 

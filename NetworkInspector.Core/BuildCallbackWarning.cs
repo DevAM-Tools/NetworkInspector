@@ -28,7 +28,11 @@ public sealed record BuildCallbackWarning(
 
     /// <inheritdoc/>
     public override string Message =>
-        $"Unresolved deferred callback(s) ({CallbackCount}) for {EntityKind} '{Name}'.";
+        EntityKind == BuildCallbackWarningKind.MissingFrameProtocol
+            ? string.Create(CultureInfo.InvariantCulture,
+                $"Required protocol '{Name}' was not registered; link-layer parsing will be skipped.")
+            : string.Create(CultureInfo.InvariantCulture,
+                $"Unresolved deferred callback(s) ({CallbackCount}) for {EntityKind} '{Name}'.");
 
     #endregion
 

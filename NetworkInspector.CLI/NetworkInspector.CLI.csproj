@@ -6,19 +6,12 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>ni</ToolCommandName>
     <PackageId>NetworkInspector.CLI</PackageId>
-    <Description>Command-line interface for the Network Inspector stack. Provides ni convert, ni export, and ni mcp commands for working with network captures.</Description>
+    <Description>Command-line interface for the Network Inspector stack. Provides ni convert and ni export commands for working with network captures.</Description>
     <PackageTags>network;pcap;pcapng;blf;capture;cli;tool</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
 
   <ItemGroup>
-    <InternalsVisibleTo Include="NetworkInspector.CLI.Tests" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <ProjectReference Include="..\NetworkInspector.Core\NetworkInspector.Core.csproj" />
-    <ProjectReference Include="..\NetworkInspector.Protocols\NetworkInspector.Protocols.csproj" />
-    <ProjectReference Include="..\NetworkInspector.Sources\NetworkInspector.Sources.csproj" />
-    <ProjectReference Include="..\NetworkInspector.Exporters\NetworkInspector.Exporters.csproj" />
+    <ProjectReference Include="..\NetworkInspector.CLI.Core\NetworkInspector.CLI.Core.csproj" />
   </ItemGroup>
 </Project>

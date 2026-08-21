@@ -46,63 +46,63 @@ internal sealed class TcpProtocolTests
             // Source port
             FieldId? srcPortId = stack.GetFieldId("tcp.srcport");
             await Assert.That(srcPortId).IsNotNull();
-            bool hasSrcPort = packet.TryGetFieldValue(srcPortId!.Value, out FieldValue srcPortVal);
+            bool hasSrcPort = packet.TryGetFieldValue(srcPortId!.Value, out FieldValue srcPortVal, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasSrcPort).IsTrue();
             srcPortVal.Data.TryGetAsU64(out ulong u64Val);
             await Assert.That(u64Val).IsEqualTo(12345UL);
 
             // Destination port
             FieldId? dstPortId = stack.GetFieldId("tcp.dstport");
-            bool hasDstPort = packet.TryGetFieldValue(dstPortId!.Value, out FieldValue dstPortVal);
+            bool hasDstPort = packet.TryGetFieldValue(dstPortId!.Value, out FieldValue dstPortVal, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasDstPort).IsTrue();
             dstPortVal.Data.TryGetAsU64(out ulong u64Val2);
             await Assert.That(u64Val2).IsEqualTo(80UL);
 
             // Sequence number
             FieldId? seqId = stack.GetFieldId("tcp.seq");
-            bool hasSeq = packet.TryGetFieldValue(seqId!.Value, out FieldValue seqVal);
+            bool hasSeq = packet.TryGetFieldValue(seqId!.Value, out FieldValue seqVal, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasSeq).IsTrue();
             seqVal.Data.TryGetAsU64(out ulong u64Val3);
             await Assert.That(u64Val3).IsEqualTo(1000UL);
 
             // ACK number is 0 for SYN
             FieldId? ackId = stack.GetFieldId("tcp.ack");
-            bool hasAck = packet.TryGetFieldValue(ackId!.Value, out FieldValue ackVal);
+            bool hasAck = packet.TryGetFieldValue(ackId!.Value, out FieldValue ackVal, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasAck).IsTrue();
             ackVal.Data.TryGetAsU64(out ulong u64Val4);
             await Assert.That(u64Val4).IsEqualTo(0UL);
 
             // Header length = 20 (data offset = 5)
             FieldId? hdrLenId = stack.GetFieldId("tcp.hdr_len");
-            bool hasHdrLen = packet.TryGetFieldValue(hdrLenId!.Value, out FieldValue hdrLenVal);
+            bool hasHdrLen = packet.TryGetFieldValue(hdrLenId!.Value, out FieldValue hdrLenVal, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasHdrLen).IsTrue();
             hdrLenVal.Data.TryGetAsU64(out ulong u64Val5);
             await Assert.That(u64Val5).IsEqualTo(20UL);
 
             // SYN flag must be set
             FieldId? synFlagId = stack.GetFieldId("tcp.flags.syn");
-            bool hasSynFlag = packet.TryGetFieldValue(synFlagId!.Value, out FieldValue synFlagVal);
+            bool hasSynFlag = packet.TryGetFieldValue(synFlagId!.Value, out FieldValue synFlagVal, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasSynFlag).IsTrue();
             synFlagVal.Data.TryGetAsBool(out bool boolVal);
             await Assert.That(boolVal).IsTrue();
 
             // ACK flag must not be set for pure SYN
             FieldId? ackFlagId = stack.GetFieldId("tcp.flags.ack");
-            bool hasAckFlag = packet.TryGetFieldValue(ackFlagId!.Value, out FieldValue ackFlagVal);
+            bool hasAckFlag = packet.TryGetFieldValue(ackFlagId!.Value, out FieldValue ackFlagVal, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasAckFlag).IsTrue();
             ackFlagVal.Data.TryGetAsBool(out bool boolVal2);
             await Assert.That(boolVal2).IsFalse();
 
             // Payload length should be 0
             FieldId? lenId = stack.GetFieldId("tcp.len");
-            bool hasLen = packet.TryGetFieldValue(lenId!.Value, out FieldValue lenVal);
+            bool hasLen = packet.TryGetFieldValue(lenId!.Value, out FieldValue lenVal, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasLen).IsTrue();
             lenVal.Data.TryGetAsU64(out ulong u64Val6);
             await Assert.That(u64Val6).IsEqualTo(0UL);
 
             // Window size
             FieldId? windowId = stack.GetFieldId("tcp.window_size_value");
-            bool hasWindow = packet.TryGetFieldValue(windowId!.Value, out FieldValue windowVal);
+            bool hasWindow = packet.TryGetFieldValue(windowId!.Value, out FieldValue windowVal, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasWindow).IsTrue();
             windowVal.Data.TryGetAsU64(out ulong u64Val7);
             await Assert.That(u64Val7).IsEqualTo(65535UL);
@@ -120,24 +120,24 @@ internal sealed class TcpProtocolTests
         {
             // SYN flag
             FieldId? synFlagId = stack.GetFieldId("tcp.flags.syn");
-            packet.TryGetFieldValue(synFlagId!.Value, out FieldValue synFlagVal);
+            packet.TryGetFieldValue(synFlagId!.Value, out FieldValue synFlagVal, materialize: true); // materialize: true — need complete field tree for assertion
             synFlagVal.Data.TryGetAsBool(out bool boolVal);
             await Assert.That(boolVal).IsTrue();
 
             // ACK flag
             FieldId? ackFlagId = stack.GetFieldId("tcp.flags.ack");
-            packet.TryGetFieldValue(ackFlagId!.Value, out FieldValue ackFlagVal);
+            packet.TryGetFieldValue(ackFlagId!.Value, out FieldValue ackFlagVal, materialize: true); // materialize: true — need complete field tree for assertion
             ackFlagVal.Data.TryGetAsBool(out bool boolVal2);
             await Assert.That(boolVal2).IsTrue();
 
             // FIN, RST, PSH must be false
             FieldId? finFlagId = stack.GetFieldId("tcp.flags.fin");
-            packet.TryGetFieldValue(finFlagId!.Value, out FieldValue finFlagVal);
+            packet.TryGetFieldValue(finFlagId!.Value, out FieldValue finFlagVal, materialize: true); // materialize: true — need complete field tree for assertion
             finFlagVal.Data.TryGetAsBool(out bool boolVal3);
             await Assert.That(boolVal3).IsFalse();
 
             FieldId? rstFlagId = stack.GetFieldId("tcp.flags.reset");
-            packet.TryGetFieldValue(rstFlagId!.Value, out FieldValue rstFlagVal);
+            packet.TryGetFieldValue(rstFlagId!.Value, out FieldValue rstFlagVal, materialize: true); // materialize: true — need complete field tree for assertion
             rstFlagVal.Data.TryGetAsBool(out bool boolVal4);
             await Assert.That(boolVal4).IsFalse();
         }
@@ -160,31 +160,31 @@ internal sealed class TcpProtocolTests
         {
             // Payload length
             FieldId? lenId = stack.GetFieldId("tcp.len");
-            packet.TryGetFieldValue(lenId!.Value, out FieldValue lenVal);
+            packet.TryGetFieldValue(lenId!.Value, out FieldValue lenVal, materialize: true); // materialize: true — need complete field tree for assertion
             lenVal.Data.TryGetAsU64(out ulong u64Val);
             await Assert.That(u64Val).IsEqualTo(100UL);
 
             // PSH flag set
             FieldId? pshFlagId = stack.GetFieldId("tcp.flags.push");
-            packet.TryGetFieldValue(pshFlagId!.Value, out FieldValue pshFlagVal);
+            packet.TryGetFieldValue(pshFlagId!.Value, out FieldValue pshFlagVal, materialize: true); // materialize: true — need complete field tree for assertion
             pshFlagVal.Data.TryGetAsBool(out bool boolVal);
             await Assert.That(boolVal).IsTrue();
 
             // ACK flag set
             FieldId? ackFlagId = stack.GetFieldId("tcp.flags.ack");
-            packet.TryGetFieldValue(ackFlagId!.Value, out FieldValue ackFlagVal);
+            packet.TryGetFieldValue(ackFlagId!.Value, out FieldValue ackFlagVal, materialize: true); // materialize: true — need complete field tree for assertion
             ackFlagVal.Data.TryGetAsBool(out bool boolVal2);
             await Assert.That(boolVal2).IsTrue();
 
             // Sequence number
             FieldId? seqId = stack.GetFieldId("tcp.seq");
-            packet.TryGetFieldValue(seqId!.Value, out FieldValue seqVal);
+            packet.TryGetFieldValue(seqId!.Value, out FieldValue seqVal, materialize: true); // materialize: true — need complete field tree for assertion
             seqVal.Data.TryGetAsU64(out ulong u64Val2);
             await Assert.That(u64Val2).IsEqualTo(5000UL);
 
             // Ack number
             FieldId? ackId = stack.GetFieldId("tcp.ack");
-            packet.TryGetFieldValue(ackId!.Value, out FieldValue ackVal);
+            packet.TryGetFieldValue(ackId!.Value, out FieldValue ackVal, materialize: true); // materialize: true — need complete field tree for assertion
             ackVal.Data.TryGetAsU64(out ulong u64Val3);
             await Assert.That(u64Val3).IsEqualTo(6000UL);
         }
@@ -200,12 +200,12 @@ internal sealed class TcpProtocolTests
         using (stack)
         {
             FieldId? finFlagId = stack.GetFieldId("tcp.flags.fin");
-            packet.TryGetFieldValue(finFlagId!.Value, out FieldValue finFlagVal);
+            packet.TryGetFieldValue(finFlagId!.Value, out FieldValue finFlagVal, materialize: true); // materialize: true — need complete field tree for assertion
             finFlagVal.Data.TryGetAsBool(out bool boolVal);
             await Assert.That(boolVal).IsTrue();
 
             FieldId? ackFlagId = stack.GetFieldId("tcp.flags.ack");
-            packet.TryGetFieldValue(ackFlagId!.Value, out FieldValue ackFlagVal);
+            packet.TryGetFieldValue(ackFlagId!.Value, out FieldValue ackFlagVal, materialize: true); // materialize: true — need complete field tree for assertion
             ackFlagVal.Data.TryGetAsBool(out bool boolVal2);
             await Assert.That(boolVal2).IsTrue();
         }
@@ -221,12 +221,12 @@ internal sealed class TcpProtocolTests
         using (stack)
         {
             FieldId? rstFlagId = stack.GetFieldId("tcp.flags.reset");
-            packet.TryGetFieldValue(rstFlagId!.Value, out FieldValue rstFlagVal);
+            packet.TryGetFieldValue(rstFlagId!.Value, out FieldValue rstFlagVal, materialize: true); // materialize: true — need complete field tree for assertion
             rstFlagVal.Data.TryGetAsBool(out bool boolVal);
             await Assert.That(boolVal).IsTrue();
 
             FieldId? synFlagId = stack.GetFieldId("tcp.flags.syn");
-            packet.TryGetFieldValue(synFlagId!.Value, out FieldValue synFlagVal);
+            packet.TryGetFieldValue(synFlagId!.Value, out FieldValue synFlagVal, materialize: true); // materialize: true — need complete field tree for assertion
             synFlagVal.Data.TryGetAsBool(out bool boolVal2);
             await Assert.That(boolVal2).IsFalse();
         }
@@ -257,7 +257,7 @@ internal sealed class TcpProtocolTests
         {
             // TCP should not have parsed any fields (data too short)
             FieldId? srcPortId = stack.GetFieldId("tcp.srcport");
-            bool hasSrcPort = packet.TryGetFieldValue(srcPortId!.Value, out _);
+            bool hasSrcPort = packet.TryGetFieldValue(srcPortId!.Value, out _, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasSrcPort).IsFalse();
         }
     }
@@ -339,7 +339,7 @@ internal sealed class TcpProtocolTests
             // Checksum field should always be present
             FieldId? csumId = stack.GetFieldId("tcp.checksum");
             await Assert.That(csumId).IsNotNull();
-            bool hasCsum = packet.TryGetFieldValue(csumId!.Value, out FieldValue csumVal);
+            bool hasCsum = packet.TryGetFieldValue(csumId!.Value, out FieldValue csumVal, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasCsum).IsTrue();
             // Checksum value should be non-zero (correctly computed)
             csumVal.Data.TryGetAsU64(out ulong u64Val);

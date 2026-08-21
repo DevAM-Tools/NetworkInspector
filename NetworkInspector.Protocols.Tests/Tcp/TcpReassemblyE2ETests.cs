@@ -172,7 +172,7 @@ internal sealed class TcpReassemblyE2ETests
             FieldId? dnsId = stack.GetFieldId("dns.id");
             if (dnsId.HasValue)
             {
-                bool found = firstPacket.TryGetFieldValue(dnsId.Value, out _);
+                bool found = firstPacket.TryGetFieldValue(dnsId.Value, out _, materialize: true); // materialize: true — need complete field tree for assertion
                 await Assert.That(found).IsFalse()
                     .Because("DNS id must not be present until reassembly completes");
             }

@@ -6,7 +6,6 @@ global using System.Buffers;
 global using System.Buffers.Binary;
 global using System.Buffers.Text;
 global using System.Collections.Generic;
-global using System.Diagnostics;
 global using System.Diagnostics.CodeAnalysis;
 global using System.Globalization;
 global using System.IO;
@@ -26,22 +25,31 @@ global using NetworkInspector.Core.Fields;
 global using NetworkInspector.Core.Ids;
 global using NetworkInspector.Core.Infos;
 global using NetworkInspector.Core.Interfaces;
-global using NetworkInspector.Core.Protocols;
 global using NetworkInspector.Values;
 #endregion
 
+#region NetworkInspector.Protocols
+global using NetworkInspector.Protocols;
+#endregion
+
 #region NetworkInspector.Exporters
+global using NetworkInspector.Exporters.Columnar;
 global using NetworkInspector.Exporters.Pbf.Columnar;
 #endregion
 
 #region NetworkInspector.Sources
 global using NetworkInspector.Sources.Blf.Format;
-global using NetworkInspector.Sources.Blf.Format.Headers;
 global using NetworkInspector.Sources.Pcapng.Format;
-global using NetworkInspector.Sources.Pcapng.Format.Blocks;
 #endregion
 
 #region External Dependencies
+global using Parquet;
+global using Parquet.Schema;
 global using ZeroAlloc;
+// Parquet.Schema.Field collides with NetworkInspector.Core.Fields.Field; an alias directive
+// takes priority over both using-namespace directives, so unqualified "Field" always resolves
+// to the packet field-tree type used throughout this project (Parquet.Schema.Field is only ever
+// referenced via its concrete subtype DataField, so it needs no unqualified name of its own).
+global using Field = NetworkInspector.Core.Fields.Field;
 #endregion
 

@@ -9,6 +9,25 @@ namespace NetworkInspector.Core.Tests;
 internal sealed class SlabAllocatorTests
 {
     [Test]
+    public async Task Constructor_NegativeCapacity_ThrowsArgumentOutOfRangeException()
+    {
+        await Assert.That(() => new SlabAllocator<int>(-1)).Throws<ArgumentOutOfRangeException>();
+    }
+
+    [Test]
+    public async Task TryAllocate_CountOverflow_ReturnsFalse()
+    {
+        SlabAllocator<int> sut = new(128);
+        sut.TryAllocate(100, out _, out _);
+
+        bool result = sut.TryAllocate(int.MaxValue, out int[]? buffer, out int offset);
+
+        await Assert.That(result).IsFalse();
+        await Assert.That(buffer).IsNull();
+        await Assert.That(offset).IsEqualTo(0);
+    }
+
+    [Test]
     public async Task TryAllocate_NegativeCount_ThrowsArgumentOutOfRangeException()
     {
         SlabAllocator<int> sut = new(64);

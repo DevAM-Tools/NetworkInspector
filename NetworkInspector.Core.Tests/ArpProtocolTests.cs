@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Core.Tests;
 
@@ -51,55 +51,55 @@ internal sealed class ArpProtocolTests
             // Verify field values
             FieldId? hwTypeId = stack.GetFieldId("arp.hw.type");
             await Assert.That(hwTypeId).IsNotNull();
-            bool hasHwType = packet.TryGetFieldValue(hwTypeId!.Value, out FieldValue hwTypeValue);
+            bool hasHwType = packet.TryGetFieldValue(hwTypeId!.Value, out FieldValue hwTypeValue, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasHwType).IsTrue();
             hwTypeValue.Data.TryGetAsU64(out ulong u64Val);
             await Assert.That(u64Val).IsEqualTo(1UL); // Ethernet
 
             FieldId? protoTypeId = stack.GetFieldId("arp.proto.type");
-            bool hasProtoType = packet.TryGetFieldValue(protoTypeId!.Value, out FieldValue protoTypeValue);
+            bool hasProtoType = packet.TryGetFieldValue(protoTypeId!.Value, out FieldValue protoTypeValue, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasProtoType).IsTrue();
             protoTypeValue.Data.TryGetAsU64(out ulong u64Val2);
             await Assert.That(u64Val2).IsEqualTo(0x0800UL); // IPv4
 
             FieldId? hwSizeId = stack.GetFieldId("arp.hw.size");
-            bool hasHwSize = packet.TryGetFieldValue(hwSizeId!.Value, out FieldValue hwSizeValue);
+            bool hasHwSize = packet.TryGetFieldValue(hwSizeId!.Value, out FieldValue hwSizeValue, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasHwSize).IsTrue();
             hwSizeValue.Data.TryGetAsU64(out ulong u64Val3);
             await Assert.That(u64Val3).IsEqualTo(6UL);
 
             FieldId? protoSizeId = stack.GetFieldId("arp.proto.size");
-            bool hasProtoSize = packet.TryGetFieldValue(protoSizeId!.Value, out FieldValue protoSizeValue);
+            bool hasProtoSize = packet.TryGetFieldValue(protoSizeId!.Value, out FieldValue protoSizeValue, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasProtoSize).IsTrue();
             protoSizeValue.Data.TryGetAsU64(out ulong u64Val4);
             await Assert.That(u64Val4).IsEqualTo(4UL);
 
             FieldId? opcodeId = stack.GetFieldId("arp.opcode");
-            bool hasOpcode = packet.TryGetFieldValue(opcodeId!.Value, out FieldValue opcodeValue);
+            bool hasOpcode = packet.TryGetFieldValue(opcodeId!.Value, out FieldValue opcodeValue, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasOpcode).IsTrue();
             opcodeValue.Data.TryGetAsU64(out ulong u64Val5);
             await Assert.That(u64Val5).IsEqualTo(1UL); // Request
 
             FieldId? srcMacId = stack.GetFieldId("arp.src.hw_mac");
-            bool hasSrcMac = packet.TryGetFieldValue(srcMacId!.Value, out FieldValue srcMacValue);
+            bool hasSrcMac = packet.TryGetFieldValue(srcMacId!.Value, out FieldValue srcMacValue, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasSrcMac).IsTrue();
             srcMacValue.Data.TryGetAsMacAddress(out MacAddress macVal);
             await Assert.That(macVal.Format()).IsEqualTo("00:11:22:33:44:55");
 
             FieldId? srcIpId = stack.GetFieldId("arp.src.proto_ipv4");
-            bool hasSrcIp = packet.TryGetFieldValue(srcIpId!.Value, out FieldValue srcIpValue);
+            bool hasSrcIp = packet.TryGetFieldValue(srcIpId!.Value, out FieldValue srcIpValue, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasSrcIp).IsTrue();
             srcIpValue.Data.TryGetAsIPv4(out IPv4Address ipv4Val);
             await Assert.That(ipv4Val.Format()).IsEqualTo("192.168.1.1");
 
             FieldId? dstMacId = stack.GetFieldId("arp.dst.hw_mac");
-            bool hasDstMac = packet.TryGetFieldValue(dstMacId!.Value, out FieldValue dstMacValue);
+            bool hasDstMac = packet.TryGetFieldValue(dstMacId!.Value, out FieldValue dstMacValue, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasDstMac).IsTrue();
             dstMacValue.Data.TryGetAsMacAddress(out MacAddress macVal2);
             await Assert.That(macVal2.Format()).IsEqualTo("00:00:00:00:00:00");
 
             FieldId? dstIpId = stack.GetFieldId("arp.dst.proto_ipv4");
-            bool hasDstIp = packet.TryGetFieldValue(dstIpId!.Value, out FieldValue dstIpValue);
+            bool hasDstIp = packet.TryGetFieldValue(dstIpId!.Value, out FieldValue dstIpValue, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasDstIp).IsTrue();
             dstIpValue.Data.TryGetAsIPv4(out IPv4Address ipv4Val2);
             await Assert.That(ipv4Val2.Format()).IsEqualTo("192.168.1.2");
@@ -121,7 +121,7 @@ internal sealed class ArpProtocolTests
         using (stack)
         {
             FieldId? opcodeId = stack.GetFieldId("arp.opcode");
-            bool hasOpcode = packet.TryGetFieldValue(opcodeId!.Value, out FieldValue opcodeValue);
+            bool hasOpcode = packet.TryGetFieldValue(opcodeId!.Value, out FieldValue opcodeValue, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasOpcode).IsTrue();
             opcodeValue.Data.TryGetAsU64(out ulong u64Val);
             await Assert.That(u64Val).IsEqualTo(2UL); // Reply

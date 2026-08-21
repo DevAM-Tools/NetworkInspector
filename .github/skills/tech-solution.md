@@ -1,6 +1,6 @@
 # Solution and Build Configuration
 
-Load when `Directory.Build.props`, `Directory.Build.targets`, `Directory.Packages.props`, `GlobalUsings.cs`, or `*.csproj` / `*.props` / `*.targets` are in scope. Extends Sections 4.7 in `copilot-instructions.md` and `tech-csharp.md`. SSOT for build properties, CPM, and New Dependency Protocol.
+Load when `Directory.Build.props`, `Directory.Build.targets`, `Directory.Packages.props`, `GlobalUsings.cs`, or `*.csproj` / `*.props` / `*.targets` are in scope. Extends Section 4.7 in `copilot-instructions.md`. SSOT for MSBuild properties, CPM, CSharpStyleChecker, and New Dependency Protocol steps.
 
 ## File Layout
 
@@ -84,7 +84,7 @@ When publishing or packaging is in scope, ask user for: `VersionSuffix`, `Compan
 
 ## CSharpStyleChecker
 
-❗ Mandatory NuGet **`1.*`** on every SDK-style consumer (`netstandard2.0` or `net5.0`+), including Roslyn source generators.
+❗ Mandatory NuGet **`1.*`** on every SDK-style consumer (`netstandard2.0` or `net5.0`+), including Roslyn source generators. Active on the referencing project only — not transitive to downstream libraries.
 
 | Step | Action |
 |------|--------|
@@ -97,6 +97,8 @@ When publishing or packaging is in scope, ask user for: `VersionSuffix`, `Compan
 - Set `ApplyCSharpStyleChecker=false` only to opt out.
 
 ## New Dependency Protocol
+
+Intent: Section 4.7. Never add a dependency without user approval.
 
 - Never add `PackageReference`, `PackageVersion`, or `ProjectReference` without user approval.
 - Ask in Grill-Me when plan may need new dependencies.

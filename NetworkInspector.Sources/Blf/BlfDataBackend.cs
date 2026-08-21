@@ -38,11 +38,11 @@ internal sealed class BlfDataBackend : IDisposable
     private readonly MmapPool? _MmapPool;
 
     /// <summary>
-    /// Whether this instance has been disposed.
-    /// Read/written via <see cref="Volatile"/> because <see cref="Dispose"/> may be
+    /// Atomic dispose latch (0 = live, 1 = disposed).
+    /// Read/written via <see cref="Interlocked"/> / <see cref="Volatile"/> because <see cref="Dispose"/> may be
     /// invoked from a different thread than concurrent readers (per SOURCE_GUIDE §13.1).
     /// </summary>
-    private bool _Disposed;
+    private volatile int _Disposed;
 
     #endregion
 
@@ -125,7 +125,7 @@ internal sealed class BlfDataBackend : IDisposable
         // caller and this entry point a racing Dispose() could have released the mmap
         // pointer. The Volatile read gives the correct observed value without the full
         // overhead of the _LifetimeLock read lock that FrameById acquires externally.
-        if (Volatile.Read(ref _Disposed))
+        if (_Disposed != 0)
         {
             return ReadOnlySpan<byte>.Empty;
         }
@@ -161,12 +161,10 @@ internal sealed class BlfDataBackend : IDisposable
     /// <inheritdoc/>
     public void Dispose()
     {
-        if (Volatile.Read(ref _Disposed))
+        if (Interlocked.Exchange(ref _Disposed, 1) != 0)
         {
             return;
         }
-
-        Volatile.Write(ref _Disposed, true);
 
         // Do not swallow exceptions silently. MmapPool.Dispose() is expected
         // to succeed under normal operation (no callers hold the view open after the

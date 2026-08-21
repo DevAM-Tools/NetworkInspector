@@ -131,8 +131,8 @@ internal sealed class BlfIncrementalScanner
 
     #region Properties
 
-    /// <summary>Whether the scanner has processed all data or the index is full.</summary>
-    internal bool IsExhausted => _Exhausted || _Index.IsFull;
+    /// <summary>Whether the scanner has processed all data.</summary>
+    internal bool IsExhausted => _Exhausted;
 
     /// <summary>Discovered channel names (bus type + channel → name).</summary>
     internal IReadOnlyDictionary<(byte BusType, byte Channel), string> ChannelNames => _ChannelNames;
@@ -426,15 +426,6 @@ internal sealed class BlfIncrementalScanner
                 };
                 _Index.Push(in entry);
                 foundFrame = true;
-
-                // When the index is full, mark scanner exhausted to prevent
-                // re-entering the drain loop on subsequent ScanNext() calls (which would
-                // produce a CPU-spin / UI-hang until the caller observes IsExhausted).
-                if (_Index.IsFull)
-                {
-                    _Exhausted = true;
-                    break;
-                }
             }
         }
 
@@ -481,19 +472,8 @@ internal sealed class BlfIncrementalScanner
             TimestampNanos = _FileInfo.StartOffsetNanos + objInfo.TimestampNanos,
         };
 
-        // M4: honour the return value — when the index is full, stop scanning
-        // to avoid wasting CPU on objects that can never be indexed.
-        if (!_Index.Push(in entry))
-        {
-            _Exhausted = true;
-        }
+        _Index.Push(in entry);
     }
-
-    /// <summary>
-    /// Whether the index reached its maximum capacity of <see cref="int.MaxValue"/> entries.
-    /// When <c>true</c>, the file contains more frames than can be indexed.
-    /// </summary>
-    internal bool IsIndexFull => _Index.IsFull;
 
     /// <summary>
     /// Processes an AppText object for channel name extraction.

@@ -8,7 +8,7 @@ namespace NetworkInspector.Core.Settings;
 /// <para>
 /// Protocols register a <c>string</c> setting (e.g. <c>"can.config_file"</c>) that
 /// holds a user-supplied file path. During the registration phase they call
-/// <see cref="TryLoadReferencedJsonConfig{T}"/> to resolve the path, load the file,
+/// <see cref="TryLoadReferencedJsonConfig"/> to resolve the path, load the file,
 /// and deserialize it into a typed configuration object — without duplicating the I/O
 /// and error-handling boilerplate in every protocol.
 /// </para>
@@ -27,6 +27,10 @@ public static class SettingsManagerExtensions
     /// file into <typeparamref name="T"/> using the AOT-safe <paramref name="typeInfo"/>.
     /// </summary>
     /// <typeparam name="T">Target configuration model type.</typeparam>
+    /// <typeparam name="TSettings">
+    /// Reader type. Constrained so <see cref="ReadOnlySettingsManagerView"/> is not boxed
+    /// when the compile-time type is the struct.
+    /// </typeparam>
     /// <param name="settings">The settings manager to look up the path setting in.</param>
     /// <param name="stringSettingName">
     /// Name of the registered <c>string</c> setting that holds the file path
@@ -48,13 +52,14 @@ public static class SettingsManagerExtensions
     /// <see langword="false"/> when no path is configured (<paramref name="warning"/> will be
     /// <see langword="null"/>) or when loading failed (<paramref name="warning"/> will be set).
     /// </returns>
-    public static bool TryLoadReferencedJsonConfig<T>(
-        this IReadOnlySettingsManager settings,
+    public static bool TryLoadReferencedJsonConfig<T, TSettings>(
+        this TSettings settings,
         string stringSettingName,
         JsonTypeInfo<T> typeInfo,
         [NotNullWhen(true)] out T? value,
         out SettingsLoadWarning? warning)
         where T : class
+        where TSettings : IReadOnlySettingsManager
     {
         string? filePath = settings.GetStringSetting(stringSettingName);
 
@@ -66,7 +71,19 @@ public static class SettingsManagerExtensions
             return false;
         }
 
-        if (!JsonConfigFile.TryLoad(filePath, typeInfo, out value, out string? error))
+        string? baseDirectory = settings.StoragePath ?? AppContext.BaseDirectory;
+        if (string.IsNullOrWhiteSpace(baseDirectory))
+        {
+            value = null;
+            warning = new SettingsLoadWarning(
+                SettingsLoadWarningKind.ExternalConfigUnavailable,
+                _DeriveGroupName(stringSettingName),
+                stringSettingName,
+                "Cannot load an external configuration file because no storage path or application base directory is available.");
+            return false;
+        }
+
+        if (!JsonConfigFile.TryLoad(filePath, baseDirectory, typeInfo, out value, out string? error))
         {
             // Derive the group name from the setting name (part before the last dot)
             string groupName = _DeriveGroupName(stringSettingName);

@@ -7,8 +7,9 @@ namespace NetworkInspector.Exporters.Blf;
 /// <para>
 /// Implements <see cref="IFrameListener"/> for integration with the capture pipeline.
 /// Supports Ethernet, CAN classic (<see cref="LinkType.CanSocketcan"/>, <see cref="LinkType.Can20B"/>),
-/// CAN FD, FlexRay, and LIN frames. Unsupported link types are
-/// skipped (counted in <see cref="IExporterStatistics.SkippedCount"/>).
+/// CAN FD, FlexRay, and LIN frames. Unsupported link types (including CAN XL on
+/// <see cref="LinkType.CanSocketcan"/>) are skipped (counted in
+/// <see cref="IExporterStatistics.SkippedCount"/>).
 /// Lazy initialization defers file creation until the first frame.
 /// </para>
 /// <para>
@@ -22,9 +23,14 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
     /// <summary>SocketCAN FD flag: FDF (FD Format indicator) at byte offset 5.</summary>
     private const byte _SocketCanFdFlagFdf = 0x04;
 
+    /// <summary>
+    /// CAN XL discriminator: byte 4 bit 7 (XLF). Classic DLC and FD length never set this bit.
+    /// </summary>
+    private const byte _SocketCanXlfFlag = 0x80;
+
     private readonly CancellationToken _CancellationToken;
     private readonly CompressionLevel _Compression;
-    private readonly long _TargetFrameCount;
+    private readonly int _TargetFrameCount;
 
     // Output target consumed on lazy init
     private ExportOutput? _Output;
@@ -49,7 +55,7 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
         string uiName,
         string? description,
         CompressionLevel compression,
-        long targetFrameCount,
+        int targetFrameCount,
         CancellationToken cancellationToken)
     {
         _Output = output;
@@ -76,22 +82,37 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
     }
 
     /// <summary>Number of frames written so far.</summary>
-    public long FrameCount
+    public int FrameCount
     {
         get; private set;
     }
 
     /// <inheritdoc/>
-    public long WrittenCount => FrameCount;
+    public int WrittenCount => FrameCount;
 
     /// <inheritdoc/>
-    public long SkippedCount
+    public long EstimatedOutputBytes
+    {
+        get
+        {
+            BlfWriter? writer = _Writer;
+            if (writer is null)
+            {
+                return 0L;
+            }
+
+            return writer.EstimatedOutputBytes;
+        }
+    }
+
+    /// <inheritdoc/>
+    public int SkippedCount
     {
         get; private set;
     }
 
     /// <inheritdoc/>
-    public long ErrorCount
+    public int ErrorCount
     {
         get; private set;
     }
@@ -199,7 +220,7 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
         {
             // Trailer/header update failed; record the error and continue cleanup.
             _HasError = true;
-            ErrorCount++;
+            if (ErrorCount < int.MaxValue) ErrorCount++;
             ItemSkipped?.Invoke(this, new ExportErrorEventArgs
             {
                 ItemIndex = FrameCount,
@@ -221,7 +242,7 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
             {
                 cleanupErrors.Add(ex);
                 _HasError = true;
-                ErrorCount++;
+                if (ErrorCount < int.MaxValue) ErrorCount++;
                 ItemSkipped?.Invoke(this, new ExportErrorEventArgs
                 {
                     ItemIndex = FrameCount,
@@ -237,7 +258,7 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
             {
                 cleanupErrors.Add(ex);
                 _HasError = true;
-                ErrorCount++;
+                if (ErrorCount < int.MaxValue) ErrorCount++;
                 ItemSkipped?.Invoke(this, new ExportErrorEventArgs
                 {
                     ItemIndex = FrameCount,
@@ -288,7 +309,7 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
         catch (Exception ex)
         {
             _HasError = true;
-            ErrorCount++;
+            if (ErrorCount < int.MaxValue) ErrorCount++;
             ItemSkipped?.Invoke(this, new ExportErrorEventArgs
             {
                 ItemIndex = 0,
@@ -315,30 +336,22 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
 
         ReadOnlySpan<byte> data = frame.Data.Span;
         long timestampNs = frame.Timestamp.AsNanos;
-        long currentIndex = FrameCount + SkippedCount;
+        int currentIndex = FrameCount + SkippedCount;
 
-        // Look up channel from the frame's interface properties for round-trip preservation
+        // Look up channel from the frame's interface properties for round-trip preservation.
+        // Opaque property bags may hold any type — convert without exception-based control flow.
         ushort channel = 0;
         if (frame.HasInterface
             && frame.Registry.TryGet(frame.InterfaceId, out FrameInterfaceInfo? interfaceInfo)
             && interfaceInfo.Properties.TryGetValue(FrameInterfacePropertyKeys.BlfChannel, out object? channelValue))
         {
-            // Explicit range validation before conversion to produce a clear SerializationError
-            // rather than letting an OverflowException, FormatException or InvalidCastException
-            // propagate uncaught to the caller. The interface property is opaque (object) and
-            // may be any type — including non-numeric strings or types that Convert.ToUInt16
-            // cannot handle at all.
-            try
-            {
-                channel = Convert.ToUInt16(channelValue, CultureInfo.InvariantCulture);
-            }
-            catch (Exception ex) when (ex is OverflowException or FormatException or InvalidCastException)
+            if (!InterfaceChannelConverter.TryConvertToUInt16(channelValue, out channel))
             {
                 return _HandleSkip(new ExportErrorEventArgs
                 {
                     ItemIndex = currentIndex,
                     Kind = ExportErrorKind.SerializationError,
-                    Message = $"BLF channel value '{channelValue}' cannot be converted to a UInt16 channel id ({ex.GetType().Name}: {ex.Message}).",
+                    Message = $"BLF channel value '{channelValue}' cannot be converted to a UInt16 channel id.",
                 });
             }
         }
@@ -356,6 +369,18 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
                 break;
 
             case LinkType.CanSocketcan:
+                // CAN XL shares LinkType.CanSocketcan but sets XLF on byte 4. The BLF exporter
+                // does not emit XL object types — skip before classic/FD interpretation.
+                if (data.Length >= 8 && (data[4] & _SocketCanXlfFlag) != 0)
+                {
+                    return _HandleSkip(new ExportErrorEventArgs
+                    {
+                        ItemIndex = currentIndex,
+                        Kind = ExportErrorKind.UnsupportedType,
+                        Message = "CAN XL frames are not supported by the BLF exporter",
+                    });
+                }
+
                 // Check FD flag at byte offset 5 to distinguish CAN classic vs CAN FD
                 if (data.Length > 5 && (data[5] & _SocketCanFdFlagFdf) != 0)
                 {
@@ -461,8 +486,15 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
     /// </summary>
     private bool _HandleSkip(ExportErrorEventArgs error)
     {
-        SkippedCount++;
-        ErrorCount++;
+        if (SkippedCount < int.MaxValue)
+        {
+            SkippedCount++;
+        }
+
+        if (ErrorCount < int.MaxValue)
+        {
+            ErrorCount++;
+        }
 
         if (ErrorTolerance == ErrorToleranceMode.Strict)
         {
@@ -499,7 +531,7 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
         private string? _Description;
         private CancellationToken _CancellationToken;
         private BlfCompressionLevel _Compression = BlfCompressionLevel.Default;
-        private long _TargetFrameCount;
+        private int _TargetFrameCount;
 
         /// <summary>Sets the output to a file path with a 4 MiB buffer.</summary>
         public Builder ToFile(string path)
@@ -555,9 +587,18 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
         /// When the target is reached, <see cref="OnFrame"/> returns <c>false</c> and
         /// <see cref="IsFinished"/> becomes <c>true</c>.
         /// </summary>
-        public Builder WithTargetFrameCount(long count)
+        public Builder WithTargetFrameCount(int count)
         {
             ArgumentOutOfRangeException.ThrowIfNegative(count);
+            if (count > ArrayIndexIdRange.MaxCount)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(count),
+                    count,
+                    $"Target frame count must not exceed {ArrayIndexIdRange.MaxCount.ToString(CultureInfo.InvariantCulture)} " +
+                    $"(Array.MaxLength={Array.MaxLength.ToString(CultureInfo.InvariantCulture)}).");
+            }
+
             _TargetFrameCount = count;
             return this;
         }

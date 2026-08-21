@@ -5,19 +5,9 @@ namespace NetworkInspector.Core.Settings;
 /// <summary>
 /// Result of registering a setting, containing both the load result and the current value.
 /// </summary>
-/// <remarks>Creates a new registration result.</remarks>
-public readonly struct SettingRegistrationResult(SettingLoadResult loadResult, SettingValue value)
+public readonly record struct SettingRegistrationResult(SettingLoadResult LoadResult, SettingValue Value)
 {
     #region Properties
-
-    /// <summary>The result of attempting to load a persisted value.</summary>
-    public SettingLoadResult LoadResult { get; } = loadResult;
-
-    /// <summary>
-    /// The current value of the setting after registration.
-    /// This is either the persisted value (if loaded) or the default value.
-    /// </summary>
-    public SettingValue Value { get; } = value;
 
     /// <summary>Returns true if a persisted value was successfully loaded.</summary>
     public bool WasLoaded => LoadResult == SettingLoadResult.Success;

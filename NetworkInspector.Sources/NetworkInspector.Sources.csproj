@@ -6,6 +6,7 @@
     <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
 
+  <!-- Exposes this assembly's link-compiled internal types (e.g. FlexRayLinkTypeFrame) to tests. -->
   <ItemGroup>
     <InternalsVisibleTo Include="NetworkInspector.Sources.Tests" />
   </ItemGroup>
@@ -16,5 +17,16 @@
 
   <ItemGroup>
     <ProjectReference Include="..\NetworkInspector.Core\NetworkInspector.Core.csproj" />
+  </ItemGroup>
+
+  <!--
+    FlexRayLinkTypeFrame lives in Protocols but is link-compiled here so Sources stays
+    Core-only (no ProjectReference to Protocols → no dependency on the full dissector stack).
+    The type is internal: each assembly compiles its own copy, so there is no shared CLR type
+    identity across Sources / Protocols / Exporters and no ambiguity when a test project
+    references multiple assemblies. Sources.Tests reaches this copy via InternalsVisibleTo above.
+  -->
+  <ItemGroup>
+    <Compile Include="..\NetworkInspector.Protocols\FlexRayLinkTypeFrame.cs" Link="Shared\FlexRay\FlexRayLinkTypeFrame.cs" />
   </ItemGroup>
 </Project>

@@ -103,21 +103,20 @@ internal sealed class DataBackend : IDisposable
     #region IDisposable
 
     /// <summary>
-    /// Whether this instance has been disposed.
-    /// Read/written via <see cref="Volatile"/> because <see cref="Dispose"/> may be
+    /// Atomic dispose latch (0 = live, 1 = disposed).
+    /// Read/written via <see cref="Interlocked"/> / <see cref="Volatile"/> because <see cref="Dispose"/> may be
     /// invoked from a different thread than concurrent readers (per SOURCE_GUIDE §13.1).
     /// </summary>
-    private bool _Disposed;
+    private volatile int _Disposed;
 
     /// <inheritdoc />
     public void Dispose()
     {
-        if (Volatile.Read(ref _Disposed))
+        if (Interlocked.Exchange(ref _Disposed, 1) != 0)
         {
             return;
         }
 
-        Volatile.Write(ref _Disposed, true);
         _MmapPool?.Dispose();
     }
 

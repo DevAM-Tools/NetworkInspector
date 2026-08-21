@@ -24,4 +24,16 @@ public enum SessionErrorCode
 
     /// <summary>The session has been disposed.</summary>
     Disposed,
+
+    /// <summary>The maximum number of job IDs has been allocated.</summary>
+    JobIdExhausted,
+
+    /// <summary>The maximum number of listener IDs has been allocated.</summary>
+    ListenerIdExhausted,
+
+    /// <summary>The maximum number of packet IDs has been allocated.</summary>
+    PacketIdExhausted,
+
+    /// <summary>The supplied <c>ListenerId</c> does not identify a registered listener.</summary>
+    ListenerNotFound,
 }

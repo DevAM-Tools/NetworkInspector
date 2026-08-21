@@ -11,34 +11,25 @@ public readonly struct FieldValue : IEquatable<FieldValue>, IComparable<FieldVal
     /// <summary>None value constant (container fields).</summary>
     public static readonly FieldValue None;
 
-    private readonly FieldValueData _Data;
-    private readonly LazyString _CustomRepresentation;
+    /// <summary>The inner value data.</summary>
+    public FieldValueData Data { get; }
+
+    /// <summary>Optional custom display representation (check <see cref="LazyString.IsNull"/> for absence).</summary>
+    public LazyString CustomRepresentation { get; }
 
     /// <summary>Creates a field value from raw data and optional custom representation.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private FieldValue(FieldValueData data, LazyString customRepresentation)
     {
-        _Data = data;
-        _CustomRepresentation = customRepresentation;
+        Data = data;
+        CustomRepresentation = customRepresentation;
     }
 
-    /// <summary>The inner value data.</summary>
-    public FieldValueData Data
-    {
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _Data;
-    }
     /// <summary>The field type discriminant.</summary>
     public FieldType Type
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _Data.Type;
-    }
-    /// <summary>Optional custom display representation (check <see cref="LazyString.IsNull"/> for absence).</summary>
-    public LazyString CustomRepresentation
-    {
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _CustomRepresentation;
+        get => Data.Type;
     }
 
     /// <summary>
@@ -48,12 +39,12 @@ public readonly struct FieldValue : IEquatable<FieldValue>, IComparable<FieldVal
     public DefaultText DataText
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => new(_Data);
+        get => new(Data);
     }
 
     /// <summary>Creates a new FieldValue with a custom representation.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public FieldValue WithCustomRepresentation(LazyString text) => new(_Data, text);
+    public FieldValue WithCustomRepresentation(LazyString text) => new(Data, text);
 
     #region Factory methods
 
@@ -132,11 +123,11 @@ public readonly struct FieldValue : IEquatable<FieldValue>, IComparable<FieldVal
     #region Equality (ignores custom representation)
 
     /// <inheritdoc/>
-    public bool Equals(FieldValue other) => _Data.Equals(other._Data);
+    public bool Equals(FieldValue other) => Data.Equals(other.Data);
     /// <inheritdoc/>
     public override bool Equals(object? obj) => obj is FieldValue other && Equals(other);
     /// <inheritdoc/>
-    public override int GetHashCode() => _Data.GetHashCode();
+    public override int GetHashCode() => Data.GetHashCode();
 
     /// <summary>Returns <see langword="true"/> if <paramref name="left"/> and <paramref name="right"/>
     /// are equal (data only; custom representation ignored).</summary>
@@ -153,7 +144,7 @@ public readonly struct FieldValue : IEquatable<FieldValue>, IComparable<FieldVal
     /// Compares by data only, ignoring custom representation.
     /// Supports cross-type numeric comparison (I64 vs U64 vs F64).
     /// </summary>
-    public int CompareTo(FieldValue other) => _Data.CompareTo(other._Data);
+    public int CompareTo(FieldValue other) => Data.CompareTo(other.Data);
 
     /// <summary>Returns <see langword="true"/> if <paramref name="left"/> is less than <paramref name="right"/>.</summary>
     public static bool operator <(FieldValue left, FieldValue right) => left.CompareTo(right) < 0;
@@ -174,9 +165,9 @@ public readonly struct FieldValue : IEquatable<FieldValue>, IComparable<FieldVal
     /// </summary>
     public bool TryFormat(Span<char> destination, out int charsWritten, ReadOnlySpan<char> format, IFormatProvider? provider)
     {
-        if (!_CustomRepresentation.IsNull)
+        if (!CustomRepresentation.IsNull)
         {
-            ReadOnlySpan<char> text = _CustomRepresentation.AsSpan;
+            ReadOnlySpan<char> text = CustomRepresentation.AsSpan;
             if (destination.Length < text.Length)
             {
                 charsWritten = 0;
@@ -186,7 +177,7 @@ public readonly struct FieldValue : IEquatable<FieldValue>, IComparable<FieldVal
             charsWritten = text.Length;
             return true;
         }
-        return _Data.TryFormat(destination, out charsWritten, format, provider);
+        return Data.TryFormat(destination, out charsWritten, format, provider);
     }
 
     /// <summary>
@@ -195,9 +186,9 @@ public readonly struct FieldValue : IEquatable<FieldValue>, IComparable<FieldVal
     /// </summary>
     public bool TryFormat(Span<byte> utf8Destination, out int bytesWritten, ReadOnlySpan<char> format, IFormatProvider? provider)
     {
-        if (!_CustomRepresentation.IsNull)
+        if (!CustomRepresentation.IsNull)
         {
-            ReadOnlySpan<char> text = _CustomRepresentation.AsSpan;
+            ReadOnlySpan<char> text = CustomRepresentation.AsSpan;
             int byteCount = Encoding.UTF8.GetByteCount(text);
             if (utf8Destination.Length < byteCount)
             {
@@ -207,17 +198,17 @@ public readonly struct FieldValue : IEquatable<FieldValue>, IComparable<FieldVal
             bytesWritten = Encoding.UTF8.GetBytes(text, utf8Destination);
             return true;
         }
-        return _Data.TryFormat(utf8Destination, out bytesWritten, format, provider);
+        return Data.TryFormat(utf8Destination, out bytesWritten, format, provider);
     }
 
     /// <summary>Returns the custom representation if present, otherwise the formatted data value.</summary>
     public override string ToString()
     {
-        if (!_CustomRepresentation.IsNull)
+        if (!CustomRepresentation.IsNull)
         {
-            return _CustomRepresentation.AsString;
+            return CustomRepresentation.AsString;
         }
-        return _Data.ToString();
+        return Data.ToString();
     }
 
     /// <summary>Returns the custom representation if present, otherwise the formatted data value.</summary>
@@ -234,12 +225,12 @@ public readonly struct FieldValue : IEquatable<FieldValue>, IComparable<FieldVal
     /// </summary>
     public bool TryGetStringSize(ReadOnlySpan<char> format, IFormatProvider? provider, out int size)
     {
-        if (!_CustomRepresentation.IsNull)
+        if (!CustomRepresentation.IsNull)
         {
-            size = _CustomRepresentation.AsSpan.Length;
+            size = CustomRepresentation.AsSpan.Length;
             return true;
         }
-        return _Data.TryGetStringSize(format, provider, out size);
+        return Data.TryGetStringSize(format, provider, out size);
     }
 
     #endregion
@@ -254,14 +245,14 @@ public readonly struct FieldValue : IEquatable<FieldValue>, IComparable<FieldVal
     /// </summary>
     public TempString ToTempString()
     {
-        if (!_CustomRepresentation.IsNull)
+        if (!CustomRepresentation.IsNull)
         {
-            ReadOnlySpan<char> text = _CustomRepresentation.AsSpan;
+            ReadOnlySpan<char> text = CustomRepresentation.AsSpan;
             char[] buffer = ZeroAllocHelper.AcquireCharBuffer(text.Length, out bool isThreadStatic);
             text.CopyTo(buffer);
             return new TempString(buffer, text.Length, isThreadStatic);
         }
-        return _Data.ToTempString();
+        return Data.ToTempString();
     }
 
     #endregion
@@ -332,6 +323,7 @@ public readonly struct FieldValue : IEquatable<FieldValue>, IComparable<FieldVal
     /// so it can be used directly in interpolated strings and formatting pipelines.
     /// </summary>
     [StructLayout(LayoutKind.Auto)]
+    // Suppression approved: CA1034 — DefaultText is a public formatting wrapper intentionally nested on FieldValue for discoverability.
     [SuppressMessage("Design", "CA1034:Nested types should not be visible",
         Justification = "DefaultText is a lightweight formatting wrapper tightly coupled to FieldValue")]
     public readonly struct DefaultText(FieldValueData data) : ISpanFormattable, IUtf8SpanFormattable, IStringSize

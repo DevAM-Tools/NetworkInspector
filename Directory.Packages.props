@@ -12,5 +12,7 @@
     <PackageVersion Include="Microsoft.CodeAnalysis.CSharp" Version="4.14.0" />
     <PackageVersion Include="TUnit" Version="1.*" />
     <PackageVersion Include="ZeroAlloc" Version="0.5.2" />
+    <PackageVersion Include="Parquet.Net" Version="6.1.0" />
+    <PackageVersion Include="DuckDB.NET.Data.Full" Version="1.5.5" />
   </ItemGroup>
 </Project>

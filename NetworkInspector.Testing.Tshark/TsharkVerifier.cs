@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Testing.Tshark;
 
@@ -148,7 +148,7 @@ public static class TsharkVerifier
     /// <remarks>
     /// <para>
     /// <c>tshark -T fields -e …</c> validates each <c>-e</c> name against the Wireshark startup field
-    /// registry only. Preference/UAT-registered Signal-PDU per-signal columns are thus rejected as
+    /// registry only. Preference/UAT-registered Signal Message per-signal columns are thus rejected as
     /// &quot;Some fields aren't valid&quot; even though the dissected PDML tree contains those fields at
     /// runtime. When <paramref name="profileDir"/> is set and stderr reports that error for the requested
     /// names, values are fetched from one <c>-T pdml</c> parse instead.

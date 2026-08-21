@@ -50,28 +50,28 @@ internal sealed class LinkLayerProtocolTests
             // Packet type = 0 (Unicast)
             FieldId? pktTypeId = stack.GetFieldId("sll.pkttype");
             await Assert.That(pktTypeId).IsNotNull();
-            bool hasPktType = packet.TryGetFieldValue(pktTypeId!.Value, out FieldValue pktTypeVal);
+            bool hasPktType = packet.TryGetFieldValue(pktTypeId!.Value, out FieldValue pktTypeVal, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasPktType).IsTrue();
             pktTypeVal.Data.TryGetAsU64(out ulong u64Val);
             await Assert.That(u64Val).IsEqualTo(0UL);
 
             // ARPHRD type = 1 (Ethernet)
             FieldId? haTypeId = stack.GetFieldId("sll.hatype");
-            bool hasHaType = packet.TryGetFieldValue(haTypeId!.Value, out FieldValue haTypeVal);
+            bool hasHaType = packet.TryGetFieldValue(haTypeId!.Value, out FieldValue haTypeVal, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasHaType).IsTrue();
             haTypeVal.Data.TryGetAsU64(out ulong u64Val2);
             await Assert.That(u64Val2).IsEqualTo(1UL);
 
             // Address length = 6
             FieldId? haLenId = stack.GetFieldId("sll.halen");
-            bool hasHaLen = packet.TryGetFieldValue(haLenId!.Value, out FieldValue haLenVal);
+            bool hasHaLen = packet.TryGetFieldValue(haLenId!.Value, out FieldValue haLenVal, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasHaLen).IsTrue();
             haLenVal.Data.TryGetAsU64(out ulong u64Val3);
             await Assert.That(u64Val3).IsEqualTo(6UL);
 
             // EtherType = 0x0800
             FieldId? etypeId = stack.GetFieldId("sll.etype");
-            bool hasEtype = packet.TryGetFieldValue(etypeId!.Value, out FieldValue etypeVal);
+            bool hasEtype = packet.TryGetFieldValue(etypeId!.Value, out FieldValue etypeVal, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasEtype).IsTrue();
             etypeVal.Data.TryGetAsU64(out ulong u64Val4);
             await Assert.That(u64Val4).IsEqualTo(0x0800UL);
@@ -89,12 +89,12 @@ internal sealed class LinkLayerProtocolTests
             // IPv4 should be parsed after SLL
             FieldId? ipSrcId = stack.GetFieldId("ip.src");
             await Assert.That(ipSrcId).IsNotNull();
-            bool hasIpSrc = packet.TryGetFieldValue(ipSrcId!.Value, out _);
+            bool hasIpSrc = packet.TryGetFieldValue(ipSrcId!.Value, out _, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasIpSrc).IsTrue();
 
             // UDP should also be parsed
             FieldId? udpSrcPortId = stack.GetFieldId("udp.srcport");
-            bool hasUdpSrcPort = packet.TryGetFieldValue(udpSrcPortId!.Value, out FieldValue udpSrcPortVal);
+            bool hasUdpSrcPort = packet.TryGetFieldValue(udpSrcPortId!.Value, out FieldValue udpSrcPortVal, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasUdpSrcPort).IsTrue();
             udpSrcPortVal.Data.TryGetAsU64(out ulong u64Val);
             await Assert.That(u64Val).IsEqualTo(5000UL);
@@ -146,21 +146,21 @@ internal sealed class LinkLayerProtocolTests
 
             // EtherType
             FieldId? etypeId = stack.GetFieldId("sll2.etype");
-            bool hasEtype = packet.TryGetFieldValue(etypeId!.Value, out FieldValue etypeVal);
+            bool hasEtype = packet.TryGetFieldValue(etypeId!.Value, out FieldValue etypeVal, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasEtype).IsTrue();
             etypeVal.Data.TryGetAsU64(out ulong u64Val);
             await Assert.That(u64Val).IsEqualTo(0x0800UL);
 
             // Interface index
             FieldId? ifIndexId = stack.GetFieldId("sll2.if_index");
-            bool hasIfIndex = packet.TryGetFieldValue(ifIndexId!.Value, out FieldValue ifIndexVal);
+            bool hasIfIndex = packet.TryGetFieldValue(ifIndexId!.Value, out FieldValue ifIndexVal, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasIfIndex).IsTrue();
             ifIndexVal.Data.TryGetAsU64(out ulong u64Val2);
             await Assert.That(u64Val2).IsEqualTo(42UL);
 
             // Packet type
             FieldId? pktTypeId = stack.GetFieldId("sll2.pkttype");
-            bool hasPktType = packet.TryGetFieldValue(pktTypeId!.Value, out FieldValue pktTypeVal);
+            bool hasPktType = packet.TryGetFieldValue(pktTypeId!.Value, out FieldValue pktTypeVal, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasPktType).IsTrue();
             pktTypeVal.Data.TryGetAsU64(out ulong u64Val3);
             await Assert.That(u64Val3).IsEqualTo(0UL);
@@ -176,7 +176,7 @@ internal sealed class LinkLayerProtocolTests
         using (stack)
         {
             FieldId? ipSrcId = stack.GetFieldId("ip.src");
-            bool hasIpSrc = packet.TryGetFieldValue(ipSrcId!.Value, out _);
+            bool hasIpSrc = packet.TryGetFieldValue(ipSrcId!.Value, out _, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasIpSrc).IsTrue();
         }
     }
@@ -198,21 +198,21 @@ internal sealed class LinkLayerProtocolTests
             // DSAP = 0xAA (SNAP)
             FieldId? dsapId = stack.GetFieldId("llc.dsap");
             await Assert.That(dsapId).IsNotNull();
-            bool hasDsap = packet.TryGetFieldValue(dsapId!.Value, out FieldValue dsapVal);
+            bool hasDsap = packet.TryGetFieldValue(dsapId!.Value, out FieldValue dsapVal, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasDsap).IsTrue();
             dsapVal.Data.TryGetAsU64(out ulong u64Val);
             await Assert.That(u64Val).IsEqualTo(0xAAUL);
 
             // SSAP = 0xAA (SNAP)
             FieldId? ssapId = stack.GetFieldId("llc.ssap");
-            bool hasSsap = packet.TryGetFieldValue(ssapId!.Value, out FieldValue ssapVal);
+            bool hasSsap = packet.TryGetFieldValue(ssapId!.Value, out FieldValue ssapVal, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasSsap).IsTrue();
             ssapVal.Data.TryGetAsU64(out ulong u64Val2);
             await Assert.That(u64Val2).IsEqualTo(0xAAUL);
 
             // Control = 0x03 (UI)
             FieldId? controlId = stack.GetFieldId("llc.control");
-            bool hasControl = packet.TryGetFieldValue(controlId!.Value, out FieldValue controlVal);
+            bool hasControl = packet.TryGetFieldValue(controlId!.Value, out FieldValue controlVal, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasControl).IsTrue();
             controlVal.Data.TryGetAsU64(out ulong u64Val3);
             await Assert.That(u64Val3).IsEqualTo(0x03UL);
@@ -230,7 +230,7 @@ internal sealed class LinkLayerProtocolTests
             // SNAP Type = 0x0800 (IPv4)
             FieldId? snapTypeId = stack.GetFieldId("llc.type");
             await Assert.That(snapTypeId).IsNotNull();
-            bool hasSnapType = packet.TryGetFieldValue(snapTypeId!.Value, out FieldValue snapTypeVal);
+            bool hasSnapType = packet.TryGetFieldValue(snapTypeId!.Value, out FieldValue snapTypeVal, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasSnapType).IsTrue();
             snapTypeVal.Data.TryGetAsU64(out ulong u64Val);
             await Assert.That(u64Val).IsEqualTo(0x0800UL);
@@ -247,12 +247,12 @@ internal sealed class LinkLayerProtocolTests
         {
             // IPv4 should be dispatched after LLC SNAP
             FieldId? ipSrcId = stack.GetFieldId("ip.src");
-            bool hasIpSrc = packet.TryGetFieldValue(ipSrcId!.Value, out _);
+            bool hasIpSrc = packet.TryGetFieldValue(ipSrcId!.Value, out _, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasIpSrc).IsTrue();
 
             // UDP should also be parsed
             FieldId? udpSrcPortId = stack.GetFieldId("udp.srcport");
-            bool hasUdpSrcPort = packet.TryGetFieldValue(udpSrcPortId!.Value, out FieldValue udpSrcPortVal);
+            bool hasUdpSrcPort = packet.TryGetFieldValue(udpSrcPortId!.Value, out FieldValue udpSrcPortVal, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasUdpSrcPort).IsTrue();
             udpSrcPortVal.Data.TryGetAsU64(out ulong u64Val);
             await Assert.That(u64Val).IsEqualTo(5000UL);

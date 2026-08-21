@@ -642,9 +642,9 @@ public sealed partial class IPv6Protocol : IProtocol
                         ReadOnlyMemory<byte> reassembledPayload = reassembled;
                         ParseResult dispatchResult = _DispatchNextHeader(
                             in parentField, finalNextHeader, reassembledPayload, in context);
-                        if (dispatchResult.IsError)
+                        if (dispatchResult.TryPropagateError(out ParseResult error))
                         {
-                            return dispatchResult;
+                            return error;
                         }
                     }
                     // Else: fragment stored, waiting for more fragments — no dispatch yet
@@ -655,9 +655,9 @@ public sealed partial class IPv6Protocol : IProtocol
                     ReadOnlyMemory<byte> payload = data.Slice(payloadStart, payloadLen);
                     ParseResult dispatchResult = _DispatchNextHeader(
                         in parentField, finalNextHeader, payload, in context);
-                    if (dispatchResult.IsError)
+                    if (dispatchResult.TryPropagateError(out ParseResult error))
                     {
-                        return dispatchResult;
+                        return error;
                     }
                 }
             }
@@ -666,9 +666,9 @@ public sealed partial class IPv6Protocol : IProtocol
                 // No fragment header — dispatch directly
                 ReadOnlyMemory<byte> payload = data.Slice(payloadStart, payloadLen);
                 ParseResult dispatchResult = _DispatchNextHeader(in parentField, finalNextHeader, payload, in context);
-                if (dispatchResult.IsError)
+                if (dispatchResult.TryPropagateError(out ParseResult error))
                 {
-                    return dispatchResult;
+                    return error;
                 }
             }
         }

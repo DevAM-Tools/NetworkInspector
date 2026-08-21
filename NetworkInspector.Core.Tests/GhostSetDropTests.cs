@@ -16,11 +16,38 @@ internal sealed class GhostSetDropTests
         await Assert.That(g.Count).IsEqualTo(1);
         await Assert.That(g.DroppedCount).IsEqualTo(0L);
 
-        // 20 > 10 budget → cannot fit even by evicting everything
+        // 20 > 10 budget → cannot fit; existing entry is preserved
         g.Add("huge", 20);
-        await Assert.That(g.Count).IsEqualTo(0); // small evicted, huge dropped
+        await Assert.That(g.Count).IsEqualTo(1);
         await Assert.That(g.DroppedCount).IsEqualTo(1L);
         await Assert.That(g.Contains("huge")).IsFalse();
+        await Assert.That(g.Contains("small")).IsTrue();
+    }
+
+    [Test]
+    public async Task Add_NegativeOrZeroWeight_IsNoOpAndPreservesTotalWeight()
+    {
+        GhostSet<int> g = new(maxWeight: 10);
+        g.Add(1, 5);
+        await Assert.That(g.TotalWeight).IsEqualTo(5);
+
+        g.Add(2, 0);
+        g.Add(3, -1);
+
+        await Assert.That(g.Count).IsEqualTo(1);
+        await Assert.That(g.TotalWeight).IsEqualTo(5);
+        await Assert.That(g.Contains(2)).IsFalse();
+        await Assert.That(g.Contains(3)).IsFalse();
+    }
+
+    [Test]
+    public async Task Add_IntMaxWeight_ExceedingBudget_IsDropped()
+    {
+        GhostSet<int> g = new(maxWeight: 10);
+        g.Add(1, int.MaxValue);
+
+        await Assert.That(g.Count).IsEqualTo(0);
+        await Assert.That(g.DroppedCount).IsEqualTo(1L);
     }
 
     [Test]

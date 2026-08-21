@@ -23,6 +23,13 @@ global using NetworkInspector.Core.Settings;
 global using NetworkInspector.Values;
 #endregion
 
+#region NetworkInspector.Filter
+global using NetworkInspector.Filter;
+global using NetworkInspector.Filter.Errors;
+// The namespace NetworkInspector.Filter shadows its own Filter type inside NetworkInspector.*.
+global using PacketFilter = NetworkInspector.Filter.Filter;
+#endregion
+
 #region NetworkInspector.Sessions
 global using NetworkInspector.Sessions;
 global using NetworkInspector.Sessions.Cache;
@@ -37,6 +44,7 @@ global using NetworkInspector.Protocols;
 #endregion
 
 #region Test Framework
+global using NetworkInspector.Sessions.Tests.Helpers;
 global using TUnit.Assertions;
 global using TUnit.Assertions.Extensions;
 global using TUnit.Core;

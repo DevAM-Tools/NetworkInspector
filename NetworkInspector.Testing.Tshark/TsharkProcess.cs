@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Testing.Tshark;
 
@@ -58,7 +58,7 @@ internal static class TsharkProcess
             string profileName = Path.GetFileName(profileDir.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
 
             // Preferences embedded in freshly generated profiles sometimes load too late or
-            // differ by platform encoding; `-o` is applied before `-r`/dissection so Signal-PDU
+            // differ by platform encoding; `-o` is applied before `-r`/dissection so Signal Message
             // raw subtree fields (-T fields) match Network Inspector asserts.
             const string hideRawPref = "-o \"signal_pdu.payload_dissector_hide_raw_values:false\"";
 

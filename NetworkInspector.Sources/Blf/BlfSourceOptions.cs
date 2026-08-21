@@ -7,6 +7,17 @@ namespace NetworkInspector.Sources.Blf;
 /// </summary>
 public sealed class BlfSourceOptions : IFileSourceOptions
 {
+    #region Constants
+
+    /// <summary>
+    /// Default maximum uncompressed container size: 128 MiB.
+    /// Rejects oversized BLF log containers before allocation to prevent OOM from
+    /// untrusted <c>uncompressedSize</c> header values. Set to <c>0</c> to disable.
+    /// </summary>
+    public const long DefaultMaxUncompressedContainerSize = 128L * 1024 * 1024;
+
+    #endregion
+
     #region Properties
 
     /// <summary>
@@ -109,7 +120,7 @@ public sealed class BlfSourceOptions : IFileSourceOptions
         }
     }
 
-    private long _MaxUncompressedContainerSize;
+    private long _MaxUncompressedContainerSize = DefaultMaxUncompressedContainerSize;
 
     /// <summary>
     /// Maximum allowed uncompressed size in bytes for a single BLF log container.
@@ -117,8 +128,8 @@ public sealed class BlfSourceOptions : IFileSourceOptions
     /// <see cref="Format.BlfDecompressionLimitExceededException"/> is thrown before any
     /// allocation is attempted.
     /// <para>
-    /// A value of <c>0</c> disables the check (default). When the limit is active it
-    /// must be positive.
+    /// A value of <c>0</c> disables the check. Default is
+    /// <see cref="DefaultMaxUncompressedContainerSize"/> (128 MiB).
     /// </para>
     /// <para>
     /// This guard complements the operating-system OOM protection: it lets callers

@@ -25,7 +25,7 @@ public sealed class FrameInterfaceRegistry
     /// All reads MUST go through <see cref="System.Threading.Volatile"/> Read
     /// to observe a consistent, immutable snapshot under the .NET memory model.
     /// </summary>
-    private FrameInterfaceInfo[] _Interfaces = [];
+    private volatile FrameInterfaceInfo[] _Interfaces = [];
 
     /// <summary>
     /// The current snapshot of registered frame sources.
@@ -33,7 +33,7 @@ public sealed class FrameInterfaceRegistry
     /// (<see cref="Interlocked.CompareExchange{T}(ref T, T, T)"/>).
     /// All reads MUST go through <see cref="System.Threading.Volatile"/> Read.
     /// </summary>
-    private FrameSourceInfo[] _Sources = [];
+    private volatile FrameSourceInfo[] _Sources = [];
 
     /// <summary>Creates an empty registry.</summary>
     public FrameInterfaceRegistry()
@@ -43,7 +43,7 @@ public sealed class FrameInterfaceRegistry
     #region Interface Registration
 
     /// <summary>Number of registered interfaces.</summary>
-    public int Count => Volatile.Read(ref _Interfaces).Length;
+    public int Count => _Interfaces.Length;
 
     /// <summary>
     /// Registers a new frame interface belonging to a registered frame source.
@@ -55,11 +55,23 @@ public sealed class FrameInterfaceRegistry
     /// <param name="linkType">Optional link-layer header type for this interface.</param>
     /// <param name="properties">Optional source-specific metadata (e.g., channel number). Frozen on storage.</param>
     /// <returns>The unique identifier assigned to the new interface.</returns>
-    /// <exception cref="ArgumentException"><paramref name="sourceId"/> is invalid or not registered.</exception>
+    /// <exception cref="ArgumentNullException"><paramref name="uiName"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="sourceId"/> is invalid or not registered, or <paramref name="uiName"/> is empty,
+    /// whitespace, or contains control characters.
+    /// </exception>
     public FrameInterfaceId Register(
         FrameSourceId sourceId, string uiName, string? description = null,
         LinkType? linkType = null, IReadOnlyDictionary<string, object>? properties = null)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(uiName);
+        if (!NameValidation.IsValidUiName(uiName))
+        {
+            throw new ArgumentException(
+                "Interface UI name must be non-empty and must not contain control characters.",
+                nameof(uiName));
+        }
+
         // Interfaces must belong to a registered source — no orphan interfaces allowed
         if (!sourceId.IsValid)
         {
@@ -68,7 +80,7 @@ public sealed class FrameInterfaceRegistry
                 nameof(sourceId));
         }
 
-        if ((uint)sourceId.Value >= (uint)Volatile.Read(ref _Sources).Length)
+        if ((uint)sourceId.Value >= (uint)_Sources.Length)
         {
             throw new ArgumentException(
                 $"Frame source ID {sourceId.Value} is not registered.", nameof(sourceId));
@@ -77,7 +89,13 @@ public sealed class FrameInterfaceRegistry
         // CAS retry loop: copy-on-write for lock-free registration
         while (true)
         {
-            FrameInterfaceInfo[] current = Volatile.Read(ref _Interfaces);
+            FrameInterfaceInfo[] current = _Interfaces;
+            if (current.Length > ArrayIndexIdRange.MaxValue)
+            {
+                throw new InvalidOperationException(
+                    $"Maximum frame interface count exceeded (valid range 0..{ArrayIndexIdRange.MaxValue.ToString(CultureInfo.InvariantCulture)}).");
+            }
+
             FrameInterfaceId id = new(current.Length);
             FrameInterfaceInfo newInfo = new(id, sourceId, uiName, description, linkType, properties);
 
@@ -104,7 +122,7 @@ public sealed class FrameInterfaceRegistry
     public FrameInterfaceInfo? Get(FrameInterfaceId id)
     {
         // Read the snapshot once — consistent even if another thread is registering
-        FrameInterfaceInfo[] snapshot = Volatile.Read(ref _Interfaces);
+        FrameInterfaceInfo[] snapshot = _Interfaces;
         if ((uint)id.Value < (uint)snapshot.Length)
         {
             return snapshot[id.Value];
@@ -121,7 +139,7 @@ public sealed class FrameInterfaceRegistry
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool TryGet(FrameInterfaceId id, [NotNullWhen(true)] out FrameInterfaceInfo? info)
     {
-        FrameInterfaceInfo[] snapshot = Volatile.Read(ref _Interfaces);
+        FrameInterfaceInfo[] snapshot = _Interfaces;
         if ((uint)id.Value < (uint)snapshot.Length)
         {
             info = snapshot[id.Value];
@@ -135,14 +153,14 @@ public sealed class FrameInterfaceRegistry
     /// Returns a snapshot of all registered interfaces. The returned array is immutable
     /// and will not change as new interfaces are registered.
     /// </summary>
-    public ReadOnlySpan<FrameInterfaceInfo> All => Volatile.Read(ref _Interfaces);
+    public ReadOnlySpan<FrameInterfaceInfo> All => _Interfaces;
 
     #endregion
 
     #region Frame Source Registration
 
     /// <summary>Number of registered frame sources.</summary>
-    public int SourceCount => Volatile.Read(ref _Sources).Length;
+    public int SourceCount => _Sources.Length;
 
     /// <summary>
     /// Registers a new frame source. Thread-safe (lock-free, CAS retry).
@@ -151,14 +169,23 @@ public sealed class FrameInterfaceRegistry
     /// to register interfaces via <see cref="Register(FrameSourceId, string, string?, LinkType?, IReadOnlyDictionary{string, object}?)"/>.
     /// </para>
     /// </summary>
-    /// <param name="source">The frame source to register.</param>
+    /// <param name="source">The frame source to register. Must not be <see langword="null"/>.</param>
     /// <returns>The unique identifier assigned to the new source.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="source"/> is <see langword="null"/>.</exception>
     public FrameSourceId RegisterSource(IFrameSource source)
     {
+        ArgumentNullException.ThrowIfNull(source);
+
         // CAS retry loop: copy-on-write for lock-free registration
         while (true)
         {
-            FrameSourceInfo[] current = Volatile.Read(ref _Sources);
+            FrameSourceInfo[] current = _Sources;
+            if (current.Length > ArrayIndexIdRange.MaxValue)
+            {
+                throw new InvalidOperationException(
+                    $"Maximum frame source count exceeded (valid range 0..{ArrayIndexIdRange.MaxValue.ToString(CultureInfo.InvariantCulture)}).");
+            }
+
             FrameSourceId id = new(current.Length);
             FrameSourceInfo newInfo = new(id, source);
 
@@ -181,7 +208,7 @@ public sealed class FrameInterfaceRegistry
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public FrameSourceInfo? GetSource(FrameSourceId id)
     {
-        FrameSourceInfo[] snapshot = Volatile.Read(ref _Sources);
+        FrameSourceInfo[] snapshot = _Sources;
         if ((uint)id.Value < (uint)snapshot.Length)
         {
             return snapshot[id.Value];
@@ -198,7 +225,7 @@ public sealed class FrameInterfaceRegistry
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool TryGetSource(FrameSourceId id, [NotNullWhen(true)] out FrameSourceInfo? info)
     {
-        FrameSourceInfo[] snapshot = Volatile.Read(ref _Sources);
+        FrameSourceInfo[] snapshot = _Sources;
         if ((uint)id.Value < (uint)snapshot.Length)
         {
             info = snapshot[id.Value];
@@ -211,6 +238,6 @@ public sealed class FrameInterfaceRegistry
     /// <summary>
     /// Returns a snapshot of all registered frame sources.
     /// </summary>
-    public ReadOnlySpan<FrameSourceInfo> AllSources => Volatile.Read(ref _Sources);
+    public ReadOnlySpan<FrameSourceInfo> AllSources => _Sources;
     #endregion
 }

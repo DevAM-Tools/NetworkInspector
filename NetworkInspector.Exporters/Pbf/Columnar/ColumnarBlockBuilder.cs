@@ -3,48 +3,21 @@
 namespace NetworkInspector.Exporters.Pbf.Columnar;
 
 /// <summary>
-/// Column-oriented PBF block builder. Groups field values by column for better
-/// compression and query performance. Each field becomes a separate column with
-/// optional dictionary encoding for repeated string values.
+/// Column-oriented PBF block builder. Wraps the shared
+/// <see cref="ColumnarPacketBatch"/> (also used by the Parquet and DuckDB exporters) and
+/// serializes it to the PBF columnar wire format (<see cref="PbfFieldNumbers.BlockTypeColumnar"/>).
 /// <para>
-/// Topology (field-tree structure per packet) is stored as two flat parallel
-/// arrays plus per-packet offsets, avoiding one <c>List&lt;int&gt;</c> allocation
-/// per packet that the previous per-packet-list approach incurred.
-/// </para>
-/// <para>
-/// The <see cref="_Columns"/> dictionary is intentionally kept alive across
-/// block boundaries so field metadata does not need to be re-transmitted on
-/// every block. Callers operating on extremely long captures with very diverse
-/// protocol mixes should be aware that column metadata grows for the lifetime of
-/// the exporter. In practice, the number of distinct field IDs in any realistic
-/// protocol mix is bounded (typically ≤ 10 000).
+/// Each field becomes a separate <c>FieldColumn</c> sub-message (see
+/// <see cref="PbfFieldNumbers.ColumnFieldId"/> and neighbouring constants). String columns
+/// (value, custom representation, custom text) are written as plain repeated strings.
 /// </para>
 /// </summary>
 internal sealed class ColumnarBlockBuilder : IDisposable
 {
-    private readonly Dictionary<int, ColumnBuilder> _Columns = new(64);
-    private readonly List<long> _PacketIds = new(256);
-    private readonly List<long> _Timestamps = new(256);
-    private readonly List<string> _InfoStrings = new(256);
+    #region Fields
 
-    // Flat topology arrays: all packets' field IDs / child counts stored sequentially.
-    // Per-packet start offset and length stored in _TopologyOffsets / _TopologyLengths.
-    // This eliminates one List<int> allocation per packet (previously: two new List<int>
-    // per AddPacket call = HIGH-6 fix).
-    private readonly List<int> _FlatTopologyFieldIds = new(256 * 8);
-    private readonly List<int> _FlatTopologyChildCounts = new(256 * 8);
-    private readonly List<int> _TopologyOffsets = new(256);
-    private readonly List<int> _TopologyLengths = new(256);
-
+    private readonly ColumnarPacketBatch _Batch;
     private readonly FieldPresence _FieldPresence;
-    private readonly int _MaxFieldId;
-    private readonly int _MaxPacketsPerBlock;
-    private readonly long _MaxBlockSize;
-
-    // Running estimated serialized size (in bytes) for the current block.
-    // Used to enforce _MaxBlockSize in AddPacket, which was previously never
-    // checked in columnar mode (CRITICAL-2 fix).
-    private long _EstimatedSize;
 
     /// <summary>
     /// Pooled envelope buffer that owns the bytes returned by <see cref="Build"/>.
@@ -53,25 +26,39 @@ internal sealed class ColumnarBlockBuilder : IDisposable
     /// </summary>
     private PooledBuffer? _Envelope;
 
-    /// <summary>
-    /// Creates a new columnar block builder.
-    /// </summary>
-    /// <param name="maxFieldId">Maximum expected field ID.</param>
+    #endregion
+
+    #region Constructor
+
+    /// <summary>Creates a new columnar block builder.</summary>
+    /// <param name="maxFieldId">Maximum expected field ID, sizing the presence bitmap.</param>
     /// <param name="maxPacketsPerBlock">Maximum packets before flush.</param>
     /// <param name="maxBlockSize">Maximum estimated block size before flush.</param>
+    /// <param name="flags">Controls which optional per-packet/per-field data is captured.</param>
+    /// <param name="isTimestampSorted">Whether the caller guarantees non-decreasing packet timestamps.</param>
     internal ColumnarBlockBuilder(
         int maxFieldId,
         int maxPacketsPerBlock = 50000,
-        long maxBlockSize = 16 * 1024 * 1024)
+        long maxBlockSize = 16 * 1024 * 1024,
+        ColumnarDetailFlags flags = ColumnarDetailFlags.All,
+        bool isTimestampSorted = false)
     {
-        _MaxFieldId = maxFieldId;
+        _Batch = new ColumnarPacketBatch(flags, maxPacketsPerBlock, maxBlockSize, isTimestampSorted);
         _FieldPresence = new FieldPresence(maxFieldId);
-        _MaxPacketsPerBlock = maxPacketsPerBlock;
-        _MaxBlockSize = maxBlockSize;
     }
 
-    /// <summary>Number of packets accumulated.</summary>
-    internal int PacketCount => _PacketIds.Count;
+    #endregion
+
+    #region Properties
+
+    /// <summary>Number of packets accumulated in the current block.</summary>
+    internal int PacketCount => _Batch.PacketCount;
+
+    /// <summary>
+    /// In-memory estimate of pending columnar payload size (same basis as flush thresholds).
+    /// Used for live <see cref="IExportByteProgress"/> without filesystem probes.
+    /// </summary>
+    internal long EstimatedPendingBytes => _Batch.EstimatedSizeBytes;
 
     /// <summary>
     /// Minimum timestamp (nanoseconds) in the most recently built block.
@@ -91,90 +78,72 @@ internal sealed class ColumnarBlockBuilder : IDisposable
         get; private set;
     }
 
+    /// <summary>Field presence bitmap for the current block, for trailer aggregation.</summary>
+    internal FieldPresence FieldPresence => _FieldPresence;
+
+    #endregion
+
+    #region Public API
+
     /// <summary>
     /// Adds a packet to the columnar block. Returns <c>true</c> if the block
     /// should be flushed after this packet (packet count or estimated size threshold reached).
     /// </summary>
-    internal bool AddPacket(Packet packet)
-    {
-        _PacketIds.Add(packet.Id.Value);
-        _Timestamps.Add(packet.Timestamp.AsNanos);
-        _InfoStrings.Add(packet.Info);
-
-        // Track estimated size: 16 bytes per packet for IDs/timestamps (encoded varints),
-        // plus the info string. Field values are tracked inside _CollectFieldValues.
-        _EstimatedSize += 16 + packet.Info.Length;
-
-        // Encode topology into flat arrays (no per-packet List<int> allocation).
-        int topoStart = _FlatTopologyFieldIds.Count;
-        TopologyEncoder.Encode(packet.RootField(), _FlatTopologyFieldIds, _FlatTopologyChildCounts);
-        int topoCount = _FlatTopologyFieldIds.Count - topoStart;
-        _TopologyOffsets.Add(topoStart);
-        _TopologyLengths.Add(topoCount);
-        _EstimatedSize += topoCount * 4; // rough: 2 varints per topology entry
-
-        // Collect field values into columns (depth-first traversal)
-        _CollectFieldValues(packet.RootField());
-
-        return PacketCount >= _MaxPacketsPerBlock || _EstimatedSize >= _MaxBlockSize;
-    }
+    internal bool AddPacket(Packet packet) => _Batch.AddPacket(packet);
 
     /// <summary>
-    /// Builds the columnar block as protobuf-encoded bytes.
+    /// Builds the columnar block as protobuf-encoded bytes (PBF columnar wire format).
+    /// Returns a span that is valid until <see cref="Reset"/> or the next <see cref="Build"/> call.
     /// </summary>
     internal ReadOnlySpan<byte> Build()
     {
+        _ComputeTimestampRange();
+        _MarkFieldPresence();
+
         PooledBuffer payload = new(64 * 1024);
 
-        // Block header: packet count, min/max IDs and timestamps
-        ProtobufEncoder.WriteVarintField(ref payload, PbfFieldNumbers.BlockPacketCount, (ulong)PacketCount);
+        int packetCount = PacketCount;
+        ProtobufEncoder.WriteVarintField(ref payload, PbfFieldNumbers.BlockPacketCount, (ulong)packetCount);
 
-        if (PacketCount > 0)
+        if (packetCount > 0)
         {
-            long minId = _PacketIds[0], maxId = _PacketIds[0];
-            long minTs = _Timestamps[0], maxTs = _Timestamps[0];
-            for (int i = 1; i < PacketCount; i++)
+            IReadOnlyList<int> packetIds = _Batch.PacketIds;
+            int minId = packetIds[0], maxId = packetIds[0];
+            for (int i = 1; i < packetCount; i++)
             {
-                if (_PacketIds[i] < minId)
+                if (packetIds[i] < minId)
                 {
-                    minId = _PacketIds[i];
+                    minId = packetIds[i];
                 }
-                if (_PacketIds[i] > maxId)
+                if (packetIds[i] > maxId)
                 {
-                    maxId = _PacketIds[i];
-                }
-                if (_Timestamps[i] < minTs)
-                {
-                    minTs = _Timestamps[i];
-                }
-                if (_Timestamps[i] > maxTs)
-                {
-                    maxTs = _Timestamps[i];
+                    maxId = packetIds[i];
                 }
             }
-            // Expose min/max timestamps so the caller (PbfExporter) can write correct
-            // block-index entries in the trailer even for columnar blocks.
-            MinTimestamp = minTs;
-            MaxTimestamp = maxTs;
             ProtobufEncoder.WriteVarintField(ref payload, PbfFieldNumbers.BlockMinPacketId, (ulong)minId);
             ProtobufEncoder.WriteVarintField(ref payload, PbfFieldNumbers.BlockMaxPacketId, (ulong)maxId);
-            ProtobufEncoder.WriteSint64(ref payload, PbfFieldNumbers.BlockMinTimestamp, minTs);
-            ProtobufEncoder.WriteSint64(ref payload, PbfFieldNumbers.BlockMaxTimestamp, maxTs);
+            ProtobufEncoder.WriteSint64(ref payload, PbfFieldNumbers.BlockMinTimestamp, MinTimestamp);
+            ProtobufEncoder.WriteSint64(ref payload, PbfFieldNumbers.BlockMaxTimestamp, MaxTimestamp);
         }
 
-        // Delta-encode packet IDs (inline, avoids long[] allocation from DeltaEncoder)
-        _WriteColumnSint64(ref payload, 10, CollectionsMarshal.AsSpan(_PacketIds));
+        _WriteDeltaSint64Column(ref payload, PbfFieldNumbers.ColumnarPacketIds, _Batch.PacketIds);
+        _WriteDeltaSint64Column(ref payload, PbfFieldNumbers.ColumnarTimestamps, _Batch.Timestamps);
 
-        // Delta-encode timestamps (inline)
-        _WriteColumnSint64(ref payload, 11, CollectionsMarshal.AsSpan(_Timestamps));
+        if ((_Batch.Flags & ColumnarDetailFlags.IncludeInfo) != 0)
+        {
+            _WriteStringColumn(ref payload, PbfFieldNumbers.ColumnarInfos, _Batch.Infos);
+        }
 
-        // Info strings column
-        _WriteColumnStrings(ref payload, 12, _InfoStrings);
+        if ((_Batch.Flags & ColumnarDetailFlags.IncludeFrameBytes) != 0)
+        {
+            _WriteBytesColumn(ref payload, PbfFieldNumbers.ColumnarFrameBytes, _Batch.FrameBytesList);
+        }
 
-        // Topology columns
-        _WriteTopologyColumns(ref payload);
+        if ((_Batch.Flags & ColumnarDetailFlags.IncludeTopology) != 0)
+        {
+            _WriteTopology(ref payload);
+        }
 
-        // Field value columns
         _WriteFieldColumns(ref payload);
 
         // Wrap in block envelope. Release any previous envelope first (defensive: the
@@ -190,121 +159,131 @@ internal sealed class ColumnarBlockBuilder : IDisposable
         return envelope.WrittenSpan;
     }
 
-    /// <summary>Resets all state for reuse.</summary>
+    /// <summary>Resets all state for reuse by the next block. Field catalog / bag metadata is retained.</summary>
     internal void Reset()
     {
         _Envelope?.Return();
         _Envelope = null;
-        _PacketIds.Clear();
-        _Timestamps.Clear();
-        _InfoStrings.Clear();
-        _FlatTopologyFieldIds.Clear();
-        _FlatTopologyChildCounts.Clear();
-        _TopologyOffsets.Clear();
-        _TopologyLengths.Clear();
-        _EstimatedSize = 0;
+        _Batch.Reset();
         _FieldPresence.Clear();
-        foreach (ColumnBuilder column in _Columns.Values)
-        {
-            column.Reset();
-        }
+        MinTimestamp = 0;
+        MaxTimestamp = 0;
     }
 
-    /// <summary>
-    /// Returns all pooled buffers to the pool.
-    /// Called by <see cref="PbfExporter"/> when the exporter is finished.
-    /// </summary>
+    /// <summary>Returns all pooled buffers and releases the underlying batch.</summary>
     public void Dispose()
     {
         _Envelope?.Return();
         _Envelope = null;
+        _Batch.Dispose();
     }
 
-    /// <summary>Returns the field presence for trailer aggregation.</summary>
-    internal FieldPresence FieldPresence => _FieldPresence;
+    #endregion
 
-    // ========================================================================
-    // Private helpers
-    // ========================================================================
+    #region Private Helpers — Header
 
-    /// <summary>
-    /// Collects field values into column builders for all descendants of <paramref name="rootField"/>.
-    /// Uses the struct-based <see cref="FieldDescendantEnumerator"/> (inline stack, zero-alloc for
-    /// trees up to 16 levels deep) instead of recursion to avoid per-level C# stack frame growth.
-    /// </summary>
-    private void _CollectFieldValues(Field rootField)
+    /// <summary>Computes <see cref="MinTimestamp"/>/<see cref="MaxTimestamp"/> from the current batch.</summary>
+    private void _ComputeTimestampRange()
     {
-        // Descendants() returns FieldDescendantEnumerable whose GetEnumerator() resolves to the
-        // ref-struct FieldDescendantEnumerator via duck-typing — no IEnumerable<Field> boxing.
-        foreach (Field field in rootField.Descendants())
+        IReadOnlyList<long> timestamps = _Batch.Timestamps;
+        if (timestamps.Count == 0)
         {
-            int fieldIdValue = field.FieldId.Value;
+            MinTimestamp = 0;
+            MaxTimestamp = 0;
+            return;
+        }
 
-            // Guard against field IDs outside the configured range. Field IDs >= _MaxFieldId
-            // would corrupt the presence bitmap; throw so the caller's error-tolerance
-            // mechanism skips only this packet rather than silently producing invalid metadata.
-            if ((uint)fieldIdValue >= (uint)_MaxFieldId)
+        long minTs = timestamps[0], maxTs = timestamps[0];
+        for (int i = 1; i < timestamps.Count; i++)
+        {
+            if (timestamps[i] < minTs)
             {
-                throw new ArgumentOutOfRangeException(nameof(rootField),
-                    $"Field ID {fieldIdValue} is outside the PBF field ID range [0, {_MaxFieldId}).");
+                minTs = timestamps[i];
             }
-
-            _FieldPresence.Mark(fieldIdValue);
-
-            ColumnBuilder column = _GetOrCreateColumn(fieldIdValue);
-            FieldValue value = field.Value;
-            string? valueStr = _FormatFieldValue(value);
-            string? customRepresentation = !value.CustomRepresentation.IsNull
-                ? value.CustomRepresentation.AsString : null;
-            LazyString customText = field.CustomText;
-            string? customTextStr = !customText.IsNull ? customText.AsString : null;
-            column.AddRow(valueStr, customRepresentation, customTextStr);
-
-            // Accumulate estimated encoded size contribution for this field value.
-            _EstimatedSize += (valueStr?.Length ?? 0) + (customRepresentation?.Length ?? 0)
-                + (customTextStr?.Length ?? 0) + 4; // 4 = protobuf overhead estimate
+            if (timestamps[i] > maxTs)
+            {
+                maxTs = timestamps[i];
+            }
         }
-    }
-
-    /// <summary>Gets or creates a column builder for the given field ID.</summary>
-    private ColumnBuilder _GetOrCreateColumn(int fieldIdValue)
-    {
-        if (!_Columns.TryGetValue(fieldIdValue, out ColumnBuilder? column))
-        {
-            column = new ColumnBuilder(fieldIdValue);
-            _Columns[fieldIdValue] = column;
-        }
-        return column;
+        MinTimestamp = minTs;
+        MaxTimestamp = maxTs;
     }
 
     /// <summary>
-    /// Writes a delta-encoded sint64 column. The first element is stored as the base
-    /// value (field 1); subsequent elements are stored as deltas from their predecessor
-    /// (field 2). Encoding deltas instead of absolute values produces smaller varints
-    /// for monotonic sequences such as packet IDs and timestamps.
-    /// No intermediate array is allocated; deltas are computed inline (LOW-3 fix).
+    /// Marks every field ID observed in this block as present, so <see cref="PbfExporter"/> can
+    /// merge it into the trailer's global field bitmap. Presence is taken from both topology
+    /// (covers pure <see cref="FieldType.None"/> containers) and field-column bags (covers value
+    /// columns even when <see cref="ColumnarDetailFlags.IncludeTopology"/> is cleared).
     /// </summary>
-    private static void _WriteColumnSint64(
-        ref PooledBuffer buffer, int fieldNumber, ReadOnlySpan<long> values)
+    private void _MarkFieldPresence()
     {
-        if (values.IsEmpty)
+        foreach (TopologyNode node in _Batch.Topology)
+        {
+            if (node.FieldId >= 0)
+            {
+                _FieldPresence.Mark(node.FieldId);
+            }
+        }
+
+        foreach (int fieldIdValue in _Batch.FieldBags.Keys)
+        {
+            if (fieldIdValue >= 0)
+            {
+                _FieldPresence.Mark(fieldIdValue);
+            }
+        }
+    }
+
+    #endregion
+
+    #region Private Helpers — Column Writers
+
+    /// <summary>
+    /// Writes a delta-encoded sint64 column. The first element is the base value (sub-field 1);
+    /// subsequent elements are deltas from their predecessor (sub-field 2). Encoding deltas
+    /// instead of absolute values produces smaller varints for monotonic sequences such as
+    /// packet IDs and timestamps.
+    /// </summary>
+    private static void _WriteDeltaSint64Column(ref PooledBuffer buffer, int fieldNumber, IReadOnlyList<long> values)
+    {
+        if (values.Count == 0)
         {
             return;
         }
 
-        PooledBuffer col = new(values.Length * 2 + 16);
-        ProtobufEncoder.WriteSint64(ref col, 1, values[0]); // base = first value
-        for (int i = 1; i < values.Length; i++)
+        PooledBuffer col = new(values.Count * 2 + 16);
+        ProtobufEncoder.WriteSint64(ref col, 1, values[0]);
+        for (int i = 1; i < values.Count; i++)
         {
-            ProtobufEncoder.WriteSint64(ref col, 2, values[i] - values[i - 1]); // delta
+            ProtobufEncoder.WriteSint64(ref col, 2, values[i] - values[i - 1]);
         }
         ProtobufEncoder.WriteLengthDelimited(ref buffer, fieldNumber, col.WrittenSpan);
         col.Return();
     }
 
-    /// <summary>Writes a string column.</summary>
-    private static void _WriteColumnStrings(
-        ref PooledBuffer buffer, int fieldNumber, List<string> values)
+    /// <summary>
+    /// Writes a delta-encoded sint64 column from <see cref="int"/> values (widened at the wire;
+    /// used for packet IDs which share the Core <see cref="PacketId"/> <see cref="int"/> range).
+    /// </summary>
+    private static void _WriteDeltaSint64Column(ref PooledBuffer buffer, int fieldNumber, IReadOnlyList<int> values)
+    {
+        if (values.Count == 0)
+        {
+            return;
+        }
+
+        PooledBuffer col = new(values.Count * 2 + 16);
+        ProtobufEncoder.WriteSint64(ref col, 1, values[0]);
+        for (int i = 1; i < values.Count; i++)
+        {
+            ProtobufEncoder.WriteSint64(ref col, 2, (long)values[i] - values[i - 1]);
+        }
+        ProtobufEncoder.WriteLengthDelimited(ref buffer, fieldNumber, col.WrittenSpan);
+        col.Return();
+    }
+
+    /// <summary>Writes a repeated string column (one tag+value per row, in row order).</summary>
+    private static void _WriteStringColumn(ref PooledBuffer buffer, int fieldNumber, IReadOnlyList<string> values)
     {
         PooledBuffer col = new(values.Count * 16);
         foreach (string value in values)
@@ -315,80 +294,165 @@ internal sealed class ColumnarBlockBuilder : IDisposable
         col.Return();
     }
 
-    /// <summary>Writes topology columns (field IDs and child counts per packet).</summary>
-    private void _WriteTopologyColumns(ref PooledBuffer buffer)
+    /// <summary>Writes a repeated bytes column. Null entries are written as zero-length byte strings.</summary>
+    private static void _WriteBytesColumn(ref PooledBuffer buffer, int fieldNumber, IReadOnlyList<byte[]> values)
     {
-        PooledBuffer topo = new(PacketCount * 64);
-        for (int i = 0; i < PacketCount; i++)
+        PooledBuffer col = new(values.Count * 16);
+        foreach (byte[] value in values)
         {
-            // Per-packet topology as nested message, using flat topology arrays
-            // (no per-packet List<int> allocation).
-            PooledBuffer packetTopo = new(64);
-            int offset = _TopologyOffsets[i];
-            int length = _TopologyLengths[i];
-            for (int j = offset; j < offset + length; j++)
-            {
-                ProtobufEncoder.WriteVarintField(ref packetTopo, 1, (ulong)_FlatTopologyFieldIds[j]);
-            }
-            for (int j = offset; j < offset + length; j++)
-            {
-                ProtobufEncoder.WriteVarintField(ref packetTopo, 2, (ulong)_FlatTopologyChildCounts[j]);
-            }
-            ProtobufEncoder.WriteLengthDelimited(ref topo, 1, packetTopo.WrittenSpan);
-            packetTopo.Return();
+            ProtobufEncoder.WriteLengthDelimited(ref col, 1, value);
         }
-        // Topology column at field 13
-        ProtobufEncoder.WriteLengthDelimited(ref buffer, 13, topo.WrittenSpan);
+        ProtobufEncoder.WriteLengthDelimited(ref buffer, fieldNumber, col.WrittenSpan);
+        col.Return();
+    }
+
+    /// <summary>Writes the <see cref="ColumnarPacketBatch.Topology"/> rows as four parallel columns.</summary>
+    private void _WriteTopology(ref PooledBuffer buffer)
+    {
+        IReadOnlyList<TopologyNode> topology = _Batch.Topology;
+        if (topology.Count == 0)
+        {
+            return;
+        }
+
+        PooledBuffer topo = new(topology.Count * 4);
+
+        // Packet IDs: delta-encoded (topology rows are grouped by ascending packet insertion order).
+        PooledBuffer packetIdCol = new(topology.Count * 2 + 16);
+        ProtobufEncoder.WriteSint64(ref packetIdCol, 1, topology[0].PacketId);
+        for (int i = 1; i < topology.Count; i++)
+        {
+            ProtobufEncoder.WriteSint64(ref packetIdCol, 2, topology[i].PacketId - topology[i - 1].PacketId);
+        }
+        ProtobufEncoder.WriteLengthDelimited(ref topo, PbfFieldNumbers.TopologyPacketIds, packetIdCol.WrittenSpan);
+        packetIdCol.Return();
+
+        foreach (TopologyNode node in topology)
+        {
+            ProtobufEncoder.WriteVarintField(ref topo, PbfFieldNumbers.TopologyNodeIds, (ulong)node.NodeId);
+        }
+        foreach (TopologyNode node in topology)
+        {
+            ProtobufEncoder.WriteVarintField(ref topo, PbfFieldNumbers.TopologyFieldIds, (ulong)node.FieldId);
+        }
+        foreach (TopologyNode node in topology)
+        {
+            ProtobufEncoder.WriteSint64(ref topo, PbfFieldNumbers.TopologyParentNodeIds, node.ParentNodeId);
+        }
+
+        ProtobufEncoder.WriteLengthDelimited(ref buffer, PbfFieldNumbers.ColumnarTopology, topo.WrittenSpan);
         topo.Return();
     }
 
-    /// <summary>Writes all field value columns.</summary>
+    /// <summary>Writes every field's <see cref="FieldColumnBag"/> as a <c>FieldColumn</c> sub-message.</summary>
     private void _WriteFieldColumns(ref PooledBuffer buffer)
     {
-        foreach (KeyValuePair<int, ColumnBuilder> entry in _Columns)
+        foreach (KeyValuePair<int, FieldColumnBag> entry in _Batch.FieldBags)
         {
+            FieldColumnBag bag = entry.Value;
+            if (bag.RowCount == 0)
+            {
+                continue;
+            }
+
             PooledBuffer colBuf = new(256);
-            ColumnBuilder column = entry.Value;
+            ProtobufEncoder.WriteVarintField(ref colBuf, PbfFieldNumbers.ColumnFieldId, (ulong)bag.FieldIdValue);
+            ProtobufEncoder.WriteVarintField(ref colBuf, PbfFieldNumbers.ColumnFieldType, (ulong)bag.FieldType);
 
-            // Field ID for this column
-            ProtobufEncoder.WriteVarintField(ref colBuf, 1, (ulong)column.FieldIdValue);
-
-            // Values
-            IReadOnlyList<string?> values = column.Values;
-            for (int i = 0; i < values.Count; i++)
+            _WriteDeltaSint64Column(ref colBuf, PbfFieldNumbers.ColumnPacketIds, bag.PacketIds);
+            foreach (int nodeId in bag.NodeIds)
             {
-                if (values[i] is not null)
-                {
-                    ProtobufEncoder.WriteString(ref colBuf, 2, values[i]);
-                }
+                ProtobufEncoder.WriteVarintField(ref colBuf, PbfFieldNumbers.ColumnNodeIds, (ulong)nodeId);
             }
 
-            // Custom representations
-            IReadOnlyList<string?> customRepresentations = column.CustomRepresentations;
-            for (int i = 0; i < customRepresentations.Count; i++)
+            _WriteTypedValues(ref colBuf, bag);
+
+            if ((_Batch.Flags & ColumnarDetailFlags.IncludeCustomRepresentation) != 0)
             {
-                if (customRepresentations[i] is not null)
-                {
-                    ProtobufEncoder.WriteString(ref colBuf, 3, customRepresentations[i]);
-                }
+                _WriteNullableStringColumn(ref colBuf, PbfFieldNumbers.ColumnCustomRepresentations, bag.CustomRepresentations);
             }
 
-            // Custom texts
-            IReadOnlyList<string?> customTexts = column.CustomTexts;
-            for (int i = 0; i < customTexts.Count; i++)
+            if ((_Batch.Flags & ColumnarDetailFlags.IncludeCustomText) != 0)
             {
-                if (customTexts[i] is not null)
-                {
-                    ProtobufEncoder.WriteString(ref colBuf, 4, customTexts[i]);
-                }
+                _WriteNullableStringColumn(ref colBuf, PbfFieldNumbers.ColumnCustomTexts, bag.CustomTexts);
             }
 
-            // Column at field 14
-            ProtobufEncoder.WriteLengthDelimited(ref buffer, 14, colBuf.WrittenSpan);
+            ProtobufEncoder.WriteLengthDelimited(ref buffer, PbfFieldNumbers.ColumnarFieldColumns, colBuf.WrittenSpan);
             colBuf.Return();
         }
     }
 
-    /// <summary>Formats a field value as string for columnar storage.</summary>
-    private static string? _FormatFieldValue(FieldValue value) => FieldValueFormatter.Format(value);
+    /// <summary>Writes the type-specific value column matching <see cref="FieldColumnBag.FieldType"/>.</summary>
+    private static void _WriteTypedValues(ref PooledBuffer colBuf, FieldColumnBag bag)
+    {
+        switch (bag.FieldType)
+        {
+            case FieldType.Bool:
+                foreach (bool value in bag.BoolValues)
+                {
+                    ProtobufEncoder.WriteBool(ref colBuf, PbfFieldNumbers.ColumnBoolValues, value);
+                }
+                break;
+            case FieldType.I64:
+                foreach (long value in bag.I64Values)
+                {
+                    ProtobufEncoder.WriteSint64(ref colBuf, PbfFieldNumbers.ColumnI64Values, value);
+                }
+                break;
+            case FieldType.U64:
+                foreach (ulong value in bag.U64Values)
+                {
+                    ProtobufEncoder.WriteVarintField(ref colBuf, PbfFieldNumbers.ColumnU64Values, value);
+                }
+                break;
+            case FieldType.F64:
+                foreach (double value in bag.F64Values)
+                {
+                    ProtobufEncoder.WriteDouble(ref colBuf, PbfFieldNumbers.ColumnF64Values, value);
+                }
+                break;
+            case FieldType.Timestamp:
+                foreach (long value in bag.TimestampValues)
+                {
+                    ProtobufEncoder.WriteSint64(ref colBuf, PbfFieldNumbers.ColumnTimestampValues, value);
+                }
+                break;
+            case FieldType.String:
+                _WriteNullableStringColumn(ref colBuf, PbfFieldNumbers.ColumnStringValues, bag.StringValues);
+                break;
+            case FieldType.Bytes:
+            case FieldType.MacAddress:
+            case FieldType.IPv4Address:
+            case FieldType.IPv6Address:
+            case FieldType.Eui64:
+            case FieldType.Uuid:
+                foreach (byte[]? value in bag.BytesValues)
+                {
+                    ProtobufEncoder.WriteLengthDelimited(ref colBuf, PbfFieldNumbers.ColumnBytesValues, value ?? []);
+                }
+                break;
+            default:
+                throw new InvalidOperationException(
+                    $"Field {bag.FieldIdValue} has unsupported column type {bag.FieldType}.");
+        }
+    }
+
+    /// <summary>Writes a repeated nullable string column, emitting null entries as empty strings.</summary>
+    private static void _WriteNullableStringColumn(ref PooledBuffer buffer, int fieldNumber, IReadOnlyList<string?> values)
+    {
+        if (values.Count == 0)
+        {
+            return;
+        }
+
+        PooledBuffer col = new(values.Count * 16);
+        foreach (string? value in values)
+        {
+            ProtobufEncoder.WriteString(ref col, 1, value ?? string.Empty);
+        }
+        ProtobufEncoder.WriteLengthDelimited(ref buffer, fieldNumber, col.WrittenSpan);
+        col.Return();
+    }
+
+    #endregion
 }

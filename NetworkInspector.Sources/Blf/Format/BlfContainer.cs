@@ -45,7 +45,7 @@ internal static class BlfContainer
         long maxUncompressedSize = 0)
     {
         // Guard against untrusted uncompressedSize before any allocation.
-        // The check is skipped when maxUncompressedSize == 0 (default, limit inactive).
+        // The check is skipped when maxUncompressedSize == 0 (limit inactive).
         if (maxUncompressedSize > 0 && uncompressedSize > (ulong)maxUncompressedSize)
         {
             throw new BlfDecompressionLimitExceededException(maxUncompressedSize, uncompressedSize);
@@ -53,6 +53,11 @@ internal static class BlfContainer
 
         if (compressionMethod == BlfConstants.CompressionNone)
         {
+            if (maxUncompressedSize > 0 && compressedData.Length > maxUncompressedSize)
+            {
+                throw new BlfDecompressionLimitExceededException(maxUncompressedSize, compressedData.Length);
+            }
+
             // Uncompressed: just copy
             return compressedData.ToArray();
         }

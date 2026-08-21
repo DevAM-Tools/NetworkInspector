@@ -65,11 +65,11 @@ internal sealed class FieldIteratorTests
 
             Field root = packet.RootField();
             // Navigate past packet container (first child) to eth container (second child)
-            root.TryGetFirstChild(out Field packetContainer);
+            root.TryGetFirstChild(out Field packetContainer, materialize: true); // materialize: true — navigate/populate children including lazy
             packetContainer.TryGetNext(out Field container); // eth container (lazy)
 
             int childCount = 0;
-            foreach (Field _ in container.Children())
+            foreach (Field _ in container.Children(materialize: true)) // materialize: true — navigate/populate children including lazy
             {
                 childCount++;
             }
@@ -90,12 +90,12 @@ internal sealed class FieldIteratorTests
 
             Field root = packet.RootField();
             // Navigate past packet container to eth container
-            root.TryGetFirstChild(out Field packetContainer);
+            root.TryGetFirstChild(out Field packetContainer, materialize: true); // materialize: true — navigate/populate children including lazy
             packetContainer.TryGetNext(out Field container);
             bool lazyBefore = container.NeedsLazyMaterialization;
 
             // Iterating with materialize=true (default) populates the container
-            foreach (Field _ in container.Children())
+            foreach (Field _ in container.Children(materialize: true)) // materialize: true — navigate/populate children including lazy
             {
             }
 
@@ -117,12 +117,12 @@ internal sealed class FieldIteratorTests
 
             Field root = packet.RootField();
             // Navigate past packet container to eth container (lazy)
-            root.TryGetFirstChild(out Field packetContainer);
+            root.TryGetFirstChild(out Field packetContainer, materialize: true); // materialize: true — navigate/populate children including lazy
             packetContainer.TryGetNext(out Field container);
 
             // Iterate container's children without materializing
             int childCount = 0;
-            foreach (Field _ in container.Children(materialize: false))
+            foreach (Field _ in container.Children(materialize: false)) // materialize: false — eager-only; do not populate lazy containers
             {
                 childCount++;
             }
@@ -145,7 +145,7 @@ internal sealed class FieldIteratorTests
             // Root itself is not lazy — iterating its eager children works
             Field root = packet.RootField();
             int childCount = 0;
-            foreach (Field _ in root.Children(materialize: false))
+            foreach (Field _ in root.Children(materialize: false)) // materialize: false — eager-only; do not populate lazy containers
             {
                 childCount++;
             }
@@ -170,7 +170,7 @@ internal sealed class FieldIteratorTests
 
             Field root = packet.RootField();
             int count = 0;
-            foreach (Field _ in root.Descendants())
+            foreach (Field _ in root.Descendants(materialize: true)) // materialize: true — navigate/populate children including lazy
             {
                 count++;
             }
@@ -191,7 +191,7 @@ internal sealed class FieldIteratorTests
 
             Field root = packet.RootField();
             int count = 0;
-            foreach (Field _ in root.Descendants(materialize: false))
+            foreach (Field _ in root.Descendants(materialize: false)) // materialize: false — eager-only; do not populate lazy containers
             {
                 count++;
             }
@@ -213,7 +213,7 @@ internal sealed class FieldIteratorTests
 
             Field root = packet.RootField();
             bool rootFound = false;
-            foreach (Field f in root.Descendants())
+            foreach (Field f in root.Descendants(materialize: true)) // materialize: true — navigate/populate children including lazy
             {
                 if (f.IsRoot)
                 {
@@ -240,7 +240,7 @@ internal sealed class FieldIteratorTests
             Packet packet = _ParseFrame(stack, data, protoId);
 
             int count = 0;
-            foreach (Field _ in packet.IterFieldsDfs())
+            foreach (Field _ in packet.IterFieldsDfs(materialize: true)) // materialize: true — navigate/populate children including lazy
             {
                 count++;
             }
@@ -260,7 +260,7 @@ internal sealed class FieldIteratorTests
             Packet packet = _ParseFrame(stack, data, protoId);
 
             int count = 0;
-            foreach (Field _ in packet.IterFieldsDfs(materialize: false))
+            foreach (Field _ in packet.IterFieldsDfs(materialize: false)) // materialize: false — eager-only; do not populate lazy containers
             {
                 count++;
             }
@@ -281,7 +281,7 @@ internal sealed class FieldIteratorTests
             Packet packet = _ParseFrame(stack, data, protoId);
 
             bool rootFound = false;
-            foreach (Field f in packet.IterFieldsDfs())
+            foreach (Field f in packet.IterFieldsDfs(materialize: true)) // materialize: true — navigate/populate children including lazy
             {
                 if (f.IsRoot)
                 {
@@ -303,7 +303,7 @@ internal sealed class FieldIteratorTests
             Packet packet = _ParseFrame(stack, data, protoId);
 
             List<FieldId> order = [];
-            foreach (Field f in packet.IterFieldsDfs())
+            foreach (Field f in packet.IterFieldsDfs(materialize: true)) // materialize: true — navigate/populate children including lazy
             {
                 order.Add(f.FieldId);
             }
@@ -334,7 +334,7 @@ internal sealed class FieldIteratorTests
             Packet packet = _ParseFrame(stack, data, protoId);
 
             int count = 0;
-            foreach (Field _ in packet.IterFieldsFlat())
+            foreach (Field _ in packet.IterFieldsFlat(materialize: true)) // materialize: true — navigate/populate children including lazy
             {
                 count++;
             }
@@ -354,7 +354,7 @@ internal sealed class FieldIteratorTests
             Packet packet = _ParseFrame(stack, data, protoId);
 
             int count = 0;
-            foreach (Field _ in packet.IterFieldsFlat(materialize: false))
+            foreach (Field _ in packet.IterFieldsFlat(materialize: false)) // materialize: false — eager-only; do not populate lazy containers
             {
                 count++;
             }
@@ -374,7 +374,7 @@ internal sealed class FieldIteratorTests
             byte[] data = new byte[14];
             Packet packet = _ParseFrame(stack, data, protoId);
 
-            foreach (Field _ in packet.IterFieldsFlat())
+            foreach (Field _ in packet.IterFieldsFlat(materialize: true)) // materialize: true — navigate/populate children including lazy
             {
             }
 
@@ -393,7 +393,7 @@ internal sealed class FieldIteratorTests
             Packet packet = _ParseFrame(stack, data, protoId);
 
             List<ushort> indices = [];
-            foreach (Field f in packet.IterFieldsFlat())
+            foreach (Field f in packet.IterFieldsFlat(materialize: true)) // materialize: true — navigate/populate children including lazy
             {
                 indices.Add(f.StorageIndex);
             }
@@ -419,21 +419,40 @@ internal sealed class FieldIteratorTests
             byte[] data = new byte[14];
             Packet packet = _ParseFrame(stack, data, protoId);
 
-            // Use the packet's root MutField to verify MutField iteration
-            // Navigate past packet container to eth container
-            Field root = packet.RootField();
-            root.TryGetFirstChild(out Field packetContainer);
-            packetContainer.TryGetNext(out Field container);
+            // Navigate past packet container to eth container via MutField APIs
+            MutField root = packet.RootFieldMut();
+            root.TryGetFirstChild(out MutField packetContainer, materialize: true); // materialize: true — navigate/populate children including lazy
+            packetContainer.TryGetNext(out MutField container);
 
-            // Access via AsField → get same result as Field.Children()
             int count = 0;
-            foreach (Field _ in container.Children())
+            foreach (MutField _ in container.Children(materialize: true)) // materialize: true — navigate/populate children including lazy
             {
                 count++;
             }
 
             await Assert.That(count).IsEqualTo(3);
             await Assert.That(proto.PopulateCallCount).IsEqualTo(1);
+        }
+    }
+
+    [Test]
+    public async Task MutField_Children_StructEnumerator_EmptyParent_ReturnsFalseAgain()
+    {
+        (Stack? stack, _, ProtocolId protoId) = _BuildStack();
+        using (stack)
+        {
+            Packet packet = _ParseFrame(stack, new byte[14], protoId);
+            MutField root = packet.RootFieldMut();
+            root.TryGetFirstChild(out MutField packetContainer, materialize: true);
+            packetContainer.TryGetNext(out MutField container);
+            container.TryGetLastChild(out MutField leaf, materialize: true);
+
+            MutFieldChildEnumerator enumerator = leaf.Children(materialize: false).GetEnumerator();
+            bool first = enumerator.MoveNext();
+            bool second = enumerator.MoveNext();
+
+            await Assert.That(first).IsFalse();
+            await Assert.That(second).IsFalse();
         }
     }
 
@@ -474,12 +493,12 @@ internal sealed class FieldIteratorTests
         {
             Packet packet = _ParseFrame(stack, new byte[14], protoId);
             Field root = packet.RootField();
-            root.TryGetFirstChild(out Field packetContainer);
+            root.TryGetFirstChild(out Field packetContainer, materialize: true); // materialize: true — navigate/populate children including lazy
             packetContainer.TryGetNext(out Field container);
-            container.TryGetLastChild(out Field leaf);
+            container.TryGetLastChild(out Field leaf, materialize: true); // materialize: true — navigate/populate children including lazy
 
-            await Assert.That(leaf.TryGetFirstChild(out _)).IsFalse();
-            await Assert.That(leaf.TryGetLastChild(out _)).IsFalse();
+            await Assert.That(leaf.TryGetFirstChild(out _, materialize: true)).IsFalse(); // materialize: true — navigate/populate children including lazy
+            await Assert.That(leaf.TryGetLastChild(out _, materialize: true)).IsFalse(); // materialize: true — navigate/populate children including lazy
             await Assert.That(leaf.TryGetNext(out _)).IsFalse();
             await Assert.That(leaf.Value.Type).IsNotEqualTo(FieldType.None);
         }
@@ -493,10 +512,10 @@ internal sealed class FieldIteratorTests
         {
             Packet packet = _ParseFrame(stack, new byte[14], protoId);
             Field root = packet.RootField();
-            root.TryGetFirstChild(out Field packetContainer);
+            root.TryGetFirstChild(out Field packetContainer, materialize: true); // materialize: true — navigate/populate children including lazy
             packetContainer.TryGetNext(out Field container);
 
-            await Assert.That(container.TryGetLastChild(out Field lastChild)).IsTrue();
+            await Assert.That(container.TryGetLastChild(out Field lastChild, materialize: true)).IsTrue(); // materialize: true — navigate/populate children including lazy
             await Assert.That(lastChild.TryGetPrev(out Field prev)).IsTrue();
             await Assert.That(prev.TryGetNext(out Field next)).IsTrue();
             await Assert.That(next.FieldId).IsEqualTo(lastChild.FieldId);
@@ -532,10 +551,10 @@ internal sealed class FieldIteratorTests
         {
             Packet packet = _ParseFrame(stack, new byte[14], protoId);
             Field root = packet.RootField();
-            root.TryGetFirstChild(out Field packetContainer);
+            root.TryGetFirstChild(out Field packetContainer, materialize: true); // materialize: true — navigate/populate children including lazy
             packetContainer.TryGetNext(out Field container);
 
-            IEnumerable nonGeneric = container.Children();
+            IEnumerable nonGeneric = container.Children(materialize: true); // materialize: true — navigate/populate children including lazy
             IEnumerator enumerator = nonGeneric.GetEnumerator();
             bool moved = enumerator.MoveNext();
             _ = enumerator.Current;
@@ -557,10 +576,10 @@ internal sealed class FieldIteratorTests
         {
             Packet packet = _ParseFrame(stack, new byte[14], protoId);
             Field root = packet.RootField();
-            root.TryGetFirstChild(out Field packetContainer);
+            root.TryGetFirstChild(out Field packetContainer, materialize: true); // materialize: true — navigate/populate children including lazy
             packetContainer.TryGetNext(out Field container);
 
-            IEnumerable<Field> enumerable = container.Children();
+            IEnumerable<Field> enumerable = container.Children(materialize: true); // materialize: true — navigate/populate children including lazy
             using IEnumerator<Field> enumerator = enumerable.GetEnumerator();
             int count = 0;
             while (enumerator.MoveNext())
@@ -582,10 +601,10 @@ internal sealed class FieldIteratorTests
         {
             Packet packet = _ParseFrame(stack, new byte[14], protoId);
             Field root = packet.RootField();
-            root.TryGetFirstChild(out Field packetContainer);
+            root.TryGetFirstChild(out Field packetContainer, materialize: true); // materialize: true — navigate/populate children including lazy
             packetContainer.TryGetNext(out Field container);
 
-            FieldChildEnumerator enumerator = container.Children().GetEnumerator();
+            FieldChildEnumerator enumerator = container.Children(materialize: true).GetEnumerator(); // materialize: true — navigate/populate children including lazy
             int count = 0;
             while (enumerator.MoveNext())
             {
@@ -606,7 +625,7 @@ internal sealed class FieldIteratorTests
         using (stack)
         {
             Packet packet = _ParseFrame(stack, new byte[14], protoId);
-            IEnumerable nonGeneric = packet.RootField().Descendants();
+            IEnumerable nonGeneric = packet.RootField().Descendants(materialize: true); // materialize: true — navigate/populate children including lazy
             IEnumerator enumerator = nonGeneric.GetEnumerator();
             bool moved = enumerator.MoveNext();
             if (enumerator is IDisposable disposable)
@@ -625,7 +644,7 @@ internal sealed class FieldIteratorTests
         using (stack)
         {
             Packet packet = _ParseFrame(stack, new byte[14], protoId);
-            IEnumerable nonGeneric = packet.IterFieldsDfs();
+            IEnumerable nonGeneric = packet.IterFieldsDfs(materialize: true); // materialize: true — navigate/populate children including lazy
             IEnumerator enumerator = nonGeneric.GetEnumerator();
             bool moved = enumerator.MoveNext();
             if (enumerator is IDisposable disposable)
@@ -644,7 +663,7 @@ internal sealed class FieldIteratorTests
         using (stack)
         {
             Packet packet = _ParseFrame(stack, new byte[14], protoId);
-            IEnumerable nonGeneric = packet.IterFieldsFlat();
+            IEnumerable nonGeneric = packet.IterFieldsFlat(materialize: true); // materialize: true — navigate/populate children including lazy
             IEnumerator enumerator = nonGeneric.GetEnumerator();
             bool moved = enumerator.MoveNext();
             if (enumerator is IDisposable disposable)
@@ -697,10 +716,10 @@ internal sealed class FieldIteratorTests
         {
             Packet packet = _ParseFrame(stack, new byte[14], protoId);
             Field root = packet.RootField();
-            root.TryGetFirstChild(out Field packetContainer);
+            root.TryGetFirstChild(out Field packetContainer, materialize: true); // materialize: true — navigate/populate children including lazy
             packetContainer.TryGetNext(out Field container);
 
-            IEnumerable<Field> enumerable = container.Children();
+            IEnumerable<Field> enumerable = container.Children(materialize: true); // materialize: true — navigate/populate children including lazy
             await Assert.That(enumerable.Count()).IsEqualTo(3);
 
             using IEnumerator<Field> enumerator = enumerable.GetEnumerator();
@@ -722,7 +741,7 @@ internal sealed class FieldIteratorTests
         using (stack)
         {
             Packet packet = _ParseFrame(stack, new byte[14], protoId);
-            IEnumerable<Field> enumerable = packet.RootField().Descendants();
+            IEnumerable<Field> enumerable = packet.RootField().Descendants(materialize: true); // materialize: true — navigate/populate children including lazy
 
             await Assert.That(enumerable.Count()).IsEqualTo(9);
 
@@ -741,7 +760,7 @@ internal sealed class FieldIteratorTests
         using (stack)
         {
             Packet packet = _ParseFrame(stack, new byte[14], protoId);
-            IEnumerable<Field> enumerable = packet.IterFieldsDfs();
+            IEnumerable<Field> enumerable = packet.IterFieldsDfs(materialize: true); // materialize: true — navigate/populate children including lazy
 
             await Assert.That(enumerable.Count()).IsGreaterThan(5);
 
@@ -760,7 +779,7 @@ internal sealed class FieldIteratorTests
         using (stack)
         {
             Packet packet = _ParseFrame(stack, new byte[14], protoId);
-            IEnumerable<Field> enumerable = packet.IterFieldsFlat();
+            IEnumerable<Field> enumerable = packet.IterFieldsFlat(materialize: true); // materialize: true — navigate/populate children including lazy
 
             await Assert.That(enumerable.Count()).IsGreaterThan(5);
 
@@ -784,11 +803,11 @@ internal sealed class FieldIteratorTests
         {
             Packet packet = _ParseFrame(stack, new byte[14], protoId);
             Field root = packet.RootField();
-            root.TryGetFirstChild(out Field packetContainer);
+            root.TryGetFirstChild(out Field packetContainer, materialize: true); // materialize: true — navigate/populate children including lazy
             packetContainer.TryGetNext(out Field container);
-            container.TryGetLastChild(out Field leaf);
+            container.TryGetLastChild(out Field leaf, materialize: true); // materialize: true — navigate/populate children including lazy
 
-            FieldChildEnumerator enumerator = leaf.Children().GetEnumerator();
+            FieldChildEnumerator enumerator = leaf.Children(materialize: true).GetEnumerator(); // materialize: true — navigate/populate children including lazy
             bool first = enumerator.MoveNext();
             bool second = enumerator.MoveNext();
 
@@ -805,16 +824,16 @@ internal sealed class FieldIteratorTests
         {
             Packet packet = _ParseFrame(stack, new byte[14], protoId);
             Field root = packet.RootField();
-            root.TryGetFirstChild(out Field packetContainer);
+            root.TryGetFirstChild(out Field packetContainer, materialize: true); // materialize: true — navigate/populate children including lazy
             packetContainer.TryGetNext(out Field container);
 
             int count = 0;
-            foreach (Field _ in container.Children())
+            foreach (Field _ in container.Children(materialize: true)) // materialize: true — navigate/populate children including lazy
             {
                 count++;
             }
 
-            FieldChildEnumerator tail = container.Children().GetEnumerator();
+            FieldChildEnumerator tail = container.Children(materialize: true).GetEnumerator(); // materialize: true — navigate/populate children including lazy
             while (tail.MoveNext())
             {
             }
@@ -832,7 +851,7 @@ internal sealed class FieldIteratorTests
         using (stack)
         {
             Packet packet = _ParseFrame(stack, new byte[14], protoId);
-            IEnumerable nonGeneric = packet.RootField().Children();
+            IEnumerable nonGeneric = packet.RootField().Children(materialize: true); // materialize: true — navigate/populate children including lazy
             IEnumerator enumerator = nonGeneric.GetEnumerator();
             bool moved = enumerator.MoveNext();
             object current = enumerator.Current;
@@ -854,7 +873,7 @@ internal sealed class FieldIteratorTests
         using (stack)
         {
             Packet packet = _ParseFrame(stack, new byte[14], protoId);
-            IEnumerable nonGeneric = packet.RootField().Descendants();
+            IEnumerable nonGeneric = packet.RootField().Descendants(materialize: true); // materialize: true — navigate/populate children including lazy
             IEnumerator enumerator = nonGeneric.GetEnumerator();
             bool moved = enumerator.MoveNext();
             if (enumerator is IDisposable disposable)
@@ -873,7 +892,7 @@ internal sealed class FieldIteratorTests
         using (stack)
         {
             Packet packet = _ParseFrame(stack, new byte[14], protoId);
-            IEnumerable nonGeneric = packet.IterFieldsDfs();
+            IEnumerable nonGeneric = packet.IterFieldsDfs(materialize: true); // materialize: true — navigate/populate children including lazy
             IEnumerator enumerator = nonGeneric.GetEnumerator();
             bool moved = enumerator.MoveNext();
             if (enumerator is IDisposable disposable)
@@ -892,7 +911,7 @@ internal sealed class FieldIteratorTests
         using (stack)
         {
             Packet packet = _ParseFrame(stack, new byte[14], protoId);
-            IEnumerable nonGeneric = packet.IterFieldsFlat();
+            IEnumerable nonGeneric = packet.IterFieldsFlat(materialize: true); // materialize: true — navigate/populate children including lazy
             IEnumerator enumerator = nonGeneric.GetEnumerator();
             bool moved = enumerator.MoveNext();
             if (enumerator is IDisposable disposable)
@@ -912,11 +931,11 @@ internal sealed class FieldIteratorTests
         {
             Packet packet = _ParseFrame(stack, new byte[14], protoId);
             Field root = packet.RootField();
-            root.TryGetFirstChild(out Field packetContainer);
+            root.TryGetFirstChild(out Field packetContainer, materialize: true); // materialize: true — navigate/populate children including lazy
             packetContainer.TryGetNext(out Field container);
 
-            await Assert.That(container.HasChildren).IsTrue();
-            await Assert.That(container.ChildCount).IsEqualTo((ushort)3);
+            await Assert.That(container.HasChildren(materialize: true)).IsTrue(); // materialize: true — navigate/populate children including lazy
+            await Assert.That(container.ChildCount(materialize: true)).IsEqualTo((ushort)3); // materialize: true — navigate/populate children including lazy
         }
     }
 

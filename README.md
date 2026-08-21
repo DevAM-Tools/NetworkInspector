@@ -10,6 +10,9 @@ High-performance packet analysis for .NET 10 with a modular package ecosystem fo
 [![NuGet](https://img.shields.io/nuget/v/NetworkInspector.FrameBuilder?label=NetworkInspector.FrameBuilder)](https://www.nuget.org/packages/NetworkInspector.FrameBuilder)
 [![NuGet](https://img.shields.io/nuget/v/NetworkInspector.Sources?label=NetworkInspector.Sources)](https://www.nuget.org/packages/NetworkInspector.Sources)
 [![NuGet](https://img.shields.io/nuget/v/NetworkInspector.Exporters?label=NetworkInspector.Exporters)](https://www.nuget.org/packages/NetworkInspector.Exporters)
+[![NuGet](https://img.shields.io/nuget/v/NetworkInspector.Exporters.DuckDb?label=NetworkInspector.Exporters.DuckDb)](https://www.nuget.org/packages/NetworkInspector.Exporters.DuckDb)
+[![NuGet](https://img.shields.io/nuget/v/NetworkInspector.Sessions?label=NetworkInspector.Sessions)](https://www.nuget.org/packages/NetworkInspector.Sessions)
+[![NuGet](https://img.shields.io/nuget/v/NetworkInspector.CLI?label=NetworkInspector.CLI)](https://www.nuget.org/packages/NetworkInspector.CLI)
 
 ## What This Is
 
@@ -42,6 +45,7 @@ Add workflow packages as required:
 ```bash
 dotnet add package NetworkInspector.Sources
 dotnet add package NetworkInspector.Exporters
+dotnet add package NetworkInspector.Exporters.DuckDb
 dotnet add package NetworkInspector.Values
 dotnet add package NetworkInspector.FrameBuilder
 ```
@@ -163,9 +167,11 @@ Best for:
 | NetworkInspector.Core | Build parser stack and parse frames to packets | [NetworkInspector.Core/README.md](NetworkInspector.Core/README.md) |
 | NetworkInspector.Protocols | Register built-in dissectors | [NetworkInspector.Protocols/README.md](NetworkInspector.Protocols/README.md) |
 | NetworkInspector.Sources | Read captures from PCAP/PCAPNG/BLF/ASC | [NetworkInspector.Sources/README.md](NetworkInspector.Sources/README.md) |
-| NetworkInspector.Exporters | Write PCAPNG/BLF/ASC/JSON/PBF/CSV/Text | [NetworkInspector.Exporters/README.md](NetworkInspector.Exporters/README.md) |
+| NetworkInspector.Exporters | Write PCAPNG/BLF/ASC/JSON/PBF/CSV/Text/Parquet | [NetworkInspector.Exporters/README.md](NetworkInspector.Exporters/README.md) |
+| NetworkInspector.Exporters.DuckDb | Write DuckDB (`.duckdb`) from parsed packets | [NetworkInspector.Exporters.DuckDb/README.md](NetworkInspector.Exporters.DuckDb/README.md) |
 | NetworkInspector.Values | Use typed addresses and timestamps | [NetworkInspector.Values/README.md](NetworkInspector.Values/README.md) |
 | NetworkInspector.FrameBuilder | Construct protocol stacks into wire frames | [NetworkInspector.FrameBuilder/README.md](NetworkInspector.FrameBuilder/README.md) |
+| NetworkInspector.Sessions | Orchestrate sources, stack parsing, listeners, and jobs | [NetworkInspector.Sessions/README.md](NetworkInspector.Sessions/README.md) |
 | NetworkInspector.CLI | Convert/export from the command line (`ni`) | [NetworkInspector.CLI/README.md](NetworkInspector.CLI/README.md) |
 | NetworkInspector.Generators | Source generation bundled with Core | [NetworkInspector.Generators/README.md](NetworkInspector.Generators/README.md) |
 
@@ -211,6 +217,8 @@ For full and current protocol list, see [NetworkInspector.Protocols/README.md](N
 | NetworkInspector.FrameBuilder | <https://www.nuget.org/packages/NetworkInspector.FrameBuilder> |
 | NetworkInspector.Sources | <https://www.nuget.org/packages/NetworkInspector.Sources> |
 | NetworkInspector.Exporters | <https://www.nuget.org/packages/NetworkInspector.Exporters> |
+| NetworkInspector.Exporters.DuckDb | <https://www.nuget.org/packages/NetworkInspector.Exporters.DuckDb> |
+| NetworkInspector.Sessions | <https://www.nuget.org/packages/NetworkInspector.Sessions> |
 | NetworkInspector.CLI | <https://www.nuget.org/packages/NetworkInspector.CLI> |
 
 ## License

@@ -112,6 +112,22 @@ internal sealed class IdTypeTests
         await Assert.That(a != sameAsA).IsFalse();
     }
 
+    [Test]
+    public async Task PacketId_OutOfRangeConstruction_Throws()
+    {
+        await Assert
+            .That(() => new PacketId(Ids.ArrayIndexIdRange.MaxValue + 1))
+            .Throws<ArgumentOutOfRangeException>();
+    }
+
+    [Test]
+    public async Task FieldId_OutOfRangeConstruction_Throws()
+    {
+        await Assert
+            .That(() => new FieldId(Ids.ArrayIndexIdRange.MaxValue + 1))
+            .Throws<ArgumentOutOfRangeException>();
+    }
+
     // === ProtocolId (int) ===
 
     [Test]
@@ -277,12 +293,20 @@ internal sealed class IdTypeTests
     }
 
     [Test]
-    public async Task FrameId_ImplicitConversion()
+    public async Task FrameId_ExplicitConstructionAndIntConversion()
     {
-        FrameId fromInt = 99;
+        FrameId fromCtor = new(99);
         int toInt = new FrameId(99);
-        await Assert.That(fromInt.Value).IsEqualTo(99);
+        await Assert.That(fromCtor.Value).IsEqualTo(99);
         await Assert.That(toInt).IsEqualTo(99);
+    }
+
+    [Test]
+    public async Task FrameId_OutOfRangeConstruction_Throws()
+    {
+        await Assert
+            .That(() => new FrameId(Ids.ArrayIndexIdRange.MaxValue + 1))
+            .Throws<ArgumentOutOfRangeException>();
     }
 
     // === PacketId (int) ===
@@ -445,9 +469,7 @@ internal sealed class IdTypeTests
         await Assert.That(a.GetHashCode()).IsEqualTo(100);
         await Assert.That(a.Equals((object)new PacketId(100))).IsTrue();
         await Assert.That(a.CompareTo(b)).IsLessThan(0);
-        PacketId fromInt = 100;
         int toInt = new PacketId(100);
-        await Assert.That(fromInt.Value).IsEqualTo(100);
         await Assert.That(toInt).IsEqualTo(100);
     }
 

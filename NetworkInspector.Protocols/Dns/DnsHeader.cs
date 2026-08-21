@@ -21,46 +21,28 @@ namespace NetworkInspector.Protocols.Dns;
 /// +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
 /// </code>
 /// </summary>
-internal readonly struct DnsHeader
+/// <param name="TransactionId">Transaction ID.</param>
+/// <param name="Flags">Raw flags word (2 bytes).</param>
+/// <param name="QuestionCount">Number of questions.</param>
+/// <param name="AnswerCount">Number of answer resource records.</param>
+/// <param name="AuthorityCount">Number of authority resource records.</param>
+/// <param name="AdditionalCount">Number of additional resource records.</param>
+internal readonly record struct DnsHeader(
+    ushort TransactionId,
+    ushort Flags,
+    ushort QuestionCount,
+    ushort AnswerCount,
+    ushort AuthorityCount,
+    ushort AdditionalCount)
 {
+    #region Constants
+
     /// <summary>Minimum header size in bytes.</summary>
     internal const int Size = 12;
 
-    /// <summary>Transaction ID.</summary>
-    internal ushort TransactionId
-    {
-        get;
-    }
+    #endregion
 
-    /// <summary>Raw flags word (2 bytes).</summary>
-    internal ushort Flags
-    {
-        get;
-    }
-
-    /// <summary>Number of questions.</summary>
-    internal ushort QuestionCount
-    {
-        get;
-    }
-
-    /// <summary>Number of answer resource records.</summary>
-    internal ushort AnswerCount
-    {
-        get;
-    }
-
-    /// <summary>Number of authority resource records.</summary>
-    internal ushort AuthorityCount
-    {
-        get;
-    }
-
-    /// <summary>Number of additional resource records.</summary>
-    internal ushort AdditionalCount
-    {
-        get;
-    }
+    #region Flag Accessors
 
     // Flag bit positions within the 16-bit flags word
     // Bit 15: QR (1 = response, 0 = query)
@@ -104,16 +86,9 @@ internal readonly struct DnsHeader
     /// <summary>Response code (4 bits).</summary>
     internal byte ResponseCode => (byte)(Flags & 0x000F);
 
-    private DnsHeader(ushort transactionId, ushort flags, ushort qdCount,
-                      ushort anCount, ushort nsCount, ushort arCount)
-    {
-        TransactionId = transactionId;
-        Flags = flags;
-        QuestionCount = qdCount;
-        AnswerCount = anCount;
-        AuthorityCount = nsCount;
-        AdditionalCount = arCount;
-    }
+    #endregion
+
+    #region Parsing
 
     /// <summary>
     /// Tries to parse a DNS header from the given span.
@@ -137,4 +112,6 @@ internal readonly struct DnsHeader
             BinaryPrimitives.ReadUInt16BigEndian(data[10..]));
         return true;
     }
+
+    #endregion
 }

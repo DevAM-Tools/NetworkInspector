@@ -38,13 +38,13 @@ internal static class ArrayWriter
             JsonHelpers.WriteJsonString(ref buffer, info);
         }
 
-        // "fields": [...]
+        // "fields": [...] — materialize: true so lazy protocol trees are exported.
         Field root = packet.RootField();
-        if (root.HasChildren)
+        if (root.HasChildren(materialize: true))
         {
             buffer.Write(",\"fields\":["u8);
             bool first = true;
-            foreach (Field child in root.Children())
+            foreach (Field child in root.Children(materialize: true))
             {
                 if (!first)
                 {
@@ -79,7 +79,7 @@ internal static class ArrayWriter
             JsonHelpers.WriteJsonString(ref buffer, info.UiName);
 
             buffer.Write(",\"type\":"u8);
-            JsonHelpers.WriteU64(ref buffer, (ulong)info.FieldType);
+            JsonHelpers.WriteFieldTypeName(ref buffer, info.FieldType);
         }
 
         // "value": ...
@@ -105,12 +105,12 @@ internal static class ArrayWriter
             JsonHelpers.WriteJsonString(ref buffer, customText.AsString);
         }
 
-        // "children": [...]
-        if (field.HasChildren)
+        // "children": [...] — materialize: true so nested lazy fields are exported.
+        if (field.HasChildren(materialize: true))
         {
             buffer.Write(",\"children\":["u8);
             bool firstChild = true;
-            foreach (Field child in field.Children())
+            foreach (Field child in field.Children(materialize: true))
             {
                 if (!firstChild)
                 {

@@ -36,7 +36,9 @@ public sealed class PbfExporter : IPacketListener, IErrorTolerantExporter, IDisp
     private readonly int _MaxPacketsPerBlock;
     private readonly long _MaxBlockSize;
     private readonly bool _IncludeTrailerIndex;
-    private readonly long _TargetPacketCount;
+    private readonly int _TargetPacketCount;
+    private readonly ColumnarDetailFlags _ColumnarDetailFlags;
+    private readonly bool _IsTimestampSorted;
 
     // Output target consumed on lazy init
     private ExportOutput? _Output;
@@ -63,6 +65,7 @@ public sealed class PbfExporter : IPacketListener, IErrorTolerantExporter, IDisp
     private bool _HasError;
     private bool _Started;
     private bool _Finished;
+    private long _CommittedBytes;
 
     /// <summary>
     /// Reusable framing buffer for <see cref="_FlushCurrentBlock"/>. Sized with
@@ -82,7 +85,9 @@ public sealed class PbfExporter : IPacketListener, IErrorTolerantExporter, IDisp
         int maxPacketsPerBlock,
         long maxBlockSize,
         bool includeTrailerIndex,
-        long targetPacketCount,
+        int targetPacketCount,
+        ColumnarDetailFlags columnarDetailFlags,
+        bool isTimestampSorted,
         CancellationToken cancellationToken)
     {
         _Output = output;
@@ -94,6 +99,8 @@ public sealed class PbfExporter : IPacketListener, IErrorTolerantExporter, IDisp
         _MaxBlockSize = maxBlockSize;
         _IncludeTrailerIndex = includeTrailerIndex;
         _TargetPacketCount = targetPacketCount;
+        _ColumnarDetailFlags = columnarDetailFlags;
+        _IsTimestampSorted = isTimestampSorted;
         _CancellationToken = cancellationToken;
     }
 
@@ -113,7 +120,7 @@ public sealed class PbfExporter : IPacketListener, IErrorTolerantExporter, IDisp
     }
 
     /// <summary>Number of packets written so far.</summary>
-    public long PacketCount
+    public int PacketCount
     {
         get; private set;
     }
@@ -125,16 +132,35 @@ public sealed class PbfExporter : IPacketListener, IErrorTolerantExporter, IDisp
     }
 
     /// <inheritdoc/>
-    public long WrittenCount => PacketCount;
+    public int WrittenCount => PacketCount;
 
     /// <inheritdoc/>
-    public long SkippedCount
+    public long EstimatedOutputBytes
+    {
+        get
+        {
+            long pending = 0L;
+            if (_Format == PbfExportFormat.Columnar)
+            {
+                pending = _ColumnarBuilder?.EstimatedPendingBytes ?? 0L;
+            }
+            else
+            {
+                pending = _StandardBuilder?.CurrentSize ?? 0L;
+            }
+
+            return _CommittedBytes + pending;
+        }
+    }
+
+    /// <inheritdoc/>
+    public int SkippedCount
     {
         get; private set;
     }
 
     /// <inheritdoc/>
-    public long ErrorCount
+    public int ErrorCount
     {
         get; private set;
     }
@@ -206,7 +232,7 @@ public sealed class PbfExporter : IPacketListener, IErrorTolerantExporter, IDisp
         catch (Exception ex)
         {
             _HasError = true;
-            ErrorCount++;
+            if (ErrorCount < int.MaxValue) ErrorCount++;
             ItemSkipped?.Invoke(this, new ExportErrorEventArgs
             {
                 ItemIndex = PacketCount,
@@ -228,7 +254,7 @@ public sealed class PbfExporter : IPacketListener, IErrorTolerantExporter, IDisp
             {
                 cleanupErrors.Add(ex);
                 _HasError = true;
-                ErrorCount++;
+                if (ErrorCount < int.MaxValue) ErrorCount++;
                 ItemSkipped?.Invoke(this, new ExportErrorEventArgs
                 {
                     ItemIndex = PacketCount,
@@ -244,7 +270,7 @@ public sealed class PbfExporter : IPacketListener, IErrorTolerantExporter, IDisp
             {
                 cleanupErrors.Add(ex);
                 _HasError = true;
-                ErrorCount++;
+                if (ErrorCount < int.MaxValue) ErrorCount++;
                 ItemSkipped?.Invoke(this, new ExportErrorEventArgs
                 {
                     ItemIndex = PacketCount,
@@ -261,7 +287,7 @@ public sealed class PbfExporter : IPacketListener, IErrorTolerantExporter, IDisp
             {
                 cleanupErrors.Add(ex);
                 _HasError = true;
-                ErrorCount++;
+                if (ErrorCount < int.MaxValue) ErrorCount++;
                 ItemSkipped?.Invoke(this, new ExportErrorEventArgs
                 {
                     ItemIndex = PacketCount,
@@ -278,7 +304,7 @@ public sealed class PbfExporter : IPacketListener, IErrorTolerantExporter, IDisp
             {
                 cleanupErrors.Add(ex);
                 _HasError = true;
-                ErrorCount++;
+                if (ErrorCount < int.MaxValue) ErrorCount++;
                 ItemSkipped?.Invoke(this, new ExportErrorEventArgs
                 {
                     ItemIndex = PacketCount,
@@ -328,7 +354,8 @@ public sealed class PbfExporter : IPacketListener, IErrorTolerantExporter, IDisp
         int maxFieldId = _MaxFieldId;
         if (_Format == PbfExportFormat.Columnar)
         {
-            _ColumnarBuilder = new ColumnarBlockBuilder(maxFieldId, _MaxPacketsPerBlock, _MaxBlockSize);
+            _ColumnarBuilder = new ColumnarBlockBuilder(
+                maxFieldId, _MaxPacketsPerBlock, _MaxBlockSize, _ColumnarDetailFlags, _IsTimestampSorted);
         }
         else
         {
@@ -341,13 +368,13 @@ public sealed class PbfExporter : IPacketListener, IErrorTolerantExporter, IDisp
             // throw on a broken target — surface as an export error rather than
             // bubbling out to the caller.
             _DirectStream = underlyingStream;
-            _DirectStream.Write(_Magic);
-            _WriteHeader(_DirectStream);
+            _WriteDirect(_Magic);
+            _WriteHeader();
         }
         catch (Exception ex)
         {
             _HasError = true;
-            ErrorCount++;
+            if (ErrorCount < int.MaxValue) ErrorCount++;
             ItemSkipped?.Invoke(this, new ExportErrorEventArgs
             {
                 ItemIndex = 0,
@@ -362,7 +389,7 @@ public sealed class PbfExporter : IPacketListener, IErrorTolerantExporter, IDisp
 
     /// <summary>Writes the PBF file header. Encodes the two fields directly into a stack-allocated
     /// buffer to avoid a pool rent+return for this single call-site.</summary>
-    private static void _WriteHeader(Stream stream)
+    private void _WriteHeader()
     {
         // Encode the two-field protobuf header message directly into a stack-allocated buffer.
         // Maximum encoded size: 2 bytes (version varint field) + 11 bytes (sint64 timestamp field) = 13 bytes.
@@ -387,8 +414,20 @@ public sealed class PbfExporter : IPacketListener, IErrorTolerantExporter, IDisp
         // Write header as length-prefixed: [4-byte length LE] + [protobuf data]
         Span<byte> lengthPrefix = stackalloc byte[4];
         BinaryPrimitives.WriteInt32LittleEndian(lengthPrefix, pos);
-        stream.Write(lengthPrefix);
-        stream.Write(data[..pos]);
+        _WriteDirect(lengthPrefix);
+        _WriteDirect(data[..pos]);
+    }
+
+    /// <summary>Writes bytes to the direct stream and updates <see cref="_CommittedBytes"/>.</summary>
+    private void _WriteDirect(ReadOnlySpan<byte> data)
+    {
+        if (_DirectStream is null)
+        {
+            return;
+        }
+
+        _DirectStream.Write(data);
+        _CommittedBytes += data.Length;
     }
 
     /// <summary>Handles a single packet: adds to block, flushes if needed.</summary>
@@ -441,8 +480,15 @@ public sealed class PbfExporter : IPacketListener, IErrorTolerantExporter, IDisp
     /// </summary>
     private bool _HandleSkip(ExportErrorEventArgs error)
     {
-        SkippedCount++;
-        ErrorCount++;
+        if (SkippedCount < int.MaxValue)
+        {
+            SkippedCount++;
+        }
+
+        if (ErrorCount < int.MaxValue)
+        {
+            ErrorCount++;
+        }
 
         if (ErrorTolerance == ErrorToleranceMode.Strict)
         {
@@ -560,7 +606,7 @@ public sealed class PbfExporter : IPacketListener, IErrorTolerantExporter, IDisp
         }
 
         // Send block to output (_DirectStream guaranteed non-null after _Start())
-        _DirectStream!.Write(blockBuf.WrittenSpan);
+        _WriteDirect(blockBuf.WrittenSpan);
         blockBuf.Reset();
 
         // Commit the block-index entry only after the bytes have been successfully
@@ -629,10 +675,10 @@ public sealed class PbfExporter : IPacketListener, IErrorTolerantExporter, IDisp
         BinaryPrimitives.WriteInt32LittleEndian(trailerSizeBytes, trailer.Length);
 
         // _DirectStream is guaranteed non-null after _Start() succeeds
-        _DirectStream!.Write(trailer.WrittenSpan);
+        _WriteDirect(trailer.WrittenSpan);
         trailer.Return();
-        _DirectStream.Write(trailerSizeBytes);
-        _DirectStream.Write(_Magic);
+        _WriteDirect(trailerSizeBytes);
+        _WriteDirect(_Magic);
     }
 
     // ========================================================================
@@ -658,7 +704,9 @@ public sealed class PbfExporter : IPacketListener, IErrorTolerantExporter, IDisp
         private int _MaxPacketsPerBlock = 50000;
         private long _MaxBlockSize = 16 * 1024 * 1024;
         private bool _IncludeTrailerIndex = true;
-        private long _TargetPacketCount;
+        private int _TargetPacketCount;
+        private ColumnarDetailFlags _ColumnarDetailFlags = ColumnarDetailFlags.All;
+        private bool _IsTimestampSorted;
 
         /// <summary>Sets the output to a file path with a 4 MiB buffer.</summary>
         public Builder ToFile(string path)
@@ -730,9 +778,18 @@ public sealed class PbfExporter : IPacketListener, IErrorTolerantExporter, IDisp
         /// When the target is reached, <see cref="OnPacket"/> returns <c>false</c> and
         /// <see cref="IsFinished"/> becomes <c>true</c>.
         /// </summary>
-        public Builder WithTargetPacketCount(long count)
+        public Builder WithTargetPacketCount(int count)
         {
             ArgumentOutOfRangeException.ThrowIfNegative(count);
+            if (count > ArrayIndexIdRange.MaxCount)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(count),
+                    count,
+                    $"Target packet count must not exceed {ArrayIndexIdRange.MaxCount.ToString(CultureInfo.InvariantCulture)} " +
+                    $"(Array.MaxLength={Array.MaxLength.ToString(CultureInfo.InvariantCulture)}).");
+            }
+
             _TargetPacketCount = count;
             return this;
         }
@@ -744,10 +801,37 @@ public sealed class PbfExporter : IPacketListener, IErrorTolerantExporter, IDisp
             return this;
         }
 
-        /// <summary>Sets the cancellation token for cooperative shutdown.</summary>
+        /// <summary>
+        /// Sets the cancellation token for cooperative shutdown.
+        /// </summary>
         public Builder WithCancellationToken(CancellationToken token)
         {
             _CancellationToken = token;
+            return this;
+        }
+
+        /// <summary>
+        /// Controls which optional data columns (info, frame bytes, custom representation/text,
+        /// topology) are captured by <see cref="PbfExportFormat.Columnar"/> blocks. Ignored for
+        /// <see cref="PbfExportFormat.Standard"/>, which always emits the full row-oriented tree.
+        /// Defaults to <see cref="ColumnarDetailFlags.All"/>.
+        /// </summary>
+        public Builder WithDetailFlags(ColumnarDetailFlags flags)
+        {
+            _ColumnarDetailFlags = flags;
+            return this;
+        }
+
+        /// <summary>
+        /// Declares that packets will be added in non-decreasing timestamp order for
+        /// <see cref="PbfExportFormat.Columnar"/> blocks. This is metadata only in the current
+        /// PBF writer (it does not change the emitted bytes); it is accepted here so callers can
+        /// configure the shared <see cref="ColumnarPacketBatch"/> knobs identically across the
+        /// PBF, Parquet, and DuckDB exporters. Defaults to <see langword="false"/>.
+        /// </summary>
+        public Builder WithTimestampSorted(bool sorted)
+        {
+            _IsTimestampSorted = sorted;
             return this;
         }
 
@@ -770,6 +854,8 @@ public sealed class PbfExporter : IPacketListener, IErrorTolerantExporter, IDisp
                 _MaxBlockSize,
                 _IncludeTrailerIndex,
                 _TargetPacketCount,
+                _ColumnarDetailFlags,
+                _IsTimestampSorted,
                 _CancellationToken);
         }
     }

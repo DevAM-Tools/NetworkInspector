@@ -17,6 +17,7 @@ global using System.Threading;
 global using NetworkInspector.Core;
 global using NetworkInspector.Core.Fields;
 global using NetworkInspector.Core.Ids;
+global using NetworkInspector.Core.Index;
 global using NetworkInspector.Core.Interfaces;
 global using NetworkInspector.Core.Settings;
 global using NetworkInspector.Values;
@@ -24,6 +25,14 @@ global using NetworkInspector.Values;
 
 #region NetworkInspector.Exporters
 global using NetworkInspector.Exporters;
+#endregion
+
+#region NetworkInspector.Filter
+global using NetworkInspector.Filter;
+global using NetworkInspector.Filter.Errors;
+// The namespace NetworkInspector.Filter shadows its own Filter type from inside other
+// NetworkInspector assemblies, so the concrete filter needs an unambiguous alias.
+global using PacketFilter = NetworkInspector.Filter.Filter;
 #endregion
 
 #region NetworkInspector.FrameBuilder

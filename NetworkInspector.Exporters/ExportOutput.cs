@@ -46,6 +46,13 @@ public abstract class ExportOutput : IDisposable
     /// <summary>Flushes any buffered data to the output.</summary>
     public abstract void Flush();
 
+    /// <summary>
+    /// Total bytes accepted via <see cref="Write"/> so far (includes data still in write buffers).
+    /// Does not include bytes written through <see cref="GetOrCreateUnderlyingStream"/> bypassing
+    /// <see cref="Write"/>.
+    /// </summary>
+    public abstract long AcceptedBytes { get; protected set; }
+
     /// <summary>Gets the underlying stream, creating it if needed.</summary>
     /// <remarks>
     /// This method replaces the former <c>UnderlyingStream</c> property. The name
@@ -87,6 +94,8 @@ internal sealed class LazyFileExportOutput : ExportOutput
     private readonly int _BufferSize;
     private Stream? _Stream;
 
+    public override long AcceptedBytes { get; protected set; }
+
     /// <summary>Creates a lazy file output.</summary>
     /// <param name="path">Target file path.</param>
     /// <param name="bufferSize">Write buffer size in bytes.</param>
@@ -103,6 +112,7 @@ internal sealed class LazyFileExportOutput : ExportOutput
             new FileStream(_Path, FileMode.Create, FileAccess.Write, FileShare.None),
             _BufferSize);
         _Stream.Write(data);
+        AcceptedBytes += data.Length;
     }
 
     /// <inheritdoc/>
@@ -138,6 +148,8 @@ internal sealed class StreamExportOutput : ExportOutput
     private readonly Stream _Stream;
     private readonly bool _OwnsStream;
 
+    public override long AcceptedBytes { get; protected set; }
+
     /// <summary>Creates a stream-backed output.</summary>
     /// <param name="stream">Target stream.</param>
     /// <param name="ownsStream">If true, the stream is disposed when this output is disposed.</param>
@@ -148,7 +160,11 @@ internal sealed class StreamExportOutput : ExportOutput
     }
 
     /// <inheritdoc/>
-    public override void Write(ReadOnlySpan<byte> data) => _Stream.Write(data);
+    public override void Write(ReadOnlySpan<byte> data)
+    {
+        _Stream.Write(data);
+        AcceptedBytes += data.Length;
+    }
 
     /// <inheritdoc/>
     public override void Flush() => _Stream.Flush();

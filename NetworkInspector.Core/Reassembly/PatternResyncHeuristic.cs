@@ -4,6 +4,10 @@ namespace NetworkInspector.Core.Reassembly;
 
 /// <summary>
 /// Pattern-based resync heuristic. Scans for a known byte pattern.
+/// <para>
+/// <b>Thread-safety:</b> Immutable after construction (pattern is copied defensively);
+/// instances are safe to share across threads.
+/// </para>
 /// </summary>
 public sealed class PatternResyncHeuristic : IResyncHeuristic
 {

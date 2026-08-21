@@ -1,0 +1,194 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://networkinspector.dev/schemas/signal-message-config.schema.json",
+  "title": "Signal Message Configuration",
+  "description": "Signal Message message definitions for Network Inspector. Each message becomes one protocol instance with bit-level signal extraction.",
+  "type": "object",
+  "properties": {
+    "messages": {
+      "type": "array",
+      "description": "Signal message definitions (one protocol instance each).",
+      "items": {
+        "$ref": "#/$defs/message"
+      }
+    }
+  },
+  "required": ["messages"],
+  "additionalProperties": false,
+  "$defs": {
+    "message": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Registered protocol name and container field name (unique).",
+          "minLength": 1,
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$"
+        },
+        "ui_name": {
+          "type": "string",
+          "description": "Human-readable protocol UI name.",
+          "minLength": 1
+        },
+        "description": {
+          "type": "string",
+          "description": "Optional protocol description shown in the stack; defaults when omitted."
+        },
+        "byte_length": {
+          "type": "integer",
+          "description": "Declared wire length in bytes; must be >= RequiredByteLength of all signals.",
+          "minimum": 1
+        },
+        "dispatch_bindings": {
+          "type": "array",
+          "description": "Dispatch tables to register this message protocol into.",
+          "items": {
+            "$ref": "#/$defs/dispatch_binding"
+          },
+          "default": []
+        },
+        "signals": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/signal"
+          },
+          "default": []
+        },
+        "mux_signal": {
+          "$ref": "#/$defs/mux_signal"
+        },
+        "mux_groups": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/mux_group"
+          },
+          "default": []
+        }
+      },
+      "required": ["name", "ui_name", "byte_length"],
+      "additionalProperties": false
+    },
+    "dispatch_binding": {
+      "type": "object",
+      "properties": {
+        "table": {
+          "type": "string",
+          "description": "Dispatch table name.",
+          "minLength": 1,
+          "examples": ["can.id", "can.extended_id", "lin.id", "flexray.id", "pdu_transport.id", "udp.port"]
+        },
+        "key": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": ["table", "key"],
+      "additionalProperties": false
+    },
+    "signal": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Registered field name in target form.",
+          "minLength": 1,
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$"
+        },
+        "ui_name": {
+          "type": "string",
+          "description": "Human-readable signal UI name for CustomText.",
+          "minLength": 1
+        },
+        "start_bit": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "bit_length": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64
+        },
+        "byte_order": {
+          "type": "string",
+          "enum": ["big_endian", "little_endian"],
+          "default": "big_endian"
+        },
+        "factor": {
+          "type": "number",
+          "default": 1.0
+        },
+        "offset": {
+          "type": "number",
+          "default": 0
+        },
+        "unit": {
+          "type": "string",
+          "default": ""
+        },
+        "min": {
+          "type": "number"
+        },
+        "max": {
+          "type": "number"
+        },
+        "value_names": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      },
+      "required": ["name", "ui_name", "start_bit", "bit_length"],
+      "additionalProperties": false
+    },
+    "mux_signal": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Registered mux field name in target form.",
+          "minLength": 1,
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$"
+        },
+        "ui_name": {
+          "type": "string",
+          "description": "UI name for the multiplexer container.",
+          "minLength": 1
+        },
+        "start_bit": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "bit_length": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64
+        },
+        "byte_order": {
+          "type": "string",
+          "enum": ["big_endian", "little_endian"],
+          "default": "big_endian"
+        }
+      },
+      "required": ["name", "ui_name", "start_bit", "bit_length"],
+      "additionalProperties": false
+    },
+    "mux_group": {
+      "type": "object",
+      "properties": {
+        "mux_value": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "signals": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/signal"
+          }
+        }
+      },
+      "required": ["mux_value", "signals"],
+      "additionalProperties": false
+    }
+  }
+}

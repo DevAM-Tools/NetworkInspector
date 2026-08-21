@@ -105,9 +105,9 @@ public sealed partial class WebSocketProtocol
                 ParseResult dispatchResult = opcode == 1
                     ? _DispatchTextPayload(in container, effectivePayload, in context)
                     : _DispatchBinaryPayload(in container, effectivePayload, in context);
-                if (dispatchResult.IsError)
+                if (dispatchResult.TryPropagateError(out ParseResult error))
                 {
-                    return dispatchResult;
+                    return error;
                 }
             }
 
@@ -124,11 +124,11 @@ public sealed partial class WebSocketProtocol
     private ParseResult _DispatchTextPayload(in MutField container, ReadOnlyMemory<byte> payloadData, in ParseContext context)
     {
         ParseResult portResult = container.TryCallNextProtocolU64(_PortTableId, 0, payloadData, in context);
-        if (portResult.IsError)
+        if (portResult.TryPropagateError(out ParseResult error))
         {
-            return portResult;
+            return error;
         }
-        if (portResult.IsSuccess && portResult.Value > 0)
+        if (portResult.TryGetConsumed(out int consumed) && consumed > 0)
         {
             return 0;
         }
@@ -148,11 +148,11 @@ public sealed partial class WebSocketProtocol
     private ParseResult _DispatchBinaryPayload(in MutField container, ReadOnlyMemory<byte> payloadData, in ParseContext context)
     {
         ParseResult portResult = container.TryCallNextProtocolU64(_PortTableId, 0, payloadData, in context);
-        if (portResult.IsError)
+        if (portResult.TryPropagateError(out ParseResult error))
         {
-            return portResult;
+            return error;
         }
-        if (portResult.IsSuccess && portResult.Value > 0)
+        if (portResult.TryGetConsumed(out int consumed) && consumed > 0)
         {
             return 0;
         }

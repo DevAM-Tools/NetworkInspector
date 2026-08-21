@@ -21,7 +21,7 @@ public sealed class RandomSourceOptions
     /// <summary>
     /// Total number of frames to generate.
     /// Zero means unlimited (source never returns <c>null</c> from <see cref="IFrameSource.NextFrame"/>).
-    /// Maximum is <see cref="int.MaxValue"/> frames.
+    /// Maximum is <c>Array.MaxLength</c> frames (valid frame indices 0 … <c>Array.MaxLength - 1</c>).
     /// </summary>
     public int FrameCount { get; init; } = 1000;   // frames
 
@@ -83,7 +83,15 @@ public sealed class RandomSourceOptions
                 "FrameCount must be non-negative.");
         }
 
-        // int type already prevents exceeding int.MaxValue at the language level
+        int maxFrameCount = ArrayIndexIdRange.MaxCount;
+        if (FrameCount > maxFrameCount)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(FrameCount),
+                FrameCount,
+                $"FrameCount must not exceed {maxFrameCount.ToString(CultureInfo.InvariantCulture)} " +
+                $"(valid frame indices 0..{ArrayIndexIdRange.MaxValue.ToString(CultureInfo.InvariantCulture)}).");
+        }
 
         if (MinFrameSize < 1)
         {

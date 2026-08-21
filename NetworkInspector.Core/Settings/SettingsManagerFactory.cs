@@ -66,8 +66,8 @@ public static class SettingsManagerFactory
     /// </param>
     /// <returns>The resolved absolute storage path.</returns>
     /// <exception cref="ArgumentException">
-    /// Thrown when <paramref name="profileName"/> contains path separators or
-    /// traversal sequences.
+    /// Thrown when <paramref name="profileName"/> contains path separators,
+    /// traversal sequences, or characters other than ASCII letters, digits, hyphens, and underscores.
     /// </exception>
     public static string ResolvePath(string? settingsPath = null, string? profileName = null)
     {
@@ -89,6 +89,18 @@ public static class SettingsManagerFactory
             throw new ArgumentException(
                 "Profile name must not contain path separators or '..' sequences.",
                 nameof(profileName));
+        }
+
+        for (int i = 0; i < profileName.Length; i++)
+        {
+            char c = profileName[i];
+            bool allowed = char.IsAsciiLetterOrDigit(c) || c is '-' or '_';
+            if (!allowed)
+            {
+                throw new ArgumentException(
+                    "Profile name must contain only alphanumeric characters, hyphens, and underscores.",
+                    nameof(profileName));
+            }
         }
 
         // Apply the optional profile as a sub-directory of the base path.

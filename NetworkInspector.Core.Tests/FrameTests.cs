@@ -87,6 +87,39 @@ internal sealed class FrameTests
     }
 
     [Test]
+    public async Task Default_DoesNotEqual_CreatedFrameWithIdZero()
+    {
+        FrameInterfaceRegistry registry = new();
+        Frame zero = _CreateFrame(registry, new FrameId(0));
+
+        await Assert.That(default(Frame) == zero).IsFalse();
+    }
+
+    [Test]
+    public async Task Default_Equals_InvalidSentinel()
+    {
+        await Assert.That(default(Frame) == Frame.Invalid).IsTrue();
+    }
+
+    [Test]
+    public async Task Default_CompareTo_CreatedFrameWithIdZero_IsNegative()
+    {
+        FrameInterfaceRegistry registry = new();
+        Frame zero = _CreateFrame(registry, new FrameId(0));
+
+        await Assert.That(default(Frame).CompareTo(zero)).IsLessThan(0);
+    }
+
+    [Test]
+    public async Task Default_GetHashCode_DiffersFromCreatedFrameWithIdZero()
+    {
+        FrameInterfaceRegistry registry = new();
+        Frame zero = _CreateFrame(registry, new FrameId(0));
+
+        await Assert.That(default(Frame).GetHashCode()).IsNotEqualTo(zero.GetHashCode());
+    }
+
+    [Test]
     public async Task ComparisonOperators_OrderByFrameId()
     {
         FrameInterfaceRegistry registry = new();

@@ -107,19 +107,20 @@ internal sealed class SessionListenerScenario : IProfilingScenario
     /// </summary>
     private sealed class CountingListener : ISessionListener
     {
-        /// <summary>Total packets processed so far (volatile read).</summary>
+        /// <summary>Total packets processed so far (Volatile.Read).</summary>
         internal long PacketsSeen => Volatile.Read(ref _PacketsSeen);
+        // `volatile` is illegal on long; cross-thread access uses Volatile.Read / Interlocked.
         private long _PacketsSeen;
 
         /// <inheritdoc/>
         public string UiName => "ProfilingCounter";
 
         /// <inheritdoc/>
-        public void OnNewPackets(ISessionReader session, long fromIndex, long toIndexExclusive)
+        public void OnNewPackets(ISessionReader session, int fromIndex, int toIndexExclusive)
         {
             for (long i = fromIndex; i < toIndexExclusive; i++)
             {
-                if (session.TryGetPacket((int)i, out Packet? packet))
+                if (session.TryGetPacket(new PacketId((int)i), out Packet? packet) && packet is not null)
                 {
                     packet.MaterializeAll();
                 }

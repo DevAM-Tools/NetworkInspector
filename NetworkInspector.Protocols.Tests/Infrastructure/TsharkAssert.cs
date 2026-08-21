@@ -43,7 +43,7 @@ internal static class TsharkAssert
     /// <param name="decodeAs">Optional <c>-d</c> dissector override (for example <c>tcp.port==8443,http2</c>).</param>
     /// <param name="profileDir">
     /// Optional per-test tshark profile directory; required for protocols whose dissector only
-    /// activates with a UAT (Signal-PDU, PDU-Transport, …). Passed straight to
+    /// activates with a UAT (Signal Message, PDU-Transport, …). Passed straight to
     /// <see cref="TsharkVerifier.GetFieldValue"/>.
     /// </param>
     internal static async Task AssertEquivalent(
@@ -107,7 +107,7 @@ internal static class TsharkAssert
 
     /// <summary>
     /// Verifies multiple (NI-field, tshark-field) pairs against a tshark invocation
-    /// scoped to <paramref name="profileDir"/> — used by Signal-PDU, PDU-Transport
+    /// scoped to <paramref name="profileDir"/> — used by Signal Message, PDU-Transport
     /// and other UAT-driven dissectors.
     /// </summary>
     internal static async Task AssertEquivalentMany(
@@ -219,7 +219,7 @@ internal static class TsharkAssert
         {
             return null;
         }
-        if (!packet.TryGetFieldValue(fieldId.Value, out FieldValue value))
+        if (!packet.TryGetFieldValue(fieldId.Value, out FieldValue value, materialize: true)) // materialize: true — need complete field tree for assertion
         {
             return null;
         }

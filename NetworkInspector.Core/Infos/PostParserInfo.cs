@@ -19,25 +19,12 @@ namespace NetworkInspector.Core.Infos;
 /// thread-safety contract as for normal parsers applies — no additional locking is introduced.
 /// </para>
 /// </summary>
-public sealed class PostParserInfo(
-    PostParserId id,
-    int priority,
-    ProtocolId protocolId,
-    string? description)
-{
-    #region Properties
-
-    /// <summary>Unique post-parser identifier. Reflects registration order; used as tie-breaker in build-time sort.</summary>
-    public PostParserId Id { get; } = id;
-
-    /// <summary>Execution priority. Lower values run first; default is 0. Equal-priority post-parsers run in registration order.</summary>
-    public int Priority { get; } = priority;
-
-    /// <summary>Protocol that owns this post-parser.</summary>
-    public ProtocolId ProtocolId { get; } = protocolId;
-
-    /// <summary>Optional description text.</summary>
-    public string? Description { get; } = description;
-
-    #endregion
-}
+/// <param name="Id">Unique post-parser identifier. Reflects registration order; used as tie-breaker in build-time sort.</param>
+/// <param name="Priority">Execution priority. Lower values run first; default is 0. Equal-priority post-parsers run in registration order.</param>
+/// <param name="ProtocolId">Protocol that owns this post-parser.</param>
+/// <param name="Description">Optional description text.</param>
+public sealed record PostParserInfo(
+    PostParserId Id,
+    int Priority,
+    ProtocolId ProtocolId,
+    string? Description);

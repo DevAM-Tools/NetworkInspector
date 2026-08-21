@@ -7,38 +7,22 @@ namespace NetworkInspector.Protocols.Tcp;
 /// Used to communicate option values back to the protocol for window scaling
 /// and other stateful analysis features.
 /// </summary>
-internal readonly struct TcpOptionsInfo
+/// <param name="Mss">Maximum Segment Size value, or null if not present.</param>
+/// <param name="WindowScale">Window Scale shift count (0-14), or null if not present.</param>
+/// <param name="SackPermitted">Whether SACK Permitted option was present.</param>
+/// <param name="TsVal">Timestamps TSval, or null if not present.</param>
+/// <param name="TsEcr">Timestamps TSecr, or null if not present.</param>
+internal readonly record struct TcpOptionsInfo(
+    ushort? Mss = null,
+    byte? WindowScale = null,
+    bool SackPermitted = false,
+    uint? TsVal = null,
+    uint? TsEcr = null)
 {
-    /// <summary>Maximum Segment Size value, or null if not present.</summary>
-    internal ushort? Mss
-    {
-        get; init;
-    }
-
-    /// <summary>Window Scale shift count (0-14), or null if not present.</summary>
-    internal byte? WindowScale
-    {
-        get; init;
-    }
-
-    /// <summary>Whether SACK Permitted option was present.</summary>
-    internal bool SackPermitted
-    {
-        get; init;
-    }
-
-    /// <summary>Timestamps TSval, or null if not present.</summary>
-    internal uint? TsVal
-    {
-        get; init;
-    }
-
-    /// <summary>Timestamps TSecr, or null if not present.</summary>
-    internal uint? TsEcr
-    {
-        get; init;
-    }
+    #region Sentinels
 
     /// <summary>Default empty options info.</summary>
     internal static TcpOptionsInfo Empty => default;
+
+    #endregion
 }

@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Protocols.Tests;
 
@@ -16,7 +16,7 @@ internal sealed class EthernetMalformedTests
         using (stack)
         {
             // The frame protocol always runs, so at least 1 field (frame container)
-            await Assert.That(packet.FieldCount()).IsGreaterThanOrEqualTo(1);
+            await Assert.That(packet.FieldCount(materialize: false)).IsGreaterThanOrEqualTo(1); // materialize: false — current materialized count only
         }
     }
 
@@ -27,7 +27,7 @@ internal sealed class EthernetMalformedTests
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
-            await Assert.That(packet.FieldCount()).IsGreaterThanOrEqualTo(1);
+            await Assert.That(packet.FieldCount(materialize: false)).IsGreaterThanOrEqualTo(1); // materialize: false — current materialized count only
         }
     }
 
@@ -40,7 +40,7 @@ internal sealed class EthernetMalformedTests
         using (stack)
         {
             // Ethernet should not parse — no eth.dst or eth.src fields
-            await Assert.That(packet.FieldCount()).IsGreaterThanOrEqualTo(1);
+            await Assert.That(packet.FieldCount(materialize: false)).IsGreaterThanOrEqualTo(1); // materialize: false — current materialized count only
         }
     }
 

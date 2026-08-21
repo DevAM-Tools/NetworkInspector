@@ -7,9 +7,10 @@ namespace NetworkInspector.Core.Fields;
 /// Each chunk represents 16 <see cref="FieldBody"/> slots (16 × ~64 bytes = 1024 bytes).
 /// Chunk descriptors themselves are stored in a slab-backed array managed by <see cref="SlabAllocator{T}"/>.
 /// <para>
-/// <b>Thread-safety:</b> Not thread-safe. Chunks are created during single-threaded parsing
-/// and become immutable after <see cref="Packet.Seal"/>. Cross-thread reads are safe
-/// because the chunk references are published via volatile fences in the <see cref="Packet"/>.
+/// <b>Thread-safety:</b> Chunk descriptors are written during single-threaded parsing and
+/// may also be appended during post-<see cref="Packet.Seal"/> lazy materialization.
+/// Cross-thread reads are safe because <see cref="Packet"/> publishes the descriptor table
+/// as one object and uses a volatile chunk-count store as the release fence for a new chunk.
 /// </para>
 /// </summary>
 [StructLayout(LayoutKind.Sequential)]

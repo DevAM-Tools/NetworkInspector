@@ -10,6 +10,10 @@
   <Project Path="NetworkInspector.Sources/NetworkInspector.Sources.csproj" />
   <Project Path="NetworkInspector.Sessions/NetworkInspector.Sessions.csproj" />
   <Project Path="NetworkInspector.Exporters/NetworkInspector.Exporters.csproj" />
+  <Project Path="NetworkInspector.Exporters.DuckDb/NetworkInspector.Exporters.DuckDb.csproj" />
+  <Project Path="NetworkInspector.Filter/NetworkInspector.Filter.csproj" />
+  <Project Path="NetworkInspector.Filter.Tests/NetworkInspector.Filter.Tests.csproj" />
+  <Project Path="NetworkInspector.CLI.Core/NetworkInspector.CLI.Core.csproj" />
   <Project Path="NetworkInspector.CLI.Tests/NetworkInspector.CLI.Tests.csproj" />
   <Project Path="NetworkInspector.CLI/NetworkInspector.CLI.csproj" />
   <Project Path="NetworkInspector.Playground/NetworkInspector.Playground.csproj" />

@@ -43,6 +43,19 @@ public enum SettingsLoadWarningKind
     InvalidGroupFileShape,
 
     /// <summary>
+    /// A group settings JSON file contains syntactically invalid JSON.
+    /// The file is skipped entirely and no settings in that group are changed.
+    /// </summary>
+    InvalidGroupFileSyntax,
+
+    /// <summary>
+    /// An enum setting was loaded with a numeric value that is allowed but a non-canonical
+    /// <c>name</c> in the persisted JSON object. The canonical name from
+    /// <see cref="EnumSettingMetadata"/> is applied instead.
+    /// </summary>
+    EnumNameMismatch,
+
+    /// <summary>
     /// An external JSON configuration file referenced by a string setting could not be loaded.
     /// Covers: file not found, malformed JSON, I/O errors, and access-denied failures.
     /// The owning protocol continues with an empty / default configuration.

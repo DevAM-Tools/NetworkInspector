@@ -41,6 +41,56 @@ internal sealed class ExportCommandRecycleTests
         return source;
     }
 
+    /// <summary>Runs the export loop with a single non-splitting capturing exporter.</summary>
+    private static int _RunLoop(
+        List<IFrameSource> sources,
+        CapturingExporter exporter,
+        Stack stack,
+        int maxPackets,
+        int progressInterval,
+        bool tolerant,
+        ref int counter,
+        CancellationToken cancellationToken)
+    {
+        SplitOutputManager split = new("capture.json", maxSize: 0, maxCount: 0);
+        return ExportCommand.RunExportLoop(
+            sources,
+            _ => exporter,
+            split,
+            stack,
+            filter: null,
+            maxPackets,
+            progressInterval,
+            tolerant,
+            ref counter,
+            cancellationToken,
+            out _);
+    }
+
+    /// <summary>Runs the export loop with a filter and a single non-splitting capturing exporter.</summary>
+    private static int _RunFilteredLoop(
+        List<IFrameSource> sources,
+        CapturingExporter exporter,
+        Stack stack,
+        IFilter filter,
+        ref int counter,
+        out int outputsWritten)
+    {
+        SplitOutputManager split = new("capture.json", maxSize: 0, maxCount: 0);
+        return ExportCommand.RunExportLoop(
+            sources,
+            _ => exporter,
+            split,
+            stack,
+            filter,
+            maxPackets: 0,
+            progressInterval: 0,
+            tolerant: false,
+            ref counter,
+            CancellationToken.None,
+            out outputsWritten);
+    }
+
     // ── Tests ─────────────────────────────────────────────────────────────────────────
 
     /// <summary>
@@ -57,10 +107,9 @@ internal sealed class ExportCommandRecycleTests
         int counter = 0;
         List<IFrameSource> sources = [source];
 
-        long result = ExportCommand.RunExportLoop(
-            sources, exporter, stack, 0, 0, false, ref counter, CancellationToken.None);
+        int result = _RunLoop(sources, exporter, stack, 0, 0, false, ref counter, CancellationToken.None);
 
-        await Assert.That(result).IsEqualTo(10L);
+        await Assert.That(result).IsEqualTo(10);
         await Assert.That(exporter.CapturedIds.Count).IsEqualTo(10);
     }
 
@@ -78,8 +127,7 @@ internal sealed class ExportCommandRecycleTests
         int counter = 0;
         List<IFrameSource> sources = [source];
 
-        ExportCommand.RunExportLoop(
-            sources, exporter, stack, 0, 0, false, ref counter, CancellationToken.None);
+        _RunLoop(sources, exporter, stack, 0, 0, false, ref counter, CancellationToken.None);
 
         await Assert.That(exporter.CapturedIds.Count).IsEqualTo(10);
         for (int i = 0; i < 10; i++)
@@ -102,10 +150,9 @@ internal sealed class ExportCommandRecycleTests
         int counter = 0;
         List<IFrameSource> sources = [source];
 
-        long result = ExportCommand.RunExportLoop(
-            sources, exporter, stack, 5, 0, false, ref counter, CancellationToken.None);
+        int result = _RunLoop(sources, exporter, stack, 5, 0, false, ref counter, CancellationToken.None);
 
-        await Assert.That(result).IsEqualTo(5L);
+        await Assert.That(result).IsEqualTo(5);
         await Assert.That(exporter.CapturedIds.Count).IsEqualTo(5);
     }
 
@@ -123,10 +170,9 @@ internal sealed class ExportCommandRecycleTests
         int counter = 0;
         List<IFrameSource> sources = [source];
 
-        long result = ExportCommand.RunExportLoop(
-            sources, exporter, stack, 0, 0, false, ref counter, CancellationToken.None);
+        int result = _RunLoop(sources, exporter, stack, 0, 0, false, ref counter, CancellationToken.None);
 
-        await Assert.That(result).IsEqualTo(0L);
+        await Assert.That(result).IsEqualTo(0);
         await Assert.That(exporter.CapturedIds.Count).IsEqualTo(0);
     }
 
@@ -145,10 +191,9 @@ internal sealed class ExportCommandRecycleTests
         int counter = 0;
         List<IFrameSource> sources = [source];
 
-        long result = ExportCommand.RunExportLoop(
-            sources, exporter, stack, 0, 0, false, ref counter, CancellationToken.None);
+        int result = _RunLoop(sources, exporter, stack, 0, 0, false, ref counter, CancellationToken.None);
 
-        await Assert.That(result).IsEqualTo(3L);
+        await Assert.That(result).IsEqualTo(3);
         await Assert.That(exporter.CapturedIds.Count).IsEqualTo(3);
     }
 
@@ -167,11 +212,143 @@ internal sealed class ExportCommandRecycleTests
         List<IFrameSource> sources = [source];
         CancellationToken cancelled = new(true);
 
-        long result = ExportCommand.RunExportLoop(
-            sources, exporter, stack, 0, 0, false, ref counter, cancelled);
+        int result = _RunLoop(sources, exporter, stack, 0, 0, false, ref counter, cancelled);
 
-        await Assert.That(result).IsEqualTo(0L);
+        await Assert.That(result).IsEqualTo(0);
         await Assert.That(exporter.CapturedIds.Count).IsEqualTo(0);
+    }
+
+    /// <summary>
+    /// A filter that accepts every frame the random source produces must not change the outcome
+    /// of the loop.
+    /// </summary>
+    [Test]
+    public async Task RunExportLoop_FilterMatchesEverything_ExportsAllPackets()
+    {
+        FrameInterfaceRegistry registry = new();
+        using Stack stack = _BuildStack(registry);
+        using RandomFrameSource source = _CreateAndStartSource(count: 10, registry);
+        CapturingExporter exporter = new();
+        int counter = 0;
+        List<IFrameSource> sources = [source];
+
+        int result = _RunFilteredLoop(sources, exporter, stack, _Compile(stack, "udp"), ref counter, out int outputs);
+
+        await Assert.That(result).IsEqualTo(10);
+        await Assert.That(exporter.CapturedIds.Count).IsEqualTo(10);
+        await Assert.That(outputs).IsEqualTo(1);
+    }
+
+    /// <summary>
+    /// A filter that matches nothing must leave no output behind at all: the exporter is only
+    /// created once a packet has actually been accepted.
+    /// </summary>
+    [Test]
+    public async Task RunExportLoop_FilterMatchesNothing_WritesNoOutput()
+    {
+        FrameInterfaceRegistry registry = new();
+        using Stack stack = _BuildStack(registry);
+        using RandomFrameSource source = _CreateAndStartSource(count: 10, registry);
+        CapturingExporter exporter = new();
+        int counter = 0;
+        List<IFrameSource> sources = [source];
+
+        int result = _RunFilteredLoop(sources, exporter, stack, _Compile(stack, "tcp"), ref counter, out int outputs);
+
+        await Assert.That(result).IsEqualTo(0);
+        await Assert.That(exporter.CapturedIds.Count).IsEqualTo(0);
+        await Assert.That(outputs).IsEqualTo(0);
+    }
+
+    /// <summary>
+    /// A filter that cannot produce a verdict must abort the export rather than write a file whose
+    /// contents silently depend on where evaluation stopped.
+    /// </summary>
+    [Test]
+    public async Task RunExportLoop_FilterEvaluationFails_Throws()
+    {
+        FrameInterfaceRegistry registry = new();
+        using Stack stack = _BuildStack(registry);
+        using RandomFrameSource poisonSource = _CreateAndStartSource(count: 1, registry);
+        using RandomFrameSource source = _CreateAndStartSource(count: 10, registry);
+        CapturingExporter exporter = new();
+        int counter = 0;
+        List<IFrameSource> sources = [source];
+
+        // Evaluating a high packet id first makes the stateful filter reject the loop's ids as
+        // out of order, which is the documented poisoning path.
+        PacketFilter filter = _Compile(stack, "flank(ip.ttl, changed, within: 1s)");
+        Frame frame = poisonSource.NextFrame()!.Value;
+        _ = filter.TryIsMatch(Packet.ParseFrame(new PacketId(5000), stack, frame), out _, out _);
+
+        bool aborted = false;
+        string message = string.Empty;
+        try
+        {
+            _ = _RunFilteredLoop(sources, exporter, stack, filter, ref counter, out _);
+        }
+        catch (InvalidOperationException exception)
+        {
+            aborted = true;
+            message = exception.Message;
+        }
+
+        await Assert.That(aborted).IsTrue();
+        await Assert.That(message).Contains("Filter evaluation failed");
+        await Assert.That(exporter.CapturedIds.Count).IsEqualTo(0);
+    }
+
+    /// <summary>
+    /// Size-based splitting needs a live byte estimate from the exporter. An exporter that cannot
+    /// report one must fail loudly instead of writing one unbounded output.
+    /// </summary>
+    [Test]
+    public async Task RunExportLoop_SizeSplitWithoutByteProgress_Throws()
+    {
+        FrameInterfaceRegistry registry = new();
+        using Stack stack = _BuildStack(registry);
+        using RandomFrameSource source = _CreateAndStartSource(count: 4, registry);
+        CapturingExporter exporter = new();
+        int counter = 0;
+        List<IFrameSource> sources = [source];
+        SplitOutputManager split = new("capture.json", maxSize: 1024, maxCount: 0);
+
+        InvalidOperationException? caught = null;
+        try
+        {
+            _ = ExportCommand.RunExportLoop(
+                sources,
+                _ => exporter,
+                split,
+                stack,
+                filter: null,
+                maxPackets: 0,
+                progressInterval: 0,
+                tolerant: false,
+                ref counter,
+                CancellationToken.None,
+                out _);
+        }
+        catch (InvalidOperationException exception)
+        {
+            caught = exception;
+        }
+
+        await Assert.That(caught).IsNotNull();
+        await Assert.That(caught!.Message).Contains("--split-size");
+        await Assert.That(exporter.CapturedIds.Count).IsEqualTo(0);
+    }
+
+    /// <summary>Compiles an expression, failing the test when it does not compile.</summary>
+    private static PacketFilter _Compile(Stack stack, string expression)
+    {
+        FilterResult<PacketFilter> result = PacketFilter.Compile(expression, stack);
+        if (!result.TryGetValue(out PacketFilter? filter))
+        {
+            throw new InvalidOperationException($"Expected '{expression}' to compile but got {result.Error}.");
+        }
+
+        return filter;
     }
 
     // ── Supporting types ──────────────────────────────────────────────────────────────

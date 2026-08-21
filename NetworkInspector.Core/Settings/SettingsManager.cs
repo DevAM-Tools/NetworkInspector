@@ -33,8 +33,6 @@ public sealed class SettingsManager : IDisposable
         WriteIndented = true
     };
 
-    private readonly string? _StoragePath;
-
     private readonly ReaderWriterLockSlim _Lock = new();
     private readonly Dictionary<string, Setting> _SettingsByName = new(StringComparer.Ordinal);
     private readonly List<Setting> _SettingsList = [];
@@ -55,29 +53,39 @@ public sealed class SettingsManager : IDisposable
     private readonly Dictionary<string, SettingValue> _PreloadedValues = new(StringComparer.Ordinal);
 
     /// <summary>Guards against double-dispose (0 = live, 1 = disposed). Written via <see cref="Interlocked"/>.</summary>
-    private int _Disposed;
+    private volatile int _Disposed;
 
-    private readonly ReadOnlySettingsView _ReadOnlyView;
+    /// <summary>Non-zero while <see cref="Load"/> is applying persisted values (0 = idle, 1 = loading).</summary>
+    private volatile int _IsLoading;
 
     /// <summary>Creates a new settings manager without a storage path.</summary>
     public SettingsManager()
     {
-        _StoragePath = null;
-        _ReadOnlyView = new ReadOnlySettingsView(this);
+        StoragePath = null;
     }
 
     /// <summary>Creates a new settings manager with a storage path for JSON persistence.</summary>
     public SettingsManager(string storagePath)
     {
-        _StoragePath = storagePath;
-        _ReadOnlyView = new ReadOnlySettingsView(this);
+        StoragePath = storagePath;
     }
 
-    /// <summary>Gets the read-only view of this manager.</summary>
-    public IReadOnlySettingsManager ReadOnly => _ReadOnlyView;
+    /// <summary>
+    /// Gets a zero-allocation read-only view of this manager.
+    /// Keep the compile-time type as <see cref="ReadOnlySettingsManagerView"/> or pass it to a
+    /// generic <c>where TSettings : IReadOnlySettingsManager</c> parameter. Do not assign the
+    /// result to <see cref="IReadOnlySettingsManager"/> — that boxes.
+    /// </summary>
+    public ReadOnlySettingsManagerView ReadOnly => new(this);
+
+    /// <summary>Alias for <see cref="ReadOnly"/>.</summary>
+    public ReadOnlySettingsManagerView AsReadOnlyView() => new(this);
 
     /// <summary>Gets the storage path, or null if no storage path is configured.</summary>
-    public string? StoragePath => _StoragePath;
+    public string? StoragePath { get; }
+
+    /// <summary>Returns true while <see cref="Load"/> is applying persisted values.</summary>
+    internal bool IsLoading => _IsLoading != 0;
 
     #region Counts
 
@@ -187,10 +195,12 @@ public sealed class SettingsManager : IDisposable
     /// Registers a setting. If the group doesn't exist, it is created implicitly.
     /// If a persisted value exists (from <see cref="Load"/>), it is applied.
     /// </summary>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="setting"/> is null.</exception>
     /// <exception cref="InvalidNameSettingsException">Thrown when the name or UI name is invalid.</exception>
     /// <exception cref="DuplicateNameSettingsException">Thrown when a setting with the same name already exists.</exception>
     public SettingRegistrationResult RegisterSetting(Setting setting)
     {
+        ArgumentNullException.ThrowIfNull(setting);
         string name = setting.Name;
         string groupName = setting.GroupName;
 
@@ -213,6 +223,8 @@ public sealed class SettingsManager : IDisposable
 
             // Ensure group exists
             _EnsureGroupExistsLocked(groupName);
+
+            setting.BindToManager(this);
 
             // Apply any pre-loaded typed value (set via PreloadValue before the setting
             // existed) — takes precedence over orphaned JSON values.
@@ -286,8 +298,8 @@ public sealed class SettingsManager : IDisposable
             return SettingLoadResult.NoPersistedValue;
         }
 
-        (SettingValue? value, SettingLoadResult parseResult) =
-            _JsonToSettingValue(jsonNode, setting.Type, setting.EnumMetadata);
+        (SettingValue? value, SettingLoadResult parseResult, _) =
+            _JsonToSettingValue(jsonNode, setting.Type, setting.EnumMetadata, setting.GroupName, setting.Name);
         if (value is null)
         {
             // Return the specific parse failure reason (TypeMismatch or DeserializationError).
@@ -296,14 +308,12 @@ public sealed class SettingsManager : IDisposable
 
         try
         {
-            setting.SetPendingValue(value.Value);
+            setting.ApplyFromPersistence(value.Value);
         }
         catch (SettingsException)
         {
             return SettingLoadResult.OutOfRange;
         }
-
-        setting.Apply();
 
         // Remove from orphaned values since it's been consumed
         groupValues.Remove(setting.Name);
@@ -392,14 +402,14 @@ public sealed class SettingsManager : IDisposable
         }
     }
 
-    private IReadOnlyList<IReadOnlySetting> _AllSettings
+    private IReadOnlyList<ReadOnlySettingView> _AllSettings
     {
         get
         {
             _Lock.EnterReadLock();
             try
             {
-                return [.. _SettingsList];
+                return ReadOnlySettingView.Wrap(_SettingsList);
             }
             finally
             {
@@ -407,6 +417,13 @@ public sealed class SettingsManager : IDisposable
             }
         }
     }
+
+    /// <summary>Snapshot of all settings as read-only struct views (used by <see cref="ReadOnlySettingsManagerView"/>).</summary>
+    internal IReadOnlyList<ReadOnlySettingView> ReadOnlyAllSettings => _AllSettings;
+
+    /// <summary>Group settings snapshot as read-only struct views (used by <see cref="ReadOnlySettingsManagerView"/>).</summary>
+    internal IReadOnlyList<ReadOnlySettingView> GetSettingsInGroupAsReadOnly(string groupName) =>
+        ReadOnlySettingView.Wrap(GetSettingsInGroup(groupName));
 
     /// <summary>Gets all group names (snapshot).</summary>
     public IReadOnlyList<string> AllGroups
@@ -451,7 +468,7 @@ public sealed class SettingsManager : IDisposable
         {
             if (_GroupsByName.TryGetValue(groupName, out SettingGroup? group))
             {
-                return group.Settings;
+                return group.CopySettings();
             }
             return [];
         }
@@ -670,6 +687,12 @@ public sealed class SettingsManager : IDisposable
     /// Each JSON file represents a group. The filename (without extension) is the group name.
     /// <c>default.json</c> maps to the default group (empty-string name).
     /// <para>
+    /// Requires exclusive access to registered settings while applying persisted values.
+    /// Concurrent overlapping <see cref="Load"/> calls throw <see cref="InvalidOperationException"/>.
+    /// Concurrent <see cref="Setting.SetPendingValue"/> / <see cref="Setting.Apply"/> calls
+    /// on registered settings throw <see cref="InvalidOperationException"/> until load completes.
+    /// </para>
+    /// <para>
     /// Invalid or incompatible persisted values are skipped — they do not prevent loading.
     /// The returned list describes every skipped entry so callers can surface diagnostics.
     /// </para>
@@ -679,23 +702,30 @@ public sealed class SettingsManager : IDisposable
     /// Each entry describes one skipped setting or skipped group file.
     /// </returns>
     /// <exception cref="PersistenceSettingsException">
-    /// Thrown when no storage path is configured or on I/O orJSON errors.
+    /// Thrown when no storage path is configured or on I/O or JSON errors.
+    /// </exception>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown when another <see cref="Load"/> is already in progress.
     /// </exception>
     public IReadOnlyList<SettingsLoadWarning> Load()
     {
-        if (_StoragePath is null)
+        if (StoragePath is null)
         {
             throw PersistenceSettingsException.ForNoStoragePath();
         }
-        if (!Directory.Exists(_StoragePath))
+        if (!Directory.Exists(StoragePath))
         {
             return [];
         }
 
         List<SettingsLoadWarning> warnings = [];
+        if (Interlocked.CompareExchange(ref _IsLoading, 1, 0) != 0)
+        {
+            throw new InvalidOperationException("SettingsManager.Load() is already in progress.");
+        }
         try
         {
-            foreach (string filePath in Directory.EnumerateFiles(_StoragePath, "*.json"))
+            foreach (string filePath in Directory.EnumerateFiles(StoragePath, "*.json"))
             {
                 _LoadGroupFile(filePath, warnings);
             }
@@ -703,6 +733,10 @@ public sealed class SettingsManager : IDisposable
         catch (IOException ex)
         {
             throw PersistenceSettingsException.ForIo(ex);
+        }
+        finally
+        {
+            _ = Interlocked.Exchange(ref _IsLoading, 0);
         }
         return warnings;
     }
@@ -712,9 +746,9 @@ public sealed class SettingsManager : IDisposable
     /// </summary>
     private void _LoadGroupFile(string filePath, List<SettingsLoadWarning> warnings)
     {
+        string groupName = Path.GetFileNameWithoutExtension(filePath);
         try
         {
-            string groupName = Path.GetFileNameWithoutExtension(filePath);
             // "default" maps to the empty-string default group
             if (groupName == "default")
             {
@@ -723,19 +757,38 @@ public sealed class SettingsManager : IDisposable
 
             // Validate the group name derived from the file name.
             // Non-default group names must be lowercase dot-separated identifiers.
+            string fileLabel = SettingsFileAccess.SafeFileLabel(filePath);
             if (!NameValidation.IsValidGroupName(groupName))
             {
                 warnings.Add(new SettingsLoadWarning(
                     SettingsLoadWarningKind.InvalidGroupName,
                     groupName,
                     string.Empty,
-                    $"Group name '{groupName}' (from file '{Path.GetFileName(filePath)}') is not a valid group name. " +
+                    $"Group name '{groupName}' (from file '{fileLabel}') is not a valid group name. " +
                     "Group names must be lowercase dot-separated identifiers (e.g. 'my.group'). The file is skipped."));
                 return;
             }
 
-            string json = File.ReadAllText(filePath);
-            JsonNode? root = JsonNode.Parse(json);
+            JsonNode? root;
+            using (FileStream stream = SettingsFileAccess.OpenSharedRead(filePath))
+            {
+                if (stream.Length > SettingsFileAccess.MaxFileBytes)
+                {
+                    warnings.Add(new SettingsLoadWarning(
+                        SettingsLoadWarningKind.InvalidGroupFileShape,
+                        groupName,
+                        string.Empty,
+                        string.Create(
+                            CultureInfo.InvariantCulture,
+                            $"Settings file '{fileLabel}' exceeds {SettingsFileAccess.MaxFileBytes} bytes. The file is skipped.")));
+                    return;
+                }
+
+                root = JsonNode.Parse(
+                    stream,
+                    nodeOptions: null,
+                    documentOptions: new JsonDocumentOptions { MaxDepth = SettingsFileAccess.JsonMaxDepth });
+            }
             if (root is not JsonObject obj)
             {
                 // The file's root is not a JSON object — emit a diagnostic and skip.
@@ -743,7 +796,7 @@ public sealed class SettingsManager : IDisposable
                     SettingsLoadWarningKind.InvalidGroupFileShape,
                     groupName,
                     string.Empty,
-                    $"Settings file '{Path.GetFileName(filePath)}' does not contain a JSON object at the root. " +
+                    $"Settings file '{fileLabel}' does not contain a JSON object at the root. " +
                     "Expected an object with setting name/value pairs. The file is skipped."));
                 return;
             }
@@ -764,8 +817,12 @@ public sealed class SettingsManager : IDisposable
 
                     if (_SettingsByName.TryGetValue(prop.Key, out Setting? setting))
                     {
-                        (SettingValue? value, SettingLoadResult parseResult) =
-                            _JsonToSettingValue(prop.Value, setting.Type, setting.EnumMetadata);
+                        (SettingValue? value, SettingLoadResult parseResult, SettingsLoadWarning? parseWarning) =
+                            _JsonToSettingValue(prop.Value, setting.Type, setting.EnumMetadata, groupName, prop.Key);
+                        if (parseWarning is not null)
+                        {
+                            warnings.Add(parseWarning.Value);
+                        }
                         if (value is not null)
                         {
                             toApply.Add((setting, value.Value));
@@ -800,8 +857,7 @@ public sealed class SettingsManager : IDisposable
                 {
                     try
                     {
-                        setting.SetPendingValue(value);
-                        setting.Apply();
+                        setting.ApplyFromPersistence(value);
                     }
                     catch (SettingsException ex)
                     {
@@ -834,7 +890,11 @@ public sealed class SettingsManager : IDisposable
         }
         catch (JsonException ex)
         {
-            throw PersistenceSettingsException.ForJson(ex);
+            warnings.Add(new SettingsLoadWarning(
+                SettingsLoadWarningKind.InvalidGroupFileSyntax,
+                groupName,
+                string.Empty,
+                $"Settings file '{SettingsFileAccess.SafeFileLabel(filePath)}' contains invalid JSON: {ex.Message} The file is skipped."));
         }
         catch (IOException ex)
         {
@@ -845,18 +905,20 @@ public sealed class SettingsManager : IDisposable
     /// <summary>
     /// Saves all settings to JSON files in the storage path.
     /// One file per group, pretty-printed.
+    /// Stale cleanup deletes only group files listed in the previous save manifest,
+    /// never unrelated JSON in <see cref="StoragePath"/>.
     /// </summary>
     /// <exception cref="PersistenceSettingsException">Thrown when no storage path is configured or on I/O/JSON errors.</exception>
     public void Save()
     {
-        if (_StoragePath is null)
+        if (StoragePath is null)
         {
             throw PersistenceSettingsException.ForNoStoragePath();
         }
 
         try
         {
-            Directory.CreateDirectory(_StoragePath);
+            Directory.CreateDirectory(StoragePath);
 
             // Group settings by group name
             Dictionary<string, JsonObject> groups = [];
@@ -882,12 +944,37 @@ public sealed class SettingsManager : IDisposable
                 _Lock.ExitReadLock();
             }
 
-            // Write each group
+            // Write each group atomically via temp file + replace
+            HashSet<string> currentGroupFiles = new(StringComparer.OrdinalIgnoreCase);
             foreach (KeyValuePair<string, JsonObject> group in groups)
             {
-                string filePath = Path.Combine(_StoragePath, $"{group.Key}.json");
+                string fileName = $"{group.Key}.json";
+                currentGroupFiles.Add(fileName);
+                string filePath = Path.Combine(StoragePath, fileName);
+                string tempPath = filePath + ".tmp";
                 string json = group.Value.ToJsonString(_WriteOptions);
-                File.WriteAllText(filePath, json);
+                File.WriteAllText(tempPath, json);
+                File.Move(tempPath, filePath, overwrite: true);
+            }
+
+            // Remove stale group files this manager previously wrote, never unrelated JSON.
+            string manifestPath = Path.Combine(StoragePath, SettingsFileAccess.OwnedGroupManifestFileName);
+            HashSet<string> previouslyOwned = _ReadOwnedGroupFiles(manifestPath);
+            foreach (string existingPath in Directory.EnumerateFiles(StoragePath, "*.json"))
+            {
+                string existingFileName = Path.GetFileName(existingPath);
+                if (previouslyOwned.Contains(existingFileName) && !currentGroupFiles.Contains(existingFileName))
+                {
+                    File.Delete(existingPath);
+                }
+            }
+
+            _WriteOwnedGroupFiles(manifestPath, currentGroupFiles);
+
+            // Clean up leftover temp files from interrupted saves
+            foreach (string tempFile in Directory.EnumerateFiles(StoragePath, "*.json.tmp"))
+            {
+                File.Delete(tempFile);
             }
         }
         catch (JsonException ex)
@@ -897,6 +984,74 @@ public sealed class SettingsManager : IDisposable
         catch (IOException ex)
         {
             throw PersistenceSettingsException.ForIo(ex);
+        }
+    }
+
+    /// <summary>
+    /// Reads the owned-group manifest. Missing or oversized files yield an empty set
+    /// so unrelated JSON is never deleted.
+    /// </summary>
+    private static HashSet<string> _ReadOwnedGroupFiles(string manifestPath)
+    {
+        HashSet<string> owned = new(StringComparer.OrdinalIgnoreCase);
+        if (!File.Exists(manifestPath))
+        {
+            return owned;
+        }
+
+        try
+        {
+            using FileStream stream = SettingsFileAccess.OpenSharedRead(manifestPath);
+            if (stream.Length > SettingsFileAccess.MaxFileBytes)
+            {
+                return owned;
+            }
+
+            using StreamReader reader = new(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+            string? line;
+            while ((line = reader.ReadLine()) is not null)
+            {
+                if (string.IsNullOrWhiteSpace(line))
+                {
+                    continue;
+                }
+
+                // Manifest entries are file names only; reject anything that looks like a path.
+                string fileName = Path.GetFileName(line.Trim());
+                if (fileName.Length == 0
+                    || !string.Equals(fileName, line.Trim(), StringComparison.Ordinal)
+                    || !fileName.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                owned.Add(fileName);
+            }
+        }
+        catch (IOException)
+        {
+            owned.Clear();
+        }
+        catch (UnauthorizedAccessException)
+        {
+            owned.Clear();
+        }
+
+        return owned;
+    }
+
+    /// <summary>Writes the owned-group manifest as one file name per line.</summary>
+    private static void _WriteOwnedGroupFiles(string manifestPath, HashSet<string> currentGroupFiles)
+    {
+        using FileStream stream = new(
+            manifestPath,
+            FileMode.Create,
+            FileAccess.Write,
+            FileShare.Read);
+        using StreamWriter writer = new(stream, Encoding.UTF8);
+        foreach (string fileName in currentGroupFiles)
+        {
+            writer.WriteLine(fileName);
         }
     }
 
@@ -913,8 +1068,8 @@ public sealed class SettingsManager : IDisposable
     ///   <item><see cref="SettingLoadResult.DeserializationError"/> — JSON node type matches but content cannot be decoded (e.g. invalid base64).</item>
     /// </list>
     /// </summary>
-    private static (SettingValue? Value, SettingLoadResult Result) _JsonToSettingValue(
-        JsonNode node, SettingType type, EnumSettingMetadata? enumMetadata)
+    private static (SettingValue? Value, SettingLoadResult Result, SettingsLoadWarning? Warning) _JsonToSettingValue(
+        JsonNode node, SettingType type, EnumSettingMetadata? enumMetadata, string groupName, string settingName)
     {
         try
         {
@@ -922,30 +1077,37 @@ public sealed class SettingsManager : IDisposable
             {
                 // Bytes parsing is handled separately because the FormatException from
                 // invalid base64 is a DeserializationError, not a TypeMismatch.
-                return _TryParseBytesWithResult(node);
+                (SettingValue? bytesValue, SettingLoadResult bytesResult) = _TryParseBytesWithResult(node);
+                return (bytesValue, bytesResult, null);
+            }
+
+            if (type == SettingType.Enum)
+            {
+                return _TryParseEnumWithMetadata(node, enumMetadata, groupName, settingName);
             }
 
             SettingValue? value = type switch
             {
                 SettingType.Bool => (SettingValue?)SettingValue.Bool(node.GetValue<bool>()),
-                SettingType.String => node.GetValue<string>() is { } s ? (SettingValue?)SettingValue.String(s) : null,
+                SettingType.String => node.GetValue<string>() is not null
+                    ? (SettingValue?)SettingValue.String(node.GetValue<string>()!)
+                    : null,
                 SettingType.F64 => _TryParseFiniteF64(node),
                 SettingType.U64 => _TryParseU64(node),
                 SettingType.I64 => _TryParseI64(node),
-                SettingType.Enum => _TryParseEnum(node),
                 _ => null,
             };
-            return (value, value is not null ? SettingLoadResult.Success : SettingLoadResult.TypeMismatch);
+            return (value, value is not null ? SettingLoadResult.Success : SettingLoadResult.TypeMismatch, null);
         }
         catch (InvalidOperationException)
         {
             // JSON node structural type doesn't match expected setting type (e.g., got array for bool).
-            return (null, SettingLoadResult.TypeMismatch);
+            return (null, SettingLoadResult.TypeMismatch, null);
         }
         catch (FormatException)
         {
             // JSON value cannot be converted to the target number/string format.
-            return (null, SettingLoadResult.DeserializationError);
+            return (null, SettingLoadResult.DeserializationError, null);
         }
     }
 
@@ -1023,42 +1185,82 @@ public sealed class SettingsManager : IDisposable
         }
     }
 
-    /// <summary>Tries to parse a <see cref="SettingType.Enum"/> from a JSON object with name/value properties.</summary>
-    private static SettingValue? _TryParseEnum(JsonNode node)
+    /// <summary>
+    /// Tries to parse a <see cref="SettingType.Enum"/> from a JSON object with name/value properties.
+    /// After numeric validation, canonicalizes the name via <paramref name="enumMetadata"/>.
+    /// </summary>
+    private static (SettingValue? Value, SettingLoadResult Result, SettingsLoadWarning? Warning) _TryParseEnumWithMetadata(
+        JsonNode node, EnumSettingMetadata? enumMetadata, string groupName, string settingName)
     {
         // Expect object with "name" and "value" properties
         if (node is not JsonObject obj)
         {
-            return null;
+            return (null, SettingLoadResult.TypeMismatch, null);
         }
         if (obj["name"] is not JsonValue nameVal)
         {
-            return null;
+            return (null, SettingLoadResult.TypeMismatch, null);
         }
         if (obj["value"] is not JsonValue valueVal)
         {
-            return null;
+            return (null, SettingLoadResult.TypeMismatch, null);
         }
 
-        if (!nameVal.TryGetValue(out string? name))
+        if (!nameVal.TryGetValue(out string? persistedName))
         {
-            return null;
+            return (null, SettingLoadResult.TypeMismatch, null);
         }
 
+        ulong? numericValue = _TryGetEnumNumericValue(valueVal);
+        if (numericValue is null)
+        {
+            return (null, SettingLoadResult.TypeMismatch, null);
+        }
+
+        if (enumMetadata is null)
+        {
+            return (SettingValue.Enum(persistedName, numericValue.Value), SettingLoadResult.Success, null);
+        }
+
+        EnumSettingValue? canonical = enumMetadata.GetByNumeric(numericValue.Value);
+        if (canonical is null)
+        {
+            return (null, SettingLoadResult.TypeMismatch, null);
+        }
+
+        string canonicalName = canonical.Value.Name;
+        SettingValue value = SettingValue.Enum(canonicalName, numericValue.Value);
+        SettingsLoadWarning? warning = null;
+        if (!string.Equals(persistedName, canonicalName, StringComparison.OrdinalIgnoreCase))
+        {
+            warning = new SettingsLoadWarning(
+                SettingsLoadWarningKind.EnumNameMismatch,
+                groupName,
+                settingName,
+                $"Persisted enum name '{persistedName}' for '{settingName}' does not match the canonical name " +
+                $"'{canonicalName}' for numeric value {numericValue.Value}. The canonical name is applied.");
+        }
+
+        return (value, SettingLoadResult.Success, warning);
+    }
+
+    /// <summary>Extracts the numeric component from an enum JSON value node.</summary>
+    private static ulong? _TryGetEnumNumericValue(JsonValue valueVal)
+    {
         if (valueVal.TryGetValue(out ulong numVal))
         {
-            return SettingValue.Enum(name, numVal);
+            return numVal;
         }
 
         if (valueVal.TryGetValue(out long longVal) && longVal >= 0)
         {
-            return SettingValue.Enum(name, (ulong)longVal);
+            return (ulong)longVal;
         }
 
         if (valueVal.TryGetValue(out string? strVal)
             && ulong.TryParse(strVal, NumberStyles.Integer, CultureInfo.InvariantCulture, out ulong parsed))
         {
-            return SettingValue.Enum(name, parsed);
+            return parsed;
         }
 
         return null;
@@ -1146,32 +1348,4 @@ public sealed class SettingsManager : IDisposable
     /// <summary>Internal alias called by <see cref="Stack.Dispose"/> via the existing disposal path.</summary>
     internal void DisposeResources() => Dispose();
     #endregion
-
-    private sealed class ReadOnlySettingsView(SettingsManager owner) : IReadOnlySettingsManager
-    {
-        public int SettingCount => owner.SettingCount;
-
-        public int GroupCount => owner.GroupCount;
-
-        public IReadOnlySetting? GetSetting(string name) => owner.GetSetting(name);
-
-        public IReadOnlyList<IReadOnlySetting> AllSettings => owner._AllSettings;
-
-        public IReadOnlyList<string> AllGroups => owner.AllGroups;
-
-        public IReadOnlySettingGroup? GetGroup(string name) => owner.GetGroup(name);
-
-        public IReadOnlyList<IReadOnlySetting> GetSettingsInGroup(string groupName) =>
-            owner.GetSettingsInGroup(groupName);
-
-        public bool? GetBoolSetting(string name) => owner.GetBoolSetting(name);
-
-        public string? GetStringSetting(string name) => owner.GetStringSetting(name);
-
-        public double? GetF64Setting(string name) => owner.GetF64Setting(name);
-
-        public ulong? GetU64Setting(string name) => owner.GetU64Setting(name);
-
-        public long? GetI64Setting(string name) => owner.GetI64Setting(name);
-    }
 }

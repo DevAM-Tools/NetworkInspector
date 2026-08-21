@@ -22,7 +22,7 @@ public sealed class CsvExporter : IPacketListener, IErrorTolerantExporter, IDisp
     private readonly bool _WriteBom;
     private readonly byte _Delimiter;
     private readonly bool _WriteHeader;
-    private readonly long _TargetPacketCount;
+    private readonly int _TargetPacketCount;
     private readonly CsvColumnDefinition[] _Columns;
 
     private ExportOutput? _Output;
@@ -45,7 +45,7 @@ public sealed class CsvExporter : IPacketListener, IErrorTolerantExporter, IDisp
         bool writeBom,
         byte delimiter,
         bool writeHeader,
-        long targetPacketCount,
+        int targetPacketCount,
         CsvColumnDefinition[] columns,
         CancellationToken cancellationToken)
     {
@@ -77,22 +77,26 @@ public sealed class CsvExporter : IPacketListener, IErrorTolerantExporter, IDisp
     }
 
     /// <summary>Number of packets successfully written.</summary>
-    public long PacketCount
+    public int PacketCount
     {
         get; private set;
     }
 
     /// <inheritdoc/>
-    public long WrittenCount => PacketCount;
+    public int WrittenCount => PacketCount;
 
     /// <inheritdoc/>
-    public long SkippedCount
+    public long EstimatedOutputBytes =>
+        (_Output?.AcceptedBytes ?? 0L) + _Buffer.Length;
+
+    /// <inheritdoc/>
+    public int SkippedCount
     {
         get; private set;
     }
 
     /// <inheritdoc/>
-    public long ErrorCount
+    public int ErrorCount
     {
         get; private set;
     }
@@ -170,7 +174,7 @@ public sealed class CsvExporter : IPacketListener, IErrorTolerantExporter, IDisp
             // Bump ErrorCount so HasErrors reflects the failure; in Tolerant mode
             // the _OnError event subscribers see it via ItemSkipped, in Strict mode
             // the next OnPacket call will be rejected via the _HasError gate.
-            ErrorCount++;
+            if (ErrorCount < int.MaxValue) ErrorCount++;
             _HasError = true;
             _OnError(0, ExportErrorKind.IoError, ex.Message);
             return false;
@@ -206,7 +210,8 @@ public sealed class CsvExporter : IPacketListener, IErrorTolerantExporter, IDisp
 
         try
         {
-            packet.MaterializeAll();
+            // Field columns materialize via TryGetFieldValue(..., materialize: true).
+            // Builtin columns (Id/Timestamp/Length/Info) do not need the full tree.
             _Buffer.Reset();
 
             // Pre-allocate the timestamp formatting buffer once outside the column loop
@@ -237,6 +242,9 @@ public sealed class CsvExporter : IPacketListener, IErrorTolerantExporter, IDisp
                             _Buffer.Write(tsBuf[..tsWritten]);
                         }
                         break;
+                    case CsvColumnKind.Field when column.FieldId.HasValue:
+                        _WriteFieldColumn(packet, column.FieldId.Value);
+                        break;
                     default:
                         string value = _ExtractColumnValue(packet, column);
                         _WriteCsvField(value);
@@ -252,8 +260,8 @@ public sealed class CsvExporter : IPacketListener, IErrorTolerantExporter, IDisp
         }
         catch (Exception ex)
         {
-            ErrorCount++;
-            long index = PacketCount;
+            if (ErrorCount < int.MaxValue) ErrorCount++;
+            int index = PacketCount;
 
             if (ErrorTolerance == ErrorToleranceMode.Strict)
             {
@@ -261,10 +269,83 @@ public sealed class CsvExporter : IPacketListener, IErrorTolerantExporter, IDisp
                 return false;
             }
 
-            SkippedCount++;
+            if (SkippedCount < int.MaxValue) SkippedCount++;
             _OnError(index, ExportErrorKind.SerializationError, ex.Message);
             return true;
         }
+    }
+
+    /// <summary>
+    /// Writes a field-column value via <see cref="IUtf8SpanFormattable"/> without an intermediate
+    /// <see cref="string"/>, scanning the UTF-8 for CSV quoting needs.
+    /// </summary>
+    private void _WriteFieldColumn(Packet packet, FieldId fieldId)
+    {
+        if (!packet.TryGetFieldValue(fieldId, out FieldValue value, materialize: true))
+        {
+            return;
+        }
+
+        int maxUtf8 = 256;
+        if (value.TryGetStringSize(format: default, CultureInfo.InvariantCulture, out int charCount))
+        {
+            // UTF-8 upper bound for BMP + common multi-byte sequences.
+            maxUtf8 = Math.Max(64, charCount * 3);
+        }
+
+        Span<byte> scratch = maxUtf8 <= 512
+            ? stackalloc byte[maxUtf8]
+            : _GetQuotedScratch(maxUtf8);
+
+        if (!value.TryFormat(scratch, out int written, default, CultureInfo.InvariantCulture))
+        {
+            // Rare: estimate too small — fall back to string path.
+            _WriteCsvField(value.ToString());
+            return;
+        }
+
+        _WriteCsvFieldUtf8(scratch[..written]);
+    }
+
+    /// <summary>Writes a CSV field from already-encoded UTF-8 with RFC 4180 quoting.</summary>
+    private void _WriteCsvFieldUtf8(ReadOnlySpan<byte> utf8)
+    {
+        bool needsQuoting = false;
+        for (int i = 0; i < utf8.Length; i++)
+        {
+            byte b = utf8[i];
+            if (b == _Delimiter || b == (byte)'"' || b == (byte)'\r' || b == (byte)'\n')
+            {
+                needsQuoting = true;
+                break;
+            }
+        }
+
+        if (!needsQuoting)
+        {
+            _Buffer.Write(utf8);
+            return;
+        }
+
+        _Buffer.Write("\""u8);
+        int start = 0;
+        for (int i = 0; i < utf8.Length; i++)
+        {
+            if (utf8[i] == (byte)'"')
+            {
+                if (i > start)
+                {
+                    _Buffer.Write(utf8[start..i]);
+                }
+                _Buffer.Write("\"\""u8);
+                start = i + 1;
+            }
+        }
+        if (start < utf8.Length)
+        {
+            _Buffer.Write(utf8[start..]);
+        }
+        _Buffer.Write("\""u8);
     }
 
     /// <summary>Writes a UTF-8 integer without heap-allocating a <see cref="string"/>.</summary>
@@ -293,7 +374,8 @@ public sealed class CsvExporter : IPacketListener, IErrorTolerantExporter, IDisp
             case CsvColumnKind.FrameLength:
                 return packet.Frame.Length.ToString(CultureInfo.InvariantCulture);
             case CsvColumnKind.Field when column.FieldId.HasValue:
-                if (packet.TryGetFieldValue(column.FieldId.Value, out FieldValue value))
+                // materialize: true — CSV column may reference a lazy field.
+                if (packet.TryGetFieldValue(column.FieldId.Value, out FieldValue value, materialize: true))
                 {
                     // FieldValue.ToString() → FieldValueData.ToTempString() → ZA.String (InvariantCulture).
                     return value.ToString();
@@ -368,7 +450,7 @@ public sealed class CsvExporter : IPacketListener, IErrorTolerantExporter, IDisp
 
         int quotedMaxBytes = Encoding.UTF8.GetMaxByteCount(value.Length);
 
-        // Use conditional stackalloc for small values; fall back to ThreadStatic scratch
+        // Use conditional stackalloc for small values; fall back to instance scratch
         // for large values to avoid heap allocation.
         // NOTE: the ternary conditional-stackalloc pattern is the only valid way to have
         // a stackalloc span remain in scope across the subsequent quote-scanning loop.
@@ -422,7 +504,7 @@ public sealed class CsvExporter : IPacketListener, IErrorTolerantExporter, IDisp
                 // handler is invoked with an IO/Serialization classification so
                 // it is never lost silently.
                 _HasError = true;
-                ErrorCount++;
+                if (ErrorCount < int.MaxValue) ErrorCount++;
                 ItemSkipped?.Invoke(this, new ExportErrorEventArgs
                 {
                     ItemIndex = PacketCount,
@@ -445,7 +527,7 @@ public sealed class CsvExporter : IPacketListener, IErrorTolerantExporter, IDisp
             if (disposalError is not null)
             {
                 _HasError = true;
-                ErrorCount++;
+                if (ErrorCount < int.MaxValue) ErrorCount++;
                 ItemSkipped?.Invoke(this, new ExportErrorEventArgs
                 {
                     ItemIndex = PacketCount,
@@ -462,7 +544,7 @@ public sealed class CsvExporter : IPacketListener, IErrorTolerantExporter, IDisp
     }
 
     /// <summary>Raises the <see cref="ItemSkipped"/> event.</summary>
-    private void _OnError(long index, ExportErrorKind kind, string message)
+    private void _OnError(int index, ExportErrorKind kind, string message)
     {
         ItemSkipped?.Invoke(this, new ExportErrorEventArgs
         {
@@ -484,7 +566,7 @@ public sealed class CsvExporter : IPacketListener, IErrorTolerantExporter, IDisp
         private bool _WriteBom = true;
         private byte _Delimiter = (byte)',';
         private bool _WriteHeader = true;
-        private long _TargetPacketCount;
+        private int _TargetPacketCount;
         private readonly List<CsvColumnDefinition> _Columns = [];
 
         /// <summary>Sets the output to a file path.</summary>
@@ -571,9 +653,18 @@ public sealed class CsvExporter : IPacketListener, IErrorTolerantExporter, IDisp
         }
 
         /// <summary>Stops after writing the specified number of packets. 0 means unlimited.</summary>
-        public Builder WithTargetPacketCount(long count)
+        public Builder WithTargetPacketCount(int count)
         {
             ArgumentOutOfRangeException.ThrowIfNegative(count);
+            if (count > ArrayIndexIdRange.MaxCount)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(count),
+                    count,
+                    $"Target packet count must not exceed {ArrayIndexIdRange.MaxCount.ToString(CultureInfo.InvariantCulture)} " +
+                    $"(Array.MaxLength={Array.MaxLength.ToString(CultureInfo.InvariantCulture)}).");
+            }
+
             _TargetPacketCount = count;
             return this;
         }

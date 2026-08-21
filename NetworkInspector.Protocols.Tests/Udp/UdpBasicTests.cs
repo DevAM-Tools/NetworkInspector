@@ -117,7 +117,7 @@ internal sealed class UdpBasicTests
             foreach (FieldId memberId in members)
             {
                 FieldLookupCookie cookie = FieldLookupCookie.Start;
-                while (packet.TryGetNextFieldValue(memberId, ref cookie, out FieldValue value))
+                while (packet.TryGetNextFieldValue(memberId, ref cookie, out FieldValue value, materialize: true)) // materialize: true — need complete field tree for assertion
                 {
                     bool ok = value.Data.TryGetAsU64(out ulong port);
                     await Assert.That(ok).IsTrue().Because("alias member values must be U64");
@@ -128,6 +128,20 @@ internal sealed class UdpBasicTests
             await Assert.That(found.Count).IsEqualTo(2);
             await Assert.That(found.Contains(12345UL)).IsTrue();
             await Assert.That(found.Contains(53UL)).IsTrue();
+        }
+    }
+
+    [Test]
+    public async Task Parse_Udp_UnregisteredPorts_SucceedsWithoutPacketError()
+    {
+        byte[] frame = _BuildUdpFrame(srcPort: 1000, dstPort: 2000);
+        (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
+        using (stack)
+        {
+            await ProtocolTestHelper.AssertProtocolPresent(stack, packet, "udp").ConfigureAwait(false);
+            await ProtocolTestHelper.AssertU64Field(stack, packet, "udp.srcport", 1000).ConfigureAwait(false);
+            await ProtocolTestHelper.AssertU64Field(stack, packet, "udp.dstport", 2000).ConfigureAwait(false);
+            await ProtocolTestHelper.AssertFieldNotPresent(stack, packet, "packet.error").ConfigureAwait(false);
         }
     }
 

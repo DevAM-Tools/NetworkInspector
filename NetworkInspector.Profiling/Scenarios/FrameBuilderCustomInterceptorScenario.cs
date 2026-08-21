@@ -28,18 +28,24 @@ internal sealed class FrameBuilderCustomInterceptorScenario : FrameBuilderScenar
     /// </summary>
     /// <remarks>
     /// Thread-safety: <see cref="HeaderCalls"/>, <see cref="FrameCalls"/>, and
-    /// <see cref="ByteSum"/> are declared volatile — every read/write must go through
-    /// <see cref="Interlocked"/>. Plain field access (e.g. <c>++HeaderCalls</c>) is a
-    /// data-race defect.
+    /// <see cref="ByteSum"/> are long counters (`volatile` is illegal on long) — every
+    /// read/write must go through <see cref="Interlocked"/>. Plain field access
+    /// (e.g. <c>++HeaderCalls</c>) is a data-race defect.
     /// </remarks>
     private readonly struct CountingInterceptor : IFrameInterceptor
     {
-        /// <summary>Volatile — every read/write must use <see cref="Interlocked"/>. Counts header callbacks.</summary>
-        internal static long HeaderCalls;  // volatile
-        /// <summary>Volatile — every read/write must use <see cref="Interlocked"/>. Counts frame-complete callbacks.</summary>
-        internal static long FrameCalls;   // volatile
-        /// <summary>Volatile — every read/write must use <see cref="Interlocked"/>. Accumulates first-byte values to prevent dead-code elimination.</summary>
-        internal static long ByteSum;      // volatile
+        /// <summary>
+        /// Header callback count. `volatile` is illegal on long; every read/write must use <see cref="Interlocked"/>.
+        /// </summary>
+        internal static long HeaderCalls;
+        /// <summary>
+        /// Frame-complete callback count. `volatile` is illegal on long; every read/write must use <see cref="Interlocked"/>.
+        /// </summary>
+        internal static long FrameCalls;
+        /// <summary>
+        /// First-byte accumulator to prevent DCE. `volatile` is illegal on long; every read/write must use <see cref="Interlocked"/>.
+        /// </summary>
+        internal static long ByteSum;
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void OnHeaderWritten<TLayer>(in TLayer layer, scoped Span<byte> headerSlice)

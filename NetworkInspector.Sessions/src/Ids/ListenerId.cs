@@ -13,62 +13,67 @@ public readonly struct ListenerId(int value) : IEquatable<ListenerId>, IComparab
     /// <summary>Sentinel value representing an invalid or unassigned listener ID.</summary>
     public static readonly ListenerId Invalid = new(-1);
 
-    private readonly int _Value = value;
-
     /// <summary>The raw numeric value of this identifier.</summary>
-    public int Value
-    {
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _Value;
-    }
+    public int Value { get; } = _StoreValidated(value);
 
     /// <summary>Whether this ID represents a valid (assigned) identifier.</summary>
     public bool IsValid
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _Value >= 0;
+        get => Core.Ids.ArrayIndexIdRange.IsValidIndex(Value);
     }
 
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public int CompareTo(ListenerId other) => _Value.CompareTo(other._Value);
+    public int CompareTo(ListenerId other) => Value.CompareTo(other.Value);
 
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public override int GetHashCode() => _Value;
+    public override int GetHashCode() => Value;
 
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public bool Equals(ListenerId other) => _Value == other._Value;
+    public bool Equals(ListenerId other) => Value == other.Value;
 
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public override bool Equals(object? obj) => obj is ListenerId other && Equals(other);
 
     /// <inheritdoc/>
-    public override string ToString() => _Value.ToString(CultureInfo.InvariantCulture);
+    public override string ToString() => Value.ToString(CultureInfo.InvariantCulture);
 
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static bool operator ==(ListenerId left, ListenerId right) => left._Value == right._Value;
+    public static bool operator ==(ListenerId left, ListenerId right) => left.Value == right.Value;
 
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static bool operator !=(ListenerId left, ListenerId right) => left._Value != right._Value;
+    public static bool operator !=(ListenerId left, ListenerId right) => left.Value != right.Value;
 
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static bool operator <(ListenerId left, ListenerId right) => left._Value < right._Value;
+    public static bool operator <(ListenerId left, ListenerId right) => left.Value < right.Value;
 
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static bool operator >(ListenerId left, ListenerId right) => left._Value > right._Value;
+    public static bool operator >(ListenerId left, ListenerId right) => left.Value > right.Value;
 
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static bool operator <=(ListenerId left, ListenerId right) => left._Value <= right._Value;
+    public static bool operator <=(ListenerId left, ListenerId right) => left.Value <= right.Value;
 
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static bool operator >=(ListenerId left, ListenerId right) => left._Value >= right._Value;
+    public static bool operator >=(ListenerId left, ListenerId right) => left.Value >= right.Value;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static int _StoreValidated(int value)
+    {
+        if (!Core.Ids.ArrayIndexIdRange.IsInvalidSentinel(value))
+        {
+            Core.Ids.ArrayIndexIdRange.ValidateIndexOrThrow(value, nameof(value));
+        }
+
+        return value;
+    }
 }

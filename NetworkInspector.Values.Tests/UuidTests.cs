@@ -166,6 +166,23 @@ internal sealed class UuidTests
         await Assert.That(restored).IsEqualTo(original);
     }
 
+    [Test]
+    public async Task TryFromBytes_ShortSpan_ReturnsFalse()
+    {
+        await Assert.That(Uuid.TryFromBytes(ReadOnlySpan<byte>.Empty, out Uuid uuid)).IsFalse();
+        await Assert.That(uuid).IsEqualTo(default(Uuid));
+    }
+
+    [Test]
+    public async Task FromBytes_ShortSpan_Throws()
+    {
+        await Assert.That(() =>
+        {
+            Uuid _ = Uuid.FromBytes(ReadOnlySpan<byte>.Empty);
+            return Task.CompletedTask;
+        }).Throws<ArgumentException>();
+    }
+
     // === GetHashCode ===
 
     [Test]

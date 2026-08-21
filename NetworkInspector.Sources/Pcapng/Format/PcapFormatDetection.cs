@@ -21,26 +21,13 @@ internal enum FileFormat
 /// <summary>
 /// Result of format detection: identifies the file format, byte order, and timestamp resolution.
 /// </summary>
-internal readonly struct FormatDetectionResult
-{
-    /// <summary>Detected file format.</summary>
-    internal FileFormat Format
-    {
-        get; init;
-    }
-
-    /// <summary>Whether the file uses swapped byte order relative to the host.</summary>
-    internal bool ByteSwapped
-    {
-        get; init;
-    }
-
-    /// <summary>Whether the file uses nanosecond timestamps (legacy PCAP only).</summary>
-    internal bool NanosecondTimestamps
-    {
-        get; init;
-    }
-}
+/// <param name="Format">Detected file format.</param>
+/// <param name="ByteSwapped">Whether the file uses swapped byte order relative to the host.</param>
+/// <param name="NanosecondTimestamps">Whether the file uses nanosecond timestamps (legacy PCAP only).</param>
+internal readonly record struct FormatDetectionResult(
+    FileFormat Format,
+    bool ByteSwapped,
+    bool NanosecondTimestamps);
 
 /// <summary>
 /// Detects the capture file format from the first bytes of the file.

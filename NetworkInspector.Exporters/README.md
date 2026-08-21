@@ -39,6 +39,7 @@ dotnet add package NetworkInspector.Sources
 | --- | --- | --- | --- |
 | Repackage or transform captures | Frames | Frame exporter | PCAPNG, BLF, ASC |
 | Produce analysis-ready records | Parsed packets | Packet exporter | JSON, PBF, CSV, Text |
+| Build a queryable analytics dataset | Parsed packets | Columnar packet exporter | Parquet, PBF (Columnar); DuckDB via `NetworkInspector.Exporters.DuckDb` |
 
 ## Quick Start
 
@@ -93,6 +94,7 @@ exporter.OnFinish();
 | `PbfExporter` | `.pbf` | Compact binary output at scale | [Pbf/README.md](Pbf/README.md) |
 | `CsvExporter` | `.csv` | Spreadsheet and tabular workflows | [Csv/README.md](Csv/README.md) |
 | `TextExporter` | `.txt` | Readable protocol-tree output | [Text/README.md](Text/README.md) |
+| `ParquetExporter` | directory of `.parquet` files | Analytics tooling (DuckDB, pandas, Spark, Polars) | [Parquet/README.md](Parquet/README.md) |
 
 ## Common Tasks
 
@@ -136,6 +138,8 @@ Call `OnFinish()` before disposal to flush final metadata and trailing structure
 - [Pbf exporter](Pbf/README.md)
 - [Csv exporter](Csv/README.md)
 - [Text exporter](Text/README.md)
+- [Parquet exporter](Parquet/README.md)
+- [DuckDB exporter](../NetworkInspector.Exporters.DuckDb/README.md) (`NetworkInspector.Exporters.DuckDb`)
 - [Root overview](../README.md)
 
 ## License

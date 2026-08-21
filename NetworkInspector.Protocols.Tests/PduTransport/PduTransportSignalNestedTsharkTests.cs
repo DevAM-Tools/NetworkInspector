@@ -3,35 +3,35 @@
 namespace NetworkInspector.Protocols.Tests.PduTransport;
 
 /// <summary>
-/// Nested PDU-Transport → Signal-PDU symmetry against tshark with generated UAT profile.
+/// Nested PDU-Transport → Signal Message symmetry against tshark with generated UAT profile.
 /// </summary>
 internal sealed class PduTransportSignalNestedTsharkTests
 {
     [Test]
-    public async Task Tshark_Nested_PduTransportAndSignalPduFieldsMatchNi()
+    public async Task Tshark_Nested_PduTransportAndSignalMessageFieldsMatchNi()
     {
         if (TsharkAvailability.ShouldSkip())
         {
             return;
         }
 
-        SignalPduLayout layout = AutomotivePduBench.TwoSequentialUint16LeLayout;
+        SignalMessageLayout layout = AutomotivePduBench.TwoSequentialUint16LeLayout;
 
-        SignalValueSet vals = SignalValueSet.For(layout).Set("EngineRpm", 125.0).Set("Thr", 555);
+        SignalMessageValueSet vals = SignalMessageValueSet.For(layout).Set("EngineRpm", 125.0).Set("Thr", 555);
 
-        SignalPduLayer inner = new(layout, vals);
+        SignalMessageLayer inner = new(layout, vals);
 
         byte[] frame = AutomotiveEthUdpFrames.EncapsulatePduTransportSignal(
             udpSrcPort: 18002,
             udpDstPort: AutomotivePduBench.UdpPduTransportDestinationPort,
             pduFb: AutomotivePduBench.PduTransportRegistry,
             pduWireId: AutomotivePduBench.PduTransportWireId,
-            signalPdu: inner);
+            signalMessage: inner);
 
         string work = Path.Combine(Path.GetTempPath(), "ni_pt_nested_" + Guid.NewGuid().ToString("N"));
         _ = Directory.CreateDirectory(work);
         string pduJson = Path.Combine(work, "pdutr.json");
-        string sigJson = Path.Combine(work, "signal_pdu.json");
+        string sigJson = Path.Combine(work, "signal_message.json");
 
         string personalRoot = Path.Combine(Path.GetTempPath(), "ni_ws_personal_nested_" + Guid.NewGuid().ToString("N"));
         _ = Directory.CreateDirectory(personalRoot);
@@ -41,7 +41,7 @@ internal sealed class PduTransportSignalNestedTsharkTests
             await File.WriteAllTextAsync(pduJson, PduTransportConfigBridge.SerializeJson(AutomotivePduBench.PduTransportRegistry))
                 .ConfigureAwait(false);
 
-            await File.WriteAllTextAsync(sigJson, SignalPduConfigBridge.SerializeJson(layout)).ConfigureAwait(false);
+            await File.WriteAllTextAsync(sigJson, SignalMessageConfigBridge.SerializeJson(layout)).ConfigureAwait(false);
 
             (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(
                 frame,
@@ -49,7 +49,8 @@ internal sealed class PduTransportSignalNestedTsharkTests
                 {
                     sm.PreloadValue("pdu_transport.config_file", pduJson);
                     sm.PreloadValue("pdu_transport.udp_dispatch_port", (ulong)AutomotivePduBench.UdpPduTransportDestinationPort);
-                    sm.PreloadValue("signal_pdu.config_file", sigJson);
+                    sm.PreloadValue("signal_message.config_file", sigJson);
+                    sm.PreloadValue("signal_message.show_raw", true);
                 });
 
             using (stack)
@@ -57,8 +58,8 @@ internal sealed class PduTransportSignalNestedTsharkTests
                 string decodeAs =
                     $"udp.port=={AutomotivePduBench.UdpPduTransportDestinationPort.ToString(System.Globalization.CultureInfo.InvariantCulture)},pdu_transport";
 
-                string profileDir = TsharkPduTransportSignalUatProfile.CreateProfileDirectoryUnderEphemeralPersonalDir(personalRoot, "nested");
-                TsharkPduTransportSignalUatProfile.EmitPduTransportOverUdpWithSignalPdu(
+                string profileDir = TsharkPduTransportSignalMessageUatProfile.CreateProfileDirectoryUnderEphemeralPersonalDir(personalRoot, "nested");
+                TsharkPduTransportSignalMessageUatProfile.EmitPduTransportOverUdpWithSignalMessage(
                     profileDir,
                     AutomotivePduBench.UdpPduTransportDestinationPort,
                     AutomotivePduBench.PduTransportRegistry,
@@ -74,7 +75,7 @@ internal sealed class PduTransportSignalNestedTsharkTests
                     decodeAs,
                     ("pdu_transport.id", "pdu_transport.id"),
                     ("pdu_transport.length", "pdu_transport.length"),
-                    ("signal_pdu.signal.raw", "signal_pdu.signals.enginerpm_raw")).ConfigureAwait(false);
+                    ("fixture_message.EngineRpm.raw", "signal_pdu.signals.enginerpm_raw")).ConfigureAwait(false);
             }
         }
         finally

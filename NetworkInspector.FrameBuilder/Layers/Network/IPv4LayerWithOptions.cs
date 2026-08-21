@@ -66,7 +66,7 @@ public readonly struct IPv4LayerWithOptions :
     /// <c>default(IPv4LayerWithOptions)</c> emits DF=1 (safe default).
     /// <c>true</c> means fragmentation is permitted.
     /// </summary>
-    private readonly bool _AllowFragmentation;
+    public bool CanFragment { get; }
 
     /// <summary>Creates an IPv4 layer with options.</summary>
     /// <param name="srcAddr">Source address.</param>
@@ -110,7 +110,7 @@ public readonly struct IPv4LayerWithOptions :
         _ProtocolIsExplicit = protocol.TryGetExplicit(out byte p);
         _ExplicitProtocol = p;
         // Store "fragmentation allowed" so the struct's default emits DF=1.
-        _AllowFragmentation = !dontFragment;
+        CanFragment = !dontFragment;
     }
 
     /// <inheritdoc />
@@ -137,7 +137,7 @@ public readonly struct IPv4LayerWithOptions :
         IPv4Header hdr = IPv4Header.Create(
             _SrcAddr, _DstAddr, _ExplicitProtocol,
             _Ttl, _Identification,
-            dontFragment: !_AllowFragmentation,
+            dontFragment: !CanFragment,
             ihl: ihl);
         _ = ((IBinarySerializable)hdr).TryWrite(dst, out _);
 
@@ -194,13 +194,6 @@ public readonly struct IPv4LayerWithOptions :
             default:
                 break;
         }
-    }
-
-    /// <inheritdoc />
-    public bool CanFragment
-    {
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _AllowFragmentation; // i.e. !DontFragment
     }
 
     /// <inheritdoc />

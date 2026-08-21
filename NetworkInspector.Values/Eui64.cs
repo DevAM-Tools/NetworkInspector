@@ -4,10 +4,10 @@ namespace NetworkInspector.Values;
 
 /// <summary>64-bit Extended Unique Identifier (EUI-64).</summary>
 [StructLayout(LayoutKind.Sequential)]
-public readonly record struct Eui64
-        : IEquatable<Eui64>, IComparable<Eui64>, IComparable,
-      ISpanFormattable, IUtf8SpanFormattable, IStringSize, IBinarySerializable,
-      ISpanParsable<Eui64>, IParsable<Eui64>
+public readonly record struct Eui64 :
+    IEquatable<Eui64>, IComparable<Eui64>, IComparable,
+    ISpanFormattable, IUtf8SpanFormattable, IStringSize, IBinarySerializable,
+    ISpanParsable<Eui64>, IParsable<Eui64>
 {
     #region Constants
 
@@ -20,40 +20,43 @@ public readonly record struct Eui64
 
     /// <summary>Creates an <see cref="Eui64"/> from a raw 64-bit value.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public Eui64(ulong value)
-    {
-        _Value = value;
-    }
-
-    #endregion
-
-    #region Fields
-
-    private readonly ulong _Value;
+    public Eui64(ulong value) => RawValue = value;
 
     #endregion
 
     #region Properties
 
     /// <summary>The raw 64-bit value.</summary>
-    public ulong RawValue
-    {
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _Value;
-    }
+    public ulong RawValue { get; }
 
     #endregion
 
     #region Factory Methods
 
     /// <summary>Creates an EUI-64 from an 8-byte big-endian span.</summary>
-    public static Eui64 FromBytes(ReadOnlySpan<byte> bytes)
+    /// <returns><see langword="false"/> when fewer than 8 bytes are available.</returns>
+    public static bool TryFromBytes(ReadOnlySpan<byte> bytes, out Eui64 value)
     {
         if (bytes.Length < 8)
         {
-            return default;
+            value = default;
+            return false;
         }
-        return new Eui64(BinaryPrimitives.ReadUInt64BigEndian(bytes));
+
+        value = new Eui64(BinaryPrimitives.ReadUInt64BigEndian(bytes));
+        return true;
+    }
+
+    /// <summary>Creates an EUI-64 from an 8-byte big-endian span.</summary>
+    /// <exception cref="ArgumentException">Fewer than 8 bytes are available.</exception>
+    public static Eui64 FromBytes(ReadOnlySpan<byte> bytes)
+    {
+        if (!TryFromBytes(bytes, out Eui64 value))
+        {
+            throw new ArgumentException("EUI-64 requires at least 8 bytes.", nameof(bytes));
+        }
+
+        return value;
     }
 
     /// <summary>
@@ -131,7 +134,7 @@ public readonly record struct Eui64
         {
             return 0;
         }
-        BinaryPrimitives.WriteUInt64BigEndian(destination, _Value);
+        BinaryPrimitives.WriteUInt64BigEndian(destination, RawValue);
         return 8;
     }
 
@@ -182,7 +185,7 @@ public readonly record struct Eui64
             {
                 sb.Append(':');
             }
-            sb.AppendHex2((byte)(_Value >> (56 - i * 8)));
+            sb.AppendHex2((byte)(RawValue >> (56 - i * 8)));
         }
         charsWritten = sb.Length;
         return true;
@@ -274,7 +277,7 @@ public readonly record struct Eui64
 
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public int CompareTo(Eui64 other) => _Value.CompareTo(other._Value);
+    public int CompareTo(Eui64 other) => RawValue.CompareTo(other.RawValue);
 
     /// <inheritdoc/>
     int IComparable.CompareTo(object? obj)
@@ -292,22 +295,22 @@ public readonly record struct Eui64
     /// <param name="left">The left operand.</param>
     /// <param name="right">The right operand.</param>
     /// <returns><see langword="true"/> if the condition holds; otherwise <see langword="false"/>.</returns>
-    public static bool operator <(Eui64 left, Eui64 right) => left._Value < right._Value;
+    public static bool operator <(Eui64 left, Eui64 right) => left.RawValue < right.RawValue;
     /// <summary>Returns <see langword="true"/> if <paramref name="left"/> is greater than <paramref name="right"/>.</summary>
     /// <param name="left">The left operand.</param>
     /// <param name="right">The right operand.</param>
     /// <returns><see langword="true"/> if the condition holds; otherwise <see langword="false"/>.</returns>
-    public static bool operator >(Eui64 left, Eui64 right) => left._Value > right._Value;
+    public static bool operator >(Eui64 left, Eui64 right) => left.RawValue > right.RawValue;
     /// <summary>Returns <see langword="true"/> if <paramref name="left"/> is less than or equal to <paramref name="right"/>.</summary>
     /// <param name="left">The left operand.</param>
     /// <param name="right">The right operand.</param>
     /// <returns><see langword="true"/> if the condition holds; otherwise <see langword="false"/>.</returns>
-    public static bool operator <=(Eui64 left, Eui64 right) => left._Value <= right._Value;
+    public static bool operator <=(Eui64 left, Eui64 right) => left.RawValue <= right.RawValue;
     /// <summary>Returns <see langword="true"/> if <paramref name="left"/> is greater than or equal to <paramref name="right"/>.</summary>
     /// <param name="left">The left operand.</param>
     /// <param name="right">The right operand.</param>
     /// <returns><see langword="true"/> if the condition holds; otherwise <see langword="false"/>.</returns>
-    public static bool operator >=(Eui64 left, Eui64 right) => left._Value >= right._Value;
+    public static bool operator >=(Eui64 left, Eui64 right) => left.RawValue >= right.RawValue;
 
     #endregion
 

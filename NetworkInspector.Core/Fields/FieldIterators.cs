@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Core.Fields;
 
@@ -6,7 +6,7 @@ namespace NetworkInspector.Core.Fields;
 
 /// <summary>
 /// Iterates direct children of a field.
-/// When <c>materialize</c> is true (default), lazy parents are materialized before iteration.
+/// When <c>materialize</c> is <see langword="true"/>, lazy parents are materialized before iteration.
 /// </summary>
 public readonly struct FieldChildEnumerable(Packet packet, ushort parentIndex, bool materialize)
     : IEnumerable<Field>
@@ -138,7 +138,7 @@ public ref struct FieldChildEnumerator
 
 /// <summary>
 /// Iterates all descendants of a field in depth-first pre-order (excludes the root itself).
-/// When <c>materialize</c> is true (default), lazy fields are materialized during traversal.
+/// When <c>materialize</c> is <see langword="true"/>, lazy fields are materialized during traversal.
 /// </summary>
 public readonly struct FieldDescendantEnumerable(Packet packet, ushort rootIndex, bool materialize)
     : IEnumerable<Field>
@@ -327,7 +327,7 @@ public ref struct FieldDescendantEnumerator
 
 /// <summary>
 /// Depth-first pre-order enumerable over all fields in a packet (including root).
-/// When <c>materialize</c> is true (default), lazy fields are materialized during traversal.
+/// When <c>materialize</c> is <see langword="true"/>, lazy fields are materialized during traversal.
 /// </summary>
 public readonly struct FieldDfsEnumerable(Packet packet, bool materialize)
     : IEnumerable<Field>
@@ -365,7 +365,8 @@ public readonly struct FieldDfsEnumerable(Packet packet, bool materialize)
             _Stack.Clear();
             _Current = FieldBody.NullIndex;
             // Push root to begin full-packet DFS traversal (root is included in the output).
-            if (_Packet.FieldCount() > 0)
+            // materialize: false — this enumerator owns materialization via _Materialize.
+            if (_Packet.FieldCount(materialize: false) > 0)
             {
                 _Stack.Push(0);
             }
@@ -438,7 +439,8 @@ public ref struct FieldDfsEnumerator
         _Stack = default;
         _Current = FieldBody.NullIndex;
 
-        if (packet.FieldCount() > 0)
+        // materialize: false — this enumerator owns materialization via _Materialize.
+        if (packet.FieldCount(materialize: false) > 0)
         {
             _Stack.Push(0); // push root
         }
@@ -493,7 +495,7 @@ public ref struct FieldDfsEnumerator
 
 /// <summary>
 /// Iterates all fields in the packet's internal array linearly (storage order, not tree order).
-/// When <c>materialize</c> is true (default), lazy fields are materialized as encountered
+/// When <c>materialize</c> is <see langword="true"/>, lazy fields are materialized as encountered
 /// and their newly added children are visited when the index reaches them.
 /// </summary>
 public readonly struct FieldFlatEnumerable(Packet packet, bool materialize)
@@ -535,8 +537,9 @@ public readonly struct FieldFlatEnumerable(Packet packet, bool materialize)
         public bool MoveNext()
         {
             _CurrentIndex++;
-            // FieldCount() is checked dynamically so materialized children are also visited.
-            if (_CurrentIndex >= _Packet.FieldCount())
+            // FieldCount is checked dynamically so materialized children are also visited.
+            // materialize: false — this enumerator owns materialization via _Materialize.
+            if (_CurrentIndex >= _Packet.FieldCount(materialize: false))
             {
                 return false;
             }
@@ -596,8 +599,9 @@ public ref struct FieldFlatEnumerator
     {
         _CurrentIndex++;
 
-        // Dynamic check: FieldCount may grow during materialization
-        if (_CurrentIndex >= _Packet.FieldCount())
+        // Dynamic check: FieldCount may grow during materialization.
+        // materialize: false — this enumerator owns materialization via _Materialize.
+        if (_CurrentIndex >= _Packet.FieldCount(materialize: false))
         {
             return false;
         }
@@ -632,28 +636,23 @@ internal ref struct InlineStack16
 
     private InlineBuffer16 _InlineBuffer;
     private ushort[]? _HeapBuffer;
-    private int _Count;
 
     /// <summary>Number of elements currently on the stack.</summary>
-    internal readonly int Count
-    {
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _Count;
-    }
+    internal int Count { get; private set; }
 
     /// <summary>Pushes a value onto the stack.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void Push(ushort value)
     {
-        if (_Count < _InlineCapacity)
+        if (Count < _InlineCapacity)
         {
-            _InlineBuffer[_Count] = value;
+            _InlineBuffer[Count] = value;
         }
         else
         {
             _PushSlow(value);
         }
-        _Count++;
+        Count++;
     }
 
     /// <summary>Pops the top value from the stack.</summary>
@@ -661,16 +660,16 @@ internal ref struct InlineStack16
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal ushort Pop()
     {
-        if (_Count <= 0)
+        if (Count <= 0)
         {
             throw new InvalidOperationException("Cannot pop from an empty stack.");
         }
-        _Count--;
+        Count--;
         if (_HeapBuffer is null)
         {
-            return _InlineBuffer[_Count];
+            return _InlineBuffer[Count];
         }
-        return _HeapBuffer[_Count];
+        return _HeapBuffer[Count];
     }
 
     /// <summary>Slow path: spills to heap when inline capacity is exceeded.</summary>
@@ -683,11 +682,11 @@ internal ref struct InlineStack16
             _HeapBuffer = new ushort[_InlineCapacity * 2];
             ((Span<ushort>)_InlineBuffer).CopyTo(_HeapBuffer);
         }
-        else if (_Count >= _HeapBuffer.Length)
+        else if (Count >= _HeapBuffer.Length)
         {
             Array.Resize(ref _HeapBuffer, _HeapBuffer.Length * 2);
         }
-        _HeapBuffer[_Count] = value;
+        _HeapBuffer[Count] = value;
     }
 
     /// <summary>Inline buffer for 16 ushort entries (32 bytes on stack).</summary>

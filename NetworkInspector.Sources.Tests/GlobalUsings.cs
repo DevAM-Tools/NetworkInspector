@@ -2,6 +2,7 @@
 
 #region System
 global using System;
+global using System.Buffers;
 global using System.Buffers.Binary;
 global using System.Collections.Concurrent;
 global using System.Collections.Generic;
@@ -37,6 +38,7 @@ global using NetworkInspector.Sources.Asc.Format;
 global using NetworkInspector.Sources.Blf;
 global using NetworkInspector.Sources.Blf.Format;
 global using NetworkInspector.Sources.Blf.Format.Headers;
+global using NetworkInspector.Sources.Blf.Format.Objects;
 global using NetworkInspector.Sources.Cached;
 global using NetworkInspector.Sources.Pcapng;
 global using NetworkInspector.Sources.Pcapng.Format;

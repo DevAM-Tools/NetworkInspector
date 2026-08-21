@@ -118,7 +118,7 @@ internal sealed class TcpBasicTests
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(truncated);
         using (stack)
         {
-            await Assert.That(packet.FieldCount()).IsGreaterThanOrEqualTo(1);
+            await Assert.That(packet.FieldCount(materialize: false)).IsGreaterThanOrEqualTo(1); // materialize: false — current materialized count only
         }
     }
 
@@ -188,7 +188,7 @@ internal sealed class TcpBasicTests
             foreach (FieldId memberId in members)
             {
                 FieldLookupCookie cookie = FieldLookupCookie.Start;
-                while (packet.TryGetNextFieldValue(memberId, ref cookie, out FieldValue value))
+                while (packet.TryGetNextFieldValue(memberId, ref cookie, out FieldValue value, materialize: true)) // materialize: true — need complete field tree for assertion
                 {
                     bool ok = value.Data.TryGetAsU64(out ulong port);
                     await Assert.That(ok).IsTrue().Because("alias member values must be U64");

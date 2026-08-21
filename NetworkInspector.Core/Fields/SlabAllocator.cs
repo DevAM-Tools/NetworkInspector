@@ -49,6 +49,7 @@ internal sealed class SlabAllocator<T>
     /// Choose a capacity that keeps the array below the 85 KB LOH threshold for value types.</param>
     internal SlabAllocator(int capacity)
     {
+        ArgumentOutOfRangeException.ThrowIfNegative(capacity);
         _Buffer = new T[capacity];
     }
 
@@ -74,16 +75,17 @@ internal sealed class SlabAllocator<T>
         }
 
         int used = _Used;
-        if (used + count <= _Buffer.Length)
+        int length = _Buffer.Length;
+        if ((uint)count > (uint)(length - used))
         {
-            buffer = _Buffer;
-            offset = used;
-            _Used = used + count;
-            return true;
+            buffer = null!;
+            offset = 0;
+            return false;
         }
 
-        buffer = null!;
-        offset = 0;
-        return false;
+        buffer = _Buffer;
+        offset = used;
+        _Used = used + count;
+        return true;
     }
 }

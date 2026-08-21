@@ -19,8 +19,8 @@ namespace NetworkInspector.Core.Reassembly;
 /// <b>Overlap detection:</b> When <c>dropOnOverlap</c> is true in
 /// <see cref="AddFragment"/>, any new fragment whose byte range overlaps that of an
 /// existing fragment at a <em>different</em> offset causes the method to return
-/// <see cref="FragmentAddResult.OverlapDiscarded"/>. The caller must then discard the
-/// entire datagram. This implements the RFC 5722 requirement for IPv6.
+/// <see cref="FragmentAddResult.OverlapDiscarded"/> and poisons the buffer. The caller must
+/// then discard the entire datagram. This implements the RFC 5722 requirement for IPv6.
 /// Duplicate fragments (same offset) are still handled by the largest-wins policy and
 /// do not trigger overlap discarding.
 /// </para>
@@ -36,12 +36,15 @@ public sealed class DatagramFragmentBuffer
     /// <summary>Maximum allowed total datagram payload length (IPv4 max = 65535).</summary>
     private const int _MaxTotalLength = 65535;
 
+    /// <summary>Maximum number of fragments accepted per datagram.</summary>
+    private const int _MaxFragmentCount = 8192;
+
     #endregion
 
     #region Fields
 
     /// <summary>Represents a single fragment in the reassembly buffer.</summary>
-    private readonly record struct Fragment(int Offset, byte[] Data);
+    private readonly record struct Fragment(int Offset, byte[] Data, int Length);
 
     /// <summary>Sorted list of fragments by offset (typically 1–3 fragments per datagram).</summary>
     private readonly List<Fragment> _Fragments = [];
@@ -51,6 +54,9 @@ public sealed class DatagramFragmentBuffer
 
     /// <summary>Sum of all received fragment data bytes. Used for quick completeness check.</summary>
     private int _ReceivedBytes;
+
+    /// <summary>When true, further fragments cannot complete reassembly.</summary>
+    private bool _Poisoned;
 
     #endregion
 
@@ -80,7 +86,18 @@ public sealed class DatagramFragmentBuffer
     /// complete, still incomplete, or must be discarded due to an overlap.</returns>
     public FragmentAddResult AddFragment(int offset, bool moreFragments, ReadOnlySpan<byte> data, bool dropOnOverlap = false)
     {
-        byte[] copy = data.ToArray();
+        if (_Poisoned)
+        {
+            return FragmentAddResult.OverlapDiscarded;
+        }
+
+        ArgumentOutOfRangeException.ThrowIfNegative(offset);
+
+        int payloadLength = data.Length;
+        if (payloadLength > _MaxTotalLength || offset >= _MaxTotalLength - payloadLength + 1)
+        {
+            return FragmentAddResult.OversizeDiscarded;
+        }
 
         // Insert in sorted order by offset.
         // Typical fragment counts are small (1–3), so linear search is efficient.
@@ -92,10 +109,13 @@ public sealed class DatagramFragmentBuffer
                 // Duplicate fragment at same offset — replace if larger (retransmission scenario).
                 // Duplicate detection is not overlap detection; RFC 5722 only applies to
                 // fragments at different offsets whose byte ranges intersect.
-                if (copy.Length > _Fragments[i].Data.Length)
+                if (payloadLength > _Fragments[i].Length)
                 {
-                    _ReceivedBytes += copy.Length - _Fragments[i].Data.Length;
-                    _Fragments[i] = new Fragment(offset, copy);
+                    _ReceivedBytes = checked(_ReceivedBytes + payloadLength - _Fragments[i].Length);
+                    byte[] rented = ArrayPool<byte>.Shared.Rent(payloadLength);
+                    data.CopyTo(rented.AsSpan(0, payloadLength));
+                    _ReturnFragment(_Fragments[i].Data);
+                    _Fragments[i] = new Fragment(offset, rented, payloadLength);
                 }
                 if (_IsComplete())
                 {
@@ -110,6 +130,11 @@ public sealed class DatagramFragmentBuffer
             }
         }
 
+        if (_Fragments.Count >= _MaxFragmentCount)
+        {
+            return FragmentAddResult.OversizeDiscarded;
+        }
+
         // RFC 5722 overlap check: verify that the new fragment's byte range [offset, offset+len)
         // does not intersect the range of the immediately adjacent fragments.
         // Because the list is sorted by offset, only the neighbours need to be checked —
@@ -120,8 +145,9 @@ public sealed class DatagramFragmentBuffer
             if (insertIdx > 0)
             {
                 Fragment prev = _Fragments[insertIdx - 1];
-                if (prev.Offset + prev.Data.Length > offset)
+                if (prev.Offset + prev.Length > offset)
                 {
+                    _Poisoned = true;
                     return FragmentAddResult.OverlapDiscarded;
                 }
             }
@@ -130,27 +156,23 @@ public sealed class DatagramFragmentBuffer
             if (insertIdx < _Fragments.Count)
             {
                 Fragment next = _Fragments[insertIdx];
-                if (offset + copy.Length > next.Offset)
+                if (offset + payloadLength > next.Offset)
                 {
+                    _Poisoned = true;
                     return FragmentAddResult.OverlapDiscarded;
                 }
             }
         }
 
-        _Fragments.Insert(insertIdx, new Fragment(offset, copy));
-        _ReceivedBytes += copy.Length;
+        byte[] newRented = ArrayPool<byte>.Shared.Rent(payloadLength);
+        data.CopyTo(newRented.AsSpan(0, payloadLength));
+        _Fragments.Insert(insertIdx, new Fragment(offset, newRented, payloadLength));
+        _ReceivedBytes = checked(_ReceivedBytes + payloadLength);
 
         // When the last fragment arrives (MF=0), we know the total datagram payload length.
         if (!moreFragments)
         {
-            int total = offset + copy.Length;
-            // Reject datagrams exceeding the maximum allowed size to prevent memory exhaustion.
-            // Return OversizeDiscarded so the caller can remove the buffer immediately instead
-            // of letting it linger until eviction (which would waste memory under malformed traffic).
-            if (total > _MaxTotalLength)
-            {
-                return FragmentAddResult.OversizeDiscarded;
-            }
+            int total = checked(offset + payloadLength);
             _TotalLength = total;
         }
 
@@ -163,9 +185,13 @@ public sealed class DatagramFragmentBuffer
 
     /// <summary>
     /// Reassembles all fragments into a single contiguous byte array.
-    /// Must only be called when <see cref="AddFragment"/> has returned <c>true</c>.
+    /// Must only be called when <see cref="AddFragment"/> returned
+    /// <see cref="FragmentAddResult.Complete"/>.
     /// </summary>
-    /// <returns>The reassembled payload, or null if fragments don't form a contiguous range.</returns>
+    /// <returns>
+    /// The reassembled payload, or <see langword="null"/> when the total length is unknown
+    /// or a fragment extends past the terminal length.
+    /// </returns>
     public byte[]? Reassemble()
     {
         if (_TotalLength <= 0)
@@ -178,20 +204,40 @@ public sealed class DatagramFragmentBuffer
         // Copy each fragment into its position within the reassembled buffer.
         foreach (Fragment fragment in _Fragments)
         {
-            int end = fragment.Offset + fragment.Data.Length;
+            int end = fragment.Offset + fragment.Length;
             if (end > _TotalLength)
             {
                 return null; // Fragment extends beyond expected length
             }
-            fragment.Data.CopyTo(result, fragment.Offset);
+            fragment.Data.AsSpan(0, fragment.Length).CopyTo(result.AsSpan(fragment.Offset));
         }
 
         return result;
     }
 
+    /// <summary>
+    /// Returns rented fragment buffers to <see cref="ArrayPool{T}.Shared"/> and clears state.
+    /// Call when the buffer is evicted or removed from the defragmenter.
+    /// </summary>
+    internal void Release()
+    {
+        for (int i = 0; i < _Fragments.Count; i++)
+        {
+            _ReturnFragment(_Fragments[i].Data);
+        }
+        _Fragments.Clear();
+        _TotalLength = -1;
+        _ReceivedBytes = 0;
+        _Poisoned = false;
+    }
+
     #endregion
 
     #region Private Helpers
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void _ReturnFragment(byte[] buffer) =>
+        ArrayPool<byte>.Shared.Return(buffer, clearArray: true);
 
     /// <summary>
     /// Checks whether all fragments have been received to form a complete datagram.
@@ -221,7 +267,7 @@ public sealed class DatagramFragmentBuffer
             {
                 return false; // Gap detected
             }
-            int end = f.Offset + f.Data.Length;
+            int end = f.Offset + f.Length;
             if (end > expectedOffset)
             {
                 expectedOffset = end;

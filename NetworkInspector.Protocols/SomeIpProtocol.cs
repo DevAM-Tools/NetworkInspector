@@ -458,9 +458,9 @@ public sealed partial class SomeIpProtocol : IProtocol
         // ParseContext and therefore cannot dispatch, so eager construction is required.
         MutField container = parentField.AppendWithCustomText(_ProtocolFieldId, containerValue, summary);
         ParseResult buildResult = _BuildSomeIpFields(in container, in context);
-        if (buildResult.IsError)
+        if (buildResult.TryPropagateError(out ParseResult error))
         {
-            return buildResult;
+            return error;
         }
 
         return totalLen;
@@ -582,11 +582,11 @@ public sealed partial class SomeIpProtocol : IProtocol
                     {
                         ParseResult dispatchResult = container.TryCallNextProtocolU64(
                             _MessageIdTableId, header.MessageId, reassembledMemory, in context);
-                        if (dispatchResult.IsError)
+                        if (dispatchResult.TryPropagateError(out ParseResult tpDispatchError))
                         {
-                            return dispatchResult;
+                            return tpDispatchError;
                         }
-                        if (!dispatchResult.IsSuccess || dispatchResult.Value == 0)
+                        if (!dispatchResult.TryGetConsumed(out int tpConsumed) || tpConsumed == 0)
                         {
                             container.Append(_PayloadFieldId, FieldValue.NewBytes(reassembledMemory));
                         }
@@ -624,9 +624,9 @@ public sealed partial class SomeIpProtocol : IProtocol
         {
             ReadOnlySpan<byte> sdPayload = someipData.Span[SomeIpHeader.Size..];
             ParseResult sdResult = SomeIpSdParser.Parse(in container, sdPayload, in _SdFieldIds);
-            if (sdResult.IsError)
+            if (sdResult.TryPropagateError(out ParseResult sdError))
             {
-                return sdResult;
+                return sdError;
             }
         }
 
@@ -641,13 +641,13 @@ public sealed partial class SomeIpProtocol : IProtocol
             // Try to dispatch payload to a sub-protocol registered on someip.messageid
             ParseResult dispatchResult = container.TryCallNextProtocolU64(
                 _MessageIdTableId, header.MessageId, payloadData, in context);
-            if (dispatchResult.IsError)
+            if (dispatchResult.TryPropagateError(out ParseResult error))
             {
-                return dispatchResult;
+                return error;
             }
 
             // If no sub-protocol consumed the payload, append raw payload bytes
-            if (!dispatchResult.IsSuccess || dispatchResult.Value == 0)
+            if (!dispatchResult.TryGetConsumed(out int consumed) || consumed == 0)
             {
                 container.Append(_PayloadFieldId, FieldValue.NewBytes(payloadData));
             }

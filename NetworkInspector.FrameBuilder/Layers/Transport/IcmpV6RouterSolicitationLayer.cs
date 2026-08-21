@@ -18,7 +18,9 @@ public readonly struct IcmpV6RouterSolicitationLayer :
     IStatelessLayer, IProvidesProtocolType, IProvidesNextProtocolValue<IpNextProtocolKind>, IRequiresPseudoHeader
 {
     private const int _ChecksumOffset = 2;
-    private const int _HeaderBytes = 8; // 4-byte ICMPv6 common + 4-byte reserved
+
+    /// <summary>Header size in bytes (4-byte ICMPv6 common + 4-byte reserved).</summary>
+    public const int HeaderBytes = 8;
 
     /// <summary>Explicit checksum value when the caller pinned one.</summary>
     private readonly ushort _ExplicitChecksum;
@@ -36,11 +38,7 @@ public readonly struct IcmpV6RouterSolicitationLayer :
     }
 
     /// <inheritdoc />
-    public int HeaderSize
-    {
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _HeaderBytes;
-    }
+    public int HeaderSize => HeaderBytes;
 
     /// <inheritdoc />
     public ushort ProtocolType

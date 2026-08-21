@@ -24,7 +24,7 @@ public enum RecycleError
 
     /// <summary>
     /// A concurrent lazy-field materializer is active on the packet
-    /// (<c>_MaterializingFlag != 0</c>). Recycling while materialization is in progress
+    /// (<c>_ActiveLazyMaterializations &gt; 0</c>). Recycling while materialization is in progress
     /// would cause data corruption.
     /// </summary>
     MaterializerActive,

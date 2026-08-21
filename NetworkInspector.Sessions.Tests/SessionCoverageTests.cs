@@ -98,7 +98,7 @@ internal sealed class SessionCoverageTests
 
         await Assert.That(found).IsTrue();
         await Assert.That(packet).IsNotNull();
-        await Assert.That(session.PacketIndex).IsNull();
+        await Assert.That(((ISessionReader)session).PacketIndex).IsNull();
 
         session.Shutdown();
     }

@@ -35,7 +35,7 @@ Load on `/implement`. Apply `copilot-instructions.md` for all quality, tech, git
 
 - Confirm **every** scoped step or finding is `✅`; list any remaining `⬜` or `⚠️` as blocker.
 - Re-run alignment check for full scope: plan done criteria or all accepted findings resolved.
-- Run full build and all tests in Release.
+- Run full build and all tests in optimized/Release configuration. Use Verify/build commands from the loaded tech skill.
 - Output Implementation Status Table (every step/finding listed, none omitted).
 
 ## Implementation Status Table

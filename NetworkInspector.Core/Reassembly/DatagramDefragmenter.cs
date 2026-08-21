@@ -59,20 +59,22 @@ public sealed class DatagramDefragmenter<TKey> where TKey : struct, IEquatable<T
     #region Properties
 
     /// <summary>Total number of datagrams successfully reassembled.</summary>
-    private long _ReassembledCount;
+    private volatile int _ReassembledCount;
 
-    /// <summary>Number of in-progress entries dropped due to capacity pressure.</summary>
-    private long _EvictedCount;
+    /// <summary>
+    /// Number of in-progress entries dropped due to capacity pressure.
+    /// </summary>
+    private volatile int _EvictedCount;
 
     /// <summary>Total number of datagrams successfully reassembled.</summary>
-    public long ReassembledCount => Interlocked.Read(ref _ReassembledCount);
+    public int ReassembledCount => _ReassembledCount;
 
     /// <summary>
     /// Total number of in-progress reassembly entries that were dropped because the
-    /// pending-entry limit (<see cref="_DefaultMaxEntries"/>) was reached. Useful as a
-    /// diagnostic counter to detect lost reassembly results upstream.
+    /// pending-entry limit (constructor <c>maxEntries</c> / <c>_MaxEntries</c>) was reached.
+    /// Useful as a diagnostic counter to detect lost reassembly results upstream.
     /// </summary>
-    public long EvictedCount => Interlocked.Read(ref _EvictedCount);
+    public int EvictedCount => _EvictedCount;
 
     /// <summary>Number of in-progress reassembly entries.</summary>
     public int PendingCount => _Buffers.Count;
@@ -128,6 +130,14 @@ public sealed class DatagramDefragmenter<TKey> where TKey : struct, IEquatable<T
         ReadOnlySpan<byte> data)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(offset);
+        if (offset >= 65535 || data.Length > 65535 - offset)
+        {
+            if (_Buffers.Remove(key, out DatagramFragmentBuffer? oversize))
+            {
+                oversize.Release();
+            }
+            return null;
+        }
 
         // Opportunistic drain of stale queue heads. On the success path of a previous
         // call we removed the entry from `_Buffers` but left its key in `_InsertionOrder`
@@ -164,6 +174,7 @@ public sealed class DatagramDefragmenter<TKey> where TKey : struct, IEquatable<T
         {
             // RFC 5722: overlapping fragments — discard the entire datagram silently.
             // Remove the poisoned buffer so future fragments for the same key start fresh.
+            buffer.Release();
             _Buffers.Remove(key);
             return null;
         }
@@ -173,6 +184,7 @@ public sealed class DatagramDefragmenter<TKey> where TKey : struct, IEquatable<T
             // The terminal fragment would exceed MaxTotalLength — this datagram can never
             // complete within safe bounds. Remove the buffer immediately to avoid holding
             // memory for an entry that will never be reassembled.
+            buffer.Release();
             _Buffers.Remove(key);
             return null;
         }
@@ -186,6 +198,7 @@ public sealed class DatagramDefragmenter<TKey> where TKey : struct, IEquatable<T
         // entry in `_InsertionOrder` becomes a stale tombstone and is drained at the
         // top of the next call (or by `_EvictOldestEntry`).
         byte[]? reassembled = buffer.Reassemble();
+        buffer.Release();
         _Buffers.Remove(key);
 
         if (reassembled is not null)
@@ -202,6 +215,10 @@ public sealed class DatagramDefragmenter<TKey> where TKey : struct, IEquatable<T
     /// </summary>
     public void Clear()
     {
+        foreach (DatagramFragmentBuffer buffer in _Buffers.Values)
+        {
+            buffer.Release();
+        }
         _Buffers.Clear();
         _InsertionOrder.Clear();
         Interlocked.Exchange(ref _ReassembledCount, 0);
@@ -224,8 +241,9 @@ public sealed class DatagramDefragmenter<TKey> where TKey : struct, IEquatable<T
         while (_InsertionOrder.Count > 0)
         {
             TKey oldest = _InsertionOrder.Dequeue();
-            if (_Buffers.Remove(oldest))
+            if (_Buffers.Remove(oldest, out DatagramFragmentBuffer? evicted))
             {
+                evicted.Release();
                 Interlocked.Increment(ref _EvictedCount);
                 return;
             }

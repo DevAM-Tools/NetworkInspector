@@ -150,7 +150,7 @@ internal sealed class DtlsProtocolTests
         {
             FieldId? ctField = stack.GetFieldId("dtls.record.content_type");
             await Assert.That(ctField).IsNotNull();
-            bool has = packet.TryGetFieldValue(ctField!.Value, out FieldValue value);
+            bool has = packet.TryGetFieldValue(ctField!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsTrue();
             value.Data.TryGetAsU64(out ulong u64Val);
             await Assert.That(u64Val).IsEqualTo(22UL);
@@ -167,7 +167,7 @@ internal sealed class DtlsProtocolTests
         {
             FieldId? verField = stack.GetFieldId("dtls.record.version");
             await Assert.That(verField).IsNotNull();
-            bool has = packet.TryGetFieldValue(verField!.Value, out FieldValue value);
+            bool has = packet.TryGetFieldValue(verField!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsTrue();
             value.Data.TryGetAsU64(out ulong u64Val);
             await Assert.That(u64Val).IsEqualTo(0xFEFDUL);
@@ -184,7 +184,7 @@ internal sealed class DtlsProtocolTests
         {
             FieldId? epochField = stack.GetFieldId("dtls.record.epoch");
             await Assert.That(epochField).IsNotNull();
-            bool has = packet.TryGetFieldValue(epochField!.Value, out FieldValue value);
+            bool has = packet.TryGetFieldValue(epochField!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsTrue();
             value.Data.TryGetAsU64(out ulong u64Val);
             await Assert.That(u64Val).IsEqualTo(1UL);
@@ -201,7 +201,7 @@ internal sealed class DtlsProtocolTests
         {
             FieldId? seqField = stack.GetFieldId("dtls.record.sequence_number");
             await Assert.That(seqField).IsNotNull();
-            bool has = packet.TryGetFieldValue(seqField!.Value, out FieldValue value);
+            bool has = packet.TryGetFieldValue(seqField!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsTrue();
             value.Data.TryGetAsU64(out ulong u64Val);
             await Assert.That(u64Val).IsEqualTo(42UL);
@@ -218,7 +218,7 @@ internal sealed class DtlsProtocolTests
         {
             FieldId? hsTypeField = stack.GetFieldId("dtls.handshake.type");
             await Assert.That(hsTypeField).IsNotNull();
-            bool has = packet.TryGetFieldValue(hsTypeField!.Value, out FieldValue value);
+            bool has = packet.TryGetFieldValue(hsTypeField!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsTrue();
             value.Data.TryGetAsU64(out ulong u64Val);
             await Assert.That(u64Val).IsEqualTo(1UL); // Client Hello
@@ -237,7 +237,7 @@ internal sealed class DtlsProtocolTests
         {
             FieldId? ctField = stack.GetFieldId("dtls.record.content_type");
             await Assert.That(ctField).IsNotNull();
-            bool has = packet.TryGetFieldValue(ctField!.Value, out _);
+            bool has = packet.TryGetFieldValue(ctField!.Value, out _, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsFalse();
         }
     }

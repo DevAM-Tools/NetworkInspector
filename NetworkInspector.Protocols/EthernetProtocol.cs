@@ -239,11 +239,12 @@ public sealed partial class EthernetProtocol : IProtocol
         if (typeOrLen >= _MinEtherType)
         {
             ParseResult dispatchResult = _DispatchEtherType(in parentField, typeOrLen, payloadRegion, in context);
-            if (dispatchResult.IsError)
+            if (dispatchResult.TryPropagateError(out ParseResult error))
             {
-                return dispatchResult;
+                return error;
             }
-            childConsumed = dispatchResult.Value;
+
+            _ = dispatchResult.TryGetConsumed(out childConsumed);
         }
         else
         {
@@ -253,11 +254,12 @@ public sealed partial class EthernetProtocol : IProtocol
             ReadOnlyMemory<byte> llcPayload = llcLen <= payloadRegion.Length ? payloadRegion[..llcLen] : payloadRegion;
             ParseResult dispatchResult = parentField.TryCallNextProtocolU64(
                 _Ieee8023TableId, 1UL, llcPayload, in context);
-            if (dispatchResult.IsError)
+            if (dispatchResult.TryPropagateError(out ParseResult llcError))
             {
-                return dispatchResult;
+                return llcError;
             }
-            childConsumed = dispatchResult.Value;
+
+            _ = dispatchResult.TryGetConsumed(out childConsumed);
         }
 
         _AppendPaddingAndTrailer(parentField, data, typeOrLen, childConsumed, hasFcs, in context);

@@ -67,6 +67,51 @@ internal static class IpAddressExtractor
     }
 
     /// <summary>
+    /// Mutable-cursor overload. Walks previous siblings without converting to <see cref="Field"/>.
+    /// </summary>
+    internal static bool TryFindPreviousIpAddresses(
+        in MutField startField,
+        FieldId ipContainerFieldId,
+        FieldId ipv6ContainerFieldId,
+        FieldId ipSrcFieldId,
+        FieldId ipDstFieldId,
+        FieldId ipv6SrcFieldId,
+        FieldId ipv6DstFieldId,
+        out (IPv4Address Src, IPv4Address Dst)? ipv4,
+        out (IPv6Address Src, IPv6Address Dst)? ipv6)
+    {
+        ipv4 = null;
+        ipv6 = null;
+        MutField current = startField;
+
+        do
+        {
+            FieldId fid = current.FieldId;
+
+            if (fid == ipContainerFieldId && ipContainerFieldId.IsValid)
+            {
+                ipv4 = _TryExtractIPv4ChildAddresses(in current, ipSrcFieldId, ipDstFieldId);
+                if (ipv4.HasValue)
+                {
+                    return true;
+                }
+            }
+
+            if (fid == ipv6ContainerFieldId && ipv6ContainerFieldId.IsValid)
+            {
+                ipv6 = _TryExtractIPv6ChildAddresses(in current, ipv6SrcFieldId, ipv6DstFieldId);
+                if (ipv6.HasValue)
+                {
+                    return true;
+                }
+            }
+        }
+        while (current.TryGetPrev(out current));
+
+        return false;
+    }
+
+    /// <summary>
     /// Extracts IPv4 source and destination addresses from the eagerly-appended
     /// children of an IPv4 container field. Uses <c>materialize: false</c> to
     /// avoid triggering lazy field population.
@@ -102,6 +147,40 @@ internal static class IpAddressExtractor
     }
 
     /// <summary>
+    /// Extracts IPv4 addresses from eagerly-appended children via a mutable cursor.
+    /// Uses <c>materialize: false</c> — IP address children are already eager.
+    /// </summary>
+    private static (IPv4Address Src, IPv4Address Dst)? _TryExtractIPv4ChildAddresses(
+        in MutField container, FieldId srcFieldId, FieldId dstFieldId)
+    {
+        IPv4Address src = default;
+        IPv4Address dst = default;
+        bool foundSrc = false;
+        bool foundDst = false;
+
+        foreach (MutField child in container.Children(materialize: false))
+        {
+            if (!foundSrc && child.FieldId == srcFieldId
+                && child.Value.Data.TryGetAsIPv4(out src))
+            {
+                foundSrc = true;
+            }
+            else if (!foundDst && child.FieldId == dstFieldId
+                && child.Value.Data.TryGetAsIPv4(out dst))
+            {
+                foundDst = true;
+            }
+
+            if (foundSrc && foundDst)
+            {
+                return (src, dst);
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
     /// Extracts IPv6 source and destination addresses from the eagerly-appended
     /// children of an IPv6 container field. Uses <c>materialize: false</c> to
     /// avoid triggering lazy field population.
@@ -115,6 +194,40 @@ internal static class IpAddressExtractor
         bool foundDst = false;
 
         foreach (Field child in container.Children(materialize: false))
+        {
+            if (!foundSrc && child.FieldId == srcFieldId
+                && child.Value.Data.TryGetAsIPv6(out src))
+            {
+                foundSrc = true;
+            }
+            else if (!foundDst && child.FieldId == dstFieldId
+                && child.Value.Data.TryGetAsIPv6(out dst))
+            {
+                foundDst = true;
+            }
+
+            if (foundSrc && foundDst)
+            {
+                return (src, dst);
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Extracts IPv6 addresses from eagerly-appended children via a mutable cursor.
+    /// Uses <c>materialize: false</c> — IP address children are already eager.
+    /// </summary>
+    private static (IPv6Address Src, IPv6Address Dst)? _TryExtractIPv6ChildAddresses(
+        in MutField container, FieldId srcFieldId, FieldId dstFieldId)
+    {
+        IPv6Address src = default;
+        IPv6Address dst = default;
+        bool foundSrc = false;
+        bool foundDst = false;
+
+        foreach (MutField child in container.Children(materialize: false))
         {
             if (!foundSrc && child.FieldId == srcFieldId
                 && child.Value.Data.TryGetAsIPv6(out src))

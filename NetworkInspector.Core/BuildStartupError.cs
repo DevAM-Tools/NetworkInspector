@@ -25,7 +25,9 @@ public sealed record BuildStartupError(
 
     /// <inheritdoc/>
     public override string Message =>
-        $"Protocol '{ProtocolName}' failed during startup: {Exception.Message}";
+        string.Create(
+            CultureInfo.InvariantCulture,
+            $"Protocol '{ProtocolName}' failed during startup: {Exception.Message}");
 
     #endregion
 

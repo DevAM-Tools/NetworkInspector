@@ -23,6 +23,15 @@ namespace NetworkInspector.Core;
 /// </summary>
 public static class DispatchCacheHelper
 {
+    #region Constants
+
+    /// <summary>
+    /// Maximum dense-cache domain size (16-bit key). 8-bit callers pass 256 (~2 kB of delegates).
+    /// </summary>
+    private const int _MaxDenseDomain = 65_536;
+
+    #endregion
+
     #region Delegate Caches
 
     /// <summary>
@@ -37,9 +46,16 @@ public static class DispatchCacheHelper
     /// At dispatch time: <c>cache[protocolByte]?.Invoke()</c> — one array load + direct call.
     /// </para>
     /// </summary>
+    /// <param name="stack">The stack that owns the protocol table.</param>
+    /// <param name="tableId">U64 protocol table to cache.</param>
+    /// <param name="domainSize">Dense array length. Must be in <c>[1, 65536]</c>.</param>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// <paramref name="domainSize"/> is less than 1 or greater than 65536.
+    /// </exception>
     public static ParseDelegate?[] BuildU64DelegateCache(
         this Stack stack, ProtocolTableId tableId, int domainSize)
     {
+        _ValidateDenseDomainSize(domainSize);
         ParseDelegate?[] cache = new ParseDelegate?[domainSize];
 
         IEnumerable<KeyValuePair<ulong, ReadOnlyMemory<ProtocolId>>>? entries =
@@ -116,9 +132,16 @@ public static class DispatchCacheHelper
     /// bucket array.
     /// </para>
     /// </summary>
+    /// <param name="stack">The stack that owns the protocol table.</param>
+    /// <param name="tableId">U64 protocol table to cache.</param>
+    /// <param name="domainSize">Dense array length. Must be in <c>[1, 65536]</c>.</param>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// <paramref name="domainSize"/> is less than 1 or greater than 65536.
+    /// </exception>
     public static ProtocolId?[] BuildU64IdCache(
         this Stack stack, ProtocolTableId tableId, int domainSize)
     {
+        _ValidateDenseDomainSize(domainSize);
         ProtocolId?[] cache = new ProtocolId?[domainSize];
 
         IEnumerable<KeyValuePair<ulong, ReadOnlyMemory<ProtocolId>>>? entries =
@@ -169,6 +192,20 @@ public static class DispatchCacheHelper
         }
 
         return [.. result];
+    }
+
+    #endregion
+
+    #region Validation
+
+    /// <summary>
+    /// Rejects non-positive and oversized dense domains so <c>OnStart</c> fails with a named
+    /// <see cref="ArgumentOutOfRangeException"/> instead of an array-ctor overflow or OOM.
+    /// </summary>
+    private static void _ValidateDenseDomainSize(int domainSize)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(domainSize);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(domainSize, _MaxDenseDomain);
     }
 
     #endregion

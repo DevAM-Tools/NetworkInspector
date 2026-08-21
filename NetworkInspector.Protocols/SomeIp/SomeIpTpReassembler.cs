@@ -22,97 +22,38 @@ internal enum SomeIpTpOutcome
 /// <summary>
 /// Result of a single <see cref="SomeIpTpReassembler.AddSegment"/> call.
 /// </summary>
-internal readonly struct SomeIpTpReassemblyResult
-{
-    /// <summary>Outcome of this fragment addition.</summary>
-    internal SomeIpTpOutcome Outcome { get; init; }
-
-    /// <summary>Reassembled payload; non-null only when <see cref="Outcome"/> is <see cref="SomeIpTpOutcome.Complete"/>.</summary>
-    internal byte[]? Payload { get; init; }
-
-    /// <summary>
-    /// True when a separate (LRU-evicted) session was silently removed to make room for this one.
-    /// The caller should emit a diagnostic for the evicted session even if this session itself
-    /// is still in progress.
-    /// </summary>
-    internal bool LruEvicted { get; init; }
-}
+/// <param name="Outcome">Outcome of this fragment addition.</param>
+/// <param name="Payload">Reassembled payload; non-null only when <see cref="Outcome"/> is <see cref="SomeIpTpOutcome.Complete"/>.</param>
+/// <param name="LruEvicted">
+/// True when a separate (LRU-evicted) session was silently removed to make room for this one.
+/// The caller should emit a diagnostic for the evicted session even if this session itself
+/// is still in progress.
+/// </param>
+internal readonly record struct SomeIpTpReassemblyResult(
+    SomeIpTpOutcome Outcome,
+    byte[]? Payload,
+    bool LruEvicted);
 
 /// <summary>
 /// Key for identifying a SOME/IP-TP reassembly session.
 /// A session is uniquely identified by the tuple (ServiceId, MethodId, ClientId, SessionId).
 /// </summary>
-internal readonly struct SomeIpTpReassemblyKey : IEquatable<SomeIpTpReassemblyKey>
-{
-    /// <summary>SOME/IP Service ID.</summary>
-    internal ushort ServiceId
-    {
-        get;
-    }
-
-    /// <summary>SOME/IP Method ID.</summary>
-    internal ushort MethodId
-    {
-        get;
-    }
-
-    /// <summary>SOME/IP Client ID.</summary>
-    internal ushort ClientId
-    {
-        get;
-    }
-
-    /// <summary>SOME/IP Session ID.</summary>
-    internal ushort SessionId
-    {
-        get;
-    }
-
-    /// <summary>Creates a new reassembly key.</summary>
-    internal SomeIpTpReassemblyKey(ushort serviceId, ushort methodId, ushort clientId, ushort sessionId)
-    {
-        ServiceId = serviceId;
-        MethodId = methodId;
-        ClientId = clientId;
-        SessionId = sessionId;
-    }
-
-    /// <inheritdoc/>
-    public bool Equals(SomeIpTpReassemblyKey other) =>
-        ServiceId == other.ServiceId && MethodId == other.MethodId &&
-        ClientId == other.ClientId && SessionId == other.SessionId;
-
-    /// <inheritdoc/>
-    public override bool Equals(object? obj) => obj is SomeIpTpReassemblyKey other && Equals(other);
-
-    /// <inheritdoc/>
-    public override int GetHashCode() => HashCode.Combine(ServiceId, MethodId, ClientId, SessionId);
-}
+/// <param name="ServiceId">SOME/IP Service ID.</param>
+/// <param name="MethodId">SOME/IP Method ID.</param>
+/// <param name="ClientId">SOME/IP Client ID.</param>
+/// <param name="SessionId">SOME/IP Session ID.</param>
+internal readonly record struct SomeIpTpReassemblyKey(
+    ushort ServiceId,
+    ushort MethodId,
+    ushort ClientId,
+    ushort SessionId);
 
 /// <summary>
 /// A single fragment in a SOME/IP-TP reassembly session.
 /// </summary>
-internal readonly struct SomeIpTpFragment
-{
-    /// <summary>Byte offset where this fragment starts in the reassembled message.</summary>
-    internal uint Offset
-    {
-        get;
-    } // bytes
-
-    /// <summary>Fragment payload data.</summary>
-    internal byte[] Data
-    {
-        get;
-    }
-
-    /// <summary>Creates a new fragment.</summary>
-    internal SomeIpTpFragment(uint offset, byte[] data)
-    {
-        Offset = offset;
-        Data = data;
-    }
-}
+/// <param name="Offset">Byte offset where this fragment starts in the reassembled message.</param>
+/// <param name="Data">Fragment payload data.</param>
+internal readonly record struct SomeIpTpFragment(uint Offset, byte[] Data);
 
 /// <summary>
 /// Tracks SOME/IP-TP fragment reassembly sessions.

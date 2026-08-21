@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Core.Tests;
 
@@ -47,14 +47,14 @@ internal sealed class TlsProtocolTests
             // Content type = 22 (Handshake)
             FieldId? ctField = stack.GetFieldId("tls.record.content_type");
             await Assert.That(ctField).IsNotNull();
-            bool hasCt = packet.TryGetFieldValue(ctField!.Value, out FieldValue ctValue);
+            bool hasCt = packet.TryGetFieldValue(ctField!.Value, out FieldValue ctValue, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasCt).IsTrue();
             ctValue.Data.TryGetAsU64(out ulong u64Val);
             await Assert.That(u64Val).IsEqualTo(22UL);
 
             // Record version
             FieldId? versionField = stack.GetFieldId("tls.record.version");
-            bool hasVersion = packet.TryGetFieldValue(versionField!.Value, out FieldValue versionValue);
+            bool hasVersion = packet.TryGetFieldValue(versionField!.Value, out FieldValue versionValue, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasVersion).IsTrue();
             // Client Hello record version is TLS 1.0 (0x0301) for maximum compatibility
             versionValue.Data.TryGetAsU64(out ulong u64Val2);
@@ -62,7 +62,7 @@ internal sealed class TlsProtocolTests
 
             // Record length > 0
             FieldId? lenField = stack.GetFieldId("tls.record.length");
-            bool hasLen = packet.TryGetFieldValue(lenField!.Value, out FieldValue lenValue);
+            bool hasLen = packet.TryGetFieldValue(lenField!.Value, out FieldValue lenValue, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasLen).IsTrue();
             lenValue.Data.TryGetAsU64(out ulong u64Val3);
             await Assert.That(u64Val3).IsGreaterThan(0UL);
@@ -84,21 +84,21 @@ internal sealed class TlsProtocolTests
             // Handshake type = 1 (Client Hello)
             FieldId? hsType = stack.GetFieldId("tls.handshake.type");
             await Assert.That(hsType).IsNotNull();
-            bool hasHsType = packet.TryGetFieldValue(hsType!.Value, out FieldValue hsTypeValue);
+            bool hasHsType = packet.TryGetFieldValue(hsType!.Value, out FieldValue hsTypeValue, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasHsType).IsTrue();
             hsTypeValue.Data.TryGetAsU64(out ulong u64Val);
             await Assert.That(u64Val).IsEqualTo(1UL);
 
             // Handshake version = TLS 1.2 (0x0303)
             FieldId? hsVersion = stack.GetFieldId("tls.handshake.version");
-            bool hasHsVersion = packet.TryGetFieldValue(hsVersion!.Value, out FieldValue hsVersionValue);
+            bool hasHsVersion = packet.TryGetFieldValue(hsVersion!.Value, out FieldValue hsVersionValue, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasHsVersion).IsTrue();
             hsVersionValue.Data.TryGetAsU64(out ulong u64Val2);
             await Assert.That(u64Val2).IsEqualTo(0x0303UL);
 
             // Handshake length > 0
             FieldId? hsLen = stack.GetFieldId("tls.handshake.length");
-            bool hasHsLen = packet.TryGetFieldValue(hsLen!.Value, out FieldValue hsLenValue);
+            bool hasHsLen = packet.TryGetFieldValue(hsLen!.Value, out FieldValue hsLenValue, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasHsLen).IsTrue();
             hsLenValue.Data.TryGetAsU64(out ulong u64Val3);
             await Assert.That(u64Val3).IsGreaterThan(0UL);
@@ -117,7 +117,7 @@ internal sealed class TlsProtocolTests
             // Cipher suites length = 6 (3 suites x 2 bytes)
             FieldId? csLen = stack.GetFieldId("tls.handshake.cipher_suites_length");
             await Assert.That(csLen).IsNotNull();
-            bool hasCsLen = packet.TryGetFieldValue(csLen!.Value, out FieldValue csLenValue);
+            bool hasCsLen = packet.TryGetFieldValue(csLen!.Value, out FieldValue csLenValue, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasCsLen).IsTrue();
             csLenValue.Data.TryGetAsU64(out ulong u64Val);
             await Assert.That(u64Val).IsEqualTo(6UL);
@@ -125,7 +125,7 @@ internal sealed class TlsProtocolTests
             // At least one cipher suite field present
             FieldId? csField = stack.GetFieldId("tls.handshake.ciphersuite");
             await Assert.That(csField).IsNotNull();
-            bool hasCs = packet.TryGetFieldValue(csField!.Value, out FieldValue csValue);
+            bool hasCs = packet.TryGetFieldValue(csField!.Value, out FieldValue csValue, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasCs).IsTrue();
         }
     }
@@ -141,7 +141,7 @@ internal sealed class TlsProtocolTests
         {
             FieldId? sniField = stack.GetFieldId("tls.handshake.extensions.server_name");
             await Assert.That(sniField).IsNotNull();
-            bool hasSni = packet.TryGetFieldValue(sniField!.Value, out FieldValue sniValue);
+            bool hasSni = packet.TryGetFieldValue(sniField!.Value, out FieldValue sniValue, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasSni).IsTrue();
             sniValue.Data.TryGetAsString(out string strVal);
             await Assert.That(strVal).IsEqualTo("www.github.com");
@@ -160,28 +160,28 @@ internal sealed class TlsProtocolTests
         {
             // Handshake type = 2 (Server Hello)
             FieldId? hsType = stack.GetFieldId("tls.handshake.type");
-            bool hasHsType = packet.TryGetFieldValue(hsType!.Value, out FieldValue hsTypeValue);
+            bool hasHsType = packet.TryGetFieldValue(hsType!.Value, out FieldValue hsTypeValue, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasHsType).IsTrue();
             hsTypeValue.Data.TryGetAsU64(out ulong u64Val);
             await Assert.That(u64Val).IsEqualTo(2UL);
 
             // Selected cipher suite
             FieldId? csField = stack.GetFieldId("tls.handshake.ciphersuite");
-            bool hasCs = packet.TryGetFieldValue(csField!.Value, out FieldValue csValue);
+            bool hasCs = packet.TryGetFieldValue(csField!.Value, out FieldValue csValue, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasCs).IsTrue();
             csValue.Data.TryGetAsU64(out ulong u64Val2);
             await Assert.That(u64Val2).IsEqualTo(0x1301UL);
 
             // Session ID length = 32
             FieldId? sidLen = stack.GetFieldId("tls.handshake.session_id_length");
-            bool hasSidLen = packet.TryGetFieldValue(sidLen!.Value, out FieldValue sidLenValue);
+            bool hasSidLen = packet.TryGetFieldValue(sidLen!.Value, out FieldValue sidLenValue, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasSidLen).IsTrue();
             sidLenValue.Data.TryGetAsU64(out ulong u64Val3);
             await Assert.That(u64Val3).IsEqualTo(32UL);
 
             // Compression method = 0 (null)
             FieldId? compField = stack.GetFieldId("tls.handshake.comp_method");
-            bool hasComp = packet.TryGetFieldValue(compField!.Value, out FieldValue compValue);
+            bool hasComp = packet.TryGetFieldValue(compField!.Value, out FieldValue compValue, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasComp).IsTrue();
             compValue.Data.TryGetAsU64(out ulong u64Val4);
             await Assert.That(u64Val4).IsEqualTo(0UL);

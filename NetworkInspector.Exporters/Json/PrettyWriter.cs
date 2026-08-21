@@ -47,16 +47,16 @@ internal static class PrettyWriter
             JsonHelpers.WriteJsonString(ref buffer, info);
         }
 
-        // "fields": [...]
+        // "fields": [...] — materialize: true so lazy protocol trees are exported.
         Field root = packet.RootField();
-        if (root.HasChildren)
+        if (root.HasChildren(materialize: true))
         {
             buffer.Write(",\n"u8);
             _WriteIndent(ref buffer, 2);
             buffer.Write("\"fields\": [\n"u8);
 
             bool first = true;
-            foreach (Field child in root.Children())
+            foreach (Field child in root.Children(materialize: true))
             {
                 if (!first)
                 {
@@ -102,7 +102,7 @@ internal static class PrettyWriter
             buffer.Write(",\n"u8);
             _WriteIndent(ref buffer, depth + 1);
             buffer.Write("\"type\": "u8);
-            JsonHelpers.WriteU64(ref buffer, (ulong)info.FieldType);
+            JsonHelpers.WriteFieldTypeName(ref buffer, info.FieldType);
         }
 
         // "value": ...
@@ -134,15 +134,15 @@ internal static class PrettyWriter
             JsonHelpers.WriteJsonString(ref buffer, customText.AsString);
         }
 
-        // "children": [...]
-        if (field.HasChildren)
+        // "children": [...] — materialize: true so nested lazy fields are exported.
+        if (field.HasChildren(materialize: true))
         {
             buffer.Write(",\n"u8);
             _WriteIndent(ref buffer, depth + 1);
             buffer.Write("\"children\": [\n"u8);
 
             bool firstChild = true;
-            foreach (Field child in field.Children())
+            foreach (Field child in field.Children(materialize: true))
             {
                 if (!firstChild)
                 {
