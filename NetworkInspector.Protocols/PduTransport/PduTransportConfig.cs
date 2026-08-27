@@ -7,7 +7,7 @@ namespace NetworkInspector.Protocols.PduTransport;
 /// for PDU identifiers. Loaded from a JSON file specified by the
 /// <c>pdu_transport.config_file</c> setting.
 /// </summary>
-internal sealed class PduTransportConfig
+public sealed class PduTransportConfig
 {
     /// <summary>List of PDU definitions with ID-to-name mappings.</summary>
     [JsonPropertyName("pdus")]
@@ -17,7 +17,7 @@ internal sealed class PduTransportConfig
 /// <summary>
 /// A single PDU entry defining an ID and its display name.
 /// </summary>
-internal sealed class PduTransportPduEntry
+public sealed class PduTransportPduEntry
 {
     /// <summary>Numeric PDU identifier.</summary>
     [JsonPropertyName("id")]

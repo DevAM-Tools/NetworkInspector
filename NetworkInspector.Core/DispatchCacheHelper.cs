@@ -11,14 +11,15 @@ namespace NetworkInspector.Core;
 /// path.
 /// </para>
 /// <para>
-/// <b>Delegate caches</b> (<see cref="BuildU64DelegateCache"/>,
-/// <see cref="BuildU64SparseDelegateCache"/>) resolve <see cref="ProtocolId"/> to
-/// pre-bound <see cref="ParseDelegate"/> at build time, enabling direct method invocation
-/// without interface vtable dispatch.
+/// <b>ID caches</b> (<see cref="BuildU64IdCache"/>, <see cref="BuildU64SparseIdCache"/>)
+/// store <see cref="ProtocolId"/> values. Production dispatch uses these with
+/// <see cref="MutField.CallProtocol"/> so invalid ids return a <see cref="ParseError"/>.
 /// </para>
 /// <para>
-/// <b>ID caches</b> (<see cref="BuildU64IdCache"/>, <see cref="BuildU64SparseIdCache"/>)
-/// store <see cref="ProtocolId"/> values for contexts that need IDs rather than delegates.
+/// <b>Delegate caches</b> (<see cref="BuildU64DelegateCache"/>,
+/// <see cref="BuildU64SparseDelegateCache"/>) resolve <see cref="ProtocolId"/> to a
+/// <see cref="ParseDelegate"/>. Prefer ID caches plus
+/// <see cref="MutField.CallProtocol"/> when the caller needs invalid-id errors.
 /// </para>
 /// </summary>
 public static class DispatchCacheHelper

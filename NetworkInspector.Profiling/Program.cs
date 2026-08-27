@@ -30,9 +30,8 @@ namespace NetworkInspector.Profiling;
 /// <para><b>Prerequisites:</b></para>
 /// <para>Run the profiling tool with elevated (administrator) privileges for accurate
 /// measurements. Without elevation the process priority cannot be raised to
-/// <c>High</c> and the OS may migrate the process across CPU cores, causing
-/// L1/L2 cache evictions and TSC skew. A console warning is emitted when
-/// elevation fails, but the profiling run continues with potentially skewed results.</para>
+/// <c>High</c>. A console warning is emitted when elevation fails, but the
+/// profiling run continues with potentially skewed results.</para>
 /// </summary>
 internal static class Program
 {
@@ -42,8 +41,9 @@ internal static class Program
         Thread.CurrentThread.CurrentCulture = CultureInfo.InvariantCulture;
         Thread.CurrentThread.CurrentUICulture = CultureInfo.InvariantCulture;
 
-        // Elevate process priority to High and pin the current thread to a single
-        // core so OS scheduling noise does not skew throughput measurements.
+        // Elevate process priority to High so OS scheduling noise does not
+        // starve the workload. Threads stay unpinned so ingest and listeners
+        // can run on separate cores.
         _ElevateProcessPriority();
 
         string? filter = null;
@@ -89,10 +89,21 @@ internal static class Program
             // ── Parsing (recycled — zero Packet heap allocations) ─────────────────
             new ParseRandomFramesRecycledScenario(materialize: false), // parse-random-frames-recycled
             new ParseRandomFramesRecycledScenario(materialize: true),  // parse-random-frames-materialized-recycled
+
+            // ── Ingest / Redissect ───────────────────────────────────────────────
+            new ParseIngestUdpScenario(),
+            new RedissectParallelUdpScenario(threadCount: 1),
+            new RedissectParallelUdpScenario(threadCount: 2),
+            new RedissectParallelUdpScenario(threadCount: 4),
+            new RedissectParallelUdpScenario(threadCount: 8),
+            new SessionConcurrentRedissectScenario(listenerCount: 1),
+            new SessionConcurrentRedissectScenario(listenerCount: 2),
+            new SessionConcurrentRedissectScenario(listenerCount: 4),
+            new SessionConcurrentRedissectScenario(listenerCount: 8),
         ];
 
         IProfilingScenario[] discovered = ScenarioDiscovery.Discover();
-        IProfilingScenario[] scenarios = [..manual, ..discovered];
+        IProfilingScenario[] scenarios = _MergeScenarios(manual, discovered);
 
         try
         {
@@ -307,9 +318,14 @@ internal static class Program
             ConsoleColor.Green);
 
         // Print throughput metric when the scenario provides work-unit information.
+        long totalWorkUnits = 0;
         if (scenario.WorkUnitsPerIteration > 0)
         {
-            double totalWorkUnits = (double)timedIterations * scenario.WorkUnitsPerIteration;
+            totalWorkUnits = timedIterations * scenario.WorkUnitsPerIteration;
+        }
+
+        if (totalWorkUnits > 0)
+        {
             double unitsPerSecond = totalWorkUnits / sw.Elapsed.TotalSeconds;
             string throughput = _FormatRate(unitsPerSecond);
             _WriteColored(
@@ -332,10 +348,9 @@ internal static class Program
         Console.WriteLine(
             FormattableString.Invariant(
                 $"  GC Heap: {gcInfo.HeapSizeBytes / 1024.0 / 1024:F1} MB, Pause: {gcInfo.PauseTimePercentage:F1}%"));
-        if (scenario.WorkUnitsPerIteration > 0)
+        if (totalWorkUnits > 0)
         {
-            double totalWorkUnits = (double)timedIterations * scenario.WorkUnitsPerIteration;
-            double allocPerWorkUnit = allocDelta / totalWorkUnits;
+            double allocPerWorkUnit = allocDelta / (double)totalWorkUnits;
             Console.WriteLine(
                 FormattableString.Invariant($"  Alloc/packet: {allocPerWorkUnit:F0} bytes"));
         }
@@ -399,9 +414,7 @@ internal static class Program
     };
 
     /// <summary>
-    /// Elevates the current process to <see cref="ProcessPriorityClass.High"/>
-    /// and sets the processor affinity to a single core. This reduces OS scheduling
-    /// jitter and yields more stable, reproducible throughput measurements.
+    /// Elevates the current process to <see cref="ProcessPriorityClass.High"/>.
     /// Failures are logged but do not abort the profiling run (e.g. when running
     /// without administrator privileges).
     /// </summary>
@@ -413,32 +426,50 @@ internal static class Program
 
             process.PriorityClass = ProcessPriorityClass.High;
 
-            // Pin to a single physical core (core 0) via affinity mask.
-            // This prevents the OS from migrating the thread between cores,
-            // which can cause L1/L2 cache evictions and TSC skew.
-            if (OperatingSystem.IsWindows() || OperatingSystem.IsLinux())
-            {
-                process.ProcessorAffinity = (nint)0b11; // core 0, both hyperthreads
-            }
-
             Console.ForegroundColor = ConsoleColor.DarkGray;
-            if (OperatingSystem.IsWindows() || OperatingSystem.IsLinux())
-            {
-                Console.WriteLine($"Process priority: {process.PriorityClass}, Affinity: 0x{process.ProcessorAffinity:X}");
-            }
-            else
-            {
-                Console.WriteLine($"Process priority: {process.PriorityClass}");
-            }
+            Console.WriteLine($"Process priority: {process.PriorityClass}");
             Console.ResetColor();
         }
         catch (Exception ex)
         {
             Console.ForegroundColor = ConsoleColor.Yellow;
-            Console.WriteLine($"WARNING: could not elevate process priority/affinity: {ex.Message}");
+            Console.WriteLine($"WARNING: could not elevate process priority: {ex.Message}");
             Console.WriteLine("Measurements may be skewed by OS scheduling jitter. Run elevated for best results.");
             Console.ResetColor();
         }
+    }
+
+    /// <summary>
+    /// Combines manual registrations with auto-discovered scenarios, keeping the first
+    /// occurrence of each <see cref="IProfilingScenario.Name"/>.
+    /// </summary>
+    private static IProfilingScenario[] _MergeScenarios(
+        IProfilingScenario[] manual,
+        IProfilingScenario[] discovered)
+    {
+        HashSet<string> names = new(StringComparer.Ordinal);
+        int count = 0;
+        IProfilingScenario[] merged = new IProfilingScenario[manual.Length + discovered.Length];
+
+        foreach (IProfilingScenario scenario in manual)
+        {
+            if (names.Add(scenario.Name))
+            {
+                merged[count] = scenario;
+                count++;
+            }
+        }
+
+        foreach (IProfilingScenario scenario in discovered)
+        {
+            if (names.Add(scenario.Name))
+            {
+                merged[count] = scenario;
+                count++;
+            }
+        }
+
+        return merged.AsSpan(0, count).ToArray();
     }
 
     /// <summary>

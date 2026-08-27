@@ -61,7 +61,7 @@ internal sealed class ParseContextDispatchTests
             FrameInterfaceId.Invalid,
             stack.FrameInterfaceRegistry).Value;
 
-        return Packet.ParseFrame(new PacketId(1), stack, frame, firstProtocolId);
+        return Packet.ParseFrame(new PacketId(0), stack, frame, firstProtocolId);
     }
 
     #endregion
@@ -101,6 +101,92 @@ internal sealed class ParseContextDispatchTests
         ProtocolId selfId = ctx.SelfProtocolId;
         await Assert.That(hasStack).IsFalse();
         await Assert.That(selfId).IsEqualTo(default(ProtocolId));
+    }
+
+    [Test]
+    public async Task CallProtocol_SetsSelfProtocolId()
+    {
+        (Stack stack, _, SpyProtocol child, _, ProtocolId childId) = _BuildDispatchStack();
+        using (stack)
+        {
+            byte[] data = [0x99];
+            Frame frame = Frame.Create(
+                new FrameId(1),
+                Timestamp.FromSecs(0),
+                data,
+                LinkType.Ethernet,
+                FrameInterfaceId.Invalid,
+                stack.FrameInterfaceRegistry).Value;
+            Packet packet = new(new PacketId(0), stack, frame);
+
+            ProtocolId firstSelf;
+            ProtocolId secondSelf;
+            {
+                MutField root = packet.RootFieldMut();
+                ParseContext ctx = new(stack);
+                _ = root.CallProtocol(childId, data, in ctx);
+                firstSelf = child.ReceivedSelfProtocolId;
+                _ = root.CallProtocol(childId, data, in ctx);
+                secondSelf = child.ReceivedSelfProtocolId;
+            }
+
+            await Assert.That(firstSelf).IsEqualTo(childId);
+            await Assert.That(secondSelf).IsEqualTo(childId);
+        }
+    }
+
+    [Test]
+    public async Task RawParse_DoesNotSetSelfProtocolId()
+    {
+        (Stack stack, _, SpyProtocol child, _, ProtocolId childId) = _BuildDispatchStack();
+        using (stack)
+        {
+            byte[] data = [0x99];
+            Frame frame = Frame.Create(
+                new FrameId(1),
+                Timestamp.FromSecs(0),
+                data,
+                LinkType.Ethernet,
+                FrameInterfaceId.Invalid,
+                stack.FrameInterfaceRegistry).Value;
+            Packet packet = new(new PacketId(0), stack, frame);
+
+            ProtocolId rawSelf;
+            ProtocolId afterCallSelf;
+            {
+                MutField root = packet.RootFieldMut();
+                ParseContext ctx = new(stack);
+                _ = child.Parse(in root, data, in ctx);
+                rawSelf = child.ReceivedSelfProtocolId;
+                _ = root.CallProtocol(childId, data, in ctx);
+                afterCallSelf = child.ReceivedSelfProtocolId;
+            }
+
+            await Assert.That(rawSelf).IsEqualTo(ProtocolId.Invalid);
+            await Assert.That(afterCallSelf).IsEqualTo(childId);
+        }
+    }
+
+    [Test]
+    public async Task PrepareForReuse_SecondParse_SetsSelfProtocolId()
+    {
+        (Stack stack, SpyProtocol parent, _, ProtocolId parentId, _) = _BuildDispatchStack();
+        using (stack)
+        {
+            Packet packet = _ParseFrame(stack, parentId);
+            await Assert.That(parent.ReceivedSelfProtocolId).IsEqualTo(parentId);
+
+            byte[] data = [0x99];
+            Frame frame = Frame.Create(
+                new FrameId(2),
+                Timestamp.FromSecs(1),
+                data,
+                LinkType.Ethernet,
+                FrameInterfaceId.Invalid,
+                stack.FrameInterfaceRegistry).Value;
+            _ = Packet.ParseFrame(packet, new PacketId(1), stack, frame, parentId);
+            await Assert.That(parent.ReceivedSelfProtocolId).IsEqualTo(parentId);
+        }
     }
 
     #endregion
@@ -169,11 +255,11 @@ internal sealed class ParseContextDispatchTests
             LinkType.Ethernet, FrameInterfaceId.Invalid, stack.FrameInterfaceRegistry).Value;
 
         // Parse via parent1 — child must see parent1Id as caller
-        _ = Packet.ParseFrame(new PacketId(1), stack, frame, parent1Id);
+        _ = Packet.ParseFrame(new PacketId(0), stack, frame, parent1Id);
         ProtocolId callerAfterParent1 = child.ReceivedCallerProtocolId;
 
         // Parse via parent2 — child must see parent2Id as caller
-        _ = Packet.ParseFrame(new PacketId(2), stack, frame, parent2Id);
+        _ = Packet.ParseFrame(new PacketId(1), stack, frame, parent2Id);
         ProtocolId callerAfterParent2 = child.ReceivedCallerProtocolId;
 
         await Assert.That(callerAfterParent1).IsEqualTo(parent1Id);
@@ -201,7 +287,7 @@ internal sealed class ParseContextDispatchTests
 
     /// <summary>
     /// A minimal protocol that records the <see cref="ParseContext"/> it receives.
-    /// On <see cref="Parse"/>, optionally dispatches to a u64 table using its single-byte payload.
+    /// On <see cref="IProtocol.Parse"/>, optionally dispatches to a u64 table using its single-byte payload.
     /// </summary>
     private sealed class SpyProtocol(string name, string uiName) : IProtocol
     {

@@ -16,7 +16,7 @@ internal sealed class CachedFrameSourceTests
     private static CachedFrameSource _CreateCached(int count, ulong seed = 42)
     {
 #pragma warning disable CA2000 // CachedFrameSource takes ownership of inner
-        RandomFrameSource inner = new(count, seed);
+        SequentialOnlyFrameSource inner = new(new RandomFrameSource(count, seed));
 #pragma warning restore CA2000
         return new CachedFrameSource(inner);
     }
@@ -86,7 +86,7 @@ internal sealed class CachedFrameSourceTests
     public async Task UiName_DelegatedToInner()
     {
 #pragma warning disable CA2000 // CachedFrameSource takes ownership of inner
-        RandomFrameSource inner = new(1, seed: 42, uiName: "TestInner");
+        SequentialOnlyFrameSource inner = new(new RandomFrameSource(1, seed: 42, uiName: "TestInner"));
 #pragma warning restore CA2000
         using CachedFrameSource source = new(inner);
         await Assert.That(source.UiName).IsEqualTo("TestInner");
@@ -259,7 +259,7 @@ internal sealed class CachedFrameSourceTests
     public async Task Start_NullRegistry_ThrowsArgumentNullException()
     {
 #pragma warning disable CA2000 // CachedFrameSource takes ownership of inner
-        RandomFrameSource inner = new(1);
+        SequentialOnlyFrameSource inner = new(new RandomFrameSource(1));
 #pragma warning restore CA2000
         using CachedFrameSource source = new(inner);
 
@@ -272,6 +272,33 @@ internal sealed class CachedFrameSourceTests
     // ========================================================================
     // Inner-source exception propagation (E3 regression guard)
     // ========================================================================
+
+    /// <summary>
+    /// Forward-only facade so <see cref="CachedFrameSource"/> can wrap a generator that already
+    /// implements <see cref="IRandomAccessFrameSource"/>.
+    /// </summary>
+    private sealed class SequentialOnlyFrameSource : IFrameSource
+    {
+        private readonly IFrameSource _Inner;
+
+        public SequentialOnlyFrameSource(IFrameSource inner) => _Inner = inner;
+
+        public string UiName => _Inner.UiName;
+
+        public string? Description => _Inner.Description;
+
+        public int? EstimatedFrameCount => _Inner.EstimatedFrameCount;
+
+        public bool IsRunning => _Inner.IsRunning;
+
+        public void Start(FrameSourceId sourceId, FrameInterfaceRegistry registry) =>
+            _Inner.Start(sourceId, registry);
+
+        public Frame? NextFrame(CancellationToken cancellationToken = default) =>
+            _Inner.NextFrame(cancellationToken);
+
+        public void Dispose() => _Inner.Dispose();
+    }
 
     private sealed class ThrowingFrameSource : IFrameSource
     {

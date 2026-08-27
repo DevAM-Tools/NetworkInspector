@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Protocols;
 
@@ -24,7 +24,7 @@ namespace NetworkInspector.Protocols;
 /// <remarks>
 /// <para><b>Thread safety:</b> instances are immutable after registration completes.
 /// All mutable state is initialised inside <c>_RegisterFieldsCustom</c> / <c>_OnStartCustom</c>
-/// (single-threaded build phase) and is read-only thereafter, so <see cref="Parse"/> may
+/// (single-threaded build phase) and is read-only thereafter, so <see cref="IProtocol.Parse"/> may
 /// be invoked concurrently from any number of threads on the same instance without external
 /// synchronisation. Per-thread caches (when present) are stored in <c>[ThreadStatic]</c> fields.</para>
 /// </remarks>
@@ -114,8 +114,7 @@ public sealed partial class EthernetProtocol : IProtocol
 
     // Sparse dispatch cache built from the EtherType protocol table at stack start.
     // Linear scan over typically 4–6 entries; avoids dictionary hash computation per packet.
-    // Pre-bound delegates for direct invocation without interface vtable dispatch.
-    private (ulong Key, ParseDelegate Parse)[] _EtherTypeSparseCache = [];
+    private (ulong Key, ProtocolId Id)[] _EtherTypeSparseCache = [];
 
     /// <summary>
     /// Registers protocol-owned alias groups. Runs at build time after all canonical
@@ -155,7 +154,7 @@ public sealed partial class EthernetProtocol : IProtocol
     /// for the 4–6 registered EtherType entries beats a dictionary for per-packet lookup.
     /// </summary>
     partial void _OnStartCustom(Stack stack) =>
-        _EtherTypeSparseCache = stack.BuildU64SparseDelegateCache(_EtherTypeTableId);
+        _EtherTypeSparseCache = stack.BuildU64SparseIdCache(_EtherTypeTableId);
 
     /// <summary>
     /// Parses a Ethernet protocol unit from the supplied <paramref name="data"/> buffer,
@@ -356,12 +355,12 @@ public sealed partial class EthernetProtocol : IProtocol
     private ParseResult _DispatchEtherType(
         in MutField parentField, ulong etherType, ReadOnlyMemory<byte> payload, in ParseContext context)
     {
-        // Direct delegate call — no ProtocolId resolution, no vtable dispatch.
-        foreach ((ulong key, ParseDelegate parse) in _EtherTypeSparseCache)
+        // Cached ProtocolId; CallProtocol returns ParseError for invalid ids.
+        foreach ((ulong key, ProtocolId id) in _EtherTypeSparseCache)
         {
             if (key == etherType)
             {
-                return parse(in parentField, payload, in context);
+                return parentField.CallProtocol(id, payload, in context);
             }
         }
 
@@ -374,7 +373,7 @@ public sealed partial class EthernetProtocol : IProtocol
 
     /// <summary>
     /// Per-thread cache for the current packet's Ethernet src/dst MAC addresses.
-    /// Written by <see cref="Parse"/> before dispatching; available to downstream
+    /// Written by <see cref="IProtocol.Parse"/> before dispatching; available to downstream
     /// protocols (ARP, 802.1X). Null means no data cached yet on this thread.
     /// </summary>
     [ThreadStatic]

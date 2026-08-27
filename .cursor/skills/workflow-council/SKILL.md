@@ -1,6 +1,6 @@
 ---
 name: workflow-council
-description: Pressure-test one decision or fork with a 5-lens council (advisors, peer review, chairman). Use on /council, "council this", "run the council", "pressure-test this", "stress-test this". Do not use for implementation, code review, factual lookups, or casual should-I questions.
+description: Pressure-test one decision or fork with Skeptic, Problem-First, Upside, Outsider, and Builder (advisors, peer review, chairman). Exam mode teardowns a built result after /implement (Skeptic goes to code detail). Use on /council, "council this", "run the council", "pressure-test this", "stress-test this", or implement Closing Exam. Advisors do not edit. Do not use for factual lookups, casual should-I, or as a /review substitute.
 ---
 
 Execute `/council` workflow.

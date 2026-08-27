@@ -340,9 +340,10 @@ public interface IStack
     ProtocolId? TryMatchHeuristic(HeuristicProtocolTableId tableId, ReadOnlyMemory<byte> data);
 
     /// <summary>
-    /// Resolves a <see cref="ProtocolId"/> to its pre-bound <see cref="ParseDelegate"/>.
-    /// Intended for one-time use in <see cref="IProtocol.OnStart"/> to build dispatch caches
-    /// that store delegates for direct invocation without interface vtable dispatch.
+    /// Resolves a <see cref="ProtocolId"/> to its concrete <see cref="ParseDelegate"/>.
+    /// The returned delegate targets <see cref="IProtocol.Parse"/>. Prefer
+    /// <see cref="MutField.CallProtocol"/> so invalid ids return <see cref="ParseError"/>
+    /// instead of skipping the invoke.
     /// <para>
     /// <b>Do not call per packet.</b> The returned delegate is stable for the lifetime of
     /// the stack.

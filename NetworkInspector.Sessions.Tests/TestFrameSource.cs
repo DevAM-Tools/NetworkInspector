@@ -26,9 +26,9 @@ internal sealed class TestFrameSource : IRandomAccessFrameSource
         get; set;
     }
 
-    // Stores produced frames by FrameId.Value for random-access retrieval.
-    // Written by NextFrame (single-threaded), read by FrameById (any thread).
-    private readonly Dictionary<int, Frame> _ProducedFrames = [];
+    // Written by NextFrame (source thread), published for FrameById (listener threads).
+    private readonly Frame[] _ProducedFrames;
+    private readonly int[] _Published;
 
     /// <summary>
     /// Creates a test source that will yield the given raw frames in order.
@@ -37,6 +37,8 @@ internal sealed class TestFrameSource : IRandomAccessFrameSource
     {
         _RawFrames = rawFrames;
         _LinkType = linkType;
+        _ProducedFrames = new Frame[rawFrames.Length];
+        _Published = new int[rawFrames.Length];
     }
 
     /// <summary>
@@ -94,8 +96,8 @@ internal sealed class TestFrameSource : IRandomAccessFrameSource
             _InterfaceId,
             _Registry!).Value;
 
-        // Store for random-access retrieval during reparse.
         _ProducedFrames[idx] = frame;
+        Volatile.Write(ref _Published[idx], 1);
 
         return frame;
     }
@@ -105,11 +107,18 @@ internal sealed class TestFrameSource : IRandomAccessFrameSource
     {
         cancellationToken.ThrowIfCancellationRequested();
 
-        if (_ProducedFrames.TryGetValue(id.Value, out Frame frame))
+        int index = id.Value;
+        if ((uint)index >= (uint)_ProducedFrames.Length)
         {
-            return frame;
+            return null;
         }
-        return null;
+
+        if (Volatile.Read(ref _Published[index]) == 0)
+        {
+            return null;
+        }
+
+        return _ProducedFrames[index];
     }
 
     /// <inheritdoc/>

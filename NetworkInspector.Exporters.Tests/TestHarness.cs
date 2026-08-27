@@ -3,83 +3,67 @@
 namespace NetworkInspector.Exporters.Tests;
 
 /// <summary>
-/// Shared test infrastructure. Provides a lazily-initialized <see cref="Stack"/>
-/// with all standard protocols registered.
+/// Per-test-thread stack and dense packet-id allocator.
+/// First parses on a stack must be <c>0, 1, 2, …</c>; a process-wide shared stack with
+/// interleaved ids from parallel tests would jump and throw. Each calling thread therefore
+/// owns its own <see cref="Stack"/> and id sequence.
 /// </summary>
 internal static class TestHarness
 {
-    /// <summary>
-    /// Cached stack instance. Written once under <see cref="_Lock"/>; read without lock
-    /// via <see cref="Volatile.Read{T}"/> to avoid the lock on the fast path.
-    /// </summary>
-    private static Stack? _Stack;
+    /// <summary>Stack owned by the current test thread. Built on first use.</summary>
+    [ThreadStatic]
+    private static Stack? _ThreadStack;
+
+    /// <summary>Next first-parse packet id on this thread's stack. Starts at 0.</summary>
+    [ThreadStatic]
+    private static int _ThreadNextPacketId;
 
     /// <summary>
-    /// Guards lazy initialisation of <see cref="_Stack"/>.
-    /// Held only for the duration of the construction call; never held across I/O.
+    /// Per-thread cache of <see cref="FrameInterfaceId"/> values keyed by <see cref="LinkType"/>.
+    /// Avoids registering a new interface for every <see cref="CreateFrame"/> call.
     /// </summary>
-    private static readonly Lock _Lock = new();
+    [ThreadStatic]
+    private static Dictionary<LinkType, FrameInterfaceId>? _ThreadInterfaceIds;
 
     /// <summary>
-    /// Monotonically increasing counter used to assign unique packet IDs.
-    /// Incremented atomically via <see cref="Interlocked.Increment(ref long)"/>.
-    /// </summary>
-    private static long _NextPacketId;
-
-    /// <summary>
-    /// Cache of <see cref="FrameInterfaceId"/> values keyed by <see cref="LinkType"/>.
-    /// Avoids registering a new interface for every <see cref="CreateFrame"/> call, which
-    /// would cause 10 000+ registrations in bulk tests and grow the registry unboundedly.
-    /// </summary>
-    private static readonly Dictionary<LinkType, FrameInterfaceId> _InterfaceIds = new();
-
-    /// <summary>
-    /// Returns a shared <see cref="Stack"/> with all standard protocols registered.
-    /// Thread-safe; the instance is created once and reused.
+    /// Returns this thread's <see cref="Stack"/> with all standard protocols registered.
+    /// Safe for concurrent tests: each thread has its own instance.
     /// </summary>
     internal static Stack GetStack()
     {
-        Stack? cached = Volatile.Read(ref _Stack);
+        Stack? cached = _ThreadStack;
         if (cached is not null)
         {
             return cached;
         }
 
-        lock (_Lock)
+        SettingsManager? settingsManager = new();
+        try
         {
-            cached = Volatile.Read(ref _Stack);
-            if (cached is not null)
-            {
-                return cached;
-            }
-
-            SettingsManager? settingsManager = new();
-            try
-            {
-                FrameInterfaceRegistry registry = new();
-                StackBuilder builder = new(settingsManager, registry);
-                builder.RegisterStandardProtocols();
-                Stack stack = builder.Build();
-                settingsManager = null; // ownership transferred to stack
-                Volatile.Write(ref _Stack, stack);
-                return stack;
-            }
-            finally
-            {
-                settingsManager?.Dispose();
-            }
+            FrameInterfaceRegistry registry = new();
+            StackBuilder builder = new(settingsManager, registry);
+            builder.RegisterStandardProtocols();
+            Stack stack = builder.Build();
+            settingsManager = null; // ownership transferred to stack
+            _ThreadStack = stack;
+            return stack;
+        }
+        finally
+        {
+            settingsManager?.Dispose();
         }
     }
 
     /// <summary>
-    /// Returns a unique <see cref="PacketId"/> for each call. Thread-safe.
+    /// Returns the next dense first-parse <see cref="PacketId"/> for this thread's stack
+    /// (<c>0, 1, 2, …</c>).
     /// </summary>
     internal static PacketId NextPacketId() =>
-        new((int)Interlocked.Increment(ref _NextPacketId));
+        new(_ThreadNextPacketId++);
 
     /// <summary>
-    /// Creates a <see cref="Frame"/> from raw data, registering the interface in the
-    /// shared stack's <see cref="FrameInterfaceRegistry"/> if needed.
+    /// Creates a <see cref="Frame"/> from raw data, registering the interface in this
+    /// thread's stack <see cref="FrameInterfaceRegistry"/> if needed.
     /// </summary>
     /// <param name="id">Frame identifier.</param>
     /// <param name="timestampNanos">Timestamp in nanoseconds.</param>
@@ -99,23 +83,19 @@ internal static class TestHarness
         }
 
         FrameSourceId sourceId = new(0);
-
-        // Reuse an existing interface registration for the same LinkType so that bulk
-        // tests that call CreateFrame thousands of times do not grow the registry unboundedly.
-        lock (_Lock)
+        Dictionary<LinkType, FrameInterfaceId> interfaceIds = _ThreadInterfaceIds ??= [];
+        if (!interfaceIds.TryGetValue(linkType, out FrameInterfaceId ifId))
         {
-            if (!_InterfaceIds.TryGetValue(linkType, out FrameInterfaceId ifId))
-            {
-                ifId = registry.Register(sourceId, $"test_{linkType}", null, linkType);
-                _InterfaceIds[linkType] = ifId;
-            }
-
-            return Frame.Create(id, Timestamp.FromNanos(timestampNanos), data, linkType, ifId, registry).Value;
+            ifId = registry.Register(sourceId, $"test_{linkType}", null, linkType);
+            interfaceIds[linkType] = ifId;
         }
+
+        return Frame.Create(id, Timestamp.FromNanos(timestampNanos), data, linkType, ifId, registry).Value;
     }
 
     /// <summary>
-    /// Parses a <see cref="Frame"/> into a <see cref="Packet"/> using the shared stack.
+    /// Parses a <see cref="Frame"/> into a <see cref="Packet"/> using this thread's stack
+    /// and the next dense packet id.
     /// </summary>
     internal static Packet ParseFrame(Frame frame) =>
         Packet.ParseFrame(NextPacketId(), GetStack(), frame);

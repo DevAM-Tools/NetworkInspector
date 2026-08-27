@@ -26,6 +26,9 @@ internal sealed class ProtocolGeneratorTests
 
         await Assert.That(hasErrorDiagnostics).IsFalse();
         await Assert.That(HasGeneratedSource(result)).IsTrue();
+        string generated = GetFirstGeneratedSource(result);
+        await Assert.That(generated.Contains("public string Name", StringComparison.Ordinal)).IsTrue();
+        await Assert.That(generated.Contains("public void OnStart", StringComparison.Ordinal)).IsTrue();
     }
 
     #endregion

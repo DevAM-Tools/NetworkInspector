@@ -438,7 +438,7 @@ public sealed partial class CanProtocol : IProtocol
 
     /// <summary>
     /// Parses a CAN XL frame from SocketCAN format (ISO 11898-1:2024).
-    /// Called by <see cref="Parse"/> when the XLF flag (0x80) is set at byte offset 4.
+    /// Called by <see cref="IProtocol.Parse"/> when the XLF flag (0x80) is set at byte offset 4.
     /// No lazy population — all fields are appended directly.
     /// </summary>
     /// <remarks>

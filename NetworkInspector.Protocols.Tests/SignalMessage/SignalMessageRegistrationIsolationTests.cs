@@ -52,7 +52,7 @@ internal sealed class SignalMessageRegistrationIsolationTests
         {
             await File.WriteAllTextAsync(path, json).ConfigureAwait(false);
 
-            using SettingsManager settings = new();
+            using SettingsManager settings = new(dir);
             settings.PreloadValue(SignalMessageRegistration.ConfigFileSetting, path);
             StackBuilder builder = new(settings, new FrameInterfaceRegistry());
 
@@ -117,7 +117,7 @@ internal sealed class SignalMessageRegistrationIsolationTests
         {
             await File.WriteAllTextAsync(path, json).ConfigureAwait(false);
 
-            using SettingsManager settings = new();
+            using SettingsManager settings = new(dir);
             settings.PreloadValue(SignalMessageRegistration.ConfigFileSetting, path);
             StackBuilder builder = new(settings, new FrameInterfaceRegistry());
 
@@ -178,7 +178,7 @@ internal sealed class SignalMessageRegistrationIsolationTests
         try
         {
             await File.WriteAllTextAsync(path, json).ConfigureAwait(false);
-            using SettingsManager settings = new();
+            using SettingsManager settings = new(dir);
             settings.PreloadValue(SignalMessageRegistration.ConfigFileSetting, path);
             StackBuilder builder = new(settings, new FrameInterfaceRegistry());
             IReadOnlyList<SettingsLoadWarning> warnings = SignalMessageRegistration.Register(builder);
@@ -232,7 +232,7 @@ internal sealed class SignalMessageRegistrationIsolationTests
         try
         {
             await File.WriteAllTextAsync(path, json).ConfigureAwait(false);
-            using SettingsManager settings = new();
+            using SettingsManager settings = new(dir);
             settings.PreloadValue(SignalMessageRegistration.ConfigFileSetting, path);
             StackBuilder builder = new(settings, new FrameInterfaceRegistry());
             IReadOnlyList<SettingsLoadWarning> warnings = SignalMessageRegistration.Register(builder);
@@ -292,7 +292,7 @@ internal sealed class SignalMessageRegistrationIsolationTests
         try
         {
             await File.WriteAllTextAsync(path, json).ConfigureAwait(false);
-            using SettingsManager settings = new();
+            using SettingsManager settings = new(dir);
             settings.PreloadValue(SignalMessageRegistration.ConfigFileSetting, path);
             StackBuilder builder = new(settings, new FrameInterfaceRegistry());
             IReadOnlyList<SettingsLoadWarning> warnings = SignalMessageRegistration.Register(builder);
@@ -338,7 +338,7 @@ internal sealed class SignalMessageRegistrationIsolationTests
         try
         {
             await File.WriteAllTextAsync(path, json).ConfigureAwait(false);
-            using SettingsManager settings = new();
+            using SettingsManager settings = new(dir);
             settings.PreloadValue(SignalMessageRegistration.ConfigFileSetting, path);
             StackBuilder builder = new(settings, new FrameInterfaceRegistry());
             IReadOnlyList<SettingsLoadWarning> warnings = SignalMessageRegistration.Register(builder);

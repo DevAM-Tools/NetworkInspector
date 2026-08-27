@@ -481,18 +481,22 @@ internal sealed class FlexRayProtocolTests
 
         ulong expectedKey = FlexRayLinkTypeFrame.EncodeDispatchKey(frameId, channelB: true, cycle);
 
-        string jsonDir = Path.Combine(Path.GetTempPath(), "ni_flexray_dispatch_" + Guid.NewGuid().ToString("N"));
+        // JsonConfigFile confines config paths to StoragePath ?? AppContext.BaseDirectory.
+        string jsonDir = Path.Combine(
+            AppContext.BaseDirectory,
+            "ni_flexray_dispatch_" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture));
         _ = Directory.CreateDirectory(jsonDir);
         string jsonPath = Path.Combine(jsonDir, "signal_message.json");
         try
         {
+            string keyText = expectedKey.ToString(CultureInfo.InvariantCulture);
             string json = $$"""
                 {
                   "messages": [{
                     "name": "fr_dispatch_probe",
                     "ui_name": "FR Dispatch Probe",
                     "byte_length": 4,
-                    "dispatch_bindings": [{ "table": "flexray.id", "key": {{expectedKey}} }],
+                    "dispatch_bindings": [{ "table": "flexray.id", "key": {{keyText}} }],
                     "signals": [{
                       "name": "fr_dispatch_probe.Probe",
                       "ui_name": "Probe",
@@ -523,7 +527,7 @@ internal sealed class FlexRayProtocolTests
                 Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame);
 
                 FieldId? probeField = stack.GetFieldId("fr_dispatch_probe.Probe");
-                await Assert.That(probeField).IsNotNull();
+                await Assert.That(probeField.HasValue).IsTrue();
                 bool has = packet.TryGetFieldValue(probeField!.Value, out FieldValue probeValue, materialize: true);
                 await Assert.That(has).IsTrue();
                 // Signal fields store the physical F64 value (factor=1 → same magnitude as raw).

@@ -22,7 +22,7 @@ internal sealed class PacketProtocolTests
         Frame frameData = Frame.Create(
             new FrameId(1), Timestamp.FromSecs(0), new byte[42],
             LinkType.Ethernet, FrameInterfaceId.Invalid, stack.FrameInterfaceRegistry).Value;
-        Packet packet = Packet.ParseFrame(new PacketId(1), stack, frameData);
+        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frameData);
 
         FieldLookupCookie cookie = FieldLookupCookie.Start;
         bool found = packet.TryGetNextFieldValue(stack.PacketErrorFieldId, ref cookie, out FieldValue err, materialize: true); // materialize: true — need complete field tree for assertion
@@ -45,7 +45,7 @@ internal sealed class PacketProtocolTests
         Frame frameData = Frame.Create(
             new FrameId(1), Timestamp.FromSecs(0), payload,
             LinkType.Ethernet, FrameInterfaceId.Invalid, stack.FrameInterfaceRegistry).Value;
-        Packet packet = Packet.ParseFrame(new PacketId(1), stack, frameData);
+        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frameData);
 
         FieldId unparsedId = stack.GetFieldId("packet.unparsed_data")!.Value;
         bool found = packet.TryGetFieldValue(unparsedId, out FieldValue value, materialize: true);
@@ -67,7 +67,7 @@ internal sealed class PacketProtocolTests
         Frame frameData = Frame.Create(
             new FrameId(1), Timestamp.FromSecs(0), payload,
             LinkType.Ethernet, FrameInterfaceId.Invalid, stack.FrameInterfaceRegistry).Value;
-        Packet packet = Packet.ParseFrame(new PacketId(1), stack, frameData);
+        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frameData);
 
         FieldId unparsedId = stack.GetFieldId("packet.unparsed_data")!.Value;
         bool found = packet.TryGetFieldValue(unparsedId, out _, materialize: true);

@@ -36,7 +36,8 @@ namespace NetworkInspector.Sources.Random;
 /// <param name="uiName">
 /// Optional display name.  When <c>null</c>, a name is derived from the options.
 /// </param>
-public sealed class RandomFrameSource(RandomSourceOptions options, string? uiName = null) : IFrameSource
+public sealed class RandomFrameSource(RandomSourceOptions options, string? uiName = null)
+    : IRandomAccessFrameSource
 {
     #region Constants
 
@@ -285,6 +286,64 @@ public sealed class RandomFrameSource(RandomSourceOptions options, string? uiNam
         Frame frame = _GenerateFrameByIndex(currentIndex);
         _FrameIndex = currentIndex + 1;
         return frame;
+    }
+
+    /// <inheritdoc/>
+    public Frame? FrameById(FrameId id, CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(_Disposed != 0, this);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (!_Started || _Registry is null)
+        {
+            return null;
+        }
+
+        int index = id.Value;
+        if (index < 0)
+        {
+            return null;
+        }
+
+        if (_Options.FrameCount > 0 && index >= _Options.FrameCount)
+        {
+            return null;
+        }
+
+        if (_TcpStreamLayout is not null)
+        {
+            TcpStreamLayout layout = _TcpStreamLayout.Value;
+            if (index >= layout.TotalFrameCount)
+            {
+                return null;
+            }
+
+            bool isIpv6 = _Options.Mode == RandomFrameMode.TcpStreamIPv6;
+            byte[]? streamData = TcpStreamFrameBuilder.BuildFrame(
+                in layout, _Options.TcpStreamOptions, _MasterSeed, index, isIpv6);
+            if (streamData is null)
+            {
+                return null;
+            }
+
+            Timestamp timestamp = new(_BaseTimestamp.AsNanos + (index * _Options.TimestampInterval));
+            ParseResult<Frame> streamResult = Frame.Create(
+                new FrameId(index),
+                timestamp,
+                streamData,
+                _LinkTypeForMode(_Options.Mode),
+                _InterfaceId,
+                _Registry);
+
+            if (!streamResult.IsSuccess)
+            {
+                return null;
+            }
+
+            return streamResult.Value;
+        }
+
+        return _GenerateFrameByIndex(index);
     }
 
     /// <inheritdoc/>

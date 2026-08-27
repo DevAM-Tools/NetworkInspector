@@ -2,6 +2,8 @@
 
 Load on `/review`. Apply `copilot-instructions.md` Sections 2–4.
 
+**Purpose:** Critically examine the existing solution. Find defects in the parts and in how the parts interact. Skeptic stance: assume it cannot work; hunt the hair in the soup.
+
 ## Stage Order
 
 1. Define Scope
@@ -24,7 +26,9 @@ Load on `/review`. Apply `copilot-instructions.md` Sections 2–4.
 ## Stage 3 — Gather Context
 
 - Enumerate in-scope files.
-- Read in-scope files, related tests, direct dependencies.
+- If `reviews/brief_<slug>*.md` exists for this scope, read it first. Follow Seq. Expect is a claim, not proof.
+- Read in-scope files, related tests, direct dependencies, and call sites.
+- Map composition: callers, callees, shared state, sequencing, and error paths that only appear when pieces combine.
 - Read definition and docs for involved types and items.
 - Build coverage checklist: file × criterion.
 - Build test-coverage matrix; list gaps explicitly.
@@ -35,9 +39,14 @@ Load on `/review`. Apply `copilot-instructions.md` Sections 2–4.
 
 - **Consistency first:** cross-check plan, request, code, tests, docs, and comments for mismatches (e.g. documented behavior ≠ implementation, `Verify` ≠ reality, API contract ≠ call sites).
 - Fix cross-file drift in finding `How` when source-of-truth is clear; cite `C{n}` when plan already chose. Undocumented mismatch → Error.
-- Review exhaustively and adversarially.
+- Review exhaustively and adversarially. Do not trust tests, docs, or a green path.
+- **Skeptic pass (required):** Assume the in-scope solution cannot work. Do not stop after the first flaw. Cite `Skeptic` in finding `Context`.
+  - **Parts:** every in-scope unit — wrong default, off-by-one, silent swallow, copy-paste, tests that cannot fail, missing guard. Dumbest caller/operator error AND worst abuse + STRIDE at trust boundaries.
+  - **Whole:** composition — call-graph, shared state, ordering, contracts vs callers, `Verify` that does not prove the claim, R{n} that holds per file but fails end-to-end, defects that exist only in the interplay of otherwise-correct pieces.
+  - Hair in the soup counts. Isolated nits that violate §4 or become fatal in combination = Error. `none` only after both hunts ran and found nothing (say so in Sweep).
 - Evaluate all in-scope files against `copilot-instructions.md` Section 4 criteria plus loaded tech-skill rules.
 - Compare requested target vs observed result.
+- When a plan is in scope: check the built result against every R{n} from the user view. Unmet R{n} = Error.
 - Evaluate test coverage for behaviors, errors, boundaries.
 - Require 100% exit-path coverage per Section 4.5 and the loaded tech skill’s gate (if any).
 - Flag missing misuse/abuse analysis in plan as Error when new public APIs are introduced.
@@ -46,7 +55,7 @@ Load on `/review`. Apply `copilot-instructions.md` Sections 2–4.
 - Never stop after first N findings.
 - Flag missing tech-skill load as Error when triggered files are in scope.
 - Flag new dependency added without user approval as Error per the loaded tech skill New Dependency Protocol.
-- Sweep per `workflow-council.md`. Skip none. Lens defect → finding; cite lens in `Context`.
+- Sweep per `workflow-council.md`. Skip none. View defect → finding; cite view in `Context`. Skeptic Sweep row must cover parts and whole and point at finding IDs (or documented `none`).
 - Competing goals without recorded preference → Error; user decision before release verdict. High-stakes fork: recommend `/council` in `How`. Do not auto-run Full unless asked.
 
 ## Stage 5 — Output
@@ -101,7 +110,7 @@ List every finding in one row: ID, bucket prefix (`E`/`C`/`R`/`P`), title, one-s
 1. Findings Overview (top)
 2. Summary
 3. Scope
-4. Perspective Sweep (table; every lens filled; finding IDs or `none`)
+4. Perspective Sweep (table; every view filled; finding IDs or `none`)
 5. Errors
 6. Cosmetic Issues
 7. Refactoring Opportunities
@@ -129,8 +138,9 @@ Bucket-specific `How` / `Why` / `Context` requirements:
 
 ## Closing Assessment
 
-- Include architecture quality, dominant error themes, thread-safety posture, allocation profile.
-- Confirm Sweep covered all five lenses; unused lens = `none`.
+- Include architecture quality, composition (parts vs whole), dominant error themes, thread-safety posture, allocation profile.
+- Confirm Sweep covered all five views; unused view = `none`.
+- Confirm Skeptic pass ran on parts and on composition; cite finding IDs or `none`.
 - State explicit release verdict: `Ready for public release` or prioritized blocker IDs.
 - List top 3 priority actions by finding ID.
 

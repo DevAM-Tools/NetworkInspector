@@ -21,6 +21,7 @@
 8. [The Parse Method](#8-the-parse-method)
 9. [Lazy Field Materialization](#9-lazy-field-materialization)
 10. [Protocol Dispatch Tables](#10-protocol-dispatch-tables)
+    - [PDU Transport → Signal Message](#109-pdu-transport--signal-message)
 11. [Heuristic Protocol Tables](#11-heuristic-protocol-tables)
 12. [Dispatch Cache Optimization](#12-dispatch-cache-optimization)
 13. [Index Groups & PacketIndex](#13-index-groups--packetindex)
@@ -67,8 +68,14 @@ Packet bytes
                                             UDP  TCP  ICMP
                                               │    │
                                         udp.port  tcp.port table
-                                           ▼         ▼
-                                        DNS, ...   HTTP, TLS, ...
+                                           │         │
+                              ┌────────────┼─────┐   ▼
+                              ▼            ▼     ▼  HTTP, TLS, …
+                            DNS      PDU Transport  …
+                                           │
+                                  pdu_transport.id
+                                           ▼
+                                    Signal Message
 ```
 
 **Field tree structure** (sibling layout, not nested):
@@ -87,11 +94,17 @@ root
 │   ├── ...
 │   ├── ip.src: 192.168.1.1
 │   └── ip.dst: 10.0.0.1
-└── udp: User Datagram Protocol, Src Port: 12345, Dst Port: 53
-    ├── udp.srcport: 12345
-    ├── udp.dstport: 53
-    └── ...
-├── <message>: …                    // e.g. signal-message protocol selected by udp.port
+├── udp: User Datagram Protocol, Src Port: 12345, Dst Port: 53
+│   ├── udp.srcport: 12345
+│   ├── udp.dstport: 53
+│   └── ...
+├── pdu_transport: PDU Transport                 // sibling of udp when bound on udp.port
+│   └── pdu_transport.pdu: PDU: BenchPdu (ID: 32)
+│       ├── pdu_transport.id / length / name
+│       └── pdu_transport.payload                // only when no sub-protocol matches
+└── fixture_message: Fixture PDU                 // sibling of pdu_transport (dispatch on parentField)
+    ├── fixture_message.EngineRpm
+    └── fixture_message.Thr
 ```
 
 > Sub-protocols are **siblings** of their parent protocol, not children.
@@ -103,14 +116,20 @@ root
 
 ## 2. Threading & Execution Model
 
-### Single-Threaded Parse Execution
+### Parse Execution
 
-Protocol implementations are **single-threaded**. A `ProtocolStack` instance is
-owned by exactly one parsing thread. There is no concurrent access to protocol
-state during parsing. This means:
+The **first** parse of each packet is single-threaded and ordered: one thread walks the
+packets of a capture in ascending id order, and that thread alone drives every protocol
+on the stack. Once a packet has been parsed, however, it may be parsed *again* from any
+thread at any time — the UI, filter evaluation and export all do this, concurrently and
+while the first-parse thread is still working through later packets. So a `Stack` is
+owned by one *first-parse* thread, not by one thread outright. This means:
 
 - **No locks, no synchronization primitives** in protocol code.
-- Protocol instance fields (caches, settings, counters) can be read and written freely.
+- Protocol instance fields that are written during parsing need the watermark and
+  effect-store pattern described below; everything else must be set up during the build
+  phase (`OnStartCustom()`) and treated as read-only afterwards, or kept in
+  `[ThreadStatic]` fields. Most protocols are stateless and need neither.
 - The `in MutField` parameter is a `ref struct` — it cannot escape the call stack.
 
 ### Random Access Parsing
@@ -120,10 +139,87 @@ export). The same packet data may be fed to `Parse()` again at any time. This me
 
 - **No mutable per-packet state** stored on the protocol instance between parse calls.
   All packet-specific state lives in the field tree (`MutField` / `FieldValue`).
+  Protocols that genuinely need cross-packet state (connection trackers, reassembly and
+  fragment buffers) are the documented exception and must follow the watermark plus
+  effect-store pattern described under *First parse vs. re-parse* below — otherwise a
+  concurrent re-parse races on that state.
 - Caches and dispatch tables are **per-stack** state, initialized once in `OnStartCustom()`
   and immutable during parsing.
 - A `LazyPopulator` may be called zero or one time per packet — never assume it runs.
 - Lazy fields store their raw header bytes in `FieldValue` so re-parsing is self-contained.
+
+### First parse vs. re-parse (concurrent subsequent parses)
+
+There is **no parse-mode parameter**. `Packet.ParseFrame` / `ParseFrameIndexed` (plus the
+`TryParseFrame*` recycle variants) are the only entry points, and `ParseContext` carries
+nothing about parse intent. Each stateful protocol decides for itself whether a call is a
+first parse or a re-parse.
+
+**Mechanism — watermark.** Every stateful protocol holds
+`private volatile int _IngestWatermark = -1`, the highest packet id whose first parse completed.
+`_IsReplay(id)` is `id.Value <= _IngestWatermark` (plain volatile read).
+
+- `id > watermark` → **first parse**: mutate cross-packet state (trackers, reassembly and
+  fragment buffers) and record a compact **effect** for the packet.
+- `id <= watermark` → **re-parse**: read the recorded effect only. Never mutate shared
+  state. A missing effect degrades to a stateless path — it never falls back to mutation.
+
+The watermark is raised in a `finally` at the end of `IProtocol.Parse` (outermost ingest only),
+so even error and exception exits close the door: a later re-parse of that id can never
+re-enter the first-parse path.
+
+Authors implement `IProtocol.Parse`. `Stack.CallProtocol` stamps `ParseContext.SelfProtocolId`
+and then invokes the bound `ParseDelegate`. A raw `protocol.Parse(...)` or a cached
+`ParseDelegate` is a valid entry; it simply does not go through `CallProtocol`. Effect keys
+do not depend on that stamp.
+
+**Mechanism — layer key.** Effects are keyed by `(PacketId, packed buffer location)`.
+`Packet.GetEffectLayerKey(data)` packs the buffer index (`0` = `Frame.Data`, `1…` =
+`Packet.AddBuffer`) into bits 31–24 and the byte offset of the `Parse` `data` slice into
+bits 23–0. The argument must be the slice passed into `Parse`, not a heap copy. First parse
+and reparse of the same frame see the same key because the bytes and additional buffers are
+stable. Do not key on remaining length (`data.Length`) or any walk ordinal. Effects live in
+`EffectStore<TEffect>`: one packed row per packet that actually ran the protocol, binary
+search on replay, nested layers chained when the tail entry already belongs to the same
+packet id. Without the packed location, the inner layer of a tunnel (or a defragmented
+datagram in an additional buffer) would collide with an outer layer and replay the wrong
+values. Reassembled payloads must be attached with `Packet.BindParseBuffer` before the
+nested `Parse` so the inner slice is a packet buffer, not a heap copy.
+
+`Stack.ProtocolCount` is how many protocols are registered. There is no
+packet walk ordinal. `ProtocolId` is assigned at `RegisterProtocol` time.
+
+Protocols must not retain `Packet` references. Cross-packet protocol state is keyed by
+`PacketId` and layer key where needed.
+
+Effect stores live on the protocol instances and therefore share the `Stack` lifetime — a
+stack swap creates fresh protocols with empty stores.
+
+**Contract for callers.** First parses must be ordered, single-threaded, and use dense packet
+ids `0, 1, 2, …`. `Packet.ParseFrame` throws `InvalidOperationException` on a jump (for example
+id 5 after id 0). Re-parses of already-parsed ids may run on any number of threads at any time,
+including while later packets are being parsed for the first time. The session guarantees the
+first half structurally: the source loop parses under `_ParseLock` with ids from a monotonic
+allocator starting at 0, while `TryGetPacket` re-parses lock-free via `_TryReparseFrame`.
+`ParseFrameIndexed` is safe on a re-parse: the index no-ops for a packet it has already seen.
+
+Stateful protocols still use their own watermark (`id <= protocol watermark` → replay) because
+they are not invoked for every packet. The dense check lives on the `Stack`, which sees every
+`ParseFrame` call.
+
+**Audit of cross-packet mutable state** (every protocol that survives state across packets):
+
+| Protocol | Cross-packet state | Measure |
+|----------|--------------------|---------|
+| `TcpProtocol` | `_ConnectionTracker`, `_ReassemblyEngine` | Watermark + `EffectStore<TcpLayerEffect>` (analysis facts, dispatch mode, reassembled PDU bytes). Re-parse without effect → stateless raw-port dispatch. |
+| `UdpProtocol` | `_StreamTracker` | Watermark + `EffectStore<StreamEffect>`. Re-parse without effect → no `udp.stream` field. |
+| `IPv4Protocol` | `_Defragmenter` fragment buffers | Watermark + `EffectStore<DefragLayerEffect>` holding the reassembled datagram (only for the completing fragment). Re-parse without effect → fragment fields, no reassembly. |
+| `IPv6Protocol` | `_Defragmenter` fragment buffers | Same as IPv4. |
+| `SomeIpProtocol` | `_TpReassembler` sessions | Watermark + `EffectStore<SomeIpTpReassemblyResult>`. Re-parse without effect → segment reported without reassembly. |
+| `EthernetProtocol`, `IPv4Protocol`, `IPv6Protocol` | address caches | `[ThreadStatic]` — thread-local, safe as-is. |
+| `SignalMessageProtocol`, `CanProtocol`, `SomeIpProtocol` name maps, all `*SparseCache` / `*DelegateCache` | dispatch and display lookups | Written during registration / `OnStart` only, immutable during parsing — safe as-is. |
+
+All other protocols hold no cross-packet mutable state.
 
 ### Lifecycle
 
@@ -177,9 +273,9 @@ struct (if any). Large protocols may split sub-field modules into separate files
 public sealed partial class UdpProtocol : IProtocol
 ```
 
-- `sealed` — protocols are not designed for inheritance.
+- `sealed` — not for inheritance beyond the generator partial.
 - `partial` — required for Source Generator integration.
-- `IProtocol` — the interface implemented by all protocols.
+- `IProtocol` — implement `Parse`. Prefer `parentField.CallProtocol` for child dispatch.
 
 ### Member Ordering
 
@@ -533,6 +629,15 @@ else
 ---
 
 ## 8. The Parse Method
+
+Handwritten dissectors implement `IProtocol.Parse`. `Stack.CallProtocol` stamps
+`ParseContext.SelfProtocolId` and then invokes the bound parse method. Prefer
+`parentField.CallProtocol` so invalid ids return `ParseError`.
+
+```csharp
+// NEVER: bind a copied local function as ParseDelegate when you need SelfProtocolId
+// ALWAYS: parentField.CallProtocol(id, data, in context) or TryCallNextProtocol*
+```
 
 ### Signature
 
@@ -984,7 +1089,7 @@ Every protocol receives two identity properties on `context`:
 
 | Property | Type | Value |
 |---|---|---|
-| `context.SelfProtocolId` | `ProtocolId` | The ID of **this** protocol — set automatically by `Stack.CallProtocol` before every parse invocation. |
+| `context.SelfProtocolId` | `ProtocolId` | The ID of **this** protocol — set by `Stack.CallProtocol` via `ParseContext.WithSelfProtocol`. A raw `Parse` / cached `ParseDelegate` does not stamp it. |
 | `context.Dispatch.CallerProtocolId` | `ProtocolId` | The ID of the **parent** protocol that triggered the table dispatch. Only meaningful when `context.Dispatch.HasDispatch == true`. |
 
 **When is `CallerProtocolId` useful?**
@@ -1052,6 +1157,12 @@ via `dispatch_bindings`. Parse needs **no dispatch-key lookup** — the table al
 selected the correct protocol instance.
 
 See schema: `NetworkInspector.Protocols/Schemas/signal-message-config.schema.json`.
+JSON may be loaded from a file setting (`signal_message.config_file`, may be empty)
+or from a caller-owned stream (`SignalMessageRegistration.TryLoadConfig` /
+`Register(builder, stream)`). Stream/object registration **adds** messages on top of
+the settings/profile file. After `RegisterStandardProtocols`, `Register(builder, stream)`
+registers only the extra messages (settings are already present). Load, compile, and
+registration warnings are returned to the caller — they are not discarded.
 
 **Best effort:** Signal Message shows as much as it can. Invalid or colliding **signals**
 (and invalid mux selectors / mux groups) are skipped with a warning; siblings in the
@@ -1113,11 +1224,145 @@ private ParseResult PopulateMyFields(in LazyField container)
     return 0;
 }
 ```
-    uint streamIndex = _StreamTracker.GetOrCreateStreamIndex(in connKey);
-    parentField.Append(_StreamFieldId, FieldValue.NewU64(streamIndex), in context);
-    context.RecordGroupPresence(_StreamGroupId);
+
+---
+
+### 10.9 PDU Transport → Signal Message
+
+Two hops. PDU Transport does **not** parse signals. Signal Message does **not** parse the PDU-Transport header. Each protocol binds to the table **above** it.
+
+```
+UDP  ──[udp.port = pdu_transport.udp_dispatch_port]──►  PDU Transport
+                                                          │
+                              [pdu_transport.id = dispatch_bindings.key]──►  Signal Message
+```
+
+Empty settings/profile is valid: PDU Transport still parses concatenated `[ID][Length][Payload]` tuples, but it never auto-binds on UDP (`udp_dispatch_port` default `0`), and Signal Message registers zero message protocols. Configure both hops or you get a raw `pdu_transport.payload` (or no PDU Transport at all).
+
+#### Settings (profile group files)
+
+`RegisterStandardProtocols` registers these settings. Persist them in the profile directory as **group files** (`{group}.json`). Paths in `*_config_file` are resolved relative to the settings storage path (the profile directory).
+
+**`pdu_transport.json`** (settings group `pdu_transport`):
+
+```json
+{
+  "pdu_transport.udp_dispatch_port": 47290,
+  "pdu_transport.id_field_size": 4,
+  "pdu_transport.length_field_size": 4,
+  "pdu_transport.config_file": "pdu-names.json"
 }
 ```
+
+| Setting | Default | Role |
+|---------|---------|------|
+| `pdu_transport.udp_dispatch_port` | `0` | UDP destination/source port that selects PDU Transport. **Must be 1–65535** or UDP never calls this parser. |
+| `pdu_transport.id_field_size` | `4` | On-wire PDU ID width: `1`, `2`, or `4` (big-endian). Other values clamp to `4` with a warning. |
+| `pdu_transport.length_field_size` | `4` | On-wire length width: `1`, `2`, or `4` (big-endian). Must match the capture. |
+| `pdu_transport.config_file` | `""` | Optional JSON of PDU **display names** only. Empty = IDs still parse; `pdu_transport.name` is omitted. Does **not** register Signal Messages. |
+
+**`signal_message.json`** (settings group `signal_message`):
+
+```json
+{
+  "signal_message.config_file": "signal-messages.json",
+  "signal_message.show_raw": false,
+  "signal_message.show_enum": false,
+  "signal_message.max_enum_values": 4096
+}
+```
+
+| Setting | Default | Role |
+|---------|---------|------|
+| `signal_message.config_file` | `""` | JSON of message protocols + `dispatch_bindings`. Empty = no Signal Message dissectors. |
+| `signal_message.show_raw` | `false` | Append `{signal}.raw` (U64) under each signal. |
+| `signal_message.show_enum` | `false` | Append `{signal}.enum` when a `value_names` hit occurs. |
+| `signal_message.max_enum_values` | `4096` | Cap on `value_names` entries per signal. |
+
+Host code equivalent (tests / custom stacks) is `SettingsManager.PreloadValue` **before** `RegisterStandardProtocols`.
+
+#### External JSON (not the group files)
+
+**`pdu-names.json`** — schema `Schemas/pdu-transport-config.schema.json`. Names only:
+
+```json
+{
+  "pdus": [
+    { "id": 32, "name": "BenchPdu" }
+  ]
+}
+```
+
+`id` must equal the on-wire PDU ID (same integer the Signal Message binding uses as `key`).
+
+**`signal-messages.json`** — schema `Schemas/signal-message-config.schema.json`. This is the dispatch configuration:
+
+```json
+{
+  "messages": [
+    {
+      "name": "fixture_message",
+      "ui_name": "Fixture PDU",
+      "byte_length": 4,
+      "dispatch_bindings": [
+        { "table": "pdu_transport.id", "key": 32 }
+      ],
+      "signals": [
+        {
+          "name": "fixture_message.EngineRpm",
+          "ui_name": "Engine RPM",
+          "start_bit": 0,
+          "bit_length": 16,
+          "byte_order": "little_endian",
+          "factor": 0.25,
+          "offset": 100.0
+        }
+      ]
+    }
+  ]
+}
+```
+
+The binding **`table` must be `pdu_transport.id`** (not `udp.port`) when the payload sits inside PDU Transport. `key` is the PDU ID. The same message may list several bindings (CAN + PDU Transport, etc.).
+
+#### Additional JSON by hand
+
+Settings/profile files may be empty. Extra documents merge **on top**:
+
+- `PduTransportRegistration.Register(builder, stream, warnings)` — extra PDU names (same ID overwrites the file).
+- `SignalMessageRegistration.Register(builder, stream)` — extra messages. After `RegisterStandardProtocols` this does **not** reload the file; it only adds the stream.
+
+Do **not** call `PduTransportRegistration.Register(builder, stream)` after `RegisterStandardProtocols`: that would register a second `pdu_transport` protocol. Put extra names in the file, or use the stream overload **instead of** the standard PDU registration.
+
+#### Field tree (sibling dispatch)
+
+PDU Transport and Signal Message both dispatch on `parentField`, same as Ethernet / IPv6 / UDP.
+
+```
+… ipv4 …
+├── udp
+│   ├── udp.srcport / udp.dstport / …
+├── pdu_transport
+│   └── pdu_transport.pdu
+│       ├── pdu_transport.id
+│       ├── pdu_transport.length
+│       ├── pdu_transport.name          // from pdu-names.json when the ID hits
+│       └── pdu_transport.payload       // only if no Signal Message consumed the payload
+└── fixture_message                     // lazy container; sibling of pdu_transport
+    ├── fixture_message.EngineRpm       // physical F64; children of the message, not of pdu
+    └── fixture_message.Thr
+```
+
+Signals are **never** children of `pdu_transport` or `pdu_transport.pdu`. Optional `{signal}.raw` / `{signal}.enum` hang under the signal. Mux-group signals hang under the mux field.
+
+#### Misconfiguration (silent miss, not a crash)
+
+| Symptom | Cause |
+|---------|--------|
+| No `pdu_transport` in the tree | `pdu_transport.udp_dispatch_port` is `0` or does not match the UDP port. |
+| `pdu_transport.payload` instead of the message | `dispatch_bindings.table` is not `pdu_transport.id`, or `key` ≠ on-wire PDU ID, or `id_field_size` / `length_field_size` do not match the capture (wrong ID read). |
+| Message protocol missing from the stack | `signal_message.config_file` empty or JSON failed to load (inspect `RegisterStandardProtocols` warnings). |
+| `pdu_transport.name` missing | `pdu_transport.config_file` empty or ID not listed. Parsing and dispatch still work. |
 
 ---
 
@@ -2050,8 +2295,11 @@ registered raw payloads (HTTP content-type, WebSocket, …) and
 `SignalMessageRegistration.Register`. Frame-level leftover bytes are
 `packet.unparsed_data` on `PacketProtocol` (§8), not a `data` protocol.
 `SignalMessageRegistration.Register` **returns** `IReadOnlyList<SettingsLoadWarning>`;
-`RegisterStandardProtocols` is `void` and currently discards that list
-(`todos/todo_registration-error-handling.md`).
+`RegisterStandardProtocols` returns the combined PDU Transport + Signal Message
+warning list so callers can decide how to handle each entry. Settings/profile JSON
+paths may be empty. Stream overloads (`Register(builder, stream)`,
+`PduTransportRegistration.TryLoadConfig`) **add** names/messages on top of that file;
+they do not replace it.
 
 ### 18.2 Registration Order
 
@@ -2074,9 +2322,10 @@ The Source Generator produces the following from attributes:
 public const string ProtocolName = "udp";
 public const string ProtocolUiName = "User Datagram Protocol";
 
-// Generated IProtocol implementation
-string IProtocol.Name => ProtocolName;
-string IProtocol.UiName => ProtocolUiName;
+// Generated Protocol.Name and UiName
+public override string Name => ProtocolName;
+public override string UiName => ProtocolUiName;
+public override void OnStart(Stack stack) { _OnStartCustom(stack); }
 
 // Generated ProtocolId field
 private ProtocolId _ProtocolId;
@@ -2142,7 +2391,7 @@ _UdpPayloadGroupId = builder.GetOrCreateIndexGroup("udp.payload");
 
 ```csharp
 // Generated:
-void IProtocol.RegisterFields(IStackBuilder builder, ProtocolId protocolId)
+public void RegisterFields(IStackBuilder builder, ProtocolId protocolId)
 {
     // ... register fields, tables, settings, RegisterAtTable entries ...
 
@@ -2153,7 +2402,7 @@ void IProtocol.RegisterFields(IStackBuilder builder, ProtocolId protocolId)
     RegisterFieldsCustom(builder, protocolId);
 }
 
-void IProtocol.OnStart(Stack stack)
+public override void OnStart(Stack stack)
 {
     // Call user-defined custom hook (caches against the frozen stack)
     OnStartCustom(stack);
@@ -2186,7 +2435,8 @@ partial void OnStartCustom(Stack stack)
 | `eth.ieee8023` | `EthernetProtocol` | `u64` / any | `LlcProtocol` (catch-all for IEEE 802.3 frames) |
 | `ip.proto` | `IPv4Protocol` | `u64` (IP protocol number) | `TcpProtocol`, `UdpProtocol`, `IcmpProtocol`, `Icmpv6Protocol`; shared by `IPv6Protocol` via `[UsesTable]` |
 | `tcp.port` | `TcpProtocol` | `u64` (port number) | `DnsProtocol`, `TlsProtocol`, `HttpProtocol`, `Http2Protocol`, `SomeIpProtocol`, … |
-| `udp.port` | `UdpProtocol` | `u64` (port number) | `DnsProtocol`, `DhcpProtocol`, `Dhcpv6Protocol`, `DtlsProtocol`, `SomeIpProtocol`, … |
+| `udp.port` | `UdpProtocol` | `u64` (port number) | `DnsProtocol`, `DhcpProtocol`, `Dhcpv6Protocol`, `DtlsProtocol`, `SomeIpProtocol`, `PduTransportProtocol` (when `pdu_transport.udp_dispatch_port` is set) |
+| `pdu_transport.id` | `PduTransportProtocol` | `u64` (PDU ID) | Signal Message via `dispatch_bindings` |
 | `http.content_type` | `HttpProtocol` | `string` | `JsonProtocol`, `TextProtocol` |
 | `http.upgrade` | `HttpProtocol` | `string` | `WebSocketProtocol` |
 | `can.id` | `CanProtocol` | `u64` | Signal Message and sub-protocols by CAN ID / CAN XL priority |
@@ -2209,11 +2459,11 @@ Frame ──[frame.link_type]──► Ethernet ──[eth.type]──► IPv4/I
                          └──► LIN ──[lin.id]           │          │
                                                   [udp.port]  [tcp.port / tcp.heuristic]
                                                    │    │      │         │
-                                                 DNS  DHCP  HTTP/1.x   TLS
-                                                          │       │
-                                              [http.content_type] [http.upgrade]
-                                                    │                  │
-                                                 JSON/Text         WebSocket
+                                          DNS/DHCP PDU-Tr. HTTP/1.x   TLS/HTTP2
+                                                       │          │
+                                              [pdu_transport.id]  [http.upgrade / content_type]
+                                                       │               │
+                                                Signal Message      WS / JSON
 ```
 
 ---
@@ -2223,6 +2473,9 @@ Frame ──[frame.link_type]──► Ethernet ──[eth.type]──► IPv4/I
 ### Class Structure
 
 - [ ] Create `sealed partial class` implementing `IProtocol`
+- [ ] Implement `public ParseResult Parse`
+- [ ] Prefer `parentField.CallProtocol` for child dispatch
+- [ ] Effect keys use `Packet.GetEffectLayerKey(data)` (never remaining length)
 - [ ] Add `[Protocol("name", "UI Name", Description = "...")]` attribute
 - [ ] Add `[RegisterAtTable(OwnerProtocol.TableName, KeyConstant)]` attribute(s)
 - [ ] Define `public const ulong` for table registration key value(s)

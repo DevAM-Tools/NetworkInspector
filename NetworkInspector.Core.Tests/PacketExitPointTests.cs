@@ -60,7 +60,7 @@ internal sealed class PacketExitPointTests
         using Stack stack = _BuildStack();
         using Stack otherStack = _BuildStack();
         Frame frame1 = _MakeFrame(stack, FrameBuilders.GenerateStaticUdpFrame(64));
-        Packet packet = Packet.ParseFrame(new PacketId(1), stack, frame1);
+        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame1);
         Frame frame2 = _MakeFrame(otherStack, FrameBuilders.GenerateStaticUdpFrame(64), 2);
 
         RecycleError? err = packet.PrepareForReuse(new PacketId(2), frame2);
@@ -83,7 +83,7 @@ internal sealed class PacketExitPointTests
     {
         using Stack stack = _BuildStack();
         Frame frame = _MakeFrame(stack, FrameBuilders.GenerateStaticUdpFrame(128));
-        Packet packet = Packet.ParseFrame(new PacketId(1), stack, frame, stack.GetProtocolId("eth")!.Value);
+        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, stack.GetProtocolId("eth")!.Value);
 
         int countAfterParse = packet.FieldCount(materialize: false); // materialize: false — current materialized count only
         await Assert.That(countAfterParse).IsGreaterThan(0);
@@ -95,7 +95,7 @@ internal sealed class PacketExitPointTests
     {
         using Stack stack = _BuildStack();
         Frame frame = _MakeFrame(stack, FrameBuilders.GenerateStaticUdpFrame(128));
-        Packet packet = Packet.ParseFrame(new PacketId(1), stack, frame, stack.GetProtocolId("eth")!.Value);
+        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, stack.GetProtocolId("eth")!.Value);
         packet.MaterializeAll();
 
         bool materialized = packet.MaterializeLazyField(0);
@@ -113,7 +113,7 @@ internal sealed class PacketExitPointTests
         using Stack stack = builder.Build();
 
         Frame frame = _MakeFrame(stack, new byte[14]);
-        Packet packet = Packet.ParseFrame(new PacketId(1), stack, frame, protoId);
+        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, protoId);
 
         ushort lazyIndex = proto.LazyContainerIndex;
         bool first = packet.MaterializeLazyField(lazyIndex);
@@ -134,7 +134,7 @@ internal sealed class PacketExitPointTests
         using Stack stack = builder.Build();
 
         Frame frame = _MakeFrame(stack, new byte[14]);
-        Packet packet = Packet.ParseFrame(new PacketId(1), stack, frame, protoId);
+        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, protoId);
 
         bool materialized = packet.MaterializeLazyField(proto.LazyContainerIndex);
         await Assert.That(materialized).IsFalse();
@@ -152,7 +152,7 @@ internal sealed class PacketExitPointTests
         using Stack stack = builder.Build();
 
         Frame frame = _MakeFrame(stack, new byte[14]);
-        Packet packet = Packet.ParseFrame(new PacketId(1), stack, frame, protoId);
+        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, protoId);
 
         bool materialized = packet.MaterializeLazyField(proto.LazyContainerIndex);
         await Assert.That(materialized).IsFalse();
@@ -170,7 +170,7 @@ internal sealed class PacketExitPointTests
         using Stack stack = builder.Build();
 
         Frame frame = _MakeFrame(stack, new byte[14]);
-        Packet packet = Packet.ParseFrame(new PacketId(1), stack, frame, protoId);
+        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, protoId);
         System.Reflection.FieldInfo? finalizedField = typeof(Packet).GetField(
             "_Finalized", BindingFlags.NonPublic | BindingFlags.Instance);
         await Assert.That(finalizedField).IsNotNull();
@@ -198,7 +198,7 @@ internal sealed class PacketExitPointTests
         proto.ConfigureGate(populatorEntered, releasePopulator);
 
         Frame frame = _MakeFrame(stack, new byte[14]);
-        Packet packet = Packet.ParseFrame(new PacketId(1), stack, frame, protoId);
+        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, protoId);
         ushort lazyIndex = proto.LazyContainerIndex;
 
         using Barrier start = new(2);
@@ -242,7 +242,7 @@ internal sealed class PacketExitPointTests
         proto.ConfigureGate(populatorEntered, releasePopulator);
 
         Frame frame = _MakeFrame(stack, new byte[14]);
-        Packet packet = Packet.ParseFrame(new PacketId(1), stack, frame, protoId);
+        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, protoId);
         System.Reflection.FieldInfo? finalizedField = typeof(Packet).GetField(
             "_Finalized", BindingFlags.NonPublic | BindingFlags.Instance);
         finalizedField!.SetValue(packet, 0);
@@ -288,7 +288,7 @@ internal sealed class PacketExitPointTests
         proto.ConfigureGate(populatorEntered, releasePopulator);
 
         Frame frame = _MakeFrame(stack, new byte[14]);
-        Packet packet = Packet.ParseFrame(new PacketId(1), stack, frame, protoId);
+        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, protoId);
         ushort lazyIndex = proto.LazyContainerIndex;
 
         Task<bool> owner = Task.Run(() => packet.MaterializeLazyField(lazyIndex));
@@ -319,7 +319,7 @@ internal sealed class PacketExitPointTests
         proto.ConfigureGate(populatorEntered, releasePopulator);
 
         Frame frame = _MakeFrame(stack, new byte[14]);
-        Packet packet = Packet.ParseFrame(new PacketId(1), stack, frame, protoId);
+        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, protoId);
         System.Reflection.FieldInfo? finalizedField = typeof(Packet).GetField(
             "_Finalized", BindingFlags.NonPublic | BindingFlags.Instance);
         await Assert.That(finalizedField).IsNotNull();
@@ -343,7 +343,7 @@ internal sealed class PacketExitPointTests
     {
         using Stack stack = _BuildStack();
         Frame frame = _MakeFrame(stack, FrameBuilders.GenerateStaticUdpFrame(64));
-        Packet packet = Packet.ParseFrame(new PacketId(1), stack, frame, stack.GetProtocolId("eth")!.Value);
+        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, stack.GetProtocolId("eth")!.Value);
 
         FieldLookupCookie cookie = FieldLookupCookie.Start;
         FieldId unknown = stack.GetFieldId("does.not.exist") ?? new FieldId(999_999);
@@ -358,7 +358,7 @@ internal sealed class PacketExitPointTests
     {
         using Stack stack = _BuildStack();
         Frame frame = _MakeFrame(stack, FrameBuilders.GenerateStaticUdpFrame(64), 1, FrameInterfaceId.Invalid);
-        Packet packet = Packet.ParseFrame(new PacketId(1), stack, frame, stack.GetProtocolId("eth")!.Value);
+        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, stack.GetProtocolId("eth")!.Value);
 
         await Assert.That(packet.FrameSourceId.IsValid).IsFalse();
     }
@@ -391,7 +391,7 @@ internal sealed class PacketExitPointTests
         using Stack stack = builder.Build();
 
         Frame frame = _MakeFrame(stack, FrameBuilders.GenerateStaticUdpFrame(64), 1, ifaceId);
-        Packet packet = Packet.ParseFrame(new PacketId(1), stack, frame, stack.GetProtocolId("eth")!.Value);
+        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, stack.GetProtocolId("eth")!.Value);
 
         await Assert.That(packet.FrameSourceId).IsEqualTo(sourceId);
     }
@@ -409,7 +409,7 @@ internal sealed class PacketExitPointTests
         using Stack stack = builder.Build();
 
         Frame frame = _MakeFrame(stack, new byte[42]);
-        Packet packet = Packet.ParseFrame(new PacketId(1), stack, frame);
+        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame);
 
         FieldLookupCookie cookie = FieldLookupCookie.Start;
         bool found = packet.TryGetNextFieldValue(
@@ -427,7 +427,7 @@ internal sealed class PacketExitPointTests
         using Stack stack1 = _BuildStack();
         using Stack stack2 = _BuildStack();
         byte[] data = FrameBuilders.GenerateStaticUdpFrame(64);
-        Packet seed = Packet.ParseFrame(new PacketId(1), stack1, _MakeFrame(stack1, data));
+        Packet seed = Packet.ParseFrame(new PacketId(0), stack1, _MakeFrame(stack1, data));
         Frame frame2 = _MakeFrame(stack2, data, 2);
 
         RecycleError? err = Packet.TryParseFrame(seed, new PacketId(2), stack2, frame2);
@@ -440,7 +440,7 @@ internal sealed class PacketExitPointTests
         using Stack stack1 = _BuildStack();
         using Stack stack2 = _BuildStack();
         byte[] data = FrameBuilders.GenerateStaticUdpFrame(64);
-        Packet seed = Packet.ParseFrame(new PacketId(1), stack1, _MakeFrame(stack1, data));
+        Packet seed = Packet.ParseFrame(new PacketId(0), stack1, _MakeFrame(stack1, data));
         Frame frame2 = _MakeFrame(stack2, data, 2);
         ProtocolId eth = stack2.GetProtocolId("eth")!.Value;
 
@@ -454,7 +454,7 @@ internal sealed class PacketExitPointTests
         using Stack stack1 = _BuildStack();
         using Stack stack2 = _BuildStack();
         byte[] data = FrameBuilders.GenerateStaticUdpFrame(64);
-        Packet seed = Packet.ParseFrame(new PacketId(1), stack1, _MakeFrame(stack1, data));
+        Packet seed = Packet.ParseFrame(new PacketId(0), stack1, _MakeFrame(stack1, data));
         PacketIndex index = new(stack2);
         Frame frame2 = _MakeFrame(stack2, data, 2);
 
@@ -468,7 +468,7 @@ internal sealed class PacketExitPointTests
         using Stack stack1 = _BuildStack();
         using Stack stack2 = _BuildStack();
         byte[] data = FrameBuilders.GenerateStaticUdpFrame(64);
-        Packet seed = Packet.ParseFrame(new PacketId(1), stack1, _MakeFrame(stack1, data));
+        Packet seed = Packet.ParseFrame(new PacketId(0), stack1, _MakeFrame(stack1, data));
         PacketIndex index = new(stack2);
         Frame frame2 = _MakeFrame(stack2, data, 2);
         ProtocolId eth = stack2.GetProtocolId("eth")!.Value;
@@ -482,14 +482,14 @@ internal sealed class PacketExitPointTests
     {
         using Stack stack = _BuildStack();
         byte[] data = FrameBuilders.GenerateStaticUdpFrame(64);
-        Packet seed = Packet.ParseFrame(new PacketId(1), stack, _MakeFrame(stack, data));
+        Packet seed = Packet.ParseFrame(new PacketId(0), stack, _MakeFrame(stack, data));
         PacketIndex index = new(stack);
         Frame frame2 = _MakeFrame(stack, data, 2);
         ProtocolId eth = stack.GetProtocolId("eth")!.Value;
 
-        Packet recycled = Packet.ParseFrameIndexed(seed, new PacketId(2), stack, frame2, index, eth);
+        Packet recycled = Packet.ParseFrameIndexed(seed, new PacketId(1), stack, frame2, index, eth);
         await Assert.That(ReferenceEquals(seed, recycled)).IsTrue();
-        await Assert.That(recycled.Id).IsEqualTo(new PacketId(2));
+        await Assert.That(recycled.Id).IsEqualTo(new PacketId(1));
     }
 
     [Test]
@@ -498,7 +498,7 @@ internal sealed class PacketExitPointTests
         using Stack stack = _BuildManyFieldsStack();
         ProtocolId protoId = stack.GetProtocolId("many.fields")!.Value;
         Frame frame = _MakeFrame(stack, new byte[1]);
-        Packet packet = Packet.ParseFrame(new PacketId(1), stack, frame, protoId);
+        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, protoId);
 
         int count = packet.FieldCount(materialize: false); // materialize: false — current materialized count only
         await Assert.That(count).IsGreaterThan(_ManyFieldCount);
@@ -509,7 +509,7 @@ internal sealed class PacketExitPointTests
     {
         using Stack stack = _BuildStack();
         Frame frame = _MakeFrame(stack, FrameBuilders.GenerateStaticUdpFrame(64));
-        Packet packet = Packet.ParseFrame(new PacketId(1), stack, frame, stack.GetProtocolId("eth")!.Value);
+        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, stack.GetProtocolId("eth")!.Value);
 
         System.Reflection.FieldInfo? activeField = typeof(Packet).GetField(
             "_ActiveLazyMaterializations", BindingFlags.NonPublic | BindingFlags.Instance);
@@ -549,7 +549,7 @@ internal sealed class PacketExitPointTests
         using Stack stack = builder.Build();
 
         Frame frame = _MakeFrame(stack, new byte[14]);
-        Packet packet = Packet.ParseFrame(new PacketId(1), stack, frame, protoId);
+        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, protoId);
         ushort lazyIndex = proto.LazyContainerIndex;
 
         Task<bool> waiter = Task.Run(() => packet.MaterializeLazyField(lazyIndex));
@@ -572,7 +572,7 @@ internal sealed class PacketExitPointTests
         using Stack stack = builder.Build();
 
         Frame frame = _MakeFrame(stack, new byte[14]);
-        Packet packet = Packet.ParseFrame(new PacketId(1), stack, frame, protoId);
+        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, protoId);
         int eagerCount = packet.FieldCount(materialize: false);
         Field containerA = default;
         Field containerB = default;
@@ -638,7 +638,7 @@ internal sealed class PacketExitPointTests
         _SetPacketProtocolId(stack, protoId);
 
         Frame frame = _MakeFrame(stack, new byte[14]);
-        Packet packet = Packet.ParseFrame(new PacketId(1), stack, frame);
+        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame);
 
         bool found = packet.TryGetFieldValue(stack.PacketErrorFieldId, out _, materialize: true);
         await Assert.That(found).IsFalse();
@@ -656,7 +656,7 @@ internal sealed class PacketExitPointTests
         using Stack stack = builder.Build();
 
         Frame frame = _MakeFrame(stack, new byte[14]);
-        Packet packet = Packet.ParseFrame(new PacketId(1), stack, frame, protoId);
+        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, protoId);
         ushort lazyIndex = proto.LazyContainerIndex;
         packet.MaterializeLazyField(lazyIndex);
 
@@ -669,7 +669,7 @@ internal sealed class PacketExitPointTests
     {
         using Stack stack = _BuildStack();
         Frame frame = _MakeFrame(stack, FrameBuilders.GenerateStaticUdpFrame(64));
-        Packet packet = Packet.ParseFrame(new PacketId(1), stack, frame, stack.GetProtocolId("eth")!.Value);
+        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, stack.GetProtocolId("eth")!.Value);
 
         System.Reflection.FieldInfo? pendingField = typeof(Packet).GetField(
             "_PendingLazyCount", BindingFlags.NonPublic | BindingFlags.Instance);
@@ -689,7 +689,7 @@ internal sealed class PacketExitPointTests
     {
         using Stack stack = _BuildStack();
         Frame frame = _MakeFrame(stack, FrameBuilders.GenerateStaticUdpFrame(64));
-        Packet packet = Packet.ParseFrame(new PacketId(1), stack, frame, stack.GetProtocolId("eth")!.Value);
+        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, stack.GetProtocolId("eth")!.Value);
         _ClearPacketErrorFieldId(stack);
 
         MethodInfo? setError = typeof(Packet).GetMethod(
@@ -705,7 +705,7 @@ internal sealed class PacketExitPointTests
     {
         using Stack stack = _BuildStack();
         Frame frame = _MakeFrame(stack, FrameBuilders.GenerateStaticUdpFrame(64));
-        Packet packet = Packet.ParseFrame(new PacketId(1), stack, frame, stack.GetProtocolId("eth")!.Value);
+        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, stack.GetProtocolId("eth")!.Value);
         _ClearPacketErrorFieldId(stack);
 
         MethodInfo? setFieldError = typeof(Packet).GetMethod(
@@ -721,7 +721,7 @@ internal sealed class PacketExitPointTests
     {
         using Stack stack = _BuildStack();
         Frame frame = _MakeFrame(stack, FrameBuilders.GenerateStaticUdpFrame(64));
-        Packet packet = Packet.ParseFrame(new PacketId(1), stack, frame, stack.GetProtocolId("eth")!.Value);
+        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, stack.GetProtocolId("eth")!.Value);
 
         MethodInfo? seal = typeof(Packet).GetMethod("Seal", BindingFlags.NonPublic | BindingFlags.Instance);
         await Assert.That(seal).IsNotNull();
@@ -737,7 +737,7 @@ internal sealed class PacketExitPointTests
         using Stack stack = _BuildStack();
         _ClearPacketProtocolId(stack);
         Frame frame = _MakeFrame(stack, FrameBuilders.GenerateStaticUdpFrame(64));
-        Packet packet = Packet.ParseFrame(new PacketId(1), stack, frame);
+        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame);
 
         await Assert.That(packet.FieldCount(materialize: false)).IsEqualTo(1); // materialize: false — current materialized count only
     }
@@ -781,12 +781,12 @@ internal sealed class PacketExitPointTests
     {
         using Stack stack = _BuildStack();
         byte[] data = FrameBuilders.GenerateStaticUdpFrame(64);
-        Packet seed = Packet.ParseFrame(new PacketId(1), stack, _MakeFrame(stack, data));
+        Packet seed = Packet.ParseFrame(new PacketId(0), stack, _MakeFrame(stack, data));
         Frame frame2 = _MakeFrame(stack, data, 2);
 
-        RecycleError? err = Packet.TryParseFrame(seed, new PacketId(2), stack, frame2);
+        RecycleError? err = Packet.TryParseFrame(seed, new PacketId(1), stack, frame2);
         await Assert.That(err).IsNull();
-        await Assert.That(seed.Id).IsEqualTo(new PacketId(2));
+        await Assert.That(seed.Id).IsEqualTo(new PacketId(1));
     }
 
     [Test]
@@ -794,11 +794,11 @@ internal sealed class PacketExitPointTests
     {
         using Stack stack = _BuildStack();
         byte[] data = FrameBuilders.GenerateStaticUdpFrame(64);
-        Packet seed = Packet.ParseFrame(new PacketId(1), stack, _MakeFrame(stack, data));
+        Packet seed = Packet.ParseFrame(new PacketId(0), stack, _MakeFrame(stack, data));
         Frame frame2 = _MakeFrame(stack, data, 2);
         ProtocolId eth = stack.GetProtocolId("eth")!.Value;
 
-        RecycleError? err = Packet.TryParseFrame(seed, new PacketId(2), stack, frame2, eth);
+        RecycleError? err = Packet.TryParseFrame(seed, new PacketId(1), stack, frame2, eth);
         await Assert.That(err).IsNull();
     }
 
@@ -807,11 +807,11 @@ internal sealed class PacketExitPointTests
     {
         using Stack stack = _BuildStack();
         byte[] data = FrameBuilders.GenerateStaticUdpFrame(64);
-        Packet seed = Packet.ParseFrame(new PacketId(1), stack, _MakeFrame(stack, data));
+        Packet seed = Packet.ParseFrame(new PacketId(0), stack, _MakeFrame(stack, data));
         PacketIndex index = new(stack);
         Frame frame2 = _MakeFrame(stack, data, 2);
 
-        RecycleError? err = Packet.TryParseFrameIndexed(seed, new PacketId(2), stack, frame2, index);
+        RecycleError? err = Packet.TryParseFrameIndexed(seed, new PacketId(1), stack, frame2, index);
         await Assert.That(err).IsNull();
     }
 
@@ -820,12 +820,12 @@ internal sealed class PacketExitPointTests
     {
         using Stack stack = _BuildStack();
         byte[] data = FrameBuilders.GenerateStaticUdpFrame(64);
-        Packet seed = Packet.ParseFrame(new PacketId(1), stack, _MakeFrame(stack, data));
+        Packet seed = Packet.ParseFrame(new PacketId(0), stack, _MakeFrame(stack, data));
         PacketIndex index = new(stack);
         Frame frame2 = _MakeFrame(stack, data, 2);
         ProtocolId eth = stack.GetProtocolId("eth")!.Value;
 
-        RecycleError? err = Packet.TryParseFrameIndexed(seed, new PacketId(2), stack, frame2, index, eth);
+        RecycleError? err = Packet.TryParseFrameIndexed(seed, new PacketId(1), stack, frame2, index, eth);
         await Assert.That(err).IsNull();
     }
 

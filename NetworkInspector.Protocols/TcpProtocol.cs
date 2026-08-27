@@ -77,10 +77,12 @@ namespace NetworkInspector.Protocols;
 /// </code>
 /// </summary>
 /// <remarks>
-/// <para><b>Thread safety:</b> Not thread-safe; designed for single-threaded use within a
-/// protocol stack. Each <see cref="Stack"/> instance is owned by exactly one parsing thread.
-/// The TCP connection tracker accumulates mutable state across packets and must not be
-/// accessed concurrently.</para>
+/// <para><b>Thread safety:</b> The first parse of a packet id mutates the TCP connection tracker
+/// and the stream reassembler, so it must stay ordered and single-threaded (the session guarantees
+/// this under its parse lock). Every later parse of an already-parsed id is a replay: it only reads
+/// the protocol-owned effect store and is safe to run on any number of threads concurrently, even
+/// while further packets are being parsed for the first time. The watermark
+/// <see cref="_IngestWatermark"/> separates both paths without any caller-supplied mode flag.</para>
 /// </remarks>
 [Protocol("tcp", "Transmission Control Protocol", Description = "TCP (RFC 793)")]
 [RegisterAtTable(IPv4Protocol.IpProtoTableName, IpProtoKey)]
@@ -470,17 +472,17 @@ public sealed partial class TcpProtocol : IProtocol
 
     /// <summary>ProtocolId of the IPv4 protocol ("ip"), resolved at startup.
     /// Used to select the correct per-protocol thread-local address cache when
-    /// <see cref="Parse"/> is dispatched from an enclosing IPv4 layer.</summary>
+    /// <see cref="IProtocol.Parse"/> is dispatched from an enclosing IPv4 layer.</summary>
     private ProtocolId _Ipv4ProtocolId;
 
     /// <summary>ProtocolId of the IPv6 protocol ("ipv6"), resolved at startup.
     /// Used to select the correct per-protocol thread-local address cache when
-    /// <see cref="Parse"/> is dispatched from an enclosing IPv6 layer.</summary>
+    /// <see cref="IProtocol.Parse"/> is dispatched from an enclosing IPv6 layer.</summary>
     private ProtocolId _Ipv6ProtocolId;
 
     // Pre-allocated populator and dispatch cache
     private LazyPopulator _Populator = null!;
-    private (ulong Key, ParseDelegate Parse)[] _PortSparseCache = [];
+    private (ulong Key, ProtocolId Id)[] _PortSparseCache = [];
 
     // TCP connection tracking for analysis
     private readonly TcpConnectionTracker _ConnectionTracker = new();
@@ -502,7 +504,7 @@ public sealed partial class TcpProtocol : IProtocol
         _Ipv4ProtocolId = stack.GetProtocolId("ip") ?? ProtocolId.Invalid;
         _Ipv6ProtocolId = stack.GetProtocolId("ipv6") ?? ProtocolId.Invalid;
         _Populator = _PopulateTcp;
-        _PortSparseCache = stack.BuildU64SparseDelegateCache(_PortTableId);
+        _PortSparseCache = stack.BuildU64SparseIdCache(_PortTableId);
         _ReassemblyEngine = new TcpReassemblyEngine(stack);
 
         // Bundle option field IDs for the parser
@@ -559,7 +561,7 @@ public sealed partial class TcpProtocol : IProtocol
     /// <summary>
     /// Lazy populator: checksum, sequence/ack numbers, header length, flags, window,
     /// urgent pointer, options, segment length, and payload for the TCP segment.
-    /// Source and destination ports are eagerly appended by <see cref="Parse"/>.
+    /// Source and destination ports are eagerly appended by <see cref="IProtocol.Parse"/>.
     /// Called on first access of the TCP container's children.
     /// </summary>
     private ParseResult _PopulateTcp(in MutField container)
@@ -687,16 +689,64 @@ public sealed partial class TcpProtocol : IProtocol
         return result == 0;
     }
 
+    #endregion
+
+    #region Parse
+
     /// <summary>
     /// Parses a Tcp protocol unit from the supplied <paramref name="data"/> buffer,
     /// appending decoded fields under <paramref name="parentField"/> and dispatching any
     /// payload via the surrounding stack.
+    /// <para>
+    /// The first parse of a packet id drives the connection tracker and the reassembly engine and
+    /// records the resulting analysis and dispatch decisions; every later parse of that id replays
+    /// those recordings and leaves both engines untouched. The watermark
+    /// (<see cref="_IsReplay"/>) separates both paths. A first parse that ends in an exception
+    /// records nothing, so its replay degrades to the stateless raw-port path.
+    /// </para>
     /// </summary>
     /// <param name="parentField">Parent field that receives the decoded protocol container and child fields.</param>
     /// <param name="data">Raw protocol bytes starting at this protocol's first header byte.</param>
     /// <param name="context">Parse context carrying stack, index, and dispatch information.</param>
     /// <returns>Number of bytes consumed, or a <see cref="ParseError"/> describing the failure.</returns>
     public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
+    {
+        Packet packet = parentField.Packet;
+        int layerKey = parentField.Packet.GetEffectLayerKey(data);
+        bool isReplay = _IsReplay(packet.Id);
+        bool raiseWatermark = !isReplay && _ParseNesting == 0;
+        if (!isReplay)
+        {
+            _ParseNesting++;
+        }
+
+        try
+        {
+            return _ParseBody(in parentField, data, in context, layerKey, isReplay);
+        }
+        finally
+        {
+            if (!isReplay)
+            {
+                _ParseNesting--;
+                if (raiseWatermark)
+                {
+                    _RaiseWatermark(packet.Id);
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Parse body. <paramref name="layerKey"/> is <see cref="Packet.GetEffectLayerKey"/> at the parse call and
+    /// <paramref name="isReplay"/> selects effect replay over stateful analysis.
+    /// </summary>
+    private ParseResult _ParseBody(
+        in MutField parentField,
+        ReadOnlyMemory<byte> data,
+        in ParseContext context,
+        int layerKey,
+        bool isReplay)
     {
         if (data.Length < TcpHeader.MinSize)
         {
@@ -771,12 +821,10 @@ public sealed partial class TcpProtocol : IProtocol
         tcpContainer.Append(_SrcPortFieldId, FieldValue.NewU64(srcPort));
         tcpContainer.Append(_DstPortFieldId, FieldValue.NewU64(dstPort));
 
-    #endregion
-
-        #region TCP Analysis (stateful, runs on every segment)
-        TcpAnalysisResult analysis = _RunAnalysis(
+        // ── TCP analysis: stateful on the first parse, effect replay afterwards ───────────────────
+        TcpAnalysisResult analysis = _ResolveAnalysis(
             in parentField, srcPort, dstPort, header.SeqNumber.Value, header.AckNumber.Value,
-            flags, header.WindowSize.Value, payloadLen, span, in context);
+            flags, header.WindowSize.Value, payloadLen, span, in context, layerKey, isReplay);
 
         // Eagerly append tcp.stream as sibling of the lazy TCP container
         parentField.Append(_StreamFieldId, FieldValue.NewU64(analysis.StreamIndex));
@@ -820,52 +868,204 @@ public sealed partial class TcpProtocol : IProtocol
         if (payloadLen > 0)
         {
             ReadOnlyMemory<byte> payload = data[headerLen..];
-            ushort lowPort = Math.Min(srcPort, dstPort);
-            ushort highPort = Math.Max(srcPort, dstPort);
+            return _DispatchTcpPayload(
+                in parentField, srcPort, dstPort, payload, data.Length, in context, in analysis, layerKey, isReplay);
+        }
 
-            // Identify the target protocol and check for reassembly support.
-            // If the protocol has a StreamReassemblyConfig, buffer segments and
-            // dispatch extracted PDUs instead of raw segment payloads.
-            ProtocolId targetProtocol = _TryIdentifyPortProtocol(lowPort, highPort, in context);
+        // No payload path: record analysis-only effects so a replay reproduces identical fields.
+        if (!isReplay)
+        {
+            _RecordEffect(
+                parentField.Packet.Id, layerKey, in analysis, PayloadDispatchMode.None, null, ProtocolId.Invalid);
+        }
 
-            if (targetProtocol.IsValid && _ReassemblyEngine is not null
-                && analysis.ConnectionState is not null)
+        return data.Length;
+    }
+
+    #endregion
+
+    #region Analysis and payload dispatch
+
+    /// <summary>
+    /// Resolves TCP analysis from the live tracker (first parse) or from the recorded effect (replay).
+    /// A replay without a recorded effect degrades to <see cref="TcpAnalysisResult.Empty"/> rather
+    /// than touching the tracker from a reader thread.
+    /// </summary>
+    private TcpAnalysisResult _ResolveAnalysis(
+        in MutField parentField,
+        ushort srcPort, ushort dstPort,
+        uint seqNum, uint ackNum,
+        byte flags, ushort window,
+        int payloadLen,
+        ReadOnlySpan<byte> tcpSegment, in ParseContext context,
+        int layerKey, bool isReplay)
+    {
+        if (isReplay)
+        {
+            TcpLayerEffect? recorded = _FindRecordedEffect(parentField.Packet.Id, layerKey);
+            if (recorded is null)
             {
-                // Check if this protocol has a reassembly config
-                TcpConnectionKey connKey = analysis.ConnectionKey;
-                TcpStreamState? streamState = _ReassemblyEngine.GetOrCreateStream(
-                    in connKey, targetProtocol,
-                    analysis.SrcAddr, srcPort, out bool reassemblyForward);
-
-                if (streamState is not null)
-                {
-                    // Track handshake observation for resync heuristic context
-                    if (analysis.ConnectionState.Phase == TcpConnectionPhase.SynSent
-                        || analysis.ConnectionState.Phase == TcpConnectionPhase.SynReceived)
-                    {
-                        streamState.HandshakeObserved = true;
-                    }
-
-                    // Buffer segment and extract PDUs
-                    TcpReassemblyEngine.FeedSegment(streamState, reassemblyForward, payload);
-
-                    // Dispatch all available complete PDUs
-                    while (TcpReassemblyEngine.TryExtractPdu(streamState, reassemblyForward,
-                        out ReadOnlyMemory<byte> pdu))
-                    {
-                        ParseResult pduResult = parentField.CallProtocol(
-                            targetProtocol, pdu, in context);
-                        if (pduResult.TryPropagateError(out ParseResult pduError))
-                        {
-                            return pduError;
-                        }
-                    }
-
-                    return data.Length;
-                }
+                return TcpAnalysisResult.Empty;
             }
 
-            // No reassembly — dispatch raw payload directly
+            return _AnalysisFromEffect(recorded.Value.Analysis);
+        }
+
+        return _RunAnalysis(
+            in parentField, srcPort, dstPort, seqNum, ackNum, flags, window, payloadLen, tcpSegment, in context);
+    }
+
+    /// <summary>Dispatches TCP payload on the first parse, or replays the recorded dispatch.</summary>
+    private ParseResult _DispatchTcpPayload(
+        in MutField parentField,
+        ushort srcPort, ushort dstPort,
+        ReadOnlyMemory<byte> payload,
+        int totalConsumed,
+        in ParseContext context,
+        in TcpAnalysisResult analysis,
+        int layerKey,
+        bool isReplay)
+    {
+        if (isReplay)
+        {
+            return _DispatchTcpPayloadReplay(
+                in parentField, srcPort, dstPort, payload, totalConsumed, in context, layerKey);
+        }
+
+        // Record effects after the dispatch attempt so error exits also capture the
+        // analysis facts and the dispatch mode reached so far.
+        ParseResult result = _DispatchTcpPayloadFirstParse(
+            in parentField, srcPort, dstPort, payload, in context,
+            in analysis, totalConsumed,
+            out PayloadDispatchMode mode, out List<PduEffect>? pdus, out ProtocolId heuristicProtocolId);
+        _RecordEffect(parentField.Packet.Id, layerKey, in analysis, mode, pdus, heuristicProtocolId);
+        return result;
+    }
+
+    /// <summary>
+    /// Dispatches TCP payload on the first parse of a packet and reports the replay metadata
+    /// (<paramref name="mode"/>, <paramref name="pdus"/>, <paramref name="heuristicProtocolId"/>)
+    /// via out parameters so the caller can record them as effects.
+    /// </summary>
+    private ParseResult _DispatchTcpPayloadFirstParse(
+        in MutField parentField,
+        ushort srcPort, ushort dstPort,
+        ReadOnlyMemory<byte> payload,
+        in ParseContext context,
+        in TcpAnalysisResult analysis,
+        int totalConsumed,
+        out PayloadDispatchMode mode,
+        out List<PduEffect>? pdus,
+        out ProtocolId heuristicProtocolId)
+    {
+        ushort lowPort = Math.Min(srcPort, dstPort);
+        ushort highPort = Math.Max(srcPort, dstPort);
+        mode = PayloadDispatchMode.RawPort;
+        pdus = null;
+        heuristicProtocolId = ProtocolId.Invalid;
+
+        ProtocolId targetProtocol = _TryIdentifyPortProtocol(lowPort, highPort, in context);
+
+        if (targetProtocol.IsValid && _ReassemblyEngine is not null
+            && analysis.ConnectionState is not null)
+        {
+            TcpConnectionKey connKey = analysis.ConnectionKey;
+            TcpStreamState? streamState = _ReassemblyEngine.GetOrCreateStream(
+                in connKey, targetProtocol,
+                analysis.SrcAddr, srcPort, out bool reassemblyForward);
+
+            if (streamState is not null)
+            {
+                if (analysis.ConnectionState.Phase == TcpConnectionPhase.SynSent
+                    || analysis.ConnectionState.Phase == TcpConnectionPhase.SynReceived)
+                {
+                    streamState.HandshakeObserved = true;
+                }
+
+                TcpReassemblyEngine.FeedSegment(streamState, reassemblyForward, payload);
+
+                bool emitted = false;
+                while (TcpReassemblyEngine.TryExtractPdu(streamState, reassemblyForward,
+                    out ReadOnlyMemory<byte> pdu))
+                {
+                    emitted = true;
+                    mode = PayloadDispatchMode.ReassemblyPdu;
+                    if (pdus is null)
+                    {
+                        pdus = [];
+                    }
+
+                    byte[] owned = pdu.ToArray();
+                    ReadOnlyMemory<byte> bound = parentField.Packet.BindParseBuffer(owned);
+                    pdus.Add(new PduEffect(targetProtocol, owned));
+
+                    ParseResult pduResult = parentField.CallProtocol(targetProtocol, bound, in context);
+                    if (pduResult.TryPropagateError(out ParseResult pduError))
+                    {
+                        return pduError;
+                    }
+                }
+
+                if (!emitted)
+                {
+                    mode = PayloadDispatchMode.ReassemblyNoEmit;
+                }
+
+                return totalConsumed;
+            }
+        }
+
+        mode = PayloadDispatchMode.RawPort;
+        ParseResult result = _DispatchPort(in parentField, lowPort, payload, in context);
+        if (result.TryPropagateError(out ParseResult error))
+        {
+            return error;
+        }
+
+        if (!result.TryGetConsumed(out _) && lowPort != highPort)
+        {
+            result = _DispatchPort(in parentField, highPort, payload, in context);
+            if (result.TryPropagateError(out ParseResult highError))
+            {
+                return highError;
+            }
+        }
+
+        if (!result.TryGetConsumed(out _) && _HeuristicTableId.IsValid)
+        {
+            result = _TryHeuristicDispatch(in parentField, payload, in context, analysis.ConnectionState);
+            if (result.TryPropagateError(out ParseResult heuristicError))
+            {
+                return heuristicError;
+            }
+
+            if (result.TryGetConsumed(out _) && analysis.ConnectionState?.HeuristicProtocolId is ProtocolId heuristicId)
+            {
+                mode = PayloadDispatchMode.Heuristic;
+                heuristicProtocolId = heuristicId;
+            }
+        }
+
+        return totalConsumed;
+    }
+
+    /// <summary>
+    /// Replays TCP payload dispatch from the recorded effect without mutating trackers.
+    /// Without a recorded effect the payload falls back to the stateless raw-port dispatch.
+    /// </summary>
+    private ParseResult _DispatchTcpPayloadReplay(
+        in MutField parentField,
+        ushort srcPort, ushort dstPort,
+        ReadOnlyMemory<byte> payload,
+        int totalConsumed,
+        in ParseContext context,
+        int layerKey)
+    {
+        TcpLayerEffect? recorded = _FindRecordedEffect(parentField.Packet.Id, layerKey);
+        if (recorded is null)
+        {
+            ushort lowPort = Math.Min(srcPort, dstPort);
+            ushort highPort = Math.Max(srcPort, dstPort);
             ParseResult result = _DispatchPort(in parentField, lowPort, payload, in context);
             if (result.TryPropagateError(out ParseResult error))
             {
@@ -881,18 +1081,101 @@ public sealed partial class TcpProtocol : IProtocol
                 }
             }
 
-            if (!result.TryGetConsumed(out _) && _HeuristicTableId.IsValid)
-            {
-                result = _TryHeuristicDispatch(in parentField, payload, in context, analysis.ConnectionState);
-                if (result.TryPropagateError(out ParseResult heuristicError))
-                {
-                    return heuristicError;
-                }
-            }
+            return totalConsumed;
         }
 
-        return data.Length;
+        PayloadDispatchEffect dispatch = recorded.Value.Dispatch;
+        switch (dispatch.Mode)
+        {
+            case PayloadDispatchMode.ReassemblyPdu:
+                if (dispatch.Pdus is not null)
+                {
+                    foreach (PduEffect pdu in dispatch.Pdus)
+                    {
+                        ReadOnlyMemory<byte> bound = parentField.Packet.BindParseBuffer(pdu.PduBytes);
+                        ParseResult pduResult = parentField.CallProtocol(
+                            pdu.ProtocolId, bound, in context);
+                        if (pduResult.TryPropagateError(out ParseResult pduError))
+                        {
+                            return pduError;
+                        }
+                    }
+                }
+
+                return totalConsumed;
+
+            case PayloadDispatchMode.ReassemblyNoEmit:
+                return totalConsumed;
+
+            case PayloadDispatchMode.Heuristic:
+                if (dispatch.HeuristicProtocolId.IsValid)
+                {
+                    ParseResult heuristicResult = parentField.CallProtocol(
+                        dispatch.HeuristicProtocolId, payload, in context);
+                    if (heuristicResult.TryPropagateError(out ParseResult heuristicError))
+                    {
+                        return heuristicError;
+                    }
+                }
+
+                return totalConsumed;
+
+            case PayloadDispatchMode.RawPort:
+            default:
+                ushort low = Math.Min(srcPort, dstPort);
+                ushort high = Math.Max(srcPort, dstPort);
+                ParseResult portResult = _DispatchPort(in parentField, low, payload, in context);
+                if (portResult.TryPropagateError(out ParseResult portError))
+                {
+                    return portError;
+                }
+
+                if (!portResult.TryGetConsumed(out _) && low != high)
+                {
+                    portResult = _DispatchPort(in parentField, high, payload, in context);
+                    if (portResult.TryPropagateError(out ParseResult highPortError))
+                    {
+                        return highPortError;
+                    }
+                }
+
+                return totalConsumed;
+        }
     }
+
+    /// <summary>Copies live analysis into an immutable effect (no connection reference).</summary>
+    private static AnalysisEffect _ToAnalysisEffect(in TcpAnalysisResult analysis) =>
+        new(
+            StreamIndex: analysis.StreamIndex,
+            Flags: (AnalysisEffectFlags)analysis.Flags,
+            DupAckNum: analysis.DupAckNum,
+            BytesInFlight: analysis.BytesInFlight,
+            InitialRtt: (float)analysis.InitialRtt,
+            AckRtt: (float)analysis.AckRtt,
+            TimeRelative: (float)analysis.TimeRelative,
+            TimeDelta: (float)analysis.TimeDelta,
+            ScaledWindowSize: analysis.ScaledWindowSize,
+            WindowScaleFactor: analysis.WindowScaleFactor,
+            Phase: (byte)analysis.Phase,
+            NoIpLayer: analysis.NoIpLayer);
+
+    /// <summary>Rebuilds a tracker-free analysis result from a recorded effect.</summary>
+    private static TcpAnalysisResult _AnalysisFromEffect(in AnalysisEffect effect) =>
+        new()
+        {
+            Flags = (TcpAnalysisFlags)effect.Flags,
+            StreamIndex = effect.StreamIndex,
+            DupAckNum = effect.DupAckNum,
+            BytesInFlight = effect.BytesInFlight,
+            InitialRtt = effect.InitialRtt,
+            AckRtt = effect.AckRtt,
+            TimeRelative = effect.TimeRelative,
+            TimeDelta = effect.TimeDelta,
+            ScaledWindowSize = effect.ScaledWindowSize,
+            WindowScaleFactor = effect.WindowScaleFactor,
+            Phase = (TcpConnectionPhase)effect.Phase,
+            NoIpLayer = effect.NoIpLayer,
+        };
 
     /// <summary>
     /// Runs TCP connection tracking and segment analysis.
@@ -1066,7 +1349,7 @@ public sealed partial class TcpProtocol : IProtocol
         return true;
     }
 
-        #endregion
+    #endregion
 
     /// <summary>
     /// Eagerly appends tcp.analysis container and its sub-fields to the parent field.
@@ -1153,11 +1436,11 @@ public sealed partial class TcpProtocol : IProtocol
     private ParseResult _DispatchPort(
         in MutField parentField, ulong port, ReadOnlyMemory<byte> payload, in ParseContext context)
     {
-        foreach ((ulong key, ParseDelegate parse) in _PortSparseCache)
+        foreach ((ulong key, ProtocolId id) in _PortSparseCache)
         {
             if (key == port)
             {
-                return parse(in parentField, payload, in context);
+                return parentField.CallProtocol(id, payload, in context);
             }
         }
 

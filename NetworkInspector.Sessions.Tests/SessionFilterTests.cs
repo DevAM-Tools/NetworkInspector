@@ -525,8 +525,10 @@ internal sealed class SessionFilterTests
     private static PacketFilter _CompilePoisoned(Stack stack)
     {
         PacketFilter filter = SessionFixture.CompileOrThrow(stack, "flank(ip.ttl, changed, within: 1s)");
-        _ = filter.TryIsMatch(TestHarness.ParseStandalone(stack, TestHarness.BuildUdpFrame(53, 64), 9), out _, out _);
-        _ = filter.TryIsMatch(TestHarness.ParseStandalone(stack, TestHarness.BuildUdpFrame(53, 63), 1), out _, out _);
+        Packet first = TestHarness.ParseStandalone(stack, TestHarness.BuildUdpFrame(53, 64), 0);
+        Packet second = TestHarness.ParseStandalone(stack, TestHarness.BuildUdpFrame(53, 63), 1);
+        _ = filter.TryIsMatch(second, out _, out _);
+        _ = filter.TryIsMatch(first, out _, out _);
         return filter;
     }
 

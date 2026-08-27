@@ -50,32 +50,43 @@ public sealed class Stack : IStack, IDisposable
     /// <summary>
     /// All non-fatal diagnostics collected during <see cref="StackBuilder.Build"/>.
     /// Published once by <see cref="SetBuildDiagnostics"/> at the end of Build, then
-    /// read concurrently by inspectors. Access is via <see cref="System.Threading.Volatile"/>
-    /// Read / Write to enforce the publication fence on every site.
+    /// read concurrently by inspectors. Declared <see langword="volatile"/> so the array
+    /// replacement is a release store and the property getter an acquire load.
+    /// Kept as a field: auto-properties cannot be <see langword="volatile"/>, and
+    /// <see cref="BuildDiagnostics"/> exposes <see cref="ReadOnlyMemory{T}"/> rather than the array.
     /// </summary>
     private volatile BuildDiagnostic[] _BuildDiagnostics = [];
 
     /// <summary>
     /// Exceptions captured during the implicit <see cref="Shutdown"/> performed by
     /// <see cref="Dispose"/>. Empty when no shutdown error occurred or when callers ran
-    /// <see cref="Shutdown"/> explicitly. Published with <see cref="Volatile.Write{T}(ref T, T)"/>
-    /// and read with <see cref="System.Threading.Volatile"/>.
+    /// <see cref="Shutdown"/> explicitly. Same publication pattern as
+    /// <see cref="_BuildDiagnostics"/>.
     /// </summary>
     private volatile Exception[] _ShutdownDiagnostics = [];
 
     /// <summary>
-    /// Atomic shutdown latch (0 = live, 1 = shut down). Set by <see cref="Shutdown"/> and checked
-    /// by <see cref="Dispose"/> so protocol <c>OnShutdown</c> runs at most once regardless of
-    /// whether the caller invokes <see cref="Shutdown"/> explicitly or relies on <see cref="Dispose"/>.
-    /// Accessed exclusively via <see cref="Interlocked.Exchange(ref int, int)"/>.
+    /// Atomic shutdown latch (0 = live, 1 = shut down). Mutated only via
+    /// <see cref="Interlocked.Exchange(ref int, int)"/> so <see cref="IProtocol.OnShutdown"/>
+    /// runs at most once. Must remain a field: <c>Interlocked</c> needs <c>ref</c>.
     /// </summary>
     private volatile int _ShutdownFlag;
 
     /// <summary>
-    /// Atomic dispose latch (0 = live, 1 = disposed). Used with <see cref="Interlocked.Exchange(ref int, int)"/>
-    /// inside <see cref="Dispose"/> so concurrent dispose attempts are race-free.
+    /// Atomic dispose latch (0 = live, 1 = disposed). Mutated only via
+    /// <see cref="Interlocked.Exchange(ref int, int)"/>. Must remain a field.
     /// </summary>
     private volatile int _DisposedFlag;
+
+    /// <summary>
+    /// Highest packet id whose first parse on this stack has completed; <c>-1</c> until id 0 is parsed.
+    /// First parses must be dense <c>0, 1, 2, …</c>. A later parse of an already-completed id is a
+    /// replay. Jumping over an id (for example 0 then 5) is a caller contract violation.
+    /// <see cref="PacketId.Value"/> is an <see cref="int"/>, so this stays <see langword="volatile"/>
+    /// <see cref="int"/> (plain volatile read/write). First-parse of a given id is serialized by the
+    /// caller; this field only publishes the completed watermark to re-parse threads.
+    /// </summary>
+    private volatile int _ParseWatermark = -1;
 
     #endregion
 
@@ -102,7 +113,6 @@ public sealed class Stack : IStack, IDisposable
         FieldId packetChoiceFieldId,
         ProtocolId packetProtocolId,
         ProtocolId frameProtocolId,
-        int indexGroupCount,
         IndexGroupInfo[] indexGroups,
         FrozenDictionary<string, IndexGroupId> indexGroupNameMap,
         FrameInterfaceRegistry frameInterfaceRegistry,
@@ -130,7 +140,6 @@ public sealed class Stack : IStack, IDisposable
         PacketChoiceFieldId = packetChoiceFieldId;
         PacketProtocolId = packetProtocolId;
         FrameProtocolId = frameProtocolId;
-        IndexGroupCount = indexGroupCount;
         IndexGroups = indexGroups;
         _IndexGroupNameMap = indexGroupNameMap;
         FrameInterfaceRegistry = frameInterfaceRegistry;
@@ -190,6 +199,63 @@ public sealed class Stack : IStack, IDisposable
     /// <summary>Sets all build diagnostics collected during <see cref="StackBuilder.Build"/>.</summary>
     internal void SetBuildDiagnostics(BuildDiagnostic[] diagnostics) =>
         _BuildDiagnostics = diagnostics;
+
+    #endregion
+
+    #region Parse sequence
+
+    /// <summary>
+    /// Classifies this <see cref="Packet.ParseFrame(PacketId, Stack, Frame)"/> call as a first parse or a replay and
+    /// rejects jumps. First parses on a stack must use dense ids <c>0, 1, 2, …</c>.
+    /// Returns <see langword="true"/> when <paramref name="id"/> was already first-parsed
+    /// (<c>id ≤ watermark</c>) and must replay; <see langword="false"/> when this is the next
+    /// first parse (<c>id == watermark + 1</c>).
+    /// </summary>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown when <paramref name="id"/> is greater than the next expected first-parse id.
+    /// </exception>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal bool ObserveParse(PacketId id)
+    {
+        int value = id.Value;
+        int current = _ParseWatermark;
+        if (value <= current)
+        {
+            return true;
+        }
+
+        if (value == current + 1)
+        {
+            return false;
+        }
+
+        _ThrowParseIdGap(value, current);
+        return false;
+    }
+
+    /// <summary>
+    /// Marks <paramref name="id"/> as having completed its first parse. Must be called from
+    /// <see langword="finally"/> after a non-replay <see cref="ObserveParse"/> so even a failed
+    /// parse closes the id — a later call with the same id is then a replay.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal void CompleteFirstParse(PacketId id) =>
+        _ParseWatermark = id.Value;
+
+    /// <summary>Cold-path helper: first-parse ids on a stack must be dense starting at 0.</summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void _ThrowParseIdGap(int actual, int current)
+    {
+        int expected = current + 1;
+        throw new InvalidOperationException(
+            string.Format(
+                CultureInfo.InvariantCulture,
+                "First parse packet ids on a Stack must be dense starting at 0 (next expected {0}, got {1}). " +
+                "A jump leaves a hole that later parses would treat as a replay. Re-parse an already " +
+                "first-parsed id, or parse the next id in sequence.",
+                expected,
+                actual));
+    }
 
     #endregion
 
@@ -332,7 +398,7 @@ public sealed class Stack : IStack, IDisposable
     public ReadOnlyMemory<IndexGroupInfo> IndexGroups { get; }
 
     /// <inheritdoc/>
-    public int IndexGroupCount { get; }
+    public int IndexGroupCount => IndexGroups.Length;
 
     #endregion
 
@@ -558,9 +624,10 @@ public sealed class Stack : IStack, IDisposable
     /// <summary>
     /// Calls a protocol's Parse method via a pre-bound delegate. Direct array
     /// indexing plus delegate invocation — no interface vtable dispatch.
-    /// Sets <see cref="ParseContext.SelfProtocolId"/> to <paramref name="protocolId"/> on the
-    /// context before invoking the delegate so that every protocol can always identify itself
-    /// without storing a separate field.
+    /// Validates the id and invokes the bound <see cref="IProtocol.Parse"/> after
+    /// <see cref="ParseContext.WithSelfProtocol"/>. Prefer this (or
+    /// <see cref="MutField.CallProtocol"/>) so invalid ids return
+    /// <see cref="ParseError"/> instead of skipping the invoke.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal ParseResult CallProtocol(
@@ -595,9 +662,9 @@ public sealed class Stack : IStack, IDisposable
     }
 
     /// <summary>
-    /// Resolves a <see cref="ProtocolId"/> to its pre-bound <see cref="ParseDelegate"/>.
-    /// Intended for one-time use in <see cref="IProtocol.OnStart"/> to build dispatch caches
-    /// that store delegates for direct invocation without interface vtable dispatch.
+    /// Resolves a <see cref="ProtocolId"/> to its concrete <see cref="ParseDelegate"/>.
+    /// Prefer <see cref="MutField.CallProtocol"/> so invalid ids return
+    /// <see cref="ParseError"/> instead of skipping the invoke.
     /// <para>
     /// <b>Do not call per packet.</b> The returned delegate is stable for the lifetime of
     /// the stack.

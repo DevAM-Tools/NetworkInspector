@@ -249,4 +249,121 @@ internal sealed class TcpReassemblyE2ETests
     }
 
     #endregion
+
+    #region Bound PDU + stateful inner parser
+
+    private const ushort _ProbePort = 65000;
+
+    /// <summary>
+    /// Stateful inner parser whose only job is to call <see cref="Packet.GetEffectLayerKey"/>.
+    /// Unbound TCP PDUs throw and surface as <c>packet.error</c>.
+    /// </summary>
+    private sealed class LayerKeyProbeProtocol : IProtocol
+    {
+        public string Name => "layerkey.probe";
+        public string UiName => "Layer Key Probe";
+
+        /// <summary>Layer key from the most recent <see cref="Parse"/> call.</summary>
+        public int LastLayerKey { get; private set; }
+
+        public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
+        {
+            LastLayerKey = parentField.Packet.GetEffectLayerKey(data);
+            return data.Length;
+        }
+    }
+
+    private static Stack _BuildProbeStack(out LayerKeyProbeProtocol probe)
+    {
+#pragma warning disable CA2000 // SettingsManager ownership transfers to Stack via StackBuilder.
+        StackBuilder builder = new(new SettingsManager(), new FrameInterfaceRegistry());
+#pragma warning restore CA2000
+        ProtocolRegistration.RegisterStandardProtocols(builder);
+        probe = new();
+        builder.RegisterProtocol(probe, static (b, id, _) =>
+        {
+            b.RegisterParserInU64TableByName(TcpProtocol.PortTableName, _ProbePort, id);
+            b.RegisterStreamReassemblyConfig(id, new StreamReassemblyConfig
+            {
+                BoundaryDetector = new LengthPrefixDetector(
+                    lengthOffset: 0,
+                    lengthSize: 2,
+                    bigEndian: true,
+                    lengthIncludesHeader: false,
+                    headerSize: 2),
+            });
+        });
+        return builder.Build();
+    }
+
+    private static byte[] _ProbeClientFrame(uint seq, uint ack, byte flags, ReadOnlySpan<byte> payload = default)
+        => _BuildTcpFrame(_ClientIp, _ServerIp, _ClientPort, _ProbePort, seq, ack, flags, payload);
+
+    private static byte[] _ProbeServerFrame(uint seq, uint ack, byte flags, ReadOnlySpan<byte> payload = default)
+        => _BuildTcpFrame(_ServerIp, _ClientIp, _ProbePort, _ClientPort, seq, ack, flags, payload);
+
+    [Test]
+    public async Task Reassembly_StatefulInner_BoundPdu_RedissectHasNoPacketError()
+    {
+        using Stack stack = _BuildProbeStack(out _);
+        uint cIsn = 9000, sIsn = 10000;
+        byte[] fullPdu = [0x00, 0x04, 0x01, 0x02, 0x03, 0x04];
+
+        byte[][] frames =
+        [
+            _ProbeClientFrame(cIsn, 0, TcpFlags.Syn),
+            _ProbeServerFrame(sIsn, cIsn + 1, TcpFlags.SynAck),
+            _ProbeClientFrame(cIsn + 1, sIsn + 1, TcpFlags.Ack),
+            _ProbeClientFrame(cIsn + 1, sIsn + 1, TcpFlags.Psh | TcpFlags.Ack, fullPdu.AsSpan(0, 3)),
+            _ProbeClientFrame(cIsn + 1 + 3, sIsn + 1, TcpFlags.Psh | TcpFlags.Ack, fullPdu.AsSpan(3)),
+        ];
+
+        Packet[] firstParsed = new Packet[frames.Length];
+        for (int i = 0; i < frames.Length; i++)
+        {
+            firstParsed[i] = ProtocolTestHelper.ParseFrame(stack, frames[i], i, Timestamp.FromSecs(i));
+        }
+
+        Packet completing = firstParsed[^1];
+        await ProtocolTestHelper.AssertFieldNotPresent(stack, completing, "packet.error").ConfigureAwait(false);
+
+        Packet reparse = ProtocolTestHelper.ParseFrame(stack, frames[^1], frames.Length - 1, Timestamp.FromSecs(frames.Length - 1));
+        await ProtocolTestHelper.AssertFieldNotPresent(stack, reparse, "packet.error").ConfigureAwait(false);
+        await PacketFieldComparer.AssertFieldIdentical(stack, completing, reparse).ConfigureAwait(false);
+    }
+
+    [Test]
+    public async Task Reassembly_StatefulInner_SingleSegmentPdu_RedissectLayerKeyMatchesIngest()
+    {
+        using Stack stack = _BuildProbeStack(out LayerKeyProbeProtocol probe);
+        uint cIsn = 9000, sIsn = 10000;
+        byte[] fullPdu = [0x00, 0x04, 0x01, 0x02, 0x03, 0x04];
+
+        byte[][] frames =
+        [
+            _ProbeClientFrame(cIsn, 0, TcpFlags.Syn),
+            _ProbeServerFrame(sIsn, cIsn + 1, TcpFlags.SynAck),
+            _ProbeClientFrame(cIsn + 1, sIsn + 1, TcpFlags.Ack),
+            _ProbeClientFrame(cIsn + 1, sIsn + 1, TcpFlags.Psh | TcpFlags.Ack, fullPdu),
+        ];
+
+        Packet[] firstParsed = new Packet[frames.Length];
+        for (int i = 0; i < frames.Length; i++)
+        {
+            firstParsed[i] = ProtocolTestHelper.ParseFrame(stack, frames[i], i, Timestamp.FromSecs(i));
+        }
+
+        Packet completing = firstParsed[^1];
+        await ProtocolTestHelper.AssertFieldNotPresent(stack, completing, "packet.error").ConfigureAwait(false);
+        int ingestKey = probe.LastLayerKey;
+
+        Packet reparse = ProtocolTestHelper.ParseFrame(
+            stack, frames[^1], frames.Length - 1, Timestamp.FromSecs(frames.Length - 1));
+        await ProtocolTestHelper.AssertFieldNotPresent(stack, reparse, "packet.error").ConfigureAwait(false);
+        int replayKey = probe.LastLayerKey;
+
+        await Assert.That(replayKey).IsEqualTo(ingestKey);
+    }
+
+    #endregion
 }

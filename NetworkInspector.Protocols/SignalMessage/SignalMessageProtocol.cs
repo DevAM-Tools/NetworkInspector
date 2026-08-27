@@ -4,12 +4,12 @@ namespace NetworkInspector.Protocols.SignalMessage;
 
 /// <summary>
 /// One immutable, stateless signal-message protocol instance compiled from JSON.
-/// <see cref="Parse"/> appends a lazy protocol container; signals and mux children are
+/// <see cref="IProtocol.Parse"/> appends a lazy protocol container; signals and mux children are
 /// built in the container populator from stored payload bytes.
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>Length contract:</b> <see cref="Parse"/> requires
+/// <b>Length contract:</b> <see cref="IProtocol.Parse"/> requires
 /// <c>data.Length &gt;= RequiredByteLength</c> (see <see cref="SignalMessageBits"/>),
 /// stores and extracts only that prefix, and returns <see cref="RequiredByteLength"/> as
 /// consumed. Trailing bytes at the end of the capture frame are shown as
@@ -17,6 +17,23 @@ namespace NetworkInspector.Protocols.SignalMessage;
 /// reports a consumed count shorter than the frame.
 /// <see cref="SignalMessageBits.ExtractRawUnchecked"/> performs no per-signal bounds checks —
 /// Debug and Release behave identically.
+/// </para>
+/// <para>
+/// <b>Field tree</b> (sibling of the caller protocol, same as Ethernet / UDP):
+/// </para>
+/// <code>
+/// parent (e.g. same parent as pdu_transport)
+/// └── {name}: {ui_name}                 [lazy container]
+///     ├── {signal}: physical F64
+///     │   ├── {signal}.raw              [optional, signal_message.show_raw]
+///     │   └── {signal}.enum             [optional, signal_message.show_enum]
+///     └── {mux}                         [optional]
+///         ├── {mux}.value
+///         └── mux-group signals
+/// </code>
+/// <para>
+/// Signals are children of this container, never of <c>pdu_transport.pdu</c>.
+/// Mux-group signals hang under the mux field.
 /// </para>
 /// <para>
 /// <b>Pipeline (inside populator):</b> extract raw <see cref="ulong"/> → physical =
@@ -29,7 +46,7 @@ namespace NetworkInspector.Protocols.SignalMessage;
 /// </para>
 /// <para><b>Thread safety:</b> Immutable after <see cref="RegisterFields"/> completes.
 /// Designed for single-threaded parse ownership per <see cref="Stack"/>; concurrent
-/// <see cref="Parse"/> on the same instance is safe because there is no mutable parse state.</para>
+/// <see cref="IProtocol.Parse"/> on the same instance is safe because there is no mutable parse state.</para>
 /// </remarks>
 internal sealed class SignalMessageProtocol : IProtocol
 {
@@ -94,7 +111,7 @@ internal sealed class SignalMessageProtocol : IProtocol
 
     /// <summary>
     /// Container materializer. The constructor assigns <see cref="_NoOpPopulator"/> so
-    /// <see cref="Parse"/> never invokes a null delegate if field registration is incomplete.
+    /// <see cref="IProtocol.Parse"/> never invokes a null delegate if field registration is incomplete.
     /// </summary>
     private LazyPopulator _ContainerPopulator = _NoOpPopulator;
 
@@ -103,7 +120,7 @@ internal sealed class SignalMessageProtocol : IProtocol
     #region Construction
 
     /// <summary>
-    /// No-op populator so <see cref="Parse"/> never sees a null delegate when
+    /// No-op populator so <see cref="IProtocol.Parse"/> never sees a null delegate when
     /// <see cref="RegisterFields"/> does not finish (best-effort registration).
     /// </summary>
     private static ParseResult _NoOpPopulator(in MutField _) => 0;
@@ -137,12 +154,12 @@ internal sealed class SignalMessageProtocol : IProtocol
 
     #endregion
 
-    #region IProtocol
+    #region Protocol
 
     /// <inheritdoc/>
     /// <remarks>
     /// <para>
-    /// Eager/lazy contract (PROTOCOL_GUIDE §9 / §13b): <see cref="Parse"/> only
+    /// Eager/lazy contract (PROTOCOL_GUIDE §9 / §13b): <see cref="IProtocol.Parse"/> only
     /// records presence and appends the lazy message container
     /// (<see cref="MutField.AppendLazyWithCustomText"/> with <see cref="FieldValue.NewBytes"/>).
     /// All signal and mux fields are appended inside <see cref="_PopulateContainerFields"/>.

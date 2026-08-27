@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Protocols;
 
@@ -22,7 +22,7 @@ namespace NetworkInspector.Protocols;
 /// <remarks>
 /// <para><b>Thread safety:</b> instances are immutable after registration completes.
 /// All mutable state is initialised inside <c>RegisterFieldsCustom</c> / <c>_OnStartCustom</c>
-/// (single-threaded build phase) and is read-only thereafter, so <see cref="Parse"/> may
+/// (single-threaded build phase) and is read-only thereafter, so <see cref="IProtocol.Parse"/> may
 /// be invoked concurrently from any number of threads on the same instance without external
 /// synchronisation. Per-thread caches (when present) are stored in <c>[ThreadStatic]</c> fields.</para>
 /// </remarks>
@@ -95,8 +95,7 @@ public sealed partial class FrameProtocol : IProtocol
 
     // Sparse dispatch cache built from the link-type protocol table at stack start.
     // Linear scan over typically 1–3 entries; avoids dictionary hash computation per packet.
-    // Pre-bound delegates for direct invocation without interface vtable dispatch.
-    private (ulong Key, ParseDelegate Parse)[] _LinkTypeSparseCache = [];
+    private (ulong Key, ProtocolId Id)[] _LinkTypeSparseCache = [];
 
     partial void _OnStartCustom(Stack stack)
     {
@@ -104,8 +103,7 @@ public sealed partial class FrameProtocol : IProtocol
         _Populator = _PopulateFrameFields;
         _InterfacePopulator = _PopulateInterfaceFields;
         // Link-type table has very few entries (typically just Ethernet = 1); cache all of them.
-        // Instance cache stores IProtocol references for zero-indirection dispatch.
-        _LinkTypeSparseCache = stack.BuildU64SparseDelegateCache(_LinkTypeTableId);
+        _LinkTypeSparseCache = stack.BuildU64SparseIdCache(_LinkTypeTableId);
     }
 
     /// <summary>
@@ -280,12 +278,12 @@ public sealed partial class FrameProtocol : IProtocol
     private ParseResult _DispatchLinkType(
         in MutField parentField, ulong linkType, ReadOnlyMemory<byte> data, in ParseContext context)
     {
-        // Direct delegate call — no ProtocolId resolution, no vtable dispatch.
-        foreach ((ulong key, ParseDelegate parse) in _LinkTypeSparseCache)
+        // Cached ProtocolId; CallProtocol returns ParseError for invalid ids.
+        foreach ((ulong key, ProtocolId id) in _LinkTypeSparseCache)
         {
             if (key == linkType)
             {
-                return parse(in parentField, data, in context);
+                return parentField.CallProtocol(id, data, in context);
             }
         }
 

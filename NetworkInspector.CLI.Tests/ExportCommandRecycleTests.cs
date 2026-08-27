@@ -114,7 +114,7 @@ internal sealed class ExportCommandRecycleTests
     }
 
     /// <summary>
-    /// Ten frames, no packet limit — packet IDs must be sequential starting at 1.
+    /// Ten frames, no packet limit — packet IDs must be sequential starting at 0.
     /// Verifies that recycling does not disturb the monotonically increasing ID assignment.
     /// </summary>
     [Test]
@@ -132,7 +132,7 @@ internal sealed class ExportCommandRecycleTests
         await Assert.That(exporter.CapturedIds.Count).IsEqualTo(10);
         for (int i = 0; i < 10; i++)
         {
-            await Assert.That(exporter.CapturedIds[i]).IsEqualTo(i + 1).Because($"packet at index {i} must have ID {i + 1}");
+            await Assert.That(exporter.CapturedIds[i]).IsEqualTo(i).Because($"packet at index {i} must have ID {i}");
         }
     }
 
@@ -275,11 +275,11 @@ internal sealed class ExportCommandRecycleTests
         int counter = 0;
         List<IFrameSource> sources = [source];
 
-        // Evaluating a high packet id first makes the stateful filter reject the loop's ids as
-        // out of order, which is the documented poisoning path.
+        // Dense first parses (0 then 1); evaluating 1 then 0 poisons a stateful filter.
         PacketFilter filter = _Compile(stack, "flank(ip.ttl, changed, within: 1s)");
         Frame frame = poisonSource.NextFrame()!.Value;
-        _ = filter.TryIsMatch(Packet.ParseFrame(new PacketId(5000), stack, frame), out _, out _);
+        _ = Packet.ParseFrame(new PacketId(0), stack, frame);
+        _ = filter.TryIsMatch(Packet.ParseFrame(new PacketId(1), stack, frame), out _, out _);
 
         bool aborted = false;
         string message = string.Empty;

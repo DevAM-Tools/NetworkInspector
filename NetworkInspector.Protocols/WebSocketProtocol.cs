@@ -6,7 +6,7 @@ namespace NetworkInspector.Protocols;
 /// WebSocket protocol parser (RFC 6455).
 /// Parses WebSocket frame headers including FIN, opcode, mask, payload length, and masking key.
 /// Performs XOR unmasking for masked frames (client → server).
-/// <para><b>Thread safety:</b> Instances are immutable after registration; <see cref="Parse"/> may
+/// <para><b>Thread safety:</b> Instances are immutable after registration; <see cref="IProtocol.Parse"/> may
 /// be called concurrently from multiple threads without external synchronisation. See remarks.</para>
 /// <para>WebSocket is established via HTTP Upgrade. Registered in the <c>http.upgrade</c>
 /// dispatch table with key "websocket". When HTTP parses a <c>101 Switching Protocols</c>
@@ -27,7 +27,7 @@ namespace NetworkInspector.Protocols;
 /// <remarks>
 /// <para><b>Thread safety:</b> instances are immutable after registration completes.
 /// All mutable state is initialised inside <c>RegisterFieldsCustom</c> / <c>_OnStartCustom</c>
-/// (single-threaded build phase) and is read-only thereafter, so <see cref="Parse"/> may
+/// (single-threaded build phase) and is read-only thereafter, so <see cref="IProtocol.Parse"/> may
 /// be invoked concurrently from any number of threads on the same instance without external
 /// synchronisation. Per-thread caches (when present) are stored in <c>[ThreadStatic]</c> fields.</para>
 /// </remarks>

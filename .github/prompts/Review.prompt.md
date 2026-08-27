@@ -1,6 +1,6 @@
 ---
 name: review
-description: Perform an exhaustive review and emit findings using the consolidated template
+description: Perform an exhaustive adversarial review (Skeptic: parts and composition) and emit findings using the consolidated template
 argument-hint: Describe files/features/PR to review
 agent: agent
 ---

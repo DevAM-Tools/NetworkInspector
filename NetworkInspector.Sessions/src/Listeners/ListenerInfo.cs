@@ -18,14 +18,13 @@ namespace NetworkInspector.Sessions.Listeners;
 ///
 /// <para>
 /// <b>Thread safety:</b>
-/// <see cref="Status"/> uses <c>Volatile.Read</c> for lock-free, consistent reads from any thread.
+/// <see cref="Status"/> is a plain volatile read of <see cref="_Status"/>, safe from any thread.
 /// Status transitions are performed by the session under controlled conditions.
 /// </para>
 /// </summary>
 public sealed class ListenerInfo
 {
-    // Atomic status field. Written via Volatile.Write by the session,
-    // read via Volatile.Read from any thread.
+    // Cross-thread status. Plain volatile read/write; the session is the only writer.
     private volatile int _Status;
 
     // Callback set by the session to implement the Unsubscribe convenience API.
@@ -61,7 +60,7 @@ public sealed class ListenerInfo
 
     /// <summary>
     /// Transitions the subscription status. Called by the session during
-    /// unsubscribe or shutdown. Thread-safe via <c>Volatile.Write</c>.
+    /// unsubscribe or shutdown. Plain volatile write.
     /// </summary>
     internal void SetStatus(SubscriptionStatus status)
         => _Status = (int)status;

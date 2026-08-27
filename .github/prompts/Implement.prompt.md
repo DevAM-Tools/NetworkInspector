@@ -1,6 +1,6 @@
 ---
 name: implement
-description: Execute approved plan/review findings step-by-step with review gates
+description: Execute approved plan/review findings step-by-step with review gates; tick Step Overview with the checklist; close with a review brief, R{n} check, and a council Exam of the built result
 argument-hint: Reference approved plan artifact or accepted review findings
 agent: agent
 ---

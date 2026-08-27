@@ -1,6 +1,6 @@
 ---
 name: plan
-description: Create an implementation plan artifact using the consolidated workflow rules
+description: Create an implementation plan artifact with user-view requirements and a closing Requirements-fit step
 argument-hint: Briefly describe the feature/change to plan
 agent: agent
 ---

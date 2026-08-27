@@ -26,7 +26,8 @@ namespace NetworkInspector.Core.Reassembly;
 /// </para>
 /// <para>
 /// <b>Thread-safety:</b> Not thread-safe. The owning <see cref="DatagramDefragmenter{TKey}"/>
-/// must serialize all access. Designed for single-threaded use during packet parsing.
+/// must serialize all access; see its thread-safety section for how the IPv4 and IPv6 protocols
+/// keep concurrent re-parses away from these buffers.
 /// </para>
 /// </summary>
 public sealed class DatagramFragmentBuffer

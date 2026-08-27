@@ -3,7 +3,7 @@
 namespace NetworkInspector.Core.Tests;
 
 /// <summary>
-/// Tests for StackBuilder: protocol, field, and table registration, deferred callbacks, and Build().
+/// Tests for StackBuilder: IProtocol, field, and table registration, deferred callbacks, and Build().
 /// </summary>
 internal sealed class StackBuilderTests
 {

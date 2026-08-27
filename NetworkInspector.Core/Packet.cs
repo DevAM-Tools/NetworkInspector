@@ -17,11 +17,13 @@ namespace NetworkInspector.Core;
 /// one is created and the old slab stays alive as long as any packet references its buffer.
 /// </para>
 /// <para>
-/// <b>Recycling:</b> For high-throughput single-threaded loops (initial trace scans, profiling),
-/// use the <c>ParseFrame(Packet recycle, …)</c> overloads to reuse an existing, sealed Packet
-/// object instead of allocating a new one. The internal slab storage is cleared and reused
-/// in place, eliminating the heap allocation and its associated GC pressure entirely.
-/// The <see cref="PrepareForReuse"/> method performs this reset.
+/// <b>Recycling:</b> For high-throughput loops over packets owned by one thread (initial trace
+/// scans, profiling, per-listener re-parsing), use the <c>ParseFrame(Packet recycle, …)</c>
+/// overloads to reuse an existing, sealed Packet object instead of allocating a new one. The
+/// internal slab storage is cleared and reused in place, eliminating the heap allocation and its
+/// associated GC pressure entirely. The <see cref="PrepareForReuse"/> method performs this reset.
+/// A recycle target belongs exclusively to the thread that passes it in — never recycle a packet
+/// another thread might still be reading.
 /// </para>
 /// <para>
 /// <b>Thread-safety contract:</b> After <see cref="Seal"/> completes, a finalized packet is safe
@@ -29,6 +31,19 @@ namespace NetworkInspector.Core;
 /// CAS on <see cref="FieldBody.LazyIndex"/> (materializing marker bit) so unrelated lazy
 /// branches can populate concurrently after <see cref="Seal"/>.
 /// All cross-thread visibility is ensured via <see cref="Volatile"/> reads/writes — no locks.
+/// </para>
+/// <para>
+/// <b>Parse concurrency:</b> The single-threaded statements throughout this type are per packet
+/// <i>instance</i>: one packet is parsed by exactly one thread up to its <see cref="Seal"/>.
+/// Different packets may be parsed on different threads at the same time. Whether that is safe is
+/// decided by the protocols on the stack, not here: a protocol that carries state across packets
+/// requires the <i>first</i> parse of each packet id to be ordered, single-threaded, and to use
+/// dense ids <c>0, 1, 2, …</c> (a jump throws <see cref="InvalidOperationException"/>). It then
+/// detects and replays any later parse of an already-parsed id lock-free (see
+/// <c>PROTOCOL_GUIDE.md</c>, "First parse vs. re-parse"). Consequently
+/// <see cref="ParseFrame(PacketId, Stack, Frame)"/> called with an id that this stack has already
+/// first-parsed is a re-parse and is safe from any thread, while calling it with a fresh id from an
+/// arbitrary thread is not.
 /// </para>
 /// </summary>
 public sealed class Packet
@@ -444,6 +459,30 @@ public sealed class Packet
     }
 
     /// <summary>
+    /// Stores <paramref name="buffer"/> as an additional packet buffer and returns that stored slice.
+    /// Nested <see cref="IProtocol.Parse"/> calls must use this slice so
+    /// <see cref="GetEffectLayerKey"/> can identify the layer.
+    /// Reparse of the same packet must bind the same recorded bytes once on the new packet
+    /// (recycle clears additional buffers).
+    /// Thread-safety follows the packet parse contract: one writer until Seal.
+    /// </summary>
+    /// <param name="buffer">Reassembled or otherwise owned bytes that outlive this parse.</param>
+    /// <returns>The stored slice, suitable as the <c>data</c> argument of a nested parse.</returns>
+    /// <exception cref="InvalidOperationException">The buffer could not be stored (parser bug).</exception>
+    public ReadOnlyMemory<byte> BindParseBuffer(ReadOnlyMemory<byte> buffer)
+    {
+        int index = AddBuffer(buffer);
+        ReadOnlyMemory<byte>? bound = Buffer(index);
+        if (bound is null)
+        {
+            throw new InvalidOperationException(
+                "Additional parse buffer was not stored on this packet.");
+        }
+
+        return bound.Value;
+    }
+
+    /// <summary>
     /// Gets a buffer by index. 0 = frame data, 1+ = additional buffers.
     /// Negative indexes and indexes at or beyond <see cref="BufferCount"/> return <see langword="null"/>.
     /// </summary>
@@ -468,6 +507,106 @@ public sealed class Packet
 
     /// <summary>Total buffer count (1 for frame + additional).</summary>
     public int BufferCount => 1 + _AdditionalBufferCount;
+
+    /// <summary>
+    /// Packs the location of <paramref name="data"/> inside this packet's frame or additional
+    /// buffers into an effect-store layer key (buffer index in bits 31–24, byte offset in bits 23–0).
+    /// <para>
+    /// <paramref name="data"/> must be a slice of <see cref="Frame.Data"/> or of a memory previously
+    /// passed to <see cref="BindParseBuffer"/> — the <c>data</c> argument of
+    /// <see cref="IProtocol.Parse"/>, not a heap copy.
+    /// Buffers are scanned from index 0 (the frame) upward; the first match wins.
+    /// A slice of <see cref="Frame.Data"/> that was also passed to
+    /// <see cref="BindParseBuffer"/> therefore packs as the frame, not as that additional buffer.
+    /// Nested parsers of reassembled bytes must see a memory that is not a frame slice
+    /// (pass an owned copy into <see cref="BindParseBuffer"/>).
+    /// A zero-length slice of a packet buffer is
+    /// valid and packs that cursor; <see cref="ReadOnlyMemory{T}.Empty"/> is not a packet slice.
+    /// Location is resolved from the shared array segment or memory manager of the two memories
+    /// (no pointer arithmetic).
+    /// </para>
+    /// <para>
+    /// Thread-safety follows the packet parse contract: one writer until Seal; reparse uses the same
+    /// frame bytes and the same additional buffers the first parse recorded.
+    /// </para>
+    /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException">The packed index/offset does not fit.</exception>
+    /// <exception cref="InvalidOperationException"><paramref name="data"/> is not a slice of a packet buffer.</exception>
+    public int GetEffectLayerKey(ReadOnlyMemory<byte> data)
+    {
+        int bufferCount = BufferCount;
+        for (int i = 0; i < bufferCount; i++)
+        {
+            ReadOnlyMemory<byte>? buffer = Buffer(i);
+            if (buffer is null)
+            {
+                continue;
+            }
+
+            if (_TryGetSliceOffset(buffer.Value, data, out int offset))
+            {
+                return _PackEffectLayerKey(i, offset);
+            }
+        }
+
+        throw new InvalidOperationException(
+            "Parse data is not a slice of this packet's frame or additional buffers.");
+    }
+
+    /// <summary>Test helper for packed-key overflow cases.</summary>
+    internal static int PackEffectLayerKeyForTests(int bufferIndex, int offset) =>
+        _PackEffectLayerKey(bufferIndex, offset);
+
+    private static int _PackEffectLayerKey(int bufferIndex, int offset)
+    {
+        if ((uint)bufferIndex > 0xFFu)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(bufferIndex),
+                "Effect layer key supports buffer index 0..255.");
+        }
+
+        if ((uint)offset > 0xFFFFFFu)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(offset),
+                "Effect layer key supports offset 0..16777215.");
+        }
+
+        return (bufferIndex << 24) | offset;
+    }
+
+    private static bool _TryGetSliceOffset(ReadOnlyMemory<byte> owner, ReadOnlyMemory<byte> slice, out int offset)
+    {
+        if (slice.Length > owner.Length)
+        {
+            offset = 0;
+            return false;
+        }
+
+        if (MemoryMarshal.TryGetArray(owner, out ArraySegment<byte> ownerSeg)
+            && MemoryMarshal.TryGetArray(slice, out ArraySegment<byte> sliceSeg)
+            && ReferenceEquals(ownerSeg.Array, sliceSeg.Array)
+            && sliceSeg.Offset >= ownerSeg.Offset
+            && (long)sliceSeg.Offset + sliceSeg.Count <= (long)ownerSeg.Offset + ownerSeg.Count)
+        {
+            offset = sliceSeg.Offset - ownerSeg.Offset;
+            return true;
+        }
+
+        if (MemoryMarshal.TryGetMemoryManager(owner, out MemoryManager<byte>? ownerMgr, out int ownerStart, out int ownerLength)
+            && MemoryMarshal.TryGetMemoryManager(slice, out MemoryManager<byte>? sliceMgr, out int sliceStart, out int sliceLength)
+            && ReferenceEquals(ownerMgr, sliceMgr)
+            && sliceStart >= ownerStart
+            && (long)sliceStart + sliceLength <= (long)ownerStart + ownerLength)
+        {
+            offset = sliceStart - ownerStart;
+            return true;
+        }
+
+        offset = 0;
+        return false;
+    }
 
     #endregion
 
@@ -1605,6 +1744,9 @@ public sealed class Packet
     /// </summary>
     private static void _ParseAndSeal(Packet packet, Frame frame)
     {
+        // Must run before the protocol-exception guard: a jump is a caller contract violation,
+        // not a parser bug, and must reach the ParseFrame caller.
+        bool replay = packet.Stack.ObserveParse(packet.Id);
         try
         {
             _ParseFrameInternal(packet, frame);
@@ -1613,6 +1755,14 @@ public sealed class Packet
         {
             packet.SetError(_BuildExceptionMessage(ex, packet.Stack.IncludeExceptionStackTrace));
         }
+        finally
+        {
+            if (!replay)
+            {
+                packet.Stack.CompleteFirstParse(packet.Id);
+            }
+        }
+
         packet.Seal();
     }
 
@@ -1623,9 +1773,16 @@ public sealed class Packet
     /// </summary>
     private static void _ParseIndexedAndSeal(Packet packet, Frame frame, PacketIndex index)
     {
-        index.BeginPacket(packet.Id.Value);
+        bool replay = packet.Stack.ObserveParse(packet.Id);
 
-        ParseContext context = new(index, packet.Stack);
+        // Replays never write the index, including when the first parse did not use one.
+        // Concurrent readers therefore never enter BeginPacket/EndPacket. A first parse that
+        // already indexed this id (direct BeginPacket, or a previous indexed parse) is a no-op
+        // for the index as well.
+        bool indexing = !replay && index.TryBeginPacket(packet.Id.Value);
+        ParseContext context = indexing
+            ? new ParseContext(index, packet.Stack)
+            : new ParseContext(packet.Stack);
 
         try
         {
@@ -1634,10 +1791,24 @@ public sealed class Packet
         catch (Exception ex)
         {
             packet.SetError(_BuildExceptionMessage(ex, packet.Stack.IncludeExceptionStackTrace));
-            index.RollbackCurrentPacket();
+            if (indexing)
+            {
+                index.RollbackCurrentPacket();
+            }
+        }
+        finally
+        {
+            if (indexing)
+            {
+                index.EndPacket();
+            }
+
+            if (!replay)
+            {
+                packet.Stack.CompleteFirstParse(packet.Id);
+            }
         }
 
-        index.EndPacket();
         packet.Seal();
     }
 
@@ -1647,7 +1818,12 @@ public sealed class Packet
     // (frame/stack registry mismatch) are validated in the Packet constructor and surface
     // as exceptions — these are not hot-path concerns since allocation already dominates.
 
-    /// <summary>Parses a frame into a new packet, catching exceptions from protocol parsers.</summary>
+    /// <summary>
+    /// Parses a frame into a new packet, catching exceptions from protocol parsers.
+    /// First parses of a given <paramref name="stack"/> must use dense ids <c>0, 1, 2, …</c>;
+    /// a later parse of an already first-parsed id is a replay. A jump (for example 0 then 5)
+    /// throws <see cref="InvalidOperationException"/>.
+    /// </summary>
     public static Packet ParseFrame(PacketId id, Stack stack, Frame frame)
     {
         Packet packet = new(id, stack, frame);
@@ -1669,7 +1845,12 @@ public sealed class Packet
         return packet;
     }
 
-    /// <summary>Parses a frame into a new packet while recording field presence in the given index.</summary>
+    /// <summary>
+    /// Parses a frame into a new packet while recording field presence in the given index.
+    /// A later call for a packet id that this index has already recorded is a no-op for the
+    /// index: bitmaps are not mutated. First-parse ids on the stack must still be dense
+    /// <c>0, 1, 2, …</c> as for <see cref="ParseFrame(PacketId, Stack, Frame)"/>.
+    /// </summary>
     public static Packet ParseFrameIndexed(
         PacketId id, Stack stack, Frame frame, PacketIndex index)
     {

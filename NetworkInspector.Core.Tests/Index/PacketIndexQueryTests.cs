@@ -1318,6 +1318,99 @@ internal sealed class PacketIndexQueryTests
         }
     }
 
+    [Test]
+    public async Task BeginPacket_SecondCallForSameId_DoesNotGrowCardinality()
+    {
+        (Stack stack, ProtocolId p1, _, IndexGroupId g1, _, _, _) = _BuildIndexTestStack();
+        using (stack)
+        {
+            PacketIndex index = new(stack);
+
+            index.BeginPacket(0);
+            index.RecordProtocolPresence(p1);
+            index.RecordGroupPresence(g1);
+            index.EndPacket();
+
+            index.BeginPacket(0);
+            index.RecordProtocolPresence(p1);
+            index.RecordGroupPresence(g1);
+            index.EndPacket();
+
+            await Assert.That(index.ProtocolCardinality(p1)).IsEqualTo(1L);
+            await Assert.That(index.GroupCardinality(g1)).IsEqualTo(1L);
+        }
+    }
+
+    [Test]
+    public async Task TryBeginPacket_AlreadyIndexed_ReturnsFalse()
+    {
+        (Stack stack, _, _, _, _, _, _) = _BuildIndexTestStack();
+        using (stack)
+        {
+            PacketIndex index = new(stack);
+
+            await Assert.That(index.TryBeginPacket(0)).IsTrue();
+            index.EndPacket();
+            await Assert.That(index.TryBeginPacket(0)).IsFalse();
+        }
+    }
+
+    [Test]
+    public async Task TryBeginPacket_AlreadyIndexedDuringLiveSession_ReturnsFalse()
+    {
+        (Stack stack, _, _, _, _, _, _) = _BuildIndexTestStack();
+        using (stack)
+        {
+            PacketIndex index = new(stack);
+
+            await Assert.That(index.TryBeginPacket(0)).IsTrue();
+            index.EndPacket();
+            await Assert.That(index.TryBeginPacket(1)).IsTrue();
+
+            bool replayResult = false;
+            Exception? replayEx = null;
+            Thread replay = new(() =>
+            {
+                try
+                {
+                    replayResult = index.TryBeginPacket(0);
+                }
+                catch (Exception ex)
+                {
+                    replayEx = ex;
+                }
+            });
+            replay.Name = "TryBeginPacket-replay";
+            replay.Start();
+            replay.Join();
+
+            await Assert.That(replayEx).IsNull();
+            await Assert.That(replayResult).IsFalse();
+
+            index.EndPacket();
+            await Assert.That(index.TryBeginPacket(1)).IsFalse();
+        }
+    }
+
+    [Test]
+    public async Task BeginPacket_AlreadyIndexedDuringLiveSession_Throws()
+    {
+        (Stack stack, _, _, _, _, _, _) = _BuildIndexTestStack();
+        using (stack)
+        {
+            PacketIndex index = new(stack);
+
+            await Assert.That(index.TryBeginPacket(0)).IsTrue();
+            index.EndPacket();
+            await Assert.That(index.TryBeginPacket(1)).IsTrue();
+
+            await Assert.That(() => index.BeginPacket(0)).Throws<InvalidOperationException>();
+
+            index.EndPacket();
+            await Assert.That(index.TryBeginPacket(1)).IsFalse();
+        }
+    }
+
     // === Stub protocol ===
 
     private sealed class StubProto(string name, string uiName) : IProtocol

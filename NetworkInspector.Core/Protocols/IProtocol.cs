@@ -59,6 +59,12 @@ public interface IProtocol
     /// <summary>
     /// Parse packet data starting at the given position.
     /// Returns bytes consumed on success, or a parse error.
+    /// <para>
+    /// Stateful protocols derive first-parse versus replay from their own ingest watermark
+    /// and from <see cref="Packet.GetEffectLayerKey(ReadOnlyMemory{byte})"/> on
+    /// <paramref name="data"/>. They must not assume <see cref="Stack.CallProtocol"/> ran:
+    /// a direct <see cref="Parse"/> or a cached <see cref="ParseDelegate"/> is a valid entry.
+    /// </para>
     /// </summary>
     /// <param name="parentField">The parent field to append parsed fields to.</param>
     /// <param name="data">The raw packet data to parse.</param>

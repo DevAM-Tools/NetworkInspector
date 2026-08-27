@@ -53,6 +53,28 @@ public interface ISessionReader
     bool TryGetPacket(PacketId id, [NotNullWhen(true)] out Packet? packet);
 
     /// <summary>
+    /// Like <see cref="TryGetPacket(PacketId, out Packet?)"/>, but reuses the caller's
+    /// <paramref name="recycle"/> packet when the id has to be re-parsed, which keeps the hot path
+    /// free of packet allocations. Pass <see langword="null"/> to always allocate.
+    ///
+    /// <para>
+    /// A store hit returns the stored instance and leaves <paramref name="recycle"/> untouched, so a
+    /// caller cannot rely on getting its own instance back — compare by reference if that matters.
+    /// If the recycle attempt is rejected (for example because the packet still has an active
+    /// materialization or came from another stack), the re-parse falls back to a fresh allocation and
+    /// still succeeds.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Ownership:</b> <paramref name="recycle"/> belongs exclusively to the calling thread.
+    /// Re-parsing into it overwrites its fields in place, so it must not be handed in while any
+    /// other thread — or the caller itself, through an earlier <see cref="Field"/> or
+    /// <see cref="MutField"/> reference — still reads it.
+    /// </para>
+    /// </summary>
+    bool TryGetPacket(PacketId id, Packet? recycle, [NotNullWhen(true)] out Packet? packet);
+
+    /// <summary>
     /// Reads a contiguous range of packets into <paramref name="buffer"/>.
     /// <paramref name="fromIndex"/> is the first <see cref="PacketId"/> value (inclusive).
     /// Returns the number of slots actually filled. Entries may be <see langword="null"/>
@@ -150,7 +172,8 @@ public interface ISessionReader
     /// <summary>
     /// Zero-allocation read-only view of the packet index built during parsing. Contains
     /// Roaring Bitmap presence information for protocols and field groups.
-    /// Returns <see langword="null"/> when the session has not started yet.
+    /// Returns <see langword="null"/> when the session has not started yet, or when
+    /// <see cref="ISession.IndexPackets"/> is <see langword="false"/>.
     /// Keep the compile-time type as <see cref="PacketIndexReaderView"/> or pass it to a
     /// generic <c>where TIndex : IPacketIndexReader</c> API. Assigning this value to
     /// <see cref="IPacketIndexReader"/> boxes.

@@ -1,6 +1,6 @@
 ---
 name: workflow-implement
-description: Execute approved plan or accepted review findings step-by-step with review gates. Use on /implement or implementation requests after plan approval.
+description: Execute approved plan or accepted review findings step-by-step with review gates. Tick Step Overview, Shared Block, and Task Checklist together. Close by checking every R{n}, writing a review brief, and running a council Closing Exam of the built result. Use on /implement or implementation requests after plan approval.
 ---
 
 Execute `/implement` workflow.

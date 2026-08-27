@@ -5,8 +5,8 @@ namespace NetworkInspector.Protocols;
 /// <summary>
 /// SOME/IP (Scalable service-Oriented MiddlewarE over IP) protocol parser.
 /// Automotive middleware protocol (AUTOSAR) for service-oriented communication.
-/// <para><b>Thread safety:</b> Not thread-safe; designed for single-threaded use within a
-/// protocol stack. See remarks for details.</para>
+/// <para><b>Thread safety:</b> Ordered single-threaded first parse per packet id; later parses of
+/// an already-parsed id replay recorded state lock-free. See remarks for details.</para>
 /// <para>Field tree structure:</para>
 /// <code>
 /// someip: SOME/IP, Service: 0x0123, Method: 0x4567, REQUEST
@@ -54,10 +54,13 @@ namespace NetworkInspector.Protocols;
 /// </code>
 /// </summary>
 /// <remarks>
-/// <para><b>Thread safety:</b> Not thread-safe; designed for single-threaded use within a
-/// protocol stack. Each <see cref="Stack"/> instance is owned by exactly one parsing thread.
-/// The TP segment reassembler accumulates mutable state across packets and must not be
-/// accessed concurrently.</para>
+/// <para><b>Thread safety:</b> The first parse of a packet id feeds the SOME/IP-TP segment
+/// reassembler and must therefore stay ordered and single-threaded (the session guarantees this
+/// under its parse lock). Every later parse of an already-parsed id is a replay: it reads the
+/// recorded reassembly outcome from the protocol-owned effect store instead of touching the
+/// reassembler, and is safe to run on any number of threads concurrently. The watermark
+/// <see cref="_IngestWatermark"/> separates both paths without any caller-supplied mode
+/// flag.</para>
 /// </remarks>
 [Protocol("someip", "SOME/IP", Description = "SOME/IP (AUTOSAR)")]
 [RegisterAtTable(UdpProtocol.PortTableName, UdpPortKey)]
@@ -382,9 +385,52 @@ public sealed partial class SomeIpProtocol : IProtocol
     }
 
     /// <summary>
-    /// Parses a SOME/IP message. Uses lazy population for field details.
+    /// Parses a SOME/IP message.
+    /// <para>
+    /// SOME/IP-TP messages are stateful: the first parse of a packet id feeds its segment into the
+    /// shared reassembler and records the result, every later parse of that id replays the recorded
+    /// result and leaves the reassembly sessions untouched. See <see cref="_IsReplay"/>.
+    /// </para>
     /// </summary>
     public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
+    {
+        Packet packet = parentField.Packet;
+        int layerKey = parentField.Packet.GetEffectLayerKey(data);
+        bool isReplay = _IsReplay(packet.Id);
+        bool raiseWatermark = !isReplay && _ParseNesting == 0;
+        if (!isReplay)
+        {
+            _ParseNesting++;
+        }
+
+        try
+        {
+            return _ParseBody(in parentField, data, in context, layerKey, isReplay);
+        }
+        finally
+        {
+            if (!isReplay)
+            {
+                _ParseNesting--;
+                if (raiseWatermark)
+                {
+                    _RaiseWatermark(packet.Id);
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Parse body. <paramref name="layerKey"/> is <see cref="Packet.GetEffectLayerKey"/> at the parse call and
+    /// <paramref name="isReplay"/> selects replay of the recorded TP result over feeding the
+    /// reassembler.
+    /// </summary>
+    private ParseResult _ParseBody(
+        in MutField parentField,
+        ReadOnlyMemory<byte> data,
+        in ParseContext context,
+        int layerKey,
+        bool isReplay)
     {
         if (data.Length < SomeIpHeader.Size)
         {
@@ -457,7 +503,7 @@ public sealed partial class SomeIpProtocol : IProtocol
         // sub-protocol presence is recorded in the index. A lazy populator receives no
         // ParseContext and therefore cannot dispatch, so eager construction is required.
         MutField container = parentField.AppendWithCustomText(_ProtocolFieldId, containerValue, summary);
-        ParseResult buildResult = _BuildSomeIpFields(in container, in context);
+        ParseResult buildResult = _BuildSomeIpFields(in container, in context, layerKey, isReplay);
         if (buildResult.TryPropagateError(out ParseResult error))
         {
             return error;
@@ -470,8 +516,11 @@ public sealed partial class SomeIpProtocol : IProtocol
     /// Builds all SOME/IP fields from the container's stored bytes, performs SOME/IP-TP
     /// reassembly, and dispatches any reassembled or tail payload to registered
     /// sub-protocols using the supplied <paramref name="context"/>.
+    /// <paramref name="layerKey"/> and <paramref name="isReplay"/> come from <see cref="IProtocol.Parse"/>
+    /// and decide whether the TP segment feeds the reassembler or replays a recorded result.
     /// </summary>
-    private ParseResult _BuildSomeIpFields(in MutField container, in ParseContext context)
+    private ParseResult _BuildSomeIpFields(
+        in MutField container, in ParseContext context, int layerKey, bool isReplay)
     {
         if (!container.Value.Data.TryGetAsBytes(out ReadOnlyMemory<byte> someipData))
         {
@@ -567,17 +616,30 @@ public sealed partial class SomeIpProtocol : IProtocol
                     FieldValue.NewU64(tpHeader.Reserved),
                     Helpers.DisplayTables.FormatHexU8(tpHeader.Reserved));
 
-                // Wire the TP fragment into the reassembler.
-                // The fragment payload follows immediately after the 4-byte TP header.
-                ReadOnlySpan<byte> fragmentPayload = someipData.Span[(payloadStart + SomeIpTpHeader.Size)..];
-                SomeIpTpReassemblyKey tpKey = new(header.ServiceId, header.MethodId, header.ClientId, header.SessionId);
-                SomeIpTpReassemblyResult tpResult = _TpReassembler.AddSegment(in tpKey, tpHeader.ByteOffset, fragmentPayload, tpHeader.MoreSegments);
+                SomeIpTpReassemblyResult tpResult;
+                if (isReplay)
+                {
+                    // Replay: never touch the shared reassembly sessions from what may be a reader
+                    // thread. A missing effect means the first parse never reached the reassembler,
+                    // so the segment is reported without reassembly.
+                    _TryGetTpEffect(container.Packet.Id, layerKey, out tpResult);
+                }
+                else
+                {
+                    // Wire the TP fragment into the reassembler.
+                    // The fragment payload follows immediately after the 4-byte TP header.
+                    ReadOnlySpan<byte> fragmentPayload = someipData.Span[(payloadStart + SomeIpTpHeader.Size)..];
+                    SomeIpTpReassemblyKey tpKey = new(header.ServiceId, header.MethodId, header.ClientId, header.SessionId);
+                    tpResult = _TpReassembler.AddSegment(
+                        in tpKey, tpHeader.ByteOffset, fragmentPayload, tpHeader.MoreSegments);
+                    _RecordTpEffect(container.Packet.Id, layerKey, in tpResult);
+                }
 
                 if (tpResult.Outcome == SomeIpTpOutcome.Complete && tpResult.Payload is not null)
                 {
                     // All TP segments received — dispatch the reassembled payload to any
                     // registered sub-protocol, or fall back to raw bytes.
-                    ReadOnlyMemory<byte> reassembledMemory = tpResult.Payload;
+                    ReadOnlyMemory<byte> reassembledMemory = container.Packet.BindParseBuffer(tpResult.Payload);
                     if (header.MessageId != SomeIpSdParser.SdMessageId)
                     {
                         ParseResult dispatchResult = container.TryCallNextProtocolU64(

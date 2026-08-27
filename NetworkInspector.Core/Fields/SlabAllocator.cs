@@ -30,8 +30,10 @@ namespace NetworkInspector.Core.Fields;
 /// and copies its existing data — the old slots become orphaned (negligible waste).
 /// </para>
 /// <para>
-/// <b>Thread-safety:</b> Not thread-safe. Designed for single-threaded use during
-/// packet parsing. Each thread manages its own slab instance via <c>[ThreadStatic]</c>.
+/// <b>Thread-safety:</b> Not thread-safe, and does not need to be: each thread manages its own
+/// slab instance via <c>[ThreadStatic]</c>, so concurrent parses on different threads never share
+/// a slab. Buffers already carved out stay valid for readers of the resulting packets — a slab is
+/// only ever appended to, never compacted.
 /// </para>
 /// </summary>
 /// <typeparam name="T">The element type stored in the slab. Must be a value or reference type.

@@ -30,7 +30,7 @@ internal sealed class DispatchContextTests
         Frame frame = Frame.Create(
             new FrameId(1), Timestamp.FromSecs(0), data,
             LinkType.Ethernet, FrameInterfaceId.Invalid, stack.FrameInterfaceRegistry).Value;
-        _ = Packet.ParseFrame(new PacketId(1), stack, frame, parentId);
+        _ = Packet.ParseFrame(new PacketId(0), stack, frame, parentId);
 
         await Assert.That(child.ReceivedKind).IsEqualTo(DispatchKeyKind.Bytes);
         await Assert.That(child.TryGetBytesResult).IsTrue();
@@ -59,7 +59,7 @@ internal sealed class DispatchContextTests
         Frame frame = Frame.Create(
             new FrameId(1), Timestamp.FromSecs(0), data,
             LinkType.Ethernet, FrameInterfaceId.Invalid, stack.FrameInterfaceRegistry).Value;
-        _ = Packet.ParseFrame(new PacketId(1), stack, frame, parentId);
+        _ = Packet.ParseFrame(new PacketId(0), stack, frame, parentId);
 
         await Assert.That(child.ReceivedKind).IsEqualTo(DispatchKeyKind.U64);
         await Assert.That(child.ReceivedU64).IsEqualTo(0x42UL);

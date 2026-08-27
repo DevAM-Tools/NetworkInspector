@@ -25,14 +25,15 @@ Goal: save tokens in chat without losing technical substance.
 
 ### Full-fidelity output (no compression)
 
-- Never apply chat terse style to plan steps or review findings.
+- Never apply chat terse style to plan steps, plan Requirements, or review findings.
 - Write plan steps and review findings with full Shared Block quality.
+- Write plan Requirements as user-observable outcomes with a Done-when check. Not slogans. Not implementation tasks.
 - ❗ Specify the concrete implementation in every plan-step and review-finding `How`. Intent-only, outline-only, or slogan-only `How` is incomplete — expand before emitting the artifact.
 - ❗ Write `How` so another agent can implement without inventing types, items, signatures, algorithms, control flow, or file structure.
 - ❗ Name types, items, visibility, signatures, parameters, return values, call-site edits, validation, error paths, and state changes.
 - ❗ Describe the chosen solution in full, not only the goal. Expand until one implementation is uniquely specified.
 - Write council verdict sections at full fidelity in chat and artifact. Advisor essays stay in the artifact.
-- Put fenced code examples in every plan-step and review-finding `How`. Use Before/After for steps; Problem/Fix for findings. Anchor with path/symbol. Show real signatures and key bodies — not stubs, pseudocode-only, or comments-as-code.
+- Put fenced code examples in every plan-step and review-finding `How`. Use Before/After for steps; Problem/Fix for findings. Anchor with path/symbol. Show real signatures and key bodies — not stubs, pseudocode-only, or comments-as-code. Exception: Requirements-fit may skip Before/After unless a gap needs a code fix.
 - Name non-trivial test coverage in every plan step: behaviors, error paths, boundaries, concurrency, security. Do not list only test file names.
 - Cite a concrete source in every plan-step and review-finding `Context` when an external reference exists: URL, official doc title + section, API reference, RFC. Else cite skill/ADR/path/symbol.
 - Write code and build/project files in normal complete form per loaded tech rules.
@@ -41,6 +42,7 @@ Goal: save tokens in chat without losing technical substance.
 
 - Never compress security warnings, destructive operations, or ambiguous multi-step sequences.
 - Never compress plan-step or review-finding `How`.
+- Never compress plan Requirements or the Requirements-fit step.
 - Use full explicit sentences when compression would change technical meaning or execution order.
 
 ## 3) Tech Load Protocol
@@ -187,6 +189,7 @@ Language-specific mechanisms live in loaded tech skills. This section is intent.
 - `❌` Error / Failed
 - `⚠️` At risk / Blocked
 - `⬜` Not started / Open
+- Tick every plan status surface together: Step Overview, Shared Block, Task Checklist. Never leave the overview stale.
 
 ## 6) Workflow Entry
 
@@ -204,6 +207,7 @@ Language-specific mechanisms live in loaded tech skills. This section is intent.
 | `/complex-task` | `workflow-complex-task.md` |
 | `/council` | `workflow-council.md` |
 
-- `/council`, `council this`, `run the council`, `pressure-test this`, `stress-test this` → `workflow-council.md`. Not casual "should I". Sweep on every plan/review. Full council only on `/council` or a blocking Decision Loop fork.
+- `/council`, `council this`, `run the council`, `pressure-test this`, `stress-test this` → `workflow-council.md`. Not casual "should I". Sweep on every plan/review. Full council on `/council` or a blocking Decision Loop fork (Lite default in plan Decision Loop). Exam council after `/implement` Stage 5 and after complex-task loop success. Exam is not a `/review` substitute.
+- Council subagents use the parent model. Cursor `Task`: set `model: inherit`. Never omit `model`. Never pick a cheaper or faster slug.
 - Do not start implementation before explicit plan approval.
 - Treat explicit approval and equivalent intent phrases as plan approval signals.

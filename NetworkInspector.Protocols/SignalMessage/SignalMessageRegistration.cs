@@ -13,11 +13,15 @@ namespace NetworkInspector.Protocols.SignalMessage;
 /// <see cref="ProtocolRegistration.RegisterStandardProtocols"/> (or custom stacks)
 /// after parent tables such as <c>can.id</c> / <c>udp.port</c> exist or will exist
 /// (deferred via <see cref="IStackBuilder.WhenProtocolTableRegistered"/>).
+/// JSON may also be supplied from a <see cref="Stream"/> via
+/// <see cref="TryLoadConfig"/> / <see cref="Register(IStackBuilder, Stream)"/>
+/// as additional messages on top of the settings/profile file (which may be empty).
 /// </para>
 /// <para>
 /// Best-effort: invalid or colliding <b>signals</b> are skipped with a warning; the rest of
 /// the message still registers. A message is skipped only when its protocol identity or
 /// declared <c>byte_length</c> is unusable. Name collisions never throw.
+/// Every warning is returned to the caller — nothing is discarded inside this type.
 /// See <c>docs/stack-registration-error-model.md</c> and PROTOCOL_GUIDE §10.7.
 /// </para>
 /// <para><b>Thread safety:</b> not thread-safe; call once during single-threaded stack build.</para>
@@ -45,14 +49,40 @@ public static class SignalMessageRegistration
     #region Public API
 
     /// <summary>
-    /// Registers settings, loads/compiles the JSON config (if configured), and registers
+    /// Deserializes a signal-message JSON document from <paramref name="stream"/>
+    /// (does not close the stream). Compile/register is a separate step
+    /// (<see cref="Register(IStackBuilder, SignalMessagesConfig)"/>).
+    /// </summary>
+    /// <param name="stream">Readable stream positioned at the JSON payload.</param>
+    /// <param name="config">Deserialized config on success; otherwise <see langword="null"/>.</param>
+    /// <param name="warning">Set when deserialization fails; <see langword="null"/> on success.</param>
+    /// <returns><see langword="true"/> when the JSON was deserialized successfully.</returns>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="stream"/> is <see langword="null"/>.</exception>
+    public static bool TryLoadConfig(
+        Stream stream,
+        [NotNullWhen(true)] out SignalMessagesConfig? config,
+        out SettingsLoadWarning? warning)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+        return JsonConfigStream.TryLoad(
+            stream,
+            SignalMessagesConfigContext.Default.SignalMessagesConfig,
+            _GroupName,
+            ConfigFileSetting,
+            out config,
+            out warning);
+    }
+
+    /// <summary>
+    /// Registers settings, loads/compiles the JSON config from
+    /// <see cref="ConfigFileSetting"/> (if configured), and registers
     /// one message protocol per successful message with <c>dispatch_bindings</c> wiring.
     /// </summary>
     /// <param name="builder">Stack builder during the registration phase.</param>
     /// <returns>
     /// Zero or more warnings (load failure, per-message compile skips, per-signal skips,
     /// per-message registration skips, per-binding dispatch failures). Empty when no config path
-    /// is set or all messages succeed.
+    /// is set or all messages succeed. Callers must inspect the list; nothing is discarded here.
     /// </returns>
     public static IReadOnlyList<SettingsLoadWarning> Register(IStackBuilder builder)
     {
@@ -61,24 +91,70 @@ public static class SignalMessageRegistration
         List<SettingsLoadWarning> warnings = [];
         _RegisterSettings(builder, warnings);
 
-        if (!_TryLoadConfig(builder, warnings, out SignalMessagesConfig? config))
+        if (!_TryLoadConfigFromSettings(builder, warnings, out SignalMessagesConfig? config))
         {
             return warnings;
         }
 
-        if (!_TryResolveCompileSettings(builder.Settings, warnings, out SignalMessageCompileSettings compileSettings))
+        _RegisterLoadedConfig(builder, config, warnings);
+        return warnings;
+    }
+
+    /// <summary>
+    /// Loads JSON from <paramref name="stream"/>, then compiles and registers message protocols
+    /// as <b>additional</b> messages. When settings are not yet registered, the
+    /// <see cref="ConfigFileSetting"/> file (may be empty) is loaded first.
+    /// When called after <see cref="ProtocolRegistration.RegisterStandardProtocols"/>,
+    /// settings are left untouched and only the stream messages are added.
+    /// Stream load failures become warnings on the returned list; later messages are not compiled
+    /// when the document itself cannot be read.
+    /// </summary>
+    /// <param name="builder">Stack builder during the registration phase.</param>
+    /// <param name="stream">Readable stream positioned at the JSON payload. Not closed.</param>
+    /// <returns>Warnings from settings, load, compile, and registration. Never <see langword="null"/>.</returns>
+    /// <exception cref="ArgumentNullException">
+    /// Thrown when <paramref name="builder"/> or <paramref name="stream"/> is <see langword="null"/>.
+    /// </exception>
+    public static IReadOnlyList<SettingsLoadWarning> Register(IStackBuilder builder, Stream stream)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        ArgumentNullException.ThrowIfNull(stream);
+
+        List<SettingsLoadWarning> warnings = [];
+        _RegisterSettingsAndFileIfNeeded(builder, warnings);
+        if (!TryLoadConfig(stream, out SignalMessagesConfig? config, out SettingsLoadWarning? loadWarning))
         {
+            if (loadWarning is not null)
+            {
+                warnings.Add(loadWarning.Value);
+            }
+
             return warnings;
         }
 
-        foreach (CompiledSignalMessage compiled in SignalMessageCompiler.CompileMessages(
-            config!,
-            in compileSettings,
-            warnings))
-        {
-            _RegisterCompiledMessage(builder, compiled, in compileSettings, warnings);
-        }
+        _RegisterLoadedConfig(builder, config, warnings);
+        return warnings;
+    }
 
+    /// <summary>
+    /// Compiles and registers message protocols from an already-deserialized
+    /// <paramref name="config"/> as <b>additional</b> messages. When settings are not
+    /// yet registered, the settings/profile file is loaded first.
+    /// </summary>
+    /// <param name="builder">Stack builder during the registration phase.</param>
+    /// <param name="config">Deserialized signal-message configuration. Caller guarantees non-null.</param>
+    /// <returns>Warnings from settings, compile, and registration. Never <see langword="null"/>.</returns>
+    /// <exception cref="ArgumentNullException">
+    /// Thrown when <paramref name="builder"/> or <paramref name="config"/> is <see langword="null"/>.
+    /// </exception>
+    public static IReadOnlyList<SettingsLoadWarning> Register(IStackBuilder builder, SignalMessagesConfig config)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        ArgumentNullException.ThrowIfNull(config);
+
+        List<SettingsLoadWarning> warnings = [];
+        _RegisterSettingsAndFileIfNeeded(builder, warnings);
+        _RegisterLoadedConfig(builder, config, warnings);
         return warnings;
     }
 
@@ -118,6 +194,28 @@ public static class SignalMessageRegistration
     #endregion
 
     #region Settings and Config Load
+
+    /// <summary>
+    /// Registers settings and the profile/settings file when this is the first Signal Message
+    /// registration on <paramref name="builder"/>. Subsequent additional stream/object
+    /// registrations skip both so <see cref="ProtocolRegistration.RegisterStandardProtocols"/>
+    /// can be followed by extra messages without duplicate-setting exceptions.
+    /// </summary>
+    private static void _RegisterSettingsAndFileIfNeeded(
+        IStackBuilder builder,
+        List<SettingsLoadWarning> warnings)
+    {
+        if (builder.Settings.GetSetting(ConfigFileSetting) is not null)
+        {
+            return;
+        }
+
+        _RegisterSettings(builder, warnings);
+        if (_TryLoadConfigFromSettings(builder, warnings, out SignalMessagesConfig? fileConfig))
+        {
+            _RegisterLoadedConfig(builder, fileConfig, warnings);
+        }
+    }
 
     /// <summary>
     /// Registers the <c>signal_message</c> settings group and its four settings.
@@ -166,7 +264,7 @@ public static class SignalMessageRegistration
     /// Loads JSON from <see cref="ConfigFileSetting"/>. Returns <see langword="false"/> when
     /// no path is set or the file cannot be deserialized (warning already appended).
     /// </summary>
-    private static bool _TryLoadConfig(
+    private static bool _TryLoadConfigFromSettings(
         IStackBuilder builder,
         List<SettingsLoadWarning> warnings,
         [NotNullWhen(true)] out SignalMessagesConfig? config)
@@ -188,6 +286,30 @@ public static class SignalMessageRegistration
 
         config = loaded;
         return true;
+    }
+
+    /// <summary>
+    /// Compiles <paramref name="config"/> and registers each successful message.
+    /// Compile-setting failures (e.g. max enum ≤ 0) abort remaining messages and are
+    /// already recorded on <paramref name="warnings"/>.
+    /// </summary>
+    private static void _RegisterLoadedConfig(
+        IStackBuilder builder,
+        SignalMessagesConfig config,
+        List<SettingsLoadWarning> warnings)
+    {
+        if (!_TryResolveCompileSettings(builder.Settings, warnings, out SignalMessageCompileSettings compileSettings))
+        {
+            return;
+        }
+
+        foreach (CompiledSignalMessage compiled in SignalMessageCompiler.CompileMessages(
+            config,
+            in compileSettings,
+            warnings))
+        {
+            _RegisterCompiledMessage(builder, compiled, in compileSettings, warnings);
+        }
     }
 
     /// <summary>
@@ -286,6 +408,9 @@ public static class SignalMessageRegistration
         {
             if (string.IsNullOrWhiteSpace(binding.Table))
             {
+                warnings.Add(_MessageWarning(
+                    messageName,
+                    "dispatch binding skipped: table name is empty."));
                 continue;
             }
 

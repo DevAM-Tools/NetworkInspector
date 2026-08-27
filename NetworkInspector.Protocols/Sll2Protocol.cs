@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Protocols;
 
@@ -77,10 +77,10 @@ public sealed partial class Sll2Protocol : IProtocol
     private ProtocolTableId _EtherTypeTableId;
 
     // Sparse dispatch cache (typically 4–6 EtherType entries)
-    private (ulong Key, ParseDelegate Parse)[] _EtherTypeSparseCache = [];
+    private (ulong Key, ProtocolId Id)[] _EtherTypeSparseCache = [];
 
     partial void _OnStartCustom(Stack stack) =>
-        _EtherTypeSparseCache = stack.BuildU64SparseDelegateCache(_EtherTypeTableId);
+        _EtherTypeSparseCache = stack.BuildU64SparseIdCache(_EtherTypeTableId);
 
     /// <summary>
     /// Parses a Sll2 protocol unit from the supplied <paramref name="data"/> buffer,
@@ -161,11 +161,11 @@ public sealed partial class Sll2Protocol : IProtocol
     private ParseResult _DispatchEtherType(
         in MutField parentField, ulong etherType, ReadOnlyMemory<byte> payload, in ParseContext context)
     {
-        foreach ((ulong key, ParseDelegate parse) in _EtherTypeSparseCache)
+        foreach ((ulong key, ProtocolId id) in _EtherTypeSparseCache)
         {
             if (key == etherType)
             {
-                return parse(in parentField, payload, in context);
+                return parentField.CallProtocol(id, payload, in context);
             }
         }
 

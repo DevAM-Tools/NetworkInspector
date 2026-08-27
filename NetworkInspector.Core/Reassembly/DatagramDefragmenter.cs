@@ -16,8 +16,13 @@ namespace NetworkInspector.Core.Reassembly;
 /// implementing the RFC 5722 requirement for IPv6 fragment reassembly.
 /// </para>
 /// <para>
-/// <b>Thread-safety:</b> Not thread-safe. Designed for single-threaded use during
-/// packet parsing. Each protocol instance manages its own <see cref="DatagramDefragmenter{TKey}"/>.
+/// <b>Thread-safety:</b> Not thread-safe. Each protocol instance manages its own
+/// <see cref="DatagramDefragmenter{TKey}"/> and must serialize all access to it. The owning
+/// protocols (IPv4, IPv6) satisfy this by feeding fragments only during the ordered first parse of
+/// a packet id and by recording the reassembly outcome per packet; any later parse of that id
+/// replays the recorded outcome instead of calling <see cref="ProcessFragment"/> again. Without
+/// that guard, a concurrent re-parse would corrupt the fragment buffers — see
+/// <c>PROTOCOL_GUIDE.md</c>, "First parse vs. re-parse".
 /// <see cref="ReassembledCount"/> and <see cref="EvictedCount"/> may be read from a monitoring
 /// thread only after all packet parsing on the owning thread has completed (i.e., with a
 /// happens-before edge established by the caller). For live diagnostic sampling across threads,

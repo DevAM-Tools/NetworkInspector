@@ -61,7 +61,8 @@ internal static class ProtocolTestHelper
         LinkType linkType = LinkType.Ethernet)
     {
 #pragma warning disable CA2000 // SettingsManager ownership transfers to Stack via StackBuilder.
-        SettingsManager settings = new();
+        // Temp-file JSON configs (signal_message / pdu_transport) resolve under this base.
+        SettingsManager settings = new(Path.GetTempPath());
 #pragma warning restore CA2000
         configureSettings(settings);
         StackBuilder builder = new(settings, new FrameInterfaceRegistry());
@@ -166,12 +167,13 @@ internal static class ProtocolTestHelper
 
     /// <summary>
     /// Creates and returns a new protocol stack with custom settings.
-    /// The caller is responsible for disposing the stack via <c>using</c>.
+    /// Temp-file JSON configs (signal_message / pdu_transport) resolve under
+    /// <see cref="Path.GetTempPath"/>. The caller is responsible for disposing the stack via <c>using</c>.
     /// </summary>
     internal static Stack BuildStack(Action<SettingsManager> configureSettings)
     {
 #pragma warning disable CA2000 // SettingsManager ownership transfers to Stack via StackBuilder.
-        SettingsManager settings = new();
+        SettingsManager settings = new(Path.GetTempPath());
 #pragma warning restore CA2000
         configureSettings(settings);
         StackBuilder builder = new(settings, new FrameInterfaceRegistry());

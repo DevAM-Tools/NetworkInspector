@@ -6,7 +6,7 @@ namespace NetworkInspector.Protocols.SignalMessage;
 /// JSON configuration root for signal-message protocols.
 /// Loaded from the file referenced by <c>signal_message.config_file</c>.
 /// </summary>
-internal sealed class SignalMessagesConfig
+public sealed class SignalMessagesConfig
 {
     /// <summary>Signal message definitions; each becomes one protocol instance.</summary>
     [JsonPropertyName("messages")]
@@ -14,7 +14,7 @@ internal sealed class SignalMessagesConfig
 }
 
 /// <summary>One signal message (one registered protocol instance).</summary>
-internal sealed class SignalMessageConfig
+public sealed class SignalMessageConfig
 {
     /// <summary>Registered protocol name and container field name (unique).</summary>
     [JsonPropertyName("name")]
@@ -64,7 +64,7 @@ internal sealed class SignalMessageConfig
 /// <remarks>
 /// Same shape as FrameBuilder <c>DispatchBinding</c> (table name + U64 key).
 /// </remarks>
-internal sealed class DispatchBinding
+public sealed class DispatchBinding
 {
     /// <summary>Dispatch table name (e.g. <c>can.id</c>).</summary>
     [JsonPropertyName("table")]
@@ -79,7 +79,7 @@ internal sealed class DispatchBinding
 }
 
 /// <summary>One signal definition inside a message.</summary>
-internal sealed class SignalFieldConfig
+public sealed class SignalFieldConfig
 {
     /// <summary>Registered field name (JSON already supplies the target form).</summary>
     [JsonPropertyName("name")]
@@ -145,7 +145,7 @@ internal sealed class SignalFieldConfig
 }
 
 /// <summary>Multiplexer selector signal.</summary>
-internal sealed class MuxSignalConfig
+public sealed class MuxSignalConfig
 {
     /// <summary>Registered mux field name (JSON already supplies the target form).</summary>
     [JsonPropertyName("name")]
@@ -175,7 +175,7 @@ internal sealed class MuxSignalConfig
 }
 
 /// <summary>Signals present when the mux selector equals <see cref="MuxValue"/>.</summary>
-internal sealed class MuxGroupConfig
+public sealed class MuxGroupConfig
 {
     /// <summary>Mux selector value that activates this group.</summary>
     [JsonPropertyName("mux_value")]

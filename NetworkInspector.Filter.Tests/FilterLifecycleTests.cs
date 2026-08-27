@@ -30,7 +30,7 @@ internal sealed class FilterLifecycleTests
     {
         using Stack stack = FilterTestHelper.BuildStack();
         Filter filter = FilterTestHelper.CompileOrThrow("udp.srcport == 53", stack);
-        Packet packet = FilterTestHelper.Parse(stack, FilterTestHelper.BuildUdpFrame(53, 1024), 7);
+        Packet packet = FilterTestHelper.Parse(stack, FilterTestHelper.BuildUdpFrame(53, 1024), 0);
 
         await Assert.That(FilterTestHelper.MatchOrThrow(filter, packet)).IsTrue();
         await Assert.That(FilterTestHelper.MatchOrThrow(filter, packet)).IsTrue();
@@ -42,7 +42,7 @@ internal sealed class FilterLifecycleTests
     public async Task Cache_UnidentifiedPacket_IsEvaluatedButNotCached()
     {
         using Stack stack = FilterTestHelper.BuildStack();
-        Filter filter = FilterTestHelper.CompileOrThrow("udp.srcport == 53", stack);
+        Filter filter = FilterTestHelper.CompileOrThrow("eth", stack);
         Packet packet = FilterTestHelper.Parse(stack, FilterTestHelper.BuildUdpFrame(53, 1024), PacketId.Invalid.Value);
 
         await Assert.That(FilterTestHelper.MatchOrThrow(filter, packet)).IsTrue();
@@ -72,7 +72,7 @@ internal sealed class FilterLifecycleTests
     {
         using Stack stack = FilterTestHelper.BuildStack();
         Filter filter = FilterTestHelper.CompileOrThrow("udp.srcport == 53", stack);
-        Packet packet = FilterTestHelper.Parse(stack, FilterTestHelper.BuildUdpFrame(53, 1024), 3);
+        Packet packet = FilterTestHelper.Parse(stack, FilterTestHelper.BuildUdpFrame(53, 1024), 0);
 
         _ = FilterTestHelper.MatchOrThrow(filter, packet);
         filter.ResetState();
@@ -100,11 +100,11 @@ internal sealed class FilterLifecycleTests
     {
         using Stack stack = FilterTestHelper.BuildStack();
         Filter filter = FilterTestHelper.CompileOrThrow("flank(ip.ttl, changed, within: 1s)", stack);
-        Packet later = FilterTestHelper.Parse(stack, FilterTestHelper.BuildUdpFrame(53, 1024, 64), 5);
-        Packet earlier = FilterTestHelper.Parse(stack, FilterTestHelper.BuildUdpFrame(53, 1024, 63), 2);
+        Packet later = FilterTestHelper.Parse(stack, FilterTestHelper.BuildUdpFrame(53, 1024, 64), 0);
+        Packet earlier = FilterTestHelper.Parse(stack, FilterTestHelper.BuildUdpFrame(53, 1024, 63), 1);
 
-        _ = FilterTestHelper.MatchOrThrow(filter, later);
-        bool produced = filter.TryIsMatch(earlier, out bool matched, out FilterError? failure);
+        _ = FilterTestHelper.MatchOrThrow(filter, earlier);
+        bool produced = filter.TryIsMatch(later, out bool matched, out FilterError? failure);
 
         await Assert.That(produced).IsFalse();
         await Assert.That(matched).IsFalse();
@@ -118,12 +118,12 @@ internal sealed class FilterLifecycleTests
     {
         using Stack stack = FilterTestHelper.BuildStack();
         Filter filter = FilterTestHelper.CompileOrThrow("flank(ip.ttl, changed, within: 1s)", stack);
-        Packet later = FilterTestHelper.Parse(stack, FilterTestHelper.BuildUdpFrame(53, 1024, 64), 5);
-        Packet earlier = FilterTestHelper.Parse(stack, FilterTestHelper.BuildUdpFrame(53, 1024, 63), 2);
-        Packet fresh = FilterTestHelper.Parse(stack, FilterTestHelper.BuildUdpFrame(53, 1024, 62), 9);
+        Packet later = FilterTestHelper.Parse(stack, FilterTestHelper.BuildUdpFrame(53, 1024, 64), 0);
+        Packet earlier = FilterTestHelper.Parse(stack, FilterTestHelper.BuildUdpFrame(53, 1024, 63), 1);
+        Packet fresh = FilterTestHelper.Parse(stack, FilterTestHelper.BuildUdpFrame(53, 1024, 62), 2);
 
-        _ = FilterTestHelper.MatchOrThrow(filter, later);
-        _ = filter.TryIsMatch(earlier, out _, out _);
+        _ = FilterTestHelper.MatchOrThrow(filter, earlier);
+        _ = filter.TryIsMatch(later, out _, out _);
 
         await Assert.That(filter.TryIsMatch(fresh, out _, out FilterError? stillFailing)).IsFalse();
         await Assert.That(stillFailing).IsNotNull();
@@ -140,11 +140,11 @@ internal sealed class FilterLifecycleTests
     {
         using Stack stack = FilterTestHelper.BuildStack();
         Filter filter = FilterTestHelper.CompileOrThrow("udp.srcport == 53", stack);
-        Packet later = FilterTestHelper.Parse(stack, FilterTestHelper.BuildUdpFrame(53, 1024), 5);
-        Packet earlier = FilterTestHelper.Parse(stack, FilterTestHelper.BuildUdpFrame(53, 1024), 2);
+        Packet later = FilterTestHelper.Parse(stack, FilterTestHelper.BuildUdpFrame(53, 1024), 0);
+        Packet earlier = FilterTestHelper.Parse(stack, FilterTestHelper.BuildUdpFrame(53, 1024), 1);
 
-        await Assert.That(FilterTestHelper.MatchOrThrow(filter, later)).IsTrue();
         await Assert.That(FilterTestHelper.MatchOrThrow(filter, earlier)).IsTrue();
+        await Assert.That(FilterTestHelper.MatchOrThrow(filter, later)).IsTrue();
         await Assert.That(filter.IsPoisoned).IsFalse();
     }
 
@@ -179,8 +179,10 @@ internal sealed class FilterLifecycleTests
         using Stack first = FilterTestHelper.BuildStack();
         using Stack second = FilterTestHelper.BuildStack();
         Filter filter = FilterTestHelper.CompileOrThrow("flank(ip.ttl, changed, within: 1s)", first);
-        _ = FilterTestHelper.MatchOrThrow(filter, FilterTestHelper.Parse(first, FilterTestHelper.BuildUdpFrame(53, 1024), 5));
-        _ = filter.TryIsMatch(FilterTestHelper.Parse(first, FilterTestHelper.BuildUdpFrame(53, 1024), 1), out _, out _);
+        Packet later = FilterTestHelper.Parse(first, FilterTestHelper.BuildUdpFrame(53, 1024), 0);
+        Packet earlier = FilterTestHelper.Parse(first, FilterTestHelper.BuildUdpFrame(53, 1024), 1);
+        _ = FilterTestHelper.MatchOrThrow(filter, earlier);
+        _ = filter.TryIsMatch(later, out _, out _);
 
         bool derived = filter.TryDerive(second, out Filter? clone, out _);
 

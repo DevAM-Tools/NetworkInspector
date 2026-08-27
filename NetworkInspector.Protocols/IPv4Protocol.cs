@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Protocols;
 
@@ -52,10 +52,12 @@ namespace NetworkInspector.Protocols;
 /// </code>
 /// </summary>
 /// <remarks>
-/// <para><b>Thread safety:</b> Not thread-safe; designed for single-threaded use within a
-/// protocol stack. Each <see cref="Stack"/> instance is owned by exactly one parsing thread.
-/// The fragment reassembly engine accumulates mutable state across packets and must not be
-/// accessed concurrently.</para>
+/// <para><b>Thread safety:</b> The first parse of a packet id feeds the fragment reassembly engine
+/// and must therefore stay ordered and single-threaded (the session guarantees this under its parse
+/// lock). Every later parse of an already-parsed id is a replay: it reads the recorded
+/// defragmentation outcome from the protocol-owned effect store instead of touching the fragment
+/// buffers, and is safe to run on any number of threads concurrently. The watermark
+/// <see cref="_IngestWatermark"/> separates both paths without any caller-supplied mode flag.</para>
 /// </remarks>
 [Protocol("ip", "Internet Protocol Version 4", Description = "IPv4 (RFC 791)")]
 [RegisterAtTable(EthernetProtocol.EtherTypeTableName, EtherTypeKey)]
@@ -247,11 +249,11 @@ public sealed partial class IPv4Protocol : IProtocol
     // Captures only `this` (singleton) — zero per-packet allocation.
     private LazyPopulator _Populator = null!;
 
-    // Dense dispatch cache for the IP protocol byte (256 entries, ~2 kB).
+    // Dense dispatch cache for the IP protocol byte (256 entries).
     // Built once in OnStart from the ip.proto table; avoids a dictionary lookup per packet.
-    // Non-null entry → pre-bound delegate for that byte value (direct invocation).
+    // Non-null entry → single protocol; CallProtocol returns ParseError for invalid ids.
     // Null entry → zero or multiple protocols → fall back to full table dispatch.
-    private ParseDelegate?[] _IpProtoDelegateCache = [];
+    private ProtocolId?[] _IpProtoIdCache = [];
 
     // Pre-allocated option field IDs struct, built once in _OnStartCustom.
     private OptionFieldIds _OptionFieldIds;
@@ -268,9 +270,8 @@ public sealed partial class IPv4Protocol : IProtocol
         _Populator = _PopulateIPv4;
         _OptionFieldIds = _BuildOptionFieldIds();
         // Pre-build 256-entry dense cache: IP protocol field is a u8, so the full domain
-        // fits in ~2 kB and direct array indexing replaces dictionary lookup per packet.
-        // Delegate cache stores pre-bound ParseDelegate for direct invocation.
-        _IpProtoDelegateCache = stack.BuildU64DelegateCache(_IpProtoTableId, 256);
+        // fits in ~1 kB and direct array indexing replaces dictionary lookup per packet.
+        _IpProtoIdCache = stack.BuildU64IdCache(_IpProtoTableId, 256);
     }
 
     /// <summary>
@@ -289,7 +290,7 @@ public sealed partial class IPv4Protocol : IProtocol
     /// <summary>
     /// Lazy populator: version, header length, DSCP, ECN, total length, identification,
     /// flags, fragment offset, TTL, checksum, and options. Source address, destination
-    /// address, and protocol number are eagerly appended by <see cref="Parse"/>.
+    /// address, and protocol number are eagerly appended by <see cref="IProtocol.Parse"/>.
     /// Called on first access of the IPv4 container's children.
     /// </summary>
     private ParseResult _PopulateIPv4(in MutField container)
@@ -392,12 +393,55 @@ public sealed partial class IPv4Protocol : IProtocol
     /// Parses a IPv4 protocol unit from the supplied <paramref name="data"/> buffer,
     /// appending decoded fields under <paramref name="parentField"/> and dispatching any
     /// payload via the surrounding <paramref name="context"/>.
+    /// <para>
+    /// Fragmented packets are stateful: the first parse feeds the fragment into the shared
+    /// defragmenter and records the outcome, every later parse of that packet id replays the recorded
+    /// outcome and leaves the fragment buffers untouched. See <see cref="_IsReplay"/>.
+    /// </para>
     /// </summary>
     /// <param name="parentField">Parent field that receives the decoded protocol container and child fields.</param>
     /// <param name="data">Raw protocol bytes starting at this protocol's first header byte.</param>
     /// <param name="context">Owning stack used to dispatch the next-protocol payload (when applicable).</param>
     /// <returns>Number of bytes consumed, or a <see cref="ParseError"/> describing the failure.</returns>
     public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
+    {
+        Packet packet = parentField.Packet;
+        int layerKey = parentField.Packet.GetEffectLayerKey(data);
+        bool isReplay = _IsReplay(packet.Id);
+        bool raiseWatermark = !isReplay && _ParseNesting == 0;
+        if (!isReplay)
+        {
+            _ParseNesting++;
+        }
+
+        try
+        {
+            return _ParseBody(in parentField, data, in context, layerKey, isReplay);
+        }
+        finally
+        {
+            if (!isReplay)
+            {
+                _ParseNesting--;
+                if (raiseWatermark)
+                {
+                    _RaiseWatermark(packet.Id);
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Parse body. <paramref name="layerKey"/> is <see cref="Packet.GetEffectLayerKey"/> at the parse call and
+    /// <paramref name="isReplay"/> selects replay of the recorded defragmentation outcome over
+    /// feeding the defragmenter.
+    /// </summary>
+    private ParseResult _ParseBody(
+        in MutField parentField,
+        ReadOnlyMemory<byte> data,
+        in ParseContext context,
+        int layerKey,
+        bool isReplay)
     {
         if (data.Length < IPv4Header.MinHeaderSize)
         {
@@ -492,18 +536,30 @@ public sealed partial class IPv4Protocol : IProtocol
 
             if (isFragment)
             {
-                // Route through defragmenter — fragment offset is in 8-byte units
-                DatagramFragmentKey key = new(src.RawValue, dst.RawValue,
-                    header.Identification.Value, protocol);
-                int byteOffset = fragOffset * 8; // convert to byte offset
+                byte[]? reassembled;
+                if (isReplay)
+                {
+                    // Replay: never touch the shared fragment buffers from what may be a reader
+                    // thread. A missing effect means the first parse never reached the defragmenter,
+                    // so there is nothing to dispatch and the fragment fields stand on their own.
+                    reassembled = _FindReassembledDatagram(parentField.Packet.Id, layerKey);
+                }
+                else
+                {
+                    // Route through defragmenter — fragment offset is in 8-byte units
+                    DatagramFragmentKey key = new(src.RawValue, dst.RawValue,
+                        header.Identification.Value, protocol);
+                    int byteOffset = fragOffset * 8; // convert to byte offset
 
-                byte[]? reassembled = _Defragmenter.ProcessFragment(
-                    key, byteOffset, moreFragments, data.Span.Slice(payloadStart, payloadLen));
+                    reassembled = _Defragmenter.ProcessFragment(
+                        key, byteOffset, moreFragments, data.Span.Slice(payloadStart, payloadLen));
+                    _RecordDefragEffect(parentField.Packet.Id, layerKey, reassembled);
+                }
 
                 if (reassembled is not null)
                 {
-                    // All fragments received — dispatch the reassembled datagram
-                    ReadOnlyMemory<byte> reassembledPayload = reassembled;
+                    // Bind the datagram so nested Parse can key effects on this packet's buffers.
+                    ReadOnlyMemory<byte> reassembledPayload = parentField.Packet.BindParseBuffer(reassembled);
                     ParseResult dispatchResult = _DispatchIpProtocol(
                         in parentField, protocol, reassembledPayload, in context);
                     if (dispatchResult.TryPropagateError(out ParseResult error))
@@ -531,17 +587,15 @@ public sealed partial class IPv4Protocol : IProtocol
 
     /// <summary>
     /// Dispatches to the next protocol by IP protocol number.
-    /// Uses the pre-cached delegate for the common single-protocol case (O(1) array lookup);
+    /// Uses the pre-cached <see cref="ProtocolId"/> for the common single-protocol case;
     /// falls back to full table dispatch for multi-protocol keys or entries outside the cache.
     /// </summary>
     private ParseResult _DispatchIpProtocol(
         in MutField parentField, byte protocol, ReadOnlyMemory<byte> payload, in ParseContext context)
     {
-        // _IpProtoDelegateCache has 256 entries after OnStart; non-null means single registered protocol.
-        // Direct delegate call — no ProtocolId resolution, no bounds check, no vtable dispatch.
-        ParseDelegate? fastParse = _IpProtoDelegateCache.Length > 0 ? _IpProtoDelegateCache[protocol] : null;
-        return fastParse is not null
-            ? fastParse(in parentField, payload, in context)
+        ProtocolId? cached = _IpProtoIdCache.Length > 0 ? _IpProtoIdCache[protocol] : null;
+        return cached is ProtocolId protocolId
+            ? parentField.CallProtocol(protocolId, payload, in context)
             : parentField.TryCallNextProtocolU64(_IpProtoTableId, protocol, payload, in context);
     }
 
@@ -694,7 +748,7 @@ public sealed partial class IPv4Protocol : IProtocol
 
     /// <summary>
     /// Per-thread cache for the current packet's IPv4 src/dst addresses.
-    /// Written by <see cref="Parse"/> before dispatching to the next protocol;
+    /// Written by <see cref="IProtocol.Parse"/> before dispatching to the next protocol;
     /// consumed by downstream protocols (TCP, UDP). Null means no data cached yet
     /// on this thread (correct default for <see langword="[ThreadStatic]"/>).
     /// </summary>

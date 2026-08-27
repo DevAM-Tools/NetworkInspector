@@ -160,7 +160,7 @@ public sealed partial class ProtocolGenerator
         sb.AppendLine($"    partial void _RegisterFieldsCustom({_GloIStackBuilder} builder, {_GloProtocolId} protocolId);");
         sb.AppendLine();
         sb.AppendLine("    /// <summary>Called after the stack is built and frozen. Use this hook only for setup that requires the frozen Stack"
-            + " (e.g., pre-bound ParseDelegate caches obtained via stack.ResolveParseDelegate)."
+            + " (e.g., ProtocolId dispatch caches via stack.BuildU64IdCache / BuildU64SparseIdCache, then MutField.CallProtocol)."
             + " Config loading and dispatch registration belong in RegisterFieldsCustom instead.</summary>");
         sb.AppendLine($"    partial void _OnStartCustom({_GloStack} stack);");
         sb.AppendLine();

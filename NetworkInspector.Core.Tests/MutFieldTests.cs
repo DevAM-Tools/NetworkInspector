@@ -26,7 +26,7 @@ internal sealed class MutFieldTests
             FrameInterfaceId.Invalid,
             stack.FrameInterfaceRegistry).Value;
 
-        return Packet.ParseFrame(new PacketId(1), stack, frame, firstProtocolId);
+        return Packet.ParseFrame(new PacketId(0), stack, frame, firstProtocolId);
     }
 
     private static bool _IsProtocolTableMissing(ParseResult result)
@@ -345,7 +345,7 @@ internal sealed class MutFieldTests
             Frame frame = Frame.Create(
                 new FrameId(1), Timestamp.FromSecs(0), data, LinkType.Ethernet,
                 FrameInterfaceId.Invalid, stack.FrameInterfaceRegistry).Value;
-            Packet packet = Packet.ParseFrame(new PacketId(1), stack, frame, protoId);
+            Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, protoId);
             MutField root = packet.RootFieldMut();
 
             ParseResult result = root.CallProtocol(protoId, data, default);
@@ -367,7 +367,7 @@ internal sealed class MutFieldTests
             Frame frame = Frame.Create(
                 new FrameId(1), Timestamp.FromSecs(0), data, LinkType.Ethernet,
                 FrameInterfaceId.Invalid, stack.FrameInterfaceRegistry).Value;
-            Packet packet = Packet.ParseFrame(new PacketId(1), stack, frame, protoId);
+            Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, protoId);
             MutField root = packet.RootFieldMut();
 
             ParseResult u64 = root.TryCallNextProtocolU64(ProtocolTableId.Invalid, 7, data, default);
@@ -418,7 +418,7 @@ internal sealed class MutFieldTests
             Frame frame = Frame.Create(
                 new FrameId(1), Timestamp.FromSecs(0), data, LinkType.Ethernet,
                 FrameInterfaceId.Invalid, stack.FrameInterfaceRegistry).Value;
-            Packet packet = Packet.ParseFrame(new PacketId(1), stack, frame, parentId);
+            Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, parentId);
 
             await Assert.That(parent.NullTableHits).IsEqualTo(10);
             await Assert.That(parent.EmptyMatchHits).IsEqualTo(5);
@@ -456,7 +456,7 @@ internal sealed class MutFieldTests
             Frame frame = Frame.Create(
                 new FrameId(1), Timestamp.FromSecs(0), data, LinkType.Ethernet,
                 FrameInterfaceId.Invalid, stack.FrameInterfaceRegistry).Value;
-            _ = Packet.ParseFrame(new PacketId(1), stack, frame, parentId);
+            _ = Packet.ParseFrame(new PacketId(0), stack, frame, parentId);
 
             await Assert.That(parent.MultiMatchHits).IsEqualTo(1);
             await Assert.That(childA.CallCount + childB.CallCount).IsEqualTo(2);
@@ -489,7 +489,7 @@ internal sealed class MutFieldTests
             Frame frame = Frame.Create(
                 new FrameId(1), Timestamp.FromSecs(0), data, LinkType.Ethernet,
                 FrameInterfaceId.Invalid, stack.FrameInterfaceRegistry).Value;
-            _ = Packet.ParseFrame(new PacketId(1), stack, frame, parentId);
+            _ = Packet.ParseFrame(new PacketId(0), stack, frame, parentId);
 
             await Assert.That(parent.NullTableHit).IsTrue();
             await Assert.That(parent.NoMatchHit).IsTrue();
@@ -842,7 +842,7 @@ internal sealed class MutFieldTests
             Frame frame = Frame.Create(
                 new FrameId(1), Timestamp.FromSecs(0), data, LinkType.Ethernet,
                 FrameInterfaceId.Invalid, stack.FrameInterfaceRegistry).Value;
-            _ = Packet.ParseFrame(new PacketId(1), stack, frame, parentId);
+            _ = Packet.ParseFrame(new PacketId(0), stack, frame, parentId);
 
             await Assert.That(parent.MultiMatchHits).IsEqualTo(4);
             await Assert.That(childA.CallCount + childB.CallCount).IsEqualTo(8);

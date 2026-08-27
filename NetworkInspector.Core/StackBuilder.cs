@@ -1061,9 +1061,7 @@ public sealed class StackBuilder : IStackBuilder
         IProtocol[] protocolInstances = [.. _ProtocolInstances];
         FieldInfo[] fields = [.. _Fields];
 
-        // Build pre-bound parse delegates: each delegate captures the concrete
-        // method pointer at creation time, so subsequent invocations bypass
-        // the IProtocol interface vtable dispatch entirely.
+        // Concrete Parse method pointers — each targets IProtocol.Parse.
         ParseDelegate[] parseDelegates = new ParseDelegate[protocolInstances.Length];
         for (int i = 0; i < protocolInstances.Length; i++)
         {
@@ -1126,7 +1124,6 @@ public sealed class StackBuilder : IStackBuilder
             _RootFieldId, _PacketErrorFieldId, _PacketChoiceFieldId,
             _PacketProtocolId,
             frameProtocolId,
-            _NextIndexGroupId,
             indexGroups, indexGroupNameMap,
             FrameInterfaceRegistry,
             IncludeExceptionStackTrace,

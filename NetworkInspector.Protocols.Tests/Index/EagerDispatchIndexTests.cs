@@ -157,19 +157,26 @@ internal sealed class EagerDispatchIndexTests
             await Assert.That(index.GetGroupBitmap(messageGroupId!.Value).Contains(0)).IsTrue()
                 .Because("eager PDU-Transport dispatch must record the message index group in the index");
 
-            // The lazy PDU-Transport descriptive field tree must NOT have been materialized yet.
-            bool pduIdBeforeMaterialize = packet.TryGetFieldValue(pduTransportIdField!.Value, out _, materialize: false); // materialize: false — prove field absent without triggering lazy
-            await Assert.That(pduIdBeforeMaterialize).IsFalse()
-                .Because("index presence must be recorded without materializing the lazy PDU-Transport field tree");
+            // Header fields are eager (Ethernet / UDP pattern). Index presence for the
+            // dispatched Signal Message must still be recorded without materializing that
+            // message's lazy signal tree.
+            bool pduIdBeforeMaterialize = packet.TryGetFieldValue(pduTransportIdField!.Value, out FieldValue pduIdEager, materialize: false);
+            await Assert.That(pduIdBeforeMaterialize).IsTrue()
+                .Because("pdu_transport.id is appended eagerly during Parse, like eth.type / udp.srcport");
+            bool isU64Eager = pduIdEager.Data.TryGetAsU64(out ulong pduIdNumericEager);
+            await Assert.That(isU64Eager).IsTrue();
+            await Assert.That(pduIdNumericEager).IsEqualTo(AutomotivePduBench.PduTransportWireId);
 
-            // After explicit materialization, the lazy PDU-Transport descriptive fields become available.
+            FieldId? engineRpmField = stack.GetFieldId("fixture_message.EngineRpm");
+            await Assert.That(engineRpmField).IsNotNull();
+            bool rpmBeforeMaterialize = packet.TryGetFieldValue(engineRpmField!.Value, out _, materialize: false);
+            await Assert.That(rpmBeforeMaterialize).IsFalse()
+                .Because("Signal Message signal fields stay lazy until materialization");
+
             packet.MaterializeAll();
-            bool pduIdAfterMaterialize = packet.TryGetFieldValue(pduTransportIdField!.Value, out FieldValue pduIdValue, materialize: false); // materialize: false — already MaterializeAll(); lookup only
-            await Assert.That(pduIdAfterMaterialize).IsTrue()
-                .Because("materialization must build the previously deferred PDU-Transport fields");
-            bool isU64 = pduIdValue.Data.TryGetAsU64(out ulong pduIdNumeric);
-            await Assert.That(isU64).IsTrue().Because("pdu_transport.id must be a U64 value");
-            await Assert.That(pduIdNumeric).IsEqualTo(AutomotivePduBench.PduTransportWireId);
+            bool rpmAfterMaterialize = packet.TryGetFieldValue(engineRpmField.Value, out _, materialize: false);
+            await Assert.That(rpmAfterMaterialize).IsTrue()
+                .Because("materialization must build the previously deferred Signal Message fields");
         }
         finally
         {

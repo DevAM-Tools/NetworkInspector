@@ -17,7 +17,10 @@ namespace NetworkInspector.Core.Index;
 /// the writer continues to append packets. Those views alias the live index bitmaps: new
 /// packet IDs become visible on the same view without obtaining another one. Per-bitmap
 /// seqlocks in <see cref="RoaringBitmap"/> retry a reader that overlaps an in-flight
-/// <see cref="RoaringBitmap.Add"/>. Concurrent writes are not supported.
+/// <see cref="RoaringBitmap.Add"/>. Concurrent writes of a <i>new</i> packet are not supported.
+/// A later parse of an already indexed packet — including <c>Packet.ParseFrameIndexed</c> from
+/// any thread — is a no-op for this index: <see cref="TryBeginPacket"/> returns
+/// <see langword="false"/> and no bitmap is mutated.
 /// </para>
 /// </summary>
 public sealed class PacketIndex : IPacketIndexReader
@@ -34,6 +37,23 @@ public sealed class PacketIndex : IPacketIndexReader
     // Starts at -1 ("no active packet") so the < 0 guard in RecordGroupPresence /
     // RecordProtocolPresence catches calls made before the very first BeginPacket.
     private int _CurrentPacketId = -1;
+
+    /// <summary>
+    /// When <see langword="true"/>, the current Begin/End pair is a replay of an already indexed
+    /// packet: <see cref="RecordGroupPresence"/> / <see cref="RecordProtocolPresence"/> return
+    /// without writing, and <see cref="EndPacket"/> does not commit. Used by the void
+    /// <see cref="BeginPacket"/> API so tests can pair EndPacket after a no-op Begin.
+    /// Single-writer only; <see cref="Packet"/> uses <see cref="TryBeginPacket"/> on the hot path
+    /// and never opens this dummy session.
+    /// </summary>
+    private bool _SuppressCommit;
+
+    /// <summary>
+    /// Packet ids that have completed <see cref="EndPacket"/> at least once.
+    /// <see cref="RoaringBitmap.Contains"/> is safe for concurrent readers (seqlock) so
+    /// <see cref="TryBeginPacket"/> can reject a replay without taking the writer path.
+    /// </summary>
+    private readonly RoaringBitmap _IndexedPackets = new();
 
     #endregion
 
@@ -70,8 +90,9 @@ public sealed class PacketIndex : IPacketIndexReader
 
     /// <summary>
     /// Begins indexing a new packet. Must be called before parsing.
-    /// Clears per-packet dedup state. Uses direct word zeroing for typical small bit-vectors
-    /// (most stacks have fewer than 64 groups/protocols) to avoid Array.Clear overhead.
+    /// A second call for a packet id that already completed <see cref="EndPacket"/> is a no-op
+    /// session: subsequent record calls and the matching <see cref="EndPacket"/> do nothing, so
+    /// bitmaps are not mutated twice. Nested begin (a second call before EndPacket) still throws.
     /// </summary>
     /// <param name="packetId">Packet identifier in the range 0 … <see cref="Ids.ArrayIndexIdRange.MaxValue"/>.</param>
     /// <exception cref="InvalidOperationException">
@@ -83,21 +104,66 @@ public sealed class PacketIndex : IPacketIndexReader
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void BeginPacket(int packetId)
     {
+        if (TryBeginPacket(packetId))
+        {
+            return;
+        }
+
+        // Already indexed. A dummy session is only legal on an idle index; opening one while
+        // another id is in flight would overwrite _CurrentPacketId and suppress that commit.
         if (_CurrentPacketId >= 0)
         {
             _ThrowNestedBeginPacket();
         }
 
+        _CurrentPacketId = packetId;
+        _SuppressCommit = true;
+    }
+
+    /// <summary>
+    /// Attempts to begin indexing <paramref name="packetId"/>.
+    /// Returns <see langword="true"/> when this is the first index session for that id and the
+    /// caller must invoke <see cref="EndPacket"/> (and may record presence).
+    /// Returns <see langword="false"/> when the id was already indexed — even while another id's
+    /// session is open — so concurrent replays only read <see cref="_IndexedPackets"/>.
+    /// Opening a <i>new</i> id still throws until the in-flight session calls
+    /// <see cref="EndPacket"/>.
+    /// </summary>
+    /// <param name="packetId">Packet identifier in the range 0 … <see cref="Ids.ArrayIndexIdRange.MaxValue"/>.</param>
+    /// <returns><see langword="true"/> when a live index session was opened.</returns>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown when <paramref name="packetId"/> is not yet indexed and a packet is already being
+    /// indexed (missing <see cref="EndPacket"/>).
+    /// </exception>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// Thrown when <paramref name="packetId"/> is negative or exceeds <see cref="Ids.ArrayIndexIdRange.MaxValue"/>.
+    /// </exception>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public bool TryBeginPacket(int packetId)
+    {
         ArrayIndexIdRange.ValidateIndexOrThrow(packetId, nameof(packetId));
 
+        if (_IndexedPackets.Contains((uint)packetId))
+        {
+            return false;
+        }
+
+        if (_CurrentPacketId >= 0)
+        {
+            _ThrowNestedBeginPacket();
+        }
+
         _CurrentPacketId = packetId;
+        _SuppressCommit = false;
         _ClearDedup(_GroupDedup);
         _ClearDedup(_ProtocolDedup);
+        return true;
     }
 
     /// <summary>
     /// Ends indexing for the current packet. Commits all deduped group/protocol presence
     /// recorded since <see cref="BeginPacket"/> into the persistent bitmaps.
+    /// A no-op session opened for an already indexed packet commits nothing.
     /// </summary>
     /// <exception cref="InvalidOperationException">
     /// Thrown when called without a matching <see cref="BeginPacket"/>.
@@ -110,10 +176,16 @@ public sealed class PacketIndex : IPacketIndexReader
             _ThrowNoActivePacketEnd();
         }
 
-        _CommitDedupToBitmaps(_GroupDedup, _GroupBitmaps);
-        _CommitDedupToBitmaps(_ProtocolDedup, _ProtocolBitmaps);
-        _ClearDedup(_GroupDedup);
-        _ClearDedup(_ProtocolDedup);
+        if (!_SuppressCommit)
+        {
+            _CommitDedupToBitmaps(_GroupDedup, _GroupBitmaps);
+            _CommitDedupToBitmaps(_ProtocolDedup, _ProtocolBitmaps);
+            _IndexedPackets.Add((uint)_CurrentPacketId);
+            _ClearDedup(_GroupDedup);
+            _ClearDedup(_ProtocolDedup);
+        }
+
+        _SuppressCommit = false;
         _CurrentPacketId = -1;
     }
 
@@ -166,6 +238,11 @@ public sealed class PacketIndex : IPacketIndexReader
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void RecordGroupPresence(IndexGroupId groupId)
     {
+        if (_SuppressCommit)
+        {
+            return;
+        }
+
         // Guard against off-lifecycle calls: _CurrentPacketId is set to -1 by EndPacket.
         // Without this check, (uint)(-1) = 4294967295 would be silently inserted into bitmaps.
         if (_CurrentPacketId < 0)
@@ -205,6 +282,11 @@ public sealed class PacketIndex : IPacketIndexReader
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void RecordProtocolPresence(ProtocolId protocolId)
     {
+        if (_SuppressCommit)
+        {
+            return;
+        }
+
         // Guard against off-lifecycle calls: same rationale as RecordGroupPresence.
         if (_CurrentPacketId < 0)
         {

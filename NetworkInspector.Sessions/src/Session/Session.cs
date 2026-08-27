@@ -47,8 +47,8 @@ namespace NetworkInspector.Sessions;
 /// </list>
 /// </para>
 /// </summary>
-/// <remarks>Creates a new session bound to <paramref name="stack"/>.</remarks>
-public sealed class Session(Stack stack) : ISession, ISessionReader
+/// <remarks>Creates a new session bound to <paramref name="stack"/> with default options.</remarks>
+public sealed class Session(Stack stack, SessionOptions? options = null) : ISession, ISessionReader
 {
     // -- Configuration --
 
@@ -174,6 +174,12 @@ public sealed class Session(Stack stack) : ISession, ISessionReader
     /// <inheritdoc/>
     public bool MorePacketsExpected => _ActiveSourceCount > 0;
 
+    /// <inheritdoc/>
+    public bool StoreParsedPackets { get; } = (options ?? SessionOptions.Default).StoreParsedPackets;
+
+    /// <inheritdoc/>
+    public bool IndexPackets { get; } = (options ?? SessionOptions.Default).IndexPackets;
+
     // -- ISession: Source management --
 
     /// <inheritdoc/>
@@ -296,7 +302,13 @@ public sealed class Session(Stack stack) : ISession, ISessionReader
     // -- ISessionReader: Packet access --
 
     /// <inheritdoc/>
-    public bool TryGetPacket(PacketId id, [NotNullWhen(true)] out Packet? packet)
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public bool TryGetPacket(PacketId id, [NotNullWhen(true)] out Packet? packet) =>
+        TryGetPacket(id, recycle: null, out packet);
+
+    /// <inheritdoc/>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public bool TryGetPacket(PacketId id, Packet? recycle, [NotNullWhen(true)] out Packet? packet)
     {
         if (_QueriesDisabled || !id.IsValid)
         {
@@ -328,13 +340,12 @@ public sealed class Session(Stack stack) : ISession, ISessionReader
             Frame? raFrame = raSource.FrameById(frameId);
             if (raFrame is not null)
             {
-                if (!_TryParseFrameUnderLock(raFrame.Value, id, out packet))
+                if (!_TryReparseFrame(raFrame.Value, id, recycle, out packet))
                 {
                     return false;
                 }
 
-                // Cache the re-parsed packet so subsequent lookups avoid re-parsing.
-                _PacketStore.Store(id, packet);
+                _TryStorePacket(id, packet);
                 return true;
             }
         }
@@ -895,7 +906,7 @@ public sealed class Session(Stack stack) : ISession, ISessionReader
             _PacketStore.Clear();
 
             // Create a fresh packet index for the new stack's field definitions.
-            _PacketIndex = _CreatePacketIndex(_Stack);
+            _PacketIndex = _TryCreatePacketIndex(_Stack);
 
             // Reset counters so re-parse fills them from 0.
             Interlocked.Exchange(ref _PacketCount, 0);
@@ -965,7 +976,7 @@ public sealed class Session(Stack stack) : ISession, ISessionReader
     /// <para>
     /// Called while the <see cref="_ParseGate"/> is closed, so no source thread
     /// is parsing concurrently. Each frame is still parsed under the
-    /// <see cref="_ParseLock"/> via <see cref="_ParseFrameUnderLock"/>.
+    /// Each frame is still parsed under the ingest lock during stack-swap reparse.
     /// </para>
     /// </summary>
     private void _ReparseAllFrames(int count)
@@ -996,8 +1007,7 @@ public sealed class Session(Stack stack) : ISession, ISessionReader
 
             Packet packet = _ParseFrameUnderLock(frame.Value, packetId: null);
 
-            // Store the re-parsed packet.
-            _PacketStore.Store(packet.Id, packet);
+            _TryStorePacket(packet.Id, packet);
 
             // The mapping entry is unchanged (same PacketId → same frame).
             // No need to re-record.
@@ -1101,12 +1111,12 @@ public sealed class Session(Stack stack) : ISession, ISessionReader
         // inspect job states via GetJobs() to see which sources are still running.
         WaitForCompletion(timeout);
 
-        // Step 3: Disable packet queries now that sources are done.
-        _QueriesDisabled = true;
+        // Listeners must still TryGetPacket (including lock-free redissect) while they
+        // drain the last NewPackets window. Disable queries only after they exit.
 
-        // Step 3b: Mark all active listeners as SessionEnded BEFORE cancelling them,
-        // so that OnUnsubscribed (called in each slot's finally block) reads the
-        // correct terminal status.
+        // Mark all active listeners as SessionEnded BEFORE cancelling them, so that
+        // OnUnsubscribed (called in each slot's finally block) reads the correct
+        // terminal status.
         foreach (ListenerInfo listenerInfo in _ListenerInfos.Current)
         {
             if (listenerInfo.Status == SubscriptionStatus.Active)
@@ -1168,6 +1178,8 @@ public sealed class Session(Stack stack) : ISession, ISessionReader
             lateSlot.Join();
             lateSlot.EnsureOnUnsubscribed();
         }
+
+        _QueriesDisabled = true;
 
         // Step 5: Transition to final state.
         _State.SetPhase(SessionPhase.Stopped);
@@ -1329,8 +1341,8 @@ public sealed class Session(Stack stack) : ISession, ISessionReader
     /// </summary>
     private void _StartInternal()
     {
-        // Create a fresh packet index for this run.
-        _PacketIndex = _CreatePacketIndex(_Stack);
+        // Create a fresh packet index for this run when indexing is enabled.
+        _PacketIndex = _TryCreatePacketIndex(_Stack);
 
         // Re-enable queries (may have been disabled by a previous Restart or Shutdown attempt).
         _QueriesDisabled = false;
@@ -1407,6 +1419,19 @@ public sealed class Session(Stack stack) : ISession, ISessionReader
     private static NetworkInspector.Core.Index.PacketIndex _CreatePacketIndex(Stack stack) =>
         new(stack);
 
+    /// <summary>
+    /// Creates a packet index when <see cref="IndexPackets"/> is enabled; otherwise null.
+    /// </summary>
+    private PacketIndex? _TryCreatePacketIndex(Stack stack)
+    {
+        if (!IndexPackets)
+        {
+            return null;
+        }
+
+        return _CreatePacketIndex(stack);
+    }
+
     // -- Source job loop --
 
     /// <summary>
@@ -1437,6 +1462,10 @@ public sealed class Session(Stack stack) : ISession, ISessionReader
         {
             source.Start(sourceInfo.Id, _Stack.FrameInterfaceRegistry);
 
+            // When the packet store is off the ingest Packet is discarded after mapping;
+            // recycle it on this source thread instead of allocating every frame.
+            Packet? ingestRecycle = null;
+
             while (!ct.IsCancellationRequested)
             {
                 Frame? frame = source.NextFrame(ct);
@@ -1454,7 +1483,13 @@ public sealed class Session(Stack stack) : ISession, ISessionReader
                 // which recognises it via token comparison and transitions to Cancelled.
                 _ParseGate.Wait(ct);
 
-                Packet packet = _ParseFrameUnderLock(capturedFrame, packetId: null);
+                Packet? recycle = null;
+                if (!StoreParsedPackets)
+                {
+                    recycle = ingestRecycle;
+                }
+
+                Packet packet = _ParseFrameUnderLock(capturedFrame, packetId: null, recycle);
 
                 // Record PacketId -> FrameId mapping for random access re-parse.
                 // Failure means the PacketId is invalid (should not happen after allocation).
@@ -1463,8 +1498,12 @@ public sealed class Session(Stack stack) : ISession, ISessionReader
                     ThrowMappingRecordFailed(packet.Id);
                 }
 
-                // Store packet in the shared PacketStore — all listeners read from here.
-                _PacketStore.Store(packet.Id, packet);
+                _TryStorePacket(packet.Id, packet);
+
+                if (!StoreParsedPackets)
+                {
+                    ingestRecycle = packet;
+                }
 
                 // Update global atomic counters.
                 Interlocked.Increment(ref _PacketCount);
@@ -1548,40 +1587,46 @@ public sealed class Session(Stack stack) : ISession, ISessionReader
     }
 
     /// <summary>
-    /// Parses a frame with the active stack and optional packet index.
-    /// Caller must hold <see cref="_ParseLock"/>.
+    /// Parses a frame, using the packet index when the session was configured with one.
+    /// Called only from <see cref="_ParseFrameUnderLock"/>, i.e. from the ordered first-parse path.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private Packet _ParseFrameCore(PacketId id, Frame frame, PacketIndex? index)
+    private Packet _ParseFrameCore(PacketId id, Frame frame)
     {
-        if (index is not null)
+        if (_PacketIndex is not null)
         {
-            return Packet.ParseFrameIndexed(id, _Stack, frame, index);
+            return Packet.ParseFrameIndexed(id, _Stack, frame, _PacketIndex);
         }
 
         return Packet.ParseFrame(id, _Stack, frame);
     }
 
     /// <summary>
-    /// Attempts to parse a frame under <see cref="_ParseLock"/> with a fixed <paramref name="packetId"/>.
-    /// Returns <see langword="false"/> without throwing when parsing fails (stale frame, protocol error).
+    /// First parse of a frame under <see cref="_ParseLock"/>. The lock plus the monotonic ids from
+    /// <see cref="_AllocateNextPacketId"/> establish exactly the contract stateful protocols rely on:
+    /// every packet id is parsed for the first time exactly once, ordered and single-threaded. That
+    /// is what lets those protocols record their replay state here and serve lock-free re-parses
+    /// afterwards, without the session having to pass any parse mode.
     /// </summary>
-    private bool _TryParseFrameUnderLock(Frame frame, PacketId packetId, [NotNullWhen(true)] out Packet? packet)
+    private Packet _ParseFrameUnderLock(Frame frame, PacketId? packetId, Packet? recycle = null)
     {
         bool lockTaken = false;
         try
         {
             _ParseLock.Enter(ref lockTaken);
-            try
+            PacketId id = packetId ?? _AllocateNextPacketId();
+            if (recycle is not null)
             {
-                packet = _ParseFrameCore(packetId, frame, _PacketIndex);
-                return true;
+                RecycleError? error = _PacketIndex is not null
+                    ? Packet.TryParseFrameIndexed(recycle, id, _Stack, frame, _PacketIndex)
+                    : Packet.TryParseFrame(recycle, id, _Stack, frame);
+                if (error is null)
+                {
+                    return recycle;
+                }
             }
-            catch
-            {
-                packet = null;
-                return false;
-            }
+
+            return _ParseFrameCore(id, frame);
         }
         finally
         {
@@ -1593,25 +1638,58 @@ public sealed class Session(Stack stack) : ISession, ISessionReader
     }
 
     /// <summary>
-    /// Parses a frame under <see cref="_ParseLock"/>.
-    /// When <paramref name="packetId"/> is <see langword="null"/>, allocates the next sequential id.
-    /// Uses indexed parsing when <see cref="_PacketIndex"/> is active.
+    /// Stores <paramref name="packet"/> when the session is configured to cache ingest results.
+    /// Skipped when <see cref="StoreParsedPackets"/> is <see langword="false"/> so listeners
+    /// always redissect.
     /// </summary>
-    private Packet _ParseFrameUnderLock(Frame frame, PacketId? packetId)
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void _TryStorePacket(PacketId id, Packet packet)
     {
-        bool lockTaken = false;
+        if (!StoreParsedPackets)
+        {
+            return;
+        }
+
+        _PacketStore.Store(id, packet);
+    }
+
+    /// <summary>
+    /// Re-parses an already announced packet id. Runs lock-free on any thread: because the id was
+    /// announced, its first parse completed, so stateful protocols detect the re-parse themselves and
+    /// replay their recorded state instead of mutating it. Passing an id that was never announced
+    /// would be a first parse on an arbitrary thread and is therefore not allowed.
+    /// <para>
+    /// A non-<see langword="null"/> <paramref name="recycle"/> is reused in place. A rejected recycle
+    /// (see <see cref="RecycleError"/>) is not an error for the caller: the re-parse repeats into a
+    /// fresh packet.
+    /// </para>
+    /// </summary>
+    private bool _TryReparseFrame(
+        Frame frame, PacketId packetId, Packet? recycle, [NotNullWhen(true)] out Packet? packet)
+    {
         try
         {
-            _ParseLock.Enter(ref lockTaken);
-            PacketId id = packetId ?? _AllocateNextPacketId();
-            return _ParseFrameCore(id, frame, _PacketIndex);
-        }
-        finally
-        {
-            if (lockTaken)
+            if (recycle is not null)
             {
-                _ParseLock.Exit(useMemoryBarrier: false);
+                RecycleError? error = _PacketIndex is not null
+                    ? Packet.TryParseFrameIndexed(recycle, packetId, _Stack, frame, _PacketIndex)
+                    : Packet.TryParseFrame(recycle, packetId, _Stack, frame);
+                if (error is null)
+                {
+                    packet = recycle;
+                    return true;
+                }
             }
+
+            packet = _PacketIndex is not null
+                ? Packet.ParseFrameIndexed(packetId, _Stack, frame, _PacketIndex)
+                : Packet.ParseFrame(packetId, _Stack, frame);
+            return true;
+        }
+        catch
+        {
+            packet = null;
+            return false;
         }
     }
 

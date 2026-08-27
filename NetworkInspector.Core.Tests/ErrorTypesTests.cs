@@ -159,11 +159,13 @@ internal sealed class ErrorTypesTests
             FrameInterfaceId.Invalid,
             stack.FrameInterfaceRegistry).Value;
 
-        Packet packet = Packet.ParseFrame(new PacketId(1), stack, frame, protoId);
-        System.Reflection.FieldInfo fieldCountField = typeof(Packet).GetField(
-            "_FieldCount",
+        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, protoId);
+        // Slot reservation throws on _AllocatedFieldCount, not the reader-visible _FieldCount.
+        // Poking _FieldCount leaves reservation below the cap and _PublishFieldCount spins forever.
+        System.Reflection.FieldInfo allocatedField = typeof(Packet).GetField(
+            "_AllocatedFieldCount",
             BindingFlags.NonPublic | BindingFlags.Instance)!;
-        fieldCountField.SetValue(packet, ushort.MaxValue - 1);
+        allocatedField.SetValue(packet, ushort.MaxValue - 1);
 
         FieldAppendException ex = Assert.Throws<FieldAppendException>(() =>
         {

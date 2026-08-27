@@ -570,7 +570,7 @@ internal sealed class IndexTests
 }
 
 /// <summary>
-/// Tests for PacketIndex: protocol-driven presence recording during parsing,
+/// Tests for PacketIndex: IProtocol-driven presence recording during parsing,
 /// dedup, PresenceQuery, and integration with real protocols.
 /// </summary>
 internal sealed class PacketIndexTests

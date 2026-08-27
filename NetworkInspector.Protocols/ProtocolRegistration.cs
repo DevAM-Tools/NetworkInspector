@@ -31,12 +31,26 @@ public static class ProtocolRegistration
     /// → TCP (<c>tcp.port</c> + heuristics) → {TLS | HTTP/1.x | HTTP/2 | WebSocket | DNS-over-TCP | …}.</para>
     /// <para>Dispatch table wiring is handled automatically via <c>[RegisterAtTable]</c> and
     /// <c>[UsesTable]</c> attributes — no manual registration needed.</para>
+    /// <para>
+    /// PDU Transport and Signal Message JSON issues are returned as
+    /// <see cref="SettingsLoadWarning"/> entries. Inspect the list; this method does not
+    /// discard them. Settings/profile files may be empty. Additional JSON can be loaded
+    /// afterwards via stream/object overloads on
+    /// <see cref="PduTransport.PduTransportRegistration"/> and
+    /// <see cref="SignalMessage.SignalMessageRegistration"/> (merged, not replacing).
+    /// </para>
     /// </remarks>
-    public static void RegisterStandardProtocols(this IStackBuilder builder)
+    /// <returns>
+    /// Warnings from PDU Transport (config load, field-size clamps) and Signal Message
+    /// (config load, compile skips, registration skips). Empty when both succeed with
+    /// no external config.
+    /// </returns>
+    public static IReadOnlyList<SettingsLoadWarning> RegisterStandardProtocols(this IStackBuilder builder)
     {
         // Eagerly initialize all display text lookup tables so the cost is paid
         // during setup, not during the first packet parse in the timed phase.
         DisplayTables.EnsureInitialized();
+        List<SettingsLoadWarning> warnings = [];
 
         // Frame — entry point, owns the frame.link_type dispatch table
         // Auto-discovered by name FrameProtocol.ProtocolName during Build()
@@ -184,12 +198,10 @@ public static class ProtocolRegistration
         json.RegisterFields(builder, jsonId);
 
         // PDU Transport — concatenated PDU framing with config-based names
-        PduTransportProtocol pduTransport = new();
-        ProtocolId pduTransportId = builder.RegisterProtocol(pduTransport);
-        pduTransport.RegisterFields(builder, pduTransportId);
+        PduTransportRegistration.Register(builder, warnings);
 
         // Signal messages — JSON-driven per-message protocols (no meta loader protocol)
-        _ = SignalMessageRegistration.Register(builder);
+        warnings.AddRange(SignalMessageRegistration.Register(builder));
 
         #region TCP Heuristic Protocol Detection
         // Register the heuristic table on TCP and wire up content-based parsers.
@@ -219,5 +231,7 @@ public static class ProtocolRegistration
                 headerSize: 2),
         });
         #endregion
+
+        return warnings;
     }
 }

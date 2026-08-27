@@ -14,10 +14,6 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <None Include="FILTER_GUIDE.md" Pack="true" PackagePath="\" />
-  </ItemGroup>
-
-  <ItemGroup>
     <InternalsVisibleTo Include="NetworkInspector.Filter.Tests" />
     <InternalsVisibleTo Include="NetworkInspector.Sessions" />
     <InternalsVisibleTo Include="NetworkInspector.CLI.Core" />

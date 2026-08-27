@@ -32,6 +32,7 @@ For each iteration starting at `1`:
    - Process findings in Priority Action List order.
    - Mark each finding `✅` in the review artifact only after Verify pass and alignment confirmed.
    - Do not skip Cosmetic, Refactoring, or Performance findings unless user explicitly defers them in this session.
+   - Skip implement Stage 5 Exam. Run Stage 4.
 5. **Increment** — `iteration += 1`; return to step 1.
 
 ## Stage 3 — Stop Conditions

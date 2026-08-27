@@ -19,7 +19,7 @@ namespace NetworkInspector.Protocols;
 /// <remarks>
 /// <para><b>Thread safety:</b> instances are immutable after registration completes.
 /// All mutable state is initialised inside <c>RegisterFieldsCustom</c> / <c>_OnStartCustom</c>
-/// (single-threaded build phase) and is read-only thereafter, so <see cref="Parse"/> may
+/// (single-threaded build phase) and is read-only thereafter, so <see cref="IProtocol.Parse"/> may
 /// be invoked concurrently from any number of threads on the same instance without external
 /// synchronisation. Per-thread caches (when present) are stored in <c>[ThreadStatic]</c> fields.</para>
 /// </remarks>

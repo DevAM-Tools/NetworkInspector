@@ -138,11 +138,11 @@ internal sealed class ConvertCommandLoopTests
         CapturingFrameExporter exporter = new();
         List<IFrameSource> sources = [source];
 
-        // Evaluating a high packet id first makes the stateful filter reject the loop's ids as
-        // out of order, which is the documented poisoning path.
+        // Dense first parses (0 then 1); evaluating 1 then 0 poisons a stateful filter.
         PacketFilter filter = _Compile(stack, "flank(ip.ttl, changed, within: 1s)");
         Frame poisonFrame = poisonSource.NextFrame()!.Value;
-        _ = filter.TryIsMatch(Packet.ParseFrame(new PacketId(5000), stack, poisonFrame), out _, out _);
+        _ = Packet.ParseFrame(new PacketId(0), stack, poisonFrame);
+        _ = filter.TryIsMatch(Packet.ParseFrame(new PacketId(1), stack, poisonFrame), out _, out _);
 
         InvalidOperationException? caught = null;
         try

@@ -536,8 +536,12 @@ internal sealed class FilterFlankTests
         using Stack stack = FilterTestHelper.BuildStack();
         Filter filter = FilterTestHelper.CompileOrThrow("flank(ip.ttl, by: >= 2, within: 1packet)", stack);
 
-        await Assert.That(_RunAt(filter, stack, (1, 0, 0), (5, 2, 0)))
-            .IsEquivalentTo(new List<bool> { false, false });
+        Packet first = FilterTestHelper.Parse(stack, FilterTestHelper.BuildUdpFrame(53, 1024, 1), 0, 0);
+        _ = FilterTestHelper.Parse(stack, FilterTestHelper.BuildUdpFrame(53, 1024, 1), 1, 0);
+        Packet second = FilterTestHelper.Parse(stack, FilterTestHelper.BuildUdpFrame(53, 1024, 5), 2, 0);
+
+        await Assert.That(FilterTestHelper.MatchOrThrow(filter, first)).IsFalse();
+        await Assert.That(FilterTestHelper.MatchOrThrow(filter, second)).IsFalse();
     }
 
     [Test]
@@ -604,7 +608,8 @@ internal sealed class FilterFlankTests
 
         Packet first = FilterTestHelper.Parse(stack, FilterTestHelper.BuildUdpFrame(53, 1024, 64), 0, 0);
         Packet next = FilterTestHelper.Parse(stack, FilterTestHelper.BuildUdpFrame(53, 1024, 63), 1, 0);
-        Packet far = FilterTestHelper.Parse(stack, FilterTestHelper.BuildUdpFrame(53, 1024, 62), 9, 0);
+        _ = FilterTestHelper.Parse(stack, FilterTestHelper.BuildUdpFrame(53, 1024, 64), 2, 0);
+        Packet far = FilterTestHelper.Parse(stack, FilterTestHelper.BuildUdpFrame(53, 1024, 62), 3, 0);
 
         await Assert.That(FilterTestHelper.MatchOrThrow(filter, first)).IsFalse();
         await Assert.That(FilterTestHelper.MatchOrThrow(filter, next)).IsTrue();

@@ -51,15 +51,15 @@ public sealed partial class EthernetProtocol : IProtocol
     [ProtocolTableU64("eth.type", "EtherType")]
     private ProtocolTableId _EtherTypeTableId;
 
-    public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, Stack stack)
+    public ParseResult Parse(
+        in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
     {
-        // parse logic
-        return ParseResult.Ok;
+        return 0;
     }
 }
 ```
 
-The generator emits the registration members and constants at compile time.
+The generator emits `public string Name` / `UiName` / `Description` and `public void OnStart` / `OnShutdown` as `IProtocol` members, plus registration members. It does not emit `Parse`.
 
 ## Common Tasks
 

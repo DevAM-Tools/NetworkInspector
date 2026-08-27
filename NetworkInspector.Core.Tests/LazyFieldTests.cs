@@ -30,7 +30,7 @@ internal sealed class LazyFieldTests
             stack.FrameInterfaceRegistry).Value;
 
         return Packet.ParseFrame(
-            new PacketId(1),
+            new PacketId(0),
             stack,
             frame,
             firstProtocolId);
@@ -262,7 +262,7 @@ internal sealed class LazyFieldTests
     [Test]
     public async Task LazyField_NestedLazy_MaterializeAllResolvesAll()
     {
-        // Arrange: protocol that creates a nested lazy container inside a lazy container.
+        // Arrange: IProtocol that creates a nested lazy container inside a lazy container.
         // MaterializeAll must re-scan to pick up the inner lazy field.
         using SettingsManager settingsManager = new();
         StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());

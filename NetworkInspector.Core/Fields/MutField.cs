@@ -508,6 +508,7 @@ public readonly ref struct MutField
     /// <summary>
     /// Directly calls a specific protocol. Returns InternalError when <see cref="ParseContext.Stack"/>
     /// is null; never <see cref="ParseResult.NotDispatched"/>.
+    /// Invalid ids return <see cref="ParseError"/> via <see cref="Stack.CallProtocol"/>.
     /// </summary>
     public readonly ParseResult CallProtocol(ProtocolId protocolId, ReadOnlyMemory<byte> data, in ParseContext context)
     {

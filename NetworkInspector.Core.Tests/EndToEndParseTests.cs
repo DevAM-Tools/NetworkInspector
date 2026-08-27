@@ -46,7 +46,7 @@ internal sealed class EndToEndParseTests
             stack.FrameInterfaceRegistry).Value;
 
         return Packet.ParseFrame(
-            new PacketId(1),
+            new PacketId(0),
             stack,
             frame,
             firstProtocolId);
@@ -158,7 +158,7 @@ internal sealed class EndToEndParseTests
                 stack.FrameInterfaceRegistry).Value;
 
             Packet packet = Packet.ParseFrame(
-                new PacketId(1),
+                new PacketId(0),
                 stack,
                 frame,
                 ethId);
@@ -290,7 +290,7 @@ internal sealed class EndToEndParseTests
                 registry).Value;
 
             Packet packet = Packet.ParseFrame(
-                new PacketId(100),
+                new PacketId(0),
                 stack,
                 frame,
                 ethId);
@@ -300,7 +300,7 @@ internal sealed class EndToEndParseTests
             FrameId frameId = packet.Frame.Id;
             int dataLength = packet.Frame.Length;
 
-            await Assert.That(packetId).IsEqualTo(new PacketId(100));
+            await Assert.That(packetId).IsEqualTo(new PacketId(0));
             await Assert.That(sourceId).IsEqualTo(expectedSourceId);
             await Assert.That(frameId).IsEqualTo(new FrameId(42));
             await Assert.That(dataLength).IsEqualTo(14);

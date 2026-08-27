@@ -122,11 +122,55 @@ internal sealed class SignalMessageMuxTests
                 await ProtocolTestHelper.AssertU64Field(stack, packet, "mux_msg.mux.value", muxValue)
                     .ConfigureAwait(false);
                 await ProtocolTestHelper.AssertF64Field(stack, packet, expectedField, expectedRaw).ConfigureAwait(false);
+
+                FieldId containerId = stack.GetFieldId("mux_msg")!.Value;
+                FieldId muxId = stack.GetFieldId("mux_msg.mux")!.Value;
+                FieldId muxValueId = stack.GetFieldId("mux_msg.mux.value")!.Value;
+                FieldId groupSignalId = stack.GetFieldId(expectedField)!.Value;
+
+                Field root = packet.RootField();
+                await Assert.That(_TryFindById(root, containerId, out Field container)).IsTrue();
+                await Assert.That(_TryFindById(container, muxId, out Field mux)).IsTrue();
+                await Assert.That(_TryFindById(mux, muxValueId, out Field muxValueField)).IsTrue();
+                await Assert.That(_TryFindById(mux, groupSignalId, out Field groupSignal)).IsTrue();
+
+                bool muxHasParent = mux.TryGetParent(out Field muxParent);
+                bool muxValueHasParent = muxValueField.TryGetParent(out Field muxValueParent);
+                bool groupHasParent = groupSignal.TryGetParent(out Field groupParent);
+                await Assert.That(muxHasParent).IsTrue();
+                await Assert.That(muxParent == container).IsTrue()
+                    .Because("Mux field must be a child of the message container.");
+                await Assert.That(muxValueHasParent).IsTrue();
+                await Assert.That(muxValueParent == mux).IsTrue()
+                    .Because("mux.value must hang under the mux field.");
+                await Assert.That(groupHasParent).IsTrue();
+                await Assert.That(groupParent == mux).IsTrue()
+                    .Because("Mux-group signals must hang under the mux field, not the message container.");
             }
         }
         finally
         {
             Directory.Delete(dir, recursive: true);
         }
+    }
+
+    private static bool _TryFindById(in Field start, FieldId id, out Field found)
+    {
+        if (start.FieldId == id)
+        {
+            found = start;
+            return true;
+        }
+
+        foreach (Field child in start.Children(materialize: true))
+        {
+            if (_TryFindById(in child, id, out found))
+            {
+                return true;
+            }
+        }
+
+        found = default;
+        return false;
     }
 }

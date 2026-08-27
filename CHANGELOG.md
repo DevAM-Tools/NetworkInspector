@@ -11,6 +11,54 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.7.0] — Concurrent re-parse, protocol-local effects, PDU Transport and Signal Message fixes
+
+Delta since `d4d3511` (0.6.0). Version is `0.7.0` in `Directory.Build.props`.
+
+After the first ordered parse of a packet, later parses of that same packet id are lock-free, field-identical, and safe on any number of threads — including while later ids are still being ingested. Stateful dissectors record a compact protocol-local effect during ingest and replay it on re-parse, so UI, filters, export, and session listeners no longer race on connection trackers, reassembly engines, or fragment buffers.
+
+PDU Transport and Signal Message now share the Ethernet / IPv6 / UDP sibling-dispatch field tree, load extra JSON from a stream or object, and return every `SettingsLoadWarning` to the caller.
+
+### Added
+
+- **`EffectStore<TEffect>`** (`NetworkInspector.Core/Collections/EffectStore.cs`) — append-only sparse store keyed by `(PacketId, layerKey)`. First-parses write in ascending packet-id order; replay binary-searches the packed row, then the nested-layer chain. Duplicate layer keys on the same packet throw. Single ordered ingest writer; lock-free readers.
+- **`Packet.GetEffectLayerKey(ReadOnlyMemory<byte> data)`** — packs buffer index (bits 31–24; `0` = `Frame.Data`, `1…` = `Packet.AddBuffer`) and byte offset of the `Parse` slice (bits 23–0). First match wins. `ReadOnlyMemory<byte>.Empty` throws `ArgumentException`; a slice that sits in no packet buffer throws `InvalidOperationException`.
+- **`Packet.BindParseBuffer`** — attaches a reassembled payload as an additional packet buffer before nested `Parse`, so inner `GetEffectLayerKey` is stable across ingest and replay. Protocols must pass an owned copy when the payload would otherwise alias `Frame.Data` (TCP single-segment extract).
+- **`JsonConfigStream`** — typed JSON load from a caller-owned `Stream` (does not close it; 1 MiB cap, same as file load). Failures map to `SettingsLoadWarning`.
+- **`PduTransportRegistration`** — `Register(builder, warnings)`, plus stream and `PduTransportConfig` overloads that merge extra PDU names on top of `pdu_transport.config_file` (empty file is valid). Schema: `Schemas/pdu-transport-config.schema.json`. `PduTransportConfig` / `PduTransportPduEntry` are public.
+- **`SignalMessageRegistration.TryLoadConfig(Stream)`** and `Register(builder, Stream)` / `Register(builder, SignalMessagesConfig)` — additional messages on top of `signal_message.config_file`. After `RegisterStandardProtocols`, a later stream register leaves settings untouched. Config models (`SignalMessagesConfig`, `SignalMessageConfig`, `DispatchBinding`, `SignalFieldConfig`, `MuxSignalConfig`, `MuxGroupConfig`) are public.
+- **`SessionOptions`** — `Default` (store + index), `WithoutPacketStore`, `RedissectOnly`. `Session(Stack, SessionOptions? options = null)`. `ISession.StoreParsedPackets` / `IndexPackets`.
+- **`ISessionReader.TryGetPacket(PacketId, Packet? recycle, out Packet?)`** — reuses the caller’s packet on re-parse. A store hit returns the stored instance and leaves `recycle` untouched. A rejected recycle falls back to a fresh allocation.
+- Profiling scenarios: `ParseIngestUdpScenario`, `RedissectParallelUdpScenario`, `SessionConcurrentRedissectScenario`, plus `MemoryFrameSource`.
+
+### Changed
+
+- **Breaking (pre-1.0): first parse requires dense packet ids `0, 1, 2, …`.** `Packet.ParseFrame` / `ParseFrameIndexed` throw `InvalidOperationException` on a jump (for example id 5 after id 0). `Stack.ObserveParse` / `CompleteFirstParse` enforce this on every entry. Re-parse of an already first-parsed id is allowed from any thread. CLI `export` / `convert` packet-id allocator starts at 0.
+- **There is no parse-mode parameter.** `ParseContext` does not carry ingest/redissect intent. Each stateful protocol decides via its own `volatile int _IngestWatermark` (`id.Value <= watermark` → replay). The watermark is raised in the outermost `finally` of ingest, including error and exception exits. Nested calls of the same protocol on one packet raise it only once.
+- **Stateful protocols record and replay protocol-local effects** instead of mutating shared trackers on re-parse:
+  - `UdpProtocol` — `EffectStore<StreamEffect>`; missing effect omits `udp.stream`.
+  - `TcpProtocol` — `EffectStore<TcpLayerEffect>` (analysis flags, dispatch mode, reassembled PDU bytes); missing effect falls back to stateless raw-port dispatch. Reassembled PDUs are bound as owned `byte[]`.
+  - `IPv4Protocol` / `IPv6Protocol` — `EffectStore<DefragLayerEffect>` on the completing fragment only; missing effect reports fragment fields without reassembly.
+  - `SomeIpProtocol` — `EffectStore<SomeIpTpReassemblyResult>`; missing effect reports the segment without reassembly.
+- **`IProtocol.Parse` remains the only parser contract.** `Stack.CallProtocol` stamps `ParseContext.SelfProtocolId` only. A raw `protocol.Parse(...)` or a cached `ParseDelegate` is a valid entry; effect keys do not depend on that stamp. Ethernet / Frame / VLAN / LLC / SLL / SLL2 keep `ProtocolId` plus `MutField.CallProtocol` caches.
+- **Session ingest stays under `_ParseLock`** with monotonic ids. When `StoreParsedPackets` is `false`, listeners re-parse lock-free via `_TryReparseFrame` while later ids continue to ingest; the source thread recycles its ingest `Packet`. Shutdown keeps queries enabled until listener slots drain, so redissect still works on the last `NewPackets` window. `ISessionReader.PacketIndex` stays `null` when `IndexPackets` is `false`.
+- **`PacketIndex.TryBeginPacket`** returns `false` for an already-indexed id (Contains first), so indexed re-parse during a live session is a no-op instead of throwing or double-counting presence bits.
+- **Chunk stores stay split:** dense `ChunkedGrowOnlyStore<T>` (`Set` / `Get`) and packed `ChunkedAppendOnlyStore<T>` (`Append` / `Count` / `BinarySearch`) over shared `ChunkedSlotStore<T>`. Mixing `Set` and `Append` on one public instance is unrepresentable. `JsonConfigFile` confines referenced paths with `Path.GetFullPath` plus `_IsPathUnderBase` against the settings storage directory.
+- `PROTOCOL_GUIDE.md` section 2 documents first-parse vs re-parse, watermark, packed layer key, `BindParseBuffer`, and the audit of every protocol that keeps cross-packet mutable state. Section 10.9 documents PDU Transport → Signal Message hops, settings vs external JSON, stream merge, sibling field tree, and silent-miss misconfiguration.
+- Version bumped to `0.7.0`.
+
+### Fixed
+
+- **PDU Transport field tree put Signal Message under `pdu_transport`.** Dispatch ran on the protocol container and `pdu_transport.pdu` / `id` / `length` / `name` were built lazily in a second pass, so unmatched payload bytes sat as siblings of the PDU metadata and index recording diverged from the visible tree. `Parse` now appends header fields eagerly under `pdu_transport.pdu` and dispatches on `parentField` (`TryCallNextProtocolU64` on `pdu_transport.id`). Signal Message containers are siblings of `pdu_transport`, never children of `pdu_transport.pdu`. `pdu_transport.payload` is appended only when no sub-protocol consumed the payload.
+- **PDU Transport / Signal Message registration warnings were incomplete or silent.** File-load failures, additional-stream failures, and field-size clamps are copied onto the caller list (`AppendRegistrationWarnings` / `Register` return values). An additional-stream warning is kept independent of the file warning. Empty Signal Message `dispatch_bindings.table` names now produce an explicit per-message warning instead of being skipped with no diagnostic.
+- **TCP single-segment reassembly keyed ingest as the frame and replay as an additional buffer.** Zero-copy extract aliased `Frame.Data`; replay bound `ToArray()` as buffer 1, so `EffectStore.TryGet` missed and nested stateful fields (for example `udp.stream`) disappeared on redissect. Ingest now binds an owned copy, matching IPv4 / IPv6 / SOME/IP-TP.
+
+### Removed
+
+- Lazy PDU Transport populator (`_PopulatePduTransportFields`). Header fields, name lookup, and payload dispatch share the eager `IProtocol.Parse` walk.
+
+---
+
 ## [0.6.0] — Filter language, columnar exporters, ParseResult two-method API
 
 Delta since `2edfc3cf` (0.5.0). Version is already `0.6.0` in `Directory.Build.props`.

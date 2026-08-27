@@ -84,7 +84,7 @@ Current built-ins include:
 
 ## Adding Custom Protocols
 
-For custom dissectors, use the implementation guide:
+Custom dissectors implement `IProtocol` with a public `Parse` method. First parse of each packet id is ordered and single-threaded; re-parse of an already-first-parsed id may run concurrently. Stateful protocols key `EffectStore<T>` with `Packet.GetEffectLayerKey`. `RegisterStandardProtocols` returns PDU Transport and Signal Message `SettingsLoadWarning` values for the caller. Follow the implementation guide:
 
 - [PROTOCOL_GUIDE.md](PROTOCOL_GUIDE.md)
 

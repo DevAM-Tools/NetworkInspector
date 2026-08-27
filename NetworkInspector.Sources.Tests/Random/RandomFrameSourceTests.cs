@@ -316,4 +316,24 @@ internal sealed class RandomFrameSourceTests
 
         await Assert.That(() => source.Start(sourceId, null!)).Throws<ArgumentNullException>();
     }
+
+    [Test]
+    public async Task FrameById_MatchesNextFrame_AndIsOrderIndependent()
+    {
+        const int count = 8;
+        using RandomFrameSource source = new(count, seed: 42, mode: RandomFrameMode.UdpIPv6);
+        SourceTestFixture.InitializeAndStartSource(source);
+
+        Frame? sequential = source.NextFrame();
+        await Assert.That(sequential).IsNotNull();
+
+        Frame? byId0 = source.FrameById(new FrameId(0));
+        Frame? byId3 = source.FrameById(new FrameId(3));
+        await Assert.That(byId0).IsNotNull();
+        await Assert.That(byId3).IsNotNull();
+        await Assert.That(byId0!.Value.Data.Span.SequenceEqual(sequential!.Value.Data.Span)).IsTrue();
+
+        Frame? missing = source.FrameById(new FrameId(count));
+        await Assert.That(missing).IsNull();
+    }
 }

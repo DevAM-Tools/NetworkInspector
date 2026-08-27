@@ -258,7 +258,7 @@ internal sealed class PbfInternalTests
     /// field at depth <c>MaxNestingDepth - 1</c> has children, and when
     /// <see cref="StandardBlockBuilder.SerializeField"/> is called at depth ≥
     /// <c>MaxNestingDepth</c>. A deep packet is constructed by parsing a frame through a
-    /// custom <see cref="IProtocol"/> that appends 18 levels of nested container fields
+    /// custom <see cref="Protocol"/> that appends 18 levels of nested container fields
     /// via the public <see cref="MutField.Append"/> API, so that the deepest field is
     /// beyond the 16-level serializer limit.
     /// </summary>
@@ -409,7 +409,7 @@ internal sealed class PbfInternalTests
                 ifId,
                 registry).Value;
 
-            Packet packet = Packet.ParseFrame(new PacketId(1), stack, frame);
+            Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame);
             packet.MaterializeAll();
             return packet;
         }
@@ -420,7 +420,7 @@ internal sealed class PbfInternalTests
     /// using only the public <see cref="MutField.Append"/> API.
     /// Registered at <see cref="LinkType.Null"/> on a dedicated test stack so that frames
     /// with that link type produce arbitrarily deep field trees.
-    /// <para><b>Thread safety:</b> instances are immutable after registration; <see cref="Parse"/>
+    /// <para><b>Thread safety:</b> instances are immutable after registration; <see cref="IProtocol.Parse"/>
     /// may be called concurrently.</para>
     /// </summary>
     private sealed class DeepNestingProtocol : IProtocol

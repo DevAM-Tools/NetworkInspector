@@ -44,7 +44,7 @@ internal sealed class FieldIteratorTests
             stack.FrameInterfaceRegistry).Value;
 
         return Packet.ParseFrame(
-            new PacketId(1),
+            new PacketId(0),
             stack,
             frame,
             firstProtocolId);

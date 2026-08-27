@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Protocols;
 
@@ -16,7 +16,7 @@ namespace NetworkInspector.Protocols;
 /// <remarks>
 /// <para><b>Thread safety:</b> instances are immutable after registration completes.
 /// All mutable state is initialised inside <c>RegisterFieldsCustom</c> / <c>_OnStartCustom</c>
-/// (single-threaded build phase) and is read-only thereafter, so <see cref="Parse"/> may
+/// (single-threaded build phase) and is read-only thereafter, so <see cref="IProtocol.Parse"/> may
 /// be invoked concurrently from any number of threads on the same instance without external
 /// synchronisation. Per-thread caches (when present) are stored in <c>[ThreadStatic]</c> fields.</para>
 /// </remarks>
@@ -76,8 +76,7 @@ public sealed partial class VlanProtocol : IProtocol
 
     // Sparse dispatch cache built from the EtherType protocol table at stack start.
     // Linear scan over typically 4–6 entries; avoids dictionary hash computation per packet.
-    // Pre-bound delegates for direct invocation without interface vtable dispatch.
-    private (ulong Key, ParseDelegate Parse)[] _EtherTypeSparseCache = [];
+    private (ulong Key, ProtocolId Id)[] _EtherTypeSparseCache = [];
 
     /// <summary>
     /// Pre-allocates the lazy-field populator delegate and builds the EtherType dispatch cache.
@@ -86,7 +85,7 @@ public sealed partial class VlanProtocol : IProtocol
     partial void _OnStartCustom(Stack stack)
     {
         _Populator = _PopulateVlanFields;
-        _EtherTypeSparseCache = stack.BuildU64SparseDelegateCache(_EtherTypeTableId);
+        _EtherTypeSparseCache = stack.BuildU64SparseIdCache(_EtherTypeTableId);
     }
 
     /// <summary>
@@ -185,12 +184,12 @@ public sealed partial class VlanProtocol : IProtocol
     private ParseResult _DispatchEtherType(
         in MutField parentField, ulong etherType, ReadOnlyMemory<byte> payload, in ParseContext context)
     {
-        // Direct delegate call — no ProtocolId resolution, no vtable dispatch.
-        foreach ((ulong key, ParseDelegate parse) in _EtherTypeSparseCache)
+        // Cached ProtocolId; CallProtocol returns ParseError for invalid ids.
+        foreach ((ulong key, ProtocolId id) in _EtherTypeSparseCache)
         {
             if (key == etherType)
             {
-                return parse(in parentField, payload, in context);
+                return parentField.CallProtocol(id, payload, in context);
             }
         }
 

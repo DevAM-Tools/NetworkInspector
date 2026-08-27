@@ -36,7 +36,7 @@ namespace NetworkInspector.Protocols;
 /// <remarks>
 /// <para><b>Thread safety:</b> instances are immutable after registration completes.
 /// All mutable state is initialised inside <c>RegisterFieldsCustom</c> / <c>_OnStartCustom</c>
-/// (single-threaded build phase) and is read-only thereafter, so <see cref="Parse"/> may
+/// (single-threaded build phase) and is read-only thereafter, so <see cref="IProtocol.Parse"/> may
 /// be invoked concurrently from any number of threads on the same instance without external
 /// synchronisation. Per-thread caches (when present) are stored in <c>[ThreadStatic]</c> fields.</para>
 /// </remarks>
@@ -476,7 +476,7 @@ public sealed partial class HttpProtocol : IProtocol
     /// <summary>
     /// Scans a single HTTP header line for the values that drive sub-protocol dispatch and the
     /// header-derived index groups, without appending any field. Used by the eager dispatch path
-    /// in <see cref="Parse"/>. The presence flags mirror the populator's emission conditions so the
+    /// in <see cref="IProtocol.Parse"/>. The presence flags mirror the populator's emission conditions so the
     /// index records http.content_type / .content_length / .host / .user_agent / .transfer_encoding
     /// / .content_encoding / .upgrade / .connection exactly when the populator emits the field.
     /// </summary>

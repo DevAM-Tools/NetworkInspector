@@ -151,6 +151,21 @@ public interface ISession : ISessionReader, IDisposable
     // ── Lifecycle ─────────────────────────────────────────────────────────────
 
     /// <summary>
+    /// Whether the session stores sealed packets for later lock-free reads.
+    /// When <see langword="false"/>, <see cref="ISessionReader.TryGetPacket(PacketId, out Packet)"/>
+    /// re-parses from the frame source; stateful protocols replay the state recorded during the first
+    /// parse.
+    /// </summary>
+    bool StoreParsedPackets { get; }
+
+    /// <summary>
+    /// Whether the session populates the packet index during the first parse of each frame.
+    /// When <see langword="false"/>, <see cref="ISessionReader.PacketIndex"/> stays
+    /// <see langword="null"/> after start.
+    /// </summary>
+    bool IndexPackets { get; }
+
+    /// <summary>
     /// Attempts to start all registered source jobs.
     /// Returns <see langword="true"/> if the session transitioned to
     /// <see cref="SessionPhase.Running"/>, <see langword="false"/> if the session
@@ -233,8 +248,8 @@ public interface ISession : ISessionReader, IDisposable
     ///   <item>Transition to <see cref="SessionPhase.ShuttingDown"/>.</item>
     ///   <item>Cancel all source jobs.</item>
     ///   <item>Wait for source jobs to finish (up to <paramref name="timeout"/> if specified).</item>
+    ///   <item>Cancel and drain all listener slots (queries stay enabled so redissect works).</item>
     ///   <item>Disable packet queries.</item>
-    ///   <item>Cancel and drain all listener slots.</item>
     ///   <item>Transition to <see cref="SessionPhase.Stopped"/>.</item>
     ///   <item>Dispose all jobs and listener slots.</item>
     /// </list>

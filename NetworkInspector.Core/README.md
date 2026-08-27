@@ -91,6 +91,7 @@ Parse packets with Core, then send them to `NetworkInspector.Exporters` packet e
 
 ## Limits And Thread-Safety Notes
 
+- First parse of each packet id is ordered and single-threaded (dense ids `0,1,2,…`). Re-parse of an already-first-parsed id may run concurrently. Protocol authors implement `IProtocol.Parse`. `Stack.CallProtocol` sets `ParseContext.SelfProtocolId` only. Stateful protocols key `EffectStore<T>` with `Packet.GetEffectLayerKey`. Dense packet maps use `ChunkedGrowOnlyStore<T>`; packed effect logs use `ChunkedAppendOnlyStore<T>`. `Stack.ProtocolCount` is the number of registered protocols. See [PROTOCOL_GUIDE.md](../NetworkInspector.Protocols/PROTOCOL_GUIDE.md).
 - Treat stack construction and mutable parse contexts as single-threaded unless package docs state otherwise.
 - Validate external frame bytes at system boundaries.
 - Use cancellation in surrounding workflow code for long-running ingest loops.

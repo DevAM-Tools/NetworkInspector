@@ -501,7 +501,7 @@ internal sealed class CanProtocolXlTests
         }
     }
 
-    /// <summary>A minimal protocol that records whether its <see cref="Parse"/> method was called.</summary>
+    /// <summary>A minimal protocol that records whether its <see cref="IProtocol.Parse"/> method was called.</summary>
     private sealed class FlagProtocol(string name) : IProtocol
     {
         /// <inheritdoc/>
@@ -510,7 +510,7 @@ internal sealed class CanProtocolXlTests
         /// <inheritdoc/>
         public string UiName => name;
 
-        /// <summary><see langword="true"/> if <see cref="Parse"/> was invoked at least once.</summary>
+        /// <summary><see langword="true"/> if <see cref="IProtocol.Parse"/> was invoked at least once.</summary>
         public bool WasCalled
         {
             get; private set;

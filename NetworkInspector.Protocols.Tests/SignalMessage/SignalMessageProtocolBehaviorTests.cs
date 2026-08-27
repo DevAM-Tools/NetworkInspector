@@ -117,6 +117,14 @@ internal sealed class SignalMessageProtocolBehaviorTests
                 // Materializing the tree builds signals under the container.
                 await ProtocolTestHelper.AssertF64Field(stack, packet, "lazy_sig.EngineRpm", 125.0)
                     .ConfigureAwait(false);
+
+                Field root = packet.RootField();
+                await Assert.That(_TryFindById(root, containerId.Value, out Field container)).IsTrue();
+                await Assert.That(_TryFindById(container, signalId.Value, out Field rpm)).IsTrue();
+                bool rpmHasParent = rpm.TryGetParent(out Field rpmParent);
+                await Assert.That(rpmHasParent).IsTrue();
+                await Assert.That(rpmParent == container).IsTrue()
+                    .Because("Signal fields must be children of the message container.");
             }
         }
         finally
@@ -292,7 +300,7 @@ internal sealed class SignalMessageProtocolBehaviorTests
         {
             await File.WriteAllTextAsync(path, json).ConfigureAwait(false);
 
-            using SettingsManager settings = new();
+            using SettingsManager settings = new(Path.GetTempPath());
             settings.PreloadValue(SignalMessageRegistration.ConfigFileSetting, path);
             StackBuilder builder = new(settings, new FrameInterfaceRegistry());
             _ = SignalMessageRegistration.Register(builder);
@@ -347,7 +355,7 @@ internal sealed class SignalMessageProtocolBehaviorTests
         try
         {
             await File.WriteAllTextAsync(path, json).ConfigureAwait(false);
-            using SettingsManager settings = new();
+            using SettingsManager settings = new(Path.GetTempPath());
             settings.PreloadValue(SignalMessageRegistration.ConfigFileSetting, path);
             StackBuilder builder = new(settings, new FrameInterfaceRegistry());
             _ = SignalMessageRegistration.Register(builder);
@@ -391,7 +399,7 @@ internal sealed class SignalMessageProtocolBehaviorTests
         try
         {
             await File.WriteAllTextAsync(path, json).ConfigureAwait(false);
-            using SettingsManager settings = new();
+            using SettingsManager settings = new(Path.GetTempPath());
             settings.PreloadValue(SignalMessageRegistration.ConfigFileSetting, path);
             StackBuilder builder = new(settings, new FrameInterfaceRegistry());
             _ = SignalMessageRegistration.Register(builder);
@@ -762,7 +770,7 @@ internal sealed class SignalMessageProtocolBehaviorTests
         try
         {
             await File.WriteAllTextAsync(path, json).ConfigureAwait(false);
-            using SettingsManager settings = new();
+            using SettingsManager settings = new(Path.GetTempPath());
             settings.PreloadValue(SignalMessageRegistration.ConfigFileSetting, path);
             settings.PreloadValue(SignalMessageRegistration.MaxEnumValuesSetting, 0UL);
             StackBuilder builder = new(settings, new FrameInterfaceRegistry());
@@ -802,7 +810,7 @@ internal sealed class SignalMessageProtocolBehaviorTests
         try
         {
             await File.WriteAllTextAsync(path, json).ConfigureAwait(false);
-            using SettingsManager settings = new();
+            using SettingsManager settings = new(Path.GetTempPath());
             settings.PreloadValue(SignalMessageRegistration.ConfigFileSetting, path);
             StackBuilder builder = new(settings, new FrameInterfaceRegistry());
             List<SettingsLoadWarning> warnings = [.. SignalMessageRegistration.Register(builder)];
@@ -968,7 +976,7 @@ internal sealed class SignalMessageProtocolBehaviorTests
         try
         {
             await File.WriteAllTextAsync(path, json).ConfigureAwait(false);
-            using SettingsManager settings = new();
+            using SettingsManager settings = new(Path.GetTempPath());
             settings.PreloadValue(SignalMessageRegistration.ConfigFileSetting, path);
             StackBuilder builder = new(settings, new FrameInterfaceRegistry());
             builder.RegisterProtocol(new NamedStubProtocol("dup_sm"));
@@ -981,6 +989,26 @@ internal sealed class SignalMessageProtocolBehaviorTests
         {
             Directory.Delete(dir, recursive: true);
         }
+    }
+
+    private static bool _TryFindById(in Field start, FieldId id, out Field found)
+    {
+        if (start.FieldId == id)
+        {
+            found = start;
+            return true;
+        }
+
+        foreach (Field child in start.Children(materialize: true))
+        {
+            if (_TryFindById(in child, id, out found))
+            {
+                return true;
+            }
+        }
+
+        found = default;
+        return false;
     }
 
     private sealed class NamedStubProtocol : IProtocol

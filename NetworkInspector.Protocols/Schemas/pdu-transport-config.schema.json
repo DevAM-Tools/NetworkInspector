@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://networkinspector.dev/schemas/pdu-transport-config.schema.json",
+  "title": "PDU Transport Configuration",
+  "description": "PDU identifier to display-name mappings for Network Inspector PDU Transport. Loaded from pdu_transport.config_file or from a caller-owned stream.",
+  "type": "object",
+  "properties": {
+    "pdus": {
+      "type": "array",
+      "description": "PDU definitions used for pdu_transport.name resolution.",
+      "items": {
+        "$ref": "#/$defs/pdu"
+      },
+      "default": []
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "pdu": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "integer",
+          "description": "Numeric PDU identifier matching the on-wire PDU ID field.",
+          "minimum": 0
+        },
+        "name": {
+          "type": "string",
+          "description": "Human-readable display name shown as pdu_transport.name."
+        },
+        "comment": {
+          "type": "string",
+          "description": "Optional comment; ignored by the parser."
+        }
+      },
+      "required": ["id", "name"],
+      "additionalProperties": false
+    }
+  }
+}

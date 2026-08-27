@@ -10,7 +10,7 @@ namespace NetworkInspector.Protocols;
 /// <remarks>
 /// <para><b>Thread safety:</b> instances are immutable after registration completes.
 /// All mutable state is initialised inside <c>RegisterFieldsCustom</c> (single-threaded build
-/// phase) and is read-only thereafter, so <see cref="Parse"/> may be invoked concurrently from
+/// phase) and is read-only thereafter, so <see cref="IProtocol.Parse"/> may be invoked concurrently from
 /// any number of threads on the same instance without external synchronisation.</para>
 /// </remarks>
 [Protocol("text", "Line-based text data", Description = "Text (line-based)")]

@@ -346,7 +346,36 @@ internal sealed class JsonConfigFileTests
 
         await Assert.That(result).IsFalse();
         await Assert.That(error).IsNotNull();
-        await Assert.That(error!).Contains("'..'");
+        await Assert.That(error!).Contains("outside the allowed base directory");
+    }
+
+    [Test]
+    public async Task TryLoad_FileNameWithConsecutiveDots_LoadsWhenUnderBase()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            string path = Path.Combine(dir, "foo..bar.json");
+            await File.WriteAllTextAsync(path, "{\"Label\":\"dots\",\"Count\":3}").ConfigureAwait(false);
+
+            bool result = JsonConfigFile.TryLoad(
+                "foo..bar.json",
+                baseDirectory: dir,
+                TestJsonContext.Default.TestSimpleConfig,
+                out TestSimpleConfig? value,
+                out string? error);
+
+            await Assert.That(result).IsTrue();
+            await Assert.That(error).IsNull();
+            await Assert.That(value).IsNotNull();
+            await Assert.That(value!.Label).IsEqualTo("dots");
+            await Assert.That(value.Count).IsEqualTo(3);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
     }
 
     [Test]
@@ -389,7 +418,7 @@ internal sealed class JsonConfigFileTests
         await Assert.That(resolved).IsFalse();
         string? error = (string?)args[3];
         await Assert.That(error).IsNotNull();
-        await Assert.That(error!).Contains("'..'");
+        await Assert.That(error!).Contains("outside the allowed base directory");
     }
 
     [Test]
@@ -560,5 +589,374 @@ internal sealed class JsonConfigFileTests
         string? error = (string?)args[3];
         await Assert.That(error).IsNotNull();
         await Assert.That(error!).Contains("base directory is required");
+    }
+
+    // === JsonConfigFile.TryLoadFromStream / JsonConfigStream ===
+
+    [Test]
+    public async Task TryLoadFromStream_ValidJson_ReturnsTrue()
+    {
+        using MemoryStream stream = _Utf8Stream("""{"Label":"from-stream","Count":9}""");
+        bool result = JsonConfigFile.TryLoadFromStream(
+            stream,
+            TestJsonContext.Default.TestSimpleConfig,
+            "configuration stream",
+            out TestSimpleConfig? value,
+            out string? error);
+
+        await Assert.That(result).IsTrue();
+        await Assert.That(error).IsNull();
+        await Assert.That(value).IsNotNull();
+        await Assert.That(value!.Label).IsEqualTo("from-stream");
+        await Assert.That(value.Count).IsEqualTo(9);
+    }
+
+    [Test]
+    public async Task TryLoadFromStream_MalformedJson_ReturnsFalseWithError()
+    {
+        using MemoryStream stream = _Utf8Stream("{ not json");
+        bool result = JsonConfigFile.TryLoadFromStream(
+            stream,
+            TestJsonContext.Default.TestSimpleConfig,
+            "configuration stream",
+            out TestSimpleConfig? value,
+            out string? error);
+
+        await Assert.That(result).IsFalse();
+        await Assert.That(value).IsNull();
+        await Assert.That(error).IsNotNull();
+        await Assert.That(error!).Contains("Failed to parse JSON");
+    }
+
+    [Test]
+    public async Task TryLoadFromStream_JsonNullLiteral_ReturnsFalseWithError()
+    {
+        using MemoryStream stream = _Utf8Stream("null");
+        bool result = JsonConfigFile.TryLoadFromStream(
+            stream,
+            TestJsonContext.Default.TestSimpleConfig,
+            "configuration stream",
+            out TestSimpleConfig? value,
+            out string? error);
+
+        await Assert.That(result).IsFalse();
+        await Assert.That(value).IsNull();
+        await Assert.That(error).IsNotNull();
+        await Assert.That(error!).Contains("null result");
+    }
+
+    [Test]
+    public async Task TryLoadFromStream_NotReadable_ReturnsFalse()
+    {
+        using NonReadableStream stream = new();
+        bool result = JsonConfigFile.TryLoadFromStream(
+            stream,
+            TestJsonContext.Default.TestSimpleConfig,
+            "configuration stream",
+            out TestSimpleConfig? value,
+            out string? error);
+
+        await Assert.That(result).IsFalse();
+        await Assert.That(value).IsNull();
+        await Assert.That(error).IsNotNull();
+        await Assert.That(error!).Contains("not readable");
+    }
+
+    [Test]
+    public async Task TryLoadFromStream_OversizedSeekable_ReturnsFalse()
+    {
+        using MemoryStream stream = new();
+        stream.SetLength(SettingsFileAccess.MaxFileBytes + 1);
+        stream.Position = 0;
+
+        bool result = JsonConfigFile.TryLoadFromStream(
+            stream,
+            TestJsonContext.Default.TestSimpleConfig,
+            "configuration stream",
+            out TestSimpleConfig? value,
+            out string? error);
+
+        await Assert.That(result).IsFalse();
+        await Assert.That(value).IsNull();
+        await Assert.That(error).IsNotNull();
+        await Assert.That(error!).Contains("exceeds");
+    }
+
+    [Test]
+    public async Task TryLoadFromStream_ForwardOnlyValidJson_ReturnsTrue()
+    {
+        using ForwardOnlyStream stream = new(Encoding.UTF8.GetBytes("""{"Label":"fwd","Count":1}"""));
+        bool result = JsonConfigFile.TryLoadFromStream(
+            stream,
+            TestJsonContext.Default.TestSimpleConfig,
+            "configuration stream",
+            out TestSimpleConfig? value,
+            out string? error);
+
+        await Assert.That(result).IsTrue();
+        await Assert.That(error).IsNull();
+        await Assert.That(value).IsNotNull();
+        await Assert.That(value!.Label).IsEqualTo("fwd");
+    }
+
+    [Test]
+    public async Task TryLoadFromStream_ForwardOnlyOversized_ReturnsFalse()
+    {
+        using OversizedForwardOnlyStream stream = new(SettingsFileAccess.MaxFileBytes + 1);
+        bool result = JsonConfigFile.TryLoadFromStream(
+            stream,
+            TestJsonContext.Default.TestSimpleConfig,
+            "configuration stream",
+            out TestSimpleConfig? value,
+            out string? error);
+
+        await Assert.That(result).IsFalse();
+        await Assert.That(value).IsNull();
+        await Assert.That(error).IsNotNull();
+        await Assert.That(error!).Contains("exceeds");
+    }
+
+    [Test]
+    public async Task TryLoadFromStream_DisposedStream_ReturnsFalse()
+    {
+        MemoryStream stream = _Utf8Stream("""{"Label":"x","Count":1}""");
+        stream.Dispose();
+        bool result = JsonConfigFile.TryLoadFromStream(
+            stream,
+            TestJsonContext.Default.TestSimpleConfig,
+            "configuration stream",
+            out TestSimpleConfig? value,
+            out string? error);
+
+        await Assert.That(result).IsFalse();
+        await Assert.That(value).IsNull();
+        await Assert.That(error).IsNotNull();
+        await Assert.That(error!).Contains("not readable");
+    }
+
+    [Test]
+    public async Task JsonConfigStream_TryLoad_ValidJson_ReturnsTrue()
+    {
+        using MemoryStream stream = _Utf8Stream("""{"Label":"pub","Count":2}""");
+        bool result = JsonConfigStream.TryLoad(
+            stream,
+            TestJsonContext.Default.TestSimpleConfig,
+            out TestSimpleConfig? value,
+            out string? error);
+
+        await Assert.That(result).IsTrue();
+        await Assert.That(error).IsNull();
+        await Assert.That(value).IsNotNull();
+        await Assert.That(value!.Label).IsEqualTo("pub");
+    }
+
+    [Test]
+    public async Task JsonConfigStream_TryLoadWarning_Valid_WarningNull()
+    {
+        using MemoryStream stream = _Utf8Stream("""{"Label":"ok","Count":3}""");
+        bool result = JsonConfigStream.TryLoad(
+            stream,
+            TestJsonContext.Default.TestSimpleConfig,
+            "grp",
+            "grp.file",
+            out TestSimpleConfig? value,
+            out SettingsLoadWarning? warning);
+
+        await Assert.That(result).IsTrue();
+        await Assert.That(warning).IsNull();
+        await Assert.That(value).IsNotNull();
+        await Assert.That(value!.Count).IsEqualTo(3);
+    }
+
+    [Test]
+    public async Task JsonConfigStream_TryLoad_Malformed_SetsWarning()
+    {
+        using MemoryStream stream = _Utf8Stream("{");
+        bool result = JsonConfigStream.TryLoad(
+            stream,
+            TestJsonContext.Default.TestSimpleConfig,
+            "grp",
+            "grp.file",
+            out TestSimpleConfig? value,
+            out SettingsLoadWarning? warning);
+
+        await Assert.That(result).IsFalse();
+        await Assert.That(value).IsNull();
+        await Assert.That(warning).IsNotNull();
+        await Assert.That(warning!.Value.Kind).IsEqualTo(SettingsLoadWarningKind.ExternalConfigUnavailable);
+        await Assert.That(warning.Value.GroupName).IsEqualTo("grp");
+        await Assert.That(warning.Value.SettingName).IsEqualTo("grp.file");
+    }
+
+    [Test]
+    public async Task JsonConfigStream_TryLoad_NullStream_Throws()
+    {
+        await Assert.That(() => JsonConfigStream.TryLoad(
+                null!,
+                TestJsonContext.Default.TestSimpleConfig,
+                out _,
+                out string? _))
+            .Throws<ArgumentNullException>();
+    }
+
+    [Test]
+    public async Task JsonConfigStream_TryLoad_NullTypeInfo_Throws()
+    {
+        using MemoryStream stream = _Utf8Stream("{}");
+        await Assert.That(() => JsonConfigStream.TryLoad<TestSimpleConfig>(
+                stream,
+                null!,
+                out _,
+                out string? _))
+            .Throws<ArgumentNullException>();
+    }
+
+    [Test]
+    public async Task JsonConfigStream_TryLoadWarning_NullSettingName_Throws()
+    {
+        using MemoryStream stream = _Utf8Stream("{}");
+        await Assert.That(() => JsonConfigStream.TryLoad(
+                stream,
+                TestJsonContext.Default.TestSimpleConfig,
+                "grp",
+                null!,
+                out _,
+                out SettingsLoadWarning? _))
+            .Throws<ArgumentNullException>();
+    }
+
+    [Test]
+    public async Task TryLoadFromStream_ReadThrowsIoException_ReturnsFalse()
+    {
+        using ThrowingReadStream stream = new();
+        bool result = JsonConfigFile.TryLoadFromStream(
+            stream,
+            TestJsonContext.Default.TestSimpleConfig,
+            "configuration stream",
+            out TestSimpleConfig? value,
+            out string? error);
+
+        await Assert.That(result).IsFalse();
+        await Assert.That(value).IsNull();
+        await Assert.That(error).IsNotNull();
+        await Assert.That(error!).Contains("Failed to read");
+    }
+
+    [Test]
+    public async Task JsonConfigStream_TryLoadWarning_NullGroup_Throws()
+    {
+        using MemoryStream stream = _Utf8Stream("{}");
+        await Assert.That(() => JsonConfigStream.TryLoad(
+                stream,
+                TestJsonContext.Default.TestSimpleConfig,
+                null!,
+                "s",
+                out _,
+                out SettingsLoadWarning? _))
+            .Throws<ArgumentNullException>();
+    }
+
+    private static MemoryStream _Utf8Stream(string json) =>
+        new(Encoding.UTF8.GetBytes(json), writable: false);
+
+    /// <summary>Readable stream with <see cref="Stream.CanRead"/> false.</summary>
+    private sealed class NonReadableStream : Stream
+    {
+        public override bool CanRead => false;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => 0;
+        public override long Position { get; set; }
+        public override void Flush() { }
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
+    /// <summary>Forwards bytes without seeking so the bounded-copy path is used.</summary>
+    private sealed class ForwardOnlyStream : Stream
+    {
+        private readonly MemoryStream _Inner;
+
+        public ForwardOnlyStream(byte[] data) =>
+            _Inner = new MemoryStream(data, writable: false);
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+        public override void Flush() { }
+        public override int Read(byte[] buffer, int offset, int count) => _Inner.Read(buffer, offset, count);
+        public override int Read(Span<byte> buffer) => _Inner.Read(buffer);
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                _Inner.Dispose();
+            }
+
+            base.Dispose(disposing);
+        }
+    }
+
+    /// <summary>Non-seekable source that yields a fixed number of zero bytes then EOF.</summary>
+    private sealed class OversizedForwardOnlyStream : Stream
+    {
+        private long _Remaining;
+
+        public OversizedForwardOnlyStream(long length) => _Remaining = length;
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+        public override void Flush() { }
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            if (_Remaining <= 0)
+            {
+                return 0;
+            }
+
+            int n = (int)Math.Min(count, _Remaining);
+            _Remaining -= n;
+            return n;
+        }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
+    /// <summary>Non-seekable stream whose <see cref="Read(byte[], int, int)"/> always throws <see cref="IOException"/>.</summary>
+    private sealed class ThrowingReadStream : Stream
+    {
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+        public override void Flush() { }
+        public override int Read(byte[] buffer, int offset, int count) => throw new IOException("simulated read failure");
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 }

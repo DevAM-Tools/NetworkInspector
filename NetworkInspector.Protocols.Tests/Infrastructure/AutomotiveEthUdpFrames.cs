@@ -33,6 +33,24 @@ internal static class AutomotiveEthUdpFrames
             .EmitFrame(ReadOnlySpan<byte>.Empty);
     }
 
+    /// <summary>
+    /// Ethernet → IPv4 → UDP carrying concatenated PDU-Transport slots (no inner Signal Message layer).
+    /// </summary>
+    internal static byte[] EncapsulatePduTransportMulti(
+        ushort udpSrcPort,
+        ushort udpDstPort,
+        PduTransportConfigFb pduFb,
+        params PduTransportSlot[] slots)
+    {
+        EthernetLayer eth = TestEthernet();
+        IPv4Layer ip = TestIpv4();
+        UdpLayer udp = new(udpSrcPort, udpDstPort);
+        return FrameStack.Start(eth).Then(ip).Then(udp)
+            .Then(PduTransportMultiLayer.Create(pduFb, slots))
+            .CreateWithFixedValues()
+            .EmitFrame(ReadOnlySpan<byte>.Empty);
+    }
+
     internal static EthernetLayer TestEthernet()
     {
         MacAddress dst = MacAddress.FromBytes([0x00, 0x11, 0x22, 0x33, 0x44, 0x55]);

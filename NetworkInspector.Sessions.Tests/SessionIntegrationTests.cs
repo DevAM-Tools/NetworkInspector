@@ -296,4 +296,71 @@ internal sealed class SessionIntegrationTests
         await Assert.That(sources.Count).IsEqualTo(1);
         await Assert.That(sources[0].UiName).IsEqualTo("TestSource");
     }
+
+    [Test]
+    public async Task RedissectOnly_TwoListeners_EachRedissectsEveryPacket()
+    {
+        const int frameCount = 64;
+        using Stack stack = TestHarness.CreateStack();
+        using TestFrameSource source = TestFrameSource.WithUdpFrames(frameCount);
+
+        RedissectListener listener1 = new("L1");
+        RedissectListener listener2 = new("L2");
+
+        using Session session = new(stack, SessionOptions.RedissectOnly);
+        await Assert.That(session.StoreParsedPackets).IsFalse();
+        await Assert.That(session.IndexPackets).IsFalse();
+
+        session.TryAddFrameSource(source, out _);
+        session.TryAddListener(listener1, out _);
+        session.TryAddListener(listener2, out _);
+        session.TryStart();
+        await Assert.That(session.PacketIndex).IsNull();
+        session.WaitForCompletion();
+        session.Shutdown();
+
+        await Assert.That(listener1.PacketsSeen).IsEqualTo(frameCount);
+        await Assert.That(listener2.PacketsSeen).IsEqualTo(frameCount);
+        await Assert.That(listener1.Misses).IsEqualTo(0);
+        await Assert.That(listener2.Misses).IsEqualTo(0);
+
+        PacketStore store = _GetPacketStore(session);
+        await Assert.That(store.Get(new PacketId(0))).IsNull();
+    }
+
+    private static PacketStore _GetPacketStore(Session session)
+    {
+        System.Reflection.FieldInfo field = typeof(Session).GetField(
+            "_PacketStore",
+            BindingFlags.Instance | BindingFlags.NonPublic)!;
+        return (PacketStore)field.GetValue(session)!;
+    }
+
+    private sealed class RedissectListener : ISessionListener
+    {
+        private int _PacketsSeen;
+        private int _Misses;
+
+        internal RedissectListener(string name) => UiName = name;
+
+        internal int PacketsSeen => Volatile.Read(ref _PacketsSeen);
+
+        internal int Misses => Volatile.Read(ref _Misses);
+
+        public string UiName { get; }
+
+        public void OnNewPackets(ISessionReader session, int fromIndex, int toIndexExclusive)
+        {
+            for (int i = fromIndex; i < toIndexExclusive; i++)
+            {
+                if (!session.TryGetPacket(new PacketId(i), out Packet? packet) || packet is null)
+                {
+                    Interlocked.Increment(ref _Misses);
+                    continue;
+                }
+
+                Interlocked.Increment(ref _PacketsSeen);
+            }
+        }
+    }
 }

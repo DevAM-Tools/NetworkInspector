@@ -17,11 +17,12 @@ namespace NetworkInspector.Protocols;
 /// </code>
 /// </summary>
 /// <remarks>
-/// <para><b>Thread safety:</b> instances are immutable after registration completes.
-/// All mutable state is initialised inside <c>_RegisterFieldsCustom</c> / <c>_OnStartCustom</c>
-/// (single-threaded build phase) and is read-only thereafter, so <see cref="Parse"/> may
-/// be invoked concurrently from any number of threads on the same instance without external
-/// synchronisation. Per-thread caches (when present) are stored in <c>[ThreadStatic]</c> fields.</para>
+/// <para><b>Thread safety:</b> The first parse of a packet id mutates <see cref="UdpStreamTracker"/>
+/// and must therefore stay ordered and single-threaded (the session guarantees this under its parse
+/// lock). Every later parse of an already-parsed id is a replay: it only reads the protocol-owned
+/// effect store and is safe to run on any number of threads concurrently, including while further
+/// packets are being parsed for the first time. The watermark <see cref="_IngestWatermark"/>
+/// separates both paths without any caller-supplied mode flag.</para>
 /// </remarks>
 [Protocol("udp", "User Datagram Protocol", Description = "UDP (RFC 768)")]
 [RegisterAtTable(IPv4Protocol.IpProtoTableName, IpProtoKey)]
@@ -131,12 +132,12 @@ public sealed partial class UdpProtocol : IProtocol
 
     /// <summary>ProtocolId of the IPv4 protocol ("ip"), resolved at startup.
     /// Used to select the correct per-protocol thread-local address cache when
-    /// <see cref="Parse"/> is dispatched from an enclosing IPv4 layer.</summary>
+    /// <see cref="IProtocol.Parse"/> is dispatched from an enclosing IPv4 layer.</summary>
     private ProtocolId _Ipv4ProtocolId;
 
     /// <summary>ProtocolId of the IPv6 protocol ("ipv6"), resolved at startup.
     /// Used to select the correct per-protocol thread-local address cache when
-    /// <see cref="Parse"/> is dispatched from an enclosing IPv6 layer.</summary>
+    /// <see cref="IProtocol.Parse"/> is dispatched from an enclosing IPv6 layer.</summary>
     private ProtocolId _Ipv6ProtocolId;
 
     #endregion
@@ -173,16 +174,62 @@ public sealed partial class UdpProtocol : IProtocol
             [_SrcPortFieldId, _DstPortFieldId]);
     }
 
+    #endregion
+
+    #region Parse
+
     /// <summary>
     /// Parses a Udp protocol unit from the supplied <paramref name="data"/> buffer,
     /// appending decoded fields under <paramref name="parentField"/> and dispatching any
     /// payload via the surrounding <paramref name="context"/>.
+    /// <para>
+    /// The first parse of a packet id draws stream indices from <see cref="UdpStreamTracker"/> and
+    /// records them; every later parse of that id replays the recorded assignment and never touches
+    /// the tracker. Both paths are separated by the watermark — see <see cref="_IsReplay"/>.
+    /// </para>
     /// </summary>
     /// <param name="parentField">Parent field that receives the decoded protocol container and child fields.</param>
     /// <param name="data">Raw protocol bytes starting at this protocol's first header byte.</param>
     /// <param name="context">Owning stack used to dispatch the next-protocol payload (when applicable).</param>
     /// <returns>Number of bytes consumed, or a <see cref="ParseError"/> describing the failure.</returns>
     public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
+    {
+        Packet packet = parentField.Packet;
+        int layerKey = parentField.Packet.GetEffectLayerKey(data);
+        bool isReplay = _IsReplay(packet.Id);
+        bool raiseWatermark = !isReplay && _ParseNesting == 0;
+        if (!isReplay)
+        {
+            _ParseNesting++;
+        }
+
+        try
+        {
+            return _ParseBody(in parentField, data, in context, layerKey, isReplay);
+        }
+        finally
+        {
+            if (!isReplay)
+            {
+                _ParseNesting--;
+                if (raiseWatermark)
+                {
+                    _RaiseWatermark(packet.Id);
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Parse body. <paramref name="layerKey"/> is <see cref="Packet.GetEffectLayerKey"/> at the parse call and
+    /// <paramref name="isReplay"/> selects effect replay over tracker mutation.
+    /// </summary>
+    private ParseResult _ParseBody(
+        in MutField parentField,
+        ReadOnlyMemory<byte> data,
+        in ParseContext context,
+        int layerKey,
+        bool isReplay)
     {
         if (data.Length < UdpHeader.HeaderSize)
         {
@@ -207,7 +254,7 @@ public sealed partial class UdpProtocol : IProtocol
 
         // Compute payload bounds (guard against negative)
         int payloadLen = Math.Max(0, Math.Min(length - UdpHeader.HeaderSize, data.Length - UdpHeader.HeaderSize));
-        ReadOnlyMemory<byte> payloadData = payloadLen > 0 ? data.Slice(UdpHeader.HeaderSize, payloadLen) : ReadOnlyMemory<byte>.Empty;
+        ReadOnlyMemory<byte> payloadData = data.Slice(UdpHeader.HeaderSize, payloadLen);
 
         // Validate checksum at parse time (needed for index group recording).
         // The checksum status field itself is appended eagerly further below once the
@@ -224,9 +271,7 @@ public sealed partial class UdpProtocol : IProtocol
             context.RecordGroupPresence(_UdpPayloadGroupId);
         }
 
-    #endregion
-
-        #region Stream tracking and checksum pre-computation
+        // ── Stream tracking and checksum pre-computation ──────────────────────────────────────────
         // Read IP addresses from the per-protocol thread-local caches (populated by
         // IPv4Protocol/IPv6Protocol during Parse). Falls back to sibling-walk navigation
         // for edge cases (custom stacks, non-standard encapsulations).
@@ -245,33 +290,37 @@ public sealed partial class UdpProtocol : IProtocol
         {
             // IPv4: build connection key
             UdpConnectionKey connKey = UdpConnectionKey.FromIPv4(src4.RawValue, dst4.RawValue, srcPort, dstPort);
-            uint streamIndex = _StreamTracker.GetOrCreateStreamIndex(in connKey);
-            parentField.Append(_StreamFieldId, FieldValue.NewU64(streamIndex));
-            context.RecordGroupPresence(_UdpStreamGroupId);
+            if (!_TryAppendUdpStream(in parentField, in context, in connKey, layerKey, isReplay))
+            {
+                return ParseError.InsufficientDataWithInfo(ProtocolName, UdpHeader.HeaderSize, (ulong)data.Length);
+            }
         }
         else if (!callerIsIpv4 && IPv6Protocol.TryGetCachedAddresses(packetId, out IPv6Address src6, out IPv6Address dst6))
         {
             // IPv6: build connection key
             UdpConnectionKey connKey = new(new UInt128(src6.High, src6.Low), new UInt128(dst6.High, dst6.Low), srcPort, dstPort);
-            uint streamIndex = _StreamTracker.GetOrCreateStreamIndex(in connKey);
-            parentField.Append(_StreamFieldId, FieldValue.NewU64(streamIndex));
-            context.RecordGroupPresence(_UdpStreamGroupId);
+            if (!_TryAppendUdpStream(in parentField, in context, in connKey, layerKey, isReplay))
+            {
+                return ParseError.InsufficientDataWithInfo(ProtocolName, UdpHeader.HeaderSize, (ulong)data.Length);
+            }
         }
         else if (_TryFindPreviousIpAddressesFallback(parentField, out IPv4Address fbSrc4, out IPv4Address fbDst4, in context))
         {
             // Fallback: IPv4 via sibling walk (edge case — cache miss)
             UdpConnectionKey connKey = UdpConnectionKey.FromIPv4(fbSrc4.RawValue, fbDst4.RawValue, srcPort, dstPort);
-            uint streamIndex = _StreamTracker.GetOrCreateStreamIndex(in connKey);
-            parentField.Append(_StreamFieldId, FieldValue.NewU64(streamIndex));
-            context.RecordGroupPresence(_UdpStreamGroupId);
+            if (!_TryAppendUdpStream(in parentField, in context, in connKey, layerKey, isReplay))
+            {
+                return ParseError.InsufficientDataWithInfo(ProtocolName, UdpHeader.HeaderSize, (ulong)data.Length);
+            }
         }
         else if (_TryFindPreviousIpv6AddressesFallback(parentField, out IPv6Address fbSrc6, out IPv6Address fbDst6, in context))
         {
             // Fallback: IPv6 via sibling walk (edge case — cache miss)
             UdpConnectionKey connKey = new(new UInt128(fbSrc6.High, fbSrc6.Low), new UInt128(fbDst6.High, fbDst6.Low), srcPort, dstPort);
-            uint streamIndex = _StreamTracker.GetOrCreateStreamIndex(in connKey);
-            parentField.Append(_StreamFieldId, FieldValue.NewU64(streamIndex));
-            context.RecordGroupPresence(_UdpStreamGroupId);
+            if (!_TryAppendUdpStream(in parentField, in context, in connKey, layerKey, isReplay))
+            {
+                return ParseError.InsufficientDataWithInfo(ProtocolName, UdpHeader.HeaderSize, (ulong)data.Length);
+            }
         }
         else
         {
@@ -388,7 +437,43 @@ public sealed partial class UdpProtocol : IProtocol
         return result == 0;
     }
 
-        #endregion
+    #endregion
+
+    #region Stream tracking helpers
+
+    /// <summary>
+    /// Appends <c>udp.stream</c>. On a first parse the index comes from the stream tracker and is
+    /// recorded for this layer; on a replay it comes from the recorded effect and the tracker stays
+    /// untouched. Returns <see langword="false"/> when a replay finds no effect for this layer, so
+    /// the caller degrades instead of falling back to a tracker mutation on a reader thread.
+    /// </summary>
+    private bool _TryAppendUdpStream(
+        in MutField parentField,
+        in ParseContext context,
+        in UdpConnectionKey connKey,
+        int layerKey,
+        bool isReplay)
+    {
+        if (isReplay)
+        {
+            if (!_TryGetStreamEffect(parentField.Packet.Id, layerKey, out StreamEffect recorded))
+            {
+                return false;
+            }
+
+            parentField.Append(_StreamFieldId, FieldValue.NewU64(recorded.StreamIndex));
+            context.RecordGroupPresence(_UdpStreamGroupId);
+            return true;
+        }
+
+        StreamEffect effect = new(_StreamTracker.GetOrCreateStreamIndex(in connKey));
+        parentField.Append(_StreamFieldId, FieldValue.NewU64(effect.StreamIndex));
+        context.RecordGroupPresence(_UdpStreamGroupId);
+        _RecordStreamEffect(parentField.Packet.Id, layerKey, effect);
+        return true;
+    }
+
+    #endregion
 
     #region Fallback IP Address Lookup (sibling walk)
 

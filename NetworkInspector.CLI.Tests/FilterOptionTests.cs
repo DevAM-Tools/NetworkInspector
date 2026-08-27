@@ -48,7 +48,7 @@ internal sealed class FilterOptionTests
     {
         using Stack stack = _BuildStack();
         PacketIndex index = new(stack);
-        Packet packet = _ParseOneIndexedFrame(stack, index, packetId: 1);
+        Packet packet = _ParseOneIndexedFrame(stack, index, packetId: 0);
         _ = CliFilter.TryCompile("udp", stack, out IFilter? filter);
 
         bool decided = CliFilter.TryMatch(filter!, packet, index, out bool matched);
@@ -64,9 +64,10 @@ internal sealed class FilterOptionTests
         PacketIndex index = new(stack);
         _ = CliFilter.TryCompile("flank(ip.ttl, changed, within: 1s)", stack, out IFilter? filter);
 
-        // Evaluating a high packet id first makes the replay of a lower id an out-of-order error.
-        _ = filter!.TryIsMatch(_ParseOneIndexedFrame(stack, index, packetId: 500), index, out _, out _);
-        bool decided = CliFilter.TryMatch(filter, _ParseOneIndexedFrame(stack, index, packetId: 1), index, out bool matched);
+        // Dense first parses (0 then 1); evaluating 1 then 0 poisons a stateful filter.
+        _ = _ParseOneIndexedFrame(stack, index, packetId: 0);
+        _ = filter!.TryIsMatch(_ParseOneIndexedFrame(stack, index, packetId: 1), index, out _, out _);
+        bool decided = CliFilter.TryMatch(filter, _ParseOneIndexedFrame(stack, index, packetId: 0), index, out bool matched);
 
         await Assert.That(decided).IsFalse();
         await Assert.That(matched).IsFalse();

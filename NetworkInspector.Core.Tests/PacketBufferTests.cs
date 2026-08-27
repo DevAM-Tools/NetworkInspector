@@ -31,7 +31,7 @@ internal sealed class PacketBufferTests
         using Stack stack = _BuildStack();
         byte[] frameData = FrameBuilders.GenerateStaticUdpFrame(128);
         Frame frame = _MakeFrame(stack, frameData);
-        Packet packet = Packet.ParseFrame(new PacketId(1), stack, frame, stack.GetProtocolId("eth")!.Value);
+        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, stack.GetProtocolId("eth")!.Value);
 
         byte[] extra1 = [0x01, 0x02];
         byte[] extra2 = [0x03, 0x04, 0x05];
@@ -58,7 +58,7 @@ internal sealed class PacketBufferTests
     {
         using Stack stack = _BuildStack();
         Frame frame = _MakeFrame(stack, FrameBuilders.GenerateStaticUdpFrame(64));
-        Packet packet = Packet.ParseFrame(new PacketId(1), stack, frame, stack.GetProtocolId("eth")!.Value);
+        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, stack.GetProtocolId("eth")!.Value);
 
         LazyString prefix = new("prefix: ");
         LazyString suffix = new(" suffix");
@@ -75,7 +75,7 @@ internal sealed class PacketBufferTests
     {
         using Stack stack = _BuildStack();
         Frame frame = _MakeFrame(stack, FrameBuilders.GenerateStaticUdpFrame(128));
-        Packet packet = Packet.ParseFrame(new PacketId(1), stack, frame, stack.GetProtocolId("eth")!.Value);
+        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, stack.GetProtocolId("eth")!.Value);
 
         int eager = packet.FieldCount(materialize: false); // materialize: false — current materialized count only
         int materialized = packet.FieldCount(materialize: true); // materialize: true — count after full materialization
@@ -88,7 +88,7 @@ internal sealed class PacketBufferTests
     {
         using Stack stack = _BuildStack();
         Frame frame = _MakeFrame(stack, FrameBuilders.GenerateStaticUdpFrame(64));
-        Packet packet = Packet.ParseFrame(new PacketId(1), stack, frame, stack.GetProtocolId("eth")!.Value);
+        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, stack.GetProtocolId("eth")!.Value);
 
         bool foundRoot = packet.TryGetFieldMutAt(0, out MutField root);
         FieldId rootFieldId = root.FieldId;
@@ -105,7 +105,7 @@ internal sealed class PacketBufferTests
         using Stack stack = _BuildStack();
         byte[] data = FrameBuilders.GenerateStaticUdpFrame(64);
         Frame frame1 = _MakeFrame(stack, data, 1);
-        Packet packet = Packet.ParseFrame(new PacketId(1), stack, frame1, stack.GetProtocolId("eth")!.Value);
+        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame1, stack.GetProtocolId("eth")!.Value);
         packet.AddBuffer(new byte[] { 0xFF });
 
         Frame frame2 = _MakeFrame(stack, data, 2);
@@ -122,7 +122,7 @@ internal sealed class PacketBufferTests
     {
         using Stack stack = _BuildStack();
         Frame frame = _MakeFrame(stack, FrameBuilders.GenerateStaticUdpFrame(128));
-        Packet packet = Packet.ParseFrame(new PacketId(1), stack, frame, stack.GetProtocolId("eth")!.Value);
+        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, stack.GetProtocolId("eth")!.Value);
 
         FieldId ethType = stack.GetFieldId("eth.type")!.Value;
         FieldLookupCookie cookie = default;
@@ -136,7 +136,7 @@ internal sealed class PacketBufferTests
     {
         using Stack stack = _BuildStack();
         Frame frame = _MakeFrame(stack, FrameBuilders.GenerateStaticUdpFrame(64));
-        Packet packet = Packet.ParseFrame(new PacketId(1), stack, frame, stack.GetProtocolId("eth")!.Value);
+        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, stack.GetProtocolId("eth")!.Value);
         packet.SetError("parse failed");
 
         FieldLookupCookie cookie = default;
@@ -153,11 +153,11 @@ internal sealed class PacketBufferTests
         using Stack stack = _BuildStack();
         byte[] data = FrameBuilders.GenerateStaticUdpFrame(128);
         Frame frame1 = _MakeFrame(stack, data, 1);
-        Packet seed = Packet.ParseFrame(new PacketId(1), stack, frame1, stack.GetProtocolId("eth")!.Value);
+        Packet seed = Packet.ParseFrame(new PacketId(0), stack, frame1, stack.GetProtocolId("eth")!.Value);
         Frame frame2 = _MakeFrame(stack, data, 2);
-        RecycleError? err = Packet.TryParseFrame(seed, new PacketId(2), stack, frame2);
+        RecycleError? err = Packet.TryParseFrame(seed, new PacketId(1), stack, frame2);
         await Assert.That(err).IsNull();
-        await Assert.That(seed.Id).IsEqualTo(new PacketId(2));
+        await Assert.That(seed.Id).IsEqualTo(new PacketId(1));
     }
 
     [Test]
@@ -166,11 +166,11 @@ internal sealed class PacketBufferTests
         using Stack stack = _BuildStack();
         byte[] data = FrameBuilders.GenerateStaticUdpFrame(128);
         Frame frame1 = _MakeFrame(stack, data, 1);
-        Packet seed = Packet.ParseFrame(new PacketId(1), stack, frame1, stack.GetProtocolId("eth")!.Value);
+        Packet seed = Packet.ParseFrame(new PacketId(0), stack, frame1, stack.GetProtocolId("eth")!.Value);
         PacketIndex index = new(stack);
         Frame frame2 = _MakeFrame(stack, data, 2);
         ProtocolId eth = stack.GetProtocolId("eth")!.Value;
-        RecycleError? err = Packet.TryParseFrameIndexed(seed, new PacketId(2), stack, frame2, index, eth);
+        RecycleError? err = Packet.TryParseFrameIndexed(seed, new PacketId(1), stack, frame2, index, eth);
         await Assert.That(err).IsNull();
     }
 
@@ -182,8 +182,8 @@ internal sealed class PacketBufferTests
         Frame frame = _MakeFrame(stack, data);
         PacketIndex index = new(stack);
         ProtocolId eth = stack.GetProtocolId("eth")!.Value;
-        Packet packet = Packet.ParseFrameIndexed(new PacketId(5), stack, frame, index, eth);
-        await Assert.That(packet.Id).IsEqualTo(new PacketId(5));
+        Packet packet = Packet.ParseFrameIndexed(new PacketId(0), stack, frame, index, eth);
+        await Assert.That(packet.Id).IsEqualTo(new PacketId(0));
         await Assert.That(packet.IsFinalized).IsTrue();
     }
 
@@ -192,7 +192,7 @@ internal sealed class PacketBufferTests
     {
         using Stack stack = _BuildStack();
         Frame frame = _MakeFrame(stack, FrameBuilders.GenerateStaticUdpFrame(64));
-        Packet packet = Packet.ParseFrame(new PacketId(1), stack, frame, stack.GetProtocolId("eth")!.Value);
+        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, stack.GetProtocolId("eth")!.Value);
         packet.SetFieldError(0, "field error");
         await Assert.That(packet.FieldCount(materialize: true)).IsGreaterThan(1); // materialize: true — count after full materialization
     }
@@ -203,10 +203,10 @@ internal sealed class PacketBufferTests
         using Stack stack = _BuildStack();
         byte[] data = FrameBuilders.GenerateStaticUdpFrame(128);
         Frame frame1 = _MakeFrame(stack, data, 1);
-        Packet seed = Packet.ParseFrame(new PacketId(1), stack, frame1, stack.GetProtocolId("eth")!.Value);
+        Packet seed = Packet.ParseFrame(new PacketId(0), stack, frame1, stack.GetProtocolId("eth")!.Value);
         PacketIndex index = new(stack);
         Frame frame2 = _MakeFrame(stack, data, 2);
-        RecycleError? err = Packet.TryParseFrameIndexed(seed, new PacketId(2), stack, frame2, index);
+        RecycleError? err = Packet.TryParseFrameIndexed(seed, new PacketId(1), stack, frame2, index);
         await Assert.That(err).IsNull();
     }
 
@@ -215,7 +215,7 @@ internal sealed class PacketBufferTests
     {
         using Stack stack = _BuildStack();
         Frame frame = _MakeFrame(stack, FrameBuilders.GenerateStaticUdpFrame(64));
-        Packet packet = Packet.ParseFrame(new PacketId(1), stack, frame, stack.GetProtocolId("eth")!.Value);
+        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, stack.GetProtocolId("eth")!.Value);
 
         ReadOnlyMemory<byte>? negative = packet.Buffer(-1);
         ReadOnlyMemory<byte>? minValue = packet.Buffer(int.MinValue);
@@ -229,7 +229,7 @@ internal sealed class PacketBufferTests
     {
         using Stack stack = _BuildStack();
         Frame frame = _MakeFrame(stack, FrameBuilders.GenerateStaticUdpFrame(128));
-        Packet packet = Packet.ParseFrame(new PacketId(1), stack, frame, stack.GetProtocolId("eth")!.Value);
+        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, stack.GetProtocolId("eth")!.Value);
         int count = packet.FieldCount(materialize: false); // materialize: false — current materialized count only
         await Assert.That(count).IsGreaterThan(0);
         await Assert.That(packet.Info.Length).IsGreaterThan(0);

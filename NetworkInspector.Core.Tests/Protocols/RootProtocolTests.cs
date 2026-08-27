@@ -20,10 +20,16 @@ internal sealed class RootProtocolTests
             new FrameId(1), Timestamp.FromSecs(0), data,
             LinkType.Ethernet, FrameInterfaceId.Invalid, stack.FrameInterfaceRegistry).Value;
         Packet packet = new(new PacketId(1), stack, frame);
-        MutField rootField = packet.RootFieldMut();
 
-        ParseResult result = root.Parse(in rootField, data, new ParseContext(stack));
-        await Assert.That(result.TryGetConsumed(out int consumed)).IsTrue();
+        bool consumedOk;
+        int consumed;
+        {
+            MutField rootField = packet.RootFieldMut();
+            ParseResult result = root.Parse(in rootField, data, new ParseContext(stack));
+            consumedOk = result.TryGetConsumed(out consumed);
+        }
+
+        await Assert.That(consumedOk).IsTrue();
         await Assert.That(consumed).IsEqualTo(0);
     }
 }

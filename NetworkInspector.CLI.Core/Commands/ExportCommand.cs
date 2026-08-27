@@ -32,7 +32,10 @@ internal static class ExportCommand
     /// <param name="maxPackets">Stop after this many packets (0 = unlimited).</param>
     /// <param name="progressInterval">Print progress every N packets to stderr (0 = silent).</param>
     /// <param name="tolerant">When <see langword="true"/>, log and skip frames that throw.</param>
-    /// <param name="packetIdCounter">Monotonically increasing packet ID counter.</param>
+    /// <param name="packetIdCounter">
+    /// Monotonic packet-id allocator. Pass 0 for a fresh loop; each frame consumes the current
+    /// value and then increments, so first-parse ids are dense <c>0, 1, 2, …</c>.
+    /// </param>
     /// <param name="cancellationToken">Cooperative cancellation.</param>
     /// <param name="outputsWritten">Number of output files or dataset directories finalized.</param>
     /// <returns>Number of packets exported successfully.</returns>
@@ -90,7 +93,7 @@ internal static class ExportCommand
                     continue;
                 }
 
-                int idValue = ++packetIdCounter;
+                int idValue = packetIdCounter++;
                 ArrayIndexIdRange.ThrowIfInvalidNextIndex(idValue, "packet");
 
                 PacketId pid = new(idValue);

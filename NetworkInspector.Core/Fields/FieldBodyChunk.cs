@@ -7,8 +7,9 @@ namespace NetworkInspector.Core.Fields;
 /// Each chunk represents 16 <see cref="FieldBody"/> slots (16 × ~64 bytes = 1024 bytes).
 /// Chunk descriptors themselves are stored in a slab-backed array managed by <see cref="SlabAllocator{T}"/>.
 /// <para>
-/// <b>Thread-safety:</b> Chunk descriptors are written during single-threaded parsing and
-/// may also be appended during post-<see cref="Packet.Seal"/> lazy materialization.
+/// <b>Thread-safety:</b> Chunk descriptors are written by the single thread that parses the
+/// owning packet, and may also be appended during post-<see cref="Packet.Seal"/> lazy
+/// materialization from any thread.
 /// Cross-thread reads are safe because <see cref="Packet"/> publishes the descriptor table
 /// as one object and uses a volatile chunk-count store as the release fence for a new chunk.
 /// </para>

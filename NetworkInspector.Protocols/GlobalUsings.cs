@@ -19,11 +19,13 @@ global using System.Text;
 global using System.Text.Json;
 global using System.Text.Json.Serialization;
 global using System.Text.Json.Serialization.Metadata;
+global using System.Threading;
 #endregion
 
 #region NetworkInspector.Core
 global using NetworkInspector.Core;
 global using NetworkInspector.Core.Cache;
+global using NetworkInspector.Core.Collections;
 global using NetworkInspector.Core.Errors;
 global using NetworkInspector.Core.Fields;
 global using NetworkInspector.Core.Ids;

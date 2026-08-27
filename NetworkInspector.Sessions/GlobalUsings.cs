@@ -14,6 +14,7 @@ global using System.Threading;
 
 #region NetworkInspector.Core
 global using NetworkInspector.Core;
+global using NetworkInspector.Core.Collections;
 global using NetworkInspector.Core.Fields;
 global using NetworkInspector.Core.Ids;
 global using NetworkInspector.Core.Index;
