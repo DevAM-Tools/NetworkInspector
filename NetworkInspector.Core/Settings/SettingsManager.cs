@@ -559,6 +559,81 @@ public sealed class SettingsManager : IDisposable
         return null;
     }
 
+    /// <summary>
+    /// Convenience: gets a boolean array copy by name.
+    /// Returns a defensive copy, or <see langword="null"/> when the name is unregistered
+    /// or the setting is not <see cref="SettingType.BoolArray"/>.
+    /// </summary>
+    public bool[]? GetBoolArraySetting(string name)
+    {
+        Setting? s = GetSetting(name);
+        if (s is not null && s.TryGetAsBoolArray(out bool[] v))
+        {
+            return v;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Convenience: gets a string array copy by name.
+    /// Returns a defensive copy, or <see langword="null"/> when the name is unregistered
+    /// or the setting is not <see cref="SettingType.StringArray"/>.
+    /// </summary>
+    public string[]? GetStringArraySetting(string name)
+    {
+        Setting? s = GetSetting(name);
+        if (s is not null && s.TryGetAsStringArray(out string[] v))
+        {
+            return v;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Convenience: gets a double array copy by name.
+    /// Returns a defensive copy, or <see langword="null"/> when the name is unregistered
+    /// or the setting is not <see cref="SettingType.F64Array"/>.
+    /// </summary>
+    public double[]? GetF64ArraySetting(string name)
+    {
+        Setting? s = GetSetting(name);
+        if (s is not null && s.TryGetAsF64Array(out double[] v))
+        {
+            return v;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Convenience: gets a ulong array copy by name.
+    /// Returns a defensive copy, or <see langword="null"/> when the name is unregistered
+    /// or the setting is not <see cref="SettingType.U64Array"/>.
+    /// </summary>
+    public ulong[]? GetU64ArraySetting(string name)
+    {
+        Setting? s = GetSetting(name);
+        if (s is not null && s.TryGetAsU64Array(out ulong[] v))
+        {
+            return v;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Convenience: gets a long array copy by name.
+    /// Returns a defensive copy, or <see langword="null"/> when the name is unregistered
+    /// or the setting is not <see cref="SettingType.I64Array"/>.
+    /// </summary>
+    public long[]? GetI64ArraySetting(string name)
+    {
+        Setting? s = GetSetting(name);
+        if (s is not null && s.TryGetAsI64Array(out long[] v))
+        {
+            return v;
+        }
+        return null;
+    }
+
     #endregion
 
     #region Change Notification
@@ -1086,6 +1161,21 @@ public sealed class SettingsManager : IDisposable
                 return _TryParseEnumWithMetadata(node, enumMetadata, groupName, settingName);
             }
 
+            if (type is SettingType.BoolArray or SettingType.StringArray or SettingType.F64Array
+                or SettingType.U64Array or SettingType.I64Array)
+            {
+                SettingValue? arrayValue = type switch
+                {
+                    SettingType.BoolArray => _TryParseBoolArray(node),
+                    SettingType.StringArray => _TryParseStringArray(node),
+                    SettingType.F64Array => _TryParseF64Array(node),
+                    SettingType.U64Array => _TryParseU64Array(node),
+                    SettingType.I64Array => _TryParseI64Array(node),
+                    _ => null,
+                };
+                return (arrayValue, arrayValue is not null ? SettingLoadResult.Success : SettingLoadResult.TypeMismatch, null);
+            }
+
             SettingValue? value = type switch
             {
                 SettingType.Bool => (SettingValue?)SettingValue.Bool(node.GetValue<bool>()),
@@ -1160,6 +1250,139 @@ public sealed class SettingsManager : IDisposable
             }
         }
         return null;
+    }
+
+    /// <summary>Tries to parse a <see cref="SettingType.BoolArray"/> from a JSON array of booleans.</summary>
+    private static SettingValue? _TryParseBoolArray(JsonNode node)
+    {
+        if (node is not JsonArray arr)
+        {
+            return null;
+        }
+
+        bool[] values = new bool[arr.Count];
+        for (int i = 0; i < arr.Count; i++)
+        {
+            JsonNode? el = arr[i];
+            if (el is null)
+            {
+                return null;
+            }
+
+            values[i] = el.GetValue<bool>();
+        }
+
+        return SettingValue.BoolArray(values);
+    }
+
+    /// <summary>Tries to parse a <see cref="SettingType.StringArray"/> from a JSON array of strings.</summary>
+    private static SettingValue? _TryParseStringArray(JsonNode node)
+    {
+        if (node is not JsonArray arr)
+        {
+            return null;
+        }
+
+        string[] values = new string[arr.Count];
+        for (int i = 0; i < arr.Count; i++)
+        {
+            JsonNode? el = arr[i];
+            if (el is not JsonValue val || !val.TryGetValue(out string? s) || s is null)
+            {
+                return null;
+            }
+
+            values[i] = s;
+        }
+
+        return SettingValue.StringArray(values);
+    }
+
+    /// <summary>Tries to parse a <see cref="SettingType.F64Array"/> from a JSON array of finite numbers.</summary>
+    private static SettingValue? _TryParseF64Array(JsonNode node)
+    {
+        if (node is not JsonArray arr)
+        {
+            return null;
+        }
+
+        double[] values = new double[arr.Count];
+        for (int i = 0; i < arr.Count; i++)
+        {
+            JsonNode? el = arr[i];
+            if (el is null)
+            {
+                return null;
+            }
+
+            SettingValue? parsed = _TryParseFiniteF64(el);
+            if (parsed is null || !parsed.Value.TryGetAsF64(out double d))
+            {
+                return null;
+            }
+
+            values[i] = d;
+        }
+
+        return SettingValue.F64Array(values);
+    }
+
+    /// <summary>Tries to parse a <see cref="SettingType.U64Array"/> from a JSON array of unsigned integers.</summary>
+    private static SettingValue? _TryParseU64Array(JsonNode node)
+    {
+        if (node is not JsonArray arr)
+        {
+            return null;
+        }
+
+        ulong[] values = new ulong[arr.Count];
+        for (int i = 0; i < arr.Count; i++)
+        {
+            JsonNode? el = arr[i];
+            if (el is null)
+            {
+                return null;
+            }
+
+            SettingValue? parsed = _TryParseU64(el);
+            if (parsed is null || !parsed.Value.TryGetAsU64(out ulong u))
+            {
+                return null;
+            }
+
+            values[i] = u;
+        }
+
+        return SettingValue.U64Array(values);
+    }
+
+    /// <summary>Tries to parse a <see cref="SettingType.I64Array"/> from a JSON array of signed integers.</summary>
+    private static SettingValue? _TryParseI64Array(JsonNode node)
+    {
+        if (node is not JsonArray arr)
+        {
+            return null;
+        }
+
+        long[] values = new long[arr.Count];
+        for (int i = 0; i < arr.Count; i++)
+        {
+            JsonNode? el = arr[i];
+            if (el is null)
+            {
+                return null;
+            }
+
+            SettingValue? parsed = _TryParseI64(el);
+            if (parsed is null || !parsed.Value.TryGetAsI64(out long l))
+            {
+                return null;
+            }
+
+            values[i] = l;
+        }
+
+        return SettingValue.I64Array(values);
     }
 
     /// <summary>Tries to parse a <see cref="SettingType.Bytes"/> from a base64-encoded JSON string.
@@ -1290,6 +1513,16 @@ public sealed class SettingsManager : IDisposable
                 return JsonValue.Create(Convert.ToBase64String(bytesVal));
             case SettingType.Enum:
                 return _CreateEnumJson(value);
+            case SettingType.BoolArray:
+                return _BoolArrayToJson(value);
+            case SettingType.StringArray:
+                return _StringArrayToJson(value);
+            case SettingType.F64Array:
+                return _F64ArrayToJson(value);
+            case SettingType.U64Array:
+                return _U64ArrayToJson(value);
+            case SettingType.I64Array:
+                return _I64ArrayToJson(value);
             default:
                 return null;
         }
@@ -1306,6 +1539,72 @@ public sealed class SettingsManager : IDisposable
             ThrowHelpers.ThrowNonFiniteF64(f64);
         }
         return JsonValue.Create(f64);
+    }
+
+    private static JsonArray _BoolArrayToJson(SettingValue value)
+    {
+        value.TryGetAsBoolArray(out bool[] items);
+        JsonArray json = [];
+        for (int i = 0; i < items.Length; i++)
+        {
+            json.Add(JsonValue.Create(items[i]));
+        }
+
+        return json;
+    }
+
+    private static JsonArray _StringArrayToJson(SettingValue value)
+    {
+        value.TryGetAsStringArray(out string[] items);
+        JsonArray json = [];
+        for (int i = 0; i < items.Length; i++)
+        {
+            json.Add(JsonValue.Create(items[i]));
+        }
+
+        return json;
+    }
+
+    private static JsonArray _F64ArrayToJson(SettingValue value)
+    {
+        value.TryGetAsF64Array(out double[] items);
+        JsonArray json = [];
+        for (int i = 0; i < items.Length; i++)
+        {
+            double d = items[i];
+            if (!double.IsFinite(d))
+            {
+                ThrowHelpers.ThrowNonFiniteF64(d);
+            }
+
+            json.Add(JsonValue.Create(d));
+        }
+
+        return json;
+    }
+
+    private static JsonArray _U64ArrayToJson(SettingValue value)
+    {
+        value.TryGetAsU64Array(out ulong[] items);
+        JsonArray json = [];
+        for (int i = 0; i < items.Length; i++)
+        {
+            json.Add(JsonValue.Create(items[i]));
+        }
+
+        return json;
+    }
+
+    private static JsonArray _I64ArrayToJson(SettingValue value)
+    {
+        value.TryGetAsI64Array(out long[] items);
+        JsonArray json = [];
+        for (int i = 0; i < items.Length; i++)
+        {
+            json.Add(JsonValue.Create(items[i]));
+        }
+
+        return json;
     }
 
     /// <summary>Creates a JSON object for an enum setting value.</summary>

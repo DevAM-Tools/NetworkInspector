@@ -110,5 +110,20 @@ public readonly struct ReadOnlySettingsManagerView : IReadOnlySettingsManager
     /// <inheritdoc/>
     public (string Name, ulong Value)? GetEnumSetting(string name) => _Owner.GetEnumSetting(name);
 
+    /// <inheritdoc/>
+    public bool[]? GetBoolArraySetting(string name) => _Owner.GetBoolArraySetting(name);
+
+    /// <inheritdoc/>
+    public string[]? GetStringArraySetting(string name) => _Owner.GetStringArraySetting(name);
+
+    /// <inheritdoc/>
+    public double[]? GetF64ArraySetting(string name) => _Owner.GetF64ArraySetting(name);
+
+    /// <inheritdoc/>
+    public ulong[]? GetU64ArraySetting(string name) => _Owner.GetU64ArraySetting(name);
+
+    /// <inheritdoc/>
+    public long[]? GetI64ArraySetting(string name) => _Owner.GetI64ArraySetting(name);
+
     #endregion
 }

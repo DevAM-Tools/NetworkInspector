@@ -19,6 +19,7 @@ public readonly struct SettingValue : IEquatable<SettingValue>, ISpanFormattable
     // String: _Bits = 0, _ReferenceValue = string
     // Bytes:  _Bits = 0, _ReferenceValue = byte[]
     // Enum:   _Bits = numeric value, _ReferenceValue = string (name)
+    // BoolArray/StringArray/F64Array/U64Array/I64Array: _Bits = 0, _ReferenceValue = T[] (privately owned copy)
 
     /// <summary>Returns the type discriminant for this value.</summary>
     public SettingType Type { get; }
@@ -78,6 +79,56 @@ public readonly struct SettingValue : IEquatable<SettingValue>, ISpanFormattable
     {
         ArgumentNullException.ThrowIfNull(name);
         return new(SettingType.Enum, (long)numericValue, name);
+    }
+
+    /// <summary>Creates a boolean array setting value. The array is defensively copied to prevent external mutation.</summary>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="value"/> is null.</exception>
+    public static SettingValue BoolArray(bool[] value)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        return new(SettingType.BoolArray, 0L, value.ToArray());
+    }
+
+    /// <summary>
+    /// Creates a string array setting value. The array is defensively copied to prevent external mutation.
+    /// Null elements are rejected because scalar <see cref="String"/> values cannot be null.
+    /// </summary>
+    /// <exception cref="ArgumentNullException">
+    /// Thrown when <paramref name="value"/> is null or any element is null.
+    /// </exception>
+    public static SettingValue StringArray(string[] value)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        for (int i = 0; i < value.Length; i++)
+        {
+            ArgumentNullException.ThrowIfNull(value[i]);
+        }
+
+        return new(SettingType.StringArray, 0L, value.ToArray());
+    }
+
+    /// <summary>Creates an F64 array setting value. The array is defensively copied to prevent external mutation.</summary>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="value"/> is null.</exception>
+    public static SettingValue F64Array(double[] value)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        return new(SettingType.F64Array, 0L, value.ToArray());
+    }
+
+    /// <summary>Creates a U64 array setting value. The array is defensively copied to prevent external mutation.</summary>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="value"/> is null.</exception>
+    public static SettingValue U64Array(ulong[] value)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        return new(SettingType.U64Array, 0L, value.ToArray());
+    }
+
+    /// <summary>Creates an I64 array setting value. The array is defensively copied to prevent external mutation.</summary>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="value"/> is null.</exception>
+    public static SettingValue I64Array(long[] value)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        return new(SettingType.I64Array, 0L, value.ToArray());
     }
 
     #endregion
@@ -198,6 +249,91 @@ public readonly struct SettingValue : IEquatable<SettingValue>, ISpanFormattable
         return false;
     }
 
+    /// <summary>
+    /// Returns <see langword="true"/> if this value is <see cref="SettingType.BoolArray"/> and
+    /// writes a <em>defensive copy</em> of the boolean array into <paramref name="value"/>;
+    /// otherwise sets <paramref name="value"/> to an empty array and returns
+    /// <see langword="false"/>. The copy prevents callers from mutating internal state.
+    /// </summary>
+    public bool TryGetAsBoolArray(out bool[] value)
+    {
+        if (Type == SettingType.BoolArray && _ReferenceValue is bool[] stored)
+        {
+            value = stored.ToArray();
+            return true;
+        }
+        value = [];
+        return false;
+    }
+
+    /// <summary>
+    /// Returns <see langword="true"/> if this value is <see cref="SettingType.StringArray"/> and
+    /// writes a <em>defensive copy</em> of the string array into <paramref name="value"/>;
+    /// otherwise sets <paramref name="value"/> to an empty array and returns
+    /// <see langword="false"/>. The copy prevents callers from mutating internal state.
+    /// </summary>
+    public bool TryGetAsStringArray(out string[] value)
+    {
+        if (Type == SettingType.StringArray && _ReferenceValue is string[] stored)
+        {
+            value = stored.ToArray();
+            return true;
+        }
+        value = [];
+        return false;
+    }
+
+    /// <summary>
+    /// Returns <see langword="true"/> if this value is <see cref="SettingType.F64Array"/> and
+    /// writes a <em>defensive copy</em> of the double array into <paramref name="value"/>;
+    /// otherwise sets <paramref name="value"/> to an empty array and returns
+    /// <see langword="false"/>. The copy prevents callers from mutating internal state.
+    /// </summary>
+    public bool TryGetAsF64Array(out double[] value)
+    {
+        if (Type == SettingType.F64Array && _ReferenceValue is double[] stored)
+        {
+            value = stored.ToArray();
+            return true;
+        }
+        value = [];
+        return false;
+    }
+
+    /// <summary>
+    /// Returns <see langword="true"/> if this value is <see cref="SettingType.U64Array"/> and
+    /// writes a <em>defensive copy</em> of the ulong array into <paramref name="value"/>;
+    /// otherwise sets <paramref name="value"/> to an empty array and returns
+    /// <see langword="false"/>. The copy prevents callers from mutating internal state.
+    /// </summary>
+    public bool TryGetAsU64Array(out ulong[] value)
+    {
+        if (Type == SettingType.U64Array && _ReferenceValue is ulong[] stored)
+        {
+            value = stored.ToArray();
+            return true;
+        }
+        value = [];
+        return false;
+    }
+
+    /// <summary>
+    /// Returns <see langword="true"/> if this value is <see cref="SettingType.I64Array"/> and
+    /// writes a <em>defensive copy</em> of the long array into <paramref name="value"/>;
+    /// otherwise sets <paramref name="value"/> to an empty array and returns
+    /// <see langword="false"/>. The copy prevents callers from mutating internal state.
+    /// </summary>
+    public bool TryGetAsI64Array(out long[] value)
+    {
+        if (Type == SettingType.I64Array && _ReferenceValue is long[] stored)
+        {
+            value = stored.ToArray();
+            return true;
+        }
+        value = [];
+        return false;
+    }
+
     #endregion
 
     #region Equality
@@ -222,6 +358,11 @@ public readonly struct SettingValue : IEquatable<SettingValue>, ISpanFormattable
             SettingType.Bytes => _BytesEqual((byte[]?)_ReferenceValue, (byte[]?)other._ReferenceValue),
             SettingType.Enum => _Bits == other._Bits &&
                 string.Equals((string?)_ReferenceValue, (string?)other._ReferenceValue, StringComparison.Ordinal),
+            SettingType.BoolArray => _ArrayEqual((bool[]?)_ReferenceValue, (bool[]?)other._ReferenceValue),
+            SettingType.StringArray => _StringArrayEqual((string[]?)_ReferenceValue, (string[]?)other._ReferenceValue),
+            SettingType.F64Array => _F64ArrayEqual((double[]?)_ReferenceValue, (double[]?)other._ReferenceValue),
+            SettingType.U64Array => _ArrayEqual((ulong[]?)_ReferenceValue, (ulong[]?)other._ReferenceValue),
+            SettingType.I64Array => _ArrayEqual((long[]?)_ReferenceValue, (long[]?)other._ReferenceValue),
             _ => false,
         };
     }
@@ -241,6 +382,11 @@ public readonly struct SettingValue : IEquatable<SettingValue>, ISpanFormattable
             SettingType.String => HashCode.Combine(Type, _ReferenceValue),
             SettingType.Bytes => _ContentHashBytes((byte[]?)_ReferenceValue),
             SettingType.Enum => HashCode.Combine(Type, _Bits, _ReferenceValue),
+            SettingType.BoolArray => _ContentHashUnmanaged((bool[]?)_ReferenceValue, SettingType.BoolArray),
+            SettingType.StringArray => _ContentHashStrings((string[]?)_ReferenceValue),
+            SettingType.F64Array => _ContentHashF64Array((double[]?)_ReferenceValue),
+            SettingType.U64Array => _ContentHashUnmanaged((ulong[]?)_ReferenceValue, SettingType.U64Array),
+            SettingType.I64Array => _ContentHashUnmanaged((long[]?)_ReferenceValue, SettingType.I64Array),
             _ => HashCode.Combine(Type),
         };
 
@@ -306,6 +452,16 @@ public readonly struct SettingValue : IEquatable<SettingValue>, ISpanFormattable
                 }
                 charsWritten = 0;
                 return true;
+            case SettingType.BoolArray:
+                return _TryFormatArrayCountLabel(_ArrayLength((bool[]?)_ReferenceValue), " bool]", destination, out charsWritten);
+            case SettingType.StringArray:
+                return _TryFormatArrayCountLabel(_ArrayLength((string[]?)_ReferenceValue), " string]", destination, out charsWritten);
+            case SettingType.F64Array:
+                return _TryFormatArrayCountLabel(_ArrayLength((double[]?)_ReferenceValue), " f64]", destination, out charsWritten);
+            case SettingType.U64Array:
+                return _TryFormatArrayCountLabel(_ArrayLength((ulong[]?)_ReferenceValue), " u64]", destination, out charsWritten);
+            case SettingType.I64Array:
+                return _TryFormatArrayCountLabel(_ArrayLength((long[]?)_ReferenceValue), " i64]", destination, out charsWritten);
             default:
                 charsWritten = 0;
                 return true;
@@ -381,6 +537,16 @@ public readonly struct SettingValue : IEquatable<SettingValue>, ISpanFormattable
                 }
                 bytesWritten = 0;
                 return true;
+            case SettingType.BoolArray:
+                return _TryFormatArrayCountLabelUtf8(_ArrayLength((bool[]?)_ReferenceValue), " bool]"u8, utf8Destination, out bytesWritten);
+            case SettingType.StringArray:
+                return _TryFormatArrayCountLabelUtf8(_ArrayLength((string[]?)_ReferenceValue), " string]"u8, utf8Destination, out bytesWritten);
+            case SettingType.F64Array:
+                return _TryFormatArrayCountLabelUtf8(_ArrayLength((double[]?)_ReferenceValue), " f64]"u8, utf8Destination, out bytesWritten);
+            case SettingType.U64Array:
+                return _TryFormatArrayCountLabelUtf8(_ArrayLength((ulong[]?)_ReferenceValue), " u64]"u8, utf8Destination, out bytesWritten);
+            case SettingType.I64Array:
+                return _TryFormatArrayCountLabelUtf8(_ArrayLength((long[]?)_ReferenceValue), " i64]"u8, utf8Destination, out bytesWritten);
             default:
                 bytesWritten = 0;
                 return true;
@@ -393,7 +559,7 @@ public readonly struct SettingValue : IEquatable<SettingValue>, ISpanFormattable
 
     /// <summary>
     /// Tries to determine the number of characters needed to format this value.
-    /// Returns <see langword="true"/> with an exact count for Bool, String, Bytes, Enum, and
+    /// Returns <see langword="true"/> with an exact count for Bool, String, Bytes, Enum, array types, and
     /// default-format integers. Returns <see langword="false"/> for <see cref="SettingType.F64"/>
     /// and for integers when a non-empty format string is supplied, because those lengths depend
     /// on the value and format.
@@ -411,6 +577,21 @@ public readonly struct SettingValue : IEquatable<SettingValue>, ISpanFormattable
             case SettingType.Bytes:
                 int byteCount = _ReferenceValue is byte[] bytes ? bytes.Length : 0;
                 size = _BytesLabelCharCount(byteCount);
+                return true;
+            case SettingType.BoolArray:
+                size = _ArrayCountLabelCharCount(_ArrayLength((bool[]?)_ReferenceValue), 6);
+                return true;
+            case SettingType.StringArray:
+                size = _ArrayCountLabelCharCount(_ArrayLength((string[]?)_ReferenceValue), 8);
+                return true;
+            case SettingType.F64Array:
+                size = _ArrayCountLabelCharCount(_ArrayLength((double[]?)_ReferenceValue), 5);
+                return true;
+            case SettingType.U64Array:
+                size = _ArrayCountLabelCharCount(_ArrayLength((ulong[]?)_ReferenceValue), 5);
+                return true;
+            case SettingType.I64Array:
+                size = _ArrayCountLabelCharCount(_ArrayLength((long[]?)_ReferenceValue), 5);
                 return true;
             case SettingType.Enum:
                 if (_ReferenceValue is string name)
@@ -614,6 +795,50 @@ public readonly struct SettingValue : IEquatable<SettingValue>, ISpanFormattable
         return true;
     }
 
+    /// <summary>
+    /// Formats <c>[N type]</c> for array settings. <paramref name="suffixWithBracket"/> is the text after the count,
+    /// including the closing bracket (e.g. <c> u64]</c>).
+    /// </summary>
+    private static bool _TryFormatArrayCountLabel(
+        int count, ReadOnlySpan<char> suffixWithBracket, Span<char> destination, out int charsWritten)
+    {
+        int total = _ArrayCountLabelCharCount(count, suffixWithBracket.Length);
+        if (destination.Length < total)
+        {
+            charsWritten = 0;
+            return false;
+        }
+
+        destination[0] = '[';
+        count.TryFormat(destination[1..], out int digitCount, default, CultureInfo.InvariantCulture);
+        suffixWithBracket.CopyTo(destination[(1 + digitCount)..]);
+        charsWritten = total;
+        return true;
+    }
+
+    /// <summary>UTF-8 counterpart of <see cref="_TryFormatArrayCountLabel"/>.</summary>
+    private static bool _TryFormatArrayCountLabelUtf8(
+        int count, ReadOnlySpan<byte> suffixWithBracket, Span<byte> destination, out int bytesWritten)
+    {
+        int total = _ArrayCountLabelCharCount(count, suffixWithBracket.Length);
+        if (destination.Length < total)
+        {
+            bytesWritten = 0;
+            return false;
+        }
+
+        destination[0] = (byte)'[';
+        count.TryFormat(destination[1..], out int digitCount, default, CultureInfo.InvariantCulture);
+        suffixWithBracket.CopyTo(destination[(1 + digitCount)..]);
+        bytesWritten = total;
+        return true;
+    }
+
+    /// <summary>Character count of <c>[N&lt;suffix&gt;</c> for a non-negative <paramref name="count"/>.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static int _ArrayCountLabelCharCount(int count, int suffixLength) =>
+        1 + _UInt64DigitCount((ulong)(uint)count) + suffixLength;
+
     private static bool _TryFormatEnumLabel(
         ReadOnlySpan<char> name, ulong numericValue, Span<char> destination, out int charsWritten)
     {
@@ -805,6 +1030,113 @@ public readonly struct SettingValue : IEquatable<SettingValue>, ISpanFormattable
         if (data is not null)
         {
             hash.AddBytes(data.AsSpan());
+        }
+        return hash.ToHashCode();
+    }
+
+    /// <summary>Element count of a stored array; 0 when the reference is null.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static int _ArrayLength<T>(T[]? array)
+    {
+        if (array is null)
+        {
+            return 0;
+        }
+
+        return array.Length;
+    }
+
+    /// <summary>Element-wise equality for unmanaged arrays. Null is not equal to an empty stored array.</summary>
+    private static bool _ArrayEqual<T>(T[]? a, T[]? b)
+        where T : unmanaged, IEquatable<T>
+    {
+        if (ReferenceEquals(a, b))
+        {
+            return true;
+        }
+        if (a is null || b is null)
+        {
+            return false;
+        }
+        return a.AsSpan().SequenceEqual(b.AsSpan());
+    }
+
+    /// <summary>Ordinal element-wise equality for string arrays.</summary>
+    private static bool _StringArrayEqual(string[]? a, string[]? b)
+    {
+        if (ReferenceEquals(a, b))
+        {
+            return true;
+        }
+        if (a is null || b is null || a.Length != b.Length)
+        {
+            return false;
+        }
+
+        for (int i = 0; i < a.Length; i++)
+        {
+            if (!string.Equals(a[i], b[i], StringComparison.Ordinal))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Bit-wise F64 array equality so NaN equals NaN, matching scalar <see cref="SettingType.F64"/>.
+    /// </summary>
+    private static bool _F64ArrayEqual(double[]? a, double[]? b)
+    {
+        if (ReferenceEquals(a, b))
+        {
+            return true;
+        }
+        if (a is null || b is null)
+        {
+            return false;
+        }
+
+        return MemoryMarshal.Cast<double, long>(a).SequenceEqual(MemoryMarshal.Cast<double, long>(b));
+    }
+
+    /// <summary>Content hash for unmanaged array settings.</summary>
+    private static int _ContentHashUnmanaged<T>(T[]? data, SettingType type)
+        where T : unmanaged
+    {
+        HashCode hash = new();
+        hash.Add(type);
+        if (data is not null)
+        {
+            hash.AddBytes(MemoryMarshal.AsBytes(data.AsSpan()));
+        }
+        return hash.ToHashCode();
+    }
+
+    /// <summary>Content hash for F64 arrays using IEEE bit patterns so NaN hashes stably.</summary>
+    private static int _ContentHashF64Array(double[]? data)
+    {
+        HashCode hash = new();
+        hash.Add(SettingType.F64Array);
+        if (data is not null)
+        {
+            hash.AddBytes(MemoryMarshal.AsBytes(MemoryMarshal.Cast<double, long>(data)));
+        }
+        return hash.ToHashCode();
+    }
+
+    /// <summary>Ordinal content hash for string arrays.</summary>
+    private static int _ContentHashStrings(string[]? data)
+    {
+        HashCode hash = new();
+        hash.Add(SettingType.StringArray);
+        if (data is not null)
+        {
+            for (int i = 0; i < data.Length; i++)
+            {
+                hash.Add(data[i], StringComparer.Ordinal);
+            }
         }
         return hash.ToHashCode();
     }

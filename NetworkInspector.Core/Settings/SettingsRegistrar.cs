@@ -101,5 +101,50 @@ public readonly ref struct SettingsRegistrar
         Setting setting = Setting.EnumWithMetadata(name, uiName, groupName, defaultValue, metadata, description);
         return _Manager.RegisterSetting(setting);
     }
+
+    /// <summary>Registers a boolean array setting.</summary>
+    public SettingRegistrationResult RegisterBoolArraySetting(
+        string name, string uiName, string groupName, bool[] defaultValue,
+        string? description = null)
+    {
+        Setting setting = Setting.BoolArray(name, uiName, groupName, defaultValue, description);
+        return _Manager.RegisterSetting(setting);
+    }
+
+    /// <summary>Registers a string array setting.</summary>
+    public SettingRegistrationResult RegisterStringArraySetting(
+        string name, string uiName, string groupName, string[] defaultValue,
+        string? description = null)
+    {
+        Setting setting = Setting.StringArray(name, uiName, groupName, defaultValue, description);
+        return _Manager.RegisterSetting(setting);
+    }
+
+    /// <summary>Registers an F64 array setting with optional per-element min/max bounds.</summary>
+    public SettingRegistrationResult RegisterF64ArraySetting(
+        string name, string uiName, string groupName, double[] defaultValue,
+        double? min = null, double? max = null, string? description = null)
+    {
+        Setting setting = Setting.F64Array(name, uiName, groupName, defaultValue, min, max, description);
+        return _Manager.RegisterSetting(setting);
+    }
+
+    /// <summary>Registers a U64 array setting with optional per-element min/max bounds.</summary>
+    public SettingRegistrationResult RegisterU64ArraySetting(
+        string name, string uiName, string groupName, ulong[] defaultValue,
+        ulong? min = null, ulong? max = null, string? description = null)
+    {
+        Setting setting = Setting.U64Array(name, uiName, groupName, defaultValue, min, max, description);
+        return _Manager.RegisterSetting(setting);
+    }
+
+    /// <summary>Registers an I64 array setting with optional per-element min/max bounds.</summary>
+    public SettingRegistrationResult RegisterI64ArraySetting(
+        string name, string uiName, string groupName, long[] defaultValue,
+        long? min = null, long? max = null, string? description = null)
+    {
+        Setting setting = Setting.I64Array(name, uiName, groupName, defaultValue, min, max, description);
+        return _Manager.RegisterSetting(setting);
+    }
     #endregion
 }

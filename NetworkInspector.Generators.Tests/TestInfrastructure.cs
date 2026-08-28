@@ -156,6 +156,61 @@ internal static class TestInfrastructure
                 public string Description { get; set; } = "";
             }
 
+            [AttributeUsage(AttributeTargets.Field)]
+            public sealed class BoolArraySettingAttribute : Attribute
+            {
+                public BoolArraySettingAttribute(string name, string uiName, string groupName) { }
+                public BoolArraySettingAttribute(string name) { }
+                public bool[] Default { get; set; } = new bool[0];
+                public string Description { get; set; } = "";
+            }
+
+            [AttributeUsage(AttributeTargets.Field)]
+            public sealed class StringArraySettingAttribute : Attribute
+            {
+                public StringArraySettingAttribute(string name, string uiName, string groupName) { }
+                public StringArraySettingAttribute(string name) { }
+                public string[] Default { get; set; } = new string[0];
+                public string Description { get; set; } = "";
+            }
+
+            [AttributeUsage(AttributeTargets.Field)]
+            public sealed class F64ArraySettingAttribute : Attribute
+            {
+                public F64ArraySettingAttribute(string name, string uiName, string groupName) { }
+                public F64ArraySettingAttribute(string name) { }
+                public double[] Default { get; set; } = new double[0];
+                public double Min { get; set; }
+                public double Max { get; set; }
+                public string Description { get; set; } = "";
+            }
+
+            [AttributeUsage(AttributeTargets.Field)]
+            public sealed class U64ArraySettingAttribute : Attribute
+            {
+                public U64ArraySettingAttribute(string name, string uiName, string groupName) { }
+                public U64ArraySettingAttribute(string name) { }
+                public ulong[] Default { get; set; } = new ulong[0];
+                public bool HasMin { get; set; }
+                public ulong Min { get; set; }
+                public bool HasMax { get; set; }
+                public ulong Max { get; set; }
+                public string Description { get; set; } = "";
+            }
+
+            [AttributeUsage(AttributeTargets.Field)]
+            public sealed class I64ArraySettingAttribute : Attribute
+            {
+                public I64ArraySettingAttribute(string name, string uiName, string groupName) { }
+                public I64ArraySettingAttribute(string name) { }
+                public long[] Default { get; set; } = new long[0];
+                public bool HasMin { get; set; }
+                public long Min { get; set; }
+                public bool HasMax { get; set; }
+                public long Max { get; set; }
+                public string Description { get; set; } = "";
+            }
+
             public abstract class FieldRegistrationAttribute : Attribute
             {
                 protected FieldRegistrationAttribute(string name, string uiName) { }

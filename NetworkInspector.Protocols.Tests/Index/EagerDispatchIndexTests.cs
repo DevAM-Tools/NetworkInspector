@@ -125,7 +125,9 @@ internal sealed class EagerDispatchIndexTests
             using Stack stack = ProtocolTestHelper.BuildStack(sm =>
             {
                 sm.PreloadValue("pdu_transport.config_file", pduJson);
-                sm.PreloadValue("pdu_transport.udp_dispatch_port", (ulong)AutomotivePduBench.UdpPduTransportDestinationPort);
+                sm.PreloadValue(
+                    PduTransportRegistration.UdpDispatchPortsSetting,
+                    SettingValue.U64Array([(ulong)AutomotivePduBench.UdpPduTransportDestinationPort]));
                 sm.PreloadValue("signal_message.config_file", sigJson);
             });
 

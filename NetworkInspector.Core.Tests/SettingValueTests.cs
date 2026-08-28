@@ -3,7 +3,7 @@
 namespace NetworkInspector.Core.Tests;
 
 /// <summary>
-/// Tests for <see cref="SettingValue"/> tagged union struct — all 7 types,
+/// Tests for <see cref="SettingValue"/> tagged union struct — all 12 types,
 /// equality, implicit conversions, and edge cases.
 /// </summary>
 internal sealed class SettingValueTests
@@ -216,6 +216,187 @@ internal sealed class SettingValueTests
         await Assert.That(e.Value).IsEqualTo(2UL);
     }
 
+    // === Array types ===
+
+    [Test]
+    public async Task BoolArray_RoundtripIncludingEmpty()
+    {
+        SettingValue filled = SettingValue.BoolArray([true, false]);
+        await Assert.That(filled.Type).IsEqualTo(SettingType.BoolArray);
+        await Assert.That(filled.TryGetAsBoolArray(out bool[] filledCopy)).IsTrue();
+        await Assert.That(filledCopy.Length).IsEqualTo(2);
+        await Assert.That(filledCopy[0]).IsTrue();
+        await Assert.That(filledCopy[1]).IsFalse();
+
+        SettingValue empty = SettingValue.BoolArray([]);
+        await Assert.That(empty.TryGetAsBoolArray(out bool[] emptyCopy)).IsTrue();
+        await Assert.That(emptyCopy.Length).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task StringArray_RoundtripIncludingEmpty()
+    {
+        SettingValue filled = SettingValue.StringArray(["a", "b"]);
+        await Assert.That(filled.Type).IsEqualTo(SettingType.StringArray);
+        await Assert.That(filled.TryGetAsStringArray(out string[] filledCopy)).IsTrue();
+        await Assert.That(filledCopy.Length).IsEqualTo(2);
+        await Assert.That(filledCopy[0]).IsEqualTo("a");
+        await Assert.That(filledCopy[1]).IsEqualTo("b");
+
+        SettingValue empty = SettingValue.StringArray([]);
+        await Assert.That(empty.TryGetAsStringArray(out string[] emptyCopy)).IsTrue();
+        await Assert.That(emptyCopy.Length).IsEqualTo(0);
+    }
+
+    [Test]
+    public void StringArray_NullArray_Throws() =>
+        _ = Assert.Throws<ArgumentNullException>(() => SettingValue.StringArray(null!));
+
+    [Test]
+    public void StringArray_NullElement_Throws() =>
+        _ = Assert.Throws<ArgumentNullException>(() => SettingValue.StringArray(["a", null!]));
+
+    [Test]
+    public async Task F64Array_RoundtripIncludingEmpty()
+    {
+        SettingValue filled = SettingValue.F64Array([1.5, -2.0]);
+        await Assert.That(filled.Type).IsEqualTo(SettingType.F64Array);
+        await Assert.That(filled.TryGetAsF64Array(out double[] filledCopy)).IsTrue();
+        await Assert.That(filledCopy.Length).IsEqualTo(2);
+        await Assert.That(filledCopy[0]).IsEqualTo(1.5);
+        await Assert.That(filledCopy[1]).IsEqualTo(-2.0);
+
+        SettingValue empty = SettingValue.F64Array([]);
+        await Assert.That(empty.TryGetAsF64Array(out double[] emptyCopy)).IsTrue();
+        await Assert.That(emptyCopy.Length).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task U64Array_RoundtripIncludingEmpty()
+    {
+        SettingValue filled = SettingValue.U64Array([1UL, 2UL]);
+        await Assert.That(filled.Type).IsEqualTo(SettingType.U64Array);
+        await Assert.That(filled.TryGetAsU64Array(out ulong[] filledCopy)).IsTrue();
+        await Assert.That(filledCopy.Length).IsEqualTo(2);
+        await Assert.That(filledCopy[0]).IsEqualTo(1UL);
+        await Assert.That(filledCopy[1]).IsEqualTo(2UL);
+
+        SettingValue empty = SettingValue.U64Array([]);
+        await Assert.That(empty.TryGetAsU64Array(out ulong[] emptyCopy)).IsTrue();
+        await Assert.That(emptyCopy.Length).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task I64Array_RoundtripIncludingEmpty()
+    {
+        SettingValue filled = SettingValue.I64Array([-1L, 2L]);
+        await Assert.That(filled.Type).IsEqualTo(SettingType.I64Array);
+        await Assert.That(filled.TryGetAsI64Array(out long[] filledCopy)).IsTrue();
+        await Assert.That(filledCopy.Length).IsEqualTo(2);
+        await Assert.That(filledCopy[0]).IsEqualTo(-1L);
+        await Assert.That(filledCopy[1]).IsEqualTo(2L);
+
+        SettingValue empty = SettingValue.I64Array([]);
+        await Assert.That(empty.TryGetAsI64Array(out long[] emptyCopy)).IsTrue();
+        await Assert.That(emptyCopy.Length).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task U64Array_WrongAccessor_ReturnsFalseAndEmpty()
+    {
+        SettingValue v = SettingValue.U64(1);
+        await Assert.That(v.TryGetAsU64Array(out ulong[] result)).IsFalse();
+        await Assert.That(result.Length).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task SiblingArray_WrongAccessor_ReturnsFalseAndEmpty()
+    {
+        SettingValue v = SettingValue.U64(1);
+        await Assert.That(v.TryGetAsBoolArray(out bool[] b)).IsFalse();
+        await Assert.That(b.Length).IsEqualTo(0);
+        await Assert.That(v.TryGetAsStringArray(out string[] s)).IsFalse();
+        await Assert.That(s.Length).IsEqualTo(0);
+        await Assert.That(v.TryGetAsF64Array(out double[] d)).IsFalse();
+        await Assert.That(d.Length).IsEqualTo(0);
+        await Assert.That(v.TryGetAsI64Array(out long[] i)).IsFalse();
+        await Assert.That(i.Length).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task U64Array_MutatingTryGetCopy_DoesNotAffectStoredValue()
+    {
+        SettingValue v = SettingValue.U64Array([10UL, 20UL]);
+        v.TryGetAsU64Array(out ulong[] first);
+        first[0] = 99UL;
+        v.TryGetAsU64Array(out ulong[] second);
+        await Assert.That(second[0]).IsEqualTo(10UL);
+    }
+
+    [Test]
+    public async Task U64Array_EqualCopies_AreEqual()
+    {
+        SettingValue a = SettingValue.U64Array([1UL, 2UL]);
+        SettingValue b = SettingValue.U64Array([1UL, 2UL]);
+        await Assert.That(a == b).IsTrue();
+    }
+
+    [Test]
+    public async Task U64Array_UnequalLengths_AreNotEqual()
+    {
+        SettingValue a = SettingValue.U64Array([1UL]);
+        SettingValue b = SettingValue.U64Array([1UL, 2UL]);
+        await Assert.That(a == b).IsFalse();
+    }
+
+    [Test]
+    public async Task F64Array_NaNBits_AreEqual()
+    {
+        SettingValue a = SettingValue.F64Array([double.NaN]);
+        SettingValue b = SettingValue.F64Array([double.NaN]);
+        await Assert.That(a == b).IsTrue();
+    }
+
+    [Test]
+    public async Task U64Array_AndScalarU64_AreNotEqual()
+    {
+        SettingValue a = SettingValue.U64Array([1UL]);
+        SettingValue b = SettingValue.U64(1UL);
+        await Assert.That(a == b).IsFalse();
+    }
+
+    [Test]
+    public async Task U64Array_Format_EmptyAndTwoElements()
+    {
+        await _AssertTryFormat(SettingValue.U64Array([]), "[0 u64]");
+        await _AssertTryFormat(SettingValue.U64Array([1UL, 2UL]), "[2 u64]");
+    }
+
+    [Test]
+    public async Task GetHashCode_EqualU64Arrays_AreStableAndEqual()
+    {
+        SettingValue a = SettingValue.U64Array([3UL, 4UL]);
+        SettingValue b = SettingValue.U64Array([3UL, 4UL]);
+        await Assert.That(a.GetHashCode()).IsEqualTo(b.GetHashCode());
+        await Assert.That(a.GetHashCode()).IsEqualTo(a.GetHashCode());
+    }
+
+    [Test]
+    public void BoolArray_NullArray_Throws() =>
+        _ = Assert.Throws<ArgumentNullException>(() => SettingValue.BoolArray(null!));
+
+    [Test]
+    public void F64Array_NullArray_Throws() =>
+        _ = Assert.Throws<ArgumentNullException>(() => SettingValue.F64Array(null!));
+
+    [Test]
+    public void U64Array_NullArray_Throws() =>
+        _ = Assert.Throws<ArgumentNullException>(() => SettingValue.U64Array(null!));
+
+    [Test]
+    public void I64Array_NullArray_Throws() =>
+        _ = Assert.Throws<ArgumentNullException>(() => SettingValue.I64Array(null!));
+
     // === Equality ===
 
     [Test]
@@ -409,6 +590,11 @@ internal sealed class SettingValueTests
             SettingValue.I64(-7),
             SettingValue.Bytes([1, 2]),
             SettingValue.Enum("Mid", 1),
+            SettingValue.BoolArray([true]),
+            SettingValue.StringArray(["x"]),
+            SettingValue.F64Array([1.5]),
+            SettingValue.U64Array([99UL]),
+            SettingValue.I64Array([-7L]),
         ];
 
         foreach (SettingValue v in values)
@@ -444,6 +630,10 @@ internal sealed class SettingValueTests
         await _AssertTryFormat(SettingValue.String("hello"), "hello");
         await _AssertTryFormat(SettingValue.Bytes([1, 2, 3]), "[3 bytes]");
         await _AssertTryFormat(SettingValue.Enum("High", 2), "High (2)");
+        await _AssertTryFormat(SettingValue.BoolArray([true]), "[1 bool]");
+        await _AssertTryFormat(SettingValue.StringArray(["a"]), "[1 string]");
+        await _AssertTryFormat(SettingValue.F64Array([1.0]), "[1 f64]");
+        await _AssertTryFormat(SettingValue.I64Array([1L]), "[1 i64]");
     }
 
     [Test]
@@ -473,6 +663,7 @@ internal sealed class SettingValueTests
         await _AssertUtf8TryFormat(SettingValue.String("hello"), "hello"u8.ToArray());
         await _AssertUtf8TryFormat(SettingValue.U64(7), "7"u8.ToArray());
         await _AssertUtf8TryFormat(SettingValue.Bytes([0]), "[1 bytes]"u8.ToArray());
+        await _AssertUtf8TryFormat(SettingValue.U64Array([1UL, 2UL]), "[2 u64]"u8.ToArray());
     }
 
     [Test]
@@ -839,6 +1030,14 @@ internal sealed class SettingValueTests
         bool ok = SettingValue.Bytes([1, 2, 3]).TryGetStringSize(default, null, out int size);
         await Assert.That(ok).IsTrue();
         await Assert.That(size).IsEqualTo("[3 bytes]".Length);
+    }
+
+    [Test]
+    public async Task IStringSize_U64Array_ReturnsExactLabelLength()
+    {
+        bool ok = SettingValue.U64Array([1UL, 2UL]).TryGetStringSize(default, null, out int size);
+        await Assert.That(ok).IsTrue();
+        await Assert.That(size).IsEqualTo("[2 u64]".Length);
     }
 
     [Test]

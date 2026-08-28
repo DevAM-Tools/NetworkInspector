@@ -42,7 +42,9 @@ internal sealed class PduTransportStandaloneTsharkTests
                 sm =>
                 {
                     sm.PreloadValue("pdu_transport.config_file", pduJson);
-                    sm.PreloadValue("pdu_transport.udp_dispatch_port", (ulong)AutomotivePduBench.UdpPduTransportDestinationPort);
+                    sm.PreloadValue(
+                        PduTransportRegistration.UdpDispatchPortsSetting,
+                        SettingValue.U64Array([(ulong)AutomotivePduBench.UdpPduTransportDestinationPort]));
                 });
 
             using (stack)

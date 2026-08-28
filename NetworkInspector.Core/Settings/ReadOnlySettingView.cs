@@ -102,6 +102,21 @@ public readonly struct ReadOnlySettingView : IReadOnlySetting
     /// <inheritdoc/>
     public bool TryGetAsEnum(out (string Name, ulong Value) value) => _Owner.TryGetAsEnum(out value);
 
+    /// <inheritdoc/>
+    public bool TryGetAsBoolArray(out bool[] value) => _Owner.TryGetAsBoolArray(out value);
+
+    /// <inheritdoc/>
+    public bool TryGetAsStringArray(out string[] value) => _Owner.TryGetAsStringArray(out value);
+
+    /// <inheritdoc/>
+    public bool TryGetAsF64Array(out double[] value) => _Owner.TryGetAsF64Array(out value);
+
+    /// <inheritdoc/>
+    public bool TryGetAsU64Array(out ulong[] value) => _Owner.TryGetAsU64Array(out value);
+
+    /// <inheritdoc/>
+    public bool TryGetAsI64Array(out long[] value) => _Owner.TryGetAsI64Array(out value);
+
     #endregion
 
     #region Internal helpers

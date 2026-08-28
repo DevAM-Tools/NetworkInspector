@@ -101,5 +101,40 @@ public interface IReadOnlySettingsManager
     /// <see cref="SettingType.Enum"/>.
     /// </summary>
     (string Name, ulong Value)? GetEnumSetting(string name);
+
+    /// <summary>
+    /// Convenience: gets a boolean array copy by name.
+    /// Returns a defensive copy of the stored values, or <see langword="null"/> when the
+    /// name is unregistered or the setting is not <see cref="SettingType.BoolArray"/>.
+    /// </summary>
+    bool[]? GetBoolArraySetting(string name);
+
+    /// <summary>
+    /// Convenience: gets a string array copy by name.
+    /// Returns a defensive copy of the stored values, or <see langword="null"/> when the
+    /// name is unregistered or the setting is not <see cref="SettingType.StringArray"/>.
+    /// </summary>
+    string[]? GetStringArraySetting(string name);
+
+    /// <summary>
+    /// Convenience: gets a double array copy by name.
+    /// Returns a defensive copy of the stored values, or <see langword="null"/> when the
+    /// name is unregistered or the setting is not <see cref="SettingType.F64Array"/>.
+    /// </summary>
+    double[]? GetF64ArraySetting(string name);
+
+    /// <summary>
+    /// Convenience: gets a ulong array copy by name.
+    /// Returns a defensive copy of the stored values, or <see langword="null"/> when the
+    /// name is unregistered or the setting is not <see cref="SettingType.U64Array"/>.
+    /// </summary>
+    ulong[]? GetU64ArraySetting(string name);
+
+    /// <summary>
+    /// Convenience: gets a long array copy by name.
+    /// Returns a defensive copy of the stored values, or <see langword="null"/> when the
+    /// name is unregistered or the setting is not <see cref="SettingType.I64Array"/>.
+    /// </summary>
+    long[]? GetI64ArraySetting(string name);
     #endregion
 }

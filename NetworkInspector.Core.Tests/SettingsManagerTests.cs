@@ -907,6 +907,258 @@ internal sealed class SettingsManagerTests
     }
 
     [Test]
+    public async Task SaveAndLoad_AllArraySettingTypes_Roundtrip()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(dir);
+            using (SettingsManager mgr = new(dir))
+            {
+                mgr.RegisterSetting(Setting.BoolArray("s.bools", "Bools", string.Empty, [true, false]));
+                mgr.RegisterSetting(Setting.StringArray("s.strs", "Strs", string.Empty, ["a", "b"]));
+                mgr.RegisterSetting(Setting.F64Array("s.f64s", "F64s", string.Empty, [1.5, 2.5]));
+                mgr.RegisterSetting(Setting.U64Array("s.u64s", "U64s", string.Empty, [1UL, 2UL]));
+                mgr.RegisterSetting(Setting.I64Array("s.i64s", "I64s", string.Empty, [-1L, 3L]));
+                mgr.Save();
+            }
+
+            using SettingsManager mgr2 = new(dir);
+            Setting b = Setting.BoolArray("s.bools", "Bools", string.Empty, []);
+            Setting st = Setting.StringArray("s.strs", "Strs", string.Empty, []);
+            Setting f = Setting.F64Array("s.f64s", "F64s", string.Empty, []);
+            Setting u = Setting.U64Array("s.u64s", "U64s", string.Empty, []);
+            Setting i = Setting.I64Array("s.i64s", "I64s", string.Empty, []);
+            mgr2.RegisterSetting(b);
+            mgr2.RegisterSetting(st);
+            mgr2.RegisterSetting(f);
+            mgr2.RegisterSetting(u);
+            mgr2.RegisterSetting(i);
+
+            IReadOnlyList<SettingsLoadWarning> warnings = mgr2.Load();
+            await Assert.That(warnings).IsEmpty();
+
+            b.TryGetAsBoolArray(out bool[] bv);
+            st.TryGetAsStringArray(out string[] sv);
+            f.TryGetAsF64Array(out double[] fv);
+            u.TryGetAsU64Array(out ulong[] uv);
+            i.TryGetAsI64Array(out long[] iv);
+
+            await Assert.That(bv.Length).IsEqualTo(2);
+            await Assert.That(bv[0]).IsTrue();
+            await Assert.That(bv[1]).IsFalse();
+            await Assert.That(sv[0]).IsEqualTo("a");
+            await Assert.That(sv[1]).IsEqualTo("b");
+            await Assert.That(fv[0]).IsEqualTo(1.5);
+            await Assert.That(fv[1]).IsEqualTo(2.5);
+            await Assert.That(uv[0]).IsEqualTo(1UL);
+            await Assert.That(uv[1]).IsEqualTo(2UL);
+            await Assert.That(iv[0]).IsEqualTo(-1L);
+            await Assert.That(iv[1]).IsEqualTo(3L);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Test]
+    public async Task SaveAndLoad_EmptyU64Array_Roundtrip()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(dir);
+            using (SettingsManager mgr = new(dir))
+            {
+                mgr.RegisterSetting(Setting.U64Array("s.empty", "Empty", string.Empty, []));
+                mgr.Save();
+            }
+
+            using SettingsManager mgr2 = new(dir);
+            Setting u = Setting.U64Array("s.empty", "Empty", string.Empty, [9UL]);
+            mgr2.RegisterSetting(u);
+            IReadOnlyList<SettingsLoadWarning> warnings = mgr2.Load();
+            await Assert.That(warnings).IsEmpty();
+            u.TryGetAsU64Array(out ulong[] uv);
+            await Assert.That(uv.Length).IsEqualTo(0);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Test]
+    public async Task Load_U64Array_ScalarJson_TypeMismatchKeepsDefault()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(dir);
+            await File.WriteAllTextAsync(Path.Combine(dir, "default.json"), """{"test.ports": 47290}""").ConfigureAwait(false);
+
+            using SettingsManager mgr = new(dir);
+            Setting s = Setting.U64Array("test.ports", "Ports", string.Empty, [1UL]);
+            mgr.RegisterSetting(s);
+
+            IReadOnlyList<SettingsLoadWarning> warnings = mgr.Load();
+            await Assert.That(warnings.Count).IsEqualTo(1);
+            await Assert.That(warnings[0].Kind).IsEqualTo(SettingsLoadWarningKind.TypeMismatch);
+            s.TryGetAsU64Array(out ulong[] current);
+            await Assert.That(current.Length).IsEqualTo(1);
+            await Assert.That(current[0]).IsEqualTo(1UL);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Test]
+    public async Task Load_U64Array_MixedJson_TypeMismatchKeepsDefault()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(dir);
+            await File.WriteAllTextAsync(Path.Combine(dir, "default.json"), """{"test.ports": [1, "x"]}""").ConfigureAwait(false);
+
+            using SettingsManager mgr = new(dir);
+            Setting s = Setting.U64Array("test.ports", "Ports", string.Empty, [1UL]);
+            mgr.RegisterSetting(s);
+
+            IReadOnlyList<SettingsLoadWarning> warnings = mgr.Load();
+            await Assert.That(warnings.Count).IsEqualTo(1);
+            await Assert.That(warnings[0].Kind).IsEqualTo(SettingsLoadWarningKind.TypeMismatch);
+            s.TryGetAsU64Array(out ulong[] current);
+            await Assert.That(current[0]).IsEqualTo(1UL);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Test]
+    public async Task Load_U64Array_NullJsonElement_TypeMismatchKeepsDefault()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(dir);
+            await File.WriteAllTextAsync(Path.Combine(dir, "default.json"), """{"test.ports": [1, null]}""").ConfigureAwait(false);
+
+            using SettingsManager mgr = new(dir);
+            Setting s = Setting.U64Array("test.ports", "Ports", string.Empty, [1UL]);
+            mgr.RegisterSetting(s);
+
+            IReadOnlyList<SettingsLoadWarning> warnings = mgr.Load();
+            await Assert.That(warnings.Count).IsEqualTo(1);
+            await Assert.That(warnings[0].Kind).IsEqualTo(SettingsLoadWarningKind.TypeMismatch);
+            s.TryGetAsU64Array(out ulong[] current);
+            await Assert.That(current.Length).IsEqualTo(1);
+            await Assert.That(current[0]).IsEqualTo(1UL);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Test]
+    public async Task Load_U64Array_OutOfRangeElement_KeepsDefault()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(dir);
+            await File.WriteAllTextAsync(Path.Combine(dir, "default.json"), """{"test.ports": [1, 99]}""").ConfigureAwait(false);
+
+            using SettingsManager mgr = new(dir);
+            Setting s = Setting.U64Array("test.ports", "Ports", string.Empty, [2UL], min: 1UL, max: 10UL);
+            mgr.RegisterSetting(s);
+
+            IReadOnlyList<SettingsLoadWarning> warnings = mgr.Load();
+            await Assert.That(warnings.Count).IsEqualTo(1);
+            await Assert.That(warnings[0].Kind).IsEqualTo(SettingsLoadWarningKind.OutOfRange);
+            s.TryGetAsU64Array(out ulong[] current);
+            await Assert.That(current.Length).IsEqualTo(1);
+            await Assert.That(current[0]).IsEqualTo(2UL);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Test]
+    public async Task Load_F64Array_NonFiniteElement_TypeMismatchKeepsDefault()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(dir);
+            await File.WriteAllTextAsync(Path.Combine(dir, "default.json"), """{"test.vals": ["NaN"]}""").ConfigureAwait(false);
+
+            using SettingsManager mgr = new(dir);
+            Setting s = Setting.F64Array("test.vals", "Vals", string.Empty, [1.5]);
+            mgr.RegisterSetting(s);
+
+            IReadOnlyList<SettingsLoadWarning> warnings = mgr.Load();
+            await Assert.That(warnings.Count).IsEqualTo(1);
+            await Assert.That(warnings[0].Kind).IsEqualTo(SettingsLoadWarningKind.TypeMismatch);
+            s.TryGetAsF64Array(out double[] current);
+            await Assert.That(current.Length).IsEqualTo(1);
+            await Assert.That(current[0]).IsEqualTo(1.5);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Test]
+    public async Task GetU64ArraySetting_UnregisteredOrWrongType_ReturnsNull()
+    {
+        using SettingsManager mgr = new();
+        mgr.RegisterSetting(Setting.U64("test.port", "Port", "test", 1));
+        await Assert.That(mgr.GetU64ArraySetting("missing")).IsNull();
+        await Assert.That(mgr.GetU64ArraySetting("test.port")).IsNull();
+        await Assert.That(mgr.GetBoolArraySetting("missing")).IsNull();
+        await Assert.That(mgr.GetBoolArraySetting("test.port")).IsNull();
+        await Assert.That(mgr.GetStringArraySetting("test.port")).IsNull();
+        await Assert.That(mgr.GetF64ArraySetting("test.port")).IsNull();
+        await Assert.That(mgr.GetI64ArraySetting("test.port")).IsNull();
+    }
+
+    [Test]
+    public async Task GetU64ArraySetting_ReturnsDefensiveCopy()
+    {
+        using SettingsManager mgr = new();
+        mgr.RegisterSetting(Setting.U64Array("test.ports", "Ports", "test", [1UL, 2UL]));
+        ulong[]? first = mgr.GetU64ArraySetting("test.ports");
+        await Assert.That(first).IsNotNull();
+        first![0] = 99UL;
+        ulong[]? second = mgr.GetU64ArraySetting("test.ports");
+        await Assert.That(second![0]).IsEqualTo(1UL);
+    }
+
+    [Test]
+    public async Task PreloadValue_U64Array_AppliesOnRegister()
+    {
+        using SettingsManager mgr = new();
+        mgr.PreloadValue("test.ports", SettingValue.U64Array([3UL, 4UL]));
+        SettingRegistrationResult result =
+            mgr.RegisterSetting(Setting.U64Array("test.ports", "Ports", "test", []));
+        await Assert.That(result.WasLoaded).IsTrue();
+        result.TryGetAsU64Array(out ulong[] loaded);
+        await Assert.That(loaded.Length).IsEqualTo(2);
+        await Assert.That(loaded[0]).IsEqualTo(3UL);
+        await Assert.That(loaded[1]).IsEqualTo(4UL);
+    }
+
+    [Test]
     public async Task Load_EnumByNumericValue_ReturnsTypeMismatch()
     {
         string dir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));

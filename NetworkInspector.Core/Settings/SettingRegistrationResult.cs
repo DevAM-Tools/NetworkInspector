@@ -42,5 +42,25 @@ public readonly record struct SettingRegistrationResult(SettingLoadResult LoadRe
     /// and writes the name and numeric value into <paramref name="value"/>.</summary>
     public bool TryGetAsEnum(out (string Name, ulong Value) value) => Value.TryGetAsEnum(out value);
 
+    /// <summary>Returns <see langword="true"/> if the value is a <see cref="SettingType.BoolArray"/>
+    /// and writes a defensive copy into <paramref name="value"/>.</summary>
+    public bool TryGetAsBoolArray(out bool[] value) => Value.TryGetAsBoolArray(out value);
+
+    /// <summary>Returns <see langword="true"/> if the value is a <see cref="SettingType.StringArray"/>
+    /// and writes a defensive copy into <paramref name="value"/>.</summary>
+    public bool TryGetAsStringArray(out string[] value) => Value.TryGetAsStringArray(out value);
+
+    /// <summary>Returns <see langword="true"/> if the value is an <see cref="SettingType.F64Array"/>
+    /// and writes a defensive copy into <paramref name="value"/>.</summary>
+    public bool TryGetAsF64Array(out double[] value) => Value.TryGetAsF64Array(out value);
+
+    /// <summary>Returns <see langword="true"/> if the value is a <see cref="SettingType.U64Array"/>
+    /// and writes a defensive copy into <paramref name="value"/>.</summary>
+    public bool TryGetAsU64Array(out ulong[] value) => Value.TryGetAsU64Array(out value);
+
+    /// <summary>Returns <see langword="true"/> if the value is an <see cref="SettingType.I64Array"/>
+    /// and writes a defensive copy into <paramref name="value"/>.</summary>
+    public bool TryGetAsI64Array(out long[] value) => Value.TryGetAsI64Array(out value);
+
     #endregion
 }

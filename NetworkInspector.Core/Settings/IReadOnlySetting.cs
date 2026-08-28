@@ -138,5 +138,35 @@ public interface IReadOnlySetting
     /// </summary>
     bool TryGetAsEnum(out (string Name, ulong Value) value);
 
+    /// <summary>
+    /// Returns <see langword="true"/> if the current value is <see cref="SettingType.BoolArray"/>
+    /// and writes a <em>defensive copy</em> of the boolean array into <paramref name="value"/>.
+    /// </summary>
+    bool TryGetAsBoolArray(out bool[] value);
+
+    /// <summary>
+    /// Returns <see langword="true"/> if the current value is <see cref="SettingType.StringArray"/>
+    /// and writes a <em>defensive copy</em> of the string array into <paramref name="value"/>.
+    /// </summary>
+    bool TryGetAsStringArray(out string[] value);
+
+    /// <summary>
+    /// Returns <see langword="true"/> if the current value is <see cref="SettingType.F64Array"/>
+    /// and writes a <em>defensive copy</em> of the double array into <paramref name="value"/>.
+    /// </summary>
+    bool TryGetAsF64Array(out double[] value);
+
+    /// <summary>
+    /// Returns <see langword="true"/> if the current value is <see cref="SettingType.U64Array"/>
+    /// and writes a <em>defensive copy</em> of the ulong array into <paramref name="value"/>.
+    /// </summary>
+    bool TryGetAsU64Array(out ulong[] value);
+
+    /// <summary>
+    /// Returns <see langword="true"/> if the current value is <see cref="SettingType.I64Array"/>
+    /// and writes a <em>defensive copy</em> of the long array into <paramref name="value"/>.
+    /// </summary>
+    bool TryGetAsI64Array(out long[] value);
+
     #endregion
 }

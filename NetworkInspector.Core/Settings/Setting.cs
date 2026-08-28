@@ -157,6 +157,36 @@ public sealed class Setting : IReadOnlySetting
     public bool TryGetAsEnum(out (string Name, ulong Value) value) => Value.TryGetAsEnum(out value);
 
     /// <summary>
+    /// Returns <see langword="true"/> if the current value is <see cref="SettingType.BoolArray"/>.
+    /// Returns a defensive copy. Lock-free.
+    /// </summary>
+    public bool TryGetAsBoolArray(out bool[] value) => Value.TryGetAsBoolArray(out value);
+
+    /// <summary>
+    /// Returns <see langword="true"/> if the current value is <see cref="SettingType.StringArray"/>.
+    /// Returns a defensive copy. Lock-free.
+    /// </summary>
+    public bool TryGetAsStringArray(out string[] value) => Value.TryGetAsStringArray(out value);
+
+    /// <summary>
+    /// Returns <see langword="true"/> if the current value is <see cref="SettingType.F64Array"/>.
+    /// Returns a defensive copy. Lock-free.
+    /// </summary>
+    public bool TryGetAsF64Array(out double[] value) => Value.TryGetAsF64Array(out value);
+
+    /// <summary>
+    /// Returns <see langword="true"/> if the current value is <see cref="SettingType.U64Array"/>.
+    /// Returns a defensive copy. Lock-free.
+    /// </summary>
+    public bool TryGetAsU64Array(out ulong[] value) => Value.TryGetAsU64Array(out value);
+
+    /// <summary>
+    /// Returns <see langword="true"/> if the current value is <see cref="SettingType.I64Array"/>.
+    /// Returns a defensive copy. Lock-free.
+    /// </summary>
+    public bool TryGetAsI64Array(out long[] value) => Value.TryGetAsI64Array(out value);
+
+    /// <summary>
     /// Gets a zero-allocation struct view of this setting.
     /// Do not assign the result to <see cref="IReadOnlySetting"/> — that boxes.
     /// </summary>
@@ -302,6 +332,14 @@ public sealed class Setting : IReadOnlySetting
             (SettingType.U64, SettingType.U64) when value.TryGetAsU64(out ulong u64v) => _WrapValidation(_ValidateU64(u64v)),
             (SettingType.I64, SettingType.I64) when value.TryGetAsI64(out long i64v) => _WrapValidation(_ValidateI64(i64v)),
             (SettingType.Enum, SettingType.Enum) => _WrapValidation(_ValidateEnum(value)),
+            (SettingType.BoolArray, SettingType.BoolArray) => (ValidationErrorKind.None, null),
+            (SettingType.StringArray, SettingType.StringArray) => (ValidationErrorKind.None, null),
+            (SettingType.F64Array, SettingType.F64Array) when value.TryGetAsF64Array(out double[] f64a) =>
+                _WrapValidation(_ValidateF64Array(f64a)),
+            (SettingType.U64Array, SettingType.U64Array) when value.TryGetAsU64Array(out ulong[] u64a) =>
+                _WrapValidation(_ValidateU64Array(u64a)),
+            (SettingType.I64Array, SettingType.I64Array) when value.TryGetAsI64Array(out long[] i64a) =>
+                _WrapValidation(_ValidateI64Array(i64a)),
             _ => (ValidationErrorKind.TypeMismatch, null),
         };
     }
@@ -373,6 +411,48 @@ public sealed class Setting : IReadOnlySetting
         {
             return $"Value {e.numericValue} is not an allowed enum value";
         }
+        return null;
+    }
+
+    private string? _ValidateF64Array(double[] values)
+    {
+        for (int i = 0; i < values.Length; i++)
+        {
+            string? error = _ValidateF64(values[i]);
+            if (error is not null)
+            {
+                return error;
+            }
+        }
+
+        return null;
+    }
+
+    private string? _ValidateU64Array(ulong[] values)
+    {
+        for (int i = 0; i < values.Length; i++)
+        {
+            string? error = _ValidateU64(values[i]);
+            if (error is not null)
+            {
+                return error;
+            }
+        }
+
+        return null;
+    }
+
+    private string? _ValidateI64Array(long[] values)
+    {
+        for (int i = 0; i < values.Length; i++)
+        {
+            string? error = _ValidateI64(values[i]);
+            if (error is not null)
+            {
+                return error;
+            }
+        }
+
         return null;
     }
 
@@ -519,6 +599,152 @@ public sealed class Setting : IReadOnlySetting
         SettingValue def = SettingValue.Bytes(defaultValue);
         return new Setting(name, uiName, description, groupName,
             SettingType.Bytes, def, null, null, null);
+    }
+
+    /// <summary>Creates a new boolean array setting.</summary>
+    /// <exception cref="InvalidNameRegistrationException">Thrown when <paramref name="name"/> or <paramref name="groupName"/>
+    /// is not a valid dot-separated C-style identifier.</exception>
+    /// <exception cref="InvalidUiNameRegistrationException">Thrown when <paramref name="uiName"/> is empty or contains control characters.</exception>
+    public static Setting BoolArray(
+        string name, string uiName, string groupName,
+        bool[] defaultValue, string? description = null)
+    {
+        SettingValue def = SettingValue.BoolArray(defaultValue);
+        return new Setting(name, uiName, description, groupName,
+            SettingType.BoolArray, def, null, null, null);
+    }
+
+    /// <summary>Creates a new string array setting.</summary>
+    /// <exception cref="InvalidNameRegistrationException">Thrown when <paramref name="name"/> or <paramref name="groupName"/>
+    /// is not a valid dot-separated C-style identifier.</exception>
+    /// <exception cref="InvalidUiNameRegistrationException">Thrown when <paramref name="uiName"/> is empty or contains control characters.</exception>
+    public static Setting StringArray(
+        string name, string uiName, string groupName,
+        string[] defaultValue, string? description = null)
+    {
+        SettingValue def = SettingValue.StringArray(defaultValue);
+        return new Setting(name, uiName, description, groupName,
+            SettingType.StringArray, def, null, null, null);
+    }
+
+    /// <summary>Creates a new F64 array setting with optional per-element min/max constraints.</summary>
+    /// <exception cref="InvalidNameRegistrationException">Thrown when <paramref name="name"/> or <paramref name="groupName"/>
+    /// is not a valid dot-separated C-style identifier.</exception>
+    /// <exception cref="InvalidUiNameRegistrationException">Thrown when <paramref name="uiName"/> is empty or contains control characters.</exception>
+    /// <exception cref="ValidationSettingsException">Thrown when constraints are invalid or a default element is out of range or non-finite.</exception>
+    public static Setting F64Array(
+        string name, string uiName, string groupName,
+        double[] defaultValue, double? min = null, double? max = null,
+        string? description = null)
+    {
+        ArgumentNullException.ThrowIfNull(defaultValue);
+        if (min.HasValue && !double.IsFinite(min.Value))
+        {
+            throw ValidationSettingsException.For($"min f64 value must be finite, got {min.Value}");
+        }
+        if (max.HasValue && !double.IsFinite(max.Value))
+        {
+            throw ValidationSettingsException.For($"max f64 value must be finite, got {max.Value}");
+        }
+        if (min.HasValue && max.HasValue && min.Value > max.Value)
+        {
+            throw ValidationSettingsException.For($"min ({min.Value}) must be <= max ({max.Value})");
+        }
+
+        for (int i = 0; i < defaultValue.Length; i++)
+        {
+            double element = defaultValue[i];
+            if (!double.IsFinite(element))
+            {
+                throw ValidationSettingsException.For($"default f64 value must be finite, got {element}");
+            }
+            if (min.HasValue && element < min.Value)
+            {
+                throw ValidationSettingsException.For($"default ({element}) must be >= min ({min.Value})");
+            }
+            if (max.HasValue && element > max.Value)
+            {
+                throw ValidationSettingsException.For($"default ({element}) must be <= max ({max.Value})");
+            }
+        }
+
+        SettingValue def = SettingValue.F64Array(defaultValue);
+        SettingValue? minVal = min.HasValue ? (SettingValue?)SettingValue.F64(min.Value) : null;
+        SettingValue? maxVal = max.HasValue ? (SettingValue?)SettingValue.F64(max.Value) : null;
+        return new Setting(name, uiName, description, groupName,
+            SettingType.F64Array, def, minVal, maxVal, null);
+    }
+
+    /// <summary>Creates a new U64 array setting with optional per-element min/max constraints.</summary>
+    /// <exception cref="InvalidNameRegistrationException">Thrown when <paramref name="name"/> or <paramref name="groupName"/>
+    /// is not a valid dot-separated C-style identifier.</exception>
+    /// <exception cref="InvalidUiNameRegistrationException">Thrown when <paramref name="uiName"/> is empty or contains control characters.</exception>
+    /// <exception cref="ValidationSettingsException">Thrown when constraints are invalid or a default element is out of range.</exception>
+    public static Setting U64Array(
+        string name, string uiName, string groupName,
+        ulong[] defaultValue, ulong? min = null, ulong? max = null,
+        string? description = null)
+    {
+        ArgumentNullException.ThrowIfNull(defaultValue);
+        if (min.HasValue && max.HasValue && min.Value > max.Value)
+        {
+            throw ValidationSettingsException.For($"min ({min.Value}) must be <= max ({max.Value})");
+        }
+
+        for (int i = 0; i < defaultValue.Length; i++)
+        {
+            ulong element = defaultValue[i];
+            if (min.HasValue && element < min.Value)
+            {
+                throw ValidationSettingsException.For($"default ({element}) must be >= min ({min.Value})");
+            }
+            if (max.HasValue && element > max.Value)
+            {
+                throw ValidationSettingsException.For($"default ({element}) must be <= max ({max.Value})");
+            }
+        }
+
+        SettingValue def = SettingValue.U64Array(defaultValue);
+        SettingValue? minVal = min.HasValue ? (SettingValue?)SettingValue.U64(min.Value) : null;
+        SettingValue? maxVal = max.HasValue ? (SettingValue?)SettingValue.U64(max.Value) : null;
+        return new Setting(name, uiName, description, groupName,
+            SettingType.U64Array, def, minVal, maxVal, null);
+    }
+
+    /// <summary>Creates a new I64 array setting with optional per-element min/max constraints.</summary>
+    /// <exception cref="InvalidNameRegistrationException">Thrown when <paramref name="name"/> or <paramref name="groupName"/>
+    /// is not a valid dot-separated C-style identifier.</exception>
+    /// <exception cref="InvalidUiNameRegistrationException">Thrown when <paramref name="uiName"/> is empty or contains control characters.</exception>
+    /// <exception cref="ValidationSettingsException">Thrown when constraints are invalid or a default element is out of range.</exception>
+    public static Setting I64Array(
+        string name, string uiName, string groupName,
+        long[] defaultValue, long? min = null, long? max = null,
+        string? description = null)
+    {
+        ArgumentNullException.ThrowIfNull(defaultValue);
+        if (min.HasValue && max.HasValue && min.Value > max.Value)
+        {
+            throw ValidationSettingsException.For($"min ({min.Value}) must be <= max ({max.Value})");
+        }
+
+        for (int i = 0; i < defaultValue.Length; i++)
+        {
+            long element = defaultValue[i];
+            if (min.HasValue && element < min.Value)
+            {
+                throw ValidationSettingsException.For($"default ({element}) must be >= min ({min.Value})");
+            }
+            if (max.HasValue && element > max.Value)
+            {
+                throw ValidationSettingsException.For($"default ({element}) must be <= max ({max.Value})");
+            }
+        }
+
+        SettingValue def = SettingValue.I64Array(defaultValue);
+        SettingValue? minVal = min.HasValue ? (SettingValue?)SettingValue.I64(min.Value) : null;
+        SettingValue? maxVal = max.HasValue ? (SettingValue?)SettingValue.I64(max.Value) : null;
+        return new Setting(name, uiName, description, groupName,
+            SettingType.I64Array, def, minVal, maxVal, null);
     }
 
     /// <summary>Creates a new enum setting from allowed value pairs.</summary>

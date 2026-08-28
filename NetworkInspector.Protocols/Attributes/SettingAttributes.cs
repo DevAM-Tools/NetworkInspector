@@ -293,3 +293,209 @@ public sealed class EnumSettingAttribute(string name, string uiName, string grou
         get; set;
     }
 }
+
+/// <summary>
+/// Marks a <c>bool[]</c> field as a boolean array setting that is registered and loaded at startup.
+/// </summary>
+/// <remarks>Initializes a new bool-array setting attribute.</remarks>
+/// <param name="name">Machine-readable setting name.</param>
+/// <param name="uiName">Human-readable UI name.</param>
+/// <param name="groupName">Setting group name.</param>
+[AttributeUsage(AttributeTargets.Field)]
+public sealed class BoolArraySettingAttribute(string name, string uiName, string groupName) : Attribute
+{
+    /// <summary>Machine-readable setting name.</summary>
+    public string Name { get; } = name;
+
+    /// <summary>Human-readable UI name.</summary>
+    public string UiName { get; } = uiName;
+
+    /// <summary>Setting group name for UI grouping.</summary>
+    public string GroupName { get; } = groupName;
+
+    /// <summary>Default value when no override is configured.</summary>
+    public bool[] Default { get; set; } = [];
+
+    /// <summary>Optional description text.</summary>
+    public string? Description
+    {
+        get; set;
+    }
+}
+
+/// <summary>
+/// Marks a <c>string[]</c> field as a string array setting that is registered and loaded at startup.
+/// </summary>
+/// <remarks>Initializes a new string-array setting attribute.</remarks>
+/// <param name="name">Machine-readable setting name.</param>
+/// <param name="uiName">Human-readable UI name.</param>
+/// <param name="groupName">Setting group name.</param>
+[AttributeUsage(AttributeTargets.Field)]
+public sealed class StringArraySettingAttribute(string name, string uiName, string groupName) : Attribute
+{
+    /// <summary>Machine-readable setting name.</summary>
+    public string Name { get; } = name;
+
+    /// <summary>Human-readable UI name.</summary>
+    public string UiName { get; } = uiName;
+
+    /// <summary>Setting group name for UI grouping.</summary>
+    public string GroupName { get; } = groupName;
+
+    /// <summary>Default value when no override is configured.</summary>
+    public string[] Default { get; set; } = [];
+
+    /// <summary>Optional description text.</summary>
+    public string? Description
+    {
+        get; set;
+    }
+}
+
+/// <summary>
+/// Marks a <c>double[]</c> field as an F64 array setting that is registered and loaded at startup.
+/// Optional <see cref="Min"/>/<see cref="Max"/> apply to each element.
+/// </summary>
+/// <remarks>Initializes a new F64-array setting attribute.</remarks>
+/// <param name="name">Machine-readable setting name.</param>
+/// <param name="uiName">Human-readable UI name.</param>
+/// <param name="groupName">Setting group name.</param>
+[AttributeUsage(AttributeTargets.Field)]
+public sealed class F64ArraySettingAttribute(string name, string uiName, string groupName) : Attribute
+{
+    /// <summary>Machine-readable setting name.</summary>
+    public string Name { get; } = name;
+
+    /// <summary>Human-readable UI name.</summary>
+    public string UiName { get; } = uiName;
+
+    /// <summary>Setting group name for UI grouping.</summary>
+    public string GroupName { get; } = groupName;
+
+    /// <summary>Default value when no override is configured.</summary>
+    public double[] Default { get; set; } = [];
+
+    /// <summary>Optional minimum allowed value for each element.</summary>
+    public double Min { get; set; } = double.NaN;
+
+    /// <summary>Optional maximum allowed value for each element.</summary>
+    public double Max { get; set; } = double.NaN;
+
+    /// <summary>Optional description text.</summary>
+    public string? Description
+    {
+        get; set;
+    }
+}
+
+/// <summary>
+/// Marks a <c>ulong[]</c> field as a U64 array setting that is registered and loaded at startup.
+/// Optional min/max apply to each element when <see cref="HasMin"/>/<see cref="HasMax"/> are set.
+/// </summary>
+/// <remarks>Initializes a new U64-array setting attribute.</remarks>
+/// <param name="name">Machine-readable setting name.</param>
+/// <param name="uiName">Human-readable UI name.</param>
+/// <param name="groupName">Setting group name.</param>
+[AttributeUsage(AttributeTargets.Field)]
+public sealed class U64ArraySettingAttribute(string name, string uiName, string groupName) : Attribute
+{
+    /// <summary>Machine-readable setting name.</summary>
+    public string Name { get; } = name;
+
+    /// <summary>Human-readable UI name.</summary>
+    public string UiName { get; } = uiName;
+
+    /// <summary>Setting group name for UI grouping.</summary>
+    public string GroupName { get; } = groupName;
+
+    /// <summary>Default value when no override is configured.</summary>
+    public ulong[] Default { get; set; } = [];
+
+    /// <summary>Whether <see cref="Min"/> is set. Set this to <see langword="true"/> together with <see cref="Min"/>
+    /// to enable per-element lower-bound validation.</summary>
+    public bool HasMin
+    {
+        get; set;
+    }
+
+    /// <summary>Optional minimum allowed value for each element. Only applied when <see cref="HasMin"/> is <see langword="true"/>.</summary>
+    public ulong Min
+    {
+        get; set;
+    }
+
+    /// <summary>Whether <see cref="Max"/> is set. Set this to <see langword="true"/> together with <see cref="Max"/>
+    /// to enable per-element upper-bound validation.</summary>
+    public bool HasMax
+    {
+        get; set;
+    }
+
+    /// <summary>Optional maximum allowed value for each element. Only applied when <see cref="HasMax"/> is <see langword="true"/>.</summary>
+    public ulong Max
+    {
+        get; set;
+    }
+
+    /// <summary>Optional description text.</summary>
+    public string? Description
+    {
+        get; set;
+    }
+}
+
+/// <summary>
+/// Marks a <c>long[]</c> field as an I64 array setting that is registered and loaded at startup.
+/// Optional min/max apply to each element when <see cref="HasMin"/>/<see cref="HasMax"/> are set.
+/// </summary>
+/// <remarks>Initializes a new I64-array setting attribute.</remarks>
+/// <param name="name">Machine-readable setting name.</param>
+/// <param name="uiName">Human-readable UI name.</param>
+/// <param name="groupName">Setting group name.</param>
+[AttributeUsage(AttributeTargets.Field)]
+public sealed class I64ArraySettingAttribute(string name, string uiName, string groupName) : Attribute
+{
+    /// <summary>Machine-readable setting name.</summary>
+    public string Name { get; } = name;
+
+    /// <summary>Human-readable UI name.</summary>
+    public string UiName { get; } = uiName;
+
+    /// <summary>Setting group name for UI grouping.</summary>
+    public string GroupName { get; } = groupName;
+
+    /// <summary>Default value when no override is configured.</summary>
+    public long[] Default { get; set; } = [];
+
+    /// <summary>Whether <see cref="Min"/> is set. Set this to <see langword="true"/> together with <see cref="Min"/>
+    /// to enable per-element lower-bound validation.</summary>
+    public bool HasMin
+    {
+        get; set;
+    }
+
+    /// <summary>Optional minimum allowed value for each element. Only applied when <see cref="HasMin"/> is <see langword="true"/>.</summary>
+    public long Min
+    {
+        get; set;
+    }
+
+    /// <summary>Whether <see cref="Max"/> is set. Set this to <see langword="true"/> together with <see cref="Max"/>
+    /// to enable per-element upper-bound validation.</summary>
+    public bool HasMax
+    {
+        get; set;
+    }
+
+    /// <summary>Optional maximum allowed value for each element. Only applied when <see cref="HasMax"/> is <see langword="true"/>.</summary>
+    public long Max
+    {
+        get; set;
+    }
+
+    /// <summary>Optional description text.</summary>
+    public string? Description
+    {
+        get; set;
+    }
+}

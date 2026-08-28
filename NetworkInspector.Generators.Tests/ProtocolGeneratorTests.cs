@@ -4,7 +4,7 @@ namespace NetworkInspector.Generators.Tests;
 
 /// <summary>
 /// Roslyn <see cref="CSharpGeneratorDriver"/> tests for <see cref="ProtocolGenerator"/>.
-/// Each test covers one NIGEN diagnostic (001–013) or the happy-path source-emission contract.
+/// Each test covers one NIGEN diagnostic (001–014) or the happy-path source-emission contract.
 /// Shared driver scaffolding lives in <see cref="TestInfrastructure"/>.
 /// </summary>
 internal sealed class ProtocolGeneratorTests
@@ -755,6 +755,285 @@ internal sealed class ProtocolGeneratorTests
 
         await Assert.That(extractionCached).IsTrue()
             .Because("equivalent compilations must yield cached extraction outputs");
+    }
+
+    #endregion
+
+    #region Array setting attributes
+
+    [Test]
+    public async Task Run_WhenU64ArraySettingWithDefault_EmitsRegisterAndGet()
+    {
+        const string source = """
+            using NetworkInspector.Protocols.Attributes;
+            namespace TestProtocols;
+            [Protocol("arr.proto", "Array Proto")]
+            public partial class U64ArrayProto
+            {
+                [U64ArraySetting("p.ports", "Ports", "p", Default = new ulong[] { 1, 2 })]
+                private ulong[] _Ports;
+            }
+            """;
+
+        GeneratorDriverRunResult result = RunGenerator(source);
+        await Assert.That(result.Diagnostics.Any(static d => d.Severity == DiagnosticSeverity.Error)).IsFalse();
+        string generatedSource = GetFirstGeneratedSource(result);
+        await Assert.That(generatedSource.Contains("RegisterU64ArraySetting", StringComparison.Ordinal)).IsTrue();
+        await Assert.That(generatedSource.Contains("GetU64ArraySetting", StringComparison.Ordinal)).IsTrue();
+        await Assert.That(generatedSource.Contains("1UL", StringComparison.Ordinal)).IsTrue();
+        await Assert.That(generatedSource.Contains("2UL", StringComparison.Ordinal)).IsTrue();
+    }
+
+    [Test]
+    public async Task Run_WhenU64ArraySettingOmitsDefault_EmitsArrayEmpty()
+    {
+        const string source = """
+            using NetworkInspector.Protocols.Attributes;
+            namespace TestProtocols;
+            [Protocol("arr.proto", "Array Proto")]
+            public partial class U64ArrayEmptyProto
+            {
+                [U64ArraySetting("p.ports", "Ports", "p")]
+                private ulong[] _Ports;
+            }
+            """;
+
+        GeneratorDriverRunResult result = RunGenerator(source);
+        await Assert.That(result.Diagnostics.Any(static d => d.Severity == DiagnosticSeverity.Error)).IsFalse();
+        string generatedSource = GetFirstGeneratedSource(result);
+        await Assert.That(generatedSource.Contains("Array.Empty<ulong>()", StringComparison.Ordinal)).IsTrue();
+    }
+
+    [Test]
+    public async Task Run_WhenU64ArraySettingHasMinMax_EmitsMinMaxArgs()
+    {
+        const string source = """
+            using NetworkInspector.Protocols.Attributes;
+            namespace TestProtocols;
+            [Protocol("arr.proto", "Array Proto")]
+            public partial class U64ArrayMinMaxProto
+            {
+                [U64ArraySetting("p.ports", "Ports", "p", Default = new ulong[] { 2 },
+                    HasMin = true, Min = 1, HasMax = true, Max = 10)]
+                private ulong[] _Ports;
+            }
+            """;
+
+        GeneratorDriverRunResult result = RunGenerator(source);
+        await Assert.That(result.Diagnostics.Any(static d => d.Severity == DiagnosticSeverity.Error)).IsFalse();
+        string generatedSource = GetFirstGeneratedSource(result);
+        await Assert.That(generatedSource.Contains("min:", StringComparison.Ordinal)).IsTrue();
+        await Assert.That(generatedSource.Contains("max:", StringComparison.Ordinal)).IsTrue();
+    }
+
+    [Test]
+    public async Task Run_WhenU64ArraySettingHasMinFalse_OmitsMinArg()
+    {
+        const string source = """
+            using NetworkInspector.Protocols.Attributes;
+            namespace TestProtocols;
+            [Protocol("arr.proto", "Array Proto")]
+            public partial class U64ArrayNoMinProto
+            {
+                [U64ArraySetting("p.ports", "Ports", "p", Default = new ulong[] { 2 })]
+                private ulong[] _Ports;
+            }
+            """;
+
+        GeneratorDriverRunResult result = RunGenerator(source);
+        await Assert.That(result.Diagnostics.Any(static d => d.Severity == DiagnosticSeverity.Error)).IsFalse();
+        string generatedSource = GetFirstGeneratedSource(result);
+        await Assert.That(generatedSource.Contains("min:", StringComparison.Ordinal)).IsFalse();
+        await Assert.That(generatedSource.Contains("max:", StringComparison.Ordinal)).IsFalse();
+    }
+
+    [Test]
+    public async Task Run_WhenI64ArraySettingHasMinMax_EmitsMinMaxArgs()
+    {
+        const string source = """
+            using NetworkInspector.Protocols.Attributes;
+            namespace TestProtocols;
+            [Protocol("arr.proto", "Array Proto")]
+            public partial class I64ArrayMinMaxProto
+            {
+                [I64ArraySetting("p.offs", "Offs", "p", Default = new long[] { 2 },
+                    HasMin = true, Min = -10, HasMax = true, Max = 10)]
+                private long[] _Offs;
+            }
+            """;
+
+        GeneratorDriverRunResult result = RunGenerator(source);
+        await Assert.That(result.Diagnostics.Any(static d => d.Severity == DiagnosticSeverity.Error)).IsFalse();
+        string generatedSource = GetFirstGeneratedSource(result);
+        await Assert.That(generatedSource.Contains("min:", StringComparison.Ordinal)).IsTrue();
+        await Assert.That(generatedSource.Contains("max:", StringComparison.Ordinal)).IsTrue();
+    }
+
+    [Test]
+    public async Task Run_WhenF64ArraySettingWithDefault_EmitsInvariantValue()
+    {
+        const string source = """
+            using NetworkInspector.Protocols.Attributes;
+            namespace TestProtocols;
+            [Protocol("arr.proto", "Array Proto")]
+            public partial class F64ArrayProto
+            {
+                [F64ArraySetting("p.vals", "Vals", "p", Default = new double[] { 3.14 })]
+                private double[] _Vals;
+            }
+            """;
+
+        GeneratorDriverRunResult result = RunGenerator(source);
+        await Assert.That(result.Diagnostics.Any(static d => d.Severity == DiagnosticSeverity.Error)).IsFalse();
+        string generatedSource = GetFirstGeneratedSource(result);
+        await Assert.That(generatedSource.Contains("RegisterF64ArraySetting", StringComparison.Ordinal)).IsTrue();
+        await Assert.That(generatedSource.Contains("3.14", StringComparison.Ordinal)).IsTrue();
+        await Assert.That(generatedSource.Contains("GetF64ArraySetting", StringComparison.Ordinal)).IsTrue();
+    }
+
+    [Test]
+    public async Task Run_WhenF64ArraySettingWithMinMax_EmitsMinMaxArgs()
+    {
+        const string source = """
+            using NetworkInspector.Protocols.Attributes;
+            namespace TestProtocols;
+            [Protocol("arr.proto", "Array Proto")]
+            public partial class F64ArrayMinMaxProto
+            {
+                [F64ArraySetting("p.vals", "Vals", "p", Default = new double[] { 3.14 }, Min = 0.0, Max = 10.0)]
+                private double[] _Vals;
+            }
+            """;
+
+        GeneratorDriverRunResult result = RunGenerator(source);
+        await Assert.That(result.Diagnostics.Any(static d => d.Severity == DiagnosticSeverity.Error)).IsFalse();
+        string generatedSource = GetFirstGeneratedSource(result);
+        await Assert.That(generatedSource.Contains("min:", StringComparison.Ordinal)).IsTrue();
+        await Assert.That(generatedSource.Contains("max:", StringComparison.Ordinal)).IsTrue();
+    }
+
+    [Test]
+    public async Task Run_WhenStringArraySettingWithQuote_Escapes()
+    {
+        const string source = """
+            using NetworkInspector.Protocols.Attributes;
+            namespace TestProtocols;
+            [Protocol("arr.proto", "Array Proto")]
+            public partial class StringArrayProto
+            {
+                [StringArraySetting("p.names", "Names", "p", Default = new string[] { "a\"b" })]
+                private string[] _Names;
+            }
+            """;
+
+        GeneratorDriverRunResult result = RunGenerator(source);
+        await Assert.That(result.Diagnostics.Any(static d => d.Severity == DiagnosticSeverity.Error)).IsFalse();
+        string generatedSource = GetFirstGeneratedSource(result);
+        await Assert.That(generatedSource.Contains("RegisterStringArraySetting", StringComparison.Ordinal)).IsTrue();
+        await Assert.That(generatedSource.Contains("GetStringArraySetting", StringComparison.Ordinal)).IsTrue();
+        await Assert.That(generatedSource.Contains("\\\"", StringComparison.Ordinal)).IsTrue();
+    }
+
+    [Test]
+    public async Task Run_WhenStringArraySettingNullElement_EmitsNIGEN014()
+    {
+        const string source = """
+            using NetworkInspector.Protocols.Attributes;
+            namespace TestProtocols;
+            [Protocol("arr.proto", "Array Proto")]
+            public partial class StringArrayNullProto
+            {
+                [StringArraySetting("p.names", "Names", "p", Default = new string[] { null })]
+                private string[] _Names;
+            }
+            """;
+
+        GeneratorDriverRunResult result = RunGenerator(source);
+        await Assert.That(HasDiagnostic(result, "NIGEN014")).IsTrue();
+    }
+
+    [Test]
+    public async Task Run_WhenBoolArrayAndI64Array_EmitRegisterAndGet()
+    {
+        const string source = """
+            using NetworkInspector.Protocols.Attributes;
+            namespace TestProtocols;
+            [Protocol("arr.proto", "Array Proto")]
+            public partial class OtherArrayProto
+            {
+                [BoolArraySetting("p.flags", "Flags", "p", Default = new bool[] { true })]
+                private bool[] _Flags;
+                [I64ArraySetting("p.offs", "Offs", "p", Default = new long[] { -1 })]
+                private long[] _Offs;
+            }
+            """;
+
+        GeneratorDriverRunResult result = RunGenerator(source);
+        await Assert.That(result.Diagnostics.Any(static d => d.Severity == DiagnosticSeverity.Error)).IsFalse();
+        string generatedSource = GetFirstGeneratedSource(result);
+        await Assert.That(generatedSource.Contains("RegisterBoolArraySetting", StringComparison.Ordinal)).IsTrue();
+        await Assert.That(generatedSource.Contains("GetBoolArraySetting", StringComparison.Ordinal)).IsTrue();
+        await Assert.That(generatedSource.Contains("RegisterI64ArraySetting", StringComparison.Ordinal)).IsTrue();
+        await Assert.That(generatedSource.Contains("GetI64ArraySetting", StringComparison.Ordinal)).IsTrue();
+    }
+
+    [Test]
+    public async Task Run_WhenArraySettingsExplicitEmptyDefault_EmitsArrayEmpty()
+    {
+        const string source = """
+            using NetworkInspector.Protocols.Attributes;
+            namespace TestProtocols;
+            [Protocol("arr.proto", "Array Proto")]
+            public partial class EmptyArrayDefaultsProto
+            {
+                [BoolArraySetting("p.flags", "Flags", "p", Default = new bool[] { })]
+                private bool[] _Flags;
+                [StringArraySetting("p.names", "Names", "p", Default = new string[] { })]
+                private string[] _Names;
+                [F64ArraySetting("p.vals", "Vals", "p", Default = new double[] { })]
+                private double[] _Vals;
+                [I64ArraySetting("p.offs", "Offs", "p", Default = new long[] { })]
+                private long[] _Offs;
+                [U64ArraySetting("p.ports", "Ports", "p", Default = new ulong[] { })]
+                private ulong[] _Ports;
+            }
+            """;
+
+        GeneratorDriverRunResult result = RunGenerator(source);
+        await Assert.That(result.Diagnostics.Any(static d => d.Severity == DiagnosticSeverity.Error)).IsFalse();
+        string generatedSource = GetFirstGeneratedSource(result);
+        await Assert.That(generatedSource.Contains("Array.Empty<bool>()", StringComparison.Ordinal)).IsTrue();
+        await Assert.That(generatedSource.Contains("Array.Empty<string>()", StringComparison.Ordinal)).IsTrue();
+        await Assert.That(generatedSource.Contains("Array.Empty<double>()", StringComparison.Ordinal)).IsTrue();
+        await Assert.That(generatedSource.Contains("Array.Empty<long>()", StringComparison.Ordinal)).IsTrue();
+        await Assert.That(generatedSource.Contains("Array.Empty<ulong>()", StringComparison.Ordinal)).IsTrue();
+    }
+
+    [Test]
+    public async Task Run_WhenArraySettingPayloadIncomplete_EmitsNIGEN013()
+    {
+        const string source = """
+            using NetworkInspector.Protocols.Attributes;
+            namespace TestProtocols;
+            [Protocol("arr.proto", "Array Proto")]
+            public partial class IncompleteArraySettingProto
+            {
+                [BoolArraySetting("p.flags")]
+                private bool[] _Flags;
+                [StringArraySetting("p.names")]
+                private string[] _Names;
+                [F64ArraySetting("p.vals")]
+                private double[] _Vals;
+                [U64ArraySetting("p.ports")]
+                private ulong[] _Ports;
+                [I64ArraySetting("p.offs")]
+                private long[] _Offs;
+            }
+            """;
+
+        GeneratorDriverRunResult result = RunGenerator(source);
+        await Assert.That(HasDiagnostic(result, "NIGEN013")).IsTrue();
+        await Assert.That(HasGeneratedSource(result)).IsTrue();
     }
 
     #endregion

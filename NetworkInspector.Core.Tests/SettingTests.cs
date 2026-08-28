@@ -625,4 +625,80 @@ internal sealed class SettingTests
             loadingField.SetValue(mgr, 0);
         }
     }
+
+    // === Array settings ===
+
+    [Test]
+    public async Task U64Array_EmptyDefault_Succeeds()
+    {
+        Setting s = Setting.U64Array("test.ports", "Ports", "test", []);
+        await Assert.That(s.Type).IsEqualTo(SettingType.U64Array);
+        await Assert.That(s.TryGetAsU64Array(out ulong[] value)).IsTrue();
+        await Assert.That(value.Length).IsEqualTo(0);
+    }
+
+    [Test]
+    public void U64Array_DefaultElementBelowMin_Throws() =>
+        _ = Assert.Throws<ValidationSettingsException>(
+            () => Setting.U64Array("test.ports", "Ports", "test", [0UL], min: 1UL));
+
+    [Test]
+    public async Task U64Array_SetPendingOutOfRange_LeavesDefault()
+    {
+        Setting s = Setting.U64Array("test.ports", "Ports", "test", [1UL], min: 1UL, max: 10UL);
+        _ = Assert.Throws<ValidationSettingsException>(
+            () => s.SetPendingValue(SettingValue.U64Array([1UL, 99UL])));
+        await Assert.That(s.TryGetAsU64Array(out ulong[] current)).IsTrue();
+        await Assert.That(current.Length).IsEqualTo(1);
+        await Assert.That(current[0]).IsEqualTo(1UL);
+        await Assert.That(s.IsDirty).IsFalse();
+    }
+
+    [Test]
+    public void U64Array_SetPendingScalarU64_ThrowsTypeMismatch()
+    {
+        Setting s = Setting.U64Array("test.ports", "Ports", "test", [1UL]);
+        _ = Assert.Throws<TypeMismatchSettingsException>(
+            () => s.SetPendingValue(SettingValue.U64(1UL)));
+    }
+
+    [Test]
+    public async Task U64Array_MutatingTryGetCopy_DoesNotChangeValue()
+    {
+        Setting s = Setting.U64Array("test.ports", "Ports", "test", [1UL, 2UL]);
+        s.TryGetAsU64Array(out ulong[] copy);
+        copy[0] = 99UL;
+        s.TryGetAsU64Array(out ulong[] again);
+        await Assert.That(again[0]).IsEqualTo(1UL);
+    }
+
+    [Test]
+    public void F64Array_NonFiniteDefault_Throws() =>
+        _ = Assert.Throws<ValidationSettingsException>(
+            () => Setting.F64Array("test.vals", "Vals", "test", [double.NaN]));
+
+    [Test]
+    public async Task BoolArray_FactoryCreatesSetting()
+    {
+        Setting s = Setting.BoolArray("test.flags", "Flags", "test", [true, false]);
+        await Assert.That(s.TryGetAsBoolArray(out bool[] value)).IsTrue();
+        await Assert.That(value.Length).IsEqualTo(2);
+        await Assert.That(value[0]).IsTrue();
+    }
+
+    [Test]
+    public async Task StringArray_FactoryCreatesSetting()
+    {
+        Setting s = Setting.StringArray("test.names", "Names", "test", ["a"]);
+        await Assert.That(s.TryGetAsStringArray(out string[] value)).IsTrue();
+        await Assert.That(value[0]).IsEqualTo("a");
+    }
+
+    [Test]
+    public async Task I64Array_FactoryCreatesSetting()
+    {
+        Setting s = Setting.I64Array("test.offs", "Offs", "test", [-1L], min: -10L, max: 10L);
+        await Assert.That(s.TryGetAsI64Array(out long[] value)).IsTrue();
+        await Assert.That(value[0]).IsEqualTo(-1L);
+    }
 }

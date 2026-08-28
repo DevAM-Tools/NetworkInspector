@@ -52,16 +52,27 @@ Write the brief before Stage 5. Exam skipped → still write it. No complete wit
 - Built result only. Name symbols, behavior, contracts. No diffs.
 - Per file: what changed, why it had to exist (failure without it), which `R{n}`/finding. Ban empty purpose and “as planned” / “cleanup” / “refactor” without necessity.
 - Order for reading, not git: contracts/types → implementations → cutover → tests → docs. State depends-on.
+- Write files as a numbered card list. No tables. Stack fields. One card per path.
 
 ```markdown
 # Review Brief — {scope}
 
-**Expect:** {outcome; R{n}} · **Done when:** {check} · **Why:** {problem without it} · **Out:** {exclusions}
+**Expect:** {outcome; R{n}}
+**Done when:** {check}
+**Why:** {problem without it}
+**Out:** {exclusions}
 
-| Seq | Path | Changed | Why needed | Depends on | Serves |
-|-----|------|---------|------------|------------|--------|
-| 1 | {path} | {symbols/behavior} | {necessity} | — | R{n} / E{n} |
-| 2 | {path} | {symbols/behavior} | {necessity} | 1 | R{n} / E{n} |
+1. `{path}`
+   - **Changed:** {symbols/behavior}
+   - **Why needed:** {necessity}
+   - **Depends on:** —
+   - **Serves:** R{n} / E{n}
+
+2. `{path}`
+   - **Changed:** {symbols/behavior}
+   - **Why needed:** {necessity}
+   - **Depends on:** 1
+   - **Serves:** R{n} / E{n}
 ```
 
 ## Stage 5 — Closing Exam

@@ -1232,12 +1232,22 @@ private ParseResult PopulateMyFields(in LazyField container)
 Two hops. PDU Transport does **not** parse signals. Signal Message does **not** parse the PDU-Transport header. Each protocol binds to the table **above** it.
 
 ```
-UDP  ──[udp.port = pdu_transport.udp_dispatch_port]──►  PDU Transport
+UDP  ──[udp.port ∈ pdu_transport.udp_dispatch_ports]──►  PDU Transport
                                                           │
                               [pdu_transport.id = dispatch_bindings.key]──►  Signal Message
 ```
 
-Empty settings/profile is valid: PDU Transport still parses concatenated `[ID][Length][Payload]` tuples, but it never auto-binds on UDP (`udp_dispatch_port` default `0`), and Signal Message registers zero message protocols. Configure both hops or you get a raw `pdu_transport.payload` (or no PDU Transport at all).
+Empty settings/profile is valid: PDU Transport still parses concatenated `[ID][Length][Payload]` tuples, but it never auto-binds on UDP (`udp_dispatch_ports` default empty), and Signal Message registers zero message protocols. Configure both hops or you get a raw `pdu_transport.payload` (or no PDU Transport at all).
+
+UDP looks up `min(src,dst)` first, then `max` only if the first lookup did not consume. A well-known low port (for example `53`) therefore wins over a listed high destination. Listing a port is parser selection on `udp.port`, not a socket bind.
+
+Host code equivalent (tests / custom stacks) is `SettingsManager.PreloadValue` **before** `RegisterStandardProtocols`:
+
+```csharp
+sm.PreloadValue(
+    "pdu_transport.udp_dispatch_ports",
+    SettingValue.U64Array([47290UL, 47291UL]));
+```
 
 #### Settings (profile group files)
 
@@ -1247,7 +1257,7 @@ Empty settings/profile is valid: PDU Transport still parses concatenated `[ID][L
 
 ```json
 {
-  "pdu_transport.udp_dispatch_port": 47290,
+  "pdu_transport.udp_dispatch_ports": [47290, 47291],
   "pdu_transport.id_field_size": 4,
   "pdu_transport.length_field_size": 4,
   "pdu_transport.config_file": "pdu-names.json"
@@ -1256,7 +1266,7 @@ Empty settings/profile is valid: PDU Transport still parses concatenated `[ID][L
 
 | Setting | Default | Role |
 |---------|---------|------|
-| `pdu_transport.udp_dispatch_port` | `0` | UDP destination/source port that selects PDU Transport. **Must be 1–65535** or UDP never calls this parser. |
+| `pdu_transport.udp_dispatch_ports` | `[]` | JSON array of UDP ports (1–65535) that select PDU Transport. Empty = UDP never calls this parser. Elements outside 1–65535 are skipped with `SettingsLoadWarningKind.OutOfRange`; in-range ports still bind. Value **must be a JSON array**, not a single number. |
 | `pdu_transport.id_field_size` | `4` | On-wire PDU ID width: `1`, `2`, or `4` (big-endian). Other values clamp to `4` with a warning. |
 | `pdu_transport.length_field_size` | `4` | On-wire length width: `1`, `2`, or `4` (big-endian). Must match the capture. |
 | `pdu_transport.config_file` | `""` | Optional JSON of PDU **display names** only. Empty = IDs still parse; `pdu_transport.name` is omitted. Does **not** register Signal Messages. |
@@ -1278,8 +1288,6 @@ Empty settings/profile is valid: PDU Transport still parses concatenated `[ID][L
 | `signal_message.show_raw` | `false` | Append `{signal}.raw` (U64) under each signal. |
 | `signal_message.show_enum` | `false` | Append `{signal}.enum` when a `value_names` hit occurs. |
 | `signal_message.max_enum_values` | `4096` | Cap on `value_names` entries per signal. |
-
-Host code equivalent (tests / custom stacks) is `SettingsManager.PreloadValue` **before** `RegisterStandardProtocols`.
 
 #### External JSON (not the group files)
 
@@ -1359,7 +1367,7 @@ Signals are **never** children of `pdu_transport` or `pdu_transport.pdu`. Option
 
 | Symptom | Cause |
 |---------|--------|
-| No `pdu_transport` in the tree | `pdu_transport.udp_dispatch_port` is `0` or does not match the UDP port. |
+| No `pdu_transport` in the tree | `pdu_transport.udp_dispatch_ports` is empty, no listed port matches, the value is not a JSON array (TypeMismatch keeps `[]`), leftover `pdu_transport.udp_dispatch_port` is ignored, or UDP already consumed `min(src,dst)` (for example source `53`). |
 | `pdu_transport.payload` instead of the message | `dispatch_bindings.table` is not `pdu_transport.id`, or `key` ≠ on-wire PDU ID, or `id_field_size` / `length_field_size` do not match the capture (wrong ID read). |
 | Message protocol missing from the stack | `signal_message.config_file` empty or JSON failed to load (inspect `RegisterStandardProtocols` warnings). |
 | `pdu_transport.name` missing | `pdu_transport.config_file` empty or ID not listed. Parsing and dispatch still work. |
@@ -2435,7 +2443,7 @@ partial void OnStartCustom(Stack stack)
 | `eth.ieee8023` | `EthernetProtocol` | `u64` / any | `LlcProtocol` (catch-all for IEEE 802.3 frames) |
 | `ip.proto` | `IPv4Protocol` | `u64` (IP protocol number) | `TcpProtocol`, `UdpProtocol`, `IcmpProtocol`, `Icmpv6Protocol`; shared by `IPv6Protocol` via `[UsesTable]` |
 | `tcp.port` | `TcpProtocol` | `u64` (port number) | `DnsProtocol`, `TlsProtocol`, `HttpProtocol`, `Http2Protocol`, `SomeIpProtocol`, … |
-| `udp.port` | `UdpProtocol` | `u64` (port number) | `DnsProtocol`, `DhcpProtocol`, `Dhcpv6Protocol`, `DtlsProtocol`, `SomeIpProtocol`, `PduTransportProtocol` (when `pdu_transport.udp_dispatch_port` is set) |
+| `udp.port` | `UdpProtocol` | `u64` (port number) | `DnsProtocol`, `DhcpProtocol`, `Dhcpv6Protocol`, `DtlsProtocol`, `SomeIpProtocol`, `PduTransportProtocol` (when `pdu_transport.udp_dispatch_ports` contains a matching port) |
 | `pdu_transport.id` | `PduTransportProtocol` | `u64` (PDU ID) | Signal Message via `dispatch_bindings` |
 | `http.content_type` | `HttpProtocol` | `string` | `JsonProtocol`, `TextProtocol` |
 | `http.upgrade` | `HttpProtocol` | `string` | `WebSocketProtocol` |

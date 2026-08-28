@@ -319,6 +319,36 @@ public sealed partial class ProtocolGenerator
                                 + $"new (string, ulong)[] {{ {enumPairs} }}){desc});");
                             break;
                         }
+                    case "BoolArray":
+                        sb.AppendLine(
+                            $"        settings.RegisterBoolArraySetting(\"{_EscapeString(setting.Name)}\","
+                            + $" \"{_EscapeString(setting.UiName)}\", \"{_EscapeString(setting.GroupName)}\","
+                            + $" {setting.DefaultValue}{desc});");
+                        break;
+                    case "StringArray":
+                        sb.AppendLine(
+                            $"        settings.RegisterStringArraySetting(\"{_EscapeString(setting.Name)}\","
+                            + $" \"{_EscapeString(setting.UiName)}\", \"{_EscapeString(setting.GroupName)}\","
+                            + $" {setting.DefaultValue}{desc});");
+                        break;
+                    case "F64Array":
+                        sb.AppendLine(
+                            $"        settings.RegisterF64ArraySetting(\"{_EscapeString(setting.Name)}\","
+                            + $" \"{_EscapeString(setting.UiName)}\", \"{_EscapeString(setting.GroupName)}\","
+                            + $" {setting.DefaultValue}{minMax}{desc});");
+                        break;
+                    case "U64Array":
+                        sb.AppendLine(
+                            $"        settings.RegisterU64ArraySetting(\"{_EscapeString(setting.Name)}\","
+                            + $" \"{_EscapeString(setting.UiName)}\", \"{_EscapeString(setting.GroupName)}\","
+                            + $" {setting.DefaultValue}{minMax}{desc});");
+                        break;
+                    case "I64Array":
+                        sb.AppendLine(
+                            $"        settings.RegisterI64ArraySetting(\"{_EscapeString(setting.Name)}\","
+                            + $" \"{_EscapeString(setting.UiName)}\", \"{_EscapeString(setting.GroupName)}\","
+                            + $" {setting.DefaultValue}{minMax}{desc});");
+                        break;
                 }
             }
             sb.AppendLine();
@@ -420,6 +450,31 @@ public sealed partial class ProtocolGenerator
                 case "Enum":
                     sb.AppendLine($"        {setting.FieldName} = builder.Settings.GetU64Setting(\"{_EscapeString(setting.Name)}\") ?? {setting.DefaultValue};");
                     break;
+                case "BoolArray":
+                    sb.AppendLine(
+                        $"        {setting.FieldName} = builder.Settings.GetBoolArraySetting(\"{_EscapeString(setting.Name)}\")"
+                        + $" ?? {setting.DefaultValue};");
+                    break;
+                case "StringArray":
+                    sb.AppendLine(
+                        $"        {setting.FieldName} = builder.Settings.GetStringArraySetting(\"{_EscapeString(setting.Name)}\")"
+                        + $" ?? {setting.DefaultValue};");
+                    break;
+                case "F64Array":
+                    sb.AppendLine(
+                        $"        {setting.FieldName} = builder.Settings.GetF64ArraySetting(\"{_EscapeString(setting.Name)}\")"
+                        + $" ?? {setting.DefaultValue};");
+                    break;
+                case "U64Array":
+                    sb.AppendLine(
+                        $"        {setting.FieldName} = builder.Settings.GetU64ArraySetting(\"{_EscapeString(setting.Name)}\")"
+                        + $" ?? {setting.DefaultValue};");
+                    break;
+                case "I64Array":
+                    sb.AppendLine(
+                        $"        {setting.FieldName} = builder.Settings.GetI64ArraySetting(\"{_EscapeString(setting.Name)}\")"
+                        + $" ?? {setting.DefaultValue};");
+                    break;
             }
         }
     }
@@ -453,11 +508,16 @@ public sealed partial class ProtocolGenerator
 
     /// <summary>
     /// Escapes a user-supplied string for embedding inside a C# string literal.
-    /// Uses <see cref="Microsoft.CodeAnalysis.CSharp.SymbolDisplay.FormatLiteral(string, bool)"/> so that all
-    /// escape sequences (backslash, quote, newline, null, surrogates, non-printable characters) are handled.
+    /// Uses <see cref="Microsoft.CodeAnalysis.CSharp.SymbolDisplay.FormatLiteral(string, bool)"/> with
+    /// <c>quote: true</c> so quotes, backslashes, newlines, and non-printables are escaped, then strips
+    /// the surrounding quotes because callers wrap the result in their own <c>"</c> delimiters.
+    /// <c>quote: false</c> does not escape <c>"</c> and would emit invalid C# for string-array defaults.
     /// </summary>
     private static string _EscapeString(string value)
-        => Microsoft.CodeAnalysis.CSharp.SymbolDisplay.FormatLiteral(value, quote: false);
+    {
+        string quoted = Microsoft.CodeAnalysis.CSharp.SymbolDisplay.FormatLiteral(value, quote: true);
+        return quoted.Substring(1, quoted.Length - 2);
+    }
 
     /// <summary>
     /// Escapes characters that are invalid inside XML documentation comment text.

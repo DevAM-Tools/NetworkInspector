@@ -37,7 +37,9 @@ internal sealed class PduTransportBasicTests
                 sm =>
                 {
                     sm.PreloadValue("pdu_transport.config_file", pduJson);
-                    sm.PreloadValue("pdu_transport.udp_dispatch_port", (ulong)AutomotivePduBench.UdpPduTransportDestinationPort);
+                    sm.PreloadValue(
+                        PduTransportRegistration.UdpDispatchPortsSetting,
+                        SettingValue.U64Array([(ulong)AutomotivePduBench.UdpPduTransportDestinationPort]));
                     sm.PreloadValue("signal_message.config_file", sigJson);
                 });
 
@@ -85,7 +87,9 @@ internal sealed class PduTransportBasicTests
                 sm =>
                 {
                     sm.PreloadValue("pdu_transport.config_file", pduJson);
-                    sm.PreloadValue("pdu_transport.udp_dispatch_port", (ulong)AutomotivePduBench.UdpPduTransportDestinationPort);
+                    sm.PreloadValue(
+                        PduTransportRegistration.UdpDispatchPortsSetting,
+                        SettingValue.U64Array([(ulong)AutomotivePduBench.UdpPduTransportDestinationPort]));
                     sm.PreloadValue("signal_message.config_file", sigJson);
                 });
 
@@ -192,7 +196,9 @@ internal sealed class PduTransportBasicTests
                 sm =>
                 {
                     sm.PreloadValue("pdu_transport.config_file", pduJson);
-                    sm.PreloadValue("pdu_transport.udp_dispatch_port", (ulong)AutomotivePduBench.UdpPduTransportDestinationPort);
+                    sm.PreloadValue(
+                        PduTransportRegistration.UdpDispatchPortsSetting,
+                        SettingValue.U64Array([(ulong)AutomotivePduBench.UdpPduTransportDestinationPort]));
                 });
 
             using (stack)
@@ -280,7 +286,7 @@ internal sealed class PduTransportBasicTests
                 bool hasPdu = packet.TryGetFieldValue(pduIdField, out _, materialize: true);
                 bool hasRpm = packet.TryGetFieldValue(rpmId, out _, materialize: true);
                 await Assert.That(hasPdu).IsFalse()
-                    .Because("pdu_transport.udp_dispatch_port default 0 must not bind PDU Transport on UDP.");
+                    .Because("pdu_transport.udp_dispatch_ports default empty must not bind PDU Transport on UDP.");
                 await Assert.That(hasRpm).IsFalse();
             }
         }
@@ -335,7 +341,9 @@ internal sealed class PduTransportBasicTests
                 sm =>
                 {
                     sm.PreloadValue("pdu_transport.config_file", pduJson);
-                    sm.PreloadValue("pdu_transport.udp_dispatch_port", (ulong)AutomotivePduBench.UdpPduTransportDestinationPort);
+                    sm.PreloadValue(
+                        PduTransportRegistration.UdpDispatchPortsSetting,
+                        SettingValue.U64Array([(ulong)AutomotivePduBench.UdpPduTransportDestinationPort]));
                     sm.PreloadValue("signal_message.config_file", sigJson);
                 });
 
@@ -375,6 +383,323 @@ internal sealed class PduTransportBasicTests
 
                 await Assert.That(payloadUnderPdu).IsTrue()
                     .Because("Unmatched PDU payload must hang under pdu_transport.pdu.");
+            }
+        }
+        finally
+        {
+            Directory.Delete(work, recursive: true);
+        }
+    }
+
+    [Test]
+    public async Task Parse_TwoConfiguredUdpPorts_BothDatagramsHavePduTransportId()
+    {
+        SignalMessageLayout layout = AutomotivePduBench.TwoSequentialUint16LeLayout;
+        SignalMessageValueSet vals = SignalMessageValueSet.For(layout).Set("EngineRpm", 125.0).Set("Thr", 555);
+        SignalMessageLayer inner = new(layout, vals);
+
+        const ushort secondPort = 47291;
+        byte[] frameA = AutomotiveEthUdpFrames.EncapsulatePduTransportSignal(
+            udpSrcPort: 16001,
+            udpDstPort: AutomotivePduBench.UdpPduTransportDestinationPort,
+            pduFb: AutomotivePduBench.PduTransportRegistry,
+            pduWireId: AutomotivePduBench.PduTransportWireId,
+            signalMessage: inner);
+        byte[] frameB = AutomotiveEthUdpFrames.EncapsulatePduTransportSignal(
+            udpSrcPort: 16002,
+            udpDstPort: secondPort,
+            pduFb: AutomotivePduBench.PduTransportRegistry,
+            pduWireId: AutomotivePduBench.PduTransportWireId,
+            signalMessage: inner);
+
+        string work = Path.Combine(Path.GetTempPath(), "ni_pdu_tr_twoport_" + Guid.NewGuid().ToString("N"));
+        _ = Directory.CreateDirectory(work);
+        string pduJson = Path.Combine(work, "pdutr.json");
+        string sigJson = Path.Combine(work, "signal_message.json");
+        try
+        {
+            await File.WriteAllTextAsync(pduJson, PduTransportConfigBridge.SerializeJson(AutomotivePduBench.PduTransportRegistry))
+                .ConfigureAwait(false);
+            await File.WriteAllTextAsync(sigJson, SignalMessageConfigBridge.SerializeJson(layout)).ConfigureAwait(false);
+
+            Action<SettingsManager> configure = sm =>
+            {
+                sm.PreloadValue("pdu_transport.config_file", pduJson);
+                sm.PreloadValue(
+                    PduTransportRegistration.UdpDispatchPortsSetting,
+                    SettingValue.U64Array(
+                    [
+                        (ulong)AutomotivePduBench.UdpPduTransportDestinationPort,
+                        secondPort,
+                    ]));
+                sm.PreloadValue("signal_message.config_file", sigJson);
+            };
+
+            (Stack stackA, Packet packetA) = ProtocolTestHelper.BuildAndParse(frameA, configure);
+            using (stackA)
+            {
+                await ProtocolTestHelper
+                    .AssertU64Field(stackA, packetA, "pdu_transport.id", AutomotivePduBench.PduTransportWireId)
+                    .ConfigureAwait(false);
+            }
+
+            (Stack stackB, Packet packetB) = ProtocolTestHelper.BuildAndParse(frameB, configure);
+            using (stackB)
+            {
+                await ProtocolTestHelper
+                    .AssertU64Field(stackB, packetB, "pdu_transport.id", AutomotivePduBench.PduTransportWireId)
+                    .ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            Directory.Delete(work, recursive: true);
+        }
+    }
+
+    [Test]
+    public async Task Parse_MixedInvalidUdpDispatchPorts_ValidPortStillDissects()
+    {
+        SignalMessageLayout layout = AutomotivePduBench.TwoSequentialUint16LeLayout;
+        SignalMessageValueSet vals = SignalMessageValueSet.For(layout).Set("EngineRpm", 125.0).Set("Thr", 555);
+        SignalMessageLayer inner = new(layout, vals);
+
+        byte[] frame = AutomotiveEthUdpFrames.EncapsulatePduTransportSignal(
+            udpSrcPort: 16003,
+            udpDstPort: AutomotivePduBench.UdpPduTransportDestinationPort,
+            pduFb: AutomotivePduBench.PduTransportRegistry,
+            pduWireId: AutomotivePduBench.PduTransportWireId,
+            signalMessage: inner);
+
+        string work = Path.Combine(Path.GetTempPath(), "ni_pdu_tr_mixedport_" + Guid.NewGuid().ToString("N"));
+        _ = Directory.CreateDirectory(work);
+        string pduJson = Path.Combine(work, "pdutr.json");
+        string sigJson = Path.Combine(work, "signal_message.json");
+        try
+        {
+            await File.WriteAllTextAsync(pduJson, PduTransportConfigBridge.SerializeJson(AutomotivePduBench.PduTransportRegistry))
+                .ConfigureAwait(false);
+            await File.WriteAllTextAsync(sigJson, SignalMessageConfigBridge.SerializeJson(layout)).ConfigureAwait(false);
+
+            (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(
+                frame,
+                sm =>
+                {
+                    sm.PreloadValue("pdu_transport.config_file", pduJson);
+                    sm.PreloadValue(
+                        PduTransportRegistration.UdpDispatchPortsSetting,
+                        SettingValue.U64Array(
+                        [
+                            (ulong)AutomotivePduBench.UdpPduTransportDestinationPort,
+                            0UL,
+                            65536UL,
+                        ]));
+                    sm.PreloadValue("signal_message.config_file", sigJson);
+                });
+
+            using (stack)
+            {
+                await ProtocolTestHelper
+                    .AssertU64Field(stack, packet, "pdu_transport.id", AutomotivePduBench.PduTransportWireId)
+                    .ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            Directory.Delete(work, recursive: true);
+        }
+    }
+
+    [Test]
+    public async Task Parse_ScalarPreloadOnUdpDispatchPorts_DoesNotDissect()
+    {
+        SignalMessageLayout layout = AutomotivePduBench.TwoSequentialUint16LeLayout;
+        SignalMessageValueSet vals = SignalMessageValueSet.For(layout).Set("EngineRpm", 125.0).Set("Thr", 555);
+        SignalMessageLayer inner = new(layout, vals);
+
+        byte[] frame = AutomotiveEthUdpFrames.EncapsulatePduTransportSignal(
+            udpSrcPort: 16004,
+            udpDstPort: AutomotivePduBench.UdpPduTransportDestinationPort,
+            pduFb: AutomotivePduBench.PduTransportRegistry,
+            pduWireId: AutomotivePduBench.PduTransportWireId,
+            signalMessage: inner);
+
+        string work = Path.Combine(Path.GetTempPath(), "ni_pdu_tr_scalarport_" + Guid.NewGuid().ToString("N"));
+        _ = Directory.CreateDirectory(work);
+        string pduJson = Path.Combine(work, "pdutr.json");
+        string sigJson = Path.Combine(work, "signal_message.json");
+        try
+        {
+            await File.WriteAllTextAsync(pduJson, PduTransportConfigBridge.SerializeJson(AutomotivePduBench.PduTransportRegistry))
+                .ConfigureAwait(false);
+            await File.WriteAllTextAsync(sigJson, SignalMessageConfigBridge.SerializeJson(layout)).ConfigureAwait(false);
+
+            (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(
+                frame,
+                sm =>
+                {
+                    sm.PreloadValue("pdu_transport.config_file", pduJson);
+                    sm.PreloadValue(
+                        PduTransportRegistration.UdpDispatchPortsSetting,
+                        (ulong)AutomotivePduBench.UdpPduTransportDestinationPort);
+                    sm.PreloadValue("signal_message.config_file", sigJson);
+                });
+
+            using (stack)
+            {
+                FieldId pduIdField = stack.GetFieldId("pdu_transport.id")!.Value;
+                bool hasPdu = packet.TryGetFieldValue(pduIdField, out _, materialize: true);
+                await Assert.That(hasPdu).IsFalse()
+                    .Because("A scalar ulong preload on pdu_transport.udp_dispatch_ports must not bind PDU Transport.");
+            }
+        }
+        finally
+        {
+            Directory.Delete(work, recursive: true);
+        }
+    }
+
+    [Test]
+    public async Task Parse_ListedSourcePort_DissectsPduTransportId()
+    {
+        SignalMessageLayout layout = AutomotivePduBench.TwoSequentialUint16LeLayout;
+        SignalMessageValueSet vals = SignalMessageValueSet.For(layout).Set("EngineRpm", 125.0).Set("Thr", 555);
+        SignalMessageLayer inner = new(layout, vals);
+
+        byte[] frame = AutomotiveEthUdpFrames.EncapsulatePduTransportSignal(
+            udpSrcPort: AutomotivePduBench.UdpPduTransportDestinationPort,
+            udpDstPort: 16005,
+            pduFb: AutomotivePduBench.PduTransportRegistry,
+            pduWireId: AutomotivePduBench.PduTransportWireId,
+            signalMessage: inner);
+
+        string work = Path.Combine(Path.GetTempPath(), "ni_pdu_tr_srcport_" + Guid.NewGuid().ToString("N"));
+        _ = Directory.CreateDirectory(work);
+        string pduJson = Path.Combine(work, "pdutr.json");
+        string sigJson = Path.Combine(work, "signal_message.json");
+        try
+        {
+            await File.WriteAllTextAsync(pduJson, PduTransportConfigBridge.SerializeJson(AutomotivePduBench.PduTransportRegistry))
+                .ConfigureAwait(false);
+            await File.WriteAllTextAsync(sigJson, SignalMessageConfigBridge.SerializeJson(layout)).ConfigureAwait(false);
+
+            (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(
+                frame,
+                sm =>
+                {
+                    sm.PreloadValue("pdu_transport.config_file", pduJson);
+                    sm.PreloadValue(
+                        PduTransportRegistration.UdpDispatchPortsSetting,
+                        SettingValue.U64Array([(ulong)AutomotivePduBench.UdpPduTransportDestinationPort]));
+                    sm.PreloadValue("signal_message.config_file", sigJson);
+                });
+
+            using (stack)
+            {
+                await ProtocolTestHelper
+                    .AssertU64Field(stack, packet, "pdu_transport.id", AutomotivePduBench.PduTransportWireId)
+                    .ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            Directory.Delete(work, recursive: true);
+        }
+    }
+
+    [Test]
+    public async Task Parse_LeftoverUdpDispatchPortSetting_DoesNotDissect()
+    {
+        SignalMessageLayout layout = AutomotivePduBench.TwoSequentialUint16LeLayout;
+        SignalMessageValueSet vals = SignalMessageValueSet.For(layout).Set("EngineRpm", 125.0).Set("Thr", 555);
+        SignalMessageLayer inner = new(layout, vals);
+
+        byte[] frame = AutomotiveEthUdpFrames.EncapsulatePduTransportSignal(
+            udpSrcPort: 16006,
+            udpDstPort: AutomotivePduBench.UdpPduTransportDestinationPort,
+            pduFb: AutomotivePduBench.PduTransportRegistry,
+            pduWireId: AutomotivePduBench.PduTransportWireId,
+            signalMessage: inner);
+
+        string work = Path.Combine(Path.GetTempPath(), "ni_pdu_tr_oldkey_" + Guid.NewGuid().ToString("N"));
+        _ = Directory.CreateDirectory(work);
+        string pduJson = Path.Combine(work, "pdutr.json");
+        string sigJson = Path.Combine(work, "signal_message.json");
+        try
+        {
+            await File.WriteAllTextAsync(pduJson, PduTransportConfigBridge.SerializeJson(AutomotivePduBench.PduTransportRegistry))
+                .ConfigureAwait(false);
+            await File.WriteAllTextAsync(sigJson, SignalMessageConfigBridge.SerializeJson(layout)).ConfigureAwait(false);
+
+            (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(
+                frame,
+                sm =>
+                {
+                    sm.PreloadValue("pdu_transport.config_file", pduJson);
+                    sm.PreloadValue("pdu_transport.udp_dispatch_port", 47290UL);
+                    sm.PreloadValue("signal_message.config_file", sigJson);
+                });
+
+            using (stack)
+            {
+                FieldId pduIdField = stack.GetFieldId("pdu_transport.id")!.Value;
+                bool hasPdu = packet.TryGetFieldValue(pduIdField, out _, materialize: true);
+                await Assert.That(hasPdu).IsFalse()
+                    .Because("Leftover pdu_transport.udp_dispatch_port must not bind PDU Transport.");
+            }
+        }
+        finally
+        {
+            Directory.Delete(work, recursive: true);
+        }
+    }
+
+    [Test]
+    public async Task Parse_ZeroDestinationWithMixedList_DoesNotDissect()
+    {
+        SignalMessageLayout layout = AutomotivePduBench.TwoSequentialUint16LeLayout;
+        SignalMessageValueSet vals = SignalMessageValueSet.For(layout).Set("EngineRpm", 125.0).Set("Thr", 555);
+        SignalMessageLayer inner = new(layout, vals);
+
+        byte[] frame = AutomotiveEthUdpFrames.EncapsulatePduTransportSignal(
+            udpSrcPort: 16007,
+            udpDstPort: 0,
+            pduFb: AutomotivePduBench.PduTransportRegistry,
+            pduWireId: AutomotivePduBench.PduTransportWireId,
+            signalMessage: inner);
+
+        string work = Path.Combine(Path.GetTempPath(), "ni_pdu_tr_zerodst_" + Guid.NewGuid().ToString("N"));
+        _ = Directory.CreateDirectory(work);
+        string pduJson = Path.Combine(work, "pdutr.json");
+        string sigJson = Path.Combine(work, "signal_message.json");
+        try
+        {
+            await File.WriteAllTextAsync(pduJson, PduTransportConfigBridge.SerializeJson(AutomotivePduBench.PduTransportRegistry))
+                .ConfigureAwait(false);
+            await File.WriteAllTextAsync(sigJson, SignalMessageConfigBridge.SerializeJson(layout)).ConfigureAwait(false);
+
+            (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(
+                frame,
+                sm =>
+                {
+                    sm.PreloadValue("pdu_transport.config_file", pduJson);
+                    sm.PreloadValue(
+                        PduTransportRegistration.UdpDispatchPortsSetting,
+                        SettingValue.U64Array(
+                        [
+                            (ulong)AutomotivePduBench.UdpPduTransportDestinationPort,
+                            0UL,
+                            65536UL,
+                        ]));
+                    sm.PreloadValue("signal_message.config_file", sigJson);
+                });
+
+            using (stack)
+            {
+                FieldId pduIdField = stack.GetFieldId("pdu_transport.id")!.Value;
+                bool hasPdu = packet.TryGetFieldValue(pduIdField, out _, materialize: true);
+                await Assert.That(hasPdu).IsFalse()
+                    .Because("Filtered-out port 0 must not bind PDU Transport even when listed next to a valid port.");
             }
         }
         finally

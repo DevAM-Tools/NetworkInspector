@@ -48,7 +48,9 @@ internal sealed class PduTransportSignalNestedTsharkTests
                 sm =>
                 {
                     sm.PreloadValue("pdu_transport.config_file", pduJson);
-                    sm.PreloadValue("pdu_transport.udp_dispatch_port", (ulong)AutomotivePduBench.UdpPduTransportDestinationPort);
+                    sm.PreloadValue(
+                        PduTransportRegistration.UdpDispatchPortsSetting,
+                        SettingValue.U64Array([(ulong)AutomotivePduBench.UdpPduTransportDestinationPort]));
                     sm.PreloadValue("signal_message.config_file", sigJson);
                     sm.PreloadValue("signal_message.show_raw", true);
                 });

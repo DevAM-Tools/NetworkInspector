@@ -9,7 +9,7 @@ namespace NetworkInspector.Generators;
 /// <para>This type is split into the following partials:
 /// <list type="bullet">
 /// <item><description><see cref="ProtocolGenerator"/> (this file): constants, public API.</description></item>
-/// <item><description><c>ProtocolGenerator.Diagnostics.cs</c>: NIGEN001..NIGEN013 diagnostic descriptors.</description></item>
+/// <item><description><c>ProtocolGenerator.Diagnostics.cs</c>: NIGEN001..NIGEN014 diagnostic descriptors.</description></item>
 /// <item><description><c>ProtocolGenerator.Extraction.cs</c>: symbol/attribute traversal and validation.</description></item>
 /// <item><description><c>ProtocolGenerator.Emit.cs</c>: source-text generation and identifier utilities.</description></item>
 /// </list>
@@ -48,6 +48,11 @@ public sealed partial class ProtocolGenerator : IIncrementalGenerator
     private const string _FqnI64SettingAttribute = _FqnNs + "I64SettingAttribute";
     private const string _FqnBytesSettingAttribute = _FqnNs + "BytesSettingAttribute";
     private const string _FqnEnumSettingAttribute = _FqnNs + "EnumSettingAttribute";
+    private const string _FqnBoolArraySettingAttribute = _FqnNs + "BoolArraySettingAttribute";
+    private const string _FqnStringArraySettingAttribute = _FqnNs + "StringArraySettingAttribute";
+    private const string _FqnF64ArraySettingAttribute = _FqnNs + "F64ArraySettingAttribute";
+    private const string _FqnU64ArraySettingAttribute = _FqnNs + "U64ArraySettingAttribute";
+    private const string _FqnI64ArraySettingAttribute = _FqnNs + "I64ArraySettingAttribute";
 
     // Field attribute suffix — used after confirming the namespace prefix is correct.
     private const string _FieldAttributeSuffix = "FieldAttribute";

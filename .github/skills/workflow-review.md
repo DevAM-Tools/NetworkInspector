@@ -26,7 +26,7 @@ Load on `/review`. Apply `copilot-instructions.md` Sections 2–4.
 ## Stage 3 — Gather Context
 
 - Enumerate in-scope files.
-- If `reviews/brief_<slug>*.md` exists for this scope, read it first. Follow Seq. Expect is a claim, not proof.
+- If `reviews/brief_<slug>*.md` exists for this scope, read it first. Follow card order. Expect is a claim, not proof.
 - Read in-scope files, related tests, direct dependencies, and call sites.
 - Map composition: callers, callees, shared state, sequencing, and error paths that only appear when pieces combine.
 - Read definition and docs for involved types and items.

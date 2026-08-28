@@ -100,13 +100,16 @@ public sealed partial class PduTransportProtocol : IProtocol
     private ulong _LengthFieldSize;
 
     /// <summary>
-    /// When non-zero (1–65535), registers this parser on <see cref="UdpProtocol.PortTableName"/> under that
-    /// port key so UDP tries PDU Transport before falling back to other sub-dissectors. Zero (default)
-    /// means no UDP auto-dispatch — matching Wireshark setups that rely solely on Decode-As /
-    /// per-capture heuristic binding.
+    /// UDP ports that select this parser on <see cref="UdpProtocol.PortTableName"/>. Empty (default) means
+    /// no UDP auto-dispatch. Each element in 1–65535 becomes a table key; UDP matches source or destination.
+    /// Values outside that range are skipped and recorded on <see cref="UdpDispatchPortsWarning"/>.
     /// </summary>
-    [U64Setting("pdu_transport.udp_dispatch_port", "UDP dispatch port", "pdu_transport", Default = 0)]
-    private ulong _UdpDispatchPort;
+    [U64ArraySetting(
+        "pdu_transport.udp_dispatch_ports",
+        "UDP dispatch ports",
+        "pdu_transport",
+        Description = "UDP ports (1-65535) that select PDU Transport. Empty means no UDP auto-dispatch. Values outside 1-65535 are skipped with a warning.")]
+    private ulong[] _UdpDispatchPorts = [];
 
     #endregion
 
@@ -171,14 +174,25 @@ public sealed partial class PduTransportProtocol : IProtocol
         get; private set;
     }
 
+    /// <summary>
+    /// Warning produced during registration if <c>pdu_transport.udp_dispatch_ports</c> contained
+    /// values outside 1–65535. Those elements are skipped; in-range ports still bind.
+    /// Duplicate in-range values are silent. <see langword="null"/> when the array is empty
+    /// or no element is outside 1–65535.
+    /// </summary>
+    public SettingsLoadWarning? UdpDispatchPortsWarning
+    {
+        get; private set;
+    }
+
     #endregion
 
     #region Public config API
 
     /// <summary>
-    /// Copies every registration warning (file load, additional stream load, field-size clamps)
-    /// into <paramref name="warnings"/>. Call after <c>RegisterFields</c> so the caller
-    /// can decide how to surface them; nothing is discarded here.
+    /// Copies every registration warning (file load, additional stream load, field-size clamps,
+    /// UDP dispatch port filter) into <paramref name="warnings"/>. Call after <c>RegisterFields</c>
+    /// so the caller can decide how to surface them; nothing is discarded here.
     /// </summary>
     /// <param name="warnings">Destination list. Caller guarantees non-null.</param>
     /// <exception cref="ArgumentNullException">Thrown when <paramref name="warnings"/> is <see langword="null"/>.</exception>
@@ -204,6 +218,11 @@ public sealed partial class PduTransportProtocol : IProtocol
         if (LengthFieldSizeClampWarning is { } lengthWarning)
         {
             warnings.Add(lengthWarning);
+        }
+
+        if (UdpDispatchPortsWarning is { } portsWarning)
+        {
+            warnings.Add(portsWarning);
         }
     }
 
@@ -302,12 +321,70 @@ public sealed partial class PduTransportProtocol : IProtocol
 
         _ApplyNameLookup(fileConfig, _AdditionalConfig);
 
-        if (_UdpDispatchPort is >= 1UL and <= ushort.MaxValue)
+        ulong[] udpPorts = _FilterUdpDispatchPorts(_UdpDispatchPorts, out SettingsLoadWarning? udpPortsWarning);
+        UdpDispatchPortsWarning = udpPortsWarning;
+        if (udpPorts.Length > 0)
         {
-            ulong portKey = _UdpDispatchPort;
             builder.WhenProtocolTableRegistered(UdpProtocol.PortTableName, table =>
-                builder.RegisterParserInU64Table(table, portKey, protocolId));
+            {
+                foreach (ulong portKey in udpPorts)
+                {
+                    builder.RegisterParserInU64Table(table, portKey, protocolId);
+                }
+            });
         }
+    }
+
+    /// <summary>
+    /// Keeps unique UDP ports in 1–65535. Out-of-range values produce one
+    /// <see cref="SettingsLoadWarningKind.OutOfRange"/> warning and are not bound.
+    /// </summary>
+    /// <param name="raw">Loaded setting elements; <see langword="null"/> or empty yields no ports and no warning.</param>
+    /// <param name="warning">Set when any element is outside 1–65535; otherwise <see langword="null"/>.</param>
+    /// <returns>Distinct ports in 1–65535, in first-seen order.</returns>
+    private static ulong[] _FilterUdpDispatchPorts(ulong[] raw, out SettingsLoadWarning? warning)
+    {
+        if (raw is not { Length: > 0 })
+        {
+            warning = null;
+            return [];
+        }
+
+        List<ulong> ports = [];
+        List<string> skipped = [];
+        for (int i = 0; i < raw.Length; i++)
+        {
+            ulong candidate = raw[i];
+            if (candidate is < 1UL or > 65535UL)
+            {
+                skipped.Add(candidate.ToString(CultureInfo.InvariantCulture));
+                continue;
+            }
+
+            if (ports.Contains(candidate))
+            {
+                continue;
+            }
+
+            ports.Add(candidate);
+        }
+
+        if (skipped.Count > 0)
+        {
+            warning = new SettingsLoadWarning(
+                SettingsLoadWarningKind.OutOfRange,
+                "pdu_transport",
+                PduTransportRegistration.UdpDispatchPortsSetting,
+                skipped.Count.ToString(CultureInfo.InvariantCulture)
+                + " UDP dispatch port value(s) skipped (not an integer in 1-65535): "
+                + string.Join(", ", skipped));
+        }
+        else
+        {
+            warning = null;
+        }
+
+        return ports.ToArray();
     }
 
     /// <summary>Rejects config apply after <c>RegisterFields</c> has committed runtime state.</summary>

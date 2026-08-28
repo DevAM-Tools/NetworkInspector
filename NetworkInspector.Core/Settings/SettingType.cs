@@ -30,5 +30,20 @@ public enum SettingType : byte
     /// <summary>Named enum value with a numeric representation.</summary>
     Enum = 6,
 
+    /// <summary>Homogeneous array of boolean values.</summary>
+    BoolArray = 7,
+
+    /// <summary>Homogeneous array of strings.</summary>
+    StringArray = 8,
+
+    /// <summary>Homogeneous array of 64-bit floating-point values.</summary>
+    F64Array = 9,
+
+    /// <summary>Homogeneous array of unsigned 64-bit integers.</summary>
+    U64Array = 10,
+
+    /// <summary>Homogeneous array of signed 64-bit integers.</summary>
+    I64Array = 11,
+
     #endregion
 }

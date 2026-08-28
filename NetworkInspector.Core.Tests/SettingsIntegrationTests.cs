@@ -57,6 +57,48 @@ internal sealed class SettingsIntegrationTests
     }
 
     [Test]
+    public async Task RegisterU64ArraySetting_ThenQueryFromStack()
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        builder.SettingsRegistrar.RegisterU64ArraySetting("test.ports", "Ports", "test", [1UL, 2UL]);
+        Stack stack = builder.Build();
+        ulong[]? value = stack.Settings.GetU64ArraySetting("test.ports");
+        await Assert.That(value).IsNotNull();
+        await Assert.That(value!.Length).IsEqualTo(2);
+        await Assert.That(value[0]).IsEqualTo(1UL);
+        await Assert.That(value[1]).IsEqualTo(2UL);
+    }
+
+    [Test]
+    public async Task RegisterSiblingArraySettings_ThenQueryFromStack()
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        builder.SettingsRegistrar.RegisterBoolArraySetting("test.flags", "Flags", "test", [true]);
+        builder.SettingsRegistrar.RegisterStringArraySetting("test.names", "Names", "test", ["x"]);
+        builder.SettingsRegistrar.RegisterF64ArraySetting("test.vals", "Vals", "test", [2.5]);
+        builder.SettingsRegistrar.RegisterI64ArraySetting("test.offs", "Offs", "test", [-2L]);
+        Stack stack = builder.Build();
+
+        bool[]? flags = stack.Settings.GetBoolArraySetting("test.flags");
+        await Assert.That(flags).IsNotNull();
+        await Assert.That(flags![0]).IsTrue();
+
+        string[]? names = stack.Settings.GetStringArraySetting("test.names");
+        await Assert.That(names).IsNotNull();
+        await Assert.That(names![0]).IsEqualTo("x");
+
+        double[]? vals = stack.Settings.GetF64ArraySetting("test.vals");
+        await Assert.That(vals).IsNotNull();
+        await Assert.That(vals![0]).IsEqualTo(2.5);
+
+        long[]? offs = stack.Settings.GetI64ArraySetting("test.offs");
+        await Assert.That(offs).IsNotNull();
+        await Assert.That(offs![0]).IsEqualTo(-2L);
+    }
+
+    [Test]
     public async Task RegisterI64Setting_ThenQueryFromStack()
     {
         using SettingsManager settingsManager = new();

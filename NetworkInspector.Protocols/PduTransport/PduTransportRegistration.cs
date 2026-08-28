@@ -13,6 +13,13 @@ namespace NetworkInspector.Protocols.PduTransport;
 /// (profile/settings, may be empty) is always applied. Stream/object overloads add extra
 /// PDU names on top of that file; they do not replace it.
 /// </para>
+/// <para>
+/// UDP parser selection (not a socket listen) uses <see cref="UdpDispatchPortsSetting"/>,
+/// a <c>U64Array</c>, not the names JSON. Empty means UDP never calls this parser.
+/// Host preload before <c>RegisterStandardProtocols</c>:
+/// <c>settings.PreloadValue(PduTransportRegistration.UdpDispatchPortsSetting, SettingValue.U64Array([47290UL, 47291UL]));</c>
+/// A scalar <c>ulong</c> preload is ignored (type mismatch; default empty).
+/// </para>
 /// <para><b>Thread safety:</b> not thread-safe; call once during single-threaded stack build.</para>
 /// </remarks>
 public static class PduTransportRegistration
@@ -21,6 +28,9 @@ public static class PduTransportRegistration
 
     /// <summary>Setting: path to the PDU Transport JSON configuration file.</summary>
     public const string ConfigFileSetting = "pdu_transport.config_file";
+
+    /// <summary>Setting: UDP ports that select PDU Transport on <c>udp.port</c>.</summary>
+    public const string UdpDispatchPortsSetting = "pdu_transport.udp_dispatch_ports";
 
     private const string _GroupName = "pdu_transport";
 
@@ -53,7 +63,8 @@ public static class PduTransportRegistration
 
     /// <summary>
     /// Registers PDU Transport using the <see cref="ConfigFileSetting"/> path (if set).
-    /// Field-size clamps and config-load failures are appended to <paramref name="warnings"/>.
+    /// Field-size clamps, UDP dispatch-port filter warnings, and config-load failures
+    /// are appended to <paramref name="warnings"/>.
     /// </summary>
     /// <param name="builder">Stack builder during the registration phase.</param>
     /// <param name="warnings">Receives registration warnings. Caller guarantees non-null.</param>

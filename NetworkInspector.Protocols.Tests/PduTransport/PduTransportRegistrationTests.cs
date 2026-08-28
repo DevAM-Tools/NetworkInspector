@@ -297,6 +297,54 @@ internal sealed class PduTransportRegistrationTests
             .Throws<ArgumentNullException>();
     }
 
+    [Test]
+    public async Task Register_EmptyUdpDispatchPorts_NoPortWarning()
+    {
+        using SettingsManager settings = new();
+        StackBuilder builder = new(settings, new FrameInterfaceRegistry());
+        List<SettingsLoadWarning> warnings = [];
+        PduTransportProtocol protocol = PduTransportRegistration.Register(builder, warnings);
+
+        await Assert.That(protocol.UdpDispatchPortsWarning).IsNull();
+        await Assert.That(warnings.Any(w => w.SettingName == PduTransportRegistration.UdpDispatchPortsSetting))
+            .IsFalse();
+    }
+
+    [Test]
+    public async Task Register_InvalidAndValidUdpDispatchPorts_WarningListsSkippedValues()
+    {
+        using SettingsManager settings = new();
+        settings.PreloadValue(
+            PduTransportRegistration.UdpDispatchPortsSetting,
+            SettingValue.U64Array([47290UL, 0UL, 65536UL, 47290UL]));
+        StackBuilder builder = new(settings, new FrameInterfaceRegistry());
+        List<SettingsLoadWarning> warnings = [];
+        PduTransportProtocol protocol = PduTransportRegistration.Register(builder, warnings);
+
+        await Assert.That(protocol.UdpDispatchPortsWarning).IsNotNull();
+        SettingsLoadWarning warning = protocol.UdpDispatchPortsWarning!.Value;
+        await Assert.That(warning.Kind).IsEqualTo(SettingsLoadWarningKind.OutOfRange);
+        await Assert.That(warning.SettingName).IsEqualTo(PduTransportRegistration.UdpDispatchPortsSetting);
+        await Assert.That(warning.Message.Contains(": 0, 65536", StringComparison.Ordinal)).IsTrue();
+        await Assert.That(warning.Message.Contains("47290", StringComparison.Ordinal)).IsFalse();
+        await Assert.That(warnings.Contains(warning)).IsTrue();
+    }
+
+    [Test]
+    public async Task Register_ScalarU64PreloadOnUdpDispatchPorts_KeepsEmptyAndDoesNotThrow()
+    {
+        using SettingsManager settings = new();
+        settings.PreloadValue(PduTransportRegistration.UdpDispatchPortsSetting, 47290UL);
+        StackBuilder builder = new(settings, new FrameInterfaceRegistry());
+        List<SettingsLoadWarning> warnings = [];
+        PduTransportProtocol protocol = PduTransportRegistration.Register(builder, warnings);
+
+        await Assert.That(protocol.UdpDispatchPortsWarning).IsNull();
+        ulong[]? current = settings.GetU64ArraySetting(PduTransportRegistration.UdpDispatchPortsSetting);
+        await Assert.That(current).IsNotNull();
+        await Assert.That(current!.Length).IsEqualTo(0);
+    }
+
     #endregion
 
     #region Helpers

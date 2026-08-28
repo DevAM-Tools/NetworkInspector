@@ -116,4 +116,18 @@ internal sealed class SettingRegistrationResultTests
         await Assert.That(value.Name).IsEqualTo("High");
         await Assert.That(value.Value).IsEqualTo(1UL);
     }
+
+    [Test]
+    public async Task TryGetAsU64Array_ReturnsRegisteredValue()
+    {
+        using SettingsManager mgr = new();
+        SettingRegistrationResult result =
+            mgr.RegisterSetting(Setting.U64Array("test.ports", "Ports", "test", [8UL, 9UL]));
+
+        bool ok = result.TryGetAsU64Array(out ulong[] value);
+        await Assert.That(ok).IsTrue();
+        await Assert.That(value.Length).IsEqualTo(2);
+        await Assert.That(value[0]).IsEqualTo(8UL);
+        await Assert.That(value[1]).IsEqualTo(9UL);
+    }
 }

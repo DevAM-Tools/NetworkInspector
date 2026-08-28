@@ -22,8 +22,8 @@ internal static class AutomotiveEthUdpFrames
         IPv4Layer ip = TestIpv4();
 
         /*
-         Destination port selects the PDU-Transport dissector whenever
-         pdu_transport.udp_dispatch_port matches.
+         UDP tries min(src,dst) first, then max. A listed source or destination
+         selects PDU Transport when that lookup is the first consumer on udp.port.
         */
         UdpLayer udp = new(udpSrcPort, udpDstPort);
         return FrameStack.Start(eth).Then(ip).Then(udp)

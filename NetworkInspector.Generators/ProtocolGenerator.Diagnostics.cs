@@ -3,7 +3,7 @@
 namespace NetworkInspector.Generators;
 
 /// <summary>
-/// Diagnostic descriptors emitted by <see cref="ProtocolGenerator"/>. NIGEN001..NIGEN013.
+/// Diagnostic descriptors emitted by <see cref="ProtocolGenerator"/>. NIGEN001..NIGEN014.
 /// </summary>
 public sealed partial class ProtocolGenerator
 {
@@ -103,6 +103,13 @@ public sealed partial class ProtocolGenerator
         messageFormat: "The '{0}' attribute on '{1}' in protocol '{2}' is missing required positional arguments and was skipped."
             + " Provide all positional constructor arguments (name, UI name, [group, ...]).",
         category: _DiagCategory, defaultSeverity: DiagnosticSeverity.Warning, isEnabledByDefault: true);
+
+    /// <summary>NIGEN014: Array setting Default contains a null element.</summary>
+    private static readonly DiagnosticDescriptor _DiagNullArraySettingDefaultElement = new(
+        id: "NIGEN014",
+        title: "Null element in array setting Default",
+        messageFormat: "The Default array of '{0}' on field '{1}' in protocol '{2}' contains a null element. Array setting defaults cannot contain null.",
+        category: _DiagCategory, defaultSeverity: DiagnosticSeverity.Error, isEnabledByDefault: true);
 
     #endregion
 }

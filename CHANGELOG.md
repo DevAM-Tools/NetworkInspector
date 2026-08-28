@@ -11,6 +11,28 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.8.0] — Settings arrays of scalar types, PDU Transport UDP port list
+
+Delta since `36dee43` (0.7.0). Version is `0.8.0` in `Directory.Build.props`.
+
+Settings can now store homogeneous JSON arrays of `bool`, `string`, `double`, `ulong`, and `long`. Protocol authors declare them with `[U64ArraySetting]` (and siblings); generated `RegisterFields` registers and loads them. PDU Transport uses that vehicle to bind several UDP ports.
+
+### Added
+
+- **`SettingType` array arms** — `BoolArray` (7), `StringArray` (8), `F64Array` (9), `U64Array` (10), `I64Array` (11). `SettingValue` factories, equality, hash, and format labels (`[N u64]`, same shape as `[N bytes]`). Getters return **defensive copies**. Empty arrays are valid. Duplicates are preserved.
+- **`SettingsRegistrar.Register*ArraySetting`** and **`IReadOnlySettingsManager.Get*ArraySetting`** for all five types. Numeric arrays accept optional per-element `min`/`max` (same `Setting.MinValue` / `MaxValue` as scalars). F64 arrays reject non-finite elements the same way as scalar F64.
+- **JSON persistence** — profile/group files store `"name": [1, 2]`. Load of a scalar, a non-array JSON value, a mixed-type array, or a `null` element is `TypeMismatch`, keeps the default, and does not apply a prefix. Out-of-range elements are `OutOfRange` and keep the default (whole array rejected by setting validation).
+- **Protocol attributes** — `[BoolArraySetting]`, `[StringArraySetting]`, `[F64ArraySetting]`, `[U64ArraySetting]`, `[I64ArraySetting]` on matching array fields. `ProtocolGenerator` emits `Register*ArraySetting` and `{Field} = Get*ArraySetting(...) ?? {default}`.
+- **`pdu_transport.udp_dispatch_ports`** (`U64Array`, default `[]`) — UDP ports in 1–65535 that select PDU Transport on `udp.port`. Protocol-side filter skips out-of-range elements with one `SettingsLoadWarningKind.OutOfRange`; in-range ports still bind. Empty means UDP never calls this parser. Listing a port is parser selection, not a socket listen. UDP still looks up `min(src,dst)` first, then `max` if the first lookup did not consume.
+
+### Changed
+
+- **Breaking (pre-1.0): `pdu_transport.udp_dispatch_port` (U64) removed.** Use `pdu_transport.udp_dispatch_ports` (JSON `[47290, 47291]`). A leftover scalar key or a JSON number (not an array) does not bind PDU Transport.
+- `PROTOCOL_GUIDE.md` §10.9 documents the JSON array, host `PreloadValue(..., SettingValue.U64Array([...]))`, leftover-key miss, and UDP first-consumer collisions (for example source `53`).
+- Version bumped to `0.8.0`.
+
+---
+
 ## [0.7.0] — Concurrent re-parse, protocol-local effects, PDU Transport and Signal Message fixes
 
 Delta since `d4d3511` (0.6.0). Version is `0.7.0` in `Directory.Build.props`.

@@ -110,4 +110,17 @@ internal sealed class ReadOnlySettingViewTests
         IReadOnlyList<ReadOnlySettingView> missing = mgr.ReadOnly.GetSettingsInGroup("nope");
         await Assert.That(missing).IsEmpty();
     }
+
+    [Test]
+    public async Task Setting_AsReadOnlyView_ForwardsU64Array()
+    {
+        Setting setting = Setting.U64Array("test.ports", "Ports", "test", [1UL, 2UL]);
+        ReadOnlySettingView view = setting.AsReadOnlyView();
+
+        await Assert.That(view.Type).IsEqualTo(SettingType.U64Array);
+        await Assert.That(view.TryGetAsU64Array(out ulong[] value)).IsTrue();
+        await Assert.That(value.Length).IsEqualTo(2);
+        await Assert.That(value[0]).IsEqualTo(1UL);
+        await Assert.That(value[1]).IsEqualTo(2UL);
+    }
 }

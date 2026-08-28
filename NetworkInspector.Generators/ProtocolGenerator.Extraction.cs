@@ -379,6 +379,46 @@ public sealed partial class ProtocolGenerator
                         settings.Add(si.Value);
                     }
                 }
+                else if (fqn == _FqnBoolArraySettingAttribute)
+                {
+                    SettingInfo? si = _ExtractBoolArraySettingInfo(fieldSymbol, attr, className, diagnostics);
+                    if (si is not null)
+                    {
+                        settings.Add(si.Value);
+                    }
+                }
+                else if (fqn == _FqnStringArraySettingAttribute)
+                {
+                    SettingInfo? si = _ExtractStringArraySettingInfo(fieldSymbol, attr, className, diagnostics);
+                    if (si is not null)
+                    {
+                        settings.Add(si.Value);
+                    }
+                }
+                else if (fqn == _FqnF64ArraySettingAttribute)
+                {
+                    SettingInfo? si = _ExtractF64ArraySettingInfo(fieldSymbol, attr, className, diagnostics);
+                    if (si is not null)
+                    {
+                        settings.Add(si.Value);
+                    }
+                }
+                else if (fqn == _FqnU64ArraySettingAttribute)
+                {
+                    SettingInfo? si = _ExtractU64ArraySettingInfo(fieldSymbol, attr, className, diagnostics);
+                    if (si is not null)
+                    {
+                        settings.Add(si.Value);
+                    }
+                }
+                else if (fqn == _FqnI64ArraySettingAttribute)
+                {
+                    SettingInfo? si = _ExtractI64ArraySettingInfo(fieldSymbol, attr, className, diagnostics);
+                    if (si is not null)
+                    {
+                        settings.Add(si.Value);
+                    }
+                }
             }
         }
     }
@@ -774,6 +814,329 @@ public sealed partial class ProtocolGenerator
         string defaultStr = defaultValue.ToString(System.Globalization.CultureInfo.InvariantCulture);
 
         return new SettingInfo(fieldSymbol.Name, name, uiName, groupName, "Enum", defaultStr, desc, EnumValues: formattedPairs);
+    }
+
+    /// <summary>Extracts a <c>[BoolArraySetting]</c> descriptor with an emit-ready default expression.</summary>
+    private static SettingInfo? _ExtractBoolArraySettingInfo(
+        IFieldSymbol fieldSymbol, AttributeData attr, string className, List<DiagnosticInfo> diagnostics)
+    {
+        if (!_TryExtractSettingHeader(fieldSymbol, attr, "BoolArraySettingAttribute", className, diagnostics, out string name, out string uiName, out string groupName))
+        {
+            return null;
+        }
+
+        string defaultExpr = "global::System.Array.Empty<bool>()";
+        string? desc = null;
+        foreach (KeyValuePair<string, TypedConstant> named in attr.NamedArguments)
+        {
+            if (named.Key == "Default")
+            {
+                defaultExpr = _FormatBoolArrayLiteral(named.Value);
+            }
+            else if (named.Key == "Description")
+            {
+                desc = named.Value.Value as string;
+            }
+        }
+
+        return new SettingInfo(fieldSymbol.Name, name, uiName, groupName, "BoolArray", defaultExpr, desc);
+    }
+
+    /// <summary>Extracts a <c>[StringArraySetting]</c> descriptor. Null default elements emit NIGEN014.</summary>
+    private static SettingInfo? _ExtractStringArraySettingInfo(
+        IFieldSymbol fieldSymbol, AttributeData attr, string className, List<DiagnosticInfo> diagnostics)
+    {
+        if (!_TryExtractSettingHeader(fieldSymbol, attr, "StringArraySettingAttribute", className, diagnostics, out string name, out string uiName, out string groupName))
+        {
+            return null;
+        }
+
+        string defaultExpr = "global::System.Array.Empty<string>()";
+        string? desc = null;
+        foreach (KeyValuePair<string, TypedConstant> named in attr.NamedArguments)
+        {
+            if (named.Key == "Default")
+            {
+                string? formatted = _TryFormatStringArrayLiteral(named.Value, fieldSymbol.Name, className, diagnostics);
+                if (formatted is null)
+                {
+                    return null;
+                }
+
+                defaultExpr = formatted;
+            }
+            else if (named.Key == "Description")
+            {
+                desc = named.Value.Value as string;
+            }
+        }
+
+        return new SettingInfo(fieldSymbol.Name, name, uiName, groupName, "StringArray", defaultExpr, desc);
+    }
+
+    /// <summary>Extracts a <c>[F64ArraySetting]</c> descriptor with optional NaN-unset min/max.</summary>
+    private static SettingInfo? _ExtractF64ArraySettingInfo(
+        IFieldSymbol fieldSymbol, AttributeData attr, string className, List<DiagnosticInfo> diagnostics)
+    {
+        if (!_TryExtractSettingHeader(fieldSymbol, attr, "F64ArraySettingAttribute", className, diagnostics, out string name, out string uiName, out string groupName))
+        {
+            return null;
+        }
+
+        string defaultExpr = "global::System.Array.Empty<double>()";
+        double min = double.NaN;
+        double max = double.NaN;
+        string? desc = null;
+        foreach (KeyValuePair<string, TypedConstant> named in attr.NamedArguments)
+        {
+            if (named.Key == "Default")
+            {
+                defaultExpr = _FormatF64ArrayLiteral(named.Value);
+            }
+            else if (named.Key == "Min" && named.Value.Value is double dMin)
+            {
+                min = dMin;
+            }
+            else if (named.Key == "Max" && named.Value.Value is double dMax)
+            {
+                max = dMax;
+            }
+            else if (named.Key == "Description")
+            {
+                desc = named.Value.Value as string;
+            }
+        }
+
+        string? minStr = double.IsNaN(min) ? null : min.ToString("R", System.Globalization.CultureInfo.InvariantCulture);
+        string? maxStr = double.IsNaN(max) ? null : max.ToString("R", System.Globalization.CultureInfo.InvariantCulture);
+        return new SettingInfo(fieldSymbol.Name, name, uiName, groupName, "F64Array", defaultExpr, desc, minStr, maxStr);
+    }
+
+    /// <summary>Extracts a <c>[U64ArraySetting]</c> descriptor with HasMin/HasMax like scalar U64.</summary>
+    private static SettingInfo? _ExtractU64ArraySettingInfo(
+        IFieldSymbol fieldSymbol, AttributeData attr, string className, List<DiagnosticInfo> diagnostics)
+    {
+        if (!_TryExtractSettingHeader(fieldSymbol, attr, "U64ArraySettingAttribute", className, diagnostics, out string name, out string uiName, out string groupName))
+        {
+            return null;
+        }
+
+        string defaultExpr = "global::System.Array.Empty<ulong>()";
+        bool hasMin = false;
+        ulong min = 0;
+        bool hasMax = false;
+        ulong max = 0;
+        string? desc = null;
+        foreach (KeyValuePair<string, TypedConstant> named in attr.NamedArguments)
+        {
+            if (named.Key == "Default")
+            {
+                defaultExpr = _FormatU64ArrayLiteral(named.Value);
+            }
+            else if (named.Key == "HasMin" && named.Value.Value is bool bMin)
+            {
+                hasMin = bMin;
+            }
+            else if (named.Key == "HasMax" && named.Value.Value is bool bMax)
+            {
+                hasMax = bMax;
+            }
+            else if (named.Key == "Min")
+            {
+                min = _TryToUInt64(named.Value.Value);
+            }
+            else if (named.Key == "Max")
+            {
+                max = _TryToUInt64(named.Value.Value);
+            }
+            else if (named.Key == "Description")
+            {
+                desc = named.Value.Value as string;
+            }
+        }
+
+        string? minStr = hasMin ? min.ToString(System.Globalization.CultureInfo.InvariantCulture) : null;
+        string? maxStr = hasMax ? max.ToString(System.Globalization.CultureInfo.InvariantCulture) : null;
+        return new SettingInfo(fieldSymbol.Name, name, uiName, groupName, "U64Array", defaultExpr, desc, minStr, maxStr);
+    }
+
+    /// <summary>Extracts a <c>[I64ArraySetting]</c> descriptor with HasMin/HasMax like scalar I64.</summary>
+    private static SettingInfo? _ExtractI64ArraySettingInfo(
+        IFieldSymbol fieldSymbol, AttributeData attr, string className, List<DiagnosticInfo> diagnostics)
+    {
+        if (!_TryExtractSettingHeader(fieldSymbol, attr, "I64ArraySettingAttribute", className, diagnostics, out string name, out string uiName, out string groupName))
+        {
+            return null;
+        }
+
+        string defaultExpr = "global::System.Array.Empty<long>()";
+        bool hasMin = false;
+        long min = 0;
+        bool hasMax = false;
+        long max = 0;
+        string? desc = null;
+        foreach (KeyValuePair<string, TypedConstant> named in attr.NamedArguments)
+        {
+            if (named.Key == "Default")
+            {
+                defaultExpr = _FormatI64ArrayLiteral(named.Value);
+            }
+            else if (named.Key == "HasMin" && named.Value.Value is bool bMin)
+            {
+                hasMin = bMin;
+            }
+            else if (named.Key == "HasMax" && named.Value.Value is bool bMax)
+            {
+                hasMax = bMax;
+            }
+            else if (named.Key == "Min")
+            {
+                min = _TryToInt64(named.Value.Value);
+            }
+            else if (named.Key == "Max")
+            {
+                max = _TryToInt64(named.Value.Value);
+            }
+            else if (named.Key == "Description")
+            {
+                desc = named.Value.Value as string;
+            }
+        }
+
+        string? minStr = hasMin ? min.ToString(System.Globalization.CultureInfo.InvariantCulture) : null;
+        string? maxStr = hasMax ? max.ToString(System.Globalization.CultureInfo.InvariantCulture) : null;
+        return new SettingInfo(fieldSymbol.Name, name, uiName, groupName, "I64Array", defaultExpr, desc, minStr, maxStr);
+    }
+
+    private static string _FormatBoolArrayLiteral(TypedConstant arrayArg)
+    {
+        if (arrayArg.Kind != TypedConstantKind.Array || arrayArg.Values.Length == 0)
+        {
+            return "global::System.Array.Empty<bool>()";
+        }
+
+        System.Text.StringBuilder sb = new();
+        sb.Append("new bool[] { ");
+        for (int i = 0; i < arrayArg.Values.Length; i++)
+        {
+            if (i > 0)
+            {
+                sb.Append(", ");
+            }
+
+            bool element = arrayArg.Values[i].Value is bool b && b;
+            sb.Append(element ? "true" : "false");
+        }
+
+        sb.Append(" }");
+        return sb.ToString();
+    }
+
+    private static string? _TryFormatStringArrayLiteral(
+        TypedConstant arrayArg, string fieldName, string className, List<DiagnosticInfo> diagnostics)
+    {
+        if (arrayArg.Kind != TypedConstantKind.Array || arrayArg.Values.Length == 0)
+        {
+            return "global::System.Array.Empty<string>()";
+        }
+
+        System.Text.StringBuilder sb = new();
+        sb.Append("new string[] { ");
+        for (int i = 0; i < arrayArg.Values.Length; i++)
+        {
+            if (arrayArg.Values[i].Value is not string s)
+            {
+                diagnostics.Add(new DiagnosticInfo(
+                    _DiagNullArraySettingDefaultElement, "StringArraySettingAttribute", fieldName, className));
+                return null;
+            }
+
+            if (i > 0)
+            {
+                sb.Append(", ");
+            }
+
+            sb.Append('"');
+            sb.Append(_EscapeString(s));
+            sb.Append('"');
+        }
+
+        sb.Append(" }");
+        return sb.ToString();
+    }
+
+    private static string _FormatF64ArrayLiteral(TypedConstant arrayArg)
+    {
+        if (arrayArg.Kind != TypedConstantKind.Array || arrayArg.Values.Length == 0)
+        {
+            return "global::System.Array.Empty<double>()";
+        }
+
+        System.Text.StringBuilder sb = new();
+        sb.Append("new double[] { ");
+        for (int i = 0; i < arrayArg.Values.Length; i++)
+        {
+            if (i > 0)
+            {
+                sb.Append(", ");
+            }
+
+            double d = arrayArg.Values[i].Value is double parsed ? parsed : 0.0;
+            sb.Append(d.ToString("R", System.Globalization.CultureInfo.InvariantCulture));
+        }
+
+        sb.Append(" }");
+        return sb.ToString();
+    }
+
+    private static string _FormatU64ArrayLiteral(TypedConstant arrayArg)
+    {
+        if (arrayArg.Kind != TypedConstantKind.Array || arrayArg.Values.Length == 0)
+        {
+            return "global::System.Array.Empty<ulong>()";
+        }
+
+        System.Text.StringBuilder sb = new();
+        sb.Append("new ulong[] { ");
+        for (int i = 0; i < arrayArg.Values.Length; i++)
+        {
+            if (i > 0)
+            {
+                sb.Append(", ");
+            }
+
+            ulong u = _TryToUInt64(arrayArg.Values[i].Value);
+            sb.Append(u.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            sb.Append("UL");
+        }
+
+        sb.Append(" }");
+        return sb.ToString();
+    }
+
+    private static string _FormatI64ArrayLiteral(TypedConstant arrayArg)
+    {
+        if (arrayArg.Kind != TypedConstantKind.Array || arrayArg.Values.Length == 0)
+        {
+            return "global::System.Array.Empty<long>()";
+        }
+
+        System.Text.StringBuilder sb = new();
+        sb.Append("new long[] { ");
+        for (int i = 0; i < arrayArg.Values.Length; i++)
+        {
+            if (i > 0)
+            {
+                sb.Append(", ");
+            }
+
+            long l = _TryToInt64(arrayArg.Values[i].Value);
+            sb.Append(l.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            sb.Append('L');
+        }
+
+        sb.Append(" }");
+        return sb.ToString();
     }
 
     #endregion
