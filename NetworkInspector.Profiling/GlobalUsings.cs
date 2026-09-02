@@ -22,6 +22,7 @@ global using NetworkInspector.Core.Ids;
 global using NetworkInspector.Core.Index;
 global using NetworkInspector.Core.Interfaces;
 global using NetworkInspector.Core.Settings;
+global using NetworkInspector.Core.ValueCaches;
 global using NetworkInspector.Values;
 #endregion
 
@@ -56,6 +57,7 @@ global using NetworkInspector.Sources.Random;
 #region NetworkInspector.Sessions
 global using NetworkInspector.Sessions;
 global using NetworkInspector.Sessions.Listeners;
+global using NetworkInspector.Sessions.ValueCaches;
 #endregion
 
 #region NetworkInspector.Profiling

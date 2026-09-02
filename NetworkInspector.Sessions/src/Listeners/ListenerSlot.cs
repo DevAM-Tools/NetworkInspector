@@ -201,8 +201,11 @@ internal sealed class ListenerSlot : IDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void Notify(NotifyFlags flags)
     {
-        Interlocked.Or(ref Flags, (int)flags);
-        _Wake.Set();
+        int prior = Interlocked.Or(ref Flags, (int)flags);
+        if ((prior & (int)flags) == 0)
+        {
+            _Wake.Set();
+        }
     }
     /// <summary>
     /// Resets the packet cursor to zero so the next <see cref="NotifyFlags.NewPackets"/>

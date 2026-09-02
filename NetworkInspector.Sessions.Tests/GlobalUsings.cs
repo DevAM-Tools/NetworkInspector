@@ -8,6 +8,7 @@ global using System.Diagnostics;
 global using System.Globalization;
 global using System.Linq;
 global using System.Reflection;
+global using System.Diagnostics.CodeAnalysis;
 global using System.Runtime.CompilerServices;
 global using System.Threading;
 global using System.Threading.Tasks;
@@ -19,7 +20,10 @@ global using NetworkInspector.Core.Ids;
 global using NetworkInspector.Core.Index;
 global using NetworkInspector.Core.Infos;
 global using NetworkInspector.Core.Interfaces;
+global using NetworkInspector.Core.Fields;
+global using NetworkInspector.Core.Protocols;
 global using NetworkInspector.Core.Settings;
+global using NetworkInspector.Core.ValueCaches;
 global using NetworkInspector.Values;
 #endregion
 
@@ -37,6 +41,7 @@ global using NetworkInspector.Sessions.Ids;
 global using NetworkInspector.Sessions.Jobs;
 global using NetworkInspector.Sessions.Listeners;
 global using NetworkInspector.Sessions.Sources;
+global using NetworkInspector.Sessions.ValueCaches;
 #endregion
 
 #region NetworkInspector.Protocols
@@ -48,5 +53,9 @@ global using NetworkInspector.Sessions.Tests.Helpers;
 global using TUnit.Assertions;
 global using TUnit.Assertions.Extensions;
 global using TUnit.Core;
+#endregion
+
+#region External Dependencies
+global using ZeroAlloc;
 #endregion
 

@@ -430,7 +430,13 @@ internal sealed class EagerIndexGroupRegistrationTests
         // so this set must equal the eager snapshot exactly: a group in eagerGroups but absent here is a
         // false positive; a group here but absent from eagerGroups is a false negative.
         HashSet<int> materializedGroups = [];
-        for (int i = 0; i <= ushort.MaxValue && packet.TryGetFieldAt((ushort)i, out Field field); i++)
+        List<Field> materializedFields = [];
+        foreach (Field field in packet.IterFieldsDfs(materialize: false))
+        {
+            materializedFields.Add(field);
+        }
+
+        foreach (Field field in materializedFields)
         {
             IndexGroupId groupId = stack.GetFieldIndexGroup(field.FieldId);
             if (!groupId.IsValid)

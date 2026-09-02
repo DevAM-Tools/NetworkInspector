@@ -3,38 +3,74 @@
 namespace NetworkInspector.Profiling.Scenarios;
 
 /// <summary>
-/// Profiling scenario that uses a <see cref="RandomFrameSource"/> (UdpIPv6) to directly
-/// parse and materialise every frame without involving a session pipeline.
-///
-/// <para>
-/// <b>Hot path:</b> RandomFrameSource.NextFrame -> Packet.ParseFrame -> MaterializeAll.
-/// Single-threaded, no session or listener overhead.
-/// </para>
+/// Same <see cref="RandomFrameSource"/> configuration as <see cref="SessionListenerScenario"/>,
+/// parsed on the calling thread with no session.
 /// </summary>
-[SuppressMessage("Performance", "CA1812:AvoidUninstantiatedInternalClasses", Justification = "Instantiated via reflection in ScenarioDiscovery.Discover.")]
+/// <remarks>
+/// Two variants:
+/// <list type="bullet">
+///   <item><b>random-source-parse</b> — ParseFrame only. Compare with <c>session-listener</c>.</item>
+///   <item>
+///     <b>random-source-parse-materialized</b> — parse plus <see cref="Packet.MaterializeAll"/>.
+///     Compare with <c>session-listener-materialized</c>.
+///   </item>
+/// </list>
+/// </remarks>
 internal sealed class RandomSourceParseScenario : IProfilingScenario
 {
-    /// <summary>Number of frames generated and parsed per <see cref="Run"/> call.</summary>
+    #region Constants
+
     private const int _FrameCount = 10_000;
-
-    /// <summary>Fixed PRNG seed so results are reproducible across iterations.</summary>
     private const ulong _Seed = 42;
-
-    /// <summary>Minimum frame size in bytes.</summary>
     private const int _MinFrameSize = 128;
-
-    /// <summary>Maximum frame size in bytes.</summary>
     private const int _MaxFrameSize = 1024;
 
+    #endregion
+
+    #region Fields
+
+    private readonly bool _Materialize;
     private Stack? _Stack;
 
-    /// <inheritdoc/>
-    public string Name => "random-source-parse";
+    #endregion
+
+    #region Constructors
+
+    /// <summary>
+    /// Creates a direct-parse scenario using <see cref="RandomFrameSource"/>.
+    /// </summary>
+    /// <param name="materialize">
+    /// When <see langword="true"/>, calls <see cref="Packet.MaterializeAll"/> after each parse.
+    /// </param>
+    internal RandomSourceParseScenario(bool materialize)
+    {
+        _Materialize = materialize;
+    }
+
+    #endregion
+
+    #region Public API
 
     /// <inheritdoc/>
-    public string Description =>
-        FormattableString.Invariant(
-            $"Direct parse: RandomFrameSource(UdpIPv6) -> ParseFrame -> MaterializeAll, {_FrameCount:N0} frames per iteration.");
+    public string Name
+    {
+        get
+        {
+            if (_Materialize)
+            {
+                return "random-source-parse-materialized";
+            }
+
+            return "random-source-parse";
+        }
+    }
+
+    /// <inheritdoc/>
+    public string Description => _Materialize
+        ? FormattableString.Invariant(
+            $"Direct parse: RandomFrameSource(UdpIPv6) -> ParseFrame -> MaterializeAll, {_FrameCount:N0} frames.")
+        : FormattableString.Invariant(
+            $"Direct parse: RandomFrameSource(UdpIPv6) -> ParseFrame (lazy), {_FrameCount:N0} frames.");
 
     /// <inheritdoc/>
     public long WorkUnitsPerIteration => _FrameCount;
@@ -59,8 +95,6 @@ internal sealed class RandomSourceParseScenario : IProfilingScenario
             MaxFrameSize = _MaxFrameSize,
         });
 
-        // Register the source to obtain a valid FrameSourceId, then start it.
-        // We use the stack's registry directly — no session involved.
         FrameSourceId sourceId = stack.FrameInterfaceRegistry.RegisterSource(source);
         source.Start(sourceId, stack.FrameInterfaceRegistry);
 
@@ -70,7 +104,10 @@ internal sealed class RandomSourceParseScenario : IProfilingScenario
         {
             Frame frame = next.Value;
             Packet packet = Packet.ParseFrame(new PacketId(packetId++), stack, frame);
-            packet.MaterializeAll();
+            if (_Materialize)
+            {
+                packet.MaterializeAll();
+            }
         }
     }
 
@@ -80,4 +117,6 @@ internal sealed class RandomSourceParseScenario : IProfilingScenario
         _Stack?.Dispose();
         _Stack = null;
     }
+
+    #endregion
 }

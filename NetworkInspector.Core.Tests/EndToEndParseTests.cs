@@ -385,7 +385,7 @@ internal sealed class EndToEndParseTests
     }
 
     [Test]
-    public async Task Parse_FieldByIndex_ValidAccess()
+    public async Task TryGetFieldAt_RootAndOutOfRange_ReturnsExpected()
     {
         (Stack? stack, MockEthernetProtocol _, ProtocolId ethId) = _BuildEthernetStack();
         using (stack)

@@ -9,7 +9,7 @@ Implementation plan: [`../plans/plans_filter-migration-modernization.md`](../pla
 
 **Audience:** users writing filter expressions; implementers locking semantics.
 
-**Not in v1:** `seq`, `stream`, `window`, `let`, `where`, public `nav(…)`, children/parent/siblings, relative short names in scopes, value caches, bytecode VM, AOT, MCP completer UI.
+**Not in v1:** `seq`, `stream`, `window`, `let`, `where`, public `nav(…)`, children/parent/siblings, relative short names in scopes, bytecode VM, AOT, MCP completer UI. Filters do not read `ValueCache` (values still come from the field tree).
 
 ---
 
@@ -981,7 +981,7 @@ $tcp {
 | `eth.addr == X` (alias) | union of member groups | gather member FieldIds | as needed |
 
 
-**There is no value cache.** Presence index only. If a value is required, read it from the packet field tree (lazily).
+**Filters do not read `ValueCache`.** Presence index only. If a value is required, read it from the packet field tree (lazily).
 
 ---
 

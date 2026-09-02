@@ -50,6 +50,9 @@ Typical flow:
 | `ISessionListener` | Pull-based notification callbacks |
 | `JobInfo` | Public view of a background job (source, listener, or user job) |
 | `ListenerInfo` | Public view of a listener subscription |
+| `ValueCacheRequest` | Name-based request for an ingest or runtime value cache |
+| `IValueCacheListener` | Pull-based value-cache notifications (`OnNewRows`) |
+| `ValueCacheInfo` | Public view of a value-cache subscription (`Cache` is a `ValueCacheReaderView`) |
 | `FrameSourceInfo` | Public view of a registered frame source |
 | `PacketStore` | Chunked store retaining all parsed packets until restart or shutdown |
 | `PacketRef` | A `PacketId` paired with its packet, so a filtered pull can report gapped ids |
@@ -72,6 +75,50 @@ Producers set atomic `NotifyFlags` on each `ListenerSlot` and wake the listener 
 | `ShuttingDown` | `OnShuttingDown` |
 
 Multiple events between two wake cycles coalesce into a single flag read.
+
+## Value caches
+
+A session can fill a RAM `ValueCache` during the first parse (`SessionOptions.ValueCache`) and/or add dedicated caches at runtime through `TryAddValueCache`. Listeners receive `OnNewRows` on a dedicated slot thread with the same coalesced packet-id window as `OnNewPackets`, then pull columns from `ValueCacheReaderView`. Runtime caches never tee on the parse thread.
+
+```csharp
+sealed class UdpPortCacheListener : IValueCacheListener
+{
+    public string UiName => "udp src ports";
+    public void OnNewRows(ISessionReader session, ValueCacheReaderView cache, int fromIndex, int toIndexExclusive)
+    {
+        if (!cache.TryGetSeries<ulong>("udp.srcport", out ValueCacheSeries<ulong>? series) || series is null)
+        {
+            return;
+        }
+
+        int count = series.Count;
+        for (int i = _Seen; i < count; i++)
+        {
+            _ = series[i].PacketId;
+        }
+
+        _Seen = count;
+        _ = fromIndex;
+        _ = toIndexExclusive;
+    }
+
+    private int _Seen;
+}
+
+session.TryAddValueCache(new UdpPortCacheListener(), new ValueCacheRequest { FieldNames = ["udp.srcport"] }, out ValueCacheInfo? info);
+// info.Cache is a ValueCacheReaderView — no RecordPacket
+```
+
+Construction-time ingest:
+
+```csharp
+using Session session = new(stack, new SessionOptions
+{
+    ValueCache = new ValueCacheRequest { FieldNames = ["udp.srcport"] },
+});
+```
+
+`session.IngestValueCache` is the read-only view filled by `ParseFrameRecorded`. Restart abandons the previous writer and rebinds surviving runtime slots. Field and group names are validated with `NameValidation.IsValidName` when the request is bound (construction, `TryAddValueCache`, Restart).
 
 ## Per-Listener Filters
 
@@ -174,7 +221,7 @@ Removes a **terminal** job (Completed, Cancelled, or Failed) from the job list. 
 
 ## Thread Safety
 
-All public `Session` methods are thread-safe. Counters use `Interlocked`; phase and flags use `Volatile`. Parsing is serialised under a shared `SpinLock` across source threads.
+All public `Session` methods are thread-safe. Counters use `Interlocked`; phase and flags use `Volatile`. First-parse is serialised under a shared Monitor across source threads; re-parse of announced ids is lock-free.
 
 ## Dependencies
 

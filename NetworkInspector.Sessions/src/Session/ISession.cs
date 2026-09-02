@@ -97,6 +97,25 @@ public interface ISession : ISessionReader, IDisposable
         [NotNullWhen(true)] out ListenerInfo? info,
         out FilterError? filterFailure);
 
+    // ── Value-cache management ───────────────────────────────────────────────
+
+    /// <summary>
+    /// Registers a dedicated value cache filled from packet id 0 by a pull slot,
+    /// analog to <see cref="TryAddListener(ISessionListener, out ListenerInfo?)"/>.
+    /// Always constructs a new cache; existing caches are never reused as a cover.
+    /// </summary>
+    /// <returns>
+    /// <see langword="false"/> when the session is shutting down or stopped.
+    /// </returns>
+    /// <exception cref="ArgumentNullException"><paramref name="listener"/> or <paramref name="request"/> is null.</exception>
+    /// <exception cref="SessionException">
+    /// <see cref="SessionErrorCode.ValueCacheUiNameEmpty"/> when <see cref="IValueCacheListener.UiName"/> is null or whitespace.
+    /// <see cref="SessionErrorCode.ValueCacheIdExhausted"/> when the value-cache ID limit is reached.
+    /// <see cref="SessionErrorCode.ValueCacheInvalidFieldName"/> when a field or group name is not a valid identifier.
+    /// <see cref="SessionErrorCode.ValueCacheUnknownField"/> when a well-formed field or group name is not on the current stack.
+    /// </exception>
+    bool TryAddValueCache(IValueCacheListener listener, ValueCacheRequest request, [NotNullWhen(true)] out ValueCacheInfo? info);
+
     // ── Job management ────────────────────────────────────────────────────────
 
     /// <summary>

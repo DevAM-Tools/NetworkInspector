@@ -153,4 +153,79 @@ internal sealed class IdTypeTests
             .That(() => new ListenerId(overflow))
             .Throws<ArgumentOutOfRangeException>();
     }
+
+    // === ValueCacheId ===
+
+    [Test]
+    public async Task ValueCacheId_ConstructionAndValueRoundtrip()
+    {
+        ValueCacheId id = new(7);
+        await Assert.That(id.Value).IsEqualTo(7);
+    }
+
+    [Test]
+    public async Task ValueCacheId_InvalidSentinel()
+    {
+        await Assert.That(ValueCacheId.Invalid.Value).IsEqualTo(-1);
+        await Assert.That(ValueCacheId.Invalid.IsValid).IsFalse();
+    }
+
+    [Test]
+    public async Task ValueCacheId_DefaultIsValid()
+    {
+        ValueCacheId id = default;
+        await Assert.That(id.Value).IsEqualTo(0);
+        await Assert.That(id.IsValid).IsTrue();
+    }
+
+    [Test]
+    public async Task ValueCacheId_EqualityAndHashCode()
+    {
+        ValueCacheId a = new(3);
+        ValueCacheId b = new(3);
+        ValueCacheId c = new(4);
+        await Assert.That(a).IsEqualTo(b);
+        await Assert.That(a).IsNotEqualTo(c);
+        await Assert.That(a.GetHashCode()).IsEqualTo(b.GetHashCode());
+        await Assert.That(a.Equals((object)b)).IsTrue();
+        await Assert.That(a.Equals((object)c)).IsFalse();
+        await Assert.That(a.ToString()).IsEqualTo("3");
+    }
+
+    [Test]
+    public async Task ValueCacheId_CompareToAndOperators()
+    {
+        ValueCacheId low = new(1);
+        ValueCacheId high = new(9);
+        await Assert.That(low.CompareTo(high)).IsLessThan(0);
+        await Assert.That(high.CompareTo(low)).IsGreaterThan(0);
+        await Assert.That(low.CompareTo(low)).IsEqualTo(0);
+        await Assert.That(low < high).IsTrue();
+        await Assert.That(high > low).IsTrue();
+        await Assert.That(low <= high).IsTrue();
+        await Assert.That(high >= low).IsTrue();
+        ValueCacheId sameAsLow = new(1);
+        await Assert.That(low <= sameAsLow).IsTrue();
+        await Assert.That(low >= sameAsLow).IsTrue();
+        await Assert.That(low == high).IsFalse();
+        await Assert.That(low != high).IsTrue();
+    }
+
+    [Test]
+    public async Task ValueCacheId_MaxValue_IsValid()
+    {
+        int maxId = Array.MaxLength - 1;
+        ValueCacheId id = new(maxId);
+        await Assert.That(id.IsValid).IsTrue();
+        await Assert.That(id.Value).IsEqualTo(maxId);
+    }
+
+    [Test]
+    public async Task ValueCacheId_OutOfRangeConstruction_Throws()
+    {
+        int overflow = Array.MaxLength;
+        await Assert
+            .That(() => new ValueCacheId(overflow))
+            .Throws<ArgumentOutOfRangeException>();
+    }
 }

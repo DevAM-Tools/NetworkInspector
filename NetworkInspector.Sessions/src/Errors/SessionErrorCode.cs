@@ -36,4 +36,28 @@ public enum SessionErrorCode
 
     /// <summary>The supplied <c>ListenerId</c> does not identify a registered listener.</summary>
     ListenerNotFound,
+
+    /// <summary>The value-cache listener's <c>UiName</c> is null or whitespace.</summary>
+    ValueCacheUiNameEmpty,
+
+    /// <summary>The maximum number of value-cache IDs has been allocated.</summary>
+    ValueCacheIdExhausted,
+
+    /// <summary>The supplied <c>ValueCacheId</c> does not identify a registered value cache.</summary>
+    ValueCacheNotFound,
+
+    /// <summary>A field or group name in the value-cache request is not on the current stack.</summary>
+    ValueCacheUnknownField,
+
+    /// <summary>
+    /// A field or group name in the value-cache request is not a valid protocol/field identifier
+    /// (<see cref="NameValidation.IsValidName"/>).
+    /// </summary>
+    ValueCacheInvalidFieldName,
+
+    /// <summary>
+    /// <see cref="SessionOptions.ValueCacheListener"/> was set without
+    /// <see cref="SessionOptions.ValueCache"/>.
+    /// </summary>
+    ValueCacheListenerWithoutRequest,
 }

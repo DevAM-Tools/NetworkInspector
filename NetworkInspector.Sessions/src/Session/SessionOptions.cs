@@ -53,5 +53,19 @@ public sealed class SessionOptions
     /// </summary>
     public bool IndexPackets { get; init; } = true;
 
+    /// <summary>
+    /// When non-null, the session builds a value cache for these fields (or all fields)
+    /// and fills it during the first parse of each frame. Field and group names are checked with
+    /// <see cref="NameValidation.IsValidName"/> at construction and Restart, then resolved on the
+    /// current stack. Replaced on <see cref="Session.Restart"/>.
+    /// </summary>
+    public ValueCacheRequest? ValueCache { get; init; }
+
+    /// <summary>
+    /// Optional push subscriber for <see cref="ValueCache"/>. Requires <see cref="ValueCache"/> to be set.
+    /// Callbacks run on a dedicated slot thread like <see cref="ISessionListener"/>.
+    /// </summary>
+    public IValueCacheListener? ValueCacheListener { get; init; }
+
     #endregion
 }

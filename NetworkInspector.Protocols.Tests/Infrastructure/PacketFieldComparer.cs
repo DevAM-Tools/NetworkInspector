@@ -27,12 +27,9 @@ internal static class PacketFieldComparer
 
         int count = packet.FieldCount(materialize: true);
         List<(FieldId Id, FieldValue Value)> fields = new(count);
-        for (ushort i = 0; i < count; i++)
+        foreach (Field field in packet.IterFieldsDfs(materialize: true))
         {
-            if (packet.TryGetFieldAt(i, out Field field))
-            {
-                fields.Add((field.FieldId, field.Value));
-            }
+            fields.Add((field.FieldId, field.Value));
         }
 
         return new PacketFieldSnapshot(count, [.. fields]);
@@ -75,22 +72,21 @@ internal static class PacketFieldComparer
         await Assert.That(actual.FieldCount(materialize: true))
             .IsEqualTo(expected.FieldCount(materialize: true));
 
-        int count = expected.FieldCount(materialize: true);
-        for (ushort i = 0; i < count; i++)
+        List<(FieldId Id, FieldValue Value)> expectedFields = [];
+        foreach (Field field in expected.IterFieldsDfs(materialize: true))
         {
-            if (!expected.TryGetFieldAt(i, out Field expectedField))
-            {
-                continue;
-            }
+            expectedFields.Add((field.FieldId, field.Value));
+        }
 
-            FieldInfo? info = stack.GetField(expectedField.FieldId);
-            string name = info?.Name ?? expectedField.FieldId.ToString();
+        foreach ((FieldId Id, FieldValue Value) expectedField in expectedFields)
+        {
+            FieldInfo? info = stack.GetField(expectedField.Id);
+            string name = info?.Name ?? expectedField.Id.ToString();
 
-            bool found = actual.TryGetFieldValue(expectedField.FieldId, out FieldValue actualValue, materialize: true);
+            bool found = actual.TryGetFieldValue(expectedField.Id, out FieldValue actualValue, materialize: true);
             await Assert.That(found).IsTrue().Because($"Redissect packet missing field '{name}'");
 
-            FieldValue expectedValue = expectedField.Value;
-            await Assert.That(_ValuesEqual(expectedValue, actualValue))
+            await Assert.That(_ValuesEqual(expectedField.Value, actualValue))
                 .IsTrue()
                 .Because($"Field '{name}' value mismatch");
         }

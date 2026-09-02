@@ -3,24 +3,13 @@
 namespace NetworkInspector.Profiling.Scenarios;
 
 /// <summary>
-/// Profiling scenario that runs the full session pipeline: a <see cref="RandomFrameSource"/>
-/// generates random IPv6/UDP frames, the session parses them, and a custom
-/// <see cref="ISessionListener"/> iterates every packet (pulling + MaterializeAll).
-///
-/// <para>
-/// <b>Hot path:</b> RandomFrameSource -> SpinLock parse -> notify -> listener pull -> MaterializeAll.
-/// This exercises the complete production data path including frame generation.
-/// </para>
-///
-/// <para>
-/// Compare with <see cref="RandomSourceParseScenario"/> which uses the identical
-/// <see cref="RandomFrameSource"/> configuration but bypasses the session pipeline.
-/// The difference isolates the overhead of Session + Listener threading.
-/// </para>
+/// Full session pipeline: <see cref="RandomFrameSource"/> generates IPv6/UDP frames, the session
+/// first-parses them, and a listener pulls every packet from the store.
 /// </summary>
-[SuppressMessage("Performance", "CA1812:AvoidUninstantiatedInternalClasses", Justification = "Instantiated via reflection in ScenarioDiscovery.Discover.")]
-internal sealed class SessionListenerScenario : IProfilingScenario
+internal sealed class SessionListenerScenario : IProfilingScenario, IDisposable
 {
+    #region Constants
+
     /// <summary>Number of frames generated per iteration.</summary>
     internal const int FrameCount = 10_000;
 
@@ -33,15 +22,53 @@ internal sealed class SessionListenerScenario : IProfilingScenario
     /// <summary>Maximum frame size in bytes.</summary>
     internal const int MaxFrameSize = 1024;
 
+    #endregion
+
+    #region Fields
+
+    private readonly bool _Materialize;
     private Stack? _Stack;
 
-    /// <inheritdoc/>
-    public string Name => "session-listener";
+    #endregion
+
+    #region Constructors
+
+    /// <summary>
+    /// Creates a session-listener scenario.
+    /// </summary>
+    /// <param name="materialize">
+    /// When <see langword="true"/>, the listener calls <see cref="Packet.MaterializeAll"/>
+    /// after each pull. When <see langword="false"/>, it only pulls the sealed packet.
+    /// </param>
+    internal SessionListenerScenario(bool materialize)
+    {
+        _Materialize = materialize;
+    }
+
+    #endregion
+
+    #region Public API
 
     /// <inheritdoc/>
-    public string Description =>
-        FormattableString.Invariant(
-            $"Full session pipeline: RandomFrameSource(UdpIPv6) -> parse -> listener iterate, {FrameCount:N0} frames per iteration.");
+    public string Name
+    {
+        get
+        {
+            if (_Materialize)
+            {
+                return "session-listener-materialized";
+            }
+
+            return "session-listener";
+        }
+    }
+
+    /// <inheritdoc/>
+    public string Description => _Materialize
+        ? FormattableString.Invariant(
+            $"Session pipeline: RandomFrameSource(UdpIPv6) -> parse -> listener TryGetPacket + MaterializeAll, {FrameCount:N0} frames.")
+        : FormattableString.Invariant(
+            $"Session pipeline: RandomFrameSource(UdpIPv6) -> parse -> listener TryGetPacket (lazy), {FrameCount:N0} frames.");
 
     /// <inheritdoc/>
     public long WorkUnitsPerIteration => FrameCount;
@@ -55,8 +82,6 @@ internal sealed class SessionListenerScenario : IProfilingScenario
     /// <inheritdoc/>
     public void Run()
     {
-        // Create a fresh session and source per iteration so the listener sees the full lifecycle.
-        // The stack is reused across iterations; the RandomFrameSource generates fresh frames.
         using Session session = new(_Stack!);
 
         using RandomFrameSource source = new(new RandomSourceOptions
@@ -68,7 +93,7 @@ internal sealed class SessionListenerScenario : IProfilingScenario
             MaxFrameSize = MaxFrameSize,
         });
 
-        CountingListener listener = new();
+        CountingListener listener = new(_Materialize);
 
         if (!session.TryAddFrameSource(source, out _))
         {
@@ -88,29 +113,40 @@ internal sealed class SessionListenerScenario : IProfilingScenario
                 "Failed to start session — session is not in the Idle phase.");
         }
 
-        // WaitForCompletion waits for source threads to drain.
-        // Shutdown then cancels listener threads and waits for them to finish;
-        // the listener's DrainRemaining() processes the final NewPackets flag.
         session.WaitForCompletion();
         session.Shutdown();
     }
 
     /// <inheritdoc/>
-    public void Cleanup()
+    public void Cleanup() => Dispose();
+
+    /// <inheritdoc/>
+    public void Dispose()
     {
         _Stack?.Dispose();
         _Stack = null;
     }
 
+    #endregion
+
+    #region Nested types
+
     /// <summary>
-    /// Minimal <see cref="ISessionListener"/> that pulls and materialises every packet.
+    /// Pulls every packet in the notified window. Optionally materializes the field tree.
     /// </summary>
     private sealed class CountingListener : ISessionListener
     {
+        private readonly bool _Materialize;
+        private long _PacketsSeen;
+
+        /// <summary>Creates a listener that pulls packets and optionally materializes them.</summary>
+        internal CountingListener(bool materialize)
+        {
+            _Materialize = materialize;
+        }
+
         /// <summary>Total packets processed so far (Volatile.Read).</summary>
         internal long PacketsSeen => Volatile.Read(ref _PacketsSeen);
-        // `volatile` is illegal on long; cross-thread access uses Volatile.Read / Interlocked.
-        private long _PacketsSeen;
 
         /// <inheritdoc/>
         public string UiName => "ProfilingCounter";
@@ -118,9 +154,14 @@ internal sealed class SessionListenerScenario : IProfilingScenario
         /// <inheritdoc/>
         public void OnNewPackets(ISessionReader session, int fromIndex, int toIndexExclusive)
         {
-            for (long i = fromIndex; i < toIndexExclusive; i++)
+            for (int i = fromIndex; i < toIndexExclusive; i++)
             {
-                if (session.TryGetPacket(new PacketId((int)i), out Packet? packet) && packet is not null)
+                if (!session.TryGetPacket(new PacketId(i), out Packet? packet) || packet is null)
+                {
+                    continue;
+                }
+
+                if (_Materialize)
                 {
                     packet.MaterializeAll();
                 }
@@ -129,4 +170,6 @@ internal sealed class SessionListenerScenario : IProfilingScenario
             Interlocked.Add(ref _PacketsSeen, toIndexExclusive - fromIndex);
         }
     }
+
+    #endregion
 }

@@ -100,6 +100,10 @@ internal static class Program
             new SessionConcurrentRedissectScenario(listenerCount: 2),
             new SessionConcurrentRedissectScenario(listenerCount: 4),
             new SessionConcurrentRedissectScenario(listenerCount: 8),
+            new SessionListenerScenario(materialize: false),
+            new SessionListenerScenario(materialize: true),
+            new RandomSourceParseScenario(materialize: false),
+            new RandomSourceParseScenario(materialize: true),
         ];
 
         IProfilingScenario[] discovered = ScenarioDiscovery.Discover();

@@ -17,6 +17,7 @@ internal sealed class SessionState
     // Next ID to hand out (0 … ArrayIndexIdRange.MaxValue). Never wraps past MaxValue.
     private volatile int _NextListenerId;
     private volatile int _NextJobId;
+    private volatile int _NextValueCacheId;
 
     /// <summary>Current session phase. Volatile read — always up to date.</summary>
     internal SessionPhase Phase => (SessionPhase)_Phase;
@@ -92,6 +93,38 @@ internal sealed class SessionState
             if (Interlocked.CompareExchange(ref _NextListenerId, current + 1, current) == current)
             {
                 return new ListenerId(current);
+            }
+        }
+    }
+
+    /// <summary>Allocates the next unique value-cache ID. Thread-safe. Independent of listener IDs.</summary>
+    internal ValueCacheId AllocateValueCacheId()
+    {
+        int maxId = Core.Ids.ArrayIndexIdRange.MaxValue;
+
+        while (true)
+        {
+            int current = _NextValueCacheId;
+            if (current < 0)
+            {
+                throw new SessionException(
+                    SessionErrorCode.ValueCacheIdExhausted,
+                    $"Maximum value-cache ID count exceeded (valid range 0..{maxId.ToString(CultureInfo.InvariantCulture)}).");
+            }
+
+            if (current == maxId)
+            {
+                if (Interlocked.CompareExchange(ref _NextValueCacheId, _IdsExhaustedSentinel, maxId) == maxId)
+                {
+                    return new ValueCacheId(maxId);
+                }
+
+                continue;
+            }
+
+            if (Interlocked.CompareExchange(ref _NextValueCacheId, current + 1, current) == current)
+            {
+                return new ValueCacheId(current);
             }
         }
     }

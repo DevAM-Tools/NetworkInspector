@@ -131,14 +131,14 @@ public readonly ref struct MutField
 
     /// <summary>Sets custom display text.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public readonly void SetCustomText(LazyString text) => Packet.GetFieldRef(StorageIndex).SetCustomText(text);
+    public readonly void SetCustomText(LazyString text) => Packet.SetFieldCustomText(StorageIndex, FieldId, text);
 
     /// <summary>Clears custom display text.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public readonly void ClearCustomText() => Packet.GetFieldRef(StorageIndex).ClearCustomText();
+    public readonly void ClearCustomText() => Packet.ClearFieldCustomText(StorageIndex, FieldId);
 
     /// <summary>Appends to custom display text.</summary>
-    public readonly void AppendCustomText(LazyString suffix) => Packet.GetFieldRef(StorageIndex).AppendCustomText(suffix);
+    public readonly void AppendCustomText(LazyString suffix) => Packet.AppendFieldCustomText(StorageIndex, FieldId, suffix);
 
     #endregion
 

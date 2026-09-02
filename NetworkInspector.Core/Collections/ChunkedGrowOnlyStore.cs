@@ -255,6 +255,40 @@ internal sealed class ChunkedSlotStore<T>
         _ = Interlocked.Increment(ref _Epoch);
     }
 
+    internal bool TryGetPublishedChunk(int chunkIndex, int publishedCount, out ReadOnlySpan<T> span)
+    {
+        if (publishedCount <= 0 || chunkIndex < 0)
+        {
+            span = default;
+            return false;
+        }
+
+        int shift = _Outer.ChunkShift;
+        if (chunkIndex > (int.MaxValue >> shift))
+        {
+            span = default;
+            return false;
+        }
+
+        int start = chunkIndex << shift;
+        if (start >= publishedCount)
+        {
+            span = default;
+            return false;
+        }
+
+        T[]? chunk = _Outer.GetChunk(chunkIndex);
+        if (chunk is null)
+        {
+            span = default;
+            return false;
+        }
+
+        int length = Math.Min(_Outer.ChunkSize, publishedCount - start);
+        span = chunk.AsSpan(0, length);
+        return true;
+    }
+
     #endregion
 
     #region Private helpers
@@ -502,6 +536,18 @@ public sealed class ChunkedGrowOnlyStore<T>
     /// <summary>Drops all chunk references.</summary>
     public void Clear() =>
         _Store.Clear();
+
+    /// <summary>
+    /// Returns a published inner chunk as a span clipped to <paramref name="publishedCount"/>.
+    /// Readers pass their loaded committed count, not a packed store <c>Count</c>
+    /// (dense <see cref="Set"/> does not publish a packed prefix).
+    /// </summary>
+    /// <param name="chunkIndex">Zero-based inner-chunk index.</param>
+    /// <param name="publishedCount">Exclusive upper bound of readable slots (typically a series committed count).</param>
+    /// <param name="span">Slice of the inner array covering published slots in this chunk.</param>
+    /// <returns><see langword="true"/> when the chunk exists and overlaps the published range.</returns>
+    public bool TryGetPublishedChunk(int chunkIndex, int publishedCount, out ReadOnlySpan<T> span) =>
+        _Store.TryGetPublishedChunk(chunkIndex, publishedCount, out span);
 
     #endregion
 }

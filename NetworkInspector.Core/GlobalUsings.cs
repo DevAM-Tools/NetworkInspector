@@ -30,8 +30,7 @@ global using ZeroAlloc;
 
 #region NetworkInspector.Core
 global using static NetworkInspector.Core.Fields.FieldTypeMarkers;
-global using NetworkInspector.Core.Cache;
-global using NetworkInspector.Core.Concurrency;
+global using NetworkInspector.Core.Collections;
 global using NetworkInspector.Core.Errors;
 global using NetworkInspector.Core.Fields;
 global using NetworkInspector.Core.Ids;
@@ -42,5 +41,6 @@ global using NetworkInspector.Core.Protocols;
 global using NetworkInspector.Core.Reassembly;
 global using NetworkInspector.Core.Settings;
 global using NetworkInspector.Core.Tables;
+global using NetworkInspector.Core.ValueCaches;
 global using NetworkInspector.Values;
 #endregion

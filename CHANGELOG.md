@@ -9,6 +9,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **`ValueCache`** (`NetworkInspector.Core.ValueCaches`) — RAM columnar series for selected fields (or all fields), filled by `RecordPacket` or parse-time tee. Capture modes first/last/all occurrence; optional custom text and custom representation series; sticky packet-id and timestamp monotonic flags; optional row/byte limits. `ValueCacheReaderView` is the read-only façade.
+- **`Packet.ParseFrameRecorded` / `TryParseFrameRecorded`** — first-parse tee into a `ValueCache`, including indexed overloads and recycle variants. Replays do not record.
+- **Session ingest and runtime value caches** — `SessionOptions.ValueCache` / `ValueCacheListener`; `ISession.TryAddValueCache`; `IValueCacheListener.OnNewRows`; `ISessionReader.IngestValueCache` and `GetValueCaches()`. Restart abandons writers and rebinds surviving slots.
+- Profiling scenarios: `session-value-cache-ingest-all-fields`, `session-value-cache-ondemand-all-fields`, `session-value-cache-ingest-udp-srcport`. Session value-cache scenarios construct a new `Stack` and `Session` per `Run` so packet ids are first-parses (replays do not tee). `value-cache-build-all-fields` and `parse-random-frames-recycled-recorded` allocate a fresh `ValueCache` per `Run`. `session-listener` pulls packets without `MaterializeAll`; `session-listener-materialized` keeps the old full-tree walk. `random-source-parse` / `random-source-parse-materialized` are the no-session counterparts.
+
+### Changed
+
+- **Breaking (pre-1.0): `Packet.TryGetFieldAt` is internal.** Storage indexes stay packet-owned. External navigation uses `RootField()`, Field parent/child/sibling APIs, `IterFieldsDfs` / `IterFieldsFlat`, or `TryGetFieldValue` / `TryGetNextField`.
+- Session value-cache bind checks field and group names with `NameValidation.IsValidName` (same rule as stack registration). Invalid identifiers throw `SessionException(ValueCacheInvalidFieldName)` at construction, `TryAddValueCache`, and Restart; well-formed names missing from the stack still throw `ValueCacheUnknownField`.
+- `ValueCache.Abandon()` and `IsAbandoned` are public. `ValueCacheReaderView.IsAbandoned` forwards that flag. Core no longer grants `InternalsVisibleTo` to `NetworkInspector.Sessions` or `NetworkInspector.Sessions.Tests`.
+- `ValueCache` parse tee uses a compact field-id array (linear scan) when at most 16 fields are recorded, otherwise a dense probe plus a bitset miss. There are no `FrozenDictionary` lookups. Unrecorded parse keeps a predicted null check on `Packet._ActiveValueCache` and a `NoInlining` stub so the probe cannot inflate `AppendChild`. Tee hits run through `_TeeHitCold` (`NoInlining`); compact scans unroll one- and two-field lists. `BeginPacket` / `EndPacket` commit only series touched in the active packet (epoch tracking). `Tee` / `TeeCustomText` stay `NoInlining` so they cannot be pulled into `AppendChild`.
+- Listener and value-cache slots skip redundant wake signals when the target flag is already set.
+- Session first-parse uses a Monitor (`_ParseMutex`) instead of `SpinLock`. One frame parse is long enough that waiting source threads kernel-wait. Re-parse of announced ids stays lock-free. Dense packet ids and protocol-instance mutation remain serialized.
+- Value-cache fill no longer rolls back on a protocol exception. Fields already teed (for example Ethernet before a UDP throw) stay in the cache; `packet.error` is still recorded. `RollbackCurrentPacket` / `RollbackActiveValueCache` are gone. `PacketIndex.RollbackCurrentPacket` is unchanged.
+- `ValueCache` types live in namespace and folder `NetworkInspector.Core.ValueCaches`. Session listener/slot types live in `NetworkInspector.Sessions.ValueCaches`. The `Vc` type alias is gone; call sites use `ValueCache`.
+
 ---
 
 ## [0.8.0] — Settings arrays of scalar types, PDU Transport UDP port list

@@ -20,6 +20,7 @@ global using NetworkInspector.Core.Ids;
 global using NetworkInspector.Core.Index;
 global using NetworkInspector.Core.Infos;
 global using NetworkInspector.Core.Interfaces;
+global using NetworkInspector.Core.ValueCaches;
 #endregion
 
 #region NetworkInspector.Filter
@@ -36,4 +37,5 @@ global using NetworkInspector.Sessions.Ids;
 global using NetworkInspector.Sessions.Jobs;
 global using NetworkInspector.Sessions.Listeners;
 global using NetworkInspector.Sessions.Sources;
+global using NetworkInspector.Sessions.ValueCaches;
 #endregion

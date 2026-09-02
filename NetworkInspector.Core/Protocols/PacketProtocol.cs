@@ -164,6 +164,8 @@ internal sealed class PacketProtocol : IProtocol
             {
                 // Record main-dispatch exception as a packet error using the same
                 // IncludeExceptionStackTrace policy as ParseAndSeal for consistency.
+                // Already-appended fields stay in the tree and in the value cache (Ethernet
+                // must survive a later UDP throw). Post-parsers still run.
                 packet.SetError(_BuildExceptionMessage(ex, stack.IncludeExceptionStackTrace));
             }
         }

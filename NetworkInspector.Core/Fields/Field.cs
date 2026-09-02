@@ -31,6 +31,15 @@ public readonly struct Field : IEquatable<Field>
         FieldId = packet.GetFieldRef(index).FieldId;
     }
 
+    /// <summary>Creates a field wrapper when the caller already knows <paramref name="fieldId"/>.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal Field(Packet packet, ushort index, FieldId fieldId)
+    {
+        Packet = packet;
+        StorageIndex = index;
+        FieldId = fieldId;
+    }
+
     #region Validity
 
     /// <summary>Whether this field reference points to a valid packet and index.</summary>

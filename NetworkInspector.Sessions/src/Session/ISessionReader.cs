@@ -182,4 +182,30 @@ public interface ISessionReader
     {
         get;
     }
+
+    // ── Stack ────────────────────────────────────────────────────────────────
+
+    /// <summary>The protocol stack currently bound to this session. Replaced by <see cref="ISession.Restart"/>.</summary>
+    Stack Stack
+    {
+        get;
+    }
+
+    // ── Value caches ─────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Read-only view of the construction-time ingest value cache, or
+    /// <see langword="null"/> when <see cref="SessionOptions.ValueCache"/> was not set.
+    /// After Restart this aliases the rebound writer.
+    /// </summary>
+    ValueCacheReaderView? IngestValueCache
+    {
+        get;
+    }
+
+    /// <summary>
+    /// Snapshot of ingest and runtime value-cache subscriptions.
+    /// Ingest without a listener is included with UiName <c>ingest</c>.
+    /// </summary>
+    IReadOnlyList<ValueCacheInfo> GetValueCaches();
 }

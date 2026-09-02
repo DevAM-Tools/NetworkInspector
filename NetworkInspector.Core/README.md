@@ -65,7 +65,7 @@ Post-parsers are protocol-owned callbacks that run after the main protocol dispa
 
 **Lifecycle** — post-parsers execute after the full protocol dispatch tree, before `packet.info` is appended, and before the packet is sealed. They receive the packet root field as parent, so their fields appear as root-level siblings identical to top-level protocol fields.
 
-**Index** — in indexed parses (`ParseFrameIndexed`), post-parsers run before `PacketIndex.EndPacket`. Their `RecordProtocolPresence` and `RecordGroupPresence` calls are treated identically to those of normal parsers.
+**Index** — in indexed parses (`ParseFrameIndexed`), post-parsers run before `PacketIndex.EndPacket`. Their `RecordProtocolPresence` and `RecordGroupPresence` calls are treated identically to those of normal parsers. **ValueCache** — `ParseFrameRecorded` tees selected field values into RAM columns during the same first parse (with or without a `PacketIndex`); unrecorded `ParseFrame` is a no-op on the tee. Membership is a compact array (few fields) or a dense probe plus bitset. See `docs/value-cache-design.md`.
 
 **Error policy** — a `ParseResult` error or exception from any post-parser is recorded as a `packet.error` and made visible. Remaining post-parsers always continue executing regardless of earlier failures. No errors are silently discarded.
 
