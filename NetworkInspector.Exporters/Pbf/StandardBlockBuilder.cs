@@ -115,6 +115,11 @@ internal sealed class StandardBlockBuilder
     /// </summary>
     internal bool AddPacket(Packet packet)
     {
+        if (!packet.HasFieldTree)
+        {
+            throw new InvalidOperationException("Skip packets cannot be exported (HasFieldTree is false).");
+        }
+
         int packetId = packet.Id.Value;
         long timestamp = packet.Timestamp.AsNanos;
 

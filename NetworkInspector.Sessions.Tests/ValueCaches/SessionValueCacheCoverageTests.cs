@@ -42,7 +42,7 @@ internal sealed class SessionValueCacheCoverageTests
     {
         public string UiName => "cover";
 
-        public void OnNewRows(ISessionReader session, ValueCacheReaderView cache, int fromIndex, int toIndexExclusive)
+        public void OnNewRows(ISessionReader session, ReadOnlyValueCache cache, int fromIndex, int toIndexExclusive)
         {
         }
     }
@@ -180,7 +180,7 @@ internal sealed class SessionValueCacheCoverageTests
     }
 
     [Test]
-    public async Task Ingest_WithoutIndex_RecordsViaParseFrameRecorded()
+    public async Task Ingest_WithoutIndex_RecordsViaParseFrame()
     {
         using Stack stack = TestHarness.CreateStack();
         using TestFrameSource source = TestFrameSource.WithUdpFrames(2);
@@ -190,12 +190,11 @@ internal sealed class SessionValueCacheCoverageTests
             {
                 ValueCache = new ValueCacheRequest { FieldNames = ["udp.srcport"] },
                 IndexPackets = false,
-                StoreParsedPackets = false,
             });
         session.TryAddFrameSource(source, out _);
         session.TryStart();
         session.WaitForCompletion();
-        ValueCacheReaderView? ingest = session.IngestValueCache;
+        ReadOnlyValueCache? ingest = session.IngestValueCache;
         await Assert.That(ingest.HasValue).IsTrue();
         await Assert.That(ingest!.Value.GetSeries<ulong>(stack.GetFieldId("udp.srcport")!.Value).Count)
             .IsEqualTo(2);

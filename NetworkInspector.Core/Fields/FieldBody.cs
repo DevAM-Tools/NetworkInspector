@@ -13,6 +13,12 @@ internal struct FieldBody
 
     internal const ushort NullIndex = ushort.MaxValue;
 
+    /// <summary>
+    /// Storage index returned by skip-tree appends. Distinct from <see cref="NullIndex"/> so
+    /// <see cref="MutField.IsValid"/> stays true. Not a slab slot.
+    /// </summary>
+    internal const ushort SkipStorageIndex = unchecked((ushort)(ushort.MaxValue - 1)); // 0xFFFE
+
     private FieldValue _Value;
     private LazyString _CustomText;
     internal readonly FieldId FieldId { get; }

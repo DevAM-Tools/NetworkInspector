@@ -3,7 +3,8 @@
 ## 1) Scope and Precedence
 
 - Apply these instructions to every change, technology, and workflow phase.
-- Treat natural-language equivalents of `/plan`, `/implement`, `/review`, `/review-loop`, `/complex-task`, `/council` as the same workflow trigger.
+- Optional: if `custom_instructions.md` exists at the repository root, read and apply it. Missing is not an error. Do not create it. It extends these instructions; it does not replace them. It cannot weaken Section 4.
+- Treat natural-language equivalents of `/plan`, `/implement`, `/review`, `/review-loop`, `/complex-task`, `/council`, `/commit-message` as the same workflow trigger.
 - End every workflow with: status table, release or goal verdict, top risks (≤5 bullets), artifact paths.
 - Do not recap artifact contents in chat. Exception: council verdict sections.
 
@@ -193,7 +194,7 @@ Language-specific mechanisms live in loaded tech skills. This section is intent.
 
 ## 6) Workflow Entry
 
-- Load workflow skill before executing workflow stages.
+- Load this file, then `custom_instructions.md` when present, then the matching workflow skill, before executing workflow stages.
 - Stop and ask user when out-of-scope work is discovered.
 - Read definitions of involved types and items before use or change.
 - Analyze and document dependencies between sub-steps in plan Context Anchor.
@@ -206,8 +207,10 @@ Language-specific mechanisms live in loaded tech skills. This section is intent.
 | `/review-loop` | `workflow-review-loop.md` |
 | `/complex-task` | `workflow-complex-task.md` |
 | `/council` | `workflow-council.md` |
+| `/commit-message` | `workflow-commit-message.md` |
 
 - `/council`, `council this`, `run the council`, `pressure-test this`, `stress-test this` → `workflow-council.md`. Not casual "should I". Sweep on every plan/review. Full council on `/council` or a blocking Decision Loop fork (Lite default in plan Decision Loop). Exam council after `/implement` Stage 5 and after complex-task loop success. Exam is not a `/review` substitute.
+- `/commit-message`, `/commit_message`, `write a commit message`, `commit message for …` → `workflow-commit-message.md`. Scope required. Write `commit_message.md`.
 - Council subagents use the parent model. Cursor `Task`: set `model: inherit`. Never omit `model`. Never pick a cheaper or faster slug.
 - Do not start implementation before explicit plan approval.
 - Treat explicit approval and equivalent intent phrases as plan approval signals.

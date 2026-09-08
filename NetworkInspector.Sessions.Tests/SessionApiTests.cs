@@ -337,7 +337,7 @@ internal sealed class SessionApiTests
     }
 
     [Test]
-    public async Task TryGetPacket_AfterStoreClear_ReparsesWithIndex()
+    public async Task TryGetPacket_ReparsesWithIndex()
     {
         const int frameCount = 5;
         using Stack stack = TestHarness.CreateStack();
@@ -351,9 +351,6 @@ internal sealed class SessionApiTests
         PacketIndexReaderView? indexBefore = session.PacketIndex;
         await Assert.That(indexBefore).IsNotNull();
         await Assert.That(indexBefore!.Value.Source).IsNotNull();
-
-        PacketStore store = _GetPacketStore(session);
-        store.Clear();
 
         bool found = session.TryGetPacket(new PacketId(0), out Packet? packet);
 
@@ -480,14 +477,6 @@ internal sealed class SessionApiTests
         {
             await Assert.That(ex.Code).IsEqualTo(SessionErrorCode.Disposed);
         }
-    }
-
-    private static PacketStore _GetPacketStore(Session session)
-    {
-        FieldInfo field = typeof(Session).GetField(
-            "_PacketStore",
-            BindingFlags.Instance | BindingFlags.NonPublic)!;
-        return (PacketStore)field.GetValue(session)!;
     }
 
     private sealed class EmptyNameListener : ISessionListener

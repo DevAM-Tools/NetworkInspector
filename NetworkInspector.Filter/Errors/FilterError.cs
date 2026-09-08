@@ -108,6 +108,14 @@ public sealed class FilterError
             -1,
             -1);
 
+    /// <summary>Creates the error raised when a skip-tree packet is evaluated.</summary>
+    public static FilterError NoFieldTree() =>
+        new(
+            FilterErrorKind.NoFieldTree,
+            "Filter evaluation requires a packet parsed with FieldTreeMode.Build.",
+            -1,
+            -1);
+
     #endregion
 
     #region Formatting

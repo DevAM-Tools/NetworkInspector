@@ -2,7 +2,7 @@
 
 namespace NetworkInspector.Core.Tests;
 
-/// <summary>Parse-time tee, <see cref="Packet.ParseFrameRecorded(PacketId, Stack, Frame, ValueCache)"/>, recycle, and custom-text mutation.</summary>
+/// <summary>Parse-time record, <see cref="Packet.ParseFrame(PacketId, Stack, Frame, FieldTreeMode, ValueCache, Boolean)"/>, recycle, and custom-text mutation.</summary>
 internal sealed class ValueCacheParseTests
 {
     #region Helpers
@@ -24,8 +24,8 @@ internal sealed class ValueCacheParseTests
         Packet packet = cache is null
             ? Packet.ParseFrame(new PacketId(0), stack, frame)
             : index is null
-                ? Packet.ParseFrameRecorded(new PacketId(0), stack, frame, cache)
-                : Packet.ParseFrameRecorded(new PacketId(0), stack, frame, cache, index);
+                ? Packet.ParseFrame(new PacketId(0), stack, frame, FieldTreeMode.Build, cache)
+                : Packet.ParseFrameIndexed(new PacketId(0), stack, frame, index, FieldTreeMode.Build, cache);
         return (stack, packet, portId);
     }
 
@@ -53,13 +53,13 @@ internal sealed class ValueCacheParseTests
     #region Parity and order
 
     [Test]
-    public async Task ParseFrameRecorded_EagerUdpPort_MatchesRecordPacket()
+    public async Task ParseFrame_EagerUdpPort_MatchesRecordPacket()
     {
         (Stack? stack, Packet parsed, FieldId portId) = _ParseUdp();
         using (stack)
         {
             ValueCache recorded = new(stack, [new ValueCacheFieldConfig(portId)]);
-            _ = Packet.ParseFrameRecorded(new PacketId(1), stack, parsed.Frame, recorded);
+            _ = Packet.ParseFrame(new PacketId(1), stack, parsed.Frame, FieldTreeMode.Build, recorded);
 
             ValueCache pulled = new(stack, [new ValueCacheFieldConfig(portId)]);
             pulled.RecordPacket(parsed);
@@ -72,14 +72,14 @@ internal sealed class ValueCacheParseTests
     }
 
     [Test]
-    public async Task ParseFrameRecorded_SingleField_MissesUnrecordedSibling()
+    public async Task ParseFrame_SingleField_MissesUnrecordedSibling()
     {
         (Stack? stack, Packet parsed, FieldId portId) = _ParseUdp();
         using (stack)
         {
             FieldId dstId = stack.GetFieldId("udp.dstport")!.Value;
             ValueCache cache = new(stack, [new ValueCacheFieldConfig(portId)]);
-            _ = Packet.ParseFrameRecorded(new PacketId(1), stack, parsed.Frame, cache);
+            _ = Packet.ParseFrame(new PacketId(1), stack, parsed.Frame, FieldTreeMode.Build, cache);
             await Assert.That(cache.TryGetSeries<ulong>(portId, out _)).IsTrue();
             await Assert.That(cache.TryGetSeries<ulong>(dstId, out _)).IsFalse();
             await Assert.That(cache.GetSeries<ulong>(portId).Count).IsEqualTo(1);
@@ -87,7 +87,7 @@ internal sealed class ValueCacheParseTests
     }
 
     [Test]
-    public async Task ParseFrameRecorded_Prepend_MatchesRecordPacketStorageOrder()
+    public async Task ParseFrame_Prepend_MatchesRecordPacketStorageOrder()
     {
         using SettingsManager settingsManager = new();
         StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
@@ -96,18 +96,18 @@ internal sealed class ValueCacheParseTests
         proto.RegisterFields(builder, protoId);
         using Stack stack = builder.Build();
         Frame frame = _Frame(stack);
-        ValueCache teed = new(stack, [new ValueCacheFieldConfig(proto.NumberId, ValueCaptureMode.AllOccurrences)]);
-        Packet teedPacket = Packet.ParseFrameRecorded(new PacketId(0), stack, frame, teed, protoId);
+        ValueCache recorded = new(stack, [new ValueCacheFieldConfig(proto.NumberId, ValueCaptureMode.AllOccurrences)]);
+        Packet recordedPacket = Packet.ParseFrame(new PacketId(0), stack, frame, protoId, FieldTreeMode.Build, recorded);
         ValueCache pulled = new(stack, [new ValueCacheFieldConfig(proto.NumberId, ValueCaptureMode.AllOccurrences)]);
-        pulled.RecordPacket(teedPacket);
-        ulong tee0 = teed.GetSeries<ulong>(proto.NumberId)[0].Value;
-        ulong tee1 = teed.GetSeries<ulong>(proto.NumberId)[1].Value;
+        pulled.RecordPacket(recordedPacket);
+        ulong recorded0 = recorded.GetSeries<ulong>(proto.NumberId)[0].Value;
+        ulong recorded1 = recorded.GetSeries<ulong>(proto.NumberId)[1].Value;
         ulong pull0 = pulled.GetSeries<ulong>(proto.NumberId)[0].Value;
         ulong pull1 = pulled.GetSeries<ulong>(proto.NumberId)[1].Value;
-        await Assert.That(teed.GetSeries<ulong>(proto.NumberId).Count).IsEqualTo(2);
-        await Assert.That((tee0, tee1)).IsEqualTo((pull0, pull1));
-        await Assert.That(tee0).IsEqualTo(1UL);
-        await Assert.That(tee1).IsEqualTo(2UL);
+        await Assert.That(recorded.GetSeries<ulong>(proto.NumberId).Count).IsEqualTo(2);
+        await Assert.That((recorded0, recorded1)).IsEqualTo((pull0, pull1));
+        await Assert.That(recorded0).IsEqualTo(1UL);
+        await Assert.That(recorded1).IsEqualTo(2UL);
     }
 
     #endregion
@@ -115,7 +115,7 @@ internal sealed class ValueCacheParseTests
     #region Lifecycle
 
     [Test]
-    public async Task ParseFrameRecorded_ProtocolThrow_KeepsRowsAlreadyTeed_NextPacketRecords()
+    public async Task ParseFrame_ProtocolThrow_KeepsRowsAlreadyRecorded_NextPacketRecords()
     {
         using SettingsManager settingsManager = new();
         StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
@@ -125,19 +125,19 @@ internal sealed class ValueCacheParseTests
         using Stack stack = builder.Build();
         ValueCache cache = new(stack, [new ValueCacheFieldConfig(proto.NumberId)]);
         proto.ThrowAfterAppend = true;
-        Packet failed = Packet.ParseFrameRecorded(new PacketId(0), stack, _Frame(stack, 0), cache, protoId);
+        Packet failed = Packet.ParseFrame(new PacketId(0), stack, _Frame(stack, 0), protoId, FieldTreeMode.Build, cache);
         bool hasError = failed.TryGetFieldValue(stack.PacketErrorFieldId, out _, materialize: true);
         await Assert.That(hasError).IsTrue();
         await Assert.That(cache.GetSeries<ulong>(proto.NumberId).Count).IsEqualTo(1);
         await Assert.That(cache.GetSeries<ulong>(proto.NumberId)[0].Value).IsEqualTo(1UL);
 
         proto.ThrowAfterAppend = false;
-        _ = Packet.ParseFrameRecorded(new PacketId(1), stack, _Frame(stack, 1), cache, protoId);
+        _ = Packet.ParseFrame(new PacketId(1), stack, _Frame(stack, 1), protoId, FieldTreeMode.Build, cache);
         await Assert.That(cache.GetSeries<ulong>(proto.NumberId).Count).IsEqualTo(2);
     }
 
     [Test]
-    public async Task ParseFrameRecorded_WithIndex_PopulatesBitmapAndSeries()
+    public async Task ParseFrameIndexed_PopulatesBitmapAndSeries()
     {
         (Stack? stack, Packet _, FieldId portId) = _ParseUdp();
         using (stack)
@@ -151,14 +151,14 @@ internal sealed class ValueCacheParseTests
                 LinkType.Ethernet,
                 FrameInterfaceId.Invalid,
                 stack.FrameInterfaceRegistry).Value;
-            _ = Packet.ParseFrameRecorded(new PacketId(1), stack, frame, cache, index);
+            _ = Packet.ParseFrameIndexed(new PacketId(1), stack, frame, index, FieldTreeMode.Build, cache);
             await Assert.That(cache.GetSeries<ulong>(portId).Count).IsEqualTo(1);
             await Assert.That(index.GetFieldBitmap(portId).Contains(1)).IsTrue();
         }
     }
 
     [Test]
-    public async Task TryParseFrameRecorded_RecycleLoop_SeriesMatchesPacketCount()
+    public async Task TryParseFrame_RecycleLoop_SeriesMatchesPacketCount()
     {
         using SettingsManager settingsManager = new();
         StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
@@ -173,7 +173,7 @@ internal sealed class ValueCacheParseTests
             LinkType.Ethernet,
             FrameInterfaceId.Invalid,
             stack.FrameInterfaceRegistry).Value;
-        Packet packet = Packet.ParseFrameRecorded(new PacketId(0), stack, frame0, cache);
+        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame0, FieldTreeMode.Build, cache);
         for (int i = 1; i < 100; i++)
         {
             Frame frame = Frame.Create(
@@ -183,7 +183,7 @@ internal sealed class ValueCacheParseTests
                 LinkType.Ethernet,
                 FrameInterfaceId.Invalid,
                 stack.FrameInterfaceRegistry).Value;
-            RecycleError? err = Packet.TryParseFrameRecorded(packet, new PacketId(i), stack, frame, cache);
+            RecycleError? err = Packet.TryParseFrame(packet, new PacketId(i), stack, frame, FieldTreeMode.Build, cache);
             await Assert.That(err).IsNull();
         }
 
@@ -191,7 +191,7 @@ internal sealed class ValueCacheParseTests
     }
 
     [Test]
-    public async Task ParseFrameRecorded_LazyTtl_ProducesRow()
+    public async Task ParseFrame_LazyTtl_ProducesRow()
     {
         using SettingsManager settingsManager = new();
         StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
@@ -206,13 +206,13 @@ internal sealed class ValueCacheParseTests
             LinkType.Ethernet,
             FrameInterfaceId.Invalid,
             stack.FrameInterfaceRegistry).Value;
-        Packet packet = Packet.ParseFrameRecorded(new PacketId(0), stack, frame, cache);
+        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, FieldTreeMode.Build, cache);
         await Assert.That(cache.GetSeries<ulong>(ttlId).Count).IsEqualTo(1);
         await Assert.That(packet.HasUnpopulatedLazyFields).IsTrue();
     }
 
     [Test]
-    public async Task ParseFrameRecorded_RecordAllFields_Completes()
+    public async Task ParseFrame_RecordAllFields_Completes()
     {
         using SettingsManager settingsManager = new();
         StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
@@ -226,15 +226,15 @@ internal sealed class ValueCacheParseTests
             LinkType.Ethernet,
             FrameInterfaceId.Invalid,
             stack.FrameInterfaceRegistry).Value;
-        _ = Packet.ParseFrameRecorded(new PacketId(0), stack, frame, cache);
+        _ = Packet.ParseFrame(new PacketId(0), stack, frame, FieldTreeMode.Build, cache);
         FieldId? portId = stack.GetFieldId("udp.srcport");
         await Assert.That(cache.GetSeries<ulong>(portId!.Value).Count).IsEqualTo(1);
     }
 
-    /// <summary>Stresses live Count vs ParseFrameRecorded writer.</summary>
+    /// <summary>Stresses live Count vs parse-time record writer.</summary>
     [Test]
     [NotInParallel]
-    public async Task ParseFrameRecorded_ConcurrentReaders_SeeOnlyCommittedRows()
+    public async Task ParseFrame_ConcurrentReaders_SeeOnlyCommittedRows()
     {
         using SettingsManager settingsManager = new();
         StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
@@ -263,7 +263,7 @@ internal sealed class ValueCacheParseTests
             LinkType.Ethernet,
             FrameInterfaceId.Invalid,
             stack.FrameInterfaceRegistry).Value;
-        Packet packet = Packet.ParseFrameRecorded(new PacketId(0), stack, frame, cache);
+        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, FieldTreeMode.Build, cache);
         for (int i = 1; i < 32; i++)
         {
             Frame next = Frame.Create(
@@ -273,7 +273,7 @@ internal sealed class ValueCacheParseTests
                 LinkType.Ethernet,
                 FrameInterfaceId.Invalid,
                 stack.FrameInterfaceRegistry).Value;
-            RecycleError? err = Packet.TryParseFrameRecorded(packet, new PacketId(i), stack, next, cache);
+            RecycleError? err = Packet.TryParseFrame(packet, new PacketId(i), stack, next, FieldTreeMode.Build, cache);
             await Assert.That(err).IsNull();
         }
 
@@ -294,19 +294,7 @@ internal sealed class ValueCacheParseTests
     #region Arguments and overloads
 
     [Test]
-    public async Task ParseFrameRecorded_NullCache_Throws()
-    {
-        (Stack? stack, Packet _, FieldId _) = _ParseUdp();
-        using (stack)
-        {
-            Frame frame = _Frame(stack);
-            await Assert.That(() => Packet.ParseFrameRecorded(new PacketId(1), stack, frame, null!))
-                .Throws<ArgumentNullException>();
-        }
-    }
-
-    [Test]
-    public async Task ParseFrameRecorded_OtherStack_Throws()
+    public async Task ParseFrame_OtherStack_Throws()
     {
         (Stack? stack, ValueCacheExerciseProtocol _, ProtocolId _) = _BuildExercise();
         (Stack? other, ValueCacheExerciseProtocol protoOther, ProtocolId _) = _BuildExercise();
@@ -314,13 +302,13 @@ internal sealed class ValueCacheParseTests
         using (other)
         {
             ValueCache cache = new(other, [new ValueCacheFieldConfig(protoOther.NumberId)]);
-            await Assert.That(() => Packet.ParseFrameRecorded(new PacketId(0), stack, _Frame(stack), cache))
+            await Assert.That(() => Packet.ParseFrame(new PacketId(0), stack, _Frame(stack), FieldTreeMode.Build, cache))
                 .Throws<ArgumentException>();
         }
     }
 
     [Test]
-    public async Task ParseFrameRecorded_Replay_DoesNotRecord()
+    public async Task ParseFrame_Replay_DoesNotRecord()
     {
         (Stack? stack, Packet _, FieldId portId) = _ParseUdp();
         using (stack)
@@ -333,14 +321,14 @@ internal sealed class ValueCacheParseTests
                 LinkType.Ethernet,
                 FrameInterfaceId.Invalid,
                 stack.FrameInterfaceRegistry).Value;
-            _ = Packet.ParseFrameRecorded(new PacketId(1), stack, frame, cache);
-            _ = Packet.ParseFrameRecorded(new PacketId(1), stack, frame, cache);
+            _ = Packet.ParseFrame(new PacketId(1), stack, frame, FieldTreeMode.Build, cache);
+            _ = Packet.ParseFrame(new PacketId(1), stack, frame, FieldTreeMode.Build, cache);
             await Assert.That(cache.GetSeries<ulong>(portId).Count).IsEqualTo(1);
         }
     }
 
     [Test]
-    public async Task ParseFrameRecorded_Overloads_AndRecycleErrors()
+    public async Task ParseFrame_Overloads_AndRecycleErrors()
     {
         using SettingsManager settingsManager = new();
         StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
@@ -361,16 +349,16 @@ internal sealed class ValueCacheParseTests
             LinkType.Ethernet,
             FrameInterfaceId.Invalid,
             stack.FrameInterfaceRegistry).Value;
-        Packet a = Packet.ParseFrameRecorded(new PacketId(0), stack, frame, cache, eth);
-        Packet b = Packet.ParseFrameRecorded(new PacketId(1), stack, frame, cache, index, eth);
-        RecycleError? ok = Packet.TryParseFrameRecorded(a, new PacketId(2), stack, frame, cache, eth);
-        RecycleError? okIndex = Packet.TryParseFrameRecorded(b, new PacketId(3), stack, frame, cache, index);
-        RecycleError? okBoth = Packet.TryParseFrameRecorded(a, new PacketId(4), stack, frame, cache, index, eth);
-        Packet thrown = Packet.ParseFrameRecorded(a, new PacketId(5), stack, frame, cache);
-        _ = Packet.ParseFrameRecorded(a, new PacketId(6), stack, frame, cache, eth);
-        _ = Packet.ParseFrameRecorded(a, new PacketId(7), stack, frame, cache, index);
-        _ = Packet.ParseFrameRecorded(a, new PacketId(8), stack, frame, cache, index, eth);
-        RecycleError? mismatch = Packet.TryParseFrameRecorded(a, new PacketId(9), other, frame, cache);
+        Packet a = Packet.ParseFrame(new PacketId(0), stack, frame, eth, FieldTreeMode.Build, cache);
+        Packet b = Packet.ParseFrameIndexed(new PacketId(1), stack, frame, index, eth, FieldTreeMode.Build, cache);
+        RecycleError? ok = Packet.TryParseFrame(a, new PacketId(2), stack, frame, eth, FieldTreeMode.Build, cache);
+        RecycleError? okIndex = Packet.TryParseFrameIndexed(b, new PacketId(3), stack, frame, index, FieldTreeMode.Build, cache);
+        RecycleError? okBoth = Packet.TryParseFrameIndexed(a, new PacketId(4), stack, frame, index, eth, FieldTreeMode.Build, cache);
+        Packet thrown = Packet.ParseFrame(a, new PacketId(5), stack, frame, FieldTreeMode.Build, cache);
+        _ = Packet.ParseFrame(a, new PacketId(6), stack, frame, eth, FieldTreeMode.Build, cache);
+        _ = Packet.ParseFrameIndexed(a, new PacketId(7), stack, frame, index, FieldTreeMode.Build, cache);
+        _ = Packet.ParseFrameIndexed(a, new PacketId(8), stack, frame, index, eth, FieldTreeMode.Build, cache);
+        RecycleError? mismatch = Packet.TryParseFrame(a, new PacketId(9), other, frame, FieldTreeMode.Build, cache);
         await Assert.That(ok).IsNull();
         await Assert.That(okIndex).IsNull();
         await Assert.That(okBoth).IsNull();
@@ -384,7 +372,7 @@ internal sealed class ValueCacheParseTests
     #region Custom text
 
     [Test]
-    public async Task ParseFrameRecorded_CustomText_LastOccurrenceOverwrite_AndFirstSkips()
+    public async Task ParseFrame_CustomText_FirstOccurrence_SkipsLaterMutation()
     {
         using SettingsManager settingsManager = new();
         StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
@@ -392,26 +380,18 @@ internal sealed class ValueCacheParseTests
         ProtocolId protoId = builder.RegisterProtocol(proto);
         proto.RegisterFields(builder, protoId);
         using Stack stack = builder.Build();
-        ValueCache last = new(
-            stack,
-            [new ValueCacheFieldConfig(proto.NumberId, ValueCaptureMode.LastOccurrence, RecordValue: false, RecordCustomText: true)]);
-        proto.OverwriteCustomText = true;
-        _ = Packet.ParseFrameRecorded(new PacketId(0), stack, _Frame(stack, 0), last, protoId);
-        _ = last.GetCustomTextSeries(proto.NumberId).TryGetAsString(0, out string lastText);
-
-        proto.OverwriteCustomText = false;
         ValueCache first = new(
             stack,
             [new ValueCacheFieldConfig(proto.NumberId, ValueCaptureMode.FirstOccurrence, RecordValue: false, RecordCustomText: true)]);
-        _ = Packet.ParseFrameRecorded(new PacketId(1), stack, _Frame(stack, 1), first, protoId);
-        _ = first.GetCustomTextSeries(proto.NumberId).TryGetAsString(0, out string firstText);
-        await Assert.That(lastText).IsEqualTo("second");
-        await Assert.That(firstText).IsEqualTo("first");
-        await Assert.That(first.GetCustomTextSeries(proto.NumberId).Count).IsEqualTo(1);
+        proto.OverwriteCustomText = true;
+        _ = Packet.ParseFrame(new PacketId(0), stack, _Frame(stack, 0), protoId, FieldTreeMode.Build, first);
+        ValueCacheSeries<string> series = first.GetCustomTextSeries(proto.NumberId);
+        await Assert.That(series.Count).IsEqualTo(1);
+        await Assert.That(series[0].Value).IsEqualTo("first");
     }
 
     [Test]
-    public async Task ParseFrameRecorded_CustomRepresentation_IsStored()
+    public async Task ParseFrame_CustomRepresentation_IsStored()
     {
         (Stack? stack, ValueCacheExerciseProtocol proto, ProtocolId protoId) = _BuildExercise();
         using (stack)
@@ -420,14 +400,15 @@ internal sealed class ValueCacheParseTests
             ValueCache cache = new(
                 stack,
                 [new ValueCacheFieldConfig(proto.NumberId, RecordValue: true, RecordCustomRepresentation: true)]);
-            _ = Packet.ParseFrameRecorded(new PacketId(0), stack, _Frame(stack), cache, protoId);
-            _ = cache.GetCustomRepresentationSeries(proto.NumberId).TryGetAsString(0, out string text);
-            await Assert.That(text).IsEqualTo("custom-rep");
+            _ = Packet.ParseFrame(new PacketId(0), stack, _Frame(stack), protoId, FieldTreeMode.Build, cache);
+            ValueCacheSeries<string> series = cache.GetCustomRepresentationSeries(proto.NumberId);
+            await Assert.That(series.Count).IsEqualTo(1);
+            await Assert.That(series[0].Value).IsEqualTo("custom-rep");
         }
     }
 
     [Test]
-    public async Task ParseFrameRecorded_InsertAfter_Tees()
+    public async Task ParseFrame_InsertAfter_Records()
     {
         using SettingsManager settingsManager = new();
         StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
@@ -436,7 +417,7 @@ internal sealed class ValueCacheParseTests
         proto.RegisterFields(builder, protoId);
         using Stack stack = builder.Build();
         ValueCache cache = new(stack, [new ValueCacheFieldConfig(proto.NumberId, ValueCaptureMode.AllOccurrences)]);
-        _ = Packet.ParseFrameRecorded(new PacketId(0), stack, _Frame(stack), cache, protoId);
+        _ = Packet.ParseFrame(new PacketId(0), stack, _Frame(stack), protoId, FieldTreeMode.Build, cache);
         await Assert.That(cache.GetSeries<ulong>(proto.NumberId).Count).IsEqualTo(2);
         await Assert.That(cache.GetSeries<ulong>(proto.NumberId)[1].Value).IsEqualTo(2UL);
     }

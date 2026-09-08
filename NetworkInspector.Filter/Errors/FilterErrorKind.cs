@@ -51,5 +51,8 @@ public enum FilterErrorKind : byte
     /// <summary>A stateful filter was queried with a packet id below the highest evaluated id without a preceding state reset.</summary>
     OutOfOrder = 11,
 
+    /// <summary>The packet was parsed with <see cref="NetworkInspector.Core.FieldTreeMode.Skip"/> and has no field tree to evaluate.</summary>
+    NoFieldTree = 12,
+
     #endregion
 }

@@ -8,9 +8,9 @@ Session orchestration library for NetworkInspector.
 
 ## What This Is
 
-`NetworkInspector.Sessions` coordinates frame sources, the protocol stack, pull-based listeners, and background jobs. It provides thread-safe packet access, a packet store with re-parse fallback, and Roaring-bitmap indexing during parsing.
+`NetworkInspector.Sessions` coordinates frame sources, the protocol stack, pull-based listeners, and background jobs. It never retains parsed packets: every `TryGetPacket` reparses the captured frame. Stream sources are wrapped in `CachedFrameSource` so frames stay readable after `NextFrame`. Random-access sources are left unwrapped unless `FrameSourceAddOptions.CacheRandomAccess` is set; that wrap holds the inner `Frame` and does not copy payload bytes.
 
-Each frame source runs on a dedicated thread. Parsed packets are stored once in a shared `PacketStore`; listeners pull data on notification instead of receiving pushed copies.
+Each frame source runs on a dedicated thread. Listeners pull by packet id on notification instead of receiving pushed copies.
 
 ## Lifecycle
 
@@ -44,7 +44,7 @@ Typical flow:
 
 | Type | Role |
 |------|------|
-| `Session` | Lifecycle orchestration and shared stores |
+| `Session` | Lifecycle orchestration; frames via `CachedFrameSource` wrap; packets reparsed on read |
 | `ISession` | Mutable session API (`TryAddFrameSource`, `TryAddListener`, `TryStart`, `Restart`, `Shutdown`) |
 | `ISessionReader` | Read-only view for listeners (`PacketCount`, `TryGetPacket`, `GetJobs`) |
 | `ISessionListener` | Pull-based notification callbacks |
@@ -52,9 +52,10 @@ Typical flow:
 | `ListenerInfo` | Public view of a listener subscription |
 | `ValueCacheRequest` | Name-based request for an ingest or runtime value cache |
 | `IValueCacheListener` | Pull-based value-cache notifications (`OnNewRows`) |
-| `ValueCacheInfo` | Public view of a value-cache subscription (`Cache` is a `ValueCacheReaderView`) |
+| `ValueCacheInfo` | Public view of a value-cache subscription (`Cache` is a `ReadOnlyValueCache`) |
 | `FrameSourceInfo` | Public view of a registered frame source |
-| `PacketStore` | Chunked store retaining all parsed packets until restart or shutdown |
+| `CachedFrameSource` (Sources) | Auto-wrapper for non-random-access frame sources; optional wrap for random-access via `FrameSourceAddOptions.CacheRandomAccess` |
+| `FrameSourceAddOptions` | Per-source `CacheRandomAccess` opt-in |
 | `PacketRef` | A `PacketId` paired with its packet, so a filtered pull can report gapped ids |
 | `PacketReadMode` | `All` or `Matching` — whether a pull applies the listener's filter |
 | `PacketIdLayout` | `Contiguous` or `Gapped` — whether returned ids are consecutive |
@@ -78,35 +79,39 @@ Multiple events between two wake cycles coalesce into a single flag read.
 
 ## Value caches
 
-A session can fill a RAM `ValueCache` during the first parse (`SessionOptions.ValueCache`) and/or add dedicated caches at runtime through `TryAddValueCache`. Listeners receive `OnNewRows` on a dedicated slot thread with the same coalesced packet-id window as `OnNewPackets`, then pull columns from `ValueCacheReaderView`. Runtime caches never tee on the parse thread.
+A session can fill a RAM `ValueCache` during the first parse (`SessionOptions.ValueCache`) and/or add dedicated caches at runtime through `TryAddValueCache`. Listeners receive `OnNewRows` on a dedicated slot thread with the same coalesced packet-id window as `OnNewPackets`, then pull columns from `ReadOnlyValueCache`. Runtime caches never record on the parse thread.
+
+How to snapshot, watermark, find, and SIMD-scan: [`VALUECACHE_GUIDE.md`](../NetworkInspector.Core/VALUECACHE_GUIDE.md). Design: [`docs/value-cache-design.md`](../docs/value-cache-design.md).
+
+Ingest always skip-parses (`FieldTreeMode.Skip`): the throwaway packet is recycled on the source thread. Listeners that call `TryGetPacket` still get a Build tree from the frame. On-demand `TryAddValueCache` fills by skip-record from `TryGetFrame` (`recordOnReplay: true`); it does not walk stored FieldBodies via `RecordPacket`.
 
 ```csharp
 sealed class UdpPortCacheListener : IValueCacheListener
 {
     public string UiName => "udp src ports";
-    public void OnNewRows(ISessionReader session, ValueCacheReaderView cache, int fromIndex, int toIndexExclusive)
+    public void OnNewRows(ISessionReader session, ReadOnlyValueCache cache, int fromIndex, int toIndexExclusive)
     {
-        if (!cache.TryGetSeries<ulong>("udp.srcport", out ValueCacheSeries<ulong>? series) || series is null)
+        if (!cache.TryGetSeries<ulong>("udp.srcport", out ReadOnlyValueCacheSeries<ulong> series))
         {
             return;
         }
 
-        int count = series.Count;
-        for (int i = _Seen; i < count; i++)
+        ValueCacheSeriesHandle<ulong> handle = series.Handle;
+        foreach (ValueCacheRow<ulong> row in handle.EnumerateFrom(_RowWatermark))
         {
-            _ = series[i].PacketId;
+            _ = row.PacketId;
         }
 
-        _Seen = count;
+        _RowWatermark = handle.Count;
         _ = fromIndex;
         _ = toIndexExclusive;
     }
 
-    private int _Seen;
+    private int _RowWatermark;
 }
 
 session.TryAddValueCache(new UdpPortCacheListener(), new ValueCacheRequest { FieldNames = ["udp.srcport"] }, out ValueCacheInfo? info);
-// info.Cache is a ValueCacheReaderView — no RecordPacket
+// info.Cache is a ReadOnlyValueCache — no RecordPacket
 ```
 
 Construction-time ingest:
@@ -118,7 +123,7 @@ using Session session = new(stack, new SessionOptions
 });
 ```
 
-`session.IngestValueCache` is the read-only view filled by `ParseFrameRecorded`. Restart abandons the previous writer and rebinds surviving runtime slots. Field and group names are validated with `NameValidation.IsValidName` when the request is bound (construction, `TryAddValueCache`, Restart).
+`session.IngestValueCache` is the read-only view filled by `ParseFrame(..., cache)`. Restart abandons the previous writer and rebinds surviving runtime slots. Field and group names are validated with `NameValidation.IsValidName` when the request is bound (construction, `TryAddValueCache`, Restart).
 
 ## Per-Listener Filters
 

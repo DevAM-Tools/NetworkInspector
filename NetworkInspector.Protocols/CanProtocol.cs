@@ -355,26 +355,29 @@ public sealed partial class CanProtocol : IProtocol
 
         // Build summary
         // Use full 32-bit hex formatting for CAN IDs to support extended 29-bit identifiers
-        LazyString summary = isFd
-            ? ZA.Lazy("Controller Area Network FD, ID: 0x",
-                new Hex8(canId),
-                ", Length: ", dlc)
-            : ZA.Lazy("Controller Area Network, ID: 0x",
-                new Hex8(canId),
-                ", Length: ", dlc);
+        string canKind = isFd
+            ? "Controller Area Network FD, ID: 0x"
+            : "Controller Area Network, ID: 0x";
 
         parentField.SetPacketInfo(isFd
             ? ZA.Lazy("CAN FD 0x", new Hex8(canId))
             : ZA.Lazy("CAN 0x", new Hex8(canId)));
 
         MutField canField = parentField.AppendWithCustomText(
-            _ProtocolFieldId, FieldValue.NewBytes(data[..totalLen]), summary);
+            _ProtocolFieldId, FieldValue.NewBytes(data[..totalLen]),
+            canKind, new Hex8(canId), ", Length: ", dlc);
 
         // CAN ID
-        LazyString idText = isExtended
-            ? ZA.Lazy("0x", new Hex8(canId), " (Extended)")
-            : ZA.Lazy("0x", new Hex3((ushort)canId), " (Standard)");
-        canField.AppendWithCustomText(_IdFieldId, FieldValue.NewU64(canId), idText);
+        if (isExtended)
+        {
+            canField.AppendWithCustomText(
+                _IdFieldId, FieldValue.NewU64(canId), "0x", new Hex8(canId), " (Extended)");
+        }
+        else
+        {
+            canField.AppendWithCustomText(
+                _IdFieldId, FieldValue.NewU64(canId), "0x", new Hex3((ushort)canId), " (Standard)");
+        }
 
         // Message name from configuration
         if (_MessageNames.TryGetValue(canId, out string? messageName))
@@ -512,16 +515,15 @@ public sealed partial class CanProtocol : IProtocol
         context.RecordGroupPresence(_CanxlGroupId);
 
         // Build summary text: "CAN XL, Priority: N, VCID: 0xNN, Length: N"
-        LazyString summary = ZA.Lazy("CAN XL, Priority: ", priority,
-            ", VCID: 0x", Helpers.DisplayTables.FormatHexU8((byte)vcid),
-            ", Length: ", payloadLength);
-
         parentField.SetPacketInfo(ZA.Lazy(
             "CAN XL P:", priority, " VCID:0x", Helpers.DisplayTables.FormatHexU8((byte)vcid)));
 
         // Append protocol container with frame slice bytes
         MutField xlField = parentField.AppendWithCustomText(
-            _CanxlProtocolFieldId, FieldValue.NewBytes(data[..totalLen]), summary);
+            _CanxlProtocolFieldId, FieldValue.NewBytes(data[..totalLen]),
+            "CAN XL, Priority: ", priority,
+            ", VCID: 0x", Helpers.DisplayTables.FormatHexU8((byte)vcid),
+            ", Length: ", payloadLength);
 
         // Priority (11-bit, bits 0-10 of the priority/VCID word)
         xlField.Append(_CanxlPriorityFieldId, FieldValue.NewU64(priority));
@@ -547,7 +549,7 @@ public sealed partial class CanProtocol : IProtocol
 
         // Acceptance Field (hex display)
         xlField.AppendWithCustomText(_CanxlAcceptanceFieldId, FieldValue.NewU64(acceptanceField),
-            ZA.Lazy("0x", new Hex8(acceptanceField)));
+            "0x", new Hex8(acceptanceField));
 
         // Data payload (conditional — present when payload length > 0).
         // Dispatches via can.id (key = priority) and can.extended_id (key = acceptanceField)

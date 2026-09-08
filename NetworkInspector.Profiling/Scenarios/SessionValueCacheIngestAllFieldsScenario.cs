@@ -3,21 +3,23 @@
 namespace NetworkInspector.Profiling.Scenarios;
 
 /// <summary>
-/// Session ingest-time tee of every stack field via <see cref="ValueCacheRequest.RecordAllFields"/>.
-/// New stack and session per <see cref="Run"/> so packet ids 0..N-1 are first-parses.
-/// Pair with <c>session-value-cache-ondemand-all-fields</c>. Compare tee cost against
-/// <c>value-cache-build-all-fields</c> and session overhead against <c>session-listener</c> (lazy).
-/// Do not compare to <c>session-listener-materialized</c>.
+/// Session ingest-time record of every stack field.
+/// <see cref="PrepareIteration"/> builds a fresh <see cref="Stack"/> so packet ids are first-parses.
+/// <see cref="Run"/> waits for ingest.
 /// </summary>
 [SuppressMessage(
     "Performance",
     "CA1812:AvoidUninstantiatedInternalClasses",
     Justification = "Instantiated via reflection in ScenarioDiscovery.Discover.")]
-internal sealed class SessionValueCacheIngestAllFieldsScenario : IProfilingScenario
+internal sealed class SessionValueCacheIngestAllFieldsScenario : IProfilingScenario, IDisposable
 {
     #region Fields
 
     private const int _FrameCount = 10_000;
+
+    private Stack? _Stack;
+    private Frame[]? _Frames;
+    private Session? _Session;
 
     #endregion
 
@@ -28,7 +30,7 @@ internal sealed class SessionValueCacheIngestAllFieldsScenario : IProfilingScena
 
     /// <inheritdoc/>
     public string Description => FormattableString.Invariant(
-        $"New Stack+Session per Run: SessionOptions.ValueCache(RecordAllFields) ingest {_FrameCount:N0} frames.");
+        $"PrepareIteration: new Stack+Session (fresh first-parse ids); Run: ingest wait {_FrameCount:N0} frames, ValueCache(RecordAllFields).");
 
     /// <inheritdoc/>
     public long WorkUnitsPerIteration => _FrameCount;
@@ -39,24 +41,41 @@ internal sealed class SessionValueCacheIngestAllFieldsScenario : IProfilingScena
     /// <inheritdoc/>
     public void Setup()
     {
-        // Stack and frames are created inside Run so each iteration first-parses packet ids 0..N-1.
+    }
+
+    /// <inheritdoc/>
+    public Action? PrepareIteration => _PrepareIteration;
+
+    private void _PrepareIteration()
+    {
+        _Stack?.Dispose();
+        _Stack = StackHelper.CreateStack();
+        _Frames = FrameHelper.CreateSharedFrames(_FrameCount, _Stack);
+        _Session = SessionValueCacheHarness.StartIngest(
+            _Stack,
+            _Frames,
+            new ValueCacheRequest { RecordAllFields = true });
     }
 
     /// <inheritdoc/>
     public void Run()
     {
-        using Stack stack = StackHelper.CreateStack();
-        Frame[] frames = FrameHelper.CreateSharedFrames(_FrameCount, stack);
-        SessionValueCacheHarness.RunIngest(
-            stack,
-            frames,
-            new ValueCacheRequest { RecordAllFields = true },
-            _FrameCount);
+        SessionValueCacheHarness.WaitIngest(_Session!, _FrameCount);
+        _Session = null;
     }
 
     /// <inheritdoc/>
-    public void Cleanup()
+    public void Cleanup() => Dispose();
+
+    /// <inheritdoc/>
+    public void Dispose()
     {
+        _Session?.Shutdown();
+        _Session?.Dispose();
+        _Session = null;
+        _Stack?.Dispose();
+        _Stack = null;
+        _Frames = null;
     }
 
     #endregion

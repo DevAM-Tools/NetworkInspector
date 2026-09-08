@@ -59,7 +59,7 @@ internal sealed class SessionCoverageTests
     }
 
     [Test]
-    public async Task TryGetPacket_NonRandomAccessSource_ReturnsFalse()
+    public async Task TryGetPacket_ForwardOnlySource_ReturnsBuildPacket()
     {
         using Stack stack = TestHarness.CreateStack();
         using ForwardOnlyFrameSource source = new(2);
@@ -69,12 +69,16 @@ internal sealed class SessionCoverageTests
         session.TryStart();
         session.WaitForCompletion();
 
-        _GetPacketStore(session).Clear();
-
-        bool found = session.TryGetPacket(new PacketId(0), out Packet? packet);
-
-        await Assert.That(found).IsFalse();
-        await Assert.That(packet).IsNull();
+        for (int i = 0; i < 2; i++)
+        {
+            bool gotFrame = session.TryGetFrame(new PacketId(i), out Frame frame);
+            bool gotPacket = session.TryGetPacket(new PacketId(i), out Packet? packet);
+            await Assert.That(gotFrame).IsTrue();
+            await Assert.That(frame.IsValid).IsTrue();
+            await Assert.That(gotPacket).IsTrue();
+            await Assert.That(packet).IsNotNull();
+            await Assert.That(packet!.HasFieldTree).IsTrue();
+        }
 
         session.Shutdown();
     }
@@ -91,7 +95,6 @@ internal sealed class SessionCoverageTests
         session.TryStart();
         session.WaitForCompletion();
 
-        _GetPacketStore(session).Clear();
         _SetPacketIndex(session, null);
 
         bool found = session.TryGetPacket(new PacketId(0), out Packet? packet);
@@ -187,14 +190,6 @@ internal sealed class SessionCoverageTests
         await Assert.That(completed).IsTrue();
 
         session.Shutdown();
-    }
-
-    private static PacketStore _GetPacketStore(Session session)
-    {
-        FieldInfo field = typeof(Session).GetField(
-            "_PacketStore",
-            BindingFlags.Instance | BindingFlags.NonPublic)!;
-        return (PacketStore)field.GetValue(session)!;
     }
 
     private static void _SetPacketIndex(Session session, PacketIndex? index)

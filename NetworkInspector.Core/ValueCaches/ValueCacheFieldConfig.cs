@@ -11,7 +11,7 @@ namespace NetworkInspector.Core.ValueCaches;
 /// <param name="FieldId">Field to record. Must be in range for the cache's stack.</param>
 /// <param name="CaptureMode">How multiple occurrences in one packet are captured.</param>
 /// <param name="RecordValue">When true, create a payload series for <paramref name="FieldId"/>.</param>
-/// <param name="RecordCustomText">When true, create a <see cref="ValueCacheStringSeries"/> of field custom text.</param>
+/// <param name="RecordCustomText">When true, create a <see cref="ValueCacheSeries{T}"/> of field custom text.</param>
 /// <param name="RecordCustomRepresentation">When true, create a string series of value custom representation.</param>
 public readonly record struct ValueCacheFieldConfig(
     FieldId FieldId,

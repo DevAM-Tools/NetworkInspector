@@ -137,7 +137,6 @@ public sealed partial class DtlsProtocol : IProtocol
         string ctText = TlsDisplayTables.GetContentTypeDisplayText(firstRecord.ContentType);
         string verText = _GetDtlsVersionText(firstRecord.Version);
 
-        LazyString summary = ZA.Lazy("DTLS Record Layer: ", ctText, " (", verText, ")");
 
         parentField.SetPacketInfo(ZA.Lazy("DTLS ", ctText));
 
@@ -157,7 +156,7 @@ public sealed partial class DtlsProtocol : IProtocol
         }
 
         parentField.AppendLazyWithCustomText(
-            _ProtocolFieldId, FieldValue.NewBytes(data), summary, _Populator);
+            _ProtocolFieldId, FieldValue.NewBytes(data), "DTLS Record Layer: ", ctText, " (", verText, ")", _Populator);
 
         return data.Length;
     }
@@ -249,7 +248,7 @@ public sealed partial class DtlsProtocol : IProtocol
 
             MutField recordContainer = container.AppendWithCustomText(
                 _RecordFieldId, FieldValue.None,
-                ZA.Lazy("DTLS Record Layer: ", ctText, " (", verText, ")"));
+                "DTLS Record Layer: ", ctText, " (", verText, ")");
 
             recordContainer.AppendWithCustomText(_ContentTypeFieldId,
                 FieldValue.NewU64(record.ContentType), ctText);
@@ -291,7 +290,7 @@ public sealed partial class DtlsProtocol : IProtocol
 
         MutField hsContainer = container.AppendWithCustomText(
             _HandshakeFieldId, FieldValue.None,
-            ZA.Lazy("Handshake Protocol: ", hsTypeText));
+            "Handshake Protocol: ", hsTypeText);
 
         hsContainer.AppendWithCustomText(_HandshakeTypeFieldId,
             FieldValue.NewU64(hsType), hsTypeText);

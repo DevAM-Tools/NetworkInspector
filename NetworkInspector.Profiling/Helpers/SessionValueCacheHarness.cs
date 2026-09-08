@@ -3,10 +3,9 @@
 namespace NetworkInspector.Profiling.Helpers;
 
 /// <summary>
-/// Shared session value-cache profiling loops. Each call constructs a new
-/// <see cref="Session"/> so warmup and previous iterations cannot reuse a writer.
-/// Ingest waits with <see cref="ISession.WaitForCompletion"/> plus a <see cref="SpinWait"/>
-/// poll for published rows (not <see cref="Thread.Sleep(int)"/>, which is ~15 ms on Windows).
+/// Shared session value-cache profiling loops. Construction lives in
+/// <see cref="StartIngest"/> / <see cref="StartOndemand"/> so the runner can put it in
+/// <c>PrepareIteration</c>. <see cref="WaitIngest"/> / <see cref="CompleteOndemand"/> are the timed work.
 /// </summary>
 internal static class SessionValueCacheHarness
 {
@@ -45,31 +44,51 @@ internal static class SessionValueCacheHarness
     }
 
     /// <summary>
-    /// Starts a session with <see cref="SessionOptions.ValueCache"/>, ingests <paramref name="frames"/>,
-    /// waits until packet count and <c>udp.srcport</c> rows reach the batch size.
+    /// Constructs and starts a session that skip-ingests <paramref name="frames"/> through a
+    /// sequential source (session wraps it). Caller must <see cref="WaitIngest"/> or dispose.
     /// </summary>
-    internal static void RunIngest(
+    internal static Session StartIngest(
         Stack stack,
         Frame[] frames,
         ValueCacheRequest request,
-        int expectedUdpSrcPortRows)
+        SessionOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(stack);
         ArgumentNullException.ThrowIfNull(frames);
         ArgumentNullException.ThrowIfNull(request);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(expectedUdpSrcPortRows);
 
-        using Session session = new(stack, new SessionOptions { ValueCache = request });
-        using MemoryFrameSource source = new(frames);
+        SessionOptions resolved = options ?? SessionOptions.Default;
+        Session session = new(
+            stack,
+            new SessionOptions
+            {
+                IndexPackets = resolved.IndexPackets,
+                ValueCache = request,
+                ValueCacheListener = resolved.ValueCacheListener,
+            });
+        SequentialMemoryFrameSource source = new(frames);
         if (!session.TryAddFrameSource(source, out _))
         {
-            throw new InvalidOperationException("Failed to add memory frame source.");
+            session.Dispose();
+            throw new InvalidOperationException("Failed to add sequential frame source.");
         }
 
         if (!session.TryStart())
         {
+            session.Dispose();
             throw new InvalidOperationException("Failed to start session.");
         }
+
+        return session;
+    }
+
+    /// <summary>
+    /// Timed ingest wait: <see cref="ISession.WaitForCompletion"/> plus row poll, then shutdown.
+    /// </summary>
+    internal static void WaitIngest(Session session, int expectedUdpSrcPortRows)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(expectedUdpSrcPortRows);
 
         try
         {
@@ -77,7 +96,7 @@ internal static class SessionValueCacheHarness
             {
                 throw new TimeoutException(
                     FormattableString.Invariant(
-                        $"Session ingest WaitForCompletion timed out before PacketCount {frames.Length.ToString(CultureInfo.InvariantCulture)}."));
+                        $"Session ingest WaitForCompletion timed out before PacketCount {session.PacketCount.ToString(CultureInfo.InvariantCulture)}."));
             }
 
             _WaitUntil(
@@ -88,43 +107,47 @@ internal static class SessionValueCacheHarness
         finally
         {
             session.Shutdown();
+            session.Dispose();
         }
     }
 
     /// <summary>
-    /// Stores <paramref name="frames"/> with no ingest cache, then
-    /// <see cref="ISession.TryAddValueCache"/> and waits for PullFill backfill.
-    /// The trigger source stays open so the session remains Running during fill.
+    /// Starts a session, ingests the batch, waits until <see cref="ISessionReader.PacketCount"/> reaches
+    /// the batch size. Does not add the on-demand cache. Caller must <see cref="CompleteOndemand"/>.
     /// </summary>
-    internal static void RunOndemand(
+    internal static Session StartOndemand(
         Stack stack,
         Frame[] frames,
         Frame triggerFrame,
-        ValueCacheRequest request,
-        string listenerUiName,
-        int expectedUdpSrcPortRows)
+        SessionOptions? options,
+        out TriggerFrameSource trigger)
     {
         ArgumentNullException.ThrowIfNull(stack);
         ArgumentNullException.ThrowIfNull(frames);
-        ArgumentNullException.ThrowIfNull(request);
-        ArgumentException.ThrowIfNullOrWhiteSpace(listenerUiName);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(expectedUdpSrcPortRows);
 
-        using Session session = new(stack);
-        using MemoryFrameSource source = new(frames);
-        using TriggerFrameSource trigger = new(triggerFrame);
-        ValueCacheFillListener listener = new(listenerUiName, expectedUdpSrcPortRows);
+        SessionOptions resolved = options ?? SessionOptions.Default;
+        Session session = new(
+            stack,
+            new SessionOptions
+            {
+                IndexPackets = resolved.IndexPackets,
+            });
+        SequentialMemoryFrameSource source = new(frames);
+        trigger = new TriggerFrameSource(triggerFrame);
+        bool triggerAdded = false;
         try
         {
             if (!session.TryAddFrameSource(source, out _))
             {
-                throw new InvalidOperationException("Failed to add memory frame source.");
+                throw new InvalidOperationException("Failed to add sequential frame source.");
             }
 
             if (!session.TryAddFrameSource(trigger, out _))
             {
                 throw new InvalidOperationException("Failed to add trigger frame source.");
             }
+
+            triggerAdded = true;
 
             if (!session.TryStart())
             {
@@ -135,7 +158,41 @@ internal static class SessionValueCacheHarness
                 () => session.PacketCount >= frames.Length,
                 WaitTimeout,
                 "session PacketCount did not reach the ingested batch.");
+        }
+        catch
+        {
+            session.Shutdown();
+            session.Dispose();
+            if (!triggerAdded)
+            {
+                trigger.Dispose();
+            }
 
+            throw;
+        }
+
+        return session;
+    }
+
+    /// <summary>
+    /// Timed on-demand fill: <see cref="ISession.TryAddValueCache"/>, trigger release, wait for rows.
+    /// </summary>
+    internal static void CompleteOndemand(
+        Session session,
+        TriggerFrameSource trigger,
+        ValueCacheRequest request,
+        string listenerUiName,
+        int expectedUdpSrcPortRows)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(trigger);
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentException.ThrowIfNullOrWhiteSpace(listenerUiName);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(expectedUdpSrcPortRows);
+
+        ValueCacheFillListener listener = new(listenerUiName, expectedUdpSrcPortRows);
+        try
+        {
             if (!session.TryAddValueCache(listener, request, out _))
             {
                 throw new InvalidOperationException(
@@ -153,6 +210,7 @@ internal static class SessionValueCacheHarness
         finally
         {
             session.Shutdown();
+            session.Dispose();
             listener.Filled.Dispose();
         }
     }
@@ -179,27 +237,16 @@ internal static class SessionValueCacheHarness
         }
     }
 
-    private static int _UdpSrcPortRowCount(ValueCacheReaderView? view)
+    private static int _UdpSrcPortRowCount(ReadOnlyValueCache? view)
     {
-        if (view is not ValueCacheReaderView cache)
+        if (view is not ReadOnlyValueCache cache)
         {
             return 0;
         }
 
-        FieldId? portId = cache.Stack.GetFieldId("udp.srcport");
-        if (portId is null)
+        if (cache.TryGetSeries<ulong>("udp.srcport", out ReadOnlyValueCacheSeries<ulong> series))
         {
-            return 0;
-        }
-
-        IReadOnlyList<ValueCacheSeries> seriesList = cache.Series;
-        for (int i = 0; i < seriesList.Count; i++)
-        {
-            ValueCacheSeries series = seriesList[i];
-            if (series.FieldId == portId.Value)
-            {
-                return series.Count;
-            }
+            return series.Count;
         }
 
         return 0;
@@ -207,9 +254,9 @@ internal static class SessionValueCacheHarness
 
     private static string _IngestFillTimeoutMessage(Session session, int expected)
     {
-        ValueCacheReaderView? view = session.IngestValueCache;
+        ReadOnlyValueCache? view = session.IngestValueCache;
         int rows = _UdpSrcPortRowCount(view);
-        int seriesCount = view is ValueCacheReaderView cache ? cache.Series.Count : 0;
+        int seriesCount = view is ReadOnlyValueCache cache ? cache.Series.Count : 0;
         return FormattableString.Invariant(
             $"Ingest value cache did not reach {expected} udp.srcport rows. PacketCount={session.PacketCount}, seriesCount={seriesCount}, udp.srcport rows={rows}, phase={session.Phase}.");
     }

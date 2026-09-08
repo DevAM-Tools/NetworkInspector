@@ -241,11 +241,12 @@ public sealed partial class DhcpProtocol : IProtocol
             _ => "Unknown"
         };
         string msgTypeText = _GetDhcpMessageTypeText(msgType);
-        LazyString summary = ZA.Lazy("DHCP ", msgTypeText, " - Transaction ID 0x", xid.ToString("X8", CultureInfo.InvariantCulture));
         parentField.SetPacketInfo(ZA.Lazy("DHCP ", msgTypeText, " - Transaction ID 0x", xid.ToString("X8", CultureInfo.InvariantCulture)));
 
         FieldValue containerValue = FieldValue.NewBytes(data);
-        MutField container = parentField.AppendWithCustomText(_ProtocolFieldId, containerValue, summary);
+        MutField container = parentField.AppendWithCustomText(
+            _ProtocolFieldId, containerValue,
+            "DHCP ", msgTypeText, " - Transaction ID 0x", xid.ToString("X8", CultureInfo.InvariantCulture));
 
         container.AppendWithCustomText(_OpFieldId, FieldValue.NewU64(op), opText);
         container.Append(_HwTypeFieldId, FieldValue.NewU64(htype));
@@ -257,7 +258,7 @@ public sealed partial class DhcpProtocol : IProtocol
         // Display shows hex value followed by the active flag name in brackets.
         bool broadcastFlag = (flags & 0x8000) != 0;
         container.AppendWithCustomText(_FlagsFieldId, FieldValue.NewU64(flags),
-            ZA.Lazy(Helpers.DisplayTables.FormatHexU16(flags), Dhcp.DhcpFlagsFormatter.Format(flags)));
+            Helpers.DisplayTables.FormatHexU16(flags), Dhcp.DhcpFlagsFormatter.Format(flags));
         container.Append(_FlagsBroadcastFieldId, FieldValue.NewBool(broadcastFlag));
         container.Append(_CiAddrFieldId, FieldValue.NewIPv4(ciaddr));
         container.Append(_YiAddrFieldId, FieldValue.NewIPv4(yiaddr));
@@ -351,7 +352,7 @@ public sealed partial class DhcpProtocol : IProtocol
             MutField optContainer = container.AppendWithCustomText(
                 _OptionFieldId,
                 FieldValue.NewBytes(options.Slice(i, 2 + length)),
-                ZA.Lazy("Option: (", (ulong)type, ") ", typeText));
+                "Option: (", (ulong)type, ") ", typeText);
             optContainer.AppendWithCustomText(_OptionTypeFieldId, FieldValue.NewU64(type), typeText);
             optContainer.Append(_OptionLengthFieldId, FieldValue.NewU64(length));
 

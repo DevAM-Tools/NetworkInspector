@@ -37,12 +37,12 @@ internal sealed class ValueCacheFillListener : IValueCacheListener
     internal ManualResetEventSlim Filled { get; } = new(false);
 
     /// <inheritdoc/>
-    public void OnNewRows(ISessionReader session, ValueCacheReaderView cache, int fromIndex, int toIndexExclusive)
+    public void OnNewRows(ISessionReader session, ReadOnlyValueCache cache, int fromIndex, int toIndexExclusive)
     {
         _ = session;
         _ = fromIndex;
         _ = toIndexExclusive;
-        if (!cache.TryGetSeries<ulong>("udp.srcport", out ValueCacheSeries<ulong>? series) || series is null)
+        if (!cache.TryGetSeries<ulong>("udp.srcport", out ReadOnlyValueCacheSeries<ulong> series))
         {
             return;
         }

@@ -254,11 +254,10 @@ public sealed partial class FrameProtocol : IProtocol
         }
 
         // Summary captures only 3 small values (int, int, string-ref) from the eagerly-extracted locals.
-        LazyString summary = ZA.Lazy("Frame ", frameId.Value, ": ", frameLength, " bytes (", linkTypeName, ")");
 
         // Store the full frame data in the field value so _PopulateFrameFields can access it
         // without any captured state (reads from container.Value.Data.AsBytes()).
-        parentField.AppendLazyWithCustomText(_ProtocolFieldId, data, summary, _Populator);
+        parentField.AppendLazyWithCustomText(_ProtocolFieldId, data, "Frame ", frameId.Value, ": ", frameLength, " bytes (", linkTypeName, ")", _Populator);
 
         // Dispatch to link-layer protocol on parentField (sibling dispatch — all protocols are direct children of root)
         ParseResult dispatchResult = _DispatchLinkType(in parentField, linkTypeValue, data, in context);

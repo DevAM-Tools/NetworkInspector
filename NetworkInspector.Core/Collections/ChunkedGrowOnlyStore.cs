@@ -94,7 +94,7 @@ internal sealed class ChunkedSlotStore<T>
 
     internal bool TryGet(int index, out T value)
     {
-        if (!Ids.ArrayIndexIdRange.IsValidIndex(index))
+        if (!Ids.ArrayIndexIdRange.IsValidIndex(index) || (uint)index >= (uint)_Count)
         {
             value = _UnsetValue;
             return false;
@@ -135,6 +135,99 @@ internal sealed class ChunkedSlotStore<T>
         finally
         {
             _ = Interlocked.Exchange(ref _AppendGate, 0);
+        }
+    }
+
+    internal void AppendRange(ReadOnlySpan<T> values)
+    {
+        if (values.Length == 0)
+        {
+            return;
+        }
+
+        if (Interlocked.CompareExchange(ref _AppendGate, 1, 0) != 0)
+        {
+            throw new InvalidOperationException("Concurrent Append is not supported.");
+        }
+
+        try
+        {
+            while (true)
+            {
+                int index = _Count;
+                int last;
+                try
+                {
+                    last = checked(index + values.Length - 1);
+                }
+                catch (OverflowException)
+                {
+                    Ids.ArrayIndexIdRange.ThrowIfInvalidNextIndex(Ids.ArrayIndexIdRange.InvalidValue, "entry");
+                    return;
+                }
+
+                Ids.ArrayIndexIdRange.ThrowIfInvalidNextIndex(last, "entry");
+                SetRange(index, values);
+                int published = checked(index + values.Length);
+                if (Interlocked.CompareExchange(ref _Count, published, index) == index)
+                {
+                    return;
+                }
+            }
+        }
+        finally
+        {
+            _ = Interlocked.Exchange(ref _AppendGate, 0);
+        }
+    }
+
+    internal void SetRange(int startIndex, ReadOnlySpan<T> values)
+    {
+        if (values.Length == 0)
+        {
+            return;
+        }
+
+        Ids.ArrayIndexIdRange.ValidateIndexOrThrow(startIndex, nameof(startIndex));
+        int last;
+        try
+        {
+            last = checked(startIndex + values.Length - 1);
+        }
+        catch (OverflowException)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(values),
+                values.Length,
+                "startIndex + values.Length - 1 overflows the valid index range.");
+        }
+
+        Ids.ArrayIndexIdRange.ValidateIndexOrThrow(last, nameof(values));
+
+        int offset = 0;
+        while (offset < values.Length)
+        {
+            int index = startIndex + offset;
+            (int chunkIdx, int slotIdx) = _Outer.DecomposeIndex(index);
+            T[] chunk = _Outer.GetOrAllocateChunk(chunkIdx, _ChunkFactory);
+            int run = Math.Min(_Outer.ChunkSize - slotIdx, values.Length - offset);
+            ReadOnlySpan<T> slice = values.Slice(offset, run);
+            if (_CanBulkCopy())
+            {
+                slice.CopyTo(chunk.AsSpan(slotIdx, run));
+            }
+            else
+            {
+                for (int i = 0; i < run; i++)
+                {
+                    _WriteSlot(ref chunk[slotIdx + i], slice[i]);
+                }
+            }
+
+            if (ReferenceEquals(_Outer.GetChunk(chunkIdx), chunk))
+            {
+                offset += run;
+            }
         }
     }
 
@@ -257,6 +350,11 @@ internal sealed class ChunkedSlotStore<T>
 
     internal bool TryGetPublishedChunk(int chunkIndex, int publishedCount, out ReadOnlySpan<T> span)
     {
+        if (publishedCount > _Count)
+        {
+            publishedCount = _Count;
+        }
+
         if (publishedCount <= 0 || chunkIndex < 0)
         {
             span = default;
@@ -316,6 +414,18 @@ internal sealed class ChunkedSlotStore<T>
                 return;
             }
         }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool _CanBulkCopy()
+    {
+        if (!typeof(T).IsValueType || RuntimeHelpers.IsReferenceOrContainsReferences<T>())
+        {
+            return false;
+        }
+
+        int size = Unsafe.SizeOf<T>();
+        return size is 1 or 2 or 4 or 8;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -442,12 +552,12 @@ internal sealed class ChunkedSlotStore<T>
 }
 
 /// <summary>
-/// Grow-only chunked store for dense non-negative integer keys up to <see cref="Ids.ArrayIndexIdRange.MaxValue"/>.
-/// Lazy inner-chunk allocation; outer chunk pointer array grows on demand via
-/// <see cref="ChunkedOuterArray{TChunk}"/>.
+/// Grow-only chunked store: a packed prefix <c>0 .. Count-1</c> published by
+/// <see cref="Append"/> / <see cref="AppendRange"/>. Lazy inner-chunk allocation; outer chunk
+/// pointer array grows on demand via <see cref="ChunkedOuterArray{TChunk}"/>.
 /// </summary>
 /// <typeparam name="T">
-/// Value stored per slot. Unset dense slots hold the constructor sentinel
+/// Value stored per slot. Unset / unpublished slots hold the constructor sentinel
 /// (default is <see langword="default"/> of <typeparamref name="T"/>).
 /// </typeparam>
 /// <remarks>
@@ -457,17 +567,21 @@ internal sealed class ChunkedSlotStore<T>
 /// live chunk, so a concurrent outer-array grow cannot drop a completed write.
 /// </para>
 /// <para>
-/// <b>Dense <see cref="Set"/> / <see cref="Get"/>:</b> Concurrent disjoint writers (one index per
-/// thread) and concurrent readers are supported for reference-type <typeparamref name="T"/> and
-/// for blittable primitives of size 1, 2, 4, or 8 bytes (published with <see cref="Volatile"/>).
-/// Larger structs, and structs that contain references, are assigned plainly; concurrent dense
-/// readers of those slots are not supported.
+/// <b>Single-writer <see cref="Append"/> / <see cref="AppendRange"/>:</b> Concurrent
+/// <see cref="Append"/> / <see cref="AppendRange"/> throws <see cref="InvalidOperationException"/>.
+/// Lock-free <see cref="Get"/> / <see cref="TryGet"/> of published slots <c>0 .. Count-1</c> is
+/// supported for reference-type <typeparamref name="T"/> and for blittable primitives of size 1, 2,
+/// 4, or 8 bytes (published with <see cref="Volatile"/>). Larger structs, and structs that contain
+/// references, are assigned plainly; concurrent readers of those slots are not supported.
+/// <see cref="Get"/> / <see cref="TryGet"/> of <c>index &gt;= Count</c> or an unallocated chunk
+/// returns the unset sentinel / <see langword="false"/>.
 /// </para>
 /// <para>
-/// <b><see cref="Clear"/>:</b> publishes an empty outer array. Concurrent <see cref="Set"/> retries
-/// onto the live array. A concurrent <see cref="Get"/> / <see cref="TryGet"/> that already sampled
-/// the previous outer array may still return that snapshot; a load that samples the outer array
-/// after <see cref="Clear"/> observes unset / false.
+/// <b><see cref="Clear"/>:</b> publishes an empty outer array and resets <see cref="Count"/> to 0.
+/// A concurrent <see cref="Append"/> retries onto the live prefix. A concurrent
+/// <see cref="Get"/> / <see cref="TryGet"/> that already sampled the previous outer array may still
+/// return that snapshot; a load that samples the outer array after <see cref="Clear"/> observes
+/// unset / false.
 /// </para>
 /// </remarks>
 public sealed class ChunkedGrowOnlyStore<T>
@@ -508,17 +622,31 @@ public sealed class ChunkedGrowOnlyStore<T>
 
     #region Public API
 
-    /// <summary>Stores a value at <paramref name="index"/>.</summary>
-    /// <exception cref="ArgumentOutOfRangeException"><paramref name="index"/> is out of range.</exception>
+    /// <summary>Number of entries published by <see cref="Append"/> / <see cref="AppendRange"/>.</summary>
+    public int Count => _Store.Count;
+
+    /// <summary>Appends one entry at <see cref="Count"/>. Single-writer only.</summary>
+    /// <exception cref="InvalidOperationException">
+    /// Concurrent <see cref="Append"/> / <see cref="AppendRange"/>, or the store reached
+    /// <see cref="Ids.ArrayIndexIdRange.MaxValue"/>.
+    /// </exception>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public void Set(int index, T value) =>
-        _Store.Set(index, value);
+    public void Append(in T item) =>
+        _Store.Append(in item);
+
+    /// <summary>Appends <paramref name="values"/> as one publish. Empty span is a no-op.</summary>
+    /// <exception cref="InvalidOperationException">
+    /// Concurrent <see cref="Append"/> / <see cref="AppendRange"/>, or the store would exceed
+    /// <see cref="Ids.ArrayIndexIdRange.MaxValue"/>.
+    /// </exception>
+    public void AppendRange(ReadOnlySpan<T> values) =>
+        _Store.AppendRange(values);
 
     /// <summary>
     /// Reads a value at <paramref name="index"/>.
-    /// For reference-type <typeparamref name="T"/>, missing/invalid/unallocated slots return
-    /// <see langword="null"/>. For value-type <typeparamref name="T"/>, they return the constructor
-    /// unset sentinel.
+    /// For reference-type <typeparamref name="T"/>, missing/invalid/unallocated slots and
+    /// <c>index &gt;= Count</c> return <see langword="null"/>. For value-type <typeparamref name="T"/>,
+    /// they return the constructor unset sentinel.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     [return: MaybeNull]
@@ -527,7 +655,8 @@ public sealed class ChunkedGrowOnlyStore<T>
 
     /// <summary>
     /// Reads a value at <paramref name="index"/>.
-    /// Returns <see langword="false"/> when the index is invalid or the inner chunk is unallocated.
+    /// Returns <see langword="false"/> when the index is invalid, <c>index &gt;= Count</c>,
+    /// or the inner chunk is unallocated.
     /// An allocated slot may still hold the unset sentinel.
     /// </summary>
     public bool TryGet(int index, out T value) =>
@@ -538,9 +667,9 @@ public sealed class ChunkedGrowOnlyStore<T>
         _Store.Clear();
 
     /// <summary>
-    /// Returns a published inner chunk as a span clipped to <paramref name="publishedCount"/>.
-    /// Readers pass their loaded committed count, not a packed store <c>Count</c>
-    /// (dense <see cref="Set"/> does not publish a packed prefix).
+    /// Returns a published inner chunk as a span clipped to the lesser of
+    /// <paramref name="publishedCount"/> and <see cref="Count"/>.
+    /// Readers pass their loaded committed count so staged-but-uncommitted slots stay hidden.
     /// </summary>
     /// <param name="chunkIndex">Zero-based inner-chunk index.</param>
     /// <param name="publishedCount">Exclusive upper bound of readable slots (typically a series committed count).</param>
@@ -554,14 +683,15 @@ public sealed class ChunkedGrowOnlyStore<T>
 
 /// <summary>
 /// Packed append-only log of <typeparamref name="T"/> entries with lock-free readers.
-/// Dense <see cref="ChunkedGrowOnlyStore{T}.Set"/> is not available on this type.
+/// Random-index slot writes are not available on this type; packed growth is
+/// <see cref="Append"/> / <see cref="AppendRange"/> only.
 /// </summary>
 /// <typeparam name="T">Packed entry type.</typeparam>
 /// <remarks>
 /// <para>
 /// One writer for <see cref="Count"/>; lock-free readers. The writer writes the live slot first, then
 /// publishes with <see cref="Interlocked.CompareExchange(ref int, int, int)"/> of <see cref="Count"/>.
-/// Concurrent <see cref="Append"/> throws <see cref="InvalidOperationException"/>.
+    /// Concurrent <see cref="Append"/> / <see cref="AppendRange"/> throws <see cref="InvalidOperationException"/>.
 /// Mutation through <see cref="ItemRef"/> is single-writer.
 /// </para>
 /// <para>
@@ -626,11 +756,24 @@ public sealed class ChunkedAppendOnlyStore<T>
     /// keys must be appended in strictly ascending order.
     /// </param>
     /// <exception cref="InvalidOperationException">
-    /// Concurrent <see cref="Append"/>, or the store reached
+    /// Concurrent <see cref="Append"/> / <see cref="AppendRange"/>, or the store reached
     /// <see cref="Ids.ArrayIndexIdRange.MaxValue"/>.
     /// </exception>
     public void Append(in T item) =>
         _Store.Append(in item);
+
+    /// <summary>
+    /// Appends every value in <paramref name="values"/> to the packed prefix as one publish.
+    /// Single-writer only. Concurrent <see cref="Append"/> or <see cref="AppendRange"/> throws.
+    /// The span length is independent of the inner chunk size. An empty span is a no-op.
+    /// A concurrent <see cref="Clear"/> causes the publish to fail and this method retries from the live prefix.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">
+    /// Concurrent <see cref="Append"/> / <see cref="AppendRange"/>, or the store would exceed
+    /// <see cref="Ids.ArrayIndexIdRange.MaxValue"/>.
+    /// </exception>
+    public void AppendRange(ReadOnlySpan<T> values) =>
+        _Store.AppendRange(values);
 
     /// <summary>
     /// Returns a reference to the packed entry at <paramref name="index"/>. Readers must treat the
@@ -774,71 +917,6 @@ public static class ChunkedGrowOnlyStoreExtensions
 
         return count;
     }
-
-    #endregion
-}
-
-/// <summary>
-/// Grow-only chunked store for packed <see cref="long"/> values (e.g. PacketId → frame mapping).
-/// Unset slots contain a configurable sentinel (default <c>-1</c>).
-/// </summary>
-/// <remarks>
-/// <b>Thread-safety:</b> Same dense concurrent model as <see cref="ChunkedGrowOnlyStore{T}"/>
-/// for <see cref="long"/> slots (<see cref="Volatile"/> writes and reads).
-/// A concurrent <see cref="TryGet"/> that already sampled the previous outer array may still
-/// return that snapshot; a load after <see cref="Clear"/> observes unset. Concurrent
-/// <see cref="Set"/> retries onto the live outer array.
-/// </remarks>
-public sealed class ChunkedGrowOnlyLongStore
-{
-    #region Fields
-
-    private readonly ChunkedGrowOnlyStore<long> _Store;
-    private readonly long _UnsetValue;
-
-    #endregion
-
-    #region Constructors
-
-    /// <summary>
-    /// Creates a store with the given chunk size (<c>1 &lt;&lt; chunkShift</c> slots per inner array).
-    /// </summary>
-    /// <param name="chunkShift">Log₂ of slots per chunk; must be in [4, 20].</param>
-    /// <param name="unsetValue">Sentinel written to unallocated slots (default <c>-1</c>).</param>
-    /// <exception cref="ArgumentOutOfRangeException"><paramref name="chunkShift"/> is out of range.</exception>
-    public ChunkedGrowOnlyLongStore(int chunkShift, long unsetValue = -1L)
-    {
-        _UnsetValue = unsetValue;
-        _Store = new(chunkShift, unsetValue);
-    }
-
-    #endregion
-
-    #region Public API
-
-    /// <summary>Stores a value at <paramref name="index"/>.</summary>
-    /// <exception cref="ArgumentOutOfRangeException"><paramref name="index"/> is out of range.</exception>
-    public void Set(int index, long value) =>
-        _Store.Set(index, value);
-
-    /// <summary>
-    /// Reads a value at <paramref name="index"/>.
-    /// Returns <see langword="false"/> when the slot is unset or the index is out of range.
-    /// </summary>
-    public bool TryGet(int index, out long value)
-    {
-        if (!_Store.TryGet(index, out value) || value == _UnsetValue)
-        {
-            value = _UnsetValue;
-            return false;
-        }
-
-        return true;
-    }
-
-    /// <summary>Drops all chunk references.</summary>
-    public void Clear() =>
-        _Store.Clear();
 
     #endregion
 }

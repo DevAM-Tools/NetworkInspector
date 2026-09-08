@@ -236,7 +236,7 @@ public sealed partial class IcmpProtocol : IProtocol
         string protoText = DisplayTables.GetIpProtocolDisplayText(protocol);
         MutField ipContainer = container.AppendWithCustomText(
             _RespInIpFieldId, FieldValue.None,
-            ZA.Lazy("Internet Protocol, Src: ", srcAddr, ", Dst: ", dstAddr));
+            "Internet Protocol, Src: ", srcAddr, ", Dst: ", dstAddr);
 
         ipContainer.Append(_RespInIpSrcFieldId, FieldValue.NewIPv4(srcAddr));
         ipContainer.Append(_RespInIpDstFieldId, FieldValue.NewIPv4(dstAddr));
@@ -298,9 +298,6 @@ public sealed partial class IcmpProtocol : IProtocol
         }
 
         // Summary text
-        LazyString summary = ZA.Lazy(
-            "Internet Control Message Protocol, ",
-            DisplayTables.GetIcmpTypeDisplayText(type));
 
         // Packet info
         parentField.SetPacketInfo(new LazyString(
@@ -309,7 +306,8 @@ public sealed partial class IcmpProtocol : IProtocol
         // Store entire ICMP message for lazy populator
         FieldValue containerValue = FieldValue.NewBytes(data)
             .WithCustomRepresentation(new LazyString("8 bytes"));
-        parentField.AppendLazyWithCustomText(_ProtocolFieldId, containerValue, summary, _Populator);
+        parentField.AppendLazyWithCustomText(_ProtocolFieldId, containerValue, "Internet Control Message Protocol, ",
+            DisplayTables.GetIcmpTypeDisplayText(type), _Populator);
 
         return data.Length;
     }

@@ -45,6 +45,13 @@ public readonly ref struct MutField
         get => Packet is not null && StorageIndex != FieldBody.NullIndex;
     }
 
+    /// <summary>False when the owning packet was parsed with <see cref="FieldTreeMode.Skip"/>.</summary>
+    public readonly bool HasFieldTree
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        get => Packet.HasFieldTree;
+    }
+
     /// <summary>Gets the field's metadata from the stack registry.</summary>
     public readonly FieldInfo? FieldInfo => Packet.Stack.GetField(FieldId);
 
@@ -52,7 +59,15 @@ public readonly ref struct MutField
     public readonly FieldValue Value
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => Packet.GetFieldRef(StorageIndex).Value;
+        get
+        {
+            if (!HasFieldTree && StorageIndex != 0 && StorageIndex != FieldBody.SkipStorageIndex)
+            {
+                ThrowHelpers.ThrowSkipFieldTreeValue();
+            }
+
+            return Packet.GetFieldRef(StorageIndex).Value;
+        }
     }
 
     /// <summary>
@@ -62,7 +77,15 @@ public readonly ref struct MutField
     public readonly LazyString CustomText
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => Packet.GetFieldRef(StorageIndex).CustomText;
+        get
+        {
+            if (!HasFieldTree && StorageIndex != 0 && StorageIndex != FieldBody.SkipStorageIndex)
+            {
+                ThrowHelpers.ThrowSkipFieldTreeValue();
+            }
+
+            return Packet.GetFieldRef(StorageIndex).CustomText;
+        }
     }
 
     /// <summary>Whether this is the root field (index 0).</summary>
@@ -81,6 +104,11 @@ public readonly ref struct MutField
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public readonly bool HasChildren(bool materialize)
     {
+        if (!HasFieldTree)
+        {
+            return false;
+        }
+
         if (materialize)
         {
             ref readonly FieldBody body = ref Packet.GetFieldRef(StorageIndex);
@@ -101,6 +129,11 @@ public readonly ref struct MutField
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public readonly ushort ChildCount(bool materialize)
     {
+        if (!HasFieldTree)
+        {
+            return 0;
+        }
+
         if (materialize)
         {
             ref readonly FieldBody body = ref Packet.GetFieldRef(StorageIndex);
@@ -191,6 +224,512 @@ public readonly ref struct MutField
     public readonly MutField InsertAfterWithCustomText(FieldId fieldId, FieldValue value, LazyString customText)
         => new(Packet, Packet.InsertAfterWithCustomText(StorageIndex, fieldId, value, customText), fieldId);
 
+    #region Generic custom text
+
+    /// <summary>
+    /// Whether custom display text or custom representation should be built for
+    /// <paramref name="fieldId"/>. True when a field tree will store it or an attached
+    /// value cache records display text for the field.
+    /// </summary>
+    public readonly bool WantsCustomText(FieldId fieldId) => Packet.WantsCustomText(fieldId);
+
+    /// <summary>Builds custom display text only when <see cref="Packet.WantsCustomText"/> is true.</summary>
+    public readonly MutField AppendWithCustomText<T0>(
+        FieldId fieldId, FieldValue value, T0 arg0)
+    {
+        if (!Packet.WantsCustomText(fieldId))
+        {
+            return Append(fieldId, value);
+        }
+
+        LazyString text = LazyString.FormatLazy(
+            arg0,
+            static s => string.Create(CultureInfo.InvariantCulture, $"{s}"));
+        return AppendWithCustomText(fieldId, value, text);
+    }
+
+    /// <summary>Builds custom display text only when <see cref="Packet.WantsCustomText"/> is true.</summary>
+    public readonly MutField AppendWithCustomText<T0, T1>(
+        FieldId fieldId, FieldValue value, T0 arg0, T1 arg1)
+    {
+        if (!Packet.WantsCustomText(fieldId))
+        {
+            return Append(fieldId, value);
+        }
+
+        LazyString text = LazyString.FormatLazy(
+            (arg0, arg1),
+            static s => string.Create(CultureInfo.InvariantCulture, $"{s.Item1}{s.Item2}"));
+        return AppendWithCustomText(fieldId, value, text);
+    }
+
+    /// <summary>Builds custom display text only when <see cref="Packet.WantsCustomText"/> is true.</summary>
+    public readonly MutField AppendWithCustomText<T0, T1, T2>(
+        FieldId fieldId, FieldValue value, T0 arg0, T1 arg1, T2 arg2)
+    {
+        if (!Packet.WantsCustomText(fieldId))
+        {
+            return Append(fieldId, value);
+        }
+
+        LazyString text = LazyString.FormatLazy(
+            (arg0, arg1, arg2),
+            static s => string.Create(CultureInfo.InvariantCulture, $"{s.Item1}{s.Item2}{s.Item3}"));
+        return AppendWithCustomText(fieldId, value, text);
+    }
+
+    /// <summary>Builds custom display text only when <see cref="Packet.WantsCustomText"/> is true.</summary>
+    public readonly MutField AppendWithCustomText<T0, T1, T2, T3>(
+        FieldId fieldId, FieldValue value, T0 arg0, T1 arg1, T2 arg2, T3 arg3)
+    {
+        if (!Packet.WantsCustomText(fieldId))
+        {
+            return Append(fieldId, value);
+        }
+
+        LazyString text = LazyString.FormatLazy(
+            (arg0, arg1, arg2, arg3),
+            static s => string.Create(CultureInfo.InvariantCulture, $"{s.Item1}{s.Item2}{s.Item3}{s.Item4}"));
+        return AppendWithCustomText(fieldId, value, text);
+    }
+
+    /// <summary>Builds custom display text only when <see cref="Packet.WantsCustomText"/> is true.</summary>
+    public readonly MutField AppendWithCustomText<T0, T1, T2, T3, T4>(
+        FieldId fieldId, FieldValue value, T0 arg0, T1 arg1, T2 arg2, T3 arg3, T4 arg4)
+    {
+        if (!Packet.WantsCustomText(fieldId))
+        {
+            return Append(fieldId, value);
+        }
+
+        LazyString text = LazyString.FormatLazy(
+            (arg0, arg1, arg2, arg3, arg4),
+            static s => string.Create(CultureInfo.InvariantCulture, $"{s.Item1}{s.Item2}{s.Item3}{s.Item4}{s.Item5}"));
+        return AppendWithCustomText(fieldId, value, text);
+    }
+
+    /// <summary>Builds custom display text only when <see cref="Packet.WantsCustomText"/> is true.</summary>
+    public readonly MutField AppendWithCustomText<T0, T1, T2, T3, T4, T5>(
+        FieldId fieldId, FieldValue value, T0 arg0, T1 arg1, T2 arg2, T3 arg3, T4 arg4, T5 arg5)
+    {
+        if (!Packet.WantsCustomText(fieldId))
+        {
+            return Append(fieldId, value);
+        }
+
+        LazyString text = LazyString.FormatLazy(
+            (arg0, arg1, arg2, arg3, arg4, arg5),
+            static s => string.Create(CultureInfo.InvariantCulture, $"{s.Item1}{s.Item2}{s.Item3}{s.Item4}{s.Item5}{s.Item6}"));
+        return AppendWithCustomText(fieldId, value, text);
+    }
+
+    /// <summary>Builds custom display text only when <see cref="Packet.WantsCustomText"/> is true.</summary>
+    public readonly MutField AppendWithCustomText<T0, T1, T2, T3, T4, T5, T6>(
+        FieldId fieldId, FieldValue value, T0 arg0, T1 arg1, T2 arg2, T3 arg3, T4 arg4, T5 arg5, T6 arg6)
+    {
+        if (!Packet.WantsCustomText(fieldId))
+        {
+            return Append(fieldId, value);
+        }
+
+        LazyString text = LazyString.FormatLazy(
+            (arg0, arg1, arg2, arg3, arg4, arg5, arg6),
+            static s => string.Create(CultureInfo.InvariantCulture, $"{s.Item1}{s.Item2}{s.Item3}{s.Item4}{s.Item5}{s.Item6}{s.Item7}"));
+        return AppendWithCustomText(fieldId, value, text);
+    }
+
+    /// <summary>Builds custom display text only when <see cref="Packet.WantsCustomText"/> is true.</summary>
+    public readonly MutField AppendWithCustomText<T0, T1, T2, T3, T4, T5, T6, T7>(
+        FieldId fieldId, FieldValue value, T0 arg0, T1 arg1, T2 arg2, T3 arg3, T4 arg4, T5 arg5, T6 arg6, T7 arg7)
+    {
+        if (!Packet.WantsCustomText(fieldId))
+        {
+            return Append(fieldId, value);
+        }
+
+        LazyString text = LazyString.FormatLazy(
+            (arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7),
+            static s => string.Create(CultureInfo.InvariantCulture, $"{s.Item1}{s.Item2}{s.Item3}{s.Item4}{s.Item5}{s.Item6}{s.Item7}{s.Item8}"));
+        return AppendWithCustomText(fieldId, value, text);
+    }
+
+    /// <summary>Builds custom display text only when <see cref="Packet.WantsCustomText"/> is true.</summary>
+    public readonly MutField PrependWithCustomText<T0>(
+        FieldId fieldId, FieldValue value, T0 arg0)
+    {
+        if (!Packet.WantsCustomText(fieldId))
+        {
+            return Prepend(fieldId, value);
+        }
+
+        LazyString text = LazyString.FormatLazy(
+            arg0,
+            static s => string.Create(CultureInfo.InvariantCulture, $"{s}"));
+        return PrependWithCustomText(fieldId, value, text);
+    }
+
+    /// <summary>Builds custom display text only when <see cref="Packet.WantsCustomText"/> is true.</summary>
+    public readonly MutField PrependWithCustomText<T0, T1>(
+        FieldId fieldId, FieldValue value, T0 arg0, T1 arg1)
+    {
+        if (!Packet.WantsCustomText(fieldId))
+        {
+            return Prepend(fieldId, value);
+        }
+
+        LazyString text = LazyString.FormatLazy(
+            (arg0, arg1),
+            static s => string.Create(CultureInfo.InvariantCulture, $"{s.Item1}{s.Item2}"));
+        return PrependWithCustomText(fieldId, value, text);
+    }
+
+    /// <summary>Builds custom display text only when <see cref="Packet.WantsCustomText"/> is true.</summary>
+    public readonly MutField PrependWithCustomText<T0, T1, T2>(
+        FieldId fieldId, FieldValue value, T0 arg0, T1 arg1, T2 arg2)
+    {
+        if (!Packet.WantsCustomText(fieldId))
+        {
+            return Prepend(fieldId, value);
+        }
+
+        LazyString text = LazyString.FormatLazy(
+            (arg0, arg1, arg2),
+            static s => string.Create(CultureInfo.InvariantCulture, $"{s.Item1}{s.Item2}{s.Item3}"));
+        return PrependWithCustomText(fieldId, value, text);
+    }
+
+    /// <summary>Builds custom display text only when <see cref="Packet.WantsCustomText"/> is true.</summary>
+    public readonly MutField PrependWithCustomText<T0, T1, T2, T3>(
+        FieldId fieldId, FieldValue value, T0 arg0, T1 arg1, T2 arg2, T3 arg3)
+    {
+        if (!Packet.WantsCustomText(fieldId))
+        {
+            return Prepend(fieldId, value);
+        }
+
+        LazyString text = LazyString.FormatLazy(
+            (arg0, arg1, arg2, arg3),
+            static s => string.Create(CultureInfo.InvariantCulture, $"{s.Item1}{s.Item2}{s.Item3}{s.Item4}"));
+        return PrependWithCustomText(fieldId, value, text);
+    }
+
+    /// <summary>Builds custom display text only when <see cref="Packet.WantsCustomText"/> is true.</summary>
+    public readonly MutField PrependWithCustomText<T0, T1, T2, T3, T4>(
+        FieldId fieldId, FieldValue value, T0 arg0, T1 arg1, T2 arg2, T3 arg3, T4 arg4)
+    {
+        if (!Packet.WantsCustomText(fieldId))
+        {
+            return Prepend(fieldId, value);
+        }
+
+        LazyString text = LazyString.FormatLazy(
+            (arg0, arg1, arg2, arg3, arg4),
+            static s => string.Create(CultureInfo.InvariantCulture, $"{s.Item1}{s.Item2}{s.Item3}{s.Item4}{s.Item5}"));
+        return PrependWithCustomText(fieldId, value, text);
+    }
+
+    /// <summary>Builds custom display text only when <see cref="Packet.WantsCustomText"/> is true.</summary>
+    public readonly MutField PrependWithCustomText<T0, T1, T2, T3, T4, T5>(
+        FieldId fieldId, FieldValue value, T0 arg0, T1 arg1, T2 arg2, T3 arg3, T4 arg4, T5 arg5)
+    {
+        if (!Packet.WantsCustomText(fieldId))
+        {
+            return Prepend(fieldId, value);
+        }
+
+        LazyString text = LazyString.FormatLazy(
+            (arg0, arg1, arg2, arg3, arg4, arg5),
+            static s => string.Create(CultureInfo.InvariantCulture, $"{s.Item1}{s.Item2}{s.Item3}{s.Item4}{s.Item5}{s.Item6}"));
+        return PrependWithCustomText(fieldId, value, text);
+    }
+
+    /// <summary>Builds custom display text only when <see cref="Packet.WantsCustomText"/> is true.</summary>
+    public readonly MutField PrependWithCustomText<T0, T1, T2, T3, T4, T5, T6>(
+        FieldId fieldId, FieldValue value, T0 arg0, T1 arg1, T2 arg2, T3 arg3, T4 arg4, T5 arg5, T6 arg6)
+    {
+        if (!Packet.WantsCustomText(fieldId))
+        {
+            return Prepend(fieldId, value);
+        }
+
+        LazyString text = LazyString.FormatLazy(
+            (arg0, arg1, arg2, arg3, arg4, arg5, arg6),
+            static s => string.Create(CultureInfo.InvariantCulture, $"{s.Item1}{s.Item2}{s.Item3}{s.Item4}{s.Item5}{s.Item6}{s.Item7}"));
+        return PrependWithCustomText(fieldId, value, text);
+    }
+
+    /// <summary>Builds custom display text only when <see cref="Packet.WantsCustomText"/> is true.</summary>
+    public readonly MutField PrependWithCustomText<T0, T1, T2, T3, T4, T5, T6, T7>(
+        FieldId fieldId, FieldValue value, T0 arg0, T1 arg1, T2 arg2, T3 arg3, T4 arg4, T5 arg5, T6 arg6, T7 arg7)
+    {
+        if (!Packet.WantsCustomText(fieldId))
+        {
+            return Prepend(fieldId, value);
+        }
+
+        LazyString text = LazyString.FormatLazy(
+            (arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7),
+            static s => string.Create(CultureInfo.InvariantCulture, $"{s.Item1}{s.Item2}{s.Item3}{s.Item4}{s.Item5}{s.Item6}{s.Item7}{s.Item8}"));
+        return PrependWithCustomText(fieldId, value, text);
+    }
+
+    /// <summary>Builds custom display text only when <see cref="Packet.WantsCustomText"/> is true.</summary>
+    public readonly MutField InsertAfterWithCustomText<T0>(
+        FieldId fieldId, FieldValue value, T0 arg0)
+    {
+        if (!Packet.WantsCustomText(fieldId))
+        {
+            return InsertAfter(fieldId, value);
+        }
+
+        LazyString text = LazyString.FormatLazy(
+            arg0,
+            static s => string.Create(CultureInfo.InvariantCulture, $"{s}"));
+        return InsertAfterWithCustomText(fieldId, value, text);
+    }
+
+    /// <summary>Builds custom display text only when <see cref="Packet.WantsCustomText"/> is true.</summary>
+    public readonly MutField InsertAfterWithCustomText<T0, T1>(
+        FieldId fieldId, FieldValue value, T0 arg0, T1 arg1)
+    {
+        if (!Packet.WantsCustomText(fieldId))
+        {
+            return InsertAfter(fieldId, value);
+        }
+
+        LazyString text = LazyString.FormatLazy(
+            (arg0, arg1),
+            static s => string.Create(CultureInfo.InvariantCulture, $"{s.Item1}{s.Item2}"));
+        return InsertAfterWithCustomText(fieldId, value, text);
+    }
+
+    /// <summary>Builds custom display text only when <see cref="Packet.WantsCustomText"/> is true.</summary>
+    public readonly MutField InsertAfterWithCustomText<T0, T1, T2>(
+        FieldId fieldId, FieldValue value, T0 arg0, T1 arg1, T2 arg2)
+    {
+        if (!Packet.WantsCustomText(fieldId))
+        {
+            return InsertAfter(fieldId, value);
+        }
+
+        LazyString text = LazyString.FormatLazy(
+            (arg0, arg1, arg2),
+            static s => string.Create(CultureInfo.InvariantCulture, $"{s.Item1}{s.Item2}{s.Item3}"));
+        return InsertAfterWithCustomText(fieldId, value, text);
+    }
+
+    /// <summary>Builds custom display text only when <see cref="Packet.WantsCustomText"/> is true.</summary>
+    public readonly MutField InsertAfterWithCustomText<T0, T1, T2, T3>(
+        FieldId fieldId, FieldValue value, T0 arg0, T1 arg1, T2 arg2, T3 arg3)
+    {
+        if (!Packet.WantsCustomText(fieldId))
+        {
+            return InsertAfter(fieldId, value);
+        }
+
+        LazyString text = LazyString.FormatLazy(
+            (arg0, arg1, arg2, arg3),
+            static s => string.Create(CultureInfo.InvariantCulture, $"{s.Item1}{s.Item2}{s.Item3}{s.Item4}"));
+        return InsertAfterWithCustomText(fieldId, value, text);
+    }
+
+    /// <summary>Builds custom display text only when <see cref="Packet.WantsCustomText"/> is true.</summary>
+    public readonly MutField InsertAfterWithCustomText<T0, T1, T2, T3, T4>(
+        FieldId fieldId, FieldValue value, T0 arg0, T1 arg1, T2 arg2, T3 arg3, T4 arg4)
+    {
+        if (!Packet.WantsCustomText(fieldId))
+        {
+            return InsertAfter(fieldId, value);
+        }
+
+        LazyString text = LazyString.FormatLazy(
+            (arg0, arg1, arg2, arg3, arg4),
+            static s => string.Create(CultureInfo.InvariantCulture, $"{s.Item1}{s.Item2}{s.Item3}{s.Item4}{s.Item5}"));
+        return InsertAfterWithCustomText(fieldId, value, text);
+    }
+
+    /// <summary>Builds custom display text only when <see cref="Packet.WantsCustomText"/> is true.</summary>
+    public readonly MutField InsertAfterWithCustomText<T0, T1, T2, T3, T4, T5>(
+        FieldId fieldId, FieldValue value, T0 arg0, T1 arg1, T2 arg2, T3 arg3, T4 arg4, T5 arg5)
+    {
+        if (!Packet.WantsCustomText(fieldId))
+        {
+            return InsertAfter(fieldId, value);
+        }
+
+        LazyString text = LazyString.FormatLazy(
+            (arg0, arg1, arg2, arg3, arg4, arg5),
+            static s => string.Create(CultureInfo.InvariantCulture, $"{s.Item1}{s.Item2}{s.Item3}{s.Item4}{s.Item5}{s.Item6}"));
+        return InsertAfterWithCustomText(fieldId, value, text);
+    }
+
+    /// <summary>Builds custom display text only when <see cref="Packet.WantsCustomText"/> is true.</summary>
+    public readonly MutField InsertAfterWithCustomText<T0, T1, T2, T3, T4, T5, T6>(
+        FieldId fieldId, FieldValue value, T0 arg0, T1 arg1, T2 arg2, T3 arg3, T4 arg4, T5 arg5, T6 arg6)
+    {
+        if (!Packet.WantsCustomText(fieldId))
+        {
+            return InsertAfter(fieldId, value);
+        }
+
+        LazyString text = LazyString.FormatLazy(
+            (arg0, arg1, arg2, arg3, arg4, arg5, arg6),
+            static s => string.Create(CultureInfo.InvariantCulture, $"{s.Item1}{s.Item2}{s.Item3}{s.Item4}{s.Item5}{s.Item6}{s.Item7}"));
+        return InsertAfterWithCustomText(fieldId, value, text);
+    }
+
+    /// <summary>Builds custom display text only when <see cref="Packet.WantsCustomText"/> is true.</summary>
+    public readonly MutField InsertAfterWithCustomText<T0, T1, T2, T3, T4, T5, T6, T7>(
+        FieldId fieldId, FieldValue value, T0 arg0, T1 arg1, T2 arg2, T3 arg3, T4 arg4, T5 arg5, T6 arg6, T7 arg7)
+    {
+        if (!Packet.WantsCustomText(fieldId))
+        {
+            return InsertAfter(fieldId, value);
+        }
+
+        LazyString text = LazyString.FormatLazy(
+            (arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7),
+            static s => string.Create(CultureInfo.InvariantCulture, $"{s.Item1}{s.Item2}{s.Item3}{s.Item4}{s.Item5}{s.Item6}{s.Item7}{s.Item8}"));
+        return InsertAfterWithCustomText(fieldId, value, text);
+    }
+
+    /// <summary>Builds custom display text only when <see cref="Packet.WantsCustomText"/> is true.</summary>
+    public readonly MutField AppendLazyWithCustomText<T0>(
+        FieldId fieldId, FieldValue value, T0 arg0, LazyPopulator populator)
+    {
+        if (!Packet.WantsCustomText(fieldId))
+        {
+            return AppendLazy(fieldId, value, populator);
+        }
+
+        LazyString text = LazyString.FormatLazy(
+            arg0,
+            static s => string.Create(CultureInfo.InvariantCulture, $"{s}"));
+        return AppendLazyWithCustomText(fieldId, value, text, populator);
+    }
+
+    /// <summary>Builds custom display text only when <see cref="Packet.WantsCustomText"/> is true.</summary>
+    public readonly MutField AppendLazyWithCustomText<T0, T1>(
+        FieldId fieldId, FieldValue value, T0 arg0, T1 arg1, LazyPopulator populator)
+    {
+        if (!Packet.WantsCustomText(fieldId))
+        {
+            return AppendLazy(fieldId, value, populator);
+        }
+
+        LazyString text = LazyString.FormatLazy(
+            (arg0, arg1),
+            static s => string.Create(CultureInfo.InvariantCulture, $"{s.Item1}{s.Item2}"));
+        return AppendLazyWithCustomText(fieldId, value, text, populator);
+    }
+
+    /// <summary>Builds custom display text only when <see cref="Packet.WantsCustomText"/> is true.</summary>
+    public readonly MutField AppendLazyWithCustomText<T0, T1, T2>(
+        FieldId fieldId, FieldValue value, T0 arg0, T1 arg1, T2 arg2, LazyPopulator populator)
+    {
+        if (!Packet.WantsCustomText(fieldId))
+        {
+            return AppendLazy(fieldId, value, populator);
+        }
+
+        LazyString text = LazyString.FormatLazy(
+            (arg0, arg1, arg2),
+            static s => string.Create(CultureInfo.InvariantCulture, $"{s.Item1}{s.Item2}{s.Item3}"));
+        return AppendLazyWithCustomText(fieldId, value, text, populator);
+    }
+
+    /// <summary>Builds custom display text only when <see cref="Packet.WantsCustomText"/> is true.</summary>
+    public readonly MutField AppendLazyWithCustomText<T0, T1, T2, T3>(
+        FieldId fieldId, FieldValue value, T0 arg0, T1 arg1, T2 arg2, T3 arg3, LazyPopulator populator)
+    {
+        if (!Packet.WantsCustomText(fieldId))
+        {
+            return AppendLazy(fieldId, value, populator);
+        }
+
+        LazyString text = LazyString.FormatLazy(
+            (arg0, arg1, arg2, arg3),
+            static s => string.Create(CultureInfo.InvariantCulture, $"{s.Item1}{s.Item2}{s.Item3}{s.Item4}"));
+        return AppendLazyWithCustomText(fieldId, value, text, populator);
+    }
+
+    /// <summary>Builds custom display text only when <see cref="Packet.WantsCustomText"/> is true.</summary>
+    public readonly MutField AppendLazyWithCustomText<T0, T1, T2, T3, T4>(
+        FieldId fieldId, FieldValue value, T0 arg0, T1 arg1, T2 arg2, T3 arg3, T4 arg4, LazyPopulator populator)
+    {
+        if (!Packet.WantsCustomText(fieldId))
+        {
+            return AppendLazy(fieldId, value, populator);
+        }
+
+        LazyString text = LazyString.FormatLazy(
+            (arg0, arg1, arg2, arg3, arg4),
+            static s => string.Create(CultureInfo.InvariantCulture, $"{s.Item1}{s.Item2}{s.Item3}{s.Item4}{s.Item5}"));
+        return AppendLazyWithCustomText(fieldId, value, text, populator);
+    }
+
+    /// <summary>Builds custom display text only when <see cref="Packet.WantsCustomText"/> is true.</summary>
+    public readonly MutField AppendLazyWithCustomText<T0, T1, T2, T3, T4, T5>(
+        FieldId fieldId, FieldValue value, T0 arg0, T1 arg1, T2 arg2, T3 arg3, T4 arg4, T5 arg5, LazyPopulator populator)
+    {
+        if (!Packet.WantsCustomText(fieldId))
+        {
+            return AppendLazy(fieldId, value, populator);
+        }
+
+        LazyString text = LazyString.FormatLazy(
+            (arg0, arg1, arg2, arg3, arg4, arg5),
+            static s => string.Create(CultureInfo.InvariantCulture, $"{s.Item1}{s.Item2}{s.Item3}{s.Item4}{s.Item5}{s.Item6}"));
+        return AppendLazyWithCustomText(fieldId, value, text, populator);
+    }
+
+    /// <summary>Builds custom display text only when <see cref="Packet.WantsCustomText"/> is true.</summary>
+    public readonly MutField AppendLazyWithCustomText<T0, T1, T2, T3, T4, T5, T6>(
+        FieldId fieldId, FieldValue value, T0 arg0, T1 arg1, T2 arg2, T3 arg3, T4 arg4, T5 arg5, T6 arg6, LazyPopulator populator)
+    {
+        if (!Packet.WantsCustomText(fieldId))
+        {
+            return AppendLazy(fieldId, value, populator);
+        }
+
+        LazyString text = LazyString.FormatLazy(
+            (arg0, arg1, arg2, arg3, arg4, arg5, arg6),
+            static s => string.Create(CultureInfo.InvariantCulture, $"{s.Item1}{s.Item2}{s.Item3}{s.Item4}{s.Item5}{s.Item6}{s.Item7}"));
+        return AppendLazyWithCustomText(fieldId, value, text, populator);
+    }
+
+    /// <summary>Builds custom display text only when <see cref="Packet.WantsCustomText"/> is true.</summary>
+    public readonly MutField AppendLazyWithCustomText<T0, T1, T2, T3, T4, T5, T6, T7>(
+        FieldId fieldId, FieldValue value, T0 arg0, T1 arg1, T2 arg2, T3 arg3, T4 arg4, T5 arg5, T6 arg6, T7 arg7, LazyPopulator populator)
+    {
+        if (!Packet.WantsCustomText(fieldId))
+        {
+            return AppendLazy(fieldId, value, populator);
+        }
+
+        LazyString text = LazyString.FormatLazy(
+            (arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7),
+            static s => string.Create(CultureInfo.InvariantCulture, $"{s.Item1}{s.Item2}{s.Item3}{s.Item4}{s.Item5}{s.Item6}{s.Item7}{s.Item8}"));
+        return AppendLazyWithCustomText(fieldId, value, text, populator);
+    }
+
+    /// <summary>Builds custom display text only when <see cref="Packet.WantsCustomText"/> is true.</summary>
+    public readonly MutField AppendLazyWithCustomText<T0, T1, T2, T3, T4, T5, T6, T7, T8>(
+        FieldId fieldId, FieldValue value, T0 arg0, T1 arg1, T2 arg2, T3 arg3, T4 arg4, T5 arg5, T6 arg6, T7 arg7, T8 arg8, LazyPopulator populator)
+    {
+        if (!Packet.WantsCustomText(fieldId))
+        {
+            return AppendLazy(fieldId, value, populator);
+        }
+
+        LazyString text = LazyString.FormatLazy(
+            (arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8),
+            static s => string.Create(CultureInfo.InvariantCulture, $"{s.Item1}{s.Item2}{s.Item3}{s.Item4}{s.Item5}{s.Item6}{s.Item7}{s.Item8}{s.Item9}"));
+        return AppendLazyWithCustomText(fieldId, value, text, populator);
+    }
+
+    #endregion
+
     /// <summary>Creates a MutField for a child at the given storage index (internal implementation detail).</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal readonly MutField ChildMut(ushort index) => new(Packet, index, Packet.GetFieldRef(index).FieldId);
@@ -211,7 +750,7 @@ public readonly ref struct MutField
         FieldId fieldId, FieldValue value, LazyPopulator populator)
     {
         ushort newIndex = Packet.AppendChild(StorageIndex, fieldId, value);
-        Packet.RegisterLazyPopulator(newIndex, populator);
+        Packet.RegisterLazyPopulator(fieldId, newIndex, in value, default, populator);
         // The populator is invoked later via MaterializeLazyField without a ParseContext
         // (ref struct cannot be captured in closures) — intentionally preventing deferred index recording.
         return new MutField(Packet, newIndex, fieldId);
@@ -225,7 +764,7 @@ public readonly ref struct MutField
         FieldId fieldId, FieldValue value, LazyString customText, LazyPopulator populator)
     {
         ushort newIndex = Packet.AppendChildWithCustomText(StorageIndex, fieldId, value, customText);
-        Packet.RegisterLazyPopulator(newIndex, populator);
+        Packet.RegisterLazyPopulator(fieldId, newIndex, in value, customText, populator);
         return new MutField(Packet, newIndex, fieldId);
     }
 
@@ -237,7 +776,7 @@ public readonly ref struct MutField
         FieldId fieldId, FieldValue value, LazyPopulator populator)
     {
         ushort newIndex = Packet.PrependChild(StorageIndex, fieldId, value);
-        Packet.RegisterLazyPopulator(newIndex, populator);
+        Packet.RegisterLazyPopulator(fieldId, newIndex, in value, default, populator);
         return new MutField(Packet, newIndex, fieldId);
     }
 
@@ -249,7 +788,7 @@ public readonly ref struct MutField
         FieldId fieldId, FieldValue value, LazyString customText, LazyPopulator populator)
     {
         ushort newIndex = Packet.PrependChildWithCustomText(StorageIndex, fieldId, value, customText);
-        Packet.RegisterLazyPopulator(newIndex, populator);
+        Packet.RegisterLazyPopulator(fieldId, newIndex, in value, customText, populator);
         return new MutField(Packet, newIndex, fieldId);
     }
 
@@ -261,7 +800,7 @@ public readonly ref struct MutField
         FieldId fieldId, FieldValue value, LazyPopulator populator)
     {
         ushort newIndex = Packet.InsertAfter(StorageIndex, fieldId, value);
-        Packet.RegisterLazyPopulator(newIndex, populator);
+        Packet.RegisterLazyPopulator(fieldId, newIndex, in value, default, populator);
         return new MutField(Packet, newIndex, fieldId);
     }
 
@@ -273,7 +812,7 @@ public readonly ref struct MutField
         FieldId fieldId, FieldValue value, LazyString customText, LazyPopulator populator)
     {
         ushort newIndex = Packet.InsertAfterWithCustomText(StorageIndex, fieldId, value, customText);
-        Packet.RegisterLazyPopulator(newIndex, populator);
+        Packet.RegisterLazyPopulator(fieldId, newIndex, in value, customText, populator);
         return new MutField(Packet, newIndex, fieldId);
     }
 
@@ -571,9 +1110,9 @@ public readonly ref struct MutField
         // Multiple matches — create a packet.choice container and dispatch all alternatives.
         // The "Choice: " prefix makes the wrapper visually distinct from regular field entries.
         FieldId choiceFieldId = context.Stack!.PacketChoiceFieldId;
-        // ZA.Lazy defers string concatenation to evaluation time.
-        LazyString choiceLabel = ZA.Lazy("Choice: ", tableName, ": ", keyDisplay);
-        MutField choiceField = AppendWithCustomText(choiceFieldId, FieldValue.None, choiceLabel);
+        MutField choiceField = Packet.WantsCustomText(choiceFieldId)
+            ? AppendWithCustomText(choiceFieldId, FieldValue.None, "Choice: ", tableName, ": ", keyDisplay)
+            : Append(choiceFieldId, FieldValue.None);
 
         int maxConsumed = 0;
         for (int i = 0; i < protocols.Length; i++)
@@ -598,6 +1137,12 @@ public readonly ref struct MutField
     /// <summary>Tries to get the parent field. Returns false if this is a root field.</summary>
     public readonly bool TryGetParent(out MutField parent)
     {
+        if (!HasFieldTree)
+        {
+            parent = default;
+            return false;
+        }
+
         ushort parentIdx = Packet.GetFieldRef(StorageIndex).ParentIndex;
         if (parentIdx != FieldBody.NullIndex)
         {
@@ -617,6 +1162,12 @@ public readonly ref struct MutField
     /// <param name="materialize">Whether to materialize lazy children before reading the child list.</param>
     public readonly bool TryGetFirstChild(out MutField firstChild, bool materialize)
     {
+        if (!HasFieldTree)
+        {
+            firstChild = default;
+            return false;
+        }
+
         if (materialize)
         {
             ref readonly FieldBody body = ref Packet.GetFieldRef(StorageIndex);
@@ -643,6 +1194,12 @@ public readonly ref struct MutField
     /// <param name="materialize">Whether to materialize lazy children before reading the child list.</param>
     public readonly bool TryGetLastChild(out MutField lastChild, bool materialize)
     {
+        if (!HasFieldTree)
+        {
+            lastChild = default;
+            return false;
+        }
+
         if (materialize)
         {
             ref readonly FieldBody body = ref Packet.GetFieldRef(StorageIndex);
@@ -664,6 +1221,12 @@ public readonly ref struct MutField
     /// <summary>Tries to get the next sibling field. Returns false if this is the last sibling.</summary>
     public readonly bool TryGetNext(out MutField next)
     {
+        if (!HasFieldTree)
+        {
+            next = default;
+            return false;
+        }
+
         ushort idx = Packet.GetFieldRef(StorageIndex).NextIndex;
         if (idx != FieldBody.NullIndex)
         {
@@ -677,6 +1240,12 @@ public readonly ref struct MutField
     /// <summary>Tries to get the previous sibling field. Returns false if this is the first sibling.</summary>
     public readonly bool TryGetPrev(out MutField prev)
     {
+        if (!HasFieldTree)
+        {
+            prev = default;
+            return false;
+        }
+
         ushort idx = Packet.GetFieldRef(StorageIndex).PrevIndex;
         if (idx != FieldBody.NullIndex)
         {

@@ -3,7 +3,7 @@
 namespace NetworkInspector.Core.Protocols;
 
 /// <summary>
-/// Packet protocol — the top-level entry point called by <see cref="Packet.ParseFrame(PacketId, Stack, Frame)"/>.
+/// Packet protocol — the top-level entry point called by <see cref="Packet.ParseFrame(PacketId, Stack, Frame, FieldTreeMode, ValueCache, Boolean)"/>.
 /// <para>Responsibilities:</para>
 /// <list type="number">
 ///   <item>Appends packet metadata fields (id, timestamp, frame source id) eagerly to the tree.</item>

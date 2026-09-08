@@ -65,7 +65,7 @@ Post-parsers are protocol-owned callbacks that run after the main protocol dispa
 
 **Lifecycle** — post-parsers execute after the full protocol dispatch tree, before `packet.info` is appended, and before the packet is sealed. They receive the packet root field as parent, so their fields appear as root-level siblings identical to top-level protocol fields.
 
-**Index** — in indexed parses (`ParseFrameIndexed`), post-parsers run before `PacketIndex.EndPacket`. Their `RecordProtocolPresence` and `RecordGroupPresence` calls are treated identically to those of normal parsers. **ValueCache** — `ParseFrameRecorded` tees selected field values into RAM columns during the same first parse (with or without a `PacketIndex`); unrecorded `ParseFrame` is a no-op on the tee. Membership is a compact array (few fields) or a dense probe plus bitset. See `docs/value-cache-design.md`.
+**Index** — in indexed parses (`ParseFrameIndexed`), post-parsers run before `PacketIndex.EndPacket`. Their `RecordProtocolPresence` and `RecordGroupPresence` calls are treated identically to those of normal parsers. **ValueCache** — pass a `ValueCache` into `ParseFrame` / `ParseFrameIndexed` to record selected field values into RAM columns during the same first parse; omit the cache and record is a no-op. Membership is a compact array (few fields) or a dense probe plus bitset. Usage: [`VALUECACHE_GUIDE.md`](VALUECACHE_GUIDE.md). Design: `docs/value-cache-design.md`.
 
 **Error policy** — a `ParseResult` error or exception from any post-parser is recorded as a `packet.error` and made visible. Remaining post-parsers always continue executing regardless of earlier failures. No errors are silently discarded.
 
@@ -75,9 +75,20 @@ Post-parsers are protocol-owned callbacks that run after the main protocol dispa
 
 Use `ProtocolRegistration.RegisterStandardProtocols(builder)` to activate the default dissector set.
 
-### Parse From Capture Readers
+**Parse From Capture Readers**
 
 Combine Core with `NetworkInspector.Sources` readers to parse frames from PCAP/PCAPNG/BLF/ASC sources.
+
+### Parse without a field tree
+
+When the caller only needs a `ValueCache`, a `PacketIndex`, or protocol side effects, pass `FieldTreeMode.Skip` as the last argument of the existing parse factories. The packet does not retain FieldBodies (`HasFieldTree` is false). Protocols still decode through the same `Append*` methods. See `docs/skip-field-tree.md`.
+
+```csharp
+Packet throwaway = Packet.ParseFrame(id, stack, frame, FieldTreeMode.Skip);
+Packet recorded = Packet.ParseFrame(id, stack, frame, FieldTreeMode.Skip, cache);
+```
+
+Skip packets must not be filtered, stored, exported, or passed to `ValueCache.RecordPacket`. Default `ParseFrame(id, stack, frame)` still builds a full tree.
 
 ### Feed Export Pipelines
 
@@ -91,7 +102,7 @@ Parse packets with Core, then send them to `NetworkInspector.Exporters` packet e
 
 ## Limits And Thread-Safety Notes
 
-- First parse of each packet id is ordered and single-threaded (dense ids `0,1,2,…`). Re-parse of an already-first-parsed id may run concurrently. Protocol authors implement `IProtocol.Parse`. `Stack.CallProtocol` sets `ParseContext.SelfProtocolId` only. Stateful protocols key `EffectStore<T>` with `Packet.GetEffectLayerKey`. Dense packet maps use `ChunkedGrowOnlyStore<T>`; packed effect logs use `ChunkedAppendOnlyStore<T>`. `Stack.ProtocolCount` is the number of registered protocols. See [PROTOCOL_GUIDE.md](../NetworkInspector.Protocols/PROTOCOL_GUIDE.md).
+- Dense packet maps use `ChunkedGrowOnlyStore<T>` (`Append` / `Count` / `Get`); packed effect logs use `ChunkedAppendOnlyStore<T>`. `Stack.ProtocolCount` is the number of registered protocols. See [PROTOCOL_GUIDE.md](../NetworkInspector.Protocols/PROTOCOL_GUIDE.md).
 - Treat stack construction and mutable parse contexts as single-threaded unless package docs state otherwise.
 - Validate external frame bytes at system boundaries.
 - Use cancellation in surrounding workflow code for long-running ingest loops.
@@ -106,6 +117,7 @@ Parse packets with Core, then send them to `NetworkInspector.Exporters` packet e
 - [Sources package](../NetworkInspector.Sources/README.md)
 - [Exporters package](../NetworkInspector.Exporters/README.md)
 - [Root overview](../README.md)
+- [ValueCache usage](VALUECACHE_GUIDE.md)
 
 ## License
 

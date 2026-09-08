@@ -43,7 +43,7 @@ internal static class CliFilter
     /// <summary>
     /// Evaluates <paramref name="filter"/> against <paramref name="packet"/>.
     /// Pass <paramref name="index"/> when the packet was parsed with
-    /// <see cref="Packet.ParseFrameIndexed(PacketId, Stack, Frame, PacketIndex)"/> so protocol
+    /// <see cref="Packet.ParseFrameIndexed(PacketId, Stack, Frame, PacketIndex, FieldTreeMode, NetworkInspector.Core.ValueCaches.ValueCache, Boolean)"/> so protocol
     /// presence stays O(1). Pass <see cref="PacketIndex"/> or <see cref="PacketIndexReaderView"/>
     /// as <typeparamref name="TIndex"/> — do not cast a view to <see cref="IPacketIndexReader"/>
     /// (that boxes).

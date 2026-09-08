@@ -33,7 +33,7 @@ internal sealed class ListenerSlot : IDisposable
     private readonly ISessionReader _SessionReader;
     private readonly Job _Job;
     private readonly ManualResetEventSlim _Wake = new(initialState: false);
-    // Tracks how far this listener has consumed packets from the PacketStore.
+    // Tracks how far this listener has consumed announced packet ids.
     private volatile int _PacketCursor;
     // 0 = OnUnsubscribed not yet invoked; 1 = invoked (RunLoop finally or coordinator fallback).
     private volatile int _OnUnsubscribedInvoked;

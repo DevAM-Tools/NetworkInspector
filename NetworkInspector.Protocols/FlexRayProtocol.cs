@@ -262,7 +262,7 @@ public sealed partial class FlexRayProtocol : IProtocol
             MutField symbolContainer = parentField.AppendWithCustomText(
                 _ProtocolFieldId,
                 FieldValue.NewBytes(data[..2]),
-                ZA.Lazy("FlexRay Symbol, Channel: ", isChannelB ? "B" : "A"));
+                "FlexRay Symbol, Channel: ", isChannelB ? "B" : "A");
 
             symbolContainer.Append(_ChannelFieldId, FieldValue.NewString(isChannelB ? "Channel B" : "Channel A"));
 
@@ -317,7 +317,7 @@ public sealed partial class FlexRayProtocol : IProtocol
         MutField container = parentField.AppendWithCustomText(
             _ProtocolFieldId,
             FieldValue.NewBytes(data[..totalConsumed]),
-            ZA.Lazy("FlexRay, Slot: ", frameId, ", Cycle: ", cycle));
+            "FlexRay, Slot: ", frameId, ", Cycle: ", cycle);
 
         // Channel
         container.Append(_ChannelFieldId, FieldValue.NewString(isChannelB ? "Channel B" : "Channel A"));
@@ -328,7 +328,7 @@ public sealed partial class FlexRayProtocol : IProtocol
         // Payload length (display in bytes)
         container.AppendWithCustomText(_PayloadLengthFieldId,
             FieldValue.NewU64((ulong)payloadSize),
-            ZA.Lazy(payloadSize, " bytes"));
+            payloadSize, " bytes");
 
         // Cycle count (6-bit)
         container.Append(_CycleFieldId, FieldValue.NewU64(cycle));

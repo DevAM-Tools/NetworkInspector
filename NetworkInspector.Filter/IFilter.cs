@@ -72,6 +72,11 @@ public interface IFilter
     /// filters, does not replay the state machine. Use <see cref="TryIsMatch{TIndex}"/> when an
     /// index is available so protocol presence stays O(1).
     /// </para>
+    /// <para>
+    /// A packet parsed with <see cref="FieldTreeMode.Skip"/> has no field tree. Evaluation then
+    /// returns <see langword="false"/> with <see cref="FilterErrorKind.NoFieldTree"/> (not a negative
+    /// match), except <see cref="Filter.AlwaysMatch"/>.
+    /// </para>
     /// </summary>
     /// <param name="packet">The packet to test.</param>
     /// <param name="matched">Receives the verdict.</param>

@@ -426,9 +426,9 @@ public sealed partial class DnsProtocol : IProtocol
 
         // Build summary text
         string hexId = DisplayTables.FormatHexU16(transactionId);
-        LazyString summary = isResponse
-            ? ZA.Lazy("Domain Name System (response), Transaction ID: 0x", hexId)
-            : ZA.Lazy("Domain Name System (query), Transaction ID: 0x", hexId);
+        string dnsKind = isResponse
+            ? "Domain Name System (response), Transaction ID: 0x"
+            : "Domain Name System (query), Transaction ID: 0x";
 
         // Set packet info for the info column
         parentField.SetPacketInfo(isResponse
@@ -436,7 +436,7 @@ public sealed partial class DnsProtocol : IProtocol
             : ZA.Lazy("DNS Query 0x", hexId));
 
         FieldValue containerValue = FieldValue.NewBytes(dnsData);
-        parentField.AppendLazyWithCustomText(_ProtocolFieldId, containerValue, summary, _Populator);
+        parentField.AppendLazyWithCustomText(_ProtocolFieldId, containerValue, dnsKind, hexId, _Populator);
 
         return data.Length;
     }
@@ -467,7 +467,7 @@ public sealed partial class DnsProtocol : IProtocol
         // Opcode and RCODE are multi-bit numeric fields rendered separately as sub-fields.
         MutField flagsField = container.AppendWithCustomText(_FlagsFieldId,
             FieldValue.NewU64(header.Flags),
-            ZA.Lazy(DisplayTables.FormatHexU16(header.Flags), " ", DnsFlagsFormatter.Format(header.Flags)));
+            DisplayTables.FormatHexU16(header.Flags), " ", DnsFlagsFormatter.Format(header.Flags));
 
         // Individual flag sub-fields
         string responseText = header.IsResponse ? "Message is a response" : "Message is a query";
@@ -504,7 +504,7 @@ public sealed partial class DnsProtocol : IProtocol
         {
             MutField queriesContainer = container.AppendWithCustomText(
                 _QueriesContainerFieldId, FieldValue.None,
-                ZA.Lazy("Queries (", header.QuestionCount, ")"));
+                "Queries (", header.QuestionCount, ")");
 
             _ParseQuestions(in queriesContainer, span, ref offset, header.QuestionCount);
         }
@@ -514,7 +514,7 @@ public sealed partial class DnsProtocol : IProtocol
         {
             MutField answersContainer = container.AppendWithCustomText(
                 _AnswersContainerFieldId, FieldValue.None,
-                ZA.Lazy("Answers (", header.AnswerCount, ")"));
+                "Answers (", header.AnswerCount, ")");
 
             _ParseResourceRecords(in answersContainer, span, dnsData, ref offset, header.AnswerCount);
         }
@@ -524,7 +524,7 @@ public sealed partial class DnsProtocol : IProtocol
         {
             MutField authContainer = container.AppendWithCustomText(
                 _AnswersContainerFieldId, FieldValue.None,
-                ZA.Lazy("Authoritative nameservers (", header.AuthorityCount, ")"));
+                "Authoritative nameservers (", header.AuthorityCount, ")");
 
             _ParseResourceRecords(in authContainer, span, dnsData, ref offset, header.AuthorityCount);
         }
@@ -534,7 +534,7 @@ public sealed partial class DnsProtocol : IProtocol
         {
             MutField addContainer = container.AppendWithCustomText(
                 _AnswersContainerFieldId, FieldValue.None,
-                ZA.Lazy("Additional records (", header.AdditionalCount, ")"));
+                "Additional records (", header.AdditionalCount, ")");
 
             _ParseResourceRecords(in addContainer, span, dnsData, ref offset, header.AdditionalCount);
         }
@@ -570,7 +570,7 @@ public sealed partial class DnsProtocol : IProtocol
             string className = DnsDisplayTables.GetClassDisplayText(qclass);
             MutField qryField = container.AppendWithCustomText(
                 _QryNameFieldId, FieldValue.NewString(name),
-                ZA.Lazy(name, ": type ", typeName, ", class ", className));
+                name, ": type ", typeName, ", class ", className);
 
             qryField.Append(_QryNameLenFieldId, FieldValue.NewU64((ulong)name.Length));
             qryField.AppendWithCustomText(_QryTypeFieldId,
@@ -628,7 +628,7 @@ public sealed partial class DnsProtocol : IProtocol
             string typeName = DnsDisplayTables.GetTypeName(rrType);
             MutField rrField = container.AppendWithCustomText(
                 _RespNameFieldId, FieldValue.NewString(name),
-                ZA.Lazy(name, ": type ", typeName));
+                name, ": type ", typeName);
 
             rrField.AppendWithCustomText(_RespTypeFieldId,
                 FieldValue.NewU64(rrType), DnsDisplayTables.GetTypeDisplayText(rrType));
@@ -758,7 +758,7 @@ public sealed partial class DnsProtocol : IProtocol
     {
         MutField optField = container.AppendWithCustomText(
             _RespNameFieldId, FieldValue.NewString("<Root>"),
-            ZA.Lazy("<Root>: type OPT"));
+            "<Root>: type OPT");
 
         optField.AppendWithCustomText(_RespTypeFieldId,
             FieldValue.NewU64(41), DnsDisplayTables.GetTypeDisplayText(41));
@@ -796,7 +796,7 @@ public sealed partial class DnsProtocol : IProtocol
 
             MutField optionField = optField.AppendWithCustomText(
                 _OptOptionFieldId, FieldValue.None,
-                ZA.Lazy("Option: ", DnsDisplayTables.GetEdnsOptionName(optionCode)));
+                "Option: ", DnsDisplayTables.GetEdnsOptionName(optionCode));
 
             optionField.Append(_OptOptionCodeFieldId, FieldValue.NewU64(optionCode));
             optionField.Append(_OptOptionLengthFieldId, FieldValue.NewU64(optionLength));
@@ -1048,7 +1048,7 @@ public sealed partial class DnsProtocol : IProtocol
                     };
 
                     rrField.AppendWithCustomText(_DnskeyFlagsFieldId,
-                        FieldValue.NewU64(flags), ZA.Lazy(flagsText));
+                        FieldValue.NewU64(flags), flagsText);
                     rrField.Append(_DnskeyProtocolFieldId, FieldValue.NewU64(protocol));
                     rrField.AppendWithCustomText(_DnskeyAlgorithmFieldId,
                         FieldValue.NewU64(algorithm), DnsDisplayTables.GetDnssecAlgorithmDisplayText(algorithm));

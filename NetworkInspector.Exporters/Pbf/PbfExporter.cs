@@ -438,6 +438,16 @@ public sealed class PbfExporter : IPacketListener, IErrorTolerantExporter, IDisp
             return false;
         }
 
+        if (!packet.HasFieldTree)
+        {
+            return _HandleSkip(new ExportErrorEventArgs
+            {
+                ItemIndex = PacketCount,
+                Kind = ExportErrorKind.Other,
+                Message = "Skip packets cannot be exported (HasFieldTree is false).",
+            });
+        }
+
         bool shouldFlush;
 
         // Wrap the entire add+flush sequence: AddPacket may throw on a malformed

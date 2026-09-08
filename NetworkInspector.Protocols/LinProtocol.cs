@@ -235,8 +235,8 @@ public sealed partial class LinProtocol : IProtocol
         MutField container = parentField.AppendWithCustomText(
             _ProtocolFieldId,
             FieldValue.NewBytes(data[..totalConsumed]),
-            ZA.Lazy("LIN ", msgTypeSummaryText, ", ID: ", Helpers.DisplayTables.FormatHexU8(frameId),
-                    ", Len: ", payloadLength));
+            "LIN ", msgTypeSummaryText, ", ID: ", Helpers.DisplayTables.FormatHexU8(frameId),
+                    ", Len: ", payloadLength);
 
         // Message format revision
         container.Append(_MessageFormatFieldId, FieldValue.NewU64(msgFormatRev));

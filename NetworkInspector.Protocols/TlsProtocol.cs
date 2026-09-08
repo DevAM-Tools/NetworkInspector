@@ -294,14 +294,13 @@ public sealed partial class TlsProtocol : IProtocol
 
         // Build summary text from first record
         string contentTypeName = TlsDisplayTables.GetContentTypeName(firstRecord.ContentType);
-        LazyString summary = ZA.Lazy("Transport Layer Security, ", contentTypeName);
 
         // Set packet info
         parentField.SetPacketInfo(ZA.Lazy("TLS ", contentTypeName));
 
         // Store entire TLS data in container for lazy parsing
         FieldValue containerValue = FieldValue.NewBytes(data);
-        parentField.AppendLazyWithCustomText(_ProtocolFieldId, containerValue, summary, _Populator);
+        parentField.AppendLazyWithCustomText(_ProtocolFieldId, containerValue, "Transport Layer Security, ", contentTypeName, _Populator);
 
         return data.Length;
     }
@@ -339,7 +338,7 @@ public sealed partial class TlsProtocol : IProtocol
             string versionText = TlsDisplayTables.GetVersionDisplayText(record.Version);
             MutField recordField = container.AppendWithCustomText(
                 _RecordFieldId, FieldValue.None,
-                ZA.Lazy("TLS Record Layer: ", ctText));
+                "TLS Record Layer: ", ctText);
 
             recordField.AppendWithCustomText(_ContentTypeFieldId,
                 FieldValue.NewU64(record.ContentType), ctText);
@@ -391,7 +390,7 @@ public sealed partial class TlsProtocol : IProtocol
             string hsTypeName = TlsDisplayTables.GetHandshakeTypeName(hsType);
             MutField hsField = recordField.AppendWithCustomText(
                 _HandshakeFieldId, FieldValue.None,
-                ZA.Lazy("Handshake Protocol: ", hsTypeName));
+                "Handshake Protocol: ", hsTypeName);
 
             hsField.AppendWithCustomText(_HandshakeTypeFieldId,
                 FieldValue.NewU64(hsType),
@@ -631,7 +630,7 @@ public sealed partial class TlsProtocol : IProtocol
 
             MutField certField = hsField.AppendWithCustomText(
                 _CertificateFieldId, FieldValue.None,
-                ZA.Lazy("Certificate [", certIndex, "] (", certLen, " bytes)"));
+                "Certificate [", certIndex, "] (", certLen, " bytes)");
 
             certField.Append(_CertificateLengthFieldId, FieldValue.NewU64((ulong)certLen));
 
@@ -673,7 +672,7 @@ public sealed partial class TlsProtocol : IProtocol
             string extName = TlsDisplayTables.GetExtensionTypeName(extType);
             MutField extField = parent.AppendWithCustomText(
                 _ExtensionFieldId, FieldValue.None,
-                ZA.Lazy("Extension: ", extName));
+                "Extension: ", extName);
 
             extField.AppendWithCustomText(_ExtensionTypeFieldId,
                 FieldValue.NewU64(extType),
@@ -934,7 +933,7 @@ public sealed partial class TlsProtocol : IProtocol
             string groupName = TlsDisplayTables.GetSupportedGroupDisplayText(group);
             MutField entry = extField.AppendWithCustomText(
                 _KeyShareEntryFieldId, FieldValue.None,
-                ZA.Lazy("Key Share Entry: Group: ", groupName, ", Key Exchange length: ", keyExLen));
+                "Key Share Entry: Group: ", groupName, ", Key Exchange length: ", keyExLen);
 
             entry.AppendWithCustomText(_KeyShareGroupFieldId,
                 FieldValue.NewU64(group), groupName);

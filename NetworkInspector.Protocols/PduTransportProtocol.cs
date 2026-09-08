@@ -488,12 +488,11 @@ public sealed partial class PduTransportProtocol : IProtocol
 
             int actualPayload = Math.Min((int)payloadLength, span.Length - offset);
 
-            LazyString pduSummary = hasName
-                ? ZA.Lazy("PDU: ", name!, " (ID: ", pduId, ")")
-                : ZA.Lazy("PDU (ID: ", pduId, ")");
-
-            MutField pduField = container.AppendWithCustomText(
-                _PduFieldId, FieldValue.None, pduSummary);
+            MutField pduField = hasName
+                ? container.AppendWithCustomText(
+                    _PduFieldId, FieldValue.None, "PDU: ", name!, " (ID: ", pduId, ")")
+                : container.AppendWithCustomText(
+                    _PduFieldId, FieldValue.None, "PDU (ID: ", pduId, ")");
             pduField.Append(_IdFieldId, FieldValue.NewU64(pduId));
             pduField.Append(_LengthFieldId, FieldValue.NewU64(payloadLength));
             if (hasName)

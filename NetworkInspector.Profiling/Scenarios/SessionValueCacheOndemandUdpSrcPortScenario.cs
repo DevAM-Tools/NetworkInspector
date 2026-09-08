@@ -3,21 +3,24 @@
 namespace NetworkInspector.Profiling.Scenarios;
 
 /// <summary>
-/// Session store ingest without a value cache, then on-demand
-/// <see cref="ISession.TryAddValueCache"/> for <c>udp.srcport</c>.
-/// New stack and session per <see cref="Run"/>. Pair with
-/// <c>session-value-cache-ingest-udp-srcport</c>. The PullFill walk is closer to
-/// <c>packet-reparse-read-udp-srcport</c> than to ingest tee.
+/// On-demand <c>udp.srcport</c> PullFill.
+/// <see cref="PrepareIteration"/> starts ingest; <see cref="Run"/> is TryAddValueCache plus fill wait.
 /// </summary>
 [SuppressMessage(
     "Performance",
     "CA1812:AvoidUninstantiatedInternalClasses",
     Justification = "Instantiated via reflection in ScenarioDiscovery.Discover.")]
-internal sealed class SessionValueCacheOndemandUdpSrcPortScenario : IProfilingScenario
+internal sealed class SessionValueCacheOndemandUdpSrcPortScenario : IProfilingScenario, IDisposable
 {
     #region Fields
 
     private const int _FrameCount = 10_000;
+
+    private Stack? _Stack;
+    private Frame[]? _Frames;
+    private Frame _TriggerFrame;
+    private Session? _Session;
+    private TriggerFrameSource? _Trigger;
 
     #endregion
 
@@ -28,7 +31,7 @@ internal sealed class SessionValueCacheOndemandUdpSrcPortScenario : IProfilingSc
 
     /// <inheritdoc/>
     public string Description => FormattableString.Invariant(
-        $"New Stack+Session per Run: store {_FrameCount:N0} frames, then TryAddValueCache(udp.srcport) PullFill.");
+        $"PrepareIteration: ingest {_FrameCount:N0} frames; Run: TryAddValueCache(udp.srcport) PullFill.");
 
     /// <inheritdoc/>
     public long WorkUnitsPerIteration => _FrameCount;
@@ -39,27 +42,50 @@ internal sealed class SessionValueCacheOndemandUdpSrcPortScenario : IProfilingSc
     /// <inheritdoc/>
     public void Setup()
     {
-        // Stack and frames are created inside Run so each iteration first-parses packet ids 0..N-1.
+        _Stack = StackHelper.CreateStack();
+        _Frames = FrameHelper.CreateSharedFrames(_FrameCount, _Stack);
+        _TriggerFrame = SessionValueCacheHarness.CreateTriggerFrame(_Stack, _Frames);
+    }
+
+    /// <inheritdoc/>
+    public Action? PrepareIteration => _PrepareIteration;
+
+    private void _PrepareIteration()
+    {
+        _Session = SessionValueCacheHarness.StartOndemand(
+            _Stack!,
+            _Frames!,
+            _TriggerFrame,
+            options: null,
+            out _Trigger);
     }
 
     /// <inheritdoc/>
     public void Run()
     {
-        using Stack stack = StackHelper.CreateStack();
-        Frame[] frames = FrameHelper.CreateSharedFrames(_FrameCount, stack);
-        Frame trigger = SessionValueCacheHarness.CreateTriggerFrame(stack, frames);
-        SessionValueCacheHarness.RunOndemand(
-            stack,
-            frames,
-            trigger,
+        SessionValueCacheHarness.CompleteOndemand(
+            _Session!,
+            _Trigger!,
             new ValueCacheRequest { FieldNames = ["udp.srcport"] },
             "ondemand-udp-srcport",
             _FrameCount);
+        _Session = null;
+        _Trigger = null;
     }
 
     /// <inheritdoc/>
-    public void Cleanup()
+    public void Cleanup() => Dispose();
+
+    /// <inheritdoc/>
+    public void Dispose()
     {
+        _Session?.Shutdown();
+        _Session?.Dispose();
+        _Session = null;
+        _Trigger = null;
+        _Stack?.Dispose();
+        _Stack = null;
+        _Frames = null;
     }
 
     #endregion

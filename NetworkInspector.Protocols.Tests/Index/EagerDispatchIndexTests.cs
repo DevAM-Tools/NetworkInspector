@@ -3,7 +3,7 @@
 namespace NetworkInspector.Protocols.Tests.Index;
 
 /// <summary>
-/// Verifies that sub-protocol dispatch is performed eagerly during <see cref="Packet.ParseFrameIndexed(PacketId, Stack, Frame, NetworkInspector.Core.Index.PacketIndex)"/>
+/// Verifies that sub-protocol dispatch is performed eagerly during <see cref="Packet.ParseFrameIndexed(PacketId, Stack, Frame, PacketIndex, FieldTreeMode, ValueCache, Boolean)"/>
 /// so that the dispatched sub-protocol's group and protocol presence are recorded in the
 /// <see cref="NetworkInspector.Core.Index.PacketIndex"/> and become queryable WITHOUT triggering
 /// materialization of the lazy descriptive field tree.

@@ -2,7 +2,7 @@
 
 namespace NetworkInspector.Core.Tests;
 
-/// <summary>Construction, capture modes, limits, flags, materialization, and RecordPacket for <see cref="ValueCache"/>.</summary>
+/// <summary>Construction, capture modes, flags, materialization, and RecordPacket for <see cref="ValueCache"/>.</summary>
 internal sealed class ValueCacheTests
 {
     #region Helpers
@@ -46,22 +46,6 @@ internal sealed class ValueCacheTests
         return Packet.ParseFrame(new PacketId(packetId), stack, frame, firstProtocolId);
     }
 
-    internal static long ExpectedUnmanagedByteSize(int rowCount, int sizeofT)
-    {
-        if (rowCount <= 0)
-        {
-            return 0;
-        }
-
-        long perRow = 4 + 8 + sizeofT;
-        int chunkAllocs = ((rowCount - 1) / ValueCacheColumnState.ChunkSize) + 1;
-        long chunkBytes = chunkAllocs * (
-            (long)ValueCacheColumnState.ChunkSize * 4
-            + (long)ValueCacheColumnState.ChunkSize * 8
-            + (long)ValueCacheColumnState.ChunkSize * sizeofT);
-        return (perRow * rowCount) + chunkBytes;
-    }
-
     private static (Stack Stack, Packet Packet) _BuildStandardUdp()
     {
         using SettingsManager settingsManager = new();
@@ -77,6 +61,20 @@ internal sealed class ValueCacheTests
             stack.FrameInterfaceRegistry).Value;
         Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame);
         return (stack, packet);
+    }
+
+    private static bool _ContainsField(ValueCache cache, FieldId fieldId)
+    {
+        IReadOnlyList<ValueCacheSeries> series = cache.Series;
+        for (int i = 0; i < series.Count; i++)
+        {
+            if (series[i].FieldId == fieldId)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     #endregion
@@ -123,17 +121,27 @@ internal sealed class ValueCacheTests
     }
 
     [Test]
-    public async Task Ctor_MaxRowCountZero_Throws()
+    public async Task Ctor_ObjectInitializerOmitsChunkShift_UsesDefault12()
+    {
+        (Stack? stack, ValueCacheExerciseProtocol _, ProtocolId _) = _BuildExerciseStack();
+        using (stack)
+        {
+            ValueCache cache = new(stack, [], options: new ValueCacheBuildOptions { RecordAllFields = true });
+            await Assert.That(cache.ChunkShift).IsEqualTo(12);
+        }
+    }
+
+    [Test]
+    public async Task Ctor_DefaultStructOptions_Throws()
     {
         (Stack? stack, ValueCacheExerciseProtocol proto, ProtocolId _) = _BuildExerciseStack();
         using (stack)
         {
-            ValueCacheBuildOptions options = new()
-            {
-                Limits = new ValueCacheLimits(0, null),
-            };
-            await Assert.That(() => new ValueCache(stack, [new ValueCacheFieldConfig(proto.NumberId)], options: options))
-                .Throws<ArgumentException>();
+            await Assert.That(() => _ = new ValueCache(
+                    stack,
+                    [new ValueCacheFieldConfig(proto.NumberId)],
+                    options: default(ValueCacheBuildOptions)))
+                .Throws<ArgumentOutOfRangeException>();
         }
     }
 
@@ -173,19 +181,19 @@ internal sealed class ValueCacheTests
             Packet packet = _Parse(stack, protoId, proto);
             ValueCache cache = new(
                 stack,
-                [new ValueCacheFieldConfig(proto.NumberId, ValueCaptureMode.LastOccurrence)],
+                [new ValueCacheFieldConfig(proto.NumberId, ValueCaptureMode.FirstOccurrence)],
                 [new ValueCacheGroupConfig(proto.NumberGroupId, ValueCaptureMode.AllOccurrences)]);
             cache.RecordPacket(packet);
 
             ValueCacheSeries<ulong> series = cache.GetSeries<ulong>(proto.NumberId);
-            await Assert.That(series.CaptureMode).IsEqualTo(ValueCaptureMode.LastOccurrence);
+            await Assert.That(series.CaptureMode).IsEqualTo(ValueCaptureMode.FirstOccurrence);
             await Assert.That(series.Count).IsEqualTo(1);
-            await Assert.That(series[0].Value).IsEqualTo(2UL);
+            await Assert.That(series[0].Value).IsEqualTo(1UL);
         }
     }
 
     [Test]
-    public async Task Ctor_RecordAllFields_CreatesPayloadPerField_NoCustomText()
+    public async Task Ctor_RecordAllFields_SeriesEmpty_NoCustomText()
     {
         (Stack? stack, ValueCacheExerciseProtocol proto, ProtocolId _) = _BuildExerciseStack();
         using (stack)
@@ -195,9 +203,29 @@ internal sealed class ValueCacheTests
                 [],
                 options: new ValueCacheBuildOptions { RecordAllFields = true });
 
-            await Assert.That(cache.TryGetSeries<byte>(stack.RootFieldId, out _)).IsTrue();
+            await Assert.That(cache.Series.Count).IsEqualTo(0);
+            await Assert.That(cache.TryGetSeries<ulong>(proto.NumberId, out _)).IsFalse();
+            await Assert.That(cache.TryGetSeries<byte>(stack.RootFieldId, out _)).IsFalse();
             await Assert.That(cache.TryGetCustomTextSeries(proto.NumberId, out _)).IsFalse();
-            await Assert.That(cache.Series.Count).IsEqualTo(stack.FieldCount);
+            await Assert.That(() => cache.GetSeries<ulong>(proto.NumberId)).Throws<ArgumentException>();
+            await Assert.That(() => cache.Series[0]).Throws<ArgumentOutOfRangeException>();
+        }
+    }
+
+    [Test]
+    public async Task Ctor_RecordAllFields_ExplicitPayload_PreCreatesOnlyThatSeries()
+    {
+        (Stack? stack, ValueCacheExerciseProtocol proto, ProtocolId _) = _BuildExerciseStack();
+        using (stack)
+        {
+            ValueCache cache = new(
+                stack,
+                [new ValueCacheFieldConfig(proto.NumberId)],
+                options: new ValueCacheBuildOptions { RecordAllFields = true });
+
+            await Assert.That(cache.Series.Count).IsEqualTo(1);
+            await Assert.That(cache.TryGetSeries<ulong>(proto.NumberId, out _)).IsTrue();
+            await Assert.That(cache.TryGetSeries<ulong>(proto.LazyTtlId, out _)).IsFalse();
         }
     }
 
@@ -219,23 +247,6 @@ internal sealed class ValueCacheTests
             ValueCacheSeries<ulong> series = cache.GetSeries<ulong>(proto.NumberId);
             await Assert.That(series.Count).IsEqualTo(1);
             await Assert.That(series[0].Value).IsEqualTo(1UL);
-        }
-    }
-
-    [Test]
-    public async Task RecordPacket_LastOccurrence_StoresSecondValue()
-    {
-        (Stack? stack, ValueCacheExerciseProtocol proto, ProtocolId protoId) = _BuildExerciseStack();
-        using (stack)
-        {
-            proto.AppendTwice = true;
-            Packet packet = _Parse(stack, protoId, proto);
-            ValueCache cache = new(stack, [new ValueCacheFieldConfig(proto.NumberId, ValueCaptureMode.LastOccurrence)]);
-            cache.RecordPacket(packet);
-
-            ValueCacheSeries<ulong> series = cache.GetSeries<ulong>(proto.NumberId);
-            await Assert.That(series.Count).IsEqualTo(1);
-            await Assert.That(series[0].Value).IsEqualTo(2UL);
         }
     }
 
@@ -281,13 +292,13 @@ internal sealed class ValueCacheTests
             cache.RecordPacket(packet);
 
             ValueCacheSeries<ulong> payload = cache.GetSeries<ulong>(proto.NumberId);
-            ValueCacheStringSeries text = cache.GetCustomTextSeries(proto.NumberId);
-            ValueCacheStringSeries rep = cache.GetCustomRepresentationSeries(proto.NumberId);
+            ValueCacheSeries<string> text = cache.GetCustomTextSeries(proto.NumberId);
+            ValueCacheSeries<string> rep = cache.GetCustomRepresentationSeries(proto.NumberId);
             await Assert.That(payload.Count).IsEqualTo(1);
-            await Assert.That(text.TryGetAsString(0, out string? textValue)).IsTrue();
-            await Assert.That(textValue).IsEqualTo("custom-text");
-            await Assert.That(rep.TryGetAsString(0, out string? repValue)).IsTrue();
-            await Assert.That(repValue).IsEqualTo("custom-rep");
+            await Assert.That(text.Count).IsEqualTo(1);
+            await Assert.That(text[0].Value).IsEqualTo("custom-text");
+            await Assert.That(rep.Count).IsEqualTo(1);
+            await Assert.That(rep[0].Value).IsEqualTo("custom-rep");
         }
     }
 
@@ -341,12 +352,9 @@ internal sealed class ValueCacheTests
             ValueCache cache = new(stack, [new ValueCacheFieldConfig(proto.Ipv6Id)]);
             cache.RecordPacket(packet);
 
-            ValueCacheIPv6Series series = cache.GetIPv6Series(proto.Ipv6Id);
-            bool gotHigh = series.TryGetHighChunk(0, series.Count, out ReadOnlySpan<ulong> high);
-            ulong high0 = gotHigh ? high[0] : 0UL;
+            ValueCacheSeries<IPv6Address> series = cache.GetSeries<IPv6Address>(proto.Ipv6Id);
             await Assert.That(series.Count).IsEqualTo(1);
-            await Assert.That(gotHigh).IsTrue();
-            await Assert.That(high0).IsEqualTo(0x20010DB800000000UL);
+            await Assert.That(series[0].Value.High).IsEqualTo(0x20010DB800000000UL);
         }
     }
 
@@ -360,12 +368,9 @@ internal sealed class ValueCacheTests
             ValueCache cache = new(stack, [new ValueCacheFieldConfig(proto.UuidId)]);
             cache.RecordPacket(packet);
 
-            ValueCacheUuidSeries series = cache.GetUuidSeries(proto.UuidId);
-            bool gotLow = series.TryGetLowChunk(0, series.Count, out ReadOnlySpan<ulong> low);
-            ulong low0 = gotLow ? low[0] : 0UL;
+            ValueCacheSeries<Uuid> series = cache.GetSeries<Uuid>(proto.UuidId);
             await Assert.That(series.Count).IsEqualTo(1);
-            await Assert.That(gotLow).IsTrue();
-            await Assert.That(low0).IsEqualTo(2UL);
+            await Assert.That(series[0].Value.Low).IsEqualTo(2UL);
         }
     }
 
@@ -380,10 +385,10 @@ internal sealed class ValueCacheTests
             cache.RecordPacket(packet);
             proto.BytesBuffer[0] = 0xFF;
 
-            ValueCacheBytesSeries series = cache.GetBytesSeries(proto.BytesId);
-            bool got = series.TryGetAsBytes(0, out ReadOnlyMemory<byte> copy);
-            byte first = got && copy.Length > 0 ? copy.Span[0] : (byte)0;
-            await Assert.That(got).IsTrue();
+            ValueCacheSeries<byte[]> series = cache.GetSeries<byte[]>(proto.BytesId);
+            byte[] copy = series[0].Value;
+            byte first = copy.Length > 0 ? copy[0] : (byte)0;
+            await Assert.That(series.Count).IsEqualTo(1);
             await Assert.That(first).IsEqualTo((byte)1);
         }
     }
@@ -398,10 +403,9 @@ internal sealed class ValueCacheTests
             ValueCache cache = new(stack, [new ValueCacheFieldConfig(proto.StringId)]);
             cache.RecordPacket(packet);
 
-            bool found = cache.Series[0] is ValueCacheStringSeries strings
-                && strings.TryGetAsString(0, out string? text)
-                && text == "lazy-string";
-            await Assert.That(found).IsTrue();
+            ValueCacheSeries<string> strings = cache.GetSeries<string>(proto.StringId);
+            await Assert.That(strings.Count).IsEqualTo(1);
+            await Assert.That(strings[0].Value).IsEqualTo("lazy-string");
         }
     }
 
@@ -427,6 +431,55 @@ internal sealed class ValueCacheTests
     }
 
     [Test]
+    public async Task RecordPacket_RecordAllFields_AppearingFieldsOnly_NoContainerPresence()
+    {
+        (Stack? stack, ValueCacheExerciseProtocol proto, ProtocolId protoId) = _BuildExerciseStack();
+        using (stack)
+        {
+            Packet packet = _Parse(stack, protoId, proto);
+            ValueCache cache = new(stack, [], options: new ValueCacheBuildOptions { RecordAllFields = true });
+            IReadOnlyList<ValueCacheSeries> series = cache.Series;
+            cache.RecordPacket(packet);
+
+            await Assert.That(ReferenceEquals(series, cache.Series)).IsTrue();
+            await Assert.That(series.Count).IsGreaterThan(0);
+            await Assert.That(series.Count).IsLessThan(stack.FieldCount);
+            await Assert.That(cache.TryGetSeries<ulong>(proto.NumberId, out _)).IsTrue();
+            await Assert.That(cache.GetSeries<ulong>(proto.NumberId).Count).IsEqualTo(1);
+            await Assert.That(cache.TryGetSeries<byte>(proto.NoneId, out _)).IsFalse();
+            await Assert.That(cache.TryGetSeries<byte>(stack.RootFieldId, out _)).IsFalse();
+            await Assert.That(cache.TryGetSeries<ulong>(proto.LazyTtlId, out _)).IsTrue();
+            int enumerated = 0;
+            foreach (ValueCacheSeries column in series)
+            {
+                enumerated++;
+                _ = column.FieldId;
+            }
+
+            await Assert.That(enumerated).IsEqualTo(series.Count);
+        }
+    }
+
+    [Test]
+    public async Task RecordPacket_RecordAllFields_RecordContainerPresence_CreatesNoneSeries()
+    {
+        (Stack? stack, ValueCacheExerciseProtocol proto, ProtocolId protoId) = _BuildExerciseStack();
+        using (stack)
+        {
+            Packet packet = _Parse(stack, protoId, proto);
+            ValueCache cache = new(
+                stack,
+                [],
+                options: new ValueCacheBuildOptions { RecordAllFields = true, RecordContainerPresence = true });
+            cache.RecordPacket(packet);
+
+            await Assert.That(cache.TryGetSeries<byte>(proto.NoneId, out _)).IsTrue();
+            await Assert.That(cache.GetSeries<byte>(proto.NoneId).Count).IsEqualTo(1);
+            await Assert.That(cache.TryGetSeries<byte>(stack.RootFieldId, out _)).IsTrue();
+        }
+    }
+
+    [Test]
     public async Task RecordPacket_RecordAllFields_ContainerAndUdpPort()
     {
         (Stack? stack, Packet packet) = _BuildStandardUdp();
@@ -436,37 +489,21 @@ internal sealed class ValueCacheTests
             cache.RecordPacket(packet);
 
             FieldId? portId = stack.GetFieldId("udp.srcport");
+            FieldId? tcpPortId = stack.GetFieldId("tcp.srcport");
             await Assert.That(portId).IsNotNull();
             await Assert.That(cache.GetSeries<ulong>(portId!.Value).Count).IsEqualTo(1);
-            await Assert.That(cache.TryGetSeries<byte>(stack.RootFieldId, out ValueCacheSeries<byte>? root)).IsTrue();
-            await Assert.That(root).IsNotNull();
-            await Assert.That(root!.Count).IsEqualTo(1);
+            await Assert.That(cache.TryGetSeries<byte>(stack.RootFieldId, out _)).IsFalse();
+            await Assert.That(cache.Series.Count).IsLessThan(stack.FieldCount);
+            if (tcpPortId is { } tcp)
+            {
+                await Assert.That(_ContainsField(cache, tcp)).IsFalse();
+            }
         }
     }
 
     #endregion
 
-    #region Limits / flags / misuse
-
-    [Test]
-    public async Task Limits_MaxRowCountOne_SecondPacketUnpublished()
-    {
-        (Stack? stack, ValueCacheExerciseProtocol proto, ProtocolId protoId) = _BuildExerciseStack();
-        using (stack)
-        {
-            Packet first = _ParseId(stack, protoId, proto, 0, 1);
-            Packet second = _ParseId(stack, protoId, proto, 1, 2);
-            ValueCache cache = new(
-                stack,
-                [new ValueCacheFieldConfig(proto.NumberId)],
-                options: new ValueCacheBuildOptions { Limits = new ValueCacheLimits(1, null) });
-            cache.RecordPacket(first);
-            cache.RecordPacket(second);
-
-            await Assert.That(cache.GetSeries<ulong>(proto.NumberId).Count).IsEqualTo(1);
-            await Assert.That(cache.IsCapacityReached).IsTrue();
-        }
-    }
+    #region Flags / misuse
 
     [Test]
     public async Task Flags_IncreasingIdsAndTimestamps_StayTrue()
@@ -521,48 +558,6 @@ internal sealed class ValueCacheTests
     }
 
     [Test]
-    public async Task ByteSize_MatchesC13_ForUdpPortSeries()
-    {
-        (Stack? stack, Packet packet) = _BuildStandardUdp();
-        using (stack)
-        {
-            FieldId? portId = stack.GetFieldId("udp.srcport");
-            await Assert.That(portId).IsNotNull();
-            ValueCache cache = new(stack, [new ValueCacheFieldConfig(portId!.Value)]);
-            cache.RecordPacket(packet);
-
-            ValueCacheSeries<ulong> series = cache.GetSeries<ulong>(portId.Value);
-            long expected = ExpectedUnmanagedByteSize(series.Count, sizeof(ulong));
-            await Assert.That(series.ByteSize).IsEqualTo(expected);
-            await Assert.That(cache.ByteSize).IsGreaterThanOrEqualTo(expected);
-        }
-    }
-
-    [Test]
-    public async Task BeginPacket_Nested_Throws()
-    {
-        (Stack? stack, ValueCacheExerciseProtocol proto, ProtocolId _) = _BuildExerciseStack();
-        using (stack)
-        {
-            ValueCache cache = new(stack, [new ValueCacheFieldConfig(proto.NumberId)]);
-            cache.BeginPacket(0, 1);
-            await Assert.That(() => cache.BeginPacket(1, 2)).Throws<InvalidOperationException>();
-            cache.EndPacket();
-        }
-    }
-
-    [Test]
-    public async Task EndPacket_WithoutBegin_Throws()
-    {
-        (Stack? stack, ValueCacheExerciseProtocol proto, ProtocolId _) = _BuildExerciseStack();
-        using (stack)
-        {
-            ValueCache cache = new(stack, [new ValueCacheFieldConfig(proto.NumberId)]);
-            await Assert.That(() => cache.EndPacket()).Throws<InvalidOperationException>();
-        }
-    }
-
-    [Test]
     public async Task RecordPacket_OtherStack_Throws()
     {
         (Stack? stack, ValueCacheExerciseProtocol proto, ProtocolId protoId) = _BuildExerciseStack();
@@ -596,7 +591,7 @@ internal sealed class ValueCacheTests
     }
 
     [Test]
-    public async Task Abandon_BeginPacket_Throws_ReadsRemain()
+    public async Task Abandon_RecordPacket_Throws_ReadsRemain()
     {
         (Stack? stack, ValueCacheExerciseProtocol proto, ProtocolId protoId) = _BuildExerciseStack();
         using (stack)
@@ -605,17 +600,18 @@ internal sealed class ValueCacheTests
             ValueCache cache = new(stack, [new ValueCacheFieldConfig(proto.NumberId)]);
             cache.RecordPacket(packet);
             cache.Abandon();
-            ValueCacheReaderView view = cache.AsReadOnlyView();
+            ReadOnlyValueCache view = cache.AsReadOnlyView();
+            Packet later = _ParseId(stack, protoId, proto, 1, 2);
 
             await Assert.That(cache.IsAbandoned).IsTrue();
             await Assert.That(view.IsAbandoned).IsTrue();
-            await Assert.That(() => cache.BeginPacket(1, 1)).Throws<InvalidOperationException>();
+            await Assert.That(() => cache.RecordPacket(later)).Throws<InvalidOperationException>();
             await Assert.That(cache.GetSeries<ulong>(proto.NumberId).Count).IsEqualTo(1);
         }
     }
 
     [Test]
-    public async Task ReaderView_ForwardsSeries()
+    public async Task ReadOnlyValueCache_ForwardsSeries()
     {
         (Stack? stack, ValueCacheExerciseProtocol proto, ProtocolId protoId) = _BuildExerciseStack();
         using (stack)
@@ -623,7 +619,7 @@ internal sealed class ValueCacheTests
             Packet packet = _Parse(stack, protoId, proto);
             ValueCache cache = new(stack, [new ValueCacheFieldConfig(proto.NumberId)]);
             cache.RecordPacket(packet);
-            ValueCacheReaderView view = cache.AsReadOnlyView();
+            ReadOnlyValueCache view = cache.AsReadOnlyView();
             await Assert.That(view.IsAbandoned).IsFalse();
             await Assert.That(view.GetSeries<ulong>(proto.NumberId).Count).IsEqualTo(1);
         }
@@ -664,6 +660,7 @@ internal sealed class ValueCacheExerciseProtocol : IProtocol
     public void ResetParseState()
     {
         BytesBuffer = [1, 2, 3];
+        NestedLazyOnMaterialize = false;
     }
 
     public void RegisterFields(StackBuilder builder, ProtocolId protocolId)

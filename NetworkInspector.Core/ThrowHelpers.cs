@@ -40,6 +40,26 @@ internal static class ThrowHelpers
                 CultureInfo.InvariantCulture,
                 $"F64 setting value must be finite, got {value}."));
 
+    /// <summary>
+    /// Throws when a skip-tree cursor is read outside the synthetic root or an in-flight lazy populator.
+    /// </summary>
+    [DoesNotReturn]
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    internal static void ThrowSkipFieldTreeValue()
+        => throw new InvalidOperationException(
+            string.Create(
+                CultureInfo.InvariantCulture,
+                $"Field values are not available on a packet parsed with FieldTreeMode.Skip except at the root and during an in-flight skip-tree lazy populator."));
+
+    /// <summary>Throws when a parse factory receives a <see cref="FieldTreeMode"/> other than Build or Skip.</summary>
+    [DoesNotReturn]
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    internal static void ThrowInvalidFieldTreeMode(FieldTreeMode fieldTree)
+        => throw new ArgumentOutOfRangeException(
+            nameof(fieldTree),
+            fieldTree,
+            "fieldTree must be FieldTreeMode.Build or FieldTreeMode.Skip.");
+
     #endregion
 
 }

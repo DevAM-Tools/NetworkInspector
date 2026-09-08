@@ -3,22 +3,24 @@
 namespace NetworkInspector.Profiling.Scenarios;
 
 /// <summary>
-/// Session ingest-time tee of <c>udp.srcport</c> via <see cref="SessionOptions.ValueCache"/>.
-/// New stack and session per <see cref="Run"/> so packet ids 0..N-1 are first-parses (replays do not tee).
-/// Pair with <c>session-value-cache-ondemand-udp-srcport</c>. Compare session overhead against
-/// <c>session-listener</c> (lazy pull, no tee) and tee cost against
-/// <c>parse-random-frames-recycled-recorded</c>. Do not compare to
-/// <c>session-listener-materialized</c>.
+/// Session ingest-time record of <c>udp.srcport</c>.
+/// <see cref="PrepareIteration"/> builds a fresh <see cref="Stack"/> so packet ids are first-parses
+/// (a reused stack would treat ids 0…N as replay and skip the ingest record).
+/// <see cref="Run"/> waits for ingest.
 /// </summary>
 [SuppressMessage(
     "Performance",
     "CA1812:AvoidUninstantiatedInternalClasses",
     Justification = "Instantiated via reflection in ScenarioDiscovery.Discover.")]
-internal sealed class SessionValueCacheIngestUdpSrcPortScenario : IProfilingScenario
+internal sealed class SessionValueCacheIngestUdpSrcPortScenario : IProfilingScenario, IDisposable
 {
     #region Fields
 
     private const int _FrameCount = 10_000;
+
+    private Stack? _Stack;
+    private Frame[]? _Frames;
+    private Session? _Session;
 
     #endregion
 
@@ -29,7 +31,7 @@ internal sealed class SessionValueCacheIngestUdpSrcPortScenario : IProfilingScen
 
     /// <inheritdoc/>
     public string Description => FormattableString.Invariant(
-        $"New Stack+Session per Run: SessionOptions.ValueCache(udp.srcport) ingest {_FrameCount:N0} frames.");
+        $"PrepareIteration: new Stack+Session (fresh first-parse ids); Run: ingest wait {_FrameCount:N0} frames, ValueCache(udp.srcport).");
 
     /// <inheritdoc/>
     public long WorkUnitsPerIteration => _FrameCount;
@@ -40,24 +42,41 @@ internal sealed class SessionValueCacheIngestUdpSrcPortScenario : IProfilingScen
     /// <inheritdoc/>
     public void Setup()
     {
-        // Stack and frames are created inside Run so each iteration first-parses packet ids 0..N-1.
+    }
+
+    /// <inheritdoc/>
+    public Action? PrepareIteration => _PrepareIteration;
+
+    private void _PrepareIteration()
+    {
+        _Stack?.Dispose();
+        _Stack = StackHelper.CreateStack();
+        _Frames = FrameHelper.CreateSharedFrames(_FrameCount, _Stack);
+        _Session = SessionValueCacheHarness.StartIngest(
+            _Stack,
+            _Frames,
+            new ValueCacheRequest { FieldNames = ["udp.srcport"] });
     }
 
     /// <inheritdoc/>
     public void Run()
     {
-        using Stack stack = StackHelper.CreateStack();
-        Frame[] frames = FrameHelper.CreateSharedFrames(_FrameCount, stack);
-        SessionValueCacheHarness.RunIngest(
-            stack,
-            frames,
-            new ValueCacheRequest { FieldNames = ["udp.srcport"] },
-            _FrameCount);
+        SessionValueCacheHarness.WaitIngest(_Session!, _FrameCount);
+        _Session = null;
     }
 
     /// <inheritdoc/>
-    public void Cleanup()
+    public void Cleanup() => Dispose();
+
+    /// <inheritdoc/>
+    public void Dispose()
     {
+        _Session?.Shutdown();
+        _Session?.Dispose();
+        _Session = null;
+        _Stack?.Dispose();
+        _Stack = null;
+        _Frames = null;
     }
 
     #endregion

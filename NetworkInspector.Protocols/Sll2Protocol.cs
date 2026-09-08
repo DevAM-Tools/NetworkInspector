@@ -117,12 +117,11 @@ public sealed partial class Sll2Protocol : IProtocol
             : default;
 
         // Build lazy summary
-        LazyString summary = ZA.Lazy("Linux cooked capture v2, Protocol: ",
-            DisplayTables.GetEtherTypeDisplayText(etherType));
 
         // Append all fields eagerly (only 7 fields, no lazy needed)
         FieldValue headerValue = FieldValue.NewBytes(data[.._HeaderSize]);
-        MutField container = parentField.AppendWithCustomText(_ProtocolFieldId, headerValue, summary);
+        MutField container = parentField.AppendWithCustomText(_ProtocolFieldId, headerValue, "Linux cooked capture v2, Protocol: ",
+            DisplayTables.GetEtherTypeDisplayText(etherType));
 
         string etypeText = DisplayTables.GetEtherTypeDisplayText(etherType);
         container.AppendWithCustomText(_EtypeFieldId, FieldValue.NewU64(etherType), etypeText);

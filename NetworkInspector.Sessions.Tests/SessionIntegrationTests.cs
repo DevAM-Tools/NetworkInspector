@@ -163,7 +163,7 @@ internal sealed class SessionIntegrationTests
         await Assert.That(session.Phase).IsEqualTo(SessionPhase.Stopped);
 
         // PacketCount equals frameCount because all frames were re-parsed from
-        // the random-access source via the PacketToFrameMap.
+        // the random-access source via the packed packet-to-frame store.
         await Assert.That(session.PacketCount).IsEqualTo(frameCount);
 
         // Listener receives re-parsed packets via StackChanged + NewPackets notification.
@@ -173,6 +173,36 @@ internal sealed class SessionIntegrationTests
         // Listener received exactly one OnStackChanged callback.
         WaitHelper.WaitUntil(() => listener.StackChangedCount >= 1);
         await Assert.That(listener.StackChangedCount).IsEqualTo(1);
+
+        session.Shutdown();
+    }
+
+    [Test]
+    public async Task Restart_FrameByIdMiss_ThrowsFrameUnavailable()
+    {
+        const int frameCount = 10;
+        using Stack stack = TestHarness.CreateStack();
+        using HoleRandomAccessSource source = new(TestFrameSource.WithUdpFrames(frameCount), holeFrameIndex: 5);
+        using Session session = new(stack);
+        session.TryAddFrameSource(source, out _);
+        session.TryStart();
+        session.WaitForCompletion();
+
+        SessionException? thrown = null;
+        try
+        {
+            session.Restart(registry => TestHarness.CreateStack(registry));
+        }
+        catch (SessionException ex)
+        {
+            thrown = ex;
+        }
+
+        await Assert.That(thrown).IsNotNull();
+        await Assert.That(thrown!.Code).IsEqualTo(SessionErrorCode.FrameUnavailable);
+        await Assert.That(session.PacketCount).IsNotEqualTo(frameCount);
+        await Assert.That(session.TryGetPacket(new PacketId(0), out _)).IsFalse();
+        await Assert.That(session.TryGetPacket(new PacketId(frameCount - 1), out _)).IsFalse();
 
         session.Shutdown();
     }
@@ -308,7 +338,6 @@ internal sealed class SessionIntegrationTests
         RedissectListener listener2 = new("L2");
 
         using Session session = new(stack, SessionOptions.RedissectOnly);
-        await Assert.That(session.StoreParsedPackets).IsFalse();
         await Assert.That(session.IndexPackets).IsFalse();
 
         session.TryAddFrameSource(source, out _);
@@ -317,23 +346,18 @@ internal sealed class SessionIntegrationTests
         session.TryStart();
         await Assert.That(session.PacketIndex).IsNull();
         session.WaitForCompletion();
-        session.Shutdown();
+        WaitHelper.WaitUntil(() => listener1.PacketsSeen >= frameCount && listener2.PacketsSeen >= frameCount);
 
         await Assert.That(listener1.PacketsSeen).IsEqualTo(frameCount);
         await Assert.That(listener2.PacketsSeen).IsEqualTo(frameCount);
         await Assert.That(listener1.Misses).IsEqualTo(0);
         await Assert.That(listener2.Misses).IsEqualTo(0);
 
-        PacketStore store = _GetPacketStore(session);
-        await Assert.That(store.Get(new PacketId(0))).IsNull();
-    }
+        bool got = session.TryGetPacket(new PacketId(0), out Packet? packet);
+        await Assert.That(got).IsTrue();
+        await Assert.That(packet!.HasFieldTree).IsTrue();
 
-    private static PacketStore _GetPacketStore(Session session)
-    {
-        System.Reflection.FieldInfo field = typeof(Session).GetField(
-            "_PacketStore",
-            BindingFlags.Instance | BindingFlags.NonPublic)!;
-        return (PacketStore)field.GetValue(session)!;
+        session.Shutdown();
     }
 
     private sealed class RedissectListener : ISessionListener

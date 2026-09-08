@@ -34,9 +34,12 @@ global using NetworkInspector.Filter.Errors;
 global using PacketFilter = NetworkInspector.Filter.Filter;
 #endregion
 
+#region NetworkInspector.Sources
+global using NetworkInspector.Sources.Cached;
+#endregion
+
 #region NetworkInspector.Sessions
 global using NetworkInspector.Sessions;
-global using NetworkInspector.Sessions.Cache;
 global using NetworkInspector.Sessions.Ids;
 global using NetworkInspector.Sessions.Jobs;
 global using NetworkInspector.Sessions.Listeners;

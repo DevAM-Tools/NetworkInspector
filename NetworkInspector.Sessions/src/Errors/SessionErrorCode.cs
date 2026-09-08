@@ -34,6 +34,14 @@ public enum SessionErrorCode
     /// <summary>The maximum number of packet IDs has been allocated.</summary>
     PacketIdExhausted,
 
+    /// <summary>
+    /// A mapped frame could not be re-read (<see cref="IRandomAccessFrameSource.FrameById"/>
+    /// returned <see langword="null"/>, the mapping slot is missing, or the source is not
+    /// random-access). Restart and ValueCache PullFill fail closed instead of compressing
+    /// PacketIds or skipping rows.
+    /// </summary>
+    FrameUnavailable,
+
     /// <summary>The supplied <c>ListenerId</c> does not identify a registered listener.</summary>
     ListenerNotFound,
 

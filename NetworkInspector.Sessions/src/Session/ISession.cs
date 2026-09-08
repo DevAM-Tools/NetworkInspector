@@ -21,11 +21,26 @@ public interface ISession : ISessionReader, IDisposable
     /// Attempts to register a frame source. Must be called while the session is
     /// in the <see cref="SessionPhase.Idle"/> phase.
     /// Returns <see langword="false"/> if the session is not in the correct phase.
+    /// After a successful add the session owns <paramref name="source"/> (or a
+    /// <see cref="CachedFrameSource"/> wrapper that owns it). The caller must not dispose it.
+    /// Non-random-access sources are always wrapped so frames remain readable after ingest.
     /// </summary>
     /// <exception cref="SessionException">
     /// <see cref="SessionErrorCode.JobIdExhausted"/> when the job ID limit is reached.
     /// </exception>
     bool TryAddFrameSource(IFrameSource source, [NotNullWhen(true)] out FrameSourceInfo? info);
+
+    /// <summary>
+    /// Registers a frame source with per-source cache options.
+    /// <see cref="FrameSourceAddOptions.CacheRandomAccess"/> wraps an
+    /// <see cref="IRandomAccessFrameSource"/> in <see cref="CachedFrameSource"/>
+    /// (holds the inner <see cref="Frame"/>; payload memory is not copied).
+    /// Stream sources are always wrapped.
+    /// </summary>
+    bool TryAddFrameSource(
+        IFrameSource source,
+        FrameSourceAddOptions addOptions,
+        [NotNullWhen(true)] out FrameSourceInfo? info);
 
     // ── Listener management ───────────────────────────────────────────────────
 
@@ -48,7 +63,7 @@ public interface ISession : ISessionReader, IDisposable
     /// The filter is used only by <see cref="ISessionReader.TryReadPackets"/> in
     /// <see cref="PacketReadMode.Matching"/> mode. Notifications stay unfiltered:
     /// <see cref="ISessionListener.OnNewPackets"/> always reports the full id window of newly
-    /// stored packets, so a listener is never starved of wake-ups by its own filter.
+    /// announced packets, so a listener is never starved of wake-ups by its own filter.
     /// </para>
     ///
     /// <para>
@@ -170,14 +185,6 @@ public interface ISession : ISessionReader, IDisposable
     // ── Lifecycle ─────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Whether the session stores sealed packets for later lock-free reads.
-    /// When <see langword="false"/>, <see cref="ISessionReader.TryGetPacket(PacketId, out Packet)"/>
-    /// re-parses from the frame source; stateful protocols replay the state recorded during the first
-    /// parse.
-    /// </summary>
-    bool StoreParsedPackets { get; }
-
-    /// <summary>
     /// Whether the session populates the packet index during the first parse of each frame.
     /// When <see langword="false"/>, <see cref="ISessionReader.PacketIndex"/> stays
     /// <see langword="null"/> after start.
@@ -214,8 +221,18 @@ public interface ISession : ISessionReader, IDisposable
     /// <para>
     /// <b>Re-parse ordering:</b>
     /// All previously parsed frames are re-parsed in the original PacketId order
-    /// (0 … N-1). Sources that do not support random access are skipped; their
-    /// past frames cannot be retrieved.
+    /// (0 … N-1) from the bound source’s <see cref="IRandomAccessFrameSource.FrameById"/>.
+    /// Stream sources are wrapped at add time, so their past frames remain readable.
+    /// An <see cref="IRandomAccessFrameSource"/> added without
+    /// <see cref="FrameSourceAddOptions.CacheRandomAccess"/> is re-parsed from that
+    /// inner source. A mapping miss, a source that is not random-access, or a
+    /// <see langword="null"/> <see cref="IRandomAccessFrameSource.FrameById"/> result
+    /// throws <see cref="SessionException"/> with
+    /// <see cref="SessionErrorCode.FrameUnavailable"/> (fail closed; PacketIds are not compressed).
+    /// After that throw, pull queries stay disabled so
+    /// <see cref="ISessionReader.TryGetPacket(PacketId, out Packet?)"/>
+    /// cannot read a partial rewrite; <see cref="ISessionReader.PacketCount"/> may be less than
+    /// the pre-restart count. Call <see cref="Shutdown"/> to tear down.
     /// </para>
     ///
     /// <para>
@@ -257,7 +274,8 @@ public interface ISession : ISessionReader, IDisposable
     /// </exception>
     /// <exception cref="SessionException">
     /// The session is not in the <see cref="SessionPhase.Running"/> or
-    /// <see cref="SessionPhase.Stopped"/> phase.
+    /// <see cref="SessionPhase.Stopped"/> phase, or a mapped frame cannot be
+    /// re-read (<see cref="SessionErrorCode.FrameUnavailable"/>).
     /// </exception>
     void Restart(Func<FrameInterfaceRegistry, Stack> stackFactory);
 

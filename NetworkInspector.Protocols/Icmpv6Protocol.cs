@@ -304,9 +304,11 @@ public sealed partial class Icmpv6Protocol : IProtocol
         // Checksum validation (uses IPv6 pseudo-header)
         if (_VerifyChecksum)
         {
-            bool valid = _ValidateChecksum(in container, icmpData.Span);
-            string statusText = valid ? "[Good]" : "[Bad]";
-            container.Append(_ChecksumStatusFieldId, FieldValue.NewString(statusText));
+            bool? valid = _ValidateChecksum(in container, icmpData.Span);
+            if (valid is bool v)
+            {
+                container.Append(_ChecksumStatusFieldId, FieldValue.NewString(v ? "[Good]" : "[Bad]"));
+            }
         }
 
         // Echo Request/Reply: identifier and sequence number
@@ -452,9 +454,6 @@ public sealed partial class Icmpv6Protocol : IProtocol
         }
 
         // Summary text
-        LazyString summary = ZA.Lazy(
-            "Internet Control Message Protocol v6, ",
-            DisplayTables.GetIcmpv6TypeDisplayText(type));
 
         // Packet info
         parentField.SetPacketInfo(new LazyString(
@@ -463,42 +462,55 @@ public sealed partial class Icmpv6Protocol : IProtocol
         // Store entire ICMPv6 message for lazy populator
         FieldValue containerValue = FieldValue.NewBytes(data)
             .WithCustomRepresentation(new LazyString("8 bytes"));
-        parentField.AppendLazyWithCustomText(_ProtocolFieldId, containerValue, summary, _Populator);
+        parentField.AppendLazyWithCustomText(_ProtocolFieldId, containerValue, "Internet Control Message Protocol v6, ",
+            DisplayTables.GetIcmpv6TypeDisplayText(type), _Populator);
 
         return data.Length;
     }
 
     /// <summary>
-    /// Validates the ICMPv6 checksum using the IPv6 pseudo-header of the innermost enclosing
-    /// IPv6 layer (sibling walk, same contract as UDP/TCP). A flat <c>TryGetFieldValue</c>
-    /// scan would pick the first <c>ipv6.src</c>/<c>ipv6.dst</c> in storage order — the
-    /// outermost header in a tunnel — and compute the wrong checksum.
-    /// Returns <see langword="false"/> when no IPv6 layer is found or the checksum is bad.
+    /// Validates the ICMPv6 checksum using the IPv6 cache first, then the innermost
+    /// enclosing IPv6 layer (sibling walk, same contract as UDP/TCP). A flat
+    /// <c>TryGetFieldValue</c> scan would pick the first <c>ipv6.src</c>/<c>ipv6.dst</c>
+    /// in storage order — the outermost header in a tunnel — and compute the wrong checksum.
+    /// Returns <see langword="null"/> when no IPv6 layer is found.
     /// </summary>
-    private bool _ValidateChecksum(in MutField container, ReadOnlySpan<byte> icmpSpan)
+    private bool? _ValidateChecksum(in MutField container, ReadOnlySpan<byte> icmpSpan)
     {
-        // Walk previous siblings to find typed IP addresses. ICMPv6 checksums are IPv6-only;
-        // an innermost IPv4 layer is treated as "no IPv6 layer".
-        if (!IpAddressExtractor.TryFindPreviousIpAddresses(in container,
-            _IpContainerFieldId, _Ipv6ContainerFieldId,
-            _IpSrcFieldId, _IpDstFieldId, _Ipv6SrcFieldId, _Ipv6DstFieldId,
-            out _,
-            out (IPv6Address Src, IPv6Address Dst)? ipv6)
+        if (IPv6Protocol.TryGetCachedAddresses(container.Packet.Id, out IPv6Address src, out IPv6Address dst))
+        {
+            ushort icmpLen = (ushort)icmpSpan.Length;
+            ulong pseudoSum = InternetChecksum.ComputeIPv6PseudoHeaderSum(
+                src.High, src.Low, dst.High, dst.Low, _Icmpv6ProtocolNumber, icmpLen);
+            return InternetChecksum.ComputeWithPseudoHeader(icmpSpan, pseudoSum) == 0;
+        }
+
+        if (!container.HasFieldTree)
+        {
+            return null;
+        }
+
+        if (!IpAddressExtractor.TryFindPreviousIpAddresses(
+                in container,
+                _IpContainerFieldId,
+                _Ipv6ContainerFieldId,
+                _IpSrcFieldId,
+                _IpDstFieldId,
+                _Ipv6SrcFieldId,
+                _Ipv6DstFieldId,
+                out _,
+                out (IPv6Address Src, IPv6Address Dst)? ipv6)
             || !ipv6.HasValue)
         {
-            return false;
+            return null;
         }
 
         IPv6Address srcAddr = ipv6.Value.Src;
         IPv6Address dstAddr = ipv6.Value.Dst;
-
-        // Compute pseudo-header sum directly from ulong high/low halves (no stackalloc / byte conversion)
-        ushort icmpLen = (ushort)icmpSpan.Length;
-        ulong pseudoSum = InternetChecksum.ComputeIPv6PseudoHeaderSum(
-            srcAddr.High, srcAddr.Low, dstAddr.High, dstAddr.Low, _Icmpv6ProtocolNumber, icmpLen);
-
-        ushort result = InternetChecksum.ComputeWithPseudoHeader(icmpSpan, pseudoSum);
-        return result == 0;
+        ushort len = (ushort)icmpSpan.Length;
+        ulong sum = InternetChecksum.ComputeIPv6PseudoHeaderSum(
+            srcAddr.High, srcAddr.Low, dstAddr.High, dstAddr.Low, _Icmpv6ProtocolNumber, len);
+        return InternetChecksum.ComputeWithPseudoHeader(icmpSpan, sum) == 0;
     }
     #endregion
 }

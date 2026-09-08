@@ -221,8 +221,6 @@ public sealed partial class WebSocketProtocol : IProtocol
         bool fin = (span[0] & 0x80) != 0;
         string opcodeText = WebSocketDisplayTables.GetOpcodeDisplayText(opcode);
 
-        LazyString summary = ZA.Lazy(
-            "WebSocket ", opcodeText, fin ? " [FIN]" : "");
 
         parentField.SetPacketInfo(ZA.Lazy("WebSocket ", opcodeText));
 
@@ -267,7 +265,7 @@ public sealed partial class WebSocketProtocol : IProtocol
         }
 
         MutField container = parentField.AppendLazyWithCustomText(
-            _ProtocolFieldId, FieldValue.NewBytes(data), summary, _Populator);
+            _ProtocolFieldId, FieldValue.NewBytes(data), "WebSocket ", opcodeText, fin ? " [FIN]" : "", _Populator);
 
         // Eagerly dispatch text/binary frame payloads to sub-protocols with the real context so
         // dispatched sub-protocols record their index groups during the index phase (Q6: the

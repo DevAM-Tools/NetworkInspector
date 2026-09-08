@@ -85,6 +85,30 @@ internal sealed class JsonExporterTests
     }
 
     [Test]
+    public async Task OnPacket_SkipPacket_ReportsSkippedAndWritesNoPacket()
+    {
+        using MemoryStream ms = new();
+        using JsonExporter exporter = JsonExporter.CreateBuilder()
+            .ToStream(ms)
+            .WithFormat(JsonExportFormat.Compact)
+            .Build();
+
+        byte[] frameData = FrameGenerators.BuildEthernetIpv4UdpFrame(32);
+        Frame frame = TestHarness.CreateFrame(new FrameId(0), 0, frameData);
+        Packet skip = Packet.ParseFrame(TestHarness.NextPacketId(), TestHarness.GetStack(), frame, FieldTreeMode.Skip);
+
+        int skippedEvents = 0;
+        exporter.ItemSkipped += (_, _) => skippedEvents++;
+        bool accepted = exporter.OnPacket(skip);
+        exporter.OnFinish();
+
+        await Assert.That(accepted).IsTrue();
+        await Assert.That(exporter.SkippedCount).IsEqualTo(1);
+        await Assert.That(exporter.PacketCount).IsEqualTo(0);
+        await Assert.That(skippedEvents).IsEqualTo(1);
+    }
+
+    [Test]
     public async Task EmptyExport_ProducesEmptyJsonArray()
     {
         using MemoryStream ms = new();

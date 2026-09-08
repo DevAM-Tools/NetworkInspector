@@ -14,7 +14,7 @@ public enum PacketIdLayout : byte
 {
     /// <summary>
     /// Ids are consecutive integers: <c>destination[i].Id == startId + i</c>. Individual packets may
-    /// still be <see langword="null"/> where the store holds no packet for that id.
+    /// still be <see langword="null"/> when the frame for that id cannot be re-read.
     /// </summary>
     Contiguous = 0,
 

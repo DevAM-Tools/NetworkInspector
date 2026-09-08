@@ -39,6 +39,11 @@ internal static class CompactWriter
     /// <param name="state">Mutable exporter state for deduplication tracking.</param>
     internal static void WritePacket(Packet packet, ref PooledBuffer buffer, JsonExporterState state)
     {
+        if (!packet.HasFieldTree)
+        {
+            throw new InvalidOperationException("Skip packets cannot be exported (HasFieldTree is false).");
+        }
+
         buffer.WriteByte((byte)'{');
 
         // ID — always present

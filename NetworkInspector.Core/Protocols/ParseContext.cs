@@ -27,6 +27,7 @@ public readonly ref struct ParseContext
     #region Fields
 
     private readonly PacketIndex? _Index;
+    private readonly bool _SkipFieldTree;
 
     #endregion
 
@@ -36,30 +37,33 @@ public readonly ref struct ParseContext
     public static ParseContext Empty => default;
 
     /// <summary>Creates a non-indexed parse context carrying only the stack (used for unindexed parses).</summary>
-    internal ParseContext(Stack stack)
+    internal ParseContext(Stack stack, bool skipFieldTree = false)
     {
         _Index = null;
         Dispatch = default;
         Stack = stack;
         SelfProtocolId = ProtocolId.Invalid;
+        _SkipFieldTree = skipFieldTree;
     }
 
     /// <summary>Creates a parse context with the given packet index and stack.</summary>
-    internal ParseContext(PacketIndex index, Stack stack)
+    internal ParseContext(PacketIndex index, Stack stack, bool skipFieldTree = false)
     {
         _Index = index;
         Dispatch = default;
         Stack = stack;
         SelfProtocolId = ProtocolId.Invalid;
+        _SkipFieldTree = skipFieldTree;
     }
 
     /// <summary>Full private constructor used by <see cref="WithDispatch"/> and <see cref="WithSelfProtocol"/> to produce updated copies.</summary>
-    private ParseContext(PacketIndex? index, DispatchContext dispatch, Stack? stack, ProtocolId selfProtocolId)
+    private ParseContext(PacketIndex? index, DispatchContext dispatch, Stack? stack, ProtocolId selfProtocolId, bool skipFieldTree)
     {
         _Index = index;
         Dispatch = dispatch;
         Stack = stack;
         SelfProtocolId = selfProtocolId;
+        _SkipFieldTree = skipFieldTree;
     }
 
     #endregion
@@ -71,6 +75,16 @@ public readonly ref struct ParseContext
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         get => _Index is not null;
+    }
+
+    /// <summary>
+    /// Whether this parse writes FieldBodies. Default and empty contexts report
+    /// <see langword="true"/> so protocols that forget to check keep the Build-tree contract.
+    /// </summary>
+    public bool HasFieldTree
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        get => !_SkipFieldTree;
     }
 
     /// <summary>Whether a stack is attached. <see langword="false"/> only for the default/empty context.</summary>
@@ -130,7 +144,7 @@ public readonly ref struct ParseContext
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal ParseContext WithDispatch(DispatchContext dispatch)
-        => new(_Index, dispatch, Stack, SelfProtocolId);
+        => new(_Index, dispatch, Stack, SelfProtocolId, _SkipFieldTree);
 
     /// <summary>
     /// Returns a copy of this context with <see cref="SelfProtocolId"/> set to
@@ -140,7 +154,7 @@ public readonly ref struct ParseContext
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal ParseContext WithSelfProtocol(ProtocolId protocolId)
-        => new(_Index, Dispatch, Stack, protocolId);
+        => new(_Index, Dispatch, Stack, protocolId, _SkipFieldTree);
 
     /// <summary>
     /// Records that the current packet contains the given index group.

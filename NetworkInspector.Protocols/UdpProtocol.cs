@@ -304,7 +304,8 @@ public sealed partial class UdpProtocol : IProtocol
                 return ParseError.InsufficientDataWithInfo(ProtocolName, UdpHeader.HeaderSize, (ulong)data.Length);
             }
         }
-        else if (_TryFindPreviousIpAddressesFallback(parentField, out IPv4Address fbSrc4, out IPv4Address fbDst4, in context))
+        else if (parentField.HasFieldTree
+            && _TryFindPreviousIpAddressesFallback(parentField, out IPv4Address fbSrc4, out IPv4Address fbDst4, in context))
         {
             // Fallback: IPv4 via sibling walk (edge case — cache miss)
             UdpConnectionKey connKey = UdpConnectionKey.FromIPv4(fbSrc4.RawValue, fbDst4.RawValue, srcPort, dstPort);
@@ -313,7 +314,8 @@ public sealed partial class UdpProtocol : IProtocol
                 return ParseError.InsufficientDataWithInfo(ProtocolName, UdpHeader.HeaderSize, (ulong)data.Length);
             }
         }
-        else if (_TryFindPreviousIpv6AddressesFallback(parentField, out IPv6Address fbSrc6, out IPv6Address fbDst6, in context))
+        else if (parentField.HasFieldTree
+            && _TryFindPreviousIpv6AddressesFallback(parentField, out IPv6Address fbSrc6, out IPv6Address fbDst6, in context))
         {
             // Fallback: IPv6 via sibling walk (edge case — cache miss)
             UdpConnectionKey connKey = new(new UInt128(fbSrc6.High, fbSrc6.Low), new UInt128(fbDst6.High, fbDst6.Low), srcPort, dstPort);
@@ -332,8 +334,6 @@ public sealed partial class UdpProtocol : IProtocol
         }
 
         // Summary and packetInfo use ZA.Lazy to defer string formatting.
-        LazyString summary = ZA.Lazy(
-            "User Datagram Protocol, Src Port: ", srcPort, ", Dst Port: ", dstPort);
 
         // Set packet info so the info column reflects the transport layer ports.
         // Higher-level protocols (DNS, HTTP, etc.) can overwrite this later.
@@ -343,7 +343,7 @@ public sealed partial class UdpProtocol : IProtocol
         // The CustomRepresentation still shows "8 bytes" (the header size) to the user.
         FieldValue containerValue = FieldValue.NewBytes(data)
             .WithCustomRepresentation(new LazyString("8 bytes"));
-        MutField udpContainer = parentField.AppendWithCustomText(_ProtocolFieldId, containerValue, summary);
+        MutField udpContainer = parentField.AppendWithCustomText(_ProtocolFieldId, containerValue, "User Datagram Protocol, Src Port: ", srcPort, ", Dst Port: ", dstPort);
 
         // UDP is fully eager: every descriptive field is appended during Parse() so that
         // index group recording and downstream filtering never depend on materialisation.
@@ -357,7 +357,7 @@ public sealed partial class UdpProtocol : IProtocol
 
         if (checksumVerified)
         {
-            bool? checksumValid = _ValidateChecksum(in udpContainer, data.Span, length);
+            bool? checksumValid = _ValidateChecksum(in udpContainer, data.Span, length, in context);
             string statusText = checksumValid switch
             {
                 true => "[Good]",
@@ -400,22 +400,38 @@ public sealed partial class UdpProtocol : IProtocol
     }
 
     /// <summary>
-    /// Validates the UDP checksum by walking previous siblings to find typed IP addresses.
+    /// Validates the UDP checksum from cached IP addresses first, then sibling walk on Build.
     /// Returns <see langword="true"/> if valid, <see langword="false"/> if invalid,
     /// or <see langword="null"/> if no IP layer was found.
     /// </summary>
-    private bool? _ValidateChecksum(in MutField container, ReadOnlySpan<byte> udpSpan, ushort udpLength)
+    private bool? _ValidateChecksum(
+        in MutField container, ReadOnlySpan<byte> udpSpan, ushort udpLength, in ParseContext context)
     {
         int segmentLen = Math.Min(udpLength, udpSpan.Length);
 
-        // Walk previous siblings to find typed IP addresses
-        if (!IpAddressExtractor.TryFindPreviousIpAddresses(in container,
-            _IpContainerFieldId, _Ipv6ContainerFieldId,
-            _IpSrcFieldId, _IpDstFieldId, _Ipv6SrcFieldId, _Ipv6DstFieldId,
-            out (IPv4Address Src, IPv4Address Dst)? ipv4,
-            out (IPv6Address Src, IPv6Address Dst)? ipv6))
+        PacketId packetId = container.Packet.Id;
+        bool callerIsIpv4 = context.Dispatch.HasDispatch && context.Dispatch.CallerProtocolId == _Ipv4ProtocolId;
+        bool callerIsIpv6 = context.Dispatch.HasDispatch && context.Dispatch.CallerProtocolId == _Ipv6ProtocolId;
+
+        (IPv4Address Src, IPv4Address Dst)? ipv4 = null;
+        (IPv6Address Src, IPv6Address Dst)? ipv6 = null;
+        if (!callerIsIpv6 && IPv4Protocol.TryGetCachedAddresses(packetId, out IPv4Address src4, out IPv4Address dst4))
         {
-            return null; // No IP layer found — cannot validate
+            ipv4 = (src4, dst4);
+        }
+        else if (!callerIsIpv4 && IPv6Protocol.TryGetCachedAddresses(packetId, out IPv6Address src6, out IPv6Address dst6))
+        {
+            ipv6 = (src6, dst6);
+        }
+        else if (!container.HasFieldTree
+            || !IpAddressExtractor.TryFindPreviousIpAddresses(
+                in container,
+                _IpContainerFieldId, _Ipv6ContainerFieldId,
+                _IpSrcFieldId, _IpDstFieldId, _Ipv6SrcFieldId, _Ipv6DstFieldId,
+                out ipv4,
+                out ipv6))
+        {
+            return null;
         }
 
         ulong pseudoSum;
@@ -426,11 +442,10 @@ public sealed partial class UdpProtocol : IProtocol
         }
         else
         {
-            // ipv6 is guaranteed non-null when TryFindPreviousIpAddresses returns true
-            IPv6Address src6 = ipv6!.Value.Src;
-            IPv6Address dst6 = ipv6!.Value.Dst;
+            IPv6Address srcAddr = ipv6!.Value.Src;
+            IPv6Address dstAddr = ipv6!.Value.Dst;
             pseudoSum = InternetChecksum.ComputeIPv6PseudoHeaderSum(
-                src6.High, src6.Low, dst6.High, dst6.Low, _UdpProtocolNumber, udpLength);
+                srcAddr.High, srcAddr.Low, dstAddr.High, dstAddr.Low, _UdpProtocolNumber, udpLength);
         }
 
         ushort result = InternetChecksum.ComputeWithPseudoHeader(udpSpan[..segmentLen], pseudoSum);

@@ -69,7 +69,7 @@ internal static class SomeIpSdParser
         int entryCount = entriesLength / _SdEntrySize;
         MutField entriesField = sdField.AppendWithCustomText(fieldIds.EntriesContainer,
             FieldValue.None,
-            entryCount == 1 ? "Entries Array (1 entry)" : ZA.Lazy("Entries Array (", entryCount, " entries)"));
+            "Entries Array (", entryCount, entryCount == 1 ? " entry)" : " entries)");
 
         // Parse individual entries
         int offset = entriesStart;
@@ -102,7 +102,7 @@ internal static class SomeIpSdParser
         if (optionsLength > 0)
         {
             MutField optionsField = sdField.AppendWithCustomText(fieldIds.OptionsContainer,
-                FieldValue.None, ZA.Lazy("Options Array (", optionsLength, " bytes)"));
+                FieldValue.None, "Options Array (", optionsLength, " bytes)");
 
             _ParseOptions(in optionsField, sdData, optionsStart, optionsEnd, in fieldIds);
         }

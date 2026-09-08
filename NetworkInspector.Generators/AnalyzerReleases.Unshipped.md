@@ -19,3 +19,4 @@ NIGEN010 | NetworkInspector.Generators | Warning | Unknown field attribute type 
 NIGEN011 | NetworkInspector.Generators | Error | Invalid hex string in BytesSetting.DefaultHex
 NIGEN012 | NetworkInspector.Generators | Error | Protocol class is not declared partial
 NIGEN013 | NetworkInspector.Generators | Warning | Attribute payload incomplete; entry skipped
+NIGEN015 | NetworkInspector.Generators | Warning | ZA.Lazy passed to MutField custom-text append

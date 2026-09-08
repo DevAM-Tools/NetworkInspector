@@ -495,8 +495,6 @@ public sealed partial class IPv4Protocol : IProtocol
         }
 
         // Summary closure captures only src and dst (8 bytes total as IPv4Address value types).
-        LazyString summary = ZA.Lazy(
-            "Internet Protocol Version 4, Src: ", src, ", Dst: ", dst);
 
         // Store the full header bytes (up to headerLen) in the field value so that
         // PopulateIPv4Fields can re-parse all fields without any captured state.
@@ -507,7 +505,7 @@ public sealed partial class IPv4Protocol : IProtocol
         FieldValue headerValue = FieldValue.NewBytes(headerBytes)
             .WithCustomRepresentation(hdrLenRepresentation);
         MutField ipContainer = parentField.AppendLazyWithCustomText(
-            _ProtocolFieldId, headerValue, summary, _Populator);
+            _ProtocolFieldId, headerValue, "Internet Protocol Version 4, Src: ", src, ", Dst: ", dst, _Populator);
 
         // Eagerly append ip.src, ip.dst, and ip.proto as non-lazy children so downstream
         // protocols (e.g., TCP/UDP) can locate IPv4 addresses via IpAddressExtractor

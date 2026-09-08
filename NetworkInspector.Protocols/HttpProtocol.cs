@@ -798,7 +798,7 @@ public sealed partial class HttpProtocol : IProtocol
 
         // Append header container with display text "Name: Value"
         MutField headerField = container.AppendWithCustomText(
-            _HeaderFieldId, FieldValue.None, ZA.Lazy(name, ": ", value));
+            _HeaderFieldId, FieldValue.None, name, ": ", value);
         headerField.Append(_HeaderNameFieldId, FieldValue.NewString(name));
         headerField.Append(_HeaderValueFieldId, FieldValue.NewString(value));
 

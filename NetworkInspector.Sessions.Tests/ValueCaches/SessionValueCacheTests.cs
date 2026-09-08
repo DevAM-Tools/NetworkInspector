@@ -10,13 +10,10 @@ internal sealed class SessionValueCacheTests
 {
     #region Helpers
 
-    private static ValueCacheRequest _UdpPortRequest(ValueCacheLimits limits = default) =>
+    private static ValueCacheRequest _UdpPortRequest() =>
         new()
         {
             FieldNames = ["udp.srcport"],
-            Limits = limits.MaxRowCount is null && limits.MaxBytes is null
-                ? ValueCacheLimits.Unlimited
-                : limits,
         };
 
     private static (Stack Stack, CustomTextSessionProtocol Proto) _CreateCustomTextStack()
@@ -54,9 +51,9 @@ internal sealed class SessionValueCacheTests
     {
         public string UiName => "udp src ports";
 
-        public void OnNewRows(ISessionReader session, ValueCacheReaderView cache, int fromIndex, int toIndexExclusive)
+        public void OnNewRows(ISessionReader session, ReadOnlyValueCache cache, int fromIndex, int toIndexExclusive)
         {
-            if (!cache.TryGetSeries<ulong>("udp.srcport", out ValueCacheSeries<ulong>? series) || series is null)
+            if (!cache.TryGetSeries<ulong>("udp.srcport", out ReadOnlyValueCacheSeries<ulong> series))
             {
                 return;
             }
@@ -111,11 +108,11 @@ internal sealed class SessionValueCacheTests
             }
         }
 
-        public void OnNewRows(ISessionReader session, ValueCacheReaderView cache, int fromIndex, int toIndexExclusive)
+        public void OnNewRows(ISessionReader session, ReadOnlyValueCache cache, int fromIndex, int toIndexExclusive)
         {
             Volatile.Write(ref _CallbackThreadId, Environment.CurrentManagedThreadId);
             Interlocked.Add(ref _RowsSeen, toIndexExclusive - fromIndex);
-            if (cache.TryGetSeries<ulong>("udp.srcport", out ValueCacheSeries<ulong>? series) && series is not null)
+            if (cache.TryGetSeries<ulong>("udp.srcport", out ReadOnlyValueCacheSeries<ulong> series))
             {
                 Volatile.Write(ref _SeriesCount, series.Count);
             }
@@ -139,7 +136,7 @@ internal sealed class SessionValueCacheTests
     {
         public string UiName => "   ";
 
-        public void OnNewRows(ISessionReader session, ValueCacheReaderView cache, int fromIndex, int toIndexExclusive)
+        public void OnNewRows(ISessionReader session, ReadOnlyValueCache cache, int fromIndex, int toIndexExclusive)
         {
         }
     }
@@ -159,9 +156,9 @@ internal sealed class SessionValueCacheTests
         session.TryStart();
         session.WaitForCompletion();
 
-        ValueCacheReaderView? ingest = session.IngestValueCache;
+        ReadOnlyValueCache? ingest = session.IngestValueCache;
         await Assert.That(ingest.HasValue).IsTrue();
-        ValueCacheSeries<ulong> series = ingest!.Value.GetSeries<ulong>(stack.GetFieldId("udp.srcport")!.Value);
+        ReadOnlyValueCacheSeries<ulong> series = ingest!.Value.GetSeries<ulong>(stack.GetFieldId("udp.srcport")!.Value);
         int count = series.Count;
         bool increasing = ingest.Value.PacketIdsStrictlyIncreasing;
         await Assert.That(count).IsEqualTo(frameCount);
@@ -215,32 +212,10 @@ internal sealed class SessionValueCacheTests
         session.TryStart();
         session.WaitForCompletion();
 
-        ValueCacheReaderView? ingest = session.IngestValueCache;
+        ReadOnlyValueCache? ingest = session.IngestValueCache;
         await Assert.That(ingest.HasValue).IsTrue();
         await Assert.That(ingest!.Value.Series.Count).IsGreaterThan(0);
         session.Shutdown();
-    }
-
-    [Test]
-    public async Task Ingest_MaxRowCount_StopsAtCapacity()
-    {
-        const int frameCount = 5;
-        using Stack stack = TestHarness.CreateStack();
-        using TestFrameSource source = TestFrameSource.WithUdpFrames(frameCount);
-        using Session session = new(
-            stack,
-            new SessionOptions { ValueCache = _UdpPortRequest(new ValueCacheLimits(MaxRowCount: 2, MaxBytes: null)) });
-        session.TryAddFrameSource(source, out _);
-        session.TryStart();
-        session.WaitForCompletion();
-
-        ValueCacheReaderView? ingest = session.IngestValueCache;
-        await Assert.That(ingest.HasValue).IsTrue();
-        ValueCacheSeries<ulong> series = ingest!.Value.GetSeries<ulong>(stack.GetFieldId("udp.srcport")!.Value);
-        int count = series.Count;
-        bool reached = ingest.Value.IsCapacityReached;
-        await Assert.That(count).IsEqualTo(2);
-        await Assert.That(reached).IsTrue();
     }
 
     [Test]
@@ -257,7 +232,7 @@ internal sealed class SessionValueCacheTests
         session.WaitForCompletion();
 
         await Assert.That(session.PacketIndex.HasValue).IsTrue();
-        ValueCacheReaderView? ingest = session.IngestValueCache;
+        ReadOnlyValueCache? ingest = session.IngestValueCache;
         await Assert.That(ingest.HasValue).IsTrue();
         await Assert.That(ingest!.Value.GetSeries<ulong>(stack.GetFieldId("udp.srcport")!.Value).Count)
             .IsEqualTo(frameCount);
@@ -566,7 +541,7 @@ internal sealed class SessionValueCacheTests
         session.WaitForCompletion();
         WaitHelper.WaitUntil(() => runtime.RowsSeen >= frameCount);
 
-        ValueCacheReaderView oldIngest = session.IngestValueCache!.Value;
+        ReadOnlyValueCache oldIngest = session.IngestValueCache!.Value;
         await Assert.That(added).IsTrue();
         await Assert.That(oldIngest.IsAbandoned).IsFalse();
 
@@ -574,7 +549,7 @@ internal sealed class SessionValueCacheTests
         WaitHelper.WaitUntil(() => runtime.StackChangedCount >= 1 && runtime.RowsSeen >= frameCount * 2);
 
         await Assert.That(oldIngest.IsAbandoned).IsTrue();
-        ValueCacheReaderView newIngest = session.IngestValueCache!.Value;
+        ReadOnlyValueCache newIngest = session.IngestValueCache!.Value;
         await Assert.That(newIngest.IsAbandoned).IsFalse();
         await Assert.That(session.GetValueCaches().Contains(runtimeInfo!)).IsTrue();
         session.Shutdown();
@@ -651,14 +626,12 @@ internal sealed class SessionValueCacheTests
         session.TryStart();
         session.WaitForCompletion();
 
-        ValueCacheReaderView? ingest = session.IngestValueCache;
+        ReadOnlyValueCache? ingest = session.IngestValueCache;
         await Assert.That(ingest.HasValue).IsTrue();
-        ValueCacheStringSeries text = ingest!.Value.GetCustomTextSeries(proto.NumberId);
-        bool gotText = text.TryGetAsString(0, out string first);
-        bool hasPayload = ingest.Value.TryGetSeries<ulong>("vcx.text", out ValueCacheSeries<ulong>? payload);
+        ReadOnlyValueCacheSeries<string> text = ingest!.Value.GetCustomTextSeries(proto.NumberId);
         await Assert.That(text.Count).IsEqualTo(2);
-        await Assert.That(gotText).IsTrue();
-        await Assert.That(first).IsEqualTo("hello");
+        await Assert.That(text[0].Value).IsEqualTo("hello");
+        bool hasPayload = ingest.Value.TryGetSeries<ulong>("vcx.text", out ReadOnlyValueCacheSeries<ulong> payload);
         await Assert.That(hasPayload).IsFalse();
         _ = payload;
         session.Shutdown();

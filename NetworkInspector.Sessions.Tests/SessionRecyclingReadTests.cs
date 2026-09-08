@@ -4,8 +4,7 @@ namespace NetworkInspector.Sessions.Tests;
 
 /// <summary>
 /// Covers the recycling overload of <see cref="ISessionReader.TryGetPacket(PacketId, Packet, out Packet)"/>:
-/// a listener that reads with the packet store off should be able to re-parse into its own packet
-/// object instead of allocating one per read.
+/// a listener re-parses into its own packet object instead of allocating one per read.
 /// </summary>
 internal sealed class SessionRecyclingReadTests
 {
@@ -83,11 +82,10 @@ internal sealed class SessionRecyclingReadTests
     }
 
     /// <summary>
-    /// With the store on, a hit must hand out the stored instance. The caller's recycle packet stays
-    /// untouched, which is what lets a caller pass one unconditionally.
+    /// Default session reparses into the caller's recycle packet; the session does not keep a stored instance.
     /// </summary>
     [Test]
-    public async Task TryGetPacket_StoreOn_ReturnsStoredInstanceAndLeavesRecycleAlone()
+    public async Task TryGetPacket_DefaultSession_ReusesCallerRecycle()
     {
         const int frameCount = 8;
         using Stack stack = TestHarness.CreateStack();
@@ -98,17 +96,46 @@ internal sealed class SessionRecyclingReadTests
         session.TryStart();
         session.WaitForCompletion();
 
-        // A packet the caller owns: re-parsed from the source, never handed to the store.
-        Frame frame = source.FrameById(new FrameId(0))!.Value;
-        Packet owned = Packet.ParseFrame(new PacketId(0), stack, frame);
-        int ownedFieldCount = owned.FieldCount(materialize: true);
-
-        bool found = session.TryGetPacket(new PacketId(2), owned, out Packet? packet);
+        session.TryGetPacket(new PacketId(0), recycle: null, out Packet? recycle);
+        bool found = session.TryGetPacket(new PacketId(2), recycle, out Packet? packet);
 
         await Assert.That(found).IsTrue();
-        await Assert.That(ReferenceEquals(packet, owned)).IsFalse();
-        await Assert.That(owned.Id).IsEqualTo(new PacketId(0));
-        await Assert.That(owned.FieldCount(materialize: false)).IsEqualTo(ownedFieldCount);
+        await Assert.That(ReferenceEquals(packet, recycle)).IsTrue();
+        await Assert.That(packet!.Id).IsEqualTo(new PacketId(2));
+        await Assert.That(packet.HasFieldTree).IsTrue();
+
+        session.Shutdown();
+    }
+
+    [Test]
+    public async Task ReadPackets_PreallocatedRecycles_ReusesInstances()
+    {
+        const int frameCount = 4;
+        using Stack stack = TestHarness.CreateStack();
+        using TestFrameSource source = TestFrameSource.WithUdpFrames(frameCount);
+
+        using Session session = new(stack);
+        session.TryAddFrameSource(source, out _);
+        session.TryStart();
+        session.WaitForCompletion();
+
+        Packet?[] buffer = new Packet?[frameCount];
+        for (int i = 0; i < frameCount; i++)
+        {
+            session.TryGetPacket(new PacketId(i), out buffer[i]);
+        }
+
+        Packet?[] originals = new Packet?[frameCount];
+        buffer.CopyTo(originals, 0);
+
+        int read = session.ReadPackets(0, buffer);
+        await Assert.That(read).IsEqualTo(frameCount);
+        for (int i = 0; i < frameCount; i++)
+        {
+            await Assert.That(ReferenceEquals(buffer[i], originals[i])).IsTrue();
+            await Assert.That(buffer[i]!.Id).IsEqualTo(new PacketId(i));
+            await Assert.That(buffer[i]!.HasFieldTree).IsTrue();
+        }
 
         session.Shutdown();
     }

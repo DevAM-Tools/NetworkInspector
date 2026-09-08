@@ -169,15 +169,7 @@ public sealed partial class ArpProtocol : IProtocol
         IPv4Address targetIp = protoSize == _IPv4ProtoSize
             ? new IPv4Address(BinaryPrimitives.ReadUInt32BigEndian(targetProtoSpan)) : default;
 
-        // Build summary text based on opcode (only for standard Ethernet/IPv4 ARP)
         bool isStandardArp = hwSize == _EthernetHwSize && protoSize == _IPv4ProtoSize;
-        LazyString summary = isStandardArp
-            ? opcode == _OpcodeRequest
-                ? ZA.Lazy("Address Resolution Protocol (request), Who has ", targetIp, "? Tell ", senderIp)
-                : opcode == _OpcodeReply
-                    ? ZA.Lazy("Address Resolution Protocol (reply), ", senderIp, " is at ", senderMac)
-                    : ZA.Lazy("Address Resolution Protocol (opcode ", DisplayTables.GetArpOpcodeDisplayText(opcode), ")")
-            : ZA.Lazy("Address Resolution Protocol (opcode ", DisplayTables.GetArpOpcodeDisplayText(opcode), ")");
 
         // Set packet info for the info column (standard ARP only)
         if (isStandardArp)
@@ -198,7 +190,25 @@ public sealed partial class ArpProtocol : IProtocol
         // ARP is a leaf protocol with few fields — no lazy populator needed.
         FieldValue containerValue = FieldValue.NewBytes(data[..totalSize])
             .WithCustomRepresentation(new LazyString(ZA.String(totalSize, " bytes")));
-        MutField container = parentField.AppendWithCustomText(_ProtocolFieldId, containerValue, summary);
+        MutField container;
+        if (isStandardArp && opcode == _OpcodeRequest)
+        {
+            container = parentField.AppendWithCustomText(
+                _ProtocolFieldId, containerValue,
+                "Address Resolution Protocol (request), Who has ", targetIp, "? Tell ", senderIp);
+        }
+        else if (isStandardArp && opcode == _OpcodeReply)
+        {
+            container = parentField.AppendWithCustomText(
+                _ProtocolFieldId, containerValue,
+                "Address Resolution Protocol (reply), ", senderIp, " is at ", senderMac);
+        }
+        else
+        {
+            container = parentField.AppendWithCustomText(
+                _ProtocolFieldId, containerValue,
+                "Address Resolution Protocol (opcode ", DisplayTables.GetArpOpcodeDisplayText(opcode), ")");
+        }
 
         // Fixed header fields (always present)
         container.AppendWithCustomText(_HwTypeFieldId, FieldValue.NewU64(hwType),

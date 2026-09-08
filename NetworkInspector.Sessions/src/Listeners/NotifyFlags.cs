@@ -43,7 +43,7 @@ public enum NotifyFlags : int
 
     // ── High-frequency (source threads) ──────────────────────────────────────
 
-    /// <summary>New packets are available in the <c>PacketStore</c>.</summary>
+    /// <summary>New packet ids have been announced and can be re-parsed from frames.</summary>
     NewPackets = 1 << 0,
 
     // ── Source lifecycle (source threads) ─────────────────────────────────────

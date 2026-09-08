@@ -346,6 +346,54 @@ internal static class TestInfrastructure
     }
 
     /// <summary>
+    /// Stubs for <see cref="ZaLazyAppendDiagnostics"/> tests: MutField custom-text overloads and ZA.Lazy.
+    /// </summary>
+    public const string ZaLazyAppendStubs = """
+        namespace NetworkInspector.Core.Fields
+        {
+            public readonly struct FieldId { }
+            public readonly struct FieldValue { public static FieldValue None => default; }
+            public readonly struct LazyString { }
+            public readonly struct MutField
+            {
+                public MutField AppendWithCustomText(FieldId id, FieldValue v, LazyString t) => this;
+                public MutField AppendWithCustomText<T0, T1>(FieldId id, FieldValue v, T0 a, T1 b) => this;
+                public void SetPacketInfo(LazyString t) { }
+            }
+        }
+        public static class ZA
+        {
+            public static NetworkInspector.Core.Fields.LazyString Lazy(object a, object b) => default;
+            public static NetworkInspector.Core.Fields.LazyString LazyInterpolated(object a) => default;
+        }
+        """;
+
+    /// <summary>
+    /// Combines <see cref="AttributeStubs"/>, <see cref="ZaLazyAppendStubs"/>, and the caller source,
+    /// then runs <see cref="ZaLazyAppendDiagnostics"/> (not <see cref="ProtocolGenerator"/>).
+    /// </summary>
+    public static GeneratorDriverRunResult RunZaLazyDiagnostics(string source)
+    {
+        SyntaxTree[] trees =
+        [
+            CSharpSyntaxTree.ParseText(AttributeStubs),
+            CSharpSyntaxTree.ParseText(ZaLazyAppendStubs),
+            CSharpSyntaxTree.ParseText(source),
+        ];
+
+        CSharpCompilation compilation = CSharpCompilation.Create(
+            "TestAssembly",
+            trees,
+            _DefaultReferences,
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+
+        ZaLazyAppendDiagnostics generator = new();
+        GeneratorDriver driver = CSharpGeneratorDriver.Create(generator);
+        driver = driver.RunGeneratorsAndUpdateCompilation(compilation, out _, out _);
+        return driver.GetRunResult();
+    }
+
+    /// <summary>
     /// Combines the attribute stubs and the caller-supplied test source into a single
     /// compilation, runs <see cref="ProtocolGenerator"/> against it, and returns the driver result.
     /// </summary>

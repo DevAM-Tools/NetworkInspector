@@ -8,15 +8,18 @@ namespace NetworkInspector.Profiling.Scenarios;
 /// implementing this interface and registering them in <see cref="Program"/>.
 ///
 /// <para>
-/// The runner in <see cref="Program"/> calls <see cref="Run"/> in a tight loop
-/// until the configured <see cref="Duration"/> has elapsed. A warm-up phase of
-/// <see cref="WarmupDuration"/> triggers the JIT before the timed phase begins.
+/// The runner in <see cref="Program"/> hoists <see cref="PrepareIteration"/> once per phase.
+/// When that delegate is non-null, it runs before every <see cref="Run"/> and is excluded from
+/// net Run time and alloc/packet. When it is <see langword="null"/>, the timed loop is only
+/// <see cref="Run"/> so parse-style scenarios keep a tight inner loop.
+/// Throughput and alloc/packet use net <see cref="Run"/> time only.
 /// </para>
 /// </summary>
 /// <remarks>
 /// <para><b>Lifecycle contract:</b> the runner calls members in this strict order:
-/// <c>Setup()</c> once, then <c>Run()</c> repeatedly during warm-up, then
-/// <c>Run()</c> repeatedly during the timed phase, then <c>Cleanup()</c> once.
+/// <c>Setup()</c> once, then optional <c>PrepareIteration</c>+<c>Run()</c> repeatedly during warm-up, then
+/// the same pair during the timed phase, then <c>Cleanup()</c> once. A null <see cref="PrepareIteration"/>
+/// means the runner never invokes prepare.
 /// Default property values are evaluated once at the point of registration; they
 /// must be stable for the lifetime of the object.</para>
 /// <para><b>Throughput coupling:</b> when <see cref="WorkUnitsPerIteration"/> is
@@ -63,6 +66,16 @@ internal interface IProfilingScenario
     /// charged to the profiling hot path.
     /// </summary>
     void Setup();
+
+    /// <summary>
+    /// Optional per-iteration setup, excluded from net Run time and from alloc/packet.
+    /// <see langword="null"/> (default) means this scenario has no prepare step: the runner
+    /// never calls into prepare, so the hot loop is a single <see cref="Run"/> invocation.
+    /// Assign a delegate (typically a private method group) to construct a clean
+    /// <see cref="Session"/> or <see cref="CachedFrameSource"/> before each <see cref="Run"/>.
+    /// The runner reads this property once per phase and invokes the captured delegate.
+    /// </summary>
+    Action? PrepareIteration => null;
 
     /// <summary>
     /// Number of work units (packets, frames, evaluations, …) processed per single

@@ -3,20 +3,16 @@
 namespace NetworkInspector.Profiling.Scenarios;
 
 /// <summary>
-/// One session ingest plus N listeners that re-parse every packet. Packet store and packet index
-/// are off, so each listener pays a full re-parse while the source thread parses the batch.
-/// Every listener re-parses into its own recycled packet. Each <see cref="Run"/> call is one
-/// complete session lifecycle, same as <see cref="SessionListenerScenario"/> — the batch is large
-/// enough that start/stop cost does not dominate the measured work.
+/// One session ingest plus N listeners that re-parse every packet without a packet index.
+/// <see cref="PrepareIteration"/> constructs the session; <see cref="Run"/> waits for ingest and redissect overlap.
+/// Work units are <c>FrameCount * listenerCount</c> for the timed wait, not construction.
 /// </summary>
-internal sealed class SessionConcurrentRedissectScenario : IProfilingScenario
+internal sealed class SessionConcurrentRedissectScenario : IProfilingScenario, IDisposable
 {
     #region Fields
 
     /// <summary>
-    /// Frames ingested per <see cref="Run"/> call. Larger than
-    /// <see cref="SessionListenerScenario.FrameCount"/> so session start/stop is amortized
-    /// against parse and redissect work.
+    /// Frames ingested per iteration.
     /// </summary>
     internal const int FrameCount = 100_000;
 
@@ -24,6 +20,7 @@ internal sealed class SessionConcurrentRedissectScenario : IProfilingScenario
 
     private Stack? _Stack;
     private Frame[]? _Frames;
+    private Session? _Session;
 
     #endregion
 
@@ -46,7 +43,7 @@ internal sealed class SessionConcurrentRedissectScenario : IProfilingScenario
     /// <inheritdoc/>
     public string Description =>
         FormattableString.Invariant(
-            $"Session ingest + {_ListenerCount} redissect listener(s), store/index off, {FrameCount:N0} frames per iteration.");
+            $"PrepareIteration: Session RedissectOnly; Run: ingest + {_ListenerCount} redissect listener(s), {FrameCount:N0} frames.");
 
     /// <inheritdoc/>
     public long WorkUnitsPerIteration => (long)FrameCount * _ListenerCount;
@@ -62,37 +59,58 @@ internal sealed class SessionConcurrentRedissectScenario : IProfilingScenario
     }
 
     /// <inheritdoc/>
-    public void Run()
+    public Action? PrepareIteration => _PrepareIteration;
+
+    private void _PrepareIteration()
     {
-        using Session session = new(_Stack!, SessionOptions.RedissectOnly);
+        _Session = new Session(_Stack!, SessionOptions.RedissectOnly);
         MemoryFrameSource source = new(_Frames!);
 
-        if (!session.TryAddFrameSource(source, out _))
+        if (!_Session.TryAddFrameSource(source, out _))
         {
+            _Session.Dispose();
+            _Session = null;
             throw new InvalidOperationException("Failed to add frame source.");
         }
 
         for (int i = 0; i < _ListenerCount; i++)
         {
             RedissectListener listener = new(FormattableString.Invariant($"Redissect{i}"));
-            if (!session.TryAddListener(listener, out _))
+            if (!_Session.TryAddListener(listener, out _))
             {
+                _Session.Dispose();
+                _Session = null;
                 throw new InvalidOperationException("Failed to add listener.");
             }
         }
 
-        if (!session.TryStart())
+        if (!_Session.TryStart())
         {
+            _Session.Dispose();
+            _Session = null;
             throw new InvalidOperationException("Failed to start session.");
         }
-
-        session.WaitForCompletion();
-        session.Shutdown();
     }
 
     /// <inheritdoc/>
-    public void Cleanup()
+    public void Run()
     {
+        Session session = _Session!;
+        session.WaitForCompletion();
+        session.Shutdown();
+        session.Dispose();
+        _Session = null;
+    }
+
+    /// <inheritdoc/>
+    public void Cleanup() => Dispose();
+
+    /// <inheritdoc/>
+    public void Dispose()
+    {
+        _Session?.Shutdown();
+        _Session?.Dispose();
+        _Session = null;
         _Stack?.Dispose();
         _Stack = null;
         _Frames = null;
@@ -101,11 +119,7 @@ internal sealed class SessionConcurrentRedissectScenario : IProfilingScenario
     #endregion
 
     /// <summary>
-    /// Re-parses every announced packet into one packet object that it keeps for its whole lifetime,
-    /// which is what the recycling overload of
-    /// <see cref="ISessionReader.TryGetPacket(PacketId, Packet, out Packet)"/> is for. Safe because a
-    /// listener slot runs its callback on a single thread and this listener keeps no field references
-    /// past the loop iteration.
+    /// Re-parses every announced packet into one packet object that it keeps for its whole lifetime.
     /// </summary>
     private sealed class RedissectListener : ISessionListener
     {

@@ -9,8 +9,8 @@ namespace NetworkInspector.Profiling.Scenarios;
 /// <para>
 /// Two variants exist:
 /// <list type="bullet">
-///   <item><b>parse-random-frames</b> — <see cref="Packet.ParseFrame(PacketId, Stack, Frame)"/> only (lazy field tree).</item>
-///   <item><b>parse-random-frames-materialized</b> — <see cref="Packet.ParseFrame(PacketId, Stack, Frame)"/> +
+///   <item><b>parse-random-frames</b> — <see cref="Packet.ParseFrame(PacketId, Stack, Frame, FieldTreeMode, ValueCache, Boolean)"/> only (lazy field tree).</item>
+///   <item><b>parse-random-frames-materialized</b> — <see cref="Packet.ParseFrame(PacketId, Stack, Frame, FieldTreeMode, ValueCache, Boolean)"/> +
 ///     <see cref="Packet.MaterializeAll"/> (fully walks and stores the field tree).</item>
 /// </list>
 /// Comparing the two isolates the cost of field-tree materialisation.
@@ -37,7 +37,7 @@ internal sealed class ParseRandomFramesScenario : IProfilingScenario
     /// <param name="materialize">
     /// When <see langword="true"/>, calls <see cref="Packet.MaterializeAll"/> after each parse
     /// to fully walk and store the field tree. When <see langword="false"/>, only
-    /// <see cref="Packet.ParseFrame(PacketId, Stack, Frame)"/> is called (the field tree is built lazily).
+    /// <see cref="Packet.ParseFrame(PacketId, Stack, Frame, FieldTreeMode, ValueCache, Boolean)"/> is called (the field tree is built lazily).
     /// </param>
     internal ParseRandomFramesScenario(bool materialize)
     {

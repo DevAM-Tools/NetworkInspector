@@ -109,7 +109,7 @@ internal sealed class PacketBufferTests
         packet.AddBuffer(new byte[] { 0xFF });
 
         Frame frame2 = _MakeFrame(stack, data, 2);
-        RecycleError? err = packet.PrepareForReuse(new PacketId(99), frame2);
+        RecycleError? err = packet.PrepareForReuse(new PacketId(99), frame2, FieldTreeMode.Build);
         await Assert.That(err).IsNull();
 
         await Assert.That(packet.Id.Value).IsEqualTo(99);

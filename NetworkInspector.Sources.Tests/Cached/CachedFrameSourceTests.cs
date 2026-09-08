@@ -50,6 +50,8 @@ internal sealed class CachedFrameSourceTests
             await Assert.That(cached!.Value.Id).IsEqualTo(frames[i].Id);
             await Assert.That(cached.Value.Data.Span.SequenceEqual(frames[i].Data.Span)).IsTrue();
         }
+
+        await Assert.That(source.EstimatedIndexBytes).IsEqualTo((16384L * Unsafe.SizeOf<Frame>()) + 16384L);
     }
 
     [Test]
@@ -135,6 +137,34 @@ internal sealed class CachedFrameSourceTests
         await Assert.That(() => new CachedFrameSource(inner)).Throws<ArgumentException>();
     }
 
+    [Test]
+    public async Task Constructor_AllowRandomAccessInner_WrapsRandomFrameSource()
+    {
+#pragma warning disable CA2000
+        RandomFrameSource inner = new(3);
+#pragma warning restore CA2000
+        using CachedFrameSource source = new(inner, allowRandomAccessInner: true);
+        SourceTestFixture.InitializeAndStartSource(source);
+
+        Frame? first = source.NextFrame();
+        await Assert.That(first.HasValue).IsTrue();
+        Frame? cached = source.FrameById(first!.Value.Id);
+        await Assert.That(cached.HasValue).IsTrue();
+        await Assert.That(cached!.Value.Data.Span.SequenceEqual(first.Value.Data.Span)).IsTrue();
+    }
+
+    [Test]
+    public async Task Constructor_NestedCachedFrameSource_ThrowsArgumentException()
+    {
+#pragma warning disable CA2000 // Outer CachedFrameSource would take ownership if construction succeeded
+        SequentialOnlyFrameSource inner = new(new RandomFrameSource(1));
+        CachedFrameSource innerCache = new(inner);
+#pragma warning restore CA2000
+
+        await Assert.That(() => new CachedFrameSource(innerCache)).Throws<ArgumentException>();
+        innerCache.Dispose();
+    }
+
     // ========================================================================
     // Concurrent FrameById reads
     // ========================================================================
@@ -177,6 +207,16 @@ internal sealed class CachedFrameSourceTests
 
         // Should complete without exceptions
         await Assert.That(async () => await Task.WhenAll(tasks).ConfigureAwait(false)).ThrowsNothing();
+    }
+
+    [Test]
+    public async Task ConcurrentFrameById_DuringNextFrame_ReturnsPublishedPayloads()
+    {
+        const int count = 80;
+        using CachedFrameSource source = _CreateCached(count);
+        SourceTestFixture.InitializeAndStartSource(source);
+
+        await CachedFrameSourceConcurrency.AssertReadDuringWrite(source, count);
     }
 
     // ========================================================================

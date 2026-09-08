@@ -154,15 +154,16 @@ public sealed partial class LlcProtocol : IProtocol
             headerSize = _MinHeaderSize + _SnapSize;
         }
 
-        // Build summary text
-        LazyString summary = isSnap
-            ? ZA.Lazy("LLC (SNAP), Type: ", DisplayTables.GetEtherTypeDisplayText(snapType))
-            : ZA.Lazy("LLC, DSAP: ", DisplayTables.GetLlcSapDisplayText(dsap),
-                       ", SSAP: ", DisplayTables.GetLlcSapDisplayText(ssap));
-
         // Append protocol container and fields
         FieldValue headerValue = FieldValue.NewBytes(data[..headerSize]);
-        MutField container = parentField.AppendWithCustomText(_ProtocolFieldId, headerValue, summary);
+        MutField container = isSnap
+            ? parentField.AppendWithCustomText(
+                _ProtocolFieldId, headerValue,
+                "LLC (SNAP), Type: ", DisplayTables.GetEtherTypeDisplayText(snapType))
+            : parentField.AppendWithCustomText(
+                _ProtocolFieldId, headerValue,
+                "LLC, DSAP: ", DisplayTables.GetLlcSapDisplayText(dsap),
+                ", SSAP: ", DisplayTables.GetLlcSapDisplayText(ssap));
 
         string dsapText = DisplayTables.GetLlcSapDisplayText(dsap);
         container.AppendWithCustomText(_DsapFieldId, FieldValue.NewU64(dsap), dsapText);

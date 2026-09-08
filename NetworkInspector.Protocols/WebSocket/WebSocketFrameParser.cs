@@ -102,7 +102,7 @@ public sealed partial class WebSocketProtocol
             // Frame container
             MutField frameContainer = container.AppendWithCustomText(
                 _FrameFieldId, FieldValue.None,
-                ZA.Lazy(opcodeText, fin ? " [FIN]" : "", ", Length: ", payloadLength));
+                opcodeText, fin ? " [FIN]" : "", ", Length: ", payloadLength);
 
             // FIN
             frameContainer.Append(_FinFieldId, FieldValue.NewBool(fin));
@@ -125,7 +125,7 @@ public sealed partial class WebSocketProtocol
             {
                 frameContainer.AppendWithCustomText(_MaskingKeyFieldId,
                     FieldValue.NewU64(maskingKey),
-                    ZA.Lazy("0x", new Hex8(maskingKey)));
+                    "0x", new Hex8(maskingKey));
             }
 
             // RSV1 = Per-Message Compressed (RFC 7692)

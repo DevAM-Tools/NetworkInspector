@@ -188,7 +188,7 @@ internal sealed class SignalMessageProtocol : IProtocol
         parentField.AppendLazyWithCustomText(
             _ContainerFieldId,
             FieldValue.NewBytes(stored),
-            ZA.Lazy(UiName),
+            UiName,
             _ContainerPopulator);
 
         return RequiredByteLength;
@@ -247,7 +247,7 @@ internal sealed class SignalMessageProtocol : IProtocol
         MutField muxField = container.AppendWithCustomText(
             _MuxFieldId,
             FieldValue.NewU64(muxValue),
-            ZA.Lazy(CultureInfo.InvariantCulture, mux.UiName, ": ", muxValue));
+            mux.UiName, ": ", muxValue);
         muxField.Append(_MuxValueFieldId, FieldValue.NewU64(muxValue));
 
         SignalInfo[]? groupSignals = _LookupMuxGroup(muxValue);
@@ -302,36 +302,37 @@ internal sealed class SignalMessageProtocol : IProtocol
     {
         double phys = SignalMessageBits.ToPhysical(raw, in signal);
         string? enumName = null;
-        LazyString text;
-        string[]? cached = signal.CustomTextByRaw;
-        if (cached is not null)
+        if (signal.Enums.Kind != SignalEnumKind.None)
         {
-            // ExtractRawUnchecked yields at most BitLength bits; the table has 1<<BitLength slots.
-            text = new LazyString(cached[(int)raw]);
-            if (signal.EnumFieldId.IsValid)
+            if (signal.Enums.TryGetName(raw, out string? resolved))
             {
-                if (signal.Enums.TryGetName(raw, out string? resolved))
-                {
-                    enumName = resolved;
-                }
+                enumName = resolved;
             }
+        }
+
+        MutField signalField;
+        if (parent.WantsCustomText(signal.SignalFieldId))
+        {
+            LazyString text;
+            string[]? cached = signal.CustomTextByRaw;
+            if (cached is not null)
+            {
+                text = new LazyString(cached[(int)raw]);
+            }
+            else
+            {
+                text = _BuildCustomText(in signal, raw, phys, enumName);
+            }
+
+            signalField = parent.AppendWithCustomText(
+                signal.SignalFieldId,
+                FieldValue.NewF64(phys),
+                text);
         }
         else
         {
-            if (signal.Enums.Kind != SignalEnumKind.None)
-            {
-                if (signal.Enums.TryGetName(raw, out string? resolved))
-                {
-                    enumName = resolved;
-                }
-            }
-
-            text = _BuildCustomText(in signal, raw, phys, enumName);
+            signalField = parent.Append(signal.SignalFieldId, FieldValue.NewF64(phys));
         }
-        MutField signalField = parent.AppendWithCustomText(
-            signal.SignalFieldId,
-            FieldValue.NewF64(phys),
-            text);
 
         if (signal.RawFieldId.IsValid)
         {

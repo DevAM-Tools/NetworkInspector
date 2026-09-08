@@ -322,7 +322,7 @@ public sealed partial class JsonProtocol : IProtocol
             // Member container — display text shows "key": value summary
             MutField memberField = objField.AppendWithCustomText(
                 _MemberFieldId, FieldValue.None,
-                ZA.Lazy("Member: ", key));
+                "Member: ", key);
 
             memberField.Append(_KeyFieldId, FieldValue.NewString(key));
 

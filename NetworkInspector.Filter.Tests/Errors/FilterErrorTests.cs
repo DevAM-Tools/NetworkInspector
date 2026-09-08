@@ -113,4 +113,14 @@ internal sealed class FilterErrorTests
         await Assert.That(error.Message).Contains("3");
         await Assert.That(error.Message).Contains("9");
     }
+
+    [Test]
+    public async Task NoFieldTree_RequiresBuildMessage()
+    {
+        FilterError error = FilterError.NoFieldTree();
+
+        await Assert.That(error.Kind).IsEqualTo(FilterErrorKind.NoFieldTree);
+        await Assert.That(error.Message).IsEqualTo("Filter evaluation requires a packet parsed with FieldTreeMode.Build.");
+        await Assert.That(error.HasPosition).IsFalse();
+    }
 }

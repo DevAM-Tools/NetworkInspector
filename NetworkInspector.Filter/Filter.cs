@@ -275,6 +275,13 @@ public sealed class Filter : IFilter
             return true;
         }
 
+        if (!packet.HasFieldTree)
+        {
+            matched = false;
+            failure = FilterError.NoFieldTree();
+            return false;
+        }
+
         if (PoisonError is FilterError poison)
         {
             matched = false;

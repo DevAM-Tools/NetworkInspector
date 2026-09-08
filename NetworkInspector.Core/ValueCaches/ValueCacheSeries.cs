@@ -4,501 +4,237 @@ namespace NetworkInspector.Core.ValueCaches;
 
 /// <summary>
 /// Non-generic reader façade for one recorded series (payload, custom text, or custom representation).
+/// Packet-id and timestamp columns live here so <see cref="Handle"/>, <see cref="GetPacketId"/>, and
+/// <see cref="TryGetPacketIdChunk"/> are not virtual. The value column stays on
+/// <see cref="ValueCacheSeries{T}"/>.
 /// <para>
-/// <b>Thread-safety:</b> Single-writer / multi-reader. The writer stages rows during
-/// <see cref="ValueCache.BeginPacket"/> … <see cref="ValueCache.EndPacket"/> (or
-/// <see cref="ValueCache.RecordPacket"/>). Concurrent readers may observe <see cref="Count"/>,
-/// <see cref="ByteSize"/>, and published chunk spans for indices strictly less than the
-/// <see cref="Count"/> they loaded. Rows from a packet that has not finished
-/// <see cref="ValueCache.EndPacket"/> are not visible. There is no public growth callback on
-/// Core <see cref="ValueCache"/>; poll <see cref="Count"/>.
+/// <b>Thread-safety:</b> Single-writer / multi-reader. The writer calls
+/// <see cref="ValueCacheSeries{T}.Record"/> (or <see cref="ValueCache.RecordPacket"/> /
+/// parse-time record). Concurrent readers load <see cref="Count"/> or open a <see cref="Handle"/>
+/// and read indexes strictly less than that count. A row becomes visible as soon as its three
+/// columns are appended and <see cref="Count"/> is published; readers may see a packet that is still
+/// being parsed. There is no public growth callback on Core <see cref="ValueCache"/>; poll
+/// <see cref="Count"/>. Contended <see cref="ValueCacheSeries{T}.Record"/> waits on a series-level
+/// CAS gate so the three column appends stay one row.
 /// </para>
 /// </summary>
-public abstract class ValueCacheSeries
+public abstract class ValueCacheSeries : IReadOnlyValueCacheSeries
 {
+    #region Fields
+
+    private readonly ChunkedGrowOnlyStore<int> _PacketIds;
+    private readonly ChunkedGrowOnlyStore<long> _Timestamps;
+    private readonly ValueCaptureMode _CaptureMode;
+    private volatile int _Count;
+    private volatile int _PacketIdsNonDecreasing = 1;
+    private volatile int _TimestampsNonDecreasing = 1;
+    private int _LastPacketId = -1;
+    private long _LastTimestampNanos;
+
+    #endregion
+
+    #region Constructors
+
+    /// <summary>Creates empty packet-id and timestamp stores. <paramref name="chunkShift"/> must be in [4, 20].</summary>
+    private protected ValueCacheSeries(
+        FieldId fieldId,
+        FieldType fieldType,
+        ValueCaptureMode captureMode,
+        int chunkShift)
+    {
+        FieldId = fieldId;
+        FieldType = fieldType;
+        ChunkShift = chunkShift;
+        _CaptureMode = captureMode;
+        _PacketIds = new(chunkShift);
+        _Timestamps = new(chunkShift);
+    }
+
+    #endregion
+
     #region Properties
 
     /// <summary>Recorded field.</summary>
-    public abstract FieldId FieldId { get; }
+    public FieldId FieldId { get; }
 
-    /// <summary>Payload <see cref="Fields.FieldType"/> of the stack field, or <see cref="FieldType.String"/> for custom-text/representation series.</summary>
-    public abstract FieldType FieldType { get; }
+    /// <summary>Log₂ of rows per inner column chunk. Same value passed into every store.</summary>
+    public int ChunkShift { get; }
 
-    /// <summary>Capture mode used when staging occurrences.</summary>
-    public abstract ValueCaptureMode CaptureMode { get; }
+    /// <summary>
+    /// Payload <see cref="Fields.FieldType"/> of the stack field, or <see cref="FieldType.String"/>
+    /// for custom-text/representation series.
+    /// </summary>
+    public FieldType FieldType { get; }
 
-    /// <summary>Number of committed rows. Volatile; readers must treat this as the exclusive upper bound for indexed reads.</summary>
-    public abstract int Count { get; }
+    /// <summary>Capture mode used when recording occurrences.</summary>
+    public ValueCaptureMode CaptureMode => _CaptureMode;
 
-    /// <summary>Cumulative C13 byte charge for this series. Readable concurrently with <see cref="Count"/>.</summary>
-    public abstract long ByteSize { get; }
+    /// <summary>
+    /// Number of published rows. Volatile; readers must treat this as the exclusive upper bound
+    /// for indexed reads. Do not use column-store <c>Count</c> values.
+    /// </summary>
+    public int Count => _Count;
+
+    /// <summary>
+    /// Frozen prefix: loads <see cref="Count"/> and monotonic flags once. Index, range, and
+    /// <c>foreach</c> ignore rows published after this load. Take another handle to follow the tail.
+    /// </summary>
+    public ValueCacheSeriesHandle Handle =>
+        new ValueCacheSeriesHandle(this, _Count, _PacketIdsNonDecreasing != 0, _TimestampsNonDecreasing != 0);
+
+    /// <summary>True when published packet ids are still non-decreasing.</summary>
+    public bool PacketIdsMonotonic => _PacketIdsNonDecreasing != 0;
+
+    /// <summary>True when published timestamps are still non-decreasing.</summary>
+    public bool TimestampsMonotonic => _TimestampsNonDecreasing != 0;
+
+    /// <summary>Last appended packet id, or -1 when empty. Writer only (FirstOccurrence skip).</summary>
+    private protected int LastPacketId => _LastPacketId;
 
     #endregion
 
     #region Public API
 
+    /// <summary>Packet id at <paramref name="index"/> against the live published <see cref="Count"/>.</summary>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="index"/> is not in <c>[0, Count)</c>.</exception>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public int GetPacketId(int index)
+    {
+        if ((uint)index >= (uint)_Count)
+        {
+            _ThrowIndexOutOfRange(index);
+        }
+
+        return PacketIdAt(index);
+    }
+
+    /// <summary>Timestamp (nanoseconds) at <paramref name="index"/> against the live published <see cref="Count"/>.</summary>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="index"/> is not in <c>[0, Count)</c>.</exception>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public long GetTimestamp(int index)
+    {
+        if ((uint)index >= (uint)_Count)
+        {
+            _ThrowIndexOutOfRange(index);
+        }
+
+        return TimestampAt(index);
+    }
+
     /// <summary>
     /// Returns the published packet-id chunk at <paramref name="chunkIndex"/> clipped to
     /// <paramref name="observedCount"/> (the caller's previously loaded <see cref="Count"/>).
+    /// Prefer <see cref="Handle"/> for scans.
     /// </summary>
-    public abstract bool TryGetPacketIdChunk(int chunkIndex, int observedCount, out ReadOnlySpan<int> span);
+    public bool TryGetPacketIdChunk(int chunkIndex, int observedCount, out ReadOnlySpan<int> span) =>
+        _PacketIds.TryGetPublishedChunk(chunkIndex, _ClipObservedCount(observedCount), out span);
 
     /// <summary>
     /// Returns the published timestamp chunk at <paramref name="chunkIndex"/> clipped to
-    /// <paramref name="observedCount"/>.
+    /// <paramref name="observedCount"/>. Prefer <see cref="Handle"/> for scans.
     /// </summary>
-    public abstract bool TryGetTimestampChunk(int chunkIndex, int observedCount, out ReadOnlySpan<long> span);
+    public bool TryGetTimestampChunk(int chunkIndex, int observedCount, out ReadOnlySpan<long> span) =>
+        _Timestamps.TryGetPublishedChunk(chunkIndex, _ClipObservedCount(observedCount), out span);
+
+    /// <summary>
+    /// Zero-allocation read-only view. Keep the compile-time type as
+    /// <see cref="ReadOnlyValueCacheSeries"/>; assigning to <see cref="IReadOnlyValueCacheSeries"/> boxes.
+    /// </summary>
+    public ReadOnlyValueCacheSeries AsReadOnlyView() => new(this);
+
+    /// <inheritdoc/>
+    public ValueCacheSeriesHandle GetHandle() => Handle;
 
     #endregion
 
     #region Internal lifecycle
 
-    /// <summary>Resets per-packet occurrence state. Writer only.</summary>
-    internal abstract void BeginPacket();
-
-    /// <summary>Publishes staged rows or retracts a torn packet when capacity was reached. Writer only.</summary>
-    internal abstract void Commit();
-
-    #endregion
-}
-
-/// <summary>
-/// Shared capacity flag and cache-wide byte/row accounting for all series of one <see cref="ValueCache"/>.
-/// Writer-only except for volatile <see cref="Reached"/> / <see cref="BytesCharged"/>.
-/// </summary>
-internal sealed class ValueCacheCapacity
-{
-    #region Fields
-
-    internal volatile int Reached;
-    private long _BytesCharged;
-
-    private int _StagedRowCount;
+    /// <summary>Drops published rows so this series can be filled again. Writer only.</summary>
+    internal abstract void ClearRows();
 
     #endregion
 
-    #region Constructors
-
-    internal ValueCacheCapacity(ValueCacheLimits limits) => Limits = limits;
-
-    #endregion
-
-    #region Properties
-
-    internal ValueCacheLimits Limits { get; }
-
-    internal bool IsReached => Reached != 0;
-
-    #endregion
-
-    #region Public API
-
-    internal void MarkReached() => Reached = 1;
-
-    internal bool WouldExceedRowCount()
-    {
-        int? maxRows = Limits.MaxRowCount;
-        return maxRows is int max && _StagedRowCount >= max;
-    }
-
-    internal void AddStagedRow() => _StagedRowCount++;
-
-    internal void RemoveStagedRows(int count)
-    {
-        if (count <= 0)
-        {
-            return;
-        }
-
-        _StagedRowCount -= count;
-        if (_StagedRowCount < 0)
-        {
-            _StagedRowCount = 0;
-        }
-    }
-
-    internal long BytesCharged => Volatile.Read(ref _BytesCharged);
-
-    internal bool WouldExceedBytes(long addedBytes)
-    {
-        long? maxBytes = Limits.MaxBytes;
-        if (maxBytes is not long max)
-        {
-            return false;
-        }
-
-        long current = Volatile.Read(ref _BytesCharged);
-        if (addedBytes < 0)
-        {
-            return false;
-        }
-
-        try
-        {
-            return checked(current + addedBytes) > max;
-        }
-        catch (OverflowException)
-        {
-            return true;
-        }
-    }
-
-    internal void AddBytes(long addedBytes)
-    {
-        long current = Volatile.Read(ref _BytesCharged);
-        long next;
-        try
-        {
-            next = checked(current + addedBytes);
-        }
-        catch (OverflowException)
-        {
-            MarkReached();
-            return;
-        }
-
-        Volatile.Write(ref _BytesCharged, next);
-    }
-
-    internal void SubtractBytes(long bytes)
-    {
-        if (bytes <= 0)
-        {
-            return;
-        }
-
-        long current = Volatile.Read(ref _BytesCharged);
-        long next = current - bytes;
-        if (next < 0)
-        {
-            next = 0;
-        }
-
-        Volatile.Write(ref _BytesCharged, next);
-    }
-
-    #endregion
-}
-
-/// <summary>
-/// Packet-id and timestamp columns plus committed-count publish for one series.
-/// Single-writer; readers use <see cref="CommittedCount"/> as the exclusive upper bound.
-/// </summary>
-internal sealed class ValueCacheColumnState
-{
-    #region Constants
-
-    internal const int ChunkShift = 12;
-    internal const int ChunkSize = 1 << ChunkShift;
-    internal const int PacketIdSlotBytes = 4;
-    internal const int TimestampSlotBytes = 8;
-    internal const int StringObjectOverheadBytes = 24;
-
-    #endregion
-
-    #region Fields
-
-    private readonly ChunkedGrowOnlyStore<int> _PacketIds;
-    private readonly ChunkedGrowOnlyStore<long> _Timestamps;
-
-    private volatile int _CommittedCount;
-    private long _ByteSize;
-
-    private int _StagedCount;
-    private int _StagedThisPacket;
-    private ushort _OccurrenceInPacket;
-    private long _BytesChargedThisPacket;
-
-    #endregion
-
-    #region Constructors
-
-    internal ValueCacheColumnState(ValueCacheCapacity capacity, ValueCaptureMode captureMode)
-    {
-        Capacity = capacity;
-        CaptureMode = captureMode;
-        _PacketIds = new(ChunkShift);
-        _Timestamps = new(ChunkShift);
-    }
-
-    #endregion
-
-    #region Properties
-
-    internal ValueCaptureMode CaptureMode { get; }
-
-    internal int CommittedCount => _CommittedCount;
+    #region Private protected helpers
 
     /// <summary>
-    /// Clips a caller-supplied chunk bound to the published row count so
-    /// <c>TryGet*Chunk(..., int.MaxValue)</c> cannot return staged or unset slots.
+    /// Appends packet-id and timestamp columns and updates monotonic flags. Does not publish
+    /// <see cref="Count"/>. Writer only; caller holds the series append gate.
     /// </summary>
-    internal int ClipObservedCount(int observedCount)
+    private protected void AppendKeys(int packetId, long timestampNanos)
     {
-        int committed = _CommittedCount;
-        if (observedCount > committed)
+        if (_Count != 0)
         {
-            observedCount = committed;
+            if (packetId < _LastPacketId)
+            {
+                _PacketIdsNonDecreasing = 0;
+            }
+
+            if (timestampNanos < _LastTimestampNanos)
+            {
+                _TimestampsNonDecreasing = 0;
+            }
+        }
+
+        _PacketIds.Append(packetId);
+        _Timestamps.Append(timestampNanos);
+        _LastPacketId = packetId;
+        _LastTimestampNanos = timestampNanos;
+    }
+
+    /// <summary>Publishes <see cref="Count"/> from the packet-id store after the value column is appended.</summary>
+    private protected void PublishCount() =>
+        _Count = _PacketIds.Count;
+
+    /// <summary>Clears packet-id / timestamp stores, count, and monotonic flags. Writer only.</summary>
+    private protected void ClearKeyColumns()
+    {
+        _PacketIds.Clear();
+        _Timestamps.Clear();
+        _Count = 0;
+        _LastPacketId = -1;
+        _LastTimestampNanos = 0;
+        _PacketIdsNonDecreasing = 1;
+        _TimestampsNonDecreasing = 1;
+    }
+
+    /// <summary>Packet id with no live-<see cref="Count"/> check. Caller proved <paramref name="index"/> is in a snapshot prefix.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal int PacketIdAt(int index) =>
+        _PacketIds.Get(index);
+
+    /// <summary>Timestamp with no live-<see cref="Count"/> check. Caller proved <paramref name="index"/> is in a snapshot prefix.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal long TimestampAt(int index) =>
+        _Timestamps.Get(index);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private protected int ClipObservedCount(int observedCount)
+    {
+        if (observedCount < 0)
+        {
+            return 0;
+        }
+
+        int published = _Count;
+        if (observedCount > published)
+        {
+            return published;
         }
 
         return observedCount;
-    }
-
-    internal long ByteSize => Volatile.Read(ref _ByteSize);
-
-    internal int StagedCount => _StagedCount;
-
-    internal ushort OccurrenceInPacket => _OccurrenceInPacket;
-
-    internal ValueCacheCapacity Capacity { get; }
-
-    internal ChunkedGrowOnlyStore<int> PacketIds => _PacketIds;
-
-    internal ChunkedGrowOnlyStore<long> Timestamps => _Timestamps;
-
-    #endregion
-
-    #region Public API
-
-    internal void BeginPacket()
-    {
-        _StagedThisPacket = 0;
-        _OccurrenceInPacket = 0;
-        _BytesChargedThisPacket = 0;
-    }
-
-    /// <summary>
-    /// Decides whether this occurrence should write a new row, overwrite the last staged row, or skip.
-    /// Returns <see langword="false"/> when the caller must not write.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal bool TryPrepareStage(out int index, out bool overwrite)
-    {
-        index = 0;
-        overwrite = false;
-
-        if (Capacity.IsReached)
-        {
-            return false;
-        }
-
-        switch (CaptureMode)
-        {
-            case ValueCaptureMode.FirstOccurrence:
-                if (_OccurrenceInPacket != 0)
-                {
-                    return false;
-                }
-
-                break;
-            case ValueCaptureMode.LastOccurrence:
-                if (_OccurrenceInPacket != 0)
-                {
-                    overwrite = true;
-                    index = _StagedCount - 1;
-                    return true;
-                }
-
-                break;
-            default:
-                if (_OccurrenceInPacket == ushort.MaxValue)
-                {
-                    return false;
-                }
-
-                break;
-        }
-
-        if (_StagedCount == ArrayIndexIdRange.MaxValue || Capacity.WouldExceedRowCount())
-        {
-            Capacity.MarkReached();
-            return false;
-        }
-
-        index = _StagedCount;
-        return true;
-    }
-
-    internal bool TryChargeNewRow(long addedBytes, int packetId, long timestampNanos, out int index)
-    {
-        index = _StagedCount;
-        if (addedBytes < 0 || Capacity.WouldExceedBytes(addedBytes))
-        {
-            Capacity.MarkReached();
-            return false;
-        }
-
-        _PacketIds.Set(index, packetId);
-        _Timestamps.Set(index, timestampNanos);
-        _CompleteNewRow(addedBytes);
-        return true;
-    }
-
-    internal void CompleteOverwrite(long addedBytes)
-    {
-        if (addedBytes > 0)
-        {
-            if (Capacity.WouldExceedBytes(addedBytes))
-            {
-                Capacity.MarkReached();
-                return;
-            }
-
-            _AddCharged(addedBytes);
-        }
-
-        if (_OccurrenceInPacket == 0)
-        {
-            _OccurrenceInPacket = 1;
-        }
-    }
-
-    internal void Commit()
-    {
-        if (Capacity.IsReached && _StagedThisPacket > 0)
-        {
-            _RetractStagedThisPacket();
-            return;
-        }
-
-        _CommittedCount = _StagedCount;
-        _StagedThisPacket = 0;
-        _OccurrenceInPacket = 0;
-        _BytesChargedThisPacket = 0;
-    }
-
-    /// <summary>
-    /// Retracts the LastOccurrence row staged in this packet (CustomText cleared).
-    /// No-op when nothing was staged this packet.
-    /// </summary>
-    internal void RetractLastOccurrenceRow()
-    {
-        if (CaptureMode != ValueCaptureMode.LastOccurrence || _StagedThisPacket <= 0)
-        {
-            return;
-        }
-
-        _RetractStagedThisPacket();
-        _OccurrenceInPacket = 0;
-    }
-
-    internal bool TryGetPacketIdChunk(int chunkIndex, int observedCount, out ReadOnlySpan<int> span) =>
-        _PacketIds.TryGetPublishedChunk(chunkIndex, ClipObservedCount(observedCount), out span);
-
-    internal bool TryGetTimestampChunk(int chunkIndex, int observedCount, out ReadOnlySpan<long> span) =>
-        _Timestamps.TryGetPublishedChunk(chunkIndex, ClipObservedCount(observedCount), out span);
-
-    internal int GetPacketId(int index) => _PacketIds.Get(index);
-
-    internal long GetTimestamp(int index) => _Timestamps.Get(index);
-
-    /// <summary>
-    /// C13 charge for a new row: packet id + timestamp + value slots + payload + new inner chunks
-    /// when <paramref name="stagedCount"/> is a multiple of <see cref="ChunkSize"/>.
-    /// </summary>
-    internal static long ComputeNewRowCharge(int stagedCount, int valueSlotBytes, int extraPayloadBytes, int extraChunkBytes)
-    {
-        try
-        {
-            return checked(_ComputeNewRowChargeUnchecked(stagedCount, valueSlotBytes, extraPayloadBytes, extraChunkBytes));
-        }
-        catch (OverflowException)
-        {
-            return long.MaxValue;
-        }
-    }
-
-    internal static int StringHeapBytes(int charCount)
-    {
-        try
-        {
-            return checked(StringObjectOverheadBytes + (2 * charCount));
-        }
-        catch (OverflowException)
-        {
-            return int.MaxValue;
-        }
     }
 
     #endregion
 
     #region Private helpers
 
-    private static long _ComputeNewRowChargeUnchecked(int stagedCount, int valueSlotBytes, int extraPayloadBytes, int extraChunkBytes)
-    {
-        long charge = PacketIdSlotBytes + TimestampSlotBytes + valueSlotBytes + extraPayloadBytes;
-        if (stagedCount % ChunkSize == 0)
-        {
-            charge += ChunkSize * PacketIdSlotBytes;
-            charge += ChunkSize * TimestampSlotBytes;
-            charge += extraChunkBytes;
-        }
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private int _ClipObservedCount(int observedCount) =>
+        ClipObservedCount(observedCount);
 
-        return charge;
-    }
-
-    private void _CompleteNewRow(long addedBytes)
-    {
-        _AddCharged(addedBytes);
-        _StagedCount++;
-        _StagedThisPacket++;
-        Capacity.AddStagedRow();
-        if (_OccurrenceInPacket < ushort.MaxValue)
-        {
-            _OccurrenceInPacket++;
-        }
-    }
-
-    private void _AddCharged(long addedBytes)
-    {
-        Capacity.AddBytes(addedBytes);
-        long current = Volatile.Read(ref _ByteSize);
-        long next;
-        try
-        {
-            next = checked(current + addedBytes);
-        }
-        catch (OverflowException)
-        {
-            Capacity.MarkReached();
-            return;
-        }
-
-        Volatile.Write(ref _ByteSize, next);
-        _BytesChargedThisPacket += addedBytes;
-    }
-
-    private void _RetractStagedThisPacket()
-    {
-        int retract = _StagedThisPacket;
-        if (retract <= 0)
-        {
-            _StagedThisPacket = 0;
-            _BytesChargedThisPacket = 0;
-            return;
-        }
-
-        _StagedCount -= retract;
-        if (_StagedCount < 0)
-        {
-            _StagedCount = 0;
-        }
-
-        Capacity.RemoveStagedRows(retract);
-        long refund = _BytesChargedThisPacket;
-        Capacity.SubtractBytes(refund);
-        long current = Volatile.Read(ref _ByteSize);
-        long next = current - refund;
-        if (next < 0)
-        {
-            next = 0;
-        }
-
-        Volatile.Write(ref _ByteSize, next);
-        _StagedThisPacket = 0;
-        _BytesChargedThisPacket = 0;
-        _OccurrenceInPacket = 0;
-    }
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private protected static void _ThrowIndexOutOfRange(int index) =>
+        throw new ArgumentOutOfRangeException(nameof(index), index, "Index must be in the published range.");
 
     #endregion
 }

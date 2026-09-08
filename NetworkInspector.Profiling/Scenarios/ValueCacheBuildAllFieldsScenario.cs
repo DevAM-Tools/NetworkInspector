@@ -3,7 +3,7 @@
 namespace NetworkInspector.Profiling.Scenarios;
 
 /// <summary>
-/// First-parse tee into a <b>new</b> <see cref="ValueCache"/> with
+/// First-parse record into a <b>new</b> <see cref="ValueCache"/> with
 /// <see cref="ValueCacheBuildOptions.RecordAllFields"/> on every <see cref="Run"/> call.
 /// Setup only builds the stack, frames, and a recycle packet (packet id 0, not recorded).
 /// Compare with <c>session-value-cache-ingest-all-fields</c>.
@@ -32,7 +32,7 @@ internal sealed class ValueCacheBuildAllFieldsScenario : IProfilingScenario
 
     /// <inheritdoc/>
     public string Description => FormattableString.Invariant(
-        $"New RecordAllFields ValueCache per Run + TryParseFrameRecorded(recycle), {_BatchSize:N0} IPv6/UDP frames.");
+        $"New RecordAllFields ValueCache per Run + TryParseFrame(recycle, cache), {_BatchSize:N0} IPv6/UDP frames.");
 
     /// <inheritdoc/>
     public long WorkUnitsPerIteration => _BatchSize;
@@ -61,8 +61,8 @@ internal sealed class ValueCacheBuildAllFieldsScenario : IProfilingScenario
         ValueCache cache = new(stack, [], options: new ValueCacheBuildOptions { RecordAllFields = true });
         for (int i = 0; i < _BatchSize; i++)
         {
-            RecycleError? error = Packet.TryParseFrameRecorded(
-                recycle, new PacketId(counter + i), stack, frames[i], cache);
+            RecycleError? error = Packet.TryParseFrame(
+                recycle, new PacketId(counter + i), stack, frames[i], FieldTreeMode.Build, cache);
             if (error is not null)
             {
                 throw new InvalidOperationException(error.ToString());

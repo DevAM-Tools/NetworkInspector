@@ -196,6 +196,34 @@ public sealed class TextExporter : IPacketListener, IErrorTolerantExporter, IDis
             return false;
         }
 
+        if (!packet.HasFieldTree)
+        {
+            if (ErrorCount < int.MaxValue)
+            {
+                ErrorCount++;
+            }
+
+            int index = PacketCount;
+            if (ErrorTolerance == ErrorToleranceMode.Strict)
+            {
+                _HasError = true;
+                return false;
+            }
+
+            if (SkippedCount < int.MaxValue)
+            {
+                SkippedCount++;
+            }
+
+            ItemSkipped?.Invoke(this, new ExportErrorEventArgs
+            {
+                ItemIndex = index,
+                Kind = ExportErrorKind.Other,
+                Message = "Skip packets cannot be exported (HasFieldTree is false).",
+            });
+            return true;
+        }
+
         try
         {
             _Started = true;

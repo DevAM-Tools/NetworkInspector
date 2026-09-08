@@ -274,9 +274,8 @@ internal static class Program
         GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
         GC.WaitForPendingFinalizers();
 
-        // Warm-up phase: call Run() for the configured warm-up duration so the
-        // JIT has compiled all hot paths before the timed phase begins.
-        long warmupIterations = _RunForDuration(scenario, scenario.WarmupDuration);
+        // Warm-up: optional PrepareIteration (hoisted) then Run.
+        (long warmupIterations, _, _) = _RunForDuration(scenario, scenario.WarmupDuration);
         Console.ForegroundColor = ConsoleColor.DarkGray;
         Console.WriteLine(
             FormattableString.Invariant(
@@ -304,7 +303,7 @@ internal static class Program
         Console.WriteLine(
             FormattableString.Invariant($"Running for {scenario.Duration.TotalSeconds:F1} s..."));
         Stopwatch sw = Stopwatch.StartNew();
-        long timedIterations = _RunForDuration(scenario, scenario.Duration);
+        (long timedIterations, long runTicks, long runAlloc) = _RunForDuration(scenario, scenario.Duration);
         sw.Stop();
 
         // Capture GC counters after the timed phase.
@@ -315,10 +314,17 @@ internal static class Program
         int gen2After = GC.CollectionCount(2);
         GCMemoryInfo gcInfo = GC.GetGCMemoryInfo();
 
-        double iterationsPerSecond = timedIterations / sw.Elapsed.TotalSeconds;
+        double wallSeconds = sw.Elapsed.TotalSeconds;
+        double netSeconds = runTicks / (double)Stopwatch.Frequency;
+        if (netSeconds <= 0)
+        {
+            netSeconds = wallSeconds;
+        }
+
+        double iterationsPerSecond = timedIterations / netSeconds;
         _WriteColored(
             FormattableString.Invariant(
-                $"Completed {timedIterations} iterations in {sw.Elapsed.TotalSeconds:F3} s ({iterationsPerSecond:F1} iter/s)."),
+                $"Completed {timedIterations} iterations in {wallSeconds:F3} s wall, {netSeconds:F3} s net Run ({iterationsPerSecond:F1} iter/s)."),
             ConsoleColor.Green);
 
         // Print throughput metric when the scenario provides work-unit information.
@@ -330,7 +336,7 @@ internal static class Program
 
         if (totalWorkUnits > 0)
         {
-            double unitsPerSecond = totalWorkUnits / sw.Elapsed.TotalSeconds;
+            double unitsPerSecond = totalWorkUnits / netSeconds;
             string throughput = _FormatRate(unitsPerSecond);
             _WriteColored(
                 FormattableString.Invariant(
@@ -340,12 +346,15 @@ internal static class Program
 
         // Print GC statistics for the timed phase
         long allocDelta = allocAfter - allocBefore;
-        double allocPerIter = (double)allocDelta / timedIterations;
-        double allocPerSec = allocDelta / sw.Elapsed.TotalSeconds;
+        double allocPerIter = timedIterations > 0 ? (double)allocDelta / timedIterations : 0;
+        double allocPerSec = wallSeconds > 0 ? allocDelta / wallSeconds : 0;
         Console.ForegroundColor = ConsoleColor.Magenta;
         Console.WriteLine(
             FormattableString.Invariant(
                 $"  GC Allocations: {_FormatBytes(allocDelta)} total, {_FormatBytes((long)allocPerIter)}/iter, {_FormatRate(allocPerSec)}B/s"));
+        Console.WriteLine(
+            FormattableString.Invariant(
+                $"  Phase alloc (includes PrepareIteration when set): {_FormatBytes(allocDelta)}"));
         Console.WriteLine(
             FormattableString.Invariant(
                 $"  GC Collections: Gen0={gen0After - gen0Before}, Gen1={gen1After - gen1Before}, Gen2={gen2After - gen2Before}"));
@@ -354,9 +363,9 @@ internal static class Program
                 $"  GC Heap: {gcInfo.HeapSizeBytes / 1024.0 / 1024:F1} MB, Pause: {gcInfo.PauseTimePercentage:F1}%"));
         if (totalWorkUnits > 0)
         {
-            double allocPerWorkUnit = allocDelta / (double)totalWorkUnits;
+            double allocPerWorkUnit = runAlloc / (double)totalWorkUnits;
             Console.WriteLine(
-                FormattableString.Invariant($"  Alloc/packet: {allocPerWorkUnit:F0} bytes"));
+                FormattableString.Invariant($"  Alloc/packet: {allocPerWorkUnit:F0} bytes (net Run)"));
         }
         Console.ResetColor();
 
@@ -477,31 +486,66 @@ internal static class Program
     }
 
     /// <summary>
-    /// Calls <see cref="IProfilingScenario.Run"/> in a tight loop until
-    /// <paramref name="duration"/> has elapsed. Returns the number of
-    /// completed iterations.
+    /// Runs one phase. Hoists <see cref="IProfilingScenario.PrepareIteration"/> once: a null
+    /// delegate keeps the inner loop as <see cref="IProfilingScenario.Run"/> only.
+    /// Returns iteration count, net Run ticks, and net Run allocated bytes
+    /// (<see cref="GC.GetTotalAllocatedBytes"/> with <c>precise: false</c>).
     /// </summary>
-    private static long _RunForDuration(IProfilingScenario scenario, TimeSpan duration)
+    private static (long Iterations, long RunTicks, long RunAllocBytes) _RunForDuration(
+        IProfilingScenario scenario,
+        TimeSpan duration)
     {
         long iterations = 0;
+        long runTicks = 0;
+        long runAlloc = 0;
         Stopwatch timer = Stopwatch.StartNew();
-
-        // Cache the target tick count so the hot loop compares two longs instead of
-        // allocating a TimeSpan struct via Stopwatch.Elapsed on every iteration.
         long endTicks = (long)(duration.TotalSeconds * Stopwatch.Frequency);
+        Action? prepare = scenario.PrepareIteration;
 
-        while (timer.ElapsedTicks < endTicks)
+        if (prepare is null)
         {
-            if (scenario.IsWorkComplete)
+            while (timer.ElapsedTicks < endTicks)
             {
-                break;
-            }
+                if (scenario.IsWorkComplete)
+                {
+                    break;
+                }
 
-            scenario.Run();
-            iterations++;
+                _TimeRun(scenario, ref runTicks, ref runAlloc);
+                iterations++;
+            }
+        }
+        else
+        {
+            while (timer.ElapsedTicks < endTicks)
+            {
+                if (scenario.IsWorkComplete)
+                {
+                    break;
+                }
+
+                prepare();
+                _TimeRun(scenario, ref runTicks, ref runAlloc);
+                iterations++;
+            }
         }
 
-        return iterations;
+        return (iterations, runTicks, runAlloc);
+    }
+
+    private static void _TimeRun(IProfilingScenario scenario, ref long runTicks, ref long runAlloc)
+    {
+        long alloc0 = GC.GetTotalAllocatedBytes(precise: false);
+        long t0 = Stopwatch.GetTimestamp();
+        scenario.Run();
+        long t1 = Stopwatch.GetTimestamp();
+        long alloc1 = GC.GetTotalAllocatedBytes(precise: false);
+        runTicks += t1 - t0;
+        long delta = alloc1 - alloc0;
+        if (delta > 0)
+        {
+            runAlloc += delta;
+        }
     }
 }
 

@@ -104,12 +104,11 @@ public sealed partial class SllProtocol : IProtocol
         ushort etherType = BinaryPrimitives.ReadUInt16BigEndian(span[14..]);
 
         // Build lazy summary
-        LazyString summary = ZA.Lazy("Linux cooked capture v1, Protocol: ",
-            DisplayTables.GetEtherTypeDisplayText(etherType));
 
         // Append all fields eagerly (only 5 fields, no lazy needed)
         FieldValue headerValue = FieldValue.NewBytes(data[.._HeaderSize]);
-        MutField container = parentField.AppendWithCustomText(_ProtocolFieldId, headerValue, summary);
+        MutField container = parentField.AppendWithCustomText(_ProtocolFieldId, headerValue, "Linux cooked capture v1, Protocol: ",
+            DisplayTables.GetEtherTypeDisplayText(etherType));
 
         string pktTypeText = DisplayTables.GetSllPacketTypeDisplayText(pktType);
         container.AppendWithCustomText(_PktTypeFieldId, FieldValue.NewU64(pktType), pktTypeText);

@@ -264,6 +264,16 @@ public sealed class ParquetExporter : IPacketListener, IErrorTolerantExporter, I
             return false;
         }
 
+        if (!packet.HasFieldTree)
+        {
+            return _HandleSkip(new ExportErrorEventArgs
+            {
+                ItemIndex = PacketCount,
+                Kind = ExportErrorKind.Other,
+                Message = "Skip packets cannot be exported (HasFieldTree is false).",
+            });
+        }
+
         try
         {
             bool shouldFlush = _Batch!.AddPacket(packet);

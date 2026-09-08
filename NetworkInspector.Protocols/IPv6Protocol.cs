@@ -629,8 +629,6 @@ public sealed partial class IPv6Protocol : IProtocol
         }
 
         // Summary closure captures only src + dst (2 × 16-byte structs) — smaller than the full header.
-        LazyString summary = ZA.Lazy(
-            "Internet Protocol Version 6, Src: ", src, ", Dst: ", dst);
 
         // Store the full IPv6 data (fixed header + extension headers) so the lazy populator
         // can reconstruct all fields including extension header sub-fields.
@@ -641,7 +639,7 @@ public sealed partial class IPv6Protocol : IProtocol
         FieldValue headerValue = FieldValue.NewBytes(headerBytes)
             .WithCustomRepresentation(new LazyString("40 bytes"));
         MutField protoField = parentField.AppendLazyWithCustomText(
-            _ProtocolFieldId, headerValue, summary, _Populator);
+            _ProtocolFieldId, headerValue, "Internet Protocol Version 6, Src: ", src, ", Dst: ", dst, _Populator);
 
         // Eagerly append src/dst as non-lazy children so downstream protocols
         // (e.g., UDP/TCP) can read IPv6 addresses from the tree without materializing.

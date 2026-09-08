@@ -219,13 +219,13 @@ internal static class Icmpv6NdpParser
         // Lifetime and timers
         container.AppendWithCustomText(f.RaRouterLifetime,
             FieldValue.NewU64(routerLifetime),
-            ZA.Lazy(routerLifetime, " seconds")); /* seconds */
+            routerLifetime, " seconds"); /* seconds */
         container.AppendWithCustomText(f.RaReachableTime,
             FieldValue.NewU64(reachableTime),
-            ZA.Lazy(reachableTime, " ms")); /* milliseconds */
+            reachableTime, " ms"); /* milliseconds */
         container.AppendWithCustomText(f.RaRetransTimer,
             FieldValue.NewU64(retransTimer),
-            ZA.Lazy(retransTimer, " ms")); /* milliseconds */
+            retransTimer, " ms"); /* milliseconds */
 
         return 12; // Options start at offset 12
     }
@@ -317,11 +317,11 @@ internal static class Icmpv6NdpParser
 
             MutField optField = container.AppendWithCustomText(
                 f.OptContainer, FieldValue.None,
-                ZA.Lazy(optName, " (", optType, ")"));
+                optName, " (", optType, ")");
 
             optField.Append(f.OptType, FieldValue.NewU64(optType));
             optField.AppendWithCustomText(f.OptLen, FieldValue.NewU64(optLenUnits),
-                ZA.Lazy(optLenUnits, " (", optLen, " bytes)"));
+                optLenUnits, " (", optLen, " bytes)");
 
             // Parse option-specific data (starts at byte 2 within the option)
             switch (optType)
@@ -382,16 +382,23 @@ internal static class Icmpv6NdpParser
         optField.Append(f.OptPrefixLength, FieldValue.NewU64(prefixLen));
         optField.Append(f.OptPrefixFlagOnLink, FieldValue.NewBool(onLink));
         optField.Append(f.OptPrefixFlagAuto, FieldValue.NewBool(autonomous));
-        optField.AppendWithCustomText(f.OptPrefixValidLifetime,
-            FieldValue.NewU64(validLifetime),
-            validLifetime == 0xFFFFFFFF
-                ? new LazyString("Infinity")
-                : ZA.Lazy(validLifetime, " seconds")); /* seconds */
-        optField.AppendWithCustomText(f.OptPrefixPreferredLifetime,
-            FieldValue.NewU64(preferredLifetime),
-            preferredLifetime == 0xFFFFFFFF
-                ? new LazyString("Infinity")
-                : ZA.Lazy(preferredLifetime, " seconds")); /* seconds */
+        if (validLifetime == 0xFFFFFFFF)
+        {
+            optField.AppendWithCustomText(f.OptPrefixValidLifetime, FieldValue.NewU64(validLifetime), "Infinity");
+        }
+        else
+        {
+            optField.AppendWithCustomText(f.OptPrefixValidLifetime, FieldValue.NewU64(validLifetime), validLifetime, " seconds");
+        }
+
+        if (preferredLifetime == 0xFFFFFFFF)
+        {
+            optField.AppendWithCustomText(f.OptPrefixPreferredLifetime, FieldValue.NewU64(preferredLifetime), "Infinity");
+        }
+        else
+        {
+            optField.AppendWithCustomText(f.OptPrefixPreferredLifetime, FieldValue.NewU64(preferredLifetime), preferredLifetime, " seconds");
+        }
 
         // Prefix (16 bytes at offset 16)
         _AppendIpv6Address(in optField, f.OptPrefix, optData[16..32], "Prefix");
@@ -426,11 +433,14 @@ internal static class Icmpv6NdpParser
         }
 
         uint lifetime = BinaryPrimitives.ReadUInt32BigEndian(optData[4..8]); /* seconds */
-        optField.AppendWithCustomText(f.OptRdnssLifetime,
-            FieldValue.NewU64(lifetime),
-            lifetime == 0xFFFFFFFF
-                ? new LazyString("Infinity")
-                : ZA.Lazy(lifetime, " seconds")); /* seconds */
+        if (lifetime == 0xFFFFFFFF)
+        {
+            optField.AppendWithCustomText(f.OptRdnssLifetime, FieldValue.NewU64(lifetime), "Infinity");
+        }
+        else
+        {
+            optField.AppendWithCustomText(f.OptRdnssLifetime, FieldValue.NewU64(lifetime), lifetime, " seconds");
+        }
 
         // Each DNS server address is 16 bytes, starting at offset 8
         int addrOffset = 8;
@@ -470,6 +480,6 @@ internal static class Icmpv6NdpParser
         System.Net.IPAddress ipAddr = new(addr);
 
         container.AppendWithCustomText(fieldId,
-            FieldValue.NewIPv6(addrValue), ZA.Lazy(label, ": ", ipAddr));
+            FieldValue.NewIPv6(addrValue), label, ": ", ipAddr);
     }
 }

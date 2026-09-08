@@ -9,7 +9,7 @@ namespace NetworkInspector.Sessions.ValueCaches;
 /// <para>
 /// <b>Pull-based model:</b>
 /// Instead of receiving pushed row copies, the listener is notified via
-/// <see cref="NotifyFlags"/> and reads columns from <see cref="ValueCacheReaderView"/>
+/// <see cref="NotifyFlags"/> and reads columns from <see cref="ReadOnlyValueCache"/>
 /// at its own pace. Natural coalescing: if multiple packets arrive before the
 /// listener polls, they are all consumed in one <see cref="OnNewRows"/> batch.
 /// </para>
@@ -43,16 +43,16 @@ public interface IValueCacheListener
     /// <paramref name="fromIndex"/> (inclusive) to <paramref name="toIndexExclusive"/>
     /// (exclusive) are packet ids, the same coalescing window as
     /// <see cref="ISessionListener.OnNewPackets"/>. They are not series row indexes:
-    /// a packet without the configured field, or one
-    /// <c>TryGetPacket</c> cannot load, adds no rows. Index columns with
+    /// a packet without the configured field adds no rows. A <c>TryGetFrame</c> miss
+    /// fails the slot rather than skipping the id. Index columns with
     /// <see cref="ValueCacheSeries.Count"/>, not with these packet ids.
     /// Pull columns from <paramref name="cache"/> or packets from <paramref name="session"/>.
     /// </summary>
     /// <param name="session">Read-only session view.</param>
-    /// <param name="cache">Current read-only view of this subscription's cache.</param>
+    /// <param name="cache">Current read-only view of this subscription's cache. Keep the compile-time struct; do not box onto <see cref="IReadOnlyValueCache"/>.</param>
     /// <param name="fromIndex">First new packet id (inclusive).</param>
     /// <param name="toIndexExclusive">One past the last new packet id.</param>
-    void OnNewRows(ISessionReader session, ValueCacheReaderView cache, int fromIndex, int toIndexExclusive);
+    void OnNewRows(ISessionReader session, ReadOnlyValueCache cache, int fromIndex, int toIndexExclusive);
 
     // ── Source lifecycle ──────────────────────────────────────────────────────
 

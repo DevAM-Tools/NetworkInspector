@@ -23,6 +23,11 @@ internal static class PrettyWriter
     /// <param name="buffer">Target output buffer.</param>
     internal static void WritePacket(Packet packet, ref PooledBuffer buffer)
     {
+        if (!packet.HasFieldTree)
+        {
+            throw new InvalidOperationException("Skip packets cannot be exported (HasFieldTree is false).");
+        }
+
         // Opening brace at indent level 1 (inside the array)
         buffer.Write("  {\n"u8);
 

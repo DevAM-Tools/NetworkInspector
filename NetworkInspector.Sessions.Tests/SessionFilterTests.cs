@@ -165,14 +165,16 @@ internal sealed class SessionFilterTests
     }
 
     [Test]
-    public async Task ReadPackets_PacketRefOverload_BeyondStoredRange_ReportsNullPackets()
+    public async Task ReadPackets_PacketRefOverload_BeyondPacketCount_Stops()
     {
         using SessionFixture fixture = SessionFixture.WithDnsPorts(2);
 
         PacketRef[] buffer = new PacketRef[4];
         int read = fixture.Session.ReadPackets(0, buffer, out _);
 
-        await Assert.That(read).IsEqualTo(4);
+        await Assert.That(read).IsEqualTo(2);
+        await Assert.That(buffer[1].Packet).IsNotNull();
+        await Assert.That(buffer[2].Packet).IsNull();
         await Assert.That(buffer[3].Packet).IsNull();
     }
 

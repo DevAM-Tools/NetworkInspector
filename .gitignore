@@ -67,3 +67,6 @@ commit_message.md
 /plans/
 /reviews/
 /councils/
+/todos/
+
+__pycache__

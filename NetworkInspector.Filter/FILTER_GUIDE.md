@@ -9,7 +9,7 @@ Implementation plan: [`../plans/plans_filter-migration-modernization.md`](../pla
 
 **Audience:** users writing filter expressions; implementers locking semantics.
 
-**Not in v1:** `seq`, `stream`, `window`, `let`, `where`, public `nav(…)`, children/parent/siblings, relative short names in scopes, bytecode VM, AOT, MCP completer UI. Filters do not read `ValueCache` (values still come from the field tree).
+**Not in v1:** `seq`, `stream`, `window`, `let`, `where`, public `nav(…)`, children/parent/siblings, relative short names in scopes, bytecode VM, AOT, MCP completer UI. Filters do not read `ValueCache` (values still come from the field tree). Columnar scans: [`VALUECACHE_GUIDE.md`](../NetworkInspector.Core/VALUECACHE_GUIDE.md). A packet parsed with `FieldTreeMode.Skip` is not a valid eval input: `TryIsMatch` returns `FilterErrorKind.NoFieldTree` (not a negative match), except `AlwaysMatch` / empty compile.
 
 ---
 
@@ -999,7 +999,8 @@ if (!compiled.TryGetValue(out Filter? filter))
 // Filter is immediately matchable — FieldId / ProtocolId / IndexGroupId / FieldAliasGroupId slots bound.
 if (!filter.TryIsMatch(packet, session.PacketIndex, out bool matched, out FilterError? err))
 {
-    // err set; filter.IsPoisoned → sticky for later packets until ResetState / TryDerive
+    // err.Kind == NoFieldTree: skip-tree packet; not a miss; IsPoisoned stays false.
+    // Other runtime failures may poison (see §8.3). Do not treat TryIsMatch false as “no match”.
 }
 ```
 
@@ -1029,6 +1030,8 @@ A single “match bit” that defaults to false is **not** enough (would re-eval
 
 ### 8.3 Poison
 
+`FilterErrorKind.NoFieldTree` is a non-poisoning runtime failure: the packet was parsed with `FieldTreeMode.Skip`. `TryIsMatch` returns false and sets `err`, but `IsPoisoned` stays false so a later Build packet can still match.
+
 ```csharp
 // Packet 5: runtime fault (e.g. regex timeout) → poison — classic and flank filters alike
 filter.TryIsMatch(p5, index, out _, out FilterError? e1); // false, e1 set, IsPoisoned
@@ -1045,6 +1048,7 @@ filter.TryDerive(newStack, out Filter? fresh, out _); // new instance, not poiso
 
 | Fault | Classic (stateless) | Flank (stateful) |
 |-------|---------------------|------------------|
+| `FilterErrorKind.NoFieldTree` (skip packet) | Not poisoned | Not poisoned |
 | `context.Error` (regex timeout, …) | Sticky poison | Sticky poison |
 | Unexpected exception from JIT root | Propagates (no poison); eval context unbound | Sticky poison |
 | Out-of-order packet id | N/A | Sticky poison |

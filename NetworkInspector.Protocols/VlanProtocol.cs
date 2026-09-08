@@ -153,14 +153,12 @@ public sealed partial class VlanProtocol : IProtocol
         ushort etherType = header.EtherType.Value;
 
         // Summary closure captures pcp (byte), dei (bool), vid (ushort) via ZA.Lazy.
-        LazyString summary = ZA.Lazy(
-            "802.1Q Virtual LAN, PRI: ", pcp, ", DEI: ", (dei ? 1 : 0), ", ID: ", vid);
 
         // Store the 4-byte header so _PopulateVlanFields can re-parse without captured variables.
         ReadOnlyMemory<byte> headerBytes = data[.._HeaderSize];
         FieldValue headerValue = FieldValue.NewBytes(headerBytes)
             .WithCustomRepresentation(new LazyString("4 bytes"));
-        parentField.AppendLazyWithCustomText(_ProtocolFieldId, headerValue, summary, _Populator);
+        parentField.AppendLazyWithCustomText(_ProtocolFieldId, headerValue, "802.1Q Virtual LAN, PRI: ", pcp, ", DEI: ", (dei ? 1 : 0), ", ID: ", vid, _Populator);
 
         // Dispatch to next protocol on parentField (sibling dispatch)
         ReadOnlyMemory<byte> payload = data[_HeaderSize..];

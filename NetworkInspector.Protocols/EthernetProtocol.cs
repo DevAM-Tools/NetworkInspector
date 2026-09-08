@@ -197,24 +197,24 @@ public sealed partial class EthernetProtocol : IProtocol
         MacAddress src = MacAddress.FromBytes(span[6..12]);
         MacAddress dst = MacAddress.FromBytes(span[..6]);
         ReadOnlyMemory<byte> hdrBytes = data[.._HeaderSize];
-        LazyString summary = typeOrLen >= _MinEtherType
-            ? ZA.Lazy("Ethernet II, Src: ", src, ", Dst: ", dst)
-            : ZA.Lazy("IEEE 802.3, Src: ", src, ", Dst: ", dst);
+        string summaryPrefix = typeOrLen >= _MinEtherType
+            ? "Ethernet II, Src: "
+            : "IEEE 802.3, Src: ";
 
         // Create protocol container field with BytesField value and custom summary text.
         // CustomRepresentation shows the header byte count alongside the field value.
         FieldValue headerValue = FieldValue.NewBytes(hdrBytes)
             .WithCustomRepresentation(new LazyString("14 bytes"));
         MutField ethContainer = parentField.AppendWithCustomText(
-            _ProtocolFieldId, headerValue, summary);
+            _ProtocolFieldId, headerValue, summaryPrefix, src, ", Dst: ", dst);
 
         // Eagerly append eth.dst, eth.src, and eth.type/eth.len so these key identifier
         // fields are present in the field tree during the initial parse pass.
         // The alias group "eth.addr" is metadata-only (registered in _RegisterFieldsCustom).
         // CustomText combines the MAC address with its I/G+L/G annotation; ZA.Lazy defers
         // string allocation until the value is actually rendered.
-        ethContainer.AppendWithCustomText(_DstFieldId, FieldValue.NewMacAddress(dst), ZA.Lazy(dst, " (", _FormatMacAddressBits(dst), ")"));
-        ethContainer.AppendWithCustomText(_SrcFieldId, FieldValue.NewMacAddress(src), ZA.Lazy(src, " (", _FormatMacAddressBits(src), ")"));
+        ethContainer.AppendWithCustomText(_DstFieldId, FieldValue.NewMacAddress(dst), dst, " (", _FormatMacAddressBits(dst), ")");
+        ethContainer.AppendWithCustomText(_SrcFieldId, FieldValue.NewMacAddress(src), src, " (", _FormatMacAddressBits(src), ")");
         if (typeOrLen >= _MinEtherType)
         {
             ethContainer.AppendWithCustomText(_TypeFieldId, FieldValue.NewU64(typeOrLen),

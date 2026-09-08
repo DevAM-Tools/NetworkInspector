@@ -37,7 +37,7 @@ public interface ISessionListener
     // ── High-frequency (packet delivery) ─────────────────────────────────────
 
     /// <summary>
-    /// New packets are available in the store. The listener reads from
+    /// New packet ids have been announced. The listener reads from
     /// <paramref name="fromIndex"/> (inclusive) to <paramref name="toIndexExclusive"/>
     /// (exclusive) via <paramref name="session"/>.
     /// </summary>

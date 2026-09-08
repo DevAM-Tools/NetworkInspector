@@ -3,7 +3,7 @@
 namespace NetworkInspector.Profiling.Scenarios;
 
 /// <summary>
-/// Recycled parse that tees <c>udp.srcport</c> and <c>ip.len</c> into a <b>new</b>
+/// Recycled parse that records <c>udp.srcport</c> and <c>ip.len</c> into a <b>new</b>
 /// <see cref="ValueCache"/> on every <see cref="Run"/> call. Setup does not attach a writer.
 /// </summary>
 [SuppressMessage(
@@ -32,7 +32,7 @@ internal sealed class ParseRandomFramesRecordedScenario : IProfilingScenario
 
     /// <inheritdoc/>
     public string Description => FormattableString.Invariant(
-        $"New ValueCache (udp.srcport, ip.len) per Run + TryParseFrameRecorded(recycle), {_BatchSize:N0} frames.");
+        $"New ValueCache (udp.srcport, ip.len) per Run + TryParseFrame(recycle, cache), {_BatchSize:N0} frames.");
 
     /// <inheritdoc/>
     public long WorkUnitsPerIteration => _BatchSize;
@@ -77,8 +77,8 @@ internal sealed class ParseRandomFramesRecordedScenario : IProfilingScenario
             [new ValueCacheFieldConfig(_PortId), new ValueCacheFieldConfig(_LenId)]);
         for (int i = 0; i < _BatchSize; i++)
         {
-            RecycleError? error = Packet.TryParseFrameRecorded(
-                recycle, new PacketId(counter + i), stack, frames[i], cache);
+            RecycleError? error = Packet.TryParseFrame(
+                recycle, new PacketId(counter + i), stack, frames[i], FieldTreeMode.Build, cache);
             if (error is not null)
             {
                 throw new InvalidOperationException(error.ToString());

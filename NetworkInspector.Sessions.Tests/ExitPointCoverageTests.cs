@@ -9,7 +9,7 @@ namespace NetworkInspector.Sessions.Tests;
 internal sealed class ExitPointCoverageTests
 {
     [Test]
-    public async Task TryGetPacket_ReparseWithMismatchedStack_ReturnsFalse()
+    public async Task TryGetPacket_ReparseWithMismatchedStack_ThrowsArgumentException()
     {
         using Stack stack = TestHarness.CreateStack();
         using TestFrameSource source = TestFrameSource.WithUdpFrames(3);
@@ -18,8 +18,6 @@ internal sealed class ExitPointCoverageTests
         session.TryAddFrameSource(source, out _);
         session.TryStart();
         session.WaitForCompletion();
-
-        _GetPacketStore(session).Clear();
 
         Stack wrongStack = TestHarness.CreateStack();
         FieldInfo stackField = typeof(Session).GetField(
@@ -30,10 +28,15 @@ internal sealed class ExitPointCoverageTests
         {
             stackField.SetValue(session, wrongStack);
 
-            bool found = session.TryGetPacket(new PacketId(0), out Packet? packet);
-
-            await Assert.That(found).IsFalse();
-            await Assert.That(packet).IsNull();
+            try
+            {
+                session.TryGetPacket(new PacketId(0), out Packet? _);
+                throw new InvalidOperationException("Expected ArgumentException was not thrown.");
+            }
+            catch (ArgumentException exception)
+            {
+                await Assert.That(exception.Message).Contains("FrameInterfaceRegistry");
+            }
         }
         finally
         {
@@ -139,13 +142,5 @@ internal sealed class ExitPointCoverageTests
             "_PacketIndex",
             BindingFlags.Instance | BindingFlags.NonPublic)!;
         field.SetValue(session, index);
-    }
-
-    private static PacketStore _GetPacketStore(Session session)
-    {
-        FieldInfo field = typeof(Session).GetField(
-            "_PacketStore",
-            BindingFlags.Instance | BindingFlags.NonPublic)!;
-        return (PacketStore)field.GetValue(session)!;
     }
 }

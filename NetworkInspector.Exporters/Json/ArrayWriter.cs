@@ -20,6 +20,11 @@ internal static class ArrayWriter
     /// <param name="buffer">Target output buffer.</param>
     internal static void WritePacket(Packet packet, ref PooledBuffer buffer)
     {
+        if (!packet.HasFieldTree)
+        {
+            throw new InvalidOperationException("Skip packets cannot be exported (HasFieldTree is false).");
+        }
+
         buffer.WriteByte((byte)'{');
 
         // "id": value

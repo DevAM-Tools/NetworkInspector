@@ -158,11 +158,10 @@ public sealed partial class Dhcpv6Protocol : IProtocol
         context.RecordGroupPresence(_Dhcpv6GroupId);
 
         string msgTypeText = _GetMessageTypeText(msgType);
-        LazyString summary = ZA.Lazy("DHCPv6 ", msgTypeText);
         parentField.SetPacketInfo(ZA.Lazy("DHCPv6 ", msgTypeText));
 
         FieldValue containerValue = FieldValue.NewBytes(data);
-        MutField container = parentField.AppendWithCustomText(_ProtocolFieldId, containerValue, summary);
+        MutField container = parentField.AppendWithCustomText(_ProtocolFieldId, containerValue, "DHCPv6 ", msgTypeText);
 
         container.AppendWithCustomText(_MsgTypeFieldId, FieldValue.NewU64(msgType), msgTypeText);
 
@@ -210,7 +209,7 @@ public sealed partial class Dhcpv6Protocol : IProtocol
             MutField optContainer = container.AppendWithCustomText(
                 _OptionFieldId,
                 FieldValue.NewBytes(options.Slice(i, 4 + length)),
-                ZA.Lazy("Option: (", (ulong)code, ") ", codeText));
+                "Option: (", (ulong)code, ") ", codeText);
             optContainer.AppendWithCustomText(_OptionCodeFieldId, FieldValue.NewU64(code), codeText);
             optContainer.Append(_OptionLengthFieldId, FieldValue.NewU64(length));
             optContainer.Append(_OptionValueFieldId, FieldValue.NewBytes(optionData));

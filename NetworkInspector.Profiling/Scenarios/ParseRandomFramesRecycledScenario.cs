@@ -10,7 +10,7 @@ namespace NetworkInspector.Profiling.Scenarios;
 /// Two variants exist:
 /// <list type="bullet">
 ///   <item>
-///     <b>parse-random-frames-recycled</b> — <see cref="Packet.ParseFrame(Packet, PacketId, Stack, Frame)"/>
+///     <b>parse-random-frames-recycled</b> — <see cref="Packet.ParseFrame(Packet, PacketId, Stack, Frame, FieldTreeMode, ValueCache, Boolean)"/>
 ///     only (lazy field tree). Equivalent to parse-random-frames but with zero <see cref="Packet"/> heap allocations.
 ///   </item>
 ///   <item>
@@ -26,7 +26,7 @@ namespace NetworkInspector.Profiling.Scenarios;
 /// <para>
 /// The recycle packet is initialised once in <see cref="Setup"/>.
 /// Each <see cref="Run"/> call re-parses all frames into the same <see cref="Packet"/> object
-/// via <see cref="Packet.ParseFrame(Packet, PacketId, Stack, Frame)"/>,
+/// via <see cref="Packet.ParseFrame(Packet, PacketId, Stack, Frame, FieldTreeMode, ValueCache, Boolean)"/>,
 /// completely eliminating the heap allocation of a new <c>Packet</c> on every frame.
 /// </para>
 /// </summary>

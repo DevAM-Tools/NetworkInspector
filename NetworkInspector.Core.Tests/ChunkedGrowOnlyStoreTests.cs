@@ -11,41 +11,53 @@ internal sealed class ChunkedGrowOnlyStoreTests
     }
 
     [Test]
-    public async Task ReferenceStore_SetGet_Roundtrip()
+    public async Task ReferenceStore_AppendGet_Roundtrip()
     {
         Collections.ChunkedGrowOnlyStore<object> store = new(chunkShift: 4);
-        object value = new();
+        object first = new();
+        object second = new();
+        object third = new();
 
-        store.Set(0, value);
-        store.Set(17, value);
-        store.Set(16, value);
+        store.Append(first);
+        store.Append(second);
+        store.Append(third);
 
-        await Assert.That(store.Get(0)).IsSameReferenceAs(value);
-        await Assert.That(store.Get(16)).IsSameReferenceAs(value);
-        await Assert.That(store.Get(17)).IsSameReferenceAs(value);
-        await Assert.That(store.Get(1)).IsNull();
+        await Assert.That(store.Count).IsEqualTo(3);
+        await Assert.That(store.Get(0)).IsSameReferenceAs(first);
+        await Assert.That(store.Get(1)).IsSameReferenceAs(second);
+        await Assert.That(store.Get(2)).IsSameReferenceAs(third);
+        await Assert.That(store.Get(3)).IsNull();
     }
 
     [Test]
-    public async Task ReferenceStore_SetOutOfRange_Throws()
+    public async Task ReferenceStore_AppendPastIndexRange_Throws()
     {
         Collections.ChunkedGrowOnlyStore<object> store = new(chunkShift: 4);
+        System.Reflection.FieldInfo countField = typeof(Collections.ChunkedGrowOnlyStore<object>)
+            .GetField("_Store", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .FieldType
+            .GetField("_Count", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        object slotStore = typeof(Collections.ChunkedGrowOnlyStore<object>)
+            .GetField("_Store", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .GetValue(store)!;
+        countField.SetValue(slotStore, Ids.ArrayIndexIdRange.MaxValue + 1);
 
         await Assert
-            .That(() => store.Set(Ids.ArrayIndexIdRange.MaxValue + 1, new()))
-            .Throws<ArgumentOutOfRangeException>();
+            .That(() => store.Append(new()))
+            .Throws<InvalidOperationException>();
     }
 
     [Test]
-    public async Task LongStore_TryGet_UnsetReturnsFalse()
+    public async Task LongStore_TryGet_UnpublishedIndex_ReturnsFalse()
     {
-        Collections.ChunkedGrowOnlyLongStore store = new(chunkShift: 4, unsetValue: -1L);
+        Collections.ChunkedGrowOnlyStore<long> store = new(chunkShift: 4);
 
-        store.Set(3, 42L);
+        store.Append(42L);
 
-        await Assert.That(store.TryGet(3, out long value)).IsTrue();
+        await Assert.That(store.Count).IsEqualTo(1);
+        await Assert.That(store.TryGet(0, out long value)).IsTrue();
         await Assert.That(value).IsEqualTo(42L);
-        await Assert.That(store.TryGet(4, out _)).IsFalse();
+        await Assert.That(store.TryGet(1, out _)).IsFalse();
     }
 
     [Test]
@@ -53,7 +65,7 @@ internal sealed class ChunkedGrowOnlyStoreTests
     {
         Collections.ChunkedGrowOnlyStore<object> store = new(chunkShift: 4);
         object value = new();
-        store.Set(0, value);
+        store.Append(value);
 
         object?[] buffer = new object?[3];
         int read = store.ReadRange(-1, buffer);
@@ -77,7 +89,7 @@ internal sealed class ChunkedGrowOnlyStoreTests
     {
         Collections.ChunkedGrowOnlyStore<object> store = new(chunkShift: 4);
         object value = new();
-        store.Set(0, value);
+        store.Append(value);
 
         await Assert.That(store.Get(-1)).IsNull();
         await Assert.That(store.Get(Ids.ArrayIndexIdRange.MaxValue + 1)).IsNull();
@@ -90,73 +102,61 @@ internal sealed class ChunkedGrowOnlyStoreTests
     {
         Collections.ChunkedGrowOnlyStore<object> store = new(chunkShift: 4);
         object value = new();
-        store.Set(0, value);
-        store.Set(17, value);
+        store.Append(value);
+        store.Append(value);
 
         store.Clear();
 
+        await Assert.That(store.Count).IsEqualTo(0);
         await Assert.That(store.Get(0)).IsNull();
-        await Assert.That(store.Get(17)).IsNull();
+        await Assert.That(store.Get(1)).IsNull();
     }
 
     [Test]
     public async Task LongStore_Constructor_InvalidChunkShiftAboveMax_Throws()
     {
         await Assert
-            .That(() => new Collections.ChunkedGrowOnlyLongStore(chunkShift: 21))
+            .That(() => new Collections.ChunkedGrowOnlyStore<long>(chunkShift: 21))
             .Throws<ArgumentOutOfRangeException>();
     }
 
     [Test]
-    public async Task LongStore_TryGet_InvalidIndex_ReturnsFalseWithSentinel()
+    public async Task LongStore_TryGet_InvalidIndex_ReturnsFalse()
     {
-        Collections.ChunkedGrowOnlyLongStore store = new(chunkShift: 4, unsetValue: -99L);
+        Collections.ChunkedGrowOnlyStore<long> store = new(chunkShift: 4);
 
-        await Assert.That(store.TryGet(-1, out long negativeValue)).IsFalse();
-        await Assert.That(negativeValue).IsEqualTo(-99L);
-        await Assert.That(store.TryGet(Ids.ArrayIndexIdRange.MaxValue + 1, out long beyondValue)).IsFalse();
-        await Assert.That(beyondValue).IsEqualTo(-99L);
+        await Assert.That(store.TryGet(-1, out _)).IsFalse();
+        await Assert.That(store.TryGet(Ids.ArrayIndexIdRange.MaxValue + 1, out _)).IsFalse();
     }
 
     [Test]
     public async Task LongStore_TryGet_BeyondAllocatedChunks_ReturnsFalse()
     {
-        Collections.ChunkedGrowOnlyLongStore store = new(chunkShift: 4, unsetValue: -1L);
-        store.Set(0, 10L);
+        Collections.ChunkedGrowOnlyStore<long> store = new(chunkShift: 4);
+        store.Append(10L);
 
-        await Assert.That(store.TryGet(256, out long value)).IsFalse();
-        await Assert.That(value).IsEqualTo(-1L);
+        await Assert.That(store.TryGet(256, out _)).IsFalse();
     }
 
     [Test]
     public async Task LongStore_TryGet_UnallocatedChunk_ReturnsFalse()
     {
-        Collections.ChunkedGrowOnlyLongStore store = new(chunkShift: 4, unsetValue: -1L);
-        store.Set(0, 10L);
+        Collections.ChunkedGrowOnlyStore<long> store = new(chunkShift: 4);
+        store.Append(10L);
 
-        await Assert.That(store.TryGet(16, out long value)).IsFalse();
-        await Assert.That(value).IsEqualTo(-1L);
-    }
-
-    [Test]
-    public async Task LongStore_TryGet_UnsetSentinelValue_ReturnsFalse()
-    {
-        Collections.ChunkedGrowOnlyLongStore store = new(chunkShift: 4, unsetValue: -1L);
-        store.Set(5, -1L);
-
-        await Assert.That(store.TryGet(5, out long value)).IsFalse();
-        await Assert.That(value).IsEqualTo(-1L);
+        await Assert.That(store.TryGet(16, out _)).IsFalse();
     }
 
     [Test]
     public async Task LongStore_Clear_DropsAllValues()
     {
-        Collections.ChunkedGrowOnlyLongStore store = new(chunkShift: 4, unsetValue: -1L);
-        store.Set(3, 42L);
+        Collections.ChunkedGrowOnlyStore<long> store = new(chunkShift: 4);
+        store.Append(42L);
 
         store.Clear();
 
-        await Assert.That(store.TryGet(3, out _)).IsFalse();
+        await Assert.That(store.TryGet(0, out _)).IsFalse();
+        await Assert.That(store.Count).IsEqualTo(0);
     }
 
     [Test]
@@ -234,32 +234,41 @@ internal sealed class ChunkedGrowOnlyStoreTests
     }
 
     [Test]
-    public async Task ReferenceStore_Get_GrownOuterArrayWithNullInnerChunk_ReturnsNull()
+    public async Task ReferenceStore_Append_AcrossChunkBoundary_Roundtrips()
     {
         Collections.ChunkedGrowOnlyStore<object> store = new(chunkShift: 4);
         object value = new();
-        store.Set(272, value);
+        for (int i = 0; i < 17; i++)
+        {
+            store.Append(value);
+        }
 
-        await Assert.That(store.Get(16)).IsNull();
-        await Assert.That(store.Get(272)).IsSameReferenceAs(value);
+        await Assert.That(store.Count).IsEqualTo(17);
+        await Assert.That(store.Get(16)).IsSameReferenceAs(value);
+        await Assert.That(store.Get(17)).IsNull();
     }
 
     [Test]
-    public async Task LongStore_TryGet_GrownOuterArrayWithNullInnerChunk_ReturnsFalse()
+    public async Task LongStore_Append_AcrossChunkBoundary_Roundtrips()
     {
-        Collections.ChunkedGrowOnlyLongStore store = new(chunkShift: 4, unsetValue: -1L);
-        store.Set(272, 42L);
+        Collections.ChunkedGrowOnlyStore<long> store = new(chunkShift: 4);
+        for (int i = 0; i < 17; i++)
+        {
+            store.Append(i);
+        }
 
-        await Assert.That(store.TryGet(16, out long value)).IsFalse();
-        await Assert.That(value).IsEqualTo(-1L);
+        await Assert.That(store.Count).IsEqualTo(17);
+        await Assert.That(store.TryGet(16, out long value)).IsTrue();
+        await Assert.That(value).IsEqualTo(16L);
+        await Assert.That(store.TryGet(17, out _)).IsFalse();
     }
 
     [Test]
-    public async Task LongStore_Set_TwoIndicesSameChunk_ReusesInnerChunk()
+    public async Task LongStore_Append_TwoIndicesSameChunk_ReusesInnerChunk()
     {
-        Collections.ChunkedGrowOnlyLongStore store = new(chunkShift: 4, unsetValue: -1L);
-        store.Set(0, 10L);
-        store.Set(1, 11L);
+        Collections.ChunkedGrowOnlyStore<long> store = new(chunkShift: 4);
+        store.Append(10L);
+        store.Append(11L);
 
         await Assert.That(store.TryGet(0, out long first)).IsTrue();
         await Assert.That(first).IsEqualTo(10L);
@@ -268,65 +277,67 @@ internal sealed class ChunkedGrowOnlyStoreTests
     }
 
     [Test]
-    public async Task LongStore_Set_SecondWriteSameChunk_ReusesOuterCapacity()
+    public async Task LongStore_Append_SequentialSameChunk_Roundtrips()
     {
-        Collections.ChunkedGrowOnlyLongStore store = new(chunkShift: 4, unsetValue: -1L);
-        store.Set(0, 1L);
-        store.Set(2, 3L);
+        Collections.ChunkedGrowOnlyStore<long> store = new(chunkShift: 4);
+        store.Append(1L);
+        store.Append(2L);
+        store.Append(3L);
 
         await Assert.That(store.TryGet(2, out long value)).IsTrue();
         await Assert.That(value).IsEqualTo(3L);
     }
 
     [Test]
-    public async Task ReferenceStore_ConcurrentDisjointSets_BothValuesReadable()
+    public async Task GrowOnlyStore_ConcurrentAppend_ThrowsInvalidOperationException()
     {
         Collections.ChunkedGrowOnlyStore<object> store = new(chunkShift: 4);
         object value0 = new();
-        object value272 = new();
+        object value1 = new();
+        const int total = 65_536;
+        int ready = 0;
+        int threw = 0;
 
-        for (int attempt = 0; attempt < 64; attempt++)
+        void Writer(object value)
         {
-            store.Clear();
-            Task first = Task.Run(() => store.Set(0, value0));
-            Task second = Task.Run(() => store.Set(272, value272));
-            await Task.WhenAll(first, second);
+            _ = Interlocked.Increment(ref ready);
+            while (Volatile.Read(ref ready) < 2)
+            {
+            }
 
-            await Assert.That(store.Get(0)).IsSameReferenceAs(value0);
-            await Assert.That(store.Get(272)).IsSameReferenceAs(value272);
+            for (int i = 0; i < total; i++)
+            {
+                try
+                {
+                    store.Append(value);
+                }
+                catch (InvalidOperationException)
+                {
+                    _ = Interlocked.Exchange(ref threw, 1);
+                    return;
+                }
+            }
         }
+
+        Task first = Task.Run(() => Writer(value0));
+        Task second = Task.Run(() => Writer(value1));
+        await Task.WhenAll(first, second);
+
+        await Assert.That(Volatile.Read(ref threw)).IsEqualTo(1);
     }
 
     [Test]
-    public async Task LongStore_ConcurrentDisjointSets_BothValuesReadable()
-    {
-        Collections.ChunkedGrowOnlyLongStore store = new(chunkShift: 4, unsetValue: -1L);
-
-        for (int attempt = 0; attempt < 64; attempt++)
-        {
-            store.Clear();
-            Task first = Task.Run(() => store.Set(0, 10L));
-            Task second = Task.Run(() => store.Set(272, 42L));
-            await Task.WhenAll(first, second);
-
-            await Assert.That(store.TryGet(0, out long firstValue)).IsTrue();
-            await Assert.That(firstValue).IsEqualTo(10L);
-            await Assert.That(store.TryGet(272, out long secondValue)).IsTrue();
-            await Assert.That(secondValue).IsEqualTo(42L);
-        }
-    }
-
-    [Test]
-    public async Task ValueStore_SetGet_Roundtrip()
+    public async Task ValueStore_AppendGet_Roundtrip()
     {
         Collections.ChunkedGrowOnlyStore<int> store = new(chunkShift: 4);
 
-        store.Set(0, 11);
-        store.Set(17, 22);
+        store.Append(11);
+        store.Append(22);
 
+        await Assert.That(store.Count).IsEqualTo(2);
         await Assert.That(store.Get(0)).IsEqualTo(11);
-        await Assert.That(store.Get(17)).IsEqualTo(22);
-        await Assert.That(store.Get(1)).IsEqualTo(0);
+        await Assert.That(store.Get(1)).IsEqualTo(22);
+        await Assert.That(store.Get(2)).IsEqualTo(0);
     }
 
     [Test]
@@ -520,27 +531,87 @@ internal sealed class ChunkedGrowOnlyStoreTests
     public async Task TryGet_AllocatedSlot_ReturnsTrue()
     {
         Collections.ChunkedGrowOnlyStore<int> store = new(chunkShift: 4, unsetValue: -1);
-        store.Set(0, 5);
+        store.Append(5);
 
         await Assert.That(store.TryGet(0, out int value)).IsTrue();
         await Assert.That(value).IsEqualTo(5);
     }
 
     [Test]
-    public async Task ValueStore_ConcurrentDisjointSets_BothValuesReadable()
+    public async Task GrowOnlyStore_AppendRange_Empty_NoOp()
     {
         Collections.ChunkedGrowOnlyStore<int> store = new(chunkShift: 4);
+        store.Append(7);
 
-        for (int attempt = 0; attempt < 64; attempt++)
+        store.AppendRange(ReadOnlySpan<int>.Empty);
+
+        await Assert.That(store.Count).IsEqualTo(1);
+        await Assert.That(store.Get(0)).IsEqualTo(7);
+    }
+
+    [Test]
+    public async Task GrowOnlyStore_AppendRange_TwoChunks_RoundTrip()
+    {
+        Collections.ChunkedGrowOnlyStore<int> store = new(chunkShift: 4);
+        int[] values = new int[20];
+        for (int i = 0; i < values.Length; i++)
         {
-            store.Clear();
-            Task first = Task.Run(() => store.Set(0, 10));
-            Task second = Task.Run(() => store.Set(272, 42));
-            await Task.WhenAll(first, second);
-
-            await Assert.That(store.Get(0)).IsEqualTo(10);
-            await Assert.That(store.Get(272)).IsEqualTo(42);
+            values[i] = 100 + i;
         }
+
+        store.AppendRange(values);
+
+        await Assert.That(store.Count).IsEqualTo(20);
+        await Assert.That(store.Get(20)).IsEqualTo(0);
+        for (int i = 0; i < values.Length; i++)
+        {
+            await Assert.That(store.Get(i)).IsEqualTo(100 + i);
+        }
+    }
+
+    [Test]
+    public async Task GrowOnlyStore_AppendRange_Length100Then5000_GrowsCount()
+    {
+        Collections.ChunkedGrowOnlyStore<int> store = new(chunkShift: 4);
+        int[] hundred = new int[100];
+        int[] fiveThousand = new int[5000];
+        for (int i = 0; i < hundred.Length; i++)
+        {
+            hundred[i] = i + 1;
+        }
+
+        for (int i = 0; i < fiveThousand.Length; i++)
+        {
+            fiveThousand[i] = i + 1000;
+        }
+
+        store.AppendRange(hundred);
+        store.AppendRange(fiveThousand);
+
+        await Assert.That(store.Count).IsEqualTo(5100);
+        await Assert.That(store.Get(0)).IsEqualTo(1);
+        await Assert.That(store.Get(99)).IsEqualTo(100);
+        await Assert.That(store.Get(100)).IsEqualTo(1000);
+        await Assert.That(store.Get(5099)).IsEqualTo(5999);
+    }
+
+    [Test]
+    public async Task GrowOnlyStore_AppendRange_PastIndexRange_Throws()
+    {
+        Collections.ChunkedGrowOnlyStore<int> store = new(chunkShift: 4);
+        System.Reflection.FieldInfo countField = typeof(Collections.ChunkedGrowOnlyStore<int>)
+            .GetField("_Store", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .FieldType
+            .GetField("_Count", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        object slotStore = typeof(Collections.ChunkedGrowOnlyStore<int>)
+            .GetField("_Store", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .GetValue(store)!;
+        countField.SetValue(slotStore, Ids.ArrayIndexIdRange.MaxValue);
+        int[] values = [1, 2];
+
+        await Assert
+            .That(() => store.AppendRange(values))
+            .Throws<InvalidOperationException>();
     }
 
     [Test]
@@ -560,7 +631,7 @@ internal sealed class ChunkedGrowOnlyStoreTests
     public async Task Append_ConcurrentSecondWriter_ThrowsInvalidOperationException()
     {
         Collections.ChunkedAppendOnlyStore<KeyedItem> store = new(chunkShift: 4);
-        const int total = 4096;
+        const int total = 65_536;
         int ready = 0;
         int threw = 0;
 
@@ -665,7 +736,7 @@ internal sealed class ChunkedGrowOnlyStoreTests
     {
         Collections.ChunkedGrowOnlyStore<object> store = new(chunkShift: 4);
         object value = new();
-        store.Set(0, value);
+        store.Append(value);
 
         object?[] buffer = new object?[4];
         int read = store.ReadRange(Ids.ArrayIndexIdRange.MaxValue - 1, buffer);
@@ -717,19 +788,129 @@ internal sealed class ChunkedGrowOnlyStoreTests
     }
 
     [Test]
-    public async Task ValueStore_ConcurrentDisjointSets_SameChunk_BothValuesReadable()
+    public async Task GrowOnlyStore_ConcurrentAppendRange_Throws()
     {
-        Collections.ChunkedGrowOnlyStore<int> store = new(chunkShift: 4);
-
+        bool sawConcurrent = false;
         for (int attempt = 0; attempt < 64; attempt++)
         {
-            store.Clear();
-            Task first = Task.Run(() => store.Set(0, 10));
-            Task second = Task.Run(() => store.Set(1, 11));
-            await Task.WhenAll(first, second);
+            Collections.ChunkedGrowOnlyStore<int> store = new(chunkShift: 4);
+            int[] data = new int[200_000];
+            using Barrier barrier = new(2);
+            Thread worker = new(() =>
+            {
+                barrier.SignalAndWait();
+                try
+                {
+                    store.AppendRange(data);
+                }
+                catch (InvalidOperationException)
+                {
+                    Volatile.Write(ref sawConcurrent, true);
+                }
+            })
+            {
+                Name = "grow-only-append-range-worker",
+            };
+            worker.Start();
+            barrier.SignalAndWait();
+            try
+            {
+                store.Append(1);
+            }
+            catch (InvalidOperationException)
+            {
+                sawConcurrent = true;
+            }
 
-            await Assert.That(store.Get(0)).IsEqualTo(10);
-            await Assert.That(store.Get(1)).IsEqualTo(11);
+            worker.Join();
+            if (sawConcurrent)
+            {
+                break;
+            }
         }
+
+        await Assert.That(sawConcurrent).IsTrue();
+    }
+
+    [Test]
+    public async Task AppendRange_PublishesCount()
+    {
+        Collections.ChunkedAppendOnlyStore<int> store = new(chunkShift: 4);
+        int[] hundred = new int[100];
+        int[] fiveThousand = new int[5000];
+        for (int i = 0; i < hundred.Length; i++)
+        {
+            hundred[i] = i;
+        }
+
+        for (int i = 0; i < fiveThousand.Length; i++)
+        {
+            fiveThousand[i] = i + 100;
+        }
+
+        store.AppendRange(hundred);
+        await Assert.That(store.Count).IsEqualTo(100);
+        await Assert.That(store.ItemRef(0)).IsEqualTo(0);
+        await Assert.That(store.ItemRef(99)).IsEqualTo(99);
+
+        store.AppendRange(fiveThousand);
+        await Assert.That(store.Count).IsEqualTo(5100);
+        await Assert.That(store.ItemRef(100)).IsEqualTo(100);
+        await Assert.That(store.ItemRef(5099)).IsEqualTo(5099);
+    }
+
+    [Test]
+    public async Task AppendRange_Empty_NoOp()
+    {
+        Collections.ChunkedAppendOnlyStore<int> store = new(chunkShift: 4);
+        store.Append(3);
+
+        store.AppendRange(ReadOnlySpan<int>.Empty);
+
+        await Assert.That(store.Count).IsEqualTo(1);
+        await Assert.That(store.ItemRef(0)).IsEqualTo(3);
+    }
+
+    [Test]
+    public async Task AppendRange_ConcurrentAppend_Throws()
+    {
+        bool sawConcurrent = false;
+        for (int attempt = 0; attempt < 64; attempt++)
+        {
+            Collections.ChunkedAppendOnlyStore<int> store = new(chunkShift: 4);
+            int[] data = new int[200_000];
+            using Barrier barrier = new(2);
+            Thread worker = new(() =>
+            {
+                barrier.SignalAndWait();
+                try
+                {
+                    store.AppendRange(data);
+                }
+                catch (InvalidOperationException)
+                {
+                    Volatile.Write(ref sawConcurrent, true);
+                }
+            })
+            {
+                Name = "append-range-worker",
+            };
+            worker.Start();
+            barrier.SignalAndWait();
+            try
+            {
+                store.Append(1);
+            }
+            catch (InvalidOperationException)
+            {
+                sawConcurrent = true;
+                worker.Join();
+                break;
+            }
+
+            worker.Join();
+        }
+
+        await Assert.That(sawConcurrent).IsTrue();
     }
 }

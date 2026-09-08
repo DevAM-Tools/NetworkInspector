@@ -45,10 +45,10 @@ public interface ISessionReader
     // ── Packet access ────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Attempts to retrieve a packet by its <see cref="PacketId"/>.
-    /// Returns <see langword="true"/> if the packet was found (store or random-access re-parse fallback),
-    /// <see langword="false"/> if the id is invalid, the packet is not in the store and cannot be
-    /// re-read from its source, or queries are disabled (e.g. during shutdown).
+    /// Attempts to retrieve a packet by its <see cref="PacketId"/> by re-parsing the captured frame.
+    /// The session does not retain packet instances. Returns <see langword="true"/> if the frame
+    /// can be loaded (cached stream source or random-access source). Returns <see langword="false"/>
+    /// if the id is invalid, the frame cannot be re-read, or queries are disabled.
     /// </summary>
     bool TryGetPacket(PacketId id, [NotNullWhen(true)] out Packet? packet);
 
@@ -58,8 +58,8 @@ public interface ISessionReader
     /// free of packet allocations. Pass <see langword="null"/> to always allocate.
     ///
     /// <para>
-    /// A store hit returns the stored instance and leaves <paramref name="recycle"/> untouched, so a
-    /// caller cannot rely on getting its own instance back — compare by reference if that matters.
+    /// A store hit is not possible: the session never keeps packets. When
+    /// <paramref name="recycle"/> is accepted, the returned instance is that object.
     /// If the recycle attempt is rejected (for example because the packet still has an active
     /// materialization or came from another stack), the re-parse falls back to a fresh allocation and
     /// still succeeds.
@@ -75,10 +75,20 @@ public interface ISessionReader
     bool TryGetPacket(PacketId id, Packet? recycle, [NotNullWhen(true)] out Packet? packet);
 
     /// <summary>
-    /// Reads a contiguous range of packets into <paramref name="buffer"/>.
+    /// Attempts to retrieve the captured frame for <paramref name="id"/> without parsing a packet.
+    /// Returns <see langword="true"/> when the frame can be re-read from a cached stream source
+    /// or a random-access source. Returns <see langword="false"/> when the id is invalid, the frame is
+    /// unreachable, or queries are disabled. On failure <paramref name="frame"/> is
+    /// <see cref="Frame.Invalid"/>.
+    /// </summary>
+    bool TryGetFrame(PacketId id, out Frame frame);
+
+    /// <summary>
+    /// Reads a contiguous range of packets into <paramref name="buffer"/> by re-parsing each id.
     /// <paramref name="fromIndex"/> is the first <see cref="PacketId"/> value (inclusive).
-    /// Returns the number of slots actually filled. Entries may be <see langword="null"/>
-    /// if the slot was cleared (e.g. after restart) or not yet stored. Returns 0 when queries are disabled.
+    /// Each non-null <paramref name="buffer"/> slot is used as that slot’s recycle packet.
+    /// Null slots allocate. The session does not retain the returned instances.
+    /// Returns the number of slots actually filled. Returns 0 when queries are disabled.
     /// </summary>
     int ReadPackets(int fromIndex, Span<Packet?> buffer);
 
@@ -86,10 +96,8 @@ public interface ISessionReader
     /// Reads a contiguous range of packets, paired with their ids, into <paramref name="destination"/>.
     ///
     /// <para>
-    /// Equivalent to <see cref="ReadPackets(int, Span{Packet})"/> apart from carrying the id in
-    /// every slot: <paramref name="idLayout"/> is always
-    /// <see cref="PacketIdLayout.Contiguous"/> and <see cref="PacketRef.Packet"/> may be
-    /// <see langword="null"/> for ids that hold nothing. Returns 0 when queries are disabled.
+    /// Every slot is an independent reparse. <see cref="PacketRef.Packet"/> on input is that slot’s recycle
+    /// instance when non-null. The session does not retain returned packets.
     /// </para>
     /// </summary>
     /// <param name="startId">First <see cref="PacketId"/> value to read (inclusive).</param>
@@ -197,8 +205,11 @@ public interface ISessionReader
     /// Read-only view of the construction-time ingest value cache, or
     /// <see langword="null"/> when <see cref="SessionOptions.ValueCache"/> was not set.
     /// After Restart this aliases the rebound writer.
+    /// Keep the compile-time type as <see cref="ReadOnlyValueCache"/> or pass it to a
+    /// generic <c>where TCache : IReadOnlyValueCache</c> API. Assigning this value to
+    /// <see cref="IReadOnlyValueCache"/> boxes.
     /// </summary>
-    ValueCacheReaderView? IngestValueCache
+    ReadOnlyValueCache? IngestValueCache
     {
         get;
     }

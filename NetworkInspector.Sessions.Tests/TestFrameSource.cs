@@ -132,3 +132,46 @@ internal sealed class TestFrameSource : IRandomAccessFrameSource
         _Registry = null;
     }
 }
+
+/// <summary>
+/// Random-access source that yields every frame on <see cref="IFrameSource.NextFrame"/>
+/// but returns <see langword="null"/> from <see cref="IRandomAccessFrameSource.FrameById"/>
+/// for one index, so Restart / PullFill can observe a mid-range miss.
+/// </summary>
+internal sealed class HoleRandomAccessSource : IRandomAccessFrameSource
+{
+    private readonly TestFrameSource _Inner;
+    private readonly int _HoleFrameIndex;
+
+    internal HoleRandomAccessSource(TestFrameSource inner, int holeFrameIndex)
+    {
+        _Inner = inner;
+        _HoleFrameIndex = holeFrameIndex;
+    }
+
+    public string UiName => _Inner.UiName;
+
+    public string? Description => _Inner.Description;
+
+    public int? EstimatedFrameCount => _Inner.EstimatedFrameCount;
+
+    public bool IsRunning => _Inner.IsRunning;
+
+    public void Start(FrameSourceId sourceId, FrameInterfaceRegistry registry) =>
+        _Inner.Start(sourceId, registry);
+
+    public Frame? NextFrame(CancellationToken cancellationToken = default) =>
+        _Inner.NextFrame(cancellationToken);
+
+    public Frame? FrameById(FrameId id, CancellationToken cancellationToken = default)
+    {
+        if (id.Value == _HoleFrameIndex)
+        {
+            return null;
+        }
+
+        return _Inner.FrameById(id, cancellationToken);
+    }
+
+    public void Dispose() => _Inner.Dispose();
+}

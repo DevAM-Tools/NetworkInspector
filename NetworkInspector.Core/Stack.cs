@@ -205,7 +205,7 @@ public sealed class Stack : IStack, IDisposable
     #region Parse sequence
 
     /// <summary>
-    /// Classifies this <see cref="Packet.ParseFrame(PacketId, Stack, Frame)"/> call as a first parse or a replay and
+    /// Classifies this <see cref="Packet.ParseFrame(PacketId, Stack, Frame, FieldTreeMode, ValueCache, Boolean)"/> call as a first parse or a replay and
     /// rejects jumps. First parses on a stack must use dense ids <c>0, 1, 2, …</c>.
     /// Returns <see langword="true"/> when <paramref name="id"/> was already first-parsed
     /// (<c>id ≤ watermark</c>) and must replay; <see langword="false"/> when this is the next

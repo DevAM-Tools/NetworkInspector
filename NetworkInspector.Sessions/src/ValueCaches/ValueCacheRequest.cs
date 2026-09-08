@@ -11,8 +11,9 @@ namespace NetworkInspector.Sessions;
 public sealed class ValueCacheRequest
 {
     /// <summary>
-    /// When true, every stack field gets a payload series. Explicit <see cref="Fields"/> still add
-    /// custom-text / custom-representation series and override capture mode.
+    /// When true, every field that actually appears gets a payload series. Unused stack fields stay
+    /// absent. Explicit <see cref="Fields"/> still add custom-text / custom-representation series
+    /// and override capture mode.
     /// </summary>
     public bool RecordAllFields { get; init; }
 
@@ -37,6 +38,14 @@ public sealed class ValueCacheRequest
     /// </summary>
     public IReadOnlyList<ValueCacheFieldRequest> Fields { get; init; } = [];
 
-    /// <summary>Optional row and byte bounds. Default is unlimited.</summary>
-    public ValueCacheLimits Limits { get; init; } = ValueCacheLimits.Unlimited;
+    /// <summary>
+    /// When true, <see cref="RecordAllFields"/> also creates presence series for
+    /// <see cref="FieldType.None"/> containers. Default false.
+    /// </summary>
+    public bool RecordContainerPresence { get; init; }
+
+    /// <summary>
+    /// Log₂ of rows per inner column chunk. Default 12 (4096). Allowed range 4…20.
+    /// </summary>
+    public int ChunkShift { get; init; } = 12;
 }

@@ -9,23 +9,82 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+---
+
+## [0.10.0] — Skip-field-tree parse, frame cache, and grow-only ValueCache
+
+Delta since 0.9.0. Version is `0.10.0` in `Directory.Build.props`.
+
+This release separates decode work from what you keep in memory. Session ingest always uses `FieldTreeMode.Skip` and recycles the throwaway packet; `TryGetPacket` and export Build-reparse from the captured frame. ValueCache is grow-only First/All series with snapshot handles for concurrent reads. `ParseFrameRecorded`, the packet store, and packed frame copy are removed.
+
 ### Added
 
-- **`ValueCache`** (`NetworkInspector.Core.ValueCaches`) — RAM columnar series for selected fields (or all fields), filled by `RecordPacket` or parse-time tee. Capture modes first/last/all occurrence; optional custom text and custom representation series; sticky packet-id and timestamp monotonic flags; optional row/byte limits. `ValueCacheReaderView` is the read-only façade.
-- **`Packet.ParseFrameRecorded` / `TryParseFrameRecorded`** — first-parse tee into a `ValueCache`, including indexed overloads and recycle variants. Replays do not record.
-- **Session ingest and runtime value caches** — `SessionOptions.ValueCache` / `ValueCacheListener`; `ISession.TryAddValueCache`; `IValueCacheListener.OnNewRows`; `ISessionReader.IngestValueCache` and `GetValueCaches()`. Restart abandons writers and rebinds surviving slots.
-- Profiling scenarios: `session-value-cache-ingest-all-fields`, `session-value-cache-ondemand-all-fields`, `session-value-cache-ingest-udp-srcport`. Session value-cache scenarios construct a new `Stack` and `Session` per `Run` so packet ids are first-parses (replays do not tee). `value-cache-build-all-fields` and `parse-random-frames-recycled-recorded` allocate a fresh `ValueCache` per `Run`. `session-listener` pulls packets without `MaterializeAll`; `session-listener-materialized` keeps the old full-tree walk. `random-source-parse` / `random-source-parse-materialized` are the no-session counterparts.
+- **`FieldTreeMode`** — last-optional parse argument on `ParseFrame` / `ParseFrameIndexed` and recycle `Try*` variants. `Skip` keeps protocol decode, packet-index presence, and ValueCache record without retaining a FieldBody tree (`HasFieldTree == false`). Default remains `Build`. `ParseFrame` / `TryParseFrame` also take optional `ValueCache? cache` and `bool recordOnReplay` so a replay id can still record (Session PullFill).
+- **`ValueCacheSeries.Handle`** — count snapshot with index access, `TryFindPacketId(s)` / `TryFindTimestamp(s)`, row `foreach` / `EnumerateFrom`, SoA `EnumerateChunks` / `EnumerateChunksFrom` (SIMD spans; first chunk sliced from the watermark), and `TryGet*Chunk` clipped to the snapshot.
+- **`ReadOnlyValueCache`** — read-only façade (replaces `ValueCacheReaderView`). `ValueCache` and the struct implement `IReadOnlyValueCache`; series implement `IReadOnlyValueCacheSeries` / `IReadOnlyValueCacheSeries<T>`. Session listeners get `ReadOnlyValueCache` and `ReadOnlyValueCacheSeries<T>` (structs; do not box onto the interface). Class `GetSeries<T>` still returns `ValueCacheSeries<T>`; interface/struct getters return `ReadOnlyValueCacheSeries<T>`. `IReadOnlyValueCache.AllSeries` is the read-only list (`ValueCache.Series` stays the writer list). Untyped series interface uses `GetHandle()` so the typed `Handle` property can stay `ValueCacheSeriesHandle<T>`.
+- **`ValueCacheBuildOptions` is a `readonly struct`.** `ChunkShift` is validated on assign (4…20). `ValueCache` still takes `ValueCacheBuildOptions?`; omit or pass `null` so defaults (`ChunkShift` 12) apply. Do not pass `default(ValueCacheBuildOptions)`.
+- **ZeroAlloc generic `AppendWithCustomText` / `AppendLazyWithCustomText`** — format fragments are not wrapped in `ZA.Lazy` first; skip parse omits display-text allocation unless the tree or cache needs it. Leftover last-arg `ZA.Lazy` is NIGEN015.
+- **Filter `NoFieldTree`** — `TryIsMatch` on a skip packet returns `FilterErrorKind.NoFieldTree` (not a negative match), except `AlwaysMatch`.
+- Profiling skip counterparts: `parse-random-frames-recycled-skip`, `parse-random-frames-recycled-recorded-skip`, `value-cache-build-all-fields-skip`.
+- **`FrameSourceAddOptions`** — per-`TryAddFrameSource` `CacheRandomAccess`. Stream sources are always wrapped. RA wrap is opt-in and holds the inner `Frame` (payload bytes are not copied).
+- Profiling `IProfilingScenario.PrepareIteration` is an optional `Action?` (null = no prepare, tight `Run` loop). Throughput and alloc/packet use net `Run` time. Scenario: `cached-frames-hold-reference`.
+- **`VALUECACHE_GUIDE.md`** — fill paths, snapshot handles, and Session integration.
+
+### Changed
+
+- Session never retains parsed packets. Ingest always `FieldTreeMode.Skip` and recycles the throwaway packet. `TryGetPacket` / bulk reads always Build-reparse from the cached or RA frame. Caller recycle is per slot.
+- On-demand Session caches (`TryAddValueCache`) skip-tee from `TryGetFrame` with `recordOnReplay: true`. They do not walk FieldBodies and do not call `ValueCache.RecordPacket`.
+- `ISessionReader.TryGetFrame` returns the captured frame without parsing.
+- `SessionOptions.RedissectOnly` is `IndexPackets = false` only. Profiling session scenarios construct the session in `PrepareIteration`, not in `Run`.
+- `CachedFrameSource` always holds the inner `Frame`. It does not copy payload bytes. `EstimatedPayloadBytes` / `EstimatedIndexBytes` report held `Frame.Data` lengths and index backing.
+- UDP/TCP/ICMPv6 checksum status on Skip uses the IP address caches; ICMPv6 no longer maps a cache miss to `[Bad]`.
+- Packet exporters reject skip packets (`HasFieldTree` false) via `ItemSkipped` instead of writing an empty tree.
+- Restart re-parses with the original `PacketId` and fails closed (`SessionErrorCode.FrameUnavailable`) when `FrameById` cannot load a mapped frame. PullFill does the same on a `TryGetFrame` miss. A failed Restart leaves pull queries disabled so callers cannot read a torn `PacketCount` / mapping.
+- **Breaking (pre-1.0): ValueCache is grow-only First/All series.** `ValueCaptureMode.LastOccurrence`, `ValueCache.BeginPacket` / `EndPacket`, `ValueCacheLimits`, `IsCapacityReached`, `ByteSize`, and specialized series types (`ValueCacheStringSeries`, `ValueCacheBytesSeries`, `ValueCacheIPv6Series`, `ValueCacheUuidSeries`) are gone. Callers use `GetSeries<T>` including `string`, `byte[]`, `IPv6Address`, and `Uuid`. `ValueCacheBuildOptions.ChunkShift` (default 12, allowed 4…20) is passed into every series store. Rows are visible as soon as `Record` appends; concurrent readers may observe a packet that is still being parsed. The cache has no silent capacity drop — it grows with traffic.
+- **Breaking (pre-1.0): `ChunkedGrowOnlyStore<T>` mutation is `Append` / `AppendRange` only.** Published slots `0 .. Count-1` are immutable. `Set` / `SetRange` and `ChunkedGrowOnlyLongStore` were removed. Session stores PacketId → (FrameId, FrameSourceId) as packed `long` in `ChunkedGrowOnlyStore<long>` (dense sequential appends).
+
+### Removed
+
+- **Breaking:** `StoreParsedPackets`, `SessionOptions.WithoutPacketStore`, `ISession.StoreParsedPackets`, and `PacketStore`. There is no packet store.
+- **Breaking:** `CachedFramePayloadMode`, `CachedFrameSource` payload-mode constructors, `PackedFramePayloadStore`, `SessionOptions.CachedFramePayloadMode`, and `FrameSourceAddOptions.PayloadMode`. Packed-arena copy was removed after it measured ~3× slower than hold.
+- **Breaking:** `ValueCacheReaderView`, `ParseFrameRecorded`, `TryParseFrameRecorded`, and `teeOnReplay`. Pass `ValueCache?` and `recordOnReplay` into `ParseFrame` / `TryParseFrame` instead.
+
+### Fixed
+
+- `ValueCache.RecordPacket` begins custom-text and custom-representation series before staging so pull ingest publishes those rows (same begin/commit contract as payload and parse-time tee).
+- Session ingest ValueCache profiling reused a `Stack` across iterations so packet ids 0…N were replays and the ingest tee skipped (`udp.srcport` stayed at 0 rows until timeout). Each iteration now builds a fresh `Stack`.
+- Session `_TryReparseFrame` no longer swallows parse exceptions (truncated frames already become error packets; OOM and invariant failures propagate).
+- `CachedFrameSource` concurrent `FrameById` tests compare against a payload clone taken at `NextFrame`, so a torn publish cannot pass by aliasing the writer’s `Frame.Data`.
+
+---
+
+## [0.9.0] — ValueCaches: parse-time tee and session on-demand fill
+
+Delta since `3c7e46c` (0.8.0). Version is `0.9.0` in `Directory.Build.props`.
+
+This release introduces RAM columnar **ValueCaches**. There are two fill paths: a parse-time tee on the first walk of each packet (`Packet.ParseFrameRecorded`, session ingest via `SessionOptions.ValueCache`), and on-demand fill from sealed packets (`ValueCache.RecordPacket`, session runtime caches via `ISession.TryAddValueCache`). Replays never tee. Filters still read the field tree, not the cache.
+
+### Added
+
+- **`ValueCache`** (`NetworkInspector.Core.ValueCaches`) — single-writer RAM columnar series for selected fields (or all fields). Fill with `RecordPacket` (sealed packet, lookup order) or parse-time tee (`ParseFrameRecorded`). Capture modes first/last/all occurrence; optional custom-text and custom-representation series; sticky packet-id and timestamp monotonic flags; optional row/byte limits (`ValueCacheLimits`). `ValueCacheReaderView` is the zero-allocation read-only façade. `Abandon()` / `IsAbandoned` are public so Session can evict a writer without Core internals.
+- **`Packet.ParseFrameRecorded` / `TryParseFrameRecorded`** — first-parse tee into a `ValueCache`, including indexed overloads, first-protocol override, and recycle variants. Replays of an already first-parsed id do not write the cache. Unrecorded `ParseFrame` keeps a predicted null check on the active cache so the tee cannot inflate `AppendChild`.
+- **Session ingest value cache** — `SessionOptions.ValueCache` / `ValueCacheListener`. The parse thread tees into the ingest writer (`NotifyOnly` when a listener is set). Exposed as `ISessionReader.IngestValueCache`. Ingest without a listener is listed by `GetValueCaches()` with UiName `ingest`.
+- **Session on-demand value caches** — `ISession.TryAddValueCache(IValueCacheListener, ValueCacheRequest, …)` always constructs a new cache and fills it on a dedicated slot thread (`PullFill`: `TryGetPacket` then `RecordPacket`). Runtime caches never tee on the parse thread. `IValueCacheListener.OnNewRows` uses the same coalesced packet-id window as `OnNewPackets`; series indexes come from `ValueCacheSeries.Count`. `ValueCacheId`, `ValueCacheInfo`, `ValueCacheRequest` / `ValueCacheFieldRequest`. Restart abandons writers and rebinds surviving slots.
+- **`ChunkedGrowOnlyStore.TryGetPublishedChunk`** — readers slice a published inner chunk by a caller-loaded committed count (used by value-cache series).
+- Profiling scenarios: `session-value-cache-ingest-all-fields`, `session-value-cache-ingest-udp-srcport`, `session-value-cache-ondemand-all-fields`, `session-value-cache-ondemand-udp-srcport`, `value-cache-build-all-fields`, `value-cache-read-udp-srcport`, `packet-reparse-read-udp-srcport`, `parse-random-frames-recycled-recorded`. Session value-cache scenarios construct a new `Stack` and `Session` per `Run` so packet ids are first-parses. `session-listener` pulls without `MaterializeAll`; `session-listener-materialized` keeps the full-tree walk. `random-source-parse` / `random-source-parse-materialized` are the no-session counterparts.
 
 ### Changed
 
 - **Breaking (pre-1.0): `Packet.TryGetFieldAt` is internal.** Storage indexes stay packet-owned. External navigation uses `RootField()`, Field parent/child/sibling APIs, `IterFieldsDfs` / `IterFieldsFlat`, or `TryGetFieldValue` / `TryGetNextField`.
-- Session value-cache bind checks field and group names with `NameValidation.IsValidName` (same rule as stack registration). Invalid identifiers throw `SessionException(ValueCacheInvalidFieldName)` at construction, `TryAddValueCache`, and Restart; well-formed names missing from the stack still throw `ValueCacheUnknownField`.
-- `ValueCache.Abandon()` and `IsAbandoned` are public. `ValueCacheReaderView.IsAbandoned` forwards that flag. Core no longer grants `InternalsVisibleTo` to `NetworkInspector.Sessions` or `NetworkInspector.Sessions.Tests`.
-- `ValueCache` parse tee uses a compact field-id array (linear scan) when at most 16 fields are recorded, otherwise a dense probe plus a bitset miss. There are no `FrozenDictionary` lookups. Unrecorded parse keeps a predicted null check on `Packet._ActiveValueCache` and a `NoInlining` stub so the probe cannot inflate `AppendChild`. Tee hits run through `_TeeHitCold` (`NoInlining`); compact scans unroll one- and two-field lists. `BeginPacket` / `EndPacket` commit only series touched in the active packet (epoch tracking). `Tee` / `TeeCustomText` stay `NoInlining` so they cannot be pulled into `AppendChild`.
+- Session value-cache bind checks field and group names with `NameValidation.IsValidName` (same rule as stack registration). Invalid identifiers throw `SessionException(ValueCacheInvalidFieldName)` at construction, `TryAddValueCache`, and Restart; well-formed names missing from the stack still throw `ValueCacheUnknownField`. `ValueCacheListener` without `ValueCache` is `ValueCacheListenerWithoutRequest`.
+- `MutField.SetCustomText` / `ClearCustomText` / `AppendCustomText` go through `Packet` so parse-time tee can record custom-text series.
+- `ValueCache` parse tee uses a compact field-id array (linear scan) when at most 16 fields are recorded, otherwise a dense probe plus a bitset miss. There are no `FrozenDictionary` lookups. Tee hits run through `_TeeHitCold` (`NoInlining`); compact scans unroll one- and two-field lists. `BeginPacket` / `EndPacket` commit only series touched in the active packet (epoch tracking). `Tee` / `TeeCustomText` stay `NoInlining` so they cannot be pulled into `AppendChild`.
 - Listener and value-cache slots skip redundant wake signals when the target flag is already set.
 - Session first-parse uses a Monitor (`_ParseMutex`) instead of `SpinLock`. One frame parse is long enough that waiting source threads kernel-wait. Re-parse of announced ids stays lock-free. Dense packet ids and protocol-instance mutation remain serialized.
 - Value-cache fill no longer rolls back on a protocol exception. Fields already teed (for example Ethernet before a UDP throw) stay in the cache; `packet.error` is still recorded. `RollbackCurrentPacket` / `RollbackActiveValueCache` are gone. `PacketIndex.RollbackCurrentPacket` is unchanged.
-- `ValueCache` types live in namespace and folder `NetworkInspector.Core.ValueCaches`. Session listener/slot types live in `NetworkInspector.Sessions.ValueCaches`. The `Vc` type alias is gone; call sites use `ValueCache`.
+- `ValueCache` types live in namespace and folder `NetworkInspector.Core.ValueCaches`. Session listener/slot types live in `NetworkInspector.Sessions.ValueCaches`. Request types (`ValueCacheRequest`, `ValueCacheFieldRequest`) live in `NetworkInspector.Sessions`. Sessions talks to the cache only through public APIs (`RecordPacket`, `Abandon`, `ValueCacheReaderView`); Core does not grant `InternalsVisibleTo` to Sessions.
+- `FILTER_GUIDE.md`: filters do not read `ValueCache`; values still come from the field tree. Core and Sessions package READMEs document parse-time tee and session ingest / on-demand caches.
+- Version bumped to `0.9.0`.
 
 ---
 

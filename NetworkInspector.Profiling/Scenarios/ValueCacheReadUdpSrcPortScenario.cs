@@ -3,8 +3,8 @@
 namespace NetworkInspector.Profiling.Scenarios;
 
 /// <summary>
-/// Reads every published <c>udp.srcport</c> value from a pre-built <see cref="ValueCache"/>
-/// via chunk spans. Setup fills the cache once; the timed loop does not parse.
+/// SIMD-scans every published <c>udp.srcport</c> payload from a pre-built <see cref="ValueCache"/>.
+/// Setup fills the cache once; the timed loop walks value chunks only (no row gather, no parse).
 /// Pair with <c>packet-reparse-read-udp-srcport</c> to compare column scan vs re-parse.
 /// </summary>
 [SuppressMessage(
@@ -19,7 +19,7 @@ internal sealed class ValueCacheReadUdpSrcPortScenario : IProfilingScenario
 
     private Stack? _Stack;
     private ValueCache? _Cache;
-    private ValueCacheSeries<ulong>? _Series;
+    private ValueCacheSeriesHandle<ulong> _Handle;
     private ulong _Sink;
 
     #endregion
@@ -31,7 +31,7 @@ internal sealed class ValueCacheReadUdpSrcPortScenario : IProfilingScenario
 
     /// <inheritdoc/>
     public string Description => FormattableString.Invariant(
-        $"Scan pre-built ValueCache series udp.srcport ({_PacketCount:N0} rows) via TryGetValueChunk — no parse.");
+        $"SIMD-scan pre-built ValueCache udp.srcport values ({_PacketCount:N0} rows) — no parse, no rows.");
 
     /// <inheritdoc/>
     public long WorkUnitsPerIteration => _PacketCount;
@@ -49,37 +49,33 @@ internal sealed class ValueCacheReadUdpSrcPortScenario : IProfilingScenario
         Packet recycle = Packet.ParseFrame(new PacketId(0), _Stack, frames[0]);
         for (int i = 0; i < _PacketCount; i++)
         {
-            RecycleError? error = Packet.TryParseFrameRecorded(
-                recycle, new PacketId(i + 1), _Stack, frames[i], _Cache);
+            RecycleError? error = Packet.TryParseFrame(
+                recycle, new PacketId(i + 1), _Stack, frames[i], FieldTreeMode.Build, _Cache);
             if (error is not null)
             {
                 throw new InvalidOperationException(error.ToString());
             }
         }
 
-        _Series = _Cache.GetSeries<ulong>(portId);
-        if (_Series.Count != _PacketCount)
+        ValueCacheSeries<ulong> series = _Cache.GetSeries<ulong>(portId);
+        if (series.Count != _PacketCount)
         {
             throw new InvalidOperationException(
                 FormattableString.Invariant(
-                    $"Expected {_PacketCount} udp.srcport rows, got {_Series.Count}."));
+                    $"Expected {_PacketCount} udp.srcport rows, got {series.Count}."));
         }
+
+        _Handle = series.Handle;
     }
 
     /// <inheritdoc/>
     public void Run()
     {
-        ValueCacheSeries<ulong> series = _Series!;
-        int observed = series.Count;
         ulong sink = 0;
         int chunkIndex = 0;
-        while (series.TryGetValueChunk(chunkIndex, observed, out ReadOnlySpan<ulong> span))
+        while (_Handle.TryGetValueChunk(chunkIndex, out ReadOnlySpan<ulong> values))
         {
-            for (int i = 0; i < span.Length; i++)
-            {
-                sink += span[i];
-            }
-
+            sink += _SumPorts(values);
             chunkIndex++;
         }
 
@@ -93,13 +89,88 @@ internal sealed class ValueCacheReadUdpSrcPortScenario : IProfilingScenario
         _Stack?.Dispose();
         _Stack = null;
         _Cache = null;
-        _Series = null;
+        _Handle = default;
     }
 
     #endregion
 
     #region Private helpers
 
+    /// <summary>
+    /// Horizontal sum of a value-chunk. Widest available SIMD, then scalar.
+    /// <see cref="Vector256.IsHardwareAccelerated"/> / <see cref="Vector128.IsHardwareAccelerated"/>
+    /// are JIT constants — unsupported ISAs drop out. No-SIMD and short spans use
+    /// <see cref="_SumPortsScalar"/>.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static ulong _SumPorts(ReadOnlySpan<ulong> values)
+    {
+        if (Vector256.IsHardwareAccelerated && values.Length >= Vector256<ulong>.Count)
+        {
+            return _SumPortsVector256(values);
+        }
+
+        if (Vector128.IsHardwareAccelerated && values.Length >= Vector128<ulong>.Count)
+        {
+            return _SumPortsVector128(values);
+        }
+
+        return _SumPortsScalar(values);
+    }
+
+    /// <summary>
+    /// Vector256 lanes plus scalar tail. Spans are not 32-byte aligned —
+    /// unaligned <see cref="Vector256.Create{T}(ReadOnlySpan{T})"/> loads.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static ulong _SumPortsVector256(ReadOnlySpan<ulong> values)
+    {
+        int width = Vector256<ulong>.Count;
+        Vector256<ulong> acc = Vector256<ulong>.Zero;
+        int i = 0;
+        for (; i + width <= values.Length; i += width)
+        {
+            acc += Vector256.Create(values.Slice(i, width));
+        }
+
+        ulong vectorSum = Vector256.Sum(acc);
+        ulong tail = _SumPortsScalar(values[i..]);
+        return vectorSum + tail;
+    }
+
+    /// <summary>
+    /// Vector128 lanes plus scalar tail. Unaligned <see cref="Vector128.Create{T}(ReadOnlySpan{T})"/> loads.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static ulong _SumPortsVector128(ReadOnlySpan<ulong> values)
+    {
+        int width = Vector128<ulong>.Count;
+        Vector128<ulong> acc = Vector128<ulong>.Zero;
+        int i = 0;
+        for (; i + width <= values.Length; i += width)
+        {
+            acc += Vector128.Create(values.Slice(i, width));
+        }
+
+        ulong vectorSum = Vector128.Sum(acc);
+        ulong tail = _SumPortsScalar(values[i..]);
+        return vectorSum + tail;
+    }
+
+    /// <summary>Scalar fallback when SIMD is missing or the remaining span is shorter than a vector.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static ulong _SumPortsScalar(ReadOnlySpan<ulong> values)
+    {
+        ulong sum = 0;
+        for (int i = 0; i < values.Length; i++)
+        {
+            sum += values[i];
+        }
+
+        return sum;
+    }
+
+    /// <summary>Resolves <c>udp.srcport</c> on the profiling stack.</summary>
     private static FieldId _RequireUdpSrcPort(Stack stack)
     {
         FieldId? portId = stack.GetFieldId("udp.srcport");

@@ -614,7 +614,7 @@ public sealed partial class TcpProtocol : IProtocol
         byte flags = header.Flags;
         string flagsText = TcpFlagsFormatter.Format(flags);
         container.AppendWithCustomText(_FlagsFieldId,
-            FieldValue.NewU64(flags), ZA.Lazy(Helpers.DisplayTables.FormatHexU8(flags), " [", flagsText, "]"));
+            FieldValue.NewU64(flags), Helpers.DisplayTables.FormatHexU8(flags), " [", flagsText, "]");
 
         container.Append(_FlagsCwrFieldId, FieldValue.NewBool((flags & 0x80) != 0));
         container.Append(_FlagsEceFieldId, FieldValue.NewBool((flags & 0x40) != 0));
@@ -652,7 +652,7 @@ public sealed partial class TcpProtocol : IProtocol
     }
 
     /// <summary>
-    /// Validates the TCP checksum by walking previous siblings to find typed IP addresses.
+    /// Validates the TCP checksum from cached IP addresses first, then sibling walk on Build.
     /// Returns <see langword="true"/> if valid, <see langword="false"/> if invalid,
     /// or <see langword="null"/> if no IP layer was found.
     /// </summary>
@@ -660,15 +660,27 @@ public sealed partial class TcpProtocol : IProtocol
     {
         const byte TcpProtocolNumber = 6;
         ushort tcpLength = (ushort)tcpData.Length;
+        PacketId packetId = container.Packet.Id;
 
-        // Walk previous siblings to find typed IP addresses
-        if (!IpAddressExtractor.TryFindPreviousIpAddresses(in container,
-            _IpContainerFieldId, _Ipv6ContainerFieldId,
-            _IpSrcFieldId, _IpDstFieldId, _Ipv6SrcFieldId, _Ipv6DstFieldId,
-            out (IPv4Address Src, IPv4Address Dst)? ipv4,
-            out (IPv6Address Src, IPv6Address Dst)? ipv6))
+        (IPv4Address Src, IPv4Address Dst)? ipv4 = null;
+        (IPv6Address Src, IPv6Address Dst)? ipv6 = null;
+        if (IPv4Protocol.TryGetCachedAddresses(packetId, out IPv4Address src4, out IPv4Address dst4))
         {
-            return null; // No IP layer found — cannot validate
+            ipv4 = (src4, dst4);
+        }
+        else if (IPv6Protocol.TryGetCachedAddresses(packetId, out IPv6Address src6, out IPv6Address dst6))
+        {
+            ipv6 = (src6, dst6);
+        }
+        else if (!container.HasFieldTree
+            || !IpAddressExtractor.TryFindPreviousIpAddresses(
+                in container,
+                _IpContainerFieldId, _Ipv6ContainerFieldId,
+                _IpSrcFieldId, _IpDstFieldId, _Ipv6SrcFieldId, _Ipv6DstFieldId,
+                out ipv4,
+                out ipv6))
+        {
+            return null;
         }
 
         ulong pseudoSum;
@@ -799,22 +811,28 @@ public sealed partial class TcpProtocol : IProtocol
             context.RecordGroupPresence(_TcpOptionsGroupId);  // IndexGroup = "tcp.options"
         }
 
-        // Summary closure captures srcPort, dstPort, flags, payloadLen
+        // Summary fragments capture srcPort, dstPort, flags, payloadLen without ZA.Lazy.
         string flagsText = TcpFlagsFormatter.Format(flags);
-        LazyString summary = payloadLen > 0
-            ? ZA.Lazy("Transmission Control Protocol, Src Port: ", srcPort,
-                      ", Dst Port: ", dstPort, ", Len: ", payloadLen,
-                      " [", flagsText, "]")
-            : ZA.Lazy("Transmission Control Protocol, Src Port: ", srcPort,
-                      ", Dst Port: ", dstPort,
-                      " [", flagsText, "]");
 
         parentField.SetPacketInfo(ZA.Lazy(srcPort, " → ", dstPort));
 
         // Store full TCP segment (header + payload) for lazy populator
-        FieldValue containerValue = FieldValue.NewBytes(data)
-            .WithCustomRepresentation(ZA.Lazy(headerLen, " bytes"));
-        MutField tcpContainer = parentField.AppendLazyWithCustomText(_ProtocolFieldId, containerValue, summary, _Populator);
+        FieldValue containerValue = FieldValue.NewBytes(data);
+        if (parentField.WantsCustomText(_ProtocolFieldId))
+        {
+            containerValue = containerValue.WithCustomRepresentation(ZA.Lazy(headerLen, " bytes"));
+        }
+        MutField tcpContainer = payloadLen > 0
+            ? parentField.AppendLazyWithCustomText(
+                _ProtocolFieldId, containerValue,
+                "Transmission Control Protocol, Src Port: ", srcPort,
+                ", Dst Port: ", dstPort, ", Len: ", payloadLen,
+                " [", flagsText, "]", _Populator)
+            : parentField.AppendLazyWithCustomText(
+                _ProtocolFieldId, containerValue,
+                "Transmission Control Protocol, Src Port: ", srcPort,
+                ", Dst Port: ", dstPort,
+                " [", flagsText, "]", _Populator);
 
         // Eagerly append tcp.srcport and tcp.dstport so checksum validation and stream
         // tracking can read ports without materialising the lazy TCP group.
@@ -1313,7 +1331,8 @@ public sealed partial class TcpProtocol : IProtocol
 
         // Fallback: walk previous siblings to find typed IP addresses.
         // materialize: false — IP containers are already eager at parse time.
-        if (!parentField.TryGetLastChild(out MutField prev, materialize: false))
+        if (!parentField.HasFieldTree
+            || !parentField.TryGetLastChild(out MutField prev, materialize: false))
         {
             key = default;
             srcAddr = default;

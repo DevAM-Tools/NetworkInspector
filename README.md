@@ -23,6 +23,7 @@ NetworkInspector is a .NET toolkit for teams that need to process network captur
 - export results into operational or analytics-friendly outputs.
 
 Custom dissectors implement `IProtocol.Parse`. See `NetworkInspector.Protocols/PROTOCOL_GUIDE.md`.
+Columnar field values over many packets: `NetworkInspector.Core/VALUECACHE_GUIDE.md`.
 
 The project is intentionally modular. You can adopt only the packages needed for your scenario.
 

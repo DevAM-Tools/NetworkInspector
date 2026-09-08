@@ -37,7 +37,14 @@ dotnet add package NetworkInspector.Core
 | Random access by frame id | `PcapSource`, `BlfSource`, `AscSource` |
 | Sequential processing with low memory pressure | `PcapStreamSource`, `BlfStreamSource`, `AscStreamSource` |
 | Test data generation | `RandomFrameSource` |
-| In-memory replay | `CachedFrameSource` |
+| In-memory replay / session stream cache | `CachedFrameSource` |
+| Session stream sources | Session auto-wraps non-random-access sources in `CachedFrameSource` |
+
+## Cached frames
+
+`CachedFrameSource` wraps a sequential `IFrameSource` and implements `IRandomAccessFrameSource`. Default construction rejects an inner that is already random-access. Pass `allowRandomAccessInner: true` when a session (or caller) wants a copy of a file source.
+
+Each published slot holds the inner `Frame`. Payload memory is whatever the inner source published (per-frame arrays, mmap slices, …). The wrapper does not copy bytes. If the inner mapping is released, aliased `Frame.Data` is no longer valid.
 
 ## Quick Start
 

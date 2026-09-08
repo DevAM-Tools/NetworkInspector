@@ -64,8 +64,10 @@ public sealed class ValueCacheInfo
     /// <summary>
     /// Zero-allocation read-only view of the current writer.
     /// After Restart this aliases the rebound cache, not the abandoned instance.
+    /// Keep the compile-time type as <see cref="ReadOnlyValueCache"/>; assigning to
+    /// <see cref="IReadOnlyValueCache"/> boxes.
     /// </summary>
-    public ValueCacheReaderView Cache
+    public ReadOnlyValueCache Cache
     {
         get
         {

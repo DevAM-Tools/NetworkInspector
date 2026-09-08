@@ -313,6 +313,16 @@ public sealed class JsonExporter : IPacketListener, IErrorTolerantExporter, IDis
             return false;
         }
 
+        if (!packet.HasFieldTree)
+        {
+            return _HandleSkip(new ExportErrorEventArgs
+            {
+                ItemIndex = PacketCount,
+                Kind = ExportErrorKind.Other,
+                Message = "Skip packets cannot be exported (HasFieldTree is false).",
+            });
+        }
+
         _Buffer.Reset();
 
         // Comma + blank line separator between packets

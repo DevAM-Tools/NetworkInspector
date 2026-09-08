@@ -10,7 +10,7 @@ public enum PacketReadMode : byte
     /// <summary>
     /// Every packet id starting at the requested id, whether or not it matches the listener's
     /// filter. Ids are always consecutive; a slot may still carry a <see langword="null"/> packet
-    /// when nothing is stored for that id.
+    /// when the frame for that id cannot be re-read.
     /// </summary>
     All = 0,
 

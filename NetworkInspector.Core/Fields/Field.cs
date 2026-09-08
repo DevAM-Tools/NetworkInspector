@@ -49,6 +49,13 @@ public readonly struct Field : IEquatable<Field>
         get => Packet is not null && StorageIndex != FieldBody.NullIndex;
     }
 
+    /// <summary>False when the owning packet was parsed with <see cref="FieldTreeMode.Skip"/>.</summary>
+    public bool HasFieldTree
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        get => Packet.HasFieldTree;
+    }
+
     #endregion
 
     #region Public Accessors
@@ -60,7 +67,17 @@ public readonly struct Field : IEquatable<Field>
     public FieldValue Value
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => Packet.GetFieldRef(StorageIndex).Value;
+        get
+        {
+            // SkipStorageIndex is readable only while a skip-tree lazy populator is in flight
+            // (GetFieldRef returns the scratch top, or throws when the stack is empty).
+            if (!HasFieldTree && StorageIndex != 0 && StorageIndex != FieldBody.SkipStorageIndex)
+            {
+                ThrowHelpers.ThrowSkipFieldTreeValue();
+            }
+
+            return Packet.GetFieldRef(StorageIndex).Value;
+        }
     }
 
     /// <summary>
@@ -74,7 +91,15 @@ public readonly struct Field : IEquatable<Field>
     public LazyString CustomText
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => Packet.GetFieldRef(StorageIndex).CustomText;
+        get
+        {
+            if (!HasFieldTree && StorageIndex != 0 && StorageIndex != FieldBody.SkipStorageIndex)
+            {
+                ThrowHelpers.ThrowSkipFieldTreeValue();
+            }
+
+            return Packet.GetFieldRef(StorageIndex).CustomText;
+        }
     }
 
     /// <summary>Whether this is the root field (index 0).</summary>
@@ -93,6 +118,11 @@ public readonly struct Field : IEquatable<Field>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool HasChildren(bool materialize)
     {
+        if (!HasFieldTree)
+        {
+            return false;
+        }
+
         if (materialize)
         {
             ref readonly FieldBody body = ref Packet.GetFieldRef(StorageIndex);
@@ -113,6 +143,11 @@ public readonly struct Field : IEquatable<Field>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ushort ChildCount(bool materialize)
     {
+        if (!HasFieldTree)
+        {
+            return 0;
+        }
+
         if (materialize)
         {
             ref readonly FieldBody body = ref Packet.GetFieldRef(StorageIndex);
@@ -139,6 +174,12 @@ public readonly struct Field : IEquatable<Field>
     /// <summary>Tries to get the parent field. Returns false if this is a root field.</summary>
     public bool TryGetParent(out Field parent)
     {
+        if (!HasFieldTree)
+        {
+            parent = default;
+            return false;
+        }
+
         ushort parentIdx = Packet.GetFieldRef(StorageIndex).ParentIndex;
         if (parentIdx != FieldBody.NullIndex)
         {
@@ -158,6 +199,12 @@ public readonly struct Field : IEquatable<Field>
     /// <param name="materialize">Whether to materialize lazy children before reading the child list.</param>
     public bool TryGetFirstChild(out Field firstChild, bool materialize)
     {
+        if (!HasFieldTree)
+        {
+            firstChild = default;
+            return false;
+        }
+
         if (materialize)
         {
             ref readonly FieldBody body = ref Packet.GetFieldRef(StorageIndex);
@@ -184,6 +231,12 @@ public readonly struct Field : IEquatable<Field>
     /// <param name="materialize">Whether to materialize lazy children before reading the child list.</param>
     public bool TryGetLastChild(out Field lastChild, bool materialize)
     {
+        if (!HasFieldTree)
+        {
+            lastChild = default;
+            return false;
+        }
+
         if (materialize)
         {
             ref readonly FieldBody body = ref Packet.GetFieldRef(StorageIndex);
@@ -205,6 +258,12 @@ public readonly struct Field : IEquatable<Field>
     /// <summary>Tries to get the next sibling field. Returns false if this is the last sibling.</summary>
     public bool TryGetNext(out Field next)
     {
+        if (!HasFieldTree)
+        {
+            next = default;
+            return false;
+        }
+
         ushort idx = Packet.GetFieldRef(StorageIndex).NextIndex;
         if (idx != FieldBody.NullIndex)
         {
@@ -218,6 +277,12 @@ public readonly struct Field : IEquatable<Field>
     /// <summary>Tries to get the previous sibling field. Returns false if this is the first sibling.</summary>
     public bool TryGetPrev(out Field prev)
     {
+        if (!HasFieldTree)
+        {
+            prev = default;
+            return false;
+        }
+
         ushort idx = Packet.GetFieldRef(StorageIndex).PrevIndex;
         if (idx != FieldBody.NullIndex)
         {

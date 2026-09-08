@@ -8,13 +8,13 @@ namespace NetworkInspector.Sessions.ValueCaches;
 internal enum ValueCacheFillMode
 {
     /// <summary>
-    /// Slot thread calls <c>TryGetPacket</c> then <c>RecordPacket</c> for each id in the window,
-    /// then notifies. Used by <c>TryAddValueCache</c>.
+    /// Slot thread skip-parses each id from its frame with <c>recordOnReplay: true</c>, then notifies.
+    /// Used by <c>TryAddValueCache</c>. The recycle packet is never published.
     /// </summary>
     PullFill = 0,
 
     /// <summary>
-    /// Parse thread already teed the ingest writer. Slot notifies without recording.
+    /// Parse thread already recorded the ingest writer. Slot notifies without recording.
     /// Used when both <see cref="SessionOptions.ValueCache"/> and
     /// <see cref="SessionOptions.ValueCacheListener"/> are set.
     /// </summary>
@@ -48,7 +48,6 @@ internal sealed class ValueCacheSlot : IDisposable
     private ValueCacheFillMode _FillMode { get; }
     private Func<Stack, ValueCache> _Rebuild { get; }
     private Func<ValueCache?> _GetIngestWriter { get; }
-    private bool _StoreParsedPackets { get; }
     private Job _Job { get; }
     private readonly ManualResetEventSlim _Wake = new(initialState: false);
 
@@ -73,7 +72,6 @@ internal sealed class ValueCacheSlot : IDisposable
         ValueCacheFillMode fillMode,
         Func<Stack, ValueCache> rebuild,
         Func<ValueCache?> getIngestWriter,
-        bool storeParsedPackets,
         Action<Job, JobStatus> onStatusChanged)
     {
         ArgumentNullException.ThrowIfNull(listener);
@@ -90,7 +88,6 @@ internal sealed class ValueCacheSlot : IDisposable
         _FillMode = fillMode;
         _Rebuild = rebuild;
         _GetIngestWriter = getIngestWriter;
-        _StoreParsedPackets = storeParsedPackets;
         _Job = new Job(
             jobId,
             listener.UiName,
@@ -341,18 +338,20 @@ internal sealed class ValueCacheSlot : IDisposable
     }
 
     /// <summary>
-    /// Records packets <paramref name="fromId"/> .. <paramref name="toIdExclusive"/>-1 via
-    /// <see cref="ISessionReader.TryGetPacket(PacketId, Packet?, out Packet?)"/> only (never
-    /// <c>ReadPackets</c>). Redissect uses a slot-private recycle instance that is never published.
+    /// Skip-parses packets <paramref name="fromId"/> .. <paramref name="toIdExclusive"/>-1 from the
+    /// captured frame via <see cref="ISessionReader.TryGetFrame"/>. Replay ids still record because
+    /// <c>recordOnReplay</c> is true. The slot-private recycle packet is never published.
     /// </summary>
     private void _FillWindow(int fromId, int toIdExclusive)
     {
         for (int id = fromId; id < toIdExclusive; id++)
         {
-            Packet? recycle = _StoreParsedPackets ? null : _Recycle;
-            if (!_SessionReader.TryGetPacket(new PacketId(id), recycle, out Packet? packet) || packet is null)
+            if (!_SessionReader.TryGetFrame(new PacketId(id), out Frame frame))
             {
-                continue;
+                throw new SessionException(
+                    SessionErrorCode.FrameUnavailable,
+                    FormattableString.Invariant(
+                        $"ValueCache PullFill cannot load frame for PacketId {id.ToString(CultureInfo.InvariantCulture)}."));
             }
 
             if (_Writer.IsAbandoned)
@@ -360,17 +359,28 @@ internal sealed class ValueCacheSlot : IDisposable
                 return;
             }
 
+            PacketId packetId = new(id);
             try
             {
-                _Writer.RecordPacket(packet);
+                if (_Recycle is null)
+                {
+                    _Recycle = Packet.ParseFrame(
+                        packetId, _SessionReader.Stack, frame, FieldTreeMode.Skip, _Writer, recordOnReplay: true);
+                }
+                else
+                {
+                    RecycleError? error = Packet.TryParseFrame(
+                        _Recycle, packetId, _SessionReader.Stack, frame, FieldTreeMode.Skip, _Writer, recordOnReplay: true);
+                    if (error is not null)
+                    {
+                        _Recycle = Packet.ParseFrame(
+                            packetId, _SessionReader.Stack, frame, FieldTreeMode.Skip, _Writer, recordOnReplay: true);
+                    }
+                }
             }
             catch (InvalidOperationException) when (_Writer.IsAbandoned)
             {
                 return;
-            }
-            if (!_StoreParsedPackets)
-            {
-                _Recycle = packet;
             }
         }
     }

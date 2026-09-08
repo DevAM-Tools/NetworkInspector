@@ -483,12 +483,6 @@ public sealed partial class SomeIpProtocol : IProtocol
 
         // Build summary
         string msgTypeText = SomeIpDisplayTables.GetMsgTypeDisplayText(header.MessageType);
-        LazyString summary = ZA.Lazy(
-            "SOME/IP, Service: 0x",
-            Helpers.DisplayTables.FormatHexU16(header.ServiceId),
-            ", Method: 0x",
-            Helpers.DisplayTables.FormatHexU16(header.MethodId),
-            ", ", msgTypeText);
 
         parentField.SetPacketInfo(ZA.Lazy(
             "SOME/IP 0x",
@@ -502,7 +496,11 @@ public sealed partial class SomeIpProtocol : IProtocol
         // must be dispatched to sub-protocols through the real ParseContext so that
         // sub-protocol presence is recorded in the index. A lazy populator receives no
         // ParseContext and therefore cannot dispatch, so eager construction is required.
-        MutField container = parentField.AppendWithCustomText(_ProtocolFieldId, containerValue, summary);
+        MutField container = parentField.AppendWithCustomText(_ProtocolFieldId, containerValue, "SOME/IP, Service: 0x",
+            Helpers.DisplayTables.FormatHexU16(header.ServiceId),
+            ", Method: 0x",
+            Helpers.DisplayTables.FormatHexU16(header.MethodId),
+            ", ", msgTypeText);
         ParseResult buildResult = _BuildSomeIpFields(in container, in context, layerKey, isReplay);
         if (buildResult.TryPropagateError(out ParseResult error))
         {
@@ -533,9 +531,8 @@ public sealed partial class SomeIpProtocol : IProtocol
         }
 
         // Message ID
-        LazyString msgIdText = ZA.Lazy("0x", new Hex8(header.MessageId));
         container.AppendWithCustomText(_MessageIdFieldId,
-            FieldValue.NewU64(header.MessageId), msgIdText);
+            FieldValue.NewU64(header.MessageId), "0x", new Hex8(header.MessageId));
 
         // Service/Method IDs
         container.AppendWithCustomText(_ServiceIdFieldId,
@@ -601,11 +598,10 @@ public sealed partial class SomeIpProtocol : IProtocol
             {
                 // Build TP summary text
                 string moreSuffix = tpHeader.MoreSegments ? ", More Segments" : ", Last Segment";
-                LazyString tpSummary = ZA.Lazy(
-                    "SOME/IP-TP, Offset: ", tpHeader.ByteOffset, " bytes", moreSuffix);
+                
 
                 MutField tpField = container.AppendWithCustomText(
-                    _TpContainerFieldId, FieldValue.None, tpSummary);
+                    _TpContainerFieldId, FieldValue.None, "SOME/IP-TP, Offset: ", tpHeader.ByteOffset, " bytes", moreSuffix);
 
                 // TP offset expressed in bytes
                 tpField.AppendWithCustomText(_TpOffsetFieldId,

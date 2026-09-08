@@ -4,7 +4,8 @@ namespace NetworkInspector.Profiling.Scenarios;
 
 /// <summary>
 /// Full session pipeline: <see cref="RandomFrameSource"/> generates IPv6/UDP frames, the session
-/// first-parses them, and a listener pulls every packet from the store.
+/// skip-parses them, and a listener re-parses every packet with a recycle instance.
+/// <see cref="PrepareIteration"/> constructs the session; <see cref="Run"/> waits for completion.
 /// </summary>
 internal sealed class SessionListenerScenario : IProfilingScenario, IDisposable
 {
@@ -28,6 +29,7 @@ internal sealed class SessionListenerScenario : IProfilingScenario, IDisposable
 
     private readonly bool _Materialize;
     private Stack? _Stack;
+    private Session? _Session;
 
     #endregion
 
@@ -66,9 +68,9 @@ internal sealed class SessionListenerScenario : IProfilingScenario, IDisposable
     /// <inheritdoc/>
     public string Description => _Materialize
         ? FormattableString.Invariant(
-            $"Session pipeline: RandomFrameSource(UdpIPv6) -> parse -> listener TryGetPacket + MaterializeAll, {FrameCount:N0} frames.")
+            $"PrepareIteration: Session+RandomFrameSource; Run: WaitForCompletion + MaterializeAll, {FrameCount:N0} frames.")
         : FormattableString.Invariant(
-            $"Session pipeline: RandomFrameSource(UdpIPv6) -> parse -> listener TryGetPacket (lazy), {FrameCount:N0} frames.");
+            $"PrepareIteration: Session+RandomFrameSource; Run: WaitForCompletion + TryGetPacket recycle, {FrameCount:N0} frames.");
 
     /// <inheritdoc/>
     public long WorkUnitsPerIteration => FrameCount;
@@ -80,11 +82,12 @@ internal sealed class SessionListenerScenario : IProfilingScenario, IDisposable
     public void Setup() => _Stack = StackHelper.CreateStack();
 
     /// <inheritdoc/>
-    public void Run()
-    {
-        using Session session = new(_Stack!);
+    public Action? PrepareIteration => _PrepareIteration;
 
-        using RandomFrameSource source = new(new RandomSourceOptions
+    private void _PrepareIteration()
+    {
+        _Session = new Session(_Stack!);
+        RandomFrameSource source = new(new RandomSourceOptions
         {
             FrameCount = FrameCount,
             Seed = Seed,
@@ -95,26 +98,39 @@ internal sealed class SessionListenerScenario : IProfilingScenario, IDisposable
 
         CountingListener listener = new(_Materialize);
 
-        if (!session.TryAddFrameSource(source, out _))
+        if (!_Session.TryAddFrameSource(source, out _))
         {
+            _Session.Dispose();
+            _Session = null;
             throw new InvalidOperationException(
                 "Failed to add frame source — session is not in the Idle phase.");
         }
 
-        if (!session.TryAddListener(listener, out _))
+        if (!_Session.TryAddListener(listener, out _))
         {
+            _Session.Dispose();
+            _Session = null;
             throw new InvalidOperationException(
                 "Failed to add listener — session may be shutting down.");
         }
 
-        if (!session.TryStart())
+        if (!_Session.TryStart())
         {
+            _Session.Dispose();
+            _Session = null;
             throw new InvalidOperationException(
                 "Failed to start session — session is not in the Idle phase.");
         }
+    }
 
+    /// <inheritdoc/>
+    public void Run()
+    {
+        Session session = _Session!;
         session.WaitForCompletion();
         session.Shutdown();
+        session.Dispose();
+        _Session = null;
     }
 
     /// <inheritdoc/>
@@ -123,6 +139,9 @@ internal sealed class SessionListenerScenario : IProfilingScenario, IDisposable
     /// <inheritdoc/>
     public void Dispose()
     {
+        _Session?.Shutdown();
+        _Session?.Dispose();
+        _Session = null;
         _Stack?.Dispose();
         _Stack = null;
     }
@@ -132,12 +151,13 @@ internal sealed class SessionListenerScenario : IProfilingScenario, IDisposable
     #region Nested types
 
     /// <summary>
-    /// Pulls every packet in the notified window. Optionally materializes the field tree.
+    /// Pulls every packet in the notified window into one recycle instance. Optionally materializes.
     /// </summary>
     private sealed class CountingListener : ISessionListener
     {
         private readonly bool _Materialize;
         private long _PacketsSeen;
+        private Packet? _Recycle;
 
         /// <summary>Creates a listener that pulls packets and optionally materializes them.</summary>
         internal CountingListener(bool materialize)
@@ -156,11 +176,12 @@ internal sealed class SessionListenerScenario : IProfilingScenario, IDisposable
         {
             for (int i = fromIndex; i < toIndexExclusive; i++)
             {
-                if (!session.TryGetPacket(new PacketId(i), out Packet? packet) || packet is null)
+                if (!session.TryGetPacket(new PacketId(i), _Recycle, out Packet? packet) || packet is null)
                 {
                     continue;
                 }
 
+                _Recycle = packet;
                 if (_Materialize)
                 {
                     packet.MaterializeAll();

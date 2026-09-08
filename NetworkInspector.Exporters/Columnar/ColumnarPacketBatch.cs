@@ -119,6 +119,11 @@ internal sealed class ColumnarPacketBatch : IDisposable
     /// <returns><see langword="true"/> if the caller should flush this batch (packet count or estimated size threshold reached).</returns>
     internal bool AddPacket(Packet packet)
     {
+        if (!packet.HasFieldTree)
+        {
+            throw new InvalidOperationException("Skip packets cannot be exported (HasFieldTree is false).");
+        }
+
         int packetIdValue = packet.Id.Value;
         _PacketIds.Add(packetIdValue);
         _Timestamps.Add(packet.Timestamp.AsNanos);

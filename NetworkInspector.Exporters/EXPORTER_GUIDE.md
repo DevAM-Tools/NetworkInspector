@@ -70,7 +70,9 @@ Exporters fall into two categories based on their input granularity:
 | **Columnar analytics** (subset of packet-level) | `IPacketListener` | `Packet` | Option-C dataset: one mono-typed table/file per `FieldId` + slim topology (`ParquetExporter`, `DuckDbExporter`, `PbfExporter` Columnar). Shared walk via `ColumnarPacketBatch`. |
 
 All exporters additionally implement `IErrorTolerantExporter` for error handling
-and statistics.
+and statistics. Packets parsed with `FieldTreeMode.Skip` (`HasFieldTree` is false)
+are rejected: `OnPacket` skips the item and fires `ItemSkipped` instead of writing
+an empty tree.
 
 **External validation for columnar exporters:** re-open the output with DuckDB SQL
 (`DuckDbExporter` file directly, or `read_parquet` / `parquet_scan` over a Parquet

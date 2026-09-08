@@ -26,6 +26,12 @@ namespace NetworkInspector.Core;
 /// another thread might still be reading.
 /// </para>
 /// <para>
+/// <b>Skip-field-tree:</b> Pass <see cref="FieldTreeMode.Skip"/> as the last argument of a parse
+/// factory to omit FieldBody slab writes. The sealed packet is throwaway: do not publish, filter,
+/// or pass it to <see cref="ValueCache.RecordPacket"/>. Packet index and ValueCache record still run.
+/// Default parse behavior is <see cref="FieldTreeMode.Build"/>.
+/// </para>
+/// <para>
 /// <b>Thread-safety contract:</b> After <see cref="Seal"/> completes, a finalized packet is safe
 /// for concurrent reads from multiple threads. Lazy field materialization uses per-field
 /// CAS on <see cref="FieldBody.LazyIndex"/> (materializing marker bit) so unrelated lazy
@@ -41,7 +47,7 @@ namespace NetworkInspector.Core;
 /// dense ids <c>0, 1, 2, …</c> (a jump throws <see cref="InvalidOperationException"/>). It then
 /// detects and replays any later parse of an already-parsed id lock-free (see
 /// <c>PROTOCOL_GUIDE.md</c>, "First parse vs. re-parse"). Consequently
-/// <see cref="ParseFrame(PacketId, Stack, Frame)"/> called with an id that this stack has already
+/// <see cref="ParseFrame(PacketId, Stack, Frame, FieldTreeMode, ValueCache, Boolean)"/> called with an id that this stack has already
 /// first-parsed is a re-parse and is safe from any thread, while calling it with a fresh id from an
 /// arbitrary thread is not.
 /// </para>
@@ -97,6 +103,16 @@ public sealed class Packet
     // Volatile: waiters acquire on this count after the allocating thread's release store.
     private volatile int _ChunkCount;
 
+    // Not volatile: parse of a given instance is single-threaded. Skip mode omits the FieldBody slab.
+    private bool _HasFieldTree = true;
+
+    // Synthetic root when Skip omits the first chunk. Unused on Build.
+    private FieldBody _SkipRootBody;
+
+    // Scratch stack for skip-tree lazy populators that must read container.Value. Recycled in place.
+    private FieldBody[]? _SkipScratchStack;
+    private int _SkipScratchDepth;
+
     private ReadOnlyMemory<byte>[]? _AdditionalBuffers;
     private int _AdditionalBufferCount;
 
@@ -148,7 +164,7 @@ public sealed class Packet
     /// The frame's registry must match the stack's registry
     /// (validated via reference equality for maximum efficiency on the hot path).
     /// </summary>
-    internal Packet(PacketId id, Stack stack, Frame frame)
+    internal Packet(PacketId id, Stack stack, Frame frame, FieldTreeMode fieldTree = FieldTreeMode.Build)
     {
         // Validate registry consistency: reference equality — single pointer comparison
         if (!ReferenceEquals(frame.Registry, stack.FrameInterfaceRegistry))
@@ -156,14 +172,26 @@ public sealed class Packet
             _ThrowRegistryMismatch();
         }
 
+        _ThrowIfInvalidFieldTree(fieldTree);
         Id = id;
         Timestamp = frame.Timestamp;
         Stack = stack;
         Frame = frame;
         FrameSourceId = _DeriveFrameSourceId(frame.InterfaceId, stack.FrameInterfaceRegistry);
-        _AllocateFirstChunk();
-        ref FieldBodyChunk firstChunk = ref _GetChunk(0);
-        firstChunk.Buffer[firstChunk.Offset] = new FieldBody(stack.RootFieldId);
+        _HasFieldTree = fieldTree == FieldTreeMode.Build;
+        if (_HasFieldTree)
+        {
+            _AllocateFirstChunk();
+            ref FieldBodyChunk firstChunk = ref _GetChunk(0);
+            firstChunk.Buffer[firstChunk.Offset] = new FieldBody(stack.RootFieldId);
+        }
+        else
+        {
+            _SkipRootBody = new FieldBody(stack.RootFieldId);
+            _ChunkCount = 0;
+            // _ChunkTable stays null! Skip GetFieldRef / skip append must not read it.
+        }
+
         _AllocatedFieldCount = 1;
         _FieldCount = 1;
         InfoLazy = LazyString.Empty;
@@ -196,11 +224,12 @@ public sealed class Packet
     /// </summary>
     /// <param name="id">New packet identifier.</param>
     /// <param name="frame">New frame to parse. Must share the same <see cref="FrameInterfaceRegistry"/> as this packet's stack.</param>
+    /// <param name="fieldTree">Whether the next parse writes FieldBodies. Skip leaves the slab unused.</param>
     /// <returns>
     /// <see langword="null"/> on success; a <see cref="RecycleError"/> value when a
     /// precondition is violated (not finalized, materializer active, or registry mismatch).
     /// </returns>
-    internal RecycleError? PrepareForReuse(PacketId id, Frame frame)
+    internal RecycleError? PrepareForReuse(PacketId id, Frame frame, FieldTreeMode fieldTree)
     {
         // Precondition: packet must be sealed — recycling an unsealed packet would corrupt
         // an in-progress parse on the same thread.
@@ -221,72 +250,90 @@ public sealed class Packet
             return RecycleError.RegistryMismatch;
         }
 
+        _ThrowIfInvalidFieldTree(fieldTree);
+
         // ── 1. Clear GC-visible references in every active FieldBody chunk ──────────
-        // Array.Clear zeroes entire FieldBody structs (including FieldValue and LazyString
-        // reference fields) so the GC does not retain stale references after reuse.
-        // All chunks before the last are always completely full (_FieldBodyChunkSize slots).
-        // The last chunk is only partially used: its slot count equals (_AllocatedFieldCount % _FieldBodyChunkSize),
-        // or _FieldBodyChunkSize when the chunk was exactly filled. Clearing only used slots
-        // avoids zeroing unused tail slots — typically saves ~25% of Array.Clear work when
-        // the last chunk holds ~12 out of 16 used slots (common for IPv6/UDP packets).
-        int usedInLastChunk = _AllocatedFieldCount & _FieldBodyChunkMask;
-        if (usedInLastChunk == 0)
+        // Skip packets that never built a tree have _ChunkCount == 0 and _ChunkTable null.
+        if (_ChunkCount > 0)
         {
-            usedInLastChunk = _FieldBodyChunkSize; // chunk was exactly filled
-        }
-        for (int i = 0; i < _ChunkCount; i++)
-        {
-            ref FieldBodyChunk chunk = ref _GetChunk(i);
-            // Full chunks: all _FieldBodyChunkSize slots. Last (partial) chunk: only used slots.
-            int clearCount = i < _ChunkCount - 1 ? _FieldBodyChunkSize : usedInLastChunk;
-            Array.Clear(chunk.Buffer, chunk.Offset, clearCount);
+            // Array.Clear zeroes entire FieldBody structs (including FieldValue and LazyString
+            // reference fields) so the GC does not retain stale references after reuse.
+            // All chunks before the last are always completely full (_FieldBodyChunkSize slots).
+            // The last chunk is only partially used: its slot count equals (_AllocatedFieldCount % _FieldBodyChunkSize),
+            // or _FieldBodyChunkSize when the chunk was exactly filled. Clearing only used slots
+            // avoids zeroing unused tail slots — typically saves ~25% of Array.Clear work when
+            // the last chunk holds ~12 out of 16 used slots (common for IPv6/UDP packets).
+            int usedInLastChunk = _AllocatedFieldCount & _FieldBodyChunkMask;
+            if (usedInLastChunk == 0)
+            {
+                usedInLastChunk = _FieldBodyChunkSize; // chunk was exactly filled
+            }
+
+            for (int i = 0; i < _ChunkCount; i++)
+            {
+                ref FieldBodyChunk chunk = ref _GetChunk(i);
+                int clearCount = i < _ChunkCount - 1 ? _FieldBodyChunkSize : usedInLastChunk;
+                Array.Clear(chunk.Buffer, chunk.Offset, clearCount);
+            }
         }
 
         // ── 2. Clear lazy populator references ───────────────────────────────────────
-        // Null out delegate slots to release any closures captured during the previous
-        // parse, allowing the GC to collect protocol-specific captured state.
         if (_LazyPopulators is not null && _LazyPopulatorCount > 0)
         {
             Array.Clear(_LazyPopulators, _LazyPopulatorOffset, _LazyPopulatorCount);
         }
 
-        // ── 3. Reset mutable state ────────────────────────────────────────────────────
-        // Keep the chunk table buffer/offset and lazy populator slots — they are reused
-        // as-is for the next parse. Reset only one active chunk; extra chunks from a previous
-        // larger parse are abandoned (their slab slots stay alive in the slab but are not
-        // reused by this packet). Capacity is restored to the initial descriptor count so
-        // reuse matches a fresh packet's growth curve.
-        ChunkTable table = _ChunkTable;
-        _ChunkTable = new ChunkTable(table.Buffer, table.BaseOffset, _InitialChunkDescriptors);
-        _ChunkCount = 1;
         _LazyPopulatorCount = 0;
         _PendingLazyCount = 0;
         _ActiveLazyMaterializations = 0;
-        _AllocatedFieldCount = 1;
-        _FieldCount = 1;
-        _Finalized = 0;  // Re-open the packet for a new parse (no fence needed: single-threaded)
-        InfoLazy = LazyString.Empty;
-        _InfoFieldIndex = FieldBody.NullIndex;
-        FirstProtocolOverride = ProtocolId.Invalid;
-
-        // Clear additional buffers (reassembly data from the previous parse).
         if (_AdditionalBufferCount > 0 && _AdditionalBuffers is not null)
         {
             Array.Clear(_AdditionalBuffers, 0, _AdditionalBufferCount);
             _AdditionalBufferCount = 0;
         }
 
-        // ── 4. Set new identity fields ────────────────────────────────────────────────
+        _HasFieldTree = fieldTree == FieldTreeMode.Build;
+        if (_SkipScratchDepth > 0 && _SkipScratchStack is not null)
+        {
+            Array.Clear(_SkipScratchStack, 0, _SkipScratchDepth);
+            _SkipScratchDepth = 0;
+        }
+
+        _SkipRootBody = default;
+        if (_HasFieldTree)
+        {
+            if (_ChunkCount == 0)
+            {
+                _AllocateFirstChunk();
+            }
+            else
+            {
+                ChunkTable table = _ChunkTable;
+                _ChunkTable = new ChunkTable(table.Buffer, table.BaseOffset, _InitialChunkDescriptors);
+                _ChunkCount = 1;
+            }
+
+            ref FieldBodyChunk firstChunk = ref _GetChunk(0);
+            firstChunk.Buffer[firstChunk.Offset] = new FieldBody(Stack.RootFieldId);
+        }
+        else
+        {
+            _SkipRootBody = new FieldBody(Stack.RootFieldId);
+            // Leave _ChunkTable and _ChunkCount unchanged (null/0 on never-Build; allocated-but-unused on Build→Skip).
+        }
+
+        _AllocatedFieldCount = 1;
+        _FieldCount = 1;
+        _Finalized = 0;
+        InfoLazy = LazyString.Empty;
+        _InfoFieldIndex = FieldBody.NullIndex;
+        _ActiveValueCache = null;
+        FirstProtocolOverride = ProtocolId.Invalid;
         Id = id;
         Timestamp = frame.Timestamp;
         Frame = frame;
         FrameSourceId = _DeriveFrameSourceId(frame.InterfaceId, Stack.FrameInterfaceRegistry);
-
-        // ── 5. Re-initialise the root FieldBody in the first slot of the first chunk ─
-        ref FieldBodyChunk firstChunk = ref _GetChunk(0);
-        firstChunk.Buffer[firstChunk.Offset] = new FieldBody(Stack.RootFieldId);
-
-        return null; // success
+        return null;
     }
 
     #endregion
@@ -313,6 +360,9 @@ public sealed class Packet
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         get => _Finalized != 0;
     }
+
+    /// <summary>False when this packet was parsed with <see cref="FieldTreeMode.Skip"/>.</summary>
+    public bool HasFieldTree => _HasFieldTree;
 
     /// <summary>
     /// The packet info/summary string.
@@ -390,6 +440,27 @@ public sealed class Packet
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal ref FieldBody GetFieldRef(int index)
     {
+        if (!_HasFieldTree)
+        {
+            if (index == FieldBody.SkipStorageIndex)
+            {
+                if (_SkipScratchDepth > 0)
+                {
+                    FieldBody[] scratch = _SkipScratchStack!;
+                    return ref scratch[_SkipScratchDepth - 1];
+                }
+
+                ThrowHelpers.ThrowSkipFieldTreeValue();
+            }
+
+            if (index == 0)
+            {
+                return ref _SkipRootBody;
+            }
+
+            ThrowHelpers.ThrowSkipFieldTreeValue();
+        }
+
         int chunkIdx = index >> _FieldBodyChunkShift;
         int slotIdx = index & _FieldBodyChunkMask;
         ref FieldBodyChunk chunk = ref _GetChunk(chunkIdx);
@@ -625,8 +696,47 @@ public sealed class Packet
     /// materialization claims via <see cref="FieldBody.TryClaimLazyMaterialization"/>.
     /// </para>
     /// </summary>
-    internal ushort RegisterLazyPopulator(ushort fieldIndex, LazyPopulator populator)
+    internal void RegisterLazyPopulator(
+        FieldId fieldId, ushort fieldIndex, in FieldValue value, LazyString customText, LazyPopulator populator)
     {
+        if (!_HasFieldTree)
+        {
+            if (_ActiveValueCache is null || !_ActiveValueCache.ShouldMaterialize(fieldId))
+            {
+                return;
+            }
+
+            if (_SkipScratchDepth >= _MaxMaterializationDepth)
+            {
+                SetFieldError(
+                    FieldBody.SkipStorageIndex,
+                    "Skip-tree lazy populator exceeded materialization depth 128.");
+                return;
+            }
+
+            _PushSkipScratch(new FieldBody(fieldId, value));
+            if (!customText.IsNull)
+            {
+                _SkipScratchStack![_SkipScratchDepth - 1].SetCustomText(customText);
+            }
+
+            try
+            {
+                MutField skipContainer = new(this, FieldBody.SkipStorageIndex, fieldId);
+                ParseResult result = populator(in skipContainer);
+                if (result.TryGetError(out ParseError parseError))
+                {
+                    SetFieldError(FieldBody.SkipStorageIndex, parseError.Message);
+                }
+            }
+            finally
+            {
+                _PopSkipScratch();
+            }
+
+            return;
+        }
+
         if (_LazyPopulators is null)
         {
             // First lazy field — allocate from thread-local slab (no per-packet alloc)
@@ -655,8 +765,6 @@ public sealed class Packet
         // Interlocked for a uniform contract with post-Seal paths and volatile definition.
         // Pre-Seal is single-threaded; Interlocked remains correct and satisfies §4.3.
         Interlocked.Increment(ref _PendingLazyCount);
-
-        return lazyIndex;
     }
 
     /// <summary>
@@ -885,7 +993,15 @@ public sealed class Packet
     /// subsequent reads of <see cref="Info"/> go through the field's
     /// <see cref="ZeroAlloc.LazyString"/> for in-heap cached lazy evaluation.
     /// </summary>
-    internal void SetInfoFieldIndex(ushort index) => _InfoFieldIndex = index;
+    internal void SetInfoFieldIndex(ushort index)
+    {
+        if (!_HasFieldTree)
+        {
+            return;
+        }
+
+        _InfoFieldIndex = index;
+    }
 
     /// <summary>Sets the packet info/summary string.</summary>
     internal void SetInfo(LazyString info) => InfoLazy = info;
@@ -899,6 +1015,47 @@ public sealed class Packet
     // Cold parse-only fields (after hot chunk/count state to reduce false sharing in AppendChild).
     private ushort _InfoFieldIndex = FieldBody.NullIndex;
     private ValueCache? _ActiveValueCache;
+
+    /// <summary>
+    /// Whether custom display text should be built for <paramref name="fieldId"/>.
+    /// Step 1: true only when a field tree will store it. Step 2 ORs an attached cache's display probe.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal bool WantsCustomText(FieldId fieldId)
+        => _HasFieldTree
+            || (_ActiveValueCache is { } cache && cache.WantsDisplayText(fieldId));
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void _ThrowIfInvalidFieldTree(FieldTreeMode fieldTree)
+    {
+        if (fieldTree is not FieldTreeMode.Build and not FieldTreeMode.Skip)
+        {
+            ThrowHelpers.ThrowInvalidFieldTreeMode(fieldTree);
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void _PushSkipScratch(FieldBody body)
+    {
+        if (_SkipScratchStack is null)
+        {
+            _SkipScratchStack = new FieldBody[4];
+        }
+        else if (_SkipScratchDepth >= _SkipScratchStack.Length)
+        {
+            Array.Resize(ref _SkipScratchStack, _SkipScratchStack.Length * 2);
+        }
+
+        _SkipScratchStack[_SkipScratchDepth] = body;
+        _SkipScratchDepth++;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void _PopSkipScratch()
+    {
+        _SkipScratchDepth--;
+        Array.Clear(_SkipScratchStack!, _SkipScratchDepth, 1);
+    }
 
     #endregion
 
@@ -1243,6 +1400,12 @@ public sealed class Packet
     /// </summary>
     internal ushort AppendChild(ushort parentIndex, FieldId fieldId, FieldValue value)
     {
+        if (!_HasFieldTree)
+        {
+            _RecordValueCacheNoText(fieldId, in value);
+            return FieldBody.SkipStorageIndex;
+        }
+
         int reservedIndex = _ReserveFieldSlot();
         ushort newIndex = (ushort)reservedIndex;
         FieldBody newField = new(fieldId, value)
@@ -1266,7 +1429,7 @@ public sealed class Packet
         }
         parent.IncrementChildCount();
 
-        _TeeValueCacheNoText(fieldId, in value);
+        _RecordValueCacheNoText(fieldId, in value);
 
         // Publish AFTER parent / sibling fix-ups so a concurrent reader that observes
         // the incremented _FieldCount also sees the consistent linked-list state.
@@ -1282,6 +1445,12 @@ public sealed class Packet
     internal ushort AppendChildWithCustomText(
         ushort parentIndex, FieldId fieldId, FieldValue value, LazyString customText)
     {
+        if (!_HasFieldTree)
+        {
+            _RecordValueCache(fieldId, in value, customText);
+            return FieldBody.SkipStorageIndex;
+        }
+
         int reservedIndex = _ReserveFieldSlot();
         ushort newIndex = (ushort)reservedIndex;
         FieldBody newField = new(fieldId, value)
@@ -1306,7 +1475,7 @@ public sealed class Packet
         parent.IncrementChildCount();
         GetFieldRef(newIndex).SetCustomText(customText);
 
-        _TeeValueCache(fieldId, in value, customText);
+        _RecordValueCache(fieldId, in value, customText);
 
         _PublishFieldCount(reservedIndex + 1);
         return newIndex;
@@ -1320,6 +1489,12 @@ public sealed class Packet
     internal ushort PrependChildWithCustomText(
         ushort parentIndex, FieldId fieldId, FieldValue value, LazyString customText)
     {
+        if (!_HasFieldTree)
+        {
+            _RecordValueCache(fieldId, in value, customText);
+            return FieldBody.SkipStorageIndex;
+        }
+
         int reservedIndex = _ReserveFieldSlot();
         ushort newIndex = (ushort)reservedIndex;
         FieldBody newField = new(fieldId, value)
@@ -1344,7 +1519,7 @@ public sealed class Packet
         parent.IncrementChildCount();
         GetFieldRef(newIndex).SetCustomText(customText);
 
-        _TeeValueCache(fieldId, in value, customText);
+        _RecordValueCache(fieldId, in value, customText);
 
         _PublishFieldCount(reservedIndex + 1);
         return newIndex;
@@ -1358,6 +1533,12 @@ public sealed class Packet
     /// </summary>
     internal ushort PrependChild(ushort parentIndex, FieldId fieldId, FieldValue value)
     {
+        if (!_HasFieldTree)
+        {
+            _RecordValueCacheNoText(fieldId, in value);
+            return FieldBody.SkipStorageIndex;
+        }
+
         int reservedIndex = _ReserveFieldSlot();
         ushort newIndex = (ushort)reservedIndex;
         FieldBody newField = new(fieldId, value)
@@ -1381,7 +1562,7 @@ public sealed class Packet
         }
         parent.IncrementChildCount();
 
-        _TeeValueCacheNoText(fieldId, in value);
+        _RecordValueCacheNoText(fieldId, in value);
 
         _PublishFieldCount(reservedIndex + 1);
         return newIndex;
@@ -1395,6 +1576,17 @@ public sealed class Packet
     internal ushort InsertAfterWithCustomText(
         ushort siblingIndex, FieldId fieldId, FieldValue value, LazyString customText)
     {
+        if (siblingIndex == 0)
+        {
+            ThrowHelpers.ThrowFieldAppend(ParseError.Custom("packet", "Cannot insert after root"));
+        }
+
+        if (!_HasFieldTree)
+        {
+            _RecordValueCache(fieldId, in value, customText);
+            return FieldBody.SkipStorageIndex;
+        }
+
         ushort parentIndex = GetFieldRef(siblingIndex).ParentIndex;
         if (parentIndex == FieldBody.NullIndex)
         {
@@ -1425,7 +1617,7 @@ public sealed class Packet
         GetFieldRef(parentIndex).IncrementChildCount();
         GetFieldRef(newIndex).SetCustomText(customText);
 
-        _TeeValueCache(fieldId, in value, customText);
+        _RecordValueCache(fieldId, in value, customText);
 
         _PublishFieldCount(reservedIndex + 1);
         return newIndex;
@@ -1438,6 +1630,17 @@ public sealed class Packet
     /// </summary>
     internal ushort InsertAfter(ushort siblingIndex, FieldId fieldId, FieldValue value)
     {
+        if (siblingIndex == 0)
+        {
+            ThrowHelpers.ThrowFieldAppend(ParseError.Custom("packet", "Cannot insert after root"));
+        }
+
+        if (!_HasFieldTree)
+        {
+            _RecordValueCacheNoText(fieldId, in value);
+            return FieldBody.SkipStorageIndex;
+        }
+
         ushort parentIndex = GetFieldRef(siblingIndex).ParentIndex;
         if (parentIndex == FieldBody.NullIndex)
         {
@@ -1467,14 +1670,14 @@ public sealed class Packet
         }
         GetFieldRef(parentIndex).IncrementChildCount();
 
-        _TeeValueCacheNoText(fieldId, in value);
+        _RecordValueCacheNoText(fieldId, in value);
 
         _PublishFieldCount(reservedIndex + 1);
         return newIndex;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void _TeeValueCacheNoText(FieldId fieldId, in FieldValue value)
+    private void _RecordValueCacheNoText(FieldId fieldId, in FieldValue value)
     {
         ValueCache? cache = _ActiveValueCache;
         if (cache is null)
@@ -1482,63 +1685,63 @@ public sealed class Packet
             return;
         }
 
-        _TeeValueCacheSlow(cache, fieldId, in value, default);
+        _RecordValueCacheSlow(this, cache, fieldId, in value, default);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void _TeeValueCache(FieldId fieldId, in FieldValue value, LazyString customText)
+    private void _RecordValueCache(FieldId fieldId, in FieldValue value, LazyString customText)
     {
-        // Unrecorded parse: predicted not-taken. The slow stub is NoInlining so Tee / slot
+        // Unrecorded parse: predicted not-taken. The slow stub is NoInlining so Record / slot
         // probe cannot inflate AppendChild native size (I-cache and inline budget).
         ValueCache? cache = _ActiveValueCache;
         if (cache is not null)
         {
-            _TeeValueCacheSlow(cache, fieldId, in value, customText);
+            _RecordValueCacheSlow(this, cache, fieldId, in value, customText);
         }
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private static void _TeeValueCacheSlow(
-        ValueCache cache, FieldId fieldId, in FieldValue value, LazyString customText) =>
-        cache.Tee(fieldId, in value, customText);
+    private static void _RecordValueCacheSlow(
+        Packet packet, ValueCache cache, FieldId fieldId, in FieldValue value, LazyString customText) =>
+        cache.Record(packet.Id.Value, packet.Timestamp.AsNanos, fieldId, in value, customText);
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void _TeeValueCacheCustomText(FieldId fieldId, LazyString customText)
+    private void _RecordValueCacheCustomText(FieldId fieldId, LazyString customText)
     {
         ValueCache? cache = _ActiveValueCache;
         if (cache is not null)
         {
-            _TeeValueCacheCustomTextSlow(cache, fieldId, customText);
+            _RecordValueCacheCustomTextSlow(this, cache, fieldId, customText);
         }
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private static void _TeeValueCacheCustomTextSlow(
-        ValueCache cache, FieldId fieldId, LazyString customText) =>
-        cache.TeeCustomText(fieldId, customText);
+    private static void _RecordValueCacheCustomTextSlow(
+        Packet packet, ValueCache cache, FieldId fieldId, LazyString customText) =>
+        cache.RecordCustomText(packet.Id.Value, packet.Timestamp.AsNanos, fieldId, customText);
 
-    /// <summary>Sets custom display text and tees it when a value cache is attached.</summary>
+    /// <summary>Sets custom display text and records it when a value cache is attached.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void SetFieldCustomText(ushort index, FieldId fieldId, LazyString text)
     {
         GetFieldRef(index).SetCustomText(text);
-        _TeeValueCacheCustomText(fieldId, text);
+        _RecordValueCacheCustomText(fieldId, text);
     }
 
-    /// <summary>Clears custom display text and tees the null text when a value cache is attached.</summary>
+    /// <summary>Clears custom display text and records the null text when a value cache is attached.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void ClearFieldCustomText(ushort index, FieldId fieldId)
     {
         GetFieldRef(index).ClearCustomText();
-        _TeeValueCacheCustomText(fieldId, default);
+        _RecordValueCacheCustomText(fieldId, default);
     }
 
-    /// <summary>Appends to custom display text and tees the combined text when a value cache is attached.</summary>
+    /// <summary>Appends to custom display text and records the combined text when a value cache is attached.</summary>
     internal void AppendFieldCustomText(ushort index, FieldId fieldId, LazyString suffix)
     {
         ref FieldBody body = ref GetFieldRef(index);
         body.AppendCustomText(suffix);
-        _TeeValueCacheCustomText(fieldId, body.CustomText);
+        _RecordValueCacheCustomText(fieldId, body.CustomText);
     }
 
     #endregion
@@ -1712,7 +1915,7 @@ public sealed class Packet
     /// <summary>
     /// Translates a <see cref="RecycleError"/> code into the appropriate exception and throws it.
     /// Called by the throwing <c>ParseFrame(Packet recycle, …)</c> overloads to convert the
-    /// return code from <see cref="TryParseFrame(Packet, PacketId, Stack, Frame)"/>.
+    /// return code from <see cref="TryParseFrame(Packet, PacketId, Stack, Frame, FieldTreeMode, ValueCache, Boolean)"/>.
     /// </summary>
     /// <exception cref="InvalidOperationException">For <see cref="RecycleError.NotFinalized"/> and <see cref="RecycleError.MaterializerActive"/>.</exception>
     /// <exception cref="ArgumentException">For <see cref="RecycleError.RegistryMismatch"/> and <see cref="RecycleError.StackMismatch"/>.</exception>
@@ -1787,7 +1990,7 @@ public sealed class Packet
         // non-indexed context that only carries the stack reference.
         if (!context.HasStack)
         {
-            context = new ParseContext(packet.Stack);
+            context = new ParseContext(packet.Stack, skipFieldTree: !packet.HasFieldTree);
         }
 
         MutField rootField = packet.RootFieldMut();
@@ -1820,111 +2023,44 @@ public sealed class Packet
     // ── Shared lifecycle helpers ──────────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Runs <see cref="_ParseFrameInternal"/> inside a protocol-exception guard and seals
-    /// the packet. Any protocol exception is recorded as a field-level error rather than
-    /// propagating to the caller.
+    /// Runs parse inside a protocol-exception guard, optionally writes <paramref name="index"/>
+    /// and records into <paramref name="cache"/>, then seals the packet. Any protocol exception
+    /// is recorded as a field-level error rather than propagating to the caller.
+    /// Replays do not write the cache unless <paramref name="recordOnReplay"/> is true (Session PullFill).
     /// </summary>
-    private static void _ParseAndSeal(Packet packet, Frame frame)
+    private static void _ParseAndSeal(
+        Packet packet,
+        Frame frame,
+        PacketIndex? index,
+        ValueCache? cache,
+        bool recordOnReplay)
     {
-        // Must run before the protocol-exception guard: a jump is a caller contract violation,
-        // not a parser bug, and must reach the ParseFrame caller.
-        bool replay = packet.Stack.ObserveParse(packet.Id);
-        try
-        {
-            _ParseFrameInternal(packet, frame);
-        }
-        catch (Exception ex)
-        {
-            packet.SetError(_BuildExceptionMessage(ex, packet.Stack.IncludeExceptionStackTrace));
-        }
-        finally
-        {
-            if (!replay)
-            {
-                packet.Stack.CompleteFirstParse(packet.Id);
-            }
-        }
-
-        packet.Seal();
-    }
-
-    /// <summary>
-    /// Runs the full indexed-parse lifecycle: begins the packet in the index, builds the
-    /// parse context, runs the protocol-exception-guarded parse, ends the packet in the
-    /// index, and seals the packet.
-    /// </summary>
-    private static void _ParseIndexedAndSeal(Packet packet, Frame frame, PacketIndex index)
-    {
-        bool replay = packet.Stack.ObserveParse(packet.Id);
-
-        // Replays never write the index, including when the first parse did not use one.
-        // Concurrent readers therefore never enter BeginPacket/EndPacket. A first parse that
-        // already indexed this id (direct BeginPacket, or a previous indexed parse) is a no-op
-        // for the index as well.
-        bool indexing = !replay && index.TryBeginPacket(packet.Id.Value);
-        ParseContext context = indexing
-            ? new ParseContext(index, packet.Stack)
-            : new ParseContext(packet.Stack);
-
-        try
-        {
-            _ParseFrameInternal(packet, frame, context);
-        }
-        catch (Exception ex)
-        {
-            packet.SetError(_BuildExceptionMessage(ex, packet.Stack.IncludeExceptionStackTrace));
-            if (indexing)
-            {
-                index.RollbackCurrentPacket();
-            }
-        }
-        finally
-        {
-            if (indexing)
-            {
-                index.EndPacket();
-            }
-
-            if (!replay)
-            {
-                packet.Stack.CompleteFirstParse(packet.Id);
-            }
-        }
-
-        packet.Seal();
-    }
-
-    /// <summary>
-    /// Runs the recorded-parse lifecycle: begins the value cache (and optional index) on a first
-    /// parse, tees field appends, materializes configured groups, and seals the packet.
-    /// A protocol exception is recorded as a packet error; fields already teed stay in the cache.
-    /// Replays do not begin the cache or tee.
-    /// </summary>
-    private static void _ParseRecordedAndSeal(Packet packet, Frame frame, PacketIndex? index, ValueCache cache)
-    {
-        if (!ReferenceEquals(cache.Stack, packet.Stack))
+        if (cache is not null && !ReferenceEquals(cache.Stack, packet.Stack))
         {
             throw new ArgumentException("ValueCache stack does not match packet stack.", nameof(cache));
         }
 
+        // Must run before the protocol-exception guard: a jump is a caller contract violation,
+        // not a parser bug, and must reach the ParseFrame caller.
         bool replay = packet.Stack.ObserveParse(packet.Id);
+
+        // Replays never write the index, including when the first parse did not use one.
         bool indexing = !replay && index is not null && index.TryBeginPacket(packet.Id.Value);
-        bool recording = !replay;
+        bool recording = cache is not null && (!replay || recordOnReplay);
         if (recording)
         {
-            cache.BeginPacket(packet.Id.Value, packet.Timestamp.AsNanos);
             packet._ActiveValueCache = cache;
         }
 
         ParseContext context = indexing
-            ? new ParseContext(index!, packet.Stack)
-            : new ParseContext(packet.Stack);
+            ? new ParseContext(index!, packet.Stack, skipFieldTree: !packet.HasFieldTree)
+            : new ParseContext(packet.Stack, skipFieldTree: !packet.HasFieldTree);
         try
         {
             _ParseFrameInternal(packet, frame, context);
             if (recording)
             {
-                cache.EnsureMaterialized(packet);
+                cache!.EnsureMaterialized(packet);
             }
         }
         catch (Exception ex)
@@ -1941,11 +2077,6 @@ public sealed class Packet
             if (indexing)
             {
                 index!.EndPacket();
-            }
-
-            if (recording)
-            {
-                cache.EndPacket();
             }
 
             if (!replay)
@@ -1968,11 +2099,18 @@ public sealed class Packet
     /// First parses of a given <paramref name="stack"/> must use dense ids <c>0, 1, 2, …</c>;
     /// a later parse of an already first-parsed id is a replay. A jump (for example 0 then 5)
     /// throws <see cref="InvalidOperationException"/>.
+    /// Pass <see cref="FieldTreeMode.Skip"/> to omit FieldBodies. Skip packets are throwaway:
+    /// do not publish, filter, or pass them to <see cref="ValueCache.RecordPacket"/>.
+    /// Pass <paramref name="cache"/> to record selected field values during parse.
+    /// Replays of an already first-parsed id do not write the cache unless <paramref name="recordOnReplay"/> is true
+    /// (Session PullFill).
     /// </summary>
-    public static Packet ParseFrame(PacketId id, Stack stack, Frame frame)
+    public static Packet ParseFrame(
+        PacketId id, Stack stack, Frame frame, FieldTreeMode fieldTree = FieldTreeMode.Build,
+        ValueCache? cache = null, bool recordOnReplay = false)
     {
-        Packet packet = new(id, stack, frame);
-        _ParseAndSeal(packet, frame);
+        Packet packet = new(id, stack, frame, fieldTree);
+        _ParseAndSeal(packet, frame, index: null, cache, recordOnReplay);
         return packet;
     }
 
@@ -1980,13 +2118,15 @@ public sealed class Packet
     /// Parses a frame into a new packet, dispatching to <paramref name="firstProtocolId"/>
     /// instead of the stack's default frame protocol.
     /// </summary>
-    public static Packet ParseFrame(PacketId id, Stack stack, Frame frame, ProtocolId firstProtocolId)
+    public static Packet ParseFrame(
+        PacketId id, Stack stack, Frame frame, ProtocolId firstProtocolId, FieldTreeMode fieldTree = FieldTreeMode.Build,
+        ValueCache? cache = null, bool recordOnReplay = false)
     {
-        Packet packet = new(id, stack, frame)
+        Packet packet = new(id, stack, frame, fieldTree)
         {
             FirstProtocolOverride = firstProtocolId
         };
-        _ParseAndSeal(packet, frame);
+        _ParseAndSeal(packet, frame, index: null, cache, recordOnReplay);
         return packet;
     }
 
@@ -1994,13 +2134,14 @@ public sealed class Packet
     /// Parses a frame into a new packet while recording field presence in the given index.
     /// A later call for a packet id that this index has already recorded is a no-op for the
     /// index: bitmaps are not mutated. First-parse ids on the stack must still be dense
-    /// <c>0, 1, 2, …</c> as for <see cref="ParseFrame(PacketId, Stack, Frame)"/>.
+    /// <c>0, 1, 2, …</c> as for <see cref="ParseFrame(PacketId, Stack, Frame, FieldTreeMode, ValueCache, Boolean)"/>.
     /// </summary>
     public static Packet ParseFrameIndexed(
-        PacketId id, Stack stack, Frame frame, PacketIndex index)
+        PacketId id, Stack stack, Frame frame, PacketIndex index, FieldTreeMode fieldTree = FieldTreeMode.Build,
+        ValueCache? cache = null, bool recordOnReplay = false)
     {
-        Packet packet = new(id, stack, frame);
-        _ParseIndexedAndSeal(packet, frame, index);
+        Packet packet = new(id, stack, frame, fieldTree);
+        _ParseAndSeal(packet, frame, index, cache, recordOnReplay);
         return packet;
     }
 
@@ -2009,77 +2150,15 @@ public sealed class Packet
     /// dispatching to <paramref name="firstProtocolId"/> instead of the stack's default frame protocol.
     /// </summary>
     public static Packet ParseFrameIndexed(
-        PacketId id, Stack stack, Frame frame, PacketIndex index, ProtocolId firstProtocolId)
+        PacketId id, Stack stack, Frame frame, PacketIndex index, ProtocolId firstProtocolId,
+        FieldTreeMode fieldTree = FieldTreeMode.Build,
+        ValueCache? cache = null, bool recordOnReplay = false)
     {
-        Packet packet = new(id, stack, frame)
+        Packet packet = new(id, stack, frame, fieldTree)
         {
             FirstProtocolOverride = firstProtocolId
         };
-        _ParseIndexedAndSeal(packet, frame, index);
-        return packet;
-    }
-
-    /// <summary>
-    /// Parses a frame into a new packet while recording selected field values in <paramref name="cache"/>.
-    /// Replays of an already first-parsed id do not write the cache.
-    /// </summary>
-    /// <exception cref="ArgumentNullException"><paramref name="cache"/> is <see langword="null"/>.</exception>
-    /// <exception cref="ArgumentException"><paramref name="cache"/> was built against a different stack.</exception>
-    public static Packet ParseFrameRecorded(PacketId id, Stack stack, Frame frame, ValueCache cache)
-    {
-        ArgumentNullException.ThrowIfNull(cache);
-        Packet packet = new(id, stack, frame);
-        _ParseRecordedAndSeal(packet, frame, index: null, cache);
-        return packet;
-    }
-
-    /// <summary>
-    /// Parses a frame into a new packet while recording selected field values, dispatching to
-    /// <paramref name="firstProtocolId"/>.
-    /// </summary>
-    /// <inheritdoc cref="ParseFrameRecorded(PacketId, Stack, Frame, ValueCache)"/>
-    public static Packet ParseFrameRecorded(
-        PacketId id, Stack stack, Frame frame, ValueCache cache, ProtocolId firstProtocolId)
-    {
-        ArgumentNullException.ThrowIfNull(cache);
-        Packet packet = new(id, stack, frame)
-        {
-            FirstProtocolOverride = firstProtocolId
-        };
-        _ParseRecordedAndSeal(packet, frame, index: null, cache);
-        return packet;
-    }
-
-    /// <summary>
-    /// Parses a frame into a new packet while recording field presence in <paramref name="index"/>
-    /// and selected field values in <paramref name="cache"/>.
-    /// </summary>
-    /// <inheritdoc cref="ParseFrameRecorded(PacketId, Stack, Frame, ValueCache)"/>
-    public static Packet ParseFrameRecorded(
-        PacketId id, Stack stack, Frame frame, ValueCache cache, PacketIndex index)
-    {
-        ArgumentNullException.ThrowIfNull(cache);
-        ArgumentNullException.ThrowIfNull(index);
-        Packet packet = new(id, stack, frame);
-        _ParseRecordedAndSeal(packet, frame, index, cache);
-        return packet;
-    }
-
-    /// <summary>
-    /// Parses a frame into a new packet while recording the packet index and value cache,
-    /// dispatching to <paramref name="firstProtocolId"/>.
-    /// </summary>
-    /// <inheritdoc cref="ParseFrameRecorded(PacketId, Stack, Frame, ValueCache)"/>
-    public static Packet ParseFrameRecorded(
-        PacketId id, Stack stack, Frame frame, ValueCache cache, PacketIndex index, ProtocolId firstProtocolId)
-    {
-        ArgumentNullException.ThrowIfNull(cache);
-        ArgumentNullException.ThrowIfNull(index);
-        Packet packet = new(id, stack, frame)
-        {
-            FirstProtocolOverride = firstProtocolId
-        };
-        _ParseRecordedAndSeal(packet, frame, index, cache);
+        _ParseAndSeal(packet, frame, index, cache, recordOnReplay);
         return packet;
     }
 
@@ -2094,14 +2173,15 @@ public sealed class Packet
     /// so the stack reference compare folds into the caller on the hot path.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static RecycleError? _TryPrepareForRecycle(Packet recycle, PacketId id, Stack stack, Frame frame)
+    private static RecycleError? _TryPrepareForRecycle(
+        Packet recycle, PacketId id, Stack stack, Frame frame, FieldTreeMode fieldTree)
     {
         // Stack check first: cheapest, catches the most common cross-stack mistake.
         if (!ReferenceEquals(recycle.Stack, stack))
         {
             return RecycleError.StackMismatch;
         }
-        return recycle.PrepareForReuse(id, frame);
+        return recycle.PrepareForReuse(id, frame, fieldTree);
     }
 
     // ── Hot-path recycling overloads (return code — no exceptions) ────────────────────────────────
@@ -2122,15 +2202,20 @@ public sealed class Packet
     /// <param name="id">New packet identifier.</param>
     /// <param name="stack">The owning stack. Must be reference-equal to the recycle packet's stack.</param>
     /// <param name="frame">New frame to parse. Must share the same <see cref="FrameInterfaceRegistry"/> as the stack.</param>
+    /// <param name="fieldTree">Whether this parse writes FieldBodies. Skip packets are throwaway.</param>
+    /// <param name="cache">Optional value cache to record into during parse.</param>
+    /// <param name="recordOnReplay">When true, record even if this packet id was already first-parsed.</param>
     /// <returns><see langword="null"/> on success; a <see cref="RecycleError"/> value on precondition failure.</returns>
-    public static RecycleError? TryParseFrame(Packet recycle, PacketId id, Stack stack, Frame frame)
+    public static RecycleError? TryParseFrame(
+        Packet recycle, PacketId id, Stack stack, Frame frame, FieldTreeMode fieldTree = FieldTreeMode.Build,
+        ValueCache? cache = null, bool recordOnReplay = false)
     {
-        RecycleError? error = _TryPrepareForRecycle(recycle, id, stack, frame);
+        RecycleError? error = _TryPrepareForRecycle(recycle, id, stack, frame, fieldTree);
         if (error is not null)
         {
             return error;
         }
-        _ParseAndSeal(recycle, frame);
+        _ParseAndSeal(recycle, frame, index: null, cache, recordOnReplay);
         return null;
     }
 
@@ -2138,17 +2223,19 @@ public sealed class Packet
     /// Hot-path variant: parses a new frame into <paramref name="recycle"/> dispatching to
     /// <paramref name="firstProtocolId"/>, without heap allocation.
     /// </summary>
-    /// <inheritdoc cref="TryParseFrame(Packet, PacketId, Stack, Frame)"/>
+    /// <inheritdoc cref="TryParseFrame(Packet, PacketId, Stack, Frame, FieldTreeMode, ValueCache, Boolean)"/>
     public static RecycleError? TryParseFrame(
-        Packet recycle, PacketId id, Stack stack, Frame frame, ProtocolId firstProtocolId)
+        Packet recycle, PacketId id, Stack stack, Frame frame, ProtocolId firstProtocolId,
+        FieldTreeMode fieldTree = FieldTreeMode.Build,
+        ValueCache? cache = null, bool recordOnReplay = false)
     {
-        RecycleError? error = _TryPrepareForRecycle(recycle, id, stack, frame);
+        RecycleError? error = _TryPrepareForRecycle(recycle, id, stack, frame, fieldTree);
         if (error is not null)
         {
             return error;
         }
         recycle.FirstProtocolOverride = firstProtocolId;
-        _ParseAndSeal(recycle, frame);
+        _ParseAndSeal(recycle, frame, index: null, cache, recordOnReplay);
         return null;
     }
 
@@ -2156,16 +2243,18 @@ public sealed class Packet
     /// Hot-path variant: parses a new frame into <paramref name="recycle"/> while recording
     /// field presence in the given index, without heap allocation.
     /// </summary>
-    /// <inheritdoc cref="TryParseFrame(Packet, PacketId, Stack, Frame)"/>
+    /// <inheritdoc cref="TryParseFrame(Packet, PacketId, Stack, Frame, FieldTreeMode, ValueCache, Boolean)"/>
     public static RecycleError? TryParseFrameIndexed(
-        Packet recycle, PacketId id, Stack stack, Frame frame, PacketIndex index)
+        Packet recycle, PacketId id, Stack stack, Frame frame, PacketIndex index,
+        FieldTreeMode fieldTree = FieldTreeMode.Build,
+        ValueCache? cache = null, bool recordOnReplay = false)
     {
-        RecycleError? error = _TryPrepareForRecycle(recycle, id, stack, frame);
+        RecycleError? error = _TryPrepareForRecycle(recycle, id, stack, frame, fieldTree);
         if (error is not null)
         {
             return error;
         }
-        _ParseIndexedAndSeal(recycle, frame, index);
+        _ParseAndSeal(recycle, frame, index, cache, recordOnReplay);
         return null;
     }
 
@@ -2174,97 +2263,19 @@ public sealed class Packet
     /// field presence in the given index and dispatching to <paramref name="firstProtocolId"/>,
     /// without heap allocation.
     /// </summary>
-    /// <inheritdoc cref="TryParseFrame(Packet, PacketId, Stack, Frame)"/>
+    /// <inheritdoc cref="TryParseFrame(Packet, PacketId, Stack, Frame, FieldTreeMode, ValueCache, Boolean)"/>
     public static RecycleError? TryParseFrameIndexed(
         Packet recycle, PacketId id, Stack stack, Frame frame,
-        PacketIndex index, ProtocolId firstProtocolId)
+        PacketIndex index, ProtocolId firstProtocolId, FieldTreeMode fieldTree = FieldTreeMode.Build,
+        ValueCache? cache = null, bool recordOnReplay = false)
     {
-        RecycleError? error = _TryPrepareForRecycle(recycle, id, stack, frame);
+        RecycleError? error = _TryPrepareForRecycle(recycle, id, stack, frame, fieldTree);
         if (error is not null)
         {
             return error;
         }
         recycle.FirstProtocolOverride = firstProtocolId;
-        _ParseIndexedAndSeal(recycle, frame, index);
-        return null;
-    }
-
-    /// <summary>
-    /// Hot-path variant: parses a new frame into <paramref name="recycle"/> while recording
-    /// selected field values in <paramref name="cache"/>, without heap allocation.
-    /// </summary>
-    /// <exception cref="ArgumentNullException"><paramref name="cache"/> is <see langword="null"/>.</exception>
-    /// <inheritdoc cref="TryParseFrame(Packet, PacketId, Stack, Frame)"/>
-    public static RecycleError? TryParseFrameRecorded(
-        Packet recycle, PacketId id, Stack stack, Frame frame, ValueCache cache)
-    {
-        ArgumentNullException.ThrowIfNull(cache);
-        RecycleError? error = _TryPrepareForRecycle(recycle, id, stack, frame);
-        if (error is not null)
-        {
-            return error;
-        }
-
-        _ParseRecordedAndSeal(recycle, frame, index: null, cache);
-        return null;
-    }
-
-    /// <summary>
-    /// Hot-path recorded recycle with a first-protocol override.
-    /// </summary>
-    /// <inheritdoc cref="TryParseFrameRecorded(Packet, PacketId, Stack, Frame, ValueCache)"/>
-    public static RecycleError? TryParseFrameRecorded(
-        Packet recycle, PacketId id, Stack stack, Frame frame, ValueCache cache, ProtocolId firstProtocolId)
-    {
-        ArgumentNullException.ThrowIfNull(cache);
-        RecycleError? error = _TryPrepareForRecycle(recycle, id, stack, frame);
-        if (error is not null)
-        {
-            return error;
-        }
-
-        recycle.FirstProtocolOverride = firstProtocolId;
-        _ParseRecordedAndSeal(recycle, frame, index: null, cache);
-        return null;
-    }
-
-    /// <summary>
-    /// Hot-path recorded recycle that also writes <paramref name="index"/>.
-    /// </summary>
-    /// <inheritdoc cref="TryParseFrameRecorded(Packet, PacketId, Stack, Frame, ValueCache)"/>
-    public static RecycleError? TryParseFrameRecorded(
-        Packet recycle, PacketId id, Stack stack, Frame frame, ValueCache cache, PacketIndex index)
-    {
-        ArgumentNullException.ThrowIfNull(cache);
-        ArgumentNullException.ThrowIfNull(index);
-        RecycleError? error = _TryPrepareForRecycle(recycle, id, stack, frame);
-        if (error is not null)
-        {
-            return error;
-        }
-
-        _ParseRecordedAndSeal(recycle, frame, index, cache);
-        return null;
-    }
-
-    /// <summary>
-    /// Hot-path recorded recycle with index and first-protocol override.
-    /// </summary>
-    /// <inheritdoc cref="TryParseFrameRecorded(Packet, PacketId, Stack, Frame, ValueCache)"/>
-    public static RecycleError? TryParseFrameRecorded(
-        Packet recycle, PacketId id, Stack stack, Frame frame,
-        ValueCache cache, PacketIndex index, ProtocolId firstProtocolId)
-    {
-        ArgumentNullException.ThrowIfNull(cache);
-        ArgumentNullException.ThrowIfNull(index);
-        RecycleError? error = _TryPrepareForRecycle(recycle, id, stack, frame);
-        if (error is not null)
-        {
-            return error;
-        }
-
-        recycle.FirstProtocolOverride = firstProtocolId;
-        _ParseRecordedAndSeal(recycle, frame, index, cache);
+        _ParseAndSeal(recycle, frame, index, cache, recordOnReplay);
         return null;
     }
 
@@ -2282,16 +2293,18 @@ public sealed class Packet
     /// <paramref name="recycle"/>.
     /// <para>
     /// For hot recycling loops, prefer
-    /// <see cref="TryParseFrame(Packet, PacketId, Stack, Frame)"/> which returns a
+    /// <see cref="TryParseFrame(Packet, PacketId, Stack, Frame, FieldTreeMode, ValueCache, Boolean)"/> which returns a
     /// <see cref="RecycleError"/> code instead of throwing.
     /// </para>
     /// </summary>
     /// <exception cref="ArgumentException">When <paramref name="stack"/> does not match the recycle packet's stack,
     /// or when the frame's registry does not match.</exception>
     /// <exception cref="InvalidOperationException">When the recycle packet is not yet finalized or a materializer is active.</exception>
-    public static Packet ParseFrame(Packet recycle, PacketId id, Stack stack, Frame frame)
+    public static Packet ParseFrame(
+        Packet recycle, PacketId id, Stack stack, Frame frame, FieldTreeMode fieldTree = FieldTreeMode.Build,
+        ValueCache? cache = null, bool recordOnReplay = false)
     {
-        RecycleError? error = TryParseFrame(recycle, id, stack, frame);
+        RecycleError? error = TryParseFrame(recycle, id, stack, frame, fieldTree, cache, recordOnReplay);
         if (error is not null)
         {
             _ThrowRecycleError(error.Value);
@@ -2303,11 +2316,13 @@ public sealed class Packet
     /// Parses a new frame into an existing recycled packet dispatching to
     /// <paramref name="firstProtocolId"/>, eliminating heap allocation.
     /// </summary>
-    /// <inheritdoc cref="ParseFrame(Packet, PacketId, Stack, Frame)"/>
+    /// <inheritdoc cref="ParseFrame(Packet, PacketId, Stack, Frame, FieldTreeMode, ValueCache, Boolean)"/>
     public static Packet ParseFrame(
-        Packet recycle, PacketId id, Stack stack, Frame frame, ProtocolId firstProtocolId)
+        Packet recycle, PacketId id, Stack stack, Frame frame, ProtocolId firstProtocolId,
+        FieldTreeMode fieldTree = FieldTreeMode.Build,
+        ValueCache? cache = null, bool recordOnReplay = false)
     {
-        RecycleError? error = TryParseFrame(recycle, id, stack, frame, firstProtocolId);
+        RecycleError? error = TryParseFrame(recycle, id, stack, frame, firstProtocolId, fieldTree, cache, recordOnReplay);
         if (error is not null)
         {
             _ThrowRecycleError(error.Value);
@@ -2319,11 +2334,13 @@ public sealed class Packet
     /// Parses a new frame into an existing recycled packet while recording field presence
     /// in the given index, eliminating heap allocation.
     /// </summary>
-    /// <inheritdoc cref="ParseFrame(Packet, PacketId, Stack, Frame)"/>
+    /// <inheritdoc cref="ParseFrame(Packet, PacketId, Stack, Frame, FieldTreeMode, ValueCache, Boolean)"/>
     public static Packet ParseFrameIndexed(
-        Packet recycle, PacketId id, Stack stack, Frame frame, PacketIndex index)
+        Packet recycle, PacketId id, Stack stack, Frame frame, PacketIndex index,
+        FieldTreeMode fieldTree = FieldTreeMode.Build,
+        ValueCache? cache = null, bool recordOnReplay = false)
     {
-        RecycleError? error = TryParseFrameIndexed(recycle, id, stack, frame, index);
+        RecycleError? error = TryParseFrameIndexed(recycle, id, stack, frame, index, fieldTree, cache, recordOnReplay);
         if (error is not null)
         {
             _ThrowRecycleError(error.Value);
@@ -2336,82 +2353,17 @@ public sealed class Packet
     /// in the given index and dispatching to <paramref name="firstProtocolId"/>,
     /// eliminating heap allocation.
     /// </summary>
-    /// <inheritdoc cref="ParseFrame(Packet, PacketId, Stack, Frame)"/>
+    /// <inheritdoc cref="ParseFrame(Packet, PacketId, Stack, Frame, FieldTreeMode, ValueCache, Boolean)"/>
     public static Packet ParseFrameIndexed(
         Packet recycle, PacketId id, Stack stack, Frame frame,
-        PacketIndex index, ProtocolId firstProtocolId)
+        PacketIndex index, ProtocolId firstProtocolId, FieldTreeMode fieldTree = FieldTreeMode.Build,
+        ValueCache? cache = null, bool recordOnReplay = false)
     {
-        RecycleError? error = TryParseFrameIndexed(recycle, id, stack, frame, index, firstProtocolId);
+        RecycleError? error = TryParseFrameIndexed(recycle, id, stack, frame, index, firstProtocolId, fieldTree, cache, recordOnReplay);
         if (error is not null)
         {
             _ThrowRecycleError(error.Value);
         }
-        return recycle;
-    }
-
-    /// <summary>
-    /// Parses a new frame into an existing recycled packet while recording selected field values.
-    /// </summary>
-    /// <inheritdoc cref="ParseFrame(Packet, PacketId, Stack, Frame)"/>
-    public static Packet ParseFrameRecorded(
-        Packet recycle, PacketId id, Stack stack, Frame frame, ValueCache cache)
-    {
-        RecycleError? error = TryParseFrameRecorded(recycle, id, stack, frame, cache);
-        if (error is not null)
-        {
-            _ThrowRecycleError(error.Value);
-        }
-
-        return recycle;
-    }
-
-    /// <summary>
-    /// Recorded recycle with a first-protocol override.
-    /// </summary>
-    /// <inheritdoc cref="ParseFrame(Packet, PacketId, Stack, Frame)"/>
-    public static Packet ParseFrameRecorded(
-        Packet recycle, PacketId id, Stack stack, Frame frame, ValueCache cache, ProtocolId firstProtocolId)
-    {
-        RecycleError? error = TryParseFrameRecorded(recycle, id, stack, frame, cache, firstProtocolId);
-        if (error is not null)
-        {
-            _ThrowRecycleError(error.Value);
-        }
-
-        return recycle;
-    }
-
-    /// <summary>
-    /// Recorded recycle that also writes <paramref name="index"/>.
-    /// </summary>
-    /// <inheritdoc cref="ParseFrame(Packet, PacketId, Stack, Frame)"/>
-    public static Packet ParseFrameRecorded(
-        Packet recycle, PacketId id, Stack stack, Frame frame, ValueCache cache, PacketIndex index)
-    {
-        RecycleError? error = TryParseFrameRecorded(recycle, id, stack, frame, cache, index);
-        if (error is not null)
-        {
-            _ThrowRecycleError(error.Value);
-        }
-
-        return recycle;
-    }
-
-    /// <summary>
-    /// Recorded recycle with index and first-protocol override.
-    /// </summary>
-    /// <inheritdoc cref="ParseFrame(Packet, PacketId, Stack, Frame)"/>
-    public static Packet ParseFrameRecorded(
-        Packet recycle, PacketId id, Stack stack, Frame frame,
-        ValueCache cache, PacketIndex index, ProtocolId firstProtocolId)
-    {
-        RecycleError? error = TryParseFrameRecorded(
-            recycle, id, stack, frame, cache, index, firstProtocolId);
-        if (error is not null)
-        {
-            _ThrowRecycleError(error.Value);
-        }
-
         return recycle;
     }
 

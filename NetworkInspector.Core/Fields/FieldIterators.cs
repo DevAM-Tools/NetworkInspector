@@ -43,6 +43,12 @@ public readonly struct FieldChildEnumerable(Packet packet, ushort parentIndex, b
             if (!_Started)
             {
                 _Started = true;
+                if (!p.HasFieldTree)
+                {
+                    _CurrentIndex = FieldBody.NullIndex;
+                    return false;
+                }
+
                 // Materialize the lazy parent before reading its first child index.
                 if (mat && p.HasUnpopulatedLazyFields && p.GetFieldRef(parentIdx).NeedsMaterialization)
                 {
@@ -91,6 +97,13 @@ public ref struct FieldChildEnumerator
     internal FieldChildEnumerator(Packet packet, ushort parentIndex, bool materialize)
     {
         _Packet = packet;
+
+        if (!packet.HasFieldTree)
+        {
+            _CurrentIndex = FieldBody.NullIndex;
+            _Started = false;
+            return;
+        }
 
         // Optionally materialize lazy parent before reading its child list.
         // Fast outer guard: if no lazy fields are pending at all, skip the per-field check.
@@ -177,6 +190,11 @@ public readonly struct FieldDescendantEnumerable(Packet packet, ushort rootIndex
         {
             _Stack.Clear();
             _Current = FieldBody.NullIndex;
+            if (!_Packet.HasFieldTree)
+            {
+                return;
+            }
+
             // Materialize root before reading its child list.
             if (_Materialize && _Packet.HasUnpopulatedLazyFields
                 && _Packet.GetFieldRef(_RootIndex).NeedsMaterialization)
@@ -258,6 +276,11 @@ public ref struct FieldDescendantEnumerator
         _Materialize = materialize;
         _Stack = default;
         _Current = FieldBody.NullIndex;
+
+        if (!packet.HasFieldTree)
+        {
+            return;
+        }
 
         // Optionally materialize root before reading its child list.
         // Fast outer guard: if no lazy fields are pending at all, skip the per-field check.
@@ -366,7 +389,7 @@ public readonly struct FieldDfsEnumerable(Packet packet, bool materialize)
             _Current = FieldBody.NullIndex;
             // Push root to begin full-packet DFS traversal (root is included in the output).
             // materialize: false — this enumerator owns materialization via _Materialize.
-            if (_Packet.FieldCount(materialize: false) > 0)
+            if (_Packet.HasFieldTree && _Packet.FieldCount(materialize: false) > 0)
             {
                 _Stack.Push(0);
             }
@@ -440,7 +463,7 @@ public ref struct FieldDfsEnumerator
         _Current = FieldBody.NullIndex;
 
         // materialize: false — this enumerator owns materialization via _Materialize.
-        if (packet.FieldCount(materialize: false) > 0)
+        if (packet.HasFieldTree && packet.FieldCount(materialize: false) > 0)
         {
             _Stack.Push(0); // push root
         }
@@ -539,7 +562,7 @@ public readonly struct FieldFlatEnumerable(Packet packet, bool materialize)
             _CurrentIndex++;
             // FieldCount is checked dynamically so materialized children are also visited.
             // materialize: false — this enumerator owns materialization via _Materialize.
-            if (_CurrentIndex >= _Packet.FieldCount(materialize: false))
+            if (!_Packet.HasFieldTree || _CurrentIndex >= _Packet.FieldCount(materialize: false))
             {
                 return false;
             }
@@ -601,7 +624,7 @@ public ref struct FieldFlatEnumerator
 
         // Dynamic check: FieldCount may grow during materialization.
         // materialize: false — this enumerator owns materialization via _Materialize.
-        if (_CurrentIndex >= _Packet.FieldCount(materialize: false))
+        if (!_Packet.HasFieldTree || _CurrentIndex >= _Packet.FieldCount(materialize: false))
         {
             return false;
         }

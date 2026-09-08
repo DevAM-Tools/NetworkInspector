@@ -52,6 +52,13 @@ public ref struct MutFieldChildEnumerator
     {
         _Packet = packet;
 
+        if (!packet.HasFieldTree)
+        {
+            _CurrentIndex = FieldBody.NullIndex;
+            _Started = false;
+            return;
+        }
+
         // Optionally materialize lazy parent before reading its child list.
         // Fast outer guard: if no lazy fields are pending at all, skip the per-field check.
         if (materialize && packet.HasUnpopulatedLazyFields)
@@ -148,6 +155,11 @@ public ref struct MutFieldDescendantEnumerator
         _Materialize = materialize;
         _Stack = default;
         _Current = FieldBody.NullIndex;
+
+        if (!packet.HasFieldTree)
+        {
+            return;
+        }
 
         // Optionally materialize root before reading its child list.
         // Fast outer guard: if no lazy fields are pending at all, skip the per-field check.

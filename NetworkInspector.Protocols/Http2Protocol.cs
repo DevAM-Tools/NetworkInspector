@@ -173,8 +173,6 @@ public sealed partial class Http2Protocol : IProtocol
         // Build summary from first frame
         string typeText = Http2DisplayTables.GetFrameTypeDisplayText(firstFrame.Type);
 
-        LazyString summary = ZA.Lazy(
-            "HTTP/2 ", typeText, ", Stream: ", firstFrame.StreamId, ", Length: ", firstFrame.Length);
 
         parentField.SetPacketInfo(ZA.Lazy("HTTP/2 ", typeText));
 
@@ -224,7 +222,7 @@ public sealed partial class Http2Protocol : IProtocol
         }
 
         parentField.AppendLazyWithCustomText(
-            _ProtocolFieldId, FieldValue.NewBytes(data), summary, _Populator);
+            _ProtocolFieldId, FieldValue.NewBytes(data), "HTTP/2 ", typeText, ", Stream: ", firstFrame.StreamId, ", Length: ", firstFrame.Length, _Populator);
 
         return data.Length;
     }
@@ -390,7 +388,7 @@ public sealed partial class Http2Protocol : IProtocol
             // Frame container
             MutField frameContainer = container.AppendWithCustomText(
                 _FrameFieldId, FieldValue.None,
-                ZA.Lazy(typeText, ", Stream: ", frame.StreamId, ", Length: ", frame.Length));
+                typeText, ", Stream: ", frame.StreamId, ", Length: ", frame.Length);
 
             // Length (24-bit)
             frameContainer.Append(_FrameLengthFieldId, FieldValue.NewU64((ulong)frame.Length));
@@ -503,7 +501,7 @@ public sealed partial class Http2Protocol : IProtocol
                         string settingName = Http2DisplayTables.GetSettingsDisplayText(settingId);
                         MutField settingField = frameContainer.AppendWithCustomText(
                             _SettingsFieldId, FieldValue.None,
-                            ZA.Lazy(settingName, ": ", settingValue));
+                            settingName, ": ", settingValue);
 
                         settingField.AppendWithCustomText(_SettingsIdFieldId,
                             FieldValue.NewU64(settingId), settingName);
@@ -622,7 +620,7 @@ public sealed partial class Http2Protocol : IProtocol
         {
             MutField headerField = frameContainer.AppendWithCustomText(
                 _HeaderFieldId, FieldValue.None,
-                ZA.Lazy(header.Name, ": ", header.Value));
+                header.Name, ": ", header.Value);
 
             headerField.Append(_HeaderNameFieldId, FieldValue.NewString(header.Name));
             headerField.Append(_HeaderValueFieldId, FieldValue.NewString(header.Value));

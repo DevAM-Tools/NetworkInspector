@@ -70,7 +70,7 @@ Special-purpose sources:
 | Source | Purpose |
 |--------|---------|
 | `RandomFrameSource` | Deterministic synthetic frame generation (testing, benchmarks) |
-| `CachedFrameSource` | Decorator that adds `IRandomAccessFrameSource` to any `IFrameSource` |
+| `CachedFrameSource` | Decorator that adds `IRandomAccessFrameSource`; holds each inner `Frame`; optional RA inner |
 
 ---
 
