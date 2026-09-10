@@ -7,8 +7,8 @@ namespace NetworkInspector.Core.Tests;
 /// (ISO 11898-1:2024, SocketCAN format).
 /// Verifies field extraction for CAN XL frames including priority, VCID,
 /// flags, SDU type, acceptance field, and payload data.
-/// Also verifies that CAN XL dispatches via <c>can.id</c> (key = priority) and
-/// <c>can.extended_id</c> (key = acceptance field).
+    /// Also verifies that CAN XL dispatches via <c>can.extended_id</c> (key = acceptance field)
+    /// and does not use <c>can.id</c> (classic/FD 11-bit ID space).
 /// </summary>
 internal sealed class CanProtocolXlTests
 {
@@ -449,17 +449,14 @@ internal sealed class CanProtocolXlTests
     }
 
     [Test]
-    public async Task Parse_CanXl_DispatchesViaCanIdTable_UsingPriority()
+    public async Task Parse_CanXl_PriorityDoesNotDispatchViaCanIdTable()
     {
-        // Register a probe protocol at can.id key=42.
-        // CAN protocol dispatches CAN XL via can.id using priority as the key,
-        // so a CAN XL frame with priority=42 must invoke the probe.
         using SettingsManager settingsManager = new();
         StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
-        NetworkInspector.Protocols.ProtocolRegistration.RegisterStandardProtocols(builder);
-        FlagProtocol probe = new("probe.canid");
+        ProtocolRegistration.RegisterStandardProtocols(builder);
+        FlagProtocol probe = new("probe.canid.xlprio");
         ProtocolId probeId = builder.RegisterProtocol(probe);
-        builder.RegisterParserInU64TableByName(NetworkInspector.Protocols.CanProtocol.IdTableName, 42, probeId);
+        builder.RegisterParserInU64TableByName(CanProtocol.IdTableName, 42, probeId);
         Stack stack = builder.Build();
 
         byte[] frameData = FrameBuilders.GenerateCanXlFrame(priority: 42, payload: [0x01, 0x02, 0x03]);
@@ -470,7 +467,7 @@ internal sealed class CanProtocolXlTests
 
         using (stack)
         {
-            await Assert.That(probe.WasCalled).IsTrue();
+            await Assert.That(probe.WasCalled).IsFalse();
         }
     }
 
@@ -501,6 +498,31 @@ internal sealed class CanProtocolXlTests
         }
     }
 
+    [Test]
+    public async Task Parse_CanXl_SubprotocolIsSiblingOfCanXlContainer()
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        ProtocolRegistration.RegisterStandardProtocols(builder);
+        FlagProtocol probe = new("probe.canxl.sibling");
+        ProtocolId probeId = builder.RegisterProtocol(probe);
+        builder.RegisterParserInU64TableByName(
+            CanProtocol.ExtendedIdTableName, 0xDEADBEEF, probeId);
+        Stack stack = builder.Build();
+
+        byte[] frameData = FrameBuilders.GenerateCanXlFrame(acceptanceField: 0xDEADBEEF, payload: [0xAA, 0xBB]);
+        Frame frame = Frame.Create(
+            new FrameId(0), Timestamp.FromSecs(0), frameData,
+            LinkType.CanSocketcan, FrameInterfaceId.Invalid, stack.FrameInterfaceRegistry).Value;
+        Packet.ParseFrame(new PacketId(0), stack, frame);
+
+        using (stack)
+        {
+            await Assert.That(probe.WasCalled).IsTrue();
+            await Assert.That(probe.ParentIsRoot).IsTrue();
+        }
+    }
+
     /// <summary>A minimal protocol that records whether its <see cref="IProtocol.Parse"/> method was called.</summary>
     private sealed class FlagProtocol(string name) : IProtocol
     {
@@ -516,10 +538,20 @@ internal sealed class CanProtocolXlTests
             get; private set;
         }
 
+        /// <summary>
+        /// <see langword="true"/> when <see cref="IProtocol.Parse"/> received the packet root
+        /// (sibling dispatch).
+        /// </summary>
+        public bool ParentIsRoot
+        {
+            get; private set;
+        }
+
         /// <inheritdoc/>
         public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
         {
             WasCalled = true;
+            ParentIsRoot = !parentField.TryGetParent(out _);
             return data.Length;
         }
     }

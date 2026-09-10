@@ -226,8 +226,7 @@ internal sealed class CanProtocolTests
     [Test]
     public async Task Parse_ClassicCanExtended_DispatchesViaCanExtendedIdTable()
     {
-        // A classic CAN extended frame (29-bit ID) must dispatch via can.extended_id in addition
-        // to can.id, so protocols registered exclusively at can.extended_id are also invoked.
+        // Extended frames dispatch only via can.extended_id — never via can.id.
         using SettingsManager settingsManager = new();
         StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
         NetworkInspector.Protocols.ProtocolRegistration.RegisterStandardProtocols(builder);
@@ -289,6 +288,128 @@ internal sealed class CanProtocolTests
         }
     }
 
+    [Test]
+    [Arguments(0x123u)]
+    [Arguments(0x1ABCDEFu)]
+    public async Task Parse_ClassicCanExtended_DoesNotDispatchViaCanIdTable(uint canId)
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        ProtocolRegistration.RegisterStandardProtocols(builder);
+        FlagProtocol probe = new("probe.canid.extended");
+        ProtocolId probeId = builder.RegisterProtocol(probe);
+        builder.RegisterParserInU64TableByName(CanProtocol.IdTableName, canId, probeId);
+        Stack stack = builder.Build();
+
+        byte[] frameData = FrameBuilders.GenerateCanFrame(
+            canId: canId, isExtended: true, payload: [0x01, 0x02]);
+        Frame frame = Frame.Create(
+            new FrameId(0), Timestamp.FromSecs(0), frameData,
+            LinkType.CanSocketcan, FrameInterfaceId.Invalid, stack.FrameInterfaceRegistry).Value;
+        Packet.ParseFrame(new PacketId(0), stack, frame);
+
+        using (stack)
+        {
+            await Assert.That(probe.WasCalled).IsFalse();
+        }
+    }
+
+    [Test]
+    public async Task Parse_ClassicCanStandard_DoesNotDispatchViaExtendedIdTable()
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        ProtocolRegistration.RegisterStandardProtocols(builder);
+        FlagProtocol probe = new("probe.canext.standard");
+        ProtocolId probeId = builder.RegisterProtocol(probe);
+        builder.RegisterParserInU64TableByName(CanProtocol.ExtendedIdTableName, 0x123, probeId);
+        Stack stack = builder.Build();
+
+        byte[] frameData = FrameBuilders.GenerateCanFrame(
+            canId: 0x123, isExtended: false, payload: [0x01, 0x02]);
+        Frame frame = Frame.Create(
+            new FrameId(0), Timestamp.FromSecs(0), frameData,
+            LinkType.CanSocketcan, FrameInterfaceId.Invalid, stack.FrameInterfaceRegistry).Value;
+        Packet.ParseFrame(new PacketId(0), stack, frame);
+
+        using (stack)
+        {
+            await Assert.That(probe.WasCalled).IsFalse();
+        }
+    }
+
+    [Test]
+    public async Task Parse_ClassicCan_ErrorFrame_DoesNotDispatch()
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        ProtocolRegistration.RegisterStandardProtocols(builder);
+        FlagProtocol probe = new("probe.can.error");
+        ProtocolId probeId = builder.RegisterProtocol(probe);
+        builder.RegisterParserInU64TableByName(CanProtocol.IdTableName, 0x100, probeId);
+        Stack stack = builder.Build();
+
+        byte[] frameData = FrameBuilders.GenerateCanFrame(
+            canId: 0x100, isError: true, payload: [0x01, 0x02]);
+        Frame frame = Frame.Create(
+            new FrameId(0), Timestamp.FromSecs(0), frameData,
+            LinkType.CanSocketcan, FrameInterfaceId.Invalid, stack.FrameInterfaceRegistry).Value;
+        Packet.ParseFrame(new PacketId(0), stack, frame);
+
+        using (stack)
+        {
+            await Assert.That(probe.WasCalled).IsFalse();
+        }
+    }
+
+    [Test]
+    public async Task Parse_ClassicCan_RtrWithPayload_DoesNotDispatch()
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        ProtocolRegistration.RegisterStandardProtocols(builder);
+        FlagProtocol probe = new("probe.can.rtr");
+        ProtocolId probeId = builder.RegisterProtocol(probe);
+        builder.RegisterParserInU64TableByName(CanProtocol.IdTableName, 0x100, probeId);
+        Stack stack = builder.Build();
+
+        byte[] frameData = FrameBuilders.GenerateCanFrame(
+            canId: 0x100, isRtr: true, payload: [0x01, 0x02]);
+        Frame frame = Frame.Create(
+            new FrameId(0), Timestamp.FromSecs(0), frameData,
+            LinkType.CanSocketcan, FrameInterfaceId.Invalid, stack.FrameInterfaceRegistry).Value;
+        Packet.ParseFrame(new PacketId(0), stack, frame);
+
+        using (stack)
+        {
+            await Assert.That(probe.WasCalled).IsFalse();
+        }
+    }
+
+    [Test]
+    public async Task Parse_ClassicCan_SubprotocolIsSiblingOfCanContainer()
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        ProtocolRegistration.RegisterStandardProtocols(builder);
+        FlagProtocol probe = new("probe.can.sibling");
+        ProtocolId probeId = builder.RegisterProtocol(probe);
+        builder.RegisterParserInU64TableByName(CanProtocol.IdTableName, 0x100, probeId);
+        Stack stack = builder.Build();
+
+        byte[] frameData = FrameBuilders.GenerateCanFrame(canId: 0x100, payload: [0x01, 0x02]);
+        Frame frame = Frame.Create(
+            new FrameId(0), Timestamp.FromSecs(0), frameData,
+            LinkType.CanSocketcan, FrameInterfaceId.Invalid, stack.FrameInterfaceRegistry).Value;
+        Packet.ParseFrame(new PacketId(0), stack, frame);
+
+        using (stack)
+        {
+            await Assert.That(probe.WasCalled).IsTrue();
+            await Assert.That(probe.ParentIsRoot).IsTrue();
+        }
+    }
+
     /// <summary>Depth-first search for the first field with <paramref name="fieldId"/>;
     /// returns its <c>CustomText.ToString()</c> or <see langword="null"/> if not found.</summary>
     private static string? _FindCustomText(Field field, FieldId fieldId)
@@ -325,10 +446,20 @@ internal sealed class CanProtocolTests
             get; private set;
         }
 
+        /// <summary>
+        /// <see langword="true"/> when <see cref="IProtocol.Parse"/> received the packet root
+        /// (sibling dispatch). <see langword="false"/> when invoked as a child of the CAN container.
+        /// </summary>
+        public bool ParentIsRoot
+        {
+            get; private set;
+        }
+
         /// <inheritdoc/>
         public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
         {
             WasCalled = true;
+            ParentIsRoot = !parentField.TryGetParent(out _);
             return data.Length;
         }
     }

@@ -1248,11 +1248,13 @@ internal static class FrameBuilders
     /// <param name="payload">CAN data payload (0-8 bytes).</param>
     /// <param name="isExtended">Whether to set the Extended Frame Format flag.</param>
     /// <param name="isRtr">Whether to set the Remote Transmission Request flag.</param>
+    /// <param name="isError">Whether to set the error-frame flag.</param>
     internal static byte[] GenerateCanFrame(
         uint canId = 0x123,
         byte[]? payload = null,
         bool isExtended = false,
-        bool isRtr = false)
+        bool isRtr = false,
+        bool isError = false)
     {
         payload ??= [0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE, 0xBA, 0xBE];
         byte dlc = (byte)Math.Min(payload.Length, 8);
@@ -1260,7 +1262,6 @@ internal static class FrameBuilders
         // SocketCAN frame: 8-byte header + data (padded to 8 bytes)
         byte[] frame = new byte[8 + 8]; // header(8) + data(max 8)
 
-        // Build CAN ID with flags (little-endian in SocketCAN)
         uint rawId = canId;
         if (isExtended)
         {
@@ -1269,6 +1270,10 @@ internal static class FrameBuilders
         if (isRtr)
         {
             rawId |= 0x40000000; // RTR flag
+        }
+        if (isError)
+        {
+            rawId |= 0x20000000; // ERR flag
         }
         // LINKTYPE_CAN_SOCKETCAN (DLT 227): CAN-ID/flags word in network byte order (big-endian).
         BinaryPrimitives.WriteUInt32BigEndian(frame.AsSpan(0), rawId);
@@ -1701,10 +1706,14 @@ internal static class FrameBuilders
     /// <param name="pid">Protected ID (6-bit ID + 2-bit parity).</param>
     /// <param name="payload">LIN data payload (0-8 bytes).</param>
     /// <param name="checksum">Checksum byte.</param>
+    /// <param name="msgType">Message type nibble (0=Frame, 1=Event-triggered, 2=Sporadic, 3=Event).</param>
+    /// <param name="errorFlags">Error flags byte at offset 7.</param>
     internal static byte[] GenerateLinFrame(
         byte pid = 0x3C,
         byte[]? payload = null,
-        byte checksum = 0xAB)
+        byte checksum = 0xAB,
+        byte msgType = 0,
+        byte errorFlags = 0)
     {
         payload ??= [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08];
         byte dataLen = (byte)Math.Min(payload.Length, 15); // max 15 — fits in 4-bit nibble
@@ -1713,7 +1722,7 @@ internal static class FrameBuilders
         // Byte 0: message format revision (1)
         // Bytes 1-3: reserved
         // Byte 4: payload length[7:4] | msg type[3:2] | checksum type[1:0]
-        //         msgType=0 (Frame), checksumType=2 (enhanced)
+        //         checksumType=2 (enhanced)
         // Byte 5: PID
         // Byte 6: checksum
         // Byte 7: error flags
@@ -1723,10 +1732,10 @@ internal static class FrameBuilders
         frame[1] = 0x00;                                          // reserved
         frame[2] = 0x00;                                          // reserved
         frame[3] = 0x00;                                          // reserved
-        frame[4] = (byte)((dataLen << 4) | (0 << 2) | 0x02);     // payloadLen | msgType=Frame | checksumType=Enhanced
+        frame[4] = (byte)((dataLen << 4) | ((msgType & 0x03) << 2) | 0x02);
         frame[5] = pid;                                           // PID
         frame[6] = checksum;                                      // checksum byte
-        frame[7] = 0x00;                                          // error flags
+        frame[7] = errorFlags;
 
         payload.AsSpan(0, dataLen).CopyTo(frame.AsSpan(8));
 

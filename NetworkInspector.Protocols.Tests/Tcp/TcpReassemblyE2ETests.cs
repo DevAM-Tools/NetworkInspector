@@ -255,7 +255,7 @@ internal sealed class TcpReassemblyE2ETests
     private const ushort _ProbePort = 65000;
 
     /// <summary>
-    /// Stateful inner parser whose only job is to call <see cref="Packet.GetEffectLayerKey"/>.
+    /// Stateful inner parser whose only job is to call <see cref="MutField.TryGetEffectLayerKey"/>.
     /// Unbound TCP PDUs throw and surface as <c>packet.error</c>.
     /// </summary>
     private sealed class LayerKeyProbeProtocol : IProtocol
@@ -268,7 +268,12 @@ internal sealed class TcpReassemblyE2ETests
 
         public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
         {
-            LastLayerKey = parentField.Packet.GetEffectLayerKey(data);
+            if (!parentField.TryGetEffectLayerKey(data, out int layerKey))
+            {
+                return NetworkInspector.Core.Errors.ParseError.Custom(Name, "Parse data is not a slice of this packet's buffers.");
+            }
+
+            LastLayerKey = layerKey;
             return data.Length;
         }
     }

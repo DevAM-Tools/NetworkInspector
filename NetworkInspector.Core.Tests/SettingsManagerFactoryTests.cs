@@ -257,5 +257,35 @@ internal sealed class SettingsManagerFactoryTests
         await Assert.That(ex.ParamName).IsEqualTo("profileName");
     }
 
+    [Test]
+    public async Task Create_OmittingCaps_UsesDefaults()
+    {
+        string tempPath = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        using SettingsManager manager = SettingsManagerFactory.Create(tempPath);
+
+        await Assert.That(manager.MaxConfigFileBytes).IsEqualTo(SettingsManager.DefaultMaxConfigFileBytes);
+        await Assert.That(manager.MaxJsonDepth).IsEqualTo(SettingsManager.DefaultMaxJsonDepth);
+    }
+
+    [Test]
+    public async Task Create_ZeroCaps_DisablesLimits()
+    {
+        string tempPath = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        using SettingsManager manager = SettingsManagerFactory.Create(tempPath, "p", 0, 0);
+
+        await Assert.That(manager.MaxConfigFileBytes).IsEqualTo(0L);
+        await Assert.That(manager.MaxJsonDepth).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task Create_CustomCaps_ForwardsToManager()
+    {
+        string tempPath = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        using SettingsManager manager = SettingsManagerFactory.Create(tempPath, "p", 4096, 8);
+
+        await Assert.That(manager.MaxConfigFileBytes).IsEqualTo(4096L);
+        await Assert.That(manager.MaxJsonDepth).IsEqualTo(8);
+    }
+
     #endregion
 }

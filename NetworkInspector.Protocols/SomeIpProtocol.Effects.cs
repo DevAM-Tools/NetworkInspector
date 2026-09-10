@@ -8,7 +8,7 @@ public sealed partial class SomeIpProtocol
 
     /// <summary>
     /// TP reassembly results recorded during first parses. Sparse: only packets carrying a TP header
-    /// get an entry. Layer key is <see cref="Packet.GetEffectLayerKey"/> at the parse call.
+    /// get an entry. Layer key is <see cref="MutField.TryGetEffectLayerKey"/> at the parse call.
     /// <para>
     /// <b>Thread-safety:</b> single ordered first-parse writer; lock-free readers once the entry is
     /// published.

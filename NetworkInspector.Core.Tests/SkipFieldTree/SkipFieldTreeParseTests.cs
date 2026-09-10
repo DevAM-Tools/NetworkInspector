@@ -71,6 +71,11 @@ internal sealed class SkipFieldTreeParseTests
         await Assert.That(packet.RootField().HasFieldTree).IsFalse();
         await Assert.That(packet.RootField().TryGetFirstChild(out _, materialize: false)).IsFalse();
         await Assert.That(packet.RootField().Value.Type).IsEqualTo(FieldType.None);
+        await Assert.That(packet.RootField().TryGetValue(out FieldValue rootValue)).IsTrue();
+        await Assert.That(rootValue.Type).IsEqualTo(FieldType.None);
+        Field ghost = new(packet, 1, FieldId.Invalid);
+        await Assert.That(ghost.TryGetValue(out _)).IsFalse();
+        await Assert.That(ghost.TryGetCustomText(out _)).IsFalse();
     }
 
     [Test]

@@ -43,13 +43,28 @@ public static class SettingsManagerFactory
     /// named after the profile within the base directory.
     /// Pass <see langword="null"/> or an empty string to use the base directory directly.
     /// </param>
+    /// <param name="maxConfigFileBytes">
+    /// Maximum accepted size in bytes for settings and referenced protocol config files.
+    /// Omit for <see cref="SettingsManager.DefaultMaxConfigFileBytes"/> (1 GiB).
+    /// Values <c>&lt;= 0</c> disable the size check.
+    /// </param>
+    /// <param name="maxJsonDepth">
+    /// Maximum JSON nesting depth for those same files.
+    /// Omit for <see cref="SettingsManager.DefaultMaxJsonDepth"/> (1024).
+    /// Values <c>&lt;= 0</c> disable the depth check.
+    /// </param>
     /// <returns>
-    /// A new <see cref="SettingsManager"/> configured with the resolved storage path.
+    /// A new <see cref="SettingsManager"/> configured with the resolved storage path,
+    /// <see cref="SettingsManager.MaxConfigFileBytes"/>, and <see cref="SettingsManager.MaxJsonDepth"/>.
     /// </returns>
-    public static SettingsManager Create(string? settingsPath = null, string? profileName = null)
+    public static SettingsManager Create(
+        string? settingsPath = null,
+        string? profileName = null,
+        long maxConfigFileBytes = SettingsManager.DefaultMaxConfigFileBytes,
+        int maxJsonDepth = SettingsManager.DefaultMaxJsonDepth)
     {
         string storagePath = ResolvePath(settingsPath, profileName);
-        return new SettingsManager(storagePath);
+        return new SettingsManager(storagePath, maxConfigFileBytes, maxJsonDepth);
     }
 
     /// <summary>

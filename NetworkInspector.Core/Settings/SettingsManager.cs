@@ -23,16 +23,35 @@ namespace NetworkInspector.Core.Settings;
 /// <para>
 /// <b>Thread-safety:</b> All public members are thread-safe. After <see cref="Dispose"/>
 /// is called the instance must not be used from any thread.
+/// <see cref="MaxConfigFileBytes"/> and <see cref="MaxJsonDepth"/> are assigned in the
+/// constructor and never change; readers do not take the instance reader-writer lock for those fields.
 /// </para>
 /// </summary>
 public sealed class SettingsManager : IDisposable
 {
+    /// <summary>
+    /// Default maximum size in bytes for persisted settings JSON and referenced protocol config files (1 GiB).
+    /// A 1 GiB load fully deserializes JSON and can exhaust memory. Values <c>&lt;= 0</c> disable the size check.
+    /// </summary>
+    public const long DefaultMaxConfigFileBytes = 1_073_741_824;
+
+    /// <summary>
+    /// Default maximum JSON nesting depth for persisted settings JSON and referenced protocol config files.
+    /// Values <c>&lt;= 0</c> disable the depth check (System.Text.Json still has a library ceiling).
+    /// </summary>
+    public const int DefaultMaxJsonDepth = 1024;
+
+    /// <summary>
+    /// Depth passed to System.Text.Json when the caller disables <see cref="MaxJsonDepth"/>.
+    /// STJ treats <c>0</c> as "use the default of 64", so a large positive ceiling is required.
+    /// </summary>
+    internal const int UnboundedJsonMaxDepth = 1_000_000;
+
     /// <summary>Reusable JSON serializer options for saving settings.</summary>
     private static readonly JsonSerializerOptions _WriteOptions = new()
     {
         WriteIndented = true
     };
-
     private readonly ReaderWriterLockSlim _Lock = new();
     private readonly Dictionary<string, Setting> _SettingsByName = new(StringComparer.Ordinal);
     private readonly List<Setting> _SettingsList = [];
@@ -58,16 +77,49 @@ public sealed class SettingsManager : IDisposable
     /// <summary>Non-zero while <see cref="Load"/> is applying persisted values (0 = idle, 1 = loading).</summary>
     private volatile int _IsLoading;
 
-    /// <summary>Creates a new settings manager without a storage path.</summary>
+    /// <summary>
+    /// Creates a new settings manager without a storage path.
+    /// <see cref="MaxConfigFileBytes"/> is <see cref="DefaultMaxConfigFileBytes"/>.
+    /// <see cref="MaxJsonDepth"/> is <see cref="DefaultMaxJsonDepth"/>.
+    /// </summary>
     public SettingsManager()
+        : this(storagePath: null, DefaultMaxConfigFileBytes, DefaultMaxJsonDepth)
     {
-        StoragePath = null;
     }
 
-    /// <summary>Creates a new settings manager with a storage path for JSON persistence.</summary>
+    /// <summary>
+    /// Creates a new settings manager with a storage path for JSON persistence.
+    /// <see cref="MaxConfigFileBytes"/> is <see cref="DefaultMaxConfigFileBytes"/>.
+    /// <see cref="MaxJsonDepth"/> is <see cref="DefaultMaxJsonDepth"/>.
+    /// </summary>
     public SettingsManager(string storagePath)
+        : this(storagePath, DefaultMaxConfigFileBytes, DefaultMaxJsonDepth)
+    {
+    }
+
+    /// <summary>
+    /// Creates a new settings manager with a storage path, file-size cap, and JSON depth cap.
+    /// Both caps are fixed for the lifetime of the instance. Values <c>&lt;= 0</c> disable that check.
+    /// </summary>
+    /// <param name="storagePath">
+    /// Directory for JSON persistence, or <see langword="null"/> when this manager does not persist.
+    /// </param>
+    /// <param name="maxConfigFileBytes">
+    /// Maximum accepted size in bytes for settings group JSON, the owned-group manifest, and
+    /// referenced protocol config files. Unit is bytes. <c>&lt;= 0</c> disables the size check.
+    /// Loading a large file fully deserializes JSON and can exhaust memory.
+    /// </param>
+    /// <param name="maxJsonDepth">
+    /// Maximum JSON nesting depth for those same files. <c>&lt;= 0</c> disables the depth check.
+    /// </param>
+    public SettingsManager(
+        string? storagePath,
+        long maxConfigFileBytes,
+        int maxJsonDepth = DefaultMaxJsonDepth)
     {
         StoragePath = storagePath;
+        MaxConfigFileBytes = maxConfigFileBytes;
+        MaxJsonDepth = maxJsonDepth;
     }
 
     /// <summary>
@@ -83,6 +135,33 @@ public sealed class SettingsManager : IDisposable
 
     /// <summary>Gets the storage path, or null if no storage path is configured.</summary>
     public string? StoragePath { get; }
+
+    /// <summary>
+    /// Maximum accepted size in bytes for persisted settings JSON and referenced protocol config files.
+    /// Values <c>&lt;= 0</c> disable the size check. Fixed at construction; there is no setter.
+    /// </summary>
+    public long MaxConfigFileBytes { get; }
+
+    /// <summary>
+    /// Maximum JSON nesting depth for persisted settings JSON and referenced protocol config files.
+    /// Values <c>&lt;= 0</c> disable the depth check. Fixed at construction; there is no setter.
+    /// </summary>
+    public int MaxJsonDepth { get; }
+
+    /// <summary>
+    /// Maps a caller depth cap to the value System.Text.Json accepts.
+    /// <c>&lt;= 0</c> becomes <see cref="UnboundedJsonMaxDepth"/> because STJ <c>MaxDepth == 0</c>
+    /// means the library default of 64, not unlimited.
+    /// </summary>
+    internal static int EffectiveJsonMaxDepth(int maxJsonDepth)
+    {
+        if (maxJsonDepth <= 0)
+        {
+            return UnboundedJsonMaxDepth;
+        }
+
+        return maxJsonDepth;
+    }
 
     /// <summary>Returns true while <see cref="Load"/> is applying persisted values.</summary>
     internal bool IsLoading => _IsLoading != 0;
@@ -847,7 +926,7 @@ public sealed class SettingsManager : IDisposable
             JsonNode? root;
             using (FileStream stream = SettingsFileAccess.OpenSharedRead(filePath))
             {
-                if (stream.Length > SettingsFileAccess.MaxFileBytes)
+                if (MaxConfigFileBytes > 0 && stream.Length > MaxConfigFileBytes)
                 {
                     warnings.Add(new SettingsLoadWarning(
                         SettingsLoadWarningKind.InvalidGroupFileShape,
@@ -855,14 +934,14 @@ public sealed class SettingsManager : IDisposable
                         string.Empty,
                         string.Create(
                             CultureInfo.InvariantCulture,
-                            $"Settings file '{fileLabel}' exceeds {SettingsFileAccess.MaxFileBytes} bytes. The file is skipped.")));
+                            $"Settings file '{fileLabel}' exceeds {MaxConfigFileBytes} bytes. The file is skipped.")));
                     return;
                 }
 
                 root = JsonNode.Parse(
                     stream,
                     nodeOptions: null,
-                    documentOptions: new JsonDocumentOptions { MaxDepth = SettingsFileAccess.JsonMaxDepth });
+                    documentOptions: new JsonDocumentOptions { MaxDepth = EffectiveJsonMaxDepth(MaxJsonDepth) });
             }
             if (root is not JsonObject obj)
             {
@@ -1066,7 +1145,7 @@ public sealed class SettingsManager : IDisposable
     /// Reads the owned-group manifest. Missing or oversized files yield an empty set
     /// so unrelated JSON is never deleted.
     /// </summary>
-    private static HashSet<string> _ReadOwnedGroupFiles(string manifestPath)
+    private HashSet<string> _ReadOwnedGroupFiles(string manifestPath)
     {
         HashSet<string> owned = new(StringComparer.OrdinalIgnoreCase);
         if (!File.Exists(manifestPath))
@@ -1077,7 +1156,7 @@ public sealed class SettingsManager : IDisposable
         try
         {
             using FileStream stream = SettingsFileAccess.OpenSharedRead(manifestPath);
-            if (stream.Length > SettingsFileAccess.MaxFileBytes)
+            if (MaxConfigFileBytes > 0 && stream.Length > MaxConfigFileBytes)
             {
                 return owned;
             }

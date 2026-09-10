@@ -5,6 +5,9 @@ namespace NetworkInspector.Core.Fields;
 /// <summary>
 /// Internal storage for a single field in the packet tree.
 /// Uses <see cref="ushort"/> indices for tree links (max 65535 fields per packet).
+/// Tree-link stores and loads use <see cref="Volatile"/> so a <c>materialize: false</c>
+/// walker on another thread cannot observe a default <see cref="FieldId"/> after a parent
+/// publishes a child pointer. <see cref="LazyIndex"/> is a separate CAS word.
 /// </summary>
 [StructLayout(LayoutKind.Sequential)]
 internal struct FieldBody
@@ -127,64 +130,72 @@ internal struct FieldBody
     internal ushort ParentIndex
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        readonly get => _ParentIndex;
+        get => Volatile.Read(ref _ParentIndex);
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        set => _ParentIndex = value;
+        set => Volatile.Write(ref _ParentIndex, value);
     }
 
     /// <summary>Index of the first child field, or <see cref="NullIndex"/> if this node has no children.</summary>
     internal ushort FirstChildIndex
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        readonly get => _FirstChildIndex;
+        get => Volatile.Read(ref _FirstChildIndex);
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        set => _FirstChildIndex = value;
+        set => Volatile.Write(ref _FirstChildIndex, value);
     }
 
     /// <summary>Index of the last child field, or <see cref="NullIndex"/> if this node has no children.</summary>
     internal ushort LastChildIndex
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        readonly get => _LastChildIndex;
+        get => Volatile.Read(ref _LastChildIndex);
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        set => _LastChildIndex = value;
+        set => Volatile.Write(ref _LastChildIndex, value);
     }
 
     /// <summary>Index of the next sibling field, or <see cref="NullIndex"/> if this is the last sibling.</summary>
     internal ushort NextIndex
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        readonly get => _NextIndex;
+        get => Volatile.Read(ref _NextIndex);
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        set => _NextIndex = value;
+        set => Volatile.Write(ref _NextIndex, value);
     }
 
     /// <summary>Index of the previous sibling field, or <see cref="NullIndex"/> if this is the first sibling.</summary>
     internal ushort PrevIndex
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        readonly get => _PrevIndex;
+        get => Volatile.Read(ref _PrevIndex);
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        set => _PrevIndex = value;
+        set => Volatile.Write(ref _PrevIndex, value);
     }
 
     /// <summary>Number of direct child fields linked from this node.</summary>
     internal ushort ChildCount
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        readonly get => _ChildCount;
+        get => Volatile.Read(ref _ChildCount);
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        set => _ChildCount = value;
+        set => Volatile.Write(ref _ChildCount, value);
     }
 
+    /// <summary>
+    /// Increments <see cref="ChildCount"/> unless it is already <see cref="ushort.MaxValue"/>.
+    /// Saturation is silent: the reserved slot is still published as a flat tombstone if the
+    /// caller wraps the insert in try/finally. One writer owns a parent at a time (the claiming
+    /// materializer), so a volatile load/store is enough.
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void IncrementChildCount()
     {
-        if (_ChildCount == ushort.MaxValue)
+        ushort current = Volatile.Read(ref _ChildCount);
+        if (current == ushort.MaxValue)
         {
-            throw new OverflowException("Field child count exceeded maximum of 65535.");
+            return;
         }
-        _ChildCount++;
+
+        Volatile.Write(ref _ChildCount, (ushort)(current + 1));
     }
 
     #endregion

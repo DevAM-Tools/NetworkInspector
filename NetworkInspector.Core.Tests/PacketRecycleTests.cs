@@ -286,7 +286,7 @@ internal sealed class PacketRecycleTests
 
         Frame frame2 = _MakeFrame(stack, frameData, 2);
 
-        await Assert.That(() => Packet.ParseFrame(unsealed, new PacketId(2), stack, frame2))
+        await Assert.That(() => Packet.ParseFrame(unsealed, new PacketId(0), stack, frame2))
             .Throws<InvalidOperationException>();
     }
 
@@ -321,7 +321,7 @@ internal sealed class PacketRecycleTests
         // frame2 from a different registry, but same stack reference
         Frame frame2 = _MakeFrame(otherStack, frameData, 2);
 
-        await Assert.That(() => Packet.ParseFrame(packet, new PacketId(2), stack, frame2))
+        await Assert.That(() => Packet.ParseFrame(packet, new PacketId(1), stack, frame2))
             .Throws<ArgumentException>();
     }
 

@@ -4,8 +4,8 @@ namespace NetworkInspector.Core.Settings;
 
 /// <summary>
 /// Internal pure-function helper that loads and deserializes a JSON file into a typed
-/// configuration object. Contains no dependency on <see cref="SettingsManager"/>; used by
-/// <see cref="SettingsManagerExtensions"/> and directly testable in isolation.
+/// configuration object. Used by <see cref="SettingsManagerExtensions"/> and directly
+/// testable in isolation. File loads take explicit size and JSON-depth caps; stream loads do not.
 /// <para>
 /// Handles path resolution, existence checks, and all I/O and deserialization exceptions,
 /// mapping each failure mode to a human-readable error message.
@@ -42,6 +42,94 @@ internal static class JsonConfigFile
         out string? error)
         where T : class
     {
+        return TryLoad(
+            filePath,
+            baseDirectory,
+            typeInfo,
+            SettingsManager.DefaultMaxConfigFileBytes,
+            SettingsManager.DefaultMaxJsonDepth,
+            out value,
+            out error);
+    }
+
+    /// <summary>
+    /// Attempts to load and deserialize a JSON file at <paramref name="filePath"/> with an explicit size cap
+    /// and the default JSON depth cap.
+    /// </summary>
+    /// <typeparam name="T">Target configuration model type.</typeparam>
+    /// <param name="filePath">Absolute or relative path to the JSON file.</param>
+    /// <param name="baseDirectory">
+    /// Required directory that confines <paramref name="filePath"/>.
+    /// Paths containing <c>..</c> segments or resolving outside the base are rejected.
+    /// When <see langword="null"/> or whitespace, the load fails (default-deny).
+    /// </param>
+    /// <param name="typeInfo">AOT-compatible type info for deserialization.</param>
+    /// <param name="maxFileBytes">
+    /// Maximum accepted file size in bytes. Values <c>&lt;= 0</c> disable the size check.
+    /// </param>
+    /// <param name="value">
+    /// On success contains the deserialized object; otherwise <see langword="null"/>.
+    /// </param>
+    /// <param name="error">
+    /// On failure contains a human-readable description of the problem;
+    /// <see langword="null"/> on success.
+    /// </param>
+    /// <returns><see langword="true"/> on success; <see langword="false"/> on any failure.</returns>
+    internal static bool TryLoad<T>(
+        string filePath,
+        string? baseDirectory,
+        JsonTypeInfo<T> typeInfo,
+        long maxFileBytes,
+        [NotNullWhen(true)] out T? value,
+        out string? error)
+        where T : class
+    {
+        return TryLoad(
+            filePath,
+            baseDirectory,
+            typeInfo,
+            maxFileBytes,
+            SettingsManager.DefaultMaxJsonDepth,
+            out value,
+            out error);
+    }
+
+    /// <summary>
+    /// Attempts to load and deserialize a JSON file at <paramref name="filePath"/> with explicit size and depth caps.
+    /// </summary>
+    /// <typeparam name="T">Target configuration model type.</typeparam>
+    /// <param name="filePath">Absolute or relative path to the JSON file.</param>
+    /// <param name="baseDirectory">
+    /// Required directory that confines <paramref name="filePath"/>.
+    /// Paths containing <c>..</c> segments or resolving outside the base are rejected.
+    /// When <see langword="null"/> or whitespace, the load fails (default-deny).
+    /// </param>
+    /// <param name="typeInfo">AOT-compatible type info for deserialization.</param>
+    /// <param name="maxFileBytes">
+    /// Maximum accepted file size in bytes. Values <c>&lt;= 0</c> disable the size check.
+    /// </param>
+    /// <param name="maxJsonDepth">
+    /// Maximum JSON nesting depth. Values <c>&lt;= 0</c> disable the depth check
+    /// (System.Text.Json still has a library ceiling).
+    /// </param>
+    /// <param name="value">
+    /// On success contains the deserialized object; otherwise <see langword="null"/>.
+    /// </param>
+    /// <param name="error">
+    /// On failure contains a human-readable description of the problem;
+    /// <see langword="null"/> on success.
+    /// </param>
+    /// <returns><see langword="true"/> on success; <see langword="false"/> on any failure.</returns>
+    internal static bool TryLoad<T>(
+        string filePath,
+        string? baseDirectory,
+        JsonTypeInfo<T> typeInfo,
+        long maxFileBytes,
+        int maxJsonDepth,
+        [NotNullWhen(true)] out T? value,
+        out string? error)
+        where T : class
+    {
         if (!_TryResolvePath(filePath, baseDirectory, out string resolvedPath, out error))
         {
             value = null;
@@ -52,16 +140,16 @@ internal static class JsonConfigFile
         try
         {
             using FileStream stream = SettingsFileAccess.OpenSharedRead(resolvedPath);
-            if (stream.Length > SettingsFileAccess.MaxFileBytes)
+            if (maxFileBytes > 0 && stream.Length > maxFileBytes)
             {
                 error = string.Create(
                     CultureInfo.InvariantCulture,
-                    $"Configuration file '{label}' exceeds {SettingsFileAccess.MaxFileBytes} bytes.");
+                    $"Configuration file '{label}' exceeds {maxFileBytes} bytes.");
                 value = null;
                 return false;
             }
 
-            return _TryDeserialize(stream, typeInfo, label, out value, out error);
+            return _TryDeserialize(stream, typeInfo, label, maxJsonDepth, out value, out error);
         }
         catch (FileNotFoundException)
         {
@@ -91,8 +179,8 @@ internal static class JsonConfigFile
 
     /// <summary>
     /// Attempts to deserialize JSON from <paramref name="stream"/> without closing it.
-    /// Seekable streams are size-checked in place; non-seekable streams are copied up to
-    /// <see cref="SettingsFileAccess.MaxFileBytes"/>.
+    /// Seekable streams are deserialized in place. Non-seekable streams are copied into a
+    /// rewindable buffer. This method does not enforce a size or JSON-depth limit.
     /// </summary>
     /// <typeparam name="T">Target configuration model type.</typeparam>
     /// <param name="stream">Readable stream positioned at the JSON payload. Not closed.</param>
@@ -130,20 +218,11 @@ internal static class JsonConfigFile
 
             if (remaining >= 0)
             {
-                if (remaining > SettingsFileAccess.MaxFileBytes)
-                {
-                    value = null;
-                    error = string.Create(
-                        CultureInfo.InvariantCulture,
-                        $"Configuration stream '{label}' exceeds {SettingsFileAccess.MaxFileBytes} bytes.");
-                    return false;
-                }
-
-                return _TryDeserialize(stream, typeInfo, label, out value, out error);
+                return _TryDeserialize(stream, typeInfo, label, maxJsonDepth: 0, out value, out error);
             }
         }
 
-        if (!_TryCopyBounded(stream, out MemoryStream? copy, out error))
+        if (!_TryCopy(stream, out MemoryStream? copy, out error))
         {
             value = null;
             return false;
@@ -151,29 +230,36 @@ internal static class JsonConfigFile
 
         using (copy)
         {
-            return _TryDeserialize(copy, typeInfo, label, out value, out error);
+            return _TryDeserialize(copy, typeInfo, label, maxJsonDepth: 0, out value, out error);
         }
     }
 
     #endregion
 
-    #region Deserialize and bounded copy
+    #region Deserialize and stream copy
 
     /// <summary>
     /// Deserializes <paramref name="stream"/> with AOT-safe <paramref name="typeInfo"/>.
     /// Maps JSON/I/O failures to <paramref name="error"/>; does not close the stream.
+    /// <paramref name="maxJsonDepth"/> values <c>&lt;= 0</c> raise System.Text.Json to its library ceiling.
     /// </summary>
     private static bool _TryDeserialize<T>(
         Stream stream,
         JsonTypeInfo<T> typeInfo,
         string label,
+        int maxJsonDepth,
         [NotNullWhen(true)] out T? value,
         out string? error)
         where T : class
     {
         try
         {
-            value = JsonSerializer.Deserialize(stream, typeInfo);
+            JsonSerializerOptions options = new(typeInfo.Options)
+            {
+                MaxDepth = SettingsManager.EffectiveJsonMaxDepth(maxJsonDepth)
+            };
+            JsonTypeInfo<T> boundInfo = (JsonTypeInfo<T>)options.GetTypeInfo(typeof(T));
+            value = JsonSerializer.Deserialize(stream, boundInfo);
 
             // A JSON null literal deserializes to null — treat it as a malformed config
             if (value is null)
@@ -212,16 +298,15 @@ internal static class JsonConfigFile
     }
 
     /// <summary>
-    /// Copies <paramref name="source"/> into a rewindable buffer, failing when the payload
-    /// would exceed <see cref="SettingsFileAccess.MaxFileBytes"/>. Used for non-seekable streams.
+    /// Copies <paramref name="source"/> into a rewindable buffer. Used for non-seekable streams.
+    /// Does not enforce a size limit; the caller must bound untrusted streams.
     /// </summary>
-    private static bool _TryCopyBounded(Stream source, [NotNullWhen(true)] out MemoryStream? copy, out string? error)
+    private static bool _TryCopy(Stream source, [NotNullWhen(true)] out MemoryStream? copy, out string? error)
     {
         MemoryStream bufferStream = new();
         byte[] buffer = ArrayPool<byte>.Shared.Rent(4096);
         try
         {
-            long total = 0;
             while (true)
             {
                 int read = source.Read(buffer, 0, buffer.Length);
@@ -230,18 +315,7 @@ internal static class JsonConfigFile
                     break;
                 }
 
-                if (read > SettingsFileAccess.MaxFileBytes - total)
-                {
-                    error = string.Create(
-                        CultureInfo.InvariantCulture,
-                        $"Configuration stream exceeds {SettingsFileAccess.MaxFileBytes} bytes.");
-                    bufferStream.Dispose();
-                    copy = null;
-                    return false;
-                }
-
                 bufferStream.Write(buffer, 0, read);
-                total += read;
             }
 
             bufferStream.Position = 0;

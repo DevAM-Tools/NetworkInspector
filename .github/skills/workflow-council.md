@@ -39,7 +39,7 @@ Outsider gets the framed question only — no Constraint Block, no tech-skill du
 
 ## Exam
 
-Target is the **built result**, not a decision fork. Frame: "Does this implementation hold against the plan R{n} and in-scope code?" Include plan path, every R{n}, review brief path, Implementation Status Table, in-scope paths, latest Step NR review paths. No steering toward Holds. Do not rubber-stamp.
+Target is the **built result**, not a decision fork. Frame: "Does this implementation hold against the plan R{n} and in-scope code?" Include plan path, every R{n}, review brief path, Implementation Status Table, in-scope paths, latest Step NR review paths. Open brief card links. Break each **How it serves** clause. No steering toward Holds. Do not rubber-stamp.
 
 Follow Lite/Full stages with these overlays. Advisors still do not edit.
 
@@ -58,7 +58,7 @@ Other views keep 150–250 words. Exam Ask:
 | View | Exam Ask |
 |------|----------|
 | Skeptic | Why can the shipped result not work? Apply the Skeptic Exam addendum. |
-| Problem-First | Did we solve the stated R{n}, or a different problem? |
+| Problem-First | Did we solve the stated R{n}, or a different problem? Match each **How it serves** clause to the file. |
 | Upside | What in-scope gap remains in what shipped? Defects only. No gold-plating. |
 | Outsider | Would a first-time user or caller of the built API get this? |
 | Builder | Does `Verify` prove the claim? Name the first command that must fail if it does not hold. |

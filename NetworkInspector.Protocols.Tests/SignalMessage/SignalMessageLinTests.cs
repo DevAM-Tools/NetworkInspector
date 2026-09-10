@@ -7,7 +7,8 @@ namespace NetworkInspector.Protocols.Tests.SignalMessage;
 /// (LINKTYPE_LIN, link type 212), dispatched via the <c>lin.id</c> table.
 /// LIN frames are limited to 8 data bytes (LIN 2.x specification), so the
 /// signal PDU layout must have <c>ByteLength</c> ≤ 8.
-/// Dispatching is performed only for standard (non-event-triggered) frames.
+/// Dispatching is performed only for non-Event frames (message type 0/1/2) with
+/// a zero error-flags byte. The dispatch key is the 6-bit frame ID, not the PID.
 /// </summary>
 internal sealed class SignalMessageLinTests
 {

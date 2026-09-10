@@ -10,7 +10,7 @@ namespace NetworkInspector.Core.Collections;
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>Layer key:</b> protocols pass <see cref="Packet.GetEffectLayerKey"/> so ingest and
+/// <b>Layer key:</b> protocols pass <see cref="MutField.TryGetEffectLayerKey"/> so ingest and
 /// replay identify the same invocation. Remaining byte length is not a key.
 /// </para>
 /// <para>
@@ -119,7 +119,7 @@ public sealed class EffectStore<TEffect> where TEffect : struct
     /// <see cref="Ids.ArrayIndexIdRange"/> index and not less than the current tail packet id.
     /// </param>
     /// <param name="layerKey">
-    /// Packed buffer-and-offset key from <see cref="Packet.GetEffectLayerKey"/>. Range is not
+    /// Packed buffer-and-offset key from <see cref="MutField.TryGetEffectLayerKey"/>. Range is not
     /// validated here; the caller guarantees the value came from that helper on the packet in flight.
     /// </param>
     /// <param name="effect">Immutable effect payload for this layer.</param>
@@ -186,7 +186,7 @@ public sealed class EffectStore<TEffect> where TEffect : struct
     /// published row at the search index no longer has that packet id.
     /// </summary>
     /// <param name="packetId">Packet id to look up.</param>
-    /// <param name="layerKey">Packed buffer-and-offset key from <see cref="Packet.GetEffectLayerKey"/>.</param>
+    /// <param name="layerKey">Packed buffer-and-offset key from <see cref="MutField.TryGetEffectLayerKey"/>.</param>
     /// <param name="effect">Recorded payload when this method returns <see langword="true"/>.</param>
     /// <returns><see langword="true"/> when a published entry matches both keys.</returns>
     public bool TryGet(int packetId, int layerKey, out TEffect effect)

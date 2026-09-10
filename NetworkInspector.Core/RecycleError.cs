@@ -23,9 +23,8 @@ public enum RecycleError
     NotFinalized,
 
     /// <summary>
-    /// A concurrent lazy-field materializer is active on the packet
-    /// (<c>_ActiveLazyMaterializations &gt; 0</c>). Recycling while materialization is in progress
-    /// would cause data corruption.
+    /// A concurrent lazy materializer is active, or another recycle already holds the packet.
+    /// Recycling while materialization is in progress would cause data corruption.
     /// </summary>
     MaterializerActive,
 
@@ -42,4 +41,22 @@ public enum RecycleError
     /// The <c>stack</c> argument must be reference-equal to the recycle packet's stack.
     /// </summary>
     StackMismatch,
+
+    /// <summary>
+    /// <see cref="FieldTreeMode"/> is neither <see cref="FieldTreeMode.Build"/> nor
+    /// <see cref="FieldTreeMode.Skip"/>. The recycle packet is left unchanged.
+    /// </summary>
+    InvalidFieldTree,
+
+    /// <summary>
+    /// The supplied <see cref="ValueCache"/> belongs to a different <see cref="Stack"/> than
+    /// the recycle packet. The recycle packet is left unchanged.
+    /// </summary>
+    CacheStackMismatch,
+
+    /// <summary>
+    /// The packet id would jump past the stack's next first-parse watermark.
+    /// The recycle packet is left unchanged.
+    /// </summary>
+    ParseIdGap,
 }

@@ -88,6 +88,21 @@ public readonly ref struct MutField
         }
     }
 
+    /// <summary>
+    /// Stores <paramref name="buffer"/> on the owning packet for nested parse and effect keys.
+    /// After Seal this returns <see cref="ReadOnlyMemory{T}.Empty"/> and does not store.
+    /// </summary>
+    public readonly ReadOnlyMemory<byte> BindParseBuffer(ReadOnlyMemory<byte> buffer)
+        => Packet.BindParseBuffer(buffer);
+
+    /// <summary>
+    /// Packs the location of <paramref name="data"/> inside this packet's buffers into an
+    /// effect-store layer key. Returns <see langword="false"/> when <paramref name="data"/> is
+    /// not a slice of a packet buffer or the packed index/offset does not fit.
+    /// </summary>
+    public readonly bool TryGetEffectLayerKey(ReadOnlyMemory<byte> data, out int key)
+        => Packet.TryGetEffectLayerKey(data, out key);
+
     /// <summary>Whether this is the root field (index 0).</summary>
     public readonly bool IsRoot
     {

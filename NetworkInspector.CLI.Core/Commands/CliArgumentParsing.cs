@@ -48,6 +48,28 @@ internal static class CliArgumentParsing
         return value;
     }
 
+    /// <summary>Parses a signed 64-bit integer, throwing a user-friendly message on failure.</summary>
+    internal static long ParseInt64(string value)
+    {
+        if (!long.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out long result))
+        {
+            throw new ArgumentException($"Invalid numeric value: '{value}'.");
+        }
+
+        return result;
+    }
+
+    /// <summary>Parses a signed 32-bit integer, throwing a user-friendly message on failure.</summary>
+    internal static int ParseInt32(string value)
+    {
+        if (!int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out int result))
+        {
+            throw new ArgumentException($"Invalid numeric value: '{value}'.");
+        }
+
+        return result;
+    }
+
     /// <summary>Parses a non-negative long value, throwing a user-friendly message on failure.</summary>
     internal static long ParseNonNegativeLong(string value)
     {

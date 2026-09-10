@@ -114,7 +114,7 @@ public sealed partial class TcpProtocol
 
     /// <summary>
     /// TCP effects recorded during first parses. Sparse: only packets where TCP actually ran get an
-    /// entry. Layer key is <see cref="Packet.GetEffectLayerKey"/> at the parse call.
+    /// entry. Layer key is <see cref="MutField.TryGetEffectLayerKey"/> at the parse call.
     /// <para>
     /// <b>Thread-safety:</b> single ordered first-parse writer; lock-free readers once the entry is
     /// published. Lifetime is bound to this protocol instance and therefore to its

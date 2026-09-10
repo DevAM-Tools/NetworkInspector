@@ -234,6 +234,19 @@ public sealed class Stack : IStack, IDisposable
     }
 
     /// <summary>
+    /// Returns whether <paramref name="id"/> would throw from <see cref="ObserveParse"/> as a
+    /// first-parse gap. No watermark mutation. Used by <c>TryParseFrame</c> so a recycle target
+    /// stays unchanged when the caller skipped an id.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal bool WouldJump(PacketId id)
+    {
+        int value = id.Value;
+        int current = _ParseWatermark;
+        return value > current && value != current + 1;
+    }
+
+    /// <summary>
     /// Marks <paramref name="id"/> as having completed its first parse. Must be called from
     /// <see langword="finally"/> after a non-replay <see cref="ObserveParse"/> so even a failed
     /// parse closes the id — a later call with the same id is then a replay.

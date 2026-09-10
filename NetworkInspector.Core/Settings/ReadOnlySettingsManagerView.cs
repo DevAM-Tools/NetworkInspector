@@ -47,6 +47,12 @@ public readonly struct ReadOnlySettingsManagerView : IReadOnlySettingsManager
     /// <inheritdoc/>
     public string? StoragePath => _Owner.StoragePath;
 
+    /// <inheritdoc/>
+    public long MaxConfigFileBytes => _Owner.MaxConfigFileBytes;
+
+    /// <inheritdoc/>
+    public int MaxJsonDepth => _Owner.MaxJsonDepth;
+
     #endregion
 
     #region Querying

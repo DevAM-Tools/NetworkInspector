@@ -542,6 +542,76 @@ internal sealed class FlexRayProtocolTests
         }
     }
 
+    [Test]
+    public async Task Parse_FlexRay_NullFrame_DoesNotDispatch()
+    {
+        const ushort frameId = 100;
+        const byte cycle = 15;
+        byte[] payload = [0x01, 0x02, 0x03, 0x04];
+        byte[] frameData = FlexRayLinkTypeFrame.BuildFrame(
+            channelB: true,
+            frameId,
+            cycle,
+            headerCrc: 0,
+            payload,
+            nfi: false);
+
+        ulong expectedKey = FlexRayLinkTypeFrame.EncodeDispatchKey(frameId, channelB: true, cycle);
+
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        ProtocolRegistration.RegisterStandardProtocols(builder);
+        FlagProtocol probe = new("probe.flexray.null");
+        ProtocolId probeId = builder.RegisterProtocol(probe);
+        builder.RegisterParserInU64TableByName(FlexRayProtocol.IdTableName, expectedKey, probeId);
+        Stack stack = builder.Build();
+
+        Frame frame = Frame.Create(
+            new FrameId(0), Timestamp.FromSecs(0), frameData,
+            LinkType.Flexray, FrameInterfaceId.Invalid, stack.FrameInterfaceRegistry).Value;
+        Packet.ParseFrame(new PacketId(0), stack, frame);
+
+        using (stack)
+        {
+            await Assert.That(probe.WasCalled).IsFalse();
+        }
+    }
+
+    [Test]
+    public async Task Parse_FlexRay_SubprotocolIsSiblingOfFlexRayContainer()
+    {
+        const ushort frameId = 100;
+        const byte cycle = 15;
+        byte[] payload = [0x01, 0x02, 0x03, 0x04];
+        byte[] frameData = FlexRayLinkTypeFrame.BuildFrame(
+            channelB: false,
+            frameId,
+            cycle,
+            headerCrc: 0,
+            payload);
+
+        ulong expectedKey = FlexRayLinkTypeFrame.EncodeDispatchKey(frameId, channelB: false, cycle);
+
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        ProtocolRegistration.RegisterStandardProtocols(builder);
+        FlagProtocol probe = new("probe.flexray.sibling");
+        ProtocolId probeId = builder.RegisterProtocol(probe);
+        builder.RegisterParserInU64TableByName(FlexRayProtocol.IdTableName, expectedKey, probeId);
+        Stack stack = builder.Build();
+
+        Frame frame = Frame.Create(
+            new FrameId(0), Timestamp.FromSecs(0), frameData,
+            LinkType.Flexray, FrameInterfaceId.Invalid, stack.FrameInterfaceRegistry).Value;
+        Packet.ParseFrame(new PacketId(0), stack, frame);
+
+        using (stack)
+        {
+            await Assert.That(probe.WasCalled).IsTrue();
+            await Assert.That(probe.ParentIsRoot).IsTrue();
+        }
+    }
+
     /// <summary>Depth-first search for the first field with <paramref name="fieldId"/>;
     /// returns its <c>CustomText.ToString()</c> or <see langword="null"/> when not present.</summary>
     private static string? _FindCustomText(Field field, FieldId fieldId)
@@ -561,5 +631,38 @@ internal sealed class FlexRayProtocolTests
         }
 
         return null;
+    }
+
+    /// <summary>A minimal protocol that records whether its <see cref="IProtocol.Parse"/> method was called.</summary>
+    private sealed class FlagProtocol(string name) : IProtocol
+    {
+        /// <inheritdoc/>
+        public string Name => name;
+
+        /// <inheritdoc/>
+        public string UiName => name;
+
+        /// <summary><see langword="true"/> if <see cref="IProtocol.Parse"/> was invoked at least once.</summary>
+        public bool WasCalled
+        {
+            get; private set;
+        }
+
+        /// <summary>
+        /// <see langword="true"/> when <see cref="IProtocol.Parse"/> received the packet root
+        /// (sibling dispatch).
+        /// </summary>
+        public bool ParentIsRoot
+        {
+            get; private set;
+        }
+
+        /// <inheritdoc/>
+        public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
+        {
+            WasCalled = true;
+            ParentIsRoot = !parentField.TryGetParent(out _);
+            return data.Length;
+        }
     }
 }

@@ -26,7 +26,7 @@ Goal: save tokens in chat without losing technical substance.
 
 ### Full-fidelity output (no compression)
 
-- Never apply chat terse style to plan steps, plan Requirements, or review findings.
+- Never apply chat terse style to plan steps, plan Requirements, review findings, or review briefs.
 - Write plan steps and review findings with full Shared Block quality.
 - Write plan Requirements as user-observable outcomes with a Done-when check. Not slogans. Not implementation tasks.
 - ❗ Specify the concrete implementation in every plan-step and review-finding `How`. Intent-only, outline-only, or slogan-only `How` is incomplete — expand before emitting the artifact.
@@ -44,6 +44,7 @@ Goal: save tokens in chat without losing technical substance.
 - Never compress security warnings, destructive operations, or ambiguous multi-step sequences.
 - Never compress plan-step or review-finding `How`.
 - Never compress plan Requirements or the Requirements-fit step.
+- Never compress review-brief **How it serves**, **Why needed**, or header **Why**. A brief that does not explain contribution is incomplete.
 - Use full explicit sentences when compression would change technical meaning or execution order.
 
 ## 3) Tech Load Protocol

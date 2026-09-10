@@ -1253,6 +1253,8 @@ sm.PreloadValue(
 
 `RegisterStandardProtocols` registers these settings. Persist them in the profile directory as **group files** (`{group}.json`). Paths in `*_config_file` are resolved relative to the settings storage path (the profile directory).
 
+Group JSON and referenced `*_config_file` JSON are capped by `SettingsManager.MaxConfigFileBytes` (default 1 GiB = 1073741824 bytes) and `SettingsManager.MaxJsonDepth` (default 1024). Set both only in the `SettingsManager` / `SettingsManagerFactory.Create` constructor; they are not profile settings. Values `<= 0` disable that check (CLI `--settings-max-config-file-bytes` / `--settings-max-json-depth`). Additional stream config (`JsonConfigStream` / `Register(..., Stream)`) is not size- or depth-capped by SettingsManager.
+
 **`pdu_transport.json`** (settings group `pdu_transport`):
 
 ```json
@@ -2447,10 +2449,10 @@ partial void OnStartCustom(Stack stack)
 | `pdu_transport.id` | `PduTransportProtocol` | `u64` (PDU ID) | Signal Message via `dispatch_bindings` |
 | `http.content_type` | `HttpProtocol` | `string` | `JsonProtocol`, `TextProtocol` |
 | `http.upgrade` | `HttpProtocol` | `string` | `WebSocketProtocol` |
-| `can.id` | `CanProtocol` | `u64` | Signal Message and sub-protocols by CAN ID / CAN XL priority |
-| `can.extended_id` | `CanProtocol` | `u64` | Extended-frame and CAN XL acceptance-field sub-protocols |
-| `flexray.id` | `FlexRayProtocol` | `u64` (slot + channel + cycle) | Signal Message and sub-protocols; key = `FlexRayLinkTypeFrame.EncodeDispatchKey(slot, channelB, cycle)` — bits `[10:0]` slot, bit `11` channel B, bits `[17:12]` cycle |
-| `lin.id` | `LinProtocol` | `u64` (6-bit frame ID) | Signal Message and sub-protocols by LIN protected ID |
+| `can.id` | `CanProtocol` | `u64` | Signal Message and sub-protocols by standard 11-bit CAN ID (classic/FD, EFF clear). Extended frames never use this table. |
+| `can.extended_id` | `CanProtocol` | `u64` | Extended 29-bit CAN IDs (classic/FD, EFF set) and CAN XL acceptance-field sub-protocols. Standard frames never use this table. |
+| `flexray.id` | `FlexRayProtocol` | `u64` (slot + channel + cycle) | Signal Message and sub-protocols; key = `FlexRayLinkTypeFrame.EncodeDispatchKey(slot, channelB, cycle)` — bits `[10:0]` slot, bit `11` channel B, bits `[17:12]` cycle. Null frames (`NFI=0`) are not dispatched. |
+| `lin.id` | `LinProtocol` | `u64` (6-bit frame ID, not the protected ID) | Signal Message and sub-protocols by LIN 6-bit frame ID. Skipped for Event (`msgType=3`) and when the capture error-flags byte is non-zero. |
 | `someip.messageid` | `SomeIpProtocol` | `u64` | Payload deserializers by SOME/IP Message ID |
 | `tcp.heuristic` | `TcpProtocol` | heuristic | `HttpProtocol`, `TlsProtocol`, `Http2Protocol` (content-based) |
 

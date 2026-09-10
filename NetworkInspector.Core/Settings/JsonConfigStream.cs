@@ -5,7 +5,9 @@ namespace NetworkInspector.Core.Settings;
 /// <summary>
 /// Loads typed JSON configuration from a caller-owned <see cref="Stream"/>
 /// (memory, files already opened by the caller, or other readable sources).
-/// Does not close the stream. Size-capped at <c>1 MiB</c> like file-based config load.
+/// Does not close the stream. This API does not enforce a size or JSON-depth limit; the caller
+/// must bound untrusted streams. File loads through <see cref="SettingsManager"/> use
+/// <see cref="SettingsManager.MaxConfigFileBytes"/> and <see cref="SettingsManager.MaxJsonDepth"/>.
 /// </summary>
 /// <remarks>
 /// <para><b>Thread safety:</b> stateless; all methods are safe for concurrent callers

@@ -433,7 +433,10 @@ public sealed partial class IPv6Protocol : IProtocol
     public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
     {
         Packet packet = parentField.Packet;
-        int layerKey = parentField.Packet.GetEffectLayerKey(data);
+        if (!parentField.TryGetEffectLayerKey(data, out int layerKey))
+        {
+            return ParseError.Custom(ProtocolName, "Parse data is not a slice of this packet's buffers.");
+        }
         bool isReplay = _IsReplay(packet.Id);
         bool raiseWatermark = !isReplay && _ParseNesting == 0;
         if (!isReplay)
@@ -459,7 +462,7 @@ public sealed partial class IPv6Protocol : IProtocol
     }
 
     /// <summary>
-    /// Parse body. <paramref name="layerKey"/> is <see cref="Packet.GetEffectLayerKey"/> at the parse call and
+    /// Parse body. <paramref name="layerKey"/> is <see cref="MutField.TryGetEffectLayerKey"/> at the parse call and
     /// <paramref name="isReplay"/> selects replay of the recorded defragmentation outcome over
     /// feeding the defragmenter.
     /// </summary>
@@ -691,7 +694,7 @@ public sealed partial class IPv6Protocol : IProtocol
                     if (reassembled is not null)
                     {
                         // Bind the datagram so nested Parse can key effects on this packet's buffers.
-                        ReadOnlyMemory<byte> reassembledPayload = parentField.Packet.BindParseBuffer(reassembled);
+                        ReadOnlyMemory<byte> reassembledPayload = parentField.BindParseBuffer(reassembled);
                         ParseResult dispatchResult = _DispatchNextHeader(
                             in parentField, finalNextHeader, reassembledPayload, in context);
                         if (dispatchResult.TryPropagateError(out ParseResult error))

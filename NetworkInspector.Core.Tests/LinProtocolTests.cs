@@ -223,4 +223,109 @@ internal sealed class LinProtocolTests
             await Assert.That(boolVal).IsFalse();
         }
     }
+
+    [Test]
+    public async Task Parse_Lin_StandardFrame_DispatchesViaLinIdTable()
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        ProtocolRegistration.RegisterStandardProtocols(builder);
+        FlagProtocol probe = new("probe.lin.id");
+        ProtocolId probeId = builder.RegisterProtocol(probe);
+        builder.RegisterParserInU64TableByName(LinProtocol.IdTableName, 0x10, probeId);
+        Stack stack = builder.Build();
+
+        byte[] frameData = FrameBuilders.GenerateLinFrame(pid: 0x10, payload: [0x01, 0x02, 0x03, 0x04]);
+        Frame frame = Frame.Create(
+            new FrameId(0), Timestamp.FromSecs(0), frameData,
+            LinkType.Lin, FrameInterfaceId.Invalid, stack.FrameInterfaceRegistry).Value;
+        Packet.ParseFrame(new PacketId(0), stack, frame);
+
+        using (stack)
+        {
+            await Assert.That(probe.WasCalled).IsTrue();
+            await Assert.That(probe.ParentIsRoot).IsTrue();
+        }
+    }
+
+    [Test]
+    public async Task Parse_Lin_EventType_DoesNotDispatch()
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        ProtocolRegistration.RegisterStandardProtocols(builder);
+        FlagProtocol probe = new("probe.lin.event");
+        ProtocolId probeId = builder.RegisterProtocol(probe);
+        builder.RegisterParserInU64TableByName(LinProtocol.IdTableName, 0x10, probeId);
+        Stack stack = builder.Build();
+
+        byte[] frameData = FrameBuilders.GenerateLinFrame(
+            pid: 0x10, payload: [0x01, 0x02, 0x03, 0x04], msgType: 3);
+        Frame frame = Frame.Create(
+            new FrameId(0), Timestamp.FromSecs(0), frameData,
+            LinkType.Lin, FrameInterfaceId.Invalid, stack.FrameInterfaceRegistry).Value;
+        Packet.ParseFrame(new PacketId(0), stack, frame);
+
+        using (stack)
+        {
+            await Assert.That(probe.WasCalled).IsFalse();
+        }
+    }
+
+    [Test]
+    public async Task Parse_Lin_ErrorFlags_DoesNotDispatch()
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        ProtocolRegistration.RegisterStandardProtocols(builder);
+        FlagProtocol probe = new("probe.lin.err");
+        ProtocolId probeId = builder.RegisterProtocol(probe);
+        builder.RegisterParserInU64TableByName(LinProtocol.IdTableName, 0x10, probeId);
+        Stack stack = builder.Build();
+
+        byte[] frameData = FrameBuilders.GenerateLinFrame(
+            pid: 0x10, payload: [0x01, 0x02, 0x03, 0x04], errorFlags: 0x01);
+        Frame frame = Frame.Create(
+            new FrameId(0), Timestamp.FromSecs(0), frameData,
+            LinkType.Lin, FrameInterfaceId.Invalid, stack.FrameInterfaceRegistry).Value;
+        Packet.ParseFrame(new PacketId(0), stack, frame);
+
+        using (stack)
+        {
+            await Assert.That(probe.WasCalled).IsFalse();
+        }
+    }
+
+    /// <summary>A minimal protocol that records whether its <see cref="IProtocol.Parse"/> method was called.</summary>
+    private sealed class FlagProtocol(string name) : IProtocol
+    {
+        /// <inheritdoc/>
+        public string Name => name;
+
+        /// <inheritdoc/>
+        public string UiName => name;
+
+        /// <summary><see langword="true"/> if <see cref="IProtocol.Parse"/> was invoked at least once.</summary>
+        public bool WasCalled
+        {
+            get; private set;
+        }
+
+        /// <summary>
+        /// <see langword="true"/> when <see cref="IProtocol.Parse"/> received the packet root
+        /// (sibling dispatch).
+        /// </summary>
+        public bool ParentIsRoot
+        {
+            get; private set;
+        }
+
+        /// <inheritdoc/>
+        public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
+        {
+            WasCalled = true;
+            ParentIsRoot = !parentField.TryGetParent(out _);
+            return data.Length;
+        }
+    }
 }

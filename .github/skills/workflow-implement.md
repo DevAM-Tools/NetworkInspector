@@ -45,34 +45,54 @@ Load on `/implement`. Apply `copilot-instructions.md` for all quality, tech, git
 
 ## Stage 4 — Review Brief
 
-Write the brief before Stage 5. Exam skipped → still write it. No complete without it. Chat: path only.
+Write the brief before Stage 5. Exam skipped → still write it. No complete without it. Chat: path only. Do not apply chat terse style to the brief.
+
+The brief is a review aid. A reviewer must judge, from the card, why the change is required and how it pays `R{n}`/`E{n}`. A card that does not explain that is worthless — expand before Stage 5.
 
 - Path: `reviews/brief_<slug>.md`. Single item: `reviews/brief_<slug>_<item>.md` (`step{n}` / finding ID). Slug from plan or review scope. Before Exam: full-scope file.
 - List every created, edited, or deleted path from the working tree. Omit none. Rewrite on remediation.
 - Built result only. Name symbols, behavior, contracts. No diffs.
-- Per file: what changed, why it had to exist (failure without it), which `R{n}`/finding. Ban empty purpose and “as planned” / “cleanup” / “refactor” without necessity.
+- Header: **Expect**, **Done when**, **Why**, **Out**, then **Requirements**. Link every in-scope `R{n}`/`E{n}` plus a short outcome. Separator ` · `.
+- `R{n}` → `[Rn](../plans/plans_<slug>.md#requirements-user-view)`. `E{n}` → the review file. Reuse these links in **How it serves** and **Serves**.
+- Existing heading: linked backtick path (template card 1). Deleted: backtick path + `(deleted)` — no link. Repo-root path, forward slashes. Sibling files may share one card; comma-separate heading links.
+- Field order: **Changed** → **Why needed** → **How it serves** → **Depends on** → **Serves**.
+- **Changed:** name the symbols and behavior that shipped.
+- **Why needed:** explain the failure without this file. Not a slogan.
+- **How it serves:** the review payload. Per cited `R{n}`/`E{n}`, lead with the linked ID, then explain the causal contribution: which symbols, what exists or is gone, what a caller can or cannot do, which Done-when this file is responsible for. Write full sentences. Expand until a reviewer can check the claim without reconstructing the argument. Unique to this file — do not copy the same paragraph onto every card. Ban slogans, R{n} titles as the whole explanation, empty purpose, and “as planned” / “cleanup” / “refactor” without necessity. Say when the card does not prove a requirement.
+- **Serves:** linked IDs only. No prose. Workflow/host-only: `(none — {reason})`; still write a full **How it serves**.
 - Order for reading, not git: contracts/types → implementations → cutover → tests → docs. State depends-on.
-- Write files as a numbered card list. No tables. Stack fields. One card per path.
+- Numbered cards. No tables. Stack fields.
 
 ```markdown
 # Review Brief — {scope}
 
 **Expect:** {outcome; R{n}}
 **Done when:** {check}
-**Why:** {problem without it}
+**Why:** {problem without this work; what stays wrong if it does not ship}
 **Out:** {exclusions}
 
-1. `{path}`
-   - **Changed:** {symbols/behavior}
-   - **Why needed:** {necessity}
-   - **Depends on:** —
-   - **Serves:** R{n} / E{n}
+**Requirements:** [R1](../plans/plans_{slug}.md#requirements-user-view) {short outcome} · [R2](../plans/plans_{slug}.md#requirements-user-view) {short outcome}
 
-2. `{path}`
+1. [`{path}`](../{path})
    - **Changed:** {symbols/behavior}
-   - **Why needed:** {necessity}
+   - **Why needed:** {what fails without this file}
+   - **How it serves:** [R1](../plans/plans_{slug}.md#requirements-user-view): {which symbols; what exists or is gone; what a caller can or cannot do; which Done-when this file owns}
+   - **Depends on:** —
+   - **Serves:** [R1](../plans/plans_{slug}.md#requirements-user-view)
+
+2. [`{path}`](../{path})
+   - **Changed:** {symbols/behavior}
+   - **Why needed:** {what fails without this file}
+   - **How it serves:** [R2](../plans/plans_{slug}.md#requirements-user-view): {causal contribution unique to this file}. [E1](../reviews/review_{slug}.md): {causal contribution unique to this file}
    - **Depends on:** 1
-   - **Serves:** R{n} / E{n}
+   - **Serves:** [R2](../plans/plans_{slug}.md#requirements-user-view), [E1](../reviews/review_{slug}.md)
+
+3. `{path}` (deleted)
+   - **Changed:** Type removed
+   - **Why needed:** {what the deleted type blocked or enabled wrongly}
+   - **How it serves:** [R1](../plans/plans_{slug}.md#requirements-user-view): {type is gone; callers must use …; Done-when that this deletion closes}
+   - **Depends on:** 2
+   - **Serves:** [R1](../plans/plans_{slug}.md#requirements-user-view)
 ```
 
 ## Stage 5 — Closing Exam

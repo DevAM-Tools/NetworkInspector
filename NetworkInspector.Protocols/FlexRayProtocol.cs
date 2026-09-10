@@ -40,7 +40,8 @@ namespace NetworkInspector.Protocols;
 /// │   ├── flexray.cod_err: Not set
 /// │   └── flexray.tss_viol: Not set
 /// ├── flexray.data: (32 bytes)
-/// └── signal_message: ...                     [optional, when registered on flexray.id]
+///
+/// signal_message: ...                     [optional sibling, when registered on flexray.id]
 /// </code>
 /// </summary>
 /// <remarks>
@@ -375,17 +376,25 @@ public sealed partial class FlexRayProtocol : IProtocol
 
         // Payload data (optional); dispatch to sub-protocols (e.g. Signal Message) when present.
         // Key encodes slot, channel, and cycle — the three identifiers of a FlexRay message.
+        // Null frames (NFI = 0) still carry a declared payload length, but the bytes are not
+        // application data — skip dispatch so flexray.id bindings cannot decode them.
+        // PPI frames keep the full payload: NM-vector / message-ID prefix length is
+        // cluster-specific and is not skipped here.
+        // Dispatch on parentField so sub-protocols are siblings of the FlexRay container.
         if (totalConsumed > _MinHeaderSize)
         {
             context.RecordGroupPresence(_FlexrayDataGroupId);
             ReadOnlyMemory<byte> payload = data[_MinHeaderSize..totalConsumed];
             container.Append(_DataFieldId, FieldValue.NewBytes(payload));
 
-            ulong dispatchKey = FlexRayLinkTypeFrame.EncodeDispatchKey(frameId, isChannelB, cycle);
-            ParseResult dispatchResult = container.TryCallNextProtocolU64(_IdTableId, dispatchKey, payload, in context);
-            if (dispatchResult.TryPropagateError(out ParseResult error))
+            if (nfi)
             {
-                return error;
+                ulong dispatchKey = FlexRayLinkTypeFrame.EncodeDispatchKey(frameId, isChannelB, cycle);
+                ParseResult dispatchResult = parentField.TryCallNextProtocolU64(_IdTableId, dispatchKey, payload, in context);
+                if (dispatchResult.TryPropagateError(out ParseResult error))
+                {
+                    return error;
+                }
             }
         }
 

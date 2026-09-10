@@ -83,7 +83,14 @@ public static class SettingsManagerExtensions
             return false;
         }
 
-        if (!JsonConfigFile.TryLoad(filePath, baseDirectory, typeInfo, out value, out string? error))
+        if (!JsonConfigFile.TryLoad(
+                filePath,
+                baseDirectory,
+                typeInfo,
+                settings.MaxConfigFileBytes,
+                settings.MaxJsonDepth,
+                out value,
+                out string? error))
         {
             // Derive the group name from the setting name (part before the last dot)
             string groupName = _DeriveGroupName(stringSettingName);

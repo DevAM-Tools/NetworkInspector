@@ -5,8 +5,9 @@ namespace NetworkInspector.Protocols;
 /// <summary>
 /// LIN protocol parser (ISO 17987) for DLT_LIN (link type 212).
 /// Dispatches the frame payload to sub-protocols (e.g. Signal Message) via the <c>lin.id</c>
-/// dispatch table, keyed by the 6-bit frame ID. Dispatching applies only to standard
-/// (non-event-triggered) frames.
+/// dispatch table, keyed by the 6-bit frame ID (not the protected ID / PID byte).
+/// Dispatching applies only to non-Event frames (<c>msgType != 3</c>) with a non-empty
+/// payload and no capture error flags.
 /// <para>DLT_LIN capture format (per Wireshark packet-lin.h / packet-lin.c):</para>
 /// <code>
 /// Byte  0:    Message Format Revision (should be 1)
@@ -40,8 +41,9 @@ namespace NetworkInspector.Protocols;
 /// ├── lin.checksum: 0xAB
 /// ├── lin.checksum.status: [Good]
 /// ├── lin.errors: 0x00
-/// ├── lin.data: (4 bytes)
-/// └── signal_message: ...                     [optional, when registered on lin.id]
+/// └── lin.data: (4 bytes)
+///
+/// signal_message: ...                     [optional sibling, when registered on lin.id]
 /// </code>
 /// </summary>
 /// <remarks>
@@ -93,9 +95,10 @@ public sealed partial class LinProtocol : IProtocol
     private const string _LinIndexGroup = "lin";
 
     /// <summary>
-    /// Dispatch-table name for sub-protocol lookup by 6-bit LIN frame ID.
-    /// Dispatching is performed only for standard frames (not event-triggered).
-    /// Key: 6-bit frame ID value (0–63).
+    /// Dispatch-table name for sub-protocol lookup by 6-bit LIN frame ID (bits 5-0 of the PID).
+    /// Dispatching is performed only for non-Event frames (message type 0/1/2), not type 3 Event,
+    /// and only when the capture error-flags byte is zero.
+    /// Key: 6-bit frame ID value (0–63), not the full protected ID.
     /// </summary>
     public const string IdTableName = "lin.id";
 
@@ -180,7 +183,7 @@ public sealed partial class LinProtocol : IProtocol
 
     #endregion
 
-    #region Data (conditional — present when payload length > 0 and no errors)
+    #region Data (conditional — present when payload length > 0)
 
     /// <summary>Dispatch table for sub-protocols keyed by 6-bit LIN frame ID.</summary>
     [ProtocolTableU64(IdTableName, "LIN Frame ID")]
@@ -314,18 +317,18 @@ public sealed partial class LinProtocol : IProtocol
         container.Append(_ErrInvalidIdFieldId, FieldValue.NewBool((errorFlags & _ErrInvalidId) != 0));
         container.Append(_ErrOverflowFieldId, FieldValue.NewBool((errorFlags & _ErrOverflow) != 0));
 
-        // Data payload (only when length > 0); dispatch to sub-protocols for standard frames.
+        // Data payload (only when length > 0). Dispatch on parentField so sub-protocols
+        // are siblings of the LIN container. Skip Event (msgType 3) and any capture with
+        // error flags — those payloads are not application data for lin.id bindings.
         if (actualDataLen > 0)
         {
             context.RecordGroupPresence(_LinDataGroupId);
             ReadOnlyMemory<byte> payload = data.Slice(_HeaderSize, actualDataLen);
             container.Append(_DataFieldId, FieldValue.NewBytes(payload));
 
-            // Dispatch only for standard frames: lin.id is appended exclusively for non-event
-            // frames, so sub-protocols keyed on lin.id are only triggered here.
-            if (msgType != _MsgTypeEvent)
+            if (msgType != _MsgTypeEvent && errorFlags == 0)
             {
-                ParseResult dispatchResult = container.TryCallNextProtocolU64(_IdTableId, (ulong)frameId, payload, in context);
+                ParseResult dispatchResult = parentField.TryCallNextProtocolU64(_IdTableId, (ulong)frameId, payload, in context);
                 if (dispatchResult.TryPropagateError(out ParseResult error))
                 {
                     return error;

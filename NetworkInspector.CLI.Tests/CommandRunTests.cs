@@ -48,6 +48,167 @@ internal sealed class CommandRunTests
     }
 
     [Test]
+    public async Task Convert_SettingsMaxConfigFileBytesZero_Succeeds()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), $"ni-cap-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        string path = Path.Combine(dir, "out.pcapng");
+        try
+        {
+            int code = ConvertCommand.Run([
+                "random:count=2,mode=udp4",
+                "-o", path,
+                "-n", "2",
+                "--settings-path", dir,
+                "--settings-max-config-file-bytes", "0",
+            ]);
+
+            await Assert.That(code).IsEqualTo((int)ExitCode.Success);
+            await Assert.That(File.Exists(path)).IsTrue();
+        }
+        finally
+        {
+            if (Directory.Exists(dir))
+            {
+                Directory.Delete(dir, recursive: true);
+            }
+        }
+    }
+
+    [Test]
+    public async Task Convert_SettingsMaxConfigFileBytesNegative_Succeeds()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), $"ni-cap-neg-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        string path = Path.Combine(dir, "out.pcapng");
+        try
+        {
+            int code = ConvertCommand.Run([
+                "random:count=2,mode=udp4",
+                "-o", path,
+                "-n", "2",
+                "--settings-path", dir,
+                "--settings-max-config-file-bytes", "-1",
+            ]);
+
+            await Assert.That(code).IsEqualTo((int)ExitCode.Success);
+            await Assert.That(File.Exists(path)).IsTrue();
+        }
+        finally
+        {
+            if (Directory.Exists(dir))
+            {
+                Directory.Delete(dir, recursive: true);
+            }
+        }
+    }
+
+    [Test]
+    public async Task Convert_SettingsMaxConfigFileBytesMissingValue_ReturnsArgumentError()
+    {
+        int code = ConvertCommand.Run([
+            "random:count=1,mode=udp4",
+            "-o", "out.pcapng",
+            "--settings-max-config-file-bytes",
+        ]);
+
+        await Assert.That(code).IsEqualTo((int)ExitCode.ArgumentError);
+    }
+
+    [Test]
+    public async Task Convert_SettingsMaxJsonDepthZero_Succeeds()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), $"ni-depth-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        string path = Path.Combine(dir, "out.pcapng");
+        try
+        {
+            int code = ConvertCommand.Run([
+                "random:count=2,mode=udp4",
+                "-o", path,
+                "-n", "2",
+                "--settings-path", dir,
+                "--settings-max-json-depth", "0",
+            ]);
+
+            await Assert.That(code).IsEqualTo((int)ExitCode.Success);
+            await Assert.That(File.Exists(path)).IsTrue();
+        }
+        finally
+        {
+            if (Directory.Exists(dir))
+            {
+                Directory.Delete(dir, recursive: true);
+            }
+        }
+    }
+
+    [Test]
+    public async Task Convert_SettingsMaxJsonDepthMissingValue_ReturnsArgumentError()
+    {
+        int code = ConvertCommand.Run([
+            "random:count=1,mode=udp4",
+            "-o", "out.pcapng",
+            "--settings-max-json-depth",
+        ]);
+
+        await Assert.That(code).IsEqualTo((int)ExitCode.ArgumentError);
+    }
+
+    [Test]
+    public async Task Export_SettingsMaxConfigFileBytesZero_Succeeds()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"ni-export-zero-{Guid.NewGuid():N}.json");
+        try
+        {
+            int code = ExportCommand.Run([
+                "random:count=2,mode=udp4",
+                "-f", "json:style=compact",
+                "-o", path,
+                "-n", "2",
+                "--settings-max-config-file-bytes", "0",
+            ]);
+
+            await Assert.That(code).IsEqualTo((int)ExitCode.Success);
+            await Assert.That(File.Exists(path)).IsTrue();
+        }
+        finally
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
+    }
+
+    [Test]
+    public async Task Export_SettingsMaxConfigFileBytes4096_Succeeds()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"ni-export-cap-{Guid.NewGuid():N}.json");
+        try
+        {
+            int code = ExportCommand.Run([
+                "random:count=2,mode=udp4",
+                "-f", "json:style=compact",
+                "-o", path,
+                "-n", "2",
+                "--settings-max-config-file-bytes", "4096",
+                "--settings-max-json-depth", "8",
+            ]);
+
+            await Assert.That(code).IsEqualTo((int)ExitCode.Success);
+            await Assert.That(File.Exists(path)).IsTrue();
+        }
+        finally
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
+    }
+
+    [Test]
     public async Task Export_InvalidMaxPackets_ReturnsArgumentError()
     {
         int code = ExportCommand.Run(["random:count=1,mode=udp4", "-n", "abc"]);

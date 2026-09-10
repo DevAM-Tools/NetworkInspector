@@ -23,7 +23,9 @@ namespace NetworkInspector.Core;
 /// internal slab storage is cleared and reused in place, eliminating the heap allocation and its
 /// associated GC pressure entirely. The <see cref="PrepareForReuse"/> method performs this reset.
 /// A recycle target belongs exclusively to the thread that passes it in — never recycle a packet
-/// another thread might still be reading.
+/// another thread might still be reading. Holding a <see cref="Field"/> across
+/// <c>TryParseFrame(recycle)</c> is unsupported; <see cref="Field"/> storage indexes refer to
+/// the new parse after a successful recycle.
 /// </para>
 /// <para>
 /// <b>Skip-field-tree:</b> Pass <see cref="FieldTreeMode.Skip"/> as the last argument of a parse
@@ -37,6 +39,8 @@ namespace NetworkInspector.Core;
 /// CAS on <see cref="FieldBody.LazyIndex"/> (materializing marker bit) so unrelated lazy
 /// branches can populate concurrently after <see cref="Seal"/>.
 /// All cross-thread visibility is ensured via <see cref="Volatile"/> reads/writes — no locks.
+/// <see cref="FieldBody"/> tree links are published with <see cref="Volatile"/> load/store.
+/// Additional buffers freeze at <see cref="Seal"/>. Recycle is exclusive.
 /// </para>
 /// <para>
 /// <b>Parse concurrency:</b> The single-threaded statements throughout this type are per packet
@@ -116,13 +120,11 @@ public sealed class Packet
     private ReadOnlyMemory<byte>[]? _AdditionalBuffers;
     private int _AdditionalBufferCount;
 
-    // LazyPopulator storage: slab-backed like FieldBody. On first lazy field,
-    // allocates _LazyPopulatorChunkSize (8) slots from the thread-local SlabAllocator.
-    // Growth beyond 8 slots uses Array.Resize (rare).
-    private LazyPopulator[]? _LazyPopulators;
-    private int _LazyPopulatorOffset;
-    private int _LazyPopulatorCapacity;
-    private int _LazyPopulatorCount;
+    // LazyPopulator storage: slab-backed like FieldBody. Published as one object so
+    // concurrent nested AppendLazy cannot tear (array, offset) on growth.
+    private volatile LazyPopulatorTable? _LazyTable;
+    private volatile int _LazyPopulatorCount;
+    private volatile int _AllocatedLazyCount;
 
     // Tracks how many lazy populators have not yet been invoked (int for Volatile compatibility).
     // Incremented by RegisterLazyPopulator, decremented by MaterializeLazyField.
@@ -144,10 +146,11 @@ public sealed class Packet
     private volatile int _AllocatedFieldCount;
 
     // 0 = not finalized, 1 = finalized.
-    // int sentinel retained for Interlocked pattern consistency — mixing Volatile and Interlocked
-    // access styles on the same field is a contract violation; all finalization writes use
-    // Interlocked.CompareExchange/Exchange, so the int type keeps all accesses in one contract.
+    // Volatile release store in Seal; PrepareForReuse stores 0 after _RecycleGate is held.
     private volatile int _Finalized;
+
+    // 0 = idle/readable, 1 = recycle in progress. Exclusive recycle vs concurrent MaterializeAll.
+    private volatile int _RecycleGate;
 
     // Side-channel info LazyString set by sub-protocols during Parse().
     // Used as the source for the lazy packet.info field value. After PacketProtocol.Parse
@@ -214,7 +217,7 @@ public sealed class Packet
     /// readers may hold <see cref="Field"/> or <see cref="MutField"/> references into this
     /// packet while <see cref="PrepareForReuse"/> is executing. The packet must be finalized
     /// (<see cref="IsFinalized"/> == <see langword="true"/>) and no concurrent materialization
-    /// must be in progress (<c>_ActiveLazyMaterializations &gt; 0</c>). Call from a single thread only.
+    /// must be in progress. Call from a single thread only.
     /// </para>
     /// <para>
     /// The <see cref="Stack"/> is not a parameter: a recycled packet always belongs to the
@@ -231,26 +234,41 @@ public sealed class Packet
     /// </returns>
     internal RecycleError? PrepareForReuse(PacketId id, Frame frame, FieldTreeMode fieldTree)
     {
-        // Precondition: packet must be sealed — recycling an unsealed packet would corrupt
-        // an in-progress parse on the same thread.
-        if (_Finalized == 0)
-        {
-            return RecycleError.NotFinalized;
-        }
-
-        // Precondition: no concurrent materializer — avoids data corruption.
-        if (_ActiveLazyMaterializations != 0)
+        // Exclusive recycle vs concurrent MaterializeAll: take the gate first so a materializer
+        // that observes the gate cannot claim a field while Array.Clear runs.
+        // MaterializeAll and MaterializeLazyField increment _ActiveLazyMaterializations before
+        // they re-read the gate. Recycle never plain-stores that counter to 0.
+        if (Interlocked.CompareExchange(ref _RecycleGate, 1, 0) != 0)
         {
             return RecycleError.MaterializerActive;
+        }
+
+        if (_ActiveLazyMaterializations != 0 || _Finalized == 0)
+        {
+            RecycleError err = _Finalized == 0 ? RecycleError.NotFinalized : RecycleError.MaterializerActive;
+            if (_ActiveLazyMaterializations != 0)
+            {
+                // Hold the gate briefly so other MaterializeLazyField calls observe it and abort.
+                // Do not Array.Clear: Active is non-zero.
+                SpinWait gateHold = default;
+                for (int i = 0; i < 8; i++)
+                {
+                    gateHold.SpinOnce();
+                }
+            }
+
+            _RecycleGate = 0;
+            return err;
         }
 
         // Validate registry consistency (same check as the constructor).
         if (!ReferenceEquals(frame.Registry, Stack.FrameInterfaceRegistry))
         {
+            _RecycleGate = 0;
             return RecycleError.RegistryMismatch;
         }
 
-        _ThrowIfInvalidFieldTree(fieldTree);
+        // FieldTreeMode is validated by TryParseFrame before this method; constructor still throws.
 
         // ── 1. Clear GC-visible references in every active FieldBody chunk ──────────
         // Skip packets that never built a tree have _ChunkCount == 0 and _ChunkTable null.
@@ -278,14 +296,15 @@ public sealed class Packet
         }
 
         // ── 2. Clear lazy populator references ───────────────────────────────────────
-        if (_LazyPopulators is not null && _LazyPopulatorCount > 0)
+        if (_LazyTable is not null && _LazyPopulatorCount > 0)
         {
-            Array.Clear(_LazyPopulators, _LazyPopulatorOffset, _LazyPopulatorCount);
+            LazyPopulatorTable lazyTable = _LazyTable;
+            Array.Clear(lazyTable.Buffer, lazyTable.Offset, _LazyPopulatorCount);
         }
 
         _LazyPopulatorCount = 0;
+        _AllocatedLazyCount = 0;
         _PendingLazyCount = 0;
-        _ActiveLazyMaterializations = 0;
         if (_AdditionalBufferCount > 0 && _AdditionalBuffers is not null)
         {
             Array.Clear(_AdditionalBuffers, 0, _AdditionalBufferCount);
@@ -467,6 +486,39 @@ public sealed class Packet
         return ref chunk.Buffer[chunk.Offset + slotIdx];
     }
 
+    /// <summary>
+    /// Spins until <paramref name="index"/> is covered by the reader-visible <see cref="_FieldCount"/>
+    /// so a tree walker that observed a volatile child/sibling pointer cannot read a default
+    /// <see cref="FieldBody"/> before the matching <see cref="_PublishFieldCount"/>.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    internal ushort WaitUntilFieldPublished(ushort index)
+    {
+        if (index == FieldBody.NullIndex || index < _FieldCount)
+        {
+            return index;
+        }
+
+        return _WaitUntilFieldPublishedSlow(index);
+    }
+
+    /// <summary>
+    /// Spins until <paramref name="index"/> is covered by <see cref="_FieldCount"/>.
+    /// Slow path of <see cref="WaitUntilFieldPublished"/>; not inlined so coverage and the
+    /// wait stay on this method.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private ushort _WaitUntilFieldPublishedSlow(ushort index)
+    {
+        SpinWait spin = default;
+        while (index >= _FieldCount)
+        {
+            spin.SpinOnce();
+        }
+
+        return index;
+    }
+
     #endregion
 
     #region Field Access
@@ -516,6 +568,17 @@ public sealed class Packet
     /// <summary>Adds an additional data buffer (e.g., reassembled data). Returns 1-based buffer index.</summary>
     internal int AddBuffer(ReadOnlyMemory<byte> buffer)
     {
+        if (_Finalized != 0)
+        {
+            return _AdditionalBufferCount;
+        }
+
+        // Effect-layer keys pack the buffer index in 8 bits (0 = frame, 1..255 = additional).
+        if (_AdditionalBufferCount >= 255)
+        {
+            return _AdditionalBufferCount;
+        }
+
         if (_AdditionalBuffers is null)
         {
             _AdditionalBuffers = new ReadOnlyMemory<byte>[2];
@@ -532,21 +595,24 @@ public sealed class Packet
     /// <summary>
     /// Stores <paramref name="buffer"/> as an additional packet buffer and returns that stored slice.
     /// Nested <see cref="IProtocol.Parse"/> calls must use this slice so
-    /// <see cref="GetEffectLayerKey"/> can identify the layer.
+    /// <see cref="TryGetEffectLayerKey"/> can identify the layer.
     /// Reparse of the same packet must bind the same recorded bytes once on the new packet
     /// (recycle clears additional buffers).
+    /// After <see cref="Seal"/> additional buffers are frozen: this method returns
+    /// <see cref="ReadOnlyMemory{T}.Empty"/> and does not store.
     /// Thread-safety follows the packet parse contract: one writer until Seal.
     /// </summary>
     /// <param name="buffer">Reassembled or otherwise owned bytes that outlive this parse.</param>
-    /// <returns>The stored slice, suitable as the <c>data</c> argument of a nested parse.</returns>
-    /// <exception cref="InvalidOperationException">The buffer could not be stored (parser bug).</exception>
-    public ReadOnlyMemory<byte> BindParseBuffer(ReadOnlyMemory<byte> buffer)
+    /// <returns>The stored slice, suitable as the <c>data</c> argument of a nested parse; empty after Seal.</returns>
+    internal ReadOnlyMemory<byte> BindParseBuffer(ReadOnlyMemory<byte> buffer)
     {
-        int index = AddBuffer(buffer);
-        ReadOnlyMemory<byte>? bound = Buffer(index);
-        return bound
-            ?? throw new InvalidOperationException(
-                "Additional parse buffer was not stored on this packet.");
+        if (_Finalized != 0)
+        {
+            return ReadOnlyMemory<byte>.Empty;
+        }
+
+        _ = AddBuffer(buffer);
+        return buffer;
     }
 
     /// <summary>
@@ -595,11 +661,13 @@ public sealed class Packet
     /// <para>
     /// Thread-safety follows the packet parse contract: one writer until Seal; reparse uses the same
     /// frame bytes and the same additional buffers the first parse recorded.
+    /// Miss (not a packet slice) or packed-key overflow returns <see langword="false"/>.
     /// </para>
     /// </summary>
-    /// <exception cref="ArgumentOutOfRangeException">The packed index/offset does not fit.</exception>
-    /// <exception cref="InvalidOperationException"><paramref name="data"/> is not a slice of a packet buffer.</exception>
-    public int GetEffectLayerKey(ReadOnlyMemory<byte> data)
+    /// <param name="data">Slice of a packet buffer, typically the <c>data</c> argument of Parse.</param>
+    /// <param name="key">Packed layer key on success; 0 on miss.</param>
+    /// <returns><see langword="true"/> when <paramref name="data"/> is a packable packet slice.</returns>
+    internal bool TryGetEffectLayerKey(ReadOnlyMemory<byte> data, out int key)
     {
         int bufferCount = BufferCount;
         for (int i = 0; i < bufferCount; i++)
@@ -610,14 +678,17 @@ public sealed class Packet
                 continue;
             }
 
-            if (_TryGetSliceOffset(buffer.Value, data, out int offset))
+            if (_TryGetSliceOffset(buffer.Value, data, out int offset)
+                && (uint)i <= 0xFFu
+                && (uint)offset <= 0xFFFFFFu)
             {
-                return _PackEffectLayerKey(i, offset);
+                key = (i << 24) | offset;
+                return true;
             }
         }
 
-        throw new InvalidOperationException(
-            "Parse data is not a slice of this packet's frame or additional buffers.");
+        key = 0;
+        return false;
     }
 
     /// <summary>Test helper for packed-key overflow cases.</summary>
@@ -680,7 +751,7 @@ public sealed class Packet
     #region Lazy Field Support
     /// <summary>
     /// Whether any lazy fields exist that have not been populated yet.
-    /// O(1) — uses <see cref="System.Threading.Volatile"/> Read for cross-thread visibility.
+    /// O(1) volatile load of the pending-populator count for cross-thread visibility.
     /// </summary>
     public bool HasUnpopulatedLazyFields
     {
@@ -737,34 +808,159 @@ public sealed class Packet
             return;
         }
 
-        if (_LazyPopulators is null)
+        int slot = _ReserveLazyPopulatorSlot();
+        if (slot < 0)
         {
-            // First lazy field — allocate from thread-local slab (no per-packet alloc)
-            _AllocateFromSlab(
-                ref _LazyPopulatorSlab, _LazyPopulatorSlabCapacity,
-                _LazyPopulatorChunkSize, out _LazyPopulators, out _LazyPopulatorOffset);
-            _LazyPopulatorCapacity = _LazyPopulatorChunkSize;
-        }
-        else if (_LazyPopulatorCount >= _LazyPopulatorCapacity)
-        {
-            // Growth: rare. Copy from slab slice into a standalone array.
-            int newCapacity = _LazyPopulatorCapacity * 2;
-            LazyPopulator[] grown = new LazyPopulator[newCapacity];
-            _LazyPopulators.AsSpan(_LazyPopulatorOffset, _LazyPopulatorCount).CopyTo(grown);
-            _LazyPopulators = grown;
-            _LazyPopulatorOffset = 0;
-            _LazyPopulatorCapacity = newCapacity;
+            SetFieldError(fieldIndex, "Lazy populator table exceeded maximum slot count.");
+            return;
         }
 
-        _LazyPopulators[_LazyPopulatorOffset + _LazyPopulatorCount] = populator;
-        _LazyPopulatorCount++;
+        _EnsureLazyCapacity(slot);
+        // Grow publishes a new table after CopyTo. Store, then retry if this write landed in
+        // a table that is no longer reader-visible so the populator cannot vanish into the
+        // discarded buffer.
+        while (true)
+        {
+            LazyPopulatorTable lazyTable = _LazyTable!;
+            lazyTable.Buffer[lazyTable.Offset + slot] = populator;
+            if (ReferenceEquals(lazyTable, _LazyTable))
+            {
+                break;
+            }
+        }
 
-        ushort lazyIndex = (ushort)_LazyPopulatorCount; // 1-based
-        GetFieldRef(fieldIndex).LazyIndex = lazyIndex;
+        ref FieldBody target = ref GetFieldRef(fieldIndex);
+        if ((target.ReadLazyIndexVolatile() & FieldBody.LazyIndexMaterializingBit) != 0)
+        {
+            SetFieldError(fieldIndex, "Lazy populator must not re-register the container being materialized.");
+            return;
+        }
 
-        // Interlocked for a uniform contract with post-Seal paths and volatile definition.
-        // Pre-Seal is single-threaded; Interlocked remains correct and satisfies §4.3.
+        target.LazyIndex = (ushort)(slot + 1);
+        _PublishLazyPopulatorCount(slot + 1);
         Interlocked.Increment(ref _PendingLazyCount);
+    }
+
+    /// <summary>
+    /// Reserves a unique lazy-populator slot. Pre-Seal is a plain increment; post-Seal uses CAS
+    /// so concurrent nested <see cref="MutField.AppendLazy"/> calls cannot share a slot.
+    /// Returns -1 when the 1-based <see cref="FieldBody.LazyIndex"/> range is exhausted.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private int _ReserveLazyPopulatorSlot()
+    {
+        const int maxSlots = ushort.MaxValue - 1;
+        if (_Finalized != 0)
+        {
+            int current = _AllocatedLazyCount;
+            while (true)
+            {
+                if (current >= maxSlots)
+                {
+                    return -1;
+                }
+
+                int updated = Interlocked.CompareExchange(ref _AllocatedLazyCount, current + 1, current);
+                if (updated == current)
+                {
+                    return current;
+                }
+
+                current = updated;
+            }
+        }
+
+        int count = _AllocatedLazyCount;
+        if (count >= maxSlots)
+        {
+            return -1;
+        }
+
+        _AllocatedLazyCount = count + 1;
+        return count;
+    }
+
+    /// <summary>
+    /// Ensures the lazy-populator array can hold <paramref name="slot"/>. The thread whose slot
+    /// equals the current capacity grows; others spin until capacity covers the slot.
+    /// </summary>
+    private void _EnsureLazyCapacity(int slot)
+    {
+        SpinWait waiter = default;
+        while (true)
+        {
+            LazyPopulatorTable? lazyTable = _LazyTable;
+            if (lazyTable is not null && slot < lazyTable.Capacity)
+            {
+                return;
+            }
+
+            if (lazyTable is null)
+            {
+                if (slot != 0)
+                {
+                    waiter.SpinOnce();
+                    continue;
+                }
+
+                _AllocateFromSlab(
+                    ref _LazyPopulatorSlab, _LazyPopulatorSlabCapacity,
+                    _LazyPopulatorChunkSize, out LazyPopulator[] buffer, out int offset);
+                if (_Finalized != 0)
+                {
+                    SpinWait delay = default;
+                    for (int i = 0; i < 8; i++)
+                    {
+                        delay.SpinOnce();
+                    }
+                }
+
+                _LazyTable = new LazyPopulatorTable(buffer, offset, _LazyPopulatorChunkSize);
+                return;
+            }
+
+            int oldCapacity = lazyTable.Capacity;
+            if (slot == oldCapacity)
+            {
+                int newCapacity = oldCapacity * 2;
+                LazyPopulator[] grown = new LazyPopulator[newCapacity];
+                lazyTable.Buffer.AsSpan(lazyTable.Offset, oldCapacity).CopyTo(grown);
+                _LazyTable = new LazyPopulatorTable(grown, offset: 0, newCapacity);
+                // Stores that landed in the old buffer after CopyTo are invisible in `grown`
+                // until this backfill. Writers that already observed the new table retry.
+                for (int i = 0; i < oldCapacity; i++)
+                {
+                    LazyPopulator fromOld = lazyTable.Buffer[lazyTable.Offset + i];
+                    if (fromOld is not null && grown[i] is null)
+                    {
+                        grown[i] = fromOld;
+                    }
+                }
+
+                return;
+            }
+
+            waiter.SpinOnce();
+        }
+    }
+
+    /// <summary>
+    /// Publishes the high-water mark of valid lazy-populator slots for recycle Array.Clear.
+    /// Concurrent nested registers must not shrink the count.
+    /// </summary>
+    private void _PublishLazyPopulatorCount(int newCount)
+    {
+        int observed = _LazyPopulatorCount;
+        while (observed < newCount)
+        {
+            int updated = Interlocked.CompareExchange(ref _LazyPopulatorCount, newCount, observed);
+            if (updated == observed)
+            {
+                break;
+            }
+
+            observed = updated;
+        }
     }
 
     /// <summary>
@@ -773,102 +969,135 @@ public sealed class Packet
     /// <b>Pre-Seal (single-threaded):</b> Uses per-field CAS on <see cref="FieldBody.LazyIndex"/>.
     /// </para>
     /// <para>
-    /// <b>Post-Seal (concurrent):</b> Per-field CAS ensures exactly one thread executes each
-    /// populator; other threads spin until the field's lazy index clears.
+    /// <b>Post-Seal (concurrent):</b> Counts the materializer in
+    /// <c>_ActiveLazyMaterializations</c> before re-reading the recycle gate, then per-field CAS
+    /// so exactly one thread executes each populator; other threads spin until the field's lazy
+    /// index clears.
     /// </para>
     /// </summary>
     internal bool MaterializeLazyField(ushort fieldIndex)
     {
-        // Fast path: volatile check — if no pending lazy fields, nothing to do
+        bool postSeal = _Finalized != 0;
         if (_PendingLazyCount == 0)
         {
             return false;
         }
 
-        // Invariant: _PendingLazyCount > 0 guarantees _LazyPopulators is initialized
-        if (_LazyPopulators is null)
+        // Publish Active before re-reading the gate so PrepareForReuse cannot sample zero
+        // under a live materializer and Array.Clear cannot run under GetFieldRef.
+        if (postSeal)
         {
-            return false;
+            Interlocked.Increment(ref _ActiveLazyMaterializations);
         }
 
-        ref FieldBody body = ref GetFieldRef(fieldIndex);
-
-        // Per-field pre-check before claiming (cheap filter)
-        if (!body.NeedsMaterialization)
+        try
         {
-            if (body.ReadLazyIndexVolatile() == 0)
+            LazyPopulatorTable? lazyTable = _LazyTable;
+            if (lazyTable is null || _PendingLazyCount == 0 || (postSeal && _RecycleGate != 0))
             {
                 return false;
             }
 
-            // Another thread is materializing this field — spin until complete.
-            if (body.IsLazyMaterializationInProgress())
-            {
-                SpinWait spin = default;
-                while (body.IsLazyMaterializationInProgress())
-                {
-                    spin.SpinOnce();
-                }
-            }
-            return false;
-        }
+            ref FieldBody body = ref GetFieldRef(fieldIndex);
 
-        bool postSeal = _Finalized != 0;
-        ushort lazyPopulatorIndex;
-        if (postSeal)
-        {
-            SpinWait spin = default;
-            while (!body.TryClaimLazyMaterialization(out lazyPopulatorIndex))
+            // Per-field pre-check before claiming (cheap filter)
+            if (!body.NeedsMaterialization)
             {
                 if (body.ReadLazyIndexVolatile() == 0)
                 {
                     return false;
                 }
-                spin.SpinOnce();
-            }
-            Interlocked.Increment(ref _ActiveLazyMaterializations);
-        }
-        else if (!body.TryClaimLazyMaterialization(out lazyPopulatorIndex))
-        {
-            return false;
-        }
 
-        try
-        {
-            // Extract and clear the populator to allow GC of captured state
-            int arrayIndex = _LazyPopulatorOffset + lazyPopulatorIndex - 1;
-            LazyPopulator populator = _LazyPopulators![arrayIndex];
-            _LazyPopulators[arrayIndex] = null!;
-
-            MutField containerField = new(this, fieldIndex, GetFieldRef(fieldIndex).FieldId);
-            try
-            {
-                ParseResult result = populator(in containerField);
-                if (result.TryGetError(out ParseError populateError))
+                // Another thread is materializing this field — spin until complete.
+                if (body.IsLazyMaterializationInProgress())
                 {
-                    // Attach the error under the lazy container field (not at root)
-                    SetFieldError(fieldIndex, $"Lazy field population failed: {populateError}");
-                    return false;
+                    SpinWait spin = default;
+                    while (body.IsLazyMaterializationInProgress())
+                    {
+                        spin.SpinOnce();
+                    }
+                }
+                return false;
+            }
+
+            ushort lazyPopulatorIndex = 0;
+            bool claimed = false;
+            if (postSeal)
+            {
+                SpinWait spin = default;
+                while (true)
+                {
+                    if (body.TryClaimLazyMaterialization(out lazyPopulatorIndex))
+                    {
+                        claimed = true;
+                        break;
+                    }
+
+                    if (body.ReadLazyIndexVolatile() == 0)
+                    {
+                        break;
+                    }
+
+                    spin.SpinOnce();
                 }
             }
-            catch (Exception ex)
+            else
             {
-                // Catch all exceptions (FieldAppendException, NullReferenceException, etc.)
-                // and attach the error under the lazy container field (not at root)
-                SetFieldError(fieldIndex, $"Lazy field materialization failed: {ex.Message}");
+                claimed = body.TryClaimLazyMaterialization(out lazyPopulatorIndex);
+            }
+
+            if (!claimed)
+            {
                 return false;
+            }
+
+            LazyPopulatorTable? publishedTable = _LazyTable;
+            if (publishedTable is not null)
+            {
+                lazyTable = publishedTable;
+            }
+
+            try
+            {
+                // Extract and clear the populator to allow GC of captured state
+                int arrayIndex = lazyTable.Offset + lazyPopulatorIndex - 1;
+                LazyPopulator populator = lazyTable.Buffer[arrayIndex];
+                lazyTable.Buffer[arrayIndex] = null!;
+
+                MutField containerField = new(this, fieldIndex, GetFieldRef(fieldIndex).FieldId);
+                try
+                {
+                    ParseResult result = populator(in containerField);
+                    if (result.TryGetError(out ParseError populateError))
+                    {
+                        // Attach the error under the lazy container field (not at root)
+                        SetFieldError(fieldIndex, $"Lazy field population failed: {populateError}");
+                        return false;
+                    }
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    // Catch protocol/parser failures (FieldAppendException, NullReferenceException, etc.)
+                    // and attach the error under the lazy container field (not at root). OOM must
+                    // propagate — catching it would hide a fatal process condition and allocate.
+                    SetFieldError(fieldIndex, _BuildExceptionMessage(ex, includeStackTrace: false));
+                    return false;
+                }
+                finally
+                {
+                    // Decrement pending count AFTER the populator has finished appending all
+                    // child fields. Always Interlocked so the volatile field never uses compound RMW.
+                    Interlocked.Decrement(ref _PendingLazyCount);
+                }
+                return true;
             }
             finally
             {
-                // Decrement pending count AFTER the populator has finished appending all
-                // child fields. Always Interlocked so the volatile field never uses compound RMW.
-                Interlocked.Decrement(ref _PendingLazyCount);
+                body.FinishLazyMaterialization();
             }
-            return true;
         }
         finally
         {
-            body.FinishLazyMaterialization();
             if (postSeal)
             {
                 Interlocked.Decrement(ref _ActiveLazyMaterializations);
@@ -903,7 +1132,20 @@ public sealed class Packet
         }
         else
         {
-            _MaterializeAllPostSeal();
+            // Count the whole scan so PrepareForReuse cannot Array.Clear between fields
+            // while GetFieldRef runs with _ActiveLazyMaterializations at 0.
+            Interlocked.Increment(ref _ActiveLazyMaterializations);
+            try
+            {
+                if (_RecycleGate == 0)
+                {
+                    _MaterializeAllPostSeal();
+                }
+            }
+            finally
+            {
+                Interlocked.Decrement(ref _ActiveLazyMaterializations);
+            }
         }
     }
 
@@ -967,6 +1209,14 @@ public sealed class Packet
             // added by the concurrent populator need a new outer-loop pass).
             if (!progress && _PendingLazyCount > 0)
             {
+                if (_ActiveLazyMaterializations <= 1)
+                {
+                    // Nested RegisterLazyPopulator leaked a pending count without a live
+                    // field materializer (this session holds the remaining 1). Stop rather
+                    // than freeze the caller.
+                    break;
+                }
+
                 SpinWait spin = default;
                 while (_PendingLazyCount > 0
                     && _FieldCount == count)
@@ -1200,10 +1450,11 @@ public sealed class Packet
     /// <para><b>Usage pattern:</b></para>
     /// <code>
     /// FieldLookupCookie cookie = FieldLookupCookie.Start;
-    /// while (packet.TryGetNextFieldValue(ipSrcFieldId, ref cookie, out FieldValue value))
+    /// while (packet.TryGetNextFieldValue(ipSrcFieldId, ref cookie, out FieldValue value, materialize: false))
     /// {
     ///     // Process each occurrence of ip.src (e.g., outer and inner tunnel headers)
     /// }
+    /// // Pass materialize: true when the lookup must wait for lazy containers.
     /// </code>
     ///
     /// <para><b>Lazy materialization (when <paramref name="materialize"/> is true):</b>
@@ -1309,36 +1560,42 @@ public sealed class Packet
     /// the first slot of a new chunk allocates it; other threads spin until
     /// <see cref="_ChunkCount"/> includes that chunk.
     /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void _EnsureChunkForReservedIndex(int reservedIndex)
     {
-        int chunkIdx = reservedIndex >> _FieldBodyChunkShift;
-        if (chunkIdx < _ChunkCount)
-        {
-            return;
-        }
-
-        if (_Finalized == 0)
-        {
-            _AllocateNewChunk();
-            return;
-        }
-
-        int firstIndexOfChunk = chunkIdx << _FieldBodyChunkShift;
-        if (reservedIndex == firstIndexOfChunk)
-        {
-            SpinWait spin = default;
-            while (_ChunkCount < chunkIdx)
-            {
-                spin.SpinOnce();
-            }
-            _AllocateNewChunk();
-            return;
-        }
-
         SpinWait waiter = default;
-        while (chunkIdx >= _ChunkCount)
+        while (true)
         {
+            int chunkIdx = reservedIndex >> _FieldBodyChunkShift;
+            if (chunkIdx < _ChunkCount)
+            {
+                return;
+            }
+
+            if (_Finalized == 0)
+            {
+                _AllocateNewChunk();
+                return;
+            }
+
+            int firstIndexOfChunk = chunkIdx << _FieldBodyChunkShift;
+            if (reservedIndex == firstIndexOfChunk)
+            {
+                SpinWait spin = default;
+                while (_ChunkCount < chunkIdx)
+                {
+                    spin.SpinOnce();
+                }
+
+                SpinWait delay = default;
+                for (int i = 0; i < 8; i++)
+                {
+                    delay.SpinOnce();
+                }
+
+                _AllocateNewChunk();
+                return;
+            }
+
             waiter.SpinOnce();
         }
     }
@@ -1394,6 +1651,19 @@ public sealed class Packet
     }
 
     /// <summary>
+    /// Publishes a reserved slot as an unlinked tombstone so <see cref="_PublishFieldCount"/>
+    /// cannot hang after a throw between reserve and the happy-path publish.
+    /// Parent/sibling links are not written: tree walkers skip the hole; flat readers see a dead slot.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private void _PublishReservedOrTombstone(int reservedIndex, FieldId fieldId)
+    {
+        FieldId tombstoneId = Stack.PacketErrorFieldId.IsValid ? Stack.PacketErrorFieldId : fieldId;
+        _AddFieldBody(new FieldBody(tombstoneId, FieldValue.None), reservedIndex);
+        _PublishFieldCount(reservedIndex + 1);
+    }
+
+    /// <summary>
     /// Appends a child field to the given parent. Performs all parent / sibling linked-list
     /// updates <b>before</b> publishing the new field count, so that a concurrent reader
     /// post-Seal cannot observe the incremented count while parent pointers are still stale.
@@ -1408,6 +1678,9 @@ public sealed class Packet
 
         int reservedIndex = _ReserveFieldSlot();
         ushort newIndex = (ushort)reservedIndex;
+        bool published = false;
+        try
+        {
         FieldBody newField = new(fieldId, value)
         {
             ParentIndex = parentIndex
@@ -1433,8 +1706,17 @@ public sealed class Packet
 
         // Publish AFTER parent / sibling fix-ups so a concurrent reader that observes
         // the incremented _FieldCount also sees the consistent linked-list state.
-        _PublishFieldCount(reservedIndex + 1);
-        return newIndex;
+            _PublishFieldCount(reservedIndex + 1);
+            published = true;
+            return newIndex;
+        }
+        finally
+        {
+            if (!published)
+            {
+                _PublishReservedOrTombstone(reservedIndex, fieldId);
+            }
+        }
     }
 
     /// <summary>
@@ -1453,6 +1735,9 @@ public sealed class Packet
 
         int reservedIndex = _ReserveFieldSlot();
         ushort newIndex = (ushort)reservedIndex;
+        bool published = false;
+        try
+        {
         FieldBody newField = new(fieldId, value)
         {
             ParentIndex = parentIndex
@@ -1477,8 +1762,17 @@ public sealed class Packet
 
         _RecordValueCache(fieldId, in value, customText);
 
-        _PublishFieldCount(reservedIndex + 1);
-        return newIndex;
+            _PublishFieldCount(reservedIndex + 1);
+            published = true;
+            return newIndex;
+        }
+        finally
+        {
+            if (!published)
+            {
+                _PublishReservedOrTombstone(reservedIndex, fieldId);
+            }
+        }
     }
 
     /// <summary>
@@ -1497,6 +1791,9 @@ public sealed class Packet
 
         int reservedIndex = _ReserveFieldSlot();
         ushort newIndex = (ushort)reservedIndex;
+        bool published = false;
+        try
+        {
         FieldBody newField = new(fieldId, value)
         {
             ParentIndex = parentIndex
@@ -1521,8 +1818,17 @@ public sealed class Packet
 
         _RecordValueCache(fieldId, in value, customText);
 
-        _PublishFieldCount(reservedIndex + 1);
-        return newIndex;
+            _PublishFieldCount(reservedIndex + 1);
+            published = true;
+            return newIndex;
+        }
+        finally
+        {
+            if (!published)
+            {
+                _PublishReservedOrTombstone(reservedIndex, fieldId);
+            }
+        }
     }
 
     /// <summary>
@@ -1541,6 +1847,9 @@ public sealed class Packet
 
         int reservedIndex = _ReserveFieldSlot();
         ushort newIndex = (ushort)reservedIndex;
+        bool published = false;
+        try
+        {
         FieldBody newField = new(fieldId, value)
         {
             ParentIndex = parentIndex
@@ -1564,8 +1873,17 @@ public sealed class Packet
 
         _RecordValueCacheNoText(fieldId, in value);
 
-        _PublishFieldCount(reservedIndex + 1);
-        return newIndex;
+            _PublishFieldCount(reservedIndex + 1);
+            published = true;
+            return newIndex;
+        }
+        finally
+        {
+            if (!published)
+            {
+                _PublishReservedOrTombstone(reservedIndex, fieldId);
+            }
+        }
     }
 
     /// <summary>
@@ -1595,6 +1913,9 @@ public sealed class Packet
 
         int reservedIndex = _ReserveFieldSlot();
         ushort newIndex = (ushort)reservedIndex;
+        bool published = false;
+        try
+        {
         FieldBody newField = new(fieldId, value)
         {
             ParentIndex = parentIndex
@@ -1619,8 +1940,17 @@ public sealed class Packet
 
         _RecordValueCache(fieldId, in value, customText);
 
-        _PublishFieldCount(reservedIndex + 1);
-        return newIndex;
+            _PublishFieldCount(reservedIndex + 1);
+            published = true;
+            return newIndex;
+        }
+        finally
+        {
+            if (!published)
+            {
+                _PublishReservedOrTombstone(reservedIndex, fieldId);
+            }
+        }
     }
 
     /// <summary>
@@ -1649,6 +1979,9 @@ public sealed class Packet
 
         int reservedIndex = _ReserveFieldSlot();
         ushort newIndex = (ushort)reservedIndex;
+        bool published = false;
+        try
+        {
         FieldBody newField = new(fieldId, value)
         {
             ParentIndex = parentIndex
@@ -1672,8 +2005,17 @@ public sealed class Packet
 
         _RecordValueCacheNoText(fieldId, in value);
 
-        _PublishFieldCount(reservedIndex + 1);
-        return newIndex;
+            _PublishFieldCount(reservedIndex + 1);
+            published = true;
+            return newIndex;
+        }
+        finally
+        {
+            if (!published)
+            {
+                _PublishReservedOrTombstone(reservedIndex, fieldId);
+            }
+        }
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -1936,6 +2278,13 @@ public sealed class Packet
             RecycleError.StackMismatch => new ArgumentException(
                 "The recycle packet belongs to a different Stack. " +
                 "The stack argument must be reference-equal to the recycle packet's stack."),
+            RecycleError.InvalidFieldTree => new ArgumentException(
+                "fieldTree must be FieldTreeMode.Build or FieldTreeMode.Skip."),
+            RecycleError.CacheStackMismatch => new ArgumentException(
+                "ValueCache stack does not match packet stack."),
+            RecycleError.ParseIdGap => new InvalidOperationException(
+                "First parse packet ids on a Stack must be dense starting at 0. " +
+                "A jump leaves a hole that later parses would treat as a replay."),
             _ => new ArgumentException($"Unknown recycle error: {error}"),
         };
     }
@@ -1964,6 +2313,7 @@ public sealed class Packet
         // On x86-64 this is a plain store (TSO provides release ordering natively).
         // On ARM64 this emits STLR (store-release) — no expensive DSB/DMB barrier.
         _Finalized = 1;
+        _RecycleGate = 0;
     }
 
     #endregion
@@ -2003,21 +2353,19 @@ public sealed class Packet
 
     /// <summary>
     /// Builds the error message for a caught parser exception.
-    /// When <paramref name="includeStackTrace"/> is <see langword="true"/>, appends a newline
-    /// and the full stack trace to help diagnose protocol parser bugs.
-    /// Uses ZeroAlloc for zero-allocation string building in the stack-trace case.
+    /// When <paramref name="includeStackTrace"/> is <see langword="true"/>, returns
+    /// <see cref="Exception.ToString"/> (type, message, and stack when the runtime provides one).
     /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    [MethodImpl(MethodImplOptions.NoInlining)]
     private static string _BuildExceptionMessage(Exception ex, bool includeStackTrace)
     {
-        if (!includeStackTrace || ex.StackTrace is null)
+        string message = ex.Message;
+        if (includeStackTrace)
         {
-            return ex.Message;
+            message = ex.ToString();
         }
 
-        // ZeroAlloc: concatenate message + newline + stack trace without intermediate allocations.
-        using TempString temp = ZA.String(ex.Message, "\n", ex.StackTrace);
-        return temp.ToString();
+        return message;
     }
 
     // ── Shared lifecycle helpers ──────────────────────────────────────────────────────────────────
@@ -2040,52 +2388,60 @@ public sealed class Packet
             throw new ArgumentException("ValueCache stack does not match packet stack.", nameof(cache));
         }
 
-        // Must run before the protocol-exception guard: a jump is a caller contract violation,
-        // not a parser bug, and must reach the ParseFrame caller.
-        bool replay = packet.Stack.ObserveParse(packet.Id);
-
-        // Replays never write the index, including when the first parse did not use one.
-        bool indexing = !replay && index is not null && index.TryBeginPacket(packet.Id.Value);
-        bool recording = cache is not null && (!replay || recordOnReplay);
-        if (recording)
-        {
-            packet._ActiveValueCache = cache;
-        }
-
-        ParseContext context = indexing
-            ? new ParseContext(index!, packet.Stack, skipFieldTree: !packet.HasFieldTree)
-            : new ParseContext(packet.Stack, skipFieldTree: !packet.HasFieldTree);
+        bool replay = false;
+        bool indexing = false;
         try
         {
-            _ParseFrameInternal(packet, frame, context);
+            // Jump is a caller contract violation, not a parser bug, and must reach the caller.
+            // Stay inside the Seal finally so a throw after PrepareForReuse cannot stick
+            // _RecycleGate at 1 with _Finalized still 0.
+            replay = packet.Stack.ObserveParse(packet.Id);
+
+            // Replays never write the index, including when the first parse did not use one.
+            indexing = !replay && index is not null && index.TryBeginPacket(packet.Id.Value);
+            bool recording = cache is not null && (!replay || recordOnReplay);
             if (recording)
             {
-                cache!.EnsureMaterialized(packet);
+                packet._ActiveValueCache = cache;
             }
-        }
-        catch (Exception ex)
-        {
-            packet.SetError(_BuildExceptionMessage(ex, packet.Stack.IncludeExceptionStackTrace));
-            if (indexing)
+
+            ParseContext context = indexing
+                ? new ParseContext(index!, packet.Stack, skipFieldTree: !packet.HasFieldTree)
+                : new ParseContext(packet.Stack, skipFieldTree: !packet.HasFieldTree);
+            try
             {
-                index!.RollbackCurrentPacket();
+                _ParseFrameInternal(packet, frame, context);
+                if (recording)
+                {
+                    cache!.EnsureMaterialized(packet);
+                }
+            }
+            catch (Exception ex)
+            {
+                packet.SetError(_BuildExceptionMessage(ex, packet.Stack.IncludeExceptionStackTrace));
+                if (indexing)
+                {
+                    index!.RollbackCurrentPacket();
+                }
+            }
+            finally
+            {
+                packet._ActiveValueCache = null;
+                if (indexing)
+                {
+                    index!.EndPacket();
+                }
+
+                if (!replay)
+                {
+                    packet.Stack.CompleteFirstParse(packet.Id);
+                }
             }
         }
         finally
         {
-            packet._ActiveValueCache = null;
-            if (indexing)
-            {
-                index!.EndPacket();
-            }
-
-            if (!replay)
-            {
-                packet.Stack.CompleteFirstParse(packet.Id);
-            }
+            packet.Seal();
         }
-
-        packet.Seal();
     }
 
     // ── Non-recycling overloads ───────────────────────────────────────────────────────────────────
@@ -2174,13 +2530,30 @@ public sealed class Packet
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static RecycleError? _TryPrepareForRecycle(
-        Packet recycle, PacketId id, Stack stack, Frame frame, FieldTreeMode fieldTree)
+        Packet recycle, PacketId id, Stack stack, Frame frame, FieldTreeMode fieldTree,
+        ValueCache? cache)
     {
         // Stack check first: cheapest, catches the most common cross-stack mistake.
         if (!ReferenceEquals(recycle.Stack, stack))
         {
             return RecycleError.StackMismatch;
         }
+
+        if (cache is not null && !ReferenceEquals(cache.Stack, stack))
+        {
+            return RecycleError.CacheStackMismatch;
+        }
+
+        if (fieldTree is not FieldTreeMode.Build and not FieldTreeMode.Skip)
+        {
+            return RecycleError.InvalidFieldTree;
+        }
+
+        if (stack.WouldJump(id))
+        {
+            return RecycleError.ParseIdGap;
+        }
+
         return recycle.PrepareForReuse(id, frame, fieldTree);
     }
 
@@ -2210,7 +2583,7 @@ public sealed class Packet
         Packet recycle, PacketId id, Stack stack, Frame frame, FieldTreeMode fieldTree = FieldTreeMode.Build,
         ValueCache? cache = null, bool recordOnReplay = false)
     {
-        RecycleError? error = _TryPrepareForRecycle(recycle, id, stack, frame, fieldTree);
+        RecycleError? error = _TryPrepareForRecycle(recycle, id, stack, frame, fieldTree, cache);
         if (error is not null)
         {
             return error;
@@ -2229,7 +2602,7 @@ public sealed class Packet
         FieldTreeMode fieldTree = FieldTreeMode.Build,
         ValueCache? cache = null, bool recordOnReplay = false)
     {
-        RecycleError? error = _TryPrepareForRecycle(recycle, id, stack, frame, fieldTree);
+        RecycleError? error = _TryPrepareForRecycle(recycle, id, stack, frame, fieldTree, cache);
         if (error is not null)
         {
             return error;
@@ -2249,7 +2622,7 @@ public sealed class Packet
         FieldTreeMode fieldTree = FieldTreeMode.Build,
         ValueCache? cache = null, bool recordOnReplay = false)
     {
-        RecycleError? error = _TryPrepareForRecycle(recycle, id, stack, frame, fieldTree);
+        RecycleError? error = _TryPrepareForRecycle(recycle, id, stack, frame, fieldTree, cache);
         if (error is not null)
         {
             return error;
@@ -2269,7 +2642,7 @@ public sealed class Packet
         PacketIndex index, ProtocolId firstProtocolId, FieldTreeMode fieldTree = FieldTreeMode.Build,
         ValueCache? cache = null, bool recordOnReplay = false)
     {
-        RecycleError? error = _TryPrepareForRecycle(recycle, id, stack, frame, fieldTree);
+        RecycleError? error = _TryPrepareForRecycle(recycle, id, stack, frame, fieldTree, cache);
         if (error is not null)
         {
             return error;
@@ -2406,6 +2779,31 @@ public sealed class Packet
         {
             Buffer = buffer;
             BaseOffset = baseOffset;
+            Capacity = capacity;
+        }
+    }
+
+    /// <summary>
+    /// Immutable snapshot of the lazy-populator array plus its slab offset and capacity.
+    /// Published as a single reference so nested post-Seal <see cref="RegisterLazyPopulator"/>
+    /// cannot observe a torn (array, offset) pair while the table grows.
+    /// </summary>
+    private sealed class LazyPopulatorTable
+    {
+        /// <summary>Backing array (slab slice or heap copy after growth).</summary>
+        internal readonly LazyPopulator[] Buffer;
+
+        /// <summary>Index of this packet's first populator slot in <see cref="Buffer"/>.</summary>
+        internal readonly int Offset;
+
+        /// <summary>Number of populator slots reserved for this packet in <see cref="Buffer"/>.</summary>
+        internal readonly int Capacity;
+
+        /// <summary>Creates a published lazy-populator table snapshot.</summary>
+        internal LazyPopulatorTable(LazyPopulator[] buffer, int offset, int capacity)
+        {
+            Buffer = buffer;
+            Offset = offset;
             Capacity = capacity;
         }
     }

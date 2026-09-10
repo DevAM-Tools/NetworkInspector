@@ -30,19 +30,20 @@ internal sealed class RedissectIdentityTests
     }
 
     [Test]
-    public async Task GetEffectLayerKey_UdpHeaderSlice_PacksEthernetIpv4Offset()
+    public async Task TryGetEffectLayerKey_UdpHeaderSlice_PacksEthernetIpv4Offset()
     {
-        using Stack stack = _BuildStack();
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        LayerKeySliceProtocol proto = new();
+        ProtocolId protoId = builder.RegisterProtocol(proto);
+        using Stack stack = builder.Build();
         byte[] frameData = _BuildUdpFrame();
         Frame frame = _CreateFrame(stack, frameData, 0);
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame);
+        _ = Packet.ParseFrame(new PacketId(0), stack, frame, protoId);
 
-        int udpKey = packet.GetEffectLayerKey(packet.Frame.Data.Slice(34, 8));
-        int ipv4Key = packet.GetEffectLayerKey(packet.Frame.Data.Slice(14, 20));
-
-        await Assert.That(udpKey).IsEqualTo(34);
-        await Assert.That(ipv4Key).IsEqualTo(14);
-        await Assert.That(udpKey).IsNotEqualTo(ipv4Key);
+        await Assert.That(proto.UdpKey).IsEqualTo(34);
+        await Assert.That(proto.Ipv4Key).IsEqualTo(14);
+        await Assert.That(proto.UdpKey).IsNotEqualTo(proto.Ipv4Key);
     }
 
     [Test]
@@ -350,4 +351,24 @@ internal sealed class RedissectIdentityTests
             LinkType.Ethernet,
             FrameInterfaceId.Invalid,
             stack.FrameInterfaceRegistry).Value;
+
+    /// <summary>
+    /// Keys UDP and IPv4 header slices during Parse so packing is exercised on the public MutField API.
+    /// </summary>
+    private sealed class LayerKeySliceProtocol : IProtocol
+    {
+        public string Name => "layerkey.slice";
+        public string UiName => "Layer Key Slice";
+        public int UdpKey { get; private set; }
+        public int Ipv4Key { get; private set; }
+
+        public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
+        {
+            _ = parentField.TryGetEffectLayerKey(data.Slice(34, 8), out int udpKey);
+            _ = parentField.TryGetEffectLayerKey(data.Slice(14, 20), out int ipv4Key);
+            UdpKey = udpKey;
+            Ipv4Key = ipv4Key;
+            return data.Length;
+        }
+    }
 }

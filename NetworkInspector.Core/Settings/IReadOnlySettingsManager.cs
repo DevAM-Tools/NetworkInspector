@@ -36,6 +36,24 @@ public interface IReadOnlySettingsManager
         get;
     }
 
+    /// <summary>
+    /// Maximum accepted size in bytes for persisted settings JSON and referenced protocol config files.
+    /// Values <c>&lt;= 0</c> disable the size check. Fixed at <see cref="SettingsManager"/> construction.
+    /// </summary>
+    long MaxConfigFileBytes
+    {
+        get;
+    }
+
+    /// <summary>
+    /// Maximum JSON nesting depth for persisted settings JSON and referenced protocol config files.
+    /// Values <c>&lt;= 0</c> disable the depth check. Fixed at <see cref="SettingsManager"/> construction.
+    /// </summary>
+    int MaxJsonDepth
+    {
+        get;
+    }
+
     #endregion
 
     #region Querying

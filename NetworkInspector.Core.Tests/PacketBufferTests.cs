@@ -31,12 +31,13 @@ internal sealed class PacketBufferTests
         using Stack stack = _BuildStack();
         byte[] frameData = FrameBuilders.GenerateStaticUdpFrame(128);
         Frame frame = _MakeFrame(stack, frameData);
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, stack.GetProtocolId("eth")!.Value);
+        Packet packet = new(new PacketId(0), stack, frame, FieldTreeMode.Build);
 
         byte[] extra1 = [0x01, 0x02];
         byte[] extra2 = [0x03, 0x04, 0x05];
         int idx1 = packet.AddBuffer(extra1);
         int idx2 = packet.AddBuffer(extra2);
+        packet.Seal();
         ReadOnlyMemory<byte>? buf1 = packet.Buffer(1);
         ReadOnlyMemory<byte>? buf2 = packet.Buffer(2);
 
@@ -51,6 +52,79 @@ internal sealed class PacketBufferTests
         await Assert.That(packet.Buffer(99)).IsNull();
         await Assert.That(packet.Buffer(-1)).IsNull();
         await Assert.That(packet.Buffer(int.MinValue)).IsNull();
+    }
+
+    [Test]
+    public async Task AddBuffer_AfterSeal_DoesNotStore()
+    {
+        using Stack stack = _BuildStack();
+        Frame frame = _MakeFrame(stack, FrameBuilders.GenerateStaticUdpFrame(64));
+        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame);
+
+        int idx = packet.AddBuffer(new byte[] { 0x01 });
+
+        await Assert.That(idx).IsEqualTo(0);
+        await Assert.That(packet.BufferCount).IsEqualTo(1);
+        await Assert.That(packet.BindParseBuffer(new byte[] { 0x02 }).IsEmpty).IsTrue();
+    }
+
+    [Test]
+    public async Task AddBuffer_StopsAt255Additional()
+    {
+        using Stack stack = _BuildStack();
+        Frame frame = _MakeFrame(stack, FrameBuilders.GenerateStaticUdpFrame(64));
+        Packet packet = new(new PacketId(0), stack, frame);
+
+        int last = 0;
+        for (int i = 0; i < 256; i++)
+        {
+            last = packet.AddBuffer(new byte[] { (byte)(i & 0xFF) });
+        }
+
+        await Assert.That(last).IsEqualTo(255);
+        await Assert.That(packet.BufferCount).IsEqualTo(256);
+    }
+
+    [Test]
+    public async Task TryGetEffectLayerKey_SliceLongerThanOwner_ReturnsFalse()
+    {
+        using Stack stack = _BuildStack();
+        Packet packet = Packet.ParseFrame(new PacketId(0), stack, _MakeFrame(stack, FrameBuilders.GenerateStaticUdpFrame(64)));
+        byte[] longer = new byte[packet.Frame.Data.Length + 8];
+        packet.Frame.Data.CopyTo(longer);
+
+        bool ok = packet.TryGetEffectLayerKey(longer, out int key);
+
+        await Assert.That(ok).IsFalse();
+        await Assert.That(key).IsEqualTo(0);
+    }
+
+    [Test]
+    [NotInParallel("recycle-gate")]
+    public async Task PrepareForReuse_ConcurrentSecondCaller_ReturnsMaterializerActive()
+    {
+        using Stack stack = _BuildStack();
+        Frame frame = _MakeFrame(stack, FrameBuilders.GenerateStaticUdpFrame(64));
+        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame);
+        RecycleError? first = RecycleError.StackMismatch;
+        RecycleError? second = RecycleError.StackMismatch;
+
+        using Barrier start = new(2);
+        Task a = Task.Run(() =>
+        {
+            start.SignalAndWait();
+            first = packet.PrepareForReuse(new PacketId(1), frame, FieldTreeMode.Build);
+        });
+        Task b = Task.Run(() =>
+        {
+            start.SignalAndWait();
+            second = packet.PrepareForReuse(new PacketId(1), frame, FieldTreeMode.Build);
+        });
+        await Task.WhenAll(a, b);
+
+        int successes = (first is null ? 1 : 0) + (second is null ? 1 : 0);
+        await Assert.That(successes).IsEqualTo(1);
+        await Assert.That(first == RecycleError.MaterializerActive || second == RecycleError.MaterializerActive).IsTrue();
     }
 
     [Test]
@@ -105,8 +179,9 @@ internal sealed class PacketBufferTests
         using Stack stack = _BuildStack();
         byte[] data = FrameBuilders.GenerateStaticUdpFrame(64);
         Frame frame1 = _MakeFrame(stack, data, 1);
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame1, stack.GetProtocolId("eth")!.Value);
+        Packet packet = new(new PacketId(0), stack, frame1, FieldTreeMode.Build);
         packet.AddBuffer(new byte[] { 0xFF });
+        packet.Seal();
 
         Frame frame2 = _MakeFrame(stack, data, 2);
         RecycleError? err = packet.PrepareForReuse(new PacketId(99), frame2, FieldTreeMode.Build);

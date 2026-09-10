@@ -73,14 +73,16 @@ public sealed partial class CanProtocol : IProtocol
     /// <summary>Index group for always-present CAN classic/FD fields.</summary>
     private const string _CanIndexGroup = "can";
 
-    /// <summary>Protocol table name for CAN identifier dispatch (standard 11-bit and FD/FD+ 29-bit IDs).</summary>
+    /// <summary>
+    /// Protocol table name for standard (11-bit, EFF clear) CAN identifier dispatch.
+    /// Classic and CAN FD standard frames use this table. Extended frames never do.
+    /// </summary>
     public const string IdTableName = "can.id";
 
     /// <summary>
-    /// Protocol table name for CAN extended-frame identifier dispatch.
-    /// Used for classic CAN extended (29-bit) frames and for CAN XL acceptance-field (32-bit) dispatch.
-    /// Sub-protocols that need to distinguish extended from standard IDs should register here
-    /// instead of (or in addition to) <see cref="IdTableName"/>.
+    /// Protocol table name for extended (29-bit, EFF set) CAN identifier dispatch.
+    /// Classic and CAN FD extended frames use this table. Standard frames never do.
+    /// CAN XL uses this table with the 32-bit acceptance field as the key.
     /// </summary>
     public const string ExtendedIdTableName = "can.extended_id";
 
@@ -134,16 +136,14 @@ public sealed partial class CanProtocol : IProtocol
     #region Dispatch tables
 
     /// <summary>
-    /// Dispatch table for standard 11-bit CAN IDs, CAN FD 29-bit IDs, and CAN XL priority (11-bit).
-    /// Sub-protocols (e.g., Signal Message) register here to be invoked by CAN ID or CAN XL priority.
+    /// Dispatch table for standard 11-bit CAN IDs (classic and CAN FD, EFF clear).
     /// </summary>
     [ProtocolTableU64(IdTableName, "CAN Identifier")]
     private ProtocolTableId _IdTableId;
 
     /// <summary>
-    /// Dispatch table for extended-frame CAN IDs (29-bit) and CAN XL acceptance-field (32-bit).
-    /// Enables protocol registration specifically on the extended or application-level identifier,
-    /// independent of the arbitration priority.
+    /// Dispatch table for extended 29-bit CAN IDs (classic and CAN FD, EFF set)
+    /// and for CAN XL acceptance-field keys.
     /// </summary>
     [ProtocolTableU64(ExtendedIdTableName, "CAN Extended Identifier")]
     private ProtocolTableId _ExtendedIdTableId;
@@ -301,7 +301,10 @@ public sealed partial class CanProtocol : IProtocol
     /// <summary>
     /// Parses a CAN frame from SocketCAN format.
     /// No lazy population — all fields are appended directly.
-    /// After appending all fields, dispatches payload to sub-protocols via can.id table.
+    /// After appending fields, dispatches data-frame payloads on <paramref name="parentField"/>
+    /// so sub-protocols are siblings of the CAN container (same as Ethernet / PDU Transport).
+    /// Standard frames (EFF clear) use <c>can.id</c>; extended frames (EFF set) use
+    /// <c>can.extended_id</c>. The two tables are exclusive — there is no fallback.
     /// </summary>
     public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
     {
@@ -413,25 +416,20 @@ public sealed partial class CanProtocol : IProtocol
             context.RecordGroupPresence(_CanDataGroupId);
             canField.Append(_DataFieldId, FieldValue.NewBytes(data.Slice(_MinHeaderSize, dataLen)));
 
-            // Dispatch payload to sub-protocols registered on can.id (e.g., Signal Message).
-            // Extended frames (29-bit IDs) are also dispatched via can.extended_id so that
-            // sub-protocols can register on the more specific extended-ID table without
-            // colliding with standard 11-bit IDs that share the same numeric value.
-            ReadOnlyMemory<byte> payload = data.Slice(_MinHeaderSize, dataLen);
-            ParseResult dispatchResult = canField.TryCallNextProtocolU64(
-                _IdTableId, canId, payload, in context);
-            if (dispatchResult.TryPropagateError(out ParseResult error))
+            // RTR and error frames have no application payload. Skip sub-protocol dispatch so
+            // can.id / can.extended_id bindings cannot decode dummy or error bytes.
+            if (!isRtr && !isError)
             {
-                return error;
-            }
-
-            if (isExtended)
-            {
-                dispatchResult = canField.TryCallNextProtocolU64(
-                    _ExtendedIdTableId, canId, payload, in context);
-                if (dispatchResult.TryPropagateError(out ParseResult extendedError))
+                ReadOnlyMemory<byte> payload = data.Slice(_MinHeaderSize, dataLen);
+                // EFF selects exactly one table: standard → can.id, extended → can.extended_id.
+                ProtocolTableId tableId = isExtended
+                    ? _ExtendedIdTableId
+                    : _IdTableId;
+                ParseResult dispatchResult = parentField.TryCallNextProtocolU64(
+                    tableId, canId, payload, in context);
+                if (dispatchResult.TryPropagateError(out ParseResult error))
                 {
-                    return extendedError;
+                    return error;
                 }
             }
         }
@@ -445,17 +443,10 @@ public sealed partial class CanProtocol : IProtocol
     /// No lazy population — all fields are appended directly.
     /// </summary>
     /// <remarks>
-    /// When the payload is non-empty, the frame is dispatched twice:
-    /// <list type="bullet">
-    ///   <item><description>
-    ///     Via <c>can.id</c> using the 11-bit <c>canxl.priority</c> as the dispatch key — enabling
-    ///     unified configuration with classic CAN standard-ID protocols.
-    ///   </description></item>
-    ///   <item><description>
-    ///     Via <c>can.extended_id</c> using the 32-bit <c>canxl.acceptance_field</c> as the dispatch key —
-    ///     allowing higher-layer protocols to bind to the application-level identifier.
-    ///   </description></item>
-    /// </list>
+    /// When the payload is non-empty, the frame is dispatched via <c>can.extended_id</c>
+    /// using the 32-bit <c>canxl.acceptance_field</c>. Priority is not used as a
+    /// <c>can.id</c> key — that table is the classic/FD 11-bit ID space and must not
+    /// match CAN XL payloads.
     /// </remarks>
     /// <param name="parentField">Parent field that receives the decoded CAN XL container and children.</param>
     /// <param name="data">Raw frame bytes starting at offset 0 (12-byte header + payload).</param>
@@ -552,27 +543,20 @@ public sealed partial class CanProtocol : IProtocol
             "0x", new Hex8(acceptanceField));
 
         // Data payload (conditional — present when payload length > 0).
-        // Dispatches via can.id (key = priority) and can.extended_id (key = acceptanceField)
-        // so higher-layer protocols can bind to either the arbitration priority or the
-        // application-level acceptance field, mirroring the two dispatch tables of classic CAN.
+        // Dispatch on parentField (sibling of the CAN XL container) via can.extended_id
+        // keyed by the 32-bit acceptance field — the application identifier, not the
+        // 11-bit arbitration priority.
         if (effectivePayloadLength > 0)
         {
             context.RecordGroupPresence(_CanxlDataGroupId);
             ReadOnlyMemory<byte> payload = data.Slice(_XlHeaderSize, effectivePayloadLength);
             xlField.Append(_CanxlDataFieldId, FieldValue.NewBytes(payload));
 
-            // Dispatch via can.id using priority (11-bit, 0–2047) as the key.
-            ParseResult dispatchResult = xlField.TryCallNextProtocolU64(_IdTableId, priority, payload, in context);
+            ParseResult dispatchResult = parentField.TryCallNextProtocolU64(
+                _ExtendedIdTableId, acceptanceField, payload, in context);
             if (dispatchResult.TryPropagateError(out ParseResult error))
             {
                 return error;
-            }
-
-            // Dispatch via can.extended_id using the acceptance field (32-bit) as the key.
-            dispatchResult = xlField.TryCallNextProtocolU64(_ExtendedIdTableId, acceptanceField, payload, in context);
-            if (dispatchResult.TryPropagateError(out ParseResult extendedError))
-            {
-                return extendedError;
             }
         }
 

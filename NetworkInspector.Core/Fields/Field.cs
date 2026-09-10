@@ -81,6 +81,45 @@ public readonly struct Field : IEquatable<Field>
     }
 
     /// <summary>
+    /// Tries to read this field's value. Returns <see langword="false"/> for skip-tree children
+    /// outside the synthetic root and an in-flight skip-tree populator. Skip packets should only
+    /// read the root; use this instead of <see cref="Value"/> when a miss is expected.
+    /// </summary>
+    /// <param name="value">The field value when the read is allowed.</param>
+    /// <returns><see langword="true"/> when a value was stored in <paramref name="value"/>.</returns>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public bool TryGetValue(out FieldValue value)
+    {
+        if (!HasFieldTree && StorageIndex != 0 && StorageIndex != FieldBody.SkipStorageIndex)
+        {
+            value = FieldValue.None;
+            return false;
+        }
+
+        value = Packet.GetFieldRef(StorageIndex).Value;
+        return true;
+    }
+
+    /// <summary>
+    /// Tries to read this field's custom display text. Returns <see langword="false"/> for
+    /// skip-tree children that cannot expose a stored <see cref="FieldBody"/>.
+    /// </summary>
+    /// <param name="text">Custom display text when the read is allowed.</param>
+    /// <returns><see langword="true"/> when text was stored in <paramref name="text"/>.</returns>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public bool TryGetCustomText(out LazyString text)
+    {
+        if (!HasFieldTree && StorageIndex != 0 && StorageIndex != FieldBody.SkipStorageIndex)
+        {
+            text = default;
+            return false;
+        }
+
+        text = Packet.GetFieldRef(StorageIndex).CustomText;
+        return true;
+    }
+
+    /// <summary>
     /// Optional custom display text (check <see cref="LazyString.IsNull"/> for absence).
     /// <para>
     /// Accesses <see cref="FieldBody.CustomText"/> through a mutable ref to the actual
@@ -213,7 +252,7 @@ public readonly struct Field : IEquatable<Field>
                 Packet.MaterializeLazyField(StorageIndex);
             }
         }
-        ushort idx = Packet.GetFieldRef(StorageIndex).FirstChildIndex;
+        ushort idx = Packet.WaitUntilFieldPublished(Packet.GetFieldRef(StorageIndex).FirstChildIndex);
         if (idx != FieldBody.NullIndex)
         {
             firstChild = new Field(Packet, idx);
@@ -245,7 +284,7 @@ public readonly struct Field : IEquatable<Field>
                 Packet.MaterializeLazyField(StorageIndex);
             }
         }
-        ushort idx = Packet.GetFieldRef(StorageIndex).LastChildIndex;
+        ushort idx = Packet.WaitUntilFieldPublished(Packet.GetFieldRef(StorageIndex).LastChildIndex);
         if (idx != FieldBody.NullIndex)
         {
             lastChild = new Field(Packet, idx);
@@ -264,7 +303,7 @@ public readonly struct Field : IEquatable<Field>
             return false;
         }
 
-        ushort idx = Packet.GetFieldRef(StorageIndex).NextIndex;
+        ushort idx = Packet.WaitUntilFieldPublished(Packet.GetFieldRef(StorageIndex).NextIndex);
         if (idx != FieldBody.NullIndex)
         {
             next = new Field(Packet, idx);
@@ -283,7 +322,7 @@ public readonly struct Field : IEquatable<Field>
             return false;
         }
 
-        ushort idx = Packet.GetFieldRef(StorageIndex).PrevIndex;
+        ushort idx = Packet.WaitUntilFieldPublished(Packet.GetFieldRef(StorageIndex).PrevIndex);
         if (idx != FieldBody.NullIndex)
         {
             prev = new Field(Packet, idx);

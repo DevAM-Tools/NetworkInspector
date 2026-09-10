@@ -2013,16 +2013,17 @@ internal sealed class SettingsManagerTests
             string path = Path.Combine(dir, "default.json");
             await using (FileStream stream = new(path, FileMode.Create, FileAccess.Write, FileShare.Read))
             {
-                stream.SetLength(SettingsFileAccess.MaxFileBytes + 1);
+                stream.SetLength(1025);
             }
 
-            using SettingsManager mgr = new(dir);
+            using SettingsManager mgr = new(dir, 1024);
             mgr.RegisterSetting(Setting.Bool("test.flag", "Flag", string.Empty, false));
             IReadOnlyList<SettingsLoadWarning> warnings = mgr.Load();
 
             await Assert.That(warnings.Count).IsEqualTo(1);
             await Assert.That(warnings[0].Kind).IsEqualTo(SettingsLoadWarningKind.InvalidGroupFileShape);
             await Assert.That(warnings[0].Message).Contains("exceeds");
+            await Assert.That(warnings[0].Message).Contains("1024");
             await Assert.That(mgr.GetBoolSetting("test.flag")).IsFalse();
         }
         finally
@@ -2078,10 +2079,10 @@ internal sealed class SettingsManagerTests
             await File.WriteAllTextAsync(sidecar, "{\"keep\":true}").ConfigureAwait(false);
             await using (FileStream stream = new(manifest, FileMode.Create, FileAccess.Write, FileShare.Read))
             {
-                stream.SetLength(SettingsFileAccess.MaxFileBytes + 1);
+                stream.SetLength(1025);
             }
 
-            using SettingsManager mgr = new(dir);
+            using SettingsManager mgr = new(dir, 1024);
             mgr.RegisterSetting(Setting.Bool("test.flag", "Flag", "test", true));
             mgr.Save();
 
@@ -2108,14 +2109,207 @@ internal sealed class SettingsManagerTests
         {
             await File.WriteAllTextAsync(manifest, "test.json\n").ConfigureAwait(false);
             using FileStream locked = new(manifest, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+            using SettingsManager mgr = new(dir);
             MethodInfo read = typeof(SettingsManager).GetMethod(
-                "_ReadOwnedGroupFiles", BindingFlags.NonPublic | BindingFlags.Static)!;
-            HashSet<string> owned = (HashSet<string>)read.Invoke(null, [manifest])!;
+                "_ReadOwnedGroupFiles", BindingFlags.NonPublic | BindingFlags.Instance)!;
+            HashSet<string> owned = (HashSet<string>)read.Invoke(mgr, [manifest])!;
             await Assert.That(owned.Count).IsEqualTo(0);
         }
         finally
         {
             Directory.Delete(dir, recursive: true);
         }
+    }
+
+    [Test]
+    public async Task Ctor_Default_MaxConfigFileBytesIs1GiB_MaxJsonDepthIs1024()
+    {
+        using SettingsManager mgr = new();
+
+        await Assert.That(mgr.MaxConfigFileBytes).IsEqualTo(1_073_741_824L);
+        await Assert.That(mgr.ReadOnly.MaxConfigFileBytes).IsEqualTo(1_073_741_824L);
+        await Assert.That(mgr.MaxJsonDepth).IsEqualTo(1024);
+        await Assert.That(mgr.ReadOnly.MaxJsonDepth).IsEqualTo(1024);
+    }
+
+    [Test]
+    public async Task Ctor_StoragePath_UsesDefaultCaps()
+    {
+        using SettingsManager mgr = new(Path.GetTempPath());
+
+        await Assert.That(mgr.MaxConfigFileBytes).IsEqualTo(SettingsManager.DefaultMaxConfigFileBytes);
+        await Assert.That(mgr.MaxJsonDepth).IsEqualTo(SettingsManager.DefaultMaxJsonDepth);
+    }
+
+    [Test]
+    public async Task Ctor_CustomCap_ExposesValue()
+    {
+        using SettingsManager mgr = new(Path.GetTempPath(), 4096);
+
+        await Assert.That(mgr.MaxConfigFileBytes).IsEqualTo(4096L);
+        await Assert.That(mgr.ReadOnly.MaxConfigFileBytes).IsEqualTo(4096L);
+        await Assert.That(mgr.MaxJsonDepth).IsEqualTo(SettingsManager.DefaultMaxJsonDepth);
+    }
+
+    [Test]
+    public async Task Ctor_CustomJsonDepth_ExposesValue()
+    {
+        using SettingsManager mgr = new(Path.GetTempPath(), 4096, 8);
+
+        await Assert.That(mgr.MaxConfigFileBytes).IsEqualTo(4096L);
+        await Assert.That(mgr.MaxJsonDepth).IsEqualTo(8);
+        await Assert.That(mgr.ReadOnly.MaxJsonDepth).IsEqualTo(8);
+    }
+
+    [Test]
+    public async Task Ctor_ZeroCap_Accepted()
+    {
+        using SettingsManager mgr = new(Path.GetTempPath(), 0, 0);
+
+        await Assert.That(mgr.MaxConfigFileBytes).IsEqualTo(0L);
+        await Assert.That(mgr.MaxJsonDepth).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task Ctor_NegativeCaps_Accepted()
+    {
+        using SettingsManager mgr = new(Path.GetTempPath(), -1, -2);
+
+        await Assert.That(mgr.MaxConfigFileBytes).IsEqualTo(-1L);
+        await Assert.That(mgr.MaxJsonDepth).IsEqualTo(-2);
+    }
+
+    [Test]
+    public async Task Load_ZeroCap_LoadsNonEmptyFile()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            string json = "{\"test.flag\":true}";
+            string padded = json + new string(' ', 2048);
+            await File.WriteAllTextAsync(Path.Combine(dir, "default.json"), padded).ConfigureAwait(false);
+
+            using SettingsManager mgr = new(dir, 0);
+            mgr.RegisterSetting(Setting.Bool("test.flag", "Flag", string.Empty, false));
+            IReadOnlyList<SettingsLoadWarning> warnings = mgr.Load();
+
+            await Assert.That(warnings).IsEmpty();
+            await Assert.That(mgr.GetBoolSetting("test.flag")).IsTrue();
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Test]
+    public async Task Load_NegativeCap_LoadsNonEmptyFile()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            string json = "{\"test.flag\":true}";
+            string padded = json + new string(' ', 2048);
+            await File.WriteAllTextAsync(Path.Combine(dir, "default.json"), padded).ConfigureAwait(false);
+
+            using SettingsManager mgr = new(dir, -1);
+            mgr.RegisterSetting(Setting.Bool("test.flag", "Flag", string.Empty, false));
+            IReadOnlyList<SettingsLoadWarning> warnings = mgr.Load();
+
+            await Assert.That(warnings).IsEmpty();
+            await Assert.That(mgr.GetBoolSetting("test.flag")).IsTrue();
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Test]
+    public async Task Load_DefaultCap_SparseFileLargerThanDefault_Skipped()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            string path = Path.Combine(dir, "default.json");
+            await using (FileStream stream = new(path, FileMode.Create, FileAccess.Write, FileShare.Read))
+            {
+                stream.SetLength(SettingsManager.DefaultMaxConfigFileBytes + 1);
+            }
+
+            using SettingsManager mgr = new(dir);
+            mgr.RegisterSetting(Setting.Bool("test.flag", "Flag", string.Empty, false));
+            IReadOnlyList<SettingsLoadWarning> warnings = mgr.Load();
+
+            await Assert.That(warnings.Count).IsEqualTo(1);
+            await Assert.That(warnings[0].Kind).IsEqualTo(SettingsLoadWarningKind.InvalidGroupFileShape);
+            await Assert.That(warnings[0].Message).Contains("exceeds");
+            await Assert.That(warnings[0].Message).Contains(
+                SettingsManager.DefaultMaxConfigFileBytes.ToString(CultureInfo.InvariantCulture));
+            await Assert.That(mgr.GetBoolSetting("test.flag")).IsFalse();
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Test]
+    public async Task Load_JsonDeeperThanCap_Skipped()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            await File.WriteAllTextAsync(Path.Combine(dir, "default.json"), _NestedJsonObject(3))
+                .ConfigureAwait(false);
+
+            using SettingsManager mgr = new(dir, SettingsManager.DefaultMaxConfigFileBytes, 2);
+            IReadOnlyList<SettingsLoadWarning> warnings = mgr.Load();
+
+            await Assert.That(warnings.Count).IsEqualTo(1);
+            await Assert.That(warnings[0].Kind).IsEqualTo(SettingsLoadWarningKind.InvalidGroupFileSyntax);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Test]
+    public async Task Load_JsonDepthDisabled_LoadsDeepObject()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            await File.WriteAllTextAsync(Path.Combine(dir, "default.json"), _NestedJsonObject(65))
+                .ConfigureAwait(false);
+
+            using SettingsManager mgr = new(dir, 0, 0);
+            IReadOnlyList<SettingsLoadWarning> warnings = mgr.Load();
+
+            await Assert.That(warnings).IsEmpty();
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    private static string _NestedJsonObject(int depth)
+    {
+        StringBuilder builder = new();
+        for (int i = 0; i < depth; i++)
+        {
+            builder.Append("{\"x\":");
+        }
+
+        builder.Append('1');
+        builder.Append('}', depth);
+        return builder.ToString();
     }
 }

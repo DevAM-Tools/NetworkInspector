@@ -228,6 +228,8 @@ internal static class ExportCommand
         string? filterExpression = null;
         string? profileName = null;
         string? settingsPath = null;
+        long maxConfigFileBytes = SettingsManager.DefaultMaxConfigFileBytes;
+        int maxJsonDepth = SettingsManager.DefaultMaxJsonDepth;
         int maxPackets = 0;
         long splitSize = 0;          // MiB
         int splitCount = 0;         // packets
@@ -276,6 +278,14 @@ internal static class ExportCommand
                 case "--SETTINGS-PATH":
                     settingsPath = CliArgumentParsing.GetNextArg(args, ref i, "--settings-path");
                     break;
+                case "--SETTINGS-MAX-CONFIG-FILE-BYTES":
+                    maxConfigFileBytes = CliArgumentParsing.ParseInt64(
+                        CliArgumentParsing.GetNextArg(args, ref i, "--settings-max-config-file-bytes"));
+                    break;
+                case "--SETTINGS-MAX-JSON-DEPTH":
+                    maxJsonDepth = CliArgumentParsing.ParseInt32(
+                        CliArgumentParsing.GetNextArg(args, ref i, "--settings-max-json-depth"));
+                    break;
                 case "--BLF-CACHE-SIZE":
                     blfCacheSize = CliArgumentParsing.ParseNonNegativeLong(
                         CliArgumentParsing.GetNextArg(args, ref i, "--blf-cache-size"));
@@ -315,6 +325,8 @@ internal static class ExportCommand
             filterExpression,
             profileName,
             settingsPath,
+            maxConfigFileBytes,
+            maxJsonDepth,
             maxPackets,
             splitSizeBytes,
             splitCount,
@@ -331,6 +343,8 @@ internal static class ExportCommand
         string? filterExpression,
         string? profileName,
         string? settingsPath,
+        long maxConfigFileBytes,
+        int maxJsonDepth,
         int maxPackets,
         long splitSizeBytes,
         int splitCount,
@@ -391,7 +405,11 @@ internal static class ExportCommand
         {
             try
             {
-                settingsManager = SettingsManagerFactory.Create(settingsPath, profileName);
+                settingsManager = SettingsManagerFactory.Create(
+                    settingsPath,
+                    profileName,
+                    maxConfigFileBytes,
+                    maxJsonDepth);
             }
             catch (ArgumentException ex)
             {
@@ -496,6 +514,10 @@ internal static class ExportCommand
         CliFilter.PrintUsageLines();
         Console.Error.WriteLine("  --profile <name>      Settings profile name");
         Console.Error.WriteLine("  --settings-path <dir> Base directory for settings storage");
+        Console.Error.WriteLine("  --settings-max-config-file-bytes <bytes>");
+        Console.Error.WriteLine("                        Max settings/referenced config JSON size in bytes (default 1073741824). <=0 disables.");
+        Console.Error.WriteLine("  --settings-max-json-depth <n>");
+        Console.Error.WriteLine("                        Max JSON nesting depth for settings/referenced config (default 1024). <=0 disables.");
         Console.Error.WriteLine("  --blf-cache-size <MB> Container cache budget for BLF sources (MiB)");
         Console.Error.WriteLine("  --progress <N>        Report progress every N packets");
         Console.Error.WriteLine("  --tolerant            Skip malformed frames instead of aborting");

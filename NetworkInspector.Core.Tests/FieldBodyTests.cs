@@ -46,14 +46,16 @@ internal sealed class FieldBodyTests
     }
 
     [Test]
-    public async Task FieldBody_IncrementChildCount_ThrowsAtLimit()
+    public async Task FieldBody_IncrementChildCount_SaturatesAtLimit()
     {
         FieldBody body = new(new FieldId(3))
         {
             ChildCount = ushort.MaxValue,
         };
 
-        await Assert.That(() => body.IncrementChildCount()).Throws<OverflowException>();
+        body.IncrementChildCount();
+
+        await Assert.That(body.ChildCount).IsEqualTo(ushort.MaxValue);
     }
 
     [Test]

@@ -54,14 +54,14 @@ public readonly struct FieldChildEnumerable(Packet packet, ushort parentIndex, b
                 {
                     p.MaterializeLazyField(parentIdx);
                 }
-                _CurrentIndex = p.GetFieldRef(parentIdx).FirstChildIndex;
+                _CurrentIndex = p.WaitUntilFieldPublished(p.GetFieldRef(parentIdx).FirstChildIndex);
                 return _CurrentIndex != FieldBody.NullIndex;
             }
             if (_CurrentIndex == FieldBody.NullIndex)
             {
                 return false;
             }
-            _CurrentIndex = p.GetFieldRef(_CurrentIndex).NextIndex;
+            _CurrentIndex = p.WaitUntilFieldPublished(p.GetFieldRef(_CurrentIndex).NextIndex);
             return _CurrentIndex != FieldBody.NullIndex;
         }
 
@@ -116,7 +116,7 @@ public ref struct FieldChildEnumerator
             }
         }
 
-        _CurrentIndex = packet.GetFieldRef(parentIndex).FirstChildIndex;
+        _CurrentIndex = packet.WaitUntilFieldPublished(packet.GetFieldRef(parentIndex).FirstChildIndex);
         _Started = false;
     }
 
@@ -140,7 +140,7 @@ public ref struct FieldChildEnumerator
         {
             return false;
         }
-        _CurrentIndex = _Packet.GetFieldRef(_CurrentIndex).NextIndex;
+        _CurrentIndex = _Packet.WaitUntilFieldPublished(_Packet.GetFieldRef(_CurrentIndex).NextIndex);
         return _CurrentIndex != FieldBody.NullIndex;
     }
 }
@@ -202,7 +202,7 @@ public readonly struct FieldDescendantEnumerable(Packet packet, ushort rootIndex
                 _Packet.MaterializeLazyField(_RootIndex);
             }
             // Push first child of root to begin DFS traversal (root itself is not yielded).
-            ushort firstChild = _Packet.GetFieldRef(_RootIndex).FirstChildIndex;
+            ushort firstChild = _Packet.WaitUntilFieldPublished(_Packet.GetFieldRef(_RootIndex).FirstChildIndex);
             if (firstChild != FieldBody.NullIndex)
             {
                 _Stack.Push(firstChild);
@@ -224,7 +224,7 @@ public readonly struct FieldDescendantEnumerable(Packet packet, ushort rootIndex
             }
             _Current = _Stack.Pop();
             // Push next sibling first so it is processed after all descendants of _Current.
-            ushort next = _Packet.GetFieldRef(_Current).NextIndex;
+            ushort next = _Packet.WaitUntilFieldPublished(_Packet.GetFieldRef(_Current).NextIndex);
             if (next != FieldBody.NullIndex)
             {
                 _Stack.Push(next);
@@ -236,7 +236,7 @@ public readonly struct FieldDescendantEnumerable(Packet packet, ushort rootIndex
                 _Packet.MaterializeLazyField(_Current);
             }
             // Push first child so it is processed before the sibling.
-            ushort child = _Packet.GetFieldRef(_Current).FirstChildIndex;
+            ushort child = _Packet.WaitUntilFieldPublished(_Packet.GetFieldRef(_Current).FirstChildIndex);
             if (child != FieldBody.NullIndex)
             {
                 _Stack.Push(child);
@@ -294,7 +294,7 @@ public ref struct FieldDescendantEnumerator
         }
 
         // Push the first child of the root to start traversal
-        ushort firstChild = packet.GetFieldRef(rootIndex).FirstChildIndex;
+        ushort firstChild = packet.WaitUntilFieldPublished(packet.GetFieldRef(rootIndex).FirstChildIndex);
         if (firstChild != FieldBody.NullIndex)
         {
             _Stack.Push(firstChild);
@@ -320,7 +320,7 @@ public ref struct FieldDescendantEnumerator
         _Current = _Stack.Pop();
 
         // Push next sibling first so children are processed before it
-        ushort next = _Packet.GetFieldRef(_Current).NextIndex;
+        ushort next = _Packet.WaitUntilFieldPublished(_Packet.GetFieldRef(_Current).NextIndex);
         if (next != FieldBody.NullIndex)
         {
             _Stack.Push(next);
@@ -334,7 +334,7 @@ public ref struct FieldDescendantEnumerator
         }
 
         // Push first child to descend
-        ushort child = _Packet.GetFieldRef(_Current).FirstChildIndex;
+        ushort child = _Packet.WaitUntilFieldPublished(_Packet.GetFieldRef(_Current).FirstChildIndex);
         if (child != FieldBody.NullIndex)
         {
             _Stack.Push(child);
@@ -417,12 +417,12 @@ public readonly struct FieldDfsEnumerable(Packet packet, bool materialize)
             }
             // Push next sibling first (lower in stack), then first child (top).
             // LIFO order ensures children are visited before siblings — correct DFS pre-order.
-            ushort next = _Packet.GetFieldRef(_Current).NextIndex;
+            ushort next = _Packet.WaitUntilFieldPublished(_Packet.GetFieldRef(_Current).NextIndex);
             if (next != FieldBody.NullIndex)
             {
                 _Stack.Push(next);
             }
-            ushort child = _Packet.GetFieldRef(_Current).FirstChildIndex;
+            ushort child = _Packet.WaitUntilFieldPublished(_Packet.GetFieldRef(_Current).FirstChildIndex);
             if (child != FieldBody.NullIndex)
             {
                 _Stack.Push(child);
@@ -496,13 +496,13 @@ public ref struct FieldDfsEnumerator
 
         // Push next sibling first, then first child (sibling-based DFS)
         // This keeps stack depth = tree depth (max 2 pushes per step)
-        ushort next = _Packet.GetFieldRef(_Current).NextIndex;
+        ushort next = _Packet.WaitUntilFieldPublished(_Packet.GetFieldRef(_Current).NextIndex);
         if (next != FieldBody.NullIndex)
         {
             _Stack.Push(next);
         }
 
-        ushort child = _Packet.GetFieldRef(_Current).FirstChildIndex;
+        ushort child = _Packet.WaitUntilFieldPublished(_Packet.GetFieldRef(_Current).FirstChildIndex);
         if (child != FieldBody.NullIndex)
         {
             _Stack.Push(child);

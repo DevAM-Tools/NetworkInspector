@@ -195,7 +195,10 @@ public sealed partial class UdpProtocol : IProtocol
     public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
     {
         Packet packet = parentField.Packet;
-        int layerKey = parentField.Packet.GetEffectLayerKey(data);
+        if (!parentField.TryGetEffectLayerKey(data, out int layerKey))
+        {
+            return ParseError.Custom(ProtocolName, "Parse data is not a slice of this packet's buffers.");
+        }
         bool isReplay = _IsReplay(packet.Id);
         bool raiseWatermark = !isReplay && _ParseNesting == 0;
         if (!isReplay)
@@ -221,7 +224,7 @@ public sealed partial class UdpProtocol : IProtocol
     }
 
     /// <summary>
-    /// Parse body. <paramref name="layerKey"/> is <see cref="Packet.GetEffectLayerKey"/> at the parse call and
+    /// Parse body. <paramref name="layerKey"/> is <see cref="MutField.TryGetEffectLayerKey"/> at the parse call and
     /// <paramref name="isReplay"/> selects effect replay over tracker mutation.
     /// </summary>
     private ParseResult _ParseBody(

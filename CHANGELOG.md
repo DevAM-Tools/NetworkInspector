@@ -11,6 +11,46 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.11.0] — Automotive dispatch, packet safety, and settings limits
+
+Delta since 0.10.0. Version is `0.11.0` in `Directory.Build.props`.
+
+This release corrects CAN, LIN, and FlexRay sub-protocol dispatch so Signal Message and other bindings sit beside the container on one identifier table and only for real application payloads. Packet parse, recycle, skip-tree reads, and concurrent field walks fail closed instead of throwing or tearing. Settings and referenced-config JSON honor configurable size and depth caps at construction. ZeroAlloc is 0.6.0.
+
+### Added
+
+- **`Field.TryGetValue` / `Field.TryGetCustomText`** — return `false` for skip-tree children outside the synthetic root and an in-flight skip-tree populator. Skip packets should read only the root; use these instead of `Value` / `CustomText` when a miss is expected.
+- **`MutField.TryGetEffectLayerKey` / `MutField.BindParseBuffer`** — protocol parse entry points for effect-layer keys and nested-parse buffer binding. A miss returns `false` or `ReadOnlyMemory<byte>.Empty`; it does not throw.
+- **`SettingsManager.MaxConfigFileBytes`** (default 1 GiB = 1073741824) and **`SettingsManager.MaxJsonDepth`** (default 1024) — construction-only caps for persisted settings JSON, the owned-group manifest, and `TryLoadReferencedJsonConfig` (Signal Message, PDU Transport, CAN, SOME/IP, …). Values `<= 0` disable that check.
+- **`SettingsManager` / `SettingsManagerFactory.Create`** overloads that take `maxConfigFileBytes` and `maxJsonDepth`.
+- CLI `convert` / `export` **`--settings-max-config-file-bytes <bytes>`** — sets `SettingsManager.MaxConfigFileBytes` at construction, before any settings or referenced-config load. Omit for 1 GiB. Values `<= 0` disable the file-size check.
+- CLI `convert` / `export` **`--settings-max-json-depth <n>`** — sets `SettingsManager.MaxJsonDepth` at construction. Omit for 1024. Values `<= 0` disable the depth check.
+- **`RecycleError.InvalidFieldTree`**, **`CacheStackMismatch`**, **`ParseIdGap`** — `TryParseFrame(recycle)` leaves the recycle packet unchanged and returns the error instead of mutating state.
+- **`Stack.WouldJump(PacketId)`** — read-only first-parse gap check used before recycle.
+
+### Changed
+
+- **Breaking (pre-1.0): `Packet.GetEffectLayerKey` and `Packet.BindParseBuffer` are internal.** From `IProtocol.Parse`, call `MutField.TryGetEffectLayerKey` and `MutField.BindParseBuffer`. IPv4, IPv6, TCP, UDP, and SOME/IP return a parse error when the parse slice is not a buffer of the packet.
+- **Breaking (pre-1.0): CAN dispatch uses exclusive tables.** Standard 11-bit classic and CAN FD frames (EFF clear) dispatch on `can.id`. Extended 29-bit frames (EFF set) and CAN XL acceptance fields dispatch on `can.extended_id`. CAN XL priority is not a `can.id` key. RTR and error CAN frames do not dispatch. Sub-protocols are siblings of the CAN container (`parentField`), not children of the CAN field.
+- **Breaking (pre-1.0): LIN dispatch keys the 6-bit frame ID**, not the protected ID / PID byte. Event frames (`msgType = 3`) and captures with a non-zero error-flags byte do not dispatch. Sub-protocols are siblings of the LIN container.
+- **Breaking (pre-1.0): FlexRay null frames (`NFI = 0`) do not dispatch** even when a payload length is declared. Sub-protocols are siblings of the FlexRay container.
+- **Breaking (pre-1.0): settings and referenced-config file size cap default is 1 GiB** (`SettingsManager.DefaultMaxConfigFileBytes` = 1073741824), up from 1 MiB. The cap is `SettingsManager.MaxConfigFileBytes` (`long`, construction-only / `SettingsManagerFactory.Create`). Values `<= 0` disable the check.
+- **Breaking (pre-1.0): settings and referenced-config JSON depth cap is `SettingsManager.MaxJsonDepth`** (default 1024, was a hardcoded 64). Construction-only. Values `<= 0` disable the check; System.Text.Json still applies a library ceiling.
+- **Breaking (pre-1.0): `JsonConfigStream.TryLoad` is not size- or depth-capped.** Callers must bound untrusted streams. File loads still honor `MaxConfigFileBytes` and `MaxJsonDepth`.
+- Concurrent field-tree walks wait on **`Packet.WaitUntilFieldPublished`** so a walker that observed a child/sibling pointer cannot read a default `FieldBody` before the matching publish.
+- Lazy populator storage is a single published **`LazyPopulatorTable`** so concurrent nested `AppendLazy` cannot tear array/offset on growth.
+- Recycle takes an exclusive **`_RecycleGate`** vs concurrent `MaterializeAll`; holding a `Field` across `TryParseFrame(recycle)` is unsupported.
+- Additional packet buffers freeze at **`Seal`**; at most 255 additional buffers (effect-layer key packs the index in 8 bits).
+- ZeroAlloc **0.6.0**.
+
+### Fixed
+
+- False automotive dispatch from overlapping CAN tables, CAN XL priority on `can.id`, LIN protected-ID keys, FlexRay null-frame payloads, and LIN Event / error-flag captures.
+- Torn packet field walks during concurrent parse when a tree link was published before its `FieldBody` slot.
+- Effect-layer key lookup throwing on a foreign slice; protocols now fail closed with a parse error.
+
+---
+
 ## [0.10.0] — Skip-field-tree parse, frame cache, and grow-only ValueCache
 
 Delta since 0.9.0. Version is `0.10.0` in `Directory.Build.props`.

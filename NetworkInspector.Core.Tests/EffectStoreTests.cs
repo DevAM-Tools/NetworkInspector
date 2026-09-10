@@ -4,7 +4,7 @@ namespace NetworkInspector.Core.Tests;
 
 /// <summary>
 /// Pins <see cref="Collections.EffectStore{T}"/> semantics used by stateful protocols to key effects
-/// by <c>(PacketId, LayerKey)</c> where layer key is <see cref="Packet.GetEffectLayerKey"/>.
+/// by <c>(PacketId, LayerKey)</c> where layer key is <see cref="MutField.TryGetEffectLayerKey"/>.
 /// </summary>
 internal sealed class EffectStoreTests
 {

@@ -196,6 +196,8 @@ internal static class ConvertCommand
         string? filterExpression = null;
         string? profileName = null;
         string? settingsPath = null;
+        long maxConfigFileBytes = SettingsManager.DefaultMaxConfigFileBytes;
+        int maxJsonDepth = SettingsManager.DefaultMaxJsonDepth;
         int maxFrames = 0;
         long splitSize = 0;          // MiB; converted to bytes before use
         int splitCount = 0;          // frames
@@ -221,6 +223,14 @@ internal static class ConvertCommand
                     break;
                 case "--SETTINGS-PATH":
                     settingsPath = CliArgumentParsing.GetNextArg(args, ref i, "--settings-path");
+                    break;
+                case "--SETTINGS-MAX-CONFIG-FILE-BYTES":
+                    maxConfigFileBytes = CliArgumentParsing.ParseInt64(
+                        CliArgumentParsing.GetNextArg(args, ref i, "--settings-max-config-file-bytes"));
+                    break;
+                case "--SETTINGS-MAX-JSON-DEPTH":
+                    maxJsonDepth = CliArgumentParsing.ParseInt32(
+                        CliArgumentParsing.GetNextArg(args, ref i, "--settings-max-json-depth"));
                     break;
                 case "-N" or "--MAX-FRAMES":
                     maxFrames = CliArgumentParsing.ParseNonNegativeInt(
@@ -283,6 +293,8 @@ internal static class ConvertCommand
             filterExpression,
             profileName,
             settingsPath,
+            maxConfigFileBytes,
+            maxJsonDepth,
             maxFrames,
             splitSizeBytes,
             splitCount,
@@ -299,6 +311,8 @@ internal static class ConvertCommand
         string? filterExpression,
         string? profileName,
         string? settingsPath,
+        long maxConfigFileBytes,
+        int maxJsonDepth,
         int maxFrames,
         long splitSizeBytes,  // bytes; 0 = no limit
         int splitCount,      // frames
@@ -345,7 +359,11 @@ internal static class ConvertCommand
         SettingsManager? settingsManager = null;
         try
         {
-            settingsManager = SettingsManagerFactory.Create(settingsPath, profileName);
+            settingsManager = SettingsManagerFactory.Create(
+                settingsPath,
+                profileName,
+                maxConfigFileBytes,
+                maxJsonDepth);
         }
         catch (ArgumentException ex)
         {
@@ -473,6 +491,10 @@ internal static class ConvertCommand
         Console.Error.WriteLine("                        (frames are parsed only when a filter is set)");
         Console.Error.WriteLine("  --profile <name>      Settings profile (available to sources/exporters)");
         Console.Error.WriteLine("  --settings-path <dir> Base directory for settings storage");
+        Console.Error.WriteLine("  --settings-max-config-file-bytes <bytes>");
+        Console.Error.WriteLine("                        Max settings/referenced config JSON size in bytes (default 1073741824). <=0 disables.");
+        Console.Error.WriteLine("  --settings-max-json-depth <n>");
+        Console.Error.WriteLine("                        Max JSON nesting depth for settings/referenced config (default 1024). <=0 disables.");
         Console.Error.WriteLine("  --blf-cache-size <MB> Container cache budget for BLF sources (MiB)");
         Console.Error.WriteLine("  --progress <N>        Report progress every N frames");
         Console.Error.WriteLine("  --tolerant            Skip malformed frames instead of aborting");

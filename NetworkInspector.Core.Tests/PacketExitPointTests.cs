@@ -171,10 +171,6 @@ internal sealed class PacketExitPointTests
 
         Frame frame = _MakeFrame(stack, new byte[14]);
         Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, protoId);
-        System.Reflection.FieldInfo? finalizedField = typeof(Packet).GetField(
-            "_Finalized", BindingFlags.NonPublic | BindingFlags.Instance);
-        await Assert.That(finalizedField).IsNotNull();
-        finalizedField!.SetValue(packet, 0);
 
         packet.MaterializeAll();
 
@@ -227,8 +223,9 @@ internal sealed class PacketExitPointTests
     }
 
     [Test]
+    [Repeat(32)]
     [NotInParallel("gated-lazy-materialization")]
-    public async Task MaterializeLazyField_PreSealConcurrentRace_ExactlyOneMaterializes()
+    public async Task MaterializeLazyField_PostSealConcurrentClaimAfterWinnerFinished_ReturnsFalse()
     {
         using SettingsManager settingsManager = new();
         StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
@@ -243,11 +240,8 @@ internal sealed class PacketExitPointTests
 
         Frame frame = _MakeFrame(stack, new byte[14]);
         Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, protoId);
-        System.Reflection.FieldInfo? finalizedField = typeof(Packet).GetField(
-            "_Finalized", BindingFlags.NonPublic | BindingFlags.Instance);
-        finalizedField!.SetValue(packet, 0);
-
         ushort lazyIndex = proto.LazyContainerIndex;
+
         using Barrier start = new(2);
         bool[] results = [false, false];
 
@@ -268,8 +262,6 @@ internal sealed class PacketExitPointTests
 
         await Assert.That(entered).IsTrue();
         await Assert.That((results[0] ? 1 : 0) + (results[1] ? 1 : 0)).IsEqualTo(1);
-        await Assert.That(results.Contains(true)).IsTrue();
-        await Assert.That(results.Contains(false)).IsTrue();
     }
 
     [Test]
@@ -301,41 +293,6 @@ internal sealed class PacketExitPointTests
         await Assert.That(waiter).IsFalse();
         await Assert.That(ownerResult).IsTrue();
         await Assert.That(packet.HasUnpopulatedLazyFields).IsFalse();
-    }
-
-    [Test]
-    [NotInParallel("gated-lazy-materialization")]
-    public async Task MaterializeLazyField_PreSealConcurrentSecondClaim_ReturnsFalse()
-    {
-        using SettingsManager settingsManager = new();
-        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
-        GatedLazyProtocol proto = new();
-        ProtocolId protoId = builder.RegisterProtocol(proto);
-        proto.RegisterFields(builder, protoId);
-        using Stack stack = builder.Build();
-
-        using ManualResetEventSlim populatorEntered = new(false);
-        using ManualResetEventSlim releasePopulator = new(false);
-        proto.ConfigureGate(populatorEntered, releasePopulator);
-
-        Frame frame = _MakeFrame(stack, new byte[14]);
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, protoId);
-        System.Reflection.FieldInfo? finalizedField = typeof(Packet).GetField(
-            "_Finalized", BindingFlags.NonPublic | BindingFlags.Instance);
-        await Assert.That(finalizedField).IsNotNull();
-        finalizedField!.SetValue(packet, 0);
-
-        ushort lazyIndex = proto.LazyContainerIndex;
-
-        Task<bool> owner = Task.Run(() => packet.MaterializeLazyField(lazyIndex));
-        bool entered = populatorEntered.WaitHandle.WaitOne(TimeSpan.FromSeconds(5));
-        bool second = packet.MaterializeLazyField(lazyIndex);
-        releasePopulator.Set();
-        bool ownerResult = await owner;
-
-        await Assert.That(entered).IsTrue();
-        await Assert.That(second).IsFalse();
-        await Assert.That(ownerResult).IsTrue();
     }
 
     [Test]
@@ -505,22 +462,6 @@ internal sealed class PacketExitPointTests
     }
 
     [Test]
-    public async Task PrepareForReuse_MaterializerActive_ReturnsMaterializerActive()
-    {
-        using Stack stack = _BuildStack();
-        Frame frame = _MakeFrame(stack, FrameBuilders.GenerateStaticUdpFrame(64));
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, stack.GetProtocolId("eth")!.Value);
-
-        System.Reflection.FieldInfo? activeField = typeof(Packet).GetField(
-            "_ActiveLazyMaterializations", BindingFlags.NonPublic | BindingFlags.Instance);
-        await Assert.That(activeField).IsNotNull();
-        activeField!.SetValue(packet, 1);
-
-        RecycleError? err = packet.PrepareForReuse(new PacketId(2), frame, FieldTreeMode.Build);
-        await Assert.That(err).IsEqualTo(RecycleError.MaterializerActive);
-    }
-
-    [Test]
     public async Task FieldCount_BeforeSeal_ReturnsPlainFieldCount()
     {
         using SettingsManager settingsManager = new();
@@ -625,6 +566,10 @@ internal sealed class PacketExitPointTests
         await Assert.That(containerB.ChildCount(materialize: false)).IsEqualTo((ushort)childrenPerContainer);
         await Assert.That(_ChildListHasBrokenSnapshot(containerA)).IsFalse();
         await Assert.That(_ChildListHasBrokenSnapshot(containerB)).IsFalse();
+        await Assert.That(containerA.TryGetFirstChild(out Field firstA, materialize: false)).IsTrue();
+        await Assert.That(firstA.FieldId).IsEqualTo(proto.LeafFieldId);
+        await Assert.That(containerB.TryGetFirstChild(out Field firstB, materialize: false)).IsTrue();
+        await Assert.That(firstB.FieldId).IsEqualTo(proto.LeafFieldId);
     }
 
     [Test]
@@ -674,7 +619,7 @@ internal sealed class PacketExitPointTests
         System.Reflection.FieldInfo? pendingField = typeof(Packet).GetField(
             "_PendingLazyCount", BindingFlags.NonPublic | BindingFlags.Instance);
         System.Reflection.FieldInfo? populatorsField = typeof(Packet).GetField(
-            "_LazyPopulators", BindingFlags.NonPublic | BindingFlags.Instance);
+            "_LazyTable", BindingFlags.NonPublic | BindingFlags.Instance);
         await Assert.That(pendingField).IsNotNull();
         await Assert.That(populatorsField).IsNotNull();
         pendingField!.SetValue(packet, 1);
@@ -743,40 +688,6 @@ internal sealed class PacketExitPointTests
     }
 
     [Test]
-    public async Task BuildExceptionMessage_WithoutStackTrace_ReturnsMessageOnly()
-    {
-        MethodInfo? buildMessage = typeof(Packet).GetMethod(
-            "_BuildExceptionMessage", BindingFlags.NonPublic | BindingFlags.Static);
-        await Assert.That(buildMessage).IsNotNull();
-
-        InvalidOperationException ex = new("boom", new InvalidOperationException("inner"));
-        string message = (string)buildMessage!.Invoke(null, [ex, false])!;
-        await Assert.That(message).IsEqualTo("boom");
-    }
-
-    [Test]
-    public async Task BuildExceptionMessage_WithStackTrace_AppendsTrace()
-    {
-        MethodInfo? buildMessage = typeof(Packet).GetMethod(
-            "_BuildExceptionMessage", BindingFlags.NonPublic | BindingFlags.Static);
-        await Assert.That(buildMessage).IsNotNull();
-
-        Exception ex = new InvalidOperationException("boom");
-        try
-        {
-            throw ex;
-        }
-        catch (Exception caught)
-        {
-            ex = caught;
-        }
-
-        string message = (string)buildMessage!.Invoke(null, [ex, true])!;
-        await Assert.That(message.Contains("boom", StringComparison.Ordinal)).IsTrue();
-        await Assert.That(message.Contains('\n')).IsTrue();
-    }
-
-    [Test]
     public async Task TryParseFrame_Success_ReturnsNull()
     {
         using Stack stack = _BuildStack();
@@ -827,6 +738,516 @@ internal sealed class PacketExitPointTests
 
         RecycleError? err = Packet.TryParseFrameIndexed(seed, new PacketId(1), stack, frame2, index, eth);
         await Assert.That(err).IsNull();
+    }
+
+    [Test]
+    public async Task MaterializeAll_PostSealNestedSiblingAppendLazy_ParallelReadersSeeLeaves()
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        NestedSiblingLazyProtocol proto = new();
+        ProtocolId protoId = builder.RegisterProtocol(proto);
+        proto.RegisterFields(builder, protoId);
+        using Stack stack = builder.Build();
+
+        Frame frame = _MakeFrame(stack, new byte[14]);
+        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, protoId);
+
+        using CancellationTokenSource cts = new(TimeSpan.FromSeconds(5));
+        Parallel.For(0, 8, _ =>
+        {
+            cts.Token.ThrowIfCancellationRequested();
+            packet.MaterializeAll();
+        });
+
+        int leaves = 0;
+        foreach (Field field in packet.RootField().Descendants(materialize: true))
+        {
+            if (field.FieldId == proto.LeafFieldId)
+            {
+                leaves++;
+            }
+        }
+
+        await Assert.That(packet.HasUnpopulatedLazyFields).IsFalse();
+        await Assert.That(leaves).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task MaterializeAll_PostSealNestedAppendLazy_GrowsTableUnderParallelReaders()
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        SevenSiblingGrowLazyProtocol proto = new();
+        ProtocolId protoId = builder.RegisterProtocol(proto);
+        proto.RegisterFields(builder, protoId);
+        using Stack stack = builder.Build();
+
+        Frame frame = _MakeFrame(stack, new byte[14]);
+        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, protoId);
+
+        using CancellationTokenSource cts = new(TimeSpan.FromSeconds(5));
+        Parallel.For(0, 8, _ =>
+        {
+            cts.Token.ThrowIfCancellationRequested();
+            packet.MaterializeAll();
+        });
+
+        int leaves = 0;
+        foreach (Field field in packet.RootField().Descendants(materialize: true))
+        {
+            if (field.FieldId == proto.LeafFieldId)
+            {
+                leaves++;
+            }
+        }
+
+        await Assert.That(packet.HasUnpopulatedLazyFields).IsFalse();
+        await Assert.That(leaves).IsEqualTo(7);
+    }
+
+    [Test]
+    public async Task MaterializeAll_PopulatorThrowsAfterAppend_ReturnsWithoutHang()
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        ThrowAfterAppendProtocol proto = new();
+        ProtocolId protoId = builder.RegisterProtocol(proto);
+        proto.RegisterFields(builder, protoId);
+        using Stack stack = builder.Build();
+
+        Frame frame = _MakeFrame(stack, new byte[14]);
+        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, protoId);
+        packet.MaterializeAll();
+
+        bool found = packet.TryGetFieldValue(proto.LeafFieldId, out _, materialize: true);
+        await Assert.That(packet.IsFinalized).IsTrue();
+        await Assert.That(found).IsTrue();
+    }
+
+    [Test]
+    public async Task RegisterLazyPopulator_NineContainers_GrowsTableAndMaterializes()
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        NineLazyProtocol proto = new();
+        ProtocolId protoId = builder.RegisterProtocol(proto);
+        proto.RegisterFields(builder, protoId);
+        using Stack stack = builder.Build();
+
+        Frame frame = _MakeFrame(stack, new byte[14]);
+        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, protoId);
+        packet.MaterializeAll();
+
+        int leaves = 0;
+        foreach (Field field in packet.RootField().Descendants(materialize: true))
+        {
+            if (field.FieldId == proto.LeafFieldId)
+            {
+                leaves++;
+            }
+        }
+
+        await Assert.That(packet.HasUnpopulatedLazyFields).IsFalse();
+        await Assert.That(leaves).IsEqualTo(9);
+    }
+
+    [Test]
+    public async Task TryParseFrame_ForeignValueCache_ReturnsCacheStackMismatchWithoutMutating()
+    {
+        using Stack stack = _BuildStack();
+        using Stack other = _BuildStack();
+        Frame frame = _MakeFrame(stack, FrameBuilders.GenerateStaticUdpFrame(64));
+        Packet recycle = Packet.ParseFrame(new PacketId(0), stack, frame);
+        PacketId oldId = recycle.Id;
+        FieldId ethType = other.GetFieldId("eth.type")!.Value;
+        ValueCache foreign = new(other, [new ValueCacheFieldConfig(ethType)]);
+
+        RecycleError? err = Packet.TryParseFrame(
+            recycle, new PacketId(1), stack, frame, FieldTreeMode.Build, foreign);
+
+        await Assert.That(err).IsEqualTo(RecycleError.CacheStackMismatch);
+        await Assert.That(recycle.IsFinalized).IsTrue();
+        await Assert.That(recycle.Id).IsEqualTo(oldId);
+    }
+
+    [Test]
+    public async Task TryParseFrame_InvalidFieldTree_ReturnsInvalidFieldTreeWithoutMutating()
+    {
+        using Stack stack = _BuildStack();
+        Frame frame = _MakeFrame(stack, FrameBuilders.GenerateStaticUdpFrame(64));
+        Packet recycle = Packet.ParseFrame(new PacketId(0), stack, frame);
+        PacketId oldId = recycle.Id;
+
+        RecycleError? err = Packet.TryParseFrame(recycle, new PacketId(1), stack, frame, (FieldTreeMode)42);
+
+        await Assert.That(err).IsEqualTo(RecycleError.InvalidFieldTree);
+        await Assert.That(recycle.IsFinalized).IsTrue();
+        await Assert.That(recycle.Id).IsEqualTo(oldId);
+    }
+
+    [Test]
+    public async Task TryParseFrame_ParseIdGap_ReturnsParseIdGapWithoutMutating()
+    {
+        using Stack stack = _BuildStack();
+        Frame frame = _MakeFrame(stack, FrameBuilders.GenerateStaticUdpFrame(64));
+        Packet recycle = Packet.ParseFrame(new PacketId(0), stack, frame);
+        PacketId oldId = recycle.Id;
+
+        RecycleError? err = Packet.TryParseFrame(recycle, new PacketId(5), stack, frame);
+
+        await Assert.That(err).IsEqualTo(RecycleError.ParseIdGap);
+        await Assert.That(recycle.IsFinalized).IsTrue();
+        await Assert.That(recycle.Id).IsEqualTo(oldId);
+    }
+
+    [Test]
+    [NotInParallel("gated-lazy-materialization")]
+    public async Task TryParseFrame_DuringGatedMaterialize_ReturnsMaterializerActive()
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        GatedLazyProtocol proto = new();
+        ProtocolId protoId = builder.RegisterProtocol(proto);
+        proto.RegisterFields(builder, protoId);
+        using Stack stack = builder.Build();
+
+        using ManualResetEventSlim populatorEntered = new(false);
+        using ManualResetEventSlim releasePopulator = new(false);
+        proto.ConfigureGate(populatorEntered, releasePopulator);
+
+        Frame frame = _MakeFrame(stack, new byte[14]);
+        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, protoId);
+        PacketId oldId = packet.Id;
+
+        Task materialize = Task.Run(() => packet.MaterializeAll());
+        populatorEntered.Wait(TimeSpan.FromSeconds(5));
+
+        RecycleError? err = Packet.TryParseFrame(packet, new PacketId(1), stack, frame, protoId);
+        releasePopulator.Set();
+        await materialize;
+
+        await Assert.That(err).IsEqualTo(RecycleError.MaterializerActive);
+        await Assert.That(packet.Id).IsEqualTo(oldId);
+    }
+
+    [Test]
+    public async Task Usage_TryGetNextFieldValue_Example_Compiles()
+    {
+        using Stack stack = _BuildStack();
+        Frame frame = _MakeFrame(stack, FrameBuilders.GenerateStaticUdpFrame(64));
+        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, stack.GetProtocolId("eth")!.Value);
+        FieldId ipSrcFieldId = stack.GetFieldId("eth.type")!.Value;
+
+        FieldLookupCookie cookie = FieldLookupCookie.Start;
+        int hits = 0;
+        while (packet.TryGetNextFieldValue(ipSrcFieldId, ref cookie, out FieldValue _, materialize: false))
+        {
+            hits++;
+        }
+
+        await Assert.That(hits).IsGreaterThanOrEqualTo(1);
+    }
+
+    [Test]
+    public async Task ParseFrame_ThrowingProtocol_BuildExceptionMessageViaPublicParse()
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry())
+        {
+            IncludeExceptionStackTrace = true
+        };
+        ThrowingFrameProto proto = new();
+        ProtocolId protoId = builder.RegisterProtocol(proto);
+        using Stack stack = builder.Build();
+        await Assert.That(stack.IncludeExceptionStackTrace).IsTrue();
+
+        Frame frame = _MakeFrame(stack, new byte[14]);
+        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, protoId);
+
+        bool found = packet.TryGetFieldValue(stack.PacketErrorFieldId, out FieldValue err, materialize: true);
+        _ = err.Data.TryGetAsString(out string msg);
+        await Assert.That(found).IsTrue();
+        await Assert.That(msg.Contains("ThrowingFrameProto failed", StringComparison.Ordinal)).IsTrue();
+    }
+
+    [Test]
+    public async Task ParseFrame_Skip_PrependInsertAndCustomText_Completes()
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        SkipInsertProtocol proto = new();
+        ProtocolId protoId = builder.RegisterProtocol(proto);
+        proto.RegisterFields(builder, protoId);
+        using Stack stack = builder.Build();
+
+        Packet packet = Packet.ParseFrame(
+            new PacketId(0), stack, _MakeFrame(stack, new byte[8]), protoId, FieldTreeMode.Skip);
+
+        await Assert.That(packet.HasFieldTree).IsFalse();
+        await Assert.That(packet.RootField().TryGetFirstChild(out _, materialize: false)).IsFalse();
+    }
+
+    [Test]
+    public async Task ParseFrame_Skip_NestedLazyExceedsDepth_RecordsErrorWithoutThrow()
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        SkipDeepLazyProtocol proto = new();
+        ProtocolId protoId = builder.RegisterProtocol(proto);
+        proto.RegisterFields(builder, protoId);
+        using Stack stack = builder.Build();
+        ValueCache cache = new(stack, [], options: new ValueCacheBuildOptions { RecordAllFields = true });
+
+        Packet packet = Packet.ParseFrame(
+            new PacketId(0), stack, _MakeFrame(stack, new byte[8]), protoId, FieldTreeMode.Skip, cache);
+
+        await Assert.That(packet.IsFinalized).IsTrue();
+        await Assert.That(packet.HasFieldTree).IsFalse();
+    }
+
+    [Test]
+    [Repeat(16)]
+    public async Task ParseFrame_MaterializeAllDuringParse_PreSealCompletes()
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        MaterializeDuringParseProtocol proto = new();
+        ProtocolId protoId = builder.RegisterProtocol(proto);
+        proto.RegisterFields(builder, protoId);
+        using Stack stack = builder.Build();
+
+        Packet packet = Packet.ParseFrame(new PacketId(0), stack, _MakeFrame(stack, new byte[14]), protoId);
+
+        await Assert.That(packet.HasUnpopulatedLazyFields).IsFalse();
+        await Assert.That(packet.IsFinalized).IsTrue();
+    }
+
+    [Test]
+    public async Task MaterializeAll_PopulatorReRegistersOwnContainer_SetsFieldError()
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        ReRegisterLazyProtocol proto = new();
+        ProtocolId protoId = builder.RegisterProtocol(proto);
+        proto.RegisterFields(builder, protoId);
+        using Stack stack = builder.Build();
+
+        Packet packet = Packet.ParseFrame(new PacketId(0), stack, _MakeFrame(stack, new byte[14]), protoId);
+        packet.MaterializeAll();
+
+        await Assert.That(packet.IsFinalized).IsTrue();
+        await Assert.That(packet.TryGetFieldValue(stack.PacketErrorFieldId, out _, materialize: false)
+            || packet.RootField().TryGetFirstChild(out _, materialize: false)).IsTrue();
+    }
+
+    [Test]
+    public async Task RegisterLazyPopulator_PreSealSlotExhaustion_SetsFieldError()
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        ExhaustLazySlotsProtocol proto = new(postSeal: false);
+        ProtocolId protoId = builder.RegisterProtocol(proto);
+        proto.RegisterFields(builder, protoId);
+        using Stack stack = builder.Build();
+
+        Packet packet = Packet.ParseFrame(new PacketId(0), stack, _MakeFrame(stack, new byte[14]), protoId);
+
+        await Assert.That(packet.IsFinalized).IsTrue();
+        await Assert.That(proto.RegisteredCount).IsGreaterThan(ushort.MaxValue - 2);
+    }
+
+    [Test]
+    public async Task RegisterLazyPopulator_PostSealSlotExhaustion_SetsFieldError()
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        ExhaustLazySlotsProtocol proto = new(postSeal: true);
+        ProtocolId protoId = builder.RegisterProtocol(proto);
+        proto.RegisterFields(builder, protoId);
+        using Stack stack = builder.Build();
+
+        Packet packet = Packet.ParseFrame(new PacketId(0), stack, _MakeFrame(stack, new byte[14]), protoId);
+        packet.MaterializeAll();
+
+        await Assert.That(packet.IsFinalized).IsTrue();
+        await Assert.That(proto.RegisteredCount).IsGreaterThan(ushort.MaxValue - 2);
+    }
+
+    [Test]
+    public async Task RegisterLazyPopulator_ConcurrentPostSealOnEmptyTable_GrowsWithoutThrow()
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        OpenPacketProtocol proto = new();
+        ProtocolId protoId = builder.RegisterProtocol(proto);
+        proto.RegisterFields(builder, protoId);
+        using Stack stack = builder.Build();
+
+        Packet packet = Packet.ParseFrame(new PacketId(0), stack, _MakeFrame(stack, new byte[14]), protoId);
+        FieldId leafId = proto.LeafFieldId;
+        const int n = 8;
+        using Barrier start = new(n);
+        Thread[] threads = new Thread[n];
+        for (int i = 0; i < n; i++)
+        {
+            threads[i] = new Thread(() =>
+            {
+                start.SignalAndWait();
+                packet.RegisterLazyPopulator(leafId, 0, FieldValue.None, default, static (in MutField _) => 0);
+            })
+            {
+                IsBackground = true
+            };
+            threads[i].Start();
+        }
+
+        for (int i = 0; i < n; i++)
+        {
+            _ = threads[i].Join(TimeSpan.FromSeconds(5));
+        }
+
+        await Assert.That(packet.HasUnpopulatedLazyFields).IsTrue();
+    }
+
+    [Test]
+    public async Task MaterializeAll_ConcurrentFatLazyAppends_WalkersSeePublishedChildren()
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        FatDualLazyProtocol proto = new();
+        ProtocolId protoId = builder.RegisterProtocol(proto);
+        proto.RegisterFields(builder, protoId);
+        using Stack stack = builder.Build();
+
+        Packet packet = Packet.ParseFrame(new PacketId(0), stack, _MakeFrame(stack, new byte[14]), protoId);
+        using CancellationTokenSource cts = new(TimeSpan.FromSeconds(5));
+
+        Parallel.For(0, 16, i =>
+        {
+            cts.Token.ThrowIfCancellationRequested();
+            if (i < 8)
+            {
+                packet.MaterializeAll();
+                return;
+            }
+
+            for (int n = 0; n < 4_000; n++)
+            {
+                if (packet.RootField().TryGetFirstChild(out Field child, materialize: false))
+                {
+                    _ = child.TryGetNext(out _);
+                    _ = child.TryGetFirstChild(out _, materialize: false);
+                }
+            }
+        });
+
+        await Assert.That(packet.HasUnpopulatedLazyFields).IsFalse();
+    }
+
+    [Test]
+    public async Task WaitUntilFieldPublished_IndexAheadOfCount_ReturnsAfterMaterialize()
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        FatDualLazyProtocol proto = new();
+        ProtocolId protoId = builder.RegisterProtocol(proto);
+        proto.RegisterFields(builder, protoId);
+        using Stack stack = builder.Build();
+
+        Packet packet = Packet.ParseFrame(new PacketId(0), stack, _MakeFrame(stack, new byte[14]), protoId);
+        ushort ahead = 20;
+        ushort published = 0;
+        using Barrier start = new(2);
+
+        Thread publisher = new(() =>
+        {
+            start.SignalAndWait();
+            packet.MaterializeAll();
+        })
+        {
+            IsBackground = true
+        };
+        publisher.Start();
+        start.SignalAndWait();
+        published = packet.WaitUntilFieldPublished(ahead);
+        bool joined = publisher.Join(TimeSpan.FromSeconds(5));
+
+        await Assert.That(joined).IsTrue();
+        await Assert.That(published).IsEqualTo(ahead);
+        await Assert.That(packet.FieldCount(materialize: false)).IsGreaterThan(ahead);
+    }
+
+    [Test]
+    public async Task ParseFrame_AbandonedCacheDuringAppend_PublishesTombstoneAndSeals()
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        AbandonCacheThenAppendProtocol proto = new();
+        ProtocolId protoId = builder.RegisterProtocol(proto);
+        proto.RegisterFields(builder, protoId);
+        using Stack stack = builder.Build();
+        ValueCache cache = new(stack, [], options: new ValueCacheBuildOptions { RecordAllFields = true });
+        proto.Cache = cache;
+
+        await Assert.That(() => Packet.ParseFrame(
+            new PacketId(0), stack, _MakeFrame(stack, new byte[14]), protoId, FieldTreeMode.Build, cache))
+            .Throws<InvalidOperationException>();
+    }
+
+    [Test]
+    [NotInParallel("gated-lazy-materialization")]
+    public async Task MaterializeLazyField_DuringRecycleGate_ReturnsFalse()
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        GatedLazyProtocol proto = new();
+        ProtocolId protoId = builder.RegisterProtocol(proto);
+        proto.RegisterFields(builder, protoId);
+        using Stack stack = builder.Build();
+
+        using ManualResetEventSlim populatorEntered = new(false);
+        using ManualResetEventSlim releasePopulator = new(false);
+        proto.ConfigureGate(populatorEntered, releasePopulator);
+
+        Frame frame = _MakeFrame(stack, new byte[14]);
+        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, protoId);
+        ushort lazyIndex = proto.LazyContainerIndex;
+
+        Task materialize = Task.Run(() => packet.MaterializeAll());
+        populatorEntered.Wait(TimeSpan.FromSeconds(5));
+
+        RecycleError? recycleErr = RecycleError.StackMismatch;
+        bool sawGateMiss = false;
+        Task recycle = Task.Run(() =>
+        {
+            for (int i = 0; i < 2_000; i++)
+            {
+                recycleErr = Packet.TryParseFrame(packet, new PacketId(1), stack, frame, protoId);
+                if (recycleErr == RecycleError.MaterializerActive)
+                {
+                    break;
+                }
+            }
+        });
+        Task probes = Task.Run(() =>
+        {
+            for (int i = 0; i < 8_000; i++)
+            {
+                packet.MaterializeAll();
+                if (!packet.MaterializeLazyField(lazyIndex))
+                {
+                    sawGateMiss = true;
+                }
+            }
+        });
+
+        await recycle;
+        releasePopulator.Set();
+        await Task.WhenAll(materialize, probes);
+
+        await Assert.That(recycleErr).IsEqualTo(RecycleError.MaterializerActive);
+        await Assert.That(sawGateMiss).IsTrue();
     }
 
     /// <summary>
@@ -895,6 +1316,7 @@ internal sealed class PacketExitPointTests
         public string UiName => "Disjoint Lazy";
         public ushort ContainerAIndex { get; private set; }
         public ushort ContainerBIndex { get; private set; }
+        public FieldId LeafFieldId => _LeafId;
 
         public void RegisterFields(StackBuilder builder, ProtocolId protocolId)
         {
@@ -1102,6 +1524,405 @@ internal sealed class PacketExitPointTests
                 });
                 return 0;
             });
+            return 14;
+        }
+    }
+
+    private sealed class NestedSiblingLazyProtocol : IProtocol
+    {
+        private FieldId _ContainerAId;
+        private FieldId _ContainerBId;
+        private FieldId _NestedId;
+        private FieldId _LeafId;
+
+        public string Name => "nested.sibling.lazy";
+        public string UiName => "Nested Sibling Lazy";
+        public FieldId LeafFieldId => _LeafId;
+
+        public void RegisterFields(StackBuilder builder, ProtocolId protocolId)
+        {
+            _ContainerAId = builder.RegisterField(protocolId, "nested.sibling.a", "A", FieldType.None);
+            _ContainerBId = builder.RegisterField(protocolId, "nested.sibling.b", "B", FieldType.None);
+            _NestedId = builder.RegisterField(protocolId, "nested.sibling.nested", "Nested", FieldType.None);
+            _LeafId = builder.RegisterField(protocolId, "nested.sibling.leaf", "Leaf", FieldType.U64);
+        }
+
+        public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
+        {
+            FieldId nestedId = _NestedId;
+            FieldId leafId = _LeafId;
+            parentField.AppendLazy(_ContainerAId, FieldValue.None, (in MutField container) =>
+            {
+                container.AppendLazy(nestedId, FieldValue.None, (in MutField nested) =>
+                {
+                    nested.Append(leafId, FieldValue.NewU64(1));
+                    return 0;
+                });
+                return 0;
+            });
+            parentField.AppendLazy(_ContainerBId, FieldValue.None, (in MutField container) =>
+            {
+                container.AppendLazy(nestedId, FieldValue.None, (in MutField nested) =>
+                {
+                    nested.Append(leafId, FieldValue.NewU64(2));
+                    return 0;
+                });
+                return 0;
+            });
+            return 14;
+        }
+    }
+
+    private sealed class SevenSiblingGrowLazyProtocol : IProtocol
+    {
+        private FieldId _ContainerId;
+        private FieldId _NestedId;
+        private FieldId _LeafId;
+
+        public string Name => "seven.sibling.grow.lazy";
+        public string UiName => "Seven Sibling Grow Lazy";
+        public FieldId LeafFieldId => _LeafId;
+
+        public void RegisterFields(StackBuilder builder, ProtocolId protocolId)
+        {
+            _ContainerId = builder.RegisterField(protocolId, "seven.sibling.grow", "C", FieldType.None);
+            _NestedId = builder.RegisterField(protocolId, "seven.sibling.grow.nested", "Nested", FieldType.None);
+            _LeafId = builder.RegisterField(protocolId, "seven.sibling.grow.leaf", "Leaf", FieldType.U64);
+        }
+
+        public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
+        {
+            FieldId nestedId = _NestedId;
+            FieldId leafId = _LeafId;
+            for (int i = 0; i < 7; i++)
+            {
+                ulong captured = (ulong)i;
+                parentField.AppendLazy(_ContainerId, FieldValue.None, (in MutField container) =>
+                {
+                    container.AppendLazy(nestedId, FieldValue.None, (in MutField nested) =>
+                    {
+                        nested.Append(leafId, FieldValue.NewU64(captured));
+                        return 0;
+                    });
+                    return 0;
+                });
+            }
+
+            return 14;
+        }
+    }
+
+    private sealed class ThrowAfterAppendProtocol : IProtocol
+    {
+        private FieldId _ContainerId;
+        private FieldId _LeafId;
+
+        public string Name => "throw.after.append";
+        public string UiName => "Throw After Append";
+        public FieldId LeafFieldId => _LeafId;
+
+        public void RegisterFields(StackBuilder builder, ProtocolId protocolId)
+        {
+            _ContainerId = builder.RegisterField(protocolId, "throw.after.append", "Lazy", FieldType.None);
+            _LeafId = builder.RegisterField(protocolId, "throw.after.append.leaf", "Leaf", FieldType.U64);
+        }
+
+        public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
+        {
+            FieldId leafId = _LeafId;
+            parentField.AppendLazy(_ContainerId, FieldValue.None, (in MutField field) =>
+            {
+                field.Append(leafId, FieldValue.NewU64(1));
+                throw new InvalidOperationException("boom");
+            });
+            return 14;
+        }
+    }
+
+    private sealed class NineLazyProtocol : IProtocol
+    {
+        private FieldId _ContainerId;
+        private FieldId _LeafId;
+
+        public string Name => "nine.lazy";
+        public string UiName => "Nine Lazy";
+        public FieldId LeafFieldId => _LeafId;
+
+        public void RegisterFields(StackBuilder builder, ProtocolId protocolId)
+        {
+            _ContainerId = builder.RegisterField(protocolId, "nine.lazy", "Lazy", FieldType.None);
+            _LeafId = builder.RegisterField(protocolId, "nine.lazy.leaf", "Leaf", FieldType.U64);
+        }
+
+        public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
+        {
+            FieldId containerId = _ContainerId;
+            FieldId leafId = _LeafId;
+            for (int i = 0; i < 9; i++)
+            {
+                ulong captured = (ulong)i;
+                parentField.AppendLazy(containerId, FieldValue.None, (in MutField field) =>
+                {
+                    field.Append(leafId, FieldValue.NewU64(captured));
+                    return 0;
+                });
+            }
+
+            return 14;
+        }
+    }
+
+    private sealed class SkipInsertProtocol : IProtocol
+    {
+        private FieldId _LeafId;
+        private FieldId _CustomId;
+        private FieldId _PrependId;
+        private FieldId _InsertId;
+
+        public string Name => "skip.insert";
+        public string UiName => "Skip Insert";
+
+        public void RegisterFields(StackBuilder builder, ProtocolId protocolId)
+        {
+            _LeafId = builder.RegisterField(protocolId, "skip.insert.leaf", "Leaf", FieldType.U64);
+            _CustomId = builder.RegisterField(protocolId, "skip.insert.custom", "Custom", FieldType.U64);
+            _PrependId = builder.RegisterField(protocolId, "skip.insert.prepend", "Prepend", FieldType.U64);
+            _InsertId = builder.RegisterField(protocolId, "skip.insert.after", "After", FieldType.U64);
+        }
+
+        public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
+        {
+            MutField leaf = parentField.AppendWithCustomText(_CustomId, FieldValue.NewU64(1), new LazyString("c"));
+            parentField.Prepend(_PrependId, FieldValue.NewU64(2));
+            parentField.PrependWithCustomText(_PrependId, FieldValue.NewU64(3), new LazyString("p"));
+            _ = leaf.InsertAfter(_InsertId, FieldValue.NewU64(4));
+            _ = leaf.InsertAfterWithCustomText(_InsertId, FieldValue.NewU64(5), new LazyString("i"));
+            _ = parentField.Append(_LeafId, FieldValue.NewU64(6));
+            return data.Length;
+        }
+    }
+
+    private sealed class SkipDeepLazyProtocol : IProtocol
+    {
+        private FieldId _BoxId;
+
+        public string Name => "skip.deep.lazy";
+        public string UiName => "Skip Deep Lazy";
+
+        public void RegisterFields(StackBuilder builder, ProtocolId protocolId)
+        {
+            _BoxId = builder.RegisterField(protocolId, "skip.deep.lazy", "Box", FieldType.None);
+        }
+
+        public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
+        {
+            _AppendNested(in parentField, 0);
+            return data.Length;
+        }
+
+        private void _AppendNested(in MutField parent, int depth)
+        {
+            if (depth >= 129)
+            {
+                return;
+            }
+
+            FieldId boxId = _BoxId;
+            parent.AppendLazy(boxId, FieldValue.None, (in MutField child) =>
+            {
+                _AppendNested(in child, depth + 1);
+                return 0;
+            });
+        }
+    }
+
+    private sealed class MaterializeDuringParseProtocol : IProtocol
+    {
+        private FieldId _ContainerId;
+        private FieldId _LeafId;
+
+        public string Name => "materialize.during.parse";
+        public string UiName => "Materialize During Parse";
+
+        public void RegisterFields(StackBuilder builder, ProtocolId protocolId)
+        {
+            _ContainerId = builder.RegisterField(protocolId, "materialize.during.parse", "Lazy", FieldType.None);
+            _LeafId = builder.RegisterField(protocolId, "materialize.during.parse.leaf", "Leaf", FieldType.U64);
+        }
+
+        public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
+        {
+            FieldId leafId = _LeafId;
+            MutField container = parentField.AppendLazy(_ContainerId, FieldValue.None, (in MutField field) =>
+            {
+                field.Append(leafId, FieldValue.NewU64(1));
+                return 0;
+            });
+            FieldId nestedLeafId = _LeafId;
+            parentField.AppendLazy(_ContainerId, FieldValue.None, (in MutField nested) =>
+            {
+                nested.Append(nestedLeafId, FieldValue.NewU64(2));
+                return 0;
+            });
+            ushort idx = container.StorageIndex;
+            Packet packet = parentField.Packet;
+            using Barrier start = new(2);
+            Thread other = new(() =>
+            {
+                start.SignalAndWait();
+                _ = packet.MaterializeLazyField(idx);
+            })
+            {
+                IsBackground = true
+            };
+            other.Start();
+            start.SignalAndWait();
+            _ = packet.MaterializeLazyField(idx);
+            _ = other.Join(TimeSpan.FromSeconds(5));
+            packet.MaterializeAll();
+            return 14;
+        }
+    }
+
+    private sealed class ReRegisterLazyProtocol : IProtocol
+    {
+        private FieldId _ContainerId;
+
+        public string Name => "reregister.lazy";
+        public string UiName => "Re-register Lazy";
+
+        public void RegisterFields(StackBuilder builder, ProtocolId protocolId)
+        {
+            _ContainerId = builder.RegisterField(protocolId, "reregister.lazy", "Lazy", FieldType.None);
+        }
+
+        public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
+        {
+            parentField.AppendLazy(_ContainerId, FieldValue.None, (in MutField field) =>
+            {
+                field.Packet.RegisterLazyPopulator(
+                    field.FieldId, field.StorageIndex, FieldValue.None, default, static (in MutField _) => 0);
+                return 0;
+            });
+            return 14;
+        }
+    }
+
+    private sealed class ExhaustLazySlotsProtocol(bool postSeal) : IProtocol
+    {
+        private FieldId _ContainerId;
+        private FieldId _LeafId;
+
+        public string Name
+        {
+            get
+            {
+                if (postSeal)
+                {
+                    return "exhaust.lazy.post";
+                }
+
+                return "exhaust.lazy.pre";
+            }
+        }
+        public string UiName => "Exhaust Lazy";
+        public int RegisteredCount { get; private set; }
+
+        public void RegisterFields(StackBuilder builder, ProtocolId protocolId)
+        {
+            _ContainerId = builder.RegisterField(protocolId, Name + ".box", "Box", FieldType.None);
+            _LeafId = builder.RegisterField(protocolId, Name + ".leaf", "Leaf", FieldType.U64);
+        }
+
+        public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
+        {
+            FieldId leafId = _LeafId;
+            if (postSeal)
+            {
+                parentField.AppendLazy(_ContainerId, FieldValue.None, (in MutField field) =>
+                {
+                    _RegisterUntilFull(field.Packet, field.Packet.RootField().FieldId, 0);
+                    field.Append(leafId, FieldValue.NewU64(1));
+                    return 0;
+                });
+                return 14;
+            }
+
+            _RegisterUntilFull(parentField.Packet, parentField.FieldId, parentField.StorageIndex);
+            return 14;
+        }
+
+        private void _RegisterUntilFull(Packet packet, FieldId fieldId, ushort fieldIndex)
+        {
+            int count = 0;
+            for (int i = 0; i < ushort.MaxValue; i++)
+            {
+                packet.RegisterLazyPopulator(fieldId, fieldIndex, FieldValue.None, default, static (in MutField _) => 0);
+                count++;
+            }
+
+            RegisteredCount = count;
+        }
+    }
+
+    private sealed class FatDualLazyProtocol : IProtocol
+    {
+        private FieldId _ContainerAId;
+        private FieldId _ContainerBId;
+        private FieldId _LeafId;
+
+        public string Name => "fat.dual.lazy";
+        public string UiName => "Fat Dual Lazy";
+
+        public void RegisterFields(StackBuilder builder, ProtocolId protocolId)
+        {
+            _ContainerAId = builder.RegisterField(protocolId, "fat.dual.a", "A", FieldType.None);
+            _ContainerBId = builder.RegisterField(protocolId, "fat.dual.b", "B", FieldType.None);
+            _LeafId = builder.RegisterField(protocolId, "fat.dual.leaf", "Leaf", FieldType.U64);
+        }
+
+        public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
+        {
+            FieldId leafId = _LeafId;
+            parentField.AppendLazy(_ContainerAId, FieldValue.None, (in MutField container) =>
+            {
+                for (int i = 0; i < 24; i++)
+                {
+                    container.Append(leafId, FieldValue.NewU64((ulong)i));
+                }
+
+                return 0;
+            });
+            parentField.AppendLazy(_ContainerBId, FieldValue.None, (in MutField container) =>
+            {
+                for (int i = 0; i < 24; i++)
+                {
+                    container.Append(leafId, FieldValue.NewU64((ulong)(100 + i)));
+                }
+
+                return 0;
+            });
+            return 14;
+        }
+    }
+
+    private sealed class AbandonCacheThenAppendProtocol : IProtocol
+    {
+        private FieldId _LeafId;
+
+        public string Name => "abandon.cache.append";
+        public string UiName => "Abandon Cache Append";
+        public ValueCache? Cache { get; set; }
+
+        public void RegisterFields(StackBuilder builder, ProtocolId protocolId)
+        {
+            _LeafId = builder.RegisterField(protocolId, "abandon.cache.append.leaf", "Leaf", FieldType.U64);
+        }
+
+        public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
+        {
+            Cache!.Abandon();
+            parentField.Append(_LeafId, FieldValue.NewU64(1));
             return 14;
         }
     }

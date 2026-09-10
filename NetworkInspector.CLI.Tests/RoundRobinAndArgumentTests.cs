@@ -137,6 +137,45 @@ internal sealed class RoundRobinAndArgumentTests
             .Throws<ArgumentException>();
     }
 
+    [Test]
+    public async Task ParseInt64_Zero_ReturnsZero()
+    {
+        await Assert.That(CliArgumentParsing.ParseInt64("0")).IsEqualTo(0L);
+    }
+
+    [Test]
+    public async Task ParseInt64_Positive_ReturnsValue()
+    {
+        await Assert.That(CliArgumentParsing.ParseInt64("4096")).IsEqualTo(4096L);
+    }
+
+    [Test]
+    public async Task ParseInt64_Negative_ReturnsValue()
+    {
+        await Assert.That(CliArgumentParsing.ParseInt64("-1")).IsEqualTo(-1L);
+    }
+
+    [Test]
+    public async Task ParseInt64_Garbage_Throws()
+    {
+        await Assert.That(() => CliArgumentParsing.ParseInt64("unlimited"))
+            .Throws<ArgumentException>();
+        await Assert.That(() => CliArgumentParsing.ParseInt64("nope"))
+            .Throws<ArgumentException>();
+    }
+
+    [Test]
+    public async Task ParseInt32_Negative_ReturnsValue()
+    {
+        await Assert.That(CliArgumentParsing.ParseInt32("-2")).IsEqualTo(-2);
+    }
+
+    [Test]
+    public async Task ParseInt32_Positive_ReturnsValue()
+    {
+        await Assert.That(CliArgumentParsing.ParseInt32("1024")).IsEqualTo(1024);
+    }
+
     private sealed class EmptyFrameSource(string name = "empty") : IFrameSource
     {
         public string UiName => name;

@@ -4,17 +4,11 @@ namespace NetworkInspector.Core.Settings;
 
 /// <summary>
 /// Shared persistence I/O helpers for settings JSON files.
-/// Caps size at the trust boundary and opens files so other processes can still read them.
+/// Opens files so other processes can still read them.
 /// </summary>
 internal static class SettingsFileAccess
 {
     #region Constants
-
-    /// <summary>Maximum accepted settings or referenced-config file size (1 MiB).</summary>
-    internal const long MaxFileBytes = 1_048_576;
-
-    /// <summary>Maximum JSON nesting depth when parsing persisted settings.</summary>
-    internal const int JsonMaxDepth = 64;
 
     /// <summary>
     /// Manifest of group JSON file names last written by <see cref="SettingsManager.Save"/>.
@@ -37,7 +31,7 @@ internal static class SettingsFileAccess
             FileMode.Open,
             FileAccess.Read,
             FileShare.Read,
-            bufferSize: 4096,
+            bufferSize: 4 * 1024 * 1024,
             FileOptions.SequentialScan);
     }
 

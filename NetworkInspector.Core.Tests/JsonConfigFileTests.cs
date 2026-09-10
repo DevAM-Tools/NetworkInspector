@@ -243,6 +243,98 @@ internal sealed class JsonConfigFileTests
     }
 
     [Test]
+    public async Task TryLoadReferencedJsonConfig_OversizedRelativeToCap_ReturnsWarning()
+    {
+        string storageDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(storageDir);
+            string configPath = Path.Combine(storageDir, "config.json");
+            await File.WriteAllTextAsync(configPath, "{\"Label\":\"hello\",\"Count\":7}").ConfigureAwait(false);
+
+            using SettingsManager mgr = new(storageDir, 16);
+            mgr.RegisterSetting(Setting.String("cfg.path", "Path", "cfg", "config.json"));
+
+            bool result = mgr.ReadOnly.TryLoadReferencedJsonConfig(
+                "cfg.path",
+                TestJsonContext.Default.TestSimpleConfig,
+                out TestSimpleConfig? value,
+                out SettingsLoadWarning? warning);
+
+            await Assert.That(result).IsFalse();
+            await Assert.That(value).IsNull();
+            await Assert.That(warning).IsNotNull();
+            await Assert.That(warning!.Value.Kind).IsEqualTo(SettingsLoadWarningKind.ExternalConfigUnavailable);
+            await Assert.That(warning.Value.Message).Contains("exceeds");
+        }
+        finally
+        {
+            Directory.Delete(storageDir, recursive: true);
+        }
+    }
+
+    [Test]
+    public async Task TryLoadReferencedJsonConfig_ZeroCap_LoadsFormerOneMibPlusFile()
+    {
+        string storageDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(storageDir);
+            string configPath = Path.Combine(storageDir, "config.json");
+            string json = "{\"Label\":\"" + new string('a', 1_048_577) + "\",\"Count\":1}";
+            await File.WriteAllTextAsync(configPath, json).ConfigureAwait(false);
+
+            using SettingsManager mgr = new(storageDir, 0);
+            mgr.RegisterSetting(Setting.String("cfg.path", "Path", "cfg", "config.json"));
+
+            bool result = mgr.ReadOnly.TryLoadReferencedJsonConfig(
+                "cfg.path",
+                TestJsonContext.Default.TestSimpleConfig,
+                out TestSimpleConfig? value,
+                out SettingsLoadWarning? warning);
+
+            await Assert.That(result).IsTrue();
+            await Assert.That(warning).IsNull();
+            await Assert.That(value).IsNotNull();
+            await Assert.That(value!.Count).IsEqualTo(1);
+        }
+        finally
+        {
+            Directory.Delete(storageDir, recursive: true);
+        }
+    }
+
+    [Test]
+    public async Task TryLoadReferencedJsonConfig_DefaultCap_LoadsFormerOneMibPlusFile()
+    {
+        string storageDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(storageDir);
+            string configPath = Path.Combine(storageDir, "config.json");
+            string json = "{\"Label\":\"" + new string('a', 1_048_577) + "\",\"Count\":1}";
+            await File.WriteAllTextAsync(configPath, json).ConfigureAwait(false);
+
+            using SettingsManager mgr = new(storageDir);
+            mgr.RegisterSetting(Setting.String("cfg.path", "Path", "cfg", "config.json"));
+
+            bool result = mgr.ReadOnly.TryLoadReferencedJsonConfig(
+                "cfg.path",
+                TestJsonContext.Default.TestSimpleConfig,
+                out TestSimpleConfig? value,
+                out SettingsLoadWarning? warning);
+
+            await Assert.That(result).IsTrue();
+            await Assert.That(warning).IsNull();
+            await Assert.That(value).IsNotNull();
+        }
+        finally
+        {
+            Directory.Delete(storageDir, recursive: true);
+        }
+    }
+
+    [Test]
     public async Task TryLoadReferencedJsonConfig_MalformedJson_ReturnsFalse_WarningWithKind()
     {
         string storageDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
@@ -431,13 +523,14 @@ internal sealed class JsonConfigFileTests
         {
             await using (FileStream stream = new(path, FileMode.Create, FileAccess.Write, FileShare.Read))
             {
-                stream.SetLength(SettingsFileAccess.MaxFileBytes + 1);
+                stream.SetLength(1025);
             }
 
             bool result = JsonConfigFile.TryLoad(
                 "huge.json",
                 baseDirectory: dir,
                 TestJsonContext.Default.TestSimpleConfig,
+                maxFileBytes: 1024,
                 out TestSimpleConfig? value,
                 out string? error);
 
@@ -445,6 +538,134 @@ internal sealed class JsonConfigFileTests
             await Assert.That(value).IsNull();
             await Assert.That(error).IsNotNull();
             await Assert.That(error!).Contains("exceeds");
+            await Assert.That(error!).Contains("1024");
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Test]
+    public async Task TryLoad_ZeroCap_DoesNotRejectLargeFile()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        string path = Path.Combine(dir, "ok.json");
+        try
+        {
+            string json = "{\"Label\":\"" + new string('a', 2048) + "\",\"Count\":1}";
+            await File.WriteAllTextAsync(path, json).ConfigureAwait(false);
+
+            bool result = JsonConfigFile.TryLoad(
+                "ok.json",
+                baseDirectory: dir,
+                TestJsonContext.Default.TestSimpleConfig,
+                maxFileBytes: 0,
+                out TestSimpleConfig? value,
+                out string? error);
+
+            await Assert.That(result).IsTrue();
+            await Assert.That(error).IsNull();
+            await Assert.That(value).IsNotNull();
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Test]
+    public async Task TryLoad_NegativeCap_DoesNotRejectFile()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        string path = Path.Combine(dir, "ok.json");
+        try
+        {
+            await File.WriteAllTextAsync(path, "{\"Label\":\"x\",\"Count\":1}").ConfigureAwait(false);
+
+            bool result = JsonConfigFile.TryLoad(
+                "ok.json",
+                baseDirectory: dir,
+                TestJsonContext.Default.TestSimpleConfig,
+                maxFileBytes: -1,
+                out TestSimpleConfig? value,
+                out string? error);
+
+            await Assert.That(result).IsTrue();
+            await Assert.That(error).IsNull();
+            await Assert.That(value).IsNotNull();
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Test]
+    public async Task TryLoad_JsonDeeperThanCap_ReturnsFalseWithError()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        string path = Path.Combine(dir, "deep.json");
+        try
+        {
+            await File.WriteAllTextAsync(path, "{\"Label\":\"x\",\"Count\":1,\"extra\":{\"x\":{\"x\":1}}}")
+                .ConfigureAwait(false);
+
+            bool result = JsonConfigFile.TryLoad(
+                "deep.json",
+                baseDirectory: dir,
+                TestJsonContext.Default.TestSimpleConfig,
+                maxFileBytes: 0,
+                maxJsonDepth: 2,
+                out TestSimpleConfig? value,
+                out string? error);
+
+            await Assert.That(result).IsFalse();
+            await Assert.That(value).IsNull();
+            await Assert.That(error).IsNotNull();
+            await Assert.That(error!).Contains("Failed to parse JSON");
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Test]
+    public async Task TryLoad_JsonDepthDisabled_LoadsDeepExtraProperty()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        string path = Path.Combine(dir, "deep.json");
+        try
+        {
+            StringBuilder nested = new("{\"Label\":\"x\",\"Count\":1,\"extra\":");
+            for (int i = 0; i < 65; i++)
+            {
+                nested.Append("{\"x\":");
+            }
+
+            nested.Append('1');
+            nested.Append('}', 65);
+            nested.Append('}');
+            await File.WriteAllTextAsync(path, nested.ToString()).ConfigureAwait(false);
+
+            bool result = JsonConfigFile.TryLoad(
+                "deep.json",
+                baseDirectory: dir,
+                TestJsonContext.Default.TestSimpleConfig,
+                maxFileBytes: 0,
+                maxJsonDepth: 0,
+                out TestSimpleConfig? value,
+                out string? error);
+
+            await Assert.That(result).IsTrue();
+            await Assert.That(error).IsNull();
+            await Assert.That(value).IsNotNull();
+            await Assert.That(value!.Label).IsEqualTo("x");
         }
         finally
         {
@@ -663,11 +884,10 @@ internal sealed class JsonConfigFileTests
     }
 
     [Test]
-    public async Task TryLoadFromStream_OversizedSeekable_ReturnsFalse()
+    public async Task TryLoadFromStream_PayloadLargerThanFormer1MiBCap_Succeeds()
     {
-        using MemoryStream stream = new();
-        stream.SetLength(SettingsFileAccess.MaxFileBytes + 1);
-        stream.Position = 0;
+        string json = "{\"Label\":\"" + new string('a', 1_048_577) + "\",\"Count\":1}";
+        using MemoryStream stream = new(Encoding.UTF8.GetBytes(json));
 
         bool result = JsonConfigFile.TryLoadFromStream(
             stream,
@@ -676,10 +896,10 @@ internal sealed class JsonConfigFileTests
             out TestSimpleConfig? value,
             out string? error);
 
-        await Assert.That(result).IsFalse();
-        await Assert.That(value).IsNull();
-        await Assert.That(error).IsNotNull();
-        await Assert.That(error!).Contains("exceeds");
+        await Assert.That(result).IsTrue();
+        await Assert.That(error).IsNull();
+        await Assert.That(value).IsNotNull();
+        await Assert.That(value!.Count).IsEqualTo(1);
     }
 
     [Test]
@@ -700,9 +920,10 @@ internal sealed class JsonConfigFileTests
     }
 
     [Test]
-    public async Task TryLoadFromStream_ForwardOnlyOversized_ReturnsFalse()
+    public async Task TryLoadFromStream_ForwardOnlyLargerThanFormer1MiBCap_Succeeds()
     {
-        using OversizedForwardOnlyStream stream = new(SettingsFileAccess.MaxFileBytes + 1);
+        string json = "{\"Label\":\"" + new string('a', 1_048_577) + "\",\"Count\":1}";
+        using ForwardOnlyStream stream = new(Encoding.UTF8.GetBytes(json));
         bool result = JsonConfigFile.TryLoadFromStream(
             stream,
             TestJsonContext.Default.TestSimpleConfig,
@@ -710,10 +931,10 @@ internal sealed class JsonConfigFileTests
             out TestSimpleConfig? value,
             out string? error);
 
-        await Assert.That(result).IsFalse();
-        await Assert.That(value).IsNull();
-        await Assert.That(error).IsNotNull();
-        await Assert.That(error!).Contains("exceeds");
+        await Assert.That(result).IsTrue();
+        await Assert.That(error).IsNull();
+        await Assert.That(value).IsNotNull();
+        await Assert.That(value!.Count).IsEqualTo(1);
     }
 
     [Test]
@@ -748,6 +969,23 @@ internal sealed class JsonConfigFileTests
         await Assert.That(error).IsNull();
         await Assert.That(value).IsNotNull();
         await Assert.That(value!.Label).IsEqualTo("pub");
+    }
+
+    [Test]
+    public async Task JsonConfigStream_TryLoad_PayloadLargerThanFormer1MiBCap_Succeeds()
+    {
+        string json = "{\"Label\":\"" + new string('a', 1_048_577) + "\",\"Count\":1}";
+        using MemoryStream stream = new(Encoding.UTF8.GetBytes(json));
+        bool result = JsonConfigStream.TryLoad(
+            stream,
+            TestJsonContext.Default.TestSimpleConfig,
+            out TestSimpleConfig? value,
+            out string? error);
+
+        await Assert.That(result).IsTrue();
+        await Assert.That(error).IsNull();
+        await Assert.That(value).IsNotNull();
+        await Assert.That(value!.Count).IsEqualTo(1);
     }
 
     [Test]
@@ -906,39 +1144,6 @@ internal sealed class JsonConfigFileTests
 
             base.Dispose(disposing);
         }
-    }
-
-    /// <summary>Non-seekable source that yields a fixed number of zero bytes then EOF.</summary>
-    private sealed class OversizedForwardOnlyStream : Stream
-    {
-        private long _Remaining;
-
-        public OversizedForwardOnlyStream(long length) => _Remaining = length;
-
-        public override bool CanRead => true;
-        public override bool CanSeek => false;
-        public override bool CanWrite => false;
-        public override long Length => throw new NotSupportedException();
-        public override long Position
-        {
-            get => throw new NotSupportedException();
-            set => throw new NotSupportedException();
-        }
-        public override void Flush() { }
-        public override int Read(byte[] buffer, int offset, int count)
-        {
-            if (_Remaining <= 0)
-            {
-                return 0;
-            }
-
-            int n = (int)Math.Min(count, _Remaining);
-            _Remaining -= n;
-            return n;
-        }
-        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
-        public override void SetLength(long value) => throw new NotSupportedException();
-        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 
     /// <summary>Non-seekable stream whose <see cref="Read(byte[], int, int)"/> always throws <see cref="IOException"/>.</summary>

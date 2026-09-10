@@ -87,6 +87,8 @@ Common options:
 - `--output-format`, `--format`, `-f` Explicit output format spec (overrides extension).
 - `--profile <name>` Settings profile (available to sources and exporters).
 - `--settings-path <dir>` Base directory for settings storage.
+- `--settings-max-config-file-bytes <bytes>` Max settings and referenced config JSON size in bytes (default 1073741824). Values `<= 0` disable the size check.
+- `--settings-max-json-depth <n>` Max JSON nesting depth for settings and referenced config (default 1024). Values `<= 0` disable the depth check.
 - `--max-frames`, `-n` Maximum number of frames to process.
 - `--split-size <MB>` Split output at this size in MiB.
 - `--split-count <N>` Split output every N frames.
@@ -141,6 +143,8 @@ Common options:
 - `--filter <expr>` Only export packets matching the expression.
 - `--profile <name>` Settings profile name.
 - `--settings-path <dir>` Base directory for settings storage.
+- `--settings-max-config-file-bytes <bytes>` Max settings and referenced config JSON size in bytes (default 1073741824). Values `<= 0` disable the size check.
+- `--settings-max-json-depth <n>` Max JSON nesting depth for settings and referenced config (default 1024). Values `<= 0` disable the depth check.
 - `--blf-cache-size <MB>` BLF cache budget in MiB.
 - `--progress <N>` Report progress every N packets (stderr).
 - `--tolerant` Skip malformed frames instead of aborting.

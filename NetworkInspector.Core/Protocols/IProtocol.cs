@@ -61,7 +61,7 @@ public interface IProtocol
     /// Returns bytes consumed on success, or a parse error.
     /// <para>
     /// Stateful protocols derive first-parse versus replay from their own ingest watermark
-    /// and from <see cref="Packet.GetEffectLayerKey(ReadOnlyMemory{byte})"/> on
+    /// and from <see cref="MutField.TryGetEffectLayerKey(ReadOnlyMemory{byte}, out int)"/> on
     /// <paramref name="data"/>. They must not assume <see cref="Stack.CallProtocol"/> ran:
     /// a direct <see cref="Parse"/> or a cached <see cref="ParseDelegate"/> is a valid entry.
     /// </para>
