@@ -119,6 +119,36 @@ internal sealed class BlfCanTests
         await Assert.That(id & 0x1FFF_FFFF).IsEqualTo(0x200u);
     }
 
+    [Test]
+    public async Task CanFdMessage64_ParsedFrom40ByteHeader()
+    {
+        byte[] payload = new byte[40 + 4];
+        payload[0] = 1;
+        payload[1] = 4;
+        payload[2] = 4;
+        BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(4), 0x8000_0200u);
+        BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(12), BlfConstants.CanFd64FlagEdl);
+        payload[40] = 0xAA;
+        payload[41] = 0xBB;
+        payload[42] = 0xCC;
+        payload[43] = 0xDD;
+
+        byte[] blfData = new BlfTestGenerator()
+            .AddRawObject(BlfConstants.ObjTypeCanFdMessage64, 1_000_000, payload)
+            .Build();
+
+        using BlfSource source = _CreateSource(blfData);
+        SourceTestFixture.InitializeAndStartSource(source);
+        Frame? frame = source.NextFrame();
+
+        await Assert.That(frame).IsNotNull();
+        uint id = BinaryPrimitives.ReadUInt32BigEndian(frame!.Value.Data.Span);
+        await Assert.That(id & 0x8000_0000).IsNotEqualTo(0u);
+        await Assert.That(frame.Value.Data.Span[4]).IsEqualTo((byte)4);
+        await Assert.That(frame.Value.Data.Span.Slice(8, 4).ToArray())
+            .IsEquivalentTo(new byte[] { 0xAA, 0xBB, 0xCC, 0xDD });
+    }
+
     // ========================================================================
     // Mixed CAN Classic + FD
     // ========================================================================
@@ -181,5 +211,67 @@ internal sealed class BlfCanTests
 
         // Different channels should produce different interface IDs
         await Assert.That(f1.Value.InterfaceId).IsNotEqualTo(f2.Value.InterfaceId);
+    }
+
+    [Test]
+    public async Task CanClassicLayout_RtrAndEff_ReimportedFromFile()
+    {
+        byte[] payload = new byte[16];
+        BinaryPrimitives.WriteUInt16LittleEndian(payload, 1);
+        payload[2] = 0x80;
+        payload[3] = 8;
+        BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(4), 0x8000_0123u);
+        payload.AsSpan(8).Fill(0xAA);
+
+        byte[] blfData = new BlfTestGenerator()
+            .AddRawObject(BlfConstants.ObjTypeCanMessage, 1_000_000, payload)
+            .Build();
+
+        using BlfSource source = _CreateSource(blfData);
+        SourceTestFixture.InitializeAndStartSource(source);
+        Frame? frame = source.NextFrame();
+
+        await Assert.That(frame).IsNotNull();
+        uint id = BinaryPrimitives.ReadUInt32BigEndian(frame!.Value.Data.Span);
+        await Assert.That(id & 0xC000_0123u).IsEqualTo(0xC000_0123u);
+        await Assert.That(frame.Value.Data.Span[8..16].ToArray()).IsEquivalentTo(new byte[8]);
+    }
+
+    [Test]
+    public async Task CanXlChannelFrame_ParsedAsSocketCanXl()
+    {
+        byte[] xl = FrameBuilders.BuildSocketCanXl(
+            0x01, [0xAA, 0xBB, 0xCC, 0xDD], vcid: 0x1A, sdt: 0x05, acceptanceField: 0x11, sec: true);
+
+        byte[] blfData = new BlfTestGenerator()
+            .AddCanXlChannelFrame(2, xl, 1_000_000)
+            .Build();
+
+        using BlfSource source = _CreateSource(blfData);
+        SourceTestFixture.InitializeAndStartSource(source);
+        Frame? frame = source.NextFrame();
+
+        await Assert.That(frame).IsNotNull();
+        await Assert.That(frame!.Value.LinkType).IsEqualTo(LinkType.CanSocketcan);
+        await Assert.That(frame.Value.Data.ToArray()).IsEquivalentTo(xl);
+    }
+
+    [Test]
+    public async Task CanXlErrorFrameType140_SkippedWithoutAbort()
+    {
+        byte[] payload = new byte[104];
+        byte[] blfData = new BlfTestGenerator()
+            .AddRawObject(BlfConstants.ObjTypeCanXlChannelErrorFrame, 1_000_000, payload)
+            .Build();
+
+        using BlfSource source = BlfSource.FromData(
+            blfData,
+            "xl-error.blf",
+            new BlfSourceOptions { ScanMode = ScanMode.Full, ErrorTolerance = ErrorToleranceMode.Tolerant });
+        SourceTestFixture.InitializeAndStartSource(source);
+
+        await Assert.That(source.EstimatedFrameCount).IsEqualTo(0);
+        await Assert.That(source.NextFrame()).IsNull();
+        await Assert.That(source.HasErrors).IsFalse();
     }
 }

@@ -8,41 +8,52 @@ namespace NetworkInspector.Sources.Tests.Blf;
 /// </summary>
 internal sealed class FlexRayParserTests
 {
-    // ========================================================================
-    // Type 29 — FLEXRAY_DATA
-    // ========================================================================
-
     [Test]
     public async Task Type29_ValidPayload_Parsed()
     {
-        byte[] payload = new byte[9 + 4];
-        BinaryPrimitives.WriteUInt16LittleEndian(payload, 1);
-        payload[2] = 0x01; // mux channel A
+        byte[] payload = new byte[12 + 4];
+        BinaryPrimitives.WriteUInt16LittleEndian(payload, 0);
+        payload[2] = 0x07;
         payload[3] = 4;
         BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(4), 0x0A);
         BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(6), 0x1234);
-        payload[9] = 0x11;
-        payload[10] = 0x22;
-        payload[11] = 0x33;
-        payload[12] = 0x44;
+        payload[12] = 0x11;
+        payload[13] = 0x22;
+        payload[14] = 0x33;
+        payload[15] = 0x44;
 
         bool ok = FlexRayParser.TryParseFlexRayData(payload, out byte[] frame, out ushort channel);
 
         await Assert.That(ok).IsTrue();
-        await Assert.That(channel).IsEqualTo((ushort)1);
-        await Assert.That(frame.Length).IsGreaterThanOrEqualTo(FlexRayLinkTypeFrame.MinHeaderSize);
+        await Assert.That(channel).IsEqualTo((ushort)0);
         bool parsed = FlexRayLinkTypeFrame.TryParseDataFrame(frame, out FlexRayLinkTypeFrame.Fields fields, out ReadOnlySpan<byte> data);
         byte[] dataBytes = data.ToArray();
         await Assert.That(parsed).IsTrue();
         await Assert.That(fields.FrameId).IsEqualTo((ushort)0x0A);
+        await Assert.That(fields.Cycle).IsEqualTo((byte)0x07);
+        await Assert.That(fields.ChannelB).IsFalse();
+        await Assert.That(fields.Nfi).IsTrue();
         await Assert.That(dataBytes.Length).IsEqualTo(4);
+    }
+
+    [Test]
+    public async Task Type29_Channel1_SetsChannelB()
+    {
+        byte[] payload = new byte[12];
+        BinaryPrimitives.WriteUInt16LittleEndian(payload, 1);
+
+        bool ok = FlexRayParser.TryParseFlexRayData(payload, out byte[] frame, out _);
+
+        await Assert.That(ok).IsTrue();
+        bool parsed = FlexRayLinkTypeFrame.TryParseDataFrame(frame, out FlexRayLinkTypeFrame.Fields fields, out _);
+        await Assert.That(parsed).IsTrue();
+        await Assert.That(fields.ChannelB).IsTrue();
     }
 
     [Test]
     public async Task Type29_DeclaredLength255_ReturnsFalse()
     {
-        byte[] payload = new byte[9];
-        BinaryPrimitives.WriteUInt16LittleEndian(payload, 1);
+        byte[] payload = new byte[12];
         payload[3] = 255;
 
         bool ok = FlexRayParser.TryParseFlexRayData(payload, out _, out _);
@@ -58,10 +69,6 @@ internal sealed class FlexRayParserTests
         await Assert.That(ok).IsFalse();
     }
 
-    // ========================================================================
-    // Type 41 — FLEXRAY_MESSAGE
-    // ========================================================================
-
     [Test]
     public async Task Type41_ValidPayload_Parsed()
     {
@@ -69,9 +76,9 @@ internal sealed class FlexRayParserTests
         BinaryPrimitives.WriteUInt16LittleEndian(payload, 2);
         BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(20), 0x20);
         BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(22), 0xABCD);
+        BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(24), 0x02);
         payload[26] = 2;
         payload[27] = 5;
-        payload[28] = 0x08; // sync
         payload[32] = 0xDE;
         payload[33] = 0xAD;
 
@@ -89,22 +96,29 @@ internal sealed class FlexRayParserTests
     }
 
     [Test]
+    public async Task Type41_FrameStateNull_ClearsNfi()
+    {
+        byte[] payload = new byte[32];
+        BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(24), 0x08);
+
+        bool ok = FlexRayParser.TryParseFlexRayMessage(payload, out byte[] frame, out _);
+
+        await Assert.That(ok).IsTrue();
+        bool parsed = FlexRayLinkTypeFrame.TryParseDataFrame(frame, out FlexRayLinkTypeFrame.Fields fields, out _);
+        await Assert.That(parsed).IsTrue();
+        await Assert.That(fields.Nfi).IsFalse();
+    }
+
+    [Test]
     public async Task Type41_DeclaredLength300_ReturnsFalse()
     {
         byte[] payload = new byte[32];
-        BinaryPrimitives.WriteUInt16LittleEndian(payload, 1);
         payload[26] = 255;
-        payload[27] = 0;
-        payload[28] = 0;
 
         bool ok = FlexRayParser.TryParseFlexRayMessage(payload, out _, out _);
 
         await Assert.That(ok).IsFalse();
     }
-
-    // ========================================================================
-    // Type 50 — FLEXRAY_RCVMESSAGE
-    // ========================================================================
 
     [Test]
     public async Task Type50_ValidPayload_Parsed()
@@ -147,34 +161,30 @@ internal sealed class FlexRayParserTests
     }
 
     [Test]
-    public async Task Type50_PayloadLength300_ReturnsFalse()
+    public async Task Type50_PayloadLengthValid300_ReturnsFalse()
     {
         byte[] payload = new byte[44];
-        BinaryPrimitives.WriteUInt16LittleEndian(payload, 1);
-        BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(22), 300);
+        BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(24), 300);
 
         bool ok = FlexRayParser.TryParseFlexRayRcvMessage(payload, out _, out _);
 
         await Assert.That(ok).IsFalse();
     }
 
-    // ========================================================================
-    // Type 66 — FLEXRAY_RCVMESSAGE_EX
-    // ========================================================================
-
     [Test]
     public async Task Type66_ValidPayload_Parsed()
     {
-        byte[] payload = new byte[60 + 4];
+        byte[] payload = new byte[84 + 4];
         BinaryPrimitives.WriteUInt16LittleEndian(payload, 3);
-        BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(4), 0x0002); // channel B
-        BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(20), 0x55);
-        BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(24), 0x777);
-        BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(28), 4);
-        payload[32] = 3;
-        BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(36), 0x01); // PPI
-        payload[60] = 0xAA;
-        payload[63] = 0xBB;
+        BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(4), 0x0002);
+        BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(16), 0x55);
+        BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(18), 0x777);
+        BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(22), 4);
+        BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(24), 4);
+        payload[26] = 3;
+        BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(36), 0x10);
+        payload[84] = 0xAA;
+        payload[87] = 0xBB;
 
         bool ok = FlexRayParser.TryParseFlexRayRcvMessageEx(payload, out byte[] frame, out ushort channel);
 
@@ -188,14 +198,15 @@ internal sealed class FlexRayParserTests
         await Assert.That(fields.Cycle).IsEqualTo((byte)3);
         await Assert.That(fields.Ppi).IsTrue();
         await Assert.That(dataBytes.Length).IsEqualTo(4);
+        await Assert.That(dataBytes[0]).IsEqualTo((byte)0xAA);
+        await Assert.That(dataBytes[3]).IsEqualTo((byte)0xBB);
     }
 
     [Test]
-    public async Task Type66_PayloadLength400_ReturnsFalse()
+    public async Task Type66_PayloadLengthValid400_ReturnsFalse()
     {
-        byte[] payload = new byte[60];
-        BinaryPrimitives.WriteUInt16LittleEndian(payload, 1);
-        BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(28), 400);
+        byte[] payload = new byte[84];
+        BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(24), 400);
 
         bool ok = FlexRayParser.TryParseFlexRayRcvMessageEx(payload, out _, out _);
 

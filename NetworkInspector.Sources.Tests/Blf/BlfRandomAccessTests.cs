@@ -327,4 +327,51 @@ internal sealed class BlfRandomAccessTests
 
         await Assert.That(() => source.Start(sourceId, null!)).Throws<ArgumentNullException>();
     }
+
+    [Test]
+    public async Task MmapOpen_PreloadBudgetZero_FrameByIdUsesSlots()
+    {
+        byte[] eth = FrameBuilders.BuildEthernetFrame(_BroadcastMac, _SrcMac, 0x0800, [0xDE, 0xAD]);
+        byte[] can = FrameBuilders.BuildSocketCanClassic(0x123, [1, 2, 3, 4, 5, 6, 7, 8]);
+        BlfTestGenerator gen = new();
+        for (int i = 0; i < 8; i++)
+        {
+            if ((i & 1) == 0)
+            {
+                gen.AddEthernetFrame(1, eth, (i + 1) * 1_000_000L);
+            }
+            else
+            {
+                gen.AddCanFrame(2, can, (i + 1) * 1_000_000L);
+            }
+        }
+
+        byte[] blfData = gen.Build();
+        string path = Path.Combine(Path.GetTempPath(), $"ni-blf-mmap-{Guid.NewGuid():N}.blf");
+        File.WriteAllBytes(path, blfData);
+        try
+        {
+            using BlfSource source = BlfSource.Open(path, new BlfSourceOptions
+            {
+                ScanMode = ScanMode.Full,
+                PreloadBudget = 0,
+                MmapSlotCount = 4,
+            });
+            SourceTestFixture.InitializeAndStartSource(source);
+
+            Frame?[] frames = new Frame?[8];
+            Parallel.For(0, 8, i =>
+            {
+                frames[i] = source.FrameById(new FrameId(i));
+            });
+
+            await Assert.That(frames.All(static f => f.HasValue)).IsTrue();
+            await Assert.That(frames[0]!.Value.Data.Span.SequenceEqual(eth)).IsTrue();
+            await Assert.That(frames[1]!.Value.Data.Span.SequenceEqual(can)).IsTrue();
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
 }

@@ -49,6 +49,7 @@ internal sealed class BlfTestGenerator
     // BLF object type constants (matching BlfConstants)
     private const uint _ObjTypeCanMessage = 1;
     private const uint _ObjTypeCanFdMessage = 100;
+    private const uint _ObjTypeCanXlChannelFrame = 139;
     private const uint _ObjTypeLinMessage = 11;
     private const uint _ObjTypeLinMessage2 = 57;
     private const uint _ObjTypeFlexRayRcvMessage = 50;
@@ -221,9 +222,9 @@ internal sealed class BlfTestGenerator
     ///   [8..12) uncompressedSize (u32 LE)
     ///   [12..16) reserved2 (zero)
     ///
-    /// Uses <see cref="PendingObject.UnpaddedObjectLength"/> = <c>true</c> so that the
-    /// scanner's slice <c>fullObjectData[48..]</c> contains exactly the compressed
-    /// bytes — trailing alignment padding zeros are excluded and would confuse LZ4.
+    /// Uses unpadded <c>object_length</c> (32 + compressed bytes) plus 0–3 alignment zeros
+    /// after the object so the next LOBJ is 4-aligned. Compressed payload slices exclude
+    /// those zeros.
     /// </summary>
     private BlfTestGenerator _AddLogContainerRaw(
         ushort compressionMethod, uint uncompressedSize, byte[] compressedContent)
@@ -234,7 +235,7 @@ internal sealed class BlfTestGenerator
         BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(8), uncompressedSize);
         // [12..16] reserved — zero-initialised
         compressedContent.CopyTo(payload.AsSpan(_ContainerHeaderSize));
-        _Objects.Add(new PendingObject(_ObjTypeLogContainer, 0, payload, UnpaddedObjectLength: true));
+        _Objects.Add(new PendingObject(_ObjTypeLogContainer, 0, payload));
         return this;
     }
 
@@ -252,9 +253,9 @@ internal sealed class BlfTestGenerator
         // [6..8]  channel (u16 LE)
         // [8..14] destination MAC (dst from Ethernet frame)
         // [14..16] direction (u16 LE) = 0x0000 (RX)
-        // [16..18] ethtype (2 bytes, big-endian, from frame[12..14])
-        // [18..20] TPID (2 bytes, big-endian) — 0 if no VLAN
-        // [20..22] TCI (2 bytes, big-endian) — 0 if no VLAN
+        // [16..18] ethtype (u16 LE)
+        // [18..20] TPID (u16 LE) — 0 if no VLAN
+        // [20..22] TCI (u16 LE) — 0 if no VLAN
         // [22..24] payload_length (u16 LE) — length of payload after ethtype
         // [24..]  payload (data after ethtype in the Ethernet frame)
 
@@ -289,16 +290,16 @@ internal sealed class BlfTestGenerator
         }
 
         // Vector blf_ethernetframeheader_t is 32 bytes (24 named fields + 8-byte uint64 res tail).
-        // The reader and tshark both consume sizeof(blf_ethernetframeheader_t) before the payload
-        // begins, so the synthetic test frames must include the trailing 8-byte reserved field.
+        // EtherType/TPID/TCI are little-endian numeric fields in the BLF struct.
+        ushort etherType = BinaryPrimitives.ReadUInt16BigEndian(innerEthType);
         byte[] payload = new byte[32 + ethPayload.Length];
         srcMac.CopyTo(payload);                                                     // [0..6]
         BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(6), channel);       // [6..8]
         dstMac.CopyTo(payload.AsSpan(8));                                           // [8..14]
         BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(14), 0x0000);       // [14..16] direction=RX
-        innerEthType.CopyTo(payload.AsSpan(16));                                    // [16..18] ethtype BE
-        BinaryPrimitives.WriteUInt16BigEndian(payload.AsSpan(18), tpid);            // [18..20] TPID
-        BinaryPrimitives.WriteUInt16BigEndian(payload.AsSpan(20), tci);             // [20..22] TCI
+        BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(16), etherType);    // [16..18] ethtype LE
+        BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(18), tpid);         // [18..20] TPID LE
+        BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(20), tci);          // [20..22] TCI LE
         BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(22),
             (ushort)ethPayload.Length);                                              // [22..24] payload_len
         // [24..32] uint64 res — left zero by new byte[]
@@ -308,14 +309,14 @@ internal sealed class BlfTestGenerator
     }
 
     /// <summary>
-    /// Adds a CAN Classic message (Type 1) from a SocketCAN frame.
+    /// Adds a CAN Classic message (Type 1) from a SocketCAN frame using the Wireshark
+    /// <c>blf_canmessage_t</c> layout (flags at offset 2, dlc at 3, EFF in ID bit 31).
     /// </summary>
     /// <param name="channel">BLF channel number (1-based).</param>
     /// <param name="socketCanFrame">SocketCAN frame: id(4BE)+dlc(1)+flags(1)+reserved(2)+data.</param>
     /// <param name="offsetNanos">Timestamp offset from start (nanoseconds).</param>
     internal BlfTestGenerator AddCanFrame(ushort channel, ReadOnlySpan<byte> socketCanFrame, long offsetNanos)
     {
-        // Type 1 layout: [0..2] channel(u16 LE) | [2] dlc | [3] flags | [4..8] can_id(u32 LE) | [8..16] data
         if (socketCanFrame.Length < 8)
         {
             throw new ArgumentException("SocketCAN frame too short", nameof(socketCanFrame));
@@ -323,21 +324,24 @@ internal sealed class BlfTestGenerator
 
         uint canIdBe = BinaryPrimitives.ReadUInt32BigEndian(socketCanFrame);
         byte dlc = socketCanFrame[4];
-        // Extract raw ID (mask off EFF/RTR/ERR flags for BLF)
         uint rawId = canIdBe & 0x1FFF_FFFF;
-        byte blfFlags = 0;
         if ((canIdBe & 0x8000_0000) != 0)
         {
-            blfFlags |= 0x04; // extended frame
+            rawId |= 0x8000_0000;
         }
 
-        byte[] payload = new byte[16]; // channel(2)+dlc(1)+flags(1)+id(4)+data(8)
+        byte blfFlags = 0;
+        if ((canIdBe & 0x4000_0000) != 0)
+        {
+            blfFlags |= 0x80; // BLF_CANMESSAGE_FLAG_RTR
+        }
+
+        byte[] payload = new byte[16];
         BinaryPrimitives.WriteUInt16LittleEndian(payload, channel);
-        payload[2] = dlc;
-        payload[3] = blfFlags;
+        payload[2] = blfFlags;
+        payload[3] = dlc;
         BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(4), rawId);
 
-        // Copy data bytes (max 8)
         int dataLen = Math.Min((int)dlc, 8);
         if (socketCanFrame.Length > 8)
         {
@@ -349,21 +353,73 @@ internal sealed class BlfTestGenerator
     }
 
     /// <summary>
-    /// Adds a CAN FD message (Type 100) from a SocketCAN FD frame.
+    /// Adds a CAN XL channel frame (Type 139) from a SocketCAN XL frame, matching
+    /// Wireshark <c>blf_dump_socketcanxl</c> (104-byte header, payload at offset 104).
+    /// </summary>
+    internal BlfTestGenerator AddCanXlChannelFrame(byte channel, ReadOnlySpan<byte> socketCanXlFrame, long offsetNanos)
+    {
+        const int SocketCanXlHeaderSize = 12;
+        if (socketCanXlFrame.Length < SocketCanXlHeaderSize)
+        {
+            throw new ArgumentException("SocketCAN XL frame too short", nameof(socketCanXlFrame));
+        }
+
+        ushort dataLength = BinaryPrimitives.ReadUInt16LittleEndian(socketCanXlFrame.Slice(6));
+        int available = socketCanXlFrame.Length - SocketCanXlHeaderSize;
+        int actualDataLen = Math.Min((int)dataLength, available);
+        ushort dlc = actualDataLen > 0
+            ? (ushort)(actualDataLen - 1)
+            : (ushort)0;
+
+        byte socketFlags = socketCanXlFrame[4];
+        uint flags = 0x400000; // XLF
+        if ((socketFlags & 0x01) != 0)
+        {
+            flags |= 0x1000000; // SEC
+        }
+
+        if ((socketFlags & 0x02) != 0)
+        {
+            flags |= 0x800000; // RRS
+        }
+
+        byte[] payload = new byte[104 + actualDataLen];
+        payload[0] = channel;
+        BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(12),
+            BinaryPrimitives.ReadUInt16BigEndian(socketCanXlFrame.Slice(2)) & 0x7FFu);
+        payload[16] = socketCanXlFrame[5];
+        BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(18), dlc);
+        BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(20), (ushort)actualDataLen);
+        payload[26] = socketCanXlFrame[1];
+        BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(28),
+            BinaryPrimitives.ReadUInt32LittleEndian(socketCanXlFrame.Slice(8)));
+        BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(48), flags);
+
+        if (actualDataLen > 0)
+        {
+            socketCanXlFrame.Slice(SocketCanXlHeaderSize, actualDataLen).CopyTo(payload.AsSpan(104));
+        }
+
+        return AddRawObject(_ObjTypeCanXlChannelFrame, offsetNanos, payload);
+    }
+
+    /// <summary>
+    /// Adds a CAN FD message (Type 100) from a SocketCAN FD frame using
+    /// Wireshark <c>blf_canfdmessage_t</c> (20-byte header, data at offset 20).
     /// </summary>
     internal BlfTestGenerator AddCanFdFrame(ushort channel, ReadOnlySpan<byte> socketCanFrame, long offsetNanos)
     {
-        // Type 100 layout:
-        // [0..2]  channel (u16 LE)
-        // [2]     dlc
-        // [3]     validPayloadLength
-        // [4..8]  txCount (u32 LE)
-        // [8..12] can_id (u32 LE)
-        // [12..16] frameLength (u32 LE) — total struct size
-        // [16..20] blfFlags (u32 LE)
-        // [20]    fdFlags — BLF FD flags
-        // [21..24] reserved
-        // [24..]  data
+        // Type 100 layout (blf_canfdmessage_t):
+        // [0..2)  channel (u16 LE)
+        // [2]     flags (RTR 0x80)
+        // [3]     dlc (4-bit code)
+        // [4..8)  id (u32 LE, bit 31 = EFF)
+        // [8..12) frameLength_in_ns
+        // [12]    arbitration_bit_count
+        // [13]    canfdflags (EDL 0x01, BRS 0x02, ESI 0x04)
+        // [14]    validDataBytes
+        // [15..20) reserved
+        // [20..)  data
 
         if (socketCanFrame.Length < 8)
         {
@@ -371,51 +427,56 @@ internal sealed class BlfTestGenerator
         }
 
         uint canIdBe = BinaryPrimitives.ReadUInt32BigEndian(socketCanFrame);
-        byte dlc = socketCanFrame[4];
-        byte scFdFlags = socketCanFrame[5]; // SocketCAN fd_flags
-
-        uint rawId = canIdBe & 0x1FFF_FFFF;
-        uint blfFlags = 0;
-        if ((canIdBe & 0x8000_0000) != 0)
+        byte payloadByteCount = socketCanFrame[4];
+        if (payloadByteCount > 64)
         {
-            blfFlags |= 0x04; // extended
+            payloadByteCount = 64;
         }
 
-        // Map SocketCAN FD flags → BLF fdFlags (per BlfConstants):
-        //   SocketCAN FDF (0x04) → BLF EDL (0x01)
-        //   SocketCAN BRS (0x01) → BLF BRS (0x02)
-        //   SocketCAN ESI (0x02) → BLF ESI (0x04)
+        byte dlc = BlfConstants.GetCanFdDlcFromPayloadByteCount(payloadByteCount);
+        byte scFdFlags = socketCanFrame[5];
+
+        uint rawId = canIdBe & 0x1FFF_FFFF;
+        if ((canIdBe & 0x8000_0000) != 0)
+        {
+            rawId |= 0x8000_0000;
+        }
+
+        byte blfFlags = 0;
+        if ((canIdBe & 0x4000_0000) != 0)
+        {
+            blfFlags |= 0x80;
+        }
+
         byte blfFdFlags = 0;
         if ((scFdFlags & 0x04) != 0)
         {
             blfFdFlags |= 0x01;
-        } // FDF → EDL
+        }
+
         if ((scFdFlags & 0x01) != 0)
         {
             blfFdFlags |= 0x02;
-        } // BRS → BRS
+        }
+
         if ((scFdFlags & 0x02) != 0)
         {
             blfFdFlags |= 0x04;
-        } // ESI → ESI
+        }
 
-        int dataLen = Math.Min((int)dlc, 64);
-        byte[] payload = new byte[24 + dataLen];
-        BinaryPrimitives.WriteUInt16LittleEndian(payload, channel);            // [0..2]
-        payload[2] = dlc;                                                       // [2]
-        payload[3] = (byte)dataLen;                                             // [3] validPayloadLength
-        // [4..8] txCount — leave as zero
-        BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(8), rawId);    // [8..12] can_id
-        BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(12),
-            (uint)(24 + dataLen));                                              // [12..16] frameLength
-        BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(16), blfFlags); // [16..20] blfFlags
-        payload[20] = blfFdFlags;                                               // [20] fdFlags
+        int dataLen = Math.Min((int)payloadByteCount, 64);
+        dataLen = Math.Min(dataLen, Math.Max(0, socketCanFrame.Length - 8));
+        byte[] payload = new byte[20 + dataLen];
+        BinaryPrimitives.WriteUInt16LittleEndian(payload, channel);
+        payload[2] = blfFlags;
+        payload[3] = dlc;
+        BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(4), rawId);
+        payload[13] = blfFdFlags;
+        payload[14] = (byte)dataLen;
 
-        // Copy data
-        if (socketCanFrame.Length > 8)
+        if (dataLen > 0)
         {
-            socketCanFrame.Slice(8, Math.Min(dataLen, socketCanFrame.Length - 8))
-                .CopyTo(payload.AsSpan(24));
+            socketCanFrame.Slice(8, dataLen).CopyTo(payload.AsSpan(20));
         }
 
         return AddRawObject(_ObjTypeCanFdMessage, offsetNanos, payload);
@@ -504,23 +565,20 @@ internal sealed class BlfTestGenerator
     }
 
     /// <summary>
-    /// Adds an AppText channel-name object (Type 65).
+    /// Adds an AppText channel-name object (Type 65): 16-byte header
+    /// (<c>source</c>, <c>reservedAppText1</c>, <c>textLength</c>, <c>reservedAppText2</c>)
+    /// and text <c>db;{name}</c> so token index 1 is the interface name.
     /// </summary>
     internal BlfTestGenerator AddAppTextChannel(ushort channel, byte busType, string name, long offsetNanos)
     {
-        // AppText layout:
-        // [0..4]  source (u32 LE) = 0x00020000 | (busType << 8) | channel
-        // [4..8]  reserved (u32 LE) = 0
-        // [8..12] text_length (u32 LE)
-        // [12..]  text (UTF-8 null-terminated)
+        byte[] textBytes = Encoding.UTF8.GetBytes("db;" + name + "\0");
+        byte[] payload = new byte[16 + textBytes.Length];
 
-        byte[] textBytes = Encoding.UTF8.GetBytes(name + '\0');
-        byte[] payload = new byte[12 + textBytes.Length];
-
-        uint source = 0x00020000 | ((uint)busType << 8) | channel;
-        BinaryPrimitives.WriteUInt32LittleEndian(payload, source);
+        uint reserved = ((uint)busType << 16) | ((uint)channel << 8);
+        BinaryPrimitives.WriteUInt32LittleEndian(payload, 1);
+        BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(4), reserved);
         BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(8), (uint)textBytes.Length);
-        textBytes.CopyTo(payload.AsSpan(12));
+        textBytes.CopyTo(payload.AsSpan(16));
 
         return AddRawObject(_ObjTypeAppText, offsetNanos, payload);
     }
@@ -606,9 +664,7 @@ internal sealed class BlfTestGenerator
     /// <summary>
     /// Writes a single BLF object (block header + V1 log header + payload).
     /// Returns total bytes written (including alignment padding).
-    /// When <see cref="PendingObject.UnpaddedObjectLength"/> is <c>true</c> the
-    /// block header's <c>objectLength</c> field is the unpadded total so that
-    /// scanners read exactly the payload bytes without trailing zeros.
+    /// <c>object_length</c> is the unpadded total; 0–3 zeros follow for 4-byte alignment.
     /// </summary>
     private static int _WriteObject(Span<byte> span, PendingObject obj)
     {
@@ -619,15 +675,11 @@ internal sealed class BlfTestGenerator
         int remainder = objectLength % 4;
         int totalSize = remainder != 0 ? objectLength + (4 - remainder) : objectLength;
 
-        // LogContainer objects store the unpadded size so the scanner's compressed-
-        // payload slice has no trailing zero bytes that would confuse LZ4.
-        uint storedObjectLength = obj.UnpaddedObjectLength ? (uint)objectLength : (uint)totalSize;
-
         // Block header (16 bytes)
         BinaryPrimitives.WriteUInt32LittleEndian(span, _ObjectMagic);                          // "LOBJ"
         BinaryPrimitives.WriteUInt16LittleEndian(span[4..], _ObjectHeaderOverhead);            // headerSize = 32
         BinaryPrimitives.WriteUInt16LittleEndian(span[6..], _HeaderTypeV1);                    // headerType = 1 (V1)
-        BinaryPrimitives.WriteUInt32LittleEndian(span[8..], storedObjectLength);              // objectLength
+        BinaryPrimitives.WriteUInt32LittleEndian(span[8..], (uint)objectLength);              // objectLength (unpadded)
         BinaryPrimitives.WriteUInt32LittleEndian(span[12..], obj.ObjectType);                 // objectType
 
         // V1 log object header (16 bytes) at offset 16, per Vector blf_logobjectheader_t:
@@ -672,13 +724,6 @@ internal sealed class BlfTestGenerator
     /// <param name="ObjectType">BLF object type constant.</param>
     /// <param name="OffsetNanos">Timestamp offset from file start (nanoseconds).</param>
     /// <param name="Payload">Raw object payload bytes.</param>
-    /// <param name="UnpaddedObjectLength">
-    /// When <c>true</c>, the block header's <c>objectLength</c> field is written as
-    /// the exact (unpadded) byte count rather than the 4-byte-aligned total size.
-    /// Required for LogContainer objects: the scanner uses <c>objectLength</c> as the
-    /// slice boundary for the compressed payload, so padding bytes must not be included.
-    /// Padding still exists in the file; the scanner skips it by LOBJ-magic search.
-    /// </param>
     private sealed record PendingObject(
-        uint ObjectType, long OffsetNanos, byte[] Payload, bool UnpaddedObjectLength = false);
+        uint ObjectType, long OffsetNanos, byte[] Payload);
 }

@@ -7,7 +7,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
-## [Unreleased]
+## [0.12.0] — Vector-compatible BLF objects
+
+Delta since 0.11.0. Version is `0.12.0` in `Directory.Build.props`.
+
+This release reads and writes Vector BLF objects using Vector object layouts. Vector captures reconstruct as SocketCAN, DLT_LIN, FlexRay, and Ethernet frames, and `BlfExporter` files those tools can open. CAN XL Type 139 is in the frame-producing set. Inner objects that straddle decompressed containers are stitched.
+
+### Added
+
+- **BLF CAN XL Type 139** — `BlfSource` / `BlfStreamSource` reconstruct SocketCAN XL from Vector `CAN_XL_CHANNEL_FRAME` objects. `BlfExporter` writes the same object from SocketCAN XL (`XLF` on byte 4). Type 140 (XL error) is still skipped.
+- **BLF cross-container stitch** — a leftover inner `LOBJ` at a decompressed container tail is prepended to the next blob, capped by `BlfSourceOptions.MaxUncompressedContainerSize` (or `BlfStreamSource.MaxUncompressedContainerSize` before `Start()`). `FrameById` stitches later containers when `object_length` overruns the first blob. Nested containers stay rejected.
+- **`/requirements` and `/illustrate`** — freeze `REQ{n}` user-view shall-statements before `/plan` when none exist, and ship a zippable HTML illustration of one concept without product code.
+
+### Changed
+
+- **Breaking (pre-1.0): classic CAN BLF Type 1/86 layout matches Vector `CAN_MESSAGE`.** `flags` is at offset 2, `dlc` at offset 3, extended IDs use CAN ID bit 31, RTR is flags `0x80`. Files written by earlier NetworkInspector builds used a private `dlc@2 flags@3` layout and are not compatible.
+- **Breaking (pre-1.0): CAN FD, Ethernet, FlexRay, and LIN BLF payloads match Vector object layouts.** Type 100 is 20 bytes; FD export is Type 101 (40-byte header). Type 71 EtherType/VLAN fields are little-endian in the BLF struct; VLAN detection also accepts QinQ `0x9100` and `0x88A8`. Type 120 is 32 bytes (`frame_length` at 22). Type 102 RX-error is 20 bytes (channel at 2). FlexRay Type 29 is 12 bytes; Type 41 ISO flags come from `frameState`; Type 50/66 flags match Vector `FRAME_FLAG_*` and Type 66 payload starts at 84. LIN frames are DLT_LIN (8-byte header, data padded to 4 or 8). Earlier NetworkInspector-private layouts for those objects are not compatible.
+- **BLF `object_length` is unpadded.** Readers advance `max(max(16, object_length), header_size)` and scan one byte at a time for the next `LOBJ`, so packed writers that omit 0–3 alignment zeros still parse.
+- **`BlfExporter` stores channel 0 as 1** — Vector tools often reject channel 0. A non-zero `FrameInterfacePropertyKeys.BlfChannel` value is preserved.
+- **ASC LIN uses the same DLT_LIN layout** as `BlfSource` (PID at byte 5, DLC in the high nibble of byte 4). The compact pid-plus-length header is gone.
+
+### Fixed
+
+- Classic CAN extended and RTR frames from Vector BLF were mis-parsed because DLC and flags were swapped and EFF lived in the flags byte.
+- CAN FD Type 100/101, Ethernet Type 71/120/102, FlexRay Type 29/41/50/66, and LIN objects from Vector BLF were reconstructed with the wrong header sizes, endianness, or compact LIN bytes.
 
 ---
 

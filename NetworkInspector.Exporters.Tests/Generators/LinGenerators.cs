@@ -3,16 +3,9 @@
 namespace NetworkInspector.Exporters.Tests.Generators;
 
 /// <summary>
-/// Utility methods for building DLT_LIN (LINKTYPE_LIN = 212) frame data for exporter tests.
-/// Produces frames matching the wire format used by the <see cref="Sources.Blf.Format.Objects.LinParser"/>.
-///
-/// DLT_LIN layout:
-///   [pid(1)|length(1)|data(0–8)|checksum(1)|errors(1)]
-///
-/// The PID (Protected Identifier) contains the 6-bit frame ID plus two parity bits:
-///   P0 = ID0 ⊕ ID1 ⊕ ID2 ⊕ ID4  (even parity)
-///   P1 = ¬(ID1 ⊕ ID3 ⊕ ID4 ⊕ ID5) (odd parity)
-///   PID = P1:P0:ID[5:0]
+/// Builds DLT_LIN (link type 212) frame bytes for exporter tests.
+/// Layout matches Wireshark <c>packet-lin.h</c> / <c>blf_read_linmessage</c>:
+/// 8-byte header, then data padded to 4 or 8 bytes.
 /// </summary>
 internal static class LinGenerators
 {
@@ -30,32 +23,23 @@ internal static class LinGenerators
         byte frameId, ReadOnlySpan<byte> data, byte checksum = 0, byte errors = 0)
     {
         int dataLength = Math.Min(data.Length, _MaxLinDataLength);
-
-        // DLT_LIN layout: pid(1) + length(1) + data(dataLength) + checksum(1) + errors(1)
-        byte[] frame = new byte[2 + dataLength + 2];
-
-        // Byte 0: PID (protected identifier with parity bits)
-        frame[0] = ComputePid(frameId);
-
-        // Byte 1: data length
-        frame[1] = (byte)dataLength;
-
-        // Data
+        int dataPad = dataLength <= 4 ? 4 : 8;
+        byte[] frame = new byte[8 + dataPad];
+        frame[0] = 1;
+        frame[4] = (byte)(dataLength << 4);
+        frame[5] = ComputePid(frameId);
+        frame[6] = checksum;
+        frame[7] = errors;
         if (dataLength > 0)
         {
-            data[..dataLength].CopyTo(frame.AsSpan(2));
+            data[..dataLength].CopyTo(frame.AsSpan(8));
         }
-
-        // Trailer: checksum + errors
-        frame[2 + dataLength] = checksum;
-        frame[2 + dataLength + 1] = errors;
 
         return frame;
     }
 
     /// <summary>
     /// Computes the LIN PID (Protected Identifier) from a 6-bit frame ID.
-    /// Uses the same algorithm as <see cref="Sources.Blf.Format.Objects.LinParser.ComputePid"/>.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static byte ComputePid(byte id)

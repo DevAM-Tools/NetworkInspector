@@ -26,6 +26,8 @@ namespace NetworkInspector.Exporters.Blf;
 /// </summary>
 internal sealed class BlfWriter
 {
+    #region Fields
+
     /// <summary>BLF file header size in bytes.</summary>
     private const int _FileHeaderSize = 144;
 
@@ -71,12 +73,16 @@ internal sealed class BlfWriter
     private long _NonMonotonicTimestampCount;
 
     // Total size the file would have if all containers were stored uncompressed.
-    // This is the value Wireshark/tshark expects in the LOGG header `len_uncompressed`
-    // field; using the compressed file size instead causes tshark to read past the
-    // last frame and report "appears to have been cut short". Each flushed container
+    // This is the value written to the LOGG header `len_uncompressed` field;
+    // using the compressed file size instead causes a reader to scan past the
+    // last object. Each flushed container
     // contributes (16 LOBJ block header + 16 container header + uncompressed content +
     // 4-byte alignment padding).
     private long _UncompressedBytesWritten;
+
+    #endregion
+
+    #region Constructors
 
     /// <summary>
     /// Creates a BLF writer and writes the 144-byte file header immediately.
@@ -93,7 +99,7 @@ internal sealed class BlfWriter
         _Stream = stream;
         // The BLF file header stores `start_date` as a Windows SYSTEMTIME with millisecond
         // precision. The per-object `timestamp` field is a 10 µs tick offset relative to
-        // `start_date`. Readers (tshark, Vector tools, our own source) reconstruct each
+        // `start_date`. Readers reconstruct each
         // frame's absolute time as `start_date_ns + relative_ticks * 10 µs`. If we kept
         // sub-millisecond precision in `_StartNs` it would silently disappear in the file
         // header and never be added back via the relative ticks, shifting every frame by
@@ -104,6 +110,10 @@ internal sealed class BlfWriter
         _ContainerBuffer = new PooledBuffer(_InitialContainerBufferSize);
         _WriteFileHeader(_StartNs);
     }
+
+    #endregion
+
+    #region Public API
 
     /// <summary>LOGG <c>start_date</c> anchor used for relative object timestamps (floored to whole milliseconds).</summary>
     internal long AnchorStartNanos => _StartNs;
@@ -219,10 +229,9 @@ internal sealed class BlfWriter
         BinaryPrimitives.WriteUInt32LittleEndian(buf.Slice(8), (uint)rawObjectSize);           // object_length (unpadded)
         BinaryPrimitives.WriteUInt32LittleEndian(buf.Slice(12), objectType);                   // object_type
 
-        // -- Log object header V1 (16 bytes) per Vector blf_logobjectheader_t --
+        // -- Log object header V1 (16 bytes) --
         //   uint32 flags (4) | uint16 client_index (2) | uint16 object_version (2) | uint64 object_timestamp (8)
-        // The previous layout (timestamp first) does not match Vector/Wireshark and produces files where
-        // tshark cannot derive a usable frame.time_epoch.
+        // Timestamp is last. A timestamp-first layout cannot be reconstructed by BLF readers.
         BinaryPrimitives.WriteUInt32LittleEndian(buf.Slice(16), _TimestampResolution10Us);      // flags (resolution = 10 µs)
         BinaryPrimitives.WriteUInt16LittleEndian(buf.Slice(20), 0);                            // client_index
         BinaryPrimitives.WriteUInt16LittleEndian(buf.Slice(22), objectVersion);                // object_version
@@ -244,6 +253,14 @@ internal sealed class BlfWriter
     /// Flushes the current container buffer to the output stream.
     /// Compresses the accumulated objects with zlib if compression is enabled,
     /// then writes the container (block header + log obj header + container header + data).
+    /// <para>
+    /// Padding policy: <c>object_length</c> is the unpadded total
+    /// (16-byte block header + 16-byte container header + compressed payload). 0–3 zero
+    /// bytes are written after that so the next file-level LOBJ is 4-aligned. Readers skip
+    /// with <c>max(max(16, object_length), header_size)</c> and consume pad via a 1-byte
+    /// LOBJ scan. The compressed payload passed to zlib never includes those zeros.
+    /// The writer compresses with zlib only; LZ4 is a source-side read method.
+    /// </para>
     /// </summary>
     internal void FlushContainer()
     {
@@ -272,10 +289,10 @@ internal sealed class BlfWriter
             compressedLen = _CompressedBuf.Length;
         }
 
-        // Container layout per Vector blf.h / Wireshark blf.c (blf_dump_start_logcontainer):
+        // Container layout:
         //   block_header(16) + container_header(16) + data + 4-byte alignment padding
         // The block header's `header_length` is the size of the block header alone (16),
-        // NOT block+container. Wireshark's reader treats `header_length - 16` as additional
+        // NOT block+container. A reader treats `header_length - 16` as additional
         // unknown padding it must skip, then reads a fixed 16-byte container header.
         const int blockHeaderSize = BlfConstants.BlockHeaderSize;                 // 16
         const int containerHeaderSize = BlfConstants.ContainerHeaderSize;         // 16
@@ -290,9 +307,9 @@ internal sealed class BlfWriter
 
         // Block header for the container object
         BinaryPrimitives.WriteUInt32LittleEndian(headerBuf, BlfConstants.ObjectMagic);               // "LOBJ"
-        BinaryPrimitives.WriteUInt16LittleEndian(headerBuf.Slice(4), (ushort)blockHeaderSize);    // header_length = 16 (block header only) per Vector/Wireshark
+        BinaryPrimitives.WriteUInt16LittleEndian(headerBuf.Slice(4), (ushort)blockHeaderSize);    // header_length = 16 (block header only)
         BinaryPrimitives.WriteUInt16LittleEndian(headerBuf.Slice(6), 1);                            // header_type = V1
-        BinaryPrimitives.WriteUInt32LittleEndian(headerBuf.Slice(8), (uint)paddedLength);   // object_length (padded total = block + container + payload + pad)
+        BinaryPrimitives.WriteUInt32LittleEndian(headerBuf.Slice(8), (uint)totalLength); // object_length: unpadded 32+compressedLen
         BinaryPrimitives.WriteUInt32LittleEndian(headerBuf.Slice(12), BlfConstants.ObjTypeLogContainer);
 
         // Container header at offset 16
@@ -365,9 +382,9 @@ internal sealed class BlfWriter
 
         long totalFileSize = _FileHeaderSize + _BytesWritten;
         // For an uncompressed file the two sizes are identical. For a compressed file
-        // tshark requires len_uncompressed to be the size the file would have if all
-        // containers were uncompressed; using the compressed size makes tshark try to
-        // read past the actual end and report "appears to have been cut short".
+        // len_uncompressed must be the size the file would have if all
+        // containers were uncompressed; using the compressed size makes a reader try to
+        // scan past the actual end.
         long uncompressedFileSize = _FileHeaderSize + _UncompressedBytesWritten;
         BinaryPrimitives.WriteUInt64LittleEndian(h.Slice(16), (ulong)totalFileSize);            // len_compressed
         BinaryPrimitives.WriteUInt64LittleEndian(h.Slice(24), (ulong)uncompressedFileSize);     // len_uncompressed
@@ -382,9 +399,9 @@ internal sealed class BlfWriter
         return new BlfWriterFinishResult(finalHeader, _ObjectCount);
     }
 
-    // ========================================================================
-    // Private helpers
-    // ========================================================================
+    #endregion
+
+    #region Private Helpers
 
     /// <summary>Writes the initial 144-byte BLF file header with placeholder values.</summary>
     private void _WriteFileHeader(long startNs)
@@ -424,9 +441,9 @@ internal sealed class BlfWriter
     /// Writes a 16-byte BLF date (Windows SYSTEMTIME layout) from Unix nanoseconds.
     /// Layout: Year(2) + Month(2) + DayOfWeek(2) + Day(2) + Hour(2) + Minute(2) + Second(2) + Millisecond(2).
     /// <para>
-    /// The fields are written in the system's <b>local</b> time zone because both Vector's
-    /// reference tooling and Wireshark/tshark interpret the on-disk SYSTEMTIME using the
-    /// reader's local timezone (via <c>mktime</c>). Writing UTC components instead would
+    /// The fields are written in the system's <b>local</b> time zone because Vector's
+    /// reference tooling interprets the on-disk SYSTEMTIME using the
+    /// reader's local timezone. Writing UTC components instead would
     /// shift every reported frame timestamp by the local UTC offset.
     /// </para>
     /// </summary>
@@ -463,6 +480,8 @@ internal sealed class BlfWriter
         CompressionLevel.SmallestSize => 9,
         _ => 6,
     };
+
+    #endregion
 }
 
 /// <summary>
@@ -472,13 +491,13 @@ internal sealed class BlfWriter
 /// </summary>
 internal sealed class BlfWriterFinishResult
 {
+    #region Fields
+
     private readonly byte[] _FinalizedHeader;
 
-    /// <summary>Total number of objects written to the BLF file.</summary>
-    internal int ObjectCount
-    {
-        get;
-    }
+    #endregion
+
+    #region Constructors
 
     /// <summary>Creates a new finish result.</summary>
     /// <param name="finalizedHeader">The complete 144-byte finalized file header.</param>
@@ -487,6 +506,16 @@ internal sealed class BlfWriterFinishResult
     {
         _FinalizedHeader = finalizedHeader;
         ObjectCount = objectCount;
+    }
+
+    #endregion
+
+    #region Public API
+
+    /// <summary>Total number of objects written to the BLF file.</summary>
+    internal int ObjectCount
+    {
+        get;
     }
 
     /// <summary>
@@ -509,4 +538,6 @@ internal sealed class BlfWriterFinishResult
         stream.Write(_FinalizedHeader);
         stream.Seek(endPos, SeekOrigin.Begin);
     }
+
+    #endregion
 }

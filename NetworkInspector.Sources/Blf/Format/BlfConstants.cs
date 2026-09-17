@@ -32,6 +32,12 @@ internal static class BlfConstants
     /// <summary>Block/object header size in bytes.</summary>
     internal const int BlockHeaderSize = 16;
 
+    /// <summary>
+    /// Number of 0–3 alignment zeros that follow an unpadded LOBJ so the next object is 4-aligned.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static int AlignmentPaddingByteCount(int unpaddedSize) => (4 - (unpaddedSize & 3)) & 3;
+
     /// <summary>Log object header Type 1 size in bytes.</summary>
     internal const int LogObjectHeaderType1Size = 16;
 
@@ -43,6 +49,14 @@ internal static class BlfConstants
 
     /// <summary>Container header size in bytes.</summary>
     internal const int ContainerHeaderSize = 16;
+
+    /// <summary>
+    /// Maximum LOBJ size fetched in one backend <c>GetSpan</c> or stream buffer (256 MiB).
+    /// Untrusted <c>object_length</c> above this is treated as corrupt: skip and scan for the
+    /// next <c>LOBJ</c> instead of mapping a multi-hundred-megabyte window.
+    /// Matches the stream-source buffer cap so file and stream backends reject the same inputs.
+    /// </summary>
+    internal const int MaxBlockReadSize = 256 * 1024 * 1024;
 
     #endregion
 
@@ -161,6 +175,46 @@ internal static class BlfConstants
     /// <summary>Ethernet frame EX (raw frame).</summary>
     internal const uint ObjTypeEthernetFrameEx = 120;
 
+    /// <summary>CAN XL channel frame (object type 139).</summary>
+    internal const uint ObjTypeCanXlChannelFrame = 139;
+
+    /// <summary>CAN XL channel error frame (object type 140).</summary>
+    internal const uint ObjTypeCanXlChannelErrorFrame = 140;
+
+    /// <summary>
+    /// Packed size of the Type 139 CAN XL channel-frame header. Payload bytes follow at offset 104.
+    /// Sequential little-endian field sizes sum to 104; do not overlay a C# struct.
+    /// <code>
+    ///   [0]      channel (u8)
+    ///   [1]      tx count (u8)
+    ///   [2]      direction (u8)
+    ///   [3]      reserved
+    ///   [4..8)   frame length on bus (u32 LE, nanoseconds)
+    ///   [8..10)  bit count (u16 LE)
+    ///   [10..12) reserved
+    ///   [12..16) frame identifier (u32 LE; 11-bit priority in the low bits)
+    ///   [16]     SDU type
+    ///   [17]     reserved
+    ///   [18..20) DLC (u16 LE)
+    ///   [20..22) data length (u16 LE)
+    ///   [22..24) stuff-bit count (u16 LE)
+    ///   [24..26) preface CRC (u16 LE)
+    ///   [26]     VCID
+    ///   [27]     reserved
+    ///   [28..32) acceptance field (u32 LE)
+    ///   [32]     stuff count
+    ///   [33..36) reserved
+    ///   [36..40) CRC (u32 LE)
+    ///   [40..44) BRS time offset (u32 LE, nanoseconds)
+    ///   [44..48) CRC-delimiter time offset (u32 LE, nanoseconds)
+    ///   [48..52) flags (u32 LE; XLF = 0x400000, RRS = 0x800000, SEC = 0x1000000)
+    ///   [52..56) reserved
+    ///   [56..104) six u64 LE timing / hardware-setting words (unused by reconstruction)
+    ///   [104..)  payload
+    /// </code>
+    /// </summary>
+    internal const int CanXlChannelFrameHeaderSize = 104;
+
     #endregion
 
     #region Bus types (for AppText channel name resolution)
@@ -184,12 +238,14 @@ internal static class BlfConstants
     /// <summary>CAN NERR flag: 0 = error, 1 = valid frame.</summary>
     internal const byte CanFlagNerr = 0x20;
 
-    /// <summary>CAN RTR flag.</summary>
-    internal const byte CanFlagRtr = 0x10;
+    /// <summary>
+    /// Remote Transmission Request in the Type 1 / Type 86 / Type 100 flags byte at offset 2 (bit 0x80).
+    /// </summary>
+    internal const byte BlfCanMessageFlagRtr = 0x80;
 
     /// <summary>
-    /// Extended-frame flag in BLF classic CAN (<see cref="ObjTypeCanMessage"/>) payload byte flags
-    /// and in CAN FD (<see cref="ObjTypeCanFdMessage"/>) 32-bit <c>blfFlags</c> (same numeric value).
+    /// Extended-frame flag in the Type 100 CAN FD 32-bit <c>blfFlags</c> field.
+    /// Classic Type 1/86 encode EFF in CAN ID bit 31, not in the flags byte.
     /// Must not be confused with <see cref="BlfCanFdEsi"/>, which is the ESI bit in the separate 8-bit FD-flags byte.
     /// </summary>
     internal const uint BlfCanMessageFlagEff = 0x04;
@@ -303,6 +359,9 @@ internal static class BlfConstants
 
     #region CAN FD Message 64 flags (u32)
 
+    /// <summary>CAN FD Type 101: remote frame in the u32 flags field at offset 12 (bit 0x000010).</summary>
+    internal const uint CanFd64FlagRemoteFrame = 0x000010;
+
     /// <summary>CAN FD 64: EDL flag in u32 flags field.</summary>
     internal const uint CanFd64FlagEdl = 0x001000;
 
@@ -314,32 +373,62 @@ internal static class BlfConstants
 
     #endregion
 
+    #region CAN XL flags (BLF ↔ SocketCAN)
+
+    /// <summary>BLF CAN XL: XLF (CAN XL frame) in the Type 139 flags word at offset 48.</summary>
+    internal const uint BlfCanXlFlagXlf = 0x400000;
+
+    /// <summary>BLF CAN XL: RRS (Remote Request Substitution).</summary>
+    internal const uint BlfCanXlFlagRrs = 0x800000;
+
+    /// <summary>BLF CAN XL: SEC (Simple Extended Content).</summary>
+    internal const uint BlfCanXlFlagSec = 0x1000000;
+
+    /// <summary>SocketCAN XL: XLF discriminator at header byte 4.</summary>
+    internal const byte SocketCanXlXlf = 0x80;
+
+    /// <summary>SocketCAN XL: SEC flag at header byte 4.</summary>
+    internal const byte SocketCanXlSec = 0x01;
+
+    /// <summary>SocketCAN XL: RRS flag at header byte 4.</summary>
+    internal const byte SocketCanXlRrs = 0x02;
+
+    #endregion
+
     #region LIN constants
 
-    /// <summary>LIN error flag: receive error.</summary>
-    internal const byte LinErrorRcv = 0x01;
+    /// <summary>DLT_LIN error bit: no slave response (BLF LIN send-error objects, types 15/58).</summary>
+    internal const byte LinErrorSnd = 0x01;
 
-    /// <summary>LIN error flag: send error.</summary>
-    internal const byte LinErrorSnd = 0x02;
+    /// <summary>DLT_LIN error bit: framing error (BLF LIN receive-error objects, types 14/61).</summary>
+    internal const byte LinErrorRcv = 0x02;
 
-    /// <summary>LIN error flag: CRC error.</summary>
-    internal const byte LinErrorCrc = 0x04;
+    /// <summary>DLT_LIN error bit: checksum error (BLF LIN CRC-error objects, types 12/60).</summary>
+    internal const byte LinErrorCrc = 0x08;
 
     #endregion
 
     #region AppText source masks
 
-    /// <summary>AppText source mask for channel name detection.</summary>
-    internal const uint AppTextSourceChannelName = 0x00020000;
+    /// <summary>
+    /// AppText Type 65 <c>source</c> value (u32 LE at offset 0) for a channel-name record.
+    /// </summary>
+    internal const uint AppTextSourceChannel = 1;
 
-    /// <summary>AppText channel number mask.</summary>
-    internal const uint AppTextChannelMask = 0xFF;
+    /// <summary>
+    /// Shift of the 1-based channel number inside the AppText reserved u32 at offset 4
+    /// (<c>(reserved &gt;&gt; 8) &amp; 0xFF</c>).
+    /// </summary>
+    internal const int AppTextReservedChannelShift = 8;
 
-    /// <summary>AppText bus type shift (bits 8–15).</summary>
-    internal const int AppTextBusTypeShift = 8;
+    /// <summary>
+    /// Shift of the bus-type byte inside the AppText reserved u32 at offset 4
+    /// (<c>(reserved &gt;&gt; 16) &amp; 0xFF</c>).
+    /// </summary>
+    internal const int AppTextReservedBusTypeShift = 16;
 
-    /// <summary>AppText bus type mask.</summary>
-    internal const uint AppTextBusTypeMask = 0xFF;
+    /// <summary>Eight-bit mask applied after an AppText reserved-field shift.</summary>
+    internal const uint AppTextReservedByteMask = 0xFF;
 
     #endregion
 
@@ -370,7 +459,7 @@ internal static class BlfConstants
         or ObjTypeFlexRayRcvMessageEx
         or ObjTypeEthernetFrame or ObjTypeCanErrorExt or ObjTypeCanMessage2
         or ObjTypeCanFdMessage or ObjTypeCanFdMessage64 or ObjTypeEthernetRxError
-        or ObjTypeCanFdError64 or ObjTypeEthernetFrameEx => true,
+        or ObjTypeCanFdError64 or ObjTypeEthernetFrameEx or ObjTypeCanXlChannelFrame => true,
         _ => false,
     };
     #endregion

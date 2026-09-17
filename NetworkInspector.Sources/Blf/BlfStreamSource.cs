@@ -34,7 +34,7 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
 
     /// <summary>
     /// Timezone used to interpret the BLF file header's SYSTEMTIME date fields.
-    /// Defaults to <see cref="TimeZoneInfo.Local"/> to match Vector BLF tooling and Wireshark behaviour.
+    /// Defaults to <see cref="TimeZoneInfo.Local"/> to match Vector BLF tooling.
     /// </summary>
     private readonly TimeZoneInfo _TimestampTimeZone;
 
@@ -65,6 +65,12 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
 
     /// <summary>Read cursor within the pending container.</summary>
     private int _ContainerOffset;
+
+    /// <summary>
+    /// Incomplete inner-object bytes saved from the previous container tail, prepended to
+    /// the next decompressed blob. Null when no carry is pending.
+    /// </summary>
+    private byte[]? _CarryOver;
 
     #endregion
 
@@ -155,7 +161,7 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
     /// <param name="timestampTimeZone">
     /// Time zone for interpreting SYSTEMTIME components in the stream header's <c>start_date</c>.
     /// If <see langword="null"/>, defaults to <see cref="TimeZoneInfo.Local"/> (matching Vector
-    /// BLF tooling and Wireshark behaviour).
+    /// BLF tooling).
     /// </param>
     /// <returns>A new BlfStreamSource ready for <see cref="Start"/>.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="stream"/> is null.</exception>
@@ -282,6 +288,7 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
         // Clear the registry reference so the session can be GC'd after Dispose().
         _Registry = null;
         _PendingContainer = null;
+        _CarryOver = null;
         if (!_LeaveOpen)
         {
             // Wrapped so that a stream disposal failure does not prevent GC.SuppressFinalize from running.
@@ -396,16 +403,17 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
     /// </summary>
     private bool _ReadNextOuterBlock()
     {
-        // Read block header (16 bytes)
+        // Shift-register scan: fill 4 bytes, on mismatch drop byte 0 and read 1 more,
+        // until LOBJ or EOF. Then read the remaining 12 bytes of the block header.
+        // Padding zeros after the previous object are consumed here, not by a computed pad skip.
         Span<byte> headerSpan = stackalloc byte[BlfConstants.BlockHeaderSize];
-        if (!_TryReadExact(headerSpan))
+        if (!_TryReadLobjBlockHeader(headerSpan))
         {
             return false;
         }
 
         if (!BlfBlockHeader.TryParse(headerSpan, out BlfBlockHeader blockHeader, out _))
         {
-            // Header bytes do not form a valid BLF block — stream is corrupt.
             _HandleSkip(new FrameReadErrorEventArgs
             {
                 FrameIndex = _FrameIndex,
@@ -416,32 +424,15 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
             return false;
         }
 
-        // Validate LOBJ magic (no stream-based corruption recovery)
-        if (blockHeader.Signature.Value != BlfConstants.ObjectMagic)
-        {
-            // Unexpected signature — stream is out of sync or corrupt.
-            _HandleSkip(new FrameReadErrorEventArgs
-            {
-                FrameIndex = _FrameIndex,
-                FileOffset = -1,
-                Kind = FrameReadErrorKind.CorruptedBlock,
-                Message = $"Unexpected BLF block signature 0x{blockHeader.Signature.Value:X8};"
-                    + $" expected LOBJ (0x{BlfConstants.ObjectMagic:X8}); stream may be corrupt."
-            });
-            return false;
-        }
-
         ushort headerSize = blockHeader.HeaderSize.Value;
         uint objectLength = blockHeader.ObjectLength.Value;
         uint objectType = blockHeader.ObjectType.Value;
 
-        // Compute total object size (same formula as file-based scanner)
-        // Guard against uint values exceeding int.MaxValue to prevent negative wrap
         long rawObjectSize = Math.Max(
             Math.Max(BlfConstants.BlockHeaderSize, objectLength),
             headerSize);
 
-        if (rawObjectSize > _MaxBufferSize)
+        if (rawObjectSize > BlfConstants.MaxBlockReadSize)
         {
             _HandleSkip(new FrameReadErrorEventArgs
             {
@@ -450,7 +441,11 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
                 Kind = FrameReadErrorKind.Other,
                 Message = $"LOBJ object size {rawObjectSize} exceeds maximum buffer size."
             });
-            return false;
+
+            // The 16-byte header is already consumed. Do not skip the claimed body:
+            // object_length is untrusted and a later LOBJ may sit immediately after
+            // this header. The next shift-register scan finds it.
+            return !_Exhausted;
         }
 
         int totalObjectSize = (int)rawObjectSize;
@@ -459,7 +454,7 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
         int bodySize = totalObjectSize - BlfConstants.BlockHeaderSize;
         if (bodySize <= 0)
         {
-            return true; // Degenerate block, skip
+            return true;
         }
 
         // Build a complete object buffer: block header + body
@@ -508,13 +503,14 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
     /// </summary>
     private void _ProcessContainer(ReadOnlySpan<byte> objectData, ushort headerSize)
     {
-        // Per Vector/Wireshark spec: container_header always sits immediately after the
+        // The container header always sits immediately after the
         // block header padding (skip headerSize - 16 unknown bytes), then a fixed 16-byte
         // container header, then the payload.
         int containerHeaderOffset = Math.Max((int)headerSize, BlfConstants.BlockHeaderSize);
         int payloadOffset = containerHeaderOffset + BlfConstants.ContainerHeaderSize;
         if (containerHeaderOffset + BlfConstants.ContainerHeaderSize > objectData.Length)
         {
+            _CarryOver = null;
             _HandleSkip(new FrameReadErrorEventArgs
             {
                 FrameIndex = _FrameIndex,
@@ -527,6 +523,7 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
 
         if (!BlfContainerHeader.TryParse(objectData[containerHeaderOffset..], out BlfContainerHeader containerHeader, out _))
         {
+            _CarryOver = null;
             _HandleSkip(new FrameReadErrorEventArgs
             {
                 FrameIndex = _FrameIndex,
@@ -552,8 +549,9 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
 
         try
         {
-            _PendingContainer = BlfContainer.Decompress(payloadData, compressionMethod, uncompressedSize,
+            byte[] decoded = BlfContainer.Decompress(payloadData, compressionMethod, uncompressedSize,
                 Volatile.Read(ref _MaxUncompressedContainerSize));
+            _PendingContainer = _PrependCarry(decoded);
             _ContainerOffset = 0;
         }
         catch (Exception ex) when (ex is BlfException or OutOfMemoryException)
@@ -562,6 +560,7 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
             // _PendingContainer is only assigned on success so no partial state is leaked.
             // BlfDecompressionLimitExceededException is intentionally not caught here
             // — it propagates to NextFrame so the caller can react.
+            _CarryOver = null;
             _HandleSkip(new FrameReadErrorEventArgs
             {
                 FrameIndex = _FrameIndex,
@@ -590,19 +589,11 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
         while (_ContainerOffset + BlfConstants.BlockHeaderSize <= containerSpan.Length)
         {
             ReadOnlySpan<byte> objectData = containerSpan[_ContainerOffset..];
+            ReadOnlyMemory<byte> objectMemory = _PendingContainer.AsMemory(_ContainerOffset);
 
-            if (!BlfObjectHeaderParser.TryParse(objectData, _ContainerOffset,
+            if (!BlfObjectHeaderParser.TryParse(objectData, _ContainerOffset, objectMemory,
                     out BlfObjectInfo objInfo, out int skipDistance))
             {
-                // Corrupted object — try LOBJ magic scan recovery
-                _HandleSkip(new FrameReadErrorEventArgs
-                {
-                    FrameIndex = _FrameIndex,
-                    FileOffset = -1,
-                    Kind = FrameReadErrorKind.CorruptedBlock,
-                    Message = $"Corrupt object at container offset {_ContainerOffset}, attempting LOBJ magic scan recovery."
-                });
-
                 int remaining = containerSpan.Length - _ContainerOffset - 1;
                 if (remaining <= 0)
                 {
@@ -614,6 +605,25 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
                 {
                     break;
                 }
+
+                ReadOnlySpan<byte> skipped = containerSpan.Slice(_ContainerOffset, 1 + nextMagic);
+                if (!_IsAllZeros(skipped))
+                {
+                    _HandleSkip(new FrameReadErrorEventArgs
+                    {
+                        FrameIndex = _FrameIndex,
+                        FileOffset = -1,
+                        Kind = FrameReadErrorKind.CorruptedBlock,
+                        Message = $"Corrupt object at container offset {_ContainerOffset}, attempting LOBJ magic scan recovery."
+                    });
+                    if (_Exhausted)
+                    {
+                        _PendingContainer = null;
+                        _CarryOver = null;
+                        return null;
+                    }
+                }
+
                 _ContainerOffset += 1 + nextMagic;
                 continue;
             }
@@ -641,9 +651,8 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
             }
         }
 
-        // Container fully consumed
-        _PendingContainer = null;
-        _ContainerOffset = 0;
+        // Container fully consumed (or leftover is a split object / padding)
+        _FinishContainer(containerSpan);
         return null;
     }
 
@@ -851,6 +860,7 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
             or BlfConstants.ObjTypeCanOverload or BlfConstants.ObjTypeCanErrorExt
             or BlfConstants.ObjTypeCanMessage2 or BlfConstants.ObjTypeCanFdMessage
             or BlfConstants.ObjTypeCanFdMessage64 or BlfConstants.ObjTypeCanFdError64
+            or BlfConstants.ObjTypeCanXlChannelFrame
             => LinkType.CanSocketcan,
 
         BlfConstants.ObjTypeLinMessage or BlfConstants.ObjTypeLinMessage2
@@ -884,6 +894,8 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
         BlfConstants.ObjTypeCanFdMessage or BlfConstants.ObjTypeCanFdMessage64
             or BlfConstants.ObjTypeCanFdError64 => "CAN FD",
 
+        BlfConstants.ObjTypeCanXlChannelFrame => "CAN XL",
+
         BlfConstants.ObjTypeLinMessage or BlfConstants.ObjTypeLinMessage2
             or BlfConstants.ObjTypeLinCrcError or BlfConstants.ObjTypeLinCrcError2
             or BlfConstants.ObjTypeLinRcvError or BlfConstants.ObjTypeLinRcvError2
@@ -912,6 +924,7 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
             or BlfConstants.ObjTypeCanOverload or BlfConstants.ObjTypeCanErrorExt
             or BlfConstants.ObjTypeCanMessage2 or BlfConstants.ObjTypeCanFdMessage
             or BlfConstants.ObjTypeCanFdMessage64 or BlfConstants.ObjTypeCanFdError64
+            or BlfConstants.ObjTypeCanXlChannelFrame
             => BlfConstants.BusTypeCan,
 
         BlfConstants.ObjTypeLinMessage or BlfConstants.ObjTypeLinMessage2
@@ -931,6 +944,169 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
     #endregion
 
     #region Stream I/O helpers
+
+    /// <summary>
+    /// Consumes bytes until the next <c>LOBJ</c> magic or EOF, then fills the remaining
+    /// 12 bytes of the 16-byte block header. Does not treat padding zeros as end-of-stream.
+    /// </summary>
+    private bool _TryReadLobjBlockHeader(Span<byte> header16)
+    {
+        if (header16.Length < BlfConstants.BlockHeaderSize)
+        {
+            return false;
+        }
+
+        if (!_TryReadExact(header16[..4]))
+        {
+            return false;
+        }
+
+        while (true)
+        {
+            if (BinaryPrimitives.ReadUInt32LittleEndian(header16) == BlfConstants.ObjectMagic)
+            {
+                return _TryReadExact(header16[4..]);
+            }
+
+            header16[0] = header16[1];
+            header16[1] = header16[2];
+            header16[2] = header16[3];
+            if (!_TryReadExact(header16.Slice(3, 1)))
+            {
+                return false;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Prepends pending carry-over bytes to <paramref name="decoded"/>. Drops the carry
+    /// when the stitched size would exceed the decompress cap.
+    /// </summary>
+    private byte[] _PrependCarry(byte[] decoded)
+    {
+        if (_CarryOver is not { Length: > 0 })
+        {
+            return decoded;
+        }
+
+        long maxUncompressed = Volatile.Read(ref _MaxUncompressedContainerSize);
+        long total = (long)_CarryOver.Length + decoded.Length;
+        if (total > int.MaxValue || (maxUncompressed > 0 && total > maxUncompressed))
+        {
+            _HandleSkip(new FrameReadErrorEventArgs
+            {
+                FrameIndex = _FrameIndex,
+                FileOffset = -1,
+                Kind = FrameReadErrorKind.Other,
+                Message = "Carried container tail plus the next blob exceeds the uncompressed size cap.",
+            });
+            _CarryOver = null;
+            return decoded;
+        }
+
+        byte[] stitched = new byte[(int)total];
+        Buffer.BlockCopy(_CarryOver, 0, stitched, 0, _CarryOver.Length);
+        Buffer.BlockCopy(decoded, 0, stitched, _CarryOver.Length, decoded.Length);
+        _CarryOver = null;
+        return stitched;
+    }
+
+    /// <summary>
+    /// Saves a partial LOBJ tail as carry-over or discards padding-only remainder.
+    /// </summary>
+    private void _FinishContainer(ReadOnlySpan<byte> containerSpan)
+    {
+        if (_ContainerOffset < containerSpan.Length)
+        {
+            ReadOnlySpan<byte> tail = containerSpan[_ContainerOffset..];
+            if (_LooksLikePartialLobj(tail) && !_DeclaredObjectLengthExceedsCap(tail))
+            {
+                _CarryOver = tail.ToArray();
+            }
+            else
+            {
+                _CarryOver = null;
+            }
+        }
+        else
+        {
+            _CarryOver = null;
+        }
+
+        _PendingContainer = null;
+        _ContainerOffset = 0;
+    }
+
+    /// <summary>
+    /// True when <paramref name="tail"/> is padding zeros, optionally followed by a
+    /// <c>LOBJ</c> magic or a truncated prefix of that magic.
+    /// </summary>
+    private static bool _LooksLikePartialLobj(ReadOnlySpan<byte> tail)
+    {
+        if (tail.IsEmpty)
+        {
+            return false;
+        }
+
+        int i = 0;
+        while (i < tail.Length && tail[i] == 0)
+        {
+            i++;
+        }
+
+        if (i == tail.Length)
+        {
+            return false;
+        }
+
+        ReadOnlySpan<byte> candidate = tail[i..];
+        int n = Math.Min(candidate.Length, BlfConstants.ObjectMagicBytes.Length);
+        return candidate[..n].SequenceEqual(BlfConstants.ObjectMagicBytes[..n]);
+    }
+
+    /// <summary>
+    /// True when <paramref name="tail"/> begins with a parseable <c>LOBJ</c> header whose
+    /// skip distance exceeds <see cref="BlfConstants.MaxBlockReadSize"/>.
+    /// </summary>
+    private static bool _DeclaredObjectLengthExceedsCap(ReadOnlySpan<byte> tail)
+    {
+        int i = 0;
+        while (i < tail.Length && tail[i] == 0)
+        {
+            i++;
+        }
+
+        ReadOnlySpan<byte> candidate = tail[i..];
+        if (candidate.Length < BlfConstants.BlockHeaderSize)
+        {
+            return false;
+        }
+
+        if (!BlfBlockHeader.TryParse(candidate, out BlfBlockHeader header, out _)
+            || header.Signature.Value != BlfConstants.ObjectMagic)
+        {
+            return false;
+        }
+
+        long skip = Math.Max(
+            Math.Max((long)BlfConstants.BlockHeaderSize, header.ObjectLength.Value),
+            header.HeaderSize.Value);
+        return skip > BlfConstants.MaxBlockReadSize;
+    }
+
+    /// <summary>True when every byte is zero (alignment padding).</summary>
+    private static bool _IsAllZeros(ReadOnlySpan<byte> data)
+    {
+        for (int i = 0; i < data.Length; i++)
+        {
+            if (data[i] != 0)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
 
     /// <summary>
     /// Reads exactly <paramref name="buffer"/>.Length bytes from the stream.
@@ -953,12 +1129,6 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
     }
 
     /// <summary>
-    /// Maximum buffer size (256 MB). Malformed objects declaring larger sizes
-    /// are rejected instead of causing unbounded allocation.
-    /// </summary>
-    private const int _MaxBufferSize = 256 * 1024 * 1024;
-
-    /// <summary>
     /// Ensures the internal read buffer is at least the given size.
     /// Returns the buffer (may be larger than requested).
     /// </summary>
@@ -966,15 +1136,15 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private byte[] _EnsureBuffer(int minSize)
     {
-        if (minSize > _MaxBufferSize)
+        if (minSize > BlfConstants.MaxBlockReadSize)
         {
             throw new BlfException(
-                $"Object size {minSize} exceeds maximum buffer size of {_MaxBufferSize} bytes. The stream data may be corrupt.");
+                $"Object size {minSize} exceeds maximum buffer size of {BlfConstants.MaxBlockReadSize} bytes. The stream data may be corrupt.");
         }
 
         if (_ReadBuffer.Length < minSize)
         {
-            int newSize = Math.Min(Math.Max(minSize, _ReadBuffer.Length * 2), _MaxBufferSize);
+            int newSize = Math.Min(Math.Max(minSize, _ReadBuffer.Length * 2), BlfConstants.MaxBlockReadSize);
             _ReadBuffer = new byte[newSize];
         }
         return _ReadBuffer;

@@ -1,6 +1,6 @@
 ---
 name: review
-description: Perform an exhaustive adversarial review (Skeptic: parts and composition) and emit findings using the consolidated template
+description: Skeptical auditor review. Answer ready-for-public-release for the scope. Ignore prior reviews unless named. Load skills from the Section 3 table. Locked finding How. Default runs tests; static on explicit reduced scope. Use on /review.
 argument-hint: Describe files/features/PR to review
 agent: agent
 ---

@@ -9,8 +9,9 @@ namespace NetworkInspector.Sources.Blf;
 /// Key design decisions:
 /// - Two-level iteration: outer file blocks → inner decompressed container objects
 /// - 2Q scan-resistant cache for decompressed containers (avoids LRU scan pollution)
-/// - Objects do NOT align to any fixed boundary — LOBJ magic scanning for corruption recovery
-/// - skip_distance = max(max(16, object_length), header_size) ensures forward progress
+/// - Skip is <c>max(max(16, object_length), header_size)</c>; 0–3 trailing zeros are consumed
+///   by a 1-byte <c>LOBJ</c> scan, not by adding a computed pad to the skip
+/// - Incomplete inner objects at a container tail are carried into the next decompressed blob
 /// - Absolute timestamps = file start offset (from BlfDate) + relative timestamp
 /// </summary>
 public sealed partial class BlfSource : IRandomAccessFrameSource, IErrorTolerantFrameSource
@@ -88,10 +89,7 @@ public sealed partial class BlfSource : IRandomAccessFrameSource, IErrorTolerant
     /// the GC will collect once <see cref="BlfSource"/> is unreachable.
     /// </summary>
     [SuppressMessage("Reliability", "CA2213:Disposable fields should be disposed",
-        Justification = "Intentionally not disposed. Disposing the lock while a concurrent FrameById caller " +
-                        "may still be entering the read lock (they observe _Disposed != 0 and exit, " +
-                        "but the window is not zero) would cause SynchronizationLockException. " +
-                        "The lock holds only managed state that the GC collects once BlfSource is unreachable.")]
+        Justification = "Id: CA2213. Why: Disposing ReaderWriterLockSlim while FrameById may still enter the read lock causes SynchronizationLockException; the lock is managed-only and GC-collected. User approved.")]
     private readonly ReaderWriterLockSlim _LifetimeLock = new(LockRecursionPolicy.NoRecursion);
 
     /// <summary>Counts silent random-access failures (decompression errors, OOM) that would otherwise be invisible to callers.</summary>
@@ -399,7 +397,6 @@ public sealed partial class BlfSource : IRandomAccessFrameSource, IErrorTolerant
             if (scanner.IsExhausted && !_FullyScanned)
             {
                 _FullyScanned = true;
-                _Index.ShrinkToFit();
                 _ChannelNames = scanner.ChannelNames;
             }
         }
@@ -577,7 +574,7 @@ public sealed partial class BlfSource : IRandomAccessFrameSource, IErrorTolerant
     [SuppressMessage(
         "Reliability",
         "CA1001:TypesThatOwnDisposableFieldsShouldBeDisposable",
-        Justification = "Eager disposal is unsafe; see comment above. ManualResetEventSlim lifetime is bounded by GC reachability.")]
+        Justification = "Id: CA1001. Why: Disposing ManualResetEventSlim while a waiter may still call Ready.Wait after the winner removed the pending-decompression entry causes ObjectDisposedException; the event is managed-only and GC-collected. User approved.")]
     private sealed class ContainerDecompressionWork
     {
         /// <summary>

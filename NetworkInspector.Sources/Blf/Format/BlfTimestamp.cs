@@ -25,22 +25,32 @@ internal static class BlfTimestamp
     internal static long ToNanoseconds(ulong rawTimestamp, uint flags)
     {
         byte resolution = (byte)(flags & 0x0F);
-        return resolution switch
+        if (resolution == BlfConstants.TimestampResolution10Us)
         {
-            BlfConstants.TimestampResolution10Us => (long)(rawTimestamp * (ulong)BlfConstants.TimestampMultiplier10Us),
-            BlfConstants.TimestampResolution1Ns => (long)rawTimestamp,
-            // Unknown resolution — treat as nanoseconds (best-effort)
-            _ => (long)rawTimestamp,
-        };
+            const ulong maxRaw = (ulong)long.MaxValue / (ulong)BlfConstants.TimestampMultiplier10Us;
+            if (rawTimestamp > maxRaw)
+            {
+                return long.MaxValue;
+            }
+
+            return (long)(rawTimestamp * (ulong)BlfConstants.TimestampMultiplier10Us);
+        }
+
+        if (rawTimestamp > (ulong)long.MaxValue)
+        {
+            return long.MaxValue;
+        }
+
+        return (long)rawTimestamp;
     }
 
     /// <summary>
     /// Converts a <see cref="BlfDate"/> (Windows SYSTEMTIME) to nanoseconds since Unix epoch.
     /// <para>
     /// The BLF specification does not say whether the SYSTEMTIME fields are UTC or local
-    /// civil time. Vector's reference tooling and Wireshark's <c>blf.c</c> write/read them
-    /// as local time; for cross-machine reproducibility the timezone must therefore be
-    /// supplied explicitly by the caller.
+    /// civil time. Vector's reference tooling writes and reads them as local time; for
+    /// cross-machine reproducibility the timezone must therefore be supplied explicitly
+    /// by the caller.
     /// </para>
     /// <para>
     /// Sub-millisecond precision is lost — the SYSTEMTIME structure has 1 ms granularity.
@@ -50,7 +60,7 @@ internal static class BlfTimestamp
     /// <param name="dateTimeZone">
     /// Time zone in which the SYSTEMTIME fields are interpreted. Pass
     /// <see cref="TimeZoneInfo.Utc"/> for cross-machine determinism, or
-    /// <see cref="TimeZoneInfo.Local"/> for Vector / Wireshark compatibility.
+    /// <see cref="TimeZoneInfo.Local"/> for Vector tooling compatibility.
     /// </param>
     /// <returns>Nanoseconds since 1970-01-01T00:00:00Z, or 0 if the date is invalid.</returns>
     internal static long DateToUnixNanoseconds(in BlfDate date, TimeZoneInfo dateTimeZone)

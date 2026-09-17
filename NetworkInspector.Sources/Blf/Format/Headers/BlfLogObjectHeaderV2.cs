@@ -4,16 +4,14 @@ namespace NetworkInspector.Sources.Blf.Format.Headers;
 
 /// <summary>
 /// BLF Log Object Header — Version 2 (header_type = 2) — 24 bytes.
-/// Matches Vector/Wireshark <c>blf_logobjectheader2_t</c> from <c>wiretap/blf.h</c>:
+/// Layout (little-endian):
 /// <code>
-/// typedef struct blf_logobjectheader2 {
-///     uint32_t flags;              // [0..4]
-///     uint8_t  timestamp_status;   // [4]
-///     uint8_t  res1;               // [5]
-///     uint16_t object_version;     // [6..8]
-///     uint64_t object_timestamp;   // [8..16]
-///     uint64_t original_timestamp; // [16..24]
-/// } blf_logobjectheader2_t;
+///   [0..4)   flags (u32; low nibble = timestamp resolution: 1 = 10 µs, 2 = 1 ns)
+///   [4]      timestamp status (u8)
+///   [5]      reserved (u8)
+///   [6..8)   object version (u16)
+///   [8..16)  object timestamp (u64)
+///   [16..24) original timestamp (u64)
 /// </code>
 /// </summary>
 [BinaryParsable]
@@ -29,10 +27,11 @@ internal readonly partial struct BlfLogObjectHeaderV2
     }
 
     /// <summary>
-    /// Combined <c>uint8 timestamp_status</c> (low byte) and <c>uint8 res1</c> (high byte).
-    /// Vector spec lists these as two adjacent bytes; we read them as one little-endian
+    /// Combined timestamp-status (low byte) and reserved (high byte).
+    /// Vector lists these as two adjacent bytes; we read them as one little-endian
     /// 16-bit field because ZeroAlloc has no <c>U8</c> wrapper. The low byte holds
-    /// the BLF_TS_STATUS_* flags; the high byte is reserved and must be zero.
+    /// timestamp-status flags (original timestamp valid, software timestamp,
+    /// protocol-specific); the high byte is reserved and must be zero.
     /// </summary>
     public U16LE TimestampStatusAndReserved
     {

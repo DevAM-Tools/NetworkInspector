@@ -60,16 +60,12 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
     #region DLT_LIN constants (BLF-derived format)
 
     /// <summary>
-    /// DLT_LIN frame header size (BLF-derived format): pid(1) + length(1) = 2 bytes.
-    /// Full layout: [pid(1) | length(1) | data(0–8) | checksum(1) | errors(1)].
+    /// DLT_LIN header size (revision, reserved, dlc/type, pid, checksum, errors).
     /// </summary>
-    private const int _LinHeaderSize = 2;
+    private const int _LinHeaderSize = 8;
 
-    /// <summary>DLT_LIN frame trailer size: checksum(1) + errors(1) = 2 bytes.</summary>
-    private const int _LinTrailerSize = 2;
-
-    /// <summary>Minimum valid DLT_LIN frame: header + trailer, no data.</summary>
-    private const int _LinMinSize = _LinHeaderSize + _LinTrailerSize;
+    /// <summary>Minimum valid DLT_LIN capture: 8-byte header.</summary>
+    private const int _LinMinSize = _LinHeaderSize;
 
     #endregion
 
@@ -636,16 +632,15 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
     }
 
     /// <summary>
-    /// Parses a DLT_LIN binary frame in BLF-derived format.
+    /// Parses a DLT_LIN binary frame (Wireshark <c>packet-lin.h</c> layout).
     /// </summary>
     /// <remarks>
-    /// BLF-derived DLT_LIN layout (used by both <c>BlfSource</c> and <c>AscSource</c>):
     /// <list type="bullet">
-    /// <item>Byte 0: PID — Protected Identifier (bits 7–6: parity P1/P0; bits 5–0: 6-bit frame ID).</item>
-    /// <item>Byte 1: Data length (0–8).</item>
-    /// <item>Bytes 2..(2+len−1): Data payload.</item>
-    /// <item>Byte (2+len): Checksum.</item>
-    /// <item>Byte (3+len): Error flags (not exported to ASC).</item>
+    /// <item>Byte 0: message format revision.</item>
+    /// <item>Byte 4: DLC in bits 7-4.</item>
+    /// <item>Byte 5: Protected ID.</item>
+    /// <item>Byte 6: checksum.</item>
+    /// <item>Bytes 8+: data payload.</item>
     /// </list>
     /// </remarks>
     private static bool _TryParseLinFrame(
@@ -661,12 +656,10 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
             return false;
         }
 
-        // Frame ID is the lower 6 bits of the PID (strip parity bits P0 and P1).
-        frameId = (byte)(data[0] & 0x3F);
-
-        // Clamp length to the bytes actually available between header and trailer.
-        int length = data[1];
-        int available = data.Length - _LinHeaderSize - _LinTrailerSize;
+        frameId = (byte)(data[5] & 0x3F);
+        checksum = data[6];
+        int length = data[4] >> 4;
+        int available = data.Length - _LinHeaderSize;
         if (length > available)
         {
             length = available;
@@ -678,7 +671,6 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
         }
 
         payload = data.Slice(_LinHeaderSize, length);
-        checksum = data[_LinHeaderSize + length];
         return true;
     }
 

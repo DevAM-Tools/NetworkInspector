@@ -61,7 +61,9 @@ internal static class FrameBuilders
     /// <param name="canId">CAN arbitration ID (11 or 29 bit).</param>
     /// <param name="data">CAN data bytes (0–8).</param>
     /// <param name="extended">If true, sets the EFF bit (29-bit ID).</param>
-    internal static byte[] BuildSocketCanClassic(uint canId, ReadOnlySpan<byte> data, bool extended = false)
+    /// <param name="rtr">If true, sets the SocketCAN RTR bit (bit 30).</param>
+    internal static byte[] BuildSocketCanClassic(
+        uint canId, ReadOnlySpan<byte> data, bool extended = false, bool rtr = false)
     {
         int dlc = Math.Min(data.Length, 8);
         uint id = canId;
@@ -70,18 +72,21 @@ internal static class FrameBuilders
             id |= 0x8000_0000; // EFF flag
         }
 
+        if (rtr)
+        {
+            id |= 0x4000_0000; // RTR flag
+        }
+
         byte[] frame = new byte[16];
         BinaryPrimitives.WriteUInt32BigEndian(frame, id);
         frame[4] = (byte)dlc;
-        // frame[5] = 0 (fd_flags = classic)
-        // frame[6..7] = 0 (reserved)
         data[..dlc].CopyTo(frame.AsSpan(8));
         return frame;
     }
 
     /// <summary>
-    /// Builds a SocketCAN FD frame (72 bytes):
-    /// id(4 BE) + dlc(1) + fd_flags(1) + reserved(2) + data(0-64, zero-padded to 64).
+    /// Builds a SocketCAN FD frame (8 + actual data length, not padded to 64):
+    /// id(4 BE) + len(1) + fd_flags(1) + reserved(2) + data(0-64).
     /// </summary>
     /// <param name="canId">CAN arbitration ID.</param>
     /// <param name="data">CAN data bytes (0–64).</param>
@@ -105,11 +110,46 @@ internal static class FrameBuilders
             fdFlags |= 0x01; // BRS
         }
 
-        byte[] frame = new byte[72];
+        byte[] frame = new byte[8 + dlc];
         BinaryPrimitives.WriteUInt32BigEndian(frame, id);
         frame[4] = (byte)dlc;
         frame[5] = fdFlags;
         data[..dlc].CopyTo(frame.AsSpan(8));
+        return frame;
+    }
+
+    /// <summary>
+    /// Builds a SocketCAN XL frame (12 + payload) matching Wireshark Type 139 reconstruction.
+    /// </summary>
+    internal static byte[] BuildSocketCanXl(
+        uint priority,
+        ReadOnlySpan<byte> data,
+        byte vcid = 0,
+        byte sdt = 0,
+        uint acceptanceField = 0,
+        bool sec = false,
+        bool rrs = false)
+    {
+        int payloadLen = Math.Min(data.Length, 2048);
+        byte[] frame = new byte[12 + payloadLen];
+        frame[1] = vcid;
+        BinaryPrimitives.WriteUInt16BigEndian(frame.AsSpan(2), (ushort)(priority & 0x7FFu));
+        byte flags = 0x80;
+        if (sec)
+        {
+            flags |= 0x01;
+        }
+
+        if (rrs)
+        {
+            flags |= 0x02;
+        }
+
+        frame[4] = flags;
+        frame[5] = sdt;
+        BinaryPrimitives.WriteUInt16LittleEndian(frame.AsSpan(6), (ushort)payloadLen);
+        BinaryPrimitives.WriteUInt32LittleEndian(frame.AsSpan(8), acceptanceField);
+        data[..payloadLen].CopyTo(frame.AsSpan(12));
         return frame;
     }
 

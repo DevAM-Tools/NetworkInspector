@@ -8,7 +8,7 @@ namespace NetworkInspector.Sources.Blf.Format.Headers;
 /// Describes the compression method and uncompressed payload size.
 ///
 /// Layout:
-///   [0..2)   CompressionMethod  — 0 = none, 2 = zlib
+///   [0..2)   CompressionMethod  — 0 = none, 1 = raw LZ4 block, 2 = zlib
 ///   [2..4)   Reserved1A         — reserved
 ///   [4..8)   Reserved1B         — reserved
 ///   [8..12)  UncompressedSize   — decompressed payload size in bytes
@@ -18,8 +18,9 @@ namespace NetworkInspector.Sources.Blf.Format.Headers;
 internal readonly partial struct BlfContainerHeader
 {
     /// <summary>
-    /// Compression method: 0 = uncompressed, 2 = zlib.
-    /// See <see cref="BlfConstants.CompressionNone"/> and <see cref="BlfConstants.CompressionZlib"/>.
+    /// Compression method: 0 = uncompressed, 1 = raw LZ4 block, 2 = zlib.
+    /// See <see cref="BlfConstants.CompressionNone"/>, <see cref="BlfConstants.CompressionLz4"/>,
+    /// and <see cref="BlfConstants.CompressionZlib"/>.
     /// </summary>
     public U16LE CompressionMethod
     {

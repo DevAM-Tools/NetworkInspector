@@ -1,6 +1,6 @@
 ---
 name: workflow-council
-description: Pressure-test one decision or fork with Skeptic, Problem-First, Upside, Outsider, and Builder (advisors, peer review, chairman). Exam mode teardowns a built result after /implement (Skeptic goes to code detail). Use on /council, "council this", "run the council", "pressure-test this", "stress-test this", or implement Closing Exam. Advisors do not edit. Do not use for factual lookups, casual should-I, or as a /review substitute.
+description: Pressure-test one decision with Skeptic, Problem-First, Upside, Outsider, and Builder. Exam mode teardowns a built result after /implement. Use on /council, "council this", "pressure-test this", or implement Closing Exam. Do not edit. Not a /review substitute.
 ---
 
 Execute `/council` workflow.

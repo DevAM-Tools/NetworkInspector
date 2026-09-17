@@ -40,11 +40,12 @@ exporter.OnFinish();
 
 - Ethernet
 - CAN classic (`CanSocketcan`, `Can20B`)
-- CAN FD (detected from SocketCAN FD flags)
+- CAN FD (SocketCAN FDF on `CanSocketcan`, BLF object type 101)
+- CAN XL (SocketCAN XLF on `CanSocketcan`, BLF object type 139)
 - FlexRay
 - LIN
 
-Unsupported link types (for example CAN XL and loopback/raw IP variants) are skipped and counted in exporter statistics.
+Unsupported link types (for example loopback/raw IP variants) are skipped and counted in exporter statistics.
 
 ## Builder Options
 
@@ -79,7 +80,8 @@ Combine target frame count and cancellation tokens for predictable runtime.
 ## Links
 
 - [Exporters hub](../README.md)
-- [BLF source folder](https://github.com/DevAM-Tools/NetworkInspector/tree/main/NetworkInspector.Exporters/Blf)
+- [BLF reader](../../NetworkInspector.Sources/Blf)
+- [BLF exporter implementation](.)
 - [GitHub repository](https://github.com/DevAM-Tools/NetworkInspector)
 - [NuGet package](https://www.nuget.org/packages/NetworkInspector.Exporters)
 - [Issue tracker](https://github.com/DevAM-Tools/NetworkInspector/issues)

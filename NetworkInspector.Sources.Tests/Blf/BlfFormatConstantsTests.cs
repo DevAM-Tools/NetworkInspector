@@ -43,6 +43,8 @@ internal sealed class BlfFormatConstantsTests
     [Arguments(BlfConstants.ObjTypeCanMessage, true)]
     [Arguments(BlfConstants.ObjTypeCanFdMessage64, true)]
     [Arguments(BlfConstants.ObjTypeEthernetFrameEx, true)]
+    [Arguments(BlfConstants.ObjTypeCanXlChannelFrame, true)]
+    [Arguments(BlfConstants.ObjTypeCanXlChannelErrorFrame, false)]
     [Arguments(0xFFFFFFFFu, false)]
     public async Task IsFrameProducingType_ClassifiesObjectTypes(uint objectType, bool expected)
     {
@@ -56,6 +58,22 @@ internal sealed class BlfFormatConstantsTests
     public async Task ToNanoseconds_ConvertsByResolution(ulong raw, uint flags, long expected)
     {
         await Assert.That(BlfTimestamp.ToNanoseconds(raw, flags)).IsEqualTo(expected);
+    }
+
+    [Test]
+    public async Task ToNanoseconds_10UsOverflow_SaturatesToLongMax()
+    {
+        long nanos = BlfTimestamp.ToNanoseconds(ulong.MaxValue, BlfConstants.TimestampResolution10Us);
+
+        await Assert.That(nanos).IsEqualTo(long.MaxValue);
+    }
+
+    [Test]
+    public async Task ToNanoseconds_1NsAboveLongMax_SaturatesToLongMax()
+    {
+        long nanos = BlfTimestamp.ToNanoseconds((ulong)long.MaxValue + 1UL, BlfConstants.TimestampResolution1Ns);
+
+        await Assert.That(nanos).IsEqualTo(long.MaxValue);
     }
 
     [Test]
@@ -104,5 +122,23 @@ internal sealed class BlfFormatConstantsTests
         long nanos = BlfTimestamp.DateToUnixNanoseconds(date, TimeZoneInfo.Utc);
 
         await Assert.That(nanos).IsEqualTo(0L);
+    }
+
+    [Test]
+    [Arguments(32, 0)]
+    [Arguments(33, 3)]
+    [Arguments(34, 2)]
+    [Arguments(35, 1)]
+    public async Task AlignmentPaddingByteCount_UnpaddedSizes(int unpaddedSize, int expectedPad)
+    {
+        await Assert.That(BlfConstants.AlignmentPaddingByteCount(unpaddedSize)).IsEqualTo(expectedPad);
+    }
+
+    [Test]
+    public async Task MaxBlockReadSize_Is256Mib()
+    {
+        int maxBlockReadSize = BlfConstants.MaxBlockReadSize;
+
+        await Assert.That(maxBlockReadSize).IsEqualTo(256 * 1024 * 1024);
     }
 }

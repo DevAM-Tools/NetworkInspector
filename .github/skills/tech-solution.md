@@ -9,12 +9,22 @@ Load when `Directory.Build.props`, `Directory.Build.targets`, `Directory.Package
 | `Directory.Build.props` | repository root |
 | `Directory.Packages.props` | repository root |
 | `Directory.Build.targets` | repository root (only when needed) |
+| `.editorconfig` | repository root (`root = true`) |
 | `GlobalUsings.cs` | project root, no namespace |
 
 ## GlobalUsings.cs
 
 - ❗Group `global using` directives by category; separate groups with a comment header.
 - Order groups: `System.*` → `Microsoft.*` → third-party → internal.
+
+```csharp
+// System
+global using System;
+global using System.Threading;
+
+// Microsoft
+global using Microsoft.Extensions.Logging;
+```
 
 ## Directory.Build.props
 
@@ -43,9 +53,36 @@ Generator projects only:
 | `EnforceCodeStyleInBuild` | `true` |
 | `AnalysisLevel` | `10-recommended` |
 | `GenerateDocumentationFile` | `true` |
-| `NoWarn` | omit globally; user approval only — document reason and scope |
+| `NoWarn` | omit globally; user approval only — template below |
 | `WarningsAsErrors` | optional; specific warning codes only |
-| `WarningsNotAsErrors` | user approval only — document reason and scope |
+| `WarningsNotAsErrors` | user approval only — same template |
+
+When a warning is hidden in MSBuild, use the **global** suppression template in `tech-csharp.md` (Diagnostics). One XML comment **per id**: id, why the warning is inapplicable, **why global** (not method/file/pragma), user approved.
+
+```xml
+<!-- Id: CS1591. Why: {why this warning is inapplicable}. Why global: {why not method/file/pragma}. User approved. -->
+<NoWarn>$(NoWarn);CS1591</NoWarn>
+```
+
+### IDE / code-style (`IDE1006` and other `IDE*` naming)
+
+`IDE1006` (naming convention) is an **EditorConfig code-style** diagnostic. It shows in the IDE even when `dotnet build` is clean.
+
+Tried both:
+
+| Mechanism | `dotnet build` (with `EnforceCodeStyleInBuild`) | IDE squiggle |
+|-----------|--------------------------------------------------|--------------|
+| `<NoWarn>$(NoWarn);IDE1006</NoWarn>` | Suppresses | **Does not** clear |
+| `.editorconfig` `dotnet_diagnostic.IDE1006.severity = none` | Suppresses | **Clears** |
+
+❗ Do **not** use `NoWarn` for `IDE1006`. Put it in the root `.editorconfig` under `[*.cs]`. Same comment fields as a global suppress: **id**, **why**, **why global**, user approved. One comment per id.
+
+```ini
+# Id: IDE1006. Why: default IDE naming rejects '_' on private members; CSharpStyleChecker requires _PascalCase. Why global: every private member; NoWarn does not clear the IDE diagnostic; a pragma per member is not viable. User approved.
+dotnet_diagnostic.IDE1006.severity = none
+```
+
+Do not “fix” the squiggle by dropping the `_` prefix. Private members stay `_PascalCase` (`tech-csharp.md`). This repo’s `.editorconfig` already sets `IDE1006` to `none` for that reason.
 
 ### Build Behavior
 
@@ -102,8 +139,25 @@ Intent: Section 4.7. Never add a dependency without user approval.
 
 - Never add `PackageReference`, `PackageVersion`, or `ProjectReference` without user approval.
 - Ask in Grill-Me when plan may need new dependencies.
-- Present: package id, purpose, license (`MIT` / `Apache-2.0` / BSD-like), alternatives.
+- Present: package id, **what it does**, **why it is needed**, license (`MIT` / `Apache-2.0` / BSD-like), alternatives.
 - After approval: add `PackageVersion` first, then `PackageReference` without `Version`.
+
+```xml
+<!-- Directory.Packages.props -->
+<PackageVersion Include="TUnit" Version="1.*" />
+<!-- Project .csproj -->
+<PackageReference Include="TUnit" />
+```
+
+## Commands
+
+```bash
+dotnet build CopilotAIWorkflow.slnx -c Release
+dotnet test CopilotAIWorkflow.slnx -c Release --no-build
+dotnet pack path/Proj.csproj -c Release
+```
+
+Do not add a wrapper script without approval. File-in-use during build: concurrent agent (Section 4.14).
 
 ## Source File Copyright Header
 

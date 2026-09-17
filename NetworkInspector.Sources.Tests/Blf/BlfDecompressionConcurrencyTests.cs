@@ -240,4 +240,65 @@ internal sealed class BlfDecompressionConcurrencyTests
         // No random-access failure counter change for raw frames.
         await Assert.That(source.RandomAccessFailureCount).IsEqualTo(failuresBefore);
     }
+
+    [Test]
+    public async Task LimitExceeded_ConcurrentFrameById_AllCallersThrowAndNoDeadlock()
+    {
+        const int framesPerContainer = 4;
+        byte[] blf = _BuildMultiContainerBlf(containerCount: 1, framesPerContainer);
+
+        using BlfSource source = _CreateSource(blf, new BlfSourceOptions
+        {
+            ScanMode = ScanMode.Full,
+            MaxUncompressedContainerSize = BlfSourceOptions.DefaultMaxUncompressedContainerSize,
+        });
+        SourceTestFixture.InitializeAndStartSource(source);
+
+        _OverwriteContainerUncompressedSize(blf, (uint)BlfSourceOptions.DefaultMaxUncompressedContainerSize + 1);
+
+        Exception?[] errors = new Exception?[framesPerContainer];
+        Parallel.For(0, framesPerContainer, i =>
+        {
+            try
+            {
+                _ = source.FrameById(new FrameId(i));
+            }
+            catch (Exception ex)
+            {
+                errors[i] = ex;
+            }
+        });
+
+        await Assert.That(errors.All(static e => e is BlfDecompressionLimitExceededException)).IsTrue();
+    }
+
+    private static void _OverwriteContainerUncompressedSize(byte[] blf, uint claimedSize)
+    {
+        int pos = 144;
+        while (pos + 16 <= blf.Length)
+        {
+            uint magic = BinaryPrimitives.ReadUInt32LittleEndian(blf.AsSpan(pos));
+            if (magic != BlfConstants.ObjectMagic)
+            {
+                pos++;
+                continue;
+            }
+
+            ushort headerSize = BinaryPrimitives.ReadUInt16LittleEndian(blf.AsSpan(pos + 4));
+            uint objectLength = BinaryPrimitives.ReadUInt32LittleEndian(blf.AsSpan(pos + 8));
+            uint objectType = BinaryPrimitives.ReadUInt32LittleEndian(blf.AsSpan(pos + 12));
+            int skip = (int)Math.Max(Math.Max((uint)BlfConstants.BlockHeaderSize, objectLength), headerSize);
+            if (objectType == BlfConstants.ObjTypeLogContainer)
+            {
+                int containerHeaderOffset = Math.Max((int)headerSize, BlfConstants.BlockHeaderSize);
+                int field = pos + containerHeaderOffset + 8;
+                if (field + 4 <= blf.Length)
+                {
+                    BinaryPrimitives.WriteUInt32LittleEndian(blf.AsSpan(field), claimedSize);
+                }
+            }
+
+            pos += skip;
+        }
+    }
 }

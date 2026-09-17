@@ -7,30 +7,32 @@ namespace NetworkInspector.Sources.Blf.Format.Objects;
 ///
 /// AppText (object type 65) is a metadata-only object written by Vector CANoe and CANalyzer
 /// when starting a measurement. One AppText record per channel contains the user-defined
-/// channel name, the channel number (1-based), and the bus type.
+/// channel name, the channel number, and the bus type.
 ///
-/// Payload layout (all fields little-endian, unsigned):
+/// Payload layout (all fields little-endian):
 /// <code>
-///   [0..4)   source      — composite field:
-///                           bits  0..7  = channel number (0-based)
-///                           bits  8..15 = bus type (BlfConstants.BusType*)
-///                           bits 16..17 = source category; 0x00020000 = channel name entry
-///   [4..8)   reserved    — unused field, skipped
-///   [8..12)  textLength  — byte length of the following UTF-8 text (NUL not included)
-///   [12..)   text        — UTF-8 (or ASCII) channel name string
+///   [0..4)   source         — <see cref="BlfConstants.AppTextSourceChannel"/> (1) for channel names
+///   [4..8)   reserved       — channel in bits 8–15, bus type in bits 16–23
+///   [8..12)  textLength     — byte length of the UTF-8 text that follows the 16-byte header
+///   [12..16) reserved2      — unused; must still be present
+///   [16..)   text           — UTF-8; this parser uses the second <c>;</c>-separated token
 /// </code>
 ///
-/// Only records where bits 16–17 of <c>source</c> equal
-/// <see cref="BlfConstants.AppTextSourceChannelName"/> carry a channel name.
-/// Other AppText records (error messages, logger info, etc.) are silently ignored.
+/// Vector channel text is <c>Path;ClusterName;...</c>. The interface name is token index 1.
+/// A missing or empty second token is not a channel name.
+///
+/// Only records whose <c>source</c> equals <see cref="BlfConstants.AppTextSourceChannel"/>
+/// carry a channel name. Other AppText records (comments, metadata, XML) are ignored.
 /// </summary>
 /// <remarks>Not thread-safe. Caller synchronisation required.</remarks>
 internal static class AppTextParser
 {
     #region Constants
 
-    /// <summary>Minimum payload size needed to read source, reserved, and textLength fields (3 × 4 bytes).</summary>
-    private const int _MinPayloadSize = 12;
+    /// <summary>
+    /// AppText header size: source + reserved1 + textLength + reserved2 (4 × 4 bytes).
+    /// </summary>
+    private const int _AppTextHeaderSize = 16;
 
     #endregion
 
@@ -44,19 +46,19 @@ internal static class AppTextParser
     /// (i.e. the slice returned by <see cref="BlfObjectInfo.Payload"/>).
     /// </param>
     /// <param name="channelNumber">
-    /// On success, the 0-based channel number encoded in bits 0–7 of the source field.
+    /// On success, the channel number encoded in bits 8–15 of the reserved u32 at offset 4.
     /// </param>
     /// <param name="busType">
-    /// On success, the bus-type byte encoded in bits 8–15 of the source field.
+    /// On success, the bus-type byte encoded in bits 16–23 of the reserved u32 at offset 4.
     /// Compare against <see cref="BlfConstants.BusTypeCan"/>, <see cref="BlfConstants.BusTypeEthernet"/>, etc.
     /// </param>
     /// <param name="name">
-    /// On success, the channel name string read from the payload.
+    /// On success, the channel name string (second <c>;</c>-separated token).
     /// </param>
     /// <returns>
     /// <see langword="true"/> if the record was a channel-name AppText entry and was parsed
     /// successfully; <see langword="false"/> if the payload is too short, not a channel-name
-    /// record, or the text length is inconsistent.
+    /// record, the text length is inconsistent, or token index 1 is missing or empty.
     /// </returns>
     internal static bool TryParseChannelName(
         ReadOnlySpan<byte> payload,
@@ -68,54 +70,54 @@ internal static class AppTextParser
         busType = 0;
         name = null;
 
-        if (payload.Length < _MinPayloadSize)
+        if (payload.Length < _AppTextHeaderSize)
         {
             return false;
         }
 
-        // Read the 32-bit composite source field (little-endian).
-        // BinaryPrimitives.ReadUInt32LittleEndian is used instead of BitConverter.ToUInt32
-        // because BLF fields are specified as little-endian and BitConverter is host-endian.
         uint source = BinaryPrimitives.ReadUInt32LittleEndian(payload);
-
-        // Only channel-name entries carry a usable name — check that the source category
-        // bits match AppTextSourceChannelName. Other AppText records (logger info, error
-        // messages, etc.) share the same struct layout but have different category bits.
-        if ((source & BlfConstants.AppTextSourceChannelName) == 0)
+        if (source != BlfConstants.AppTextSourceChannel)
         {
             return false;
         }
 
-        channelNumber = (byte)(source & BlfConstants.AppTextChannelMask);
-        busType = (byte)((source >> BlfConstants.AppTextBusTypeShift) & BlfConstants.AppTextBusTypeMask);
+        uint reserved = BinaryPrimitives.ReadUInt32LittleEndian(payload[4..]);
+        channelNumber = (byte)((reserved >> BlfConstants.AppTextReservedChannelShift) & BlfConstants.AppTextReservedByteMask);
+        busType = (byte)((reserved >> BlfConstants.AppTextReservedBusTypeShift) & BlfConstants.AppTextReservedByteMask);
 
-        // Read textLength as uint first to detect both zero and values too large
-        // to represent as int (> int.MaxValue). A direct (int) cast from ReadUInt32 silently
-        // wraps values above int.MaxValue to negative, which would pass the > 0 check and
-        // produce a negative Slice length, throwing an ArgumentOutOfRangeException later.
         uint textLengthUint = BinaryPrimitives.ReadUInt32LittleEndian(payload[8..]);
-
-        // Reject zero-length names, names larger than any addressable span (> int.MaxValue),
-        // and names that would overrun the remaining payload bytes.
         if (textLengthUint == 0
             || textLengthUint > (uint)int.MaxValue
-            || textLengthUint > (uint)(payload.Length - _MinPayloadSize))
+            || textLengthUint > (uint)(payload.Length - _AppTextHeaderSize))
         {
             return false;
         }
 
         int textLength = (int)textLengthUint;
-
-        // Decode the UTF-8 channel name. Vector tools write ASCII in practice but the
-        // BLF SDK documentation allows UTF-8 for localised names. Strip a trailing NUL
-        // terminator if present (Vector tools write null-terminated strings).
-        ReadOnlySpan<byte> textBytes = payload.Slice(_MinPayloadSize, textLength);
+        ReadOnlySpan<byte> textBytes = payload.Slice(_AppTextHeaderSize, textLength);
         if (textBytes.Length > 0 && textBytes[^1] == 0)
         {
             textBytes = textBytes[..^1];
         }
 
-        name = Encoding.UTF8.GetString(textBytes);
+        string fullText = Encoding.UTF8.GetString(textBytes);
+        int firstSeparator = fullText.IndexOf(';');
+        if (firstSeparator < 0)
+        {
+            return false;
+        }
+
+        int tokenStart = firstSeparator + 1;
+        int secondSeparator = fullText.IndexOf(';', tokenStart);
+        string token = secondSeparator < 0
+            ? fullText[tokenStart..]
+            : fullText[tokenStart..secondSeparator];
+        if (token.Length == 0)
+        {
+            return false;
+        }
+
+        name = token;
         return true;
     }
 

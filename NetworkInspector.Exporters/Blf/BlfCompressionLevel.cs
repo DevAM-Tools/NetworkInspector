@@ -8,6 +8,8 @@ namespace NetworkInspector.Exporters.Blf;
 /// </summary>
 public enum BlfCompressionLevel
 {
+    #region Enum
+
     /// <summary>No compression — objects stored raw.</summary>
     None = 0,
 
@@ -19,4 +21,6 @@ public enum BlfCompressionLevel
 
     /// <summary>Best compression ratio at the cost of higher CPU usage.</summary>
     Best = 9,
+
+    #endregion
 }

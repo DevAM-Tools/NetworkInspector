@@ -1,56 +1,84 @@
 # Blazor / Razor Rules
 
-Load when `.razor`, `.razor.cs`, or `.razor.css` files are in scope. Extends Sections 4.2, 4.8 in `copilot-instructions.md` and `tech-csharp.md`.
+Load when `.razor`, `.razor.cs`, or `.razor.css` files are in scope. Extends `tech-web.md`, Sections 4.2, 4.8 in `copilot-instructions.md`, and `tech-csharp.md`.
 
 ## Structure
 
 - Organize by feature, not by type.
-- Keep feature components, services, and view-models in feature folders.
-- Use `Shared/` only for cross-feature reuse.
+- Put feature components, services, and view-models in feature folders.
+- Put a type in `Shared/` only when two or more features use it.
 
 ## Components
 
 - Match `PascalCase.razor` file name to class name.
-- Keep logic in `ComponentName.razor.cs` partial class.
-- Use CSS isolation (`ComponentName.razor.css`).
+- Put logic in `ComponentName.razor.cs`.
 - Do not put business logic in markup.
 
 ## Parameters, Events, DI
 
-- Use `[Parameter]` and `[EditorRequired]` for mandatory inputs.
+- Mark mandatory inputs `[Parameter]` and `[EditorRequired]`.
 - Validate parameter invariants in `OnParametersSet` / `OnParametersSetAsync`.
-- Use `EventCallback<T>` for component events.
+- Raise events with `EventCallback<T>`.
 - Inject with `[Inject]` in code-behind only.
+
+```csharp
+[Parameter, EditorRequired]
+public required string Title { get; set; }
+
+[Parameter]
+public EventCallback<string> TitleChanged { get; set; }
+```
 
 ## Lifecycle and Rendering
 
-- Prefer `OnInitializedAsync` for async init.
-- Subscribe and unsubscribe cleanly; implement dispose when needed.
-- Do not block CPU-heavy work on render path.
-- Pass cancellation tokens to long-running async operations.
+- Initialize asynchronously in `OnInitializedAsync`.
+- Unsubscribe in `Dispose` / `DisposeAsync` when you subscribe.
+- Do not run CPU-heavy work on the render path.
+- Pass every available `CancellationToken` (parameter, dispose-linked `CancellationTokenSource`, injected API) into cancellable calls. Do this especially for HTTP, streams, delays, and background loops. Do not drop the token at an intermediate call.
+- Cancel a `CancellationTokenSource` in `Dispose` / `DisposeAsync` when async work outlives one lifecycle method.
+
+```csharp
+await _http.GetAsync(url, _cts.Token);
+await Task.Delay(TimeSpan.FromSeconds(5), _cts.Token);
+```
+
 - Call `await InvokeAsync(StateHasChanged)` for external notifications.
 
 ## Render Mode
 
 - Choose per component: Static SSR, Interactive Server, Interactive WebAssembly, or Auto.
-- Declare `@rendermode` when interactive behavior exists.
-- Document render-mode rationale in component XML summary.
+- Declare `@rendermode` when the component is interactive.
+- Document the render-mode rationale in the component XML summary.
 
-## Markup, State, Security
+## Markup, State, Security, Layout
 
 - Add `@key` in `@foreach` repeats.
-- Avoid deep nesting; extract child components.
-- Prefer explicit `@bind-Value` plus event for two-way binding.
+- Extract a child component instead of deep nesting.
+- Bind with explicit `@bind-Value` plus the event.
 - Wrap risky subtrees in `<ErrorBoundary>` with recovery UI.
-- Keep per-user state in scoped services.
-- Keep shared app state in singleton services.
-- Never use static fields for user state.
+- Keep per-user state in scoped services. Keep shared app state in singletons. Never store user state in static fields.
 - Apply `[Authorize]` / `<AuthorizeRouteView>` where required.
 - Never trust `[Parameter]` data without validation.
 - Validate user input server-side.
 
+## CSS
+
+Shared look, locked breakpoints, CSS layers, JS vs CSS: `tech-web.md`.
+
+- Put component-only rules in `ComponentName.razor.css`.
+- Use `::deep` only when a parent must style a child it owns visually. Otherwise add a shared class in app/layout CSS.
+
 ## Testing
 
-- ❗ Test Razor and Blazor pages and components extensively with bUnit.
-- Cover render states, parameters, user events, auth visibility, and error boundaries.
-- Use TUnit for code-behind, view-models, and services; exit-point gate per `tech-tunit.md`.
+- Component logic: bUnit (render states, parameters, user events, auth visibility, error boundaries).
+- Code-behind, view-models, services: TUnit; exit-point gate: `tech-tunit.md`.
+- Page journeys and UI debug: `tech-playwright.md` (`TUnit.Playwright` in `{App}.UiTest`).
+- Case design: `tech-test.md`.
+
+## Commands
+
+```bash
+dotnet test path/App.Tests.csproj -c Release
+```
+
+UI test commands: `tech-playwright.md`.

@@ -1,11 +1,6 @@
 ---
 name: workflow-commit-message
-description: >-
-  Write a paste-ready English commit message for a user-named scope.
-  Conventional type prefix (feat/fix/…); user-perspective purpose and
-  effect; theme blocks for large work; no file lists or test counts. Scope
-  is required — ask if missing. Use on /commit-message, /commit_message, or
-  when the user asks for a commit message.
+description: Write a specific English commit message for a named scope: named outcomes, before/after, and examples. Update CHANGELOG.md on release or when asked. Use on /commit-message.
 ---
 
 Execute `/commit-message` workflow.

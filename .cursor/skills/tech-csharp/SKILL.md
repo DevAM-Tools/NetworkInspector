@@ -1,6 +1,6 @@
 ---
 name: tech-csharp
-description: C# coding standards for .NET 10 / C# 14. Load when *.cs files are in scope per Tech Load Protocol.
+description: C# coding standards for .NET 10 / C# 14. Load when *.cs files are in scope.
 ---
 
 Read and apply `.github/skills/tech-csharp.md` exactly. C# mechanisms for Section 4 in `.github/copilot-instructions.md`.

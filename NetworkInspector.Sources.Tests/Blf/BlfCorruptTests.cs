@@ -150,4 +150,42 @@ internal sealed class BlfCorruptTests
 
         await Assert.That(didNotCrash).IsTrue();
     }
+
+    [Test]
+    public async Task ObjectLengthAboveMaxBlockReadSize_SkipsAndFindsTheNextObject()
+    {
+        byte[] can = FrameBuilders.BuildSocketCanClassic(0x123, [1, 2, 3, 4]);
+        byte[] good = new BlfTestGenerator().AddCanFrame(1, can, 1_000_000).Build();
+
+        byte[] data = new byte[good.Length + 16];
+        good.AsSpan(0, 144).CopyTo(data);
+        BinaryPrimitives.WriteUInt32LittleEndian(data.AsSpan(144), BlfConstants.ObjectMagic);
+        BinaryPrimitives.WriteUInt16LittleEndian(data.AsSpan(148), 32);
+        BinaryPrimitives.WriteUInt16LittleEndian(data.AsSpan(150), 1);
+        BinaryPrimitives.WriteUInt32LittleEndian(data.AsSpan(152), 300u * 1024 * 1024);
+        BinaryPrimitives.WriteUInt32LittleEndian(data.AsSpan(156), BlfConstants.ObjTypeCanMessage);
+        good.AsSpan(144).CopyTo(data.AsSpan(160));
+
+        using BlfSource source = BlfSource.FromData(
+            data, "huge-object.blf", new BlfSourceOptions { ScanMode = ScanMode.Full });
+        SourceTestFixture.InitializeAndStartSource(source);
+
+        int count = 0;
+        while (source.NextFrame() is not null)
+        {
+            count++;
+        }
+
+        using BlfStreamSource streamSource = BlfStreamSource.FromStream(
+            new MemoryStream(data), "huge-object-stream.blf");
+        SourceTestFixture.InitializeAndStartSource(streamSource);
+        int streamCount = 0;
+        while (streamSource.NextFrame() is not null)
+        {
+            streamCount++;
+        }
+
+        await Assert.That(count).IsEqualTo(1);
+        await Assert.That(streamCount).IsEqualTo(1);
+    }
 }

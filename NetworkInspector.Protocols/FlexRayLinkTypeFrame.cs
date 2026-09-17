@@ -264,24 +264,17 @@ internal static class FlexRayLinkTypeFrame
         stfi = (typeFlags & 0x10) != 0;
     }
 
-    /// <summary>Maps BLF Type 50/66 <c>frameFlags</c> to ISO 17458-2 indicator bits.</summary>
+    /// <summary>
+    /// Maps BLF Type 50/66 <c>frameFlags</c> to ISO 17458-2 indicator bits
+    /// (<c>NULL_FRAME=0x01</c>, <c>SYNC=0x04</c>, <c>STARTUP=0x08</c>, <c>PAYLOAD_PREAM=0x10</c>).
+    /// </summary>
     public static void MapBlfFrameFlags(uint frameFlags, out bool ppi, out bool nfi, out bool sfi, out bool stfi)
     {
-        ppi = (frameFlags & 0x01) != 0;
-        bool isNullFrame = (frameFlags & 0x02) != 0;
+        ppi = (frameFlags & 0x10) != 0;
+        bool isNullFrame = (frameFlags & 0x01) != 0;
         nfi = !isNullFrame;
         sfi = (frameFlags & 0x04) != 0;
         stfi = (frameFlags & 0x08) != 0;
-    }
-
-    /// <summary>Maps BLF Type 41 <c>headerBitMask</c> to ISO 17458-2 indicator bits.</summary>
-    public static void MapBlfHeaderBitMask(byte headerBitMask, out bool ppi, out bool nfi, out bool sfi, out bool stfi)
-    {
-        ppi = (headerBitMask & 0x02) != 0;
-        bool isNullFrame = (headerBitMask & 0x04) != 0;
-        nfi = !isNullFrame;
-        sfi = (headerBitMask & 0x08) != 0;
-        stfi = (headerBitMask & 0x10) != 0;
     }
 
     #endregion

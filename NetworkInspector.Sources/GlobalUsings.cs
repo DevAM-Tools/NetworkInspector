@@ -21,6 +21,7 @@ global using Microsoft.Win32.SafeHandles;
 #region NetworkInspector.Core
 global using NetworkInspector.Core;
 global using NetworkInspector.Core.Cache;
+global using NetworkInspector.Core.Collections;
 global using NetworkInspector.Core.Concurrency;
 global using NetworkInspector.Core.Errors;
 global using NetworkInspector.Core.Ids;

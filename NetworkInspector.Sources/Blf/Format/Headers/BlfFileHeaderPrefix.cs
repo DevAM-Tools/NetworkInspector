@@ -3,10 +3,10 @@
 namespace NetworkInspector.Sources.Blf.Format.Headers;
 
 /// <summary>
-/// BLF file header prefix — 20 bytes.
-/// Contains the first 5 fields of the BLF file header before the embedded BlfDate structs.
-/// The full file header is at least 144 bytes; this prefix contains the fields needed
-/// for validation and header size determination.
+/// BLF file header prefix — 12 bytes.
+/// Magic, header length, and API version. Measurement start time is a <see cref="BlfDate"/>
+/// at file offset 40 (after application/compression bytes and the compressed/uncompressed
+/// length fields). Those later bytes are not part of this prefix.
 /// </summary>
 [BinaryParsable]
 internal readonly partial struct BlfFileHeaderPrefix
@@ -25,18 +25,6 @@ internal readonly partial struct BlfFileHeaderPrefix
 
     /// <summary>BLF API version.</summary>
     public U32LE ApiVersion
-    {
-        get; init;
-    }
-
-    /// <summary>Platform identifier (Windows = 1).</summary>
-    public U32LE Platform
-    {
-        get; init;
-    }
-
-    /// <summary>Creation flags.</summary>
-    public U32LE CreationFlags
     {
         get; init;
     }

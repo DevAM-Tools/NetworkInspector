@@ -4,14 +4,12 @@ namespace NetworkInspector.Sources.Blf.Format.Headers;
 
 /// <summary>
 /// BLF Log Object Header — Version 1 (header_type = 1) — 16 bytes.
-/// Matches Vector/Wireshark <c>blf_logobjectheader_t</c> from <c>wiretap/blf.h</c>:
+/// Layout (little-endian):
 /// <code>
-/// typedef struct blf_logobjectheader {
-///     uint32_t flags;            // [0..4]
-///     uint16_t client_index;     // [4..6]
-///     uint16_t object_version;   // [6..8]
-///     uint64_t object_timestamp; // [8..16]
-/// } blf_logobjectheader_t;
+///   [0..4)  flags (u32; low nibble = timestamp resolution: 1 = 10 µs, 2 = 1 ns)
+///   [4..6)  client index (u16)
+///   [6..8)  object version (u16)
+///   [8..16) object timestamp (u64; units from flags)
 /// </code>
 /// </summary>
 [BinaryParsable]

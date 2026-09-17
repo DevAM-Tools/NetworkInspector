@@ -17,11 +17,13 @@ namespace NetworkInspector.Exporters.Blf;
 /// </summary>
 internal static class BlfObjectPayloads
 {
+    #region Ethernet
+
     /// <summary>
     /// Builds an Ethernet Frame (Type 71) payload from a raw Ethernet frame.
     /// <para>
     /// BLF layout:
-    /// <c>src(6) + channel(2) + dst(6) + dir(2) + ethertype(2 BE) + tpid(2 BE) + tci(2 BE) + payload_len(2 LE) + payload_data</c>.
+    /// <c>src(6) + channel(2) + dst(6) + dir(2) + ethertype(2 LE) + tpid(2 LE) + tci(2 LE) + payload_len(2 LE) + payload_data</c>.
     /// </para>
     /// </summary>
     /// <param name="frame">Raw Ethernet frame bytes (dst + src + ethertype + payload).</param>
@@ -49,17 +51,18 @@ internal static class BlfObjectPayloads
         ushort ethertype;
         int payloadOffset;
 
-        // Check for VLAN tag (0x8100)
-        if (frame.Length >= 18 && frame[12] == 0x81 && frame[13] == 0x00)
+        // VLAN / QinQ: 0x8100, 0x9100, and 0x88A8 all carry a 4-byte tag before the inner EtherType.
+        ushort typeAt12 = BinaryPrimitives.ReadUInt16BigEndian(frame.Slice(12));
+        if (frame.Length >= 18 && (typeAt12 == 0x8100 || typeAt12 == 0x9100 || typeAt12 == 0x88A8))
         {
-            tpid = BinaryPrimitives.ReadUInt16BigEndian(frame.Slice(12));
+            tpid = typeAt12;
             tci = BinaryPrimitives.ReadUInt16BigEndian(frame.Slice(14));
             ethertype = BinaryPrimitives.ReadUInt16BigEndian(frame.Slice(16));
             payloadOffset = 18;
         }
         else
         {
-            ethertype = BinaryPrimitives.ReadUInt16BigEndian(frame.Slice(12));
+            ethertype = typeAt12;
             payloadOffset = 14;
         }
 
@@ -75,29 +78,21 @@ internal static class BlfObjectPayloads
 
         ushort payloadLen = (ushort)payload.Length;
 
-        // Vector blf_ethernetframeheader_t (per Wireshark wiretap/blf.h):
-        //   src(6) + channel(2 LE) + dst(6) + dir(2 LE) + ethtype(2) + tpid(2) +
-        //   tci(2) + payload_len(2 LE) + uint64 res = 32 bytes total.
-        // The trailing 8-byte reserved field MUST be present; tshark always reads
-        // sizeof(blf_ethernetframeheader_t) = 32 bytes for the header and expects
-        // the actual frame payload to start at offset 32. Writing only 24 bytes
-        // here causes tshark to read 8 bytes of payload as part of the header,
-        // then over-read by 8 bytes when fetching the payload — for the last
-        // object in the file this trips "appears to have been cut short".
-        // The ethtype/tpid/tci numeric values are stored little-endian in the
-        // BLF struct but their wire byte order on Ethernet is big-endian; since
-        // the high/low bytes are swapped the LE store of the BE-read value
-        // happens to round-trip the original two bytes identically. We keep the
-        // BE writes here because our reader is symmetric.
+        // Type 71 Ethernet header is 32 bytes:
+        //   src(6) + channel(2 LE) + dst(6) + dir(2 LE) + ethtype(2 LE) + tpid(2 LE) +
+        //   tci(2 LE) + payload_len(2 LE) + reserved(8) = 32.
+        // The trailing 8-byte reserved field MUST be present; readers always consume
+        // 32 header bytes and expect the Ethernet payload to start at offset 32.
+        // EtherType/TPID/TCI are little-endian numeric fields in the BLF header.
         Span<byte> header = output.Reserve(32);
         header.Clear(); // zero everything (covers the 8-byte res field)
         src.CopyTo(header);
         BinaryPrimitives.WriteUInt16LittleEndian(header.Slice(6), channel);
         dst.CopyTo(header.Slice(8));
         BinaryPrimitives.WriteUInt16LittleEndian(header.Slice(14), direction);
-        BinaryPrimitives.WriteUInt16BigEndian(header.Slice(16), ethertype);
-        BinaryPrimitives.WriteUInt16BigEndian(header.Slice(18), tpid);
-        BinaryPrimitives.WriteUInt16BigEndian(header.Slice(20), tci);
+        BinaryPrimitives.WriteUInt16LittleEndian(header.Slice(16), ethertype);
+        BinaryPrimitives.WriteUInt16LittleEndian(header.Slice(18), tpid);
+        BinaryPrimitives.WriteUInt16LittleEndian(header.Slice(20), tci);
         BinaryPrimitives.WriteUInt16LittleEndian(header.Slice(22), payloadLen);
         // header[24..32] = 0 (uint64 res, already zeroed by Clear())
 
@@ -110,11 +105,16 @@ internal static class BlfObjectPayloads
         return true;
     }
 
+    #endregion
+
+    #region CAN classic
+
     /// <summary>
     /// Builds a CAN Message (Type 1) payload from a SocketCAN frame.
     /// <para>
     /// SocketCAN layout: <c>id(4 BE) + dlc(1) + fd_flags(1) + reserved(2) + data(0-8)</c>.
-    /// BLF layout: <c>channel(2 LE) + flags(1) + dlc(1) + id(4 LE) + data(0-8)</c>.
+    /// BLF Type 1 layout:
+    /// <c>channel(2 LE) + flags(1) + dlc(1) + id(4 LE, bit 31 = EFF) + data(8)</c>.
     /// </para>
     /// </summary>
     /// <param name="socketCanFrame">SocketCAN frame bytes.</param>
@@ -136,37 +136,30 @@ internal static class BlfObjectPayloads
         uint canId = BinaryPrimitives.ReadUInt32BigEndian(socketCanFrame);
         byte dlc = socketCanFrame[4];
 
-        // Convert SocketCAN ID → BLF ID (29-bit mask)
-        uint blfId = canId & 0x1FFFFFFF;
+        // BLF stores the 29-bit ID plus EFF in bit 31 (not as a flags-byte bit).
+        uint blfId = canId & 0x1FFF_FFFFu;
+        if ((canId & BlfConstants.SocketCanEff) != 0)
+        {
+            blfId |= 0x8000_0000u;
+        }
 
-        // BLF CAN flags
         byte blfFlags = 0;
         if ((canId & BlfConstants.SocketCanRtr) != 0)
         {
-            blfFlags |= BlfConstants.CanFlagRtr;
+            blfFlags |= BlfConstants.BlfCanMessageFlagRtr;
         }
 
-        if ((canId & BlfConstants.SocketCanEff) != 0)
-        {
-            blfFlags |= (byte)BlfConstants.BlfCanMessageFlagEff;
-        }
-
-        // Data length from DLC lookup table
         byte dataLen = BlfConstants.CanDlcToLength[Math.Min(dlc, (byte)15)];
         int dataAvailable = Math.Max(0, socketCanFrame.Length - 8);
         int actualDataLen = Math.Min(dataLen, Math.Min(dataAvailable, 8));
 
-        // Header: channel(2) + dlc(1) + flags(1) + id(4) = 8 bytes
-        // Layout matches CanParser.TryParseCanMessage which expects dlc@2, flags@3.
         Span<byte> header = output.Reserve(8);
         BinaryPrimitives.WriteUInt16LittleEndian(header, channel);
-        header[2] = dlc;
-        header[3] = blfFlags;
+        header[2] = blfFlags;
+        header[3] = dlc;
         BinaryPrimitives.WriteUInt32LittleEndian(header.Slice(4), blfId);
 
-        // Always emit 8 data bytes (zero-padded) to match the canonical Vector
-        // CAN message layout. The parser requires the 16-byte object size and
-        // the round-trip comparison expects a fixed 16-byte SocketCAN frame.
+        // Always emit 8 data bytes (zero-padded) to match Vector CAN message layout.
         Span<byte> dataOut = output.Reserve(8);
         dataOut.Clear();
         if (actualDataLen > 0)
@@ -177,13 +170,99 @@ internal static class BlfObjectPayloads
         return true;
     }
 
+    #endregion
+
+    #region CAN XL
+
+    /// <summary>
+    /// Builds a CAN XL Channel Frame (Type 139) payload from a SocketCAN XL frame.
+    /// <para>
+    /// SocketCAN XL: <c>[0]=0, vcid, priority(2 BE), flags, sdu, dataLength(2 LE), acceptance(4 LE), data</c>.
+    /// BLF Type 139 header is 104 bytes (see <see cref="BlfConstants.CanXlChannelFrameHeaderSize"/>);
+    /// payload follows at offset 104. Channel is stored as a single byte (low 8 bits of the interface channel).
+    /// Direction is 0 (RX) — see class remarks on direction loss.
+    /// </para>
+    /// </summary>
+    /// <param name="socketCanFrame">SocketCAN XL frame bytes (12 + payload).</param>
+    /// <param name="channel">BLF channel number; stored as the low 8 bits.</param>
+    /// <param name="output">Buffer to write the payload into (reset before use).</param>
+    /// <returns>
+    /// <c>true</c> if the payload was built; <c>false</c> if the frame is shorter than 12 bytes,
+    /// XLF is clear, or the declared dataLength exceeds the remaining bytes.
+    /// </returns>
+    internal static bool TryBuildCanXlChannelFramePayload(
+        ReadOnlySpan<byte> socketCanFrame, ushort channel,
+        PooledBuffer output)
+    {
+        const int SocketCanXlHeaderSize = 12;
+        if (socketCanFrame.Length < SocketCanXlHeaderSize)
+        {
+            return false;
+        }
+
+        byte socketFlags = socketCanFrame[4];
+        if ((socketFlags & BlfConstants.SocketCanXlXlf) == 0)
+        {
+            return false;
+        }
+
+        ushort dataLength = BinaryPrimitives.ReadUInt16LittleEndian(socketCanFrame.Slice(6));
+        int required = SocketCanXlHeaderSize + dataLength;
+        if (socketCanFrame.Length < required)
+        {
+            return false;
+        }
+
+        output.Reset();
+
+        byte vcid = socketCanFrame[1];
+        ushort priority = (ushort)(BinaryPrimitives.ReadUInt16BigEndian(socketCanFrame.Slice(2)) & 0x7FF);
+        byte sduType = socketCanFrame[5];
+        uint acceptanceField = BinaryPrimitives.ReadUInt32LittleEndian(socketCanFrame.Slice(8));
+
+        // Type 139 stores DLC as dataLength - 1 when dataLength > 0, else 0.
+        ushort dlc = dataLength > 0
+            ? (ushort)(dataLength - 1)
+            : (ushort)0;
+
+        uint flags = BlfConstants.BlfCanXlFlagXlf;
+        if ((socketFlags & BlfConstants.SocketCanXlSec) != 0)
+        {
+            flags |= BlfConstants.BlfCanXlFlagSec;
+        }
+
+        if ((socketFlags & BlfConstants.SocketCanXlRrs) != 0)
+        {
+            flags |= BlfConstants.BlfCanXlFlagRrs;
+        }
+
+        Span<byte> header = output.Reserve(BlfConstants.CanXlChannelFrameHeaderSize);
+        header.Clear();
+        header[0] = (byte)channel;
+        BinaryPrimitives.WriteUInt32LittleEndian(header.Slice(12), priority);
+        header[16] = sduType;
+        BinaryPrimitives.WriteUInt16LittleEndian(header.Slice(18), dlc);
+        BinaryPrimitives.WriteUInt16LittleEndian(header.Slice(20), dataLength);
+        header[26] = vcid;
+        BinaryPrimitives.WriteUInt32LittleEndian(header.Slice(28), acceptanceField);
+        BinaryPrimitives.WriteUInt32LittleEndian(header.Slice(48), flags);
+
+        if (dataLength > 0)
+        {
+            output.Write(socketCanFrame.Slice(SocketCanXlHeaderSize, dataLength));
+        }
+
+        return true;
+    }
+
+    #endregion
+
+    #region CAN FD
+
     /// <summary>
     /// Builds a CAN FD Message (Type 100) payload from a SocketCAN FD frame.
-    /// <para>
-    /// SocketCAN FD layout: <c>id(4 BE) + dlc(1) + fd_flags(1) + reserved(2) + data(0-64)</c>.
-    /// BLF layout: <c>channel(2 LE) + flags(1) + dlc(1) + id(4 LE) + frameLength(4 LE) +
-    /// arbBitCount(1) + canfdflags(1) + validDataBytes(1) + reserved(5) + data</c>.
-    /// </para>
+    /// 20-byte header, data at offset 20 (same layout as the Type 100 parser).
+    /// The exporter writes Type 101 for FD; this builder remains for Vector-style Type 100 files.
     /// </summary>
     /// <param name="socketCanFrame">SocketCAN FD frame bytes.</param>
     /// <param name="channel">BLF channel number.</param>
@@ -193,7 +272,6 @@ internal static class BlfObjectPayloads
         ReadOnlySpan<byte> socketCanFrame, ushort channel,
         PooledBuffer output)
     {
-        // Minimum SocketCAN FD: id(4) + dlc(1) + flags(1) + reserved(2) = 8 bytes
         if (socketCanFrame.Length < 8)
         {
             return false;
@@ -202,76 +280,58 @@ internal static class BlfObjectPayloads
         output.Reset();
 
         uint canId = BinaryPrimitives.ReadUInt32BigEndian(socketCanFrame);
-        // SocketCAN FD `len` field at offset 4 is the actual byte count (0..64),
-        // not a DLC code. BLF stores it as a 4-bit DLC index that the parser
-        // expands via CanFdDlcToLength. Convert byte count → DLC code by reverse
-        // lookup so values like 12, 16, 20, 24, 32, 48, 64 round-trip correctly.
         byte payloadByteCount = socketCanFrame[4];
+        if (payloadByteCount > 64)
+        {
+            payloadByteCount = 64;
+        }
+
         byte dlc = BlfConstants.GetCanFdDlcFromPayloadByteCount(payloadByteCount);
         byte socketCanFdFlags = socketCanFrame[5];
 
-        // Convert SocketCAN ID → BLF ID (29-bit mask)
-        uint blfId = canId & 0x1FFFFFFF;
+        uint blfId = canId & 0x1FFF_FFFF;
+        if ((canId & BlfConstants.SocketCanEff) != 0)
+        {
+            blfId |= 0x8000_0000u;
+        }
 
-        // Map SocketCAN FD flags → BLF CAN FD flags. FDF (FD format) is the
-        // canonical FD indicator; without it the parser would misclassify the
-        // frame as classic CAN.
         byte canFdFlags = 0;
         if ((socketCanFdFlags & BlfConstants.SocketCanFdFdf) != 0)
         {
-            canFdFlags |= BlfConstants.BlfCanFdEdl; // FDF → EDL
+            canFdFlags |= BlfConstants.BlfCanFdEdl;
         }
+
         if ((socketCanFdFlags & BlfConstants.SocketCanFdBrs) != 0)
         {
             canFdFlags |= BlfConstants.BlfCanFdBrs;
         }
+
         if ((socketCanFdFlags & BlfConstants.SocketCanFdEsi) != 0)
         {
             canFdFlags |= BlfConstants.BlfCanFdEsi;
         }
 
-        // BLF CAN message flags (u32 in Type 100; EFF is 0x04, same as classic single-byte flags)
-        uint blfFlags32 = 0;
+        byte blfFlags = 0;
         if ((canId & BlfConstants.SocketCanRtr) != 0)
         {
-            blfFlags32 |= BlfConstants.CanFlagRtr;
+            blfFlags |= BlfConstants.BlfCanMessageFlagRtr;
         }
 
-        if ((canId & BlfConstants.SocketCanEff) != 0)
-        {
-            blfFlags32 |= BlfConstants.BlfCanMessageFlagEff;
-        }
-
-        // Data lengths from FD DLC lookup table; validDataBytes is the actual
-        // bytes carried (may be less than the DLC-implied length when payload
-        // is shorter than the next DLC bucket).
         byte dataLen = BlfConstants.CanFdDlcToLength[Math.Min(dlc, (byte)15)];
         int dataAvailable = Math.Max(0, socketCanFrame.Length - 8);
         byte validDataBytes = (byte)Math.Min(payloadByteCount, (byte)dataAvailable);
         validDataBytes = (byte)Math.Min(validDataBytes, dataLen);
 
-        // Header layout (24 bytes) matches CanParser.TryParseCanFdMessage:
-        //   [0..2]  channel (u16 LE)
-        //   [2]     dlc
-        //   [3]     validPayloadLength
-        //   [4..8]  txCount (u32 LE)            -- zero
-        //   [8..12] can_id (u32 LE)
-        //   [12..16] frameLength (u32 LE)       -- total struct size
-        //   [16..20] blfFlags (u32 LE)
-        //   [20]    fdFlags (BLF EDL/BRS/ESI)
-        //   [21..24] reserved                    -- zero
-        Span<byte> header = output.Reserve(24);
+        const int CanFdMessageHeaderSize = 20;
+        Span<byte> header = output.Reserve(CanFdMessageHeaderSize);
         header.Clear();
         BinaryPrimitives.WriteUInt16LittleEndian(header, channel);
-        header[2] = dlc;
-        header[3] = validDataBytes;
-        BinaryPrimitives.WriteUInt32LittleEndian(header.Slice(8), blfId);
-        BinaryPrimitives.WriteUInt32LittleEndian(header.Slice(12), (uint)(24 + validDataBytes));
-        BinaryPrimitives.WriteUInt32LittleEndian(header.Slice(16), blfFlags32);
-        header[20] = canFdFlags;
+        header[2] = blfFlags;
+        header[3] = dlc;
+        BinaryPrimitives.WriteUInt32LittleEndian(header.Slice(4), blfId);
+        header[13] = canFdFlags;
+        header[14] = validDataBytes;
 
-        // Data (variable up to 64 bytes — BLF stores only validDataBytes; the
-        // parser zero-pads the resulting SocketCAN frame to 64 data bytes).
         if (validDataBytes > 0)
         {
             output.Write(socketCanFrame.Slice(8, validDataBytes));
@@ -281,14 +341,95 @@ internal static class BlfObjectPayloads
     }
 
     /// <summary>
+    /// Builds a CAN FD Message 64 (Type 101) payload from a SocketCAN FD frame.
+    /// 40-byte header, unused timing fields zero, data at offset 40:
+    /// <code>
+    ///   [0]      channel (u8)
+    ///   [1]      DLC
+    ///   [2]      valid data bytes
+    ///   [3]      tx count (0)
+    ///   [4..8)   id (u32 LE; bit 31 = EFF)
+    ///   [8..12)  frame length ns (0)
+    ///   [12..16) flags (u32 LE; EDL 0x1000, BRS 0x2000, ESI 0x4000)
+    ///   [16..40) unused timing / CRC fields (0)
+    ///   [40..)   data
+    /// </code>
+    /// </summary>
+    /// <param name="socketCanFrame">SocketCAN FD frame bytes.</param>
+    /// <param name="channel">BLF channel number; stored as the low 8 bits.</param>
+    /// <param name="output">Buffer to write the payload into (reset before use).</param>
+    /// <returns><c>true</c> if the payload was built; <c>false</c> if the frame is shorter than 8 bytes.</returns>
+    internal static bool TryBuildCanFdMessage64Payload(
+        ReadOnlySpan<byte> socketCanFrame, ushort channel,
+        PooledBuffer output)
+    {
+        if (socketCanFrame.Length < 8)
+        {
+            return false;
+        }
+
+        output.Reset();
+
+        uint canId = BinaryPrimitives.ReadUInt32BigEndian(socketCanFrame);
+        byte payloadByteCount = socketCanFrame[4];
+        if (payloadByteCount > 64)
+        {
+            payloadByteCount = 64;
+        }
+
+        byte dlc = BlfConstants.GetCanFdDlcFromPayloadByteCount(payloadByteCount);
+        byte socketCanFdFlags = socketCanFrame[5];
+
+        uint blfId = canId & 0x1FFF_FFFF;
+        if ((canId & BlfConstants.SocketCanEff) != 0)
+        {
+            blfId |= 0x8000_0000u;
+        }
+
+        uint flags = 0;
+        if ((socketCanFdFlags & BlfConstants.SocketCanFdFdf) != 0)
+        {
+            flags |= BlfConstants.CanFd64FlagEdl;
+        }
+
+        if ((socketCanFdFlags & BlfConstants.SocketCanFdBrs) != 0)
+        {
+            flags |= BlfConstants.CanFd64FlagBrs;
+        }
+
+        if ((socketCanFdFlags & BlfConstants.SocketCanFdEsi) != 0)
+        {
+            flags |= BlfConstants.CanFd64FlagEsi;
+        }
+
+        int dataAvailable = Math.Max(0, socketCanFrame.Length - 8);
+        byte validDataBytes = (byte)Math.Min(payloadByteCount, (byte)dataAvailable);
+
+        const int CanFdMessage64HeaderSize = 40;
+        Span<byte> header = output.Reserve(CanFdMessage64HeaderSize);
+        header.Clear();
+        header[0] = (byte)channel;
+        header[1] = dlc;
+        header[2] = validDataBytes;
+        BinaryPrimitives.WriteUInt32LittleEndian(header.Slice(4), blfId);
+        BinaryPrimitives.WriteUInt32LittleEndian(header.Slice(12), flags);
+
+        if (validDataBytes > 0)
+        {
+            output.Write(socketCanFrame.Slice(8, validDataBytes));
+        }
+
+        return true;
+    }
+
+    #endregion
+
+    #region FlexRay
+
+    /// <summary>
     /// Builds a FlexRay RcvMessage (Type 50) payload from a LINKTYPE_FLEXRAY frame.
-    /// <para>
-    /// LINKTYPE_FLEXRAY layout: measurement header + error flags + ISO 17458-2 header + data.
-    /// BLF Type 50 layout:
-    /// <c>channel(2 LE)|version(2 LE)|channel_mask(2 LE)|dir(2 LE)|client_idx(4 LE)|
-    /// cluster_no(4 LE)|frame_id(2 LE)|header_crc1(2 LE)|header_crc2(2 LE)|
-    /// payload_length(2 LE)|cycle(1)|tag(1)|data_flag(1)|frame_flags(1)|data...</c>.
-    /// </para>
+    /// 44-byte header. <c>frameFlags</c> at offset 36 uses
+    /// NULL=0x01, SYNC=0x04, STARTUP=0x08, PAYLOAD_PREAM=0x10.
     /// </summary>
     /// <param name="linkTypeFlexRayFrame">LINKTYPE_FLEXRAY frame bytes (7-byte header + data).</param>
     /// <param name="channel">BLF channel number to encode into the output payload header.</param>
@@ -313,14 +454,14 @@ internal static class BlfObjectPayloads
         int dataLength = data.Length;
 
         // Map ISO indicator bits → BLF frame_flags (reverse of FlexRayParser).
-        byte frameFlags = 0;
+        uint frameFlags = 0;
         if (fields.Ppi)
         {
-            frameFlags |= 0x01;
+            frameFlags |= 0x10;
         }
         if (!fields.Nfi)
         {
-            frameFlags |= 0x02;
+            frameFlags |= 0x01;
         }
         if (fields.Sfi)
         {
@@ -331,8 +472,7 @@ internal static class BlfObjectPayloads
             frameFlags |= 0x08;
         }
 
-        // BLF FLEXRAY_RCVMESSAGE (Type 50) — Vector blf_flexrayrcvmessage_t header is
-        // 44 bytes packed (matches Wireshark wiretap/blf.h). Field-by-field LE layout:
+        // BLF FLEXRAY_RCVMESSAGE (Type 50) — 44-byte packed header, little-endian:
         //   ch(2) ver(2) chMask(2) dir(2)              =  8
         //   clientIndex(4) clusterNo(4)                = +8 = 16
         //   frameId(2) headerCrc1(2) headerCrc2(2)
@@ -369,6 +509,10 @@ internal static class BlfObjectPayloads
         return true;
     }
 
+    #endregion
+
+    #region LIN
+
     /// <summary>
     /// Maximum LIN data length.
     /// </summary>
@@ -377,30 +521,30 @@ internal static class BlfObjectPayloads
     /// <summary>
     /// Builds a LIN Message V2 (Type 57) payload from a DLT_LIN frame.
     /// <para>
-    /// DLT_LIN layout:
-    /// <c>pid(1)|length(1)|data(0–8)|checksum(1)|errors(1)</c>.
-    /// BLF Type 57 layout:
-    /// <c>data(8)|crc(1)|dir(1)|simulated(1)|isEtf(1)|etfAI(1)|id(1)|dlc(1)|
-    /// startOfFrame(8 LE)|baudrate(4 LE)|responseFlags(4 LE)|channel(1)|...</c>.
+    /// DLT_LIN layout (8-byte header):
+    /// <c>rev(1)|reserved(3)|dlc nibble at [4]|pid at [5]|checksum at [6]|errors at [7]|data at 8</c>.
+    /// BLF Type 57 is a 132-byte packed nested layout (136 on disk with 4-byte alignment padding).
+    /// Written fields: channel at 12, id at 37, dlc at 38, data at 112, crc low byte at 120.
     /// </para>
     /// </summary>
-    /// <param name="dltLinFrame">DLT_LIN frame bytes (4-byte header + data).</param>
+    /// <param name="dltLinFrame">DLT_LIN frame bytes (8-byte header + data).</param>
     /// <param name="channel">BLF channel number.</param>
     /// <param name="output">Buffer to write the payload into (reset before use).</param>
     /// <returns><c>true</c> if the payload was built successfully; <c>false</c> if the frame is too short.</returns>
     internal static bool TryBuildLinMessage2Payload(
         ReadOnlySpan<byte> dltLinFrame, ushort channel, PooledBuffer output)
     {
-        // DLT_LIN minimum: pid(1) + length(1) + checksum(1) + errors(1) = 4 bytes
-        if (dltLinFrame.Length < 4)
+        // DLT_LIN minimum: 8-byte header
+        if (dltLinFrame.Length < 8)
         {
             return false;
         }
 
         output.Reset();
 
-        byte pid = dltLinFrame[0];
-        byte dlc = dltLinFrame[1];
+        byte pid = dltLinFrame[5];
+        byte dlc = (byte)(dltLinFrame[4] >> 4);
+        byte checksum = dltLinFrame[6];
 
         // Extract 6-bit frame ID from PID (strip parity bits)
         byte id = (byte)(pid & 0x3F);
@@ -408,46 +552,45 @@ internal static class BlfObjectPayloads
         // Clamp DLC to max LIN data length
         int dataLength = Math.Min((int)dlc, (int)_MaxLinDataLength);
 
-        // Data starts at offset 2, followed by checksum and errors
-        // Layout: pid(1)|length(1)|data(dataLength)|checksum(1)|errors(1)
-        int expectedMinLength = 2 + dataLength + 2; // header + data + trailer
-        byte checksum = 0;
-        if (dltLinFrame.Length >= expectedMinLength)
-        {
-            checksum = dltLinFrame[2 + dataLength]; // checksum after data
-        }
-
-        // BLF LIN_MESSAGE2 (Type 57) — Vector blf_linmessage2_t is 132 bytes packed
-        // (matches Wireshark wiretap/blf.h). The struct nests several smaller events:
-        //   blf_linbusevent (16)            : sof(8) eventBaudrate(4) channel(2) res1(2)
-        //   blf_linsynchfieldevent (32)     : linbusevent(16) synchBreakLength(8) synchDelLength(8)
-        //   blf_linmessagedescriptor (40)   : linsynchfieldevent(32) supplierId(2) messageId(2)
-        //                                     configuredNodeAddress(1) id(1) dlc(1) checksumModel(1)
-        //   blf_lindatabytetimestampevent (112): linmessagedescriptor(40) databyteTimestamps[9](72)
-        //   blf_linmessage2 (132)           : lindatabytetimestampevent(112) data[8](8) crc(2)
-        //                                     dir(1) simulated(1) isEtf(1) eftAssocIndex(1)
-        //                                     eftAssocEftId(1) fsmId(1) fsmState(1) res1[3](3)
-        // We zero everything except channel, id, dlc, data, crc — enough for tshark to
-        // accept the object and reconstruct the LIN frame on reimport.
-        // NOTE: Wireshark's blf_read_linmessage2 requires sizeof(blf_linmessage2_t)
-        // bytes. Although the nominal field layout is 132 bytes, C struct alignment
-        // (max member alignment = 8 from uint64_t sof + databyteTimestamps[]) pads
-        // the struct to 136 bytes. We must emit those 4 trailing padding bytes.
+        // BLF LIN_MESSAGE2 (Type 57) — 132 packed bytes, stored as 136 with 4-byte alignment:
+        //   [0..8)     SOF timestamp (u64 LE)
+        //   [8..12)    event baudrate (u32 LE)
+        //   [12..14)   channel (u16 LE)
+        //   [14..16)   reserved
+        //   [16..32)   sync-break / sync-delimiter lengths (two u64 LE)
+        //   [32..36)   supplier id + message id (two u16 LE)
+        //   [36]       configured node address
+        //   [37]       6-bit frame id
+        //   [38]       dlc
+        //   [39]       checksum model
+        //   [40..112)  nine u64 LE per-byte timestamps
+        //   [112..120) data (8)
+        //   [120..122) crc (u16 LE; checksum in the low byte)
+        //   [122]      dir
+        //   [123]      simulated
+        //   [124]      isEtf
+        //   [125]      eftAssocIndex
+        //   [126]      eftAssocEftId
+        //   [127]      fsmId
+        //   [128]      fsmState
+        //   [129..132) reserved
+        //   [132..136) alignment padding (u64 members force 8-byte alignment)
+        // Unused fields stay zero. Readers require the full 136-byte object.
         const int LinMessage2Size = 136;
         Span<byte> payload = output.Reserve(LinMessage2Size);
         payload.Clear(); // zero-fill all fields including trailing alignment padding
 
-        // ── blf_linbusevent (offset 0..16) ──
+        // ── bus-event prefix (offset 0..16) ──
         // sof(0..8) = 0
         // eventBaudrate(8..12) = 0
         BinaryPrimitives.WriteUInt16LittleEndian(payload.Slice(12), channel); // channel
         // res1(14..16) = 0
 
-        // ── blf_linsynchfieldevent extra (offset 16..32) ──
+        // ── sync-field extra (offset 16..32) ──
         // synchBreakLength(16..24) = 0
         // synchDelLength(24..32)   = 0
 
-        // ── blf_linmessagedescriptor extra (offset 32..40) ──
+        // ── message descriptor extra (offset 32..40) ──
         // supplierId(32..34) = 0
         // messageId(34..36)  = 0
         // configuredNodeAddress(36) = 0
@@ -455,14 +598,14 @@ internal static class BlfObjectPayloads
         payload[38] = dlc;          // dlc
         // checksumModel(39) = 0
 
-        // ── blf_lindatabytetimestampevent extra (offset 40..112) ──
+        // ── per-byte timestamps (offset 40..112) ──
         // databyteTimestamps[9] (40..112) = 0
 
-        // ── blf_linmessage2 extra (offset 112..132) ──
+        // ── message extra (offset 112..132) ──
         // data[8] (112..120)
-        if (dataLength > 0 && dltLinFrame.Length >= 2 + dataLength)
+        if (dataLength > 0 && dltLinFrame.Length >= 8 + dataLength)
         {
-            dltLinFrame.Slice(2, dataLength).CopyTo(payload.Slice(112));
+            dltLinFrame.Slice(8, dataLength).CopyTo(payload.Slice(112));
         }
         // crc (120..122) — store the LIN checksum byte in the low byte; high byte stays 0.
         payload[120] = checksum;
@@ -477,4 +620,6 @@ internal static class BlfObjectPayloads
 
         return true;
     }
+
+    #endregion
 }

@@ -7,10 +7,12 @@ namespace NetworkInspector.Exporters.Blf;
 /// <para>
 /// Implements <see cref="IFrameListener"/> for integration with the capture pipeline.
 /// Supports Ethernet, CAN classic (<see cref="LinkType.CanSocketcan"/>, <see cref="LinkType.Can20B"/>),
-/// CAN FD, FlexRay, and LIN frames. Unsupported link types (including CAN XL on
-/// <see cref="LinkType.CanSocketcan"/>) are skipped (counted in
+/// CAN FD (Type 101), CAN XL (SocketCAN XLF on <see cref="LinkType.CanSocketcan"/>), FlexRay, and LIN frames.
+/// Unsupported link types are skipped (counted in
 /// <see cref="IExporterStatistics.SkippedCount"/>).
 /// Lazy initialization defers file creation until the first frame.
+/// Channel 0 is stored as 1: Vector tools often reject files that keep channel 0.
+/// A non-zero <see cref="FrameInterfacePropertyKeys.BlfChannel"/> value is preserved.
 /// </para>
 /// <para>
 /// <b>Thread safety:</b> Not thread-safe. <see cref="OnFrame"/> and <see cref="OnFinish"/>
@@ -340,12 +342,13 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
 
         // Look up channel from the frame's interface properties for round-trip preservation.
         // Opaque property bags may hold any type — convert without exception-based control flow.
-        ushort channel = 0;
+        // Channel 0 is stored as 1 because Vector tools often reject it.
+        ushort channel = 1;
         if (frame.HasInterface
             && frame.Registry.TryGet(frame.InterfaceId, out FrameInterfaceInfo? interfaceInfo)
             && interfaceInfo.Properties.TryGetValue(FrameInterfacePropertyKeys.BlfChannel, out object? channelValue))
         {
-            if (!InterfaceChannelConverter.TryConvertToUInt16(channelValue, out channel))
+            if (!InterfaceChannelConverter.TryConvertToUInt16(channelValue, out ushort mapped))
             {
                 return _HandleSkip(new ExportErrorEventArgs
                 {
@@ -353,6 +356,11 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
                     Kind = ExportErrorKind.SerializationError,
                     Message = $"BLF channel value '{channelValue}' cannot be converted to a UInt16 channel id.",
                 });
+            }
+
+            if (mapped != 0)
+            {
+                channel = mapped;
             }
         }
 
@@ -369,23 +377,21 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
                 break;
 
             case LinkType.CanSocketcan:
-                // CAN XL shares LinkType.CanSocketcan but sets XLF on byte 4. The BLF exporter
-                // does not emit XL object types — skip before classic/FD interpretation.
+                // CAN XL shares LinkType.CanSocketcan but sets XLF on byte 4. Emit Type 139
+                // before classic/FD so the 12-byte XL header is never interpreted as DLC/FDF.
                 if (data.Length >= 8 && (data[4] & _SocketCanXlfFlag) != 0)
                 {
-                    return _HandleSkip(new ExportErrorEventArgs
-                    {
-                        ItemIndex = currentIndex,
-                        Kind = ExportErrorKind.UnsupportedType,
-                        Message = "CAN XL frames are not supported by the BLF exporter",
-                    });
+                    objectType = BlfConstants.ObjTypeCanXlChannelFrame;
+                    payloadBuilt = BlfObjectPayloads.TryBuildCanXlChannelFramePayload(
+                        data, channel, _PayloadBuffer);
+                    break;
                 }
 
                 // Check FD flag at byte offset 5 to distinguish CAN classic vs CAN FD
                 if (data.Length > 5 && (data[5] & _SocketCanFdFlagFdf) != 0)
                 {
-                    objectType = BlfConstants.ObjTypeCanFdMessage;
-                    payloadBuilt = BlfObjectPayloads.TryBuildCanFdMessagePayload(
+                    objectType = BlfConstants.ObjTypeCanFdMessage64;
+                    payloadBuilt = BlfObjectPayloads.TryBuildCanFdMessage64Payload(
                         data, channel, _PayloadBuffer);
                 }
                 else

@@ -433,38 +433,41 @@ internal sealed class BlfExporterTests
     }
 
     [Test]
-    public async Task CanXlFrame_TolerantMode_Skipped()
+    public async Task CanXlFrame_WritesType139AndReimports()
     {
-        // CAN XL shares LinkType.CanSocketcan with classic/FD but sets XLF (byte 4, bit 7).
-        // BLF has no CAN XL object type in this exporter — must skip, not write classic CAN.
         using TestDir dir = new("blf_canxl");
         string path = dir.FilePath("output.blf");
 
-        using BlfExporter exporter = BlfExporter.CreateBuilder().ToFile(path).Build();
-        exporter.ErrorTolerance = ErrorToleranceMode.Tolerant;
+        byte[] xlData = SocketCanGenerators.BuildCanXl(
+            0x01, [0xAA, 0xBB, 0xCC, 0xDD], vcid: 0x1A, sdt: 0x05, acceptanceField: 0x11);
 
-        ExportErrorKind? reportedKind = null;
-        exporter.ItemSkipped += (_, e) => reportedKind = e.Kind;
+        using (BlfExporter exporter = BlfExporter.CreateBuilder().ToFile(path).Build())
+        {
+            exporter.ErrorTolerance = ErrorToleranceMode.Tolerant;
+            bool accepted = exporter.OnFrame(
+                TestHarness.CreateFrame(new FrameId(0), 1_000_000_000L, xlData, LinkType.CanSocketcan));
+            exporter.OnFinish();
 
-        byte[] xlData = SocketCanGenerators.BuildCanXl(0x01, [0xAA, 0xBB, 0xCC, 0xDD]);
-        bool accepted = exporter.OnFrame(
-            TestHarness.CreateFrame(new FrameId(0), 1_000_000_000L, xlData, LinkType.CanSocketcan));
-        exporter.OnFinish();
-
-        await Assert.That(accepted).IsTrue();
-        await Assert.That(reportedKind).IsEqualTo(ExportErrorKind.UnsupportedType);
-        await Assert.That(exporter.SkippedCount).IsEqualTo(1);
-        await Assert.That(exporter.FrameCount).IsEqualTo(0);
-        await Assert.That(exporter.HasErrors).IsTrue();
+            await Assert.That(accepted).IsTrue();
+            await Assert.That(exporter.SkippedCount).IsEqualTo(0);
+            await Assert.That(exporter.FrameCount).IsEqualTo(1);
+        }
 
         BlfStructuralVerifier verifier = BlfStructuralVerifier.Open(path);
-        // File header only — no classic/FD CAN log objects from the XL frame.
         await Assert.That(verifier.HasValidHeader).IsTrue();
-        await Assert.That(verifier.ObjectCount).IsEqualTo(0);
+        await Assert.That(verifier.ObjectCount).IsGreaterThanOrEqualTo(1);
+
+        using BlfSource source = BlfSource.Open(path);
+        _StartSource(source);
+        Frame? frame = source.NextFrame();
+        await Assert.That(frame).IsNotNull();
+        await Assert.That(frame!.Value.LinkType).IsEqualTo(LinkType.CanSocketcan);
+        await Assert.That(frame.Value.Data.ToArray()).IsEquivalentTo(xlData);
+        await Assert.That(source.NextFrame()).IsNull();
     }
 
     [Test]
-    public async Task CanXlFrame_StrictMode_AbortsExport()
+    public async Task CanXlFrame_StrictMode_WritesObject()
     {
         using MemoryStream ms = new();
         using BlfExporter exporter = BlfExporter.CreateBuilder().ToStream(ms).Build();
@@ -475,9 +478,173 @@ internal sealed class BlfExporterTests
             TestHarness.CreateFrame(new FrameId(0), 1_000_000_000L, xlData, LinkType.CanSocketcan));
         exporter.OnFinish();
 
-        await Assert.That(accepted).IsFalse();
-        await Assert.That(exporter.HasErrors).IsTrue();
+        await Assert.That(accepted).IsTrue();
+        await Assert.That(exporter.HasErrors).IsFalse();
+        await Assert.That(exporter.FrameCount).IsEqualTo(1);
         await Assert.That(exporter.IsFinished).IsTrue();
-        await Assert.That(exporter.FrameCount).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task CanClassicFrame_ExtendedId_DoesNotSetFlagsByteEff()
+    {
+        using TestDir dir = new("blf_can_eff");
+        string path = dir.FilePath("output.blf");
+
+        byte[] canData = SocketCanGenerators.BuildCanClassic(0x123, [0x01], extended: true);
+        using (BlfExporter exporter = BlfExporter.CreateBuilder()
+            .ToFile(path)
+            .WithCompressionLevel(BlfCompressionLevel.None)
+            .Build())
+        {
+            exporter.OnFrame(TestHarness.CreateFrame(
+                new FrameId(0), 1_000_000_000L, canData, LinkType.CanSocketcan));
+            exporter.OnFinish();
+        }
+
+        using BlfSource source = BlfSource.Open(path);
+        _StartSource(source);
+        Frame? frame = source.NextFrame();
+        await Assert.That(frame).IsNotNull();
+        byte[] data = frame!.Value.Data.ToArray();
+        uint id = BinaryPrimitives.ReadUInt32BigEndian(data);
+        await Assert.That(id & 0x8000_0000u).IsEqualTo(0x8000_0000u);
+        await Assert.That(id & 0x1FFF_FFFFu).IsEqualTo(0x123u);
+    }
+
+    [Test]
+    public async Task CanFdFrame_WritesType101AndReimports()
+    {
+        using TestDir dir = new("blf_canfd_t101");
+        string path = dir.FilePath("output.blf");
+
+        byte[] fdData = SocketCanGenerators.BuildCanFd(
+            0x456, [0x01, 0x02, 0x03, 0x04], extended: true, brs: true);
+
+        using (BlfExporter exporter = BlfExporter.CreateBuilder()
+            .ToFile(path)
+            .WithCompressionLevel(BlfCompressionLevel.None)
+            .Build())
+        {
+            exporter.ErrorTolerance = ErrorToleranceMode.Tolerant;
+            bool accepted = exporter.OnFrame(
+                TestHarness.CreateFrame(new FrameId(0), 1_000_000_000L, fdData, LinkType.CanSocketcan));
+            exporter.OnFinish();
+
+            await Assert.That(accepted).IsTrue();
+            await Assert.That(exporter.SkippedCount).IsEqualTo(0);
+            await Assert.That(exporter.FrameCount).IsEqualTo(1);
+        }
+
+        // Inner LOBJs sit in an uncompressed LOG_CONTAINER; scan file bytes for Type 101.
+        byte[] fileBytes = File.ReadAllBytes(path);
+        bool foundType101 = false;
+        for (int i = 0; i + 16 <= fileBytes.Length; i++)
+        {
+            if (BinaryPrimitives.ReadUInt32LittleEndian(fileBytes.AsSpan(i)) != 0x4A424F4C)
+            {
+                continue;
+            }
+
+            uint objectType = BinaryPrimitives.ReadUInt32LittleEndian(fileBytes.AsSpan(i + 12));
+            if (objectType == BlfConstants.ObjTypeCanFdMessage64)
+            {
+                foundType101 = true;
+                break;
+            }
+        }
+
+        await Assert.That(foundType101).IsTrue();
+
+        using BlfSource source = BlfSource.Open(path);
+        _StartSource(source);
+        Frame? frame = source.NextFrame();
+        await Assert.That(frame).IsNotNull();
+        await Assert.That(frame!.Value.LinkType).IsEqualTo(LinkType.CanSocketcan);
+        byte[] data = frame!.Value.Data.ToArray();
+        uint id = BinaryPrimitives.ReadUInt32BigEndian(data);
+        await Assert.That(id & 0x8000_0000u).IsEqualTo(0x8000_0000u);
+        await Assert.That(id & 0x1FFF_FFFFu).IsEqualTo(0x456u);
+        await Assert.That(data[4]).IsEqualTo((byte)4);
+        await Assert.That(data[5] & 0x04).IsEqualTo((byte)0x04);
+        await Assert.That(data.AsSpan(8, 4).ToArray()).IsEquivalentTo(new byte[] { 0x01, 0x02, 0x03, 0x04 });
+    }
+
+    [Test]
+    public async Task EthernetFrameWithoutChannelProperty_WritesChannelOne()
+    {
+        using MemoryStream ms = new();
+        using BlfExporter exporter = BlfExporter.CreateBuilder()
+            .ToStream(ms)
+            .WithCompressionLevel(BlfCompressionLevel.None)
+            .Build();
+
+        byte[] frameData = FrameGenerators.BuildEthernetIpv4UdpFrame(32);
+        Frame frame = TestHarness.CreateFrame(new FrameId(0), 1_000_000_000, frameData);
+        exporter.OnFrame(frame);
+        exporter.OnFinish();
+
+        using BlfSource source = BlfSource.FromData(
+            ms.ToArray(), "ch0.blf", new BlfSourceOptions { ScanMode = ScanMode.Full });
+        FrameInterfaceRegistry registry = new();
+        FrameSourceId sourceId = registry.RegisterSource(source);
+        source.Start(sourceId, registry);
+        Frame? read = source.NextFrame();
+
+        await Assert.That(read).IsNotNull();
+        FrameInterfaceInfo? iface = registry.Get(read!.Value.InterfaceId);
+        await Assert.That(iface).IsNotNull();
+        await Assert.That((long)iface!.Properties[FrameInterfacePropertyKeys.BlfChannel]).IsEqualTo(1L);
+    }
+
+    [Test]
+    public async Task EthernetFrameWithNonZeroChannel_PreservesChannel()
+    {
+        Stack stack = TestHarness.GetStack();
+        FrameInterfaceRegistry outRegistry = stack.FrameInterfaceRegistry;
+        if (outRegistry.SourceCount == 0)
+        {
+            outRegistry.RegisterSource(TestHarness.CreateNullFrameSource());
+        }
+
+        FrameInterfaceId ifId = outRegistry.Register(
+            new FrameSourceId(0),
+            "eth-ch7",
+            null,
+            LinkType.Ethernet,
+            new Dictionary<string, object> { [FrameInterfacePropertyKeys.BlfChannel] = 7L });
+        byte[] frameData = FrameGenerators.BuildEthernetIpv4UdpFrame(32);
+        Frame frame = Frame.Create(
+            new FrameId(0),
+            Timestamp.FromNanos(1_000_000_000),
+            frameData,
+            LinkType.Ethernet,
+            ifId,
+            outRegistry).Value;
+
+        using MemoryStream ms = new();
+        using BlfExporter exporter = BlfExporter.CreateBuilder()
+            .ToStream(ms)
+            .WithCompressionLevel(BlfCompressionLevel.None)
+            .Build();
+        exporter.OnFrame(frame);
+        exporter.OnFinish();
+
+        using BlfSource source = BlfSource.FromData(
+            ms.ToArray(), "ch7.blf", new BlfSourceOptions { ScanMode = ScanMode.Full });
+        FrameInterfaceRegistry inRegistry = new();
+        source.Start(inRegistry.RegisterSource(source), inRegistry);
+        Frame? read = source.NextFrame();
+
+        await Assert.That(read).IsNotNull();
+        FrameInterfaceInfo? iface = inRegistry.Get(read!.Value.InterfaceId);
+        await Assert.That(iface).IsNotNull();
+        await Assert.That((long)iface!.Properties[FrameInterfacePropertyKeys.BlfChannel]).IsEqualTo(7L);
+    }
+
+    private static void _StartSource(BlfSource source)
+    {
+        FrameInterfaceRegistry registry = new();
+        FrameSourceId sourceId = registry.RegisterSource(source);
+        source.Start(sourceId, registry);
     }
 }

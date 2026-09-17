@@ -571,8 +571,9 @@ Use **`ArrayPool<byte>.Shared.Rent`** when the buffer lifetime crosses component
 spans **zlib/LZ4** framing that needs a contiguous backing array tied to **`Stream`**
 APIs, or when the upper bound size is unpredictable until runtime. Prefer
 **`PooledBuffer`** / **`Utf8Formatter` + stackalloc** for sequential exporter rows
-(CSV, text, JSON payloads). Source-side BLF **zlib** staging uses **`ArrayPool`** to
-avoid a full extra heap copy of compressed spans.
+(CSV, text, JSON payloads). Source-side BLF zlib inflates from a pinned input span
+via **`UnmanagedMemoryStream`** + **`ZLibStream`** into the output array; there is
+no compressed-side **`ArrayPool`** copy.
 
 ### 11.4 BLF `start_date` and relative timestamps
 

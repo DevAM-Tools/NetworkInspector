@@ -779,4 +779,57 @@ internal sealed class BlfCompressionTests
         await Assert.That(ex!.ConfiguredLimit).IsEqualTo(limit);
         await Assert.That(ex.RequestedSize).IsEqualTo((long)payload.Length);
     }
+
+    /// <summary>
+    /// Container <c>object_length</c> is the unpadded total; 1–3 zero bytes follow so the
+    /// next file-level LOBJ is 4-aligned. Those zeros are not part of the compressed input.
+    /// </summary>
+    [Test]
+    [Arguments(BlfConstants.CompressionZlib)]
+    [Arguments(BlfConstants.CompressionLz4)]
+    public async Task LogContainer_UnpaddedObjectLength_HasTrailingAlignmentZeros(ushort compressionMethod)
+    {
+        (byte[] blfData, int frameCount) = _BuildContainerWithTrailingPad(compressionMethod);
+        int pos = 144;
+        uint objectLength = BinaryPrimitives.ReadUInt32LittleEndian(blfData.AsSpan(pos + 8));
+        uint objectType = BinaryPrimitives.ReadUInt32LittleEndian(blfData.AsSpan(pos + 12));
+        int remainder = (int)(objectLength % 4);
+        int pad = 4 - remainder;
+
+        await Assert.That(objectType).IsEqualTo(BlfConstants.ObjTypeLogContainer);
+        await Assert.That(pad is >= 1 and <= 3).IsTrue();
+
+        for (int i = 0; i < pad; i++)
+        {
+            await Assert.That(blfData[pos + (int)objectLength + i]).IsEqualTo((byte)0);
+        }
+
+        using BlfSource source = _CreateFullSource(blfData);
+        SourceTestFixture.InitializeAndStartSource(source);
+        List<Frame> frames = _ReadAll(source);
+        await Assert.That(frames.Count).IsEqualTo(frameCount);
+    }
+
+    /// <summary>
+    /// Builds a single-container BLF whose compressed payload length is not a multiple of 4,
+    /// so 1–3 alignment zeros sit after the unpadded <c>object_length</c>.
+    /// </summary>
+    private static (byte[] Blf, int FrameCount) _BuildContainerWithTrailingPad(ushort compressionMethod)
+    {
+        for (int count = 10; count <= 40; count++)
+        {
+            byte[] blf = new BlfTestGenerator()
+                .AddLogContainer(compressionMethod, _InnerCanFrames(count))
+                .Build();
+            uint objectLength = BinaryPrimitives.ReadUInt32LittleEndian(blf.AsSpan(144 + 8));
+            int remainder = (int)(objectLength % 4);
+            if (remainder != 0)
+            {
+                return (blf, count);
+            }
+        }
+
+        throw new InvalidOperationException(
+            $"Could not produce a {compressionMethod} container whose object_length is unaligned.");
+    }
 }

@@ -43,6 +43,44 @@ internal sealed class BlfLinFlexRayTests
     }
 
     [Test]
+    public async Task LinMessageV1_ParsesThroughProtocolStack()
+    {
+        byte[] linData = [0x01, 0x02, 0x03, 0x04];
+        byte[] blfData = new BlfTestGenerator()
+            .AddLinFrame(1, 0x10, linData, 1_000_000)
+            .Build();
+
+        using BlfStreamSource source = _CreateSource(blfData);
+        SourceTestFixture.InitializeAndStartSource(source);
+        Frame? rawFrame = source.NextFrame();
+        await Assert.That(rawFrame).IsNotNull();
+        await Assert.That(rawFrame!.Value.Data.Span[0]).IsEqualTo((byte)1);
+
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        ProtocolRegistration.RegisterStandardProtocols(builder);
+        Stack stack = builder.Build();
+        using (stack)
+        {
+            Frame frame = Frame.Create(
+                new FrameId(0),
+                rawFrame.Value.Timestamp,
+                rawFrame.Value.Data,
+                LinkType.Lin,
+                FrameInterfaceId.Invalid,
+                stack.FrameInterfaceRegistry).Value;
+
+            Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame);
+
+            FieldId? idField = stack.GetFieldId("lin.id");
+            await Assert.That(idField).IsNotNull();
+            packet.TryGetFieldValue(idField!.Value, out FieldValue idValue, materialize: true);
+            idValue.Data.TryGetAsU64(out ulong linId);
+            await Assert.That(linId).IsEqualTo(0x10UL);
+        }
+    }
+
+    [Test]
     public async Task LinMessageV1_MultipleFrames_AllParsed()
     {
         byte[] blfData = new BlfTestGenerator()
@@ -312,7 +350,7 @@ internal sealed class BlfLinFlexRayTests
 
         byte[] blfData = new BlfTestGenerator()
             // Channel name before any frame on that channel
-            .AddAppTextChannel(1, 5, "ETH-Port1", 500_000) // busType=5 for Ethernet
+            .AddAppTextChannel(1, BlfConstants.BusTypeEthernet, "ETH-Port1", 500_000)
             .AddEthernetFrame(1, ethFrame, 1_000_000)
             .Build();
 
@@ -329,6 +367,6 @@ internal sealed class BlfLinFlexRayTests
         FrameInterfaceId ifId = frame.Value.InterfaceId;
         FrameInterfaceInfo? iface = registry.Get(ifId);
         await Assert.That(iface).IsNotNull();
-        await Assert.That(iface!.UiName).IsNotNull();
+        await Assert.That(iface!.UiName).IsEqualTo("ETH-Port1");
     }
 }

@@ -14,7 +14,6 @@ public sealed partial class BlfSource
         BlfIncrementalScanner scanner = new(_Backend, _FileInfo, _Index, _Options.MaxUncompressedContainerSize);
         _Scanner = scanner;
         scanner.ScanToEnd();
-        _Index.ShrinkToFit();
         _FullyScanned = true;
     }
 
@@ -48,9 +47,9 @@ public sealed partial class BlfSource
     /// </remarks>
     private Frame? _TryBuildFrame(int frameIndex, CancellationToken cancellationToken = default)
     {
-        ref readonly BlfFrameEntry entry = ref _Index.GetEntry(frameIndex);
+        BlfFrameEntry entry = _Index.GetEntry(frameIndex);
 
-        byte[]? frameData = _TryExtractFrameData(in entry, cancellationToken);
+        ReadOnlyMemory<byte>? frameData = _TryExtractFrameData(in entry, frameIndex, cancellationToken);
         if (frameData is null)
         {
             return null;
@@ -70,7 +69,7 @@ public sealed partial class BlfSource
         ParseResult<Frame> result = Frame.Create(
             new FrameId(frameIndex),
             new Timestamp(entry.TimestampNanos),
-            frameData,
+            frameData.Value,
             linkType,
             interfaceId,
             registry);
@@ -86,25 +85,36 @@ public sealed partial class BlfSource
     /// <summary>
     /// Pure (read-only) variant of <see cref="_ExtractFrameData"/> for random-access callers.
     /// Returns <c>null</c> on any failure without invoking <see cref="_HandleSkip"/>.
+    /// Container bytes are read through mmap slots hashed by <paramref name="frameIndex"/>.
     /// </summary>
-    private byte[]? _TryExtractFrameData(in BlfFrameEntry entry, CancellationToken cancellationToken = default)
+    private ReadOnlyMemory<byte>? _TryExtractFrameData(
+        in BlfFrameEntry entry, int frameIndex, CancellationToken cancellationToken = default)
     {
-        ReadOnlySpan<byte> objectData;
-
+        ReadOnlyMemory<byte> objectMemory;
         if (entry.ObjectOffset >= 0)
         {
-            byte[] containerData = _TryGetContainerData(entry.ContainerOffset, cancellationToken);
+            byte[] containerData = _TryGetContainerData(entry.ContainerOffset, frameIndex, cancellationToken);
             if (containerData.Length == 0)
             {
                 return null;
             }
 
-            if (entry.ObjectOffset + entry.ObjectLength > containerData.Length)
+            if ((long)entry.ObjectOffset + entry.ObjectLength > containerData.Length)
             {
-                return null;
-            }
+                byte[]? stitched = _TryMaterializeSpanningObject(
+                    entry.ContainerOffset, entry.ObjectOffset, entry.ObjectLength,
+                    frameIndex, useRandomAccessSlots: true, reportErrors: false, cancellationToken);
+                if (stitched is null)
+                {
+                    return null;
+                }
 
-            objectData = containerData.AsSpan(entry.ObjectOffset, entry.ObjectLength);
+                objectMemory = stitched;
+            }
+            else
+            {
+                objectMemory = containerData.AsMemory(entry.ObjectOffset, entry.ObjectLength);
+            }
         }
         else
         {
@@ -113,10 +123,15 @@ public sealed partial class BlfSource
                 return null;
             }
 
-            objectData = _Backend.GetSpan(entry.ContainerOffset, entry.ObjectLength);
+            objectMemory = _Backend.ReadRegion(frameIndex, entry.ContainerOffset, entry.ObjectLength);
+            if (objectMemory.Length < entry.ObjectLength)
+            {
+                return null;
+            }
         }
 
-        if (!BlfObjectHeaderParser.TryParse(objectData, entry.ContainerOffset, out BlfObjectInfo objInfo, out _))
+        if (!BlfObjectHeaderParser.TryParse(
+            objectMemory.Span, entry.ContainerOffset, objectMemory, out BlfObjectInfo objInfo, out _))
         {
             return null;
         }
@@ -136,10 +151,10 @@ public sealed partial class BlfSource
     /// </summary>
     private Frame? _BuildFrame(int frameIndex, CancellationToken cancellationToken = default)
     {
-        ref readonly BlfFrameEntry entry = ref _Index.GetEntry(frameIndex);
+        BlfFrameEntry entry = _Index.GetEntry(frameIndex);
 
         // Get or decompress the container data
-        byte[]? frameData = _ExtractFrameData(in entry, frameIndex, cancellationToken);
+        ReadOnlyMemory<byte>? frameData = _ExtractFrameData(in entry, frameIndex, cancellationToken);
         if (frameData is null)
         {
             // Error already reported in _ExtractFrameData
@@ -164,7 +179,7 @@ public sealed partial class BlfSource
         ParseResult<Frame> result = Frame.Create(
             new FrameId(frameIndex),
             new Timestamp(entry.TimestampNanos),
-            frameData,
+            frameData.Value,
             linkType,
             interfaceId,
             registry);
@@ -189,12 +204,14 @@ public sealed partial class BlfSource
     /// Extracts the frame data for a given index entry.
     /// For container objects: retrieves from cache or decompresses the container,
     /// then re-parses the object at the stored offset.
-    /// For raw objects: reads directly from file data.
+    /// For raw objects: reads directly from the primary backend span (sequential path).
     /// Reports errors via <see cref="_HandleSkip"/> on failure.
     /// </summary>
-    private byte[]? _ExtractFrameData(in BlfFrameEntry entry, int frameIndex, CancellationToken cancellationToken = default)
+    private ReadOnlyMemory<byte>? _ExtractFrameData(in BlfFrameEntry entry, int frameIndex, CancellationToken cancellationToken = default)
     {
-        ReadOnlySpan<byte> objectData;
+        ReadOnlyMemory<byte> objectMemory = default;
+        ReadOnlySpan<byte> objectSpan;
+        bool hasObjectMemory;
 
         if (entry.ObjectOffset >= 0)
         {
@@ -206,23 +223,29 @@ public sealed partial class BlfSource
                 return null;
             }
 
-            if (entry.ObjectOffset + entry.ObjectLength > containerData.Length)
+            if ((long)entry.ObjectOffset + entry.ObjectLength > containerData.Length)
             {
-                _HandleSkip(new FrameReadErrorEventArgs
+                byte[]? stitched = _TryMaterializeSpanningObject(
+                    entry.ContainerOffset, entry.ObjectOffset, entry.ObjectLength,
+                    frameIndex, useRandomAccessSlots: false, reportErrors: true, cancellationToken);
+                if (stitched is null)
                 {
-                    FrameIndex = frameIndex,
-                    FileOffset = entry.ContainerOffset,
-                    Kind = FrameReadErrorKind.CorruptedBlock,
-                    Message = $"Object at offset {entry.ObjectOffset} with length {entry.ObjectLength} exceeds container size {containerData.Length}."
-                });
-                return null;
+                    return null;
+                }
+
+                objectMemory = stitched;
+            }
+            else
+            {
+                objectMemory = containerData.AsMemory(entry.ObjectOffset, entry.ObjectLength);
             }
 
-            objectData = containerData.AsSpan(entry.ObjectOffset, entry.ObjectLength);
+            objectSpan = objectMemory.Span;
+            hasObjectMemory = true;
         }
         else
         {
-            // Raw file object
+            // Raw file object — sequential path uses the primary mmap/in-memory span.
             if (entry.ContainerOffset + entry.ObjectLength > _Backend.FileSize)
             {
                 _HandleSkip(new FrameReadErrorEventArgs
@@ -235,11 +258,14 @@ public sealed partial class BlfSource
                 return null;
             }
 
-            objectData = _Backend.GetSpan(entry.ContainerOffset, entry.ObjectLength);
+            objectSpan = _Backend.GetSpan(entry.ContainerOffset, entry.ObjectLength);
+            hasObjectMemory = false;
         }
 
-        // Re-parse the object to extract the frame
-        if (!BlfObjectHeaderParser.TryParse(objectData, entry.ContainerOffset, out BlfObjectInfo objInfo, out _))
+        bool parsed = hasObjectMemory
+            ? BlfObjectHeaderParser.TryParse(objectSpan, entry.ContainerOffset, objectMemory, out BlfObjectInfo objInfo, out _)
+            : BlfObjectHeaderParser.TryParse(objectSpan, entry.ContainerOffset, out objInfo, out _);
+        if (!parsed)
         {
             _HandleSkip(new FrameReadErrorEventArgs
             {
@@ -294,7 +320,7 @@ public sealed partial class BlfSource
     /// time across all container offsets. Waiting threads do not hold a semaphore slot.
     /// </para>
     /// </remarks>
-    private byte[] _TryGetContainerData(long containerFileOffset, CancellationToken cancellationToken = default)
+    private byte[] _TryGetContainerData(long containerFileOffset, int frameId, CancellationToken cancellationToken = default)
     {
         ContainerDecompressionWork work;
         bool isWinner;
@@ -330,6 +356,11 @@ public sealed partial class BlfSource
                 {
                     return cached;
                 }
+
+                if (work.Error is BlfDecompressionLimitExceededException limit)
+                {
+                    throw limit;
+                }
             }
 
             // Winner failed. The failure was already counted by the winner thread.
@@ -342,7 +373,8 @@ public sealed partial class BlfSource
         byte[]? decompressed = null;
         Exception? failure = null;
 
-        if (!_TryReadContainerPayload(containerFileOffset, out ReadOnlySpan<byte> payloadData,
+        if (!_TryReadContainerPayload(containerFileOffset, frameId, useRandomAccessSlots: true,
+            out ReadOnlySpan<byte> payloadData, out ReadOnlyMemory<byte> payloadOwner,
             out ushort compressionMethod, out uint uncompressedSize, out _, out _))
         {
             failure = new BlfException($"Failed to parse container headers at offset {containerFileOffset}.");
@@ -356,15 +388,15 @@ public sealed partial class BlfSource
             _DecompressionSemaphore.Wait(CancellationToken.None);
             try
             {
-                // BlfDecompressionLimitExceededException is intentionally not caught here
-                // — it propagates to FrameById so the caller can react.
+                _ = payloadOwner;
                 decompressed = BlfContainer.Decompress(
                     payloadData,
                     compressionMethod,
                     uncompressedSize,
                     _Options.MaxUncompressedContainerSize);
             }
-            catch (Exception ex) when (ex is BlfException or OutOfMemoryException)
+            catch (Exception ex) when (
+                ex is BlfException or OutOfMemoryException or BlfDecompressionLimitExceededException)
             {
                 failure = ex;
             }
@@ -400,6 +432,11 @@ public sealed partial class BlfSource
         if (failure is not null)
         {
             Interlocked.Increment(ref _RandomAccessFailureCount);
+        }
+
+        if (failure is BlfDecompressionLimitExceededException)
+        {
+            throw failure;
         }
 
         if (decompressed is null)
@@ -463,6 +500,11 @@ public sealed partial class BlfSource
                 {
                     return cached;
                 }
+
+                if (work.Error is BlfDecompressionLimitExceededException limit)
+                {
+                    throw limit;
+                }
             }
 
             // Winner failed — report via _HandleSkip so the sequential path surfaces the error.
@@ -482,7 +524,8 @@ public sealed partial class BlfSource
         Exception? failure = null;
         FrameReadErrorEventArgs? errorArgs = null;
 
-        if (!_TryReadContainerPayload(containerFileOffset, out ReadOnlySpan<byte> payloadData,
+        if (!_TryReadContainerPayload(containerFileOffset, frameIndex, useRandomAccessSlots: false,
+            out ReadOnlySpan<byte> payloadData, out ReadOnlyMemory<byte> payloadOwner,
             out ushort compressionMethod, out uint uncompressedSize,
             out FrameReadErrorKind errorKind, out string? errorMessage))
         {
@@ -504,15 +547,15 @@ public sealed partial class BlfSource
             _DecompressionSemaphore.Wait(CancellationToken.None);
             try
             {
-                // BlfDecompressionLimitExceededException is intentionally not caught here
-                // — it propagates to NextFrame so the caller can react.
+                _ = payloadOwner;
                 decompressed = BlfContainer.Decompress(
                     payloadData,
                     compressionMethod,
                     uncompressedSize,
                     _Options.MaxUncompressedContainerSize);
             }
-            catch (Exception ex) when (ex is BlfException or OutOfMemoryException)
+            catch (Exception ex) when (
+                ex is BlfException or OutOfMemoryException or BlfDecompressionLimitExceededException)
             {
                 failure = ex;
                 errorArgs = new FrameReadErrorEventArgs
@@ -546,6 +589,11 @@ public sealed partial class BlfSource
             work.Ready.Set();
         }
 
+        if (failure is BlfDecompressionLimitExceededException)
+        {
+            throw failure;
+        }
+
         // Report errors outside the lock to keep the critical section short.
         if (errorArgs is not null)
         {
@@ -561,33 +609,193 @@ public sealed partial class BlfSource
     }
 
     /// <summary>
+    /// Copies a container object that starts in one decompressed blob and continues in the
+    /// next LOG_CONTAINER blobs. Used when <c>object_length</c> overruns the first container.
+    /// </summary>
+    private byte[]? _TryMaterializeSpanningObject(
+        long firstContainerOffset,
+        int objectOffset,
+        int objectLength,
+        int mmapSlotFrameId,
+        bool useRandomAccessSlots,
+        bool reportErrors,
+        CancellationToken cancellationToken)
+    {
+        if (objectOffset < 0 || objectLength <= 0 || objectLength > BlfConstants.MaxBlockReadSize)
+        {
+            if (reportErrors)
+            {
+                _HandleSkip(new FrameReadErrorEventArgs
+                {
+                    FrameIndex = mmapSlotFrameId,
+                    FileOffset = firstContainerOffset,
+                    Kind = FrameReadErrorKind.CorruptedBlock,
+                    Message = $"Split container object at offset {firstContainerOffset} has invalid bounds.",
+                });
+            }
+
+            return null;
+        }
+
+        byte[] result = new byte[objectLength];
+        int filled = 0;
+        long containerOffset = firstContainerOffset;
+        int skipInContainer = objectOffset;
+
+        while (filled < objectLength)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            byte[] decoded = useRandomAccessSlots
+                ? _TryGetContainerData(containerOffset, mmapSlotFrameId, cancellationToken)
+                : _GetContainerData(containerOffset, mmapSlotFrameId, cancellationToken);
+            if (decoded.Length == 0)
+            {
+                return null;
+            }
+
+            if (skipInContainer > decoded.Length)
+            {
+                if (reportErrors)
+                {
+                    _HandleSkip(new FrameReadErrorEventArgs
+                    {
+                        FrameIndex = mmapSlotFrameId,
+                        FileOffset = containerOffset,
+                        Kind = FrameReadErrorKind.CorruptedBlock,
+                        Message = $"Split object inner offset {skipInContainer} exceeds container size {decoded.Length}.",
+                    });
+                }
+
+                return null;
+            }
+
+            ReadOnlySpan<byte> slice = decoded.AsSpan(skipInContainer);
+            int copy = Math.Min(slice.Length, objectLength - filled);
+            slice[..copy].CopyTo(result.AsSpan(filled));
+            filled += copy;
+            skipInContainer = 0;
+
+            if (filled >= objectLength)
+            {
+                break;
+            }
+
+            if (!_TryFindNextLogContainerOffset(containerOffset, out long nextOffset))
+            {
+                if (reportErrors)
+                {
+                    _HandleSkip(new FrameReadErrorEventArgs
+                    {
+                        FrameIndex = mmapSlotFrameId,
+                        FileOffset = containerOffset,
+                        Kind = FrameReadErrorKind.TruncatedStream,
+                        Message = $"Split object at offset {firstContainerOffset} has no following log container.",
+                    });
+                }
+
+                return null;
+            }
+
+            containerOffset = nextOffset;
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Finds the next file-level LOG_CONTAINER after the object at
+    /// <paramref name="currentContainerOffset"/> using skip-then-1-byte <c>LOBJ</c> scan.
+    /// </summary>
+    private bool _TryFindNextLogContainerOffset(long currentContainerOffset, out long nextOffset)
+    {
+        nextOffset = 0;
+        long fileSize = _Backend.FileSize;
+        if (currentContainerOffset + BlfConstants.BlockHeaderSize > fileSize)
+        {
+            return false;
+        }
+
+        int headerFetch = (int)Math.Min(BlfConstants.BlockHeaderSize, fileSize - currentContainerOffset);
+        ReadOnlySpan<byte> headerSpan = _Backend.GetSpan(currentContainerOffset, headerFetch);
+        if (!BlfBlockHeader.TryParse(headerSpan, out BlfBlockHeader currentHeader, out _))
+        {
+            return false;
+        }
+
+        long skip = Math.Max(
+            Math.Max((long)BlfConstants.BlockHeaderSize, currentHeader.ObjectLength.Value),
+            currentHeader.HeaderSize.Value);
+        long searchFrom = currentContainerOffset + skip;
+
+        while (searchFrom + 4 <= fileSize)
+        {
+            int chunkSize = (int)Math.Min(_ScanForMagicChunkSize, fileSize - searchFrom);
+            ReadOnlySpan<byte> chunk = _Backend.GetSpan(searchFrom, chunkSize);
+            int found = chunk.IndexOf(BlfConstants.ObjectMagicBytes);
+            if (found < 0)
+            {
+                searchFrom += Math.Max(1, chunkSize - 3);
+                continue;
+            }
+
+            long pos = searchFrom + found;
+            if (pos + BlfConstants.BlockHeaderSize > fileSize)
+            {
+                return false;
+            }
+
+            ReadOnlySpan<byte> nextHeader = _Backend.GetSpan(pos, BlfConstants.BlockHeaderSize);
+            if (!BlfBlockHeader.TryParse(nextHeader, out BlfBlockHeader block, out _)
+                || block.Signature.Value != BlfConstants.ObjectMagic)
+            {
+                searchFrom = pos + 1;
+                continue;
+            }
+
+            if (block.ObjectType.Value == BlfConstants.ObjTypeLogContainer)
+            {
+                nextOffset = pos;
+                return true;
+            }
+
+            long objSkip = Math.Max(
+                Math.Max((long)BlfConstants.BlockHeaderSize, block.ObjectLength.Value),
+                block.HeaderSize.Value);
+            if (objSkip > BlfConstants.MaxBlockReadSize)
+            {
+                searchFrom = pos + 1;
+                continue;
+            }
+
+            searchFrom = pos + objSkip;
+        }
+
+        return false;
+    }
+
+    /// <summary>4 MiB window with 3-byte overlap when locating the next file-level LOBJ.</summary>
+    private const int _ScanForMagicChunkSize = 4 * 1024 * 1024;
+
+    /// <summary>
     /// Reads the raw compressed payload from the backend for the container block at
     /// <paramref name="containerFileOffset"/> and returns the parse results needed to
     /// decompress it. All backend I/O and header parsing is done here; no decompression
     /// is performed.
     /// </summary>
-    /// <param name="containerFileOffset">Absolute file offset of the container LOBJ block.</param>
-    /// <param name="payloadData">
-    /// On success, a span over the compressed payload bytes inside the backend.
-    /// The span is valid for the lifetime of the current call stack (the caller holds
-    /// either the <see cref="_LifetimeLock"/> read lock for random-access paths, or the
-    /// single-threaded sequential contract for <see cref="NextFrame"/>).
-    /// On failure, <see cref="ReadOnlySpan{T}.Empty"/>.
-    /// </param>
-    /// <param name="compressionMethod">BLF compression method code (0 = none, 1 = LZ4, 2 = zlib).</param>
-    /// <param name="uncompressedSize">Expected size after decompression as declared in the container header.</param>
-    /// <param name="errorKind">Populated when the method returns <c>false</c>.</param>
-    /// <param name="errorMessage">Human-readable diagnostic populated when the method returns <c>false</c>.</param>
-    /// <returns><c>true</c> on success; <c>false</c> if any header is malformed or out of bounds.</returns>
     private bool _TryReadContainerPayload(
         long containerFileOffset,
+        int mmapSlotFrameId,
+        bool useRandomAccessSlots,
         out ReadOnlySpan<byte> payloadData,
+        out ReadOnlyMemory<byte> payloadOwner,
         out ushort compressionMethod,
         out uint uncompressedSize,
         out FrameReadErrorKind errorKind,
         out string? errorMessage)
     {
         payloadData = ReadOnlySpan<byte>.Empty;
+        payloadOwner = ReadOnlyMemory<byte>.Empty;
         compressionMethod = 0;
         uncompressedSize = 0;
 
@@ -598,8 +806,23 @@ public sealed partial class BlfSource
             return false;
         }
 
-        ReadOnlySpan<byte> blockData = _Backend.GetSpan(containerFileOffset,
-            (int)Math.Min(_Backend.FileSize - containerFileOffset, int.MaxValue));
+        ReadOnlySpan<byte> blockData;
+        ReadOnlyMemory<byte> headerMemory = default;
+        if (useRandomAccessSlots)
+        {
+            headerMemory = _Backend.ReadRegion(
+                mmapSlotFrameId,
+                containerFileOffset,
+                (int)Math.Min(_Backend.FileSize - containerFileOffset, BlfConstants.BlockHeaderSize));
+            blockData = headerMemory.Span;
+        }
+        else
+        {
+            int headerFetch = (int)Math.Min(
+                BlfConstants.BlockHeaderSize,
+                _Backend.FileSize - containerFileOffset);
+            blockData = _Backend.GetSpan(containerFileOffset, headerFetch);
+        }
 
         if (!BlfBlockHeader.TryParse(blockData, out BlfBlockHeader blockHeader, out _))
         {
@@ -610,13 +833,18 @@ public sealed partial class BlfSource
 
         ushort headerSize = blockHeader.HeaderSize.Value;
         uint objectLength = blockHeader.ObjectLength.Value;
-        // Use long arithmetic to avoid uint overflow: objectLength comes from untrusted
-        // file data and can exceed int.MaxValue, wrapping to a negative int.
         long totalSizeLong = Math.Max(Math.Max((long)BlfConstants.BlockHeaderSize, objectLength), headerSize);
         if (totalSizeLong > int.MaxValue)
         {
             errorKind = FrameReadErrorKind.MalformedHeader;
             errorMessage = $"Container at offset {containerFileOffset} claims size {totalSizeLong} which exceeds the addressable span range.";
+            return false;
+        }
+
+        if (totalSizeLong > BlfConstants.MaxBlockReadSize)
+        {
+            errorKind = FrameReadErrorKind.MalformedHeader;
+            errorMessage = $"Container at offset {containerFileOffset} claims size {totalSizeLong} which exceeds the {BlfConstants.MaxBlockReadSize} byte block-read cap.";
             return false;
         }
 
@@ -628,7 +856,24 @@ public sealed partial class BlfSource
             return false;
         }
 
-        ReadOnlySpan<byte> fullObjectData = _Backend.GetSpan(containerFileOffset, totalSize);
+        ReadOnlySpan<byte> fullObjectData;
+        if (useRandomAccessSlots)
+        {
+            payloadOwner = _Backend.ReadRegion(mmapSlotFrameId, containerFileOffset, totalSize);
+            if (payloadOwner.Length < totalSize)
+            {
+                errorKind = FrameReadErrorKind.CorruptedBlock;
+                errorMessage = $"Container at offset {containerFileOffset} with size {totalSize} could not be read.";
+                payloadOwner = ReadOnlyMemory<byte>.Empty;
+                return false;
+            }
+
+            fullObjectData = payloadOwner.Span;
+        }
+        else
+        {
+            fullObjectData = _Backend.GetSpan(containerFileOffset, totalSize);
+        }
 
         int containerHeaderOffset = Math.Max((int)headerSize, BlfConstants.BlockHeaderSize);
         int containerPayloadOffset = containerHeaderOffset + BlfConstants.ContainerHeaderSize;
@@ -653,7 +898,16 @@ public sealed partial class BlfSource
             return false;
         }
 
-        payloadData = fullObjectData[containerPayloadOffset..];
+        if (useRandomAccessSlots)
+        {
+            payloadOwner = payloadOwner[containerPayloadOffset..];
+            payloadData = payloadOwner.Span;
+        }
+        else
+        {
+            payloadData = fullObjectData[containerPayloadOffset..];
+        }
+
         compressionMethod = containerHeader.CompressionMethod.Value;
         uncompressedSize = containerHeader.UncompressedSize.Value;
         errorKind = FrameReadErrorKind.Other;
@@ -762,6 +1016,7 @@ public sealed partial class BlfSource
             or BlfConstants.ObjTypeCanOverload or BlfConstants.ObjTypeCanErrorExt
             or BlfConstants.ObjTypeCanMessage2 or BlfConstants.ObjTypeCanFdMessage
             or BlfConstants.ObjTypeCanFdMessage64 or BlfConstants.ObjTypeCanFdError64
+            or BlfConstants.ObjTypeCanXlChannelFrame
             => LinkType.CanSocketcan,
 
         BlfConstants.ObjTypeLinMessage or BlfConstants.ObjTypeLinMessage2
@@ -795,6 +1050,8 @@ public sealed partial class BlfSource
         BlfConstants.ObjTypeCanFdMessage or BlfConstants.ObjTypeCanFdMessage64
             or BlfConstants.ObjTypeCanFdError64 => "CAN FD",
 
+        BlfConstants.ObjTypeCanXlChannelFrame => "CAN XL",
+
         BlfConstants.ObjTypeLinMessage or BlfConstants.ObjTypeLinMessage2
             or BlfConstants.ObjTypeLinCrcError or BlfConstants.ObjTypeLinCrcError2
             or BlfConstants.ObjTypeLinRcvError or BlfConstants.ObjTypeLinRcvError2
@@ -823,6 +1080,7 @@ public sealed partial class BlfSource
             or BlfConstants.ObjTypeCanOverload or BlfConstants.ObjTypeCanErrorExt
             or BlfConstants.ObjTypeCanMessage2 or BlfConstants.ObjTypeCanFdMessage
             or BlfConstants.ObjTypeCanFdMessage64 or BlfConstants.ObjTypeCanFdError64
+            or BlfConstants.ObjTypeCanXlChannelFrame
             => BlfConstants.BusTypeCan,
 
         BlfConstants.ObjTypeLinMessage or BlfConstants.ObjTypeLinMessage2

@@ -40,7 +40,7 @@ internal sealed class BlfFileInfo
     /// <param name="dateTimeZone">
     /// Timezone in which the embedded SYSTEMTIME date fields are interpreted.
     /// Pass <see cref="TimeZoneInfo.Utc"/> for cross-machine reproducibility, or
-    /// <see cref="TimeZoneInfo.Local"/> for Vector / Wireshark compatibility.
+    /// <see cref="TimeZoneInfo.Local"/> for Vector tooling compatibility.
     /// </param>
     /// <param name="info">Parsed file info on success.</param>
     /// <returns>True if parsing succeeded; false if the data is too short or the magic is invalid.</returns>
@@ -48,14 +48,13 @@ internal sealed class BlfFileInfo
     {
         info = null;
 
-        // We need at least the prefix (20B) + measurement_start_time BlfDate (16B) at offset 20
-        // Total minimum: 36 bytes. But spec says 144B minimum — check that.
+        // Spec minimum is 144 bytes (prefix + length fields + both BlfDate structs + padding).
         if (data.Length < BlfConstants.FileHeaderMinSize)
         {
             return false;
         }
 
-        // Parse the fixed prefix (signature, header_size, api_version, platform, creation_flags)
+        // Parse the 12-byte prefix (signature, header_size, api_version).
         if (!BlfFileHeaderPrefix.TryParse(data, out BlfFileHeaderPrefix prefix, out _))
         {
             return false;
@@ -75,8 +74,8 @@ internal sealed class BlfFileInfo
             return false;
         }
 
-        // Parse measurement_start_time (BlfDate at offset 40 per Vector blf_fileheader_t).
-        // Layout from wiretap/blf.h:
+        // Parse measurement_start_time (BlfDate at offset 40).
+        // File-header layout:
         //   magic[4] header_length(4) api_version(4) application(1) compression_level(1)
         //   application_major(1) application_minor(1) len_compressed(8) len_uncompressed(8)
         //   obj_count(4) application_build(4) start_date(16) end_date(16) ...

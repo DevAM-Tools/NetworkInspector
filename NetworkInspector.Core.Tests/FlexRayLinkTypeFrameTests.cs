@@ -122,27 +122,13 @@ internal sealed class FlexRayLinkTypeFrameTests
     [Test]
     public async Task MapBlfFrameFlags_AllCombinations()
     {
-        FlexRayLinkTypeFrame.MapBlfFrameFlags(0x0D, out bool ppi, out bool nfi, out bool sfi, out bool stfi);
+        FlexRayLinkTypeFrame.MapBlfFrameFlags(0x1C, out bool ppi, out bool nfi, out bool sfi, out bool stfi);
         await Assert.That(ppi).IsTrue();
         await Assert.That(nfi).IsTrue();
         await Assert.That(sfi).IsTrue();
         await Assert.That(stfi).IsTrue();
 
-        FlexRayLinkTypeFrame.MapBlfFrameFlags(0x02, out ppi, out nfi, out sfi, out stfi);
-        await Assert.That(ppi).IsFalse();
-        await Assert.That(nfi).IsFalse();
-    }
-
-    [Test]
-    public async Task MapBlfHeaderBitMask_AllCombinations()
-    {
-        FlexRayLinkTypeFrame.MapBlfHeaderBitMask(0x1A, out bool ppi, out bool nfi, out bool sfi, out bool stfi);
-        await Assert.That(ppi).IsTrue();
-        await Assert.That(nfi).IsTrue();
-        await Assert.That(sfi).IsTrue();
-        await Assert.That(stfi).IsTrue();
-
-        FlexRayLinkTypeFrame.MapBlfHeaderBitMask(0x04, out ppi, out nfi, out sfi, out stfi);
+        FlexRayLinkTypeFrame.MapBlfFrameFlags(0x01, out ppi, out nfi, out sfi, out stfi);
         await Assert.That(ppi).IsFalse();
         await Assert.That(nfi).IsFalse();
     }

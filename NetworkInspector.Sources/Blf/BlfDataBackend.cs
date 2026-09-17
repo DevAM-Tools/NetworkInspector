@@ -22,10 +22,10 @@ namespace NetworkInspector.Sources.Blf;
 /// </list>
 /// </summary>
 /// <remarks>
-/// <b>Thread-safety:</b> <see cref="GetSpan"/> is safe to call from multiple threads
-/// concurrently because both the in-memory array and the mmap primary view are read-only
-/// once created. The mmap primary view's pointer is acquired and released on each call
-/// but the underlying memory remains valid for the lifetime of this instance.
+    /// <b>Thread-safety:</b> <see cref="GetSpan"/> is the sequential-scan path
+    /// (lock-free primary mmap view). Concurrent random-access reads use
+    /// <see cref="ReadRegion"/>, which hashes <c>frameId</c> onto the mmap slot pool.
+    /// Both the in-memory array and the mmap primary view are read-only once created.
 /// </remarks>
 internal sealed class BlfDataBackend : IDisposable
 {
@@ -152,6 +152,51 @@ internal sealed class BlfDataBackend : IDisposable
         }
 
         return pool.GetPrimarySpan(offset, length);
+    }
+
+    /// <summary>
+    /// Reads a file region for concurrent random access.
+    /// In-memory backends return a slice of the loaded array (no copy).
+    /// Mmap backends copy through the slot selected by <c>frameId % poolSize</c>.
+    /// </summary>
+    internal ReadOnlyMemory<byte> ReadRegion(int frameId, long offset, int length)
+    {
+        if (_Disposed != 0)
+        {
+            return ReadOnlyMemory<byte>.Empty;
+        }
+
+        if (offset < 0 || length <= 0)
+        {
+            return ReadOnlyMemory<byte>.Empty;
+        }
+
+        if (_InMemoryData is not null)
+        {
+            if (offset >= _InMemoryData.Length)
+            {
+                return ReadOnlyMemory<byte>.Empty;
+            }
+
+            int safeLength = (int)Math.Min(length, _InMemoryData.Length - offset);
+            return safeLength <= 0
+                ? ReadOnlyMemory<byte>.Empty
+                : new ReadOnlyMemory<byte>(_InMemoryData, (int)offset, safeLength);
+        }
+
+        MmapPool? pool = _MmapPool;
+        if (pool is null)
+        {
+            return ReadOnlyMemory<byte>.Empty;
+        }
+
+        int readable = (int)Math.Min(length, Math.Max(0, FileSize - offset));
+        if (readable <= 0)
+        {
+            return ReadOnlyMemory<byte>.Empty;
+        }
+
+        return pool.ReadAt(frameId, offset, readable);
     }
 
     #endregion

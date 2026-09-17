@@ -101,6 +101,26 @@ internal sealed class BlfStreamSourceTests
         await Assert.That(source.NextFrame()).IsNull();
     }
 
+    [Test]
+    public async Task CanXlSingle_Parsed()
+    {
+        byte[] xl = FrameBuilders.BuildSocketCanXl(0x123, [0xDE, 0xAD]);
+
+        byte[] blfData = new BlfTestGenerator()
+            .AddCanXlChannelFrame(1, xl, 500_000)
+            .Build();
+
+        using BlfStreamSource source = _CreateSource(blfData);
+        SourceTestFixture.InitializeAndStartSource(source);
+
+        Frame? frame = source.NextFrame();
+        await Assert.That(frame).IsNotNull();
+        await Assert.That(frame!.Value.LinkType).IsEqualTo(LinkType.CanSocketcan);
+        await Assert.That(frame.Value.Data.Span.SequenceEqual(xl)).IsTrue();
+
+        await Assert.That(source.NextFrame()).IsNull();
+    }
+
     // ========================================================================
     // CAN FD
     // ========================================================================

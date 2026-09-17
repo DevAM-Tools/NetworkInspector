@@ -39,8 +39,31 @@ internal readonly ref struct BlfObjectInfo
         get; init;
     }
 
-    /// <summary>Payload data following the complete header.</summary>
+    /// <summary>
+    /// File or container offset of this object's first magic byte, as supplied by the caller.
+    /// Used in skip/error diagnostics; parsing itself always starts at the beginning of the span.
+    /// </summary>
+    internal long StartOffset
+    {
+        get; init;
+    }
+
+    /// <summary>
+    /// Payload data following the complete header, bounded to this object's unpadded
+    /// <c>object_length</c> (alignment zeros after the object are not included).
+    /// </summary>
     internal ReadOnlySpan<byte> Payload
+    {
+        get; init;
+    }
+
+    /// <summary>
+    /// Heap-backed view of <see cref="Payload"/> when the caller supplied a
+    /// <see cref="ReadOnlyMemory{T}"/> over an existing array (decompressed container or
+    /// in-memory file). Empty when the payload is only a mmap span and must be copied
+    /// before it can be stored on a <see cref="Frame"/>.
+    /// </summary>
+    internal ReadOnlyMemory<byte> PayloadMemory
     {
         get; init;
     }
@@ -51,6 +74,17 @@ internal readonly ref struct BlfObjectInfo
 /// Reads the block header, then the appropriate V1/V2/V3 log object header,
 /// and returns a <see cref="BlfObjectInfo"/> with resolved timestamp and payload slice.
 /// </summary>
+/// <remarks>
+/// <para>
+/// Padding policy (inner objects and on-disk containers): writers store unpadded
+/// <c>object_length</c> equal to the byte count from the first <c>LOBJ</c> magic through
+/// the last payload byte (16 + log header + payload, or 32 + compressed bytes for
+/// containers). 0–3 zero bytes follow so the next object is 4-aligned. Skip distance is
+/// <c>max(max(16, object_length), header_size)</c>; a 1-byte LOBJ scan then consumes the
+/// pad. Compressed container input is exactly those compressed bytes — never the
+/// alignment zeros.
+/// </para>
+/// </remarks>
 internal static class BlfObjectHeaderParser
 {
     #region Public API
@@ -60,16 +94,34 @@ internal static class BlfObjectHeaderParser
     /// from the given data span.
     /// </summary>
     /// <param name="data">Data starting at the "LOBJ" magic.</param>
-    /// <param name="startOffset">Offset of this object in the file (for error messages).</param>
+    /// <param name="startOffset">
+    /// Offset of this object in the file or decompressed container (surfaced on
+    /// <see cref="BlfObjectInfo.StartOffset"/> for diagnostics).
+    /// </param>
     /// <param name="info">Parsed object info on success.</param>
     /// <param name="skipDistance">
     /// Total bytes to advance past this object to reach the next.
     /// Computed as: max(max(16, objectLength), headerSize).
+    /// Pad bytes after that are skipped by the LOBJ magic scan, not by this distance.
     /// </param>
     /// <returns>True if a valid object was parsed.</returns>
     internal static bool TryParse(
         ReadOnlySpan<byte> data,
         long startOffset,
+        out BlfObjectInfo info,
+        out int skipDistance) =>
+        TryParse(data, startOffset, ReadOnlyMemory<byte>.Empty, out info, out skipDistance);
+
+    /// <summary>
+    /// Tries to parse a complete BLF object and, when <paramref name="objectMemory"/>
+    /// covers the same bytes as <paramref name="data"/>, exposes a
+    /// <see cref="ReadOnlyMemory{T}"/> payload slice so frame reconstruction can alias
+    /// an existing array.
+    /// </summary>
+    internal static bool TryParse(
+        ReadOnlySpan<byte> data,
+        long startOffset,
+        ReadOnlyMemory<byte> objectMemory,
         out BlfObjectInfo info,
         out int skipDistance)
     {
@@ -119,17 +171,22 @@ internal static class BlfObjectHeaderParser
             return false;
         }
 
+        ReadOnlySpan<byte> objectBytes = data[..totalObjectSize];
+        ReadOnlyMemory<byte> objectMemorySlice = objectMemory.Length >= totalObjectSize
+            ? objectMemory[..totalObjectSize]
+            : ReadOnlyMemory<byte>.Empty;
+
         // Parse log object header based on type
-        ReadOnlySpan<byte> logHeaderData = data[BlfConstants.BlockHeaderSize..];
+        ReadOnlySpan<byte> logHeaderData = objectBytes[BlfConstants.BlockHeaderSize..];
 
         switch (blockHeader.HeaderType.Value)
         {
             case 1:
-                return _TryParseWithV1(logHeaderData, objectType, headerSize, data, out info);
+                return _TryParseWithV1(logHeaderData, objectType, headerSize, objectBytes, objectMemorySlice, startOffset, out info);
             case 2:
-                return _TryParseWithV2(logHeaderData, objectType, headerSize, data, out info);
+                return _TryParseWithV2(logHeaderData, objectType, headerSize, objectBytes, objectMemorySlice, startOffset, out info);
             case 3:
-                return _TryParseWithV3(logHeaderData, objectType, headerSize, data, out info);
+                return _TryParseWithV3(logHeaderData, objectType, headerSize, objectBytes, objectMemorySlice, startOffset, out info);
             default:
                 // Unknown header type — skip this object
                 return false;
@@ -156,6 +213,8 @@ internal static class BlfObjectHeaderParser
         uint objectType,
         ushort headerSize,
         ReadOnlySpan<byte> fullData,
+        ReadOnlyMemory<byte> objectMemory,
+        long startOffset,
         out BlfObjectInfo info)
     {
         info = default;
@@ -164,11 +223,6 @@ internal static class BlfObjectHeaderParser
             return false;
         }
 
-        // Payload starts after the full header (block + log object)
-        ReadOnlySpan<byte> payload = fullData.Length > headerSize
-            ? fullData[headerSize..]
-            : ReadOnlySpan<byte>.Empty;
-
         info = new BlfObjectInfo
         {
             ObjectType = objectType,
@@ -176,7 +230,9 @@ internal static class BlfObjectHeaderParser
             Flags = v1.Flags.Value,
             ClientIndex = v1.ClientIndex.Value,
             ObjectVersion = v1.ObjectVersion.Value,
-            Payload = payload,
+            StartOffset = startOffset,
+            Payload = _SlicePayload(fullData, headerSize),
+            PayloadMemory = _SlicePayloadMemory(objectMemory, headerSize),
         };
         return true;
     }
@@ -187,6 +243,8 @@ internal static class BlfObjectHeaderParser
         uint objectType,
         ushort headerSize,
         ReadOnlySpan<byte> fullData,
+        ReadOnlyMemory<byte> objectMemory,
+        long startOffset,
         out BlfObjectInfo info)
     {
         info = default;
@@ -195,10 +253,6 @@ internal static class BlfObjectHeaderParser
             return false;
         }
 
-        ReadOnlySpan<byte> payload = fullData.Length > headerSize
-            ? fullData[headerSize..]
-            : ReadOnlySpan<byte>.Empty;
-
         info = new BlfObjectInfo
         {
             ObjectType = objectType,
@@ -206,7 +260,9 @@ internal static class BlfObjectHeaderParser
             Flags = v2.Flags.Value,
             ClientIndex = 0, // V2 (per Vector blf.h) has no client_index field; uses timestamp_status instead
             ObjectVersion = v2.ObjectVersion.Value,
-            Payload = payload,
+            StartOffset = startOffset,
+            Payload = _SlicePayload(fullData, headerSize),
+            PayloadMemory = _SlicePayloadMemory(objectMemory, headerSize),
         };
         return true;
     }
@@ -217,6 +273,8 @@ internal static class BlfObjectHeaderParser
         uint objectType,
         ushort headerSize,
         ReadOnlySpan<byte> fullData,
+        ReadOnlyMemory<byte> objectMemory,
+        long startOffset,
         out BlfObjectInfo info)
     {
         info = default;
@@ -225,10 +283,6 @@ internal static class BlfObjectHeaderParser
             return false;
         }
 
-        ReadOnlySpan<byte> payload = fullData.Length > headerSize
-            ? fullData[headerSize..]
-            : ReadOnlySpan<byte>.Empty;
-
         info = new BlfObjectInfo
         {
             ObjectType = objectType,
@@ -236,10 +290,24 @@ internal static class BlfObjectHeaderParser
             Flags = v3.Flags.Value,
             ClientIndex = 0, // V3 has no client index
             ObjectVersion = v3.ObjectVersion.Value,
-            Payload = payload,
+            StartOffset = startOffset,
+            Payload = _SlicePayload(fullData, headerSize),
+            PayloadMemory = _SlicePayloadMemory(objectMemory, headerSize),
         };
         return true;
     }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static ReadOnlySpan<byte> _SlicePayload(ReadOnlySpan<byte> fullData, ushort headerSize) =>
+        fullData.Length > headerSize
+            ? fullData[headerSize..]
+            : ReadOnlySpan<byte>.Empty;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static ReadOnlyMemory<byte> _SlicePayloadMemory(ReadOnlyMemory<byte> objectMemory, ushort headerSize) =>
+        objectMemory.Length > headerSize
+            ? objectMemory[headerSize..]
+            : ReadOnlyMemory<byte>.Empty;
 
     #endregion
 }

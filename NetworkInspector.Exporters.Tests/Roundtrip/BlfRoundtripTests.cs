@@ -121,7 +121,8 @@ internal sealed class BlfRoundtripTests
     }
 
     /// <summary>
-    /// Classic CAN ID in 11‑bit numeric range but with SocketCAN EFF set must round-trip BLF flag 0x04.
+    /// Classic CAN ID in 11-bit numeric range but with SocketCAN EFF set must round-trip
+    /// Wireshark ID bit 31 (not a flags-byte EFF bit).
     /// </summary>
     [Test]
     public async Task CanClassic_ExtendedLowIdPreserved_Roundtrip()
@@ -147,9 +148,29 @@ internal sealed class BlfRoundtripTests
         await ValueTask.CompletedTask.ConfigureAwait(false);
     }
 
-    // ========================================================================
-    // 4. CAN FD — BRS/EDL flags, DLC up to 64.
-    // ========================================================================
+    [Test]
+    public async Task CanXl_Roundtrip()
+    {
+        using TestDir dir = new("rt_blf_canxl");
+        string path = dir.FilePath("canxl.blf");
+
+        RoundtripFrameFactory factory = new();
+        FrameInterfaceId ifId = factory.AddInterface("canxl0", LinkType.CanSocketcan,
+            new Dictionary<string, object> { [FrameInterfacePropertyKeys.BlfChannel] = (ushort)1 });
+
+        Frame[] originals =
+        [
+            factory.Create(ifId, LinkType.CanSocketcan, _EpochBaseNs + _TickNs,
+                SocketCanGenerators.BuildCanXl(0x01, [0xAA, 0xBB, 0xCC, 0xDD], vcid: 0x1A, sdt: 0x05, acceptanceField: 0x11, sec: true)),
+        ];
+
+        _ExportAndClose(path, originals);
+
+        // Installed tshark 4.6 wiretap does not count Type 139 objects. NI reimport is the
+        // layout proof for this object type; tshark encap/XLF checks belong with a 4.7+ dump tool.
+        _ReimportAndAssert(path, originals);
+        await ValueTask.CompletedTask.ConfigureAwait(false);
+    }
     [Test]
     public async Task CanFd_Roundtrip()
     {

@@ -46,6 +46,8 @@ internal sealed class SourcesFormatConstantsTests
     [Arguments(BlfConstants.ObjTypeCanMessage, true)]
     [Arguments(BlfConstants.ObjTypeCanFdMessage64, true)]
     [Arguments(BlfConstants.ObjTypeEthernetFrameEx, true)]
+    [Arguments(BlfConstants.ObjTypeCanXlChannelFrame, true)]
+    [Arguments(BlfConstants.ObjTypeCanXlChannelErrorFrame, false)]
     [Arguments(0xFFFFFFFFu, false)]
     public async Task BlfConstants_IsFrameProducingType_ClassifiesObjectTypes(uint objectType, bool expected)
     {

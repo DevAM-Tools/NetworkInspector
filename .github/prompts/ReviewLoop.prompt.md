@@ -1,7 +1,7 @@
 ---
 name: review-loop
-description: Review and remediate in a loop until findings are resolved
-argument-hint: Describe scope to review (files, feature, PR); optional — full clean for zero findings in all buckets
+description: Review and remediate in a loop until findings are resolved. Use on /review-loop or when user wants review+fix cycles without a plan.
+argument-hint: Describe scope to review (files, feature, PR); default is full clean (all buckets); optional — errors only
 agent: agent
 ---
 

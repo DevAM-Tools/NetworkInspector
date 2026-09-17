@@ -1,6 +1,6 @@
 ---
 name: commit-message
-description: Write a paste-ready English commit message (feat/fix/… prefix) for a user-named scope; ask if scope is missing
+description: Write a specific English commit message for a named scope: named outcomes, before/after, and examples. Update CHANGELOG.md on release or when asked. Use on /commit-message.
 argument-hint: Name the scope (required)
 agent: agent
 ---

@@ -6,12 +6,15 @@ namespace NetworkInspector.Sources.Blf.Format;
 /// Result of parsing a BLF object into a network frame.
 /// Contains the reconstructed frame data, link type, and channel information.
 /// </summary>
-/// <param name="FrameData">Reconstructed frame data (Ethernet, SocketCAN, DLT_LIN, or DLT_FLEXRAY).</param>
+/// <param name="FrameData">
+/// Reconstructed frame data (Ethernet, SocketCAN, DLT_LIN, or DLT_FLEXRAY).
+/// May alias a decompressed container array for Type 120/102 Ethernet frames.
+/// </param>
 /// <param name="LinkType">Link type for the reconstructed frame.</param>
 /// <param name="Channel">Channel number (BLF-level, used for interface registration).</param>
 /// <param name="ObjectType">Object type that produced this frame (for bus type classification).</param>
 internal readonly record struct BlfFrameResult(
-    byte[] FrameData,
+    ReadOnlyMemory<byte> FrameData,
     LinkType LinkType,
     ushort Channel,
     uint ObjectType);
@@ -53,7 +56,8 @@ internal static class BlfFrameDispatcher
                 return true;
 
             case BlfConstants.ObjTypeEthernetFrameEx:
-                if (!EthernetParser.TryParseType120(objectInfo.Payload, out byte[] ethFrame120, out ushort ethCh120))
+                if (!EthernetParser.TryParseType120(
+                    objectInfo.Payload, objectInfo.PayloadMemory, out ReadOnlyMemory<byte> ethFrame120, out ushort ethCh120))
                 {
                     return false;
                 }
@@ -67,7 +71,8 @@ internal static class BlfFrameDispatcher
                 return true;
 
             case BlfConstants.ObjTypeEthernetRxError:
-                if (!EthernetParser.TryParseType102(objectInfo.Payload, out byte[] ethFrame102, out ushort ethCh102))
+                if (!EthernetParser.TryParseType102(
+                    objectInfo.Payload, objectInfo.PayloadMemory, out ReadOnlyMemory<byte> ethFrame102, out ushort ethCh102))
                 {
                     return false;
                 }
@@ -112,12 +117,15 @@ internal static class BlfFrameDispatcher
 
             #endregion
 
+            #region CAN XL
+            case BlfConstants.ObjTypeCanXlChannelFrame:
+                return _TryDispatchCan(CanParser.TryParseCanXlChannelFrame, objectInfo, out result);
+
+            #endregion
+
             #region LIN (V1)
             case BlfConstants.ObjTypeLinMessage:
-                return _TryDispatchLin(
-                    (ReadOnlySpan<byte> p, out byte[] f, out ushort c) =>
-                        LinParser.TryParseLinMessageV1(p, out f, out c),
-                    objectInfo, out result);
+                return _TryDispatchLin(LinParser.TryParseLinMessageV1, objectInfo, out result);
 
             case BlfConstants.ObjTypeLinCrcError:
                 return _TryDispatchLinError(BlfConstants.LinErrorCrc, objectInfo, isV2: false, out result);
@@ -132,10 +140,7 @@ internal static class BlfFrameDispatcher
 
             #region LIN (V2)
             case BlfConstants.ObjTypeLinMessage2:
-                return _TryDispatchLin(
-                    (ReadOnlySpan<byte> p, out byte[] f, out ushort c) =>
-                        LinParser.TryParseLinMessageV2(p, out f, out c),
-                    objectInfo, out result);
+                return _TryDispatchLin(LinParser.TryParseLinMessageV2, objectInfo, out result);
 
             case BlfConstants.ObjTypeLinCrcError2:
                 return _TryDispatchLinError(BlfConstants.LinErrorCrc, objectInfo, isV2: true, out result);
@@ -146,11 +151,14 @@ internal static class BlfFrameDispatcher
             case BlfConstants.ObjTypeLinSndError2:
                 return _TryDispatchLinError(BlfConstants.LinErrorSnd, objectInfo, isV2: true, out result);
 
-            // LIN sleep/wakeup — produce empty LIN frames with just a PID
             case BlfConstants.ObjTypeLinSleep:
+                return _TryDispatchLin(LinParser.TryParseLinSleep, objectInfo, out result);
+
             case BlfConstants.ObjTypeLinWakeup:
+                return _TryDispatchLin(LinParser.TryParseLinWakeup, objectInfo, out result);
+
             case BlfConstants.ObjTypeLinWakeup2:
-                return _TryDispatchLinSleepWake(objectInfo, out result);
+                return _TryDispatchLin(LinParser.TryParseLinWakeup2, objectInfo, out result);
 
             #endregion
 
@@ -170,8 +178,52 @@ internal static class BlfFrameDispatcher
             #endregion
 
             default:
+                // TODO: CAN XL error frame (type 140) not mapped to SocketCAN yet
                 return false;
         }
+    }
+
+    /// <summary>
+    /// Reads only the channel field for a frame-producing object type, without reconstructing
+    /// frame bytes. Uses the same minimum payload sizes as the corresponding parsers.
+    /// </summary>
+    internal static bool TryGetChannel(uint objectType, ReadOnlySpan<byte> payload, out ushort channel)
+    {
+        channel = 0;
+        return objectType switch
+        {
+            BlfConstants.ObjTypeEthernetFrame => EthernetParser.TryGetChannelType71(payload, out channel),
+            BlfConstants.ObjTypeEthernetFrameEx => EthernetParser.TryGetChannelType120(payload, out channel),
+            BlfConstants.ObjTypeEthernetRxError => EthernetParser.TryGetChannelType102(payload, out channel),
+            BlfConstants.ObjTypeCanMessage
+                or BlfConstants.ObjTypeCanMessage2
+                or BlfConstants.ObjTypeCanError
+                or BlfConstants.ObjTypeCanOverload
+                or BlfConstants.ObjTypeCanErrorExt
+                or BlfConstants.ObjTypeCanFdMessage
+                or BlfConstants.ObjTypeCanFdMessage64
+                or BlfConstants.ObjTypeCanFdError64
+                or BlfConstants.ObjTypeCanXlChannelFrame =>
+                CanParser.TryGetChannel(objectType, payload, out channel),
+            BlfConstants.ObjTypeLinMessage
+                or BlfConstants.ObjTypeLinCrcError
+                or BlfConstants.ObjTypeLinRcvError
+                or BlfConstants.ObjTypeLinSndError
+                or BlfConstants.ObjTypeLinMessage2
+                or BlfConstants.ObjTypeLinCrcError2
+                or BlfConstants.ObjTypeLinRcvError2
+                or BlfConstants.ObjTypeLinSndError2
+                or BlfConstants.ObjTypeLinSleep
+                or BlfConstants.ObjTypeLinWakeup
+                or BlfConstants.ObjTypeLinWakeup2 =>
+                LinParser.TryGetChannel(objectType, payload, out channel),
+            BlfConstants.ObjTypeFlexRayData
+                or BlfConstants.ObjTypeFlexRayMessage
+                or BlfConstants.ObjTypeFlexRayRcvMessage
+                or BlfConstants.ObjTypeFlexRayRcvMessageEx =>
+                FlexRayParser.TryGetChannel(objectType, payload, out channel),
+            _ => false,
+        };
     }
 
     #endregion
@@ -247,32 +299,6 @@ internal static class BlfFrameDispatcher
             FrameData = linFrame,
             LinkType = LinkType.Lin,
             Channel = linChannel,
-            ObjectType = objectInfo.ObjectType,
-        };
-        return true;
-    }
-
-    /// <summary>Dispatches LIN sleep/wakeup objects — produces minimal LIN frames.</summary>
-    private static bool _TryDispatchLinSleepWake(in BlfObjectInfo objectInfo, out BlfFrameResult result)
-    {
-        result = default;
-
-        if (objectInfo.Payload.Length < 2)
-        {
-            return false;
-        }
-
-        ushort channel = BinaryPrimitives.ReadUInt16LittleEndian(objectInfo.Payload);
-
-        // Produce a minimal 4-byte DLT_LIN frame: [pid=0xFF|len=0|checksum=0|errors=0]
-        // 0xFF is used as a special "sleep/wakeup" indicator PID
-        byte[] frame = [0xFF, 0, 0, 0];
-
-        result = new BlfFrameResult
-        {
-            FrameData = frame,
-            LinkType = LinkType.Lin,
-            Channel = channel,
             ObjectType = objectInfo.ObjectType,
         };
         return true;

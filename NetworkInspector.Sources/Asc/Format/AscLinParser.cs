@@ -9,18 +9,15 @@ namespace NetworkInspector.Sources.Asc.Format;
 ///   &lt;time&gt; L&lt;n&gt; &lt;id&gt; [ &lt;dir&gt; ] &lt;dlc&gt; &lt;data...&gt; checksum = &lt;cs&gt; ... CSM = enhanced|classic
 /// The direction token (Tx/Rx/Slave/Master) is optional in some exports.
 ///
-/// DLT_LIN frame layout:
-///   [pid(1) | length(1) | data(0–8) | checksum(1) | errors(1)]
+/// DLT_LIN frame layout (Wireshark <c>packet-lin.h</c>):
+/// 8-byte header, then data padded to 4 or 8 bytes.
 /// </summary>
 internal static class AscLinParser
 {
     #region Constants
 
-    /// <summary>DLT_LIN header: [pid(1) | length(1)].</summary>
-    private const int _DltLinHeaderSize = 2;
-
-    /// <summary>DLT_LIN trailer: [checksum(1) | errors(1)].</summary>
-    private const int _DltLinTrailerSize = 2;
+    /// <summary>DLT_LIN header size.</summary>
+    private const int _DltLinHeaderSize = 8;
 
     /// <summary>Maximum LIN data length.</summary>
     private const int _MaxLinDataLength = 8;
@@ -159,28 +156,32 @@ internal static class AscLinParser
             _ = byte.TryParse(csValue, idStyle, CultureInfo.InvariantCulture, out checksum);
         }
 
-        // Compute PID from frame ID
         byte pid = ComputePid(frameId);
-
-        // Build DLT_LIN frame: [pid(1) | length(1) | data(0-8) | checksum(1) | errors(1)]
-        frame = new byte[_DltLinHeaderSize + parsedCount + _DltLinTrailerSize];
-        frame[0] = pid;
-        frame[1] = (byte)parsedCount;
-
-        if (parsedCount > 0)
-        {
-            dataBytes[..parsedCount].CopyTo(frame.AsSpan(_DltLinHeaderSize));
-        }
-
-        frame[_DltLinHeaderSize + parsedCount] = checksum;
-        frame[_DltLinHeaderSize + parsedCount + 1] = 0; // no errors
-
+        frame = _BuildDltLinFrame(pid, parsedCount, dataBytes[..parsedCount], checksum);
         return true;
     }
 
     #endregion
 
     #region Helpers
+
+    private static byte[] _BuildDltLinFrame(byte pid, int dlc, ReadOnlySpan<byte> data, byte checksum)
+    {
+        int clampedDlc = Math.Clamp(dlc, 0, _MaxLinDataLength);
+        int dataPad = clampedDlc <= 4 ? 4 : 8;
+        byte[] frame = new byte[_DltLinHeaderSize + dataPad];
+        frame[0] = 1;
+        frame[4] = (byte)(clampedDlc << 4);
+        frame[5] = pid;
+        frame[6] = checksum;
+        int copyLen = Math.Min(clampedDlc, data.Length);
+        if (copyLen > 0)
+        {
+            data[..copyLen].CopyTo(frame.AsSpan(_DltLinHeaderSize));
+        }
+
+        return frame;
+    }
 
     private static bool _IsLikelyLinDirectionToken(ReadOnlySpan<char> token) =>
         token.Equals("Tx", StringComparison.OrdinalIgnoreCase)
@@ -369,19 +370,7 @@ internal static class AscLinParser
         }
 
         byte pid = ComputePid(frameId);
-
-        frame = new byte[_DltLinHeaderSize + parsedCount + _DltLinTrailerSize];
-        frame[0] = pid;
-        frame[1] = (byte)parsedCount;
-
-        if (parsedCount > 0)
-        {
-            dataBytes[..parsedCount].CopyTo(frame.AsSpan(_DltLinHeaderSize));
-        }
-
-        frame[_DltLinHeaderSize + parsedCount] = checksum;
-        frame[_DltLinHeaderSize + parsedCount + 1] = 0;
-
+        frame = _BuildDltLinFrame(pid, parsedCount, dataBytes[..parsedCount], checksum);
         return true;
     }
 

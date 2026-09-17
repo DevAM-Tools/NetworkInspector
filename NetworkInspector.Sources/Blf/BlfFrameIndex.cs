@@ -47,35 +47,37 @@ internal struct BlfFrameEntry
 }
 
 /// <summary>
-/// _Growable index of BLF frame entries stored in a single <see cref="BlfFrameEntry"/> array.
-/// Each entry contains both the location metadata and the timestamp, so the array is the
+/// Growable index of BLF frame entries stored in a <see cref="ChunkedGrowOnlyStore{T}"/>.
+/// Each entry contains both the location metadata and the timestamp, so the store is the
 /// sole authoritative storage — there is no split-array layout.
 /// </summary>
 /// <remarks>
+/// <para>
+/// Chunked storage (chunkShift 12 → 4096 entries × 32 B = 128 KiB chunks) avoids
+/// doubling-array copies of the whole table on grow and matches Session's dense
+/// append-only frame maps. Random access does not need a single contiguous array.
+/// </para>
+/// <para>
 /// <b>Thread-safety:</b> A single writer (the scanner) calls <see cref="Push"/>; concurrent
-/// readers may call <see cref="Count"/> and <see cref="GetEntry"/> at any time. The writer
-/// publishes growth via <see cref="System.Threading.Volatile"/> Write on both the array reference
-/// and the count, and readers take a single <see cref="System.Threading.Volatile"/> Read snapshot of
-/// the array per access. Each entry is fully written before the count is published, so any
-/// index <c>i &lt; Count</c> observed by a reader is guaranteed to be initialised on the
-/// array snapshot the reader holds.
+/// readers may call <see cref="Count"/> and <see cref="GetEntry"/> at any time. The store
+/// publishes <see cref="ChunkedGrowOnlyStore{T}.Count"/> after the slot is written, so any
+/// index <c>i &lt; Count</c> observed by a reader is a fully initialised entry.
+/// </para>
 /// </remarks>
 internal sealed class BlfFrameIndex
 {
     #region Fields
 
-    private volatile BlfFrameEntry[] _Entries;
-    private volatile int _Count;
+    private readonly ChunkedGrowOnlyStore<BlfFrameEntry> _Entries = new(chunkShift: 12);
 
     #endregion
 
     #region Constructors
 
-    /// <summary>Creates a new BLF frame index with an initial capacity.</summary>
+    /// <summary>Creates a new BLF frame index. <paramref name="initialCapacity"/> is ignored; chunks grow on demand.</summary>
     internal BlfFrameIndex(int initialCapacity = 1024)
     {
-        _Entries = new BlfFrameEntry[Math.Max(initialCapacity, 16)];
-        _Count = 0;
+        _ = initialCapacity;
     }
 
     #endregion
@@ -83,7 +85,7 @@ internal sealed class BlfFrameIndex
     #region Properties
 
     /// <summary>Number of indexed frames. Safe for concurrent readers.</summary>
-    internal int Count => _Count;
+    internal int Count => _Entries.Count;
 
     #endregion
 
@@ -98,52 +100,14 @@ internal sealed class BlfFrameIndex
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal bool Push(in BlfFrameEntry entry)
     {
-        int count = _Count;
-        ArrayIndexIdRange.ThrowIfInvalidNextIndex(count, "frame");
-
-        if (count == _Entries.Length)
-        {
-            _Grow();
-        }
-        _Entries[count] = entry;
-        _Count = count + 1;
+        ArrayIndexIdRange.ThrowIfInvalidNextIndex(_Entries.Count, "frame");
+        _Entries.Append(in entry);
         return true;
     }
 
-    /// <summary>Returns a readonly reference to the entry at the given frame index. Safe for concurrent readers.</summary>
+    /// <summary>Returns a copy of the entry at the given frame index. Safe for concurrent readers.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal ref readonly BlfFrameEntry GetEntry(int index) => ref _Entries[index];
-
-    /// <summary>Trims the internal array to exactly fit the current count. Single-writer only.</summary>
-    internal void ShrinkToFit()
-    {
-        int count = _Count;
-        if (count < _Entries.Length)
-        {
-            BlfFrameEntry[] trimmed = new BlfFrameEntry[count];
-            Array.Copy(_Entries, trimmed, count);
-            _Entries = trimmed;
-        }
-    }
-
-    #endregion
-
-    #region Private Helpers
-
-    /// <summary>
-    /// Doubles the internal capacity (saturating at <see cref="ArrayIndexIdRange.MaxCount"/>) and publishes
-    /// the new array via <see cref="System.Threading.Volatile"/> Write so concurrent readers never observe
-    /// a partially copied array.
-    /// </summary>
-    private void _Grow()
-    {
-        long doubled = (long)_Entries.Length * 2;
-        long target = Math.Max(doubled, 1024);
-        int newCapacity = (int)Math.Min(target, ArrayIndexIdRange.MaxCount);
-        BlfFrameEntry[] newEntries = new BlfFrameEntry[newCapacity];
-        Array.Copy(_Entries, newEntries, _Count);
-        _Entries = newEntries;
-    }
+    internal BlfFrameEntry GetEntry(int index) => _Entries.Get(index);
 
     #endregion
 }

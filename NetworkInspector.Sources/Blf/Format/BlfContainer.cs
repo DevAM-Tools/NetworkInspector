@@ -107,18 +107,21 @@ internal static class BlfContainer
 
     /// <summary>
     /// Decompresses zlib-compressed data into a buffer of the expected size.
-    /// Uses <see cref="ZLibStream"/> with the raw compressed bytes wrapped in a MemoryStream.
+    /// Inflates directly from the input span via a pinned <see cref="UnmanagedMemoryStream"/>;
+    /// there is no intermediate ArrayPool copy of the compressed bytes.
     /// </summary>
-    private static byte[] _DecompressZlib(ReadOnlySpan<byte> compressedData, uint uncompressedSize)
+    private static unsafe byte[] _DecompressZlib(ReadOnlySpan<byte> compressedData, uint uncompressedSize)
     {
+        if (compressedData.IsEmpty)
+        {
+            throw new BlfException("BLF zlib decompression failed: compressed payload is empty.");
+        }
+
         byte[] output = new byte[uncompressedSize];
 
-        byte[] rented = ArrayPool<byte>.Shared.Rent(Math.Max(compressedData.Length, 1));
-        try
+        fixed (byte* p = compressedData)
         {
-            compressedData.CopyTo(rented);
-            using MemoryStream compressedStream = new(rented, 0, compressedData.Length,
-                writable: false, publiclyVisible: true);
+            using UnmanagedMemoryStream compressedStream = new(p, compressedData.Length);
             using ZLibStream zlibStream = new(compressedStream, CompressionMode.Decompress);
 
             int totalRead = 0;
@@ -146,13 +149,9 @@ internal static class BlfContainer
                 throw new BlfException(
                     $"BLF zlib decompression size mismatch: expected {uncompressedSize} bytes, got {totalRead}");
             }
+        }
 
-            return output;
-        }
-        finally
-        {
-            ArrayPool<byte>.Shared.Return(rented);
-        }
+        return output;
     }
 
     #endregion

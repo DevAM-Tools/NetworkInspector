@@ -27,12 +27,12 @@ internal static class FlexRayParser
     #region Constants
 
     /// <summary>
-    /// Minimum Type 29 payload size: channel(2)+mux(1)+len(1)+messageId(2)+crc(2)+muxId(1) = 9 bytes.
+    /// Packed size of the Type 29 FlexRay data header. Data starts at offset 12.
     /// </summary>
-    private const int _FlexRayDataMinSize = 9;
+    private const int _FlexRayDataMinSize = 12;
 
     /// <summary>
-    /// Minimum Type 41 payload size (blf_flexraymessage_t):
+    /// Minimum Type 41 payload size:
     /// channel(2)+dir(1)+lowTime(1)+fpgaTick(4)+fpgaTickOverflow(4)+clientIndex(4)+
     /// clusterTime(4)+frameId(2)+headerCrc(2)+frameState(2)+length(1)+cycle(1)+
     /// headerBitMask(1)+reserved1(1)+reserved2(2) = 32 bytes.
@@ -40,7 +40,7 @@ internal static class FlexRayParser
     private const int _FlexRayMessageMinSize = 32;
 
     /// <summary>
-    /// Minimum Type 50 payload size (blf_flexrayrcvmessage_t, 44-byte header):
+    /// Minimum Type 50 payload size (44-byte header):
     /// channel(2)+version(2)+channelMask(2)+dir(2)+clientIndex(4)+clusterNo(4)+
     /// frameId(2)+headerCrc1(2)+headerCrc2(2)+payloadLength(2)+payloadLengthValid(2)+
     /// cycle(2)+tag(4)+data(4)+frameFlags(4)+appParameter(4) = 44 bytes.
@@ -48,11 +48,10 @@ internal static class FlexRayParser
     private const int _FlexRayRcvMessageHeaderSize = 44;
 
     /// <summary>
-    /// Minimum Type 66 payload size (blf_flexrayrcvmessageex_t):
-    /// Similar to Type 50 but with extra version/TS fields. The frameId is at offset 40,
-    /// which requires at least 42 bytes of header before data.
+    /// Type 66 is Type 50's 44-byte header plus 40 skipped extension bytes (84).
+    /// Payload starts at offset 84.
     /// </summary>
-    private const int _FlexRayRcvMessageExMinSize = 60;
+    private const int _FlexRayRcvMessageExMinSize = 84;
 
     #endregion
 
@@ -60,17 +59,18 @@ internal static class FlexRayParser
 
     /// <summary>
     /// Parses a BLF Type 29 (FLEXRAY_DATA) payload into a DLT_FLEXRAY frame.
-    ///
-    /// Payload layout (all little-endian):
+    /// 12-byte header (little-endian), data at offset 12:
     /// <code>
-    ///   [0..2)  channel (u16 LE)
-    ///   [2]     mux (channel bitmask: bit 0 = A, bit 1 = B)
-    ///   [3]     len (data length in bytes)
-    ///   [4..6)  messageId (frame ID, u16 LE)
-    ///   [6..8)  crc (header CRC, u16 LE)
-    ///   [8]     muxId (ignored)
-    ///   [9..)   data
+    ///   [0..2)  channel (u16 LE; 0 = A, 1 = B)
+    ///   [2]     mux (low 6 bits become the reconstructed cycle)
+    ///   [3]     payload length
+    ///   [4..6)  frame id (u16 LE)
+    ///   [6..8)  header CRC (u16 LE)
+    ///   [8]     direction
+    ///   [9..12) reserved
+    ///   [12..)  payload
     /// </code>
+    /// Reconstruction always sets NFI and takes the cycle nibble from <c>mux</c>.
     /// </summary>
     internal static bool TryParseFlexRayData(
         ReadOnlySpan<byte> payload, out byte[] frame, out ushort channel)
@@ -88,10 +88,9 @@ internal static class FlexRayParser
         int dataLen = payload[3];
         ushort frameId = BinaryPrimitives.ReadUInt16LittleEndian(payload[4..]);
         ushort headerCrc = BinaryPrimitives.ReadUInt16LittleEndian(payload[6..]);
+        // [8] dir, [9] reserved, [10..12) reserved — skipped; data at sizeof(frheader).
 
-        // mux bit 0 = channel A, bit 1 = channel B
-        byte subChannel = (mux & 0x02) != 0 ? (byte)1 : (byte)0;
-
+        byte subChannel = channel == 1 ? (byte)1 : (byte)0;
         int available = Math.Max(0, payload.Length - _FlexRayDataMinSize);
         if (!_TryResolvePayloadLength(dataLen, available, out int actualDataLen))
         {
@@ -100,9 +99,10 @@ internal static class FlexRayParser
 
         ReadOnlySpan<byte> data = payload.Slice(_FlexRayDataMinSize, actualDataLen);
 
+        // Type 29 has no frameState; reconstruct with NFI set and cycle from mux.
         frame = _BuildLinkTypeFrame(
             subChannel, ppi: false, nfi: true, sfi: false, stfi: false,
-            frameId, cycle: 0, headerCrc, data);
+            frameId, cycle: (byte)(mux & 0x3F), headerCrc, data);
         return true;
     }
 
@@ -123,7 +123,7 @@ internal static class FlexRayParser
     ///   [24..26) frameState (u16 LE)
     ///   [26]    length (data length in bytes)
     ///   [27]    cycle
-    ///   [28]    headerBitMask (flags: bit 1=payload preamble, bit 2=null, bit 3=sync, bit 4=startup)
+    ///   [28]    headerBitMask (ignored for ISO indicators; those come from frameState)
     ///   [29]    reserved1
     ///   [30..32) reserved2 (u16 LE)
     ///   [32..)  data
@@ -143,11 +143,15 @@ internal static class FlexRayParser
         channel = BinaryPrimitives.ReadUInt16LittleEndian(payload);
         ushort frameId = BinaryPrimitives.ReadUInt16LittleEndian(payload[20..]);
         ushort headerCrc = BinaryPrimitives.ReadUInt16LittleEndian(payload[22..]);
+        ushort frameState = BinaryPrimitives.ReadUInt16LittleEndian(payload[24..]);
         int dataLen = payload[26];
         byte cycle = payload[27];
-        byte headerBitMask = payload[28];
 
-        FlexRayLinkTypeFrame.MapBlfHeaderBitMask(headerBitMask, out bool ppi, out bool nfi, out bool sfi, out bool stfi);
+        // ISO flags come from frameState, not headerBitMask.
+        bool ppi = (frameState & 0x01) != 0;
+        bool sfi = (frameState & 0x02) != 0;
+        bool nfi = (frameState & 0x08) == 0;
+        bool stfi = (frameState & 0x10) != 0;
 
         int available = Math.Max(0, payload.Length - _FlexRayMessageMinSize);
         if (!_TryResolvePayloadLength(dataLen, available, out int actualDataLen))
@@ -164,7 +168,7 @@ internal static class FlexRayParser
     /// <summary>
     /// Parses a BLF Type 50 (FLEXRAY_RCVMESSAGE) payload into a DLT_FLEXRAY frame.
     ///
-    /// The 44-byte <c>blf_flexrayrcvmessage_t</c> header layout (all little-endian):
+    /// The 44-byte Type 50 header layout (all little-endian):
     /// <code>
     ///   [0..2)   channel (u16 LE)
     ///   [2..4)   version (u16 LE)
@@ -180,7 +184,7 @@ internal static class FlexRayParser
     ///   [26..28) cycle (u16 LE; high byte = reserved)
     ///   [28..32) tag (u32 LE)
     ///   [32..36) data (u32 LE, field name, not payload)
-    ///   [36..40) frameFlags (u32 LE; bit 1=payload preamble, bit 2=null, bit 3=sync, bit 4=startup)
+    ///   [36..40) frameFlags (u32 LE; NULL=0x01, SYNC=0x04, STARTUP=0x08, PAYLOAD_PREAM=0x10)
     ///   [40..44) appParameter (u32 LE)
     ///   [44..)   FlexRay data payload
     /// </code>
@@ -200,7 +204,7 @@ internal static class FlexRayParser
         ushort channelMask = BinaryPrimitives.ReadUInt16LittleEndian(payload[4..]);
         ushort frameId = BinaryPrimitives.ReadUInt16LittleEndian(payload[16..]);
         ushort headerCrc = BinaryPrimitives.ReadUInt16LittleEndian(payload[18..]);
-        int payloadLength = BinaryPrimitives.ReadUInt16LittleEndian(payload[22..]);
+        int payloadLengthValid = BinaryPrimitives.ReadUInt16LittleEndian(payload[24..]);
         byte cycle = payload[26]; // low byte of cycle u16
         uint frameFlags = BinaryPrimitives.ReadUInt32LittleEndian(payload[36..]);
 
@@ -209,8 +213,12 @@ internal static class FlexRayParser
 
         FlexRayLinkTypeFrame.MapBlfFrameFlags(frameFlags, out bool ppi, out bool nfi, out bool sfi, out bool stfi);
 
+        // Encode ISO length from copied valid bytes. Vector payloadLength can exceed
+        // payloadLengthValid; using the larger declared length would drop the frame
+        // on reimport because TryParseDataFrame requires the buffer to hold the
+        // declared payload.
         int available = Math.Max(0, payload.Length - _FlexRayRcvMessageHeaderSize);
-        if (!_TryResolvePayloadLength(payloadLength, available, out int actualDataLen))
+        if (!_TryResolvePayloadLength(payloadLengthValid, available, out int actualDataLen))
         {
             return false;
         }
@@ -223,30 +231,8 @@ internal static class FlexRayParser
 
     /// <summary>
     /// Parses a BLF Type 66 (FLEXRAY_RCVMESSAGE_EX) payload into a DLT_FLEXRAY frame.
-    ///
-    /// The extended receive message has a larger header than Type 50. The layout of the
-    /// first 60 bytes (minimum required) is:
-    /// <code>
-    ///   [0..2)   channel (u16 LE)
-    ///   [2..4)   version (u16 LE)
-    ///   [4..6)   channelMask (u16 LE)
-    ///   [6..8)   dir (u16 LE)
-    ///   [8..12)  clientIndex (u32 LE)
-    ///   [12..16) clusterNo (u32 LE)
-    ///   [16..18) reserved (u16 LE)
-    ///   [18..20) reserved (u16 LE)
-    ///   [20..24) frameId (u32 LE)   — extended, but only lower 16 bits used
-    ///   [24..28) headerCrc (u32 LE) — extended
-    ///   [28..30) payloadLength (u16 LE)
-    ///   [30..32) payloadLengthValid (u16 LE)
-    ///   [32..34) cycle (u16 LE)
-    ///   [34..36) tag (u16 LE)
-    ///   [36..40) frameFlags (u32 LE)
-    ///   [40..44) appParameter (u32 LE)
-    ///   [44..52) reserved (u64 LE) — timing extension
-    ///   [52..60) reserved (u64 LE)
-    ///   [60..)   FlexRay data payload
-    /// </code>
+    /// Offsets 0–44 match Type 50; 40 extension bytes follow; payload starts at 84.
+    /// Copy length is <c>payloadLengthValid</c> at offset 24.
     /// </summary>
     internal static bool TryParseFlexRayRcvMessageEx(
         ReadOnlySpan<byte> payload, out byte[] frame, out ushort channel)
@@ -261,18 +247,19 @@ internal static class FlexRayParser
 
         channel = BinaryPrimitives.ReadUInt16LittleEndian(payload);
         ushort channelMask = BinaryPrimitives.ReadUInt16LittleEndian(payload[4..]);
-        ushort frameId = (ushort)BinaryPrimitives.ReadUInt32LittleEndian(payload[20..]);
-        ushort headerCrc = (ushort)BinaryPrimitives.ReadUInt32LittleEndian(payload[24..]);
-        int payloadLength = BinaryPrimitives.ReadUInt16LittleEndian(payload[28..]);
-        byte cycle = payload[32];
+        ushort frameId = BinaryPrimitives.ReadUInt16LittleEndian(payload[16..]);
+        ushort headerCrc = BinaryPrimitives.ReadUInt16LittleEndian(payload[18..]);
+        int payloadLengthValid = BinaryPrimitives.ReadUInt16LittleEndian(payload[24..]);
+        byte cycle = payload[26];
         uint frameFlags = BinaryPrimitives.ReadUInt32LittleEndian(payload[36..]);
 
         byte subChannel = (channelMask & 0x02) != 0 ? (byte)1 : (byte)0;
 
         FlexRayLinkTypeFrame.MapBlfFrameFlags(frameFlags, out bool ppi, out bool nfi, out bool sfi, out bool stfi);
 
+        // Same ISO-length rule as Type 50: encode from copied payloadLengthValid bytes.
         int available = Math.Max(0, payload.Length - _FlexRayRcvMessageExMinSize);
-        if (!_TryResolvePayloadLength(payloadLength, available, out int actualDataLen))
+        if (!_TryResolvePayloadLength(payloadLengthValid, available, out int actualDataLen))
         {
             return false;
         }
@@ -280,6 +267,30 @@ internal static class FlexRayParser
         frame = _BuildLinkTypeFrame(
             subChannel, ppi, nfi, sfi, stfi, frameId, cycle, headerCrc,
             payload.Slice(_FlexRayRcvMessageExMinSize, actualDataLen));
+        return true;
+    }
+
+    /// <summary>
+    /// Reads only the channel field for a FlexRay object, using the same minimum sizes as the parsers.
+    /// Channel is u16 LE at offset 0 for every FlexRay object type this parser handles.
+    /// </summary>
+    internal static bool TryGetChannel(uint objectType, ReadOnlySpan<byte> payload, out ushort channel)
+    {
+        channel = 0;
+        int minSize = objectType switch
+        {
+            BlfConstants.ObjTypeFlexRayData => _FlexRayDataMinSize,
+            BlfConstants.ObjTypeFlexRayMessage => _FlexRayMessageMinSize,
+            BlfConstants.ObjTypeFlexRayRcvMessage => _FlexRayRcvMessageHeaderSize,
+            BlfConstants.ObjTypeFlexRayRcvMessageEx => _FlexRayRcvMessageExMinSize,
+            _ => 0,
+        };
+        if (minSize == 0 || payload.Length < minSize)
+        {
+            return false;
+        }
+
+        channel = BinaryPrimitives.ReadUInt16LittleEndian(payload);
         return true;
     }
 

@@ -102,6 +102,12 @@ BlfSourceOptions options = new()
 
 For stream-based reading, set `BlfStreamSource.MaxUncompressedContainerSize` before `Start()`.
 
+BLF sources emit frames for the object types in the frame-producing set: classic CAN,
+CAN FD, CAN XL Type 139, LIN, FlexRay, and Ethernet Types 71, 102, and 120. Ethernet
+status/PHY objects (103/133) and AppText are metadata, not reconstructed frames.
+`object_length` is unpadded; readers then scan one byte at a time for the next `LOBJ`.
+A leftover inner object at a container tail is prepended to the next decompressed blob.
+
 ### Combine With Parser Stack
 
 Read `RawFrame` instances from sources, then convert them to `Frame` and parse into `Packet` via Core.

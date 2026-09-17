@@ -89,13 +89,13 @@ public sealed class BlfSourceOptions : IFileSourceOptions
     /// Timezone in which the BLF file's <c>start_date</c> SYSTEMTIME fields are interpreted.
     /// <para>
     /// The BLF specification does not record a timezone with the SYSTEMTIME structure.
-    /// Vector's reference tools and Wireshark write/read it as local civil time, so the
+    /// Vector's reference tools write and read it as local civil time, so the
     /// same file produces different absolute timestamps depending on how these fields are
     /// interpreted versus the Unix epoch used by <see cref="BlfSource"/>.
     /// </para>
     /// <para>
-    /// Default: <see cref="TimeZoneInfo.Local"/> — matches Wireshark/tshark and mainstream
-    /// Vector tooling end-to-end. Use <see cref="TimeZoneInfo.Utc"/> only if your capture
+    /// Default: <see cref="TimeZoneInfo.Local"/> — matches mainstream Vector tooling
+    /// end-to-end. Use <see cref="TimeZoneInfo.Utc"/> only if your capture
     /// pipeline explicitly treats SYSTEMTIME components as UTC (non-standard versus those tools).
     /// </para>
     /// </summary>
@@ -105,7 +105,9 @@ public sealed class BlfSourceOptions : IFileSourceOptions
 
     /// <summary>
     /// Number of memory-mapped view accessor slots used for concurrent random-access reads
-    /// when the file exceeds <see cref="PreloadBudget"/>.
+    /// when the file exceeds <see cref="PreloadBudget"/>. Sequential scan uses the primary
+    /// view; <see cref="BlfSource.FrameById"/> hashes the frame id onto these slots via
+    /// <c>ReadAt</c>/<c>ReadInto</c>.
     /// Must be positive.
     /// Default: <see cref="Environment.ProcessorCount"/>. Ignored when the file is loaded in-memory.
     /// </summary>

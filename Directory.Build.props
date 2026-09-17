@@ -34,7 +34,11 @@
       IDE1006 — Naming rule violation (e.g. underscore-prefixed private fields/methods).
       Ignored globally: the solution uses _camelCase for private members and helpers by convention.
     -->
-    <NoWarn>$(NoWarn);CA1711;CA1720;IDE1006</NoWarn>
+    <!-- Id: RCS1226. Why: Roslynator wants extra XML-doc paragraphs in <para>; this repo
+         uses blank-line multi-paragraph summaries and does not adopt that markup. Why global:
+         it fires on any multi-paragraph XML comment; a pragma per comment is not viable.
+         User approved. See .editorconfig for the IDE severity. -->
+    <NoWarn>$(NoWarn);CA1711;CA1720;IDE1006;RCS1226</NoWarn>
 
     <!-- Build -->
     <Deterministic>true</Deterministic>
@@ -47,7 +51,7 @@
     <EnableTrimAnalyzer>false</EnableTrimAnalyzer>
 
     <!-- Version & package metadata -->
-    <Version>0.11.0</Version>
+    <Version>0.12.0</Version>
     <Authors>DevAM</Authors>
     <Company>DevAM</Company>
     <Copyright>Copyright © 2026 DevAM. All rights reserved.</Copyright>

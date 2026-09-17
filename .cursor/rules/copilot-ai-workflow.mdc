@@ -14,10 +14,11 @@ If `custom_instructions.md` exists at repo root, read and apply it (Section 1). 
 
 ## Workflow triggers
 
-Natural-language equivalents of `/plan`, `/implement`, `/review`, `/review-loop`, `/complex-task`, `/council`, `/commit-message` use the same workflow.
+Natural-language equivalents of `/plan`, `/implement`, `/review`, `/review-loop`, `/complex-task`, `/council`, `/commit-message`, `/requirements`, `/illustrate` use the same workflow trigger.
 
 | Trigger | SSOT skill |
 |---------|------------|
+| `/requirements` | `.github/skills/workflow-requirements.md` |
 | `/plan` | `.github/skills/workflow-plan.md` |
 | `/implement` | `.github/skills/workflow-implement.md` |
 | `/review` | `.github/skills/workflow-review.md` |
@@ -25,6 +26,7 @@ Natural-language equivalents of `/plan`, `/implement`, `/review`, `/review-loop`
 | `/complex-task` | `.github/skills/workflow-complex-task.md` |
 | `/council` | `.github/skills/workflow-council.md` |
 | `/commit-message` | `.github/skills/workflow-commit-message.md` |
+| `/illustrate` | `.github/skills/workflow-illustrate.md` |
 
 On workflow start: read `copilot-instructions.md`, `custom_instructions.md` when present, plus the matching workflow skill. Run Tech Load Protocol (Section 3) before edits.
 
@@ -33,4 +35,4 @@ On workflow start: read `copilot-instructions.md`, `custom_instructions.md` when
 - Slash commands: `.cursor/commands/` (thin wrappers, same as `.github/prompts/`)
 - Discoverable skills: `.cursor/skills/` (pointers to `.github/skills/` SSOT)
 
-Do not restate SSOT content in chat when artifacts were written to files; cite paths only.
+Chat handover: the matching workflow skill’s Completion (or Output Modes). Do not restate it here.
