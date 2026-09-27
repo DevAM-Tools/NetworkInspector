@@ -10,9 +10,9 @@ namespace NetworkInspector.Sources.Blf.Format.Objects;
 ///   [0]     message format revision (1)
 ///   [1..4)  reserved
 ///   [4]     DLC nibble (bits 7-4) | message type (bits 3-2) | checksum type (bits 1-0)
-///   [5]     Protected ID (parity + 6-bit frame ID)
-///   [6]     checksum
-///   [7]     error flags
+    ///   [5]     6-bit frame ID (parity is not reconstructed)
+    ///   [6]     checksum
+    ///   [7]     error flags
 ///   [8..]   data, padded to 4 or 8 bytes
 /// </code>
 /// Sleep and wakeup objects reconstruct the 12-byte DLT_LIN event (message type 3).
@@ -119,7 +119,7 @@ internal static class LinParser
         byte dlc = (byte)(payload[3] & 0x0F);
         int dataLen = Math.Min((int)dlc, _MaxLinDataLength);
 
-        byte pid = _ComputeLinPid(rawId);
+        byte pid = rawId;
         byte checksum = payload.Length >= _LinMessageV1CrcOffset + 2
             ? payload[_LinMessageV1CrcOffset]
             : (byte)0;
@@ -170,14 +170,21 @@ internal static class LinParser
         byte dlc = (byte)(payload[38] & 0x0F);
         int dataLen = Math.Min((int)dlc, _MaxLinDataLength);
         byte checksum = payload[120];
+        byte checksumModel = payload[39];
 
-        byte pid = _ComputeLinPid(rawId);
+        // DLT byte 5 holds the 6-bit Vector id. Checksum model 0 = classic, 1 = enhanced.
+        byte pid = rawId;
+        byte checksumTypeBits = checksumModel == 1
+            ? (byte)2
+            : checksumModel == 0
+                ? (byte)1
+                : (byte)0;
 
         ReadOnlySpan<byte> data = payload.Length >= 112 + dataLen
             ? payload.Slice(112, dataLen)
             : payload[112..];
 
-        frame = _BuildDltLinFrame(pid, dataLen, data, checksum, errors: 0);
+        frame = _BuildDltLinFrame(pid, dataLen, data, checksum, errors: 0, checksumTypeBits);
         return true;
     }
 
@@ -213,9 +220,9 @@ internal static class LinParser
         channel = BinaryPrimitives.ReadUInt16LittleEndian(payload);
         byte rawId = (byte)(payload[2] & 0x3F);
         byte dlc = (byte)(payload[3] & 0x0F);
-        byte pid = _ComputeLinPid(rawId);
 
-        frame = _BuildDltLinErrorFrame(pid, Math.Min((int)dlc, _MaxLinDataLength), errorType);
+        // Byte 5 is the masked 6-bit id. Parity bits are not reconstructed.
+        frame = _BuildDltLinErrorFrame(rawId, Math.Min((int)dlc, _MaxLinDataLength), errorType);
         return true;
     }
 
@@ -245,9 +252,9 @@ internal static class LinParser
         byte dlc = payload.Length > 38
             ? (byte)(payload[38] & 0x0F)
             : (byte)0;
-        byte pid = _ComputeLinPid(rawId);
 
-        frame = _BuildDltLinErrorFrame(pid, Math.Min((int)dlc, _MaxLinDataLength), errorType);
+        // Byte 5 is the masked 6-bit id. Parity bits are not reconstructed.
+        frame = _BuildDltLinErrorFrame(rawId, Math.Min((int)dlc, _MaxLinDataLength), errorType);
         return true;
     }
 
@@ -406,42 +413,17 @@ internal static class LinParser
     #region Private Helpers
 
     /// <summary>
-    /// Computes the LIN Protected Identifier (PID) from a 6-bit frame ID.
-    /// <para>
-    /// The two parity bits are computed per the LIN 2.x specification:
-    /// <list type="bullet">
-    ///   <item>P0 = ID0 ⊕ ID1 ⊕ ID2 ⊕ ID4</item>
-    ///   <item>P1 = ¬(ID1 ⊕ ID3 ⊕ ID4 ⊕ ID5)</item>
-    /// </list>
-    /// Bit layout of PID: [P1|P0|ID5|ID4|ID3|ID2|ID1|ID0].
-    /// </para>
-    /// </summary>
-    private static byte _ComputeLinPid(byte id)
-    {
-        byte id0 = (byte)(id & 0x01);
-        byte id1 = (byte)((id >> 1) & 0x01);
-        byte id2 = (byte)((id >> 2) & 0x01);
-        byte id3 = (byte)((id >> 3) & 0x01);
-        byte id4 = (byte)((id >> 4) & 0x01);
-        byte id5 = (byte)((id >> 5) & 0x01);
-
-        byte p0 = (byte)((id0 ^ id1 ^ id2 ^ id4) & 0x01);
-        byte p1 = (byte)((1 ^ id1 ^ id3 ^ id4 ^ id5) & 0x01); // NOT(...)
-
-        return (byte)((id & 0x3F) | (p0 << 6) | (p1 << 7));
-    }
-
-    /// <summary>
     /// Builds a DLT_LIN frame: 8-byte header plus data padded to 4 or 8 bytes.
+    /// <paramref name="checksumTypeBits"/> occupy bits 1-0 of byte 4 (1 = classic, 2 = enhanced).
     /// </summary>
     private static byte[] _BuildDltLinFrame(
-        byte pid, int dlc, ReadOnlySpan<byte> data, byte checksum, byte errors)
+        byte pid, int dlc, ReadOnlySpan<byte> data, byte checksum, byte errors, byte checksumTypeBits = 0)
     {
         int clampedDlc = Math.Clamp(dlc, 0, _MaxLinDataLength);
         int dataPad = clampedDlc <= 4 ? 4 : 8;
         byte[] frame = new byte[_DltLinHeaderSize + dataPad];
         frame[0] = 1;
-        frame[4] = (byte)(clampedDlc << 4);
+        frame[4] = (byte)((clampedDlc << 4) | (checksumTypeBits & 0x03));
         frame[5] = pid;
         frame[6] = checksum;
         frame[7] = errors;

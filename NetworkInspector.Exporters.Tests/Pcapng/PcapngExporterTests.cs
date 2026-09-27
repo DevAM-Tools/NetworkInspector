@@ -9,6 +9,16 @@ namespace NetworkInspector.Exporters.Tests.Pcapng;
 internal sealed class PcapngExporterTests
 {
     [Test]
+    public async Task Builder_RejectsBinaryOrOutOfRangeTimestampResolution()
+    {
+        PcapngExporter.Builder binary = PcapngExporter.CreateBuilder().ToStream(new MemoryStream());
+        PcapngExporter.Builder tooFine = PcapngExporter.CreateBuilder().ToStream(new MemoryStream());
+
+        await Assert.That(() => binary.WithTimestampResolution(0x80 | 9)).Throws<ArgumentOutOfRangeException>();
+        await Assert.That(() => tooFine.WithTimestampResolution(20)).Throws<ArgumentOutOfRangeException>();
+    }
+
+    [Test]
     public async Task Builder_RequiresOutput()
     {
         PcapngExporter.Builder builder = PcapngExporter.CreateBuilder();
@@ -461,5 +471,22 @@ internal sealed class PcapngExporterTests
         exporter.OnFinish();
 
         await Assert.That(exporter.HasErrors).IsTrue();
+    }
+
+    [Test]
+    public async Task ShbOption_EmptyHardware_WritesWithoutErrors()
+    {
+        using MemoryStream ms = new();
+        using PcapngExporter exporter = PcapngExporter.CreateBuilder()
+            .ToStream(ms)
+            .WithHardware("")
+            .Build();
+
+        exporter.OnFinish();
+
+        await Assert.That(exporter.HasErrors).IsFalse();
+        await Assert.That(ms.Length).IsGreaterThan(0);
+        PcapngVerifier verifier = PcapngVerifier.FromData(ms.ToArray());
+        await Assert.That(verifier.SectionCount).IsEqualTo(1);
     }
 }

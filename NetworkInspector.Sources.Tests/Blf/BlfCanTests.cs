@@ -37,8 +37,8 @@ internal sealed class BlfCanTests
         await Assert.That(frame!.Value.LinkType).IsEqualTo(LinkType.CanSocketcan);
         await Assert.That(frame.Value.Id.Value).IsEqualTo(0);
 
-        // Verify SocketCAN format: id(4 BE)+dlc(1)+flags(1)+reserved(2)+data(8)
-        await Assert.That(frame.Value.Data.Length >= 16).IsTrue();
+        // DLC 8 keeps the 8-byte header plus all eight data bytes.
+        await Assert.That(frame.Value.Data.Length).IsEqualTo(16);
 
         uint id = BinaryPrimitives.ReadUInt32BigEndian(frame.Value.Data.Span);
         await Assert.That(id & 0x1FFF_FFFF).IsEqualTo(0x123u);
@@ -73,6 +73,7 @@ internal sealed class BlfCanTests
         (uint CanId, byte[] Data)[] tests =
         [
             (0x100, []),                         // DLC=0
+            (0x150, [0xAB]),                     // DLC=1
             (0x200, [1, 2, 3, 4]),               // DLC=4
             (0x300, [1, 2, 3, 4, 5, 6, 7, 8]),  // DLC=8
         ];
@@ -90,7 +91,12 @@ internal sealed class BlfCanTests
 
             await Assert.That(frame).IsNotNull();
             await Assert.That(frame!.Value.LinkType).IsEqualTo(LinkType.CanSocketcan);
+            await Assert.That(frame.Value.Data.Length).IsEqualTo(8 + canData.Length);
             await Assert.That(frame.Value.Data.Span[4]).IsEqualTo((byte)canData.Length);
+            if (canData.Length > 0)
+            {
+                await Assert.That(frame.Value.Data.Span.Slice(8, canData.Length).ToArray()).IsEquivalentTo(canData);
+            }
         }
     }
 
@@ -234,7 +240,8 @@ internal sealed class BlfCanTests
         await Assert.That(frame).IsNotNull();
         uint id = BinaryPrimitives.ReadUInt32BigEndian(frame!.Value.Data.Span);
         await Assert.That(id & 0xC000_0123u).IsEqualTo(0xC000_0123u);
-        await Assert.That(frame.Value.Data.Span[8..16].ToArray()).IsEquivalentTo(new byte[8]);
+        await Assert.That(frame.Value.Data.Length).IsEqualTo(8);
+        await Assert.That(frame.Value.Data.Span[4]).IsEqualTo((byte)8);
     }
 
     [Test]

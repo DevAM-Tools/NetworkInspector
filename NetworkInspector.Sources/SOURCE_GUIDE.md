@@ -398,6 +398,7 @@ return result.Value;
 - Never construct `Frame` directly — always use `Frame.Create()`
 - Handle `ParseResult` failures — do not discard errors silently
 - The `FrameId` value is the zero-based sequential index of the frame (valid range: `0 … Array.MaxLength - 1`; see `ArrayIndexIdRange` in Core)
+- PCAPNG/PCAP `Frame.Data` is **captured length**. On-wire `orig_len` is not stored on `Frame`. Unknown link types skip the packet and raise `FrameSkipped`.
 
 ---
 

@@ -7,6 +7,54 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.13.0] — Vector LIN events, Type 120 Ethernet, and PCAPNG limits
+
+Delta since 0.12.0. Version is `0.13.0` in `Directory.Build.props`.
+
+This release writes Vector LIN event objects and Ethernet Type 120, keeps an explicit BLF channel of 0, and reads PCAPNG captured bytes under one block-size cap. `FrameInterfacePropertyKeys` is no longer a public Core type; the property strings are unchanged.
+
+### Added
+
+- **BLF Ethernet Type 120 export** — `BlfExporter` writes `ETHERNET_FRAME_EX`: a 32-byte header, then the raw frame. VLAN TCI 0, QinQ inner tags, and an FCS trailer survive. Type 71 is not the exporter path. Direction is 0 (RX).
+- **`blf.hw_channel`** — a `ushort` on the interface is written at Type 120 offset 6 with flags bit `0x0002`. Readers store a valid Type 120 or Type 102 hardware channel on the same key and keep that interface separate. Absent means the field is omitted.
+- **BLF CAN error Type 2** — a SocketCAN frame with the error flag is `CAN_ERROR`, not classic Type 1.
+- **BLF LIN events** — data frames (error byte 0, message type 0) are Type 57 with `object_version` 1. CRC / receive / send errors (bits `0x08` / `0x02` / `0x01`) are Types 60, 61, and 58. Sleep (event byte `0x01` or `0x02`) is Type 20. Wakeup (`0x04`) is Type 62. Any other LIN shape is skipped.
+- **BLF CAN XL nested classic and FD** — Type 139 with the XLF flag clear reconstructs classic (8 bytes plus the data length) or CAN FD from FDF, BRS, ESI, and the remote-frame flag. Type 140 stays skipped.
+- **FlexRay Type 50 channel and dual CRC on export** — Channel A/B is `channelMask`. The ISO header CRC is written to both `headerCrc1` and `headerCrc2`.
+
+### Changed
+
+- **PCAPNG captured length** — `PcapSource` / `PcapStreamSource` expose captured packet bytes only (`Frame.Data` / `Frame.Length`). EPB, obsolete PB, and legacy `orig_len` are not stored.
+- **PCAPNG scan continues after a packet skip** — `Open` / `FromData` index the rest of the file. Skips from that pass are raised as `FrameSkipped` on the first `NextFrame` after `Start`. `ErrorToleranceMode.Strict` makes later `NextFrame` calls return null after the first skip. A malformed packet, a missing interface, an unknown DLT (`FrameReadErrorKind.Other`, message `Unknown link-layer type {raw}; frame skipped.`), or an unsupported `if_tsresol` skips that packet and continues. A block boundary that cannot be rounded, is below the minimum size, runs past EOF, exceeds 134348832 bytes, reads short, or has a mismatched trailer raises `FrameSkipped` with `CorruptedBlock` and then stops. The first section header that fails this check throws, and the source does not open.
+- **ASC channel lookup** — `AscExporter` still reads `asc.channel`, then `blf.channel`, then its default.
+- **PCAPNG `if_name` and `if_fcslen`** — `PcapngExporter` writes `FrameInterfaceInfo.UiName` as IDB `if_name`. A byte at `if.fcs_length` is `if_fcslen`; omit it and option 13 is absent. Per-packet EPB flags are not written. Snap truncation stores `orig_len` from the pre-snap `Frame.Length`.
+- **PCAPNG `WithTimestampResolution`** — decimal power-of-ten exponent 0..19 (6 = microseconds, 9 = nanoseconds). Bit 7 or a value above 19 throws `ArgumentOutOfRangeException`.
+- **Ethernet Type 120/102 length** — `frame_length` must be at least 14 and those bytes must all be present. A short object fails. Alignment zeros after the frame are not a packet.
+- **FlexRay Type 50/66 payload** — ISO length is the even `payloadLength`. Copied bytes come from `payloadLengthValid` and are zero-padded to that length. Exclusive Channel B (`channelMask == 2`) uses `headerCrc2`; every other mask uses `headerCrc1`. Slot and cycle are masked to 11 and 6 bits.
+- **BLF object timestamps on export** — nanoseconds (flags word 2) relative to the millisecond `start_date` anchor. A timestamp before that anchor clamps to 0.
+
+### Breaking
+
+- **`FrameInterfacePropertyKeys` left Core.** Use the strings: `blf.channel`, `blf.hw_channel`, `blf.object_type`, `blf.bus_type`, `if.fcs_length`, `if.speed`, `if.snap_length`, `if.filter`, `if.os`, `if.raw_link_type`, `capture.hardware`, `capture.os`, `capture.application`. The C# holders are internal to Sources and Exporters.
+- **`blf.channel` 0 is stored as 0.** Omit the property for channel 1. 0.12.0 rewrote 0 to 1.
+- **Classic CAN frames are 8 bytes plus the captured data length.** DLC 8 stays 16 bytes. RTR stays 8 bytes and keeps the DLC in byte 4. A fixed 16-byte buffer is gone.
+- **LIN byte 5 is the 6-bit id.** Parity bits are not added. Type 57 checksum model 0 or 1 becomes classic or enhanced in byte 4 bits 1-0.
+- **BLF timestamp flags must be exactly 1 (10 µs) or 2 (nanoseconds).** Any other word, including a value whose low nibble is 1 or 2, yields timestamp 0.
+- **FlexRay channel mapping.** Type 29/41: channel 0 is A, any other value is B. Type 50/66: `channelMask` 1 is A; 0, exclusive B, and A+B are B.
+- **`LinLayer` pads the DLT_LIN payload.** Data length 0..4 stores 4 payload bytes; 5..8 stores 8. A 2-byte payload is 12 bytes. The length nibble stays the real data length. Pad bytes are not checksummed.
+- **Unsupported `if_tsresol` skips the interface.** A decimal exponent above 19 no longer falls back to nanoseconds. A binary exponent above 63 no longer wraps the clock.
+
+### Fixed
+
+- PCAPNG readers round a leading `block_total_length` up to a multiple of 4 before reading the block. The trailer must equal that rounded length, or round up to it. File and stream readers share one maximum block size (134348832 bytes).
+- PCAPNG `if_tsoffset` is applied as seconds after tick conversion. Tick counts above `long.MaxValue` saturate instead of becoming negative.
+- PCAPNG export throws `ArgumentOutOfRangeException` when the padded block length does not fit in 32 bits, before any block byte is written.
+- `PcapPadding.OptionSize(0)` is 4. An empty SHB hardware string writes a valid section header.
+- Disposing a memory-mapped capture throws `AggregateException` when a native view cannot be released. A second dispose does not throw.
+- The PCAPNG frame index grows by 4096-entry chunks and does not copy earlier entries.
+
+---
+
 ## [0.12.0] — Vector-compatible BLF objects
 
 Delta since 0.11.0. Version is `0.12.0` in `Directory.Build.props`.

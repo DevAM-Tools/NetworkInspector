@@ -243,13 +243,6 @@ internal static class BlfConstants
     /// </summary>
     internal const byte BlfCanMessageFlagRtr = 0x80;
 
-    /// <summary>
-    /// Extended-frame flag in the Type 100 CAN FD 32-bit <c>blfFlags</c> field.
-    /// Classic Type 1/86 encode EFF in CAN ID bit 31, not in the flags byte.
-    /// Must not be confused with <see cref="BlfCanFdEsi"/>, which is the ESI bit in the separate 8-bit FD-flags byte.
-    /// </summary>
-    internal const uint BlfCanMessageFlagEff = 0x04;
-
     /// <summary>Lookup: SocketCAN FD payload byte length (index 0..64) → 4‑bit DLC code for BLF CAN FD payloads.</summary>
     internal static ReadOnlySpan<byte> CanFdPayloadLengthToDlc => _CanFdPayloadLengthToDlc;
 
@@ -378,6 +371,18 @@ internal static class BlfConstants
     /// <summary>BLF CAN XL: XLF (CAN XL frame) in the Type 139 flags word at offset 48.</summary>
     internal const uint BlfCanXlFlagXlf = 0x400000;
 
+    /// <summary>BLF CAN XL nested classic/FD: remote frame in the Type 139 flags word.</summary>
+    internal const uint BlfCanXlFlagRemoteFrame = 0x10;
+
+    /// <summary>BLF CAN XL nested FD: FDF in the Type 139 flags word.</summary>
+    internal const uint BlfCanXlFlagFdf = 0x1000;
+
+    /// <summary>BLF CAN XL nested FD: BRS in the Type 139 flags word.</summary>
+    internal const uint BlfCanXlFlagBrs = 0x2000;
+
+    /// <summary>BLF CAN XL nested FD: ESI in the Type 139 flags word.</summary>
+    internal const uint BlfCanXlFlagEsi = 0x4000;
+
     /// <summary>BLF CAN XL: RRS (Remote Request Substitution).</summary>
     internal const uint BlfCanXlFlagRrs = 0x800000;
 
@@ -433,10 +438,6 @@ internal static class BlfConstants
     #endregion
 
     #region Default configuration
-
-    /// <summary>Property key for the BLF channel number in <see cref="FrameInterfaceInfo.Properties"/>.</summary>
-    /// <remarks>Use <see cref="FrameInterfacePropertyKeys.BlfChannel"/> instead. Kept for reference only.</remarks>
-    internal const string PropertyKeyChannel = FrameInterfacePropertyKeys.BlfChannel;
 
     /// <summary>Default container cache budget in bytes (32 MiB).</summary>
     internal const int DefaultCacheBudget = 32 * 1024 * 1024;

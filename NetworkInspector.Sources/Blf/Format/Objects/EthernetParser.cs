@@ -176,19 +176,15 @@ internal static class EthernetParser
         int frameLength = BinaryPrimitives.ReadUInt16LittleEndian(payload[_Type120FrameLengthOffset..]);
         int available = payload.Length - _Type120HeaderSize;
 
-        if (available <= 0)
+        // frame_length is the Ethernet size. A zero length is not "the rest of the object":
+        // alignment zeros after the frame must not become a packet. A short object fails
+        // instead of being truncated.
+        if (frameLength < _MinEthernetFrameSize || available < frameLength)
         {
             return false;
         }
 
-        int actualLen = frameLength > 0
-            ? Math.Min(frameLength, available)
-            : available;
-
-        if (actualLen < _MinEthernetFrameSize)
-        {
-            return false;
-        }
+        int actualLen = frameLength;
 
         frame = _SliceOrCopyEthernet(payload, payloadMemory, _Type120HeaderSize, actualLen);
         return true;
@@ -231,19 +227,13 @@ internal static class EthernetParser
         int frameLength = BinaryPrimitives.ReadUInt16LittleEndian(payload[_Type102FrameLengthOffset..]);
         int available = payload.Length - _Type102HeaderSize;
 
-        if (available <= 0)
+        // Same rule as Type 120: only frame_length bytes, and only when they are all present.
+        if (frameLength < _MinEthernetFrameSize || available < frameLength)
         {
             return false;
         }
 
-        int actualLen = frameLength > 0
-            ? Math.Min(frameLength, available)
-            : available;
-
-        if (actualLen < _MinEthernetFrameSize)
-        {
-            return false;
-        }
+        int actualLen = frameLength;
 
         frame = _SliceOrCopyEthernet(payload, payloadMemory, _Type102HeaderSize, actualLen);
         return true;
@@ -273,6 +263,46 @@ internal static class EthernetParser
 
         channel = BinaryPrimitives.ReadUInt16LittleEndian(payload[_Type120ChannelOffset..]);
         return true;
+    }
+
+    /// <summary>
+    /// Reads the hardware channel when the object carries one.
+    /// Type 120 stores it at offset 6 and sets flags bit 0x0002 when it is valid.
+    /// Type 102 stores it at offset 6; zero means the field is absent.
+    /// </summary>
+    internal static bool TryReadHardwareChannel(uint objectType, ReadOnlySpan<byte> payload, out ushort hardwareChannel)
+    {
+        hardwareChannel = 0;
+        const ushort hardwareChannelFlag = 0x0002;
+        if (objectType == BlfConstants.ObjTypeEthernetFrameEx)
+        {
+            if (payload.Length < 8)
+            {
+                return false;
+            }
+
+            ushort flags = BinaryPrimitives.ReadUInt16LittleEndian(payload[2..]);
+            if ((flags & hardwareChannelFlag) == 0)
+            {
+                return false;
+            }
+
+            hardwareChannel = BinaryPrimitives.ReadUInt16LittleEndian(payload[6..]);
+            return true;
+        }
+
+        if (objectType == BlfConstants.ObjTypeEthernetRxError)
+        {
+            if (payload.Length < 8)
+            {
+                return false;
+            }
+
+            hardwareChannel = BinaryPrimitives.ReadUInt16LittleEndian(payload[6..]);
+            return hardwareChannel != 0;
+        }
+
+        return false;
     }
 
     /// <summary>Reads Type 102 channel without reconstructing the Ethernet frame.</summary>

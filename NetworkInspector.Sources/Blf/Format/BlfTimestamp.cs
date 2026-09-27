@@ -4,10 +4,11 @@ namespace NetworkInspector.Sources.Blf.Format;
 
 /// <summary>
 /// Converts BLF timestamps to nanoseconds since Unix epoch.
-/// BLF uses two timestamp representations:
+/// BLF uses two timestamp representations, matched on the whole <c>flags</c> value:
 /// <list type="bullet">
-///   <item>10 µs resolution (flags &amp; 0x0F == 1): multiply raw value by 10,000</item>
-///   <item>1 ns resolution (flags &amp; 0x0F == 2): raw value is nanoseconds directly</item>
+///   <item>10 µs resolution (<c>flags == 1</c>): multiply raw value by 10,000</item>
+///   <item>1 ns resolution (<c>flags == 2</c>): raw value is nanoseconds directly</item>
+///   <item>any other flags word, including a value whose low nibble is 1 or 2: timestamp 0</item>
 /// </list>
 /// Absolute timestamps are computed as: file_start_offset_ns + relative_timestamp_ns.
 /// </summary>
@@ -19,13 +20,15 @@ internal static class BlfTimestamp
     /// Converts a raw BLF timestamp to nanoseconds based on resolution flags.
     /// </summary>
     /// <param name="rawTimestamp">Raw timestamp value from the log object header.</param>
-    /// <param name="flags">Flags from the log object header (lower nibble = resolution).</param>
+    /// <param name="flags">
+    /// Whole flags word. 1 = 10 µs units, 2 = nanoseconds.
+    /// Any other word, including a value whose low nibble is 1 or 2, yields timestamp 0.
+    /// </param>
     /// <returns>Timestamp in nanoseconds (relative or absolute depending on context).</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static long ToNanoseconds(ulong rawTimestamp, uint flags)
     {
-        byte resolution = (byte)(flags & 0x0F);
-        if (resolution == BlfConstants.TimestampResolution10Us)
+        if (flags == BlfConstants.TimestampResolution10Us)
         {
             const ulong maxRaw = (ulong)long.MaxValue / (ulong)BlfConstants.TimestampMultiplier10Us;
             if (rawTimestamp > maxRaw)
@@ -36,12 +39,17 @@ internal static class BlfTimestamp
             return (long)(rawTimestamp * (ulong)BlfConstants.TimestampMultiplier10Us);
         }
 
-        if (rawTimestamp > (ulong)long.MaxValue)
+        if (flags == BlfConstants.TimestampResolution1Ns)
         {
-            return long.MaxValue;
+            if (rawTimestamp > (ulong)long.MaxValue)
+            {
+                return long.MaxValue;
+            }
+
+            return (long)rawTimestamp;
         }
 
-        return (long)rawTimestamp;
+        return 0;
     }
 
     /// <summary>

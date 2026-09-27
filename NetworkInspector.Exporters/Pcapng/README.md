@@ -11,9 +11,9 @@ It is designed for format-preserving conversion and tool interoperability.
 
 ## Why Use It
 
-- Broad ecosystem compatibility (Wireshark, tshark, tcpdump, Scapy, and other PCAPNG tools).
-- On-demand interface registration for multi-interface captures.
-- Configurable snap length and timestamp resolution.
+- Broad ecosystem compatibility with other PCAPNG readers.
+- On-demand interface registration for multi-interface captures. `FrameInterfaceInfo.UiName` is written as IDB `if_name`. A `if.fcs_length` byte is written as `if_fcslen`. Per-packet EPB flags are not written.
+- Configurable snap length and timestamp resolution. Snap truncation writes EPB `orig_len` from the pre-snap `Frame.Length`. Readers later expose captured bytes only.
 
 ## Quick Start
 
@@ -63,7 +63,7 @@ Use SHB metadata options to include capture context:
 | `ToFile(path)` / `ToStream(stream)` / `ToStdout()` | Select output target |
 | `WithUiName(name)` / `WithDescription(text)` | Set user-facing metadata |
 | `WithSnapLength(length)` | Truncate stored frame bytes per packet |
-| `WithTimestampResolution(resolution)` | Set timestamp precision exponent |
+| `WithTimestampResolution(resolution)` | Decimal power-of-ten exponent 0..19 (9 = nanoseconds). Bit 7 and values above 19 throw. |
 | `WithHardware(...)`, `WithOs(...)`, `WithApplication(...)`, `WithComment(...)` | Set section header metadata |
 | `WithTargetFrameCount(count)` | Stop after N frames (`0` = unlimited) |
 | `WithCancellationToken(token)` | Enable cooperative cancellation |

@@ -25,7 +25,7 @@ internal sealed class LinParserTests
         await Assert.That(channel).IsEqualTo((ushort)1);
         await Assert.That(frame[0]).IsEqualTo((byte)1);
         await Assert.That(frame[4]).IsEqualTo((byte)(4 << 4));
-        await Assert.That((byte)(frame[5] & 0x3F)).IsEqualTo((byte)0x10);
+        await Assert.That(frame[5]).IsEqualTo((byte)0x10);
         await Assert.That(frame.AsSpan(8, 4).ToArray()).IsEquivalentTo(new byte[] { 0xAA, 0xBB, 0xCC, 0xDD });
         await Assert.That(frame.Length).IsEqualTo(12);
         await Assert.That(frame[6]).IsEqualTo((byte)0);
@@ -81,6 +81,8 @@ internal sealed class LinParserTests
         bool ok = LinParser.TryParseLinErrorV1(payload, BlfConstants.LinErrorCrc, out byte[] frame, out _);
 
         await Assert.That(ok).IsTrue();
+        await Assert.That(frame[5]).IsEqualTo((byte)0x11);
+        await Assert.That(frame[6]).IsEqualTo((byte)0);
         await Assert.That(frame[7]).IsEqualTo((byte)0x08);
         await Assert.That(frame.Length).IsEqualTo(12);
     }
@@ -97,7 +99,50 @@ internal sealed class LinParserTests
         await Assert.That(ok).IsTrue();
         await Assert.That(frame.Length).IsEqualTo(12);
         await Assert.That(frame[4]).IsEqualTo((byte)(8 << 4));
+        await Assert.That(frame[5]).IsEqualTo((byte)0x11);
         await Assert.That(frame[7]).IsEqualTo((byte)0x02);
+    }
+
+    [Test]
+    public async Task TryParseLinErrorV1MaskedIdOmitsParityBits()
+    {
+        byte[] payload = new byte[4];
+        payload[2] = 0x01;
+        payload[3] = 0;
+
+        bool ok = LinParser.TryParseLinErrorV1(payload, BlfConstants.LinErrorSnd, out byte[] frame, out _);
+
+        await Assert.That(ok).IsTrue();
+        await Assert.That(frame[5]).IsEqualTo((byte)0x01);
+        await Assert.That(frame[6]).IsEqualTo((byte)0);
+        await Assert.That(frame[7]).IsEqualTo(BlfConstants.LinErrorSnd);
+    }
+
+    [Test]
+    public async Task TryParseLinErrorV2IdAtOffset37IsMasked()
+    {
+        byte[] payload = new byte[38];
+        payload[37] = 0x11;
+
+        bool ok = LinParser.TryParseLinErrorV2(payload, BlfConstants.LinErrorCrc, out byte[] frame, out _);
+
+        await Assert.That(ok).IsTrue();
+        await Assert.That(frame[5]).IsEqualTo((byte)0x11);
+        await Assert.That(frame[6]).IsEqualTo((byte)0);
+        await Assert.That(frame[7]).IsEqualTo(BlfConstants.LinErrorCrc);
+    }
+
+    [Test]
+    public async Task TryParseLinErrorV2MaskedIdOmitsParityBits()
+    {
+        byte[] payload = new byte[38];
+        payload[37] = 0x01;
+
+        bool ok = LinParser.TryParseLinErrorV2(payload, BlfConstants.LinErrorRcv, out byte[] frame, out _);
+
+        await Assert.That(ok).IsTrue();
+        await Assert.That(frame[5]).IsEqualTo((byte)0x01);
+        await Assert.That(frame[7]).IsEqualTo(BlfConstants.LinErrorRcv);
     }
 
     [Test]
@@ -146,5 +191,39 @@ internal sealed class LinParserTests
         bool ok = LinParser.TryParseLinSleep([0x01, 0x00], out _, out _);
 
         await Assert.That(ok).IsFalse();
+    }
+
+    [Test]
+    public async Task TryParseLinMessageV2ChecksumModelEnhancedSetsDltBits()
+    {
+        byte[] payload = new byte[121];
+        payload[37] = 0x05;
+        payload[38] = 2;
+        payload[39] = 1;
+        payload[112] = 0xAA;
+        payload[113] = 0xBB;
+        payload[120] = 0x42;
+
+        bool ok = LinParser.TryParseLinMessageV2(payload, out byte[] frame, out _);
+
+        await Assert.That(ok).IsTrue();
+        await Assert.That(frame[5]).IsEqualTo((byte)0x05);
+        await Assert.That((byte)(frame[4] & 0x03)).IsEqualTo((byte)2);
+        await Assert.That(frame[6]).IsEqualTo((byte)0x42);
+    }
+
+    [Test]
+    public async Task TryParseLinMessageV2ChecksumModelClassicSetsDltBits()
+    {
+        byte[] payload = new byte[121];
+        payload[37] = 0x05;
+        payload[38] = 0;
+        payload[39] = 0;
+
+        bool ok = LinParser.TryParseLinMessageV2(payload, out byte[] frame, out _);
+
+        await Assert.That(ok).IsTrue();
+        await Assert.That(frame[5]).IsEqualTo((byte)0x05);
+        await Assert.That((byte)(frame[4] & 0x03)).IsEqualTo((byte)1);
     }
 }

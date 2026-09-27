@@ -5,9 +5,10 @@ namespace NetworkInspector.Sources.Blf.Format.Objects;
 /// <summary>
 /// Parses BLF CAN, CAN FD, and CAN XL object payloads into SocketCAN frame bytes.
 ///
-/// Output format is SocketCAN for classic CAN (16 bytes fixed):
+/// Output format is SocketCAN for classic CAN (8 bytes plus the captured data length, 0–8).
+/// DLC 8 is 16 bytes. An RTR frame is 8 bytes: byte 4 still holds the DLC and there is no data tail.
 /// <code>
-///   id(4 BE) + dlc(1) + fd_flags(1=0) + reserved(2) + data(8, zero-padded)
+///   id(4 BE) + dlc(1) + fd_flags(1=0) + reserved(2) + data(0–8)
 /// </code>
 /// SocketCAN FD for CAN FD (8 + actual data length, not padded to 64):
 /// <code>
@@ -70,7 +71,7 @@ internal static class CanParser
     /// </summary>
     private const int _CanFdError64HeaderSize = 44;
 
-    /// <summary>SocketCAN classic frame total size: header(8) + data(8).</summary>
+    /// <summary>SocketCAN error-frame size. Classic data frames are 8 plus the captured length, not this constant.</summary>
     private const int _SocketCanClassicSize = 16;
 
     /// <summary>SocketCAN FD frame header size (before data).</summary>
@@ -95,8 +96,10 @@ internal static class CanParser
     ///   [2]     flags  (bit 0x80 = RTR; TX/NERR/WU unused for reconstruction)
     ///   [3]     dlc (low 4 bits)
     ///   [4..8)  id (u32 LE; bit 31 = EFF)
-    ///   [8..16) data (8 bytes, zero-padded)
+    ///   [8..16) data (8 bytes on the object; the SocketCAN buffer keeps only the captured length)
     /// </code>
+    /// The returned frame is 8 bytes plus the data length for that DLC. RTR keeps the DLC in byte 4
+    /// and omits the data tail, so the frame is 8 bytes.
     /// </summary>
     internal static bool TryParseCanMessage(
         ReadOnlySpan<byte> payload, out byte[] frame, out ushort channel)
@@ -205,12 +208,11 @@ internal static class CanParser
     /// Parses a BLF Type 139 (<c>CAN_XL_CHANNEL_FRAME</c>) payload into SocketCAN XL.
     /// Requires at least <see cref="BlfConstants.CanXlChannelFrameHeaderSize"/> bytes.
     /// Layout: see that constant. Reconstruction uses identifier@12, SDU@16, dataLength@20,
-    /// VCID@26, acceptance@28, flags@48, and payload at 104. Returns <c>false</c> when the
-    /// header is truncated or the XLF flag at offset 48 is clear (classic/FD nested in a
-    /// Type 139 object is not reconstructed).
+    /// VCID@26, acceptance@28, flags@48, and payload at 104. When the XLF flag is clear,
+    /// nested classic (8 bytes plus the data length) or CAN FD frames are reconstructed from FDF/BRS/ESI/RTR.
     /// </summary>
     /// <param name="payload">BLF object payload; length is already bounded by the object header parser.</param>
-    /// <param name="frame">SocketCAN XL bytes (12 + clamped dataLength) on success; empty on failure.</param>
+    /// <param name="frame">SocketCAN XL, FD, or classic bytes on success; empty on failure.</param>
     /// <param name="channel">Channel from payload byte 0, zero-extended.</param>
     internal static bool TryParseCanXlChannelFrame(
         ReadOnlySpan<byte> payload, out byte[] frame, out ushort channel)
@@ -231,15 +233,16 @@ internal static class CanParser
         byte vcid = payload[26];
         uint acceptanceField = BinaryPrimitives.ReadUInt32LittleEndian(payload[28..]);
         uint flags = BinaryPrimitives.ReadUInt32LittleEndian(payload[48..]);
-
-        // Only the XL reconstruction is implemented. Nested classic/FD in Type 139 is not reconstructed.
-        if ((flags & BlfConstants.BlfCanXlFlagXlf) == 0)
-        {
-            return false;
-        }
-
         int available = payload.Length - BlfConstants.CanXlChannelFrameHeaderSize;
         int actualDataLen = Math.Min((int)declaredDataLength, available);
+
+        if ((flags & BlfConstants.BlfCanXlFlagXlf) == 0)
+        {
+            // Pass the declared length. Classic rejects a payload that does not contain
+            // those data bytes. The CAN FD branch clamps to the bytes that are present.
+            return _TryParseNestedClassicOrFdFromCanXl(
+                payload, flags, frameIdentifier, declaredDataLength, out frame);
+        }
 
         byte socketFlags = BlfConstants.SocketCanXlXlf;
         if ((flags & BlfConstants.BlfCanXlFlagSec) != 0)
@@ -573,15 +576,18 @@ internal static class CanParser
             dataLen = 0;
         }
 
-        // SocketCAN classic frame: id(4 BE) + dlc(1) + fd_flags(0 for classic) + reserved(2) + data(8)
-        frame = new byte[_SocketCanClassicSize];
+        // Captured length is the header plus the DLC's data bytes. Do not keep a zero tail
+        // out to 16. DLC 8 is still 16 bytes. RTR has copyLen 0, so the frame stays 8 bytes.
+        // copyLen is at most 8, and _CanMessageMinSize is 16, so the object already contains
+        // those data bytes. A shorter object returned false above.
+        int copyLen = Math.Min((int)dataLen, _CanMaxDataLength);
+        frame = new byte[8 + copyLen];
         BinaryPrimitives.WriteUInt32BigEndian(frame, socketCanId);
         frame[4] = dlc;
-        // frame[5] = 0 (fd_flags = classic CAN)
-        // frame[6..7] = 0 (reserved)
-
-        int copyLen = Math.Min((int)dataLen, _CanMaxDataLength);
-        payload.Slice(8, copyLen).CopyTo(frame.AsSpan(8));
+        if (copyLen > 0)
+        {
+            payload.Slice(8, copyLen).CopyTo(frame.AsSpan(8));
+        }
 
         return true;
     }
@@ -612,6 +618,74 @@ internal static class CanParser
         byte[] errorFrame = new byte[_SocketCanClassicSize];
         BinaryPrimitives.WriteUInt32BigEndian(errorFrame, socketCanErrId);
         return errorFrame;
+    }
+
+    /// <summary>
+    /// Reconstructs classic or CAN FD SocketCAN bytes from a Type 139 object whose XLF flag is clear.
+    /// EFF is set when the 29-bit identifier exceeds 11 bits. RTR applies only to classic frames.
+    /// </summary>
+    private static bool _TryParseNestedClassicOrFdFromCanXl(
+        ReadOnlySpan<byte> payload,
+        uint flags,
+        uint frameIdentifier,
+        int actualDataLen,
+        out byte[] frame)
+    {
+        bool isCanFd = (flags & BlfConstants.BlfCanXlFlagFdf) != 0;
+        uint socketCanId = frameIdentifier & 0x1FFF_FFFFu;
+        if (socketCanId > 0x7FFu)
+        {
+            socketCanId |= BlfConstants.SocketCanEff;
+        }
+
+        if (isCanFd)
+        {
+            // Same captured length as before: only the bytes present after the header, capped at 64.
+            int availableFd = payload.Length - BlfConstants.CanXlChannelFrameHeaderSize;
+            actualDataLen = Math.Min(actualDataLen, availableFd);
+            actualDataLen = Math.Min(actualDataLen, _CanFdMaxDataLength);
+            byte socketFdFlags = BlfConstants.SocketCanFdFdf;
+            if ((flags & BlfConstants.BlfCanXlFlagBrs) != 0)
+            {
+                socketFdFlags |= BlfConstants.SocketCanFdBrs;
+            }
+
+            if ((flags & BlfConstants.BlfCanXlFlagEsi) != 0)
+            {
+                socketFdFlags |= BlfConstants.SocketCanFdEsi;
+            }
+
+            frame = _BuildSocketCanFdFrame(
+                socketCanId,
+                socketFdFlags,
+                payload.Slice(BlfConstants.CanXlChannelFrameHeaderSize, actualDataLen));
+            return true;
+        }
+
+        if ((flags & BlfConstants.BlfCanXlFlagRemoteFrame) != 0)
+        {
+            socketCanId |= BlfConstants.SocketCanRtr;
+            actualDataLen = 0;
+        }
+
+        // Same captured-length rule as Type 1: 8 plus the data bytes. A declared length
+        // that overruns the payload is a failure, not a zero-padded 16-byte buffer.
+        actualDataLen = Math.Min(actualDataLen, _CanMaxDataLength);
+        if (payload.Length < BlfConstants.CanXlChannelFrameHeaderSize + actualDataLen)
+        {
+            frame = [];
+            return false;
+        }
+
+        frame = new byte[8 + actualDataLen];
+        BinaryPrimitives.WriteUInt32BigEndian(frame, socketCanId);
+        frame[4] = (byte)actualDataLen;
+        if (actualDataLen > 0)
+        {
+            payload.Slice(BlfConstants.CanXlChannelFrameHeaderSize, actualDataLen).CopyTo(frame.AsSpan(8));
+        }
+
+        return true;
     }
 
     #endregion

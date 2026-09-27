@@ -110,6 +110,55 @@ internal sealed class EthernetParserTests
     }
 
     [Test]
+    public async Task Type120_FrameLengthZero_ReturnsFalse()
+    {
+        byte[] payload = new byte[32 + 20];
+        BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(22), 0);
+
+        bool ok = EthernetParser.TryParseType120(payload, out _, out _);
+
+        await Assert.That(ok).IsFalse();
+    }
+
+    [Test]
+    public async Task Type120_FrameLengthLongerThanPayload_ReturnsFalse()
+    {
+        byte[] payload = new byte[32 + 20];
+        BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(22), 64);
+
+        bool ok = EthernetParser.TryParseType120(payload, out _, out _);
+
+        await Assert.That(ok).IsFalse();
+    }
+
+    [Test]
+    public async Task Type120_TrailingAlignmentZeros_AreNotPartOfTheFrame()
+    {
+        byte[] payload = new byte[32 + 16];
+        BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(22), 14);
+        payload.AsSpan(32, 6).Fill(0xAA);
+        payload.AsSpan(38, 6).Fill(0xBB);
+        payload[44] = 0x08;
+        payload[45] = 0x00;
+
+        bool ok = EthernetParser.TryParseType120(payload, out ReadOnlyMemory<byte> frame, out _);
+
+        await Assert.That(ok).IsTrue();
+        await Assert.That(frame.Length).IsEqualTo(14);
+    }
+
+    [Test]
+    public async Task Type102_FrameLengthZero_ReturnsFalse()
+    {
+        byte[] payload = new byte[20 + 20];
+        BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(12), 0);
+
+        bool ok = EthernetParser.TryParseType102(payload, out _, out _);
+
+        await Assert.That(ok).IsFalse();
+    }
+
+    [Test]
     public async Task Type120_ShortHeader_ReturnsFalse()
     {
         bool ok = EthernetParser.TryParseType120(new byte[31], out _, out _);

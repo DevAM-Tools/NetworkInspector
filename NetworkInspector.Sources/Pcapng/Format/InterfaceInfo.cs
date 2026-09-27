@@ -10,7 +10,10 @@ internal sealed class InterfaceInfo
 {
     #region Properties
 
-    /// <summary>Resolved link type, or null if the raw value is unknown.</summary>
+    /// <summary>
+    /// Resolved link type, or null when <see cref="RawLinkType"/> is not a defined <see cref="Core.LinkType"/> member.
+    /// Unknown DLTs do not produce frames; the packet is skipped.
+    /// </summary>
     internal LinkType? LinkType
     {
         get; private set;
@@ -34,8 +37,8 @@ internal sealed class InterfaceInfo
     /// </summary>
     internal ulong TimestampResolution { get; private set; } = PcapConstants.TsResolMicroseconds;
 
-    /// <summary>Offset applied to all packet timestamps (in timestamp units).</summary>
-    internal long TimestampOffset
+    /// <summary>Seconds added to each packet timestamp (PCAPNG if_tsoffset). Default 0.</summary>
+    internal long TimestampOffsetSeconds
     {
         get; private set;
     }
@@ -76,6 +79,15 @@ internal sealed class InterfaceInfo
         get; private set;
     }
 
+    /// <summary>
+    /// False when <c>if_tsresol</c> is a decimal exponent above 19.
+    /// Packets on this interface are skipped; the clock is not guessed.
+    /// </summary>
+    internal bool HasSupportedTimestampResolution
+    {
+        get; private set;
+    } = true;
+
     #endregion
 
     #region Constructors
@@ -100,40 +112,50 @@ internal sealed class InterfaceInfo
     /// Sets the timestamp resolution from a raw if_tsresol option byte.
     /// Bit 7 = 0 → resolution is 10^value (e.g. 6 → microseconds).
     /// Bit 7 = 1 → resolution is 2^(value &amp; 0x7F) (binary resolution).
+    /// Binary exponents above 63 do not fit in <see cref="ulong"/> and are rejected.
+    /// A decimal exponent above 19 does not fit in <see cref="ulong"/> and is rejected.
     /// </summary>
-    internal void SetTimestampResolution(byte rawResolution)
+    /// <returns>False when the exponent does not fit. The interface is then marked unsupported.</returns>
+    internal bool TrySetTimestampResolution(byte rawResolution)
     {
         if ((rawResolution & 0x80) != 0)
         {
-            // Binary power: 2^(value & 0x7F)
+            // Binary power: 2^(value & 0x7F). A ulong shift of 64 or more wraps to 1,
+            // so exponents 64..127 are rejected instead of stored as 2^63.
             int exponent = rawResolution & 0x7F;
-            TimestampResolution = 1UL << exponent;
-        }
-        else
-        {
-            // Decimal power: 10^value.
-            // 10^19 ≈ 1e19 < 2^64 ≈ 1.84e19; 10^20 > 2^64, so exponent > 19 overflows ulong.
-            // Cap at 19 and fall back to nanosecond resolution (10^9) for higher values to
-            // prevent silent ulong wrap-around that would produce nonsensical timestamps.
-            const int MaxDecimalExponent = 19;
-            if (rawResolution > MaxDecimalExponent)
+            if (exponent > 63)
             {
-                // Exponent is too large for ulong; fall back to nanosecond resolution (10^9).
-                TimestampResolution = PcapConstants.TsResolNanoseconds;
-                return;
+                HasSupportedTimestampResolution = false;
+                return false;
             }
 
-            ulong resolution = 1;
-            for (int i = 0; i < rawResolution; i++)
-            {
-                resolution *= 10;
-            }
-            TimestampResolution = resolution;
+            TimestampResolution = 1UL << exponent;
+            HasSupportedTimestampResolution = true;
+            return true;
         }
+
+        // Decimal power: 10^value.
+        // 10^19 fits in ulong. 10^20 does not. Do not substitute another clock.
+        const int MaxDecimalExponent = 19;
+        if (rawResolution > MaxDecimalExponent)
+        {
+            HasSupportedTimestampResolution = false;
+            return false;
+        }
+
+        ulong resolution = 1;
+        for (int i = 0; i < rawResolution; i++)
+        {
+            resolution *= 10;
+        }
+
+        TimestampResolution = resolution;
+        HasSupportedTimestampResolution = true;
+        return true;
     }
 
-    /// <summary>Sets the timestamp offset.</summary>
-    internal void SetTimestampOffset(long offset) => TimestampOffset = offset;
+    /// <summary>Sets the timestamp offset in seconds (PCAPNG if_tsoffset).</summary>
+    internal void SetTimestampOffset(long offsetSeconds) => TimestampOffsetSeconds = offsetSeconds;
 
     /// <summary>Sets the interface name.</summary>
     internal void SetName(string name) => Name = name;
@@ -155,55 +177,124 @@ internal sealed class InterfaceInfo
 
     /// <summary>
     /// Converts a raw 64-bit PCAPNG timestamp to nanoseconds since epoch.
-    /// Applies the interface's timestamp resolution and offset.
+    /// Converts interface ticks first, then adds <see cref="TimestampOffsetSeconds"/> as whole seconds.
     /// </summary>
     /// <param name="rawTimestamp">Raw 64-bit timestamp from the packet block.</param>
     /// <returns>Timestamp in nanoseconds since Unix epoch.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal long TimestampToNanos(ulong rawTimestamp)
     {
-        // Apply offset first (in timestamp units)
-        long adjusted = (long)rawTimestamp + TimestampOffset;
-
-        // Convert to nanoseconds based on resolution
-        // Formula: nanos = adjusted * (1_000_000_000 / resolution)
-        // To avoid overflow for high-resolution sources, we use the equivalent:
-        // nanos = adjusted / resolution * 1_000_000_000 + (adjusted % resolution) * 1_000_000_000 / resolution
-        if (TimestampResolution == PcapConstants.TsResolNanoseconds)
+        long nanos = _TicksToNanos(rawTimestamp);
+        if (TimestampOffsetSeconds == 0)
         {
-            // Already nanoseconds — no conversion needed
-            return adjusted;
+            return nanos;
         }
-        if (TimestampResolution == PcapConstants.TsResolMicroseconds)
+
+        const long nsPerSecond = 1_000_000_000L;
+        if (TimestampOffsetSeconds > long.MaxValue / nsPerSecond)
+        {
+            return long.MaxValue;
+        }
+
+        if (TimestampOffsetSeconds < long.MinValue / nsPerSecond)
+        {
+            return long.MinValue;
+        }
+
+        return _SaturatingAdd(nanos, TimestampOffsetSeconds * nsPerSecond);
+    }
+
+    /// <summary>
+    /// Converts raw interface ticks to nanoseconds without applying if_tsoffset.
+    /// The tick count stays unsigned until the nanosecond value is known to fit in <see cref="long"/>.
+    /// A tick count above <see cref="long.MaxValue"/> saturates; it does not become negative.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private long _TicksToNanos(ulong rawTimestamp)
+    {
+        ulong resolution = TimestampResolution;
+        if (resolution == 0)
+        {
+            return 0;
+        }
+
+        const ulong nsPerSecond = 1_000_000_000UL;
+
+        if (resolution == PcapConstants.TsResolNanoseconds)
+        {
+            if (rawTimestamp > (ulong)long.MaxValue)
+            {
+                return long.MaxValue;
+            }
+
+            return (long)rawTimestamp;
+        }
+
+        if (resolution == PcapConstants.TsResolMicroseconds)
         {
             // Microseconds → nanoseconds: multiply by 1000.
-            // Use checked to detect captures spanning more than ~292 years from epoch.
-            // On overflow, saturate to long.MaxValue rather than propagating an exception
-            // (callers are not prepared for TimestampToNanos to throw).
-            try
+            if (rawTimestamp > (ulong)(long.MaxValue / 1000))
             {
-                return checked(adjusted * 1_000);
+                return long.MaxValue;
             }
-            catch (OverflowException)
-            {
-                return adjusted < 0 ? long.MinValue : long.MaxValue;
-            }
+
+            return (long)rawTimestamp * 1000L;
         }
 
-        // General case — split to avoid overflow
-        long wholeSeconds = adjusted / (long)TimestampResolution;
-        long remainder = adjusted % (long)TimestampResolution;
+        // nanos = wholeSeconds * 1e9 + (remainder * 1e9 / resolution).
+        // Remainder uses a widened product when resolution * 1e9 would wrap a ulong.
+        ulong wholeSeconds = rawTimestamp / resolution;
+        ulong remainder = rawTimestamp % resolution;
+        if (wholeSeconds > (ulong)(long.MaxValue / (long)nsPerSecond))
+        {
+            return long.MaxValue;
+        }
 
-        // Guard against overflow in the final nanosecond accumulation.
-        // wholeSeconds * 1_000_000_000L can overflow for extreme timestamps.
-        try
+        long fromSeconds = (long)wholeSeconds * (long)nsPerSecond;
+        ulong remNs = _RemainderToNanos(remainder, resolution, nsPerSecond);
+        if ((ulong)fromSeconds > (ulong)long.MaxValue - remNs)
         {
-            return checked(wholeSeconds * 1_000_000_000L + remainder * 1_000_000_000L / (long)TimestampResolution);
+            return long.MaxValue;
         }
-        catch (OverflowException)
+
+        return fromSeconds + (long)remNs;
+    }
+
+    /// <summary>
+    /// Converts the fractional tick count to nanoseconds.
+    /// Uses <see cref="UInt128"/> when <c>remainder * nsPerSecond</c> does not fit in <see cref="ulong"/>.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static ulong _RemainderToNanos(ulong remainder, ulong resolution, ulong nsPerSecond)
+    {
+        if (remainder == 0)
         {
-            return adjusted < 0 ? long.MinValue : long.MaxValue;
+            return 0;
         }
+
+        if (resolution <= ulong.MaxValue / nsPerSecond || remainder <= ulong.MaxValue / nsPerSecond)
+        {
+            return remainder * nsPerSecond / resolution;
+        }
+
+        return (ulong)((UInt128)remainder * nsPerSecond / resolution);
+    }
+
+    /// <summary>Adds two longs, saturating at <see cref="long.MinValue"/> / <see cref="long.MaxValue"/>.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static long _SaturatingAdd(long left, long right)
+    {
+        if (right > 0 && left > long.MaxValue - right)
+        {
+            return long.MaxValue;
+        }
+
+        if (right < 0 && left < long.MinValue - right)
+        {
+            return long.MinValue;
+        }
+
+        return left + right;
     }
 
     #endregion

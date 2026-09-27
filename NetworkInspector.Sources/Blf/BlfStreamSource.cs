@@ -83,7 +83,7 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
     private FrameInterfaceRegistry? _Registry;
 
     /// <summary>Maps (objectType, channel) → FrameInterfaceId.</summary>
-    private readonly Dictionary<(uint, ushort), FrameInterfaceId> _InterfaceMap = [];
+    private readonly Dictionary<(uint ObjectType, ushort Channel, bool HasHardwareChannel, ushort HardwareChannel), FrameInterfaceId> _InterfaceMap = [];
 
     /// <summary>Discovered channel names from AppText objects.</summary>
     private readonly Dictionary<(byte BusType, byte Channel), string> _ChannelNames = [];
@@ -726,8 +726,9 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
         // Enforce maximum frame count — FrameId is array-index-based
         ArrayIndexIdRange.ThrowIfInvalidNextIndex(_FrameIndex, "frame");
 
-        LinkType linkType = _GetLinkTypeForObjectType(frameResult.ObjectType);
-        FrameInterfaceId interfaceId = _GetOrRegisterInterface(frameResult.ObjectType, frameResult.Channel);
+        LinkType linkType = BlfFrameDispatcher.LinkTypeForObject(frameResult.ObjectType);
+        FrameInterfaceId interfaceId = _GetOrRegisterInterface(
+            frameResult.ObjectType, frameResult.Channel, frameResult.HardwareChannel);
 
         int frameId = _FrameIndex++;
         ParseResult<Frame> createResult = Frame.Create(
@@ -790,9 +791,12 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
     /// Gets or registers a frame interface for the given object type and channel.
     /// Uses discovered channel names from AppText when available.
     /// </summary>
-    private FrameInterfaceId _GetOrRegisterInterface(uint objectType, ushort channel)
+    private FrameInterfaceId _GetOrRegisterInterface(uint objectType, ushort channel, ushort? hardwareChannel)
     {
-        (uint, ushort) key = (objectType, channel);
+        bool hasHardwareChannel = hardwareChannel.HasValue;
+        ushort hardwareChannelValue = hardwareChannel ?? 0;
+        (uint ObjectType, ushort Channel, bool HasHardwareChannel, ushort HardwareChannel) key =
+            (objectType, channel, hasHardwareChannel, hardwareChannelValue);
 
         if (_InterfaceMap.TryGetValue(key, out FrameInterfaceId existingId))
         {
@@ -807,16 +811,20 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
         string busName = _GetBusName(objectType);
         string interfaceName = _TryGetChannelName(objectType, channel)
             ?? $"{busName} {channel}";
-        LinkType linkType = _GetLinkTypeForObjectType(objectType);
+        LinkType linkType = BlfFrameDispatcher.LinkTypeForObject(objectType);
+        Dictionary<string, object> properties = new()
+        {
+            [BlfInterfacePropertyKeys.Channel] = (long)channel,
+            [BlfInterfacePropertyKeys.ObjectType] = objectType,
+            [BlfInterfacePropertyKeys.BusType] = _GetBusTypeForObjectType(objectType),
+        };
+        if (hasHardwareChannel)
+        {
+            properties[BlfInterfacePropertyKeys.HardwareChannel] = hardwareChannelValue;
+        }
 
         FrameInterfaceId id = _Registry.Register(
-            _SourceId, interfaceName, null, linkType,
-            new Dictionary<string, object>
-            {
-                [FrameInterfacePropertyKeys.BlfChannel] = (long)channel,
-                [FrameInterfacePropertyKeys.BlfObjectType] = objectType,
-                [FrameInterfacePropertyKeys.BlfBusType] = _GetBusTypeForObjectType(objectType),
-            });
+            _SourceId, interfaceName, null, linkType, properties);
         _InterfaceMap[key] = id;
         return id;
     }
@@ -846,37 +854,6 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
 
         return name;
     }
-
-    /// <summary>
-    /// Returns the link type for a given BLF object type.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static LinkType _GetLinkTypeForObjectType(uint objectType) => objectType switch
-    {
-        BlfConstants.ObjTypeEthernetFrame or BlfConstants.ObjTypeEthernetFrameEx
-            or BlfConstants.ObjTypeEthernetRxError => LinkType.Ethernet,
-
-        BlfConstants.ObjTypeCanMessage or BlfConstants.ObjTypeCanError
-            or BlfConstants.ObjTypeCanOverload or BlfConstants.ObjTypeCanErrorExt
-            or BlfConstants.ObjTypeCanMessage2 or BlfConstants.ObjTypeCanFdMessage
-            or BlfConstants.ObjTypeCanFdMessage64 or BlfConstants.ObjTypeCanFdError64
-            or BlfConstants.ObjTypeCanXlChannelFrame
-            => LinkType.CanSocketcan,
-
-        BlfConstants.ObjTypeLinMessage or BlfConstants.ObjTypeLinMessage2
-            or BlfConstants.ObjTypeLinCrcError or BlfConstants.ObjTypeLinCrcError2
-            or BlfConstants.ObjTypeLinRcvError or BlfConstants.ObjTypeLinRcvError2
-            or BlfConstants.ObjTypeLinSndError or BlfConstants.ObjTypeLinSndError2
-            or BlfConstants.ObjTypeLinSleep or BlfConstants.ObjTypeLinWakeup
-            or BlfConstants.ObjTypeLinWakeup2
-            => LinkType.Lin,
-
-        BlfConstants.ObjTypeFlexRayData or BlfConstants.ObjTypeFlexRayMessage
-            or BlfConstants.ObjTypeFlexRayRcvMessage or BlfConstants.ObjTypeFlexRayRcvMessageEx
-            => LinkType.Flexray,
-
-        _ => LinkType.Null,
-    };
 
     /// <summary>
     /// Returns a bus name string for interface naming.

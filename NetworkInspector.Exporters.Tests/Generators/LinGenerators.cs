@@ -4,8 +4,8 @@ namespace NetworkInspector.Exporters.Tests.Generators;
 
 /// <summary>
 /// Builds DLT_LIN (link type 212) frame bytes for exporter tests.
-/// Layout matches Wireshark <c>packet-lin.h</c> / <c>blf_read_linmessage</c>:
-/// 8-byte header, then data padded to 4 or 8 bytes.
+/// 8-byte header, then data padded to 4 or 8 bytes. Byte 5 is the 6-bit frame id
+/// (no protected-ID parity). Byte 4 bits 1-0 default to classic checksum type (1).
 /// </summary>
 internal static class LinGenerators
 {
@@ -19,15 +19,20 @@ internal static class LinGenerators
     /// <param name="data">Payload data bytes (up to 8).</param>
     /// <param name="checksum">LIN checksum byte.</param>
     /// <param name="errors">Error flags byte (0 = no errors).</param>
+    /// <param name="checksumTypeBits">DLT checksum-type bits 1-0 (1 = classic, 2 = enhanced).</param>
     internal static byte[] BuildLinFrame(
-        byte frameId, ReadOnlySpan<byte> data, byte checksum = 0, byte errors = 0)
+        byte frameId,
+        ReadOnlySpan<byte> data,
+        byte checksum = 0,
+        byte errors = 0,
+        byte checksumTypeBits = 1)
     {
         int dataLength = Math.Min(data.Length, _MaxLinDataLength);
         int dataPad = dataLength <= 4 ? 4 : 8;
         byte[] frame = new byte[8 + dataPad];
         frame[0] = 1;
-        frame[4] = (byte)(dataLength << 4);
-        frame[5] = ComputePid(frameId);
+        frame[4] = (byte)((dataLength << 4) | (checksumTypeBits & 0x03));
+        frame[5] = (byte)(frameId & 0x3F);
         frame[6] = checksum;
         frame[7] = errors;
         if (dataLength > 0)
@@ -36,22 +41,5 @@ internal static class LinGenerators
         }
 
         return frame;
-    }
-
-    /// <summary>
-    /// Computes the LIN PID (Protected Identifier) from a 6-bit frame ID.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal static byte ComputePid(byte id)
-    {
-        int frameId = id & 0x3F;
-
-        // P0: even parity of bits 0,1,2,4
-        int p0 = ((frameId >> 0) ^ (frameId >> 1) ^ (frameId >> 2) ^ (frameId >> 4)) & 1;
-
-        // P1: inverted even parity of bits 1,3,4,5
-        int p1 = (~((frameId >> 1) ^ (frameId >> 3) ^ (frameId >> 4) ^ (frameId >> 5))) & 1;
-
-        return (byte)(frameId | (p0 << 6) | (p1 << 7));
     }
 }

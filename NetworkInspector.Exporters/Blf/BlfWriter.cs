@@ -44,12 +44,6 @@ internal sealed class BlfWriter
     /// </summary>
     private const int _InitialContainerBufferSize = 256 * 1024;
 
-    /// <summary>BLF timestamp resolution flag value: 10 µs units.</summary>
-    private const uint _TimestampResolution10Us = BlfConstants.TimestampResolution10Us;
-
-    /// <summary>Nanoseconds per 10 µs tick (the BLF timestamp unit).</summary>
-    private const long _NanosPerTick = 10_000;
-
     private readonly Stream _Stream;
     private long _StartNs;
     private readonly CompressionLevel _Compression;
@@ -97,14 +91,10 @@ internal sealed class BlfWriter
         CompressionLevel compression = CompressionLevel.Optimal)
     {
         _Stream = stream;
-        // The BLF file header stores `start_date` as a Windows SYSTEMTIME with millisecond
-        // precision. The per-object `timestamp` field is a 10 µs tick offset relative to
-        // `start_date`. Readers reconstruct each
-        // frame's absolute time as `start_date_ns + relative_ticks * 10 µs`. If we kept
-        // sub-millisecond precision in `_StartNs` it would silently disappear in the file
-        // header and never be added back via the relative ticks, shifting every frame by
-        // up to ~1 ms. Round down to ms here so the relative-tick computation absorbs the
-        // residual sub-ms offset and the round-trip is exact.
+        // start_date is a SYSTEMTIME with millisecond precision. The object timestamp is
+        // nanoseconds relative to that millisecond anchor (flags word 2). Flooring _StartNs
+        // keeps the sub-millisecond residual in the object field. Leaving it on _StartNs
+        // would drop that residual, because the header cannot store it.
         _StartNs = (startNs / 1_000_000L) * 1_000_000L;
         _Compression = compression;
         _ContainerBuffer = new PooledBuffer(_InitialContainerBufferSize);
@@ -194,21 +184,19 @@ internal sealed class BlfWriter
         long timestampNs,
         ReadOnlySpan<byte> payload)
     {
-        // Convert absolute Unix nanos to relative 10 µs ticks
+        // Nanoseconds relative to the millisecond start_date anchor. A negative delta
+        // is not representable in the unsigned object field, so it clamps to 0.
         long relativeNs = timestampNs - _StartNs;
         if (relativeNs < 0)
         {
-            // Record the non-monotonic event and clamp to 0 so the output
-            // remains a valid BLF file (negative tick offsets are not representable).
-            // Callers can poll NonMonotonicTimestampCount to surface a diagnostic.
             _NonMonotonicTimestampCount++;
             relativeNs = 0;
         }
-        ulong blfTimestamp = (ulong)(relativeNs / _NanosPerTick);
+        ulong blfTimestamp = (ulong)relativeNs;
 
         // Calculate object sizes with 4-byte alignment
         int rawObjectSize = _ObjectHeaderTotalSize + payload.Length;
-        int padding = (4 - (rawObjectSize & 3)) & 3;
+        int padding = BlfConstants.AlignmentPaddingByteCount(rawObjectSize);
         int totalObjectSize = rawObjectSize + padding;
 
         // If adding this object would exceed the container limit, flush first.
@@ -232,10 +220,10 @@ internal sealed class BlfWriter
         // -- Log object header V1 (16 bytes) --
         //   uint32 flags (4) | uint16 client_index (2) | uint16 object_version (2) | uint64 object_timestamp (8)
         // Timestamp is last. A timestamp-first layout cannot be reconstructed by BLF readers.
-        BinaryPrimitives.WriteUInt32LittleEndian(buf.Slice(16), _TimestampResolution10Us);      // flags (resolution = 10 µs)
+        BinaryPrimitives.WriteUInt32LittleEndian(buf.Slice(16), BlfConstants.TimestampResolution1Ns); // flags = 1 ns
         BinaryPrimitives.WriteUInt16LittleEndian(buf.Slice(20), 0);                            // client_index
         BinaryPrimitives.WriteUInt16LittleEndian(buf.Slice(22), objectVersion);                // object_version
-        BinaryPrimitives.WriteUInt64LittleEndian(buf.Slice(24), blfTimestamp);                 // object_timestamp (10 µs units)
+        BinaryPrimitives.WriteUInt64LittleEndian(buf.Slice(24), blfTimestamp);                 // object_timestamp (nanoseconds)
 
         // -- Payload --
         payload.CopyTo(buf.Slice(_ObjectHeaderTotalSize));
@@ -298,8 +286,8 @@ internal sealed class BlfWriter
         const int containerHeaderSize = BlfConstants.ContainerHeaderSize;         // 16
         const int containerHeaderTotal = blockHeaderSize + containerHeaderSize;   // 32
         int totalLength = containerHeaderTotal + compressedLen;
-        int paddedLength = (totalLength + 3) & ~3;
-        int containerPadding = paddedLength - totalLength;
+        int containerPadding = BlfConstants.AlignmentPaddingByteCount(totalLength);
+        int paddedLength = totalLength + containerPadding;
 
         // Write 32-byte combined header: block(16) + container(16)
         Span<byte> headerBuf = stackalloc byte[containerHeaderTotal];
@@ -346,7 +334,7 @@ internal sealed class BlfWriter
         // uncompressed-equivalent length is 32 (block + container header) + raw payload,
         // padded to 4-byte alignment.
         int uncompressedTotal = containerHeaderTotal + (int)uncompressedSize;
-        int uncompressedPadded = (uncompressedTotal + 3) & ~3;
+        int uncompressedPadded = uncompressedTotal + BlfConstants.AlignmentPaddingByteCount(uncompressedTotal);
         _UncompressedBytesWritten += uncompressedPadded;
 
         _ContainerBuffer.Reset();

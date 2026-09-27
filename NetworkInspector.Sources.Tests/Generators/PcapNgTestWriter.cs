@@ -38,17 +38,27 @@ internal sealed class PcapNgTestWriter : IDisposable
     /// <param name="linkType">Link-layer type for this interface.</param>
     /// <param name="nanosecondResolution">If true, timestamps use nanosecond resolution (default: microseconds).</param>
     /// <param name="snapLen">Max captured length per frame.</param>
+    /// <param name="name">Optional IDB if_name.</param>
+    /// <param name="timestampOffsetSeconds">Optional IDB if_tsoffset in seconds.</param>
+    /// <param name="rawLinkType">When set, written as the IDB link type instead of <paramref name="linkType"/>.</param>
+    /// <param name="rawTimestampResolution">When set, written as the raw <c>if_tsresol</c> byte.</param>
     internal uint AddInterface(
         LinkType linkType = LinkType.Ethernet,
         bool nanosecondResolution = false,
-        uint snapLen = 65535)
+        uint snapLen = 65535,
+        string? name = null,
+        long timestampOffsetSeconds = 0,
+        ushort? rawLinkType = null,
+        byte? rawTimestampResolution = null)
     {
         uint interfaceId = (uint)_TsResolutions.Count;
-        byte tsResolution = nanosecondResolution ? (byte)9 : (byte)6;
-        ulong divisor = _Pow10(tsResolution);
+        byte tsResolution = rawTimestampResolution ?? (nanosecondResolution ? (byte)9 : (byte)6);
+        // Exponents above 19 do not fit in ulong. The reader rejects them; the writer only needs a divisor for the test clock.
+        ulong divisor = tsResolution <= 19 ? _Pow10(tsResolution) : 1UL;
         _TsResolutions.Add(divisor);
 
-        _WriteInterfaceDescriptionBlock(linkType, snapLen, tsResolution);
+        ushort linkTypeCode = rawLinkType ?? (ushort)linkType;
+        _WriteInterfaceDescriptionBlock(linkTypeCode, snapLen, tsResolution, name, timestampOffsetSeconds);
         return interfaceId;
     }
 
@@ -58,7 +68,11 @@ internal sealed class PcapNgTestWriter : IDisposable
     /// <param name="interfaceId">Interface this frame was captured on.</param>
     /// <param name="timestampNanos">Timestamp in nanoseconds since Unix epoch.</param>
     /// <param name="data">Raw frame data.</param>
-    internal void WriteFrame(uint interfaceId, long timestampNanos, ReadOnlySpan<byte> data)
+    /// <param name="originalLength">
+    /// EPB orig_len. When omitted, equals captured length.
+    /// Readers ignore this field; it exists so tests can prove captured-length-only behavior.
+    /// </param>
+    internal void WriteFrame(uint interfaceId, long timestampNanos, ReadOnlySpan<byte> data, uint? originalLength = null)
     {
         ulong divisor = interfaceId < (uint)_TsResolutions.Count
             ? _TsResolutions[(int)interfaceId]
@@ -73,6 +87,7 @@ internal sealed class PcapNgTestWriter : IDisposable
         uint tsLow = (uint)tsUnits;
 
         uint capturedLen = (uint)data.Length;
+        uint origLen = originalLength ?? capturedLen;
         int paddedLen = (data.Length + 3) & ~3;
 
         // Block total length: 32 (header+fields) + padded data
@@ -85,7 +100,7 @@ internal sealed class PcapNgTestWriter : IDisposable
         BinaryPrimitives.WriteUInt32LittleEndian(header[12..], tsHigh);
         BinaryPrimitives.WriteUInt32LittleEndian(header[16..], tsLow);
         BinaryPrimitives.WriteUInt32LittleEndian(header[20..], capturedLen);
-        BinaryPrimitives.WriteUInt32LittleEndian(header[24..], capturedLen); // original length
+        BinaryPrimitives.WriteUInt32LittleEndian(header[24..], origLen);
         BinaryPrimitives.WriteUInt32LittleEndian(header[28..], blockLen);    // trailing block len
 
         _Stream.Write(header[..28]);
@@ -106,9 +121,10 @@ internal sealed class PcapNgTestWriter : IDisposable
         _Stream.Write(trailer);
     }
 
-    /// <summary>
-    /// Returns the complete PcapNG file as a byte array.
-    /// </summary>
+    /// <summary>Appends an already-serialized PCAPNG block.</summary>
+    internal void WriteRawBlock(ReadOnlySpan<byte> block) => _Stream.Write(block);
+
+    /// <summary>Returns the complete PcapNG file as a byte array.</summary>
     internal byte[] Build() => _Stream.ToArray();
 
     /// <summary>
@@ -135,34 +151,58 @@ internal sealed class PcapNgTestWriter : IDisposable
         _Stream.Write(block);
     }
 
-    private void _WriteInterfaceDescriptionBlock(LinkType linkType, uint snapLen, byte tsResolution)
+    private void _WriteInterfaceDescriptionBlock(
+        ushort linkType,
+        uint snapLen,
+        byte tsResolution,
+        string? name,
+        long timestampOffsetSeconds)
     {
-        // Options: if_tsresol (code 9, length 1, padded to 4) + opt_endofopt (4)
-        // Options size: 4 (code+len) + 4 (value+padding) + 4 (endofopt) = 12
-        // But standard: code(2)+len(2)+value(1)+padding(3) + endofopt(4) = 12
-        int optionsLen = 12;
-        uint blockLen = (uint)(20 + optionsLen);
+        using MemoryStream options = new();
+        if (name is not null)
+        {
+            byte[] nameBytes = Encoding.UTF8.GetBytes(name);
+            _WriteOption(options, 2, nameBytes);
+        }
 
+        _WriteOption(options, 9, [tsResolution]);
+
+        if (timestampOffsetSeconds != 0)
+        {
+            Span<byte> offsetBytes = stackalloc byte[8];
+            BinaryPrimitives.WriteInt64LittleEndian(offsetBytes, timestampOffsetSeconds);
+            _WriteOption(options, 14, offsetBytes);
+        }
+
+        // opt_endofopt
+        options.Write(stackalloc byte[4]);
+
+        byte[] optionBytes = options.ToArray();
+        uint blockLen = (uint)(20 + optionBytes.Length);
         byte[] block = new byte[blockLen];
         BinaryPrimitives.WriteUInt32LittleEndian(block, _IdbType);
         BinaryPrimitives.WriteUInt32LittleEndian(block.AsSpan(4), blockLen);
-        BinaryPrimitives.WriteUInt16LittleEndian(block.AsSpan(8), (ushort)linkType);
-        // reserved 2 bytes at offset 10 (already zero)
+        BinaryPrimitives.WriteUInt16LittleEndian(block.AsSpan(8), linkType);
         BinaryPrimitives.WriteUInt32LittleEndian(block.AsSpan(12), snapLen);
-
-        // if_tsresol option
-        int optOff = 16;
-        BinaryPrimitives.WriteUInt16LittleEndian(block.AsSpan(optOff), 9);     // option code
-        BinaryPrimitives.WriteUInt16LittleEndian(block.AsSpan(optOff + 2), 1); // option length
-        block[optOff + 4] = tsResolution;
-        // padding (3 bytes already zero)
-
-        // opt_endofopt
-        // code=0, length=0 → 4 zero bytes (already zero)
-
-        // Trailing block length
+        optionBytes.CopyTo(block.AsSpan(16));
         BinaryPrimitives.WriteUInt32LittleEndian(block.AsSpan((int)blockLen - 4), blockLen);
         _Stream.Write(block);
+    }
+
+    private static void _WriteOption(Stream dest, ushort code, ReadOnlySpan<byte> value)
+    {
+        Span<byte> header = stackalloc byte[4];
+        BinaryPrimitives.WriteUInt16LittleEndian(header, code);
+        BinaryPrimitives.WriteUInt16LittleEndian(header[2..], (ushort)value.Length);
+        dest.Write(header);
+        dest.Write(value);
+        int pad = (4 - (value.Length & 3)) & 3;
+        if (pad > 0)
+        {
+            Span<byte> padBytes = stackalloc byte[4];
+            padBytes.Clear();
+            dest.Write(padBytes[..pad]);
+        }
     }
 
     /// <summary>Returns 10 raised to <paramref name="exponent"/>; used to convert the pcapng timestamp resolution option to a divisor.</summary>

@@ -317,6 +317,153 @@ internal sealed class BlfObjectPayloadsTests
             await Assert.That(payload[38]).IsEqualTo((byte)4);
             await Assert.That(payload[120]).IsEqualTo((byte)0xAB);
             await Assert.That(payload.AsSpan(112, 4).ToArray()).IsEquivalentTo(new byte[] { 0xDE, 0xAD, 0xBE, 0xEF });
+            await Assert.That(payload[39]).IsEqualTo((byte)0);
+        }
+        finally
+        {
+            buffer.Return();
+        }
+    }
+
+    [Test]
+    public async Task TryBuildLinMessage2PayloadEnhancedChecksumWritesModelOne()
+    {
+        byte[] lin = LinGenerators.BuildLinFrame(0x15, [0x01], checksum: 0x11, checksumTypeBits: 2);
+        PooledBuffer buffer = new(160);
+        try
+        {
+            bool built = BlfObjectPayloads.TryBuildLinMessage2Payload(lin, 1, buffer);
+            byte[] payload = buffer.WrittenSpan.ToArray();
+
+            await Assert.That(built).IsTrue();
+            await Assert.That(payload[39]).IsEqualTo((byte)1);
+        }
+        finally
+        {
+            buffer.Return();
+        }
+    }
+
+    [Test]
+    public async Task TryBuildFlexRayRcvMessagePayloadWritesDirZeroAndBothCrcs()
+    {
+        byte[] fr = FlexRayGenerators.BuildFlexRayFrame(1, 10, 3, 0x5A3, [0xDE, 0xAD]);
+        PooledBuffer buffer = new(128);
+        try
+        {
+            bool built = BlfObjectPayloads.TryBuildFlexRayRcvMessagePayload(fr, 1, buffer);
+            byte[] payload = buffer.WrittenSpan.ToArray();
+            ushort crc1 = BinaryPrimitives.ReadUInt16LittleEndian(payload.AsSpan(18));
+            ushort crc2 = BinaryPrimitives.ReadUInt16LittleEndian(payload.AsSpan(20));
+            ushort channelMask = BinaryPrimitives.ReadUInt16LittleEndian(payload.AsSpan(4));
+
+            await Assert.That(built).IsTrue();
+            await Assert.That(payload[6]).IsEqualTo((byte)0);
+            await Assert.That(payload[7]).IsEqualTo((byte)0);
+            await Assert.That(crc1).IsEqualTo((ushort)0x5A3);
+            await Assert.That(crc2).IsEqualTo((ushort)0x5A3);
+            await Assert.That(channelMask).IsEqualTo((ushort)0x0002);
+        }
+        finally
+        {
+            buffer.Return();
+        }
+    }
+
+    [Test]
+    public async Task TryBuildCanErrorPayloadWritesEightZeroedBytesWithChannel()
+    {
+        byte[] socketCan = SocketCanGenerators.BuildCanClassic(0x123, [0x01]);
+        BinaryPrimitives.WriteUInt32BigEndian(
+            socketCan, BinaryPrimitives.ReadUInt32BigEndian(socketCan) | BlfConstants.SocketCanErr);
+        PooledBuffer buffer = new(16);
+        try
+        {
+            bool built = BlfObjectPayloads.TryBuildCanErrorPayload(socketCan, 4, buffer);
+            byte[] payload = buffer.WrittenSpan.ToArray();
+
+            await Assert.That(built).IsTrue();
+            await Assert.That(payload.Length).IsEqualTo(8);
+            await Assert.That(BinaryPrimitives.ReadUInt16LittleEndian(payload)).IsEqualTo((ushort)4);
+            await Assert.That(BinaryPrimitives.ReadUInt16LittleEndian(payload.AsSpan(2))).IsEqualTo((ushort)0);
+        }
+        finally
+        {
+            buffer.Return();
+        }
+    }
+
+    [Test]
+    public async Task TryBuildEthernetFrameExPayloadCopiesRawFrame()
+    {
+        byte[] ethernet = new byte[18];
+        ethernet.AsSpan(0, 6).Fill(0xFF);
+        ethernet.AsSpan(6, 6).Fill(0x11);
+        ethernet[12] = 0x81;
+        ethernet[13] = 0x00;
+        ethernet[14] = 0x00;
+        ethernet[15] = 0x00;
+        ethernet[16] = 0x08;
+        ethernet[17] = 0x00;
+        PooledBuffer buffer = new(64);
+        try
+        {
+            bool built = BlfObjectPayloads.TryBuildEthernetFrameExPayload(ethernet, 3, buffer);
+            byte[] payload = buffer.WrittenSpan.ToArray();
+
+            await Assert.That(built).IsTrue();
+            await Assert.That(BinaryPrimitives.ReadUInt16LittleEndian(payload)).IsEqualTo((ushort)32);
+            await Assert.That(BinaryPrimitives.ReadUInt16LittleEndian(payload.AsSpan(4))).IsEqualTo((ushort)3);
+            await Assert.That(BinaryPrimitives.ReadUInt16LittleEndian(payload.AsSpan(22))).IsEqualTo((ushort)18);
+            await Assert.That(payload.AsSpan(32).ToArray()).IsEquivalentTo(ethernet);
+        }
+        finally
+        {
+            buffer.Return();
+        }
+    }
+
+    [Test]
+    public async Task TryBuildFlexRayRcvMessagePayloadShortBufferReturnsFalse()
+    {
+        PooledBuffer buffer = new(16);
+        try
+        {
+            bool built = BlfObjectPayloads.TryBuildFlexRayRcvMessagePayload(new byte[3], 1, buffer);
+
+            await Assert.That(built).IsFalse();
+        }
+        finally
+        {
+            buffer.Return();
+        }
+    }
+
+    [Test]
+    public async Task TryBuildCanErrorPayloadTooShortReturnsFalse()
+    {
+        PooledBuffer buffer = new(16);
+        try
+        {
+            bool built = BlfObjectPayloads.TryBuildCanErrorPayload(new byte[7], 1, buffer);
+
+            await Assert.That(built).IsFalse();
+        }
+        finally
+        {
+            buffer.Return();
+        }
+    }
+
+    [Test]
+    public async Task TryBuildEthernetFrameExPayloadTooShortReturnsFalse()
+    {
+        PooledBuffer buffer = new(16);
+        try
+        {
+            bool built = BlfObjectPayloads.TryBuildEthernetFrameExPayload(new byte[13], 1, buffer);
+
+            await Assert.That(built).IsFalse();
         }
         finally
         {

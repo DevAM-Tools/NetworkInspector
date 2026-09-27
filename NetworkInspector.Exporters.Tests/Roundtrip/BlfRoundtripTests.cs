@@ -11,10 +11,9 @@ namespace NetworkInspector.Exporters.Tests.Roundtrip;
 ///   4. Reimport with <see cref="BlfSource"/> and compare every frame against the
 ///      original (data, timestamp, link type, interface mapping).
 /// <para>
-/// BLF stores timestamps in 10 µs ticks natively, so all generated test timestamps are
-/// chosen as exact 10 µs multiples. Comparisons are then made with <see cref="RoundtripAssertions.ExactNs"/>
-/// tolerance — no rounding losses sneak in. Originals can still be expressed in
-/// nanoseconds; only the stored value is constrained.
+/// Object timestamps are nanoseconds relative to the millisecond <c>start_date</c> anchor.
+/// Comparisons use <see cref="RoundtripAssertions.ExactNs"/>. One fixture keeps a residual
+/// that is not a multiple of 10 µs; the others still use 10 µs steps.
 /// </para>
 /// <para>tshark is required — tests fail when it is missing.</para>
 /// </summary>
@@ -23,7 +22,7 @@ internal sealed class BlfRoundtripTests
     /// <summary>Reference Unix epoch base in nanoseconds (April 2026, 10 µs aligned).</summary>
     private const long _EpochBaseNs = 1_777_000_000_000_000_000L;
 
-    /// <summary>10 µs tick in nanoseconds — the BLF native timestamp resolution.</summary>
+    /// <summary>10 µs step used by fixtures that do not exercise a sub-step residual.</summary>
     private const long _TickNs = 10_000L;
 
     // ========================================================================
@@ -67,10 +66,37 @@ internal sealed class BlfRoundtripTests
 
         RoundtripFrameFactory factory = new();
         FrameInterfaceId ifId = factory.AddInterface("eth-test", LinkType.Ethernet,
-            new Dictionary<string, object> { [FrameInterfacePropertyKeys.BlfChannel] = (ushort)1 });
+            new Dictionary<string, object> { [BlfInterfacePropertyKeys.Channel] = (ushort)1 });
         Frame[] originals =
         [
             factory.Create(ifId, LinkType.Ethernet, _EpochBaseNs + (123L * _TickNs),
+                FrameGenerators.BuildEthernetIpv4UdpFrame(64)),
+        ];
+
+        _ExportAndClose(path, originals);
+
+        RoundtripAssertions.AssertTsharkMatchesOriginals(path, originals, RoundtripAssertions.ExactNs);
+        _ReimportAndAssert(path, originals);
+        await ValueTask.CompletedTask.ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// A timestamp that is not a multiple of 10 µs must come back as the same nanosecond value.
+    /// </summary>
+    [Test]
+    public async Task EthernetNanosecondResidualRoundtrip()
+    {
+        TsharkVerifier.RequireAvailable();
+        using TestDir dir = new("rt_blf_ns");
+        string path = dir.FilePath("ns.blf");
+
+        const long timestampNs = _EpochBaseNs + 1_234_567L;
+        RoundtripFrameFactory factory = new();
+        FrameInterfaceId ifId = factory.AddInterface("eth-ns", LinkType.Ethernet,
+            new Dictionary<string, object> { [BlfInterfacePropertyKeys.Channel] = (ushort)1 });
+        Frame[] originals =
+        [
+            factory.Create(ifId, LinkType.Ethernet, timestampNs,
                 FrameGenerators.BuildEthernetIpv4UdpFrame(64)),
         ];
 
@@ -93,7 +119,7 @@ internal sealed class BlfRoundtripTests
 
         RoundtripFrameFactory factory = new();
         FrameInterfaceId ifId = factory.AddInterface("can0", LinkType.CanSocketcan,
-            new Dictionary<string, object> { [FrameInterfacePropertyKeys.BlfChannel] = (ushort)1 });
+            new Dictionary<string, object> { [BlfInterfacePropertyKeys.Channel] = (ushort)1 });
 
         List<Frame> originals = new();
         // DLC 0..8 plus standard + extended IDs
@@ -106,12 +132,12 @@ internal sealed class BlfRoundtripTests
             }
             originals.Add(factory.Create(ifId, LinkType.CanSocketcan,
                 _EpochBaseNs + (((long)dlc + 1) * _TickNs),
-                SocketCanGenerators.BuildCanClassic((uint)(0x100 + dlc), data)));
+                _ClassicSocketCan((uint)(0x100 + dlc), data)));
         }
         // Extended IDs (29-bit)
         originals.Add(factory.Create(ifId, LinkType.CanSocketcan,
             _EpochBaseNs + (50L * _TickNs),
-            SocketCanGenerators.BuildCanClassic(0x1ABCDEF0, [0xDE, 0xAD, 0xBE, 0xEF], extended: true)));
+            _ClassicSocketCan(0x1ABCDEF0, [0xDE, 0xAD, 0xBE, 0xEF], extended: true)));
 
         _ExportAndClose(path, originals);
 
@@ -121,8 +147,8 @@ internal sealed class BlfRoundtripTests
     }
 
     /// <summary>
-    /// Classic CAN ID in 11-bit numeric range but with SocketCAN EFF set must round-trip
-    /// Wireshark ID bit 31 (not a flags-byte EFF bit).
+    /// Classic CAN ID in the 11-bit numeric range but with SocketCAN EFF set must round-trip
+    /// as ID bit 31, not as a flags-byte EFF bit.
     /// </summary>
     [Test]
     public async Task CanClassic_ExtendedLowIdPreserved_Roundtrip()
@@ -133,12 +159,12 @@ internal sealed class BlfRoundtripTests
 
         RoundtripFrameFactory factory = new();
         FrameInterfaceId ifId = factory.AddInterface("can0", LinkType.CanSocketcan,
-            new Dictionary<string, object> { [FrameInterfacePropertyKeys.BlfChannel] = (ushort)1 });
+            new Dictionary<string, object> { [BlfInterfacePropertyKeys.Channel] = (ushort)1 });
 
         Frame[] originals =
         [
             factory.Create(ifId, LinkType.CanSocketcan, _EpochBaseNs + _TickNs,
-                SocketCanGenerators.BuildCanClassic(0x123, [0xAA, 0xBB], extended: true)),
+                _ClassicSocketCan(0x123, [0xAA, 0xBB], extended: true)),
         ];
 
         _ExportAndClose(path, originals);
@@ -156,7 +182,7 @@ internal sealed class BlfRoundtripTests
 
         RoundtripFrameFactory factory = new();
         FrameInterfaceId ifId = factory.AddInterface("canxl0", LinkType.CanSocketcan,
-            new Dictionary<string, object> { [FrameInterfacePropertyKeys.BlfChannel] = (ushort)1 });
+            new Dictionary<string, object> { [BlfInterfacePropertyKeys.Channel] = (ushort)1 });
 
         Frame[] originals =
         [
@@ -180,7 +206,7 @@ internal sealed class BlfRoundtripTests
 
         RoundtripFrameFactory factory = new();
         FrameInterfaceId ifId = factory.AddInterface("canfd0", LinkType.CanSocketcan,
-            new Dictionary<string, object> { [FrameInterfacePropertyKeys.BlfChannel] = (ushort)2 });
+            new Dictionary<string, object> { [BlfInterfacePropertyKeys.Channel] = (ushort)2 });
 
         // CAN FD valid DLCs map to 0,1,...,8,12,16,20,24,32,48,64 — exercise the boundaries.
         int[] dlcs = [0, 1, 8, 12, 16, 20, 24, 32, 48, 64];
@@ -222,7 +248,7 @@ internal sealed class BlfRoundtripTests
 
         RoundtripFrameFactory factory = new();
         FrameInterfaceId ifId = factory.AddInterface("lin0", LinkType.Lin,
-            new Dictionary<string, object> { [FrameInterfacePropertyKeys.BlfChannel] = (ushort)1 });
+            new Dictionary<string, object> { [BlfInterfacePropertyKeys.Channel] = (ushort)1 });
         Frame[] originals =
         [
             factory.Create(ifId, LinkType.Lin, _EpochBaseNs + _TickNs,
@@ -250,7 +276,7 @@ internal sealed class BlfRoundtripTests
 
         RoundtripFrameFactory factory = new();
         FrameInterfaceId ifId = factory.AddInterface("fr0", LinkType.Flexray,
-            new Dictionary<string, object> { [FrameInterfacePropertyKeys.BlfChannel] = (ushort)1 });
+            new Dictionary<string, object> { [BlfInterfacePropertyKeys.Channel] = (ushort)1 });
         Frame[] originals =
         [
             factory.Create(ifId, LinkType.Flexray, _EpochBaseNs + _TickNs,
@@ -278,22 +304,22 @@ internal sealed class BlfRoundtripTests
 
         RoundtripFrameFactory factory = new();
         FrameInterfaceId eth = factory.AddInterface("eth-1", LinkType.Ethernet,
-            new Dictionary<string, object> { [FrameInterfacePropertyKeys.BlfChannel] = (ushort)1 });
+            new Dictionary<string, object> { [BlfInterfacePropertyKeys.Channel] = (ushort)1 });
         FrameInterfaceId can1 = factory.AddInterface("can-1", LinkType.CanSocketcan,
-            new Dictionary<string, object> { [FrameInterfacePropertyKeys.BlfChannel] = (ushort)1 });
+            new Dictionary<string, object> { [BlfInterfacePropertyKeys.Channel] = (ushort)1 });
         FrameInterfaceId can2 = factory.AddInterface("can-2", LinkType.CanSocketcan,
-            new Dictionary<string, object> { [FrameInterfacePropertyKeys.BlfChannel] = (ushort)2 });
+            new Dictionary<string, object> { [BlfInterfacePropertyKeys.Channel] = (ushort)2 });
         FrameInterfaceId lin = factory.AddInterface("lin-1", LinkType.Lin,
-            new Dictionary<string, object> { [FrameInterfacePropertyKeys.BlfChannel] = (ushort)1 });
+            new Dictionary<string, object> { [BlfInterfacePropertyKeys.Channel] = (ushort)1 });
         FrameInterfaceId fr = factory.AddInterface("fr-1", LinkType.Flexray,
-            new Dictionary<string, object> { [FrameInterfacePropertyKeys.BlfChannel] = (ushort)1 });
+            new Dictionary<string, object> { [BlfInterfacePropertyKeys.Channel] = (ushort)1 });
 
         Frame[] originals =
         [
             factory.Create(eth,  LinkType.Ethernet,    _EpochBaseNs + (1L * _TickNs),
                 FrameGenerators.BuildEthernetIpv4UdpFrame(32)),
             factory.Create(can1, LinkType.CanSocketcan, _EpochBaseNs + (2L * _TickNs),
-                SocketCanGenerators.BuildCanClassic(0x111, [1, 2, 3])),
+                _ClassicSocketCan(0x111, [1, 2, 3])),
             factory.Create(can2, LinkType.CanSocketcan, _EpochBaseNs + (3L * _TickNs),
                 SocketCanGenerators.BuildCanFd(0x222, new byte[16], brs: true)),
             factory.Create(lin,  LinkType.Lin,         _EpochBaseNs + (4L * _TickNs),
@@ -325,7 +351,7 @@ internal sealed class BlfRoundtripTests
         const int count = 10_000;
         RoundtripFrameFactory factory = new();
         FrameInterfaceId ifId = factory.AddInterface("eth-bulk", LinkType.Ethernet,
-            new Dictionary<string, object> { [FrameInterfacePropertyKeys.BlfChannel] = (ushort)1 });
+            new Dictionary<string, object> { [BlfInterfacePropertyKeys.Channel] = (ushort)1 });
 
         Frame[] originals = new Frame[count];
         for (int i = 0; i < count; i++)
@@ -359,7 +385,7 @@ internal sealed class BlfRoundtripTests
 
         RoundtripFrameFactory factory = new();
         FrameInterfaceId ifId = factory.AddInterface("eth-cmp", LinkType.Ethernet,
-            new Dictionary<string, object> { [FrameInterfacePropertyKeys.BlfChannel] = (ushort)1 });
+            new Dictionary<string, object> { [BlfInterfacePropertyKeys.Channel] = (ushort)1 });
         Frame[] originals = new Frame[256];
         for (int i = 0; i < originals.Length; i++)
         {
@@ -403,7 +429,7 @@ internal sealed class BlfRoundtripTests
 
         RoundtripFrameFactory factory = new();
         FrameInterfaceId ifId = factory.AddInterface("eth-ts", LinkType.Ethernet,
-            new Dictionary<string, object> { [FrameInterfacePropertyKeys.BlfChannel] = (ushort)1 });
+            new Dictionary<string, object> { [BlfInterfacePropertyKeys.Channel] = (ushort)1 });
 
         byte[] data0 = FrameGenerators.BuildEthernetIpv4UdpFrame(8);
         byte[] data1 = FrameGenerators.BuildEthernetIpv4UdpFrame(9);
@@ -448,7 +474,7 @@ internal sealed class BlfRoundtripTests
 
         RoundtripFrameFactory factory = new();
         FrameInterfaceId ifId = factory.AddInterface("eth-ts", LinkType.Ethernet,
-            new Dictionary<string, object> { [FrameInterfacePropertyKeys.BlfChannel] = (ushort)1 });
+            new Dictionary<string, object> { [BlfInterfacePropertyKeys.Channel] = (ushort)1 });
 
         // Two frames share the same timestamp; both must round-trip intact.
         Frame[] originals =
@@ -480,7 +506,7 @@ internal sealed class BlfRoundtripTests
 
         RoundtripFrameFactory factory = new();
         FrameInterfaceId ifId = factory.AddInterface("eth-stream", LinkType.Ethernet,
-            new Dictionary<string, object> { [FrameInterfacePropertyKeys.BlfChannel] = (ushort)1 });
+            new Dictionary<string, object> { [BlfInterfacePropertyKeys.Channel] = (ushort)1 });
         Frame[] originals = new Frame[8];
         for (int i = 0; i < originals.Length; i++)
         {
@@ -525,7 +551,7 @@ internal sealed class BlfRoundtripTests
 
         RoundtripFrameFactory factory = new();
         FrameInterfaceId ifId = factory.AddInterface("eth-scan", LinkType.Ethernet,
-            new Dictionary<string, object> { [FrameInterfacePropertyKeys.BlfChannel] = (ushort)1 });
+            new Dictionary<string, object> { [BlfInterfacePropertyKeys.Channel] = (ushort)1 });
         Frame[] originals = new Frame[50];
         for (int i = 0; i < originals.Length; i++)
         {
@@ -567,7 +593,7 @@ internal sealed class BlfRoundtripTests
 
         RoundtripFrameFactory factory = new();
         FrameInterfaceId ifId = factory.AddInterface("eth-rand", LinkType.Ethernet,
-            new Dictionary<string, object> { [FrameInterfacePropertyKeys.BlfChannel] = (ushort)1 });
+            new Dictionary<string, object> { [BlfInterfacePropertyKeys.Channel] = (ushort)1 });
         const int count = 32;
         Frame[] originals = new Frame[count];
         for (int i = 0; i < count; i++)
@@ -617,6 +643,17 @@ internal sealed class BlfRoundtripTests
         }
 
         exporter.OnFinish();
+    }
+
+    /// <summary>
+    /// Classic SocketCAN bytes as reimported: 8-byte header plus <paramref name="data"/>.
+    /// The on-disk object still stores 8 data bytes; the captured buffer does not keep a zero tail.
+    /// </summary>
+    private static byte[] _ClassicSocketCan(uint canId, ReadOnlySpan<byte> data, bool extended = false)
+    {
+        byte[] padded = SocketCanGenerators.BuildCanClassic(canId, data, extended);
+        int captured = 8 + Math.Min(data.Length, 8);
+        return padded.AsSpan(0, captured).ToArray();
     }
 
     private static void _ReimportAndAssert(string path, IReadOnlyList<Frame> originals)

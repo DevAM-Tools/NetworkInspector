@@ -195,16 +195,18 @@ internal sealed class BusAndExtensionLayerSmokeTests
     public async Task Lin_BuildsCorrectFrameWithPayload()
     {
         // frameId=0x10, 2-byte payload, enhanced checksum (type 2).
-        // Total frame: 8-byte header + 2 bytes payload = 10 bytes.
+        // 8-byte header + data padded to 4 = 12 bytes.
         FB.LinLayer lin = new(frameId: 0x10, data: new byte[] { 0xAA, 0xBB });
 
         FB.CreatedStack<FB.StatelessStack<FB.LinLayer, FB.StackEnd>, FB.NoTrailer, FB.NoInterceptor> stack
             = FB.FrameStack.Start(lin).CreateWithFixedValues();
 
-        byte[] frame = new byte[10];
+        byte[] frame = new byte[12];
         int written = _EmitOnce(in stack, ReadOnlySpan<byte>.Empty, frame);
 
-        await Assert.That(written).IsEqualTo(10);
+        await Assert.That(written).IsEqualTo(12);
+        await Assert.That(frame[10]).IsEqualTo((byte)0);
+        await Assert.That(frame[11]).IsEqualTo((byte)0);
 
         // Byte 0: msg_format_rev = 1.
         await Assert.That(frame[0]).IsEqualTo((byte)1);

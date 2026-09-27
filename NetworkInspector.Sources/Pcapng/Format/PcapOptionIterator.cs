@@ -87,9 +87,15 @@ internal ref struct PcapOptionIterator
             return false;
         }
 
-        // Read option header fields
-        ushort code = _Reader.ReadU16(_Data[_Offset..]);
-        ushort length = _Reader.ReadU16(_Data[(_Offset + 2)..]);
+        // Read option header fields. OptionHeader is little-endian on disk; swap when the section is swapped.
+        if (!OptionHeader.TryParse(_Data[_Offset..], out OptionHeader header, out _))
+        {
+            option = default;
+            return false;
+        }
+
+        ushort code = _Reader.Swap(header.Code.Value);
+        ushort length = _Reader.Swap(header.Length.Value);
 
         // End-of-options sentinel
         if (code == PcapConstants.OptEndOfOpt)
@@ -109,12 +115,17 @@ internal ref struct PcapOptionIterator
             return false;
         }
 
-        // Extract the unpadded value
+        // Extract the unpadded value only when the padded TLV fits. Missing pad bytes mean a truncated option.
+        int padded = PcapPadding.PaddedLength(length);
+        if (_Offset + padded > _Data.Length)
+        {
+            option = default;
+            return false;
+        }
+
         ReadOnlySpan<byte> value = _Data.Slice(_Offset, length);
         option = new RawOption(code, value);
-
-        // Advance past the padded value
-        _Offset += PcapPadding.PaddedLength(length);
+        _Offset += padded;
         return true;
     }
 

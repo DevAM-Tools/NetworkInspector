@@ -8,6 +8,8 @@ namespace NetworkInspector.Exporters.Pcapng;
 /// </summary>
 internal sealed record ShbOptions
 {
+    #region Public API
+
     /// <summary>Hardware description string.</summary>
     internal string? Hardware { get; init; }
 
@@ -53,6 +55,8 @@ internal sealed record ShbOptions
         size += PcapPadding.EndOfOptionsSize;
         return size;
     }
+
+    #endregion
 }
 
 /// <summary>
@@ -66,6 +70,8 @@ internal sealed record ShbOptions
 /// </summary>
 internal sealed class PcapngWriter
 {
+    #region Fields
+
     /// <summary>Zero padding buffer (4 bytes max needed for 32-bit alignment).</summary>
     private static readonly byte[] _ZeroPadding = [0, 0, 0, 0];
 
@@ -103,6 +109,10 @@ internal sealed class PcapngWriter
 
     /// <summary>Bytes written to <see cref="_Stream"/> (committed output).</summary>
     private long _BytesWritten;
+
+    #endregion
+
+    #region Public API
 
     /// <summary>Creates a new PCAPNG writer wrapping the given stream.</summary>
     /// <param name="stream">The output stream.</param>
@@ -208,14 +218,29 @@ internal sealed class PcapngWriter
     /// <param name="snapLength">Maximum captured packet length.</param>
     /// <param name="tsResolution">Timestamp resolution (power-of-10 exponent, e.g. 9 = nanosecond).</param>
     /// <param name="name">Optional interface name.</param>
-    internal void WriteInterfaceDescription(LinkType linkType, uint snapLength, byte tsResolution, string? name)
+    /// <param name="fcsLength">
+    /// Optional interface FCS length in bytes (<c>if_fcslen</c>). Omitted when null.
+    /// Per-packet EPB flags are not written: <see cref="Frame"/> does not store them.
+    /// </param>
+    internal void WriteInterfaceDescription(
+        LinkType linkType,
+        uint snapLength,
+        byte tsResolution,
+        string? name,
+        byte? fcsLength = null)
     {
-        // Calculate options size: always write if_tsresol (1 byte value)
-        int optionsSize = PcapPadding.OptionSize(1); // if_tsresol
+        // if_tsresol is always present. if_name and if_fcslen are optional.
+        int optionsSize = PcapPadding.OptionSize(1);
         if (name is not null)
         {
             optionsSize += PcapPadding.OptionSize(Encoding.UTF8.GetByteCount(name));
         }
+
+        if (fcsLength.HasValue)
+        {
+            optionsSize += PcapPadding.OptionSize(1);
+        }
+
         optionsSize += PcapPadding.EndOfOptionsSize;
 
         uint blockTotalLength = (uint)(_IdbHeaderSize + optionsSize + _TrailingLengthSize);
@@ -235,6 +260,11 @@ internal sealed class PcapngWriter
             _WriteOptionToBuffer(_BlockBuffer, PcapConstants.OptIfName, name);
         }
         _WriteOptionRawToBuffer(_BlockBuffer, PcapConstants.OptIfTsResol, [tsResolution]);
+        if (fcsLength.HasValue)
+        {
+            _WriteOptionRawToBuffer(_BlockBuffer, PcapConstants.OptIfFcsLen, [fcsLength.Value]);
+        }
+
         _WriteEndOfOptionsToBuffer(_BlockBuffer);
 
         Span<byte> trailing = _BlockBuffer.Reserve(_TrailingLengthSize);
@@ -249,7 +279,10 @@ internal sealed class PcapngWriter
     /// <param name="interfaceId">Zero-based PCAPNG interface ID.</param>
     /// <param name="timestamp">Frame capture timestamp.</param>
     /// <param name="data">Captured frame bytes (possibly truncated to snap length).</param>
-    /// <param name="originalLength">Original on-wire frame length before truncation.</param>
+    /// <param name="originalLength">
+    /// EPB original_len. Callers pass <see cref="Frame.Length"/> (captured bytes).
+    /// When this write snap-truncates, pass the pre-truncation captured length.
+    /// </param>
     /// <param name="tsResolution">Timestamp resolution (power-of-10 exponent).</param>
     internal void WriteEnhancedPacket(
         uint interfaceId,
@@ -258,15 +291,22 @@ internal sealed class PcapngWriter
         uint originalLength,
         byte tsResolution)
     {
+        if (data.Length > int.MaxValue - 3)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(data),
+                "PCAPNG payload cannot be padded to a 4-byte boundary.");
+        }
+
+        if (!TryBlockLength(data.Length, out uint blockTotalLength))
+        {
+            throw new ArgumentOutOfRangeException(nameof(data), "PCAPNG block length exceeds 32 bits.");
+        }
+
         uint capturedLength = (uint)data.Length;
         // PCAPNG EPB requires both captured and original length. The original length
         // must never be smaller than captured bytes.
         uint originalPacketLength = Math.Max(capturedLength, originalLength);
-        int paddedDataLength = PcapPadding.PaddedLength(data.Length);
-
-        // total = fixed header (28) + padded data + trailing length (4)
-        // No options for EPBs in this implementation
-        uint blockTotalLength = (uint)(_EpbHeaderSize + paddedDataLength + _TrailingLengthSize);
 
         // Convert timestamp to the appropriate resolution
         ulong tsValue = ConvertTimestamp(timestamp, tsResolution);
@@ -301,9 +341,32 @@ internal sealed class PcapngWriter
     /// <summary>Flushes the underlying stream.</summary>
     internal void Flush() => _Stream.Flush();
 
-    // ========================================================================
-    // Private helpers
-    // ========================================================================
+    /// <summary>
+    /// Computes the enhanced-packet block length for <paramref name="payloadLength"/> captured bytes.
+    /// Returns false when padding or the 32-bit block length would wrap.
+    /// Does not write to the stream.
+    /// </summary>
+    internal static bool TryBlockLength(int payloadLength, out uint blockLength)
+    {
+        blockLength = 0;
+        if (payloadLength < 0 || payloadLength > int.MaxValue - 3)
+        {
+            return false;
+        }
+
+        long total = (long)_EpbHeaderSize + PcapPadding.PaddedLength(payloadLength) + _TrailingLengthSize;
+        if (total > uint.MaxValue)
+        {
+            return false;
+        }
+
+        blockLength = (uint)total;
+        return true;
+    }
+
+    #endregion
+
+    #region Private helpers
 
     /// <summary>Writes bytes to the stream and updates <see cref="_BytesWritten"/>.</summary>
     private void _WriteToStream(ReadOnlySpan<byte> data)
@@ -338,15 +401,12 @@ internal sealed class PcapngWriter
         }
         // Finer resolution (rare): multiply with saturation
         ulong multiplier = _Pow10((uint)(tsResolution - 9));
-        // Use checked multiplication to detect overflow, saturate to ulong.MaxValue
-        try
-        {
-            return checked(nanosUnsigned * multiplier);
-        }
-        catch (OverflowException)
+        if (multiplier != 0 && nanosUnsigned > ulong.MaxValue / multiplier)
         {
             return ulong.MaxValue;
         }
+
+        return nanosUnsigned * multiplier;
     }
 
     /// <summary>Computes 10^exponent for small exponents via lookup (exponents 0–18 cover PCAPNG resol range).</summary>
@@ -428,4 +488,6 @@ internal sealed class PcapngWriter
         BinaryPrimitives.WriteUInt16LittleEndian(eoo, PcapConstants.OptEndOfOpt);
         BinaryPrimitives.WriteUInt16LittleEndian(eoo[2..], 0);
     }
+
+    #endregion
 }

@@ -13,6 +13,9 @@ namespace NetworkInspector.Sources.Pcapng;
 /// <item><b>Full:</b> Scans the entire file upfront, building a complete frame index.</item>
 /// <item><b>Lazy:</b> Scans frames on demand as <see cref="NextFrame"/> is called.</item>
 /// </list>
+/// Packet payload on <see cref="Frame"/> is the captured length. PCAPNG/PCAP <c>orig_len</c>
+/// is not kept. Link types that are not defined <see cref="LinkType"/> members skip the
+/// packet and raise <see cref="FrameSkipped"/>.
 /// Thread-safety: <see cref="FrameById"/> is thread-safe with respect to itself only after
 /// the lazy scan has completed (<see cref="NextFrame"/> has returned <c>null</c> at end-of-stream).
 /// While the lazy scan is in progress, <see cref="FrameById"/> returns <c>null</c> for any id
@@ -70,6 +73,10 @@ public sealed class PcapSource : IRandomAccessFrameSource, IErrorTolerantFrameSo
     private volatile int _ReadFrameCount;
     private readonly SaturatingVolatileCounter _SkippedFrameCount = new();
     private readonly SaturatingVolatileCounter _ErrorCount = new();
+    /// <summary>Malformed packet skips collected during a full open-time scan.</summary>
+    private List<FrameReadErrorEventArgs>? _PendingScanSkips;
+
+    /// <summary>Set in strict mode after a skip so later <see cref="NextFrame"/> calls return null.</summary>
     private volatile bool _Aborted;
 
     #endregion
@@ -79,7 +86,14 @@ public sealed class PcapSource : IRandomAccessFrameSource, IErrorTolerantFrameSo
     /// <summary>
     /// Private constructor — use <see cref="Open"/> or <see cref="FromData"/> factory methods.
     /// </summary>
-    private PcapSource(string uiName, string? description, DataBackend backend, FrameIndex index, ScannerFormat format, IncrementalScanner? scanner)
+    private PcapSource(
+        string uiName,
+        string? description,
+        DataBackend backend,
+        FrameIndex index,
+        ScannerFormat format,
+        IncrementalScanner? scanner,
+        List<FrameReadErrorEventArgs>? pendingScanSkips = null)
     {
         UiName = uiName;
         _Description = description;
@@ -87,6 +101,11 @@ public sealed class PcapSource : IRandomAccessFrameSource, IErrorTolerantFrameSo
         _Index = index;
         _Format = format;
         _Scanner = scanner;
+        _PendingScanSkips = pendingScanSkips;
+        if (_Scanner is not null)
+        {
+            _Scanner.OnSkip = _HandleSkip;
+        }
     }
 
     #endregion
@@ -165,17 +184,26 @@ public sealed class PcapSource : IRandomAccessFrameSource, IErrorTolerantFrameSo
     private static PcapSource _OpenFullScan(string uiName, string? description, DataBackend backend)
     {
         IncrementalScanner scanner = new(backend, backend.FileSize);
+        List<FrameReadErrorEventArgs> skips = [];
+        scanner.OnSkip = skips.Add;
 
-        // Scan to exhaustion
-        while (scanner.NextFrame(out _))
+        // Packet skips return false without exhausting; keep scanning until EOF.
+        while (true)
         {
-            // Frame is already indexed inside the scanner
+            if (scanner.NextFrame(out _))
+            {
+                continue;
+            }
+
+            if (scanner.IsExhausted)
+            {
+                break;
+            }
         }
 
         FrameIndex index = scanner.Index;
-        index.ShrinkToFit();
 
-        return new PcapSource(uiName, description, backend, index, scanner.Format, null);
+        return new PcapSource(uiName, description, backend, index, scanner.Format, null, skips.Count == 0 ? null : skips);
     }
 
     /// <summary>Lazy scan: only parses the first header, scans frames on demand.</summary>
@@ -268,6 +296,12 @@ public sealed class PcapSource : IRandomAccessFrameSource, IErrorTolerantFrameSo
 
         cancellationToken.ThrowIfCancellationRequested();
 
+        _FlushPendingScanSkips();
+        if (_Aborted)
+        {
+            return null;
+        }
+
         // Read _Scanner for symmetry with Dispose()'s null write.
         if (_Scanner is not null)
         {
@@ -308,7 +342,7 @@ public sealed class PcapSource : IRandomAccessFrameSource, IErrorTolerantFrameSo
             return null;
         }
 
-        ref readonly FrameOffset offset = ref _Index.GetOffset(frameId);
+        FrameOffset offset = _Index.GetOffset(frameId);
         long timestampNanos = _Index.GetTimestamp(frameId);
 
         ReadOnlyMemory<byte> data = _Backend.ReadFrameData(frameId, offset.FileOffset, offset.CapturedLength);
@@ -393,19 +427,27 @@ public sealed class PcapSource : IRandomAccessFrameSource, IErrorTolerantFrameSo
             }
 
             int frameId = _CurrentFrame++;
-            ref readonly FrameOffset offset = ref _Index.GetOffset(frameId);
+            FrameOffset offset = _Index.GetOffset(frameId);
             long timestampNanos = _Index.GetTimestamp(frameId);
 
             ReadOnlyMemory<byte> data = _Backend.ReadFrameData(frameId, offset.FileOffset, offset.CapturedLength);
 
             if (!_TryResolveLinkTypeAndInterface(offset.SectionIndex, offset.InterfaceId, out LinkType linkType, out FrameInterfaceId interfaceId))
             {
+                FrameReadErrorKind kind = FrameReadErrorKind.UnresolvedInterface;
+                string message = $"Unresolved interface: section={offset.SectionIndex}, interface={offset.InterfaceId}.";
+                if (_TryUnknownLinkTypeMessage(offset.SectionIndex, offset.InterfaceId, out string unknownMessage))
+                {
+                    kind = FrameReadErrorKind.Other;
+                    message = unknownMessage;
+                }
+
                 _HandleSkip(new FrameReadErrorEventArgs
                 {
                     FrameIndex = frameId,
                     FileOffset = offset.FileOffset,
-                    Kind = FrameReadErrorKind.UnresolvedInterface,
-                    Message = $"Unresolved interface: section={offset.SectionIndex}, interface={offset.InterfaceId}."
+                    Kind = kind,
+                    Message = message,
                 });
                 continue;
             }
@@ -463,6 +505,17 @@ public sealed class PcapSource : IRandomAccessFrameSource, IErrorTolerantFrameSo
 
             if (!scanner.NextFrame(out ScannedFrame scanned))
             {
+                if (!scanner.IsExhausted)
+                {
+                    // Packet skip already raised via OnSkip → _HandleSkip.
+                    if (_Aborted)
+                    {
+                        return null;
+                    }
+
+                    continue;
+                }
+
                 // Scanning complete — finalize
                 _FinishLazyScan(scanner);
                 return null;
@@ -482,12 +535,20 @@ public sealed class PcapSource : IRandomAccessFrameSource, IErrorTolerantFrameSo
 
             if (!_TryResolveLinkTypeAndInterface(scanned.SectionIndex, scanned.InterfaceId, out LinkType linkType, out FrameInterfaceId interfaceId))
             {
+                FrameReadErrorKind kind = FrameReadErrorKind.UnresolvedInterface;
+                string message = $"Unresolved interface: section={scanned.SectionIndex}, interface={scanned.InterfaceId}.";
+                if (_TryUnknownLinkTypeMessage(scanned.SectionIndex, scanned.InterfaceId, out string unknownMessage))
+                {
+                    kind = FrameReadErrorKind.Other;
+                    message = unknownMessage;
+                }
+
                 _HandleSkip(new FrameReadErrorEventArgs
                 {
                     FrameIndex = scanned.FrameIndex,
-                    FileOffset = -1,
-                    Kind = FrameReadErrorKind.UnresolvedInterface,
-                    Message = $"Unresolved interface: section={scanned.SectionIndex}, interface={scanned.InterfaceId}."
+                    FileOffset = scanned.FileOffset,
+                    Kind = kind,
+                    Message = message,
                 });
                 continue;
             }
@@ -530,7 +591,6 @@ public sealed class PcapSource : IRandomAccessFrameSource, IErrorTolerantFrameSo
     private void _FinishLazyScan(IncrementalScanner scanner)
     {
         _Index = scanner.Index;
-        _Index.ShrinkToFit();
         _Format = scanner.Format;
         // _Scanner is the publication marker observed by FrameById. Clearing it last
         // (with a release-style store) ensures _Index/_Format updates above are visible
@@ -658,40 +718,40 @@ public sealed class PcapSource : IRandomAccessFrameSource, IErrorTolerantFrameSo
         // RawLinkType and SnapLength are always available — initialize with them
         Dictionary<string, object> props = new()
         {
-            [FrameInterfacePropertyKeys.RawLinkType] = info.RawLinkType,
-            [FrameInterfacePropertyKeys.SnapLength] = info.SnapLength,
+            [PcapInterfacePropertyKeys.RawLinkType] = info.RawLinkType,
+            [PcapInterfacePropertyKeys.SnapLength] = info.SnapLength,
         };
 
         // Interface-level metadata (IDB options)
         if (info.Speed.HasValue)
         {
-            props[FrameInterfacePropertyKeys.Speed] = info.Speed.Value;
+            props[PcapInterfacePropertyKeys.Speed] = info.Speed.Value;
         }
         if (info.FcsLength.HasValue)
         {
-            props[FrameInterfacePropertyKeys.FcsLength] = info.FcsLength.Value;
+            props[PcapInterfacePropertyKeys.FcsLength] = info.FcsLength.Value;
         }
         if (info.Filter is not null)
         {
-            props[FrameInterfacePropertyKeys.Filter] = info.Filter;
+            props[PcapInterfacePropertyKeys.Filter] = info.Filter;
         }
         if (info.Os is not null)
         {
-            props[FrameInterfacePropertyKeys.Os] = info.Os;
+            props[PcapInterfacePropertyKeys.Os] = info.Os;
         }
 
         // Section-level metadata (SHB options) — shared across all interfaces in the section
         if (section.Hardware is not null)
         {
-            props[FrameInterfacePropertyKeys.CaptureHardware] = section.Hardware;
+            props[PcapInterfacePropertyKeys.CaptureHardware] = section.Hardware;
         }
         if (section.Os is not null)
         {
-            props[FrameInterfacePropertyKeys.CaptureOs] = section.Os;
+            props[PcapInterfacePropertyKeys.CaptureOs] = section.Os;
         }
         if (section.UserApplication is not null)
         {
-            props[FrameInterfacePropertyKeys.CaptureApplication] = section.UserApplication;
+            props[PcapInterfacePropertyKeys.CaptureApplication] = section.UserApplication;
         }
 
         return props;
@@ -706,8 +766,8 @@ public sealed class PcapSource : IRandomAccessFrameSource, IErrorTolerantFrameSo
         // Legacy PCAP has limited metadata — snap length and raw link type
         Dictionary<string, object> props = new()
         {
-            [FrameInterfacePropertyKeys.RawLinkType] = info.RawLinkType,
-            [FrameInterfacePropertyKeys.SnapLength] = info.SnapLength,
+            [PcapInterfacePropertyKeys.RawLinkType] = info.RawLinkType,
+            [PcapInterfacePropertyKeys.SnapLength] = info.SnapLength,
         };
 
         return props;
@@ -766,5 +826,48 @@ public sealed class PcapSource : IRandomAccessFrameSource, IErrorTolerantFrameSo
         frameInterfaceId = FrameInterfaceId.Invalid;
         return false;
     }
+
+    /// <summary>Replays packet skips recorded during a full open-time scan.</summary>
+    private void _FlushPendingScanSkips()
+    {
+        List<FrameReadErrorEventArgs>? skips = _PendingScanSkips;
+        if (skips is null || skips.Count == 0)
+        {
+            return;
+        }
+
+        _PendingScanSkips = null;
+        foreach (FrameReadErrorEventArgs skip in skips)
+        {
+            _HandleSkip(skip);
+            if (_Aborted)
+            {
+                return;
+            }
+        }
+    }
+
+    /// <summary>True when the named interface exists but its DLT is not a defined <see cref="LinkType"/>.</summary>
+    private bool _TryUnknownLinkTypeMessage(ushort sectionIndex, ushort interfaceId, out string message)
+    {
+        message = "";
+        if (_Format is PcapNgFormat pcapng && sectionIndex < pcapng.Sections.Count)
+        {
+            InterfaceInfo? info = pcapng.Sections[sectionIndex].Interface(interfaceId);
+            if (info is not null && info.LinkType is null)
+            {
+                message = $"Unknown link-layer type {info.RawLinkType}; frame skipped.";
+                return true;
+            }
+        }
+        else if (_Format is LegacyPcapFormat legacy && legacy.Info.LinkType is null)
+        {
+            message = $"Unknown link-layer type {legacy.Info.RawLinkType}; frame skipped.";
+            return true;
+        }
+
+        return false;
+    }
+
     #endregion
 }

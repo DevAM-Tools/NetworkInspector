@@ -49,7 +49,8 @@ public sealed partial class BlfSource
     {
         BlfFrameEntry entry = _Index.GetEntry(frameIndex);
 
-        ReadOnlyMemory<byte>? frameData = _TryExtractFrameData(in entry, frameIndex, cancellationToken);
+        ReadOnlyMemory<byte>? frameData = _TryExtractFrameData(
+            in entry, frameIndex, cancellationToken, out ushort? hardwareChannel);
         if (frameData is null)
         {
             return null;
@@ -63,8 +64,9 @@ public sealed partial class BlfSource
             return null;
         }
 
-        LinkType linkType = _GetLinkTypeForObjectType(entry.ObjectType);
-        FrameInterfaceId interfaceId = _GetOrRegisterInterface(entry.ObjectType, entry.Channel, registry);
+        LinkType linkType = BlfFrameDispatcher.LinkTypeForObject(entry.ObjectType);
+        FrameInterfaceId interfaceId = _GetOrRegisterInterface(
+            entry.ObjectType, entry.Channel, registry, hardwareChannel);
 
         ParseResult<Frame> result = Frame.Create(
             new FrameId(frameIndex),
@@ -88,8 +90,9 @@ public sealed partial class BlfSource
     /// Container bytes are read through mmap slots hashed by <paramref name="frameIndex"/>.
     /// </summary>
     private ReadOnlyMemory<byte>? _TryExtractFrameData(
-        in BlfFrameEntry entry, int frameIndex, CancellationToken cancellationToken = default)
+        in BlfFrameEntry entry, int frameIndex, CancellationToken cancellationToken, out ushort? hardwareChannel)
     {
+        hardwareChannel = null;
         ReadOnlyMemory<byte> objectMemory;
         if (entry.ObjectOffset >= 0)
         {
@@ -141,6 +144,7 @@ public sealed partial class BlfSource
             return null;
         }
 
+        hardwareChannel = result.HardwareChannel;
         return result.FrameData;
     }
 
@@ -154,7 +158,8 @@ public sealed partial class BlfSource
         BlfFrameEntry entry = _Index.GetEntry(frameIndex);
 
         // Get or decompress the container data
-        ReadOnlyMemory<byte>? frameData = _ExtractFrameData(in entry, frameIndex, cancellationToken);
+        ReadOnlyMemory<byte>? frameData = _ExtractFrameData(
+            in entry, frameIndex, cancellationToken, out ushort? hardwareChannel);
         if (frameData is null)
         {
             // Error already reported in _ExtractFrameData
@@ -170,11 +175,12 @@ public sealed partial class BlfSource
         }
 
         // Determine link type from object type
-        LinkType linkType = _GetLinkTypeForObjectType(entry.ObjectType);
+        LinkType linkType = BlfFrameDispatcher.LinkTypeForObject(entry.ObjectType);
 
         // Get or register the interface, passing the snapshotted registry so we never
         // re-read _Registry inside the lock (TOCTOU race with Dispose() nulling it).
-        FrameInterfaceId interfaceId = _GetOrRegisterInterface(entry.ObjectType, entry.Channel, registry);
+        FrameInterfaceId interfaceId = _GetOrRegisterInterface(
+            entry.ObjectType, entry.Channel, registry, hardwareChannel);
 
         ParseResult<Frame> result = Frame.Create(
             new FrameId(frameIndex),
@@ -207,8 +213,10 @@ public sealed partial class BlfSource
     /// For raw objects: reads directly from the primary backend span (sequential path).
     /// Reports errors via <see cref="_HandleSkip"/> on failure.
     /// </summary>
-    private ReadOnlyMemory<byte>? _ExtractFrameData(in BlfFrameEntry entry, int frameIndex, CancellationToken cancellationToken = default)
+    private ReadOnlyMemory<byte>? _ExtractFrameData(
+        in BlfFrameEntry entry, int frameIndex, CancellationToken cancellationToken, out ushort? hardwareChannel)
     {
+        hardwareChannel = null;
         ReadOnlyMemory<byte> objectMemory = default;
         ReadOnlySpan<byte> objectSpan;
         bool hasObjectMemory;
@@ -289,6 +297,7 @@ public sealed partial class BlfSource
             return null;
         }
 
+        hardwareChannel = result.HardwareChannel;
         return result.FrameData;
     }
 
@@ -948,9 +957,18 @@ public sealed partial class BlfSource
     /// never re-read <c>_Registry</c> inside the lock (TOCTOU race with
     /// <see cref="Dispose"/> nulling <c>_Registry</c>).
     /// </param>
-    private FrameInterfaceId _GetOrRegisterInterface(uint objectType, ushort channel, FrameInterfaceRegistry registry)
+    /// <param name="hardwareChannel">
+    /// Ethernet hardware channel. Null when the object did not mark one as valid.
+    /// A present value, including 0, is stored on <see cref="BlfInterfacePropertyKeys.HardwareChannel"/>
+    /// and keeps that interface separate from the same logical channel without a hardware channel.
+    /// </param>
+    private FrameInterfaceId _GetOrRegisterInterface(
+        uint objectType, ushort channel, FrameInterfaceRegistry registry, ushort? hardwareChannel)
     {
-        (uint ObjectType, ushort Channel) key = (objectType, channel);
+        bool hasHardwareChannel = hardwareChannel.HasValue;
+        ushort hardwareChannelValue = hardwareChannel ?? 0;
+        (uint ObjectType, ushort Channel, bool HasHardwareChannel, ushort HardwareChannel) key =
+            (objectType, channel, hasHardwareChannel, hardwareChannelValue);
 
         lock (_InterfaceLock)
         {
@@ -962,16 +980,20 @@ public sealed partial class BlfSource
             string busName = _GetBusName(objectType);
             string interfaceName = _TryGetChannelName(objectType, channel)
                 ?? $"{busName} {channel}";
-            LinkType linkType = _GetLinkTypeForObjectType(objectType);
+            LinkType linkType = BlfFrameDispatcher.LinkTypeForObject(objectType);
+            Dictionary<string, object> properties = new()
+            {
+                [BlfInterfacePropertyKeys.Channel] = (long)channel,
+                [BlfInterfacePropertyKeys.ObjectType] = objectType,
+                [BlfInterfacePropertyKeys.BusType] = _GetBusTypeForObjectType(objectType),
+            };
+            if (hasHardwareChannel)
+            {
+                properties[BlfInterfacePropertyKeys.HardwareChannel] = hardwareChannelValue;
+            }
 
             FrameInterfaceId id = registry.Register(
-                _SourceId, interfaceName, null, linkType,
-                new Dictionary<string, object>
-                {
-                    [FrameInterfacePropertyKeys.BlfChannel] = (long)channel,
-                    [FrameInterfacePropertyKeys.BlfObjectType] = objectType,
-                    [FrameInterfacePropertyKeys.BlfBusType] = _GetBusTypeForObjectType(objectType),
-                });
+                _SourceId, interfaceName, null, linkType, properties);
             _InterfaceMap[key] = id;
             return id;
         }
@@ -1002,37 +1024,6 @@ public sealed partial class BlfSource
 
         return name;
     }
-
-    /// <summary>
-    /// Returns the link type for a given BLF object type.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static LinkType _GetLinkTypeForObjectType(uint objectType) => objectType switch
-    {
-        BlfConstants.ObjTypeEthernetFrame or BlfConstants.ObjTypeEthernetFrameEx
-            or BlfConstants.ObjTypeEthernetRxError => LinkType.Ethernet,
-
-        BlfConstants.ObjTypeCanMessage or BlfConstants.ObjTypeCanError
-            or BlfConstants.ObjTypeCanOverload or BlfConstants.ObjTypeCanErrorExt
-            or BlfConstants.ObjTypeCanMessage2 or BlfConstants.ObjTypeCanFdMessage
-            or BlfConstants.ObjTypeCanFdMessage64 or BlfConstants.ObjTypeCanFdError64
-            or BlfConstants.ObjTypeCanXlChannelFrame
-            => LinkType.CanSocketcan,
-
-        BlfConstants.ObjTypeLinMessage or BlfConstants.ObjTypeLinMessage2
-            or BlfConstants.ObjTypeLinCrcError or BlfConstants.ObjTypeLinCrcError2
-            or BlfConstants.ObjTypeLinRcvError or BlfConstants.ObjTypeLinRcvError2
-            or BlfConstants.ObjTypeLinSndError or BlfConstants.ObjTypeLinSndError2
-            or BlfConstants.ObjTypeLinSleep or BlfConstants.ObjTypeLinWakeup
-            or BlfConstants.ObjTypeLinWakeup2
-            => LinkType.Lin,
-
-        BlfConstants.ObjTypeFlexRayData or BlfConstants.ObjTypeFlexRayMessage
-            or BlfConstants.ObjTypeFlexRayRcvMessage or BlfConstants.ObjTypeFlexRayRcvMessageEx
-            => LinkType.Flexray,
-
-        _ => LinkType.Null,
-    };
 
     /// <summary>
     /// Returns a bus name string for interface naming.

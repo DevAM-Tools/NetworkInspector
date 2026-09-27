@@ -593,7 +593,7 @@ internal sealed class BlfExporterTests
         await Assert.That(read).IsNotNull();
         FrameInterfaceInfo? iface = registry.Get(read!.Value.InterfaceId);
         await Assert.That(iface).IsNotNull();
-        await Assert.That((long)iface!.Properties[FrameInterfacePropertyKeys.BlfChannel]).IsEqualTo(1L);
+        await Assert.That((long)iface!.Properties[BlfInterfacePropertyKeys.Channel]).IsEqualTo(1L);
     }
 
     [Test]
@@ -611,7 +611,7 @@ internal sealed class BlfExporterTests
             "eth-ch7",
             null,
             LinkType.Ethernet,
-            new Dictionary<string, object> { [FrameInterfacePropertyKeys.BlfChannel] = 7L });
+            new Dictionary<string, object> { [BlfInterfacePropertyKeys.Channel] = 7L });
         byte[] frameData = FrameGenerators.BuildEthernetIpv4UdpFrame(32);
         Frame frame = Frame.Create(
             new FrameId(0),
@@ -638,7 +638,298 @@ internal sealed class BlfExporterTests
         await Assert.That(read).IsNotNull();
         FrameInterfaceInfo? iface = inRegistry.Get(read!.Value.InterfaceId);
         await Assert.That(iface).IsNotNull();
-        await Assert.That((long)iface!.Properties[FrameInterfacePropertyKeys.BlfChannel]).IsEqualTo(7L);
+        await Assert.That((long)iface!.Properties[BlfInterfacePropertyKeys.Channel]).IsEqualTo(7L);
+    }
+
+    [Test]
+    public async Task EthernetChannelZeroAndHardwareChannelRoundTrip()
+    {
+        Stack stack = TestHarness.GetStack();
+        FrameInterfaceRegistry outRegistry = stack.FrameInterfaceRegistry;
+        if (outRegistry.SourceCount == 0)
+        {
+            outRegistry.RegisterSource(TestHarness.CreateNullFrameSource());
+        }
+
+        FrameInterfaceId ifId = outRegistry.Register(
+            new FrameSourceId(0),
+            "eth-ch0",
+            null,
+            LinkType.Ethernet,
+            new Dictionary<string, object>
+            {
+                [BlfInterfacePropertyKeys.Channel] = 0L,
+                [BlfInterfacePropertyKeys.HardwareChannel] = (ushort)2,
+            });
+        byte[] frameData = FrameGenerators.BuildEthernetIpv4UdpFrame(32);
+        Frame frame = Frame.Create(
+            new FrameId(0),
+            Timestamp.FromNanos(1_000_000_000),
+            frameData,
+            LinkType.Ethernet,
+            ifId,
+            outRegistry).Value;
+
+        using MemoryStream ms = new();
+        using BlfExporter exporter = BlfExporter.CreateBuilder()
+            .ToStream(ms)
+            .WithCompressionLevel(BlfCompressionLevel.None)
+            .Build();
+        exporter.OnFrame(frame);
+        exporter.OnFinish();
+
+        using BlfSource source = BlfSource.FromData(
+            ms.ToArray(), "ch0hw.blf", new BlfSourceOptions { ScanMode = ScanMode.Full });
+        FrameInterfaceRegistry inRegistry = new();
+        source.Start(inRegistry.RegisterSource(source), inRegistry);
+        Frame? read = source.NextFrame();
+
+        await Assert.That(read).IsNotNull();
+        FrameInterfaceInfo? iface = inRegistry.Get(read!.Value.InterfaceId);
+        await Assert.That(iface).IsNotNull();
+        await Assert.That((long)iface!.Properties[BlfInterfacePropertyKeys.Channel]).IsEqualTo(0L);
+        await Assert.That((ushort)iface.Properties[BlfInterfacePropertyKeys.HardwareChannel]).IsEqualTo((ushort)2);
+    }
+
+    [Test]
+    public async Task LinSleepEventWritesType20()
+    {
+        using TestDir dir = new("blf_lin_event");
+        string path = dir.FilePath("output.blf");
+        byte[] linEvent = new byte[12];
+        linEvent[0] = 1;
+        linEvent[4] = 3 << 2;
+        linEvent[8] = 0xB0;
+        linEvent[9] = 0xB0;
+        linEvent[11] = 0x01;
+
+        using (BlfExporter exporter = BlfExporter.CreateBuilder()
+            .ToFile(path)
+            .WithCompressionLevel(BlfCompressionLevel.None)
+            .Build())
+        {
+            exporter.ErrorTolerance = ErrorToleranceMode.Tolerant;
+            bool accepted = exporter.OnFrame(
+                TestHarness.CreateFrame(new FrameId(0), 1_000_000_000L, linEvent, LinkType.Lin));
+            exporter.OnFinish();
+
+            await Assert.That(accepted).IsTrue();
+            await Assert.That(exporter.SkippedCount).IsEqualTo(0);
+            await Assert.That(exporter.FrameCount).IsEqualTo(1);
+        }
+
+        await Assert.That(_FileContainsObjectType(path, BlfConstants.ObjTypeLinMessage2)).IsFalse();
+        await Assert.That(_FileContainsObjectType(path, BlfConstants.ObjTypeLinSleep)).IsTrue();
+
+        using BlfSource source = BlfSource.Open(path);
+        _StartSource(source);
+        Frame? frame = source.NextFrame();
+        await Assert.That(frame).IsNotNull();
+        await Assert.That(frame!.Value.Data.Span[11]).IsEqualTo((byte)0x01);
+    }
+
+    [Test]
+    public async Task LinWakeupEventWritesType62()
+    {
+        using TestDir dir = new("blf_lin_wakeup");
+        string path = dir.FilePath("output.blf");
+        byte[] linEvent = new byte[12];
+        linEvent[0] = 1;
+        linEvent[4] = 3 << 2;
+        linEvent[8] = 0xB0;
+        linEvent[9] = 0xB0;
+        linEvent[11] = 0x04;
+
+        using (BlfExporter exporter = BlfExporter.CreateBuilder()
+            .ToFile(path)
+            .WithCompressionLevel(BlfCompressionLevel.None)
+            .Build())
+        {
+            exporter.OnFrame(TestHarness.CreateFrame(new FrameId(0), 1_000_000_000L, linEvent, LinkType.Lin));
+            exporter.OnFinish();
+            await Assert.That(exporter.FrameCount).IsEqualTo(1);
+        }
+
+        await Assert.That(_FileContainsObjectType(path, BlfConstants.ObjTypeLinWakeup2)).IsTrue();
+
+        using BlfSource source = BlfSource.Open(path);
+        _StartSource(source);
+        Frame? frame = source.NextFrame();
+        await Assert.That(frame).IsNotNull();
+        await Assert.That(frame!.Value.Data.Span[11]).IsEqualTo((byte)0x04);
+    }
+
+    [Test]
+    public async Task LinErrorFrameWritesType60()
+    {
+        using TestDir dir = new("blf_lin_err");
+        string path = dir.FilePath("output.blf");
+        byte[] linError = LinGenerators.BuildLinFrame(0x05, [0x11], checksum: 0x42, errors: 0x08);
+
+        using (BlfExporter exporter = BlfExporter.CreateBuilder()
+            .ToFile(path)
+            .WithCompressionLevel(BlfCompressionLevel.None)
+            .Build())
+        {
+            exporter.ErrorTolerance = ErrorToleranceMode.Tolerant;
+            exporter.OnFrame(TestHarness.CreateFrame(
+                new FrameId(0), 1_000_000_000L, linError, LinkType.Lin));
+            exporter.OnFinish();
+
+            await Assert.That(exporter.SkippedCount).IsEqualTo(0);
+            await Assert.That(exporter.FrameCount).IsEqualTo(1);
+        }
+
+        await Assert.That(_FileContainsObjectType(path, BlfConstants.ObjTypeLinMessage2)).IsFalse();
+        await Assert.That(_FileContainsObjectType(path, BlfConstants.ObjTypeLinCrcError2)).IsTrue();
+
+        using BlfSource source = BlfSource.Open(path);
+        _StartSource(source);
+        Frame? frame = source.NextFrame();
+        await Assert.That(frame).IsNotNull();
+        await Assert.That(frame!.Value.Data.Span[7]).IsEqualTo((byte)0x08);
+    }
+
+    [Test]
+    public async Task CanErrorFrameWritesType2()
+    {
+        using TestDir dir = new("blf_can_err");
+        string path = dir.FilePath("output.blf");
+        byte[] canData = SocketCanGenerators.BuildCanClassic(0x123, [0x01]);
+        BinaryPrimitives.WriteUInt32BigEndian(
+            canData, BinaryPrimitives.ReadUInt32BigEndian(canData) | BlfConstants.SocketCanErr);
+
+        using (BlfExporter exporter = BlfExporter.CreateBuilder()
+            .ToFile(path)
+            .WithCompressionLevel(BlfCompressionLevel.None)
+            .Build())
+        {
+            exporter.OnFrame(TestHarness.CreateFrame(
+                new FrameId(0), 1_000_000_000L, canData, LinkType.CanSocketcan));
+            exporter.OnFinish();
+        }
+
+        await Assert.That(_FileContainsObjectType(path, BlfConstants.ObjTypeCanError)).IsTrue();
+        await Assert.That(_FileContainsObjectType(path, BlfConstants.ObjTypeCanMessage)).IsFalse();
+
+        using BlfSource source = BlfSource.Open(path);
+        _StartSource(source);
+        Frame? frame = source.NextFrame();
+        await Assert.That(frame).IsNotNull();
+        uint id = BinaryPrimitives.ReadUInt32BigEndian(frame!.Value.Data.Span);
+        await Assert.That(id & BlfConstants.SocketCanErr).IsEqualTo(BlfConstants.SocketCanErr);
+    }
+
+    [Test]
+    public async Task EthernetVlanTciZeroRoundTripsViaType120()
+    {
+        using TestDir dir = new("blf_eth_tci0");
+        string path = dir.FilePath("output.blf");
+        byte[] ethernet = new byte[18];
+        ethernet.AsSpan(0, 6).Fill(0xFF);
+        ethernet.AsSpan(6, 6).Fill(0x11);
+        ethernet[12] = 0x81;
+        ethernet[13] = 0x00;
+        ethernet[14] = 0x00;
+        ethernet[15] = 0x00;
+        ethernet[16] = 0x08;
+        ethernet[17] = 0x00;
+
+        using (BlfExporter exporter = BlfExporter.CreateBuilder()
+            .ToFile(path)
+            .WithCompressionLevel(BlfCompressionLevel.None)
+            .Build())
+        {
+            exporter.OnFrame(TestHarness.CreateFrame(new FrameId(0), 1_000_000_000L, ethernet));
+            exporter.OnFinish();
+        }
+
+        await Assert.That(_FileContainsObjectType(path, BlfConstants.ObjTypeEthernetFrameEx)).IsTrue();
+        await Assert.That(_FileContainsObjectType(path, BlfConstants.ObjTypeEthernetFrame)).IsFalse();
+
+        using BlfSource source = BlfSource.Open(path);
+        _StartSource(source);
+        Frame? frame = source.NextFrame();
+        await Assert.That(frame).IsNotNull();
+        await Assert.That(frame!.Value.Data.ToArray()).IsEquivalentTo(ethernet);
+    }
+
+    [Test]
+    public async Task EthernetFrameWithFcsRoundTripsViaType120()
+    {
+        using TestDir dir = new("blf_eth_fcs");
+        string path = dir.FilePath("output.blf");
+        byte[] ethernet = FrameGenerators.BuildEthernetIpv4UdpFrame(8);
+        byte[] withFcs = new byte[ethernet.Length + 4];
+        ethernet.CopyTo(withFcs, 0);
+        withFcs[^4] = 0xDE;
+        withFcs[^3] = 0xAD;
+        withFcs[^2] = 0xBE;
+        withFcs[^1] = 0xEF;
+
+        using (BlfExporter exporter = BlfExporter.CreateBuilder()
+            .ToFile(path)
+            .WithCompressionLevel(BlfCompressionLevel.None)
+            .Build())
+        {
+            exporter.OnFrame(TestHarness.CreateFrame(new FrameId(0), 1_000_000_000L, withFcs));
+            exporter.OnFinish();
+        }
+
+        using BlfSource source = BlfSource.Open(path);
+        _StartSource(source);
+        Frame? frame = source.NextFrame();
+        await Assert.That(frame).IsNotNull();
+        await Assert.That(frame!.Value.Data.ToArray()).IsEquivalentTo(withFcs);
+    }
+
+    [Test]
+    public async Task LinDataFrameWritesObjectVersionOne()
+    {
+        using TestDir dir = new("blf_lin_ver");
+        string path = dir.FilePath("output.blf");
+        byte[] linData = LinGenerators.BuildLinFrame(0x05, [0x11, 0x22, 0x33], checksum: 0x42);
+
+        using (BlfExporter exporter = BlfExporter.CreateBuilder()
+            .ToFile(path)
+            .WithCompressionLevel(BlfCompressionLevel.None)
+            .Build())
+        {
+            exporter.OnFrame(TestHarness.CreateFrame(
+                new FrameId(0), 1_000_000_000L, linData, LinkType.Lin));
+            exporter.OnFinish();
+        }
+
+        await Assert.That(_FindObjectVersion(path, BlfConstants.ObjTypeLinMessage2)).IsEqualTo((ushort)1);
+    }
+
+    [Test]
+    public async Task FlexRayChannelBRoundTripsHeaderCrc()
+    {
+        using TestDir dir = new("blf_fr_chb");
+        string path = dir.FilePath("output.blf");
+        byte[] frData = FlexRayGenerators.BuildFlexRayFrame(1, 10, 3, 0x5A3, [0xDE, 0xAD], sync: true);
+
+        using (BlfExporter exporter = BlfExporter.CreateBuilder()
+            .ToFile(path)
+            .WithCompressionLevel(BlfCompressionLevel.None)
+            .Build())
+        {
+            exporter.OnFrame(TestHarness.CreateFrame(
+                new FrameId(0), 1_000_000_000L, frData, LinkType.Flexray));
+            exporter.OnFinish();
+        }
+
+        using BlfSource source = BlfSource.Open(path);
+        _StartSource(source);
+        Frame? frame = source.NextFrame();
+        await Assert.That(frame).IsNotNull();
+        await Assert.That(frame!.Value.Data.ToArray()).IsEquivalentTo(frData);
+        bool parsed = FlexRayLinkTypeFrame.TryParseDataFrame(
+            frame.Value.Data.Span, out FlexRayLinkTypeFrame.Fields fields, out _);
+        await Assert.That(parsed).IsTrue();
+        await Assert.That(fields.ChannelB).IsTrue();
+        await Assert.That(fields.HeaderCrc).IsEqualTo((ushort)0x5A3);
     }
 
     private static void _StartSource(BlfSource source)
@@ -646,5 +937,45 @@ internal sealed class BlfExporterTests
         FrameInterfaceRegistry registry = new();
         FrameSourceId sourceId = registry.RegisterSource(source);
         source.Start(sourceId, registry);
+    }
+
+    private static bool _FileContainsObjectType(string path, uint objectType)
+    {
+        byte[] fileBytes = File.ReadAllBytes(path);
+        for (int i = 0; i + 16 <= fileBytes.Length; i++)
+        {
+            if (BinaryPrimitives.ReadUInt32LittleEndian(fileBytes.AsSpan(i)) != 0x4A424F4C)
+            {
+                continue;
+            }
+
+            if (BinaryPrimitives.ReadUInt32LittleEndian(fileBytes.AsSpan(i + 12)) == objectType)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static ushort _FindObjectVersion(string path, uint objectType)
+    {
+        byte[] fileBytes = File.ReadAllBytes(path);
+        for (int i = 0; i + 24 <= fileBytes.Length; i++)
+        {
+            if (BinaryPrimitives.ReadUInt32LittleEndian(fileBytes.AsSpan(i)) != 0x4A424F4C)
+            {
+                continue;
+            }
+
+            if (BinaryPrimitives.ReadUInt32LittleEndian(fileBytes.AsSpan(i + 12)) != objectType)
+            {
+                continue;
+            }
+
+            return BinaryPrimitives.ReadUInt16LittleEndian(fileBytes.AsSpan(i + 22));
+        }
+
+        return ushort.MaxValue;
     }
 }

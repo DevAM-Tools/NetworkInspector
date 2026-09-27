@@ -13,11 +13,15 @@ namespace NetworkInspector.Sources.Blf.Format;
 /// <param name="LinkType">Link type for the reconstructed frame.</param>
 /// <param name="Channel">Channel number (BLF-level, used for interface registration).</param>
 /// <param name="ObjectType">Object type that produced this frame (for bus type classification).</param>
+/// <param name="HardwareChannel">
+/// Ethernet hardware channel when the object marked it valid. Null for every other object.
+/// </param>
 internal readonly record struct BlfFrameResult(
     ReadOnlyMemory<byte> FrameData,
     LinkType LinkType,
     ushort Channel,
-    uint ObjectType);
+    uint ObjectType,
+    ushort? HardwareChannel = null);
 
 /// <summary>
 /// Dispatches BLF object payloads to the appropriate protocol parser
@@ -67,6 +71,7 @@ internal static class BlfFrameDispatcher
                     LinkType = LinkType.Ethernet,
                     Channel = ethCh120,
                     ObjectType = objectInfo.ObjectType,
+                    HardwareChannel = _HardwareChannelOrNull(objectInfo),
                 };
                 return true;
 
@@ -82,6 +87,7 @@ internal static class BlfFrameDispatcher
                     LinkType = LinkType.Ethernet,
                     Channel = ethCh102,
                     ObjectType = objectInfo.ObjectType,
+                    HardwareChannel = _HardwareChannelOrNull(objectInfo),
                 };
                 return true;
 
@@ -184,6 +190,36 @@ internal static class BlfFrameDispatcher
     }
 
     /// <summary>
+    /// Link type for a BLF object type. Both the file reader and the stream reader use this map.
+    /// </summary>
+    internal static LinkType LinkTypeForObject(uint objectType) => objectType switch
+    {
+        BlfConstants.ObjTypeEthernetFrame or BlfConstants.ObjTypeEthernetFrameEx
+            or BlfConstants.ObjTypeEthernetRxError => LinkType.Ethernet,
+
+        BlfConstants.ObjTypeCanMessage or BlfConstants.ObjTypeCanError
+            or BlfConstants.ObjTypeCanOverload or BlfConstants.ObjTypeCanErrorExt
+            or BlfConstants.ObjTypeCanMessage2 or BlfConstants.ObjTypeCanFdMessage
+            or BlfConstants.ObjTypeCanFdMessage64 or BlfConstants.ObjTypeCanFdError64
+            or BlfConstants.ObjTypeCanXlChannelFrame
+            => LinkType.CanSocketcan,
+
+        BlfConstants.ObjTypeLinMessage or BlfConstants.ObjTypeLinMessage2
+            or BlfConstants.ObjTypeLinCrcError or BlfConstants.ObjTypeLinCrcError2
+            or BlfConstants.ObjTypeLinRcvError or BlfConstants.ObjTypeLinRcvError2
+            or BlfConstants.ObjTypeLinSndError or BlfConstants.ObjTypeLinSndError2
+            or BlfConstants.ObjTypeLinSleep or BlfConstants.ObjTypeLinWakeup
+            or BlfConstants.ObjTypeLinWakeup2
+            => LinkType.Lin,
+
+        BlfConstants.ObjTypeFlexRayData or BlfConstants.ObjTypeFlexRayMessage
+            or BlfConstants.ObjTypeFlexRayRcvMessage or BlfConstants.ObjTypeFlexRayRcvMessageEx
+            => LinkType.Flexray,
+
+        _ => LinkType.Null,
+    };
+
+    /// <summary>
     /// Reads only the channel field for a frame-producing object type, without reconstructing
     /// frame bytes. Uses the same minimum payload sizes as the corresponding parsers.
     /// </summary>
@@ -229,6 +265,16 @@ internal static class BlfFrameDispatcher
     #endregion
 
     #region Private Helpers
+
+    private static ushort? _HardwareChannelOrNull(in BlfObjectInfo objectInfo)
+    {
+        if (!EthernetParser.TryReadHardwareChannel(objectInfo.ObjectType, objectInfo.Payload, out ushort hardwareChannel))
+        {
+            return null;
+        }
+
+        return hardwareChannel;
+    }
 
     /// <summary>Parser delegate for CAN/LIN/FlexRay object types.</summary>
     private delegate bool TryParseDelegate(ReadOnlySpan<byte> payload, out byte[] frame, out ushort channel);

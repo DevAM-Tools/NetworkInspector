@@ -54,7 +54,9 @@ internal sealed class BlfFormatConstantsTests
     [Test]
     [Arguments(100UL, BlfConstants.TimestampResolution10Us, 1_000_000L)]
     [Arguments(42UL, BlfConstants.TimestampResolution1Ns, 42L)]
-    [Arguments(99UL, 0xFFu, 99L)]
+    [Arguments(100UL, 0x11u, 0L)]
+    [Arguments(99UL, 0xFFu, 0L)]
+    [Arguments(5UL, 0u, 0L)]
     public async Task ToNanoseconds_ConvertsByResolution(ulong raw, uint flags, long expected)
     {
         await Assert.That(BlfTimestamp.ToNanoseconds(raw, flags)).IsEqualTo(expected);

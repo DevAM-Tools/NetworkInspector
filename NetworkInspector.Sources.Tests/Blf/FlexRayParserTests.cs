@@ -92,7 +92,51 @@ internal sealed class FlexRayParserTests
         await Assert.That(fields.FrameId).IsEqualTo((ushort)0x20);
         await Assert.That(fields.Cycle).IsEqualTo((byte)5);
         await Assert.That(fields.Sfi).IsTrue();
+        await Assert.That(fields.ChannelB).IsTrue();
         await Assert.That(dataBytes.Length).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task Type41Channel0IsChannelA()
+    {
+        byte[] payload = new byte[32];
+
+        bool ok = FlexRayParser.TryParseFlexRayMessage(payload, out byte[] frame, out _);
+
+        await Assert.That(ok).IsTrue();
+        bool parsed = FlexRayLinkTypeFrame.TryParseDataFrame(frame, out FlexRayLinkTypeFrame.Fields fields, out _);
+        await Assert.That(parsed).IsTrue();
+        await Assert.That(fields.ChannelB).IsFalse();
+    }
+
+    [Test]
+    public async Task Type29Channel2IsChannelB()
+    {
+        byte[] payload = new byte[12];
+        BinaryPrimitives.WriteUInt16LittleEndian(payload, 2);
+
+        bool ok = FlexRayParser.TryParseFlexRayData(payload, out byte[] frame, out _);
+
+        await Assert.That(ok).IsTrue();
+        bool parsed = FlexRayLinkTypeFrame.TryParseDataFrame(frame, out FlexRayLinkTypeFrame.Fields fields, out _);
+        await Assert.That(parsed).IsTrue();
+        await Assert.That(fields.ChannelB).IsTrue();
+    }
+
+    [Test]
+    public async Task Type41WideFrameIdAndCycleAreMasked()
+    {
+        byte[] payload = new byte[32];
+        BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(20), 0x800);
+        payload[27] = 0x40;
+
+        bool ok = FlexRayParser.TryParseFlexRayMessage(payload, out byte[] frame, out _);
+
+        await Assert.That(ok).IsTrue();
+        bool parsed = FlexRayLinkTypeFrame.TryParseDataFrame(frame, out FlexRayLinkTypeFrame.Fields fields, out _);
+        await Assert.That(parsed).IsTrue();
+        await Assert.That(fields.FrameId).IsEqualTo((ushort)0);
+        await Assert.That(fields.Cycle).IsEqualTo((byte)0);
     }
 
     [Test]
@@ -143,7 +187,95 @@ internal sealed class FlexRayParserTests
         await Assert.That(parsed).IsTrue();
         await Assert.That(fields.FrameId).IsEqualTo((ushort)42);
         await Assert.That(fields.Cycle).IsEqualTo((byte)7);
+        await Assert.That(fields.ChannelB).IsFalse();
         await Assert.That(dataBytes.Length).IsEqualTo(8);
+    }
+
+    [Test]
+    public async Task Type50ExclusiveBUsesHeaderCrc2()
+    {
+        byte[] payload = new byte[44];
+        BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(4), 0x0002);
+        BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(18), 0);
+        BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(20), 0x5A3);
+
+        bool ok = FlexRayParser.TryParseFlexRayRcvMessage(payload, out byte[] frame, out _);
+
+        await Assert.That(ok).IsTrue();
+        bool parsed = FlexRayLinkTypeFrame.TryParseDataFrame(frame, out FlexRayLinkTypeFrame.Fields fields, out _);
+        await Assert.That(parsed).IsTrue();
+        await Assert.That(fields.ChannelB).IsTrue();
+        await Assert.That(fields.HeaderCrc).IsEqualTo((ushort)0x5A3);
+    }
+
+    [Test]
+    public async Task Type50ChannelAIgnoresHeaderCrc2()
+    {
+        byte[] payload = new byte[44];
+        BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(4), 0x0001);
+        BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(18), 0x111);
+        BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(20), 0x5A3);
+
+        bool ok = FlexRayParser.TryParseFlexRayRcvMessage(payload, out byte[] frame, out _);
+
+        await Assert.That(ok).IsTrue();
+        bool parsed = FlexRayLinkTypeFrame.TryParseDataFrame(frame, out FlexRayLinkTypeFrame.Fields fields, out _);
+        await Assert.That(parsed).IsTrue();
+        await Assert.That(fields.ChannelB).IsFalse();
+        await Assert.That(fields.HeaderCrc).IsEqualTo((ushort)0x111);
+    }
+
+    [Test]
+    [Arguments((ushort)0, true)]
+    [Arguments((ushort)1, false)]
+    [Arguments((ushort)2, true)]
+    [Arguments((ushort)3, true)]
+    public async Task Type50ChannelMaskSelectsBus(ushort channelMask, bool expectChannelB)
+    {
+        byte[] payload = new byte[44];
+        BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(4), channelMask);
+
+        bool ok = FlexRayParser.TryParseFlexRayRcvMessage(payload, out byte[] frame, out _);
+
+        await Assert.That(ok).IsTrue();
+        bool parsed = FlexRayLinkTypeFrame.TryParseDataFrame(frame, out FlexRayLinkTypeFrame.Fields fields, out _);
+        await Assert.That(parsed).IsTrue();
+        await Assert.That(fields.ChannelB).IsEqualTo(expectChannelB);
+    }
+
+    [Test]
+    public async Task Type50TruncatedValidBytesKeepDeclaredIsoLength()
+    {
+        byte[] payload = new byte[44 + 8];
+        BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(4), 0x0001);
+        BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(22), 16);
+        BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(24), 8);
+        payload[44] = 0xAA;
+        payload[51] = 0xBB;
+
+        bool ok = FlexRayParser.TryParseFlexRayRcvMessage(payload, out byte[] frame, out _);
+
+        await Assert.That(ok).IsTrue();
+        bool parsed = FlexRayLinkTypeFrame.TryParseDataFrame(frame, out FlexRayLinkTypeFrame.Fields fields, out ReadOnlySpan<byte> data);
+        byte[] dataBytes = data.ToArray();
+        await Assert.That(parsed).IsTrue();
+        await Assert.That(fields.PayloadByteCount).IsEqualTo(16);
+        await Assert.That(dataBytes.Length).IsEqualTo(16);
+        await Assert.That(dataBytes[0]).IsEqualTo((byte)0xAA);
+        await Assert.That(dataBytes[7]).IsEqualTo((byte)0xBB);
+        await Assert.That(dataBytes[8]).IsEqualTo((byte)0);
+        await Assert.That(dataBytes[15]).IsEqualTo((byte)0);
+    }
+
+    [Test]
+    public async Task Type50DeclaredPayloadLength300ReturnsFalse()
+    {
+        byte[] payload = new byte[44];
+        BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(22), 300);
+
+        bool ok = FlexRayParser.TryParseFlexRayRcvMessage(payload, out _, out _);
+
+        await Assert.That(ok).IsFalse();
     }
 
     [Test]
@@ -178,7 +310,8 @@ internal sealed class FlexRayParserTests
         BinaryPrimitives.WriteUInt16LittleEndian(payload, 3);
         BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(4), 0x0002);
         BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(16), 0x55);
-        BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(18), 0x777);
+        BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(18), 0x111);
+        BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(20), 0x777);
         BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(22), 4);
         BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(24), 4);
         payload[26] = 3;
@@ -197,6 +330,7 @@ internal sealed class FlexRayParserTests
         await Assert.That(fields.FrameId).IsEqualTo((ushort)0x55);
         await Assert.That(fields.Cycle).IsEqualTo((byte)3);
         await Assert.That(fields.Ppi).IsTrue();
+        await Assert.That(fields.HeaderCrc).IsEqualTo((ushort)0x777);
         await Assert.That(dataBytes.Length).IsEqualTo(4);
         await Assert.That(dataBytes[0]).IsEqualTo((byte)0xAA);
         await Assert.That(dataBytes[3]).IsEqualTo((byte)0xBB);
@@ -211,5 +345,20 @@ internal sealed class FlexRayParserTests
         bool ok = FlexRayParser.TryParseFlexRayRcvMessageEx(payload, out _, out _);
 
         await Assert.That(ok).IsFalse();
+    }
+
+    [Test]
+    public async Task Type50WideCycleIsMasked()
+    {
+        byte[] payload = new byte[44];
+        BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(4), 0x0001);
+        payload[26] = 0x40;
+
+        bool ok = FlexRayParser.TryParseFlexRayRcvMessage(payload, out byte[] frame, out _);
+
+        await Assert.That(ok).IsTrue();
+        bool parsed = FlexRayLinkTypeFrame.TryParseDataFrame(frame, out FlexRayLinkTypeFrame.Fields fields, out _);
+        await Assert.That(parsed).IsTrue();
+        await Assert.That(fields.Cycle).IsEqualTo((byte)0);
     }
 }

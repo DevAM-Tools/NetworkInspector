@@ -16,12 +16,13 @@ internal static class RoundtripAssertions
 {
     /// <summary>
     /// Tolerance in nanoseconds when comparing original vs. tshark-reported timestamps.
-    /// 0 means "must match exactly". Tests pass per-format tolerance because PCAPNG
-    /// preserves nanoseconds while BLF quantizes to 10 µs.
+    /// 0 means the values must match exactly. Exported PCAPNG and BLF object timestamps
+    /// are nanoseconds. <see cref="BlfTickNs"/> is the 10 µs unit of a log object whose
+    /// flags word is still 1.
     /// </summary>
     internal const long ExactNs = 0;
 
-    /// <summary>10 µs tolerance for BLF timestamps (the BLF native tick resolution).</summary>
+    /// <summary>10 µs in nanoseconds. Used when a log object flags word is 1.</summary>
     internal const long BlfTickNs = 10_000;
 
     /// <summary>

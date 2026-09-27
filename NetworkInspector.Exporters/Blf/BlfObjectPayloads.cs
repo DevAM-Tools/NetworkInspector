@@ -14,6 +14,14 @@ namespace NetworkInspector.Exporters.Blf;
 /// and preserving it would require extending <see cref="Frame"/> with a breaking change
 /// across all sources.
 /// </para>
+/// <para>
+/// <b>LIN events:</b> Sleep, wakeup, and error DLT_LIN frames are written as Type 20, 62,
+/// 60, 61, or 58. They are not written as Type 57 data objects.
+/// </para>
+/// <para>
+/// <b>CAN errors:</b> SocketCAN frames with the error flag are written as Type 2
+/// (<c>CAN_ERROR</c>), not as classic Type 1 data.
+/// </para>
 /// </summary>
 internal static class BlfObjectPayloads
 {
@@ -105,6 +113,47 @@ internal static class BlfObjectPayloads
         return true;
     }
 
+    /// <summary>
+    /// Builds an Ethernet Frame EX (Type 120) payload from a raw Ethernet frame.
+    /// 32-byte header, then the frame bytes unchanged so VLAN TCI 0, QinQ, and FCS survive.
+    /// </summary>
+    /// <param name="frame">Raw Ethernet frame bytes.</param>
+    /// <param name="channel">BLF channel number, stored as u16 LE at offset 4.</param>
+    /// <param name="output">Buffer to write the payload into (reset before use).</param>
+    /// <param name="hardwareChannel">
+    /// Hardware channel written at offset 6 with flags bit 0x0002. Omitted when null.
+    /// </param>
+    /// <returns>
+    /// <c>true</c> if the payload was built; <c>false</c> if the frame is shorter than 14 bytes
+    /// or longer than <see cref="ushort.MaxValue"/>.
+    /// </returns>
+    internal static bool TryBuildEthernetFrameExPayload(
+        ReadOnlySpan<byte> frame, ushort channel, PooledBuffer output, ushort? hardwareChannel = null)
+    {
+        if (frame.Length < 14 || frame.Length > ushort.MaxValue)
+        {
+            return false;
+        }
+
+        output.Reset();
+
+        // Type 120 header: struct_length@0, flags@2, channel@4, frame_length@22, raw frame@32.
+        Span<byte> header = output.Reserve(32);
+        header.Clear();
+        BinaryPrimitives.WriteUInt16LittleEndian(header, 32);
+        BinaryPrimitives.WriteUInt16LittleEndian(header.Slice(4), channel);
+        if (hardwareChannel.HasValue)
+        {
+            // BLF_ETHERNET_EX_HARDWARECHANNEL. The hardware channel itself is at offset 6.
+            BinaryPrimitives.WriteUInt16LittleEndian(header.Slice(2), 0x0002);
+            BinaryPrimitives.WriteUInt16LittleEndian(header.Slice(6), hardwareChannel.Value);
+        }
+
+        BinaryPrimitives.WriteUInt16LittleEndian(header.Slice(22), (ushort)frame.Length);
+        output.Write(frame);
+        return true;
+    }
+
     #endregion
 
     #region CAN classic
@@ -167,6 +216,29 @@ internal static class BlfObjectPayloads
             socketCanFrame.Slice(8, actualDataLen).CopyTo(dataOut);
         }
 
+        return true;
+    }
+
+    /// <summary>
+    /// Builds a CAN Error (Type 2) payload from a SocketCAN error frame.
+    /// Layout: channel (u16 LE), length 0 (u16 LE), reserved 0 (u32 LE).
+    /// </summary>
+    /// <param name="socketCanFrame">SocketCAN frame; only the 8-byte header size is required.</param>
+    /// <param name="channel">BLF channel number.</param>
+    /// <param name="output">Buffer to write the payload into (reset before use).</param>
+    /// <returns><c>true</c> if the payload was built; <c>false</c> if the frame is shorter than 8 bytes.</returns>
+    internal static bool TryBuildCanErrorPayload(
+        ReadOnlySpan<byte> socketCanFrame, ushort channel, PooledBuffer output)
+    {
+        if (socketCanFrame.Length < 8)
+        {
+            return false;
+        }
+
+        output.Reset();
+        Span<byte> header = output.Reserve(8);
+        header.Clear();
+        BinaryPrimitives.WriteUInt16LittleEndian(header, channel);
         return true;
     }
 
@@ -486,12 +558,14 @@ internal static class BlfObjectPayloads
         BinaryPrimitives.WriteUInt16LittleEndian(header, channel);                          // channel
         // header[2..4]  = version (0)
         BinaryPrimitives.WriteUInt16LittleEndian(header.Slice(4), channelMask);            // channelMask: bit0=A, bit1=B
-        BinaryPrimitives.WriteUInt16LittleEndian(header.Slice(6), 0x0001);                 // dir = RX
+        // Vector BLF_DIR_RX is 0. Do not write 1 — that is BLF_DIR_TX.
+        BinaryPrimitives.WriteUInt16LittleEndian(header.Slice(6), 0);
         // header[8..12]  = clientIndex (0)
         // header[12..16] = clusterNo (0)
         BinaryPrimitives.WriteUInt16LittleEndian(header.Slice(16), frameId);                // frameId
-        BinaryPrimitives.WriteUInt16LittleEndian(header.Slice(18), headerCrc);              // headerCrc1
-        // header[20..22] = headerCrc2 (0)
+        // Dual CRC: Channel A readers use headerCrc1; exclusive-B files store the CRC in headerCrc2.
+        BinaryPrimitives.WriteUInt16LittleEndian(header.Slice(18), headerCrc);
+        BinaryPrimitives.WriteUInt16LittleEndian(header.Slice(20), headerCrc);
         BinaryPrimitives.WriteUInt16LittleEndian(header.Slice(22), (ushort)dataLength);     // payloadLength
         BinaryPrimitives.WriteUInt16LittleEndian(header.Slice(24), (ushort)dataLength);     // payloadLengthValid
         BinaryPrimitives.WriteUInt16LittleEndian(header.Slice(26), cycle);                  // cycle
@@ -596,7 +670,9 @@ internal static class BlfObjectPayloads
         // configuredNodeAddress(36) = 0
         payload[37] = id;           // id (6-bit frame id)
         payload[38] = dlc;          // dlc
-        // checksumModel(39) = 0
+        // DLT byte 4 bits 1-0: 1 = classic → model 0, 2 = enhanced → model 1.
+        byte checksumTypeBits = (byte)(dltLinFrame[4] & 0x03);
+        payload[39] = checksumTypeBits == 2 ? (byte)1 : (byte)0;
 
         // ── per-byte timestamps (offset 40..112) ──
         // databyteTimestamps[9] (40..112) = 0
@@ -618,6 +694,93 @@ internal static class BlfObjectPayloads
         // fsmState(128)   = 0
         // res1(129..132)  = 0
 
+        return true;
+    }
+
+    /// <summary>
+    /// Builds a LIN V2 error payload (Types 58, 60, and 61). The object type carries the error kind.
+    /// Channel is at offset 12, the 6-bit id at 37, DLC at 38, and data at 112.
+    /// </summary>
+    internal static bool TryBuildLinError2Payload(
+        ReadOnlySpan<byte> dltLinFrame, ushort channel, PooledBuffer output)
+    {
+        if (dltLinFrame.Length < 8)
+        {
+            return false;
+        }
+
+        output.Reset();
+        const int LinError2Size = 121;
+        Span<byte> payload = output.Reserve(LinError2Size);
+        payload.Clear();
+        BinaryPrimitives.WriteUInt16LittleEndian(payload.Slice(12), channel);
+        payload[37] = (byte)(dltLinFrame[5] & 0x3F);
+        byte dlc = (byte)((dltLinFrame[4] >> 4) & 0x0F);
+        if (dlc > _MaxLinDataLength)
+        {
+            dlc = (byte)_MaxLinDataLength;
+        }
+
+        payload[38] = dlc;
+        int copyLength = Math.Min(dlc, Math.Max(0, dltLinFrame.Length - 8));
+        if (copyLength > 0)
+        {
+            dltLinFrame.Slice(8, copyLength).CopyTo(payload.Slice(112));
+        }
+
+        return true;
+    }
+
+    /// <summary>Type 60 CRC error. Same bytes as <see cref="TryBuildLinError2Payload"/>.</summary>
+    internal static bool TryBuildLinCrcError2Payload(
+        ReadOnlySpan<byte> dltLinFrame, ushort channel, PooledBuffer output) =>
+        TryBuildLinError2Payload(dltLinFrame, channel, output);
+
+    /// <summary>Type 61 receive error. Same bytes as <see cref="TryBuildLinError2Payload"/>.</summary>
+    internal static bool TryBuildLinRcvError2Payload(
+        ReadOnlySpan<byte> dltLinFrame, ushort channel, PooledBuffer output) =>
+        TryBuildLinError2Payload(dltLinFrame, channel, output);
+
+    /// <summary>Type 58 send error. Same bytes as <see cref="TryBuildLinError2Payload"/>.</summary>
+    internal static bool TryBuildLinSndError2Payload(
+        ReadOnlySpan<byte> dltLinFrame, ushort channel, PooledBuffer output) =>
+        TryBuildLinError2Payload(dltLinFrame, channel, output);
+
+    /// <summary>
+    /// Builds a Type 62 wakeup payload. Channel is the u16 at offset 12 of a 20-byte bus event.
+    /// </summary>
+    internal static bool TryBuildLinWakeup2Payload(
+        ReadOnlySpan<byte> dltLinFrame, ushort channel, PooledBuffer output)
+    {
+        if (dltLinFrame.Length < 12)
+        {
+            return false;
+        }
+
+        output.Reset();
+        Span<byte> payload = output.Reserve(20);
+        payload.Clear();
+        BinaryPrimitives.WriteUInt16LittleEndian(payload.Slice(12), channel);
+        return true;
+    }
+
+    /// <summary>
+    /// Builds a Type 20 sleep payload: channel at 0, reason at 2, flags at 3.
+    /// Reason 1 is a go-to-sleep frame and reason 2 is bus idle.
+    /// </summary>
+    internal static bool TryBuildLinSleepPayload(
+        ReadOnlySpan<byte> dltLinFrame, ushort channel, byte reason, PooledBuffer output)
+    {
+        if (dltLinFrame.Length < 12)
+        {
+            return false;
+        }
+
+        output.Reset();
+        Span<byte> payload = output.Reserve(4);
+        payload.Clear();
+        BinaryPrimitives.WriteUInt16LittleEndian(payload, channel);
+        payload[2] = reason;
         return true;
     }
 

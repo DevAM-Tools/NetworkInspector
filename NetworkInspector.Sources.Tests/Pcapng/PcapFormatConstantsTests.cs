@@ -44,11 +44,38 @@ internal sealed class PcapFormatConstantsTests
     }
 
     [Test]
-    [Arguments(0, 0)]
+    [Arguments(0, 4)]
     [Arguments(1, 8)]
     [Arguments(5, 12)]
     public async Task OptionSize_ComputesTlvSize(int valueLength, int expected)
     {
         await Assert.That(PcapPadding.OptionSize(valueLength)).IsEqualTo(expected);
+    }
+
+    [Test]
+    public async Task OptionSize_NegativeLength_ThrowsArgumentOutOfRangeException()
+    {
+        await Assert.That(() => PcapPadding.OptionSize(-1)).Throws<ArgumentOutOfRangeException>();
+    }
+
+    [Test]
+    public async Task TryPacketDataBounds_CapLenPlusPadMustFit()
+    {
+        await Assert.That(PcapngBlockLayout.TryPacketDataBounds(28, 96, 61, out int captured, out int pad)).IsTrue();
+        await Assert.That(captured).IsEqualTo(61);
+        await Assert.That(pad).IsEqualTo(3);
+
+        await Assert.That(PcapngBlockLayout.TryPacketDataBounds(28, 96, 65, out _, out _)).IsFalse();
+    }
+
+    [Test]
+    public async Task OptionIterator_StopsWhenPaddedTlvDoesNotFit()
+    {
+        // code=1, length=1, one value byte, missing 3 pad bytes
+        byte[] truncated = [1, 0, 1, 0, 0x41];
+        PcapOptionIterator iter = new(truncated);
+        bool hasOption = iter.TryGetNext(out _);
+
+        await Assert.That(hasOption).IsFalse();
     }
 }

@@ -45,7 +45,7 @@ public sealed partial class BlfSource : IRandomAccessFrameSource, IErrorTolerant
     // Interface registration
     private FrameSourceId _SourceId;
     private volatile FrameInterfaceRegistry? _Registry;
-    private readonly Dictionary<(uint ObjectType, ushort Channel), FrameInterfaceId> _InterfaceMap = new();
+    private readonly Dictionary<(uint ObjectType, ushort Channel, bool HasHardwareChannel, ushort HardwareChannel), FrameInterfaceId> _InterfaceMap = new();
 
     /// <summary>
     /// Synchronises concurrent <see cref="_GetOrRegisterInterface"/> calls that arrive via

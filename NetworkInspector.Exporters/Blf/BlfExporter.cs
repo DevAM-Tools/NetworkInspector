@@ -6,13 +6,15 @@ namespace NetworkInspector.Exporters.Blf;
 /// BLF frame exporter. Writes captured frames to a BLF file.
 /// <para>
 /// Implements <see cref="IFrameListener"/> for integration with the capture pipeline.
-/// Supports Ethernet, CAN classic (<see cref="LinkType.CanSocketcan"/>, <see cref="LinkType.Can20B"/>),
-/// CAN FD (Type 101), CAN XL (SocketCAN XLF on <see cref="LinkType.CanSocketcan"/>), FlexRay, and LIN frames.
+/// Supports Ethernet (Type 120 raw frame), CAN classic (<see cref="LinkType.CanSocketcan"/>, <see cref="LinkType.Can20B"/>),
+/// CAN FD (Type 101), CAN XL (SocketCAN XLF on <see cref="LinkType.CanSocketcan"/>), FlexRay (Type 50),
+/// LIN data frames (Type 57), LIN errors (Types 58, 60, 61), LIN sleep (Type 20), and LIN wakeup (Type 62).
 /// Unsupported link types are skipped (counted in
 /// <see cref="IExporterStatistics.SkippedCount"/>).
 /// Lazy initialization defers file creation until the first frame.
-/// Channel 0 is stored as 1: Vector tools often reject files that keep channel 0.
-/// A non-zero <see cref="FrameInterfacePropertyKeys.BlfChannel"/> value is preserved.
+/// A <see cref="BlfInterfacePropertyKeys.Channel"/> value is preserved, including 0.
+/// When the property is absent the channel defaults to 1.
+/// A <see cref="BlfInterfacePropertyKeys.HardwareChannel"/> value is written into Type 120.
 /// </para>
 /// <para>
 /// <b>Thread safety:</b> Not thread-safe. <see cref="OnFrame"/> and <see cref="OnFinish"/>
@@ -340,28 +342,41 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
         long timestampNs = frame.Timestamp.AsNanos;
         int currentIndex = FrameCount + SkippedCount;
 
-        // Look up channel from the frame's interface properties for round-trip preservation.
-        // Opaque property bags may hold any type — convert without exception-based control flow.
-        // Channel 0 is stored as 1 because Vector tools often reject it.
+        // Channel defaults to 1 only when the interface has no blf.channel property.
+        // An explicit 0 is kept. Hardware channel is written only when that property is present.
         ushort channel = 1;
+        bool hasChannel = false;
+        ushort? hardwareChannel = null;
         if (frame.HasInterface
-            && frame.Registry.TryGet(frame.InterfaceId, out FrameInterfaceInfo? interfaceInfo)
-            && interfaceInfo.Properties.TryGetValue(FrameInterfacePropertyKeys.BlfChannel, out object? channelValue))
+            && frame.Registry.TryGet(frame.InterfaceId, out FrameInterfaceInfo? interfaceInfo))
         {
-            if (!InterfaceChannelConverter.TryConvertToUInt16(channelValue, out ushort mapped))
+            if (interfaceInfo.Properties.TryGetValue(BlfInterfacePropertyKeys.Channel, out object? channelValue))
             {
-                return _HandleSkip(new ExportErrorEventArgs
+                if (!InterfaceChannelConverter.TryConvertToUInt16(channelValue, out ushort mapped))
                 {
-                    ItemIndex = currentIndex,
-                    Kind = ExportErrorKind.SerializationError,
-                    Message = $"BLF channel value '{channelValue}' cannot be converted to a UInt16 channel id.",
-                });
+                    return _HandleSkip(new ExportErrorEventArgs
+                    {
+                        ItemIndex = currentIndex,
+                        Kind = ExportErrorKind.SerializationError,
+                        Message = $"BLF channel value '{channelValue}' cannot be converted to a UInt16 channel id.",
+                    });
+                }
+
+                channel = mapped;
+                hasChannel = true;
             }
 
-            if (mapped != 0)
+            if (interfaceInfo.Properties.TryGetValue(
+                    BlfInterfacePropertyKeys.HardwareChannel, out object? hardwareValue)
+                && hardwareValue is ushort hardware)
             {
-                channel = mapped;
+                hardwareChannel = hardware;
             }
+        }
+
+        if (!hasChannel)
+        {
+            channel = 1;
         }
 
         // Determine BLF object type from link type
@@ -371,9 +386,9 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
         switch (frame.LinkType)
         {
             case LinkType.Ethernet:
-                objectType = BlfConstants.ObjTypeEthernetFrame;
-                payloadBuilt = BlfObjectPayloads.TryBuildEthernetFramePayload(
-                    data, channel, 0, _PayloadBuffer);
+                objectType = BlfConstants.ObjTypeEthernetFrameEx;
+                payloadBuilt = BlfObjectPayloads.TryBuildEthernetFrameExPayload(
+                    data, channel, _PayloadBuffer, hardwareChannel);
                 break;
 
             case LinkType.CanSocketcan:
@@ -383,6 +398,15 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
                 {
                     objectType = BlfConstants.ObjTypeCanXlChannelFrame;
                     payloadBuilt = BlfObjectPayloads.TryBuildCanXlChannelFramePayload(
+                        data, channel, _PayloadBuffer);
+                    break;
+                }
+
+                if (data.Length >= 4
+                    && (BinaryPrimitives.ReadUInt32BigEndian(data) & BlfConstants.SocketCanErr) != 0)
+                {
+                    objectType = BlfConstants.ObjTypeCanError;
+                    payloadBuilt = BlfObjectPayloads.TryBuildCanErrorPayload(
                         data, channel, _PayloadBuffer);
                     break;
                 }
@@ -403,6 +427,15 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
                 break;
 
             case LinkType.Can20B:
+                if (data.Length >= 4
+                    && (BinaryPrimitives.ReadUInt32BigEndian(data) & BlfConstants.SocketCanErr) != 0)
+                {
+                    objectType = BlfConstants.ObjTypeCanError;
+                    payloadBuilt = BlfObjectPayloads.TryBuildCanErrorPayload(
+                        data, channel, _PayloadBuffer);
+                    break;
+                }
+
                 objectType = BlfConstants.ObjTypeCanMessage;
                 payloadBuilt = BlfObjectPayloads.TryBuildCanMessagePayload(
                     data, channel, _PayloadBuffer);
@@ -415,9 +448,57 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
                 break;
 
             case LinkType.Lin:
-                objectType = BlfConstants.ObjTypeLinMessage2;
-                payloadBuilt = BlfObjectPayloads.TryBuildLinMessage2Payload(
-                    data, channel, _PayloadBuffer);
+                if (data.Length < 8)
+                {
+                    payloadBuilt = false;
+                    objectType = 0;
+                    break;
+                }
+
+                byte linMsgType = (byte)((data[4] >> 2) & 0x03);
+                byte linErrors = data[7];
+                if (linErrors == 0 && linMsgType == 0)
+                {
+                    objectType = BlfConstants.ObjTypeLinMessage2;
+                    payloadBuilt = BlfObjectPayloads.TryBuildLinMessage2Payload(data, channel, _PayloadBuffer);
+                }
+                else if ((linErrors & BlfConstants.LinErrorCrc) != 0)
+                {
+                    objectType = BlfConstants.ObjTypeLinCrcError2;
+                    payloadBuilt = BlfObjectPayloads.TryBuildLinCrcError2Payload(data, channel, _PayloadBuffer);
+                }
+                else if ((linErrors & BlfConstants.LinErrorRcv) != 0)
+                {
+                    objectType = BlfConstants.ObjTypeLinRcvError2;
+                    payloadBuilt = BlfObjectPayloads.TryBuildLinRcvError2Payload(data, channel, _PayloadBuffer);
+                }
+                else if ((linErrors & BlfConstants.LinErrorSnd) != 0)
+                {
+                    objectType = BlfConstants.ObjTypeLinSndError2;
+                    payloadBuilt = BlfObjectPayloads.TryBuildLinSndError2Payload(data, channel, _PayloadBuffer);
+                }
+                else if (linMsgType == 3 && data.Length >= 12 && data[11] == 0x04)
+                {
+                    objectType = BlfConstants.ObjTypeLinWakeup2;
+                    payloadBuilt = BlfObjectPayloads.TryBuildLinWakeup2Payload(data, channel, _PayloadBuffer);
+                }
+                else if (linMsgType == 3 && data.Length >= 12 && (data[11] == 0x01 || data[11] == 0x02))
+                {
+                    objectType = BlfConstants.ObjTypeLinSleep;
+                    byte reason = data[11] == 0x01 ? (byte)1 : (byte)2;
+                    payloadBuilt = BlfObjectPayloads.TryBuildLinSleepPayload(data, channel, reason, _PayloadBuffer);
+                }
+                else
+                {
+                    return _HandleSkip(new ExportErrorEventArgs
+                    {
+                        ItemIndex = currentIndex,
+                        Kind = ExportErrorKind.UnsupportedType,
+                        Message =
+                            $"BLF LIN frame is not a data, error, sleep, or wakeup object (byte4=0x{data[4]:X2}, byte7=0x{linErrors:X2}, length={data.Length}).",
+                    });
+                }
+
                 break;
 
             default:
@@ -464,7 +545,10 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
                 });
             }
 
-            _Writer.WriteRawObject(objectType, 0, timestampNs, _PayloadBuffer.WrittenSpan);
+            ushort objectVersion = objectType == BlfConstants.ObjTypeLinMessage2
+                ? (ushort)1
+                : (ushort)0;
+            _Writer.WriteRawObject(objectType, objectVersion, timestampNs, _PayloadBuffer.WrittenSpan);
         }
         catch (Exception ex)
         {

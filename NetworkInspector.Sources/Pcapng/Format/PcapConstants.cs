@@ -125,7 +125,7 @@ internal static class PcapConstants
     /// <summary>FCS length in bytes.</summary>
     internal const ushort OptIfFcsLen = 13;
 
-    /// <summary>Timestamp offset applied to all packet timestamps.</summary>
+    /// <summary>Timestamp offset in seconds applied after converting packet timestamps (PCAPNG if_tsoffset).</summary>
     internal const ushort OptIfTsOffset = 14;
 
     // EPB options
@@ -162,6 +162,14 @@ internal static class PcapConstants
 
     /// <summary>Minimum PCAPNG block size: type (4) + length (4) + trailing length (4).</summary>
     internal const uint MinBlockSize = 12;
+
+    /// <summary>
+    /// Maximum block size for the file scanner and the stream reader.
+    /// 32 bytes is the minimum enhanced-packet block. 128 MiB is the packet-data allowance.
+    /// 131072 bytes cover option and header slack past that packet. Both readers must use this
+    /// constant so a block that one reader accepts is not fatal for the other.
+    /// </summary>
+    internal const uint MaxBlockSize = 32u + (128u * 1024u * 1024u) + 131072u;
 
     /// <summary>SHB fixed size before options: type(4) + len(4) + magic(4) + ver(4) + section_len(8) + trailing_len(4) = 28 bytes.</summary>
     internal const int ShbFixedSize = 28;

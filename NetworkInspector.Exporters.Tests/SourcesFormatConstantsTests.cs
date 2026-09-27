@@ -93,11 +93,17 @@ internal sealed class SourcesFormatConstantsTests
     }
 
     [Test]
-    [Arguments(0, 0)]
+    [Arguments(0, 4)]
     [Arguments(1, 8)]
     [Arguments(5, 12)]
     public async Task PcapPadding_OptionSize_ComputesTlvSize(int valueLength, int expected)
     {
         await Assert.That(PcapPadding.OptionSize(valueLength)).IsEqualTo(expected);
+    }
+
+    [Test]
+    public async Task PcapPadding_OptionSize_NegativeLength_ThrowsArgumentOutOfRangeException()
+    {
+        await Assert.That(() => PcapPadding.OptionSize(-1)).Throws<ArgumentOutOfRangeException>();
     }
 }

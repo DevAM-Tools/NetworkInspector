@@ -87,6 +87,7 @@ internal sealed class PcapngRoundtripTests
         Frame? reimported = source.NextFrame();
         await Assert.That(reimported).IsNotNull();
         await Assert.That(reimported!.Value.Data.Length).IsEqualTo((int)snapLength);
+        await Assert.That(reimported.Value.Length).IsEqualTo((int)snapLength);
     }
 
     // ========================================================================
@@ -462,6 +463,117 @@ internal sealed class PcapngRoundtripTests
 
         // Out of bounds returns null.
         await Assert.That(source.FrameById(new FrameId(count))).IsNull();
+    }
+
+    [Test]
+    public async Task InterfaceName_Roundtrip_PreservesIfName()
+    {
+        using MemoryStream ms = new();
+        using PcapngExporter exporter = PcapngExporter.CreateBuilder().ToStream(ms).Build();
+
+        RoundtripFrameFactory factory = new();
+        FrameInterfaceId ifId = factory.AddInterface("eth0", LinkType.Ethernet);
+        byte[] frameData = FrameGenerators.BuildEthernetIpv4UdpFrame(32);
+        Frame frame = factory.Create(ifId, LinkType.Ethernet, _EpochBaseNs, frameData);
+        exporter.OnFrame(frame);
+        exporter.OnFinish();
+
+        PcapngVerifier verifier = PcapngVerifier.FromData(ms.ToArray());
+        await Assert.That(verifier.InterfaceCount).IsEqualTo(1);
+        await Assert.That(verifier.Interfaces[0].Name).IsEqualTo("eth0");
+
+        using PcapSource source = PcapSource.FromData(ms.ToArray(), "roundtrip.pcapng");
+        FrameInterfaceRegistry registry = RoundtripAssertions.StartSource(source);
+        Frame? reimported = source.NextFrame();
+        await Assert.That(reimported).IsNotNull();
+        FrameInterfaceInfo? info = registry.Get(reimported!.Value.InterfaceId);
+        await Assert.That(info).IsNotNull();
+        await Assert.That(info!.UiName).IsEqualTo("eth0");
+
+        using MemoryStream second = new();
+        using PcapngExporter exporter2 = PcapngExporter.CreateBuilder().ToStream(second).Build();
+        exporter2.OnFrame(reimported.Value);
+        exporter2.OnFinish();
+        PcapngVerifier secondPass = PcapngVerifier.FromData(second.ToArray());
+        await Assert.That(secondPass.Interfaces[0].Name).IsEqualTo("eth0");
+    }
+
+    /// <summary>
+    /// An IDB <c>if_fcslen</c> of 4 survives a read, an export, and a second read.
+    /// Packet bytes stay the same length. An interface without the property writes no option.
+    /// </summary>
+    [Test]
+    public async Task IfFcsLenSurvivesExport()
+    {
+        byte[] payload = [0x01, 0x02, 0x03, 0x04];
+        using MemoryStream first = new();
+        PcapngWriter writer = new(first);
+        writer.WriteSectionHeader(null);
+        writer.WriteInterfaceDescription(
+            LinkType.Ethernet,
+            65535,
+            PcapngWriter.TsResolNanoseconds,
+            "eth0",
+            (byte)4);
+        writer.WriteEnhancedPacket(
+            0,
+            Timestamp.FromNanos(_EpochBaseNs),
+            payload,
+            (uint)payload.Length,
+            PcapngWriter.TsResolNanoseconds);
+        writer.ReturnBuffers();
+        byte[] originalFile = first.ToArray();
+
+        using PcapSource source = PcapSource.FromData(originalFile, "fcs.pcapng");
+        FrameInterfaceRegistry registry = RoundtripAssertions.StartSource(source);
+        Frame? frame = source.NextFrame();
+        await Assert.That(frame).IsNotNull();
+        await Assert.That(frame!.Value.Data.Length).IsEqualTo(payload.Length);
+        FrameInterfaceInfo? info = registry.Get(frame.Value.InterfaceId);
+        await Assert.That(info).IsNotNull();
+        await Assert.That(info!.Properties[PcapInterfacePropertyKeys.FcsLength]).IsEqualTo((byte)4);
+
+        using MemoryStream exported = new();
+        using (PcapngExporter exporter = PcapngExporter.CreateBuilder().ToStream(exported).Build())
+        {
+            exporter.OnFrame(frame.Value);
+            exporter.OnFinish();
+        }
+
+        using PcapSource again = PcapSource.FromData(exported.ToArray(), "fcs-again.pcapng");
+        FrameInterfaceRegistry registryAgain = RoundtripAssertions.StartSource(again);
+        Frame? second = again.NextFrame();
+        await Assert.That(second).IsNotNull();
+        await Assert.That(second!.Value.Data.Length).IsEqualTo(payload.Length);
+        await Assert.That(second.Value.Data.Span.SequenceEqual(payload)).IsTrue();
+        FrameInterfaceInfo? infoAgain = registryAgain.Get(second.Value.InterfaceId);
+        await Assert.That(infoAgain).IsNotNull();
+        await Assert.That(infoAgain!.Properties[PcapInterfacePropertyKeys.FcsLength]).IsEqualTo((byte)4);
+    }
+
+    [Test]
+    public async Task InterfaceWithoutFcsLengthOmitsOption()
+    {
+        RoundtripFrameFactory factory = new();
+        FrameInterfaceId ifId = factory.AddInterface("eth-plain", LinkType.Ethernet);
+        byte[] payload = [0x0A, 0x0B, 0x0C, 0x0D];
+        Frame frame = factory.Create(ifId, LinkType.Ethernet, _EpochBaseNs, payload);
+
+        using MemoryStream ms = new();
+        using (PcapngExporter exporter = PcapngExporter.CreateBuilder().ToStream(ms).Build())
+        {
+            exporter.OnFrame(frame);
+            exporter.OnFinish();
+        }
+
+        using PcapSource source = PcapSource.FromData(ms.ToArray(), "no-fcs.pcapng");
+        FrameInterfaceRegistry registry = RoundtripAssertions.StartSource(source);
+        Frame? reimported = source.NextFrame();
+        await Assert.That(reimported).IsNotNull();
+        await Assert.That(reimported!.Value.Data.Length).IsEqualTo(payload.Length);
+        FrameInterfaceInfo? info = registry.Get(reimported.Value.InterfaceId);
+        await Assert.That(info).IsNotNull();
+        await Assert.That(info!.Properties.ContainsKey(PcapInterfacePropertyKeys.FcsLength)).IsFalse();
     }
 
     // ========================================================================

@@ -82,9 +82,9 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
     #region Channel property keys
 
     /// <summary>
-    /// Interface property key for the ASC channel number (stored by <c>AscSource</c>).
-    /// Not in <see cref="FrameInterfacePropertyKeys"/> because it is source-specific;
-    /// defined locally to avoid a direct dependency on the Sources assembly.
+    /// Interface property key for the ASC channel number written by AscSource.
+    /// The matching constant lives with the ASC reader. This exporter keeps the
+    /// string locally so it does not reference the Sources assembly.
     /// </summary>
     private const string _AscChannelKey = "asc.channel";
 
@@ -711,8 +711,8 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
 
     /// <summary>
     /// Resolves the CAN/LIN channel number from the frame's interface property bag.
-    /// Checks the ASC-native key (<c>"asc.channel"</c>) first, then the BLF key
-    /// (<see cref="FrameInterfacePropertyKeys.BlfChannel"/>), and falls back to
+    /// Checks the ASC-native key (<c>"asc.channel"</c>) first, then
+    /// <see cref="BlfInterfacePropertyKeys.Channel"/>, and falls back to
     /// <paramref name="defaultChannel"/> when neither is present or the value cannot
     /// be converted.
     /// </summary>
@@ -733,7 +733,7 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
             return ascChannel;
         }
 
-        if (info.Properties.TryGetValue(FrameInterfacePropertyKeys.BlfChannel, out object? blfCh)
+        if (info.Properties.TryGetValue(BlfInterfacePropertyKeys.Channel, out object? blfCh)
             && InterfaceChannelConverter.TryConvertToInt32(blfCh, out int blfChannel))
         {
             return blfChannel;

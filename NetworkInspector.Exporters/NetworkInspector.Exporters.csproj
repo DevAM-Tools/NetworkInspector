@@ -30,7 +30,9 @@
   <ItemGroup>
     <Compile Include="..\NetworkInspector.Sources\Pcapng\Format\PcapConstants.cs" Link="Shared\Pcapng\PcapConstants.cs" />
     <Compile Include="..\NetworkInspector.Sources\Pcapng\Format\PcapPadding.cs" Link="Shared\Pcapng\PcapPadding.cs" />
+    <Compile Include="..\NetworkInspector.Sources\Pcapng\Format\PcapInterfacePropertyKeys.cs" Link="Shared\Pcapng\PcapInterfacePropertyKeys.cs" />
     <Compile Include="..\NetworkInspector.Sources\Blf\Format\BlfConstants.cs" Link="Shared\Blf\BlfConstants.cs" />
+    <Compile Include="..\NetworkInspector.Sources\Blf\Format\BlfInterfacePropertyKeys.cs" Link="Shared\Blf\BlfInterfacePropertyKeys.cs" />
     <Compile Include="..\NetworkInspector.Protocols\FlexRayLinkTypeFrame.cs" Link="Shared\FlexRay\FlexRayLinkTypeFrame.cs" />
   </ItemGroup>
 </Project>

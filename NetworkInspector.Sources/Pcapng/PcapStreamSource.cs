@@ -6,6 +6,9 @@ namespace NetworkInspector.Sources.Pcapng;
 /// Stream-based frame source for PCAPNG and legacy PCAP data.
 /// Implements <see cref="IFrameSource"/> for forward-only sequential reading
 /// from any <see cref="Stream"/> (e.g., network streams, pipes, stdin).
+/// Packet payload on <see cref="Frame"/> is the captured length. PCAPNG/PCAP <c>orig_len</c>
+/// is not kept. Link types that are not defined <see cref="LinkType"/> members skip the
+/// packet and raise <see cref="FrameSkipped"/>.
 /// <para>
 /// Unlike <see cref="PcapSource"/>, this class does not support random access
 /// (<see cref="IRandomAccessFrameSource"/>). Frames are read one at a time
@@ -303,6 +306,12 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
 
         EndianReader reader = new(swap);
         uint blockLength = reader.ReadU32(detectionBytes[4..]);
+        if (!PcapPadding.TryRoundBlockLength(blockLength, out uint roundedLength))
+        {
+            throw new PcapException($"SHB block length {blockLength} cannot be rounded to a multiple of 4.");
+        }
+
+        blockLength = roundedLength;
         if (blockLength < PcapConstants.ShbFixedSize)
         {
             throw new PcapException($"SHB block length {blockLength} is less than minimum {PcapConstants.ShbFixedSize}.");
@@ -310,7 +319,7 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
 
         // Guard: uint → int cast is undefined for blockLength > int.MaxValue and produces
         // a negative remaining that bypasses _EnsureBuffer's cap check.
-        if (blockLength > (uint)_MaxBufferSize)
+        if (blockLength > PcapConstants.MaxBlockSize)
         {
             return false;
         }
@@ -331,8 +340,20 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
             return false;
         }
 
+        if (!PcapngBlockLayout.TryValidatePcapngBlockLength(
+                blockLength, shbBuffer.AsSpan((int)blockLength - 4, 4), swap, out _))
+        {
+            throw new PcapException("SHB trailing block_total_length does not match the leading length.");
+        }
+
+        long startOffset = 0;
+        if (_Stream.CanSeek)
+        {
+            startOffset = _Stream.Position - blockLength;
+        }
+
         // Create section
-        SectionInfo section = new(swap, -1, 0);
+        SectionInfo section = new(swap, -1, startOffset);
 
         // Parse SHB options if present (after 24-byte struct, before trailing 4 bytes)
         int optionsStart = 24;
@@ -470,17 +491,28 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
             blockType = reader.Swap(rawBlockType);
             blockLength = reader.ReadU32(headerBytes[4..]);
 
-            // Validate minimum block size
-            if (blockLength < PcapConstants.MinBlockSize)
+            if (!PcapPadding.TryRoundBlockLength(blockLength, out uint roundedLength))
             {
-                // Block length is below the spec-mandated minimum — the stream is corrupt.
-                // Report via _HandleSkip before exhausting so callers receive the diagnostic.
                 _HandleSkip(new FrameReadErrorEventArgs
                 {
                     FrameIndex = _FrameIndex,
                     FileOffset = -1,
                     Kind = FrameReadErrorKind.CorruptedBlock,
-                    Message = $"Block length {blockLength} is below the minimum allowed ({PcapConstants.MinBlockSize}); stream may be corrupt."
+                    Message = $"PCAPNG block length {blockLength} cannot be rounded to a multiple of 4.",
+                });
+                _Exhausted = true;
+                return null;
+            }
+
+            blockLength = roundedLength;
+            if (blockLength < PcapConstants.MinBlockSize)
+            {
+                _HandleSkip(new FrameReadErrorEventArgs
+                {
+                    FrameIndex = _FrameIndex,
+                    FileOffset = -1,
+                    Kind = FrameReadErrorKind.CorruptedBlock,
+                    Message = $"PCAPNG block length {blockLength} is below the minimum block size.",
                 });
                 _Exhausted = true;
                 return null;
@@ -491,14 +523,14 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
             // blockBuffer.AsSpan(0, bodySize) to throw ArgumentOutOfRangeException.
             // Use an unsigned comparison to cover both the int-overflow range and valid-but-
             // oversized values that _EnsureBuffer would otherwise handle via its null return.
-            if (blockLength > (uint)_MaxBufferSize + 8u)
+            if (blockLength > PcapConstants.MaxBlockSize)
             {
                 _HandleSkip(new FrameReadErrorEventArgs
                 {
                     FrameIndex = _FrameIndex,
                     FileOffset = -1,
                     Kind = FrameReadErrorKind.CorruptedBlock,
-                    Message = $"Block length {blockLength} exceeds the {_MaxBufferSize / (1024 * 1024)} MiB safety cap; the stream data may be corrupt."
+                    Message = $"Block length {blockLength} exceeds the {PcapConstants.MaxBlockSize / (1024 * 1024)} MiB safety cap; the stream data may be corrupt."
                 });
                 _Exhausted = true;
                 return null;
@@ -515,7 +547,7 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
                     FrameIndex = _FrameIndex,
                     FileOffset = -1,
                     Kind = FrameReadErrorKind.CorruptedBlock,
-                    Message = $"Block body size {bodySize} exceeds the {_MaxBufferSize / (1024 * 1024)} MiB safety cap; the stream data may be corrupt."
+                    Message = $"Block body size {bodySize} exceeds the {PcapConstants.MaxBlockSize / (1024 * 1024)} MiB safety cap; the stream data may be corrupt."
                 });
                 _Exhausted = true;
                 return null;
@@ -536,41 +568,103 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
             }
 
             ReadOnlySpan<byte> bodySpan = blockBuffer.AsSpan(0, bodySize);
+            if (!PcapngBlockLayout.TryValidatePcapngBlockLength(blockLength, bodySpan[^4..], swap, out _))
+            {
+                _HandleSkip(new FrameReadErrorEventArgs
+                {
+                    FrameIndex = _FrameIndex,
+                    FileOffset = -1,
+                    Kind = FrameReadErrorKind.CorruptedBlock,
+                    Message = "PCAPNG trailing block_total_length does not match the leading length.",
+                });
+                _Exhausted = true;
+                return null;
+            }
 
             switch (blockType)
             {
                 case PcapConstants.BlockTypeIDB:
-                    _ProcessInterfaceDescription(bodySpan);
+                    _ProcessInterfaceDescription(bodySpan, blockLength);
                     continue;
 
                 case PcapConstants.BlockTypeEPB:
                     {
-                        Frame? frame = _TryScanEnhancedPacket(bodySpan);
-                        if (frame.HasValue)
+                        ScanPacketResult epbResult = _TryScanEnhancedPacket(bodySpan, blockLength, out Frame? epbFrame);
+                        if (epbResult == ScanPacketResult.Frame)
                         {
-                            return frame;
+                            if (epbFrame is not null)
+                            {
+                                return epbFrame;
+                            }
+
+                            if (_Exhausted)
+                            {
+                                return null;
+                            }
+
+                            continue;
                         }
-                        // Malformed EPB — skip
+
+                        _HandlePacketScanSkip(epbResult);
+                        if (_Exhausted)
+                        {
+                            return null;
+                        }
+
                         continue;
                     }
 
                 case PcapConstants.BlockTypeSPB:
                     {
-                        Frame? frame = _TryScanSimplePacket(bodySpan, blockLength);
-                        if (frame.HasValue)
+                        ScanPacketResult spbResult = _TryScanSimplePacket(bodySpan, blockLength, out Frame? spbFrame);
+                        if (spbResult == ScanPacketResult.Frame)
                         {
-                            return frame;
+                            if (spbFrame is not null)
+                            {
+                                return spbFrame;
+                            }
+
+                            if (_Exhausted)
+                            {
+                                return null;
+                            }
+
+                            continue;
                         }
+
+                        _HandlePacketScanSkip(spbResult);
+                        if (_Exhausted)
+                        {
+                            return null;
+                        }
+
                         continue;
                     }
 
                 case PcapConstants.BlockTypePB:
                     {
-                        Frame? frame = _TryScanObsoletePacket(bodySpan, blockLength);
-                        if (frame.HasValue)
+                        ScanPacketResult pbResult = _TryScanObsoletePacket(bodySpan, blockLength, out Frame? pbFrame);
+                        if (pbResult == ScanPacketResult.Frame)
                         {
-                            return frame;
+                            if (pbFrame is not null)
+                            {
+                                return pbFrame;
+                            }
+
+                            if (_Exhausted)
+                            {
+                                return null;
+                            }
+
+                            continue;
                         }
+
+                        _HandlePacketScanSkip(pbResult);
+                        if (_Exhausted)
+                        {
+                            return null;
+                        }
+
                         continue;
                     }
 
@@ -591,6 +685,12 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
     /// <param name="magicBytes">4 bytes of byte-order magic.</param>
     private bool _ProcessSectionHeaderFromStream(bool swap, uint blockLength, ReadOnlySpan<byte> headerBytes, ReadOnlySpan<byte> magicBytes)
     {
+        if (!PcapPadding.TryRoundBlockLength(blockLength, out uint roundedLength))
+        {
+            return false;
+        }
+
+        blockLength = roundedLength;
         if (blockLength < PcapConstants.ShbFixedSize)
         {
             return false;
@@ -598,7 +698,7 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
 
         // Guard: uint → int cast is undefined for blockLength > int.MaxValue and produces
         // a negative remaining that bypasses _EnsureBuffer's cap check.
-        if (blockLength > (uint)_MaxBufferSize)
+        if (blockLength > PcapConstants.MaxBlockSize)
         {
             return false;
         }
@@ -620,18 +720,32 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
             return false;
         }
 
-        // Parse section length from bytes 16..24 of the SHB
-        EndianReader reader = new(swap);
-        long sectionLength = reader.ReadI64(shbBuffer.AsSpan(16));
-
-        SectionInfo section = new(swap, sectionLength, 0);
-
-        // Parse SHB options (after 24-byte struct, before trailing 4 bytes)
-        int optionsStart = 24;
-        int optionsEnd = (int)blockLength - 4;
-        if (optionsEnd > optionsStart)
+        if (!PcapngBlockLayout.TryValidatePcapngBlockLength(
+                blockLength, shbBuffer.AsSpan((int)blockLength - 4, 4), swap, out _))
         {
-            section.ParseShbOptions(shbBuffer.AsSpan(optionsStart, optionsEnd - optionsStart));
+            return false;
+        }
+
+        if (!PcapngPacketBlocks.TryReadShb(
+                shbBuffer.AsSpan(0, (int)blockLength),
+                swap,
+                blockLength,
+                out long sectionLength,
+                out ReadOnlySpan<byte> optionData))
+        {
+            return false;
+        }
+
+        long startOffset = 0;
+        if (_Stream.CanSeek)
+        {
+            startOffset = _Stream.Position - blockLength;
+        }
+
+        SectionInfo section = new(swap, sectionLength, startOffset);
+        if (!optionData.IsEmpty)
+        {
+            section.ParseShbOptions(optionData);
         }
 
         _Sections.Add(section);
@@ -642,167 +756,142 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
     /// Processes an Interface Description Block.
     /// The body span starts after the 8-byte block header (contains link_type, reserved, snap_len, options, trailing length).
     /// </summary>
-    private void _ProcessInterfaceDescription(ReadOnlySpan<byte> bodySpan)
+    private void _ProcessInterfaceDescription(ReadOnlySpan<byte> bodySpan, uint blockLength)
     {
-        if (_Sections.Count == 0 || bodySpan.Length < 8)
+        if (_Sections.Count == 0)
         {
             return;
         }
 
         SectionInfo section = _Sections[^1];
-        EndianReader reader = new(section.ByteSwapped);
+        if (!PcapngPacketBlocks.TryReadIdb(
+                bodySpan,
+                bodyOmits8ByteHeader: true,
+                section.ByteSwapped,
+                blockLength,
+                out IdbFields idb))
+        {
+            return;
+        }
 
-        // Body layout (after block_type+block_total_length):
-        // link_type (2) + reserved (2) + snap_length (4) + options... + trailing_length (4)
-        ushort linkType = reader.ReadU16(bodySpan);
-        uint snapLength = reader.ReadU32(bodySpan[4..]);
-
-        // Options start at offset 8, end before trailing 4-byte length
-        int optionsStart = 8;
-        int optionsEnd = bodySpan.Length - 4;
-        ReadOnlySpan<byte> optionData = optionsEnd > optionsStart
-            ? bodySpan[optionsStart..optionsEnd]
-            : ReadOnlySpan<byte>.Empty;
-
-        InterfaceInfo info = section.ParseIdbOptions(linkType, snapLength, optionData);
+        InterfaceInfo info = section.ParseIdbOptions(idb.LinkType, idb.SnapLength, idb.OptionData);
         int localId = section.AddInterface(info);
 
-        // Register with the stack
         _RegisterPcapNgInterface(section, (ushort)(_Sections.Count - 1), (ushort)localId, info);
     }
 
     /// <summary>
     /// Tries to scan an Enhanced Packet Block from the body span.
-    /// Body starts after the 8-byte block header.
+    /// Body starts after the 8-byte block header. orig_len is ignored.
     /// </summary>
-    private Frame? _TryScanEnhancedPacket(ReadOnlySpan<byte> bodySpan)
+    private ScanPacketResult _TryScanEnhancedPacket(ReadOnlySpan<byte> bodySpan, uint blockLength, out Frame? frame)
     {
-        // EPB body layout: interface_id(4) + ts_high(4) + ts_low(4) + captured_len(4)
-        //                  + original_len(4) + data + options + trailing_length(4)
-        // Minimum body: 20 bytes (fields) + 4 (trailing) = 24
-        if (bodySpan.Length < 24)
-        {
-            return null;
-        }
-
+        frame = null;
         if (_Sections.Count == 0)
         {
-            return null;
+            return ScanPacketResult.SkipMalformed;
         }
 
-        SectionInfo section = _Sections[^1];
-        EndianReader reader = new(section.ByteSwapped);
-
-        uint interfaceId = reader.ReadU32(bodySpan);
-        uint tsHigh = reader.ReadU32(bodySpan[4..]);
-        uint tsLow = reader.ReadU32(bodySpan[8..]);
-        uint capturedLength = reader.ReadU32(bodySpan[12..]);
-
-        // Validate interface
-        InterfaceInfo? iface = section.Interface((int)interfaceId);
-        if (iface == null)
+        ScanPacketResult result = PcapngPacketBlocks.TryReadEpb(
+            bodySpan,
+            bodyOmits8ByteHeader: true,
+            _Sections[^1].ByteSwapped,
+            blockLength,
+            _Sections[^1],
+            out EpbFields fields);
+        if (result != ScanPacketResult.Frame)
         {
-            return null;
+            return result;
         }
 
-        // Validate captured length fits (data starts at offset 20, trailing length at end)
-        int maxData = bodySpan.Length - 20 - 4; // minus fields header, minus trailing length
-        int actualCaptured = (int)Math.Min(capturedLength, maxData);
-        if (actualCaptured < 0)
-        {
-            return null;
-        }
-
-        // Compute timestamp
-        ulong rawTimestamp = ((ulong)tsHigh << 32) | tsLow;
-        long timestampNanos = iface.TimestampToNanos(rawTimestamp);
-
-        // Copy frame data
-        byte[] frameData = bodySpan.Slice(20, actualCaptured).ToArray();
-
-        ushort sectionIndex = (ushort)(_Sections.Count - 1);
-        return _CreateTrackedFrame(sectionIndex, (ushort)interfaceId, timestampNanos, frameData);
+        frame = _FrameFromPacketFields(fields);
+        return ScanPacketResult.Frame;
     }
 
-    /// <summary>
-    /// Tries to scan a Simple Packet Block from the body span.
-    /// </summary>
-    private Frame? _TryScanSimplePacket(ReadOnlySpan<byte> bodySpan, uint blockLength)
+    /// <summary>Tries to scan a Simple Packet Block from the body span.</summary>
+    private ScanPacketResult _TryScanSimplePacket(ReadOnlySpan<byte> bodySpan, uint blockLength, out Frame? frame)
     {
-        // SPB body layout: original_packet_len(4) + data + trailing_length(4)
-        if (bodySpan.Length < 8 || _Sections.Count == 0)
+        frame = null;
+        if (_Sections.Count == 0)
         {
-            return null;
+            return ScanPacketResult.SkipMalformed;
         }
 
-        SectionInfo section = _Sections[^1];
-        EndianReader reader = new(section.ByteSwapped);
-
-        // SPB always uses interface 0
-        InterfaceInfo? iface = section.Interface(0);
-        if (iface == null)
+        ScanPacketResult result = PcapngPacketBlocks.TryReadSpb(
+            bodySpan,
+            bodyOmits8ByteHeader: true,
+            _Sections[^1].ByteSwapped,
+            blockLength,
+            _Sections[^1],
+            out EpbFields fields);
+        if (result != ScanPacketResult.Frame)
         {
-            return null;
+            return result;
         }
 
-        uint originalLength = reader.ReadU32(bodySpan);
-
-        // Captured length = min(original, body_data_size, snaplen)
-        // Body data starts at offset 4, trailing length at end
-        int bodyDataSize = bodySpan.Length - 4 - 4; // minus originalLength field, minus trailing
-        int capturedLength = (int)Math.Min(Math.Min(originalLength, (uint)bodyDataSize), iface.SnapLength);
-        if (capturedLength < 0)
-        {
-            return null;
-        }
-
-        byte[] frameData = bodySpan.Slice(4, capturedLength).ToArray();
-
-        ushort sectionIndex = (ushort)(_Sections.Count - 1);
-        return _CreateTrackedFrame(sectionIndex, 0, 0, frameData); // SPB has no timestamp
+        frame = _FrameFromPacketFields(fields);
+        return ScanPacketResult.Frame;
     }
 
-    /// <summary>
-    /// Tries to scan an Obsolete Packet Block from the body span.
-    /// </summary>
-    private Frame? _TryScanObsoletePacket(ReadOnlySpan<byte> bodySpan, uint blockLength)
+    /// <summary>Tries to scan an Obsolete Packet Block from the body span. orig_len is ignored.</summary>
+    private ScanPacketResult _TryScanObsoletePacket(ReadOnlySpan<byte> bodySpan, uint blockLength, out Frame? frame)
     {
-        // PB body layout: interface_id(2) + drops_count(2) + ts_high(4) + ts_low(4)
-        //                + captured_len(4) + original_len(4) + data + options + trailing(4)
-        // Minimum body: 20 bytes fields + 4 trailing = 24
-        if (bodySpan.Length < 24 || _Sections.Count == 0)
+        frame = null;
+        if (_Sections.Count == 0)
         {
-            return null;
+            return ScanPacketResult.SkipMalformed;
         }
 
-        SectionInfo section = _Sections[^1];
-        EndianReader reader = new(section.ByteSwapped);
-
-        ushort interfaceId = reader.ReadU16(bodySpan);
-        uint tsHigh = reader.ReadU32(bodySpan[4..]);
-        uint tsLow = reader.ReadU32(bodySpan[8..]);
-        uint capturedLength = reader.ReadU32(bodySpan[12..]);
-
-        InterfaceInfo? iface = section.Interface(interfaceId);
-        if (iface == null)
+        ScanPacketResult result = PcapngPacketBlocks.TryReadPb(
+            bodySpan,
+            bodyOmits8ByteHeader: true,
+            _Sections[^1].ByteSwapped,
+            blockLength,
+            _Sections[^1],
+            out EpbFields fields);
+        if (result != ScanPacketResult.Frame)
         {
-            return null;
+            return result;
         }
 
-        int maxData = bodySpan.Length - 20 - 4;
-        int actualCaptured = (int)Math.Min(capturedLength, maxData);
-        if (actualCaptured < 0)
-        {
-            return null;
-        }
+        frame = _FrameFromPacketFields(fields);
+        return ScanPacketResult.Frame;
+    }
 
-        ulong rawTimestamp = ((ulong)tsHigh << 32) | tsLow;
-        long timestampNanos = iface.TimestampToNanos(rawTimestamp);
-
-        byte[] frameData = bodySpan.Slice(20, actualCaptured).ToArray();
-
+    /// <summary>Copies helper packet bytes into a tracked <see cref="Frame"/> (stream payloads cannot alias the reused block buffer).</summary>
+    private Frame? _FrameFromPacketFields(EpbFields fields)
+    {
+        byte[] frameData = fields.PacketData.ToArray();
         ushort sectionIndex = (ushort)(_Sections.Count - 1);
-        return _CreateTrackedFrame(sectionIndex, interfaceId, timestampNanos, frameData);
+        return _CreateTrackedFrame(sectionIndex, (ushort)fields.InterfaceId, fields.TimestampNanos, frameData);
+    }
+
+    /// <summary>Raises <see cref="FrameSkipped"/> for a packet-block parse failure.</summary>
+    private void _HandlePacketScanSkip(ScanPacketResult result)
+    {
+        FrameReadErrorKind kind = result switch
+        {
+            ScanPacketResult.SkipNoInterface => FrameReadErrorKind.UnresolvedInterface,
+            ScanPacketResult.SkipUnknownLinkType => FrameReadErrorKind.Other,
+            ScanPacketResult.SkipUnsupportedTimestampResolution => FrameReadErrorKind.Other,
+            _ => FrameReadErrorKind.CorruptedBlock,
+        };
+
+        string message = result switch
+        {
+            ScanPacketResult.SkipNoInterface => "Packet block references an interface that was not declared.",
+            ScanPacketResult.SkipUnknownLinkType => "Packet block uses an unknown link-layer type; frame skipped.",
+            ScanPacketResult.SkipUnsupportedTimestampResolution => "unsupported if_tsresol",
+            _ => "Malformed packet block.",
+        };
+
+        _HandleSkip(new FrameReadErrorEventArgs
+        {
+            FrameIndex = _FrameIndex,
+            FileOffset = -1,
+            Kind = kind,
+            Message = message,
+        });
     }
 
     #endregion
@@ -970,40 +1059,40 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
         // RawLinkType and SnapLength are always available — initialize with them
         Dictionary<string, object> props = new()
         {
-            [FrameInterfacePropertyKeys.RawLinkType] = info.RawLinkType,
-            [FrameInterfacePropertyKeys.SnapLength] = info.SnapLength,
+            [PcapInterfacePropertyKeys.RawLinkType] = info.RawLinkType,
+            [PcapInterfacePropertyKeys.SnapLength] = info.SnapLength,
         };
 
         // Interface-level metadata (IDB options)
         if (info.Speed.HasValue)
         {
-            props[FrameInterfacePropertyKeys.Speed] = info.Speed.Value;
+            props[PcapInterfacePropertyKeys.Speed] = info.Speed.Value;
         }
         if (info.FcsLength.HasValue)
         {
-            props[FrameInterfacePropertyKeys.FcsLength] = info.FcsLength.Value;
+            props[PcapInterfacePropertyKeys.FcsLength] = info.FcsLength.Value;
         }
         if (info.Filter is not null)
         {
-            props[FrameInterfacePropertyKeys.Filter] = info.Filter;
+            props[PcapInterfacePropertyKeys.Filter] = info.Filter;
         }
         if (info.Os is not null)
         {
-            props[FrameInterfacePropertyKeys.Os] = info.Os;
+            props[PcapInterfacePropertyKeys.Os] = info.Os;
         }
 
         // Section-level metadata (SHB options) — shared across all interfaces in the section
         if (section.Hardware is not null)
         {
-            props[FrameInterfacePropertyKeys.CaptureHardware] = section.Hardware;
+            props[PcapInterfacePropertyKeys.CaptureHardware] = section.Hardware;
         }
         if (section.Os is not null)
         {
-            props[FrameInterfacePropertyKeys.CaptureOs] = section.Os;
+            props[PcapInterfacePropertyKeys.CaptureOs] = section.Os;
         }
         if (section.UserApplication is not null)
         {
-            props[FrameInterfacePropertyKeys.CaptureApplication] = section.UserApplication;
+            props[PcapInterfacePropertyKeys.CaptureApplication] = section.UserApplication;
         }
 
         return props;
@@ -1018,8 +1107,8 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
         // Legacy PCAP has limited metadata — snap length and raw link type
         Dictionary<string, object> props = new()
         {
-            [FrameInterfacePropertyKeys.RawLinkType] = info.RawLinkType,
-            [FrameInterfacePropertyKeys.SnapLength] = info.SnapLength,
+            [PcapInterfacePropertyKeys.RawLinkType] = info.RawLinkType,
+            [PcapInterfacePropertyKeys.SnapLength] = info.SnapLength,
         };
 
         return props;
@@ -1033,7 +1122,14 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
     {
         if (_IsLegacy && _LegacyInfo is not null)
         {
-            linkType = _LegacyInfo.LinkType ?? LinkType.Ethernet;
+            if (!_LegacyInfo.LinkType.HasValue)
+            {
+                linkType = default;
+                frameInterfaceId = default;
+                return false;
+            }
+
+            linkType = _LegacyInfo.LinkType.Value;
             return _Interfaces.TryGetValue((0, 0), out frameInterfaceId);
         }
 
@@ -1041,9 +1137,9 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
         {
             SectionInfo section = _Sections[sectionIndex];
             InterfaceInfo? info = section.Interface(interfaceId);
-            if (info is not null)
+            if (info is not null && info.LinkType.HasValue)
             {
-                linkType = info.LinkType ?? LinkType.Ethernet;
+                linkType = info.LinkType.Value;
                 return _Interfaces.TryGetValue((sectionIndex, interfaceId), out frameInterfaceId);
             }
         }
@@ -1151,32 +1247,28 @@ public sealed class PcapStreamSource : IFrameSource, IErrorTolerantFrameSource
         return true;
     }
 
-    /// <summary>Maximum block body size (256 MiB). Malformed blocks declaring larger sizes
-    /// are rejected to prevent unbounded allocation.</summary>
-    private const int _MaxBufferSize = 256 * 1024 * 1024;
-
     /// <summary>
     /// Ensures the internal block buffer is at least the given size.
     /// Returns the buffer (may be larger than requested), or <c>null</c> when
-    /// <paramref name="minSize"/> exceeds <see cref="_MaxBufferSize"/>.
+    /// <paramref name="minSize"/> exceeds <see cref="PcapConstants.MaxBlockSize"/>.
     /// When <c>null</c> is returned the caller must skip the oversized block
     /// via <see cref="_HandleSkip"/> and mark the stream exhausted.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private byte[]? _EnsureBuffer(int minSize)
     {
-        if (minSize > _MaxBufferSize)
+        if ((uint)minSize > PcapConstants.MaxBlockSize)
         {
-            // Block exceeds the 256 MiB safety cap. Raise a diagnostic so the
-            // caller can log the offending block offset, then let the caller
-            // exhaust the stream gracefully rather than throwing an exception.
+            // Above the shared block cap. The caller exhausts the stream
+            // instead of allocating the declared size.
             return null;
         }
 
         if (_BlockBuffer.Length < minSize)
         {
-            // Grow to the next power of two or the requested size, whichever is larger
-            int newSize = Math.Min(Math.Max(minSize, _BlockBuffer.Length * 2), _MaxBufferSize);
+            // Grow to the next power of two or the requested size, whichever is larger.
+            int cap = (int)PcapConstants.MaxBlockSize;
+            int newSize = Math.Min(Math.Max(minSize, _BlockBuffer.Length * 2), cap);
             _BlockBuffer = new byte[newSize];
         }
         return _BlockBuffer;

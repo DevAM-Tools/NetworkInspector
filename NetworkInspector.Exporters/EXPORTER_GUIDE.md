@@ -779,7 +779,7 @@ Every exporter **must** have tests for:
 ### 16.3 External Validation
 
 Where feasible, use external tools to verify exported files:
-- **PCAPNG**: `tshark` for structural validation.
+- **PCAPNG**: NI reimport and block-layout checks for structural validation.
 - **BLF**: Structural verification via `BlfStructuralVerifier` (header + top-level LOBJ scan; does not expand compressed LOG_CONTAINER blobs).
 - **JSON**: `System.Text.Json.JsonDocument` for parse validation.
 

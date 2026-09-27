@@ -121,6 +121,7 @@ Use random-access source variants where frame-id lookups are required for replay
 - Choose streaming sources for very large captures to bound memory usage.
 - Validate source format and assumptions before automated ingestion.
 - Use cancellation and external execution limits in long-running jobs.
+- PCAPNG and PCAP readers expose captured packet bytes only (`Frame.Length` / `Frame.Data`). On-wire original length in the file is not kept. Unknown DLT values skip the packet and raise `FrameSkipped`. IDB `if_name` becomes the registry interface `UiName`.
 
 ## Safe Usage (STRIDE)
 

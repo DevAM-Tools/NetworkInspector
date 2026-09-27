@@ -134,7 +134,7 @@ internal sealed class SectionInfo
                     info.SetSpeed(reader.ReadU64(option.Value));
                     break;
                 case PcapConstants.OptIfTsResol when option.Value.Length == 1:
-                    info.SetTimestampResolution(option.Value[0]);
+                    _ = info.TrySetTimestampResolution(option.Value[0]);
                     break;
                 case PcapConstants.OptIfFilter when option.Value.Length > 1:
                     // First byte is the filter type, rest is the filter string

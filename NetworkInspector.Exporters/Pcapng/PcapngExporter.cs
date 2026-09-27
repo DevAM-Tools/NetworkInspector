@@ -9,7 +9,12 @@ namespace NetworkInspector.Exporters.Pcapng;
 /// Supports automatic interface discovery (IDBs written on-demand), lazy initialization
 /// (no file until the first frame), and snap-length truncation.
 /// Link-layer types are written through as PCAPNG DLT values; unknown DLTs are not
-/// filtered here — decoding is left to the consumer (e.g. Wireshark).
+/// filtered here — decoding is left to the consumer. Interface names come from
+/// <see cref="FrameInterfaceInfo.UiName"/> (PCAPNG <c>if_name</c> round-trips).
+/// A <see cref="PcapInterfacePropertyKeys.FcsLength"/> byte is written as IDB
+/// <c>if_fcslen</c>. Per-packet EPB flags are not written.
+/// Packet <c>orig_len</c> is not a <see cref="Frame"/> field: the writer stores
+/// <see cref="Frame.Length"/> (then snap-truncates captured bytes on this write).
 /// </para>
 /// <para>
 /// <b>Thread safety:</b> Not thread-safe. <see cref="OnFrame"/> and <see cref="OnFinish"/>
@@ -175,7 +180,10 @@ public sealed class PcapngExporter : IFrameListener, IErrorTolerantExporter, IDi
         catch (Exception ex)
         {
             _HasError = true;
-            if (ErrorCount < int.MaxValue) ErrorCount++;
+            if (ErrorCount < int.MaxValue)
+            {
+                ErrorCount++;
+            }
             ItemSkipped?.Invoke(this, new ExportErrorEventArgs
             {
                 ItemIndex = FrameCount,
@@ -199,7 +207,10 @@ public sealed class PcapngExporter : IFrameListener, IErrorTolerantExporter, IDi
             {
                 cleanupErrors.Add(ex);
                 _HasError = true;
-                if (ErrorCount < int.MaxValue) ErrorCount++;
+                if (ErrorCount < int.MaxValue)
+                {
+                    ErrorCount++;
+                }
                 ItemSkipped?.Invoke(this, new ExportErrorEventArgs
                 {
                     ItemIndex = FrameCount,
@@ -251,7 +262,10 @@ public sealed class PcapngExporter : IFrameListener, IErrorTolerantExporter, IDi
         catch (Exception ex)
         {
             _HasError = true;
-            if (ErrorCount < int.MaxValue) ErrorCount++;
+            if (ErrorCount < int.MaxValue)
+            {
+                ErrorCount++;
+            }
             ItemSkipped?.Invoke(this, new ExportErrorEventArgs
             {
                 ItemIndex = 0,
@@ -289,7 +303,8 @@ public sealed class PcapngExporter : IFrameListener, IErrorTolerantExporter, IDi
         }
 
         // Prepare frame data — truncate to snap_length if needed.
-        // Preserve the original on-wire length for EPB original length.
+        // Frame has no on-wire orig_len: EPB original_len is this payload length
+        // (before this write's snap truncation).
         ReadOnlySpan<byte> data = frame.Data.Span;
         uint originalLength = (uint)data.Length;
         // _SnapLength is constrained to <= int.MaxValue by the builder, so the
@@ -300,17 +315,29 @@ public sealed class PcapngExporter : IFrameListener, IErrorTolerantExporter, IDi
             data = data[..snapLengthInt];
         }
 
-        // Build interface name for the IDB
-        string? idbName = needsIdb && interfaceId != FrameInterfaceId.Invalid
-            ? $"Interface {interfaceId.Value}"
-            : null;
+        // Preserve the registry display name as IDB if_name so NI→PCAPNG→NI keeps eth0 etc.
+        // if_fcslen is written only when the property is a byte. A missing or non-byte
+        // value omits the option; it does not fail the frame.
+        string? idbName = null;
+        byte? fcsLength = null;
+        if (needsIdb && interfaceId != FrameInterfaceId.Invalid)
+        {
+            FrameInterfaceInfo? ifInfo = frame.Registry.Get(frame.InterfaceId);
+            idbName = ifInfo?.UiName;
+            if (ifInfo is not null
+                && ifInfo.Properties.TryGetValue(PcapInterfacePropertyKeys.FcsLength, out object? fcsValue)
+                && fcsValue is byte fcsByte)
+            {
+                fcsLength = fcsByte;
+            }
+        }
 
         // _Writer is guaranteed non-null after _Start() succeeds
         try
         {
             if (needsIdb)
             {
-                _Writer!.WriteInterfaceDescription(linkType, _SnapLength, _TsResolution, idbName);
+                _Writer!.WriteInterfaceDescription(linkType, _SnapLength, _TsResolution, idbName, fcsLength);
                 // IDB written successfully — now commit the interface mapping so that
                 // subsequent frames can reuse the same ID.  Doing this after the write
                 // means a write failure cannot leave a dangling dict entry.
@@ -443,9 +470,23 @@ public sealed class PcapngExporter : IFrameListener, IErrorTolerantExporter, IDi
             return this;
         }
 
-        /// <summary>Sets the timestamp resolution (power-of-10 exponent, e.g. 9 = nanosecond).</summary>
+        /// <summary>
+        /// Sets the timestamp resolution as a decimal power-of-ten exponent (0..19).
+        /// 6 is microseconds and 9 is nanoseconds. Binary resolutions (bit 7 set) are rejected
+        /// because this writer divides nanoseconds by a power of ten.
+        /// </summary>
+        /// <exception cref="ArgumentOutOfRangeException">
+        /// <paramref name="resolution"/> is above 19 or has bit 7 set.
+        /// </exception>
         public Builder WithTimestampResolution(byte resolution)
         {
+            if ((resolution & 0x80) != 0 || resolution > 19)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(resolution),
+                    "Timestamp resolution must be a decimal power-of-ten exponent from 0 through 19.");
+            }
+
             _TsResolution = resolution;
             return this;
         }

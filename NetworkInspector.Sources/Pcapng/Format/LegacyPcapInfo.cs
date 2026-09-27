@@ -28,7 +28,7 @@ internal sealed class LegacyPcapInfo
         get;
     }
 
-    /// <summary>Resolved link type, or null if the raw value is unknown.</summary>
+    /// <summary>Resolved link type, or null when the raw DLT is not a defined <see cref="Core.LinkType"/> member.</summary>
     internal LinkType? LinkType
     {
         get;

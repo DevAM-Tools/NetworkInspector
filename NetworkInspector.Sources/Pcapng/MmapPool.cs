@@ -48,26 +48,12 @@ internal sealed class MmapPool : IDisposable
     /// <summary>Atomic dispose latch (0 = live, 1 = disposed).</summary>
     private volatile int _Disposed;
 
-    /// <summary>
-    /// Number of exceptions swallowed during <see cref="Dispose"/>.
-    /// Each native cleanup step is individually guarded to ensure all slots are
-    /// released even when one step throws. Failures are counted here so callers
-    /// can detect that resource cleanup was not fully clean.
-    /// </summary>
-    private volatile int _DisposeErrors;
-
     #endregion
 
     #region Properties
 
     /// <summary>Gets the file size in bytes.</summary>
     internal long FileSize => _FileSize;
-
-    /// <summary>
-    /// Number of exceptions swallowed during disposal. Non-zero indicates that one
-    /// or more native memory-map handles could not be cleanly released.
-    /// </summary>
-    internal int DisposeErrors => _DisposeErrors;
 
     #endregion
 
@@ -201,32 +187,52 @@ internal sealed class MmapPool : IDisposable
         }
 
         // Release the lifetime-pinned primary pointer before disposing the accessor.
-        // Each step is wrapped independently so that a failure in one step does not
-        // prevent the remaining native resources from being released.
-        // Failures are counted in _DisposeErrors so callers can detect incomplete cleanup.
+        // Each step is independent so one failure does not skip the remaining handles.
+        // After every step has been attempted, one aggregate exception reports the failures.
+        List<Exception> failures = [];
         try
         {
             _Primary.SafeMemoryMappedViewHandle.ReleasePointer();
         }
-        catch (Exception) { Interlocked.Increment(ref _DisposeErrors); }
+        catch (Exception ex)
+        {
+            failures.Add(ex);
+        }
+
         try
         {
             _Primary.Dispose();
         }
-        catch (Exception) { Interlocked.Increment(ref _DisposeErrors); }
+        catch (Exception ex)
+        {
+            failures.Add(ex);
+        }
+
         for (int i = 0; i < _Slots.Length; i++)
         {
             try
             {
                 _Slots[i].Accessor.Dispose();
             }
-            catch (Exception) { Interlocked.Increment(ref _DisposeErrors); }
+            catch (Exception ex)
+            {
+                failures.Add(ex);
+            }
         }
+
         try
         {
             _MmapFile.Dispose();
         }
-        catch (Exception) { Interlocked.Increment(ref _DisposeErrors); }
+        catch (Exception ex)
+        {
+            failures.Add(ex);
+        }
+
+        if (failures.Count > 0)
+        {
+            throw new AggregateException("Memory-map dispose failed.", failures);
+        }
     }
 
     #endregion

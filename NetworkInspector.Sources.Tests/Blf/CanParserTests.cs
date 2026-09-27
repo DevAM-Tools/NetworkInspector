@@ -25,7 +25,36 @@ internal sealed class CanParserTests
         await Assert.That(id & 0x8000_0000u).IsEqualTo(0x8000_0000u);
         await Assert.That(id & 0x4000_0000u).IsEqualTo(0x4000_0000u);
         await Assert.That(id & 0x1FFF_FFFFu).IsEqualTo(0x123u);
-        await Assert.That(frame.AsSpan(8).ToArray()).IsEquivalentTo(new byte[8]);
+        await Assert.That(frame.Length).IsEqualTo(8);
+        await Assert.That(frame[4]).IsEqualTo((byte)8);
+    }
+
+    [Test]
+    public async Task TryParseCanMessageDlcZeroIsEightBytes()
+    {
+        byte[] payload = new byte[16];
+        payload[3] = 0;
+
+        bool parsed = CanParser.TryParseCanMessage(payload, out byte[] frame, out _);
+
+        await Assert.That(parsed).IsTrue();
+        await Assert.That(frame.Length).IsEqualTo(8);
+        await Assert.That(frame[4]).IsEqualTo((byte)0);
+    }
+
+    [Test]
+    public async Task TryParseCanMessageDlcOneIsNineBytes()
+    {
+        byte[] payload = new byte[16];
+        payload[3] = 1;
+        payload[8] = 0xAB;
+
+        bool parsed = CanParser.TryParseCanMessage(payload, out byte[] frame, out _);
+
+        await Assert.That(parsed).IsTrue();
+        await Assert.That(frame.Length).IsEqualTo(9);
+        await Assert.That(frame[4]).IsEqualTo((byte)1);
+        await Assert.That(frame[8]).IsEqualTo((byte)0xAB);
     }
 
     [Test]
@@ -128,14 +157,89 @@ internal sealed class CanParserTests
     }
 
     [Test]
-    public async Task TryParseCanXlChannelFrame_XlfClear_ReturnsFalse()
+    public async Task TryParseCanXlChannelFrameNestedFdReconstructsSocketCanFd()
+    {
+        byte[] payload = new byte[104 + 16];
+        payload[0] = 2;
+        BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(12), 0x123);
+        BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(20), 16);
+        BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(48),
+            BlfConstants.BlfCanXlFlagFdf | BlfConstants.BlfCanXlFlagBrs | BlfConstants.BlfCanXlFlagEsi);
+        payload.AsSpan(104, 16).Fill(0xAB);
+
+        bool parsed = CanParser.TryParseCanXlChannelFrame(payload, out byte[] frame, out ushort channel);
+
+        await Assert.That(parsed).IsTrue();
+        await Assert.That(channel).IsEqualTo((ushort)2);
+        await Assert.That(frame.Length).IsEqualTo(24);
+        uint id = BinaryPrimitives.ReadUInt32BigEndian(frame);
+        await Assert.That(id & 0x1FFF_FFFFu).IsEqualTo(0x123u);
+        await Assert.That(frame[4]).IsEqualTo((byte)16);
+        await Assert.That(frame[5] & BlfConstants.SocketCanFdFdf).IsEqualTo(BlfConstants.SocketCanFdFdf);
+        await Assert.That(frame[5] & BlfConstants.SocketCanFdBrs).IsEqualTo(BlfConstants.SocketCanFdBrs);
+        await Assert.That(frame[5] & BlfConstants.SocketCanFdEsi).IsEqualTo(BlfConstants.SocketCanFdEsi);
+        await Assert.That(frame[8]).IsEqualTo((byte)0xAB);
+    }
+
+    [Test]
+    public async Task TryParseCanXlChannelFrameNestedClassicReconstructsSixteenByteSocketCan()
+    {
+        byte[] payload = new byte[104 + 8];
+        BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(12), 0x7FF);
+        BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(20), 8);
+        payload.AsSpan(104, 8).Fill(0x11);
+
+        bool parsed = CanParser.TryParseCanXlChannelFrame(payload, out byte[] frame, out _);
+
+        await Assert.That(parsed).IsTrue();
+        await Assert.That(frame.Length).IsEqualTo(16);
+        uint id = BinaryPrimitives.ReadUInt32BigEndian(frame);
+        await Assert.That(id & BlfConstants.SocketCanEff).IsEqualTo(0u);
+        await Assert.That(id & 0x1FFF_FFFFu).IsEqualTo(0x7FFu);
+        await Assert.That(frame[4]).IsEqualTo((byte)8);
+        await Assert.That(frame.AsSpan(8, 8).ToArray()).IsEquivalentTo(new byte[] { 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11 });
+    }
+
+    [Test]
+    public async Task TryParseCanXlChannelFrameNestedClassicDlcOneIsNineBytes()
+    {
+        byte[] payload = new byte[104 + 1];
+        BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(12), 0x42);
+        BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(20), 1);
+        payload[104] = 0xAB;
+
+        bool parsed = CanParser.TryParseCanXlChannelFrame(payload, out byte[] frame, out _);
+
+        await Assert.That(parsed).IsTrue();
+        await Assert.That(frame.Length).IsEqualTo(9);
+        await Assert.That(frame[4]).IsEqualTo((byte)1);
+        await Assert.That(frame[8]).IsEqualTo((byte)0xAB);
+    }
+
+    [Test]
+    public async Task TryParseCanXlChannelFrameNestedClassicMissingDataReturnsFalse()
     {
         byte[] payload = new byte[104];
-        payload[0] = 1;
+        BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(20), 4);
 
-        bool parsed = CanParser.TryParseCanXlChannelFrame(payload, out _, out _);
+        bool parsed = CanParser.TryParseCanXlChannelFrame(payload, out byte[] frame, out _);
 
         await Assert.That(parsed).IsFalse();
+        await Assert.That(frame.Length).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task TryParseCanXlChannelFrameNestedClassicWideIdSetsEff()
+    {
+        byte[] payload = new byte[104];
+        BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(12), 0x800);
+
+        bool parsed = CanParser.TryParseCanXlChannelFrame(payload, out byte[] frame, out _);
+
+        await Assert.That(parsed).IsTrue();
+        uint id = BinaryPrimitives.ReadUInt32BigEndian(frame);
+        await Assert.That(id & BlfConstants.SocketCanEff).IsEqualTo(BlfConstants.SocketCanEff);
+        await Assert.That(id & 0x1FFF_FFFFu).IsEqualTo(0x800u);
     }
 
     [Test]

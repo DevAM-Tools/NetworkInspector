@@ -8,8 +8,9 @@ namespace NetworkInspector.FrameBuilder;
 /// </summary>
 /// <remarks>
 /// <para>
-/// The LIN capture format (per Wireshark packet-lin.h) has an 8-byte fixed
-/// header followed by the data payload:
+/// The DLT_LIN capture format has an 8-byte fixed header followed by the data
+/// payload. The payload is padded with zeros to 4 bytes when the data length is
+/// 0..4, and to 8 bytes when it is 5..8. Byte 4 still stores the real data length.
 /// </para>
 /// <code>
 /// Byte 0:     Message Format Revision = 1
@@ -21,7 +22,7 @@ namespace NetworkInspector.FrameBuilder;
 /// Byte 5:     Protected ID = parity[7:6] | frameId[5:0]
 /// Byte 6:     Checksum (computed over data bytes, optionally including PID)
 /// Byte 7:     Error Flags (0 = no errors)
-/// Bytes 8+:   Data payload (0..8 bytes)
+/// Bytes 8+:   Data payload, then zero pad out to 4 or 8 bytes
 /// </code>
 /// <para>
 /// <b>Parity computation (ISO 17987):</b> P0 = ID0 ⊕ ID1 ⊕ ID2 ⊕ ID4;
@@ -97,7 +98,7 @@ public readonly struct LinLayer : IStatelessLayer, IRootLayer
     public int HeaderSize
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => 8 + _DataLen; // 8-byte fixed header + data bytes
+        get => 8 + _PaddedDataLength(_DataLen);
     }
 
     /// <inheritdoc />
@@ -109,8 +110,9 @@ public readonly struct LinLayer : IStatelessLayer, IRootLayer
         // Byte 4: payloadLength[7:4] | msgType[3:2] | checksumType[1:0]
         // msgType = 0 (Frame), so bits 3-2 are 00.
         byte byte4 = (byte)((_DataLen << 4) | (_ChecksumType & 0x03));
+        int padded = _PaddedDataLength(_DataLen);
 
-        // Collect data bytes into a temporary local span for checksum computation.
+        // Checksum covers the real data bytes only. Pad bytes stay zero and are not summed.
         Span<byte> dataSlice = dst.Length >= 8 + _DataLen ? dst.Slice(8, _DataLen) : stackalloc byte[_DataLen];
 
         if (_DataLen > 0)
@@ -157,13 +159,31 @@ public readonly struct LinLayer : IStatelessLayer, IRootLayer
         dst[6] = checksum;
         dst[7] = _ErrorFlags;
 
-        // Data bytes are already written to dataSlice (which points into dst) above;
-        // if they were on the stack (fallback path), copy them now.
-        if (dataSlice.Overlaps(dst))
+        // Data bytes are already written to dataSlice when it aliases dst.
+        // The stack fallback must be copied before the pad is cleared.
+        if (!dataSlice.Overlaps(dst) && _DataLen > 0)
         {
-            return;
+            dataSlice.CopyTo(dst[8..]);
         }
-        dataSlice.CopyTo(dst[8..]);
+
+        if (padded > _DataLen && dst.Length >= 8 + padded)
+        {
+            dst.Slice(8 + _DataLen, padded - _DataLen).Clear();
+        }
+    }
+
+    /// <summary>
+    /// DLT_LIN stores 4 payload bytes when the data length is 0..4, and 8 when it is 5..8.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static int _PaddedDataLength(int dataLength)
+    {
+        if (dataLength <= 4)
+        {
+            return 4;
+        }
+
+        return 8;
     }
 
     /// <inheritdoc />

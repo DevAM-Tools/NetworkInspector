@@ -33,7 +33,7 @@ internal sealed class RoundtripFrameFactory
 
     /// <summary>
     /// Registers a new interface and returns its id. Callers can pass extra properties
-    /// (e.g. <see cref="FrameInterfacePropertyKeys.BlfChannel"/>) used by the BLF
+    /// (e.g. <see cref="BlfInterfacePropertyKeys.Channel"/>) used by the BLF
     /// exporter for channel routing.
     /// </summary>
     internal FrameInterfaceId AddInterface(

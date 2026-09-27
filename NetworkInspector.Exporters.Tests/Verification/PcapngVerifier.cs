@@ -116,9 +116,42 @@ internal sealed class PcapngVerifier
 
         ushort linkType = BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(offset + 8));
         uint snapLength = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(offset + 12));
+        string? name = _ReadIfName(data, offset, blockLen);
 
-        Interfaces.Add(new IdbInfo(linkType, snapLength));
+        Interfaces.Add(new IdbInfo(linkType, snapLength, name));
         InterfaceCount++;
+    }
+
+    /// <summary>Reads IDB if_name (option 2) when present.</summary>
+    private static string? _ReadIfName(byte[] data, int offset, uint blockLen)
+    {
+        int optOff = offset + 16;
+        int optEnd = offset + (int)blockLen - 4;
+        while (optOff + 4 <= optEnd)
+        {
+            ushort code = BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(optOff));
+            ushort length = BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(optOff + 2));
+            if (code == 0)
+            {
+                return null;
+            }
+
+            int valueStart = optOff + 4;
+            if (valueStart + length > optEnd)
+            {
+                return null;
+            }
+
+            if (code == 2 && length > 0)
+            {
+                return Encoding.UTF8.GetString(data, valueStart, length);
+            }
+
+            int padded = (length + 3) & ~3;
+            optOff = valueStart + padded;
+        }
+
+        return null;
     }
 
     /// <summary>Validates the Section Header Block structure.</summary>
@@ -175,8 +208,10 @@ internal sealed class PcapngVerifier
     /// <summary>Information extracted from an Interface Description Block.</summary>
     /// <param name="LinkType">Link-layer type (DLT value).</param>
     /// <param name="SnapLength">Maximum captured packet length.</param>
+    /// <param name="Name">IDB if_name when present.</param>
     internal readonly record struct IdbInfo(
         ushort LinkType,
-        uint SnapLength);
+        uint SnapLength,
+        string? Name = null);
 
 }
