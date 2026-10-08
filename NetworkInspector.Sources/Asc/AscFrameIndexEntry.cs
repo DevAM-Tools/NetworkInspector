@@ -11,4 +11,9 @@ namespace NetworkInspector.Sources.Asc;
 /// For disk backend: byte offset of the line start in the file.
 /// </param>
 /// <param name="LineType">The classified type of this line.</param>
-internal readonly record struct AscFrameIndexEntry(long Location, AscLineType LineType);
+/// <param name="ClockOffset">
+/// File clock after folding this line. Absolute headers store the line time.
+/// Relative headers store the sum of frame-producing line times up to and including this line.
+/// Stored here so <c>FrameById</c> does not depend on call order.
+/// </param>
+internal readonly record struct AscFrameIndexEntry(long Location, AscLineType LineType, AscTimestamp ClockOffset);

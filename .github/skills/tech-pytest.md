@@ -13,17 +13,19 @@ Load when `test_*.py`, `*_test.py`, or pytest is in scope. Content and case desi
 
 ## Commands
 
+When the full file or suite is not required, pass a node id or `-k` (`tech-test.md`).
+
 ```bash
+uv run pytest -q tests/test_parser.py::test_empty_input_returns_none
+uv run pytest -q -k "parser and not slow"
 uv run pytest -q
-uv run pytest -q tests/test_gap_run.py::test_empty_solution_returns_zero
-uv run pytest -q -k "pairing and not slow"
 ```
 
 Do not add `-x` unless the user wants fail-fast. Debug and collision: `tech-test.md`.
 
 ## Authoring
 
-Mechanics only. What to cover, speed, doubles, AAA, exit paths: `tech-test.md`.
+Mechanics only. What to cover, speed, doubles, AAA: `tech-test.md`.
 
 - Files: `test_<unit>.py`. Functions: `test_` prefix (pytest discovery) + `tech-test.md` name shape.
 - Type every test function and fixture. Do not leave fixtures untyped.

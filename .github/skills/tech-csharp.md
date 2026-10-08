@@ -237,8 +237,7 @@ Console.InputEncoding = Encoding.UTF8;
 - No console/trace for library error handling.
 
 ## Tests
-`tech-test.md` + `tech-tunit.md`. Test methods: PascalCase without underscores (`PairEmptyRepoReturnsNone`).
-- ❗ Require 100% exit-path coverage on every public or internal API before release. Branch coverage is not the gate. Run ExitPointGaps per `tech-tunit.md`.
+`tech-test.md` + `tech-tunit.md`. Test methods: PascalCase without underscores (`ParseEmptyInputReturnsNone`).
 - C# browser journeys: TUnit + `TUnit.Playwright` in `{App}.UiTest` (`tech-playwright.md`). Not NUnit, xUnit, or MSTest.
 
 ## Commands
@@ -249,4 +248,4 @@ dotnet test path/Proj.Tests.csproj -c Release --no-build
 dotnet build CopilotAIWorkflow.slnx -c Release
 ```
 
-Use Release/optimized for Verify. Filter a single test when debugging. PDB / file-in-use errors: concurrent agent (Section 4.14), not a logic bug. Do not add a wrapper script without approval.
+Run tests with `dotnet test`. When the full project is not required, filter to the tests that cover the change (`tech-tunit.md`, `tech-test.md`). Use Release/optimized for Verify. PDB / file-in-use errors: concurrent agent (Section 4.14), not a logic bug. Do not add a wrapper script without approval.

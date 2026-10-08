@@ -60,7 +60,22 @@ internal sealed class PacketExitPointTests
         using Stack stack = _BuildStack();
         using Stack otherStack = _BuildStack();
         Frame frame1 = _MakeFrame(stack, FrameBuilders.GenerateStaticUdpFrame(64));
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame1);
+        Packet packet;
+        {
+            ParseOptions options = new();
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame1,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
         Frame frame2 = _MakeFrame(otherStack, FrameBuilders.GenerateStaticUdpFrame(64), 2);
 
         RecycleError? err = packet.PrepareForReuse(new PacketId(2), frame2, FieldTreeMode.Build);
@@ -83,7 +98,23 @@ internal sealed class PacketExitPointTests
     {
         using Stack stack = _BuildStack();
         Frame frame = _MakeFrame(stack, FrameBuilders.GenerateStaticUdpFrame(128));
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, stack.GetProtocolId("eth")!.Value);
+        Packet packet;
+        {
+            ParseOptions options = new(
+                firstProtocol: stack.GetProtocolId("eth")!.Value);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
 
         int countAfterParse = packet.FieldCount(materialize: false); // materialize: false — current materialized count only
         await Assert.That(countAfterParse).IsGreaterThan(0);
@@ -95,7 +126,23 @@ internal sealed class PacketExitPointTests
     {
         using Stack stack = _BuildStack();
         Frame frame = _MakeFrame(stack, FrameBuilders.GenerateStaticUdpFrame(128));
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, stack.GetProtocolId("eth")!.Value);
+        Packet packet;
+        {
+            ParseOptions options = new(
+                firstProtocol: stack.GetProtocolId("eth")!.Value);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
         packet.MaterializeAll();
 
         bool materialized = packet.MaterializeLazyField(0);
@@ -113,7 +160,22 @@ internal sealed class PacketExitPointTests
         using Stack stack = builder.Build();
 
         Frame frame = _MakeFrame(stack, new byte[14]);
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, protoId);
+        Packet packet;
+        {
+            ParseOptions options = new(firstProtocol: protoId);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
 
         ushort lazyIndex = proto.LazyContainerIndex;
         bool first = packet.MaterializeLazyField(lazyIndex);
@@ -134,7 +196,22 @@ internal sealed class PacketExitPointTests
         using Stack stack = builder.Build();
 
         Frame frame = _MakeFrame(stack, new byte[14]);
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, protoId);
+        Packet packet;
+        {
+            ParseOptions options = new(firstProtocol: protoId);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
 
         bool materialized = packet.MaterializeLazyField(proto.LazyContainerIndex);
         await Assert.That(materialized).IsFalse();
@@ -152,7 +229,22 @@ internal sealed class PacketExitPointTests
         using Stack stack = builder.Build();
 
         Frame frame = _MakeFrame(stack, new byte[14]);
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, protoId);
+        Packet packet;
+        {
+            ParseOptions options = new(firstProtocol: protoId);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
 
         bool materialized = packet.MaterializeLazyField(proto.LazyContainerIndex);
         await Assert.That(materialized).IsFalse();
@@ -170,7 +262,22 @@ internal sealed class PacketExitPointTests
         using Stack stack = builder.Build();
 
         Frame frame = _MakeFrame(stack, new byte[14]);
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, protoId);
+        Packet packet;
+        {
+            ParseOptions options = new(firstProtocol: protoId);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
 
         packet.MaterializeAll();
 
@@ -194,7 +301,22 @@ internal sealed class PacketExitPointTests
         proto.ConfigureGate(populatorEntered, releasePopulator);
 
         Frame frame = _MakeFrame(stack, new byte[14]);
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, protoId);
+        Packet packet;
+        {
+            ParseOptions options = new(firstProtocol: protoId);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
         ushort lazyIndex = proto.LazyContainerIndex;
 
         using Barrier start = new(2);
@@ -239,7 +361,22 @@ internal sealed class PacketExitPointTests
         proto.ConfigureGate(populatorEntered, releasePopulator);
 
         Frame frame = _MakeFrame(stack, new byte[14]);
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, protoId);
+        Packet packet;
+        {
+            ParseOptions options = new(firstProtocol: protoId);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
         ushort lazyIndex = proto.LazyContainerIndex;
 
         using Barrier start = new(2);
@@ -280,7 +417,22 @@ internal sealed class PacketExitPointTests
         proto.ConfigureGate(populatorEntered, releasePopulator);
 
         Frame frame = _MakeFrame(stack, new byte[14]);
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, protoId);
+        Packet packet;
+        {
+            ParseOptions options = new(firstProtocol: protoId);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
         ushort lazyIndex = proto.LazyContainerIndex;
 
         Task<bool> owner = Task.Run(() => packet.MaterializeLazyField(lazyIndex));
@@ -300,7 +452,23 @@ internal sealed class PacketExitPointTests
     {
         using Stack stack = _BuildStack();
         Frame frame = _MakeFrame(stack, FrameBuilders.GenerateStaticUdpFrame(64));
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, stack.GetProtocolId("eth")!.Value);
+        Packet packet;
+        {
+            ParseOptions options = new(
+                firstProtocol: stack.GetProtocolId("eth")!.Value);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
 
         FieldLookupCookie cookie = FieldLookupCookie.Start;
         FieldId unknown = stack.GetFieldId("does.not.exist") ?? new FieldId(999_999);
@@ -315,7 +483,23 @@ internal sealed class PacketExitPointTests
     {
         using Stack stack = _BuildStack();
         Frame frame = _MakeFrame(stack, FrameBuilders.GenerateStaticUdpFrame(64), 1, FrameInterfaceId.Invalid);
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, stack.GetProtocolId("eth")!.Value);
+        Packet packet;
+        {
+            ParseOptions options = new(
+                firstProtocol: stack.GetProtocolId("eth")!.Value);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
 
         await Assert.That(packet.FrameSourceId.IsValid).IsFalse();
     }
@@ -348,7 +532,23 @@ internal sealed class PacketExitPointTests
         using Stack stack = builder.Build();
 
         Frame frame = _MakeFrame(stack, FrameBuilders.GenerateStaticUdpFrame(64), 1, ifaceId);
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, stack.GetProtocolId("eth")!.Value);
+        Packet packet;
+        {
+            ParseOptions options = new(
+                firstProtocol: stack.GetProtocolId("eth")!.Value);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
 
         await Assert.That(packet.FrameSourceId).IsEqualTo(sourceId);
     }
@@ -366,7 +566,22 @@ internal sealed class PacketExitPointTests
         using Stack stack = builder.Build();
 
         Frame frame = _MakeFrame(stack, new byte[42]);
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame);
+        Packet packet;
+        {
+            ParseOptions options = new();
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
 
         FieldLookupCookie cookie = FieldLookupCookie.Start;
         bool found = packet.TryGetNextFieldValue(
@@ -384,11 +599,38 @@ internal sealed class PacketExitPointTests
         using Stack stack1 = _BuildStack();
         using Stack stack2 = _BuildStack();
         byte[] data = FrameBuilders.GenerateStaticUdpFrame(64);
-        Packet seed = Packet.ParseFrame(new PacketId(0), stack1, _MakeFrame(stack1, data));
+        Packet seed;
+        {
+            ParseOptions options = new();
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack1,
+                _MakeFrame(stack1, data),
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            seed = parsed;
+        }
         Frame frame2 = _MakeFrame(stack2, data, 2);
 
-        RecycleError? err = Packet.TryParseFrame(seed, new PacketId(2), stack2, frame2);
-        await Assert.That(err).IsEqualTo(RecycleError.StackMismatch);
+        bool errParsed;
+        ParseFailure errFailure;
+        {
+            ParseOptions options = new();
+            errParsed = Packet.TryParse(
+                seed,
+                new PacketId(2),
+                stack2,
+                frame2,
+                in options,
+                out errFailure);
+        }
+        await Assert.That(errParsed).IsFalse();
+        await Assert.That(errFailure).IsEqualTo(ParseFailure.StackMismatch);
     }
 
     [Test]
@@ -397,12 +639,39 @@ internal sealed class PacketExitPointTests
         using Stack stack1 = _BuildStack();
         using Stack stack2 = _BuildStack();
         byte[] data = FrameBuilders.GenerateStaticUdpFrame(64);
-        Packet seed = Packet.ParseFrame(new PacketId(0), stack1, _MakeFrame(stack1, data));
+        Packet seed;
+        {
+            ParseOptions options = new();
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack1,
+                _MakeFrame(stack1, data),
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            seed = parsed;
+        }
         Frame frame2 = _MakeFrame(stack2, data, 2);
         ProtocolId eth = stack2.GetProtocolId("eth")!.Value;
 
-        RecycleError? err = Packet.TryParseFrame(seed, new PacketId(2), stack2, frame2, eth);
-        await Assert.That(err).IsEqualTo(RecycleError.StackMismatch);
+        bool errParsed;
+        ParseFailure errFailure;
+        {
+            ParseOptions options = new(firstProtocol: eth);
+            errParsed = Packet.TryParse(
+                seed,
+                new PacketId(2),
+                stack2,
+                frame2,
+                in options,
+                out errFailure);
+        }
+        await Assert.That(errParsed).IsFalse();
+        await Assert.That(errFailure).IsEqualTo(ParseFailure.StackMismatch);
     }
 
     [Test]
@@ -411,12 +680,39 @@ internal sealed class PacketExitPointTests
         using Stack stack1 = _BuildStack();
         using Stack stack2 = _BuildStack();
         byte[] data = FrameBuilders.GenerateStaticUdpFrame(64);
-        Packet seed = Packet.ParseFrame(new PacketId(0), stack1, _MakeFrame(stack1, data));
+        Packet seed;
+        {
+            ParseOptions options = new();
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack1,
+                _MakeFrame(stack1, data),
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            seed = parsed;
+        }
         PacketIndex index = new(stack2);
         Frame frame2 = _MakeFrame(stack2, data, 2);
 
-        RecycleError? err = Packet.TryParseFrameIndexed(seed, new PacketId(2), stack2, frame2, index);
-        await Assert.That(err).IsEqualTo(RecycleError.StackMismatch);
+        bool errParsed;
+        ParseFailure errFailure;
+        {
+            ParseOptions options = new(index: index);
+            errParsed = Packet.TryParse(
+                seed,
+                new PacketId(2),
+                stack2,
+                frame2,
+                in options,
+                out errFailure);
+        }
+        await Assert.That(errParsed).IsFalse();
+        await Assert.That(errFailure).IsEqualTo(ParseFailure.StackMismatch);
     }
 
     [Test]
@@ -425,13 +721,40 @@ internal sealed class PacketExitPointTests
         using Stack stack1 = _BuildStack();
         using Stack stack2 = _BuildStack();
         byte[] data = FrameBuilders.GenerateStaticUdpFrame(64);
-        Packet seed = Packet.ParseFrame(new PacketId(0), stack1, _MakeFrame(stack1, data));
+        Packet seed;
+        {
+            ParseOptions options = new();
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack1,
+                _MakeFrame(stack1, data),
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            seed = parsed;
+        }
         PacketIndex index = new(stack2);
         Frame frame2 = _MakeFrame(stack2, data, 2);
         ProtocolId eth = stack2.GetProtocolId("eth")!.Value;
 
-        RecycleError? err = Packet.TryParseFrameIndexed(seed, new PacketId(2), stack2, frame2, index, eth);
-        await Assert.That(err).IsEqualTo(RecycleError.StackMismatch);
+        bool errParsed;
+        ParseFailure errFailure;
+        {
+            ParseOptions options = new(index: index, firstProtocol: eth);
+            errParsed = Packet.TryParse(
+                seed,
+                new PacketId(2),
+                stack2,
+                frame2,
+                in options,
+                out errFailure);
+        }
+        await Assert.That(errParsed).IsFalse();
+        await Assert.That(errFailure).IsEqualTo(ParseFailure.StackMismatch);
     }
 
     [Test]
@@ -439,12 +762,42 @@ internal sealed class PacketExitPointTests
     {
         using Stack stack = _BuildStack();
         byte[] data = FrameBuilders.GenerateStaticUdpFrame(64);
-        Packet seed = Packet.ParseFrame(new PacketId(0), stack, _MakeFrame(stack, data));
+        Packet seed;
+        {
+            ParseOptions options = new();
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                _MakeFrame(stack, data),
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            seed = parsed;
+        }
         PacketIndex index = new(stack);
         Frame frame2 = _MakeFrame(stack, data, 2);
         ProtocolId eth = stack.GetProtocolId("eth")!.Value;
 
-        Packet recycled = Packet.ParseFrameIndexed(seed, new PacketId(1), stack, frame2, index, eth);
+        Packet recycled;
+        {
+            ParseOptions options = new(index: index, firstProtocol: eth);
+            if (!Packet.TryParse(
+                seed,
+                new PacketId(1),
+                stack,
+                frame2,
+                in options,
+                out ParseFailure failure))
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            recycled = seed;
+        }
         await Assert.That(ReferenceEquals(seed, recycled)).IsTrue();
         await Assert.That(recycled.Id).IsEqualTo(new PacketId(1));
     }
@@ -455,7 +808,22 @@ internal sealed class PacketExitPointTests
         using Stack stack = _BuildManyFieldsStack();
         ProtocolId protoId = stack.GetProtocolId("many.fields")!.Value;
         Frame frame = _MakeFrame(stack, new byte[1]);
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, protoId);
+        Packet packet;
+        {
+            ParseOptions options = new(firstProtocol: protoId);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
 
         int count = packet.FieldCount(materialize: false); // materialize: false — current materialized count only
         await Assert.That(count).IsGreaterThan(_ManyFieldCount);
@@ -490,7 +858,22 @@ internal sealed class PacketExitPointTests
         using Stack stack = builder.Build();
 
         Frame frame = _MakeFrame(stack, new byte[14]);
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, protoId);
+        Packet packet;
+        {
+            ParseOptions options = new(firstProtocol: protoId);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
         ushort lazyIndex = proto.LazyContainerIndex;
 
         Task<bool> waiter = Task.Run(() => packet.MaterializeLazyField(lazyIndex));
@@ -513,7 +896,22 @@ internal sealed class PacketExitPointTests
         using Stack stack = builder.Build();
 
         Frame frame = _MakeFrame(stack, new byte[14]);
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, protoId);
+        Packet packet;
+        {
+            ParseOptions options = new(firstProtocol: protoId);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
         int eagerCount = packet.FieldCount(materialize: false);
         Field containerA = default;
         Field containerB = default;
@@ -583,7 +981,22 @@ internal sealed class PacketExitPointTests
         _SetPacketProtocolId(stack, protoId);
 
         Frame frame = _MakeFrame(stack, new byte[14]);
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame);
+        Packet packet;
+        {
+            ParseOptions options = new();
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
 
         bool found = packet.TryGetFieldValue(stack.PacketErrorFieldId, out _, materialize: true);
         await Assert.That(found).IsFalse();
@@ -601,7 +1014,22 @@ internal sealed class PacketExitPointTests
         using Stack stack = builder.Build();
 
         Frame frame = _MakeFrame(stack, new byte[14]);
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, protoId);
+        Packet packet;
+        {
+            ParseOptions options = new(firstProtocol: protoId);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
         ushort lazyIndex = proto.LazyContainerIndex;
         packet.MaterializeLazyField(lazyIndex);
 
@@ -614,7 +1042,23 @@ internal sealed class PacketExitPointTests
     {
         using Stack stack = _BuildStack();
         Frame frame = _MakeFrame(stack, FrameBuilders.GenerateStaticUdpFrame(64));
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, stack.GetProtocolId("eth")!.Value);
+        Packet packet;
+        {
+            ParseOptions options = new(
+                firstProtocol: stack.GetProtocolId("eth")!.Value);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
 
         System.Reflection.FieldInfo? pendingField = typeof(Packet).GetField(
             "_PendingLazyCount", BindingFlags.NonPublic | BindingFlags.Instance);
@@ -634,7 +1078,23 @@ internal sealed class PacketExitPointTests
     {
         using Stack stack = _BuildStack();
         Frame frame = _MakeFrame(stack, FrameBuilders.GenerateStaticUdpFrame(64));
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, stack.GetProtocolId("eth")!.Value);
+        Packet packet;
+        {
+            ParseOptions options = new(
+                firstProtocol: stack.GetProtocolId("eth")!.Value);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
         _ClearPacketErrorFieldId(stack);
 
         MethodInfo? setError = typeof(Packet).GetMethod(
@@ -650,7 +1110,23 @@ internal sealed class PacketExitPointTests
     {
         using Stack stack = _BuildStack();
         Frame frame = _MakeFrame(stack, FrameBuilders.GenerateStaticUdpFrame(64));
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, stack.GetProtocolId("eth")!.Value);
+        Packet packet;
+        {
+            ParseOptions options = new(
+                firstProtocol: stack.GetProtocolId("eth")!.Value);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
         _ClearPacketErrorFieldId(stack);
 
         MethodInfo? setFieldError = typeof(Packet).GetMethod(
@@ -666,7 +1142,23 @@ internal sealed class PacketExitPointTests
     {
         using Stack stack = _BuildStack();
         Frame frame = _MakeFrame(stack, FrameBuilders.GenerateStaticUdpFrame(64));
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, stack.GetProtocolId("eth")!.Value);
+        Packet packet;
+        {
+            ParseOptions options = new(
+                firstProtocol: stack.GetProtocolId("eth")!.Value);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
 
         MethodInfo? seal = typeof(Packet).GetMethod("Seal", BindingFlags.NonPublic | BindingFlags.Instance);
         await Assert.That(seal).IsNotNull();
@@ -682,7 +1174,22 @@ internal sealed class PacketExitPointTests
         using Stack stack = _BuildStack();
         _ClearPacketProtocolId(stack);
         Frame frame = _MakeFrame(stack, FrameBuilders.GenerateStaticUdpFrame(64));
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame);
+        Packet packet;
+        {
+            ParseOptions options = new();
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
 
         await Assert.That(packet.FieldCount(materialize: false)).IsEqualTo(1); // materialize: false — current materialized count only
     }
@@ -692,11 +1199,36 @@ internal sealed class PacketExitPointTests
     {
         using Stack stack = _BuildStack();
         byte[] data = FrameBuilders.GenerateStaticUdpFrame(64);
-        Packet seed = Packet.ParseFrame(new PacketId(0), stack, _MakeFrame(stack, data));
+        Packet seed;
+        {
+            ParseOptions options = new();
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                _MakeFrame(stack, data),
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            seed = parsed;
+        }
         Frame frame2 = _MakeFrame(stack, data, 2);
 
-        RecycleError? err = Packet.TryParseFrame(seed, new PacketId(1), stack, frame2);
-        await Assert.That(err).IsNull();
+        bool errParsed;
+        {
+            ParseOptions options = new();
+            errParsed = Packet.TryParse(
+                seed,
+                new PacketId(1),
+                stack,
+                frame2,
+                in options,
+                out ParseFailure _);
+        }
+        await Assert.That(errParsed).IsTrue();
         await Assert.That(seed.Id).IsEqualTo(new PacketId(1));
     }
 
@@ -705,12 +1237,37 @@ internal sealed class PacketExitPointTests
     {
         using Stack stack = _BuildStack();
         byte[] data = FrameBuilders.GenerateStaticUdpFrame(64);
-        Packet seed = Packet.ParseFrame(new PacketId(0), stack, _MakeFrame(stack, data));
+        Packet seed;
+        {
+            ParseOptions options = new();
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                _MakeFrame(stack, data),
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            seed = parsed;
+        }
         Frame frame2 = _MakeFrame(stack, data, 2);
         ProtocolId eth = stack.GetProtocolId("eth")!.Value;
 
-        RecycleError? err = Packet.TryParseFrame(seed, new PacketId(1), stack, frame2, eth);
-        await Assert.That(err).IsNull();
+        bool errParsed;
+        {
+            ParseOptions options = new(firstProtocol: eth);
+            errParsed = Packet.TryParse(
+                seed,
+                new PacketId(1),
+                stack,
+                frame2,
+                in options,
+                out ParseFailure _);
+        }
+        await Assert.That(errParsed).IsTrue();
     }
 
     [Test]
@@ -718,12 +1275,37 @@ internal sealed class PacketExitPointTests
     {
         using Stack stack = _BuildStack();
         byte[] data = FrameBuilders.GenerateStaticUdpFrame(64);
-        Packet seed = Packet.ParseFrame(new PacketId(0), stack, _MakeFrame(stack, data));
+        Packet seed;
+        {
+            ParseOptions options = new();
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                _MakeFrame(stack, data),
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            seed = parsed;
+        }
         PacketIndex index = new(stack);
         Frame frame2 = _MakeFrame(stack, data, 2);
 
-        RecycleError? err = Packet.TryParseFrameIndexed(seed, new PacketId(1), stack, frame2, index);
-        await Assert.That(err).IsNull();
+        bool errParsed;
+        {
+            ParseOptions options = new(index: index);
+            errParsed = Packet.TryParse(
+                seed,
+                new PacketId(1),
+                stack,
+                frame2,
+                in options,
+                out ParseFailure _);
+        }
+        await Assert.That(errParsed).IsTrue();
     }
 
     [Test]
@@ -731,13 +1313,38 @@ internal sealed class PacketExitPointTests
     {
         using Stack stack = _BuildStack();
         byte[] data = FrameBuilders.GenerateStaticUdpFrame(64);
-        Packet seed = Packet.ParseFrame(new PacketId(0), stack, _MakeFrame(stack, data));
+        Packet seed;
+        {
+            ParseOptions options = new();
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                _MakeFrame(stack, data),
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            seed = parsed;
+        }
         PacketIndex index = new(stack);
         Frame frame2 = _MakeFrame(stack, data, 2);
         ProtocolId eth = stack.GetProtocolId("eth")!.Value;
 
-        RecycleError? err = Packet.TryParseFrameIndexed(seed, new PacketId(1), stack, frame2, index, eth);
-        await Assert.That(err).IsNull();
+        bool errParsed;
+        {
+            ParseOptions options = new(index: index, firstProtocol: eth);
+            errParsed = Packet.TryParse(
+                seed,
+                new PacketId(1),
+                stack,
+                frame2,
+                in options,
+                out ParseFailure _);
+        }
+        await Assert.That(errParsed).IsTrue();
     }
 
     [Test]
@@ -751,7 +1358,22 @@ internal sealed class PacketExitPointTests
         using Stack stack = builder.Build();
 
         Frame frame = _MakeFrame(stack, new byte[14]);
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, protoId);
+        Packet packet;
+        {
+            ParseOptions options = new(firstProtocol: protoId);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
 
         using CancellationTokenSource cts = new(TimeSpan.FromSeconds(5));
         Parallel.For(0, 8, _ =>
@@ -784,7 +1406,22 @@ internal sealed class PacketExitPointTests
         using Stack stack = builder.Build();
 
         Frame frame = _MakeFrame(stack, new byte[14]);
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, protoId);
+        Packet packet;
+        {
+            ParseOptions options = new(firstProtocol: protoId);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
 
         using CancellationTokenSource cts = new(TimeSpan.FromSeconds(5));
         Parallel.For(0, 8, _ =>
@@ -817,7 +1454,22 @@ internal sealed class PacketExitPointTests
         using Stack stack = builder.Build();
 
         Frame frame = _MakeFrame(stack, new byte[14]);
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, protoId);
+        Packet packet;
+        {
+            ParseOptions options = new(firstProtocol: protoId);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
         packet.MaterializeAll();
 
         bool found = packet.TryGetFieldValue(proto.LeafFieldId, out _, materialize: true);
@@ -836,7 +1488,22 @@ internal sealed class PacketExitPointTests
         using Stack stack = builder.Build();
 
         Frame frame = _MakeFrame(stack, new byte[14]);
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, protoId);
+        Packet packet;
+        {
+            ParseOptions options = new(firstProtocol: protoId);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
         packet.MaterializeAll();
 
         int leaves = 0;
@@ -858,15 +1525,41 @@ internal sealed class PacketExitPointTests
         using Stack stack = _BuildStack();
         using Stack other = _BuildStack();
         Frame frame = _MakeFrame(stack, FrameBuilders.GenerateStaticUdpFrame(64));
-        Packet recycle = Packet.ParseFrame(new PacketId(0), stack, frame);
+        Packet recycle;
+        {
+            ParseOptions options = new();
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            recycle = parsed;
+        }
         PacketId oldId = recycle.Id;
         FieldId ethType = other.GetFieldId("eth.type")!.Value;
         ValueCache foreign = new(other, [new ValueCacheFieldConfig(ethType)]);
 
-        RecycleError? err = Packet.TryParseFrame(
-            recycle, new PacketId(1), stack, frame, FieldTreeMode.Build, foreign);
+        bool errParsed;
+        ParseFailure errFailure;
+        {
+            ParseOptions options = new(FieldTreeMode.Build, foreign);
+            errParsed = Packet.TryParse(
+                recycle,
+                new PacketId(1),
+                stack,
+                frame,
+                in options,
+                out errFailure);
+        }
 
-        await Assert.That(err).IsEqualTo(RecycleError.CacheStackMismatch);
+        await Assert.That(errParsed).IsFalse();
+        await Assert.That(errFailure).IsEqualTo(ParseFailure.CacheStackMismatch);
         await Assert.That(recycle.IsFinalized).IsTrue();
         await Assert.That(recycle.Id).IsEqualTo(oldId);
     }
@@ -876,12 +1569,40 @@ internal sealed class PacketExitPointTests
     {
         using Stack stack = _BuildStack();
         Frame frame = _MakeFrame(stack, FrameBuilders.GenerateStaticUdpFrame(64));
-        Packet recycle = Packet.ParseFrame(new PacketId(0), stack, frame);
+        Packet recycle;
+        {
+            ParseOptions options = new();
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            recycle = parsed;
+        }
         PacketId oldId = recycle.Id;
 
-        RecycleError? err = Packet.TryParseFrame(recycle, new PacketId(1), stack, frame, (FieldTreeMode)42);
+        bool errParsed;
+        ParseFailure errFailure;
+        {
+            ParseOptions options = new(
+                (FieldTreeMode)42);
+            errParsed = Packet.TryParse(
+                recycle,
+                new PacketId(1),
+                stack,
+                frame,
+                in options,
+                out errFailure);
+        }
 
-        await Assert.That(err).IsEqualTo(RecycleError.InvalidFieldTree);
+        await Assert.That(errParsed).IsFalse();
+        await Assert.That(errFailure).IsEqualTo(ParseFailure.InvalidFieldTree);
         await Assert.That(recycle.IsFinalized).IsTrue();
         await Assert.That(recycle.Id).IsEqualTo(oldId);
     }
@@ -891,12 +1612,39 @@ internal sealed class PacketExitPointTests
     {
         using Stack stack = _BuildStack();
         Frame frame = _MakeFrame(stack, FrameBuilders.GenerateStaticUdpFrame(64));
-        Packet recycle = Packet.ParseFrame(new PacketId(0), stack, frame);
+        Packet recycle;
+        {
+            ParseOptions options = new();
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            recycle = parsed;
+        }
         PacketId oldId = recycle.Id;
 
-        RecycleError? err = Packet.TryParseFrame(recycle, new PacketId(5), stack, frame);
+        bool errParsed;
+        ParseFailure errFailure;
+        {
+            ParseOptions options = new();
+            errParsed = Packet.TryParse(
+                recycle,
+                new PacketId(5),
+                stack,
+                frame,
+                in options,
+                out errFailure);
+        }
 
-        await Assert.That(err).IsEqualTo(RecycleError.ParseIdGap);
+        await Assert.That(errParsed).IsFalse();
+        await Assert.That(errFailure).IsEqualTo(ParseFailure.ParseIdGap);
         await Assert.That(recycle.IsFinalized).IsTrue();
         await Assert.That(recycle.Id).IsEqualTo(oldId);
     }
@@ -917,17 +1665,44 @@ internal sealed class PacketExitPointTests
         proto.ConfigureGate(populatorEntered, releasePopulator);
 
         Frame frame = _MakeFrame(stack, new byte[14]);
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, protoId);
+        Packet packet;
+        {
+            ParseOptions options = new(firstProtocol: protoId);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
         PacketId oldId = packet.Id;
 
         Task materialize = Task.Run(() => packet.MaterializeAll());
         populatorEntered.Wait(TimeSpan.FromSeconds(5));
 
-        RecycleError? err = Packet.TryParseFrame(packet, new PacketId(1), stack, frame, protoId);
+        bool errParsed;
+        ParseFailure errFailure;
+        {
+            ParseOptions options = new(firstProtocol: protoId);
+            errParsed = Packet.TryParse(
+                packet,
+                new PacketId(1),
+                stack,
+                frame,
+                in options,
+                out errFailure);
+        }
         releasePopulator.Set();
         await materialize;
 
-        await Assert.That(err).IsEqualTo(RecycleError.MaterializerActive);
+        await Assert.That(errParsed).IsFalse();
+        await Assert.That(errFailure).IsEqualTo(ParseFailure.MaterializerActive);
         await Assert.That(packet.Id).IsEqualTo(oldId);
     }
 
@@ -936,7 +1711,23 @@ internal sealed class PacketExitPointTests
     {
         using Stack stack = _BuildStack();
         Frame frame = _MakeFrame(stack, FrameBuilders.GenerateStaticUdpFrame(64));
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, stack.GetProtocolId("eth")!.Value);
+        Packet packet;
+        {
+            ParseOptions options = new(
+                firstProtocol: stack.GetProtocolId("eth")!.Value);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
         FieldId ipSrcFieldId = stack.GetFieldId("eth.type")!.Value;
 
         FieldLookupCookie cookie = FieldLookupCookie.Start;
@@ -963,7 +1754,22 @@ internal sealed class PacketExitPointTests
         await Assert.That(stack.IncludeExceptionStackTrace).IsTrue();
 
         Frame frame = _MakeFrame(stack, new byte[14]);
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, protoId);
+        Packet packet;
+        {
+            ParseOptions options = new(firstProtocol: protoId);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
 
         bool found = packet.TryGetFieldValue(stack.PacketErrorFieldId, out FieldValue err, materialize: true);
         _ = err.Data.TryGetAsString(out string msg);
@@ -981,8 +1787,22 @@ internal sealed class PacketExitPointTests
         proto.RegisterFields(builder, protoId);
         using Stack stack = builder.Build();
 
-        Packet packet = Packet.ParseFrame(
-            new PacketId(0), stack, _MakeFrame(stack, new byte[8]), protoId, FieldTreeMode.Skip);
+        Packet packet;
+        {
+            ParseOptions options = new(FieldTreeMode.Skip, firstProtocol: protoId);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                _MakeFrame(stack, new byte[8]),
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
 
         await Assert.That(packet.HasFieldTree).IsFalse();
         await Assert.That(packet.RootField().TryGetFirstChild(out _, materialize: false)).IsFalse();
@@ -999,8 +1819,22 @@ internal sealed class PacketExitPointTests
         using Stack stack = builder.Build();
         ValueCache cache = new(stack, [], options: new ValueCacheBuildOptions { RecordAllFields = true });
 
-        Packet packet = Packet.ParseFrame(
-            new PacketId(0), stack, _MakeFrame(stack, new byte[8]), protoId, FieldTreeMode.Skip, cache);
+        Packet packet;
+        {
+            ParseOptions options = new(FieldTreeMode.Skip, cache, firstProtocol: protoId);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                _MakeFrame(stack, new byte[8]),
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
 
         await Assert.That(packet.IsFinalized).IsTrue();
         await Assert.That(packet.HasFieldTree).IsFalse();
@@ -1017,7 +1851,22 @@ internal sealed class PacketExitPointTests
         proto.RegisterFields(builder, protoId);
         using Stack stack = builder.Build();
 
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, _MakeFrame(stack, new byte[14]), protoId);
+        Packet packet;
+        {
+            ParseOptions options = new(firstProtocol: protoId);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                _MakeFrame(stack, new byte[14]),
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
 
         await Assert.That(packet.HasUnpopulatedLazyFields).IsFalse();
         await Assert.That(packet.IsFinalized).IsTrue();
@@ -1033,7 +1882,22 @@ internal sealed class PacketExitPointTests
         proto.RegisterFields(builder, protoId);
         using Stack stack = builder.Build();
 
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, _MakeFrame(stack, new byte[14]), protoId);
+        Packet packet;
+        {
+            ParseOptions options = new(firstProtocol: protoId);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                _MakeFrame(stack, new byte[14]),
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
         packet.MaterializeAll();
 
         await Assert.That(packet.IsFinalized).IsTrue();
@@ -1051,7 +1915,22 @@ internal sealed class PacketExitPointTests
         proto.RegisterFields(builder, protoId);
         using Stack stack = builder.Build();
 
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, _MakeFrame(stack, new byte[14]), protoId);
+        Packet packet;
+        {
+            ParseOptions options = new(firstProtocol: protoId);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                _MakeFrame(stack, new byte[14]),
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
 
         await Assert.That(packet.IsFinalized).IsTrue();
         await Assert.That(proto.RegisteredCount).IsGreaterThan(ushort.MaxValue - 2);
@@ -1067,7 +1946,22 @@ internal sealed class PacketExitPointTests
         proto.RegisterFields(builder, protoId);
         using Stack stack = builder.Build();
 
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, _MakeFrame(stack, new byte[14]), protoId);
+        Packet packet;
+        {
+            ParseOptions options = new(firstProtocol: protoId);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                _MakeFrame(stack, new byte[14]),
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
         packet.MaterializeAll();
 
         await Assert.That(packet.IsFinalized).IsTrue();
@@ -1084,7 +1978,22 @@ internal sealed class PacketExitPointTests
         proto.RegisterFields(builder, protoId);
         using Stack stack = builder.Build();
 
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, _MakeFrame(stack, new byte[14]), protoId);
+        Packet packet;
+        {
+            ParseOptions options = new(firstProtocol: protoId);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                _MakeFrame(stack, new byte[14]),
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
         FieldId leafId = proto.LeafFieldId;
         const int n = 8;
         using Barrier start = new(n);
@@ -1120,7 +2029,22 @@ internal sealed class PacketExitPointTests
         proto.RegisterFields(builder, protoId);
         using Stack stack = builder.Build();
 
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, _MakeFrame(stack, new byte[14]), protoId);
+        Packet packet;
+        {
+            ParseOptions options = new(firstProtocol: protoId);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                _MakeFrame(stack, new byte[14]),
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
         using CancellationTokenSource cts = new(TimeSpan.FromSeconds(5));
 
         Parallel.For(0, 16, i =>
@@ -1155,7 +2079,22 @@ internal sealed class PacketExitPointTests
         proto.RegisterFields(builder, protoId);
         using Stack stack = builder.Build();
 
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, _MakeFrame(stack, new byte[14]), protoId);
+        Packet packet;
+        {
+            ParseOptions options = new(firstProtocol: protoId);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                _MakeFrame(stack, new byte[14]),
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
         ushort ahead = 20;
         ushort published = 0;
         using Barrier start = new(2);
@@ -1190,9 +2129,20 @@ internal sealed class PacketExitPointTests
         ValueCache cache = new(stack, [], options: new ValueCacheBuildOptions { RecordAllFields = true });
         proto.Cache = cache;
 
-        await Assert.That(() => Packet.ParseFrame(
-            new PacketId(0), stack, _MakeFrame(stack, new byte[14]), protoId, FieldTreeMode.Build, cache))
-            .Throws<InvalidOperationException>();
+        await Assert.That(() =>
+        {
+            ParseOptions options = new(FieldTreeMode.Build, cache, firstProtocol: protoId);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                _MakeFrame(stack, new byte[14]),
+                in options,
+                out Packet? _,
+                out ParseFailure failure))
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+        }).Throws<InvalidOperationException>();
     }
 
     [Test]
@@ -1211,20 +2161,45 @@ internal sealed class PacketExitPointTests
         proto.ConfigureGate(populatorEntered, releasePopulator);
 
         Frame frame = _MakeFrame(stack, new byte[14]);
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, protoId);
+        Packet packet;
+        {
+            ParseOptions options = new(firstProtocol: protoId);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
         ushort lazyIndex = proto.LazyContainerIndex;
 
         Task materialize = Task.Run(() => packet.MaterializeAll());
         populatorEntered.Wait(TimeSpan.FromSeconds(5));
 
-        RecycleError? recycleErr = RecycleError.StackMismatch;
+        bool recycleErrParsed = false;
+        ParseFailure recycleErrFailure = ParseFailure.None;
         bool sawGateMiss = false;
         Task recycle = Task.Run(() =>
         {
             for (int i = 0; i < 2_000; i++)
             {
-                recycleErr = Packet.TryParseFrame(packet, new PacketId(1), stack, frame, protoId);
-                if (recycleErr == RecycleError.MaterializerActive)
+                {
+                    ParseOptions options = new(firstProtocol: protoId);
+                    recycleErrParsed = Packet.TryParse(
+                        packet,
+                        new PacketId(1),
+                        stack,
+                        frame,
+                        in options,
+                        out recycleErrFailure);
+                }
+                if (recycleErrFailure == ParseFailure.MaterializerActive)
                 {
                     break;
                 }
@@ -1246,7 +2221,8 @@ internal sealed class PacketExitPointTests
         releasePopulator.Set();
         await Task.WhenAll(materialize, probes);
 
-        await Assert.That(recycleErr).IsEqualTo(RecycleError.MaterializerActive);
+        await Assert.That(recycleErrParsed).IsFalse();
+        await Assert.That(recycleErrFailure).IsEqualTo(ParseFailure.MaterializerActive);
         await Assert.That(sawGateMiss).IsTrue();
     }
 

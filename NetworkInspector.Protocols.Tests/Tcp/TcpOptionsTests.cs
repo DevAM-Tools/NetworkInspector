@@ -277,5 +277,23 @@ internal sealed class TcpOptionsTests
         await ProtocolTestHelper.AssertDisplayText(stack, p, "tcp.options.mss", "Maximum Segment Size: 1460 bytes").ConfigureAwait(false);
     }
 
+    [Test]
+    public async Task Options_Echo_Value()
+    {
+        using Stack stack = ProtocolTestHelper.BuildStack();
+        byte[] echo = [0x06, 0x06, 0x00, 0x00, 0x00, 0x2A];
+        Packet packet = _Parse(stack, _BuildFrameWithOptions(TcpFlags.Ack, echo));
+        await ProtocolTestHelper.AssertU64Field(stack, packet, "tcp.options.echo.value", 42).ConfigureAwait(false);
+    }
+
+    [Test]
+    public async Task Options_AccEcn_Order0_OneCounter()
+    {
+        using Stack stack = ProtocolTestHelper.BuildStack();
+        byte[] option = [0xAC, 0x05, 0x00, 0x00, 0x07, 0x00];
+        Packet packet = _Parse(stack, _BuildFrameWithOptions(TcpFlags.Ack, option));
+        await ProtocolTestHelper.AssertU64Field(stack, packet, "tcp.options.acc_ecn.ee0b", 7).ConfigureAwait(false);
+    }
+
     #endregion
 }

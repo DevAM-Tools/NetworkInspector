@@ -362,20 +362,16 @@ internal sealed class ValueCacheSlot : IDisposable
             PacketId packetId = new(id);
             try
             {
-                if (_Recycle is null)
+                ParseOptions options = new(FieldTreeMode.Skip, _Writer, recordOnReplay: true);
+                if (_Recycle is null
+                    || !Packet.TryParse(_Recycle, packetId, _SessionReader.Stack, frame, in options, out _))
                 {
-                    _Recycle = Packet.ParseFrame(
-                        packetId, _SessionReader.Stack, frame, FieldTreeMode.Skip, _Writer, recordOnReplay: true);
-                }
-                else
-                {
-                    RecycleError? error = Packet.TryParseFrame(
-                        _Recycle, packetId, _SessionReader.Stack, frame, FieldTreeMode.Skip, _Writer, recordOnReplay: true);
-                    if (error is not null)
+                    if (!Packet.TryParse(packetId, _SessionReader.Stack, frame, in options, out Packet? parsed, out _))
                     {
-                        _Recycle = Packet.ParseFrame(
-                            packetId, _SessionReader.Stack, frame, FieldTreeMode.Skip, _Writer, recordOnReplay: true);
+                        return;
                     }
+
+                    _Recycle = parsed;
                 }
             }
             catch (InvalidOperationException) when (_Writer.IsAbandoned)

@@ -6,9 +6,9 @@ namespace NetworkInspector.Exporters.Asc;
 /// ASC frame exporter. Writes captured frames to a Vector CANalyzer ASCII log file
 /// (.asc) compatible with CANoe, can-utils (candump/canplayer), and NetworkInspector.
 /// <para>
-/// Supports CAN classic, CAN FD, LIN, and FlexRay frames.
-/// Ethernet and CAN XL frames are skipped with an <see cref="ExportErrorKind.UnsupportedType"/>
-/// event. Unsupported link types are tracked in <see cref="SkippedCount"/>.
+/// Supports CAN classic, CAN FD, CAN XL, LIN, FlexRay, and Ethernet.
+/// AFDX status, AFDX bus statistics, <c>ETH STAT</c>, and <c>ETH RxEr</c> are not written. AFDX data frames are read back as Ethernet.
+/// Unsupported link types are tracked in <see cref="SkippedCount"/>.
 /// </para>
 /// <para>
 /// The output file uses <c>base hex  timestamps absolute</c>: all identifiers and data bytes
@@ -385,7 +385,23 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
         {
             case LinkType.CanSocketcan:
             case LinkType.Can20B:
+                if (data.Length > 4 && (data[4] & _SocketCanXlfFlag) != 0)
+                {
+                    if (data.Length < 12)
+                    {
+                        return _HandleSkip(
+                            ExportErrorKind.MalformedData,
+                            $"CAN XL frame is shorter than 12 bytes ({data.Length})",
+                            currentIndex);
+                    }
+
+                    return _HandleCanXlFrame(data, timestampNs, currentIndex, frame);
+                }
+
                 return _HandleCanFrame(data, timestampNs, currentIndex, frame);
+
+            case LinkType.Ethernet:
+                return _HandleEthernetFrame(data, timestampNs, currentIndex, frame);
 
             case LinkType.Lin:
                 return _HandleLinFrame(data, timestampNs, currentIndex, frame);
@@ -406,27 +422,11 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
     /// <see cref="LinkType.Can20B"/>). Parses the binary SocketCAN header and
     /// dispatches to <see cref="AscWriter.WriteCanMessage"/> or
     /// <see cref="AscWriter.WriteCanFdMessage"/> based on the FDF flag.
-    /// <para>
-    /// CAN XL frames share the same link type but are distinguished by the XLF bit
-    /// (byte 4, bit 7). The ASC format has no CAN XL line syntax, so CAN XL frames
-    /// are rejected as <see cref="ExportErrorKind.UnsupportedType"/> before any
-    /// classic/FD interpretation can occur.
-    /// </para>
+    /// CAN XL frames are handled by <see cref="_HandleCanXlFrame"/> before this method runs.
     /// </summary>
     private bool _HandleCanFrame(
         ReadOnlySpan<byte> data, long timestampNs, int currentIndex, Frame frame)
     {
-        // CAN XL frames share LinkType.CanSocketcan with classic/FD but are identified by
-        // the XLF bit (byte 4, bit 7). The ASC format cannot represent CAN XL, so skip early
-        // before _TryParseCanFrame interprets the 12-byte XL header as a classic/FD header.
-        if (data.Length >= _SocketCanHeaderSize && (data[4] & _SocketCanXlfFlag) != 0)
-        {
-            return _HandleSkip(
-                ExportErrorKind.UnsupportedType,
-                "CAN XL frames are not supported by the ASC format",
-                currentIndex);
-        }
-
         if (!_TryParseCanFrame(data,
             out uint rawCanId, out bool isExtended, out bool isRemote,
             out bool isFd, out bool brs, out bool esi, out byte dlc,
@@ -450,6 +450,73 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
             {
                 _Writer!.WriteCanMessage(timestampNs, channel, rawCanId, isExtended, isRemote, dlc, payload);
             }
+        }
+        catch (Exception ex)
+        {
+            return _HandleSkip(ExportErrorKind.IoError, $"Write failed: {ex.Message}", currentIndex);
+        }
+
+        FrameCount++;
+        return true;
+    }
+
+    /// <summary>
+    /// Writes a CAN XL frame as one <c>CANXL</c> / <c>XLFF</c> line.
+    /// A buffer shorter than 12 bytes, or a payload length outside 1..2048, is malformed.
+    /// </summary>
+    private bool _HandleCanXlFrame(
+        ReadOnlySpan<byte> data, long timestampNs, int currentIndex, Frame frame)
+    {
+        if (data.Length < 12)
+        {
+            return _HandleSkip(
+                ExportErrorKind.MalformedData,
+                $"CAN XL frame is shorter than 12 bytes ({data.Length})",
+                currentIndex);
+        }
+
+        int length = BinaryPrimitives.ReadUInt16LittleEndian(data.Slice(6, 2));
+        if (length < 1 || length > 2048 || data.Length < 12 + length)
+        {
+            return _HandleSkip(
+                ExportErrorKind.MalformedData,
+                $"CAN XL payload length {length} does not fit in {data.Length} bytes",
+                currentIndex);
+        }
+
+        int channel = _GetChannel(frame, 1);
+        try
+        {
+            _Writer!.WriteCanXlFrame(timestampNs, channel, data);
+        }
+        catch (Exception ex)
+        {
+            return _HandleSkip(ExportErrorKind.IoError, $"Write failed: {ex.Message}", currentIndex);
+        }
+
+        FrameCount++;
+        return true;
+    }
+
+    /// <summary>
+    /// Writes an Ethernet frame as one section 4.2 <c>ETH</c> line under <c>base hex</c>.
+    /// Lengths outside 0..1518 are malformed. The line is not wrapped.
+    /// </summary>
+    private bool _HandleEthernetFrame(
+        ReadOnlySpan<byte> data, long timestampNs, int currentIndex, Frame frame)
+    {
+        if (data.Length > 1518)
+        {
+            return _HandleSkip(
+                ExportErrorKind.MalformedData,
+                $"Ethernet frame length {data.Length} is outside 0..1518",
+                currentIndex);
+        }
+
+        int channel = _GetChannel(frame, 1);
+        try
+        {
+            _Writer!.WriteEthernetFrame(timestampNs, channel, data);
         }
         catch (Exception ex)
         {

@@ -22,7 +22,22 @@ internal sealed class PacketProtocolTests
         Frame frameData = Frame.Create(
             new FrameId(1), Timestamp.FromSecs(0), new byte[42],
             LinkType.Ethernet, FrameInterfaceId.Invalid, stack.FrameInterfaceRegistry).Value;
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frameData);
+        Packet packet;
+        {
+            ParseOptions options = new();
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frameData,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
 
         FieldLookupCookie cookie = FieldLookupCookie.Start;
         bool found = packet.TryGetNextFieldValue(stack.PacketErrorFieldId, ref cookie, out FieldValue err, materialize: true); // materialize: true — need complete field tree for assertion
@@ -45,7 +60,22 @@ internal sealed class PacketProtocolTests
         Frame frameData = Frame.Create(
             new FrameId(1), Timestamp.FromSecs(0), payload,
             LinkType.Ethernet, FrameInterfaceId.Invalid, stack.FrameInterfaceRegistry).Value;
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frameData);
+        Packet packet;
+        {
+            ParseOptions options = new();
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frameData,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
 
         FieldId unparsedId = stack.GetFieldId("packet.unparsed_data")!.Value;
         bool found = packet.TryGetFieldValue(unparsedId, out FieldValue value, materialize: true);
@@ -67,7 +97,22 @@ internal sealed class PacketProtocolTests
         Frame frameData = Frame.Create(
             new FrameId(1), Timestamp.FromSecs(0), payload,
             LinkType.Ethernet, FrameInterfaceId.Invalid, stack.FrameInterfaceRegistry).Value;
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frameData);
+        Packet packet;
+        {
+            ParseOptions options = new();
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frameData,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
 
         FieldId unparsedId = stack.GetFieldId("packet.unparsed_data")!.Value;
         bool found = packet.TryGetFieldValue(unparsedId, out _, materialize: true);

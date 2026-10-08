@@ -367,4 +367,122 @@ internal sealed class TcpSessionTests
     }
 
     #endregion
+
+    #region Stream key
+
+    [Test]
+    public async Task StreamKey_VlanOff_SameFiveTuple_OneStream()
+    {
+        using Stack stack = ProtocolTestHelper.BuildStack();
+        Packet first = ProtocolTestHelper.ParseFrame(stack, _VlanFrame(10), 0, Timestamp.FromMillis(0));
+        Packet second = ProtocolTestHelper.ParseFrame(stack, _VlanFrame(20), 1, Timestamp.FromMillis(1));
+        await ProtocolTestHelper.AssertU64Field(stack, first, "tcp.stream", 0).ConfigureAwait(false);
+        await ProtocolTestHelper.AssertU64Field(stack, second, "tcp.stream", 0).ConfigureAwait(false);
+    }
+
+    [Test]
+    public async Task StreamKey_LastVlanOn_SplitsInnerVlan()
+    {
+        using Stack stack = ProtocolTestHelper.BuildStackWithSettings(
+            ("tcp.stream_key_last_vlan", SettingValue.Bool(true)));
+        Packet first = ProtocolTestHelper.ParseFrame(stack, _VlanFrame(10), 0, Timestamp.FromMillis(0));
+        Packet second = ProtocolTestHelper.ParseFrame(stack, _VlanFrame(20), 1, Timestamp.FromMillis(1));
+        await ProtocolTestHelper.AssertU64Field(stack, first, "tcp.stream", 0).ConfigureAwait(false);
+        await ProtocolTestHelper.AssertU64Field(stack, second, "tcp.stream", 1).ConfigureAwait(false);
+    }
+
+    [Test]
+    public async Task StreamKey_VlanZero_DoesNotSplitFromUntagged()
+    {
+        using Stack stack = ProtocolTestHelper.BuildStackWithSettings(
+            ("tcp.stream_key_last_vlan", SettingValue.Bool(true)));
+        Packet tagged = ProtocolTestHelper.ParseFrame(stack, _VlanFrame(0), 0, Timestamp.FromMillis(0));
+        Packet plain = ProtocolTestHelper.ParseFrame(stack, _ClientFrame(1000, 0, TcpFlags.Syn), 1, Timestamp.FromMillis(1));
+        await ProtocolTestHelper.AssertU64Field(stack, tagged, "tcp.stream", 0).ConfigureAwait(false);
+        await ProtocolTestHelper.AssertU64Field(stack, plain, "tcp.stream", 0).ConfigureAwait(false);
+    }
+
+    [Test]
+    public async Task StreamKey_FrameInterfaceOff_OneStream()
+    {
+        (Stack stack, FrameInterfaceId first, FrameInterfaceId second) = _StackWithTwoInterfaces(includeFrame: false);
+        using (stack)
+        {
+            Packet a = ProtocolTestHelper.ParseFrame(stack, _ClientFrame(1000, 0, TcpFlags.Syn), 0, Timestamp.FromMillis(0), interfaceId: first);
+            Packet b = ProtocolTestHelper.ParseFrame(stack, _ClientFrame(1000, 0, TcpFlags.Syn), 1, Timestamp.FromMillis(1), interfaceId: second);
+            await ProtocolTestHelper.AssertU64Field(stack, a, "tcp.stream", 0).ConfigureAwait(false);
+            await ProtocolTestHelper.AssertU64Field(stack, b, "tcp.stream", 0).ConfigureAwait(false);
+        }
+    }
+
+    [Test]
+    public async Task StreamKey_FrameInterfaceOn_SplitsInterfaces()
+    {
+        (Stack stack, FrameInterfaceId first, FrameInterfaceId second) = _StackWithTwoInterfaces(includeFrame: true);
+        using (stack)
+        {
+            Packet a = ProtocolTestHelper.ParseFrame(stack, _ClientFrame(1000, 0, TcpFlags.Syn), 0, Timestamp.FromMillis(0), interfaceId: first);
+            Packet b = ProtocolTestHelper.ParseFrame(stack, _ClientFrame(1000, 0, TcpFlags.Syn), 1, Timestamp.FromMillis(1), interfaceId: second);
+            await ProtocolTestHelper.AssertU64Field(stack, a, "tcp.stream", 0).ConfigureAwait(false);
+            await ProtocolTestHelper.AssertU64Field(stack, b, "tcp.stream", 1).ConfigureAwait(false);
+        }
+    }
+
+    [Test]
+    public async Task StreamLimit_SecondFiveTuple_ReportsFull()
+    {
+        using Stack stack = ProtocolTestHelper.BuildStackWithSettings(
+            ("tcp.max_tracked_streams", SettingValue.U64(1)));
+        Packet first = ProtocolTestHelper.ParseFrame(stack, _ClientFrame(1000, 0, TcpFlags.Syn), 0, Timestamp.FromMillis(0));
+        byte[] other = _ClientFrame(1000, 0, TcpFlags.Syn, srcPort: 49153);
+        Packet second = ProtocolTestHelper.ParseFrame(stack, other, 1, Timestamp.FromMillis(1));
+        await ProtocolTestHelper.AssertU64Field(stack, first, "tcp.stream", 0).ConfigureAwait(false);
+        await ProtocolTestHelper.AssertFieldNotPresent(stack, second, "tcp.stream").ConfigureAwait(false);
+        await ProtocolTestHelper.AssertFieldExists(stack, second, "tcp.error.stream_limit").ConfigureAwait(false);
+    }
+
+    [Test]
+    public async Task RelativeSeq_DataAfterSyn_IsOffsetFromIsn()
+    {
+        using Stack stack = ProtocolTestHelper.BuildStack();
+        _DoHandshake(stack);
+        byte[] data = _ClientFrame(1001, 2001, TcpFlags.PshAck, "x"u8);
+        Packet packet = ProtocolTestHelper.ParseFrame(stack, data, 3, Timestamp.FromMillis(20));
+        await ProtocolTestHelper.AssertU64Field(stack, packet, "tcp.seq", 1).ConfigureAwait(false);
+        await ProtocolTestHelper.AssertU64Field(stack, packet, "tcp.seq_raw", 1001).ConfigureAwait(false);
+    }
+
+    private static byte[] _VlanFrame(ushort vlanId)
+    {
+        EthernetLayer eth = new(_DstMac, _SrcMac);
+        VlanLayer vlan = new(vlanId);
+        IPv4Layer ip = new(_ClientIp, _ServerIp);
+        TcpLayer tcp = new(_ClientPort, _ServerPort, seqNum: 1000, flags: TcpFlags.Syn);
+        return FrameStack.Start(eth).Then(vlan).Then(ip).Then(tcp).CreateWithFixedValues().EmitFrame(ReadOnlySpan<byte>.Empty);
+    }
+
+    private static (Stack Stack, FrameInterfaceId First, FrameInterfaceId Second) _StackWithTwoInterfaces(bool includeFrame)
+    {
+        Stack stack = includeFrame
+            ? ProtocolTestHelper.BuildStackWithSettings(("tcp.stream_key_frame", SettingValue.Bool(true)))
+            : ProtocolTestHelper.BuildStack();
+        FrameSourceId source = stack.FrameInterfaceRegistry.RegisterSource(new _TcpTestSource());
+        FrameInterfaceId first = stack.FrameInterfaceRegistry.Register(source, "eth0");
+        FrameInterfaceId second = stack.FrameInterfaceRegistry.Register(source, "eth1");
+        return (stack, first, second);
+    }
+
+    private sealed class _TcpTestSource : IFrameSource
+    {
+        public string UiName => "test";
+        public string? Description => null;
+        public int? EstimatedFrameCount => null;
+        public bool IsRunning => false;
+        public void Start(FrameSourceId sourceId, FrameInterfaceRegistry registry) { }
+        public Frame? NextFrame(CancellationToken cancellationToken = default) => null;
+        public void Stop() => _ = UiName;
+        public void Dispose() { }
+    }
+
+    #endregion
 }

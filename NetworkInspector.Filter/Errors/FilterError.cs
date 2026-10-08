@@ -116,6 +116,14 @@ public sealed class FilterError
             -1,
             -1);
 
+    /// <summary>Creates the error raised when an observer compile sees a subtree scope.</summary>
+    public static FilterError NeedsFieldTree() =>
+        new(
+            FilterErrorKind.NeedsFieldTree,
+            "This expression selects a subtree and needs a field tree.",
+            -1,
+            -1);
+
     #endregion
 
     #region Formatting

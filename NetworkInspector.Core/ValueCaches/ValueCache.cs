@@ -5,7 +5,7 @@ namespace NetworkInspector.Core.ValueCaches;
 /// <summary>
 /// Single-writer RAM columnar cache of selected field values.
 /// Create with a <see cref="Stack"/> and field/group configs (or <see cref="ValueCacheBuildOptions.RecordAllFields"/>),
-/// then fill via <see cref="RecordPacket"/> or parse-time record (<c>Packet.ParseFrame(..., cache)</c>).
+/// then fill via <see cref="RecordPacket"/> or parse-time record (<c>Packet.TryParse</c> with a cache).
 /// Implements <see cref="IReadOnlyValueCache"/>. Listeners should take
 /// <see cref="ReadOnly"/> / <see cref="AsReadOnlyView"/> (keep the compile-time struct)
 /// so they cannot call <see cref="RecordPacket"/> or <see cref="Abandon"/>.
@@ -169,10 +169,7 @@ public sealed class ValueCache : IReadOnlyValueCache
     private const int _CompactRecordLimit = 16;
 
     #endregion
-
     #region Fields
-
-    private readonly int _ChunkShift;
     private readonly ValueCacheProbeSlot[] _Probe;
     private readonly int[] _CompactFieldIds;
     private readonly ulong[] _RecordedBits;
@@ -230,7 +227,7 @@ public sealed class ValueCache : IReadOnlyValueCache
         _RecordContainerPresence = resolved.RecordContainerPresence;
         _ValidateCaptureMode(_DefaultCaptureMode);
         ValueCacheBuildOptions.ThrowIfChunkShiftOutOfRange(resolved.ChunkShift, nameof(options));
-        _ChunkShift = resolved.ChunkShift;
+        ChunkShift = resolved.ChunkShift;
 
         if (!RecordAllFields && fields.Length == 0 && groups.Length == 0)
         {
@@ -354,7 +351,7 @@ public sealed class ValueCache : IReadOnlyValueCache
             int textIndex = 0;
             foreach (KeyValuePair<int, (FieldInfo Info, ValueCaptureMode Mode)> entry in customText)
             {
-                ValueCacheSeries<string> series = new(entry.Value.Info.Id, FieldType.String, entry.Value.Mode, _ChunkShift);
+                ValueCacheSeries<string> series = new(entry.Value.Info.Id, FieldType.String, entry.Value.Mode, ChunkShift);
                 textSeries[textIndex++] = series;
                 all[allIndex++] = series;
                 _SetCustomTextSlot(dense, compactSlots, entry.Key, series);
@@ -370,7 +367,7 @@ public sealed class ValueCache : IReadOnlyValueCache
             int repIndex = 0;
             foreach (KeyValuePair<int, (FieldInfo Info, ValueCaptureMode Mode)> entry in customRep)
             {
-                ValueCacheSeries<string> series = new(entry.Value.Info.Id, FieldType.String, entry.Value.Mode, _ChunkShift);
+                ValueCacheSeries<string> series = new(entry.Value.Info.Id, FieldType.String, entry.Value.Mode, ChunkShift);
                 repSeries[repIndex++] = series;
                 all[allIndex++] = series;
                 _SetCustomRepresentationSlot(dense, compactSlots, entry.Key, series);
@@ -486,7 +483,7 @@ public sealed class ValueCache : IReadOnlyValueCache
     public bool RecordAllFields { get; }
 
     /// <summary>Log₂ of rows per inner column chunk used by every series of this cache.</summary>
-    public int ChunkShift => _ChunkShift;
+    public int ChunkShift { get; }
 
     /// <summary>
     /// Sticky flag: recorded packet ids have been strictly increasing so far.
@@ -1007,7 +1004,7 @@ public sealed class ValueCache : IReadOnlyValueCache
     private object _CreatePayloadSeries(FieldInfo info, ValueCaptureMode mode)
     {
         FieldId id = info.Id;
-        int shift = _ChunkShift;
+        int shift = ChunkShift;
         return info.FieldType switch
         {
             FieldType.None => new ValueCacheSeries<byte>(id, FieldType.None, mode, shift),

@@ -152,13 +152,17 @@ public sealed partial class VlanProtocol : IProtocol
         ushort vid = header.VlanId;
         ushort etherType = header.EtherType.Value;
 
+        // Last write wins, so a nested tag replaces the outer one. TCP reads this as the innermost VLAN.
+        // Per-thread, replaced on every VLAN of this packet, valid only until the next packet parsed on this thread.
+        SetLastVlan(parentField.Packet.Id, vid);
+
         // Summary closure captures pcp (byte), dei (bool), vid (ushort) via ZA.Lazy.
 
         // Store the 4-byte header so _PopulateVlanFields can re-parse without captured variables.
         ReadOnlyMemory<byte> headerBytes = data[.._HeaderSize];
         FieldValue headerValue = FieldValue.NewBytes(headerBytes)
             .WithCustomRepresentation(new LazyString("4 bytes"));
-        parentField.AppendLazyWithCustomText(_ProtocolFieldId, headerValue, "802.1Q Virtual LAN, PRI: ", pcp, ", DEI: ", (dei ? 1 : 0), ", ID: ", vid, _Populator);
+        parentField.AppendLazyWithCustomText(_ProtocolFieldId, headerValue, "802.1Q Virtual LAN, PRI: ", pcp, ", DEI: ", dei ? 1 : 0, ", ID: ", vid, _Populator);
 
         // Dispatch to next protocol on parentField (sibling dispatch)
         ReadOnlyMemory<byte> payload = data[_HeaderSize..];
@@ -173,6 +177,37 @@ public sealed partial class VlanProtocol : IProtocol
 
         return data.Length;
     }
+
+    /// <summary>
+    /// Caches the VLAN id of the tag just parsed.
+    /// Per-thread. Replaced on every VLAN of this packet, so the last write is the innermost tag.
+    /// Valid only until the next packet is parsed on this thread. VLAN id 0 is stored and treated as absent by TCP.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static void SetLastVlan(PacketId packetId, ushort vlanId)
+        => _LastVlanCache = (packetId.Value, vlanId);
+
+    /// <summary>
+    /// Reads the last VLAN id cached for <paramref name="packetId"/>.
+    /// Returns <see langword="false"/> when the slot is empty, belongs to another packet, or the id is 0.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static bool TryGetLastVlan(PacketId packetId, out ushort vlanId)
+    {
+        (int PacketId, ushort VlanId)? cached = _LastVlanCache;
+        if (cached.HasValue && cached.Value.PacketId == packetId.Value && cached.Value.VlanId != 0)
+        {
+            vlanId = cached.Value.VlanId;
+            return true;
+        }
+
+        vlanId = 0;
+        return false;
+    }
+
+    /// <summary>Per-thread last VLAN tag parsed on this thread. Null until the first VLAN.</summary>
+    [ThreadStatic]
+    private static (int PacketId, ushort VlanId)? _LastVlanCache;
 
     /// <summary>
     /// Dispatches to the next protocol by EtherType.

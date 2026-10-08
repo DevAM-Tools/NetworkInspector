@@ -16,41 +16,44 @@ internal sealed class HttpHeuristicParser(ProtocolId protocolId) : IHeuristicPar
 
     public bool Test(ReadOnlyMemory<byte> data)
     {
-        // Minimum meaningful HTTP request: "GET / HTTP/1.0\r\n" = 16 bytes
-        // Minimum HTTP response: "HTTP/1.0 200\r\n" = 15 bytes
-        if (data.Length < 4)
+        ReadOnlySpan<byte> span = data.Span;
+        int lineEnd = span.IndexOf((byte)'\n');
+        if (lineEnd < 0)
         {
             return false;
         }
 
-        ReadOnlySpan<byte> span = data.Span;
+        ReadOnlySpan<byte> line = span[..lineEnd];
+        if (line.Length > 0 && line[^1] == (byte)'\r')
+        {
+            line = line[..^1];
+        }
 
-        // Check for HTTP response: "HTTP/"
-        if (span.Length >= 5
-            && span[0] == (byte)'H'
-            && span[1] == (byte)'T'
-            && span[2] == (byte)'T'
-            && span[3] == (byte)'P'
-            && span[4] == (byte)'/')
+        // Wireshark rejects a line whose length is exactly 8.
+        if (line.Length == 8)
+        {
+            return false;
+        }
+
+        return _StartsOrEndsWithHttp1(line);
+    }
+
+    private static bool _StartsOrEndsWithHttp1(ReadOnlySpan<byte> line)
+    {
+        ReadOnlySpan<byte> token = "HTTP/1."u8;
+        if (line.Length < token.Length)
+        {
+            return false;
+        }
+
+        if (System.Text.Ascii.EqualsIgnoreCase(line[..token.Length], token))
         {
             return true;
         }
 
-        // Check for HTTP methods followed by a space
-        return _MatchesMethod(span, "GET "u8)
-            || _MatchesMethod(span, "POST "u8)
-            || _MatchesMethod(span, "PUT "u8)
-            || _MatchesMethod(span, "HEAD "u8)
-            || _MatchesMethod(span, "DELETE "u8)
-            || _MatchesMethod(span, "OPTIONS "u8)
-            || _MatchesMethod(span, "PATCH "u8)
-            || _MatchesMethod(span, "CONNECT "u8)
-            || _MatchesMethod(span, "TRACE "u8);
+        return line.Length >= 8
+            && System.Text.Ascii.EqualsIgnoreCase(line.Slice(line.Length - 8, token.Length), token);
     }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static bool _MatchesMethod(ReadOnlySpan<byte> data, ReadOnlySpan<byte> method) =>
-        data.Length >= method.Length && data[..method.Length].SequenceEqual(method);
 }
 
 /// <summary>
@@ -104,8 +107,8 @@ internal sealed class TlsHeuristicParser(ProtocolId protocolId) : IHeuristicPars
 /// </summary>
 internal sealed class Http2HeuristicParser(ProtocolId protocolId) : IHeuristicParser
 {
-    /// <summary>HTTP/2 client connection preface (first 6 bytes are sufficient to identify).</summary>
-    private static ReadOnlySpan<byte> _Http2Preface => "PRI * "u8;
+    /// <summary>HTTP/2 client connection preface. Wireshark accepts only this magic, not a bare frame header.</summary>
+    private static ReadOnlySpan<byte> _Http2Preface => "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"u8;
 
     public ProtocolId ProtocolId { get; } = protocolId;
     public string Name => "http2.heuristic";
@@ -114,36 +117,7 @@ internal sealed class Http2HeuristicParser(ProtocolId protocolId) : IHeuristicPa
 
     public bool Test(ReadOnlyMemory<byte> data)
     {
-        if (data.Length < 9)
-        {
-            return false;
-        }
-
         ReadOnlySpan<byte> span = data.Span;
-
-        // Check for HTTP/2 client connection preface: "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
-        if (span.Length >= _Http2Preface.Length && span[.._Http2Preface.Length].SequenceEqual(_Http2Preface))
-        {
-            return true;
-        }
-
-        // Check for HTTP/2 frame header:
-        // 3 bytes length + 1 byte type + 1 byte flags + 4 bytes stream ID = 9 bytes
-        // Type must be 0x00–0x09 (DATA through CONTINUATION)
-        byte frameType = span[3];
-        if (frameType > 9)
-        {
-            return false;
-        }
-
-        // Stream ID: bit 31 is reserved (must be 0)
-        if ((span[5] & 0x80) != 0)
-        {
-            return false;
-        }
-
-        // Frame length sanity: max 16384 default, 16MB theoretical
-        int frameLength = (span[0] << 16) | (span[1] << 8) | span[2];
-        return frameLength <= 16777215 && frameLength + 9 <= data.Length + 9;
+        return span.Length >= _Http2Preface.Length && span[.._Http2Preface.Length].SequenceEqual(_Http2Preface);
     }
 }

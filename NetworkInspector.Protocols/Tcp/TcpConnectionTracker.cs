@@ -48,18 +48,17 @@ internal sealed class TcpConnectionTracker
     /// <summary>Number of valid entries in the LRU cache (0.._CacheSize).</summary>
     private int _CacheCount;
 
-    /// <summary>Gets or creates a connection state for the given key.</summary>
-    /// <param name="key">Normalized TCP connection key.</param>
-    /// <param name="isNew">Set to <see langword="true"/> if this is a new connection.</param>
-    internal TcpConnectionState GetOrCreate(in TcpConnectionKey key, out bool isNew)
+    /// <summary>
+    /// Gets or creates a connection state for the given key.
+    /// Returns <see langword="false"/> when the key is new and <paramref name="maxStreams"/> is already reached.
+    /// </summary>
+    internal bool TryGetOrCreate(in TcpConnectionKey key, int maxStreams, out TcpConnectionState state)
     {
         // Linear probe — sequential access from MRU ([0]) toward LRU.
         for (int i = 0; i < _CacheCount; i++)
         {
             if (_CacheKeys[i].Equals(key))
             {
-                isNew = false;
-
                 // Swap with MRU position [0] — O(1), avoids shifting all entries.
                 if (i > 0)
                 {
@@ -70,25 +69,32 @@ internal sealed class TcpConnectionTracker
                     _CacheValues[0] = hitValue;
                 }
 
-                return _CacheValues[0]!;
+                state = _CacheValues[0]!;
+                return true;
             }
         }
 
-        // Cache miss — fall through to dictionary
-        TcpConnectionState state;
         if (_Connections.TryGetValue(key, out TcpConnectionState? existing))
         {
             state = existing;
-            isNew = false;
-        }
-        else
-        {
-            state = new TcpConnectionState { StreamIndex = _NextStreamIndex++ };
-            _Connections[key] = state;
-            isNew = true;
+            _InsertCache(key, state);
+            return true;
         }
 
-        // Insert at MRU position [0] — shift existing entries toward LRU.
+        if (_Connections.Count >= maxStreams)
+        {
+            state = null!;
+            return false;
+        }
+
+        state = new TcpConnectionState { StreamIndex = _NextStreamIndex++ };
+        _Connections[key] = state;
+        _InsertCache(key, state);
+        return true;
+    }
+
+    private void _InsertCache(in TcpConnectionKey key, TcpConnectionState state)
+    {
         int shiftCount = Math.Min(_CacheCount, _CacheSize - 1);
         for (int j = shiftCount; j > 0; j--)
         {
@@ -103,8 +109,6 @@ internal sealed class TcpConnectionTracker
         {
             _CacheCount++;
         }
-
-        return state;
     }
 
 
@@ -121,7 +125,10 @@ internal sealed class TcpConnectionTracker
     /// <param name="window">Advertised window size.</param>
     /// <param name="payloadLen">TCP payload length in bytes.</param>
     /// <param name="timestamp">Packet timestamp for RTT calculations.</param>
+    /// <param name="srcPort">Source TCP port. Used to learn the server port from a SYN-ACK.</param>
+    /// <param name="dstPort">Destination TCP port. Used to learn the server port from a pure SYN.</param>
     /// <param name="windowScale">Window Scale shift count from SYN options, or null if not a SYN or no WScale option.</param>
+    /// <param name="relativeSequenceNumbers">When true, <see cref="TcpAnalysisResult.RelativeSeq"/> subtracts the sender ISN.</param>
     internal static TcpAnalysisResult Analyze(
         TcpConnectionState conn,
         bool isForward,
@@ -131,7 +138,10 @@ internal sealed class TcpConnectionTracker
         ushort window,
         int payloadLen,
         Timestamp timestamp,
-        byte? windowScale = null)
+        ushort srcPort,
+        ushort dstPort,
+        byte? windowScale = null,
+        bool relativeSequenceNumbers = true)
     {
         TcpFlowState flow = isForward ? conn.Forward : conn.Reverse;
         TcpFlowState reverseFlow = isForward ? conn.Reverse : conn.Forward;
@@ -183,11 +193,37 @@ internal sealed class TcpConnectionTracker
 
         #endregion
 
-        #region 2. Initial RTT: SYN-ACK → delta from SYN
-        if (isSyn && isAck && !conn.InitialRttSet && reverseFlow.SynTimestamp.HasValue)
+        #region Server port and initiator
+        // The first pure SYN names the initiator and the server port (its destination).
+        // A SYN-ACK names the server port from its source when no pure SYN was seen.
+        if (isSyn && !isAck)
         {
-            // SYN-ACK seen; compute delta from the original SYN
-            double delta = _ComputeTimeDelta(reverseFlow.SynTimestamp.Value, timestamp);
+            if (!conn.Forward.IsInitiator && !conn.Reverse.IsInitiator)
+            {
+                flow.IsInitiator = true;
+            }
+
+            if (!conn.ServerPortSet)
+            {
+                conn.ServerPort = dstPort;
+                conn.ServerPortSet = true;
+            }
+
+            conn.PureSynTimestamp = timestamp;
+        }
+        else if (isSyn && isAck && !conn.ServerPortSet)
+        {
+            conn.ServerPort = srcPort;
+            conn.ServerPortSet = true;
+        }
+
+        #endregion
+
+        #region 2. Initial RTT: pure SYN to the first pure ACK
+        if (!isSyn && isAck && payloadLen == 0 && !isFin && !isRst
+            && !conn.InitialRttSet && conn.PureSynTimestamp.HasValue)
+        {
+            double delta = _ComputeTimeDelta(conn.PureSynTimestamp.Value, timestamp);
             if (delta >= 0)
             {
                 conn.InitialRttValue = delta;
@@ -198,8 +234,19 @@ internal sealed class TcpConnectionTracker
 
         #endregion
 
-        #region 3. Retransmission / Out-of-Order
-        if (flow.Seen && segLen > 0 && !isSyn)
+        #region 3. Keep-alive (before retransmission)
+        // A keep-alive sits one sequence before next and carries 0 or 1 bytes.
+        // It is not a retransmission. Wireshark skips the retransmission check once this flag is set.
+        bool isKeepAlive = flow.Seen && payloadLen <= 1 && seqNum == flow.NextSeq - 1 && !isSyn && !isFin && !isRst;
+        if (isKeepAlive)
+        {
+            analysisFlags |= TcpAnalysisFlags.KeepAlive;
+        }
+
+        #endregion
+
+        #region 4. Retransmission / Out-of-Order
+        if (!isKeepAlive && flow.Seen && segLen > 0 && !isSyn)
         {
             // Check if this segment's data has already been seen
             if (_IsSequenceBefore(endSeq, flow.NextSeq) || endSeq == flow.NextSeq)
@@ -258,8 +305,10 @@ internal sealed class TcpConnectionTracker
 
         #endregion
 
-        #region 6. Zero Window Probe (data sent to peer with zero window)
-        if (payloadLen > 0 && reverseFlow.Seen && reverseFlow.LastWindow == 0)
+        #region 5. Zero Window Probe (exactly one new byte into a zero window)
+        if (payloadLen == 1 && flow.Seen && seqNum == flow.NextSeq
+            && reverseFlow.Seen && reverseFlow.LastWindow == 0
+            && !isSyn && !isFin && !isRst)
         {
             analysisFlags |= TcpAnalysisFlags.ZeroWindowProbe;
         }
@@ -286,9 +335,10 @@ internal sealed class TcpConnectionTracker
         #endregion
 
         #region 9. Duplicate ACK
-        if (isAck && payloadLen == 0 && flow.Seen && !isSyn && !isFin && !isRst
+        if (isAck && payloadLen == 0 && window != 0 && flow.Seen && !isSyn && !isFin && !isRst
             && ackNum == flow.LastAck && window == flow.LastWindow
-            && !isWindowUpdate)
+            && !isWindowUpdate
+            && !reverseFlow.LastSegmentWasKeepAlive)
         {
             flow.DupAckCount++;
             flow.LastDupAck = ackNum;
@@ -303,11 +353,26 @@ internal sealed class TcpConnectionTracker
 
         #endregion
 
-        #region 10. ACK RTT
-        if (isAck && reverseFlow.DataSegmentTimestamps.Count > 0)
+        #region 9b. Keep-alive ACK
+        if (isAck && payloadLen == 0 && window != 0 && flow.Seen
+            && !isSyn && !isFin && !isRst
+            && seqNum == flow.NextSeq && ackNum == flow.LastAck && window == flow.LastWindow
+            && reverseFlow.LastSegmentWasKeepAlive
+            && (analysisFlags & TcpAnalysisFlags.KeepAlive) == 0)
         {
-            if (reverseFlow.DataSegmentTimestamps.Remove(ackNum, out Timestamp segTs))
+            analysisFlags |= TcpAnalysisFlags.KeepAliveAck;
+        }
+
+        #endregion
+
+        #region 10. ACK RTT
+        if (isAck)
+        {
+            int slot = (int)(ackNum & 255);
+            if (reverseFlow.AckRttSlotUsed[slot] && reverseFlow.AckRttSeq[slot] == ackNum)
             {
+                reverseFlow.AckRttSlotUsed[slot] = false;
+                Timestamp segTs = Timestamp.FromNanos(reverseFlow.AckRttNanos[slot]);
                 double delta = _ComputeTimeDelta(segTs, timestamp);
                 if (delta >= 0)
                 {
@@ -353,11 +418,11 @@ internal sealed class TcpConnectionTracker
         {
             conn.Completeness |= TcpConnectionState.DataSeen;
 
-            // Record timestamp for ACK RTT (limit to 256 entries)
-            if (flow.DataSegmentTimestamps.Count < 256)
-            {
-                flow.DataSegmentTimestamps.TryAdd(endSeq, timestamp);
-            }
+            // Record timestamp for ACK RTT. The ring overwrites a colliding slot instead of growing.
+            int rttSlot = (int)(endSeq & 255);
+            flow.AckRttSeq[rttSlot] = endSeq;
+            flow.AckRttNanos[rttSlot] = timestamp.AsNanos;
+            flow.AckRttSlotUsed[rttSlot] = true;
         }
 
         if (isFin)
@@ -389,11 +454,13 @@ internal sealed class TcpConnectionTracker
         }
 
         flow.Seen = true;
+        flow.LastSegmentWasKeepAlive = (analysisFlags & TcpAnalysisFlags.KeepAlive) != 0;
 
         #endregion
 
         #region Connection state machine transitions (RFC 793)
-        _UpdateConnectionPhase(conn, isSyn, isAck, isFin, isRst, isForward);
+        // If no pure SYN was seen, IsInitiator stays false and a FIN is reported as FIN_WAIT_1.
+        _UpdateConnectionPhase(conn, flow, isSyn, isAck, isFin, isRst);
 
         #endregion
 
@@ -421,21 +488,29 @@ internal sealed class TcpConnectionTracker
         #endregion
 
         #region 15. Scaled window size
-        // The *receiver's* scale factor applies to the window value advertised by this sender.
-        // E.g., if the reverse flow negotiated window scale = 7, then this segment's window
-        // should be shifted by 7 to get the actual receive window.
+        // SYN and SYN-ACK windows are not scaled. The shift is the one this sender put in its own SYN.
         ulong scaledWindowSize = 0;
         int windowScaleFactor = -1;
-        if (reverseFlow.WindowScale.HasValue)
+        if (!isSyn && flow.WindowScale.HasValue)
         {
-            windowScaleFactor = reverseFlow.WindowScale.Value;
-            scaledWindowSize = (ulong)window << reverseFlow.WindowScale.Value;
+            windowScaleFactor = flow.WindowScale.Value;
+            scaledWindowSize = (ulong)window << flow.WindowScale.Value;
         }
 
-        // Store initial RTT from connection state if this is the first time we have it
-        if (conn.InitialRttSet && double.IsNaN(initialRtt))
+        uint relativeSeq = seqNum;
+        bool sequenceIsRelative = false;
+        if (relativeSequenceNumbers && flow.IsnSet)
         {
-            initialRtt = conn.InitialRttValue;
+            relativeSeq = seqNum - flow.Isn;
+            sequenceIsRelative = true;
+        }
+
+        uint relativeAck = ackNum;
+        bool ackIsRelative = false;
+        if (relativeSequenceNumbers && reverseFlow.IsnSet)
+        {
+            relativeAck = ackNum - reverseFlow.Isn;
+            ackIsRelative = true;
         }
 
         return new TcpAnalysisResult
@@ -452,6 +527,10 @@ internal sealed class TcpConnectionTracker
             WindowScaleFactor = windowScaleFactor,
             ConnectionState = conn,
             Phase = conn.Phase,
+            RelativeSeq = relativeSeq,
+            RelativeAck = relativeAck,
+            SequenceIsRelative = sequenceIsRelative,
+            AckIsRelative = ackIsRelative,
         };
     }
 
@@ -460,6 +539,8 @@ internal sealed class TcpConnectionTracker
     {
         _Connections.Clear();
         _NextStreamIndex = 0;
+        _CacheCount = 0;
+        Array.Clear(_CacheValues);
     }
 
     /// <summary>
@@ -493,7 +574,7 @@ internal sealed class TcpConnectionTracker
     /// Follows the simplified RFC 793 state diagram with tracking for both directions.
     /// </summary>
     private static void _UpdateConnectionPhase(
-        TcpConnectionState conn, bool isSyn, bool isAck, bool isFin, bool isRst, bool isForward)
+        TcpConnectionState conn, TcpFlowState flow, bool isSyn, bool isAck, bool isFin, bool isRst)
     {
         if (isRst)
         {
@@ -529,7 +610,11 @@ internal sealed class TcpConnectionTracker
             case TcpConnectionPhase.Established:
                 if (isFin)
                 {
-                    conn.Phase = TcpConnectionPhase.FinWait1;
+                    // The side that sent the first pure SYN is the active closer. The other side enters CLOSE_WAIT.
+                    // With no pure SYN in the capture, IsInitiator is false and the FIN is reported as FIN_WAIT_1.
+                    conn.Phase = flow.IsInitiator
+                        ? TcpConnectionPhase.FinWait1
+                        : TcpConnectionPhase.CloseWait;
                 }
                 break;
 

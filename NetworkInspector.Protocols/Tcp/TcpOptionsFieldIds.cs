@@ -240,5 +240,37 @@ internal readonly struct TcpOptionsFieldIds
     {
         get; init;
     }
+
+    #endregion
+
+    #region Echo, CC, SCPS, Quick-Start, AccECN, experimental
+
+    internal FieldId Echo { get; init; }
+    internal FieldId EchoValue { get; init; }
+    internal FieldId EchoReply { get; init; }
+    internal FieldId EchoReplyValue { get; init; }
+    internal FieldId Cc { get; init; }
+    internal FieldId CcValue { get; init; }
+    internal FieldId CcNew { get; init; }
+    internal FieldId CcNewValue { get; init; }
+    internal FieldId CcEcho { get; init; }
+    internal FieldId CcEchoValue { get; init; }
+    internal FieldId Scps { get; init; }
+    internal FieldId ScpsBets { get; init; }
+    internal FieldId ScpsSnack1 { get; init; }
+    internal FieldId ScpsSnack2 { get; init; }
+    internal FieldId ScpsCompress { get; init; }
+    internal FieldId ScpsNlts { get; init; }
+    internal FieldId Qs { get; init; }
+    internal FieldId QsRate { get; init; }
+    internal FieldId QsTtlDiff { get; init; }
+    internal FieldId AccEcn { get; init; }
+    internal FieldId AccEcnEe0b { get; init; }
+    internal FieldId AccEcnEceb { get; init; }
+    internal FieldId AccEcnEe1b { get; init; }
+    internal FieldId Exp { get; init; }
+    internal FieldId ExpExId { get; init; }
+    internal FieldId ExpData { get; init; }
+
     #endregion
 }

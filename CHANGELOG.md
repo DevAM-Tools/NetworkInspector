@@ -7,6 +7,43 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.14.0] — Field watches, Vector ASC layout, and TCP corrections
+
+Delta since 0.13.0. Version is `0.14.0` in `Directory.Build.props`.
+
+This release parses through `Packet.TryParse` and a `ParseOptions` struct, so a field tree, a value cache, and a field watch are independent choices on one call. A filter expression can compile to a tree-free `FilterObserver`. ASC import and export follow the Vector line layout, including Ethernet section 4.2 and CAN XL. TCP analysis, reassembly, and port dispatch match the handshake that was actually seen. `PacketId.Invalid`, a default field cursor, and a full parse-buffer table fail closed.
+
+### Added
+
+- **Field watch** — `ParseOptions.Observers` is a `ParseObserver` list (`IFieldObserver` plus `FieldWatch`) for that parse only. `FieldWatch.None` is the default and reports nothing. `FieldWatch.All` reports every produced field and expands every deferred group. `FieldWatch.Only` names one field or several. `BeginPacket` runs before any `OnField`. The synthetic packet root is not reported. A skip parse delivers `FieldVisit.Value` and no cursor. A build parse can navigate to the parent and to siblings already linked.
+- **Filter observer** — `Filter.Compile(expression, stack, in FilterObserverOptions)` or `Filter.TryCompile` returns a `FilterObserver`. It is not a `Filter`. Read `IsMatch` after `TryParse`. When `HasFlank` is true, read `TryReadMatch` before the next frame. A subtree scope (`$udp { ... }`) fails with `FilterErrorKind.NeedsFieldTree`.
+- **ASC Ethernet and CAN XL export** — `AscExporter` writes Ethernet as one section 4.2 `ETH` line (hex length, no FCS) and CAN XL as `CANXL` / `XLFF`. 0.13 skipped both as `UnsupportedType`. A length outside the allowed range is `ExportErrorKind.MalformedData`.
+- **TCP stream-key settings** — `tcp.stream_key_last_vlan` and `tcp.stream_key_frame` default to false. Set either to true to split `tcp.stream` on the innermost VLAN id or the capture interface.
+
+### Changed
+
+- **ASC timestamps** — line time is whole seconds plus a nanosecond fraction, scaled in `long`. A tenth digit of 5 or more rounds up. Absolute lines replace the clock and add to the header date. Relative lines accumulate, including timestamped lines that are not frames. A relative split file starts at the previous-log absolute time.
+- **ASC Ethernet import** — section 4.2 `ETH` and `AFDX` data frames are Ethernet. Wrapped hex joins until `DataLen` is met. `ETH STAT`, `ETH RxEr`, `AFDX STAT`, and `AFDX BUS` are not frames.
+- **ASC CAN XL import** — `XLFF` is CAN XL. `CBFF` / `CEFF` stay classic. `FBFF` / `FEFF` stay CAN FD. Channel and the data-length column are decimal. Other numeric columns stay hex under `base dec`. Error and overload frames are SocketCAN error frames.
+
+### Breaking
+
+- **Parse entry** — `Packet.ParseFrame`, `ParseFrameIndexed`, `TryParseFrame`, and `TryParseFrameIndexed` are removed. Parse with `Packet.TryParse` and a `ParseOptions` struct. An id jump and a recycle precondition return `ParseFailure` and do not throw. `RecycleError` remains the code used inside packet recycle.
+- **ASC text from 0.13** — CAN FD DLC is one hex digit under `base hex` (`12` becomes `C`). LIN channel 1 is `Li`, not `L1`. FlexRay writes a hex cycle, NM `0`, sync `0`, and a hex byte count, not a payload-word count and a decimal cycle. `AscSource` reads this layout. The token `L1` is not channel 1.
+
+### Fixed
+
+- **TCP keep-alive, FIN, and window scale** — a keep-alive (one sequence before next, 0 or 1 data bytes) sets `tcp.analysis.keep_alive` and not `tcp.analysis.retransmission`. After a handshake, the server `FIN, ACK` is `CLOSE_WAIT`. A FIN with no pure SYN stays `FIN_WAIT_1`. `tcp.window_size` uses that sender's own SYN shift. SYN and SYN-ACK do not publish `tcp.window_size`.
+- **TCP reassembly and HTTP** — an out-of-order segment waits for the hole. A retransmission is not appended twice. The first payload sequence is the left edge. An HTTP/1 request split across segments is one message on the completing segment. Non-HTTP bytes on port 80 set `http.error.not_http`. A client source port of 80 does not select HTTP when the learned server port is elsewhere. HTTP/2 heuristic accepts only the connection preface.
+- **TCP stream table** — when `tcp.max_tracked_streams` is full, the next five-tuple sets `tcp.error.stream_limit` and omits `tcp.stream`.
+- **ASC CAN FD, classic CAN, LIN, and FlexRay columns** — hex-base FD DLC `12` is rejected; decimal-base DLC `12` is twelve; FD DLC 15 is 64 bytes; classic DLC 15 stores 8 bytes. A remote frame with no DLC is RTR and length 0. LIN channel 1 is `Li`. FlexRay cycle and byte count follow the file base.
+- **Invalid packet id** — `Packet.TryParse` with `PacketId.Invalid` returns false and `ParseFailure.InvalidPacketId`. The creating overload leaves `packet` null. The recycle overload leaves the packet unchanged. Id 0 on a fresh stack still parses. The invalid id is not a replay.
+- **`IsRoot`** — `Field.IsRoot` and `MutField.IsRoot` are true only for a valid cursor whose storage index is 0. `default(Field)` and `default(MutField)` are not the root.
+- **`BindParseBuffer` cap** — the 255th additional buffer is stored and `BufferCount` becomes 256. The next `MutField.BindParseBuffer` returns empty, does not store, and `TryGetEffectLayerKey` on that empty memory is false. The cap is a constant (effect-key bits 31–24).
+- **`ChunkedGrowOnlyStore`** — after `Append` returns, every index in `0 .. Count-1` is a published value, or a concurrent `Clear` has set `Count` to 0. `Clear` does not leave a hole at index 0. `Get` returns the constructor's unset sentinel on a miss, not null unless that sentinel is null. `ReadRange(int.MinValue, buffer)` fills every slot with null and returns `buffer.Length`.
+- **Name lookup** — a null name throws `ArgumentNullException` from `GetProtocolId`, `GetFieldId`, `GetFieldAliasGroupId`, `GetIndexGroupId`, `GetProtocolTableId`, and `GetHeuristicProtocolTableId` on `Stack` and `StackBuilder`. An unknown name returns null.
+- **Invariant error text** — `Invalid protocol ID: {n}` and `Slab allocation failed after {attempts} attempts (requested {count} slots).` format those integers with `CultureInfo.InvariantCulture`.
+
 ## [0.13.0] — Vector LIN events, Type 120 Ethernet, and PCAPNG limits
 
 Delta since 0.12.0. Version is `0.13.0` in `Directory.Build.props`.

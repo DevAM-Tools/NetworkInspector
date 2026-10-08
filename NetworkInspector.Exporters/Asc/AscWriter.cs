@@ -107,6 +107,10 @@ internal sealed class AscWriter
     /// <item>Data bytes: 2-char uppercase hex each, space-separated.</item>
     /// </list>
     /// </remarks>
+    /// <remarks>
+    /// Direction is always Rx. SocketCAN, DLT_LIN, and LINKTYPE_FLEXRAY payloads
+    /// do not carry Tx versus Rx, and the ASC parser discards the direction token.
+    /// </remarks>
     /// <param name="timestampNs">Frame timestamp in nanoseconds since Unix epoch.</param>
     /// <param name="channel">CAN channel number (decimal).</param>
     /// <param name="rawCanId">29-bit CAN ID without flag bits (bits 28–0).</param>
@@ -135,6 +139,7 @@ internal sealed class AscWriter
             _AppendHexUInt32(rawCanId, 3);
         }
 
+        // No Tx/Rx bit on the frame. Parser ignores this token. Keep Rx.
         _LineBuffer.Write(" Rx "u8);
         _LineBuffer.WriteByte(isRemote ? (byte)'r' : (byte)'d');
         _LineBuffer.WriteByte((byte)' ');
@@ -161,10 +166,14 @@ internal sealed class AscWriter
     /// Output format: <c>{ts} CANFD {ch} Rx {id}[x] {brs} {esi} {dlc} {dlen} [data bytes...]</c>
     /// <list type="bullet">
     /// <item>BRS and ESI: decimal <c>0</c> or <c>1</c>.</item>
-    /// <item>DLC: decimal integer (FD DLC code, 0–15).</item>
+    /// <item>DLC: one uppercase hex digit (0–9, A–F). The file header is <c>base hex</c>.</item>
     /// <item>Data length: decimal integer (actual byte count, 0–64).</item>
     /// <item>Data bytes: 2-char uppercase hex each, space-separated.</item>
     /// </list>
+    /// </remarks>
+    /// <remarks>
+    /// Direction is always Rx. SocketCAN, DLT_LIN, and LINKTYPE_FLEXRAY payloads
+    /// do not carry Tx versus Rx, and the ASC parser discards the direction token.
     /// </remarks>
     /// <param name="timestampNs">Frame timestamp in nanoseconds since Unix epoch.</param>
     /// <param name="channel">CAN channel number (decimal).</param>
@@ -182,6 +191,7 @@ internal sealed class AscWriter
         _AppendTimestamp(timestampNs);
         _LineBuffer.Write(" CANFD "u8);
         _AppendDecimalInt(channel);
+        // No Tx/Rx bit on the frame. Parser ignores this token. Keep Rx.
         _LineBuffer.Write(" Rx "u8);
 
         if (isExtended)
@@ -199,7 +209,8 @@ internal sealed class AscWriter
         _LineBuffer.WriteByte((byte)' ');
         _LineBuffer.WriteByte(esi ? (byte)'1' : (byte)'0');
         _LineBuffer.WriteByte((byte)' ');
-        _AppendDecimalInt(dlc);
+        // DLC is hex under base hex. One digit keeps 10..15 distinct from the decimal data length.
+        _LineBuffer.WriteByte((byte)"0123456789ABCDEF"[dlc]);
         _LineBuffer.WriteByte((byte)' ');
         _AppendDecimalInt(data.Length);
 
@@ -218,9 +229,9 @@ internal sealed class AscWriter
     /// </summary>
     /// <remarks>
     /// Output format:
-    /// <c>{ts} L{ch} {frameId:X2} Rx {dlc} [data bytes...] checksum = {cs:X2} CSM = enhanced</c>
+    /// <c>{ts} Li|{L2..} {frameId:X2} Rx {dlc} [data bytes...] checksum = {cs:X2} CSM = enhanced</c>
     /// <list type="bullet">
-    /// <item>Channel: decimal integer prefixed with <c>L</c> (e.g., <c>L1</c>).</item>
+    /// <item>Channel 1 is <c>Li</c>. Channels 2 and above are <c>L</c> plus the decimal number.</item>
     /// <item>Frame ID: 2-char uppercase hex (6-bit value, 0x00–0x3F).</item>
     /// <item>DLC: decimal integer (data byte count).</item>
     /// <item>Data bytes: 2-char uppercase hex each, space-separated.</item>
@@ -228,8 +239,12 @@ internal sealed class AscWriter
     /// <item>Checksum method: always <c>enhanced</c> (most common in LIN 2.x).</item>
     /// </list>
     /// </remarks>
+    /// <remarks>
+    /// Direction is always Rx. SocketCAN, DLT_LIN, and LINKTYPE_FLEXRAY payloads
+    /// do not carry Tx versus Rx, and the ASC parser discards the direction token.
+    /// </remarks>
     /// <param name="timestampNs">Frame timestamp in nanoseconds since Unix epoch.</param>
-    /// <param name="channel">LIN channel number (decimal, written as <c>L{channel}</c>).</param>
+    /// <param name="channel">LIN channel number. Channel 1 is written as <c>Li</c>.</param>
     /// <param name="frameId">6-bit LIN frame identifier (0–63).</param>
     /// <param name="data">Payload bytes (0–8 bytes).</param>
     /// <param name="checksum">LIN checksum byte.</param>
@@ -239,10 +254,18 @@ internal sealed class AscWriter
     {
         _AppendTimestamp(timestampNs);
         _LineBuffer.WriteByte((byte)' ');
-        _LineBuffer.WriteByte((byte)'L');
-        _AppendDecimalInt(channel);
+        if (channel == 1)
+        {
+            _LineBuffer.Write("Li"u8);
+        }
+        else
+        {
+            _LineBuffer.WriteByte((byte)'L');
+            _AppendDecimalInt(channel);
+        }
         _LineBuffer.WriteByte((byte)' ');
         _AppendHexByte((byte)(frameId & 0x3F));
+        // No Tx/Rx bit on the frame. Parser ignores this token. Keep Rx.
         _LineBuffer.Write(" Rx "u8);
         _AppendDecimalInt(data.Length);
 
@@ -264,16 +287,15 @@ internal sealed class AscWriter
     /// </summary>
     /// <remarks>
     /// Output format:
-    /// <c>{ts} Fr {ch} V9 {frameId:X4} {payloadWords} {cycle} 0 {headerCrc:X4} x {dlen} [data bytes...]</c>
+    /// <c>{ts} Fr {ch} V9 {frameId:X4} {cycle:X2} 0 0 {headerCrc:X4} x {byteCount:X2} [data bytes...]</c>
     /// <list type="bullet">
     /// <item>Channel: decimal integer (raw value from DLT_FLEXRAY header byte 0).</item>
     /// <item>Frame ID: 4-char uppercase hex (11-bit slot ID, 0x0000–0x07FF).</item>
-    /// <item>Payload words: decimal ceiling count of 16-bit words needed for the payload.</item>
-    /// <item>Cycle: decimal integer (0–63).</item>
-    /// <item>NM flag: always <c>0</c> (not available from the frame data).</item>
+    /// <item>Cycle: uppercase hex (0–63). The file header is <c>base hex</c>.</item>
+    /// <item>NM and Sync: always <c>0</c>. The link-type frame does not carry them.</item>
     /// <item>Header CRC: 4-char uppercase hex.</item>
     /// <item>Identifier: literal <c>x</c> placeholder token.</item>
-    /// <item>Data length: decimal integer (actual byte count).</item>
+    /// <item>Byte count: uppercase hex, because the file base is hex.</item>
     /// <item>Data bytes: 2-char uppercase hex each, space-separated.</item>
     /// </list>
     /// </remarks>
@@ -283,27 +305,29 @@ internal sealed class AscWriter
     /// <param name="cycle">Cycle counter (0–63).</param>
     /// <param name="headerCrc">FlexRay header CRC value.</param>
     /// <param name="data">Payload bytes (0–254 bytes).</param>
+    /// <remarks>
+    /// Direction is always Rx. SocketCAN, DLT_LIN, and LINKTYPE_FLEXRAY payloads
+    /// do not carry Tx versus Rx, and the ASC parser discards the direction token.
+    /// FlexRay ASC lines have no direction column, so this method does not emit a token.
+    /// </remarks>
     internal void WriteFlexRayMessage(
         long timestampNs, int channel,
         ushort frameId, byte cycle, ushort headerCrc,
         ReadOnlySpan<byte> data)
     {
-        // Payload length in 16-bit words (ceiling division).
-        int payloadWords = (data.Length + 1) / 2;
-
+        // No Tx/Rx bit on the frame. FlexRay ASC has no direction column, so none is written.
+        // Column order is id, cycle, NM, sync, header CRC, name, byte count.
         _AppendTimestamp(timestampNs);
         _LineBuffer.Write(" Fr "u8);
         _AppendDecimalInt(channel);
         _LineBuffer.Write(" V9 "u8);
         _AppendHexUInt16(frameId, 4);
         _LineBuffer.WriteByte((byte)' ');
-        _AppendDecimalInt(payloadWords);
-        _LineBuffer.WriteByte((byte)' ');
-        _AppendDecimalInt(cycle);
-        _LineBuffer.Write(" 0 "u8); // NM flag = 0
+        _AppendHexByte(cycle);
+        _LineBuffer.Write(" 0 0 "u8);
         _AppendHexUInt16(headerCrc, 4);
-        _LineBuffer.Write(" x "u8); // identifier placeholder
-        _AppendDecimalInt(data.Length);
+        _LineBuffer.Write(" x "u8);
+        _AppendHexByte((byte)data.Length);
 
         foreach (byte b in data)
         {
@@ -311,6 +335,99 @@ internal sealed class AscWriter
             _AppendHexByte(b);
         }
 
+        _LineBuffer.Write(_CrLf);
+        _FlushLine();
+    }
+
+    /// <summary>
+    /// Writes one Ethernet ASC 1.3.1 section 4.2 packet on a single physical line.
+    /// The exporter header is <c>base hex</c>, so the length column is uppercase hex.
+    /// </summary>
+    /// <remarks>
+    /// Direction is always Rx. SocketCAN, DLT_LIN, and LINKTYPE_FLEXRAY payloads
+    /// do not carry Tx versus Rx, and the ASC parser discards the direction token.
+    /// The caller rejects lengths outside 0..1518 before calling this method.
+    /// </remarks>
+    /// <param name="timestampNs">Frame timestamp in nanoseconds since Unix epoch.</param>
+    /// <param name="channel">Ethernet channel (1..255).</param>
+    /// <param name="frame">Frame bytes starting at the destination MAC, without the Ethernet CRC.</param>
+    internal void WriteEthernetFrame(long timestampNs, int channel, ReadOnlySpan<byte> frame)
+    {
+        _AppendTimestamp(timestampNs);
+        _LineBuffer.Write(" ETH "u8);
+        _AppendDecimalInt(channel);
+        // No Tx/Rx bit on the frame. Parser ignores this token. Keep Rx.
+        _LineBuffer.Write(" Rx "u8);
+        _AppendHexUInt32((uint)frame.Length, 1);
+        _LineBuffer.WriteByte((byte)':');
+        foreach (byte value in frame)
+        {
+            _AppendHexByte(value);
+        }
+
+        _LineBuffer.Write(_CrLf);
+        _FlushLine();
+    }
+
+    /// <summary>
+    /// Writes one CAN XL <c>XLFF</c> line. Classic and FD frames are not wrapped in <c>CANXL</c>.
+    /// </summary>
+    /// <remarks>
+    /// Direction is always Rx. SocketCAN, DLT_LIN, and LINKTYPE_FLEXRAY payloads
+    /// do not carry Tx versus Rx, and the ASC parser discards the direction token.
+    /// The caller checks the XLF bit, the 1..2048 length, and that the buffer holds the payload.
+    /// </remarks>
+    /// <param name="timestampNs">Frame timestamp in nanoseconds since Unix epoch.</param>
+    /// <param name="channel">CAN channel.</param>
+    /// <param name="frame">Compact 12-byte CAN XL header plus payload.</param>
+    internal void WriteCanXlFrame(long timestampNs, int channel, ReadOnlySpan<byte> frame)
+    {
+        uint word = BinaryPrimitives.ReadUInt32BigEndian(frame);
+        uint priority = word & 0x7FFu;
+        byte vcid = (byte)((word >> 16) & 0xFF);
+        byte flags = frame[4];
+        byte sdt = frame[5];
+        int length = BinaryPrimitives.ReadUInt16LittleEndian(frame.Slice(6, 2));
+        uint acceptanceField = BinaryPrimitives.ReadUInt32LittleEndian(frame.Slice(8, 4));
+        uint ascFlags = 0x00400000u;
+        if ((flags & 0x01) != 0)
+        {
+            ascFlags |= 0x01000000u;
+        }
+
+        if ((flags & 0x02) != 0)
+        {
+            ascFlags |= 0x00800000u;
+        }
+
+        _AppendTimestamp(timestampNs);
+        _LineBuffer.Write(" CANXL "u8);
+        _AppendDecimalInt(channel);
+        // No Tx/Rx bit on the frame. Parser ignores this token. Keep Rx.
+        _LineBuffer.Write(" Rx XLFF 0 0 "u8);
+        _AppendHexUInt32(priority, 1);
+        _LineBuffer.WriteByte((byte)' ');
+        _AppendHexByte(sdt);
+        _LineBuffer.WriteByte((byte)' ');
+        _LineBuffer.WriteByte((flags & 0x01) != 0 ? (byte)'1' : (byte)'0');
+        _LineBuffer.WriteByte((byte)' ');
+        _AppendHexUInt32((uint)(length - 1), 1);
+        _LineBuffer.WriteByte((byte)' ');
+        _AppendDecimalInt(length);
+        _LineBuffer.Write(" 0 0 "u8);
+        _AppendHexByte(vcid);
+        _LineBuffer.WriteByte((byte)' ');
+        _AppendHexUInt32(acceptanceField, 8);
+
+        ReadOnlySpan<byte> payload = frame.Slice(12, length);
+        foreach (byte value in payload)
+        {
+            _LineBuffer.WriteByte((byte)' ');
+            _AppendHexByte(value);
+        }
+
+        _LineBuffer.Write(" 0 "u8);
+        _AppendHexUInt32(ascFlags, 8);
         _LineBuffer.Write(_CrLf);
         _FlushLine();
     }

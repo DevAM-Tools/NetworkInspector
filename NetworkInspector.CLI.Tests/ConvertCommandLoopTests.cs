@@ -141,8 +141,21 @@ internal sealed class ConvertCommandLoopTests
         // Dense first parses (0 then 1); evaluating 1 then 0 poisons a stateful filter.
         PacketFilter filter = _Compile(stack, "flank(ip.ttl, changed, within: 1s)");
         Frame poisonFrame = poisonSource.NextFrame()!.Value;
-        _ = Packet.ParseFrame(new PacketId(0), stack, poisonFrame);
-        _ = filter.TryIsMatch(Packet.ParseFrame(new PacketId(1), stack, poisonFrame), out _, out _);
+        ParseOptions options = new();
+        PacketId firstId = new(0);
+        if (!Packet.TryParse(firstId, stack, poisonFrame, in options, out _, out ParseFailure firstFailure))
+        {
+            throw new InvalidOperationException(firstFailure.ToString());
+        }
+
+        PacketId secondId = new(1);
+        if (!Packet.TryParse(secondId, stack, poisonFrame, in options, out Packet? second, out ParseFailure secondFailure)
+            || second is null)
+        {
+            throw new InvalidOperationException(secondFailure.ToString());
+        }
+
+        _ = filter.TryIsMatch(second, out _, out _);
 
         InvalidOperationException? caught = null;
         try

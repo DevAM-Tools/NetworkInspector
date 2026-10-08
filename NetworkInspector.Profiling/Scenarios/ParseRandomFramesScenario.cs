@@ -9,8 +9,8 @@ namespace NetworkInspector.Profiling.Scenarios;
 /// <para>
 /// Two variants exist:
 /// <list type="bullet">
-///   <item><b>parse-random-frames</b> — <see cref="Packet.ParseFrame(PacketId, Stack, Frame, FieldTreeMode, ValueCache, Boolean)"/> only (lazy field tree).</item>
-///   <item><b>parse-random-frames-materialized</b> — <see cref="Packet.ParseFrame(PacketId, Stack, Frame, FieldTreeMode, ValueCache, Boolean)"/> +
+///   <item><b>parse-random-frames</b> — <see cref="Packet.TryParse(PacketId, Stack, Frame, in ParseOptions, out Packet?, out ParseFailure)"/> only (lazy field tree).</item>
+///   <item><b>parse-random-frames-materialized</b> — <see cref="Packet.TryParse(PacketId, Stack, Frame, in ParseOptions, out Packet?, out ParseFailure)"/> +
 ///     <see cref="Packet.MaterializeAll"/> (fully walks and stores the field tree).</item>
 /// </list>
 /// Comparing the two isolates the cost of field-tree materialisation.
@@ -37,7 +37,7 @@ internal sealed class ParseRandomFramesScenario : IProfilingScenario
     /// <param name="materialize">
     /// When <see langword="true"/>, calls <see cref="Packet.MaterializeAll"/> after each parse
     /// to fully walk and store the field tree. When <see langword="false"/>, only
-    /// <see cref="Packet.ParseFrame(PacketId, Stack, Frame, FieldTreeMode, ValueCache, Boolean)"/> is called (the field tree is built lazily).
+    /// <see cref="Packet.TryParse(PacketId, Stack, Frame, in ParseOptions, out Packet?, out ParseFailure)"/> is called (the field tree is built lazily).
     /// </param>
     internal ParseRandomFramesScenario(bool materialize)
     {
@@ -60,9 +60,9 @@ internal sealed class ParseRandomFramesScenario : IProfilingScenario
     /// <inheritdoc/>
     public string Description => _Materialize
         ? FormattableString.Invariant(
-            $"ParseFrame + MaterializeAll, {_BatchSize:N0} IPv6/UDP frames per iteration.")
+            $"TryParse + MaterializeAll, {_BatchSize:N0} IPv6/UDP frames per iteration.")
         : FormattableString.Invariant(
-            $"ParseFrame only (lazy field tree), {_BatchSize:N0} IPv6/UDP frames per iteration.");
+            $"TryParse only (lazy field tree), {_BatchSize:N0} IPv6/UDP frames per iteration.");
 
     /// <inheritdoc/>
     public long WorkUnitsPerIteration => _BatchSize;
@@ -86,12 +86,19 @@ internal sealed class ParseRandomFramesScenario : IProfilingScenario
         int counter = _PacketCounter;
         ArrayIndexIdRange.ThrowIfInvalidNextIndex(counter + _BatchSize - 1, "packet");
 
+        // One options value for the batch. The timed loop must not rebuild it per frame.
+        ParseOptions options = new();
         if (_Materialize)
         {
             for (int i = 0; i < _BatchSize; i++)
             {
-                Packet packet = Packet.ParseFrame(new PacketId(counter + i), stack, frames[i]);
-                packet.MaterializeAll();
+                PacketId id = new(counter + i);
+                if (!Packet.TryParse(id, stack, frames[i], in options, out Packet? packet, out ParseFailure failure))
+                {
+                    throw new InvalidOperationException(failure.ToString());
+                }
+
+                packet!.MaterializeAll();
             }
         }
         else
@@ -99,7 +106,11 @@ internal sealed class ParseRandomFramesScenario : IProfilingScenario
             for (int i = 0; i < _BatchSize; i++)
             {
                 // Hot path: parse only — the field tree is built but not walked.
-                Packet.ParseFrame(new PacketId(counter + i), stack, frames[i]);
+                PacketId id = new(counter + i);
+                if (!Packet.TryParse(id, stack, frames[i], in options, out _, out ParseFailure failure))
+                {
+                    throw new InvalidOperationException(failure.ToString());
+                }
             }
         }
 

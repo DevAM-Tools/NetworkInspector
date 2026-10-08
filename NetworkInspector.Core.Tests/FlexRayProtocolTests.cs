@@ -25,7 +25,22 @@ internal sealed class FlexRayProtocolTests
             FrameInterfaceId.Invalid,
             stack.FrameInterfaceRegistry).Value;
 
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame);
+        Packet packet;
+        {
+            ParseOptions options = new();
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
         return (stack, packet);
     }
 
@@ -458,7 +473,19 @@ internal sealed class FlexRayProtocolTests
                 FrameInterfaceId.Invalid,
                 stack.FrameInterfaceRegistry).Value;
 
-            Packet.ParseFrameIndexed(new PacketId(0), stack, frame, index);
+            {
+                ParseOptions options = new(index: index);
+                if (!Packet.TryParse(
+                    new PacketId(0),
+                    stack,
+                    frame,
+                    in options,
+                    out Packet? _,
+                    out ParseFailure failure))
+                {
+                    throw new InvalidOperationException(failure.ToString());
+                }
+            }
 
             ProtocolId? flexrayId = stack.GetProtocolId("flexray");
             await Assert.That(flexrayId).IsNotNull();
@@ -524,7 +551,22 @@ internal sealed class FlexRayProtocolTests
                     FrameInterfaceId.Invalid,
                     stack.FrameInterfaceRegistry).Value;
 
-                Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame);
+                Packet packet;
+                {
+                    ParseOptions options = new();
+                    if (!Packet.TryParse(
+                        new PacketId(0),
+                        stack,
+                        frame,
+                        in options,
+                        out Packet? parsed,
+                        out ParseFailure failure) || parsed is null)
+                    {
+                        throw new InvalidOperationException(failure.ToString());
+                    }
+
+                    packet = parsed;
+                }
 
                 FieldId? probeField = stack.GetFieldId("fr_dispatch_probe.Probe");
                 await Assert.That(probeField.HasValue).IsTrue();
@@ -569,7 +611,19 @@ internal sealed class FlexRayProtocolTests
         Frame frame = Frame.Create(
             new FrameId(0), Timestamp.FromSecs(0), frameData,
             LinkType.Flexray, FrameInterfaceId.Invalid, stack.FrameInterfaceRegistry).Value;
-        Packet.ParseFrame(new PacketId(0), stack, frame);
+        {
+            ParseOptions options = new();
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? _,
+                out ParseFailure failure))
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+        }
 
         using (stack)
         {
@@ -603,7 +657,19 @@ internal sealed class FlexRayProtocolTests
         Frame frame = Frame.Create(
             new FrameId(0), Timestamp.FromSecs(0), frameData,
             LinkType.Flexray, FrameInterfaceId.Invalid, stack.FrameInterfaceRegistry).Value;
-        Packet.ParseFrame(new PacketId(0), stack, frame);
+        {
+            ParseOptions options = new();
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? _,
+                out ParseFailure failure))
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+        }
 
         using (stack)
         {

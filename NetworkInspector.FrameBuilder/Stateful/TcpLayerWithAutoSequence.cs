@@ -99,11 +99,17 @@ public readonly struct TcpLayerWithAutoSequence :
         uint seq = state.TcpNextSeq;
         uint ack = state.TcpAck;
 
-        // Advance the counter for the NEXT frame.  SYN and FIN consume one
-        // sequence number even though they carry no payload; payload bytes
-        // each consume one sequence number too.
-        bool isSynOrFin = (_Flags & (TcpFlags.Syn | TcpFlags.Fin)) != 0;
-        uint advance = (uint)state.CurrentPayloadLength + (isSynOrFin ? 1u : 0u);
+        // SYN and FIN each consume one sequence number, including when both are set.
+        uint advance = (uint)state.CurrentPayloadLength;
+        if ((_Flags & TcpFlags.Syn) != 0)
+        {
+            advance++;
+        }
+
+        if ((_Flags & TcpFlags.Fin) != 0)
+        {
+            advance++;
+        }
         unchecked
         {
             state.TcpNextSeq = seq + advance;

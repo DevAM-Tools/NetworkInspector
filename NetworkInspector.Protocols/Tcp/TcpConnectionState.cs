@@ -99,17 +99,37 @@ internal sealed class TcpFlowState
 
     #region Timestamps
 
-    /// <summary>Timestamp of the SYN packet (for Initial RTT calculation).</summary>
+    /// <summary>Timestamp of the SYN packet (for diagnostics). Initial RTT uses the connection's pure-SYN time.</summary>
     internal Timestamp? SynTimestamp
     {
         get; set;
     }
 
     /// <summary>
-    /// Maps sequence numbers to timestamps for ACK RTT calculation.
-    /// Limited to 256 entries to prevent unbounded growth.
+    /// Fixed 256-slot ring for ACK RTT. Index is <c>endSeq &amp; 255</c>.
+    /// A collision overwrites the older entry. One allocation per flow, not per segment.
     /// </summary>
-    internal Dictionary<uint, Timestamp> DataSegmentTimestamps { get; } = new(capacity: 64);
+    internal uint[] AckRttSeq { get; } = new uint[256];
+
+    /// <summary>Timestamp nanoseconds paired with <see cref="AckRttSeq"/>.</summary>
+    internal long[] AckRttNanos { get; } = new long[256];
+
+    /// <summary>Whether the ring slot holds a live data-segment timestamp.</summary>
+    internal bool[] AckRttSlotUsed { get; } = new bool[256];
+
+    /// <summary>The previous segment in this direction was a keep-alive.</summary>
+    internal bool LastSegmentWasKeepAlive
+    {
+        get; set;
+    }
+
+    /// <summary>This direction sent the first pure SYN observed on the connection.</summary>
+    internal bool IsInitiator
+    {
+        get; set;
+    }
+
+    #endregion
 }
 
 /// <summary>
@@ -124,10 +144,10 @@ internal sealed class TcpConnectionState
         get; init;
     }
 
-    /// <summary>Forward direction flow state (initial SYN sender → receiver).</summary>
+    /// <summary>Lower (address, port) endpoint. Not the SYN sender.</summary>
     internal TcpFlowState Forward { get; } = new();
 
-    /// <summary>Reverse direction flow state (SYN-ACK sender → initiator).</summary>
+    /// <summary>The other endpoint. Not the SYN-ACK sender.</summary>
     internal TcpFlowState Reverse { get; } = new();
 
     /// <summary>Whether the initial RTT has been computed for this connection.</summary>
@@ -139,7 +159,23 @@ internal sealed class TcpConnectionState
     /// <summary>Measured initial RTT in seconds (NaN if not yet computed).</summary>
     internal double InitialRttValue { get; set; } = double.NaN;
 
-    #endregion
+    /// <summary>Timestamp of the most recent pure SYN (no ACK). Used once, on the first pure ACK, as iRTT.</summary>
+    internal Timestamp? PureSynTimestamp
+    {
+        get; set;
+    }
+
+    /// <summary>Server port learned from the first SYN (destination) or SYN-ACK (source).</summary>
+    internal ushort ServerPort
+    {
+        get; set;
+    }
+
+    /// <summary>Whether <see cref="ServerPort"/> was learned from a SYN.</summary>
+    internal bool ServerPortSet
+    {
+        get; set;
+    }
 
     #region Stream timing
 

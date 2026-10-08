@@ -12,7 +12,22 @@ internal sealed class PacketEffectLayerKeyTests
     public async Task TryGetEffectLayerKey_FrameSlice_PacksBufferZeroAndOffset()
     {
         using Stack stack = _BuildStack();
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, _MakeFrame(stack));
+        Packet packet;
+        {
+            ParseOptions options = new();
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                _MakeFrame(stack),
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
 
         bool ok = packet.TryGetEffectLayerKey(packet.Frame.Data.Slice(14, 8), out int key);
 
@@ -28,7 +43,22 @@ internal sealed class PacketEffectLayerKeyTests
         BindDuringParseProtocol proto = new(bindFrameSlice: true);
         ProtocolId protoId = builder.RegisterProtocol(proto);
         using Stack stack = builder.Build();
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, _MakeFrame(stack), protoId);
+        Packet packet;
+        {
+            ParseOptions options = new(firstProtocol: protoId);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                _MakeFrame(stack),
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
 
         await Assert.That(proto.KeyOk).IsTrue();
         await Assert.That(proto.Key).IsEqualTo(14);
@@ -45,7 +75,19 @@ internal sealed class PacketEffectLayerKeyTests
         BindDuringParseProtocol proto = new(extra: extra, sliceStart: 2, sliceLength: 4);
         ProtocolId protoId = builder.RegisterProtocol(proto);
         using Stack stack = builder.Build();
-        _ = Packet.ParseFrame(new PacketId(0), stack, _MakeFrame(stack), protoId);
+        {
+            ParseOptions options = new(firstProtocol: protoId);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                _MakeFrame(stack),
+                in options,
+                out Packet? _,
+                out ParseFailure failure))
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+        }
 
         await Assert.That(proto.KeyOk).IsTrue();
         await Assert.That(proto.Key).IsEqualTo((1 << 24) | 2);
@@ -61,7 +103,19 @@ internal sealed class PacketEffectLayerKeyTests
         BindDuringParseProtocol proto = new(extra: manager.Memory, sliceStart: 2, sliceLength: 4);
         ProtocolId protoId = builder.RegisterProtocol(proto);
         using Stack stack = builder.Build();
-        _ = Packet.ParseFrame(new PacketId(0), stack, _MakeFrame(stack), protoId);
+        {
+            ParseOptions options = new(firstProtocol: protoId);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                _MakeFrame(stack),
+                in options,
+                out Packet? _,
+                out ParseFailure failure))
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+        }
 
         await Assert.That(proto.KeyOk).IsTrue();
         await Assert.That(proto.Key).IsEqualTo((1 << 24) | 2);
@@ -71,7 +125,22 @@ internal sealed class PacketEffectLayerKeyTests
     public async Task TryGetEffectLayerKey_EmptySlice_PacksOffset()
     {
         using Stack stack = _BuildStack();
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, _MakeFrame(stack));
+        Packet packet;
+        {
+            ParseOptions options = new();
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                _MakeFrame(stack),
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
 
         bool ok = packet.TryGetEffectLayerKey(packet.Frame.Data.Slice(14, 0), out int key);
 
@@ -84,7 +153,22 @@ internal sealed class PacketEffectLayerKeyTests
     public async Task TryGetEffectLayerKey_EmptyData_ReturnsFalse()
     {
         using Stack stack = _BuildStack();
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, _MakeFrame(stack));
+        Packet packet;
+        {
+            ParseOptions options = new();
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                _MakeFrame(stack),
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
 
         bool ok = packet.TryGetEffectLayerKey(ReadOnlyMemory<byte>.Empty, out int key);
 
@@ -102,7 +186,19 @@ internal sealed class PacketEffectLayerKeyTests
         BindDuringParseProtocol proto = new(extra: manager.Memory, sliceStart: 2, sliceLength: 0);
         ProtocolId protoId = builder.RegisterProtocol(proto);
         using Stack stack = builder.Build();
-        _ = Packet.ParseFrame(new PacketId(0), stack, _MakeFrame(stack), protoId);
+        {
+            ParseOptions options = new(firstProtocol: protoId);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                _MakeFrame(stack),
+                in options,
+                out Packet? _,
+                out ParseFailure failure))
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+        }
 
         await Assert.That(proto.KeyOk).IsTrue();
         await Assert.That(proto.Key).IsEqualTo((1 << 24) | 2);
@@ -112,7 +208,22 @@ internal sealed class PacketEffectLayerKeyTests
     public async Task TryGetEffectLayerKey_TwoEmptySlices_RecordDistinctKeys()
     {
         using Stack stack = _BuildStack();
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, _MakeFrame(stack));
+        Packet packet;
+        {
+            ParseOptions options = new();
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                _MakeFrame(stack),
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
         bool ok14 = packet.TryGetEffectLayerKey(packet.Frame.Data.Slice(14, 0), out int key14);
         bool ok20 = packet.TryGetEffectLayerKey(packet.Frame.Data.Slice(20, 0), out int key20);
         EffectStore<int> store = new();
@@ -128,7 +239,22 @@ internal sealed class PacketEffectLayerKeyTests
     public async Task TryGetEffectLayerKey_CopyNotSlice_ReturnsFalse()
     {
         using Stack stack = _BuildStack();
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, _MakeFrame(stack));
+        Packet packet;
+        {
+            ParseOptions options = new();
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                _MakeFrame(stack),
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
         byte[] copy = packet.Frame.Data.ToArray();
 
         bool ok = packet.TryGetEffectLayerKey(copy, out int key);

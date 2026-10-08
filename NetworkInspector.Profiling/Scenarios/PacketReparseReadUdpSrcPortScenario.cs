@@ -33,7 +33,7 @@ internal sealed class PacketReparseReadUdpSrcPortScenario : IProfilingScenario
 
     /// <inheritdoc/>
     public string Description => FormattableString.Invariant(
-        $"ParseFrame(recycle) + IterFieldsDfs for udp.srcport, {_PacketCount:N0} IPv6/UDP frames per iteration.");
+        $"TryParse(recycle) + IterFieldsDfs for udp.srcport, {_PacketCount:N0} IPv6/UDP frames per iteration.");
 
     /// <inheritdoc/>
     public long WorkUnitsPerIteration => _PacketCount;
@@ -51,12 +51,23 @@ internal sealed class PacketReparseReadUdpSrcPortScenario : IProfilingScenario
         _PortId = portId.Value;
 
         // First parse so the timed loop is a redissect with protocol replay state in place.
+        ParseOptions options = new();
         for (int i = 0; i < _PacketCount; i++)
         {
-            Packet.ParseFrame(new PacketId(i), _Stack, _Frames[i]);
+            PacketId id = new(i);
+            if (!Packet.TryParse(id, _Stack, _Frames[i], in options, out _, out ParseFailure failure))
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
         }
 
-        _RecyclePacket = Packet.ParseFrame(new PacketId(0), _Stack, _Frames[0]);
+        PacketId seedId = new(0);
+        if (!Packet.TryParse(seedId, _Stack, _Frames[0], in options, out Packet? seeded, out ParseFailure seedFailure))
+        {
+            throw new InvalidOperationException(seedFailure.ToString());
+        }
+
+        _RecyclePacket = seeded;
     }
 
     /// <inheritdoc/>
@@ -68,9 +79,16 @@ internal sealed class PacketReparseReadUdpSrcPortScenario : IProfilingScenario
         FieldId portId = _PortId;
         ulong sink = 0;
 
+        // Replay options do not change across the batch.
+        ParseOptions options = new();
         for (int i = 0; i < _PacketCount; i++)
         {
-            Packet.ParseFrame(recycle, new PacketId(i), stack, frames[i]);
+            PacketId id = new(i);
+            if (!Packet.TryParse(recycle, id, stack, frames[i], in options, out ParseFailure failure))
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
             foreach (Field field in recycle.IterFieldsDfs(materialize: false))
             {
                 if (field.FieldId != portId)

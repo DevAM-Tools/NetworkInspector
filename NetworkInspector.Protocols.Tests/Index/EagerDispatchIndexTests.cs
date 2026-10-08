@@ -3,7 +3,8 @@
 namespace NetworkInspector.Protocols.Tests.Index;
 
 /// <summary>
-/// Verifies that sub-protocol dispatch is performed eagerly during <see cref="Packet.ParseFrameIndexed(PacketId, Stack, Frame, PacketIndex, FieldTreeMode, ValueCache, Boolean)"/>
+/// Verifies that sub-protocol dispatch is performed eagerly during
+/// <see cref="Packet.TryParse(PacketId, Stack, Frame, in ParseOptions, out Packet?, out ParseFailure)"/>
 /// so that the dispatched sub-protocol's group and protocol presence are recorded in the
 /// <see cref="NetworkInspector.Core.Index.PacketIndex"/> and become queryable WITHOUT triggering
 /// materialization of the lazy descriptive field tree.
@@ -63,7 +64,12 @@ internal sealed class EagerDispatchIndexTests
             FrameInterfaceId.Invalid,
             stack.FrameInterfaceRegistry).Value;
 
-        Packet packet = Packet.ParseFrameIndexed(new PacketId(0), stack, parsedFrame, index);
+        ParseOptions options = new(index: index);
+        if (!Packet.TryParse(new PacketId(0), stack, parsedFrame, in options, out Packet? packet, out ParseFailure failure)
+            || packet is null)
+        {
+            throw new InvalidOperationException(failure.ToString());
+        }
 
         ProtocolId? jsonId = stack.GetProtocolId("json");
         await Assert.That(jsonId).IsNotNull().Because("JSON protocol must be registered");
@@ -75,7 +81,7 @@ internal sealed class EagerDispatchIndexTests
         await Assert.That(jsonKeyFieldId).IsNotNull().Because("json.key field must be registered");
 
         // The dispatched JSON sub-protocol must be queryable from the index BEFORE any materialization,
-        // proving HTTP body dispatch ran eagerly during ParseFrameIndexed.
+        // proving HTTP body dispatch ran eagerly during the indexed parse.
         await Assert.That(index.GetProtocolBitmap(jsonId!.Value).Contains(0)).IsTrue()
             .Because("eager HTTP body dispatch must record JSON protocol presence in the index");
         await Assert.That(index.GetGroupBitmap(jsonGroupId!.Value).Contains(0)).IsTrue()
@@ -141,7 +147,12 @@ internal sealed class EagerDispatchIndexTests
                 FrameInterfaceId.Invalid,
                 stack.FrameInterfaceRegistry).Value;
 
-            Packet packet = Packet.ParseFrameIndexed(new PacketId(0), stack, parsedFrame, index);
+            ParseOptions options = new(index: index);
+        if (!Packet.TryParse(new PacketId(0), stack, parsedFrame, in options, out Packet? packet, out ParseFailure failure)
+            || packet is null)
+        {
+            throw new InvalidOperationException(failure.ToString());
+        }
 
             ProtocolId? messageId = stack.GetProtocolId("fixture_message");
             await Assert.That(messageId).IsNotNull().Because("Signal message protocol must be registered");
@@ -153,7 +164,7 @@ internal sealed class EagerDispatchIndexTests
             await Assert.That(pduTransportIdField).IsNotNull().Because("pdu_transport.id field must be registered");
 
             // The dispatched message protocol must be queryable from the index BEFORE any
-            // materialization, proving PDU-Transport dispatch ran eagerly during ParseFrameIndexed.
+            // materialization, proving PDU-Transport dispatch ran eagerly during the indexed parse.
             await Assert.That(index.GetProtocolBitmap(messageId!.Value).Contains(0)).IsTrue()
                 .Because("eager PDU-Transport dispatch must record message protocol presence in the index");
             await Assert.That(index.GetGroupBitmap(messageGroupId!.Value).Contains(0)).IsTrue()

@@ -43,11 +43,40 @@ internal sealed class FieldIteratorTests
             FrameInterfaceId.Invalid,
             stack.FrameInterfaceRegistry).Value;
 
-        return Packet.ParseFrame(
-            new PacketId(0),
-            stack,
-            frame,
-            firstProtocolId);
+        {
+            ParseOptions options = new(firstProtocol: firstProtocolId);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            return parsed;
+        }
+    }
+
+    [Test]
+    public async Task DefaultFieldIsNotRoot()
+    {
+        Field empty = default;
+
+        await Assert.That(empty.IsRoot).IsFalse();
+        await Assert.That(empty.IsValid).IsFalse();
+
+        (Stack? stack, _, ProtocolId protoId) = _BuildStack();
+        using (stack)
+        {
+            Packet packet = _ParseFrame(stack, new byte[14], protoId);
+            Field root = packet.RootField();
+
+            await Assert.That(root.IsValid).IsTrue();
+            await Assert.That(root.IsRoot).IsTrue();
+        }
     }
 
     // =========================================================================

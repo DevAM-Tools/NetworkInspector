@@ -97,26 +97,20 @@ internal static class ExportCommand
                 ArrayIndexIdRange.ThrowIfInvalidNextIndex(idValue, "packet");
 
                 PacketId pid = new(idValue);
+                ParseOptions exportOptions = new(index: filterIndex);
                 Packet packet;
-                if (filterIndex is not null)
+                if (recyclePacket is not null
+                    && Packet.TryParse(recyclePacket, pid, stack, frame.Value, in exportOptions, out _))
                 {
-                    if (recyclePacket is null
-                        || Packet.TryParseFrameIndexed(recyclePacket, pid, stack, frame.Value, filterIndex) is not null)
-                    {
-                        packet = Packet.ParseFrameIndexed(pid, stack, frame.Value, filterIndex);
-                    }
-                    else
-                    {
-                        packet = recyclePacket;
-                    }
+                    packet = recyclePacket;
                 }
-                else if (recyclePacket is null || Packet.TryParseFrame(recyclePacket, pid, stack, frame.Value) is not null)
+                else if (!Packet.TryParse(pid, stack, frame.Value, in exportOptions, out Packet? created, out ParseFailure exportFailure))
                 {
-                    packet = Packet.ParseFrame(pid, stack, frame.Value);
+                    throw new InvalidOperationException(exportFailure.ToString());
                 }
                 else
                 {
-                    packet = recyclePacket;
+                    packet = created!;
                 }
 
                 recyclePacket = packet;

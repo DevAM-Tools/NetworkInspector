@@ -3,7 +3,7 @@
 namespace NetworkInspector.Core.Protocols;
 
 /// <summary>
-/// Packet protocol — the top-level entry point called by <see cref="Packet.ParseFrame(PacketId, Stack, Frame, FieldTreeMode, ValueCache, Boolean)"/>.
+/// Packet protocol — the top-level entry point called by <see cref="Packet.TryParse(PacketId, Stack, Frame, in ParseOptions, out Packet?, out ParseFailure)"/>.
 /// <para>Responsibilities:</para>
 /// <list type="number">
 ///   <item>Appends packet metadata fields (id, timestamp, frame source id) eagerly to the tree.</item>
@@ -135,7 +135,7 @@ internal sealed class PacketProtocol : IProtocol
         packetContainer.Append(_FrameSourceIdFieldId, FieldValue.NewU64((ulong)packet.FrameSourceId.Value));
 
         // Dispatch to the first protocol after PacketProtocol:
-        // - Per-packet override (set via ParseFrame overload) takes priority
+        // - Per-packet override (set via ParseOptions.FirstProtocol) takes priority
         // - Falls back to the stack's auto-discovered frame protocol
         ProtocolId dispatchTarget = packet.FirstProtocolOverride.IsValid
             ? packet.FirstProtocolOverride

@@ -124,7 +124,7 @@ internal sealed class AscLineClassifierTests
     [Test]
     public async Task LinMessage_Classified()
     {
-        AscLineType result = AscLineClassifier.Classify("0.300000 L1 3C Rx 8 01 02 03 04 05 06 07 08 checksum = F0"u8);
+        AscLineType result = AscLineClassifier.Classify("0.300000 Li 3C Rx 8 01 02 03 04 05 06 07 08 checksum = F0"u8);
 
         await Assert.That(result).IsEqualTo(AscLineType.LinMessage);
     }
@@ -154,11 +154,71 @@ internal sealed class AscLineClassifierTests
     }
 
     [Test]
-    public async Task AfdxPacket_ClassifiedAsEthernet()
+    public async Task AfdxPacketIsEthernet()
     {
-        AscLineType result = AscLineClassifier.Classify("0.600000 AFDX 1 Rx 14:AABBCCDDEEFF112233445566ABCD"u8);
+        AscLineType bytes = AscLineClassifier.Classify("0.600000 AFDX 1 Rx 1 0 0 4:01020304"u8);
+        AscLineType chars = AscLineClassifier.Classify("0.600000 AFDX 1 Rx 1 0 0 4:01020304".AsSpan());
 
-        await Assert.That(result).IsEqualTo(AscLineType.EthernetPacket);
+        await Assert.That(bytes).IsEqualTo(AscLineType.EthernetPacket);
+        await Assert.That(chars).IsEqualTo(AscLineType.EthernetPacket);
+    }
+
+    [Test]
+    public async Task LinChannel1TokenIsLi()
+    {
+        AscLineType li = AscLineClassifier.Classify("0.073973 Li 2d Tx 1 aa checksum = 70"u8);
+        AscLineType wildcard = AscLineClassifier.Classify("0.073973 L* 2d Tx 1 aa"u8);
+
+        await Assert.That(li).IsEqualTo(AscLineType.LinMessage);
+        await Assert.That(wildcard).IsEqualTo(AscLineType.Unknown);
+    }
+
+    [Test]
+    public async Task ChannelStatisticIsNotCan()
+    {
+        AscLineType result = AscLineClassifier.Classify("1.0100 1 Statistic: D 0 R 0 XD 0 XR 0 E 0 O 0 B 0.0%"u8);
+
+        await Assert.That(result).IsEqualTo(AscLineType.CanBusStatistics);
+    }
+
+    [Test]
+    public async Task FlexRayStatusIsUnknown()
+    {
+        AscLineType result = AscLineClassifier.Classify("0.003022 Fr SE 0 0 1 3 255 5 2 15 0 0 0 0"u8);
+
+        await Assert.That(result).IsEqualTo(AscLineType.Unknown);
+    }
+
+    [Test]
+    public async Task EthStatIsUnknown()
+    {
+        AscLineType result = AscLineClassifier.Classify("0.100000 ETH 1 STAT 0"u8);
+
+        await Assert.That(result).IsEqualTo(AscLineType.Unknown);
+    }
+
+    [Test]
+    public async Task EthRxErIsUnknown()
+    {
+        AscLineType result = AscLineClassifier.Classify("0.200000 ETH 2 RxEr e:0011"u8);
+
+        await Assert.That(result).IsEqualTo(AscLineType.Unknown);
+    }
+
+    [Test]
+    public async Task CanXlTokenIsCanXlMessage()
+    {
+        AscLineType result = AscLineClassifier.Classify("0.100000 CANXL 1 Rx XLFF 0 0 123"u8);
+
+        await Assert.That(result).IsEqualTo(AscLineType.CanXlMessage);
+    }
+
+    [Test]
+    public async Task FlexRayNameContainingCanFdStaysFlexRay()
+    {
+        AscLineType result = AscLineClassifier.Classify("0.400000 Fr 1 CANFD 0A 4 0 0 1234 x 8 0102030405060708"u8);
+
+        await Assert.That(result).IsEqualTo(AscLineType.FlexRayMessage);
     }
 
     // ========================================================================

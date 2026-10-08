@@ -23,16 +23,25 @@ internal readonly struct TcpConnectionKey : IEquatable<TcpConnectionKey>
     private readonly UInt128 _Addr2;
     private readonly ushort _Port1;
     private readonly ushort _Port2;
+    private readonly ushort _LastVlanId;
+    private readonly int _FrameIdentity;
 
-    /// <summary>Creates a normalized connection key from two endpoints.</summary>
+    /// <summary>Creates a normalized connection key from two endpoints and optional stream discriminators.</summary>
     /// <param name="srcAddr">Source IP address (IPv4 or IPv6).</param>
     /// <param name="dstAddr">Destination IP address (IPv4 or IPv6).</param>
     /// <param name="srcPort">Source TCP port.</param>
     /// <param name="dstPort">Destination TCP port.</param>
-    internal TcpConnectionKey(UInt128 srcAddr, UInt128 dstAddr, ushort srcPort, ushort dstPort)
+    /// <param name="lastVlanId">Innermost VLAN id, or 0 when the stream key does not include VLAN.</param>
+    /// <param name="frameIdentity">Capture-interface identity, or 0 when the stream key does not include it.</param>
+    internal TcpConnectionKey(
+        UInt128 srcAddr, UInt128 dstAddr, ushort srcPort, ushort dstPort,
+        ushort lastVlanId = 0, int frameIdentity = 0)
     {
-        // Normalize: lower (addr, port) pair first for consistent hashing
-        // Compare addresses first, then ports as tiebreaker
+        _LastVlanId = lastVlanId;
+        _FrameIdentity = frameIdentity;
+
+        // Normalize: lower (addr, port) pair first for consistent hashing.
+        // VLAN and frame identity are not swapped; they are properties of the packet's path.
         if (srcAddr < dstAddr || (srcAddr == dstAddr && srcPort <= dstPort))
         {
             _Addr1 = srcAddr;
@@ -59,12 +68,13 @@ internal readonly struct TcpConnectionKey : IEquatable<TcpConnectionKey>
 
     /// <summary>Creates a connection key from raw IPv4 addresses (as 32-bit values).</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal static TcpConnectionKey FromIPv4(uint srcIp, uint dstIp, ushort srcPort, ushort dstPort)
+    internal static TcpConnectionKey FromIPv4(
+        uint srcIp, uint dstIp, ushort srcPort, ushort dstPort, ushort lastVlanId = 0, int frameIdentity = 0)
     {
         // Map IPv4 to IPv4-mapped IPv6: ::ffff:a.b.c.d
         UInt128 srcAddr = _MapIPv4ToIPv6(srcIp);
         UInt128 dstAddr = _MapIPv4ToIPv6(dstIp);
-        return new TcpConnectionKey(srcAddr, dstAddr, srcPort, dstPort);
+        return new TcpConnectionKey(srcAddr, dstAddr, srcPort, dstPort, lastVlanId, frameIdentity);
     }
 
     /// <summary>Maps an IPv4 address (32 bits) to IPv4-mapped IPv6 (::ffff:x.x.x.x) as UInt128.</summary>
@@ -77,7 +87,8 @@ internal readonly struct TcpConnectionKey : IEquatable<TcpConnectionKey>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool Equals(TcpConnectionKey other) =>
         _Addr1 == other._Addr1 && _Addr2 == other._Addr2 &&
-        _Port1 == other._Port1 && _Port2 == other._Port2;
+        _Port1 == other._Port1 && _Port2 == other._Port2 &&
+        _LastVlanId == other._LastVlanId && _FrameIdentity == other._FrameIdentity;
 
     /// <inheritdoc/>
     public override bool Equals(object? obj) =>
@@ -106,6 +117,8 @@ internal readonly struct TcpConnectionKey : IEquatable<TcpConnectionKey>
         h = _RotateLeft(h, 7) ^ hi1;
         h = _RotateLeft(h, 11) ^ hi2;
         h = _RotateLeft(h, 13) ^ ports;
+        h = _RotateLeft(h, 17) ^ _LastVlanId;
+        h = _RotateLeft(h, 19) ^ (uint)_FrameIdentity;
 
         // Final avalanche — ensures all bits influence the result
         h ^= h >> 33;

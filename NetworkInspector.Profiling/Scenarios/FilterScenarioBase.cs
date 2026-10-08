@@ -188,9 +188,18 @@ internal abstract class FilterScenarioBase : IProfilingScenario
         PacketIndex index = _Index!;
         Stack stack = _Stack!;
         Packet[] packets = new Packet[frames.Length];
+
+        // Index is fixed for this pool. Build options once so setup does not copy them per frame.
+        ParseOptions options = new(index: index);
         for (int i = 0; i < frames.Length; i++)
         {
-            packets[i] = Packet.ParseFrameIndexed(new PacketId(packetIdBase + i), stack, frames[i], index);
+            PacketId id = new(packetIdBase + i);
+            if (!Packet.TryParse(id, stack, frames[i], in options, out Packet? packet, out ParseFailure failure))
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packets[i] = packet!;
         }
 
         return packets;

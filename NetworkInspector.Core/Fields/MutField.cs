@@ -90,6 +90,8 @@ public readonly ref struct MutField
 
     /// <summary>
     /// Stores <paramref name="buffer"/> on the owning packet for nested parse and effect keys.
+    /// The additional-buffer cap is a constant, not a setting: 255, because the effect-layer key
+    /// uses bits 31–24. A full table returns <see cref="ReadOnlyMemory{T}.Empty"/> and does not store.
     /// After Seal this returns <see cref="ReadOnlyMemory{T}.Empty"/> and does not store.
     /// </summary>
     public readonly ReadOnlyMemory<byte> BindParseBuffer(ReadOnlyMemory<byte> buffer)
@@ -103,11 +105,14 @@ public readonly ref struct MutField
     public readonly bool TryGetEffectLayerKey(ReadOnlyMemory<byte> data, out int key)
         => Packet.TryGetEffectLayerKey(data, out key);
 
-    /// <summary>Whether this is the root field (index 0).</summary>
+    /// <summary>
+    /// True only when this cursor is valid and its storage index is 0.
+    /// A default cursor is not the root.
+    /// </summary>
     public readonly bool IsRoot
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => StorageIndex == 0;
+        get => Packet is not null && StorageIndex == 0;
     }
 
     /// <summary>

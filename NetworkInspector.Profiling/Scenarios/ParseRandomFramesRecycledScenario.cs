@@ -10,7 +10,7 @@ namespace NetworkInspector.Profiling.Scenarios;
 /// Two variants exist:
 /// <list type="bullet">
 ///   <item>
-///     <b>parse-random-frames-recycled</b> — <see cref="Packet.ParseFrame(Packet, PacketId, Stack, Frame, FieldTreeMode, ValueCache, Boolean)"/>
+///     <b>parse-random-frames-recycled</b> — <see cref="Packet.TryParse(Packet, PacketId, Stack, Frame, in ParseOptions, out ParseFailure)"/>
 ///     only (lazy field tree). Equivalent to parse-random-frames but with zero <see cref="Packet"/> heap allocations.
 ///   </item>
 ///   <item>
@@ -26,7 +26,7 @@ namespace NetworkInspector.Profiling.Scenarios;
 /// <para>
 /// The recycle packet is initialised once in <see cref="Setup"/>.
 /// Each <see cref="Run"/> call re-parses all frames into the same <see cref="Packet"/> object
-/// via <see cref="Packet.ParseFrame(Packet, PacketId, Stack, Frame, FieldTreeMode, ValueCache, Boolean)"/>,
+/// via <see cref="Packet.TryParse(Packet, PacketId, Stack, Frame, in ParseOptions, out ParseFailure)"/>,
 /// completely eliminating the heap allocation of a new <c>Packet</c> on every frame.
 /// </para>
 /// </summary>
@@ -68,9 +68,9 @@ internal sealed class ParseRandomFramesRecycledScenario : IProfilingScenario
     /// <inheritdoc/>
     public string Description => _Materialize
         ? FormattableString.Invariant(
-            $"ParseFrame(recycle) + MaterializeAll, {_BatchSize:N0} IPv6/UDP frames per iteration — zero Packet allocations.")
+            $"TryParse(recycle) + MaterializeAll, {_BatchSize:N0} IPv6/UDP frames per iteration — zero Packet allocations.")
         : FormattableString.Invariant(
-            $"ParseFrame(recycle) only (lazy field tree), {_BatchSize:N0} IPv6/UDP frames per iteration — zero Packet allocations.");
+            $"TryParse(recycle) only (lazy field tree), {_BatchSize:N0} IPv6/UDP frames per iteration — zero Packet allocations.");
 
     /// <inheritdoc/>
     public long WorkUnitsPerIteration => _BatchSize;
@@ -87,7 +87,14 @@ internal sealed class ParseRandomFramesRecycledScenario : IProfilingScenario
 
         // Create the initial seed packet that will be recycled throughout all iterations.
         // This is the only Packet heap allocation in the entire scenario.
-        _RecyclePacket = Packet.ParseFrame(new PacketId(0), _Stack, _Frames[0]);
+        ParseOptions seedOptions = new();
+        PacketId seedId = new(0);
+        if (!Packet.TryParse(seedId, _Stack, _Frames[0], in seedOptions, out Packet? seeded, out ParseFailure seedFailure))
+        {
+            throw new InvalidOperationException(seedFailure.ToString());
+        }
+
+        _RecyclePacket = seeded;
     }
 
     /// <inheritdoc/>
@@ -100,14 +107,20 @@ internal sealed class ParseRandomFramesRecycledScenario : IProfilingScenario
         ArrayIndexIdRange.ThrowIfInvalidNextIndex(counter + _BatchSize - 1, "packet");
 
         // Hot path: reuse the same Packet object for every frame.
-        // Each call to ParseFrame(recycle, ...) invokes PrepareForReuse internally,
-        // clearing the previous parse's state and replacing it with the new frame's data —
-        // without allocating a new Packet on the heap.
+        // TryParse invokes PrepareForReuse internally, clearing the previous parse and
+        // replacing it with the new frame — without allocating a new Packet on the heap.
+        // Options stay outside the loop so the batch does not rebuild them per frame.
+        ParseOptions options = new();
         if (_Materialize)
         {
             for (int i = 0; i < _BatchSize; i++)
             {
-                Packet.ParseFrame(recycle, new PacketId(counter + i), stack, frames[i]);
+                PacketId id = new(counter + i);
+                if (!Packet.TryParse(recycle, id, stack, frames[i], in options, out ParseFailure failure))
+                {
+                    throw new InvalidOperationException(failure.ToString());
+                }
+
                 recycle.MaterializeAll();
             }
         }
@@ -115,7 +128,11 @@ internal sealed class ParseRandomFramesRecycledScenario : IProfilingScenario
         {
             for (int i = 0; i < _BatchSize; i++)
             {
-                Packet.ParseFrame(recycle, new PacketId(counter + i), stack, frames[i]);
+                PacketId id = new(counter + i);
+                if (!Packet.TryParse(recycle, id, stack, frames[i], in options, out ParseFailure failure))
+                {
+                    throw new InvalidOperationException(failure.ToString());
+                }
             }
         }
 

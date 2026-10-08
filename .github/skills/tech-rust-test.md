@@ -10,16 +10,18 @@ Load when Rust tests are in scope (`#[cfg(test)]`, `tests/`). Content and case d
 
 ## Commands
 
+When the full crate suite is not required, pass the test name (`tech-test.md`).
+
 ```bash
+cargo test --release parse_empty_input_returns_none -- --exact
 cargo test --release
-cargo test --release pairing_empty_repo_returns_none -- --exact
 ```
 
 `cargo fmt` / `clippy`: `tech-rust.md`. Debug and collision: `tech-test.md`.
 
 ## Authoring
 
-Mechanics only. What to cover, speed, doubles, AAA, exit paths: `tech-test.md`.
+Mechanics only. What to cover, speed, doubles, AAA: `tech-test.md`.
 
 - Assert `Err` explicitly. Do not `unwrap` on error-path tests.
 

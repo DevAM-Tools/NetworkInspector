@@ -28,10 +28,8 @@ namespace NetworkInspector.Filter;
 /// </summary>
 public sealed class Filter : IFilter
 {
-    #region Fields
 
-    /// <summary>The filter returned for empty expressions.</summary>
-    private static readonly Filter _AlwaysMatch = new();
+    #region Fields
 
     /// <inheritdoc />
     public string Expression { get; }
@@ -91,7 +89,7 @@ public sealed class Filter : IFilter
     /// The filter that accepts every packet. Requires no stack and holds no mutable state.
     /// Safe to share across threads; <see cref="ResetState"/> is a no-op.
     /// </summary>
-    public static Filter AlwaysMatch => _AlwaysMatch;
+    public static Filter AlwaysMatch { get; } = new();
 
     /// <summary>
     /// Compiles an expression against a stack.
@@ -110,7 +108,7 @@ public sealed class Filter : IFilter
 
         if (string.IsNullOrWhiteSpace(expression))
         {
-            return _AlwaysMatch;
+            return AlwaysMatch;
         }
 
         if (stack is null)
@@ -129,6 +127,63 @@ public sealed class Filter : IFilter
 
     /// <summary>Compiles an expression that must be empty, yielding <see cref="AlwaysMatch"/>.</summary>
     public static FilterResult<Filter> Compile(string expression) => Compile(expression, null);
+
+    /// <summary>
+    /// Compiles an expression into a tree-free <see cref="FilterObserver"/>.
+    /// Does not construct a <see cref="Filter"/>. An empty expression yields
+    /// <see cref="FilterObserver.AlwaysMatch"/> and ignores <paramref name="stack"/>.
+    /// A subtree scope fails with <see cref="FilterErrorKind.NeedsFieldTree"/>.
+    /// </summary>
+    /// <param name="expression">The filter expression.</param>
+    /// <param name="stack">The stack to bind names against. Null is allowed only for an empty expression.</param>
+    /// <param name="options">Selects this overload and carries the same compile inputs as a field-tree compile.</param>
+    public static FilterResult<FilterObserver> Compile(
+        string expression,
+        IStack? stack,
+        in FilterObserverOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(expression);
+        if (string.IsNullOrWhiteSpace(expression))
+        {
+            return FilterObserver.AlwaysMatch;
+        }
+
+        if (stack is null)
+        {
+            return FilterError.StackRequired();
+        }
+
+        FilterResult<FilterProgram> parsed = _Parse(expression, options.Compile);
+        if (!parsed.TryGetValue(out FilterProgram? program))
+        {
+            return parsed.Error;
+        }
+
+        return FilterObserverCompiler.Compile(expression, program, stack, options.Compile);
+    }
+
+    /// <summary>
+    /// Compiles an observer, reporting failures through <paramref name="failure"/>.
+    /// </summary>
+    public static bool TryCompile(
+        string expression,
+        IStack? stack,
+        in FilterObserverOptions options,
+        [NotNullWhen(true)] out FilterObserver? observer,
+        [NotNullWhen(false)] out FilterError? failure)
+    {
+        FilterResult<FilterObserver> result = Compile(expression, stack, in options);
+        if (result.TryGetValue(out FilterObserver? compiled))
+        {
+            observer = compiled;
+            failure = null;
+            return true;
+        }
+
+        observer = null;
+        failure = result.Error;
+        return false;
+    }
 
     /// <summary>
     /// Compiles an expression, reporting failures through <paramref name="failure"/>.
@@ -418,7 +473,7 @@ public sealed class Filter : IFilter
 
         if (IsAlwaysMatch)
         {
-            derived = _AlwaysMatch;
+            derived = AlwaysMatch;
             failure = null;
             return true;
         }

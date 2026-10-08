@@ -113,9 +113,17 @@ internal readonly struct TcpStreamLayer :
         ushort window = state.TcpStreamWindow;
         ushort urgent = state.TcpStreamUrgent;
 
-        // Advance SEQ for the NEXT frame: payload bytes + 1 for SYN/FIN.
-        bool isSynOrFin = (flags & (TcpFlags.Syn | TcpFlags.Fin)) != 0;
-        uint advance = (uint)state.CurrentPayloadLength + (isSynOrFin ? 1u : 0u);
+        // Advance SEQ for the NEXT frame: payload bytes, plus one each for SYN and FIN.
+        uint advance = (uint)state.CurrentPayloadLength;
+        if ((flags & TcpFlags.Syn) != 0)
+        {
+            advance++;
+        }
+
+        if ((flags & TcpFlags.Fin) != 0)
+        {
+            advance++;
+        }
         unchecked
         {
             state.TcpStreamNextSeq = seq + advance;

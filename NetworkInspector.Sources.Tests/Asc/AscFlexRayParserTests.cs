@@ -18,11 +18,12 @@ internal sealed class AscFlexRayParserTests
     public async Task BasicHex_ParsedCorrectly()
     {
         bool ok = AscFlexRayParser.TryParse(
-            "0.800000 Fr 1 V9 0A 4 0 0 1234 x 8 0102030405060708"u8,
-            16, out double ts, out int ch, out byte[] frame);
+            "0.800000 Fr 1 V9 0A 4 0 0 1234 x 8 01 02 03 04 05 06 07 08"u8,
+            16, out AscTimestamp ts, out int ch, out byte[] frame);
 
         await Assert.That(ok).IsTrue();
-        await Assert.That(ts).IsEqualTo(0.8).Within(0.0001);
+        await Assert.That(ts.WholeSeconds).IsEqualTo(0);
+        await Assert.That(ts.Nanoseconds).IsEqualTo(800_000_000);
         await Assert.That(ch).IsEqualTo(1);
 
         await Assert.That(frame.Length).IsGreaterThanOrEqualTo(FlexRayLinkTypeFrame.MinHeaderSize);
@@ -31,7 +32,7 @@ internal sealed class AscFlexRayParserTests
         await Assert.That(parsed).IsTrue();
         await Assert.That(fields.ChannelB).IsFalse();
         await Assert.That(fields.FrameId).IsEqualTo((ushort)0x0A);
-        await Assert.That(fields.Cycle).IsEqualTo((byte)0);
+        await Assert.That(fields.Cycle).IsEqualTo((byte)4);
         await Assert.That(fields.HeaderCrc).IsEqualTo((ushort)(0x1234 & 0x7FF));
         await Assert.That(payload.Length).IsEqualTo(8);
         await Assert.That(payload[0]).IsEqualTo((byte)0x01);
@@ -56,7 +57,7 @@ internal sealed class AscFlexRayParserTests
         await Assert.That(parsed).IsTrue();
         await Assert.That(fields.ChannelB).IsTrue();
         await Assert.That(fields.FrameId).IsEqualTo((ushort)0x10);
-        await Assert.That(fields.Cycle).IsEqualTo((byte)5);
+        await Assert.That(fields.Cycle).IsEqualTo((byte)2);
         await Assert.That(fields.HeaderCrc).IsEqualTo((ushort)(0xABCD & 0x7FF));
     }
 
@@ -99,7 +100,7 @@ internal sealed class AscFlexRayParserTests
     public async Task LargePayload_32Bytes()
     {
         bool ok = AscFlexRayParser.TryParse(
-            "1.600000 Fr 1 V9 FF 16 0 0 FFFF x 32 0102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F2021"u8,
+            "1.600000 Fr 1 V9 FF 10 0 0 FFFF x 20 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F 10 11 12 13 14 15 16 17 18 19 1A 1B 1C 1D 1E 1F 20"u8,
             16, out _, out _, out byte[] frame);
 
         await Assert.That(ok).IsTrue();
@@ -149,30 +150,8 @@ internal sealed class AscFlexRayParserTests
         byte[] lineBytes = System.Text.Encoding.ASCII.GetBytes(sb.ToString());
         bool ok = AscFlexRayParser.TryParse(lineBytes, 16, out _, out _, out byte[] frame);
 
-        await Assert.That(ok).IsTrue();
-        await Assert.That(frame.Length).IsEqualTo(FlexRayLinkTypeFrame.MinHeaderSize + FlexRayLinkTypeFrame.MaxPayloadBytes);
-    }
-
-    /// <summary>
-    /// F3 regression (char-span variant): Same clamp verification as
-    /// <see cref="PayloadLenWordsZero_DataLen255_ByteVariant_ClampedTo254"/>
-    /// but exercising the <see cref="AscFlexRayParser.TryParse(ReadOnlySpan{char},int,out double,out int,out byte[])"/>
-    /// overload to confirm both variants share the fix.
-    /// </summary>
-    [Test]
-    public async Task PayloadLenWordsZero_DataLen255_CharVariant_ClampedTo254()
-    {
-        System.Text.StringBuilder sb = new("1.000000 Fr 1 V9 01 0 0 0 0000 x 255 ");
-        for (int i = 0; i < 255; i++)
-        {
-            sb.Append("01");
-        }
-
-        string line = sb.ToString();
-        bool ok = AscFlexRayParser.TryParse(line.AsSpan(), 16, out _, out _, out byte[] frame);
-
-        await Assert.That(ok).IsTrue();
-        await Assert.That(frame.Length).IsEqualTo(FlexRayLinkTypeFrame.MinHeaderSize + FlexRayLinkTypeFrame.MaxPayloadBytes);
+        await Assert.That(ok).IsFalse();
+        await Assert.That(frame.Length).IsEqualTo(0);
     }
 
     /// <summary>
@@ -188,16 +167,58 @@ internal sealed class AscFlexRayParserTests
         await Assert.That(ok).IsFalse();
     }
 
-    /// <summary>
-    /// Negative <c>dataLen</c> on the char overload must return <c>false</c> without throwing.
-    /// </summary>
     [Test]
-    public async Task NegativeDataLen_CharVariant_ReturnsFalse()
+    public async Task SpecExampleCycleIs25()
     {
         bool ok = AscFlexRayParser.TryParse(
-            "1.000000 Fr 1 V9 01 0 0 0 0000 x -1".AsSpan(),
-            16, out _, out _, out _);
+            "0.042000 Fr 1 V9 4 25 0 1 151 x 4 21 87 22 148"u8,
+            10, out _, out _, out byte[] frame);
 
-        await Assert.That(ok).IsFalse();
+        await Assert.That(ok).IsTrue();
+        bool parsed = FlexRayLinkTypeFrame.TryParseDataFrame(frame, out FlexRayLinkTypeFrame.Fields fields, out ReadOnlySpan<byte> payloadSpan);
+        byte[] payload = payloadSpan.ToArray();
+        await Assert.That(parsed).IsTrue();
+        await Assert.That(fields.FrameId).IsEqualTo((ushort)4);
+        await Assert.That(fields.Cycle).IsEqualTo((byte)25);
+        await Assert.That(fields.HeaderCrc).IsEqualTo((ushort)151);
+        await Assert.That(payload.Length).IsEqualTo(4);
+        await Assert.That(payload[0]).IsEqualTo((byte)21);
+        await Assert.That(payload[3]).IsEqualTo((byte)148);
+    }
+
+    [Test]
+    public async Task Cycle1WithEightBytesParses()
+    {
+        bool ok = AscFlexRayParser.TryParse(
+            "0.042000 Fr 1 V9 4 1 0 0 151 x 8 1 2 3 4 5 6 7 8"u8,
+            10, out _, out _, out byte[] frame);
+
+        await Assert.That(ok).IsTrue();
+        bool parsed = FlexRayLinkTypeFrame.TryParseDataFrame(frame, out FlexRayLinkTypeFrame.Fields fields, out ReadOnlySpan<byte> payloadSpan);
+        byte[] payload = payloadSpan.ToArray();
+        await Assert.That(parsed).IsTrue();
+        await Assert.That(fields.Cycle).IsEqualTo((byte)1);
+        await Assert.That(payload.Length).IsEqualTo(8);
+    }
+
+    [Test]
+    public async Task RmsgExampleReadsSlotAndCycle()
+    {
+        bool ok = AscFlexRayParser.TryParse(
+            "0.039255 Fr RMSG 0 0 1 1 4 7 Rx 0 14 5 32 151 Message_2 4 4 27 24 29 241 0 0 0"u8,
+            10, out _, out int channel, out byte[] frame);
+
+        await Assert.That(ok).IsTrue();
+        await Assert.That(channel).IsEqualTo(1);
+        bool parsed = FlexRayLinkTypeFrame.TryParseDataFrame(frame, out FlexRayLinkTypeFrame.Fields fields, out ReadOnlySpan<byte> payloadSpan);
+        byte[] payload = payloadSpan.ToArray();
+        await Assert.That(parsed).IsTrue();
+        await Assert.That(fields.ChannelB).IsFalse();
+        await Assert.That(fields.FrameId).IsEqualTo((ushort)4);
+        await Assert.That(fields.Cycle).IsEqualTo((byte)7);
+        await Assert.That(fields.HeaderCrc).IsEqualTo((ushort)151);
+        await Assert.That(payload.Length).IsEqualTo(4);
+        await Assert.That(payload[0]).IsEqualTo((byte)27);
+        await Assert.That(payload[3]).IsEqualTo((byte)241);
     }
 }

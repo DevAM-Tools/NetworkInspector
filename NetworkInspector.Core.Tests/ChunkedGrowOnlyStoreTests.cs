@@ -77,6 +77,24 @@ internal sealed class ChunkedGrowOnlyStoreTests
     }
 
     [Test]
+    public async Task ReadRangeFromIndexMinValueFillsNulls()
+    {
+        Collections.ChunkedGrowOnlyStore<object> store = new(chunkShift: 4);
+        object value = new();
+        store.Append(value);
+
+        object?[] buffer = new object?[4];
+        int read = store.ReadRange(int.MinValue, buffer);
+
+        await Assert.That(read).IsEqualTo(4);
+        await Assert.That(buffer[0]).IsNull();
+        await Assert.That(buffer[1]).IsNull();
+        await Assert.That(buffer[2]).IsNull();
+        await Assert.That(buffer[3]).IsNull();
+        await Assert.That(store.Get(0)).IsSameReferenceAs(value);
+    }
+
+    [Test]
     public async Task ChunkShift_Invalid_ThrowsOnConstruction()
     {
         await Assert
@@ -912,5 +930,166 @@ internal sealed class ChunkedGrowOnlyStoreTests
         }
 
         await Assert.That(sawConcurrent).IsTrue();
+    }
+
+    [Test]
+    public async Task AppendOverlappingClearDoesNotPublishAHole()
+    {
+        Collections.ChunkedGrowOnlyStore<int> store = new(chunkShift: 4, unsetValue: -1);
+        ClearStop stop = new();
+        Thread clearer = new(() =>
+        {
+            while (stop.Value == 0)
+            {
+                store.Clear();
+            }
+        })
+        {
+            Name = "grow-only-clear",
+            IsBackground = true,
+        };
+        clearer.Start();
+
+        int stablePublishes = 0;
+        try
+        {
+            for (int i = 0; i < 100_000; i++)
+            {
+                // A Clear that lands after this read makes Count smaller. That is not a hole.
+                int before = store.Count;
+                store.Append(7);
+                int after = store.Count;
+                if (after != before + 1)
+                {
+                    continue;
+                }
+
+                bool found = store.TryGet(after - 1, out int value);
+                if (store.Count < after)
+                {
+                    continue;
+                }
+
+                stablePublishes++;
+                if (!found || value != 7)
+                {
+                    await Assert.That(found).IsTrue();
+                    await Assert.That(value).IsEqualTo(7);
+                }
+            }
+        }
+        finally
+        {
+            stop.Value = 1;
+            clearer.Join();
+        }
+
+        store.Append(7);
+
+        await Assert.That(stablePublishes).IsGreaterThan(0);
+        await Assert.That(store.Count).IsGreaterThan(0);
+        for (int index = 0; index < store.Count; index++)
+        {
+            bool found = store.TryGet(index, out int value);
+            if (!found || value == -1)
+            {
+                await Assert.That(found).IsTrue();
+                await Assert.That(value).IsNotEqualTo(-1);
+            }
+        }
+
+        bool lastFound = store.TryGet(store.Count - 1, out int last);
+        await Assert.That(lastFound).IsTrue();
+        await Assert.That(last).IsEqualTo(7);
+    }
+
+    [Test]
+    public async Task AppendRangeOverlappingClearDoesNotPublishAHole()
+    {
+        Collections.ChunkedAppendOnlyStore<int> store = new(chunkShift: 4);
+        int[] pair = [7, 8];
+        ClearStop stop = new();
+        Thread clearer = new(() =>
+        {
+            while (stop.Value == 0)
+            {
+                store.Clear();
+            }
+        })
+        {
+            Name = "grow-only-clear",
+            IsBackground = true,
+        };
+        clearer.Start();
+
+        int stablePublishes = 0;
+        try
+        {
+            for (int i = 0; i < 100_000; i++)
+            {
+                int before = store.Count;
+                store.AppendRange(pair);
+                int after = store.Count;
+                if (after != before + pair.Length)
+                {
+                    continue;
+                }
+
+                bool firstFound = store.TryReadPublished(before, out int first);
+                bool secondFound = store.TryReadPublished(before + 1, out int second);
+                if (store.Count < after)
+                {
+                    continue;
+                }
+
+                // Clear's odd epoch makes TryReadPublished miss before Count drops.
+                // A hit is still the pair just written, never the unset sentinel.
+                if (!firstFound || !secondFound)
+                {
+                    continue;
+                }
+
+                stablePublishes++;
+                if (first != 7 || second != 8)
+                {
+                    await Assert.That(first).IsEqualTo(7);
+                    await Assert.That(second).IsEqualTo(8);
+                }
+            }
+        }
+        finally
+        {
+            stop.Value = 1;
+            clearer.Join();
+        }
+
+        // Quiescent prefix from the overlapped phase, then one more publish with no Clear.
+        await _AssertPackedPrefixHasNoUnset(store);
+        store.AppendRange(pair);
+
+        await Assert.That(stablePublishes).IsGreaterThan(0);
+        await _AssertPackedPrefixHasNoUnset(store);
+        await Assert.That(store.Count).IsGreaterThan(0);
+    }
+
+    private static async Task _AssertPackedPrefixHasNoUnset(Collections.ChunkedAppendOnlyStore<int> store)
+    {
+        for (int index = 0; index < store.Count; index++)
+        {
+            bool found = store.TryReadPublished(index, out int value);
+            if (!found || value == 0)
+            {
+                await Assert.That(found).IsTrue();
+                await Assert.That(value).IsNotEqualTo(0);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Cross-thread stop for a clearer. The test thread writes 1; the clearer reads it.
+    /// </summary>
+    private sealed class ClearStop
+    {
+        internal volatile int Value;
     }
 }

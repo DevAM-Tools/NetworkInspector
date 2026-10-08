@@ -272,7 +272,15 @@ internal sealed class FilterOptionTests
         using RandomFrameSource source = new(count: 1, seed: 7, mode: RandomFrameMode.UdpIPv4);
         source.Start(registry.RegisterSource(source), registry);
         Frame frame = source.NextFrame()!.Value;
-        return Packet.ParseFrame(new PacketId(packetId), stack, frame);
+        ParseOptions options = new();
+        PacketId id = new(packetId);
+        if (!Packet.TryParse(id, stack, frame, in options, out Packet? packet, out ParseFailure failure)
+            || packet is null)
+        {
+            throw new InvalidOperationException(failure.ToString());
+        }
+
+        return packet;
     }
 
     /// <summary>Parses a frame into the live <paramref name="index"/> used by CLI filter eval.</summary>
@@ -282,7 +290,15 @@ internal sealed class FilterOptionTests
         using RandomFrameSource source = new(count: 1, seed: 7, mode: RandomFrameMode.UdpIPv4);
         source.Start(registry.RegisterSource(source), registry);
         Frame frame = source.NextFrame()!.Value;
-        return Packet.ParseFrameIndexed(new PacketId(packetId), stack, frame, index);
+        ParseOptions options = new(index: index);
+        PacketId id = new(packetId);
+        if (!Packet.TryParse(id, stack, frame, in options, out Packet? packet, out ParseFailure failure)
+            || packet is null)
+        {
+            throw new InvalidOperationException(failure.ToString());
+        }
+
+        return packet;
     }
 
     /// <summary>A unique path in the temp directory with the given extension.</summary>

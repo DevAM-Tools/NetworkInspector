@@ -254,7 +254,15 @@ internal static class FilterTestHelper
             FrameInterfaceId.Invalid,
             stack.FrameInterfaceRegistry).Value;
 
-        return Packet.ParseFrame(new PacketId(packetId), stack, frame);
+        ParseOptions options = new();
+        PacketId id = new(packetId);
+        if (!Packet.TryParse(id, stack, frame, in options, out Packet? packet, out ParseFailure failure)
+            || packet is null)
+        {
+            throw new InvalidOperationException(failure.ToString());
+        }
+
+        return packet;
     }
 
     /// <summary>Parses one frame on the given stack while recording presence into an index.</summary>
@@ -273,7 +281,15 @@ internal static class FilterTestHelper
             FrameInterfaceId.Invalid,
             stack.FrameInterfaceRegistry).Value;
 
-        return Packet.ParseFrameIndexed(new PacketId(packetId), stack, frame, index);
+        ParseOptions options = new(index: index);
+        PacketId id = new(packetId);
+        if (!Packet.TryParse(id, stack, frame, in options, out Packet? packet, out ParseFailure failure)
+            || packet is null)
+        {
+            throw new InvalidOperationException(failure.ToString());
+        }
+
+        return packet;
     }
 
     #endregion

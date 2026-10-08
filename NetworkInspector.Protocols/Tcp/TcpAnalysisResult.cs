@@ -94,8 +94,8 @@ internal readonly record struct TcpAnalysisResult
     internal ulong ScaledWindowSize { get; init; }
 
     /// <summary>
-    /// Window scale factor for the sender of this segment, or -1 if unknown.
-    /// The sender's window_size_value should be shifted left by the *receiver's* scale factor.
+    /// Window scale factor advertised by the sender of this segment, or -1 when this segment is a SYN
+    /// or the sender's SYN did not carry a scale. The sender's window is shifted by this value.
     /// </summary>
     internal int WindowScaleFactor { get; init; }
 
@@ -125,11 +125,23 @@ internal readonly record struct TcpAnalysisResult
     /// </summary>
     internal TcpConnectionKey ConnectionKey { get; init; }
 
-    /// <summary>
-    /// Source IP address as UInt128 for direction detection in the reassembly engine.
-    /// Default when no IP layer is found.
-    /// </summary>
+    /// <summary>Source IP address as UInt128 for direction detection in the reassembly engine.</summary>
     internal UInt128 SrcAddr { get; init; }
+
+    /// <summary>Wire sequence minus this direction's ISN when relative sequence numbers are on and the ISN is known.</summary>
+    internal uint RelativeSeq { get; init; }
+
+    /// <summary>Wire acknowledgement minus the peer ISN when relative sequence numbers are on and that ISN is known.</summary>
+    internal uint RelativeAck { get; init; }
+
+    /// <summary>Whether <see cref="RelativeSeq"/> is the ISN-adjusted value.</summary>
+    internal bool SequenceIsRelative { get; init; }
+
+    /// <summary>Whether <see cref="RelativeAck"/> is the ISN-adjusted value.</summary>
+    internal bool AckIsRelative { get; init; }
+
+    /// <summary>The stream table refused this key. Header fields are still parsed; <c>tcp.stream</c> is not appended.</summary>
+    internal bool StreamLimitReached { get; init; }
 
     /// <summary>Whether any analysis flag is set.</summary>
     internal bool HasAnyFlag => Flags != TcpAnalysisFlags.None;

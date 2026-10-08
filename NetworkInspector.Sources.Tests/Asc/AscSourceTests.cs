@@ -168,9 +168,9 @@ internal sealed class AscSourceTests
             "Begin Triggerblock\n" +
             "0.100000 1 123 Rx d 8 AA BB CC DD EE FF 00 11\n" +
             "0.200000 CANFD 1 Rx 200 1 0 8 8 01 02 03 04 05 06 07 08\n" +
-            "0.300000 L1 3C Rx 8 01 02 03 04 05 06 07 08 checksum = F0\n" +
+            "0.300000 Li 3C Rx 8 01 02 03 04 05 06 07 08 checksum = F0\n" +
             "0.400000 Fr 1 V9 0A 4 0 0 1234 x 8 0102030405060708\n" +
-            "0.500000 ETH 1 Rx 14:001122334455667788990A0B0C0D\n" +
+            "0.500000 ETH 1 Rx e:001122334455667788990A0B0C0D\n" +
             "End TriggerBlock\n");
         SourceTestFixture.InitializeAndStartSource(source);
 
@@ -377,5 +377,154 @@ internal sealed class AscSourceTests
         FrameSourceId sourceId = registry.RegisterSource(source);
 
         await Assert.That(() => source.Start(sourceId, null!)).Throws<ArgumentNullException>();
+    }
+
+    [Test]
+    public async Task ErrorAndOverloadFramesAreIndexed()
+    {
+        using AscSource source = _CreateFromText(
+            "base hex timestamps absolute\n" +
+            "Begin Triggerblock\n" +
+            "0.100000 1 100 Rx d 1 AA\n" +
+            "0.700000 1 ErrorFrame\n" +
+            "0.800000 1 OverloadFrame\n" +
+            "0.900000 1 101 Rx d 1 BB\n" +
+            "End TriggerBlock\n");
+        SourceTestFixture.InitializeAndStartSource(source);
+
+        List<Frame> frames = _DrainFrames(source);
+
+        await Assert.That(frames.Count).IsEqualTo(4);
+        await Assert.That(frames[1].LinkType).IsEqualTo(LinkType.CanSocketcan);
+        await Assert.That(frames[1].Data.Length).IsEqualTo(16);
+        await Assert.That(BinaryPrimitives.ReadUInt32BigEndian(frames[1].Data.Span)).IsEqualTo(0x20000000u);
+        await Assert.That(BinaryPrimitives.ReadUInt32BigEndian(frames[2].Data.Span)).IsEqualTo(0x20000000u);
+    }
+
+    [Test]
+    public async Task WrappedEthernetPacketIs60Bytes()
+    {
+        string payload = "FFFFFFFFFFFF" + new string('A', 108);
+        using AscSource source = _CreateFromText(
+            "base hex timestamps absolute\n" +
+            "Begin Triggerblock\n" +
+            "0.000000 ETH 2 Tx 3c:" + payload[..12] + "\n" +
+            payload[12..] + "\n" +
+            "0.100000 1 100 Rx d 1 AA\n" +
+            "End TriggerBlock\n");
+        SourceTestFixture.InitializeAndStartSource(source);
+
+        List<Frame> frames = _DrainFrames(source);
+
+        await Assert.That(frames.Count).IsEqualTo(2);
+        await Assert.That(frames[0].LinkType).IsEqualTo(LinkType.Ethernet);
+        await Assert.That(frames[0].Data.Length).IsEqualTo(60);
+        await Assert.That(frames[0].Data.Span[0]).IsEqualTo((byte)0xFF);
+        await Assert.That(frames[0].Data.Span[5]).IsEqualTo((byte)0xFF);
+    }
+
+    [Test]
+    public async Task EthStatusLinesProduceNoFrame()
+    {
+        using AscSource source = _CreateFromText(
+            "base hex\n" +
+            "Begin Triggerblock\n" +
+            "0.100000 ETH 1 STAT 0\n" +
+            "0.200000 ETH 2 RxEr e:001122334455667788990A0B0C0D\n" +
+            "0.300000 1 100 Rx d 1 AA\n" +
+            "End TriggerBlock\n");
+        SourceTestFixture.InitializeAndStartSource(source);
+
+        List<Frame> frames = _DrainFrames(source);
+
+        await Assert.That(frames.Count).IsEqualTo(1);
+        await Assert.That(frames[0].LinkType).IsEqualTo(LinkType.CanSocketcan);
+    }
+
+    [Test]
+    public async Task AbsoluteLineTimeIsAddedToTheHeader()
+    {
+        using AscSource source = _CreateFromText(
+            "date Sun Nov 24 11:44:00 AM 2019\n" +
+            "base hex timestamps absolute\n" +
+            "Begin Triggerblock\n" +
+            "1.000000001 1 100 Rx d 1 AA\n" +
+            "End TriggerBlock\n");
+        SourceTestFixture.InitializeAndStartSource(source);
+        long start = AscDateParser.TryParseToUnixNanos("Sun Nov 24 11:44:00 AM 2019", TimeZoneInfo.Utc);
+
+        List<Frame> frames = _DrainFrames(source);
+
+        await Assert.That(frames.Count).IsEqualTo(1);
+        await Assert.That(frames[0].Timestamp.AsNanos).IsEqualTo(start + 1_000_000_001L);
+    }
+
+    [Test]
+    public async Task RelativeDeltasAccumulateAndSkipNonFrames()
+    {
+        using AscSource source = _CreateFromText(
+            "date Sun Nov 24 11:44:00 AM 2019\n" +
+            "base hex timestamps relative\n" +
+            "Begin Triggerblock\n" +
+            "0.001000 1 100 Rx d 1 AA\n" +
+            "0.050000 CAN 1 Status: bus off\n" +
+            "0.001000 1 100 Rx d 1 BB\n" +
+            "End TriggerBlock\n");
+        SourceTestFixture.InitializeAndStartSource(source);
+        long start = AscDateParser.TryParseToUnixNanos("Sun Nov 24 11:44:00 AM 2019", TimeZoneInfo.Utc);
+
+        List<Frame> frames = _DrainFrames(source);
+
+        await Assert.That(frames.Count).IsEqualTo(2);
+        await Assert.That(frames[0].Timestamp.AsNanos).IsEqualTo(start + 1_000_000L);
+        // 0.001 frame + 0.050 status + 0.001 frame. Relative time includes the status event.
+        await Assert.That(frames[1].Timestamp.AsNanos).IsEqualTo(start + 52_000_000L);
+    }
+
+    [Test]
+    public async Task RelativeStatisticIsNotAFrameAndMovesTheClock()
+    {
+        using AscSource source = _CreateFromText(
+            "date Sun Nov 24 11:44:00 AM 2019\n" +
+            "base hex timestamps relative\n" +
+            "Begin Triggerblock\n" +
+            "0.500000 1 Statistic: D 1 R 0 XD 0 XR 0 E 0 O 0 B 1.0%\n" +
+            "0.500000 1 64 Rx d 1 AA\n" +
+            "End TriggerBlock\n");
+        SourceTestFixture.InitializeAndStartSource(source);
+        long start = AscDateParser.TryParseToUnixNanos("Sun Nov 24 11:44:00 AM 2019", TimeZoneInfo.Utc);
+
+        List<Frame> frames = _DrainFrames(source);
+
+        await Assert.That(frames.Count).IsEqualTo(1);
+        await Assert.That(frames[0].Timestamp.AsNanos).IsEqualTo(start + 1_000_000_000L);
+    }
+
+    [Test]
+    public async Task RelativeSplitFileAddsPreviousAbsoluteTime()
+    {
+        using AscSource relative = _CreateFromText(
+            "date Sun Nov 24 11:44:00 AM 2019\n" +
+            "base hex timestamps relative\n" +
+            "// 60.0000 previous log file: Inc_L1.asc\n" +
+            "Begin Triggerblock\n" +
+            "0.500000 1 100 Rx d 1 AA\n" +
+            "End TriggerBlock\n");
+        using AscSource absolute = _CreateFromText(
+            "date Sun Nov 24 11:44:00 AM 2019\n" +
+            "base hex timestamps absolute\n" +
+            "// 60.0000 previous log file: Inc_L1.asc\n" +
+            "Begin Triggerblock\n" +
+            "0.500000 1 100 Rx d 1 AA\n" +
+            "End TriggerBlock\n");
+        SourceTestFixture.InitializeAndStartSource(relative);
+        SourceTestFixture.InitializeAndStartSource(absolute);
+        long start = AscDateParser.TryParseToUnixNanos("Sun Nov 24 11:44:00 AM 2019", TimeZoneInfo.Utc);
+
+        List<Frame> relativeFrames = _DrainFrames(relative);
+        List<Frame> absoluteFrames = _DrainFrames(absolute);
+
+        await Assert.That(relativeFrames[0].Timestamp.AsNanos).IsEqualTo(start + 60_500_000_000L);
+        await Assert.That(absoluteFrames[0].Timestamp.AsNanos).IsEqualTo(start + 500_000_000L);
     }
 }

@@ -11,6 +11,8 @@ Implementation plan: [`../plans/plans_filter-migration-modernization.md`](../pla
 
 **Not in v1:** `seq`, `stream`, `window`, `let`, `where`, public `nav(…)`, children/parent/siblings, relative short names in scopes, bytecode VM, AOT, MCP completer UI. Filters do not read `ValueCache` (values still come from the field tree). Columnar scans: [`VALUECACHE_GUIDE.md`](../NetworkInspector.Core/VALUECACHE_GUIDE.md). A packet parsed with `FieldTreeMode.Skip` is not a valid eval input: `TryIsMatch` returns `FilterErrorKind.NoFieldTree` (not a negative match), except `AlwaysMatch` / empty compile.
 
+`Filter.Compile(expression, stack, in FilterObserverOptions)` compiles the same expression into a `FilterObserver`. That object is not a `Filter`. It latches values during a skip parse and does not share reset or match state with a field-tree filter of the same text. A subtree scope (`$udp { ... }`) fails that compile with `FilterErrorKind.NeedsFieldTree`; use `Filter.Compile` and `FieldTreeMode.Build` for it. Read `IsMatch` after `TryParse` returns. When `HasFlank` is true, read `TryReadMatch` instead. `BeginPacket` clears the per-frame bits and keeps the flank sample. `ResetState` clears the sample too.
+
 ---
 
 ## 1. Mental model

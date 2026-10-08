@@ -9,7 +9,7 @@ namespace NetworkInspector.Sessions.Tests;
 internal sealed class ExitPointCoverageTests
 {
     [Test]
-    public async Task TryGetPacket_ReparseWithMismatchedStack_ThrowsArgumentException()
+    public async Task TryGetPacket_ReparseWithMismatchedStack_ThrowsRegistryMismatch()
     {
         using Stack stack = TestHarness.CreateStack();
         using TestFrameSource source = TestFrameSource.WithUdpFrames(3);
@@ -28,15 +28,18 @@ internal sealed class ExitPointCoverageTests
         {
             stackField.SetValue(session, wrongStack);
 
+            InvalidOperationException? caught = null;
             try
             {
                 session.TryGetPacket(new PacketId(0), out Packet? _);
-                throw new InvalidOperationException("Expected ArgumentException was not thrown.");
             }
-            catch (ArgumentException exception)
+            catch (InvalidOperationException exception)
             {
-                await Assert.That(exception.Message).Contains("FrameInterfaceRegistry");
+                caught = exception;
             }
+
+            await Assert.That(caught).IsNotNull();
+            await Assert.That(caught!.Message).Contains("RegistryMismatch");
         }
         finally
         {

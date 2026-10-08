@@ -141,11 +141,14 @@ public readonly struct Field : IEquatable<Field>
         }
     }
 
-    /// <summary>Whether this is the root field (index 0).</summary>
+    /// <summary>
+    /// True only when this cursor is valid and its storage index is 0.
+    /// A default cursor is not the root.
+    /// </summary>
     public bool IsRoot
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => StorageIndex == 0;
+        get => Packet is not null && StorageIndex == 0;
     }
 
     /// <summary>

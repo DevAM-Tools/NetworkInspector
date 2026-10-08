@@ -113,6 +113,17 @@ internal ref struct AscTokenizerBytes
     /// </summary>
     internal readonly ReadOnlySpan<byte> Remaining => TrimStartAscii(_Remaining);
 
+    /// <summary>
+    /// Captures the unconsumed tail so a speculative parse can be rewound.
+    /// The span aliases the original line; it is not a copy.
+    /// </summary>
+    internal readonly ReadOnlySpan<byte> Capture() => _Remaining;
+
+    /// <summary>
+    /// Restores a tail previously returned by <see cref="Capture"/>.
+    /// </summary>
+    internal void Restore(ReadOnlySpan<byte> captured) => _Remaining = captured;
+
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     /// <summary>Trims leading ASCII space (0x20) and tab (0x09) bytes.</summary>

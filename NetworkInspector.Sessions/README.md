@@ -123,7 +123,7 @@ using Session session = new(stack, new SessionOptions
 });
 ```
 
-`session.IngestValueCache` is the read-only view filled by `ParseFrame(..., cache)`. Restart abandons the previous writer and rebinds surviving runtime slots. Field and group names are validated with `NameValidation.IsValidName` when the request is bound (construction, `TryAddValueCache`, Restart).
+`session.IngestValueCache` is the read-only view filled by `Packet.TryParse` with `ParseOptions.Cache`. Restart abandons the previous writer and rebinds surviving runtime slots. Field and group names are validated with `NameValidation.IsValidName` when the request is bound (construction, `TryAddValueCache`, Restart).
 
 ## Per-Listener Filters
 

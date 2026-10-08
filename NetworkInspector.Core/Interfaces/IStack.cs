@@ -57,7 +57,11 @@ public interface IStack
     /// <summary>Gets protocol info by ID. Returns <c>null</c> if the ID is out of range.</summary>
     ProtocolInfo? GetProtocol(ProtocolId id);
 
-    /// <summary>Looks up a protocol ID by name. Returns <c>null</c> if not found.</summary>
+    /// <summary>
+    /// Looks up a protocol ID by name. Returns <c>null</c> if not found.
+    /// A null <paramref name="name"/> throws <see cref="ArgumentNullException"/>; a name that is
+    /// not registered returns <see langword="null"/>.
+    /// </summary>
     ProtocolId? GetProtocolId(string name);
 
     /// <summary>All registered protocols.</summary>
@@ -81,6 +85,8 @@ public interface IStack
 
     /// <summary>
     /// Looks up a canonical field ID by name. Returns <c>null</c> if not found.
+    /// A null <paramref name="name"/> throws <see cref="ArgumentNullException"/>; a name that is
+    /// not registered returns <see langword="null"/>.
     /// <para>
     /// Field alias names (e.g., <c>"eth.addr"</c>, <c>"ip.addr"</c>, <c>"udp.port"</c>) are
     /// <b>never</b> resolved by this method by design; the canonical field namespace and the
@@ -123,6 +129,8 @@ public interface IStack
 
     /// <summary>
     /// Looks up a field alias group ID by name. Returns <c>null</c> if not found.
+    /// A null <paramref name="name"/> throws <see cref="ArgumentNullException"/>; a name that is
+    /// not registered returns <see langword="null"/>.
     /// </summary>
     FieldAliasGroupId? GetFieldAliasGroupId(string name);
 
@@ -145,7 +153,11 @@ public interface IStack
     /// <summary>Gets index group info by ID. Returns <c>null</c> if the ID is out of range.</summary>
     IndexGroupInfo? GetIndexGroup(IndexGroupId id);
 
-    /// <summary>Looks up an index group ID by name. Returns <c>null</c> if not found.</summary>
+    /// <summary>
+    /// Looks up an index group ID by name. Returns <c>null</c> if not found.
+    /// A null <paramref name="name"/> throws <see cref="ArgumentNullException"/>; a name that is
+    /// not registered returns <see langword="null"/>.
+    /// </summary>
     IndexGroupId? GetIndexGroupId(string name);
 
     /// <summary>All registered index groups.</summary>
@@ -167,7 +179,11 @@ public interface IStack
     /// <summary>Gets protocol table info by ID. Returns <c>null</c> if the ID is out of range.</summary>
     ProtocolTableInfo? GetProtocolTableInfo(ProtocolTableId id);
 
-    /// <summary>Looks up a protocol table ID by name. Returns <c>null</c> if not found.</summary>
+    /// <summary>
+    /// Looks up a protocol table ID by name. Returns <c>null</c> if not found.
+    /// A null <paramref name="name"/> throws <see cref="ArgumentNullException"/>; a name that is
+    /// not registered returns <see langword="null"/>.
+    /// </summary>
     ProtocolTableId? GetProtocolTableId(string name);
 
     /// <summary>All registered protocol tables.</summary>
@@ -223,7 +239,11 @@ public interface IStack
     /// <summary>Gets heuristic table info by ID. Returns <c>null</c> if the ID is out of range.</summary>
     HeuristicProtocolTableInfo? GetHeuristicProtocolTableInfo(HeuristicProtocolTableId id);
 
-    /// <summary>Looks up a heuristic table ID by name. Returns <c>null</c> if not found.</summary>
+    /// <summary>
+    /// Looks up a heuristic table ID by name. Returns <c>null</c> if not found.
+    /// A null <paramref name="name"/> throws <see cref="ArgumentNullException"/>; a name that is
+    /// not registered returns <see langword="null"/>.
+    /// </summary>
     HeuristicProtocolTableId? GetHeuristicProtocolTableId(string name);
 
     /// <summary>All registered heuristic protocol tables.</summary>

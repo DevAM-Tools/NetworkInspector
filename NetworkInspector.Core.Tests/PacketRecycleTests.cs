@@ -103,10 +103,40 @@ internal sealed class PacketRecycleTests
         Frame frame1 = _MakeFrame(stack, frameData, frameId: 1);
         Frame frame2 = _MakeFrame(stack, frameData, frameId: 2);
 
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame1);
+        Packet packet;
+        {
+            ParseOptions options = new();
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame1,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
 
         // Recycle with new identity
-        Packet recycled = Packet.ParseFrame(packet, new PacketId(1), stack, frame2);
+        Packet recycled;
+        {
+            ParseOptions options = new();
+            if (!Packet.TryParse(
+                packet,
+                new PacketId(1),
+                stack,
+                frame2,
+                in options,
+                out ParseFailure failure))
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            recycled = packet;
+        }
 
         await Assert.That(ReferenceEquals(packet, recycled)).IsTrue();
         await Assert.That(recycled.Id).IsEqualTo(new PacketId(1));
@@ -124,16 +154,61 @@ internal sealed class PacketRecycleTests
         Frame recycleFrame = _MakeFrame(stack, frameData, frameId: 3);
 
         // Fresh parse baseline
-        Packet fresh = Packet.ParseFrame(new PacketId(0), stack, freshFrame);
+        Packet fresh;
+        {
+            ParseOptions options = new();
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                freshFrame,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            fresh = parsed;
+        }
         int freshCount = fresh.FieldCount(materialize: true); // materialize: true — count after full materialization
 
         // Seed packet to recycle. Ids ascend across all three parses: a stateful protocol treats a
         // parse below its highest seen id as a re-parse and replays instead of tracking, which would
         // leave the recycled packet without the fields the fresh parse produced.
-        Packet seed = Packet.ParseFrame(new PacketId(1), stack, _MakeFrame(stack, frameData, frameId: 2));
+        Packet seed;
+        {
+            ParseOptions options = new();
+            if (!Packet.TryParse(
+                new PacketId(1),
+                stack,
+                _MakeFrame(stack, frameData, frameId: 2),
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            seed = parsed;
+        }
 
         // Recycled parse
-        Packet recycled = Packet.ParseFrame(seed, new PacketId(2), stack, recycleFrame);
+        Packet recycled;
+        {
+            ParseOptions options = new();
+            if (!Packet.TryParse(
+                seed,
+                new PacketId(2),
+                stack,
+                recycleFrame,
+                in options,
+                out ParseFailure failure))
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            recycled = seed;
+        }
         int recycledCount = recycled.FieldCount(materialize: true); // materialize: true — count after full materialization
 
         await Assert.That(recycledCount).IsEqualTo(freshCount);
@@ -147,13 +222,43 @@ internal sealed class PacketRecycleTests
 
         // Parse a first packet to be recycled
         Frame frame1 = _MakeFrame(stack, frameData, frameId: 1);
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame1);
+        Packet packet;
+        {
+            ParseOptions options = new();
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame1,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
         int firstCount = packet.FieldCount(materialize: true); // materialize: true — count after full materialization
         await Assert.That(firstCount).IsGreaterThan(1);
 
         // Recycle
         Frame frame2 = _MakeFrame(stack, frameData, frameId: 2);
-        Packet recycled = Packet.ParseFrame(packet, new PacketId(1), stack, frame2);
+        Packet recycled;
+        {
+            ParseOptions options = new();
+            if (!Packet.TryParse(
+                packet,
+                new PacketId(1),
+                stack,
+                frame2,
+                in options,
+                out ParseFailure failure))
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            recycled = packet;
+        }
 
         // Verify that _Id changed — old identity is gone
         await Assert.That(recycled.Id).IsEqualTo(new PacketId(1));
@@ -172,14 +277,44 @@ internal sealed class PacketRecycleTests
         byte[] frameData = _BuildIpv6UdpFrame();
 
         Frame frame1 = _MakeFrame(stack, frameData, frameId: 1);
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame1);
+        Packet packet;
+        {
+            ParseOptions options = new();
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame1,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
 
         // Packet should have lazy fields before materialization
         await Assert.That(packet.HasUnpopulatedLazyFields).IsTrue();
 
         // Recycle WITHOUT materializing — lazy populators from parse 1 must be gone
         Frame frame2 = _MakeFrame(stack, frameData, frameId: 2);
-        Packet recycled = Packet.ParseFrame(packet, new PacketId(1), stack, frame2);
+        Packet recycled;
+        {
+            ParseOptions options = new();
+            if (!Packet.TryParse(
+                packet,
+                new PacketId(1),
+                stack,
+                frame2,
+                in options,
+                out ParseFailure failure))
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            recycled = packet;
+        }
 
         // After recycle and fresh parse, lazy fields refer only to the new parse
         await Assert.That(recycled.IsFinalized).IsTrue();
@@ -194,13 +329,58 @@ internal sealed class PacketRecycleTests
         byte[] frameData = _BuildIpv6UdpFrame(srcPort: 9999, dstPort: 1234);
 
         // Fresh parse for field count baseline
-        Packet fresh = Packet.ParseFrame(new PacketId(0), stack, _MakeFrame(stack, frameData));
+        Packet fresh;
+        {
+            ParseOptions options = new();
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                _MakeFrame(stack, frameData),
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            fresh = parsed;
+        }
         int freshCount = fresh.FieldCount(materialize: true); // materialize: true — count after full materialization
 
         // Seed + recycle, ascending ids (see Recycle_FieldCountMatchesFreshParse)
-        Packet seed = Packet.ParseFrame(new PacketId(1), stack, _MakeFrame(stack, frameData, 2));
+        Packet seed;
+        {
+            ParseOptions options = new();
+            if (!Packet.TryParse(
+                new PacketId(1),
+                stack,
+                _MakeFrame(stack, frameData, 2),
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            seed = parsed;
+        }
         Frame recycleFrame = _MakeFrame(stack, frameData, frameId: 3);
-        Packet recycled = Packet.ParseFrame(seed, new PacketId(2), stack, recycleFrame);
+        Packet recycled;
+        {
+            ParseOptions options = new();
+            if (!Packet.TryParse(
+                seed,
+                new PacketId(2),
+                stack,
+                recycleFrame,
+                in options,
+                out ParseFailure failure))
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            recycled = seed;
+        }
         recycled.MaterializeAll();
 
         await Assert.That(recycled.FieldCount(materialize: false)).IsEqualTo(freshCount); // materialize: false — current materialized count only
@@ -215,14 +395,44 @@ internal sealed class PacketRecycleTests
         byte[] frameData = _BuildIpv6UdpFrame();
 
         // Establish expected field count
-        Packet baseline = Packet.ParseFrame(new PacketId(0), stack, _MakeFrame(stack, frameData, 0));
+        Packet baseline;
+        {
+            ParseOptions options = new();
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                _MakeFrame(stack, frameData, 0),
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            baseline = parsed;
+        }
         int expected = baseline.FieldCount(materialize: true); // materialize: true — count after full materialization
 
         // Recycle the same packet 50 times
         for (int i = 1; i <= 50; i++)
         {
             Frame frame = _MakeFrame(stack, frameData, i);
-            Packet recycled = Packet.ParseFrame(baseline, new PacketId(i), stack, frame);
+            Packet recycled;
+            {
+                ParseOptions options = new();
+                if (!Packet.TryParse(
+                    baseline,
+                    new PacketId(i),
+                    stack,
+                    frame,
+                    in options,
+                    out ParseFailure failure))
+                {
+                    throw new InvalidOperationException(failure.ToString());
+                }
+
+                recycled = baseline;
+            }
 
             await Assert.That(recycled.Id).IsEqualTo(new PacketId(i));
             await Assert.That(recycled.IsFinalized).IsTrue();
@@ -239,12 +449,41 @@ internal sealed class PacketRecycleTests
         using Stack stack = _BuildStack();
         byte[] frameData = _BuildIpv6UdpFrame();
 
-        Packet seed = Packet.ParseFrame(new PacketId(0), stack, _MakeFrame(stack, frameData, 1));
+        Packet seed;
+        {
+            ParseOptions options = new();
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                _MakeFrame(stack, frameData, 1),
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            seed = parsed;
+        }
 
         // Recycle with explicit first protocol (stack default)
         Frame frame2 = _MakeFrame(stack, frameData, 2);
-        Packet recycled = Packet.ParseFrame(
-            seed, new PacketId(1), stack, frame2, stack.FrameProtocolId);
+        Packet recycled;
+        {
+            ParseOptions options = new(firstProtocol: stack.FrameProtocolId);
+            if (!Packet.TryParse(
+                seed,
+                new PacketId(1),
+                stack,
+                frame2,
+                in options,
+                out ParseFailure failure))
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            recycled = seed;
+        }
 
         await Assert.That(recycled.Id).IsEqualTo(new PacketId(1));
         await Assert.That(recycled.IsFinalized).IsTrue();
@@ -261,10 +500,40 @@ internal sealed class PacketRecycleTests
         PacketIndex index = new(stack);
 
         Frame frame1 = _MakeFrame(stack, frameData, 1);
-        Packet seed = Packet.ParseFrameIndexed(new PacketId(0), stack, frame1, index);
+        Packet seed;
+        {
+            ParseOptions options = new(index: index);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame1,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            seed = parsed;
+        }
 
         Frame frame2 = _MakeFrame(stack, frameData, 2);
-        Packet recycled = Packet.ParseFrameIndexed(seed, new PacketId(1), stack, frame2, index);
+        Packet recycled;
+        {
+            ParseOptions options = new(index: index);
+            if (!Packet.TryParse(
+                seed,
+                new PacketId(1),
+                stack,
+                frame2,
+                in options,
+                out ParseFailure failure))
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            recycled = seed;
+        }
 
         await Assert.That(ReferenceEquals(seed, recycled)).IsTrue();
         await Assert.That(recycled.Id).IsEqualTo(new PacketId(1));
@@ -286,8 +555,16 @@ internal sealed class PacketRecycleTests
 
         Frame frame2 = _MakeFrame(stack, frameData, 2);
 
-        await Assert.That(() => Packet.ParseFrame(unsealed, new PacketId(0), stack, frame2))
-            .Throws<InvalidOperationException>();
+        ParseOptions options = new();
+        bool parsed = Packet.TryParse(
+            unsealed,
+            new PacketId(0),
+            stack,
+            frame2,
+            in options,
+            out ParseFailure failure);
+        await Assert.That(parsed).IsFalse();
+        await Assert.That(failure).IsEqualTo(ParseFailure.NotFinalized);
     }
 
     [Test]
@@ -298,14 +575,39 @@ internal sealed class PacketRecycleTests
 
         byte[] frameData = _BuildIpv6UdpFrame();
         Frame frame1 = _MakeFrame(stack1, frameData, 1);
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack1, frame1);
+        Packet packet;
+        {
+            ParseOptions options = new();
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack1,
+                frame1,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
 
         // frame2 must be from stack2 to satisfy registry check for stack2,
         // but the recycle packet is from stack1 — stack mismatch
         Frame frame2 = _MakeFrame(stack2, frameData, 2);
 
-        await Assert.That(() => Packet.ParseFrame(packet, new PacketId(2), stack2, frame2))
-            .Throws<ArgumentException>();
+        {
+            ParseOptions options = new();
+            bool parsed = Packet.TryParse(
+                packet,
+                new PacketId(2),
+                stack2,
+                frame2,
+                in options,
+                out ParseFailure failure);
+            await Assert.That(parsed).IsFalse();
+            await Assert.That(failure).IsEqualTo(ParseFailure.StackMismatch);
+        }
     }
 
     [Test]
@@ -316,13 +618,38 @@ internal sealed class PacketRecycleTests
 
         byte[] frameData = _BuildIpv6UdpFrame();
         Frame frame1 = _MakeFrame(stack, frameData, 1);
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame1);
+        Packet packet;
+        {
+            ParseOptions options = new();
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame1,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
 
         // frame2 from a different registry, but same stack reference
         Frame frame2 = _MakeFrame(otherStack, frameData, 2);
 
-        await Assert.That(() => Packet.ParseFrame(packet, new PacketId(1), stack, frame2))
-            .Throws<ArgumentException>();
+        {
+            ParseOptions options = new();
+            bool parsed = Packet.TryParse(
+                packet,
+                new PacketId(1),
+                stack,
+                frame2,
+                in options,
+                out ParseFailure failure);
+            await Assert.That(parsed).IsFalse();
+            await Assert.That(failure).IsEqualTo(ParseFailure.RegistryMismatch);
+        }
     }
 
     // ── Correctness: recycled packet matches fresh parse ─────────────────────────────
@@ -335,13 +662,58 @@ internal sealed class PacketRecycleTests
 
         // Collect field IDs and values from fresh parse
         Frame freshFrame = _MakeFrame(stack, frameData, 1);
-        Packet fresh = Packet.ParseFrame(new PacketId(0), stack, freshFrame);
+        Packet fresh;
+        {
+            ParseOptions options = new();
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                freshFrame,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            fresh = parsed;
+        }
         List<FieldId> freshFields = _CollectFieldIds(fresh);
 
         // Seed + recycle, ascending ids (see Recycle_FieldCountMatchesFreshParse)
-        Packet seed = Packet.ParseFrame(new PacketId(1), stack, _MakeFrame(stack, frameData, 2));
+        Packet seed;
+        {
+            ParseOptions options = new();
+            if (!Packet.TryParse(
+                new PacketId(1),
+                stack,
+                _MakeFrame(stack, frameData, 2),
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            seed = parsed;
+        }
         Frame recycleFrame = _MakeFrame(stack, frameData, 3);
-        Packet recycled = Packet.ParseFrame(seed, new PacketId(2), stack, recycleFrame);
+        Packet recycled;
+        {
+            ParseOptions options = new();
+            if (!Packet.TryParse(
+                seed,
+                new PacketId(2),
+                stack,
+                recycleFrame,
+                in options,
+                out ParseFailure failure))
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            recycled = seed;
+        }
         List<FieldId> recycledFields = _CollectFieldIds(recycled);
 
         // Same number of fields in same order

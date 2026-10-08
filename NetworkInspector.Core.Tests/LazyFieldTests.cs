@@ -29,11 +29,21 @@ internal sealed class LazyFieldTests
             FrameInterfaceId.Invalid,
             stack.FrameInterfaceRegistry).Value;
 
-        return Packet.ParseFrame(
-            new PacketId(0),
-            stack,
-            frame,
-            firstProtocolId);
+        {
+            ParseOptions options = new(firstProtocol: firstProtocolId);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            return parsed;
+        }
     }
 
     [Test]

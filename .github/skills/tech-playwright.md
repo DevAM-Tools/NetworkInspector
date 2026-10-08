@@ -59,14 +59,25 @@ Use **Playwright Test for VS Code** (`ms-playwright.playwright`) for headed debu
 .NET UI tests (`{App}.UiTest`): Unix `PWDEBUG=1`, PowerShell `$env:PWDEBUG = "1"`,
 the IDE test runner, or .NET trace files. Do not use that extension.
 
+## Editor browser
+
+The editor’s integrated browser is available for a running web UI. The agent can open the page, navigate, click, type, and read what rendered. Using it is recommended while implementing or debugging a UI. It does not replace a Playwright journey.
+
+- **Cursor:** integrated Browser. Navigate, click, type, fill, read the page, screenshot, console, and network. No separate browser install.
+- **VS Code:** Integrated Browser (browser tools, on by default via `workbench.browser.enableChatTools`): page content, screenshots, and console output.
+
+If that browser is unavailable, headed Playwright or a trace still works (Commands).
+
 ## Commands
+
+Run the journey that covers the change. A full UI-project run is for a cross-cutting UI change or final verification (`tech-test.md`). .NET UI tests use `dotnet test`.
 
 ### .NET UI tests (TUnit)
 
 ```bash
 dotnet build path/App.UiTest.csproj -c Release
-dotnet test path/App.UiTest.csproj -c Release
 dotnet test path/App.UiTest.csproj -c Release -- --treenode-filter "/*HomePageLoads/*"
+dotnet test path/App.UiTest.csproj -c Release
 ```
 
 Headed debug env (Unix, then Windows PowerShell):
@@ -180,7 +191,7 @@ Mechanics only. Case design and suite size: `tech-test.md`.
 
 - One journey per spec/class when possible. Node name: `feature_scenario.spec.ts`. C#: PascalCase (`tech-tunit.md`).
 - Assert what the user can see (heading, table row, error text, URL).
-- **Named UI requirements:** each concrete UI `REQ{n}` / `TEST{n}` gets an observable assert. Do not stop at smoke (“heading visible”) when the requirement names validation, navigation, or layout.
+- **Named UI requirements:** each concrete UI requirement ID / `TEST-<AREA>-<TOPIC>` gets an observable assert. Do not stop at smoke (“heading visible”) when the requirement names validation, navigation, or layout.
 - **Product UI:** run the journey at the phone (`375 × 667`) and desktop (`1280 × 720`) viewports in `tech-web.md` unless the user waived responsiveness. Add tablet (`768 × 1024`) when layout changes at 768px.
 - **Illustrations:** asserts in `workflow-illustrate.md` only. Do not apply
   product viewports from `tech-web.md`. Spec files are optional keep-tests in

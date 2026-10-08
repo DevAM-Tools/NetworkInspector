@@ -149,6 +149,12 @@ public sealed partial class TcpProtocol : IProtocol
     [BoolField("tcp.flags.fin", "Fin", IndexGroup = _TcpIndexGroup)]
     private FieldId _FlagsFinFieldId;
 
+    [BoolField("tcp.flags.ns", "Nonce", IndexGroup = _TcpIndexGroup)]
+    private FieldId _FlagsNsFieldId;
+
+    [U64Field("tcp.flags.res", "Reserved", IndexGroup = _TcpIndexGroup)]
+    private FieldId _FlagsResFieldId;
+
     [U64Field("tcp.window_size_value", "Window", IndexGroup = _TcpIndexGroup)]
     private FieldId _WindowFieldId;
 
@@ -329,6 +335,88 @@ public sealed partial class TcpProtocol : IProtocol
 
     #endregion
 
+    #region Echo, CC, SCPS, Quick-Start, AccECN, experimental
+
+    [NoneField("tcp.options.echo", "Echo", IndexGroup = _OptionsIndexGroup)]
+    private FieldId _OptEchoFieldId;
+
+    [U64Field("tcp.options.echo.value", "Echo Value", IndexGroup = _OptionsIndexGroup)]
+    private FieldId _OptEchoValueFieldId;
+
+    [NoneField("tcp.options.echo_reply", "Echo Reply", IndexGroup = _OptionsIndexGroup)]
+    private FieldId _OptEchoReplyFieldId;
+
+    [U64Field("tcp.options.echo_reply.value", "Echo Reply Value", IndexGroup = _OptionsIndexGroup)]
+    private FieldId _OptEchoReplyValueFieldId;
+
+    [NoneField("tcp.options.cc", "CC", IndexGroup = _OptionsIndexGroup)]
+    private FieldId _OptCcFieldId;
+
+    [U64Field("tcp.options.cc.value", "CC Value", IndexGroup = _OptionsIndexGroup)]
+    private FieldId _OptCcValueFieldId;
+
+    [NoneField("tcp.options.cc_new", "CC.NEW", IndexGroup = _OptionsIndexGroup)]
+    private FieldId _OptCcNewFieldId;
+
+    [U64Field("tcp.options.cc_new.value", "CC.NEW Value", IndexGroup = _OptionsIndexGroup)]
+    private FieldId _OptCcNewValueFieldId;
+
+    [NoneField("tcp.options.cc_echo", "CC.ECHO", IndexGroup = _OptionsIndexGroup)]
+    private FieldId _OptCcEchoFieldId;
+
+    [U64Field("tcp.options.cc_echo.value", "CC.ECHO Value", IndexGroup = _OptionsIndexGroup)]
+    private FieldId _OptCcEchoValueFieldId;
+
+    [NoneField("tcp.options.scps", "SCPS Capabilities", IndexGroup = _OptionsIndexGroup)]
+    private FieldId _OptScpsFieldId;
+
+    [BoolField("tcp.options.scps.bets", "BETS", IndexGroup = _OptionsIndexGroup)]
+    private FieldId _OptScpsBetsFieldId;
+
+    [BoolField("tcp.options.scps.snack1", "SNACK1", IndexGroup = _OptionsIndexGroup)]
+    private FieldId _OptScpsSnack1FieldId;
+
+    [BoolField("tcp.options.scps.snack2", "SNACK2", IndexGroup = _OptionsIndexGroup)]
+    private FieldId _OptScpsSnack2FieldId;
+
+    [BoolField("tcp.options.scps.compress", "COMP", IndexGroup = _OptionsIndexGroup)]
+    private FieldId _OptScpsCompressFieldId;
+
+    [BoolField("tcp.options.scps.nlts", "NLTS", IndexGroup = _OptionsIndexGroup)]
+    private FieldId _OptScpsNltsFieldId;
+
+    [NoneField("tcp.options.qs", "Quick-Start Response", IndexGroup = _OptionsIndexGroup)]
+    private FieldId _OptQsFieldId;
+
+    [U64Field("tcp.options.qs.rate", "Rate", IndexGroup = _OptionsIndexGroup)]
+    private FieldId _OptQsRateFieldId;
+
+    [U64Field("tcp.options.qs.ttl_diff", "TTL Diff", IndexGroup = _OptionsIndexGroup)]
+    private FieldId _OptQsTtlDiffFieldId;
+
+    [NoneField("tcp.options.acc_ecn", "Accurate ECN", IndexGroup = _OptionsIndexGroup)]
+    private FieldId _OptAccEcnFieldId;
+
+    [U64Field("tcp.options.acc_ecn.ee0b", "EE0B", IndexGroup = _OptionsIndexGroup)]
+    private FieldId _OptAccEcnEe0bFieldId;
+
+    [U64Field("tcp.options.acc_ecn.eceb", "ECEB", IndexGroup = _OptionsIndexGroup)]
+    private FieldId _OptAccEcnEcebFieldId;
+
+    [U64Field("tcp.options.acc_ecn.ee1b", "EE1B", IndexGroup = _OptionsIndexGroup)]
+    private FieldId _OptAccEcnEe1bFieldId;
+
+    [NoneField("tcp.options.exp", "Experimental", IndexGroup = _OptionsIndexGroup)]
+    private FieldId _OptExpFieldId;
+
+    [U64Field("tcp.options.exp.exid", "ExID", IndexGroup = _OptionsIndexGroup)]
+    private FieldId _OptExpExIdFieldId;
+
+    [BytesField("tcp.options.exp.data", "Data", IndexGroup = _OptionsIndexGroup)]
+    private FieldId _OptExpDataFieldId;
+
+    #endregion
+
     #region Unknown options
     [NoneField("tcp.options.unknown", "Unknown Option", IndexGroup = _OptionsIndexGroup)]
     private FieldId _OptUnknownFieldId;
@@ -352,6 +440,9 @@ public sealed partial class TcpProtocol : IProtocol
 
     [StringField("tcp.error.no_ip", "No enclosing IP layer", IndexGroup = "tcp.error")]
     private FieldId _NoIpLayerFieldId;
+
+    [StringField("tcp.error.stream_limit", "Stream table full", IndexGroup = "tcp.error")]
+    private FieldId _StreamLimitFieldId;
 
     #endregion
 
@@ -392,6 +483,9 @@ public sealed partial class TcpProtocol : IProtocol
 
     [BoolField("tcp.analysis.keep_alive", "Keep-Alive", IndexGroup = _AnalysisIndexGroup)]
     private FieldId _AnalysisKeepAliveFieldId;
+
+    [BoolField("tcp.analysis.keep_alive_ack", "Keep-Alive ACK", IndexGroup = _AnalysisIndexGroup)]
+    private FieldId _AnalysisKeepAliveAckFieldId;
 
     [BoolField("tcp.analysis.zero_window", "Zero Window", IndexGroup = _AnalysisIndexGroup)]
     private FieldId _AnalysisZeroWindowFieldId;
@@ -450,6 +544,18 @@ public sealed partial class TcpProtocol : IProtocol
 
     [BoolSetting("tcp.verify_checksum", "Verify Checksum", "tcp", Default = false)]
     private bool _VerifyChecksum;
+
+    [BoolSetting("tcp.relative_sequence_numbers", "Relative sequence numbers", "tcp", Default = true)]
+    private bool _RelativeSequenceNumbers;
+
+    [BoolSetting("tcp.stream_key_last_vlan", "Include last VLAN id in the TCP stream key", "tcp", Default = false)]
+    private bool _StreamKeyLastVlan;
+
+    [BoolSetting("tcp.stream_key_frame", "Include frame identity in the TCP stream key", "tcp", Default = false)]
+    private bool _StreamKeyFrame;
+
+    [U64Setting("tcp.max_tracked_streams", "Maximum tracked TCP streams", "tcp", Default = 100000)]
+    private ulong _MaxTrackedStreams;
 
     #endregion
 
@@ -539,6 +645,32 @@ public sealed partial class TcpProtocol : IProtocol
             TcpAoKeyId = _OptAoKeyIdFieldId,
             TcpAoRNextKeyId = _OptAoRNextKeyIdFieldId,
             TcpAoMac = _OptAoMacFieldId,
+            Echo = _OptEchoFieldId,
+            EchoValue = _OptEchoValueFieldId,
+            EchoReply = _OptEchoReplyFieldId,
+            EchoReplyValue = _OptEchoReplyValueFieldId,
+            Cc = _OptCcFieldId,
+            CcValue = _OptCcValueFieldId,
+            CcNew = _OptCcNewFieldId,
+            CcNewValue = _OptCcNewValueFieldId,
+            CcEcho = _OptCcEchoFieldId,
+            CcEchoValue = _OptCcEchoValueFieldId,
+            Scps = _OptScpsFieldId,
+            ScpsBets = _OptScpsBetsFieldId,
+            ScpsSnack1 = _OptScpsSnack1FieldId,
+            ScpsSnack2 = _OptScpsSnack2FieldId,
+            ScpsCompress = _OptScpsCompressFieldId,
+            ScpsNlts = _OptScpsNltsFieldId,
+            Qs = _OptQsFieldId,
+            QsRate = _OptQsRateFieldId,
+            QsTtlDiff = _OptQsTtlDiffFieldId,
+            AccEcn = _OptAccEcnFieldId,
+            AccEcnEe0b = _OptAccEcnEe0bFieldId,
+            AccEcnEceb = _OptAccEcnEcebFieldId,
+            AccEcnEe1b = _OptAccEcnEe1bFieldId,
+            Exp = _OptExpFieldId,
+            ExpExId = _OptExpExIdFieldId,
+            ExpData = _OptExpDataFieldId,
             Unknown = _OptUnknownFieldId,
             UnknownData = _OptUnknownDataFieldId,
         };
@@ -587,7 +719,7 @@ public sealed partial class TcpProtocol : IProtocol
         string csumText = DisplayTables.FormatHexU16(header.Checksum.Value);
         container.AppendWithCustomText(_ChecksumFieldId, FieldValue.NewU64(header.Checksum.Value), csumText);
 
-        if (_VerifyChecksum && header.Checksum.Value != 0)
+        if (_VerifyChecksum)
         {
             bool? valid = _ValidateChecksum(in container, tcpData.Span);
             string statusText = valid switch
@@ -602,10 +734,8 @@ public sealed partial class TcpProtocol : IProtocol
         int headerLen = header.HeaderLength;
         int payloadLen = Math.Max(0, tcpData.Length - headerLen);
 
-        container.Append(_SeqFieldId, FieldValue.NewU64(header.SeqNumber.Value));
-        container.Append(_AckFieldId, FieldValue.NewU64(header.AckNumber.Value));
-
-        // Raw (absolute) sequence/ack numbers — always appended.
+        // tcp.seq and tcp.ack are appended eagerly in Parse so relative values survive replay.
+        // tcp.seq_raw / tcp.ack_raw stay here as the wire values.
         container.Append(_SeqRawFieldId, FieldValue.NewU64(header.SeqNumber.Value));
         container.Append(_AckRawFieldId, FieldValue.NewU64(header.AckNumber.Value));
 
@@ -624,6 +754,8 @@ public sealed partial class TcpProtocol : IProtocol
         container.Append(_FlagsResetFieldId, FieldValue.NewBool((flags & 0x04) != 0));
         container.Append(_FlagsSynFieldId, FieldValue.NewBool((flags & 0x02) != 0));
         container.Append(_FlagsFinFieldId, FieldValue.NewBool((flags & 0x01) != 0));
+        container.Append(_FlagsNsFieldId, FieldValue.NewBool(header.NsFlag != 0));
+        container.Append(_FlagsResFieldId, FieldValue.NewU64(header.Reserved));
 
         container.Append(_WindowFieldId, FieldValue.NewU64(header.WindowSize.Value));
         container.Append(_UrgentPointerFieldId, FieldValue.NewU64(header.UrgentPointer.Value));
@@ -801,7 +933,7 @@ public sealed partial class TcpProtocol : IProtocol
         int payloadLen = Math.Max(0, data.Length - headerLen);
 
         // Record optional index groups
-        if (_VerifyChecksum && header.Checksum.Value != 0)
+        if (_VerifyChecksum)
         {
             context.RecordGroupPresence(_TcpChecksumStatusGroupId);
         }
@@ -837,8 +969,8 @@ public sealed partial class TcpProtocol : IProtocol
                 ", Dst Port: ", dstPort,
                 " [", flagsText, "]", _Populator);
 
-        // Eagerly append tcp.srcport and tcp.dstport so checksum validation and stream
-        // tracking can read ports without materialising the lazy TCP group.
+        // Eagerly append ports and the displayed sequence numbers. Relative values come from analysis;
+        // the lazy populator keeps tcp.seq_raw / tcp.ack_raw as the wire values.
         tcpContainer.Append(_SrcPortFieldId, FieldValue.NewU64(srcPort));
         tcpContainer.Append(_DstPortFieldId, FieldValue.NewU64(dstPort));
 
@@ -846,6 +978,24 @@ public sealed partial class TcpProtocol : IProtocol
         TcpAnalysisResult analysis = _ResolveAnalysis(
             in parentField, srcPort, dstPort, header.SeqNumber.Value, header.AckNumber.Value,
             flags, header.WindowSize.Value, payloadLen, span, in context, layerKey, isReplay);
+
+        uint shownSeq = analysis.SequenceIsRelative ? analysis.RelativeSeq : header.SeqNumber.Value;
+        uint shownAck = analysis.AckIsRelative ? analysis.RelativeAck : header.AckNumber.Value;
+        tcpContainer.Append(_SeqFieldId, FieldValue.NewU64(shownSeq));
+        tcpContainer.Append(_AckFieldId, FieldValue.NewU64(shownAck));
+
+        if (analysis.StreamLimitReached)
+        {
+            parentField.Append(_StreamLimitFieldId, FieldValue.NewString("TCP stream table is full"));
+            context.RecordGroupPresence(_TcpErrorGroupId);
+            if (!isReplay)
+            {
+                _RecordEffect(
+                    parentField.Packet.Id, layerKey, in analysis, PayloadDispatchMode.None, null, ProtocolId.Invalid);
+            }
+
+            return data.Length;
+        }
 
         // Eagerly append tcp.stream as sibling of the lazy TCP container
         parentField.Append(_StreamFieldId, FieldValue.NewU64(analysis.StreamIndex));
@@ -878,8 +1028,7 @@ public sealed partial class TcpProtocol : IProtocol
         }
 
         // Eagerly append analysis fields (if any flags were detected)
-        if (analysis.HasAnyFlag || analysis.BytesInFlight > 0
-            || !double.IsNaN(analysis.InitialRtt) || !double.IsNaN(analysis.AckRtt))
+        if (!analysis.NoIpLayer && !analysis.StreamLimitReached)
         {
             context.RecordGroupPresence(_TcpAnalysisGroupId);
             _AppendAnalysisFields(in parentField, in analysis, in context);
@@ -890,7 +1039,7 @@ public sealed partial class TcpProtocol : IProtocol
         {
             ReadOnlyMemory<byte> payload = data[headerLen..];
             return _DispatchTcpPayload(
-                in parentField, srcPort, dstPort, payload, data.Length, in context, in analysis, layerKey, isReplay);
+                in parentField, srcPort, dstPort, header.SeqNumber.Value, payload, data.Length, in context, in analysis, layerKey, isReplay);
         }
 
         // No payload path: record analysis-only effects so a replay reproduces identical fields.
@@ -940,6 +1089,7 @@ public sealed partial class TcpProtocol : IProtocol
     private ParseResult _DispatchTcpPayload(
         in MutField parentField,
         ushort srcPort, ushort dstPort,
+        uint sequence,
         ReadOnlyMemory<byte> payload,
         int totalConsumed,
         in ParseContext context,
@@ -956,10 +1106,12 @@ public sealed partial class TcpProtocol : IProtocol
         // Record effects after the dispatch attempt so error exits also capture the
         // analysis facts and the dispatch mode reached so far.
         ParseResult result = _DispatchTcpPayloadFirstParse(
-            in parentField, srcPort, dstPort, payload, in context,
+            in parentField, srcPort, dstPort, sequence, payload, in context,
             in analysis, totalConsumed,
             out PayloadDispatchMode mode, out List<PduEffect>? pdus, out ProtocolId heuristicProtocolId);
-        _RecordEffect(parentField.Packet.Id, layerKey, in analysis, mode, pdus, heuristicProtocolId);
+        bool hasPreferred = analysis.ConnectionState is { ServerPortSet: true };
+        ushort preferred = hasPreferred ? analysis.ConnectionState!.ServerPort : (ushort)0;
+        _RecordEffect(parentField.Packet.Id, layerKey, in analysis, mode, pdus, heuristicProtocolId, preferred, hasPreferred);
         return result;
     }
 
@@ -971,6 +1123,7 @@ public sealed partial class TcpProtocol : IProtocol
     private ParseResult _DispatchTcpPayloadFirstParse(
         in MutField parentField,
         ushort srcPort, ushort dstPort,
+        uint sequence,
         ReadOnlyMemory<byte> payload,
         in ParseContext context,
         in TcpAnalysisResult analysis,
@@ -985,9 +1138,39 @@ public sealed partial class TcpProtocol : IProtocol
         pdus = null;
         heuristicProtocolId = ProtocolId.Invalid;
 
-        ProtocolId targetProtocol = _TryIdentifyPortProtocol(lowPort, highPort, in context);
+        bool serverPortKnown = analysis.ConnectionState is { ServerPortSet: true };
+        ushort serverPort = serverPortKnown ? analysis.ConnectionState!.ServerPort : (ushort)0;
+        ProtocolId targetProtocol = default;
+        bool singleOwner = false;
+        if (serverPortKnown)
+        {
+            ReadOnlySpan<ProtocolId> onServer = _PortProtocols(serverPort, in context);
+            if (onServer.Length == 1)
+            {
+                singleOwner = true;
+                targetProtocol = onServer[0];
+            }
+        }
+        else
+        {
+            ReadOnlySpan<ProtocolId> onLow = _PortProtocols(lowPort, in context);
+            if (onLow.Length == 1)
+            {
+                singleOwner = true;
+                targetProtocol = onLow[0];
+            }
+            else if (onLow.IsEmpty && lowPort != highPort)
+            {
+                ReadOnlySpan<ProtocolId> onHigh = _PortProtocols(highPort, in context);
+                if (onHigh.Length == 1)
+                {
+                    singleOwner = true;
+                    targetProtocol = onHigh[0];
+                }
+            }
+        }
 
-        if (targetProtocol.IsValid && _ReassemblyEngine is not null
+        if (singleOwner && targetProtocol.IsValid && _ReassemblyEngine is not null
             && analysis.ConnectionState is not null)
         {
             TcpConnectionKey connKey = analysis.ConnectionKey;
@@ -997,13 +1180,13 @@ public sealed partial class TcpProtocol : IProtocol
 
             if (streamState is not null)
             {
-                if (analysis.ConnectionState.Phase == TcpConnectionPhase.SynSent
-                    || analysis.ConnectionState.Phase == TcpConnectionPhase.SynReceived)
+                if ((analysis.ConnectionState.Completeness
+                        & (TcpConnectionState.SynSeen | TcpConnectionState.SynAckSeen)) != 0)
                 {
                     streamState.HandshakeObserved = true;
                 }
 
-                TcpReassemblyEngine.FeedSegment(streamState, reassemblyForward, payload);
+                TcpReassemblyEngine.FeedSegment(streamState, reassemblyForward, sequence, payload);
 
                 bool emitted = false;
                 while (TcpReassemblyEngine.TryExtractPdu(streamState, reassemblyForward,
@@ -1016,9 +1199,9 @@ public sealed partial class TcpProtocol : IProtocol
                         pdus = [];
                     }
 
-                    byte[] owned = pdu.ToArray();
-                    ReadOnlyMemory<byte> bound = parentField.BindParseBuffer(owned);
-                    pdus.Add(new PduEffect(targetProtocol, owned));
+                    // TryExtractPdu already owns the PDU bytes. Do not copy them again.
+                    ReadOnlyMemory<byte> bound = parentField.BindParseBuffer(pdu);
+                    pdus.Add(new PduEffect(targetProtocol, pdu));
 
                     ParseResult pduResult = parentField.CallProtocol(targetProtocol, bound, in context);
                     if (pduResult.TryPropagateError(out ParseResult pduError))
@@ -1037,18 +1220,30 @@ public sealed partial class TcpProtocol : IProtocol
         }
 
         mode = PayloadDispatchMode.RawPort;
-        ParseResult result = _DispatchPort(in parentField, lowPort, payload, in context);
-        if (result.TryPropagateError(out ParseResult error))
+        ParseResult result;
+        if (serverPortKnown)
         {
-            return error;
-        }
-
-        if (!result.TryGetConsumed(out _) && lowPort != highPort)
-        {
-            result = _DispatchPort(in parentField, highPort, payload, in context);
-            if (result.TryPropagateError(out ParseResult highError))
+            result = _DispatchPort(in parentField, serverPort, payload, in context);
+            if (result.TryPropagateError(out ParseResult serverError))
             {
-                return highError;
+                return serverError;
+            }
+        }
+        else
+        {
+            result = _DispatchPort(in parentField, lowPort, payload, in context);
+            if (result.TryPropagateError(out ParseResult error))
+            {
+                return error;
+            }
+
+            if (!result.TryGetConsumed(out _) && lowPort != highPort)
+            {
+                result = _DispatchPort(in parentField, highPort, payload, in context);
+                if (result.TryPropagateError(out ParseResult highError))
+                {
+                    return highError;
+                }
             }
         }
 
@@ -1143,6 +1338,18 @@ public sealed partial class TcpProtocol : IProtocol
 
             case PayloadDispatchMode.RawPort:
             default:
+                if (dispatch.HasPreferredPort)
+                {
+                    ParseResult preferredResult = _DispatchPort(
+                        in parentField, dispatch.PreferredPort, payload, in context);
+                    if (preferredResult.TryPropagateError(out ParseResult preferredError))
+                    {
+                        return preferredError;
+                    }
+
+                    return totalConsumed;
+                }
+
                 ushort low = Math.Min(srcPort, dstPort);
                 ushort high = Math.Max(srcPort, dstPort);
                 ParseResult portResult = _DispatchPort(in parentField, low, payload, in context);
@@ -1178,7 +1385,12 @@ public sealed partial class TcpProtocol : IProtocol
             ScaledWindowSize: analysis.ScaledWindowSize,
             WindowScaleFactor: analysis.WindowScaleFactor,
             Phase: (byte)analysis.Phase,
-            NoIpLayer: analysis.NoIpLayer);
+            NoIpLayer: analysis.NoIpLayer,
+            RelativeSeq: analysis.RelativeSeq,
+            RelativeAck: analysis.RelativeAck,
+            SequenceIsRelative: analysis.SequenceIsRelative,
+            AckIsRelative: analysis.AckIsRelative,
+            StreamLimitReached: analysis.StreamLimitReached);
 
     /// <summary>Rebuilds a tracker-free analysis result from a recorded effect.</summary>
     private static TcpAnalysisResult _AnalysisFromEffect(in AnalysisEffect effect) =>
@@ -1196,6 +1408,11 @@ public sealed partial class TcpProtocol : IProtocol
             WindowScaleFactor = effect.WindowScaleFactor,
             Phase = (TcpConnectionPhase)effect.Phase,
             NoIpLayer = effect.NoIpLayer,
+            RelativeSeq = effect.RelativeSeq,
+            RelativeAck = effect.RelativeAck,
+            SequenceIsRelative = effect.SequenceIsRelative,
+            AckIsRelative = effect.AckIsRelative,
+            StreamLimitReached = effect.StreamLimitReached,
         };
 
     /// <summary>
@@ -1228,7 +1445,17 @@ public sealed partial class TcpProtocol : IProtocol
             };
         }
 
-        TcpConnectionState conn = _ConnectionTracker.GetOrCreate(in key, out _);
+        int maxStreams = _MaxTrackedStreams >= int.MaxValue ? int.MaxValue : (int)_MaxTrackedStreams;
+        if (!_ConnectionTracker.TryGetOrCreate(in key, maxStreams, out TcpConnectionState conn))
+        {
+            return TcpAnalysisResult.Empty with
+            {
+                StreamLimitReached = true,
+                ConnectionKey = key,
+                SrcAddr = srcAddr,
+            };
+        }
+
         bool isForward = key.IsForward(srcAddr, srcPort);
 
         // Extract Window Scale from SYN/SYN-ACK options for connection state tracking.
@@ -1247,7 +1474,8 @@ public sealed partial class TcpProtocol : IProtocol
         }
 
         return TcpConnectionTracker.Analyze(
-            conn, isForward, seqNum, ackNum, flags, window, payloadLen, timestamp, windowScale)
+            conn, isForward, seqNum, ackNum, flags, window, payloadLen, timestamp,
+            srcPort, dstPort, windowScale, _RelativeSequenceNumbers)
             with
         {
             ConnectionKey = key,
@@ -1318,17 +1546,29 @@ public sealed partial class TcpProtocol : IProtocol
         bool callerIsIpv4 = context.Dispatch.HasDispatch && context.Dispatch.CallerProtocolId == _Ipv4ProtocolId;
         bool callerIsIpv6 = context.Dispatch.HasDispatch && context.Dispatch.CallerProtocolId == _Ipv6ProtocolId;
 
+        ushort lastVlan = 0;
+        if (_StreamKeyLastVlan)
+        {
+            _ = VlanProtocol.TryGetLastVlan(packetId, out lastVlan);
+        }
+
+        int frameIdentity = 0;
+        if (_StreamKeyFrame)
+        {
+            frameIdentity = _ReadFrameIdentity(parentField.Packet);
+        }
+
         // Fast path: read from per-protocol thread-local caches
         if (!callerIsIpv6 && IPv4Protocol.TryGetCachedAddresses(packetId, out IPv4Address src4, out IPv4Address dst4))
         {
-            key = TcpConnectionKey.FromIPv4(src4.RawValue, dst4.RawValue, srcPort, dstPort);
+            key = TcpConnectionKey.FromIPv4(src4.RawValue, dst4.RawValue, srcPort, dstPort, lastVlan, frameIdentity);
             srcAddr = new UInt128(0, 0x0000_FFFF_0000_0000UL | src4.RawValue);
             return true;
         }
         if (!callerIsIpv4 && IPv6Protocol.TryGetCachedAddresses(packetId, out IPv6Address cachedSrc6, out IPv6Address cachedDst6))
         {
             srcAddr = new UInt128(cachedSrc6.High, cachedSrc6.Low);
-            key = new TcpConnectionKey(srcAddr, new UInt128(cachedDst6.High, cachedDst6.Low), srcPort, dstPort);
+            key = new TcpConnectionKey(srcAddr, new UInt128(cachedDst6.High, cachedDst6.Low), srcPort, dstPort, lastVlan, frameIdentity);
             return true;
         }
 
@@ -1357,7 +1597,7 @@ public sealed partial class TcpProtocol : IProtocol
         {
             uint srcIp = ipv4.Value.Src.RawValue;
             uint dstIp = ipv4.Value.Dst.RawValue;
-            key = TcpConnectionKey.FromIPv4(srcIp, dstIp, srcPort, dstPort);
+            key = TcpConnectionKey.FromIPv4(srcIp, dstIp, srcPort, dstPort, lastVlan, frameIdentity);
             srcAddr = new UInt128(0, 0x0000_FFFF_0000_0000UL | srcIp);
             return true;
         }
@@ -1367,8 +1607,22 @@ public sealed partial class TcpProtocol : IProtocol
         IPv6Address dst6 = ipv6!.Value.Dst;
         srcAddr = new UInt128(src6.High, src6.Low);
         UInt128 dstAddr128 = new(dst6.High, dst6.Low);
-        key = new TcpConnectionKey(srcAddr, dstAddr128, srcPort, dstPort);
+        key = new TcpConnectionKey(srcAddr, dstAddr128, srcPort, dstPort, lastVlan, frameIdentity);
         return true;
+    }
+
+    /// <summary>
+    /// Capture-interface identity for the stream key (<see cref="Frame.InterfaceId"/>).
+    /// An invalid interface contributes 0 and does not split streams. This is not <see cref="Frame.Id"/>.
+    /// </summary>
+    private static int _ReadFrameIdentity(Packet packet)
+    {
+        if (packet.Frame.InterfaceId.IsValid)
+        {
+            return packet.Frame.InterfaceId.Value;
+        }
+
+        return 0;
     }
 
     #endregion
@@ -1411,6 +1665,10 @@ public sealed partial class TcpProtocol : IProtocol
         if ((flags & TcpAnalysisFlags.KeepAlive) != 0)
         {
             analysisContainer.Append(_AnalysisKeepAliveFieldId, FieldValue.NewBool(true));
+        }
+        if ((flags & TcpAnalysisFlags.KeepAliveAck) != 0)
+        {
+            analysisContainer.Append(_AnalysisKeepAliveAckFieldId, FieldValue.NewBool(true));
         }
         if ((flags & TcpAnalysisFlags.ZeroWindow) != 0)
         {
@@ -1501,12 +1759,7 @@ public sealed partial class TcpProtocol : IProtocol
         return parentField.CallProtocol(matchedId.Value, payload, in context);
     }
 
-    /// <summary>
-    /// Identifies which protocol is registered for the given port pair without dispatching.
-    /// Checks low port first, then high port. Returns invalid <see cref="ProtocolId"/>
-    /// if no match is found.
-    /// </summary>
-    private ProtocolId _TryIdentifyPortProtocol(ushort lowPort, ushort highPort, in ParseContext context)
+    private ReadOnlySpan<ProtocolId> _PortProtocols(ushort port, in ParseContext context)
     {
         Stack? stack = context.Stack;
         if (stack is null)
@@ -1514,21 +1767,6 @@ public sealed partial class TcpProtocol : IProtocol
             return default;
         }
 
-        ReadOnlySpan<ProtocolId> byLow = stack.GetProtocolsFromU64ProtocolTable(_PortTableId, lowPort);
-        if (!byLow.IsEmpty)
-        {
-            return byLow[0];
-        }
-
-        if (lowPort != highPort)
-        {
-            ReadOnlySpan<ProtocolId> byHigh = stack.GetProtocolsFromU64ProtocolTable(_PortTableId, highPort);
-            if (!byHigh.IsEmpty)
-            {
-                return byHigh[0];
-            }
-        }
-
-        return default;
+        return stack.GetProtocolsFromU64ProtocolTable(_PortTableId, port);
     }
 }

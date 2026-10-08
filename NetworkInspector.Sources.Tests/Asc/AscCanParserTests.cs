@@ -18,10 +18,11 @@ internal sealed class AscCanParserTests
     {
         bool ok = AscCanParser.TryParse(
             "0.100000 1 123 Rx d 8 AA BB CC DD EE FF 00 11"u8,
-            16, out double ts, out int ch, out byte[] frame);
+            16, out AscTimestamp ts, out int ch, out byte[] frame);
 
         await Assert.That(ok).IsTrue();
-        await Assert.That(ts).IsEqualTo(0.1).Within(0.0001);
+        await Assert.That(ts.WholeSeconds).IsEqualTo(0);
+        await Assert.That(ts.Nanoseconds).IsEqualTo(100_000_000);
         await Assert.That(ch).IsEqualTo(1);
 
         // SocketCAN layout: [4B CAN-ID BE] [1B DLC] [3B pad] [data...]
@@ -165,5 +166,58 @@ internal sealed class AscCanParserTests
             "0.100000 1"u8, 16, out _, out _, out _);
 
         await Assert.That(ok).IsFalse();
+    }
+
+    [Test]
+    public async Task Dlc15StoresEightPayloadBytes()
+    {
+        bool ok = AscCanParser.TryParse(
+            "0.100000 1 123 Rx d F AA BB CC DD EE FF 00 11"u8,
+            16, out _, out _, out byte[] frame);
+
+        await Assert.That(ok).IsTrue();
+        await Assert.That(frame[4]).IsEqualTo((byte)8);
+        await Assert.That(frame.Length).IsEqualTo(16);
+    }
+
+    [Test]
+    public async Task RemoteWithoutDlcSetsRtrAndLengthZero()
+    {
+        bool bare = AscCanParser.TryParse("2.5010 1 200 Tx r"u8, 16, out _, out _, out byte[] bareFrame);
+        bool withLength = AscCanParser.TryParse(
+            "2.5010 1 200 Tx r Length = 1704000 BitCount = 145 ID = 512"u8,
+            16, out _, out _, out byte[] lengthFrame);
+        bool withDlc = AscCanParser.TryParse("2.5010 1 200 Tx r 8"u8, 16, out _, out _, out byte[] dlcFrame);
+
+        await Assert.That(bare).IsTrue();
+        await Assert.That(withLength).IsTrue();
+        await Assert.That(withDlc).IsTrue();
+        uint bareId = BinaryPrimitives.ReadUInt32BigEndian(bareFrame);
+        uint lengthId = BinaryPrimitives.ReadUInt32BigEndian(lengthFrame);
+        uint dlcId = BinaryPrimitives.ReadUInt32BigEndian(dlcFrame);
+        await Assert.That((bareId & 0x40000000u) != 0).IsTrue();
+        await Assert.That(bareFrame[4]).IsEqualTo((byte)0);
+        await Assert.That((lengthId & 0x40000000u) != 0).IsTrue();
+        await Assert.That(lengthFrame[4]).IsEqualTo((byte)0);
+        await Assert.That((dlcId & 0x40000000u) != 0).IsTrue();
+        await Assert.That(dlcFrame[4]).IsEqualTo((byte)8);
+    }
+
+    [Test]
+    public async Task SymbolicNameUsesDecimalIdField()
+    {
+        bool named = AscCanParser.TryParse(
+            "0.003040 1 EngineData Rx d 2 00 00 Length = 768000 BitCount = 67 ID = 291"u8,
+            16, out _, out _, out byte[] namedFrame);
+        bool numeric = AscCanParser.TryParse(
+            "0.003040 1 123 Rx d 2 00 00 ID = 291"u8,
+            16, out _, out _, out byte[] numericFrame);
+
+        await Assert.That(named).IsTrue();
+        await Assert.That(numeric).IsTrue();
+        uint namedId = BinaryPrimitives.ReadUInt32BigEndian(namedFrame);
+        uint numericId = BinaryPrimitives.ReadUInt32BigEndian(numericFrame);
+        await Assert.That(namedId & 0x1FFFFFFFu).IsEqualTo(291u);
+        await Assert.That(numericId & 0x1FFFFFFFu).IsEqualTo(0x123u);
     }
 }

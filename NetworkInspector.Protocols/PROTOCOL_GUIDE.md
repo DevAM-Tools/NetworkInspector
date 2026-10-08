@@ -150,10 +150,10 @@ export). The same packet data may be fed to `Parse()` again at any time. This me
 
 ### First parse vs. re-parse (concurrent subsequent parses)
 
-There is **no parse-mode parameter**. `Packet.ParseFrame` / `ParseFrameIndexed` (plus the
-`TryParseFrame*` recycle variants) are the only entry points, and `ParseContext` carries
-nothing about parse intent. Each stateful protocol decides for itself whether a call is a
-first parse or a re-parse.
+The only entry points are the two `Packet.TryParse` overloads. `ParseOptions` carries the
+field-tree mode, cache, index, replay-record flag, first protocol, and observers.
+`ParseContext` still does not carry a separate parse-intent enum. Each stateful protocol
+decides for itself whether a call is a first parse or a re-parse.
 
 **Mechanism — watermark.** Every stateful protocol holds
 `private volatile int _IngestWatermark = -1`, the highest packet id whose first parse completed.
@@ -174,16 +174,17 @@ and then invokes the bound `ParseDelegate`. A raw `protocol.Parse(...)` or a cac
 do not depend on that stamp.
 
 **Mechanism — layer key.** Effects are keyed by `(PacketId, packed buffer location)`.
-`Packet.GetEffectLayerKey(data)` packs the buffer index (`0` = `Frame.Data`, `1…` =
-`Packet.AddBuffer`) into bits 31–24 and the byte offset of the `Parse` `data` slice into
-bits 23–0. The argument must be the slice passed into `Parse`, not a heap copy. First parse
+`MutField.TryGetEffectLayerKey(data, out int key)` packs the buffer index (`0` = `Frame.Data`,
+`1…` = buffers stored by `MutField.BindParseBuffer`) into bits 31–24 and the byte offset of
+the `Parse` `data` slice into bits 23–0. On false the slice is not a packet buffer. The
+argument must be the slice passed into `Parse`, not a heap copy. First parse
 and reparse of the same frame see the same key because the bytes and additional buffers are
 stable. Do not key on remaining length (`data.Length`) or any walk ordinal. Effects live in
 `EffectStore<TEffect>`: one packed row per packet that actually ran the protocol, binary
 search on replay, nested layers chained when the tail entry already belongs to the same
 packet id. Without the packed location, the inner layer of a tunnel (or a defragmented
 datagram in an additional buffer) would collide with an outer layer and replay the wrong
-values. Reassembled payloads must be attached with `Packet.BindParseBuffer` before the
+values. Reassembled payloads must be attached with `MutField.BindParseBuffer` before the
 nested `Parse` so the inner slice is a packet buffer, not a heap copy.
 
 `Stack.ProtocolCount` is how many protocols are registered. There is no
@@ -196,16 +197,17 @@ Effect stores live on the protocol instances and therefore share the `Stack` lif
 stack swap creates fresh protocols with empty stores.
 
 **Contract for callers.** First parses must be ordered, single-threaded, and use dense packet
-ids `0, 1, 2, …`. `Packet.ParseFrame` throws `InvalidOperationException` on a jump (for example
-id 5 after id 0). Re-parses of already-parsed ids may run on any number of threads at any time,
-including while later packets are being parsed for the first time. The session guarantees the
-first half structurally: the source loop parses under `_ParseLock` with ids from a monotonic
-allocator starting at 0, while `TryGetPacket` re-parses lock-free via `_TryReparseFrame`.
-`ParseFrameIndexed` is safe on a re-parse: the index no-ops for a packet it has already seen.
+ids `0, 1, 2, …`. `Packet.TryParse` returns false and `ParseFailure.ParseIdGap`, and does not
+throw, on a jump (for example id 5 after id 0). Re-parses of already-parsed ids may run on any
+number of threads at any time, including while later packets are being parsed for the first time.
+The session guarantees the first half structurally: the source loop parses under `_ParseLock`
+with ids from a monotonic allocator starting at 0, while `TryGetPacket` re-parses lock-free via
+`_TryReparseFrame`. `Packet.TryParse` with `ParseOptions.Index` is safe on a re-parse:
+`TryBeginPacket` returns false and the index is not mutated.
 
 Stateful protocols still use their own watermark (`id <= protocol watermark` → replay) because
 they are not invoked for every packet. The dense check lives on the `Stack`, which sees every
-`ParseFrame` call.
+`TryParse` call.
 
 **Audit of cross-packet mutable state** (every protocol that survives state across packets):
 
@@ -2456,6 +2458,16 @@ partial void OnStartCustom(Stack stack)
 | `someip.messageid` | `SomeIpProtocol` | `u64` | Payload deserializers by SOME/IP Message ID |
 | `tcp.heuristic` | `TcpProtocol` | heuristic | `HttpProtocol`, `TlsProtocol`, `Http2Protocol` (content-based) |
 
+TCP stream settings (group `tcp`, defaults in parentheses):
+
+- `tcp.relative_sequence_numbers` (true) — `tcp.seq` / `tcp.ack` subtract the direction ISN; `tcp.seq_raw` / `tcp.ack_raw` stay on the wire.
+- `tcp.stream_key_last_vlan` (false) — include the innermost VLAN id in the stream key. Id 0 does not split.
+- `tcp.stream_key_frame` (false) — include `Frame.InterfaceId` in the stream key. An invalid interface does not split.
+- `tcp.max_tracked_streams` (100000) — new 5-tuples past the cap parse the header and set `tcp.error.stream_limit` instead of `tcp.stream`.
+- `tcp.verify_checksum` (false) — check the checksum, including a checksum field of 0.
+
+HTTP on TCP ports 80 and 8080 is reassembled with `Http1MessageDetector` before `HttpProtocol.Parse`. A port that has more than one registered protocol is not reassembled; every registered parser is still tried.
+
 **Dispatch chain:**
 
 ```
@@ -2485,7 +2497,7 @@ Frame ──[frame.link_type]──► Ethernet ──[eth.type]──► IPv4/I
 - [ ] Create `sealed partial class` implementing `IProtocol`
 - [ ] Implement `public ParseResult Parse`
 - [ ] Prefer `parentField.CallProtocol` for child dispatch
-- [ ] Effect keys use `Packet.GetEffectLayerKey(data)` (never remaining length)
+- [ ] Effect keys use `MutField.TryGetEffectLayerKey` (never remaining length)
 - [ ] Add `[Protocol("name", "UI Name", Description = "...")]` attribute
 - [ ] Add `[RegisterAtTable(OwnerProtocol.TableName, KeyConstant)]` attribute(s)
 - [ ] Define `public const ulong` for table registration key value(s)

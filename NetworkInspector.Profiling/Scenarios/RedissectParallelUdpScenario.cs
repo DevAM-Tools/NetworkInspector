@@ -54,7 +54,7 @@ internal sealed class RedissectParallelUdpScenario : IProfilingScenario, IDispos
     /// <inheritdoc/>
     public string Description =>
         FormattableString.Invariant(
-            $"Parallel ParseFrame re-parse, {_ThreadCount} threads each re-parse {_BatchSize:N0} packets (cumulative).");
+            $"Parallel TryParse re-parse, {_ThreadCount} threads each re-parse {_BatchSize:N0} packets (cumulative).");
 
     /// <inheritdoc/>
     public long WorkUnitsPerIteration => (long)_BatchSize * _ThreadCount;
@@ -71,14 +71,26 @@ internal sealed class RedissectParallelUdpScenario : IProfilingScenario, IDispos
         _Stop = 0;
         _Fault = null;
 
+        // First parse records protocol replay state. Recycle packets are a second parse of id 0.
+        ParseOptions options = new();
         for (int i = 0; i < _BatchSize; i++)
         {
-            Packet.ParseFrame(new PacketId(i), _Stack, _Frames[i]);
+            PacketId id = new(i);
+            if (!Packet.TryParse(id, _Stack, _Frames[i], in options, out _, out ParseFailure failure))
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
         }
 
+        PacketId seedId = new(0);
         for (int t = 0; t < _ThreadCount; t++)
         {
-            _RecyclePackets[t] = Packet.ParseFrame(new PacketId(0), _Stack, _Frames[0]);
+            if (!Packet.TryParse(seedId, _Stack, _Frames[0], in options, out Packet? seeded, out ParseFailure seedFailure))
+            {
+                throw new InvalidOperationException(seedFailure.ToString());
+            }
+
+            _RecyclePackets[t] = seeded!;
         }
 
         // Main thread + N workers rendezvous at the start and end of every Run().
@@ -187,13 +199,15 @@ internal sealed class RedissectParallelUdpScenario : IProfilingScenario, IDispos
         Stack stack = _Stack!;
         Frame[] frames = _Frames!;
         Packet packet = _RecyclePackets![threadIndex];
+
+        // Same options for every frame on this worker. A failed recycle is a broken benchmark invariant.
+        ParseOptions options = new();
         for (int i = 0; i < _BatchSize; i++)
         {
-            RecycleError? error = Packet.TryParseFrame(packet, new PacketId(i), stack, frames[i]);
-            if (error is not null)
+            PacketId id = new(i);
+            if (!Packet.TryParse(packet, id, stack, frames[i], in options, out ParseFailure failure))
             {
-                throw new InvalidOperationException(
-                    FormattableString.Invariant($"Re-parse failed for packet {i}: {error}"));
+                throw new InvalidOperationException(failure.ToString());
             }
         }
     }

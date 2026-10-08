@@ -6,9 +6,10 @@ namespace NetworkInspector.Protocols.Tests;
 /// Verifies that re-parsing an already parsed packet reproduces the first parse field-by-field, and
 /// that the watermark inside the stateful protocols separates first parses from re-parses correctly.
 /// <para>
-/// There is no parse-mode parameter: <see cref="Packet.ParseFrame"/> is used throughout. The first
-/// parse of a packet id drives the stateful trackers, every later parse of that id replays what the
-/// first one recorded.
+/// There is no parse-mode parameter:
+/// <see cref="Packet.TryParse(PacketId, Stack, Frame, in ParseOptions, out Packet?, out ParseFailure)"/>
+/// is used throughout. The first parse of a packet id drives the stateful trackers, and every
+/// later parse of that id replays what the first one recorded.
 /// </para>
 /// </summary>
 internal sealed class RedissectIdentityTests
@@ -23,8 +24,8 @@ internal sealed class RedissectIdentityTests
         using Stack stack = _BuildStack();
         Frame frame = _CreateFrame(stack, frameData, 0);
 
-        Packet first = Packet.ParseFrame(new PacketId(0), stack, frame);
-        Packet reparse = Packet.ParseFrame(new PacketId(0), stack, frame);
+        Packet first = _ParseExpected(stack, frame, 0);
+        Packet reparse = _ParseExpected(stack, frame, 0);
 
         await PacketFieldComparer.AssertFieldIdentical(stack, first, reparse);
     }
@@ -39,7 +40,7 @@ internal sealed class RedissectIdentityTests
         using Stack stack = builder.Build();
         byte[] frameData = _BuildUdpFrame();
         Frame frame = _CreateFrame(stack, frameData, 0);
-        _ = Packet.ParseFrame(new PacketId(0), stack, frame, protoId);
+        _ = _ParseExpected(stack, frame, 0, protoId);
 
         await Assert.That(proto.UdpKey).IsEqualTo(34);
         await Assert.That(proto.Ipv4Key).IsEqualTo(14);
@@ -55,8 +56,8 @@ internal sealed class RedissectIdentityTests
         {
             byte[] frameData = _BuildUdpFrame(srcPort: (ushort)(1000 + i), dstPort: 53);
             Frame frame = _CreateFrame(stack, frameData, i);
-            Packet first = Packet.ParseFrame(new PacketId(i), stack, frame);
-            Packet reparse = Packet.ParseFrame(new PacketId(i), stack, frame);
+            Packet first = _ParseExpected(stack, frame, i);
+            Packet reparse = _ParseExpected(stack, frame, i);
             await PacketFieldComparer.AssertFieldIdentical(stack, first, reparse);
         }
     }
@@ -68,8 +69,8 @@ internal sealed class RedissectIdentityTests
         Frame frame0 = _CreateFrame(stack, _BuildUdpFrame(srcPort: 1000), 0);
         Frame frame1 = _CreateFrame(stack, _BuildUdpFrame(srcPort: 1001), 1);
 
-        Packet first = Packet.ParseFrame(new PacketId(0), stack, frame0);
-        Packet second = Packet.ParseFrame(new PacketId(1), stack, frame1);
+        Packet first = _ParseExpected(stack, frame0, 0);
+        Packet second = _ParseExpected(stack, frame1, 1);
 
         // Id 1 is above the watermark left by id 0, so it must take the first-parse path and draw a
         // fresh stream index from the tracker instead of replaying anything.
@@ -77,13 +78,22 @@ internal sealed class RedissectIdentityTests
     }
 
     [Test]
-    public async Task Udp_JumpInPacketId_Throws()
+    public async Task Udp_JumpInPacketId_ReturnsParseIdGap()
     {
         using Stack stack = _BuildStack();
-        Packet.ParseFrame(new PacketId(0), stack, _CreateFrame(stack, _BuildUdpFrame(srcPort: 1000), 0));
+        _ = _ParseExpected(stack, _CreateFrame(stack, _BuildUdpFrame(srcPort: 1000), 0), 0);
 
-        await Assert.That(() => Packet.ParseFrame(new PacketId(2), stack, _CreateFrame(stack, _BuildUdpFrame(srcPort: 2000), 2)))
-            .Throws<InvalidOperationException>();
+        ParseOptions options = new();
+        bool jumped = Packet.TryParse(
+            new PacketId(2),
+            stack,
+            _CreateFrame(stack, _BuildUdpFrame(srcPort: 2000), 2),
+            in options,
+            out _,
+            out ParseFailure failure);
+
+        await Assert.That(jumped).IsFalse();
+        await Assert.That(failure).IsEqualTo(ParseFailure.ParseIdGap);
     }
 
     [Test]
@@ -93,9 +103,9 @@ internal sealed class RedissectIdentityTests
         byte[] frameData = _BuildUdpFrame();
         Frame frame = _CreateFrame(stack, frameData, 0);
 
-        Packet.ParseFrame(new PacketId(0), stack, frame);
-        Packet second = Packet.ParseFrame(new PacketId(0), stack, frame);
-        Packet third = Packet.ParseFrame(new PacketId(0), stack, frame);
+        _ = _ParseExpected(stack, frame, 0);
+        Packet second = _ParseExpected(stack, frame, 0);
+        Packet third = _ParseExpected(stack, frame, 0);
 
         await PacketFieldComparer.AssertFieldIdentical(stack, second, third);
     }
@@ -107,11 +117,13 @@ internal sealed class RedissectIdentityTests
         Frame frame0 = _CreateFrame(stack, _BuildUdpFrame(srcPort: 1000), 0);
         Frame frame1 = _CreateFrame(stack, _BuildUdpFrame(srcPort: 1001), 1);
 
-        Packet recycled = Packet.ParseFrame(new PacketId(0), stack, frame0);
-        RecycleError? error = Packet.TryParseFrame(recycled, new PacketId(1), stack, frame1);
-        await Assert.That(error).IsNull();
+        Packet recycled = _ParseExpected(stack, frame0, 0);
+        ParseOptions options = new();
+        bool recycledOk = Packet.TryParse(recycled, new PacketId(1), stack, frame1, in options, out ParseFailure failure);
+        await Assert.That(recycledOk).IsTrue();
+        await Assert.That(failure).IsEqualTo(ParseFailure.None);
 
-        Packet reparse = Packet.ParseFrame(new PacketId(1), stack, frame1);
+        Packet reparse = _ParseExpected(stack, frame1, 1);
         await PacketFieldComparer.AssertFieldIdentical(stack, recycled, reparse);
     }
 
@@ -127,12 +139,12 @@ internal sealed class RedissectIdentityTests
         {
             byte[] frameData = _BuildUdpFrame(srcPort: (ushort)(2000 + i), dstPort: 53);
             frames[i] = _CreateFrame(stack, frameData, i);
-            references[i] = Packet.ParseFrame(new PacketId(i), stack, frames[i]);
+            references[i] = _ParseExpected(stack, frames[i], i);
         }
 
         await Parallel.ForAsync(0, count, async (i, _) =>
         {
-            Packet reparse = Packet.ParseFrame(new PacketId(i), stack, frames[i]);
+            Packet reparse = _ParseExpected(stack, frames[i], i);
             await PacketFieldComparer.AssertFieldIdentical(stack, references[i], reparse);
         });
     }
@@ -168,7 +180,7 @@ internal sealed class RedissectIdentityTests
         {
             for (int i = 0; i < count; i++)
             {
-                Packet first = Packet.ParseFrame(new PacketId(i), stack, frames[i]);
+                Packet first = _ParseExpected(stack, frames[i], i);
                 references[i] = PacketFieldComparer.CaptureFields(first);
                 Volatile.Write(ref announced, i);
             }
@@ -187,7 +199,7 @@ internal sealed class RedissectIdentityTests
                         spin.SpinOnce();
                     }
 
-                    Packet reparse = Packet.ParseFrame(new PacketId(i), stack, frames[i]);
+                    Packet reparse = _ParseExpected(stack, frames[i], i);
                     await PacketFieldComparer.AssertMatchesSnapshot(stack, references[i], reparse);
                 }
             });
@@ -224,13 +236,13 @@ internal sealed class RedissectIdentityTests
         for (int i = 0; i < frames.Length; i++)
         {
             Frame frame = _CreateFrame(stack, frames[i], i);
-            firstParsed[i] = Packet.ParseFrame(new PacketId(i), stack, frame);
+            firstParsed[i] = _ParseExpected(stack, frame, i);
         }
 
         for (int i = 0; i < frames.Length; i++)
         {
             Frame frame = _CreateFrame(stack, frames[i], i);
-            Packet reparse = Packet.ParseFrame(new PacketId(i), stack, frame);
+            Packet reparse = _ParseExpected(stack, frame, i);
             await PacketFieldComparer.AssertFieldIdentical(stack, firstParsed[i], reparse);
         }
     }
@@ -267,7 +279,7 @@ internal sealed class RedissectIdentityTests
         for (int i = 0; i < frames.Length; i++)
         {
             Frame frame = _CreateFrame(stack, frames[i], i);
-            firstParsed[i] = Packet.ParseFrame(new PacketId(i), stack, frame);
+            firstParsed[i] = _ParseExpected(stack, frame, i);
         }
 
         Packet completing = firstParsed[^1];
@@ -276,9 +288,25 @@ internal sealed class RedissectIdentityTests
         for (int i = 0; i < frames.Length; i++)
         {
             Frame frame = _CreateFrame(stack, frames[i], i);
-            Packet reparse = Packet.ParseFrame(new PacketId(i), stack, frame);
+            Packet reparse = _ParseExpected(stack, frame, i);
             await PacketFieldComparer.AssertFieldIdentical(stack, firstParsed[i], reparse);
         }
+    }
+
+    /// <summary>
+    /// Parses a frame the test expects to succeed. A false return means the fixture is broken.
+    /// </summary>
+    private static Packet _ParseExpected(Stack stack, Frame frame, int packetId, ProtocolId? firstProtocol = null)
+    {
+        ParseOptions options = new(firstProtocol: firstProtocol);
+        PacketId id = new(packetId);
+        if (!Packet.TryParse(id, stack, frame, in options, out Packet? packet, out ParseFailure failure)
+            || packet is null)
+        {
+            throw new InvalidOperationException(failure.ToString());
+        }
+
+        return packet;
     }
 
     /// <summary>Reads the <c>udp.stream</c> index of a parsed packet.</summary>

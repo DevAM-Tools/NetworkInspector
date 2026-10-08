@@ -2,7 +2,7 @@
 
 namespace NetworkInspector.Core.Tests;
 
-/// <summary>Parse-time record, <see cref="Packet.ParseFrame(PacketId, Stack, Frame, FieldTreeMode, ValueCache, Boolean)"/>, recycle, and custom-text mutation.</summary>
+/// <summary>Parse-time record, <see cref="Packet.TryParse(PacketId, Stack, Frame, in ParseOptions, out Packet?, out ParseFailure)"/>, recycle, and custom-text mutation.</summary>
 internal sealed class ValueCacheParseTests
 {
     #region Helpers
@@ -21,11 +21,56 @@ internal sealed class ValueCacheParseTests
             FrameInterfaceId.Invalid,
             stack.FrameInterfaceRegistry).Value;
         FieldId portId = stack.GetFieldId("udp.srcport")!.Value;
-        Packet packet = cache is null
-            ? Packet.ParseFrame(new PacketId(0), stack, frame)
-            : index is null
-                ? Packet.ParseFrame(new PacketId(0), stack, frame, FieldTreeMode.Build, cache)
-                : Packet.ParseFrameIndexed(new PacketId(0), stack, frame, index, FieldTreeMode.Build, cache);
+        Packet packet;
+        if (cache is null)
+        {
+            ParseOptions options = new();
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
+        else if (index is null)
+        {
+            ParseOptions options = new(FieldTreeMode.Build, cache);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
+        else
+        {
+            ParseOptions options = new(FieldTreeMode.Build, cache, index: index);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
+
         return (stack, packet, portId);
     }
 
@@ -59,7 +104,19 @@ internal sealed class ValueCacheParseTests
         using (stack)
         {
             ValueCache recorded = new(stack, [new ValueCacheFieldConfig(portId)]);
-            _ = Packet.ParseFrame(new PacketId(1), stack, parsed.Frame, FieldTreeMode.Build, recorded);
+            {
+                ParseOptions options = new(FieldTreeMode.Build, recorded);
+                if (!Packet.TryParse(
+                    new PacketId(1),
+                    stack,
+                    parsed.Frame,
+                    in options,
+                    out Packet? _,
+                    out ParseFailure failure))
+                {
+                    throw new InvalidOperationException(failure.ToString());
+                }
+            }
 
             ValueCache pulled = new(stack, [new ValueCacheFieldConfig(portId)]);
             pulled.RecordPacket(parsed);
@@ -79,7 +136,19 @@ internal sealed class ValueCacheParseTests
         {
             FieldId dstId = stack.GetFieldId("udp.dstport")!.Value;
             ValueCache cache = new(stack, [new ValueCacheFieldConfig(portId)]);
-            _ = Packet.ParseFrame(new PacketId(1), stack, parsed.Frame, FieldTreeMode.Build, cache);
+            {
+                ParseOptions options = new(FieldTreeMode.Build, cache);
+                if (!Packet.TryParse(
+                    new PacketId(1),
+                    stack,
+                    parsed.Frame,
+                    in options,
+                    out Packet? _,
+                    out ParseFailure failure))
+                {
+                    throw new InvalidOperationException(failure.ToString());
+                }
+            }
             await Assert.That(cache.TryGetSeries<ulong>(portId, out _)).IsTrue();
             await Assert.That(cache.TryGetSeries<ulong>(dstId, out _)).IsFalse();
             await Assert.That(cache.GetSeries<ulong>(portId).Count).IsEqualTo(1);
@@ -97,7 +166,22 @@ internal sealed class ValueCacheParseTests
         using Stack stack = builder.Build();
         Frame frame = _Frame(stack);
         ValueCache recorded = new(stack, [new ValueCacheFieldConfig(proto.NumberId, ValueCaptureMode.AllOccurrences)]);
-        Packet recordedPacket = Packet.ParseFrame(new PacketId(0), stack, frame, protoId, FieldTreeMode.Build, recorded);
+        Packet recordedPacket;
+        {
+            ParseOptions options = new(FieldTreeMode.Build, recorded, firstProtocol: protoId);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            recordedPacket = parsed;
+        }
         ValueCache pulled = new(stack, [new ValueCacheFieldConfig(proto.NumberId, ValueCaptureMode.AllOccurrences)]);
         pulled.RecordPacket(recordedPacket);
         ulong recorded0 = recorded.GetSeries<ulong>(proto.NumberId)[0].Value;
@@ -125,14 +209,41 @@ internal sealed class ValueCacheParseTests
         using Stack stack = builder.Build();
         ValueCache cache = new(stack, [new ValueCacheFieldConfig(proto.NumberId)]);
         proto.ThrowAfterAppend = true;
-        Packet failed = Packet.ParseFrame(new PacketId(0), stack, _Frame(stack, 0), protoId, FieldTreeMode.Build, cache);
+        Packet failed;
+        {
+            ParseOptions options = new(FieldTreeMode.Build, cache, firstProtocol: protoId);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                _Frame(stack, 0),
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            failed = parsed;
+        }
         bool hasError = failed.TryGetFieldValue(stack.PacketErrorFieldId, out _, materialize: true);
         await Assert.That(hasError).IsTrue();
         await Assert.That(cache.GetSeries<ulong>(proto.NumberId).Count).IsEqualTo(1);
         await Assert.That(cache.GetSeries<ulong>(proto.NumberId)[0].Value).IsEqualTo(1UL);
 
         proto.ThrowAfterAppend = false;
-        _ = Packet.ParseFrame(new PacketId(1), stack, _Frame(stack, 1), protoId, FieldTreeMode.Build, cache);
+        {
+            ParseOptions options = new(FieldTreeMode.Build, cache, firstProtocol: protoId);
+            if (!Packet.TryParse(
+                new PacketId(1),
+                stack,
+                _Frame(stack, 1),
+                in options,
+                out Packet? _,
+                out ParseFailure failure))
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+        }
         await Assert.That(cache.GetSeries<ulong>(proto.NumberId).Count).IsEqualTo(2);
     }
 
@@ -151,7 +262,19 @@ internal sealed class ValueCacheParseTests
                 LinkType.Ethernet,
                 FrameInterfaceId.Invalid,
                 stack.FrameInterfaceRegistry).Value;
-            _ = Packet.ParseFrameIndexed(new PacketId(1), stack, frame, index, FieldTreeMode.Build, cache);
+            {
+                ParseOptions options = new(FieldTreeMode.Build, cache, index: index);
+                if (!Packet.TryParse(
+                    new PacketId(1),
+                    stack,
+                    frame,
+                    in options,
+                    out Packet? _,
+                    out ParseFailure failure))
+                {
+                    throw new InvalidOperationException(failure.ToString());
+                }
+            }
             await Assert.That(cache.GetSeries<ulong>(portId).Count).IsEqualTo(1);
             await Assert.That(index.GetFieldBitmap(portId).Contains(1)).IsTrue();
         }
@@ -173,7 +296,22 @@ internal sealed class ValueCacheParseTests
             LinkType.Ethernet,
             FrameInterfaceId.Invalid,
             stack.FrameInterfaceRegistry).Value;
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame0, FieldTreeMode.Build, cache);
+        Packet packet;
+        {
+            ParseOptions options = new(FieldTreeMode.Build, cache);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame0,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
         for (int i = 1; i < 100; i++)
         {
             Frame frame = Frame.Create(
@@ -183,8 +321,18 @@ internal sealed class ValueCacheParseTests
                 LinkType.Ethernet,
                 FrameInterfaceId.Invalid,
                 stack.FrameInterfaceRegistry).Value;
-            RecycleError? err = Packet.TryParseFrame(packet, new PacketId(i), stack, frame, FieldTreeMode.Build, cache);
-            await Assert.That(err).IsNull();
+            bool errParsed;
+            {
+                ParseOptions options = new(FieldTreeMode.Build, cache);
+                errParsed = Packet.TryParse(
+                    packet,
+                    new PacketId(i),
+                    stack,
+                    frame,
+                    in options,
+                    out ParseFailure _);
+            }
+            await Assert.That(errParsed).IsTrue();
         }
 
         await Assert.That(cache.GetSeries<ulong>(portId).Count).IsEqualTo(100);
@@ -206,7 +354,22 @@ internal sealed class ValueCacheParseTests
             LinkType.Ethernet,
             FrameInterfaceId.Invalid,
             stack.FrameInterfaceRegistry).Value;
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, FieldTreeMode.Build, cache);
+        Packet packet;
+        {
+            ParseOptions options = new(FieldTreeMode.Build, cache);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
         await Assert.That(cache.GetSeries<ulong>(ttlId).Count).IsEqualTo(1);
         await Assert.That(packet.HasUnpopulatedLazyFields).IsTrue();
     }
@@ -226,7 +389,19 @@ internal sealed class ValueCacheParseTests
             LinkType.Ethernet,
             FrameInterfaceId.Invalid,
             stack.FrameInterfaceRegistry).Value;
-        _ = Packet.ParseFrame(new PacketId(0), stack, frame, FieldTreeMode.Build, cache);
+        {
+            ParseOptions options = new(FieldTreeMode.Build, cache);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? _,
+                out ParseFailure failure))
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+        }
         FieldId? portId = stack.GetFieldId("udp.srcport");
         await Assert.That(cache.GetSeries<ulong>(portId!.Value).Count).IsEqualTo(1);
     }
@@ -263,7 +438,22 @@ internal sealed class ValueCacheParseTests
             LinkType.Ethernet,
             FrameInterfaceId.Invalid,
             stack.FrameInterfaceRegistry).Value;
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, FieldTreeMode.Build, cache);
+        Packet packet;
+        {
+            ParseOptions options = new(FieldTreeMode.Build, cache);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
         for (int i = 1; i < 32; i++)
         {
             Frame next = Frame.Create(
@@ -273,8 +463,18 @@ internal sealed class ValueCacheParseTests
                 LinkType.Ethernet,
                 FrameInterfaceId.Invalid,
                 stack.FrameInterfaceRegistry).Value;
-            RecycleError? err = Packet.TryParseFrame(packet, new PacketId(i), stack, next, FieldTreeMode.Build, cache);
-            await Assert.That(err).IsNull();
+            bool errParsed;
+            {
+                ParseOptions options = new(FieldTreeMode.Build, cache);
+                errParsed = Packet.TryParse(
+                    packet,
+                    new PacketId(i),
+                    stack,
+                    next,
+                    in options,
+                    out ParseFailure _);
+            }
+            await Assert.That(errParsed).IsTrue();
         }
 
         await cts.CancelAsync();
@@ -302,8 +502,16 @@ internal sealed class ValueCacheParseTests
         using (other)
         {
             ValueCache cache = new(other, [new ValueCacheFieldConfig(protoOther.NumberId)]);
-            await Assert.That(() => Packet.ParseFrame(new PacketId(0), stack, _Frame(stack), FieldTreeMode.Build, cache))
-                .Throws<ArgumentException>();
+            ParseOptions options = new(FieldTreeMode.Build, cache);
+            bool parsed = Packet.TryParse(
+                new PacketId(0),
+                stack,
+                _Frame(stack),
+                in options,
+                out Packet? _,
+                out ParseFailure failure);
+            await Assert.That(parsed).IsFalse();
+            await Assert.That(failure).IsEqualTo(ParseFailure.CacheStackMismatch);
         }
     }
 
@@ -321,8 +529,32 @@ internal sealed class ValueCacheParseTests
                 LinkType.Ethernet,
                 FrameInterfaceId.Invalid,
                 stack.FrameInterfaceRegistry).Value;
-            _ = Packet.ParseFrame(new PacketId(1), stack, frame, FieldTreeMode.Build, cache);
-            _ = Packet.ParseFrame(new PacketId(1), stack, frame, FieldTreeMode.Build, cache);
+            {
+                ParseOptions options = new(FieldTreeMode.Build, cache);
+                if (!Packet.TryParse(
+                    new PacketId(1),
+                    stack,
+                    frame,
+                    in options,
+                    out Packet? _,
+                    out ParseFailure failure))
+                {
+                    throw new InvalidOperationException(failure.ToString());
+                }
+            }
+            {
+                ParseOptions options = new(FieldTreeMode.Build, cache);
+                if (!Packet.TryParse(
+                    new PacketId(1),
+                    stack,
+                    frame,
+                    in options,
+                    out Packet? _,
+                    out ParseFailure failure))
+                {
+                    throw new InvalidOperationException(failure.ToString());
+                }
+            }
             await Assert.That(cache.GetSeries<ulong>(portId).Count).IsEqualTo(1);
         }
     }
@@ -349,21 +581,144 @@ internal sealed class ValueCacheParseTests
             LinkType.Ethernet,
             FrameInterfaceId.Invalid,
             stack.FrameInterfaceRegistry).Value;
-        Packet a = Packet.ParseFrame(new PacketId(0), stack, frame, eth, FieldTreeMode.Build, cache);
-        Packet b = Packet.ParseFrameIndexed(new PacketId(1), stack, frame, index, eth, FieldTreeMode.Build, cache);
-        RecycleError? ok = Packet.TryParseFrame(a, new PacketId(2), stack, frame, eth, FieldTreeMode.Build, cache);
-        RecycleError? okIndex = Packet.TryParseFrameIndexed(b, new PacketId(3), stack, frame, index, FieldTreeMode.Build, cache);
-        RecycleError? okBoth = Packet.TryParseFrameIndexed(a, new PacketId(4), stack, frame, index, eth, FieldTreeMode.Build, cache);
-        Packet thrown = Packet.ParseFrame(a, new PacketId(5), stack, frame, FieldTreeMode.Build, cache);
-        _ = Packet.ParseFrame(a, new PacketId(6), stack, frame, eth, FieldTreeMode.Build, cache);
-        _ = Packet.ParseFrameIndexed(a, new PacketId(7), stack, frame, index, FieldTreeMode.Build, cache);
-        _ = Packet.ParseFrameIndexed(a, new PacketId(8), stack, frame, index, eth, FieldTreeMode.Build, cache);
-        RecycleError? mismatch = Packet.TryParseFrame(a, new PacketId(9), other, frame, FieldTreeMode.Build, cache);
-        await Assert.That(ok).IsNull();
-        await Assert.That(okIndex).IsNull();
-        await Assert.That(okBoth).IsNull();
+        Packet a;
+        {
+            ParseOptions options = new(FieldTreeMode.Build, cache, firstProtocol: eth);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            a = parsed;
+        }
+        Packet b;
+        {
+            ParseOptions options = new(FieldTreeMode.Build, cache, index: index, firstProtocol: eth);
+            if (!Packet.TryParse(
+                new PacketId(1),
+                stack,
+                frame,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            b = parsed;
+        }
+        bool okParsed;
+        {
+            ParseOptions options = new(FieldTreeMode.Build, cache, firstProtocol: eth);
+            okParsed = Packet.TryParse(
+                a,
+                new PacketId(2),
+                stack,
+                frame,
+                in options,
+                out ParseFailure _);
+        }
+        bool okIndexParsed;
+        {
+            ParseOptions options = new(FieldTreeMode.Build, cache, index: index);
+            okIndexParsed = Packet.TryParse(
+                b,
+                new PacketId(3),
+                stack,
+                frame,
+                in options,
+                out ParseFailure _);
+        }
+        bool okBothParsed;
+        {
+            ParseOptions options = new(FieldTreeMode.Build, cache, index: index, firstProtocol: eth);
+            okBothParsed = Packet.TryParse(
+                a,
+                new PacketId(4),
+                stack,
+                frame,
+                in options,
+                out ParseFailure _);
+        }
+        Packet thrown;
+        {
+            ParseOptions options = new(FieldTreeMode.Build, cache);
+            if (!Packet.TryParse(
+                a,
+                new PacketId(5),
+                stack,
+                frame,
+                in options,
+                out ParseFailure failure))
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            thrown = a;
+        }
+        {
+            ParseOptions options = new(FieldTreeMode.Build, cache, firstProtocol: eth);
+            if (!Packet.TryParse(
+                a,
+                new PacketId(6),
+                stack,
+                frame,
+                in options,
+                out ParseFailure failure))
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+        }
+        {
+            ParseOptions options = new(FieldTreeMode.Build, cache, index: index);
+            if (!Packet.TryParse(
+                a,
+                new PacketId(7),
+                stack,
+                frame,
+                in options,
+                out ParseFailure failure))
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+        }
+        {
+            ParseOptions options = new(FieldTreeMode.Build, cache, index: index, firstProtocol: eth);
+            if (!Packet.TryParse(
+                a,
+                new PacketId(8),
+                stack,
+                frame,
+                in options,
+                out ParseFailure failure))
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+        }
+        bool mismatchParsed;
+        ParseFailure mismatchFailure;
+        {
+            ParseOptions options = new(FieldTreeMode.Build, cache);
+            mismatchParsed = Packet.TryParse(
+                a,
+                new PacketId(9),
+                other,
+                frame,
+                in options,
+                out mismatchFailure);
+        }
+        await Assert.That(okParsed).IsTrue();
+        await Assert.That(okIndexParsed).IsTrue();
+        await Assert.That(okBothParsed).IsTrue();
         await Assert.That(thrown).IsSameReferenceAs(a);
-        await Assert.That(mismatch).IsEqualTo(RecycleError.StackMismatch);
+        await Assert.That(mismatchParsed).IsFalse();
+        await Assert.That(mismatchFailure).IsEqualTo(ParseFailure.StackMismatch);
         await Assert.That(cache.GetSeries<ulong>(portId).Count).IsEqualTo(9);
     }
 
@@ -384,7 +739,19 @@ internal sealed class ValueCacheParseTests
             stack,
             [new ValueCacheFieldConfig(proto.NumberId, ValueCaptureMode.FirstOccurrence, RecordValue: false, RecordCustomText: true)]);
         proto.OverwriteCustomText = true;
-        _ = Packet.ParseFrame(new PacketId(0), stack, _Frame(stack, 0), protoId, FieldTreeMode.Build, first);
+        {
+            ParseOptions options = new(FieldTreeMode.Build, first, firstProtocol: protoId);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                _Frame(stack, 0),
+                in options,
+                out Packet? _,
+                out ParseFailure failure))
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+        }
         ValueCacheSeries<string> series = first.GetCustomTextSeries(proto.NumberId);
         await Assert.That(series.Count).IsEqualTo(1);
         await Assert.That(series[0].Value).IsEqualTo("first");
@@ -400,7 +767,19 @@ internal sealed class ValueCacheParseTests
             ValueCache cache = new(
                 stack,
                 [new ValueCacheFieldConfig(proto.NumberId, RecordValue: true, RecordCustomRepresentation: true)]);
-            _ = Packet.ParseFrame(new PacketId(0), stack, _Frame(stack), protoId, FieldTreeMode.Build, cache);
+            {
+                ParseOptions options = new(FieldTreeMode.Build, cache, firstProtocol: protoId);
+                if (!Packet.TryParse(
+                    new PacketId(0),
+                    stack,
+                    _Frame(stack),
+                    in options,
+                    out Packet? _,
+                    out ParseFailure failure))
+                {
+                    throw new InvalidOperationException(failure.ToString());
+                }
+            }
             ValueCacheSeries<string> series = cache.GetCustomRepresentationSeries(proto.NumberId);
             await Assert.That(series.Count).IsEqualTo(1);
             await Assert.That(series[0].Value).IsEqualTo("custom-rep");
@@ -417,7 +796,19 @@ internal sealed class ValueCacheParseTests
         proto.RegisterFields(builder, protoId);
         using Stack stack = builder.Build();
         ValueCache cache = new(stack, [new ValueCacheFieldConfig(proto.NumberId, ValueCaptureMode.AllOccurrences)]);
-        _ = Packet.ParseFrame(new PacketId(0), stack, _Frame(stack), protoId, FieldTreeMode.Build, cache);
+        {
+            ParseOptions options = new(FieldTreeMode.Build, cache, firstProtocol: protoId);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                _Frame(stack),
+                in options,
+                out Packet? _,
+                out ParseFailure failure))
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+        }
         await Assert.That(cache.GetSeries<ulong>(proto.NumberId).Count).IsEqualTo(2);
         await Assert.That(cache.GetSeries<ulong>(proto.NumberId)[1].Value).IsEqualTo(2UL);
     }

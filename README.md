@@ -112,7 +112,11 @@ Frame frame = Frame.Create(
     FrameInterfaceId.Invalid,
     stack.FrameInterfaceRegistry).Value;
 
-Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame);
+ParseOptions options = new();
+if (!Packet.TryParse(new PacketId(0), stack, frame, in options, out Packet? packet, out ParseFailure failure))
+{
+    throw new InvalidOperationException(failure.ToString());
+}
 foreach (Field field in packet)
 {
     Console.WriteLine($"{field.Info.UiName}: {field.Value}");

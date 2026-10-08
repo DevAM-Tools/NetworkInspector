@@ -28,8 +28,11 @@ internal enum AscLineType : byte
     /// <summary>Classical CAN message (standard or extended frame).</summary>
     CanMessage,
 
-    /// <summary>CAN FD message (line starts with <c>CANFD</c>).</summary>
+    /// <summary>CAN FD message. The token after the timestamp is <c>CANFD</c>.</summary>
     CanFdMessage,
+
+    /// <summary>CAN XL message. The token after the timestamp is <c>CANXL</c>.</summary>
+    CanXlMessage,
 
     /// <summary>CAN error frame (<c>ErrorFrame</c>).</summary>
     CanErrorFrame,
@@ -55,7 +58,7 @@ internal enum AscLineType : byte
     /// <summary>FlexRay start cycle event.</summary>
     FlexRayStartCycle,
 
-    /// <summary>Ethernet packet (<c>ETH</c> or <c>AFDX</c> prefix).</summary>
+    /// <summary>Ethernet packet. <c>ETH</c> or <c>AFDX</c> plus channel and direction <c>Rx</c>, <c>Tx</c>, <c>TxRq</c>, or <c>TxFwd</c>. Status lines are not packets.</summary>
     EthernetPacket,
 
     /// <summary>Environment variable event.</summary>

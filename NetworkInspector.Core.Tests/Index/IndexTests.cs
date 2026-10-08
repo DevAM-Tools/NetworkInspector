@@ -600,8 +600,19 @@ internal sealed class PacketIndexTests
         (Stack stack, Frame frame) = _BuildStackAndFrame();
         PacketIndex index = new(stack);
 
-        _ = Packet.ParseFrameIndexed(
-            new PacketId(0), stack, frame, index);
+        {
+            ParseOptions options = new(index: index);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? _,
+                out ParseFailure failure))
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+        }
 
         // eth, ip, udp protocols should be recorded
         ProtocolId? ethId = stack.GetProtocolId("eth");
@@ -623,8 +634,19 @@ internal sealed class PacketIndexTests
         (Stack stack, Frame frame) = _BuildStackAndFrame();
         PacketIndex index = new(stack);
 
-        Packet.ParseFrameIndexed(
-            new PacketId(0), stack, frame, index);
+        {
+            ParseOptions options = new(index: index);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? _,
+                out ParseFailure failure))
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+        }
 
         // Verify group presence via field lookup — udp.srcport is in "udp" group
         FieldId? srcPortId = stack.GetFieldId("udp.srcport");
@@ -641,8 +663,19 @@ internal sealed class PacketIndexTests
         PacketIndex index = new(stack);
 
         // Frame has payload → udp.payload group should be recorded
-        Packet.ParseFrameIndexed(
-            new PacketId(0), stack, frame, index);
+        {
+            ParseOptions options = new(index: index);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? _,
+                out ParseFailure failure))
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+        }
 
         FieldId? payloadId = stack.GetFieldId("udp.payload");
         await Assert.That(payloadId).IsNotNull();
@@ -660,8 +693,19 @@ internal sealed class PacketIndexTests
         // Parse 100 packets
         for (int i = 0; i < 100; i++)
         {
-            Packet.ParseFrameIndexed(
-                new PacketId(i), stack, frame, index);
+            {
+                ParseOptions options = new(index: index);
+                if (!Packet.TryParse(
+                    new PacketId(i),
+                    stack,
+                    frame,
+                    in options,
+                    out Packet? _,
+                    out ParseFailure failure))
+                {
+                    throw new InvalidOperationException(failure.ToString());
+                }
+            }
         }
 
         ProtocolId? udpId = stack.GetProtocolId("udp");
@@ -676,8 +720,19 @@ internal sealed class PacketIndexTests
         PacketIndex index = new(stack);
 
         // Parse same packet — each protocol is recorded once per packet
-        Packet.ParseFrameIndexed(
-            new PacketId(0), stack, frame, index);
+        {
+            ParseOptions options = new(index: index);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? _,
+                out ParseFailure failure))
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+        }
 
         ProtocolId? ethId = stack.GetProtocolId("eth");
         await Assert.That(ethId).IsNotNull();
@@ -692,8 +747,19 @@ internal sealed class PacketIndexTests
 
         for (int i = 0; i < 10; i++)
         {
-            Packet.ParseFrameIndexed(
-                new PacketId(i), stack, frame, index);
+            {
+                ParseOptions options = new(index: index);
+                if (!Packet.TryParse(
+                    new PacketId(i),
+                    stack,
+                    frame,
+                    in options,
+                    out Packet? _,
+                    out ParseFailure failure))
+                {
+                    throw new InvalidOperationException(failure.ToString());
+                }
+            }
         }
 
         ProtocolId? udpId = stack.GetProtocolId("udp");
@@ -714,8 +780,19 @@ internal sealed class PacketIndexTests
 
         for (int i = 0; i < 10; i++)
         {
-            Packet.ParseFrameIndexed(
-                new PacketId(i), stack, frame, index);
+            {
+                ParseOptions options = new(index: index);
+                if (!Packet.TryParse(
+                    new PacketId(i),
+                    stack,
+                    frame,
+                    in options,
+                    out Packet? _,
+                    out ParseFailure failure))
+                {
+                    throw new InvalidOperationException(failure.ToString());
+                }
+            }
         }
 
         ProtocolId? ethId = stack.GetProtocolId("eth");
@@ -736,8 +813,22 @@ internal sealed class PacketIndexTests
         // Ensure normal (non-indexed) parsing still works fine
         (Stack stack, Frame frame) = _BuildStackAndFrame();
 
-        Packet packet = Packet.ParseFrame(
-            new PacketId(0), stack, frame);
+        Packet packet;
+        {
+            ParseOptions options = new();
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
 
         // Packet should parse correctly, no index side effects
         await Assert.That(packet.FieldCount(materialize: false)).IsGreaterThan(0); // materialize: false — current materialized count only
@@ -756,8 +847,19 @@ internal sealed class PacketIndexTests
 
         for (int i = 0; i < 5; i++)
         {
-            Packet.ParseFrameIndexed(
-                new PacketId(i), stack, ipv4Frame, index);
+            {
+                ParseOptions options = new(index: index);
+                if (!Packet.TryParse(
+                    new PacketId(i),
+                    stack,
+                    ipv4Frame,
+                    in options,
+                    out Packet? _,
+                    out ParseFailure failure))
+                {
+                    throw new InvalidOperationException(failure.ToString());
+                }
+            }
         }
 
         // Parse IPv6 frame for packets 5-9
@@ -767,8 +869,19 @@ internal sealed class PacketIndexTests
 
         for (int i = 5; i < 10; i++)
         {
-            Packet.ParseFrameIndexed(
-                new PacketId(i), stack, ipv6Frame, index);
+            {
+                ParseOptions options = new(index: index);
+                if (!Packet.TryParse(
+                    new PacketId(i),
+                    stack,
+                    ipv6Frame,
+                    in options,
+                    out Packet? _,
+                    out ParseFailure failure))
+                {
+                    throw new InvalidOperationException(failure.ToString());
+                }
+            }
         }
 
         ProtocolId? ipId = stack.GetProtocolId("ip");

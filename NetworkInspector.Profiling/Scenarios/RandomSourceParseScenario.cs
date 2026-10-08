@@ -9,7 +9,7 @@ namespace NetworkInspector.Profiling.Scenarios;
 /// <remarks>
 /// Two variants:
 /// <list type="bullet">
-///   <item><b>random-source-parse</b> — ParseFrame only. Compare with <c>session-listener</c>.</item>
+///   <item><b>random-source-parse</b> — TryParse only. Compare with <c>session-listener</c>.</item>
 ///   <item>
 ///     <b>random-source-parse-materialized</b> — parse plus <see cref="Packet.MaterializeAll"/>.
 ///     Compare with <c>session-listener-materialized</c>.
@@ -68,9 +68,9 @@ internal sealed class RandomSourceParseScenario : IProfilingScenario
     /// <inheritdoc/>
     public string Description => _Materialize
         ? FormattableString.Invariant(
-            $"Direct parse: RandomFrameSource(UdpIPv6) -> ParseFrame -> MaterializeAll, {_FrameCount:N0} frames.")
+            $"Direct parse: RandomFrameSource(UdpIPv6) -> TryParse -> MaterializeAll, {_FrameCount:N0} frames.")
         : FormattableString.Invariant(
-            $"Direct parse: RandomFrameSource(UdpIPv6) -> ParseFrame (lazy), {_FrameCount:N0} frames.");
+            $"Direct parse: RandomFrameSource(UdpIPv6) -> TryParse (lazy), {_FrameCount:N0} frames.");
 
     /// <inheritdoc/>
     public long WorkUnitsPerIteration => _FrameCount;
@@ -99,14 +99,21 @@ internal sealed class RandomSourceParseScenario : IProfilingScenario
         source.Start(sourceId, stack.FrameInterfaceRegistry);
 
         int packetId = 0;
+        ParseOptions options = new();
         Frame? next;
         while ((next = source.NextFrame()) is not null)
         {
             Frame frame = next.Value;
-            Packet packet = Packet.ParseFrame(new PacketId(packetId++), stack, frame);
+            PacketId id = new(packetId);
+            packetId++;
+            if (!Packet.TryParse(id, stack, frame, in options, out Packet? packet, out ParseFailure failure))
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
             if (_Materialize)
             {
-                packet.MaterializeAll();
+                packet!.MaterializeAll();
             }
         }
     }

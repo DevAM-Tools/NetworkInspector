@@ -87,8 +87,23 @@ internal static class Program
             new ParseRandomFramesScenario(materialize: true),         // parse-random-frames-materialized
 
             // ── Parsing (recycled — zero Packet heap allocations) ─────────────────
-            new ParseRandomFramesRecycledScenario(materialize: false), // parse-random-frames-recycled
             new ParseRandomFramesRecycledScenario(materialize: true),  // parse-random-frames-materialized-recycled
+            new ParseComboScenario(ParseComboKind.Build),
+            new ParseComboScenario(ParseComboKind.Skip),
+            new ParseComboScenario(ParseComboKind.BuildCachePort),
+            new ParseComboScenario(ParseComboKind.SkipCachePort),
+            new ParseComboScenario(ParseComboKind.BuildCacheAll),
+            new ParseComboScenario(ParseComboKind.SkipCacheAll),
+            new ParseComboScenario(ParseComboKind.SkipMiss),
+            new ParseComboScenario(ParseComboKind.SkipPort),
+            new ParseComboScenario(ParseComboKind.SkipPorts),
+            new ParseComboScenario(ParseComboKind.SkipAll),
+            new ParseComboScenario(ParseComboKind.BuildPort),
+            new ParseComboScenario(ParseComboKind.BuildAll),
+            new ParseComboScenario(ParseComboKind.TcpSkipSeq),
+            new ParseComboScenario(ParseComboKind.TcpSkipSeqRaw),
+            new ParseComboScenario(ParseComboKind.FilterBuild),
+            new ParseComboScenario(ParseComboKind.FilterObserver),
 
             // ── Ingest / Redissect ───────────────────────────────────────────────
             new ParseIngestUdpScenario(),

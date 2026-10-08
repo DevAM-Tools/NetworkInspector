@@ -95,7 +95,12 @@ internal sealed class JsonExporterTests
 
         byte[] frameData = FrameGenerators.BuildEthernetIpv4UdpFrame(32);
         Frame frame = TestHarness.CreateFrame(new FrameId(0), 0, frameData);
-        Packet skip = Packet.ParseFrame(TestHarness.NextPacketId(), TestHarness.GetStack(), frame, FieldTreeMode.Skip);
+        ParseOptions options = new(FieldTreeMode.Skip);
+        if (!Packet.TryParse(TestHarness.NextPacketId(), TestHarness.GetStack(), frame, in options, out Packet? skip, out ParseFailure failure)
+            || skip is null)
+        {
+            throw new InvalidOperationException(failure.ToString());
+        }
 
         int skippedEvents = 0;
         exporter.ItemSkipped += (_, _) => skippedEvents++;

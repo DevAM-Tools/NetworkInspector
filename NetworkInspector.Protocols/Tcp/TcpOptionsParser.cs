@@ -1,4 +1,4 @@
-// Copyright � 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Protocols.Tcp;
 
@@ -6,19 +6,19 @@ namespace NetworkInspector.Protocols.Tcp;
 /// Static parser for TCP options (variable-length area between the fixed 20-byte
 /// TCP header and the payload). Supports the following option kinds:
 /// <list type="bullet">
-///   <item>EOL (0) � End of Option List</item>
-///   <item>NOP (1) � No-Operation / padding</item>
-///   <item>MSS (2) � Maximum Segment Size (RFC 879)</item>
-///   <item>Window Scale (3) � Window Scale factor (RFC 1323, capped to 14)</item>
-///   <item>SACK Permitted (4) � SACK support flag (RFC 2018)</item>
-///   <item>SACK (5) � Selective Acknowledgment blocks (RFC 2018)</item>
-///   <item>Timestamps (8) � TSval/TSecr (RFC 1323)</item>
-///   <item>User Timeout (28) � RFC 5482</item>
-///   <item>TCP Fast Open (34) � cookie (RFC 7413)</item>
-///   <item>MPTCP (30) � Multipath TCP subtype (RFC 6824/8684)</item>
-///   <item>MD5 Signature (19) � RFC 2385</item>
-///   <item>TCP-AO (29) � Authentication Option (RFC 5925)</item>
-///   <item>Unknown � catch-all for unrecognized options</item>
+///   <item>EOL (0) - End of Option List</item>
+///   <item>NOP (1) - No-Operation / padding</item>
+///   <item>MSS (2) - Maximum Segment Size (RFC 879)</item>
+///   <item>Window Scale (3) - Window Scale factor (RFC 1323, capped to 14)</item>
+///   <item>SACK Permitted (4) - SACK support flag (RFC 2018)</item>
+///   <item>SACK (5) - Selective Acknowledgment blocks (RFC 2018)</item>
+///   <item>Timestamps (8) - TSval/TSecr (RFC 1323)</item>
+///   <item>User Timeout (28) - RFC 5482</item>
+///   <item>TCP Fast Open (34) - cookie (RFC 7413)</item>
+///   <item>MPTCP (30) - Multipath TCP subtype (RFC 6824/8684)</item>
+///   <item>MD5 Signature (19) - RFC 2385</item>
+///   <item>TCP-AO (29) - Authentication Option (RFC 5925)</item>
+///   <item>Unknown - catch-all for unrecognized options</item>
 /// </list>
 /// </summary>
 internal static class TcpOptionsParser
@@ -36,6 +36,17 @@ internal static class TcpOptionsParser
     private const byte _OptTcpAo = 29;
     private const byte _OptMptcp = 30;
     private const byte _OptFastOpen = 34;
+    private const byte _OptEcho = 6;
+    private const byte _OptEchoReply = 7;
+    private const byte _OptCc = 11;
+    private const byte _OptCcNew = 12;
+    private const byte _OptCcEcho = 13;
+    private const byte _OptScps = 20;
+    private const byte _OptQs = 27;
+    private const byte _OptAccEcn0 = 0xAC;
+    private const byte _OptAccEcn1 = 0xAE;
+    private const byte _OptExpFd = 0xFD;
+    private const byte _OptExpFe = 0xFE;
 
     /// <summary>Maximum window scale shift count per RFC 7323.</summary>
     private const byte _MaxWindowScale = 14;
@@ -89,7 +100,7 @@ internal static class TcpOptionsParser
             #region Multi-byte options: kind + length + data
             if (offset + 1 >= optionsData.Length)
             {
-                break; // Truncated � no length byte
+                break; // Truncated - no length byte
             }
 
             byte optLen = optionsData[offset + 1];
@@ -132,6 +143,35 @@ internal static class TcpOptionsParser
                     break;
                 case _OptTcpAo:
                     _ParseTcpAo(optionBytes, in container, in fieldIds);
+                    break;
+                case _OptEcho:
+                    _ParseEcho(optionBytes, in container, in fieldIds);
+                    break;
+                case _OptEchoReply:
+                    _ParseEchoReply(optionBytes, in container, in fieldIds);
+                    break;
+                case _OptCc:
+                    _ParseFixedU32(optionBytes, in container, in fieldIds, fieldIds.Cc, fieldIds.CcValue);
+                    break;
+                case _OptCcNew:
+                    _ParseFixedU32(optionBytes, in container, in fieldIds, fieldIds.CcNew, fieldIds.CcNewValue);
+                    break;
+                case _OptCcEcho:
+                    _ParseFixedU32(optionBytes, in container, in fieldIds, fieldIds.CcEcho, fieldIds.CcEchoValue);
+                    break;
+                case _OptScps:
+                    _ParseScps(optionBytes, in container, in fieldIds);
+                    break;
+                case _OptQs:
+                    _ParseQs(optionBytes, in container, in fieldIds);
+                    break;
+                case _OptAccEcn0:
+                case _OptAccEcn1:
+                    _ParseAccEcn(optionBytes, kind == _OptAccEcn0, in container, in fieldIds);
+                    break;
+                case _OptExpFd:
+                case _OptExpFe:
+                    _ParseExp(optionBytes, in container, in fieldIds);
                     break;
                 default:
                     _ParseUnknown(kind, optionBytes, in container, in fieldIds);
@@ -181,7 +221,7 @@ internal static class TcpOptionsParser
         }
 
         byte shift = data[2];
-        // RFC 7323 �2.3: shift count MUST NOT exceed 14
+        // RFC 7323 -2.3: shift count MUST NOT exceed 14
         byte effectiveShift = Math.Min(shift, _MaxWindowScale);
         uint multiplier = 1u << effectiveShift;
 
@@ -373,6 +413,153 @@ internal static class TcpOptionsParser
             aoField.Append(ids.TcpAoMac, FieldValue.NewBytes(mac));
         }
     }
+
+    /// <summary>Echo (kind 6) and Echo Reply (kind 7): length 6, big-endian uint at offset 2.</summary>
+    private static void _ParseEcho(ReadOnlySpan<byte> data, in MutField container, in TcpOptionsFieldIds ids)
+    {
+        if (data.Length != 6)
+        {
+            _ParseUnknown(data[0], data, in container, in ids);
+            return;
+        }
+
+        uint value = BinaryPrimitives.ReadUInt32BigEndian(data[2..]);
+        MutField echo = container.Append(ids.Echo, FieldValue.None);
+        echo.Append(ids.EchoValue, FieldValue.NewU64(value));
+    }
+
+    private static void _ParseEchoReply(ReadOnlySpan<byte> data, in MutField container, in TcpOptionsFieldIds ids)
+    {
+        if (data.Length != 6)
+        {
+            _ParseUnknown(data[0], data, in container, in ids);
+            return;
+        }
+
+        uint value = BinaryPrimitives.ReadUInt32BigEndian(data[2..]);
+        MutField echo = container.Append(ids.EchoReply, FieldValue.None);
+        echo.Append(ids.EchoReplyValue, FieldValue.NewU64(value));
+    }
+
+    private static void _ParseFixedU32(
+        ReadOnlySpan<byte> data, in MutField container, in TcpOptionsFieldIds ids, FieldId containerField, FieldId valueField)
+    {
+        if (data.Length != 6)
+        {
+            _ParseUnknown(data[0], data, in container, in ids);
+            return;
+        }
+
+        uint value = BinaryPrimitives.ReadUInt32BigEndian(data[2..]);
+        MutField node = container.Append(containerField, FieldValue.None);
+        node.Append(valueField, FieldValue.NewU64(value));
+    }
+
+    private static void _ParseScps(ReadOnlySpan<byte> data, in MutField container, in TcpOptionsFieldIds ids)
+    {
+        if (data.Length != 4)
+        {
+            _ParseUnknown(data[0], data, in container, in ids);
+            return;
+        }
+
+        byte caps = data[2];
+        MutField scps = container.Append(ids.Scps, FieldValue.None);
+        scps.Append(ids.ScpsBets, FieldValue.NewBool((caps & 0x80) != 0));
+        scps.Append(ids.ScpsSnack1, FieldValue.NewBool((caps & 0x40) != 0));
+        scps.Append(ids.ScpsSnack2, FieldValue.NewBool((caps & 0x20) != 0));
+        scps.Append(ids.ScpsCompress, FieldValue.NewBool((caps & 0x10) != 0));
+        scps.Append(ids.ScpsNlts, FieldValue.NewBool((caps & 0x08) != 0));
+    }
+
+    private static void _ParseQs(ReadOnlySpan<byte> data, in MutField container, in TcpOptionsFieldIds ids)
+    {
+        if (data.Length != 8)
+        {
+            _ParseUnknown(data[0], data, in container, in ids);
+            return;
+        }
+
+        MutField qs = container.Append(ids.Qs, FieldValue.None);
+        qs.Append(ids.QsRate, FieldValue.NewU64((uint)(data[2] & 0x0F)));
+        qs.Append(ids.QsTtlDiff, FieldValue.NewU64(data[3]));
+    }
+
+    private static void _ParseAccEcn(ReadOnlySpan<byte> data, bool order0, in MutField container, in TcpOptionsFieldIds ids)
+    {
+        int dataLen = data.Length - 2;
+        if (dataLen is not (0 or 3 or 6 or 9))
+        {
+            _ParseUnknown(data[0], data, in container, in ids);
+            return;
+        }
+
+        MutField node = container.Append(ids.AccEcn, FieldValue.None);
+        if (dataLen >= 3)
+        {
+            uint first = _ReadU24(data[2..]);
+            node.Append(order0 ? ids.AccEcnEe0b : ids.AccEcnEe1b, FieldValue.NewU64(first));
+        }
+
+        if (dataLen >= 6)
+        {
+            node.Append(ids.AccEcnEceb, FieldValue.NewU64(_ReadU24(data[5..])));
+        }
+
+        if (dataLen >= 9)
+        {
+            uint third = _ReadU24(data[8..]);
+            node.Append(order0 ? ids.AccEcnEe1b : ids.AccEcnEe0b, FieldValue.NewU64(third));
+        }
+    }
+
+    private static void _ParseExp(ReadOnlySpan<byte> data, in MutField container, in TcpOptionsFieldIds ids)
+    {
+        if (data.Length < 4)
+        {
+            _ParseUnknown(data[0], data, in container, in ids);
+            return;
+        }
+
+        ushort exid = BinaryPrimitives.ReadUInt16BigEndian(data[2..]);
+        MutField exp = container.Append(ids.Exp, FieldValue.None);
+        exp.Append(ids.ExpExId, FieldValue.NewU64(exid));
+        if (data.Length > 4)
+        {
+            exp.Append(ids.ExpData, FieldValue.NewBytes(data[4..].ToArray()));
+        }
+
+        if (exid is 0xACC0 or 0xACC1)
+        {
+            _ParseAccEcnCounters(data[4..], exid == 0xACC0, in exp, in ids);
+        }
+    }
+
+    private static void _ParseAccEcnCounters(ReadOnlySpan<byte> counters, bool order0, in MutField node, in TcpOptionsFieldIds ids)
+    {
+        if (counters.Length is not (0 or 3 or 6 or 9))
+        {
+            return;
+        }
+
+        if (counters.Length >= 3)
+        {
+            node.Append(order0 ? ids.AccEcnEe0b : ids.AccEcnEe1b, FieldValue.NewU64(_ReadU24(counters)));
+        }
+
+        if (counters.Length >= 6)
+        {
+            node.Append(ids.AccEcnEceb, FieldValue.NewU64(_ReadU24(counters[3..])));
+        }
+
+        if (counters.Length >= 9)
+        {
+            node.Append(order0 ? ids.AccEcnEe1b : ids.AccEcnEe0b, FieldValue.NewU64(_ReadU24(counters[6..])));
+        }
+    }
+
+    private static uint _ReadU24(ReadOnlySpan<byte> data) =>
+        (uint)((data[0] << 16) | (data[1] << 8) | data[2]);
 
     /// <summary>Parses an unknown/unrecognized TCP option.</summary>
     private static void _ParseUnknown(

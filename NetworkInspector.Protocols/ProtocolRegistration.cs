@@ -230,6 +230,14 @@ public static class ProtocolRegistration
                 lengthIncludesHeader: false,
                 headerSize: 2),
         });
+
+        // HTTP/1 messages are framed by headers plus Content-Length or chunked encoding.
+        builder.RegisterStreamReassemblyConfig(httpId, new StreamReassemblyConfig
+        {
+            BoundaryDetector = new Http1MessageDetector(),
+            MaxPduSize = 16 * 1024 * 1024,
+            MaxBufferSize = 16 * 1024 * 1024,
+        });
         #endregion
 
         return warnings;

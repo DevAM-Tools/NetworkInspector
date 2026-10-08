@@ -29,7 +29,21 @@ internal sealed class ValueCacheTests
             stack.FrameInterfaceRegistry).Value;
 
         proto.ResetParseState();
-        return Packet.ParseFrame(new PacketId(0), stack, frame, firstProtocolId);
+        {
+            ParseOptions options = new(firstProtocol: firstProtocolId);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            return parsed;
+        }
     }
 
     private static Packet _ParseId(Stack stack, ProtocolId firstProtocolId, ValueCacheExerciseProtocol proto, int packetId, long timestampSecs)
@@ -43,7 +57,21 @@ internal sealed class ValueCacheTests
             stack.FrameInterfaceRegistry).Value;
 
         proto.ResetParseState();
-        return Packet.ParseFrame(new PacketId(packetId), stack, frame, firstProtocolId);
+        {
+            ParseOptions options = new(firstProtocol: firstProtocolId);
+            if (!Packet.TryParse(
+                new PacketId(packetId),
+                stack,
+                frame,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            return parsed;
+        }
     }
 
     private static (Stack Stack, Packet Packet) _BuildStandardUdp()
@@ -59,7 +87,22 @@ internal sealed class ValueCacheTests
             LinkType.Ethernet,
             FrameInterfaceId.Invalid,
             stack.FrameInterfaceRegistry).Value;
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame);
+        Packet packet;
+        {
+            ParseOptions options = new();
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
         return (stack, packet);
     }
 

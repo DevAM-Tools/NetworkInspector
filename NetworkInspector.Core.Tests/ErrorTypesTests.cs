@@ -159,7 +159,22 @@ internal sealed class ErrorTypesTests
             FrameInterfaceId.Invalid,
             stack.FrameInterfaceRegistry).Value;
 
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, protoId);
+        Packet packet;
+        {
+            ParseOptions options = new(firstProtocol: protoId);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
         // Slot reservation throws on _AllocatedFieldCount, not the reader-visible _FieldCount.
         // Poking _FieldCount leaves reservation below the cap and _PublishFieldCount spins forever.
         System.Reflection.FieldInfo allocatedField = typeof(Packet).GetField(

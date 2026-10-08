@@ -2,7 +2,7 @@
 
 Load on `/plan`. Apply `copilot-instructions.md` Sections 2–4.
 
-Plans are for **human acceptance** and for a **weaker executing agent**. Before/After, locked `How`, test **content** (`TEST{n}`), and step acceptance criteria are the handoff. Prefer fenced snippets over prose when describing types, APIs, algorithms, control flow, or file shape; prose carries why, constraints, and what code cannot show. Extra illustrative snippets (call-site usage, data examples, test shape) are welcome throughout the plan. They do not replace locked Before/After or TEST{n} **Content**. Do not treat existing files under `plans/` as style examples unless the user points at one. Do not compress step `How`, Test case **Content**, or Requirements-fit. Do not copy the requirements table into the plan.
+Plans are for **human acceptance** and for a **weaker executing agent**. Before/After, locked `How`, test **content** (`TEST-<AREA>-<TOPIC>`), and step acceptance criteria are the handoff. Prefer fenced snippets over prose when describing types, APIs, algorithms, control flow, or file shape; prose carries why, constraints, and what code cannot show. Extra illustrative snippets (call-site usage, data examples, test shape) are welcome throughout the plan. They do not replace locked Before/After or `TEST-<AREA>-<TOPIC>` **Content**. Do not treat existing files under `plans/` as style examples unless the user points at one. Do not compress step `How`, Test case **Content**, or Requirements-fit. Do not copy the requirement list into the plan.
 
 ## Stage Order
 
@@ -19,8 +19,8 @@ Plans are for **human acceptance** and for a **weaker executing agent**. Before/
 
 - If a requirements file already exists (user path, attached workspace doc, or `requirements/req_<slug>.md`): **read it in full** and use it. Do not rewrite outcomes that are already clear. That file is the high-level **user-view** system description (`workflow-requirements.md`). Do not turn it into a task list in the plan.
 - Else execute `workflow-requirements.md` (write `requirements/req_<slug>.md` from an explicit list without reinventing, or run the full requirements workflow), then continue.
-- The plan **links** that file. It does **not** copy requirement tables or Done-when text. Section 4.6: every file reference is a clickable relative Markdown link (from `plans/`, or the user-given path). Bare backticks are not enough.
-- Map every `REQ{n}` that has Done-when in Target Solution and Coverage. Cite other `REQ{n}` when a coverage row maps to them. Steps do **not** cite `REQ{n}` in `How`. Tick `Met` in the **requirements file** on those Done-when rows when the check runs (step close and Requirements-fit).
+- The plan **links** that file. It does **not** copy the requirement list or Done-when text. Section 4.6: every file reference is a clickable relative Markdown link (from `plans/`, or the user-given path). Bare backticks are not enough.
+- Map every requirement ID that has Done-when in Target Solution and Coverage. Cite each ID as written in the linked file (`REQ-<AREA>-<TOPIC>` when this workflow wrote it). Do not renumber a supplied list. Steps do **not** cite requirement IDs in `How`. Tick `Met` in the **requirements file** on each requirement whose Done-when this check ran (step close and Requirements-fit).
 
 ## Stage 1 — Gather Context
 
@@ -47,8 +47,13 @@ Include unresolved Sweep/Council follow-ups. Tag `Source`. Council candidates �
 Cover every topic before finalizing scope:
 
 - functional outcomes and **concrete** acceptance criteria (not “it builds”)
-- test **content** (minimum the plan must cover): important scenarios; edges; special constellations; contradictions; gaps; what is out; time budget (`tech-test.md`). Class and Layer may be named. Test code may appear later in the plan; agree content here.
-- public API snippet + usage when a public surface exists
+- test **content** (minimum the plan must cover): important scenarios; edges;
+  special constellations; contradictions; gaps; what is out; time budget
+  (`tech-test.md`). IDs are `TEST-<AREA>-<TOPIC>`. Class and Layer may be
+  named. Test code may appear later in the plan; agree content here.
+- public API snippet + usage when a public surface exists; interfaces, traits,
+  or the language’s other contract types the steps will implement (locked
+  later in **API and interfaces**)
 - web UI: load per Section 3 (`tech-web.md`, `tech-playwright.md`, `tech-test.md`, stack UI skill); dark mode (other themes out of scope); mandatory responsive layout and locked breakpoints (`tech-web.md`); journeys; debug story
 - performance and allocations (hot paths, budgets) — performance is a feature
 - edge cases and error handling
@@ -90,12 +95,15 @@ Grill Me ↔ Council per `workflow-council.md` until no blocking fork. Lite defa
 - English (Section 4.6).
 - Slug: lowercase, punctuation/whitespace → `-`, collapse `-`, trim, fallback `task`.
 - Step Overview at top. Status starts `⬜`.
-- Next: Requirements — **link only**. Real Markdown link to the Stage 0 file. Do not paste requirement tables.
-- Map every `REQ{n}` that has Done-when in Target Solution (design completeness). Unmapped = incomplete. Extra design with no matching `REQ{n}`: justify or cut. Do not restate full requirement text here. **Do not** cite `REQ{n}` inside step `How`.
-- Test cases are first-class **content** (index + `TEST{n}` cards). Cover everything **important** in the plan. Extra tests at implement time are allowed. An executing agent must be able to prove each card without inventing the scenario.
+- Next: Requirements — **link only**. Real Markdown link to the Stage 0 file. Do not paste the requirement list.
+- Map every requirement ID that has Done-when in Target Solution (design completeness). Unmapped = incomplete. Extra design with no matching requirement ID: justify or cut. Do not restate full requirement text here. **Do not** cite requirement IDs inside step `How`.
+- Test cases are first-class **content** (index + `TEST-<AREA>-<TOPIC>` cards). Cover everything **important** in the plan. Extra tests at implement time are allowed. An executing agent must be able to prove each card without inventing the scenario.
 - End with Requirements fit, then its Step `{n}R`.
 - Record `Loaded skills:` (include `workflow-council.md` and `tech-test.md` when tests exist), Sweep table, council paths as Section 4.6 links, Decision Loop count, step dependencies. Leave Coverage for Stage 7. Every file named in the plan (Context, Where, Coverage, Target Solution) is a clickable relative link (Section 4.6).
 - Every step needs a fully specified `How` and Before/After (Shared Block below). Prefer snippets over a prose-only `How` or Target Solution. Extra illustration snippets are welcome.
+- Immediately before the steps, write **API and interfaces**: schematic fenced
+  signatures for the public API and for interfaces, traits, or equivalent
+  contract types.
 - Do not present the plan for approval. Run Stage 7.
 
 ### Step Overview
@@ -107,7 +115,7 @@ Narrow table. Experience lives in the step block, not as an extra column.
 |------|--------|----------|
 | Step 1 — {title} | ⬜ | {one sentence} |
 | Step 1R — Review Step 1 | ⬜ | Zero Error findings; iterate until clean |
-| Step {N} — Requirements fit | ⬜ | Every REQ{n} with Done-when Met |
+| Step {N} — Requirements fit | ⬜ | Every requirement with Done-when Met |
 | Step {N}R — Review Step {N} | ⬜ | Zero Error findings; iterate until clean |
 ```
 
@@ -116,8 +124,8 @@ Narrow table. Experience lives in the step block, not as an extra column.
 Field order: `What` → `Why` → `How` → `Experience` → `Acceptance` → `Tests` → `[Public API]` → `[Size]` → `[Context]` → `[Where]` → `Verify` → `Debug` → `[If it fails]`.
 
 Always require `What`, `Why`, `How`, `Experience`, `Acceptance`, `Verify`.
-Require `Tests` when the step ships behavior (cite `TEST{n}` this step adds or runs; **Content** lives on the card).
-Require `Public API` when the step ships or changes a public surface.
+Require `Tests` when the step ships behavior (cite the test ID this step adds or runs; **Content** lives on the card).
+Require `Public API` when the step ships or changes a public surface. That field matches **API and interfaces**. It does not introduce a second signature.
 Require `Size` when the step may exceed the soft budget (see Step Rules).
 Omit `Context` only when neither constraints nor sources exist. Omit `Where` when no file is touched.
 Require `If it fails` for schema, state, or external-system risks.
@@ -129,7 +137,7 @@ Require `Debug` so the executing agent can probe a red `Verify` (command, Playwr
 ❗Include fenced **Before** and **After** in every step `How` — current code, then Target Solution shape (real signatures and key bodies); anchor with path/symbol. Not stubs, not pseudocode-only, not an intermediate shape later steps will replace. New file: After only. Requirements-fit: skip unless a gap needs a fix.
 Prefer those fences over a paragraph that restates the same shape. Extra snippets that illustrate usage, edges, or the test that proves the step are welcome.
 ❗Cite a concrete source in `Context` when an external reference exists.
-Test code in `How` or on a `TEST{n}` card is allowed and welcome. It does not replace Test case **Content**.
+Test code in `How` or on a `TEST-<AREA>-<TOPIC>` card is allowed and welcome. It does not replace Test case **Content**.
 
 `Where`: clickable relative Markdown link (Section 4.6), approximate lines, symbol. Mark `primary` (create/rewrite) or `call-site` or `additive` (append-only).
 `Verify`: exact command in optimized/Release per loaded tech skill, plus expected result.
@@ -150,7 +158,7 @@ Not yet: …
 ### Acceptance
 - [ ] {observable check for this step — may be deeper than R-level}
 ### Tests
-- TEST{n} {short name} — {in this step: add | run}
+- TEST-EXPORT-NO-DUPLICATE — {in this step: add | run}
 ### Public API
 ### Size
 Prod files: {n} · ~LOC: {n} (tests excluded) · over budget because: {or n/a}
@@ -171,15 +179,16 @@ Collision: other agents locking build/test?
 2. Requirements — Markdown link to the requirements file (no copied table)
 3. Test cases (index + content cards)
 4. Summary / Context Anchor (include Coverage table)
-5. Target Solution (Vision) — include Public API snippet when applicable
+5. Target Solution (Vision)
 6. Phases (optional; >10 steps or multiple areas)
 7. Slices
-8. Steps (Shared Block; last = Requirements fit + `{n}R`)
-9. Edge Cases and Risks
-10. Decisions & Trade-offs (`C{n}`; omit when none)
-11. Open Questions
-12. Closing Summary
-13. Task Checklist (Step N, tests that are their own steps, Step `{n}R`; include Requirements fit)
+8. API and interfaces — schematic snippets, immediately before the steps
+9. Steps (Shared Block; last = Requirements fit + `{n}R`)
+10. Edge Cases and Risks
+11. Decisions & Trade-offs (`C{n}`; omit when none)
+12. Open Questions
+13. Closing Summary
+14. Task Checklist (Step N, tests that are their own steps, Step `{n}R`; include Requirements fit)
 
 ## Requirements
 
@@ -189,14 +198,32 @@ Collision: other agents locking build/test?
 Source: [requirements/req_<slug>.md](../requirements/req_<slug>.md)
 ```
 
-- Use the real relative (or user-given) path. The label should match the file name. Do not paste requirement tables.
-- `Met` lives in the requirements file on every `REQ{n}` that has Done-when. Fill it only when Done-when **ran**. Start `⬜` there.
-- Reject the plan when a `REQ{n}` with Done-when in the linked file cannot be observed by a user.
-- Step `How` does not say “implements REQ12”. At step close the agent re-reads the **linked** file and ticks rows whose Done-when now holds.
+- Use the real relative (or user-given) path. The label should match the file name. Do not paste the requirement list.
+- `Met` lives in the requirements file on every requirement ID that has Done-when. Fill it only when Done-when **ran**. Start `⬜` there.
+- Reject the plan when a requirement ID with Done-when in the linked file cannot be observed by a user.
+- Step `How` does not say “implements REQ-EXPORT-CREATE”. At step close the agent re-reads the **linked** file and ticks `Met` on each requirement whose Done-when now holds.
 
 ## Test cases
 
 First-class **content**. The cards are the **minimum** the implementing agent must prove. Cover everything important here (strategy classes that apply, plus content-level edges, special constellations, contradictions, and gaps). Extra tests at implement time are allowed and are not scope creep unless they contradict agreed Out.
+
+Form: `TEST-<AREA>-<TOPIC>`. Same token rules as `REQ-<AREA>-<TOPIC>` in `workflow-requirements.md`.
+
+- `TEST-` plus 2 to 4 tokens. A token is uppercase `A–Z` and digits, contains at least one letter, and tokens split on a single `-`.
+- The first token is the **area**. When the case proves a requirement, use that requirement’s area token.
+- The other tokens **hint at the case**. When the case is that requirement,
+  reuse its topic (`REQ-EXPORT-NO-DUPLICATE` → `TEST-EXPORT-NO-DUPLICATE`).
+  Another case on the same requirement adds a topic token
+  (`TEST-EXPORT-EMPTY-NAME`).
+- English. Unique in the plan. Stable: inserting a case does not rename others. Do not reuse an ID after delete.
+- Class stays on the card. Do not encode happy or error as `HAPPY` or `ERROR` in the ID.
+- The ID is plan content. It is not a test file name or a test method name. Do not copy it into code. Method names follow the loaded tech skill.
+- Cite each ID as written. Do not renumber a plan the user already wrote.
+
+```text
+Accept: TEST-EXPORT-NO-DUPLICATE · TEST-EXPORT-EMPTY-NAME · TEST-SESSION-STABLE-ID
+Reject: TEST1 · TEST01 · TEST-1 · TEST-EXPORT-1 · TEST-ExportFormTests
+```
 
 Index (narrow). Details live in the cards, not extra columns.
 
@@ -205,13 +232,15 @@ Index (narrow). Details live in the cards, not extra columns.
 
 | ID | Case | Step | Status |
 |----|------|------|--------|
-| TEST1 | {short name} | Step 2 | ⬜ |
+| TEST-EXPORT-NO-DUPLICATE | Duplicate name rejected | Step 2 | ⬜ |
 ```
 
-Every `TEST{n}` needs a card. **Content** is required. **Class** and **Layer** may be named. Test code or a short fenced example of setup / expected observation is welcome; it does not replace Content.
+Every test ID needs a card. **Content** is required. **Class** and **Layer**
+may be named. Test code or a short fenced example of setup / expected
+observation is welcome; it does not replace Content.
 
 ```markdown
-### TEST{n} — {short name}
+### TEST-<AREA>-<TOPIC>
 
 - **Class:** happy · error · boundary · collection · absence · concurrency · trust-boundary
 - **Layer:** unit · UI
@@ -224,44 +253,26 @@ Omit **Class**, **Layer**, or **Out** when they add nothing. Do not omit **Conte
 Accept:
 
 ```markdown
-### TEST1 — Duplicate export name is rejected
+### TEST-EXPORT-NO-DUPLICATE
 
 - **Class:** error
 - **Layer:** UI
-- **Content:** An export named Report already exists. The user submits Report again. A duplicate-name error is visible and the list still has one row. This catches silent overwrite versus the uniqueness rule.
+- **Content:** An export named Report already exists. The user submits Report again. A duplicate-name error is visible and the list still has one row. This catches silent overwrite versus the uniqueness rule. Proves REQ-EXPORT-NO-DUPLICATE.
 ```
 
-Reject as the whole card: `TEST1 — error · UI` · `TEST1 — ExportFormTests.cs` · `TEST1 — add tests`.
+Reject as the whole card: `TEST1 — error · UI` · `TEST-EXPORT-1 — ExportFormTests.cs` · `TEST-EXPORT-ADD-TESTS`.
 
-Exhaustive = the **classes** in `tech-test.md` plus named content (edges, constellations, contradictions, gaps), not every integer. Keep the suite fast. An applicable class with no `TEST{n}` and no Out = gap.
+Exhaustive = the **classes** in `tech-test.md` plus named content (edges,
+constellations, contradictions, gaps), not every integer. Keep the suite
+fast. An applicable class with no test ID and no Out = gap.
 
 ## Target Solution (Vision)
 
 - Concrete end-state: types, files, APIs, data flow, invariants, algorithms. Show that shape in snippets, not only in prose. Not a slogan.
-- Map every `REQ{n}` that has Done-when to a design element here (completeness). Do not paste Done-when from the requirements file. Steps then apply this shape.
+- Map every requirement ID that has Done-when to a design element here (completeness). Do not paste Done-when from the requirements file. Steps then apply this shape.
 - SSOT for final file shape. A primary-file `After` that differs from this section is an incomplete plan.
 - Do not use step order here.
-
-### Public API (when a public surface exists)
-
-Short snippet + usage. This is what a human reviews. Changing it after approval → new Grill Me.
-
-````markdown
-### Public API
-
-```csharp
-public sealed class GapRunOrchestrator
-{
-    public static Task<int> RunAsync(CliOptions options, CancellationToken ct);
-}
-```
-
-Usage:
-
-```csharp
-int code = await GapRunOrchestrator.RunAsync(opts, ct);
-```
-````
+- Public signatures and contract types are written once, in **API and interfaces**. Do not paste a second shape here.
 
 ## Slices
 
@@ -271,6 +282,58 @@ int code = await GapRunOrchestrator.RunAsync(opts, ct);
 - Build each cross-cutting concern in target shape. Later slices call it.
 - Extract a repeated pattern before a second slice copies it.
 - Preserve layer boundaries.
+
+## API and interfaces
+
+This section sits immediately before the steps. It is the schematic contract those steps implement.
+
+- Fenced snippets: signatures and how the types connect. Not method bodies, and not the step `How`.
+- **Public API**, when the work has a public surface: the signatures a caller
+  uses, then a usage snippet. This is the snippet Section 4.12 locks.
+  Changing it after approval needs a new Grill Me.
+- **Interfaces and traits**, or the language’s equivalent contract types, that
+  the steps add or change: the type, its members, which type implements it,
+  and which type calls it.
+- One heading per group. Above each fence, a clickable relative link to the file that will hold the type (Section 4.6).
+- A step `After` uses these signatures. A different public signature or interface member in a step is an incomplete plan.
+- When the plan adds or changes neither a public API nor a contract type, keep the heading and write one sentence: no public API or interface in this plan.
+
+````markdown
+## API and interfaces
+
+### Public API
+
+[`src/Export.cs`](../src/Export.cs)
+
+```csharp
+public static class Export
+{
+    public static Result<ExportId> Create(string name);
+}
+```
+
+Usage:
+
+```csharp
+Result<ExportId> created = Export.Create("Report");
+```
+
+### Interfaces
+
+[`src/IExportStore.cs`](../src/IExportStore.cs)
+
+```csharp
+public interface IExportStore
+{
+    Result<ExportId> Add(string name);
+    bool Contains(string name);
+}
+```
+
+`FileExportStore` implements `IExportStore`. `Export.Create` calls `Add`.
+````
+
+The fence shows the shape. Use the language of the plan (C# interface, Rust trait, Python protocol, or the equivalent).
 
 ## Step Rules
 
@@ -290,30 +353,31 @@ Still required:
 - Size a step so a human can accept the Before/After.
 - Analyze dependencies. Order topologically. State depends-on.
 - Reject a `How` that allows more than one implementation, or whose `After` is not Target Solution for primary files.
+- Reject a step `After` whose public signature or contract member differs from **API and interfaces**.
 - Close with Requirements fit.
 
 ## Stage 7 — Coverage Check
 
 Run after the plan file is written. **Walk the plan twice.** Patch until both walks are clean. Do not enter Completion with gaps.
 
-1. **Requirements walk** — Re-read the **linked** requirements file **in full**. Do not treat anything in the plan as a copy of those tables. Every `REQ{n}` that has Done-when, and every `TEST{n}`, must land in Target Solution and in a step `How` / `Tests` / `Acceptance`. A `TEST{n}` without **Content** = gap. An applicable `tech-test.md` class with no `TEST{n}` and no Out = gap. Unmapped = gap.
-2. **Conversation walk** — Re-read the conversation, Grill Me Q/A, Sweep, council, and attached docs **in full**, then the **entire** written plan. Every relevant user ask, constraint, non-goal, named type/path/command, accepted proposal, rejected option with leftover constraint, and named edge / constellation / contradiction / gap must land somewhere (`REQ{n}`, `TEST{n}` **Content**, Out, `C{n}`, or out of scope). Unmapped = gap. “Implied” without a citation = gap.
+1. **Requirements walk** — Re-read the **linked** requirements file **in full**. Do not treat anything in the plan as a copy of that list. Every requirement ID that has Done-when, and every test ID, must land in Target Solution and in a step `How` / `Tests` / `Acceptance`. A test ID without **Content** = gap. An applicable `tech-test.md` class with no test ID and no Out = gap. Unmapped = gap. Cite each test ID as written. Do not renumber a supplied plan.
+2. **Conversation walk** — Re-read the conversation, Grill Me Q/A, Sweep, council, and attached docs **in full**, then the **entire** written plan. Every relevant user ask, constraint, non-goal, named type/path/command, accepted proposal, rejected option with leftover constraint, and named edge / constellation / contradiction / gap must land somewhere (a requirement ID, a test ID **Content**, Out, `C{n}`, or out of scope). Unmapped = gap. “Implied” without a citation = gap.
 
-Include every `REQ{n}` with Done-when, every `TEST{n}`, and every Grill Me answer as a row. Record dropped items with reason. Write both tables into Context Anchor. Re-run this stage after any patch.
+Include every requirement ID with Done-when, every test ID, and every Grill Me answer as a row. Record dropped items with reason. Write both tables into Context Anchor. Re-run this stage after any patch.
 
 ```markdown
 **Coverage (requirements → plan):**
 
 | ID | Lands in |
 |----|----------|
-| REQ12 | Target Solution · Step 2 Acceptance |
-| TEST1 | Step 2 Tests · TEST1 Content |
+| REQ-EXPORT-CREATE | Target Solution · Step 2 Acceptance |
+| TEST-EXPORT-NO-DUPLICATE | Step 2 Tests · TEST-EXPORT-NO-DUPLICATE Content |
 
 **Coverage (conversation → plan):**
 
 | Item | Source | Lands in |
 |------|--------|----------|
-| {one-line item} | User · Q{n} · Sweep · Council · Doc | REQ12 · TEST1 · Step {n} · C{n} · Out of scope ({reason}) |
+| {one-line item} | User · Q{n} · Sweep · Council · Doc | REQ-EXPORT-CREATE · TEST-EXPORT-NO-DUPLICATE · Step {n} · C{n} · Out of scope ({reason}) |
 ```
 
 ## Requirements Fit (last step)
@@ -322,23 +386,23 @@ Include every `REQ{n}` with Done-when, every `TEST{n}`, and every Grill Me answe
 ## Step {N} - Requirements fit
 Status: ⬜ Depends on all prior steps
 ### What
-Walk the built solution as a user. Check every REQ{n} with Done-when and every TEST{n}.
+Walk the built solution as a user. Check every requirement ID with Done-when and every test ID.
 ### Why
 A green build can still miss the user outcome.
 ### How
 - Re-read the linked requirements file and Test cases. Ignore implementer intent.
-- For each REQ{n} with Done-when: run Done-when. Cite evidence (command, UI, API, file, output). Tick Met in the requirements file.
-- For each TEST{n}: confirm the Content exists as a test that can fail (extra tests beyond TEST{n} are fine).
+- For each requirement ID with Done-when: run Done-when. Cite evidence (command, UI, API, file, output). Tick Met in the requirements file.
+- For each test ID: confirm the Content exists as a test that can fail (extra tests beyond the planned IDs are fine).
 - Mark Met / Status ✅ only when the check holds with no caveats.
 - Any ❌ or leftover ⬜ = blocker.
 - Skip Before/After unless a gap needs a code fix; then stop and file the gap.
 ### Experience
 A person can execute every Done-when without reading the source.
 ### Acceptance
-- [ ] Every REQ{n} with Done-when Met = ✅
-- [ ] Every TEST{n} Status = ✅
+- [ ] Every requirement ID with Done-when Met = ✅
+- [ ] Every test ID Status = ✅
 ### Verify
-Every REQ{n} with Done-when Met = ✅. Every TEST{n} ✅. Zero leftover ⬜.
+Every requirement ID with Done-when Met = ✅. Every test ID ✅. Zero leftover ⬜.
 ### Debug
 Re-run the failing Done-when in isolation. Check agent collision before redesign.
 ```

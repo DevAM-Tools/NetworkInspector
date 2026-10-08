@@ -45,6 +45,7 @@ global using NetworkInspector.Protocols.Can;
 global using NetworkInspector.Protocols.Dns;
 global using NetworkInspector.Protocols.Dtls;
 global using NetworkInspector.Protocols.Helpers;
+global using NetworkInspector.Protocols.Http;
 global using NetworkInspector.Protocols.Http2;
 global using NetworkInspector.Protocols.Icmpv6;
 global using NetworkInspector.Protocols.PduTransport;

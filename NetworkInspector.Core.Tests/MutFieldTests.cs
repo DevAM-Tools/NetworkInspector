@@ -26,7 +26,53 @@ internal sealed class MutFieldTests
             FrameInterfaceId.Invalid,
             stack.FrameInterfaceRegistry).Value;
 
-        return Packet.ParseFrame(new PacketId(0), stack, frame, firstProtocolId);
+        {
+            ParseOptions options = new(firstProtocol: firstProtocolId);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            return parsed;
+        }
+    }
+
+    [Test]
+    public async Task DefaultMutFieldIsNotRoot()
+    {
+        // MutField is a ref struct, so it cannot stay live across await.
+        bool emptyIsRoot;
+        bool emptyIsValid;
+        {
+            MutField empty = default;
+            emptyIsRoot = empty.IsRoot;
+            emptyIsValid = empty.IsValid;
+        }
+
+        await Assert.That(emptyIsRoot).IsFalse();
+        await Assert.That(emptyIsValid).IsFalse();
+
+        (Stack? stack, _, ProtocolId protoId) = _BuildStack();
+        using (stack)
+        {
+            Packet packet = _ParseFrame(stack, protoId);
+            bool rootIsValid;
+            bool rootIsRoot;
+            {
+                MutField root = packet.RootFieldMut();
+                rootIsValid = root.IsValid;
+                rootIsRoot = root.IsRoot;
+            }
+
+            await Assert.That(rootIsValid).IsTrue();
+            await Assert.That(rootIsRoot).IsTrue();
+        }
     }
 
     private static bool _IsProtocolTableMissing(ParseResult result)
@@ -345,7 +391,22 @@ internal sealed class MutFieldTests
             Frame frame = Frame.Create(
                 new FrameId(1), Timestamp.FromSecs(0), data, LinkType.Ethernet,
                 FrameInterfaceId.Invalid, stack.FrameInterfaceRegistry).Value;
-            Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, protoId);
+            Packet packet;
+            {
+                ParseOptions options = new(firstProtocol: protoId);
+                if (!Packet.TryParse(
+                    new PacketId(0),
+                    stack,
+                    frame,
+                    in options,
+                    out Packet? parsed,
+                    out ParseFailure failure) || parsed is null)
+                {
+                    throw new InvalidOperationException(failure.ToString());
+                }
+
+                packet = parsed;
+            }
             MutField root = packet.RootFieldMut();
 
             ParseResult result = root.CallProtocol(protoId, data, default);
@@ -367,7 +428,22 @@ internal sealed class MutFieldTests
             Frame frame = Frame.Create(
                 new FrameId(1), Timestamp.FromSecs(0), data, LinkType.Ethernet,
                 FrameInterfaceId.Invalid, stack.FrameInterfaceRegistry).Value;
-            Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, protoId);
+            Packet packet;
+            {
+                ParseOptions options = new(firstProtocol: protoId);
+                if (!Packet.TryParse(
+                    new PacketId(0),
+                    stack,
+                    frame,
+                    in options,
+                    out Packet? parsed,
+                    out ParseFailure failure) || parsed is null)
+                {
+                    throw new InvalidOperationException(failure.ToString());
+                }
+
+                packet = parsed;
+            }
             MutField root = packet.RootFieldMut();
 
             ParseResult u64 = root.TryCallNextProtocolU64(ProtocolTableId.Invalid, 7, data, default);
@@ -418,7 +494,22 @@ internal sealed class MutFieldTests
             Frame frame = Frame.Create(
                 new FrameId(1), Timestamp.FromSecs(0), data, LinkType.Ethernet,
                 FrameInterfaceId.Invalid, stack.FrameInterfaceRegistry).Value;
-            Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, parentId);
+            Packet packet;
+            {
+                ParseOptions options = new(firstProtocol: parentId);
+                if (!Packet.TryParse(
+                    new PacketId(0),
+                    stack,
+                    frame,
+                    in options,
+                    out Packet? parsed,
+                    out ParseFailure failure) || parsed is null)
+                {
+                    throw new InvalidOperationException(failure.ToString());
+                }
+
+                packet = parsed;
+            }
 
             await Assert.That(parent.NullTableHits).IsEqualTo(10);
             await Assert.That(parent.EmptyMatchHits).IsEqualTo(5);
@@ -456,7 +547,19 @@ internal sealed class MutFieldTests
             Frame frame = Frame.Create(
                 new FrameId(1), Timestamp.FromSecs(0), data, LinkType.Ethernet,
                 FrameInterfaceId.Invalid, stack.FrameInterfaceRegistry).Value;
-            _ = Packet.ParseFrame(new PacketId(0), stack, frame, parentId);
+            {
+                ParseOptions options = new(firstProtocol: parentId);
+                if (!Packet.TryParse(
+                    new PacketId(0),
+                    stack,
+                    frame,
+                    in options,
+                    out Packet? _,
+                    out ParseFailure failure))
+                {
+                    throw new InvalidOperationException(failure.ToString());
+                }
+            }
 
             await Assert.That(parent.MultiMatchHits).IsEqualTo(1);
             await Assert.That(childA.CallCount + childB.CallCount).IsEqualTo(2);
@@ -489,7 +592,19 @@ internal sealed class MutFieldTests
             Frame frame = Frame.Create(
                 new FrameId(1), Timestamp.FromSecs(0), data, LinkType.Ethernet,
                 FrameInterfaceId.Invalid, stack.FrameInterfaceRegistry).Value;
-            _ = Packet.ParseFrame(new PacketId(0), stack, frame, parentId);
+            {
+                ParseOptions options = new(firstProtocol: parentId);
+                if (!Packet.TryParse(
+                    new PacketId(0),
+                    stack,
+                    frame,
+                    in options,
+                    out Packet? _,
+                    out ParseFailure failure))
+                {
+                    throw new InvalidOperationException(failure.ToString());
+                }
+            }
 
             await Assert.That(parent.NullTableHit).IsTrue();
             await Assert.That(parent.NoMatchHit).IsTrue();
@@ -842,7 +957,19 @@ internal sealed class MutFieldTests
             Frame frame = Frame.Create(
                 new FrameId(1), Timestamp.FromSecs(0), data, LinkType.Ethernet,
                 FrameInterfaceId.Invalid, stack.FrameInterfaceRegistry).Value;
-            _ = Packet.ParseFrame(new PacketId(0), stack, frame, parentId);
+            {
+                ParseOptions options = new(firstProtocol: parentId);
+                if (!Packet.TryParse(
+                    new PacketId(0),
+                    stack,
+                    frame,
+                    in options,
+                    out Packet? _,
+                    out ParseFailure failure))
+                {
+                    throw new InvalidOperationException(failure.ToString());
+                }
+            }
 
             await Assert.That(parent.MultiMatchHits).IsEqualTo(4);
             await Assert.That(childA.CallCount + childB.CallCount).IsEqualTo(8);

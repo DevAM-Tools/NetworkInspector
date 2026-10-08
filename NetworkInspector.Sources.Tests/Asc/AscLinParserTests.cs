@@ -17,11 +17,12 @@ internal sealed class AscLinParserTests
     public async Task BasicLinHex_ParsedCorrectly()
     {
         bool ok = AscLinParser.TryParse(
-            "0.100000 L1 3C Rx 8 01 02 03 04 05 06 07 08 checksum = F0"u8,
-            16, out double ts, out int ch, out byte[] frame);
+            "0.100000 Li 3C Rx 8 01 02 03 04 05 06 07 08 checksum = F0"u8,
+            16, out AscTimestamp ts, out int ch, out byte[] frame);
 
         await Assert.That(ok).IsTrue();
-        await Assert.That(ts).IsEqualTo(0.1).Within(0.0001);
+        await Assert.That(ts.WholeSeconds).IsEqualTo(0);
+        await Assert.That(ts.Nanoseconds).IsEqualTo(100_000_000);
         await Assert.That(ch).IsEqualTo(1);
         await Assert.That(frame.Length).IsGreaterThan(0);
     }
@@ -50,7 +51,7 @@ internal sealed class AscLinParserTests
     {
         // ID 60 decimal = 0x3C
         bool ok = AscLinParser.TryParse(
-            "0.300000 L1 60 Rx 4 1 2 3 4 checksum = 100"u8,
+            "0.300000 Li 60 Rx 4 1 2 3 4 checksum = 100"u8,
             10, out _, out _, out byte[] frame);
 
         await Assert.That(ok).IsTrue();
@@ -65,20 +66,21 @@ internal sealed class AscLinParserTests
     public async Task OptionalDirectionOmitted_BytePath_ParsedCorrectly()
     {
         bool ok = AscLinParser.TryParse(
-            "0.100000 L1 3C 8 01 02 03 04 05 06 07 08 checksum = F0"u8,
-            16, out double ts, out int ch, out byte[] frame);
+            "0.100000 Li 3C 8 01 02 03 04 05 06 07 08 checksum = F0"u8,
+            16, out AscTimestamp ts, out int ch, out byte[] frame);
 
         await Assert.That(ok).IsTrue();
-        await Assert.That(ts).IsEqualTo(0.1).Within(0.0001);
+        await Assert.That(ts.WholeSeconds).IsEqualTo(0);
+        await Assert.That(ts.Nanoseconds).IsEqualTo(100_000_000);
         await Assert.That(ch).IsEqualTo(1);
         await Assert.That(frame.Length).IsGreaterThan(0);
     }
 
     [Test]
-    public async Task OptionalDirectionOmitted_CharPath_ParsedCorrectly()
+    public async Task OptionalDirectionOmittedParsed()
     {
         bool ok = AscLinParser.TryParse(
-            "0.110000 L2 10 4 AA BB CC DD checksum = 00",
+            "0.110000 L2 10 4 AA BB CC DD checksum = 00"u8,
             16, out _, out int ch, out byte[] frame);
 
         await Assert.That(ok).IsTrue();
@@ -94,7 +96,7 @@ internal sealed class AscLinParserTests
     public async Task Dlc2_ParsedCorrectly()
     {
         bool ok = AscLinParser.TryParse(
-            "0.400000 L1 3C Rx 2 01 02 checksum = AA"u8,
+            "0.400000 Li 3C Rx 2 01 02 checksum = AA"u8,
             16, out _, out _, out byte[] frame);
 
         await Assert.That(ok).IsTrue();
@@ -105,7 +107,7 @@ internal sealed class AscLinParserTests
     public async Task Dlc8_ParsedCorrectly()
     {
         bool ok = AscLinParser.TryParse(
-            "0.500000 L1 3C Rx 8 01 02 03 04 05 06 07 08 checksum = AB"u8,
+            "0.500000 Li 3C Rx 8 01 02 03 04 05 06 07 08 checksum = AB"u8,
             16, out _, out _, out byte[] frame);
 
         await Assert.That(ok).IsTrue();
@@ -121,7 +123,7 @@ internal sealed class AscLinParserTests
     {
         // Some LIN implementations omit the checksum
         bool ok = AscLinParser.TryParse(
-            "0.600000 L1 3C Rx 2 01 02"u8,
+            "0.600000 Li 3C Rx 2 01 02"u8,
             16, out _, out _, out byte[] frame);
 
         // Should still parse — checksum is optional
@@ -147,5 +149,27 @@ internal sealed class AscLinParserTests
         bool ok = AscLinParser.TryParse("0.100000 L1"u8, 16, out _, out _, out _);
 
         await Assert.That(ok).IsFalse();
+    }
+
+    [Test]
+    public async Task ChannelTokenL1IsNotChannel1()
+    {
+        bool ok = AscLinParser.TryParse(
+            "0.100000 L1 3C Rx 1 AA checksum = 00"u8,
+            16, out _, out _, out _);
+
+        await Assert.That(ok).IsFalse();
+    }
+
+    [Test]
+    public async Task LiChannelReadsOneDataByte()
+    {
+        bool ok = AscLinParser.TryParse(
+            "0.073973 Li 2d Tx 1 aa checksum = 70"u8,
+            16, out _, out int channel, out byte[] frame);
+
+        await Assert.That(ok).IsTrue();
+        await Assert.That(channel).IsEqualTo(1);
+        await Assert.That(frame[8]).IsEqualTo((byte)0xAA);
     }
 }

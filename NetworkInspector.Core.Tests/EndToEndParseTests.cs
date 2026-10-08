@@ -45,11 +45,21 @@ internal sealed class EndToEndParseTests
             FrameInterfaceId.Invalid,
             stack.FrameInterfaceRegistry).Value;
 
-        return Packet.ParseFrame(
-            new PacketId(0),
-            stack,
-            frame,
-            firstProtocolId);
+        {
+            ParseOptions options = new(firstProtocol: firstProtocolId);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            return parsed;
+        }
     }
 
     [Test]
@@ -157,11 +167,22 @@ internal sealed class EndToEndParseTests
                 FrameInterfaceId.Invalid,
                 stack.FrameInterfaceRegistry).Value;
 
-            Packet packet = Packet.ParseFrame(
-                new PacketId(0),
-                stack,
-                frame,
-                ethId);
+            Packet packet;
+            {
+                ParseOptions options = new(firstProtocol: ethId);
+                if (!Packet.TryParse(
+                    new PacketId(0),
+                    stack,
+                    frame,
+                    in options,
+                    out Packet? parsed,
+                    out ParseFailure failure) || parsed is null)
+                {
+                    throw new InvalidOperationException(failure.ToString());
+                }
+
+                packet = parsed;
+            }
 
             bool isFinalized = packet.IsFinalized;
             await Assert.That(isFinalized).IsTrue();
@@ -289,11 +310,22 @@ internal sealed class EndToEndParseTests
                 ifaceId,
                 registry).Value;
 
-            Packet packet = Packet.ParseFrame(
-                new PacketId(0),
-                stack,
-                frame,
-                ethId);
+            Packet packet;
+            {
+                ParseOptions options = new(firstProtocol: ethId);
+                if (!Packet.TryParse(
+                    new PacketId(0),
+                    stack,
+                    frame,
+                    in options,
+                    out Packet? parsed,
+                    out ParseFailure failure) || parsed is null)
+                {
+                    throw new InvalidOperationException(failure.ToString());
+                }
+
+                packet = parsed;
+            }
 
             PacketId packetId = packet.Id;
             FrameSourceId sourceId = packet.FrameSourceId;

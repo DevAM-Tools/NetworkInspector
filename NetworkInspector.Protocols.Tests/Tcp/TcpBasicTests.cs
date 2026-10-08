@@ -55,7 +55,8 @@ internal sealed class TcpBasicTests
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
-            await ProtocolTestHelper.AssertU64Field(stack, packet, "tcp.seq", 123456).ConfigureAwait(false);
+            await ProtocolTestHelper.AssertU64Field(stack, packet, "tcp.seq", 0).ConfigureAwait(false);
+            await ProtocolTestHelper.AssertU64Field(stack, packet, "tcp.seq_raw", 123456).ConfigureAwait(false);
         }
     }
 

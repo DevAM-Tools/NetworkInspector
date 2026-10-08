@@ -74,13 +74,6 @@ internal sealed class ChunkedSlotStore<T>
     #region Public API
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal void Set(int index, T value)
-    {
-        Ids.ArrayIndexIdRange.ValidateIndexOrThrow(index, nameof(index));
-        _WriteLiveSlot(index, value);
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     [return: MaybeNull]
     internal T Get(int index)
     {
@@ -123,13 +116,42 @@ internal sealed class ChunkedSlotStore<T>
         {
             while (true)
             {
+                // Odd epoch: Clear is in progress. Do not publish against a prefix it is dropping.
+                // _Epoch is volatile, so this read is the acquire. Volatile.Read cannot take
+                // a ref to a volatile field.
+                int epoch = _Epoch;
+                if ((epoch & 1) != 0)
+                {
+                    continue;
+                }
+
                 int index = _Count;
                 Ids.ArrayIndexIdRange.ThrowIfInvalidNextIndex(index, "entry");
                 _WriteLiveSlot(index, item);
-                if (Interlocked.CompareExchange(ref _Count, index + 1, index) == index)
+
+                // Keep the slot write before the epoch re-read. A Clear that already
+                // finished resets Count to 0, so a CAS of index 0 would otherwise succeed
+                // against the discarded chunk.
+                Interlocked.MemoryBarrier();
+                if (_Epoch != epoch)
+                {
+                    continue;
+                }
+
+                if (Interlocked.CompareExchange(ref _Count, index + 1, index) != index)
+                {
+                    continue;
+                }
+
+                Interlocked.MemoryBarrier();
+                if (_Epoch == epoch)
                 {
                     return;
                 }
+
+                // Clear landed between the check and the CAS. index was 0, so the CAS
+                // matched the reset count. Undo only this publish, then retry.
+                _ = Interlocked.CompareExchange(ref _Count, index, index + 1);
             }
         }
         finally
@@ -154,6 +176,15 @@ internal sealed class ChunkedSlotStore<T>
         {
             while (true)
             {
+                // Odd epoch: Clear is in progress. Do not publish against a prefix it is dropping.
+                // _Epoch is volatile, so this read is the acquire. Volatile.Read cannot take
+                // a ref to a volatile field.
+                int epoch = _Epoch;
+                if ((epoch & 1) != 0)
+                {
+                    continue;
+                }
+
                 int index = _Count;
                 int last;
                 try
@@ -169,10 +200,30 @@ internal sealed class ChunkedSlotStore<T>
                 Ids.ArrayIndexIdRange.ThrowIfInvalidNextIndex(last, "entry");
                 SetRange(index, values);
                 int published = checked(index + values.Length);
-                if (Interlocked.CompareExchange(ref _Count, published, index) == index)
+
+                // Keep the slot write before the epoch re-read. A Clear that already
+                // finished resets Count to 0, so a CAS of index 0 would otherwise succeed
+                // against the discarded chunk.
+                Interlocked.MemoryBarrier();
+                if (_Epoch != epoch)
+                {
+                    continue;
+                }
+
+                if (Interlocked.CompareExchange(ref _Count, published, index) != index)
+                {
+                    continue;
+                }
+
+                Interlocked.MemoryBarrier();
+                if (_Epoch == epoch)
                 {
                     return;
                 }
+
+                // Clear landed between the check and the CAS. index was 0, so the CAS
+                // matched the reset count. Undo only this publish, then retry.
+                _ = Interlocked.CompareExchange(ref _Count, index, published);
             }
         }
         finally
@@ -552,6 +603,11 @@ internal sealed class ChunkedSlotStore<T>
 }
 
 /// <summary>
+/// Thread-safety: one thread may call Append or AppendRange; a second append throws
+/// InvalidOperationException. Get and TryGet of published slots are lock-free for reference
+/// types and for blittable values of size 1, 2, 4, or 8 bytes. Concurrent readers of larger
+/// structs, and of structs that contain references, are not supported. Clear may run during
+/// Append; Append then retries onto the live prefix.
 /// Grow-only chunked store: a packed prefix <c>0 .. Count-1</c> published by
 /// <see cref="Append"/> / <see cref="AppendRange"/>. Lazy inner-chunk allocation; outer chunk
 /// pointer array grows on demand via <see cref="ChunkedOuterArray{TChunk}"/>.
@@ -643,10 +699,10 @@ public sealed class ChunkedGrowOnlyStore<T>
         _Store.AppendRange(values);
 
     /// <summary>
-    /// Reads a value at <paramref name="index"/>.
-    /// For reference-type <typeparamref name="T"/>, missing/invalid/unallocated slots and
-    /// <c>index &gt;= Count</c> return <see langword="null"/>. For value-type <typeparamref name="T"/>,
-    /// they return the constructor unset sentinel.
+    /// Reads the value at <paramref name="index"/>.
+    /// An invalid index, an index <c>&gt;= Count</c>, or an unallocated chunk returns the
+    /// unset sentinel from the constructor. That sentinel is null for a reference type
+    /// only when the caller left it at the default.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     [return: MaybeNull]
@@ -682,6 +738,11 @@ public sealed class ChunkedGrowOnlyStore<T>
 }
 
 /// <summary>
+/// Thread-safety: one thread may call Append or AppendRange; a second append throws
+/// InvalidOperationException. TryReadPublished and ItemRef of published slots are lock-free
+/// for reference types and for blittable values of size 1, 2, 4, or 8 bytes. Concurrent readers
+/// of larger structs, and of structs that contain references, are not supported. Clear may run
+/// during Append; Append then retries onto the live prefix.
 /// Packed append-only log of <typeparamref name="T"/> entries with lock-free readers.
 /// Random-index slot writes are not available on this type; packed growth is
 /// <see cref="Append"/> / <see cref="AppendRange"/> only.
@@ -887,7 +948,10 @@ public static class ChunkedGrowOnlyStoreExtensions
 
         if (start < 0)
         {
-            int holes = Math.Min(-start, buffer.Length);
+            // -int.MinValue overflows in int. The prefix is entirely holes for any
+            // buffer this method can fill.
+            long magnitude = -(long)start;
+            int holes = magnitude >= buffer.Length ? buffer.Length : (int)magnitude;
             for (int h = 0; h < holes; h++)
             {
                 buffer[h] = null;

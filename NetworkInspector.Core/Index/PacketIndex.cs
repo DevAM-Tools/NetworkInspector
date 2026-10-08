@@ -18,8 +18,9 @@ namespace NetworkInspector.Core.Index;
 /// packet IDs become visible on the same view without obtaining another one. Per-bitmap
 /// seqlocks in <see cref="RoaringBitmap"/> retry a reader that overlaps an in-flight
 /// <see cref="RoaringBitmap.Add"/>. Concurrent writes of a <i>new</i> packet are not supported.
-/// A later parse of an already indexed packet — including <c>Packet.ParseFrameIndexed</c> from
-/// any thread — is a no-op for this index: <see cref="TryBeginPacket"/> returns
+/// A later parse of an already indexed packet — including <c>Packet.TryParse</c> when
+/// <see cref="ParseOptions.Index"/> is set, from any thread — is a no-op for this index:
+/// <see cref="TryBeginPacket"/> returns
 /// <see langword="false"/> and no bitmap is mutated.
 /// </para>
 /// </summary>

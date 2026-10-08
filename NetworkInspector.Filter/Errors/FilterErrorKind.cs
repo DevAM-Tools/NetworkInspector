@@ -54,5 +54,8 @@ public enum FilterErrorKind : byte
     /// <summary>The packet was parsed with <see cref="NetworkInspector.Core.FieldTreeMode.Skip"/> and has no field tree to evaluate.</summary>
     NoFieldTree = 12,
 
+    /// <summary>The expression selects a subtree, which the tree-free observer cannot run.</summary>
+    NeedsFieldTree = 13,
+
     #endregion
 }

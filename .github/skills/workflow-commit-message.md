@@ -163,19 +163,12 @@ Allowed: a public type, command, flag, workflow trigger, or config key; a short 
 Small (one behavior — purpose still has a name, before/after, and example):
 
 ```
-feat: Let operators gate coverage with one local tool
+feat: Let you rerun one TUnit test from the command line
 
-You can list remaining exit-point gaps with one local tool and treat a
-zero gap count as the release gate. You no longer install or version a
-separate analysis library, and you no longer infer coverage from a
-generic percentage.
+You can rerun a single test without the rest of the project. You no
+longer pass an xUnit filter the runner ignores.
 
-After restore, run:
-
-    dotnet tool run exitpointgaps --repo-root .
-
-A passing run means summary.exitGapCount is 0. A failing run lists each
-remaining exit (file, line, kind) so you can add a test and re-gate.
+    dotnet test path/Proj.Tests.csproj -c Release -- --treenode-filter "/*ParserTests/*"
 ```
 
 Large (blocks — each theme names the surface and shows how to use it):
@@ -191,12 +184,13 @@ follows your language; plans and other lasting artifacts stay English.
 ## Requirements
 
 Say `/requirements` (or capture the user-view system description before `/plan` when none exist).
-You get `REQ{n}` rows (behavior, properties, shall-not) and a Done-when check you can
-observe — not “it builds”. If you already attached a list, the plan
-reads it instead of rewriting it.
+You get an atomic `REQ-<AREA>-<TOPIC>` list (behavior, properties, shall-not)
+and a Done-when check you can observe — not “it builds”. If you already
+attached a list, the plan reads it instead of rewriting it.
 
 Example: “Export must fail closed when the path is empty” becomes
-`REQ10` with Done-when: the operator sees a path-empty error and no file.
+`REQ-EXPORT-FAIL-CLOSED` with Done-when: the operator sees a path-empty
+error and no file.
 
 ## Illustrate
 
@@ -215,23 +209,21 @@ views in the same session; do not spawn subagent advisors.
 Breaking:
 
 ```
-feat!: Switch the public CLI to a single run command
+feat!: Switch the TUnit filter to the platform flag
 
-You invoke one command to gate a repo. Split verbs (plan / run /
-report) are gone, so scripts and docs that called them will fail.
+You pass the filter after `--`. A script that still uses the xUnit
+flag runs the whole suite and looks green for the wrong reason.
 
 Old:
 
-    exitpointgaps plan --repo-root .
-    exitpointgaps run --repo-root .
+    dotnet test path/Proj.Tests.csproj --filter ParserTests
 
 New:
 
-    exitpointgaps --repo-root .
+    dotnet test path/Proj.Tests.csproj -c Release -- --treenode-filter "/*ParserTests/*"
 
-BREAKING CHANGE: The previous command names no longer exist. Use the
-single run command with the same --repo-root argument. Drop `plan` and
-`run` subcommands from scripts.
+BREAKING CHANGE: xUnit-style `--filter` is not the TUnit filter. Put
+`--treenode-filter` after `--`. Drop `--filter` from scripts.
 ```
 
 ## Stage 5 — Changelog
@@ -252,7 +244,7 @@ Example addition:
 
 ### Agent workflow
 
-- `/requirements` formalizes high-level `REQ{n}` user-view requirements before `/plan` when none exist
+- `/requirements` formalizes high-level `REQ-<AREA>-<TOPIC>` user-view requirements before `/plan` when none exist
 - Council runs in the same agent; no subagent advisors
 ```
 

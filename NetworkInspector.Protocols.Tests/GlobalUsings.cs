@@ -25,6 +25,7 @@ global using NetworkInspector.Core.Ids;
 global using NetworkInspector.Core.Infos;
 global using NetworkInspector.Core.Reassembly;
 global using NetworkInspector.Core.Settings;
+global using NetworkInspector.Core.Interfaces;
 global using NetworkInspector.Core.Protocols;
 global using NetworkInspector.Core.ValueCaches;
 global using NetworkInspector.Values;

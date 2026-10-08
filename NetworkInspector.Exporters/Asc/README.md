@@ -37,11 +37,12 @@ exporter.OnFinish();
 
 ## Supported Frame Families
 
-- CAN classic and CAN FD
+- CAN classic, CAN FD, and CAN XL
 - LIN
 - FlexRay
+- Ethernet (Vector ASC 1.3.1 section 4.2, `base hex` length, no FCS)
 
-Unsupported link types (for example Ethernet and CAN XL) are skipped and counted in exporter statistics.
+AFDX data frames are read as Ethernet. AFDX status, AFDX bus statistics, `ETH STAT`, and `ETH RxEr` are not read or written. Other link types are skipped and counted in exporter statistics.
 
 ## Builder Options
 

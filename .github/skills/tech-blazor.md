@@ -71,8 +71,8 @@ Shared look, locked breakpoints, CSS layers, JS vs CSS: `tech-web.md`.
 ## Testing
 
 - Component logic: bUnit (render states, parameters, user events, auth visibility, error boundaries).
-- Code-behind, view-models, services: TUnit; exit-point gate: `tech-tunit.md`.
-- Page journeys and UI debug: `tech-playwright.md` (`TUnit.Playwright` in `{App}.UiTest`).
+- Code-behind, view-models, services: TUnit (`tech-tunit.md`).
+- Page journeys and UI debug: `tech-playwright.md` (`TUnit.Playwright` in `{App}.UiTest`). The editor’s integrated browser is available and recommended.
 - Case design: `tech-test.md`.
 
 ## Commands

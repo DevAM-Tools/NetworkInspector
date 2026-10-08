@@ -94,16 +94,23 @@ public sealed partial class TcpProtocol
         ulong ScaledWindowSize,
         int WindowScaleFactor,
         byte Phase,
-        bool NoIpLayer);
+        bool NoIpLayer,
+        uint RelativeSeq,
+        uint RelativeAck,
+        bool SequenceIsRelative,
+        bool AckIsRelative,
+        bool StreamLimitReached);
 
     /// <summary>A single reassembled PDU emitted during ingest, in dispatch order.</summary>
-    public readonly record struct PduEffect(ProtocolId ProtocolId, byte[] PduBytes);
+    public readonly record struct PduEffect(ProtocolId ProtocolId, ReadOnlyMemory<byte> PduBytes);
 
     /// <summary>TCP payload dispatch metadata for redissect replay.</summary>
     public readonly record struct PayloadDispatchEffect(
         PayloadDispatchMode Mode,
         PduEffect[]? Pdus,
-        ProtocolId HeuristicProtocolId);
+        ProtocolId HeuristicProtocolId,
+        ushort PreferredPort,
+        bool HasPreferredPort);
 
     /// <summary>Combined TCP effects of one layer, recorded once at the end of its first parse.</summary>
     private readonly record struct TcpLayerEffect(AnalysisEffect Analysis, PayloadDispatchEffect Dispatch);
@@ -160,7 +167,9 @@ public sealed partial class TcpProtocol
         in TcpAnalysisResult analysis,
         PayloadDispatchMode mode,
         List<PduEffect>? pdus,
-        ProtocolId heuristicProtocolId)
+        ProtocolId heuristicProtocolId,
+        ushort preferredPort = 0,
+        bool hasPreferredPort = false)
     {
         PduEffect[]? pduArray = null;
         if (pdus is not null)
@@ -173,7 +182,7 @@ public sealed partial class TcpProtocol
             layerKey,
             new TcpLayerEffect(
                 _ToAnalysisEffect(in analysis),
-                new PayloadDispatchEffect(mode, pduArray, heuristicProtocolId)));
+                new PayloadDispatchEffect(mode, pduArray, heuristicProtocolId, preferredPort, hasPreferredPort)));
     }
 
     /// <summary>

@@ -47,6 +47,7 @@ global using NetworkInspector.Protocols;
 #endregion
 
 #region NetworkInspector.Sources
+global using NetworkInspector.Sources.Asc;
 global using NetworkInspector.Sources.Blf;
 global using NetworkInspector.Sources.Blf.Format;
 global using NetworkInspector.Sources.Blf.Format.Headers;

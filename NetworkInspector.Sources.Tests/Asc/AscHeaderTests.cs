@@ -76,7 +76,7 @@ internal sealed class AscHeaderTests
         header.TryParseLine("date Sun Nov 24 11:44:00 AM 2019"u8);
 
         // Epoch should be non-zero for a valid date
-        await Assert.That(header.StartTimeEpoch).IsNotEqualTo(0.0);
+        await Assert.That(header.StartUnixNanos).IsNotEqualTo(0L);
     }
 
     // ========================================================================
@@ -130,7 +130,7 @@ internal sealed class AscHeaderTests
         await Assert.That(header.TimestampFormat).IsEqualTo("absolute");
         await Assert.That(header.InternalEventsLogged).IsFalse();
         await Assert.That(header.DateString).IsNull();
-        await Assert.That(header.StartTimeEpoch).IsEqualTo(0.0);
+        await Assert.That(header.StartUnixNanos).IsEqualTo(0L);
     }
 
     // ========================================================================
@@ -153,7 +153,7 @@ internal sealed class AscHeaderTests
         await Assert.That(header.TimestampFormat).IsEqualTo("absolute");
         await Assert.That(header.InternalEventsLogged).IsTrue();
         await Assert.That(header.DateString).IsNotNull();
-        await Assert.That(header.StartTimeEpoch).IsNotEqualTo(0.0);
+        await Assert.That(header.StartUnixNanos).IsNotEqualTo(0L);
     }
 
     // ========================================================================
@@ -177,5 +177,58 @@ internal sealed class AscHeaderTests
         bool consumed = header.TryParseLine("// Another comment"u8);
 
         await Assert.That(consumed).IsTrue();
+    }
+
+    [Test]
+    public async Task RelativeHeaderAccumulatesTwoFrames()
+    {
+        using AscSource source = AscSource.FromText(
+            "date Sun Nov 24 11:44:00 AM 2019\n" +
+            "base dec timestamps relative\n" +
+            "Begin Triggerblock\n" +
+            "0.001 1 100 Rx d 1 1\n" +
+            "0.001 1 100 Rx d 1 2\n" +
+            "End TriggerBlock\n");
+        FrameInterfaceRegistry registry = new();
+        FrameSourceId sourceId = registry.RegisterSource(source);
+        source.Start(sourceId, registry);
+        long start = AscDateParser.TryParseToUnixNanos("Sun Nov 24 11:44:00 AM 2019", TimeZoneInfo.Utc);
+
+        Frame first = source.NextFrame()!.Value;
+        Frame second = source.NextFrame()!.Value;
+
+        await Assert.That(first.Timestamp.AsNanos).IsEqualTo(start + 1_000_000L);
+        await Assert.That(second.Timestamp.AsNanos).IsEqualTo(start + 2_000_000L);
+    }
+
+    [Test]
+    public async Task GermanWeekdayParsesToNonZero()
+    {
+        long nanos = AscDateParser.TryParseToUnixNanos("Die Dez 21 11:29:01 2004", TimeZoneInfo.Utc);
+        DateTime civil = new(2004, 12, 21, 11, 29, 1, DateTimeKind.Unspecified);
+        long expected = (new DateTimeOffset(civil, TimeSpan.Zero).UtcDateTime.Ticks - DateTime.UnixEpoch.Ticks) * 100L;
+
+        await Assert.That(nanos).IsEqualTo(expected);
+    }
+
+    [Test]
+    public async Task EnglishMillisecondMeridianKeepsFraction()
+    {
+        long nanos = AscDateParser.TryParseToUnixNanos("Wed Apr 16 09:21:13.159 am 2014", TimeZoneInfo.Utc);
+        DateTime civil = new(2014, 4, 16, 9, 21, 13, 159, DateTimeKind.Unspecified);
+        long expected = (new DateTimeOffset(civil, TimeSpan.Zero).UtcDateTime.Ticks - DateTime.UnixEpoch.Ticks) * 100L;
+
+        await Assert.That(nanos).IsEqualTo(expected);
+    }
+
+    [Test]
+    public async Task PreviousLogCommentStoresAbsoluteSeconds()
+    {
+        AscHeader header = new();
+        bool consumed = header.TryParseLine("// 60.0000 previous log file: Inc_L1.asc"u8);
+
+        await Assert.That(consumed).IsTrue();
+        await Assert.That(header.PreviousLogAbsolute.HasValue).IsTrue();
+        await Assert.That(header.PreviousLogAbsolute!.Value.WholeSeconds).IsEqualTo(60L);
     }
 }

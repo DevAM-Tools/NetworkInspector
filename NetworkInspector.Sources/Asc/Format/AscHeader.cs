@@ -41,12 +41,21 @@ internal sealed class AscHeader
     }
 
     /// <summary>
-    /// Parsed start timestamp in seconds since Unix epoch, derived from the date header.
+    /// Parsed start timestamp in nanoseconds since the Unix epoch, derived from the date header.
     /// Zero if the date could not be parsed or was not present.
     /// </summary>
-    internal double StartTimeEpoch
+    internal long StartUnixNanos
     {
         get; set;
+    }
+
+    /// <summary>
+    /// Absolute log time from <c>// &lt;time&gt; previous log file:</c>, when that comment is present.
+    /// Used as the starting clock only when timestamps are relative.
+    /// </summary>
+    internal AscTimestamp? PreviousLogAbsolute
+    {
+        get; private set;
     }
 
     /// <summary>
@@ -100,8 +109,9 @@ internal sealed class AscHeader
         if (AscLineClassifier.StartsWithAsciiIgnoreCase(line, "date "u8))
         {
             ReadOnlySpan<byte> datePart = AscTokenizerBytes.TrimAscii(line[5..]);
-            DateString = _ByteSpanToString(datePart);
-            StartTimeEpoch = AscDateParser.TryParseToEpoch(DateString, TimestampTimeZone);
+            // Latin-1 keeps the byte 0xE4 in "Mär". ASCII would turn it into '?'.
+            DateString = _Latin1ToString(datePart);
+            StartUnixNanos = AscDateParser.TryParseToUnixNanos(DateString, TimestampTimeZone);
             return true;
         }
 
@@ -119,17 +129,18 @@ internal sealed class AscHeader
             return true;
         }
 
-        // "Begin Triggerblock" ends the header; optional date on the same line updates StartTimeEpoch
+        // "Begin Triggerblock" ends the header; optional date on the same line updates StartUnixNanos.
+        // Zero means the date did not parse, so a missing trigger date leaves the header date in place.
         if (AscLineClassifier.StartsWithAsciiIgnoreCase(line, "Begin Triggerblock"u8))
         {
             ReadOnlySpan<byte> rest = AscTokenizerBytes.TrimStartAscii(line[18..]);
             if (!rest.IsEmpty)
             {
                 string triggerDate = _ByteSpanToString(rest);
-                double triggerEpoch = AscDateParser.TryParseToEpoch(triggerDate, TimestampTimeZone);
-                if (triggerEpoch > 0)
+                long triggerNanos = AscDateParser.TryParseToUnixNanos(triggerDate, TimestampTimeZone);
+                if (triggerNanos != 0)
                 {
-                    StartTimeEpoch = triggerEpoch;
+                    StartUnixNanos = triggerNanos;
                 }
             }
 
@@ -196,6 +207,22 @@ internal sealed class AscHeader
         if (AscLineClassifier.StartsWithAsciiIgnoreCase(content, "version "u8))
         {
             Version = _ByteSpanToString(AscTokenizerBytes.TrimAscii(content[8..]));
+            return;
+        }
+
+        // "// <time> previous log file: <filename>" — the time is absolute seconds, even in a relative file.
+        int space = content.IndexOf((byte)' ');
+        if (space <= 0)
+        {
+            return;
+        }
+
+        ReadOnlySpan<byte> timeToken = content[..space];
+        ReadOnlySpan<byte> rest = AscTokenizerBytes.TrimStartAscii(content[(space + 1)..]);
+        if (AscTimestamp.TryParse(timeToken, out AscTimestamp stamp)
+            && AscLineClassifier.StartsWithAsciiIgnoreCase(rest, "previous log file:"u8))
+        {
+            PreviousLogAbsolute = stamp;
         }
     }
 
@@ -223,6 +250,25 @@ internal sealed class AscHeader
     /// </summary>
     private static string _ByteSpanToString(ReadOnlySpan<byte> span) =>
         System.Text.Encoding.ASCII.GetString(span);
+
+    /// <summary>
+    /// Decodes header date bytes as Latin-1 so the German month <c>Mär</c> (byte 0xE4) survives.
+    /// </summary>
+    private static string _Latin1ToString(ReadOnlySpan<byte> span)
+    {
+        if (span.Length > 128)
+        {
+            return System.Text.Encoding.Latin1.GetString(span);
+        }
+
+        Span<char> chars = stackalloc char[span.Length];
+        for (int i = 0; i < span.Length; i++)
+        {
+            chars[i] = (char)span[i];
+        }
+
+        return new string(chars);
+    }
 
     #endregion
 }

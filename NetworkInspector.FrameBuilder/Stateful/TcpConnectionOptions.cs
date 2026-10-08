@@ -11,8 +11,12 @@ namespace NetworkInspector.FrameBuilder;
 /// <param name="ServerIsn">Initial Send Sequence number used by the server (SEQ of the SYN+ACK). Default <c>9000</c>.</param>
 /// <param name="Mss">Maximum Segment Size used to split application-data Writes into TCP segments. Default <c>1460</c> bytes.</param>
 /// <param name="WindowSize">Default window size advertised in every emitted segment. Default <c>65535</c>.</param>
+/// <param name="ClientSynOptions">Options written only on the client SYN. Empty keeps a 20-byte header.</param>
+/// <param name="ServerSynOptions">Options written only on the server SYN-ACK. Empty keeps a 20-byte header.</param>
 public readonly record struct TcpConnectionOptions(
     uint ClientIsn = 1000,
     uint ServerIsn = 9000,
     ushort Mss = 1460,
-    ushort WindowSize = 65535);
+    ushort WindowSize = 65535,
+    TcpOptions ClientSynOptions = default,
+    TcpOptions ServerSynOptions = default);

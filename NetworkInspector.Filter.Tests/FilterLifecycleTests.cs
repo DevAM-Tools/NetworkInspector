@@ -43,7 +43,12 @@ internal sealed class FilterLifecycleTests
     {
         using Stack stack = FilterTestHelper.BuildStack();
         Filter filter = FilterTestHelper.CompileOrThrow("eth", stack);
-        Packet packet = FilterTestHelper.Parse(stack, FilterTestHelper.BuildUdpFrame(53, 1024), PacketId.Invalid.Value);
+        // TryParse rejects PacketId.Invalid. The cache still ignores a negative id, so a
+        // parsed packet's id is replaced after the field tree exists.
+        Packet packet = FilterTestHelper.Parse(stack, FilterTestHelper.BuildUdpFrame(53, 1024), 0);
+        System.Reflection.MethodInfo setter = typeof(Packet).GetProperty(nameof(Packet.Id))!
+            .GetSetMethod(nonPublic: true)!;
+        setter.Invoke(packet, [PacketId.Invalid]);
 
         await Assert.That(FilterTestHelper.MatchOrThrow(filter, packet)).IsTrue();
         await Assert.That(FilterTestHelper.MatchOrThrow(filter, packet)).IsTrue();

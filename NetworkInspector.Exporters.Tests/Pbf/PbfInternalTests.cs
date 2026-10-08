@@ -409,7 +409,12 @@ internal sealed class PbfInternalTests
                 ifId,
                 registry).Value;
 
-            Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame);
+            ParseOptions options = new();
+            if (!Packet.TryParse(new PacketId(0), stack, frame, in options, out Packet? packet, out ParseFailure failure)
+                || packet is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
             packet.MaterializeAll();
             return packet;
         }

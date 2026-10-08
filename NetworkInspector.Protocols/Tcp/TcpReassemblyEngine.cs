@@ -76,12 +76,13 @@ internal sealed class TcpReassemblyEngine
     /// </summary>
     /// <param name="stream">The stream state (from <see cref="GetOrCreateStream"/>).</param>
     /// <param name="isForward">Direction of this segment.</param>
+    /// <param name="sequence">TCP sequence number of the first payload byte.</param>
     /// <param name="payload">The TCP payload data.</param>
     /// <returns><see langword="true"/> if the segment was accepted.</returns>
-    internal static bool FeedSegment(TcpStreamState stream, bool isForward, ReadOnlyMemory<byte> payload)
+    internal static bool FeedSegment(TcpStreamState stream, bool isForward, uint sequence, ReadOnlyMemory<byte> payload)
     {
         SegmentBuffer buffer = stream.GetBuffer(isForward);
-        return buffer.AppendSegment(payload);
+        return buffer.TryAppend(sequence, payload);
     }
 
     /// <summary>

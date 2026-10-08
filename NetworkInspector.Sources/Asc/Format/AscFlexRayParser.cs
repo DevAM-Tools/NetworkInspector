@@ -5,9 +5,12 @@ namespace NetworkInspector.Sources.Asc.Format;
 /// <summary>
 /// Parses an ASC FlexRay message line into a LINKTYPE_FLEXRAY binary frame.
 ///
-/// ASC FlexRay line format:
-///   &lt;time&gt; Fr &lt;channel&gt; V9 &lt;frame_id&gt; &lt;payload_len&gt; &lt;cycle&gt; &lt;nm&gt;
-///   &lt;header_crc&gt; &lt;ident&gt; &lt;data_len&gt; &lt;data...&gt; &lt;flags&gt;
+/// Old ASC FlexRay line (CANoe 5.1 and earlier):
+///   &lt;time&gt; Fr &lt;channel&gt; V9 &lt;id&gt; &lt;cycle&gt; &lt;nm&gt; &lt;sync&gt; &lt;header_crc&gt; &lt;name&gt; &lt;byte_count&gt; &lt;data...&gt;
+/// New ASC FlexRay line (since CANoe 5.2):
+///   &lt;time&gt; Fr RMSG|PDU &lt;cluster&gt; &lt;client&gt; &lt;channel&gt; &lt;mask&gt; &lt;slot&gt; &lt;cycle&gt; &lt;dir&gt; ... &lt;crc&gt; &lt;name&gt; &lt;payloadLen&gt; &lt;bufferLen&gt; &lt;data...&gt;
+/// Numeric fields follow the file base. NM and Sync are skipped. Mask 3 (both channels) is stored as bus channel B
+/// because LINKTYPE_FLEXRAY has one channel bit.
 ///
 /// LINKTYPE_FLEXRAY frame layout (7-byte header + data):
 ///   Measurement header + error flags + ISO 17458-2 frame header + payload.
@@ -17,334 +20,117 @@ internal static class AscFlexRayParser
     #region Public API
 
     /// <summary>
-    /// Tries to parse an ASC FlexRay line and produce a DLT_FLEXRAY binary frame.
-    /// </summary>
-    /// <param name="line">The full trimmed ASC line (including timestamp).</param>
-    /// <param name="numericBase">16 for hex, 10 for dec.</param>
-    /// <param name="timestamp">Parsed timestamp in seconds.</param>
-    /// <param name="channel">Parsed FlexRay channel number.</param>
-    /// <param name="frame">The resulting DLT_FLEXRAY binary frame.</param>
-    /// <returns><c>true</c> if parsing succeeded.</returns>
-    internal static bool TryParse(
-        ReadOnlySpan<char> line, int numericBase,
-        out double timestamp, out int channel, out byte[] frame)
-    {
-        timestamp = 0.0;
-        channel = 0;
-        frame = [];
-
-        AscTokenizer tokenizer = new(line);
-
-        // Token 0: timestamp
-        if (!tokenizer.TryNextToken(out ReadOnlySpan<char> tsToken)
-            || !AscCanParser.TryParseTimestamp(tsToken, out timestamp))
-        {
-            return false;
-        }
-
-        // Token 1: "Fr" keyword
-        if (!tokenizer.TryNextToken(out ReadOnlySpan<char> frToken))
-        {
-            return false;
-        }
-
-        if (!frToken.Equals("Fr", StringComparison.OrdinalIgnoreCase))
-        {
-            return false;
-        }
-
-        // Token 2: channel number
-        if (!tokenizer.TryNextToken(out ReadOnlySpan<char> chToken)
-            || !AscCanParser.TryParseChannel(chToken, out channel))
-        {
-            return false;
-        }
-
-        // Token 3: version string (e.g., "V9") — skip
-        if (!tokenizer.TryNextToken(out _))
-        {
-            return false;
-        }
-
-        // Token 4: frame ID (slot ID)
-        if (!tokenizer.TryNextToken(out ReadOnlySpan<char> frameIdToken))
-        {
-            return false;
-        }
-
-        NumberStyles numStyle = numericBase == 16 ? NumberStyles.HexNumber : NumberStyles.Integer;
-        if (!ushort.TryParse(frameIdToken, numStyle, CultureInfo.InvariantCulture, out ushort frameId))
-        {
-            return false;
-        }
-
-        // Token 5: payload length (in words, i.e., 2-byte units)
-        if (!tokenizer.TryNextToken(out ReadOnlySpan<char> payloadLenToken))
-        {
-            return false;
-        }
-
-        if (!int.TryParse(payloadLenToken, NumberStyles.Integer, CultureInfo.InvariantCulture, out int payloadLenWords))
-        {
-            return false;
-        }
-
-        if (payloadLenWords < 0)
-        {
-            return false;
-        }
-
-        // Token 6: cycle count
-        if (!tokenizer.TryNextToken(out ReadOnlySpan<char> cycleToken))
-        {
-            return false;
-        }
-
-        if (!byte.TryParse(cycleToken, NumberStyles.Integer, CultureInfo.InvariantCulture, out byte cycle))
-        {
-            return false;
-        }
-
-        // Token 7: NM (Network Management) flag — skip
-        if (!tokenizer.TryNextToken(out _))
-        {
-            return false;
-        }
-
-        // Token 8: header CRC
-        if (!tokenizer.TryNextToken(out ReadOnlySpan<char> crcToken))
-        {
-            return false;
-        }
-
-        if (!ushort.TryParse(crcToken, numStyle, CultureInfo.InvariantCulture, out ushort headerCrc))
-        {
-            return false;
-        }
-
-        // Token 9: identifier/name — may be 'x' or a symbolic name, skip
-        if (!tokenizer.TryNextToken(out _))
-        {
-            return false;
-        }
-
-        // Token 10: data length (in bytes)
-        if (!tokenizer.TryNextToken(out ReadOnlySpan<char> dataLenToken))
-        {
-            return false;
-        }
-
-        if (!int.TryParse(dataLenToken, NumberStyles.Integer, CultureInfo.InvariantCulture, out int dataLen))
-        {
-            return false;
-        }
-
-        if (dataLen < 0)
-        {
-            return false;
-        }
-
-        if (payloadLenWords > 0 && dataLen > payloadLenWords * 2)
-        {
-            // Payload length in the header is in 16-bit words; declared byte length cannot exceed that.
-            return false;
-        }
-
-        // Clamp to the FlexRay protocol maximum before allocating: when payloadLenWords is 0
-        // (not specified) the guard above does not apply, and a malicious ASC line could
-        // declare an arbitrarily large dataLen, triggering an unbounded heap allocation.
-        dataLen = Math.Min(dataLen, FlexRayLinkTypeFrame.MaxPayloadBytes);
-
-        byte[] dataBytes = ArrayPool<byte>.Shared.Rent(dataLen);
-        try
-        {
-            int parsedCount = _ParseCharDataTokens(ref tokenizer, dataLen, dataBytes);
-
-            // Build LINKTYPE_FLEXRAY frame (ASC channel 1 = A, 2 = B).
-            ReadOnlySpan<byte> payloadSpan = parsedCount > 0
-                ? dataBytes.AsSpan(0, parsedCount)
-                : ReadOnlySpan<byte>.Empty;
-            frame = FlexRayLinkTypeFrame.BuildFrame(
-                FlexRayLinkTypeFrame.AscChannelToBusChannel(channel),
-                frameId,
-                cycle,
-                headerCrc,
-                payloadSpan);
-
-            return true;
-        }
-        finally
-        {
-            ArrayPool<byte>.Shared.Return(dataBytes);
-        }
-    }
-
-    #endregion
-
-    #region Byte-span overload (zero-allocation path)
-
-    /// <summary>
-    /// Byte-span overload of <see cref="TryParse(ReadOnlySpan{char}, int, out double, out int, out byte[])"/>.
-    /// Works directly on raw ASCII bytes without converting to a <see cref="string"/>.
+    /// Parses an ASC FlexRay line from raw ASCII bytes.
     /// </summary>
     internal static bool TryParse(
         ReadOnlySpan<byte> line, int numericBase,
-        out double timestamp, out int channel, out byte[] frame)
+        out AscTimestamp timestamp, out int channel, out byte[] frame)
     {
-        timestamp = 0.0;
+        timestamp = default;
         channel = 0;
         frame = [];
 
         AscTokenizerBytes tokenizer = new(line);
 
         if (!tokenizer.TryNextToken(out ReadOnlySpan<byte> tsToken)
-            || !AscCanParser.TryParseTimestamp(tsToken, out timestamp))
+            || !AscTimestamp.TryParse(tsToken, out timestamp))
         {
             return false;
         }
 
-        // "Fr" keyword
         if (!tokenizer.TryNextToken(out ReadOnlySpan<byte> frToken)
             || !AscLineClassifier.StartsWithAsciiIgnoreCase(frToken, "Fr"u8) || frToken.Length != 2)
         {
             return false;
         }
 
-        if (!tokenizer.TryNextToken(out ReadOnlySpan<byte> chToken)
-            || !AscCanParser.TryParseChannel(chToken, out channel))
-        {
-            return false;
-        }
-
-        // Version string (e.g., "V9") — skip
-        if (!tokenizer.TryNextToken(out _))
-        {
-            return false;
-        }
-
-        // Frame ID
-        if (!tokenizer.TryNextToken(out ReadOnlySpan<byte> frameIdToken))
+        if (!tokenizer.TryNextToken(out ReadOnlySpan<byte> kindOrChannel))
         {
             return false;
         }
 
         bool isHex = numericBase == 16;
-        ushort frameId;
-        if (isHex)
+        if (_TokenIs(kindOrChannel, "RMSG"u8) || _TokenIs(kindOrChannel, "PDU"u8))
         {
-            if (!System.Buffers.Text.Utf8Parser.TryParse(frameIdToken, out uint u, out _, 'X') || u > ushort.MaxValue)
-            {
-                return false;
-            }
-
-            frameId = (ushort)u;
-        }
-        else
-        {
-            if (!System.Buffers.Text.Utf8Parser.TryParse(frameIdToken, out int si, out _) || si < 0 || si > ushort.MaxValue)
-            {
-                return false;
-            }
-
-            frameId = (ushort)si;
+            return _TryParseNewFlexRay(ref tokenizer, isHex, out channel, out frame);
         }
 
-        // Payload length (in words)
-        if (!tokenizer.TryNextToken(out ReadOnlySpan<byte> payloadLenToken)
-            || !System.Buffers.Text.Utf8Parser.TryParse(payloadLenToken, out int payloadLenWords, out _))
+        if (!AscCanParser.TryParseChannel(kindOrChannel, out channel))
         {
             return false;
         }
 
-        if (payloadLenWords < 0)
-        {
-            return false;
-        }
+        return _TryParseOldFlexRay(ref tokenizer, isHex, channel, out frame);
+    }
 
-        // Cycle count
-        if (!tokenizer.TryNextToken(out ReadOnlySpan<byte> cycleToken)
-            || !System.Buffers.Text.Utf8Parser.TryParse(cycleToken, out int cycleInt, out _))
-        {
-            return false;
-        }
+    /// <summary>
+    /// Old format: version, id, cycle, NM, sync, header CRC, name, byte count, data.
+    /// A byte count above 254 is rejected so the line cannot force a large allocation.
+    /// </summary>
+    private static bool _TryParseOldFlexRay(
+        ref AscTokenizerBytes tokenizer,
+        bool isHex,
+        int channel,
+        out byte[] frame)
+    {
+        frame = [];
 
-        byte cycle = (byte)(cycleInt & 0xFF);
-
-        // NM flag — skip
+        // Version string (for example "V9").
         if (!tokenizer.TryNextToken(out _))
         {
             return false;
         }
 
-        // Header CRC
-        if (!tokenizer.TryNextToken(out ReadOnlySpan<byte> crcToken))
+        if (!_TryParseFlexInt(ref tokenizer, isHex, out int frameIdValue)
+            || frameIdValue < 0
+            || frameIdValue > ushort.MaxValue)
         {
             return false;
         }
 
-        ushort headerCrc;
-        if (isHex)
+        if (!_TryParseFlexInt(ref tokenizer, isHex, out int cycleInt) || cycleInt < 0 || cycleInt > 63)
         {
-            if (!System.Buffers.Text.Utf8Parser.TryParse(crcToken, out uint u, out _, 'X') || u > ushort.MaxValue)
-            {
-                return false;
-            }
-
-            headerCrc = (ushort)u;
-        }
-        else
-        {
-            if (!System.Buffers.Text.Utf8Parser.TryParse(crcToken, out int si, out _) || si < 0 || si > ushort.MaxValue)
-            {
-                return false;
-            }
-
-            headerCrc = (ushort)si;
+            return false;
         }
 
-        // Identifier/name — skip
+        // NM and Sync are not carried by LINKTYPE_FLEXRAY.
+        if (!tokenizer.TryNextToken(out _) || !tokenizer.TryNextToken(out _))
+        {
+            return false;
+        }
+
+        if (!_TryParseFlexInt(ref tokenizer, isHex, out int crcValue)
+            || crcValue < 0
+            || crcValue > ushort.MaxValue)
+        {
+            return false;
+        }
+
         if (!tokenizer.TryNextToken(out _))
         {
             return false;
         }
 
-        // Data length (in bytes)
-        if (!tokenizer.TryNextToken(out ReadOnlySpan<byte> dataLenToken)
-            || !System.Buffers.Text.Utf8Parser.TryParse(dataLenToken, out int dataLen, out _))
+        if (!_TryParseFlexInt(ref tokenizer, isHex, out int dataLen)
+            || dataLen < 0
+            || dataLen > FlexRayLinkTypeFrame.MaxPayloadBytes)
         {
             return false;
         }
-
-        if (dataLen < 0)
-        {
-            return false;
-        }
-
-        if (payloadLenWords > 0 && dataLen > payloadLenWords * 2)
-        {
-            return false;
-        }
-
-        // Clamp to the FlexRay protocol maximum before allocating: when payloadLenWords is 0
-        // (not specified) the guard above does not apply, and a malicious ASC line could
-        // declare an arbitrarily large dataLen, triggering an unbounded heap allocation.
-        dataLen = Math.Min(dataLen, FlexRayLinkTypeFrame.MaxPayloadBytes);
 
         byte[] dataBytes = ArrayPool<byte>.Shared.Rent(dataLen);
         try
         {
-            int parsedCount = _ParseByteDataTokens(ref tokenizer, dataLen, dataBytes);
-
+            int parsedCount = _ParseByteDataTokens(ref tokenizer, dataLen, isHex, dataBytes);
             ReadOnlySpan<byte> payloadSpan = parsedCount > 0
                 ? dataBytes.AsSpan(0, parsedCount)
                 : ReadOnlySpan<byte>.Empty;
             frame = FlexRayLinkTypeFrame.BuildFrame(
                 FlexRayLinkTypeFrame.AscChannelToBusChannel(channel),
-                frameId,
-                cycle,
-                headerCrc,
+                (ushort)frameIdValue,
+                (byte)cycleInt,
+                (ushort)crcValue,
                 payloadSpan);
-
             return true;
         }
         finally
@@ -353,67 +139,120 @@ internal static class AscFlexRayParser
         }
     }
 
+    /// <summary>
+    /// New format since CANoe 5.2. The application channel is the interface id.
+    /// Mask 1 is bus A. Mask 2 and mask 3 are bus B.
+    /// </summary>
+    private static bool _TryParseNewFlexRay(
+        ref AscTokenizerBytes tokenizer,
+        bool isHex,
+        out int channel,
+        out byte[] frame)
+    {
+        channel = 0;
+        frame = [];
+
+        // Cluster and client are not part of the reconstructed frame.
+        if (!_TryParseFlexInt(ref tokenizer, isHex, out _)
+            || !_TryParseFlexInt(ref tokenizer, isHex, out _))
+        {
+            return false;
+        }
+
+        if (!_TryParseFlexInt(ref tokenizer, isHex, out channel))
+        {
+            return false;
+        }
+
+        if (!_TryParseFlexInt(ref tokenizer, isHex, out int mask) || (mask != 1 && mask != 2 && mask != 3))
+        {
+            return false;
+        }
+
+        if (!_TryParseFlexInt(ref tokenizer, isHex, out int slot)
+            || slot < 0
+            || slot > ushort.MaxValue)
+        {
+            return false;
+        }
+
+        if (!_TryParseFlexInt(ref tokenizer, isHex, out int cycleInt) || cycleInt < 0 || cycleInt > 63)
+        {
+            return false;
+        }
+
+        if (!tokenizer.TryNextToken(out ReadOnlySpan<byte> direction) || !_IsFlexRayDirection(direction))
+        {
+            return false;
+        }
+
+        // App parameter, flags, CC type, and CC data are controller metadata.
+        if (!_TryParseFlexInt(ref tokenizer, isHex, out _)
+            || !_TryParseFlexInt(ref tokenizer, isHex, out _)
+            || !_TryParseFlexInt(ref tokenizer, isHex, out _)
+            || !_TryParseFlexInt(ref tokenizer, isHex, out _))
+        {
+            return false;
+        }
+
+        if (!_TryParseFlexInt(ref tokenizer, isHex, out int crcValue)
+            || crcValue < 0
+            || crcValue > ushort.MaxValue)
+        {
+            return false;
+        }
+
+        if (!tokenizer.TryNextToken(out _))
+        {
+            return false;
+        }
+
+        if (!_TryParseFlexInt(ref tokenizer, isHex, out int payloadLength)
+            || payloadLength < 0
+            || payloadLength > FlexRayLinkTypeFrame.MaxPayloadBytes)
+        {
+            return false;
+        }
+
+        if (!_TryParseFlexInt(ref tokenizer, isHex, out int bufferLength)
+            || bufferLength < 0
+            || bufferLength > payloadLength)
+        {
+            return false;
+        }
+
+        byte[] data = new byte[payloadLength];
+        for (int i = 0; i < bufferLength; i++)
+        {
+            if (!tokenizer.TryNextToken(out ReadOnlySpan<byte> dataToken)
+                || !AscCanParser.TryParseByte(dataToken, isHex ? 16 : 10, out byte parsed))
+            {
+                return false;
+            }
+
+            data[i] = parsed;
+        }
+
+        // Mask 3 means both channels. The link type stores one bit, so both is recorded as B.
+        bool channelB = mask != 1;
+        frame = FlexRayLinkTypeFrame.BuildFrame(
+            channelB,
+            (ushort)slot,
+            (byte)cycleInt,
+            (ushort)crcValue,
+            data);
+        return true;
+    }
+
     #endregion
 
     #region Private Helpers
 
-    private static int _ParseCharDataTokens(ref AscTokenizer tokenizer, int dataLen, byte[] dataBytes)
+    private static int _ParseByteDataTokens(
+        ref AscTokenizerBytes tokenizer, int dataLen, bool isHex, byte[] dataBytes)
     {
+        int numericBase = isHex ? 16 : 10;
         int parsedCount = 0;
-
-        for (int i = 0; i < dataLen; i++)
-        {
-            if (!tokenizer.TryNextToken(out ReadOnlySpan<char> dataToken))
-            {
-                break;
-            }
-
-            // The data might be in hex pairs (e.g., "01d0") — parse two bytes at a time
-            if (dataToken.Length >= 4)
-            {
-                // Could be a hex word (2 bytes), parse byte by byte
-                int bytesInToken = dataToken.Length / 2;
-                for (int j = 0; j < bytesInToken && parsedCount < dataLen; j++)
-                {
-                    ReadOnlySpan<char> byteStr = dataToken.Slice(j * 2, 2);
-                    if (byte.TryParse(byteStr, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out byte b))
-                    {
-                        dataBytes[parsedCount++] = b;
-                    }
-                    else
-                    {
-                        break;
-                    }
-                }
-
-                // Adjust the loop counter to account for multi-byte tokens
-                i = parsedCount - 1;
-            }
-            else if (dataToken.Length == 2)
-            {
-                if (byte.TryParse(dataToken, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out byte b))
-                {
-                    dataBytes[parsedCount++] = b;
-                }
-                else
-                {
-                    break;
-                }
-            }
-            else
-            {
-                // Might be a flags token or other metadata — stop data parsing
-                break;
-            }
-        }
-
-        return parsedCount;
-    }
-
-    private static int _ParseByteDataTokens(ref AscTokenizerBytes tokenizer, int dataLen, byte[] dataBytes)
-    {
-        int parsedCount = 0;
-
         for (int i = 0; i < dataLen; i++)
         {
             if (!tokenizer.TryNextToken(out ReadOnlySpan<byte> dataToken))
@@ -421,43 +260,47 @@ internal static class AscFlexRayParser
                 break;
             }
 
-            if (dataToken.Length >= 4)
-            {
-                int bytesInToken = dataToken.Length / 2;
-                for (int j = 0; j < bytesInToken && parsedCount < dataLen; j++)
-                {
-                    ReadOnlySpan<byte> byteStr = dataToken.Slice(j * 2, 2);
-                    if (System.Buffers.Text.Utf8Parser.TryParse(byteStr, out uint u, out _, 'X') && u <= 255)
-                    {
-                        dataBytes[parsedCount++] = (byte)u;
-                    }
-                    else
-                    {
-                        break;
-                    }
-                }
-
-                i = parsedCount - 1;
-            }
-            else if (dataToken.Length == 2)
-            {
-                if (System.Buffers.Text.Utf8Parser.TryParse(dataToken, out uint u, out _, 'X') && u <= 255)
-                {
-                    dataBytes[parsedCount++] = (byte)u;
-                }
-                else
-                {
-                    break;
-                }
-            }
-            else
+            if (!AscCanParser.TryParseByte(dataToken, numericBase, out byte parsed))
             {
                 break;
             }
+
+            dataBytes[parsedCount++] = parsed;
         }
 
         return parsedCount;
     }
+
+    private static bool _TryParseFlexInt(ref AscTokenizerBytes tokenizer, bool isHex, out int value)
+    {
+        value = 0;
+        if (!tokenizer.TryNextToken(out ReadOnlySpan<byte> token) || token.IsEmpty)
+        {
+            return false;
+        }
+
+        if (isHex)
+        {
+            if (!System.Buffers.Text.Utf8Parser.TryParse(token, out uint parsed, out int consumed, 'X')
+                || consumed != token.Length
+                || parsed > int.MaxValue)
+            {
+                return false;
+            }
+
+            value = (int)parsed;
+            return true;
+        }
+
+        return System.Buffers.Text.Utf8Parser.TryParse(token, out value, out int consumedDec)
+            && consumedDec == token.Length;
+    }
+
+    private static bool _TokenIs(ReadOnlySpan<byte> token, ReadOnlySpan<byte> expected) =>
+        token.Length == expected.Length && AscLineClassifier.StartsWithAsciiIgnoreCase(token, expected);
+
+    private static bool _IsFlexRayDirection(ReadOnlySpan<byte> token) =>
+        _TokenIs(token, "Rx"u8) || _TokenIs(token, "Tx"u8) || _TokenIs(token, "TxRq"u8);
 
     #endregion
 }

@@ -3,8 +3,9 @@
 Load on `/illustrate`, or when a plan/requirements/concept needs an interactive HTML illustration. Apply `copilot-instructions.md` Sections 2–4. Do not implement product code unless the user asked for the illustration only.
 
 **Purpose:** Make one item of interest easier to understand. Slideshow or
-interactive demo. Zip and open offline: relative paths, no build, no CDN in the
-shipped HTML. Ask before vendoring allowlisted libraries. Playwright is an
+interactive demo. Try to show the relationship being illustrated as a graphic
+and as an animation. Zip and open offline: relative paths, no build, no CDN in
+the shipped HTML. Ask before vendoring allowlisted libraries. Playwright is an
 agent create-time check only; the illustration does not mention or require it.
 
 ## Stage Order
@@ -29,8 +30,12 @@ agent create-time check only; the illustration does not mention or require it.
   have to reflow for phones.
 - Self-contained: relative paths only; no build step; no npm; no bundler; no CDN
   URLs in the shipped HTML.
-- SVG inlined or as sibling `.svg` files is welcome.
-- Animation and interactivity are welcome when they **explain**. Do not decorate.
+- Try to show the relationship being illustrated as a **graphic** and as an
+  **animation**: who relates to whom, what changes, and in what order. Inline
+  SVG, a staged sequence, or CSS motion. The motion has to carry that
+  relationship. Skip decoration that does not explain it.
+- SVG inlined or as sibling `.svg` files is the usual graphic. A still diagram
+  still counts when the subject has no change worth moving.
 - Do **not** download vendor files or add `<script>` / stylesheet links until
   Stage 3 is answered.
 
@@ -112,6 +117,9 @@ When any `vendor/` file exists, use a folder (`illustrations/<slug>/index.html` 
 
 - Semantic HTML. Keyboard usable. Visible strings in **English** (Section 4.6).
   Not required to be responsive. Do not load `tech-web.md`.
+- Include the graphic and, when the relationship changes over time or in
+  steps, the animation chosen in Stage 2. Do not leave the relationship as
+  prose alone when a picture or a short motion can show it.
 - 3D: only when Stage 3 was **Yes** for three.js or Babylon.js. Relative
   `./vendor/…` only: ES modules + import map for three.js, or a script tag for
   Babylon.js. Keep the camera and one explanatory object; do not ship a game.

@@ -1,6 +1,6 @@
 ---
 name: review
-description: Skeptical auditor review. Answer ready-for-public-release for the scope. Ignore prior reviews unless named. Load skills from the Section 3 table. Locked finding How. Default runs tests; static on explicit reduced scope. Use on /review.
+description: Skeptical auditor review. Answer ready-for-public-release for the scope. Summary is a findings table plus a hunt-results table. Ignore prior reviews unless named. Load skills from the Section 3 table. Locked finding How. Default runs tests; static on explicit reduced scope. Use on /review.
 argument-hint: Describe files/features/PR to review
 agent: agent
 ---

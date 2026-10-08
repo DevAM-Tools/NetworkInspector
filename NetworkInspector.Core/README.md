@@ -34,6 +34,7 @@ dotnet add package NetworkInspector.Protocols
 
 ```csharp
 using NetworkInspector.Core;
+using NetworkInspector.Core.Infos;
 using NetworkInspector.Protocols;
 
 StackBuilder builder = new(new SettingsManager(), new FrameInterfaceRegistry());
@@ -48,10 +49,23 @@ Frame frame = Frame.Create(
     FrameInterfaceId.Invalid,
     stack.FrameInterfaceRegistry).Value;
 
-Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame);
-foreach (Field field in packet)
+ParseOptions options = new();
+bool parsed = Packet.TryParse(
+    new PacketId(0),
+    stack,
+    frame,
+    in options,
+    out Packet? packet,
+    out ParseFailure failure);
+if (!parsed || packet is null)
 {
-    Console.WriteLine($"{field.Info.UiName}: {field.Value}");
+    throw new InvalidOperationException(failure.ToString());
+}
+
+foreach (Field field in packet.IterFieldsDfs(materialize: true))
+{
+    FieldInfo? info = field.FieldInfo;
+    Console.WriteLine($"{info?.UiName}: {field.Value}");
 }
 
 stack.Dispose();
@@ -65,7 +79,7 @@ Post-parsers are protocol-owned callbacks that run after the main protocol dispa
 
 **Lifecycle** — post-parsers execute after the full protocol dispatch tree, before `packet.info` is appended, and before the packet is sealed. They receive the packet root field as parent, so their fields appear as root-level siblings identical to top-level protocol fields.
 
-**Index** — in indexed parses (`ParseFrameIndexed`), post-parsers run before `PacketIndex.EndPacket`. Their `RecordProtocolPresence` and `RecordGroupPresence` calls are treated identically to those of normal parsers. **ValueCache** — pass a `ValueCache` into `ParseFrame` / `ParseFrameIndexed` to record selected field values into RAM columns during the same first parse; omit the cache and record is a no-op. Membership is a compact array (few fields) or a dense probe plus bitset. Usage: [`VALUECACHE_GUIDE.md`](VALUECACHE_GUIDE.md). Design: `docs/value-cache-design.md`.
+**Index** — in indexed parses (`Packet.TryParse` with `ParseOptions.Index`), post-parsers run before `PacketIndex.EndPacket`. Their `RecordProtocolPresence` and `RecordGroupPresence` calls are treated identically to those of normal parsers. **ValueCache** — pass a `ValueCache` through `ParseOptions` on `Packet.TryParse` to record selected field values into RAM columns during the same first parse; omit the cache and record is a no-op. Membership is a compact array (few fields) or a dense probe plus bitset. Usage: [`VALUECACHE_GUIDE.md`](VALUECACHE_GUIDE.md). Design: `docs/value-cache-design.md`.
 
 **Error policy** — a `ParseResult` error or exception from any post-parser is recorded as a `packet.error` and made visible. Remaining post-parsers always continue executing regardless of earlier failures. No errors are silently discarded.
 
@@ -81,14 +95,19 @@ Combine Core with `NetworkInspector.Sources` readers to parse frames from PCAP/P
 
 ### Parse without a field tree
 
-When the caller only needs a `ValueCache`, a `PacketIndex`, or protocol side effects, pass `FieldTreeMode.Skip` as the last argument of the existing parse factories. The packet does not retain FieldBodies (`HasFieldTree` is false). Protocols still decode through the same `Append*` methods. See `docs/skip-field-tree.md`.
+When the caller only needs a `ValueCache`, a `PacketIndex`, or protocol side effects, pass `ParseOptions` whose `FieldTree` is `FieldTreeMode.Skip`. The packet does not retain FieldBodies (`HasFieldTree` is false). Protocols still decode through the same `Append*` methods. See `docs/skip-field-tree.md`.
 
 ```csharp
-Packet throwaway = Packet.ParseFrame(id, stack, frame, FieldTreeMode.Skip);
-Packet recorded = Packet.ParseFrame(id, stack, frame, FieldTreeMode.Skip, cache);
+ParseOptions skip = new(FieldTreeMode.Skip);
+bool throwawayOk = Packet.TryParse(
+    id, stack, frame, in skip, out Packet? throwaway, out ParseFailure skipFailure);
+
+ParseOptions recorded = new(FieldTreeMode.Skip, cache);
+bool recordedOk = Packet.TryParse(
+    id, stack, frame, in recorded, out Packet? recordedPacket, out ParseFailure recordedFailure);
 ```
 
-Skip packets must not be filtered, stored, exported, or passed to `ValueCache.RecordPacket`. Default `ParseFrame(id, stack, frame)` still builds a full tree.
+Skip packets must not be filtered, stored, exported, or passed to `ValueCache.RecordPacket`. Default `new ParseOptions()` still builds a tree.
 
 ### Feed Export Pipelines
 

@@ -183,7 +183,7 @@ internal sealed class AscExporterTests
         // tokens: ts, CANFD, ch, Rx, id, brs, esi, dlc, dlen, data...
         int canFdIdx = Array.IndexOf(tokens, "CANFD");
         await Assert.That(canFdIdx).IsGreaterThanOrEqualTo(0);
-        int dlcToken = int.Parse(tokens[canFdIdx + 6], CultureInfo.InvariantCulture);
+        int dlcToken = Convert.ToInt32(tokens[canFdIdx + 6], 16);
         int dlenToken = int.Parse(tokens[canFdIdx + 7], CultureInfo.InvariantCulture);
         await Assert.That(dlcToken).IsEqualTo(expectedDlc);
         await Assert.That(dlenToken).IsEqualTo(payloadLen);
@@ -210,8 +210,8 @@ internal sealed class AscExporterTests
 
         string content = Encoding.UTF8.GetString(ms.ToArray());
 
-        // LIN channel prefix
-        await Assert.That(content).Contains("L1");
+        // LIN channel 1 is the token Li.
+        await Assert.That(content).Contains(" Li ");
         // Frame ID in 2-char uppercase hex (0x3F = 63 decimal → upper 6 bits = 0x3F)
         await Assert.That(content).Contains("3F");
         // Data bytes
@@ -247,6 +247,7 @@ internal sealed class AscExporterTests
         await Assert.That(content).Contains("V9");
         // Frame ID: 4-char uppercase hex
         await Assert.That(content).Contains("000A");
+        await Assert.That(content).Contains(" 03 0 0 ");
         // Header CRC: 11-bit value, 4-char uppercase hex
         await Assert.That(content).Contains("05A3");
         // Data bytes
@@ -504,7 +505,7 @@ internal sealed class AscExporterTests
                 new FrameId(i), (long)i * 1_000_000L, canData, LinkType.CanSocketcan));
         }
 
-        // 2 unsupported (Ethernet) frames — produce skips
+        // 2 Ethernet frames are written, not skipped.
         for (int i = 0; i < 2; i++)
         {
             byte[] ethData = FrameGenerators.BuildEthernetIpv4UdpFrame(16);
@@ -514,10 +515,12 @@ internal sealed class AscExporterTests
 
         exporter.OnFinish();
 
-        await Assert.That(exporter.WrittenCount).IsEqualTo(3);
-        await Assert.That(exporter.SkippedCount).IsEqualTo(2);
-        await Assert.That(exporter.ErrorCount).IsEqualTo(2);
-        await Assert.That(exporter.HasErrors).IsTrue();
+        List<Frame> readBack = _ReadAsc(ms);
+        await Assert.That(exporter.WrittenCount).IsEqualTo(5);
+        await Assert.That(exporter.SkippedCount).IsEqualTo(0);
+        await Assert.That(readBack.Count).IsEqualTo(5);
+        await Assert.That(readBack[3].LinkType).IsEqualTo(LinkType.Ethernet);
+        await Assert.That(readBack[4].LinkType).IsEqualTo(LinkType.Ethernet);
     }
 
     // ========================================================================
@@ -576,9 +579,8 @@ internal sealed class AscExporterTests
             }
         };
 
-        // Ethernet frame — not supported by ASC exporter
-        byte[] ethData = FrameGenerators.BuildEthernetIpv4UdpFrame(16);
-        exporter.OnFrame(TestHarness.CreateFrame(new FrameId(0), 0L, ethData));
+        // A link type with no ASC line is still skipped.
+        exporter.OnFrame(TestHarness.CreateFrame(new FrameId(0), 0L, [0x01, 0x02], LinkType.Raw));
         exporter.OnFinish();
 
         await Assert.That(exporter.SkippedCount).IsEqualTo(1);
@@ -586,44 +588,63 @@ internal sealed class AscExporterTests
     }
 
     [Test]
-    public async Task CanXlFrame_TolerantMode_Skipped()
+    public async Task CanXlFrameRoundTrips()
     {
-        // CAN XL shares LinkType.CanSocketcan with classic/FD but sets XLF (byte 4, bit 7).
-        // The ASC format has no CAN XL representation; the exporter must count it as skipped.
         using MemoryStream ms = new();
         using AscExporter exporter = AscExporter.CreateBuilder().ToStream(ms).Build();
-        exporter.ErrorTolerance = ErrorToleranceMode.Tolerant;
 
-        ExportErrorKind? reportedKind = null;
-        exporter.ItemSkipped += (_, e) => reportedKind = e.Kind;
-
-        byte[] xlData = SocketCanGenerators.BuildCanXl(0x01, [0xAA, 0xBB, 0xCC, 0xDD]);
+        byte[] xlData = SocketCanGenerators.BuildCanXl(0x123, [0xAA, 0xBB, 0xCC, 0xDD], vcid: 0x01, sdt: 0x05);
         bool accepted = exporter.OnFrame(
             TestHarness.CreateFrame(new FrameId(0), 1_000_000L, xlData, LinkType.CanSocketcan));
         exporter.OnFinish();
 
-        // Tolerant mode: caller is told to continue, frame is counted as skipped, not written.
+        string text = Encoding.Latin1.GetString(ms.ToArray());
+        List<Frame> readBack = _ReadAsc(ms);
         await Assert.That(accepted).IsTrue();
-        await Assert.That(reportedKind).IsEqualTo(ExportErrorKind.UnsupportedType);
-        await Assert.That(exporter.SkippedCount).IsEqualTo(1);
-        await Assert.That(exporter.WrittenCount).IsEqualTo(0);
-        await Assert.That(exporter.HasErrors).IsTrue();
+        await Assert.That(exporter.WrittenCount).IsEqualTo(1);
+        await Assert.That(text).Contains(" CANXL ");
+        await Assert.That(text).Contains(" Rx ");
+        await Assert.That(readBack.Count).IsEqualTo(1);
+        await Assert.That(readBack[0].LinkType).IsEqualTo(LinkType.CanSocketcan);
+        await Assert.That(readBack[0].Data.Span[4] & 0x80).IsEqualTo(0x80);
+        await Assert.That(readBack[0].Data.Length).IsEqualTo(xlData.Length);
     }
 
     [Test]
-    public async Task CanXlFrame_StrictMode_AbortsExport()
+    public async Task EthernetFrameRoundTripsAsSection42()
     {
-        // In Strict mode the exporter must immediately abort when a CAN XL frame arrives.
+        using MemoryStream ms = new();
+        using AscExporter exporter = AscExporter.CreateBuilder().ToStream(ms).Build();
+
+        byte[] ethData = new byte[60];
+        ethData.AsSpan(0, 6).Fill(0xFF);
+        bool accepted = exporter.OnFrame(TestHarness.CreateFrame(new FrameId(0), 0L, ethData));
+        exporter.OnFinish();
+
+        string text = Encoding.Latin1.GetString(ms.ToArray());
+        List<Frame> readBack = _ReadAsc(ms);
+        await Assert.That(accepted).IsTrue();
+        await Assert.That(exporter.WrittenCount).IsEqualTo(1);
+        await Assert.That(text).Contains(" ETH 1 Rx 3C:");
+        await Assert.That(text).Contains(" Rx ");
+        await Assert.That(readBack.Count).IsEqualTo(1);
+        await Assert.That(readBack[0].Data.Length).IsEqualTo(60);
+        await Assert.That(readBack[0].Data.Span[0]).IsEqualTo((byte)0xFF);
+    }
+
+    [Test]
+    public async Task MalformedCanXlStrictModeAbortsExport()
+    {
         using MemoryStream ms = new();
         using AscExporter exporter = AscExporter.CreateBuilder().ToStream(ms).Build();
         exporter.ErrorTolerance = ErrorToleranceMode.Strict;
 
-        byte[] xlData = SocketCanGenerators.BuildCanXl(0x01, [0xAA, 0xBB, 0xCC, 0xDD]);
+        byte[] truncated = new byte[8];
+        truncated[4] = 0x80;
         bool accepted = exporter.OnFrame(
-            TestHarness.CreateFrame(new FrameId(0), 1_000_000L, xlData, LinkType.CanSocketcan));
+            TestHarness.CreateFrame(new FrameId(0), 1_000_000L, truncated, LinkType.CanSocketcan));
         exporter.OnFinish();
 
-        // Strict mode: OnFrame returns false, export is finished in error state.
         await Assert.That(accepted).IsFalse();
         await Assert.That(exporter.HasErrors).IsTrue();
         await Assert.That(exporter.IsFinished).IsTrue();
@@ -643,9 +664,8 @@ internal sealed class AscExporterTests
         int skippedRaised = 0;
         exporter.ItemSkipped += (_, _) => Interlocked.Increment(ref skippedRaised);
 
-        // Ethernet frame is unsupported → skipped + event raised
-        byte[] ethData = FrameGenerators.BuildEthernetIpv4UdpFrame(16);
-        bool accepted = exporter.OnFrame(TestHarness.CreateFrame(new FrameId(0), 0L, ethData));
+        byte[] oversized = new byte[1519];
+        bool accepted = exporter.OnFrame(TestHarness.CreateFrame(new FrameId(0), 0L, oversized));
 
         // Tolerant mode: OnFrame still returns true so the loop can continue
         await Assert.That(accepted).IsTrue();
@@ -661,9 +681,8 @@ internal sealed class AscExporterTests
         using AscExporter exporter = AscExporter.CreateBuilder().ToStream(ms).Build();
         exporter.ErrorTolerance = ErrorToleranceMode.Strict;
 
-        // Ethernet frame is unsupported → strict mode sets error and aborts
-        byte[] ethData = FrameGenerators.BuildEthernetIpv4UdpFrame(16);
-        bool accepted = exporter.OnFrame(TestHarness.CreateFrame(new FrameId(0), 0L, ethData));
+        byte[] oversized = new byte[1519];
+        bool accepted = exporter.OnFrame(TestHarness.CreateFrame(new FrameId(0), 0L, oversized));
 
         await Assert.That(accepted).IsFalse();
         await Assert.That(exporter.HasErrors).IsTrue();
@@ -764,5 +783,22 @@ internal sealed class AscExporterTests
         await Assert.That(content).Contains("0.000000");
         // Second frame: timestamp = 1.000000
         await Assert.That(content).Contains("1.000000");
+    }
+
+    private static List<Frame> _ReadAsc(MemoryStream stream)
+    {
+        stream.Position = 0;
+        string text = Encoding.Latin1.GetString(stream.ToArray());
+        using AscSource source = AscSource.FromText(text);
+        FrameInterfaceRegistry registry = new();
+        FrameSourceId sourceId = registry.RegisterSource(source);
+        source.Start(sourceId, registry);
+        List<Frame> frames = [];
+        while (source.NextFrame() is Frame frame)
+        {
+            frames.Add(frame);
+        }
+
+        return frames;
     }
 }

@@ -83,12 +83,18 @@ internal static class ConvertCommand
                 if (filter is not null && stack is not null && filterIndex is not null)
                 {
                     ArrayIndexIdRange.ThrowIfInvalidNextIndex(filterPacketId, "packet");
-                    Packet packet = Packet.ParseFrameIndexed(
+                    ParseOptions filterOptions = new(index: filterIndex);
+                    if (!Packet.TryParse(
                         new PacketId(filterPacketId++),
                         stack,
                         frame.Value,
-                        filterIndex);
-                    if (!CliFilter.TryMatch(filter, packet, filterIndex, out bool matched))
+                        in filterOptions,
+                        out Packet? packet,
+                        out ParseFailure filterFailure))
+                    {
+                        throw new InvalidOperationException(filterFailure.ToString());
+                    }
+                    if (!CliFilter.TryMatch(filter, packet!, filterIndex, out bool matched))
                     {
                         throw new InvalidOperationException(
                             "Filter evaluation failed; the conversion was aborted to avoid writing a partially filtered output.");
@@ -503,7 +509,8 @@ internal static class ConvertCommand
         Console.Error.WriteLine("Output format is auto-detected from the output extension:");
         Console.Error.WriteLine("  .pcapng / other       PCAPNG (default)");
         Console.Error.WriteLine("  .blf                  BLF with default compression");
-        Console.Error.WriteLine("  .asc                  CANalyzer ASCII log (CAN, CAN FD, LIN, FlexRay)");
+        Console.Error.WriteLine("  .asc                  CANalyzer ASCII log (CAN, CAN FD, CAN XL, LIN, FlexRay, Ethernet)");
+        Console.Error.WriteLine("                        AFDX data frames are read. AFDX status, AFDX bus statistics, ETH STAT, and ETH RxEr are not read.");
         Console.Error.WriteLine();
         Console.Error.WriteLine("Output format specifications (--output-format):");
         Console.Error.WriteLine("  pcapng                PCAPNG format");
@@ -511,7 +518,8 @@ internal static class ConvertCommand
         Console.Error.WriteLine("  blf:compression=off   BLF, no compression");
         Console.Error.WriteLine("  blf:compression=fast  BLF, fast compression");
         Console.Error.WriteLine("  blf:compression=best  BLF, best compression ratio");
-        Console.Error.WriteLine("  asc                   CANalyzer ASCII log (CAN, CAN FD, LIN, FlexRay)");
+        Console.Error.WriteLine("  asc                   CANalyzer ASCII log (CAN, CAN FD, CAN XL, LIN, FlexRay, Ethernet)");
+        Console.Error.WriteLine("                        AFDX data frames are read. AFDX status, AFDX bus statistics, ETH STAT, and ETH RxEr are not read.");
         Console.Error.WriteLine();
         Console.Error.WriteLine("Source specifications:");
         Console.Error.WriteLine("  capture.pcap[ng]      Auto-detected PCAP/PCAPNG");

@@ -70,7 +70,12 @@ internal sealed class BlfLinFlexRayTests
                 FrameInterfaceId.Invalid,
                 stack.FrameInterfaceRegistry).Value;
 
-            Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame);
+            ParseOptions options = new();
+            if (!Packet.TryParse(new PacketId(0), stack, frame, in options, out Packet? packet, out ParseFailure failure)
+                || packet is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
 
             FieldId? idField = stack.GetFieldId("lin.id");
             await Assert.That(idField).IsNotNull();
@@ -204,7 +209,12 @@ internal sealed class BlfLinFlexRayTests
                 FrameInterfaceId.Invalid,
                 stack.FrameInterfaceRegistry).Value;
 
-            Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame);
+            ParseOptions options = new();
+            if (!Packet.TryParse(new PacketId(0), stack, frame, in options, out Packet? packet, out ParseFailure failure)
+                || packet is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
 
             FieldId? frameIdField = stack.GetFieldId("flexray.frame_id");
             FieldId? cycleField = stack.GetFieldId("flexray.cycle");

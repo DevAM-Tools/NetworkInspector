@@ -226,6 +226,14 @@ public sealed class Session<TStack, TTrailer, TInterceptor> : IDisposable
         return _I.State.TcpStreamAck;
     }
 
+    /// <summary>Replaces the TcpStream NextSeq slot. Used when a SYN was emitted outside the session.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal void SetTcpStreamNextSeq(uint seq)
+    {
+        _ThrowIfDisposed();
+        _I.State.TcpStreamNextSeq = seq;
+    }
+
     /// <summary>Replaces the TcpStream Ack slot with <paramref name="ack"/>.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void SetTcpStreamAck(uint ack)

@@ -152,4 +152,4 @@ syncChartSize(desktop);
 
 ## Testing
 
-Journeys, viewports, and debug: `tech-playwright.md`. Case design and suite size: `tech-test.md`.
+Journeys, viewports, and debug: `tech-playwright.md`. The editor’s integrated browser is available there and recommended. Case design and suite size: `tech-test.md`.

@@ -63,7 +63,8 @@ public static class TcpConnection
         Session<Stack<TcpStreamLayer, StatelessStack<TOld, TTail>>, NoTrailer, NoInterceptor> clientSession = clientCreated.OpenSession();
         Session<Stack<TcpStreamLayer, StatelessStack<TOld, TTail>>, NoTrailer, NoInterceptor> serverSession = serverCreated.OpenSession();
 
-        return new TcpConnection<TOld, TTail>(clientSession, serverSession, options, clientPort, serverPort);
+        return new TcpConnection<TOld, TTail>(
+            clientSession, serverSession, options, clientPort, serverPort, clientCarrier, serverCarrier);
     }
 
     /// <summary>
@@ -118,6 +119,8 @@ public sealed class TcpConnection<TOld, TTail> : IDisposable
 {
     private readonly Session<Stack<TcpStreamLayer, StatelessStack<TOld, TTail>>, NoTrailer, NoInterceptor> _ClientSession;
     private readonly Session<Stack<TcpStreamLayer, StatelessStack<TOld, TTail>>, NoTrailer, NoInterceptor> _ServerSession;
+    private readonly StatelessStack<TOld, TTail> _ClientCarrier;
+    private readonly StatelessStack<TOld, TTail> _ServerCarrier;
     private readonly TcpConnectionOptions _Options;
 
     /// <summary>Source port the client side uses.</summary>
@@ -176,10 +179,14 @@ public sealed class TcpConnection<TOld, TTail> : IDisposable
         Session<Stack<TcpStreamLayer, StatelessStack<TOld, TTail>>, NoTrailer, NoInterceptor> serverSession,
         TcpConnectionOptions options,
         ushort clientPort,
-        ushort serverPort)
+        ushort serverPort,
+        StatelessStack<TOld, TTail> clientCarrier,
+        StatelessStack<TOld, TTail> serverCarrier)
     {
         _ClientSession = clientSession;
         _ServerSession = serverSession;
+        _ClientCarrier = clientCarrier;
+        _ServerCarrier = serverCarrier;
         _Options = options;
         ClientPort = clientPort;
         ServerPort = serverPort;
@@ -210,33 +217,45 @@ public sealed class TcpConnection<TOld, TTail> : IDisposable
 
         TcpSegmentMutator? effective = mutator ?? OnSegment;
 
-        // SYN (client → server)
-        _EmitOneSegment(
-            isClient: true,
-            phase: TcpLifecycle.Handshake,
-            defaultFlags: TcpFlags.Syn,
-            payload: ReadOnlySpan<byte>.Empty,
-            segmentIndex: 0,
-            segmentCount: 3,
-            sink: sink,
-            mutator: effective);
+        if (_Options.ClientSynOptions.Data.Length > 0)
+        {
+            _EmitSynWithOptions(isClient: true, flags: TcpFlags.Syn, seq: _Options.ClientIsn, ack: 0, _Options.ClientSynOptions, sink);
+        }
+        else
+        {
+            _EmitOneSegment(
+                isClient: true,
+                phase: TcpLifecycle.Handshake,
+                defaultFlags: TcpFlags.Syn,
+                payload: ReadOnlySpan<byte>.Empty,
+                segmentIndex: 0,
+                segmentCount: 3,
+                sink: sink,
+                mutator: effective);
+        }
 
-        // After client SYN: server's expected ACK from client is ClientIsn + 1.
-        _ServerSession.SetTcpStreamAck(_Options.ClientIsn + 1u);
-
-        // SYN+ACK (server → client)
-        _EmitOneSegment(
-            isClient: false,
-            phase: TcpLifecycle.Handshake,
-            defaultFlags: TcpFlags.SynAck,
-            payload: ReadOnlySpan<byte>.Empty,
-            segmentIndex: 1,
-            segmentCount: 3,
-            sink: sink,
-            mutator: effective);
-
-        // After server SYN+ACK: client's expected ACK from server is ServerIsn + 1.
-        _ClientSession.SetTcpStreamAck(_Options.ServerIsn + 1u);
+        if (_Options.ServerSynOptions.Data.Length > 0)
+        {
+            _EmitSynWithOptions(
+                isClient: false,
+                flags: TcpFlags.SynAck,
+                seq: _Options.ServerIsn,
+                ack: _Options.ClientIsn + 1u,
+                _Options.ServerSynOptions,
+                sink);
+        }
+        else
+        {
+            _EmitOneSegment(
+                isClient: false,
+                phase: TcpLifecycle.Handshake,
+                defaultFlags: TcpFlags.SynAck,
+                payload: ReadOnlySpan<byte>.Empty,
+                segmentIndex: 1,
+                segmentCount: 3,
+                sink: sink,
+                mutator: effective);
+        }
 
         // ACK (client → server)
         _EmitOneSegment(
@@ -265,15 +284,12 @@ public sealed class TcpConnection<TOld, TTail> : IDisposable
 
         // FIN+ACK (client → server)
         _EmitOneSegment(true, TcpLifecycle.Fin, TcpFlags.FinAck, ReadOnlySpan<byte>.Empty, 0, 4, sink, effective);
-        // After client FIN: server's expected ACK from client increments by 1 (FIN consumes a SEQ).
-        _ServerSession.AdvanceTcpStreamAck(1u);
 
         // ACK (server → client)
         _EmitOneSegment(false, TcpLifecycle.Ack, TcpFlags.Ack, ReadOnlySpan<byte>.Empty, 1, 4, sink, effective);
 
         // FIN+ACK (server → client)
         _EmitOneSegment(false, TcpLifecycle.Fin, TcpFlags.FinAck, ReadOnlySpan<byte>.Empty, 2, 4, sink, effective);
-        _ClientSession.AdvanceTcpStreamAck(1u);
 
         // ACK (client → server)
         _EmitOneSegment(true, TcpLifecycle.Ack, TcpFlags.Ack, ReadOnlySpan<byte>.Empty, 3, 4, sink, effective);
@@ -434,6 +450,39 @@ public sealed class TcpConnection<TOld, TTail> : IDisposable
     /// the scratch buffer, then forwards the wire bytes to the sink and
     /// updates the peer's expected ACK.
     /// </summary>
+    private void _EmitSynWithOptions(
+        bool isClient, byte flags, uint seq, uint ack, TcpOptions options, FrameSink sink)
+    {
+        TcpLayerWithOptions layer = new(
+            isClient ? ClientPort : ServerPort,
+            isClient ? ServerPort : ClientPort,
+            options,
+            seqNum: seq,
+            ackNum: ack,
+            flags: flags,
+            windowSize: _Options.WindowSize);
+
+        CreatedStack<StatelessStack<TcpLayerWithOptions, StatelessStack<TOld, TTail>>, NoTrailer, NoInterceptor> created =
+            (isClient ? _ClientCarrier : _ServerCarrier).Then(layer).CreateWithFixedValues();
+        byte[] frame = new byte[created.HeaderSize];
+        FrameSequence<StatelessStack<TcpLayerWithOptions, StatelessStack<TOld, TTail>>, NoTrailer, NoInterceptor> sequence =
+            created.Build(ReadOnlySpan<byte>.Empty);
+        sequence.MoveNext(frame, out int written);
+        sink(frame.AsSpan(0, written));
+
+        uint next = seq + 1u;
+        if (isClient)
+        {
+            _ClientSession.SetTcpStreamNextSeq(next);
+            _ServerSession.SetTcpStreamAck(next);
+        }
+        else
+        {
+            _ServerSession.SetTcpStreamNextSeq(next);
+            _ClientSession.SetTcpStreamAck(next);
+        }
+    }
+
     private void _EmitOneSegment(
         bool isClient,
         TcpLifecycle phase,
@@ -522,19 +571,24 @@ public sealed class TcpConnection<TOld, TTail> : IDisposable
                 $"TcpConnection segment build failed with status {sequence.Status}.");
         }
 
-        // Propagate the SEQ delta into the peer's expected ACK:
-        //   SYN: managed explicitly by EmitHandshake (SetTcpStreamAck) — skip here.
-        //   FIN with no payload: managed explicitly by EmitFinClose (AdvanceTcpStreamAck(1));
-        //     isFin && payload.Length == 0 keeps peerAdvance == 0 — skip here.
-        //   Data or FIN+data (mutator-driven): auto-advance by payload.Length + (isFin ? 1 : 0)
-        //     so the peer knows the full sequence space consumed by this segment.
-        bool isSyn = (flags & TcpFlags.Syn) != 0;
-        bool isFin = (flags & TcpFlags.Fin) != 0;
-        uint peerAdvance = (uint)finalPayload.Length + (isFin && finalPayload.Length > 0 ? 1u : 0u);
-        if (!isSyn && peerAdvance > 0)
+        // Peer ACK tracks the sender's next sequence after this segment.
+        // SYN and FIN each consume one sequence number. An empty ACK does not move the peer.
+        uint consumed = (uint)finalPayload.Length;
+        if ((flags & TcpFlags.Syn) != 0)
         {
-            Session<Stack<TcpStreamLayer, StatelessStack<TOld, TTail>>, NoTrailer, NoInterceptor> peer = isClient ? _ServerSession : _ClientSession;
-            peer.AdvanceTcpStreamAck(peerAdvance);
+            consumed++;
+        }
+
+        if ((flags & TcpFlags.Fin) != 0)
+        {
+            consumed++;
+        }
+
+        if (consumed > 0)
+        {
+            Session<Stack<TcpStreamLayer, StatelessStack<TOld, TTail>>, NoTrailer, NoInterceptor> peer =
+                isClient ? _ServerSession : _ClientSession;
+            peer.SetTcpStreamAck(session.PeekTcpStreamNextSeq());
         }
     }
 

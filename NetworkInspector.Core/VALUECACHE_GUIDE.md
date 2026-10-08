@@ -14,7 +14,7 @@ Filters still read the field tree, not this cache. See [`FILTER_GUIDE.md`](../Ne
 
 | Need | Use |
 |------|-----|
-| One packet, topology, display text | Field tree (`ParseFrame` default / `TryGetPacket`) |
+| One packet, topology, display text | Field tree (`TryParse` with default `ParseOptions` / `TryGetPacket`) |
 | Same field(s) across many packets, RAM columns | `ValueCache` |
 | Presence only (protocol/group “did this appear?”) | `PacketIndex` |
 | Parse for effects, drop the tree | `FieldTreeMode.Skip` plus a cache and/or index |
@@ -51,7 +51,7 @@ new Session(stack, new SessionOptions
 
 | Path | When |
 |------|------|
-| `Packet.ParseFrame(..., cache)` | First parse records. Replays skip unless `recordOnReplay: true`. |
+| `Packet.TryParse` and `new ParseOptions(cache: cache)` | First parse records. Replays skip the cache unless `ParseOptions.RecordOnReplay` is true. |
 | Skip parse + cache | Ingest and Session PullFill. No tree retained. |
 | `ValueCache.RecordPacket` | Sealed **Build** packet (CLI, tests). Throws on skip packets. |
 

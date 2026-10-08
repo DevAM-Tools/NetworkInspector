@@ -46,14 +46,23 @@ internal sealed class ValueCacheReadUdpSrcPortScenario : IProfilingScenario
         Frame[] frames = FrameHelper.CreateSharedFrames(_PacketCount, _Stack);
         FieldId portId = _RequireUdpSrcPort(_Stack);
         _Cache = new ValueCache(_Stack, [new ValueCacheFieldConfig(portId)]);
-        Packet recycle = Packet.ParseFrame(new PacketId(0), _Stack, frames[0]);
+
+        // Seed packet is not recorded. The loop below is the only writer into the cache.
+        ParseOptions seedOptions = new();
+        PacketId seedId = new(0);
+        if (!Packet.TryParse(seedId, _Stack, frames[0], in seedOptions, out Packet? seeded, out ParseFailure seedFailure))
+        {
+            throw new InvalidOperationException(seedFailure.ToString());
+        }
+
+        Packet recycle = seeded!;
+        ParseOptions options = new(FieldTreeMode.Build, _Cache);
         for (int i = 0; i < _PacketCount; i++)
         {
-            RecycleError? error = Packet.TryParseFrame(
-                recycle, new PacketId(i + 1), _Stack, frames[i], FieldTreeMode.Build, _Cache);
-            if (error is not null)
+            PacketId id = new(i + 1);
+            if (!Packet.TryParse(recycle, id, _Stack, frames[i], in options, out ParseFailure failure))
             {
-                throw new InvalidOperationException(error.ToString());
+                throw new InvalidOperationException(failure.ToString());
             }
         }
 

@@ -77,7 +77,7 @@ Language-specific mechanisms live in loaded tech skills. This section is intent.
 - Provide result types or language-idiomatic try-APIs at public boundaries for expected failure paths.
 - Preserve preconditions, postconditions, and interface consistency.
 - Never ship incomplete implementations. Mark incomplete work with `// TODO:` and concrete reason.
-- Never put plan IDs, issue IDs, `REQ{n}`, `TEST{n}`, or tracking IDs in code or comments.
+- Never put plan IDs, issue IDs, `REQ-<AREA>-<TOPIC>`, `TEST-<AREA>-<TOPIC>`, or tracking IDs in code or comments.
 - Guard against off-by-one errors, invalid transitions, and logic regressions.
 - ❗ Assess integer ops for overflow/underflow; guard when wrap-around would break correctness, security, or invariants. Mechanism: loaded tech skill.
 
@@ -115,8 +115,13 @@ Performance is a feature of every application and library, not optional polish. 
 - ❗ Require tests before release for every public or internal API.
 - Cover happy path, errors, boundaries, concurrency, and security. Exhaustive means those **behavior classes**, not iterating every integer value.
 - Keep tests fast. No sleeps. No network in unit tests.
-- Test **strategy**: `tech-test.md`. Test **stack and coverage tool**: loaded tech skill. When the skill defines a gate, that gate is the release gate.
-- In planning / Grill Me, lock test **content** as `TEST{n}` (important scenarios, edges, constellations, contradictions, gaps). That content is the minimum to prove. Extra tests at implement time are allowed. Schema: `workflow-plan.md`. Strategy: `tech-test.md`.
+- ❗ Minimize test execution time on every stack. When a full run is not required, run only the tests that cover the change. .NET tests use `dotnet test`. Mechanism: `tech-test.md`.
+- Test **strategy**: `tech-test.md`. Test **stack**: loaded tech skill.
+- In planning / Grill Me, lock test **content** as `TEST-<AREA>-<TOPIC>`
+  (important scenarios, edges, constellations, contradictions, gaps). The ID
+  names the case the way `REQ-<AREA>-<TOPIC>` names a requirement. That
+  content is the minimum to prove. Extra tests at implement time are allowed.
+  Schema: `workflow-plan.md`. Strategy: `tech-test.md`.
 
 ### 4.6 Documentation
 
@@ -169,6 +174,11 @@ for `illustrations/**`.
   **and** debugging. Playwright may verify HTML illustrations at create time
   (`workflow-illustrate.md`). The shipped zip does not depend on Playwright.
   Illustrations are not required to be responsive.
+- The editor’s integrated browser is available for a running product web UI,
+  and using it is recommended. **Cursor:** the agent-driven Browser (open the
+  page, navigate, click, type, read what rendered). **VS Code:** Integrated
+  Browser, the same way. It does not replace Playwright journeys. Mechanism:
+  `tech-playwright.md`.
 
 ### 4.9 Structure
 
@@ -213,7 +223,7 @@ for `illustrations/**`.
 
 - ❗ Design apps and libraries so an agent can debug them: smallest native toolchain command, filterable tests, observable errors, traces. Do not require a human-only debugger for core logic.
 - When `Verify` fails: reproduce with that command, then debug, then change code. Do not redesign on the first red run.
-- For web UI: Playwright trace, screenshot, or headed debug per `tech-playwright.md`.
+- For web UI, the editor’s integrated browser is available and recommended, alongside a Playwright trace, screenshot, or headed debug. **Cursor:** integrated Browser. **VS Code:** Integrated Browser. Mechanism: `tech-playwright.md`.
 - Consider concurrent-agent collision before treating a failure as a product defect.
 - After two failed remediations of the same root cause: exponential backoff then retry, or stop and report a blocker.
 
@@ -233,8 +243,8 @@ for `illustrations/**`.
 | `C{n}` | A recorded choice between options that could not all hold. |
 | Shared Block | The field template for a plan step or review finding. |
 | Step `{n}R` | The `/review` of Step `{n}`. Same as “Step NR” with N = `{n}`. |
-| `REQ{n}` | A requirements row. IDs stay out of product code. |
-| `TEST{n}` | Plan test **content**, not a file name. |
+| `REQ-<AREA>-<TOPIC>` | One atomic requirement. The ID names the subject. Stays out of product code. |
+| `TEST-<AREA>-<TOPIC>` | Plan test content. The ID names the case. Not a file or method name. Stays out of product code. |
 | MTP | Microsoft.Testing.Platform (`global.json` `test.runner`). |
 
 ## 6) Workflow Entry

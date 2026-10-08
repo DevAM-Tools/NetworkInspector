@@ -175,6 +175,9 @@ public sealed partial class HttpProtocol : IProtocol
     [BytesField("http.payload.decoded", "Decoded Payload", IndexGroup = "http.payload.decoded")]
     private FieldId _DecodedPayloadFieldId;
 
+    [StringField("http.error.not_http", "Not HTTP", IndexGroup = "http.error")]
+    private FieldId _NotHttpFieldId;
+
     #endregion
 
     #region Runtime state
@@ -214,7 +217,15 @@ public sealed partial class HttpProtocol : IProtocol
         int firstLineEnd = _FindLineEnd(span);
         if (firstLineEnd < 0)
         {
-            return 0; // Not enough data for a complete first line — skip
+            if (_CouldBeHttpStart(span))
+            {
+                return ParseError.InsufficientDataWithInfo(ProtocolName, 1, (ulong)data.Length);
+            }
+
+            context.RecordProtocolPresence(_ProtocolId);
+            context.RecordGroupPresence(_HttpErrorGroupId);
+            parentField.Append(_NotHttpFieldId, FieldValue.NewString("Payload is not an HTTP/1 start line"));
+            return data.Length;
         }
 
         ReadOnlySpan<byte> firstLine = span[..firstLineEnd];
@@ -225,7 +236,10 @@ public sealed partial class HttpProtocol : IProtocol
 
         if (!isRequest && !isResponse)
         {
-            return 0; // Not an HTTP message — let another protocol handle it
+            context.RecordProtocolPresence(_ProtocolId);
+            context.RecordGroupPresence(_HttpErrorGroupId);
+            parentField.Append(_NotHttpFieldId, FieldValue.NewString("Payload is not an HTTP/1 start line"));
+            return data.Length;
         }
 
         context.RecordProtocolPresence(_ProtocolId);
@@ -918,6 +932,38 @@ public sealed partial class HttpProtocol : IProtocol
                line.StartsWith("PATCH "u8) ||
                line.StartsWith("CONNECT "u8) ||
                line.StartsWith("TRACE "u8);
+    }
+
+    /// <summary>True when <paramref name="data"/> is a prefix of an HTTP start line and may still grow.</summary>
+    private static bool _CouldBeHttpStart(ReadOnlySpan<byte> data)
+    {
+        if (data.IsEmpty)
+        {
+            return true;
+        }
+
+        ReadOnlySpan<byte> http = "HTTP/"u8;
+        int httpTake = Math.Min(data.Length, http.Length);
+        if (System.Text.Ascii.EqualsIgnoreCase(data[..httpTake], http[..httpTake]))
+        {
+            return true;
+        }
+
+        return _IsPrefixOf(data, "GET "u8)
+            || _IsPrefixOf(data, "POST "u8)
+            || _IsPrefixOf(data, "PUT "u8)
+            || _IsPrefixOf(data, "HEAD "u8)
+            || _IsPrefixOf(data, "DELETE "u8)
+            || _IsPrefixOf(data, "OPTIONS "u8)
+            || _IsPrefixOf(data, "PATCH "u8)
+            || _IsPrefixOf(data, "CONNECT "u8)
+            || _IsPrefixOf(data, "TRACE "u8);
+    }
+
+    private static bool _IsPrefixOf(ReadOnlySpan<byte> data, ReadOnlySpan<byte> token)
+    {
+        int take = Math.Min(data.Length, token.Length);
+        return data[..take].SequenceEqual(token[..take]);
     }
 
     /// <summary>

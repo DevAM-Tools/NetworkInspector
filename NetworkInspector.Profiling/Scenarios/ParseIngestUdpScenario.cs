@@ -20,7 +20,7 @@ internal sealed class ParseIngestUdpScenario : IProfilingScenario
     /// <inheritdoc/>
     public string Description =>
         FormattableString.Invariant(
-            $"ParseFrame first parse with protocol-recorded replay state, {_BatchSize:N0} IPv6/UDP frames per iteration.");
+            $"TryParse first parse with protocol-recorded replay state, {_BatchSize:N0} IPv6/UDP frames per iteration.");
 
     /// <inheritdoc/>
     public long WorkUnitsPerIteration => _BatchSize;
@@ -43,9 +43,15 @@ internal sealed class ParseIngestUdpScenario : IProfilingScenario
         Frame[] frames = _Frames!;
         int counter = _PacketCounter;
 
+        // Default build options for the whole batch. The loop only supplies id and frame.
+        ParseOptions options = new();
         for (int i = 0; i < _BatchSize; i++)
         {
-            Packet.ParseFrame(new PacketId(counter + i), stack, frames[i]);
+            PacketId id = new(counter + i);
+            if (!Packet.TryParse(id, stack, frames[i], in options, out _, out ParseFailure failure))
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
         }
 
         _PacketCounter = counter + _BatchSize;

@@ -31,7 +31,15 @@ internal sealed class SessionSkipFieldTreeTests
             FrameInterfaceId.Invalid,
             stack.FrameInterfaceRegistry).Value;
 
-        return Packet.ParseFrame(new PacketId(packetId), stack, frame, FieldTreeMode.Skip);
+        ParseOptions options = new(FieldTreeMode.Skip);
+        PacketId id = new(packetId);
+        if (!Packet.TryParse(id, stack, frame, in options, out Packet? packet, out ParseFailure failure)
+            || packet is null)
+        {
+            throw new InvalidOperationException(failure.ToString());
+        }
+
+        return packet;
     }
 
     private sealed class RecordingValueCacheListener(string uiName = "skip-vc") : IValueCacheListener

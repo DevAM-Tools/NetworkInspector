@@ -26,7 +26,22 @@ internal sealed class SomeIpProtocolTests
             FrameInterfaceId.Invalid,
             stack.FrameInterfaceRegistry).Value;
 
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame);
+        Packet packet;
+        {
+            ParseOptions options = new();
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
         return (stack, packet);
     }
 
@@ -182,7 +197,19 @@ internal sealed class SomeIpProtocolTests
                 FrameInterfaceId.Invalid,
                 stack.FrameInterfaceRegistry).Value;
 
-            Packet.ParseFrameIndexed(new PacketId(0), stack, frame, index);
+            {
+                ParseOptions options = new(index: index);
+                if (!Packet.TryParse(
+                    new PacketId(0),
+                    stack,
+                    frame,
+                    in options,
+                    out Packet? _,
+                    out ParseFailure failure))
+                {
+                    throw new InvalidOperationException(failure.ToString());
+                }
+            }
 
             // SOME/IP protocol should be in the index
             ProtocolId? someipProtocolId = stack.GetProtocolId("someip");
@@ -509,7 +536,19 @@ internal sealed class SomeIpProtocolTests
                 FrameInterfaceId.Invalid,
                 stack.FrameInterfaceRegistry).Value;
 
-            Packet.ParseFrameIndexed(new PacketId(0), stack, frame, index);
+            {
+                ParseOptions options = new(index: index);
+                if (!Packet.TryParse(
+                    new PacketId(0),
+                    stack,
+                    frame,
+                    in options,
+                    out Packet? _,
+                    out ParseFailure failure))
+                {
+                    throw new InvalidOperationException(failure.ToString());
+                }
+            }
 
             // SD flags field should be in the index
             FieldId? sdFlagsField = stack.GetFieldId("someip_sd.flags");

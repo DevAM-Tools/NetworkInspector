@@ -48,7 +48,7 @@ internal static class FrameHelper
         BinaryPrimitives.WriteUInt16BigEndian(frame.AsSpan(12), 0x86DD);
 
         // ── IPv6 header ──────────────────────────────────────────────────────
-        int ip = _EthSize;
+        const int ip = _EthSize;
         // Version=6, Traffic Class=0, Flow Label=0x12345
         BinaryPrimitives.WriteUInt32BigEndian(frame.AsSpan(ip), 0x60012345);
         // Payload length = UDP header + payload
@@ -179,9 +179,16 @@ internal static class FrameHelper
     internal static Packet[] ParseAndMaterialize(Frame[] frames, Stack stack)
     {
         Packet[] packets = new Packet[frames.Length];
+        ParseOptions options = new();
         for (int i = 0; i < frames.Length; i++)
         {
-            packets[i] = Packet.ParseFrame(new PacketId(i), stack, frames[i]);
+            PacketId id = new(i);
+            if (!Packet.TryParse(id, stack, frames[i], in options, out Packet? packet, out ParseFailure failure))
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packets[i] = packet!;
             packets[i].MaterializeAll();
         }
 

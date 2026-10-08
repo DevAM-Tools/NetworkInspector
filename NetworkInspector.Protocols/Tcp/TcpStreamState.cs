@@ -58,9 +58,11 @@ internal sealed class TcpStreamState
         return Reverse;
     }
 
-    /// <summary>Clears both direction buffers.</summary>
+    /// <summary>Clears both direction buffers and any per-stream detector state.</summary>
     internal void Clear()
     {
+        Forward.ResetDetector(StreamId);
+        Reverse.ResetDetector(StreamId);
         Forward.Clear();
         Reverse.Clear();
     }

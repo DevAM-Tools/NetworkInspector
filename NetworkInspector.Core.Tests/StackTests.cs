@@ -314,6 +314,32 @@ internal sealed class StackTests
         }
     }
 
+    [Test]
+    public async Task NameLookupNullNameThrows()
+    {
+        using Stack stack = _BuildStack();
+
+        await Assert.That(() => stack.GetProtocolId(null!)).Throws<ArgumentNullException>();
+        await Assert.That(() => stack.GetFieldId(null!)).Throws<ArgumentNullException>();
+        await Assert.That(() => stack.GetFieldAliasGroupId(null!)).Throws<ArgumentNullException>();
+        await Assert.That(() => stack.GetIndexGroupId(null!)).Throws<ArgumentNullException>();
+        await Assert.That(() => stack.GetProtocolTableId(null!)).Throws<ArgumentNullException>();
+        await Assert.That(() => stack.GetHeuristicProtocolTableId(null!)).Throws<ArgumentNullException>();
+
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+
+        await Assert.That(() => builder.GetProtocolId(null!)).Throws<ArgumentNullException>();
+        await Assert.That(() => builder.GetFieldId(null!)).Throws<ArgumentNullException>();
+        await Assert.That(() => builder.GetFieldAliasGroupId(null!)).Throws<ArgumentNullException>();
+        await Assert.That(() => builder.GetIndexGroupId(null!)).Throws<ArgumentNullException>();
+        await Assert.That(() => builder.GetProtocolTableId(null!)).Throws<ArgumentNullException>();
+        await Assert.That(() => builder.GetHeuristicProtocolTableId(null!)).Throws<ArgumentNullException>();
+
+        using Stack built = builder.Build();
+        await Assert.That(built).IsNotNull();
+    }
+
     // === Helpers ===
 
     private sealed class CountingProto : IProtocol

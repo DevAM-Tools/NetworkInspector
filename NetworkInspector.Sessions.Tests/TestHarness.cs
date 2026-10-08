@@ -184,7 +184,15 @@ internal static class TestHarness
             FrameInterfaceId.Invalid,
             stack.FrameInterfaceRegistry).Value;
 
-        return Packet.ParseFrame(new PacketId(packetId), stack, frame);
+        ParseOptions options = new();
+        PacketId id = new(packetId);
+        if (!Packet.TryParse(id, stack, frame, in options, out Packet? packet, out ParseFailure failure)
+            || packet is null)
+        {
+            throw new InvalidOperationException(failure.ToString());
+        }
+
+        return packet;
     }
 
     /// <summary>

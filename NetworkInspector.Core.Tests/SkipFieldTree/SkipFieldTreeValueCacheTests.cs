@@ -52,10 +52,37 @@ internal sealed class SkipFieldTreeValueCacheTests
         ValueCacheFieldConfig[] configs = [new(ttlId), new(portId)];
 
         ValueCache build = new(stack, configs);
-        _ = Packet.ParseFrame(new PacketId(0), stack, frame, FieldTreeMode.Build, build);
+        {
+            ParseOptions options = new(FieldTreeMode.Build, build);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? _,
+                out ParseFailure failure))
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+        }
 
         ValueCache skip = new(stack, configs);
-        Packet skipPacket = Packet.ParseFrame(new PacketId(1), stack, frame, FieldTreeMode.Skip, skip);
+        Packet skipPacket;
+        {
+            ParseOptions options = new(FieldTreeMode.Skip, skip);
+            if (!Packet.TryParse(
+                new PacketId(1),
+                stack,
+                frame,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            skipPacket = parsed;
+        }
 
         await Assert.That(skipPacket.FieldCount(materialize: false)).IsEqualTo(1);
         await Assert.That(skip.GetSeries<ulong>(ttlId).Count).IsEqualTo(build.GetSeries<ulong>(ttlId).Count);
@@ -73,7 +100,22 @@ internal sealed class SkipFieldTreeValueCacheTests
         FieldId? dnsNameId = stack.GetFieldId("dns.qry.name");
 
         ValueCache skip = new(stack, [new ValueCacheFieldConfig(portId)]);
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, FieldTreeMode.Skip, skip);
+        Packet packet;
+        {
+            ParseOptions options = new(FieldTreeMode.Skip, skip);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
 
         await Assert.That(packet.FieldCount(materialize: false)).IsEqualTo(1);
         await Assert.That(skip.GetSeries<ulong>(portId).Count).IsEqualTo(1);
@@ -94,10 +136,34 @@ internal sealed class SkipFieldTreeValueCacheTests
         FieldId ethSrcId = stack.GetFieldId("eth.src")!.Value;
 
         ValueCache build = new(stack, [], options: new ValueCacheBuildOptions { RecordAllFields = true });
-        _ = Packet.ParseFrame(new PacketId(0), stack, frame, FieldTreeMode.Build, build);
+        {
+            ParseOptions options = new(FieldTreeMode.Build, build);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? _,
+                out ParseFailure failure))
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+        }
 
         ValueCache skip = new(stack, [], options: new ValueCacheBuildOptions { RecordAllFields = true });
-        _ = Packet.ParseFrame(new PacketId(1), stack, frame, FieldTreeMode.Skip, skip);
+        {
+            ParseOptions options = new(FieldTreeMode.Skip, skip);
+            if (!Packet.TryParse(
+                new PacketId(1),
+                stack,
+                frame,
+                in options,
+                out Packet? _,
+                out ParseFailure failure))
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+        }
 
         await Assert.That(skip.GetSeries<ulong>(portId).Count).IsEqualTo(build.GetSeries<ulong>(portId).Count);
         await Assert.That(skip.GetSeries<IPv6Address>(ipv6SrcId).Count).IsEqualTo(build.GetSeries<IPv6Address>(ipv6SrcId).Count);
@@ -146,7 +212,22 @@ internal sealed class SkipFieldTreeValueCacheTests
     {
         using Stack stack = _BuildStandardStack();
         Frame frame = _Frame(stack, FrameBuilders.GenerateStaticUdpIpv6Frame());
-        Packet skip = Packet.ParseFrame(new PacketId(0), stack, frame, FieldTreeMode.Skip);
+        Packet skip;
+        {
+            ParseOptions options = new(FieldTreeMode.Skip);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            skip = parsed;
+        }
         FieldId portId = stack.GetFieldId("udp.srcport")!.Value;
         ValueCache cache = new(stack, [new ValueCacheFieldConfig(portId)]);
 
@@ -164,7 +245,22 @@ internal sealed class SkipFieldTreeValueCacheTests
         using Stack stack = builder.Build();
         Frame frame = _Frame(stack, new byte[8]);
 
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, protoId, FieldTreeMode.Skip);
+        Packet packet;
+        {
+            ParseOptions options = new(FieldTreeMode.Skip, firstProtocol: protoId);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
 
         await Assert.That(packet.FieldCount(materialize: false)).IsEqualTo(1);
         await Assert.That(proto.PopulatorInvocations).IsEqualTo(0);

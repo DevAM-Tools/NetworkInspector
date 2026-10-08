@@ -419,19 +419,20 @@ internal sealed class TcpAnalysisTests
     #region RTT Measurements
 
     [Test]
-    public async Task Analysis_InitialRtt_MeasuredFromSynToSynAck()
+    public async Task Analysis_InitialRtt_MeasuredFromSynToFinalAck()
     {
         using Stack stack = ProtocolTestHelper.BuildStack();
 
-        // SYN at t=0
         byte[] syn = _ClientFrame(1000, 0, TcpFlags.Syn);
         ProtocolTestHelper.ParseFrame(stack, syn, 0, Timestamp.FromMillis(0));
 
-        // SYN-ACK at t=10ms → iRTT should be ~0.010s
         byte[] synAck = _ServerFrame(2000, 1001, TcpFlags.SynAck);
         Packet pSynAck = ProtocolTestHelper.ParseFrame(stack, synAck, 1, Timestamp.FromMillis(10));
+        await ProtocolTestHelper.AssertFieldNotPresent(stack, pSynAck, "tcp.analysis.initial_rtt").ConfigureAwait(false);
 
-        await ProtocolTestHelper.AssertF64FieldApprox(stack, pSynAck, "tcp.analysis.initial_rtt", 0.010, 0.001).ConfigureAwait(false);
+        byte[] ack = _ClientFrame(1001, 2001, TcpFlags.Ack);
+        Packet pAck = ProtocolTestHelper.ParseFrame(stack, ack, 2, Timestamp.FromMillis(25));
+        await ProtocolTestHelper.AssertF64FieldApprox(stack, pAck, "tcp.analysis.initial_rtt", 0.025, 0.001).ConfigureAwait(false);
     }
 
     [Test]
@@ -502,6 +503,61 @@ internal sealed class TcpAnalysisTests
         Packet pAck = ProtocolTestHelper.ParseFrame(stack, ack, 2, Timestamp.FromMillis(50));
 
         await ProtocolTestHelper.AssertF64FieldApprox(stack, pAck, "tcp.time_delta", 0.040, 0.001).ConfigureAwait(false);
+    }
+
+    [Test]
+    public async Task Analysis_AsymmetricWindowScale_UsesSenderShiftAndSkipsSyn()
+    {
+        using Stack stack = ProtocolTestHelper.BuildStack();
+        byte[] clientSyn = _FrameWithScale(isClient: true, shift: 7, seq: 1000, ack: 0, flags: TcpFlags.Syn);
+        Packet pSyn = ProtocolTestHelper.ParseFrame(stack, clientSyn, 0, Timestamp.FromMillis(0));
+        await ProtocolTestHelper.AssertFieldNotPresent(stack, pSyn, "tcp.window_size").ConfigureAwait(false);
+
+        byte[] serverSyn = _FrameWithScale(isClient: false, shift: 2, seq: 2000, ack: 1001, flags: TcpFlags.SynAck);
+        Packet pSynAck = ProtocolTestHelper.ParseFrame(stack, serverSyn, 1, Timestamp.FromMillis(1));
+        await ProtocolTestHelper.AssertFieldNotPresent(stack, pSynAck, "tcp.window_size").ConfigureAwait(false);
+
+        byte[] clientData = _ClientFrame(1001, 2001, TcpFlags.PshAck, "x"u8, windowSize: 100);
+        Packet pClient = ProtocolTestHelper.ParseFrame(stack, clientData, 2, Timestamp.FromMillis(2));
+        await ProtocolTestHelper.AssertU64Field(stack, pClient, "tcp.window_size", 12800).ConfigureAwait(false);
+        await ProtocolTestHelper.AssertU64Field(stack, pClient, "tcp.window_size_scalefactor", 7).ConfigureAwait(false);
+
+        byte[] serverData = _ServerFrame(2001, 1002, TcpFlags.PshAck, "y"u8, windowSize: 100);
+        Packet pServer = ProtocolTestHelper.ParseFrame(stack, serverData, 3, Timestamp.FromMillis(3));
+        await ProtocolTestHelper.AssertU64Field(stack, pServer, "tcp.window_size", 400).ConfigureAwait(false);
+        await ProtocolTestHelper.AssertU64Field(stack, pServer, "tcp.window_size_scalefactor", 2).ConfigureAwait(false);
+    }
+
+    [Test]
+    public async Task Analysis_KeepAlive_IsNotRetransmission()
+    {
+        using Stack stack = ProtocolTestHelper.BuildStack();
+        _DoHandshake(stack);
+        byte[] keep = _ClientFrame(1000, 2001, TcpFlags.Ack, [0x00]);
+        Packet packet = ProtocolTestHelper.ParseFrame(stack, keep, 3, Timestamp.FromMillis(30));
+        await ProtocolTestHelper.AssertBoolField(stack, packet, "tcp.analysis.keep_alive", true).ConfigureAwait(false);
+        await ProtocolTestHelper.AssertFieldNotPresent(stack, packet, "tcp.analysis.retransmission").ConfigureAwait(false);
+    }
+
+    [Test]
+    public async Task Analysis_ServerFin_IsCloseWait()
+    {
+        using Stack stack = ProtocolTestHelper.BuildStack();
+        _DoHandshake(stack);
+        byte[] fin = _ServerFrame(2001, 1001, TcpFlags.FinAck);
+        Packet packet = ProtocolTestHelper.ParseFrame(stack, fin, 3, Timestamp.FromMillis(30));
+        await ProtocolTestHelper.AssertStringField(stack, packet, "tcp.analysis.connection_state", "CLOSE_WAIT").ConfigureAwait(false);
+    }
+
+    private static byte[] _FrameWithScale(bool isClient, byte shift, uint seq, uint ack, byte flags)
+    {
+        byte[] options = [0x03, 0x03, shift, 0x01];
+        EthernetLayer eth = isClient ? new(_DstMac, _SrcMac) : new(_SrcMac, _DstMac);
+        IPv4Layer ip = isClient ? new(_ClientIp, _ServerIp) : new(_ServerIp, _ClientIp);
+        ushort src = isClient ? _ClientPort : _ServerPort;
+        ushort dst = isClient ? _ServerPort : _ClientPort;
+        TcpLayerWithOptions tcp = new(src, dst, options, seqNum: seq, ackNum: ack, flags: flags, windowSize: 100);
+        return FrameStack.Start(eth).Then(ip).Then(tcp).CreateWithFixedValues().EmitFrame(ReadOnlySpan<byte>.Empty);
     }
 
     #endregion

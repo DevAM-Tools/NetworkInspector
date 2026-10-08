@@ -7,7 +7,9 @@ namespace NetworkInspector.Sources.Asc;
 /// Implements <see cref="IFrameSource"/> for forward-only sequential reading
 /// from any <see cref="Stream"/>.
 /// <para>
-/// Supports CAN classic, CAN FD, LIN, FlexRay, and Ethernet bus types.
+/// Supports CAN classic, CAN FD, CAN XL, LIN, FlexRay, and Ethernet.
+/// Error and overload frames are SocketCAN error frames. AFDX data lines are Ethernet frames.
+/// AFDX status and bus statistics are not read.
 /// Each line is parsed and converted to the appropriate binary frame format
 /// (SocketCAN, DLT_LIN, DLT_FLEXRAY, or raw Ethernet).
 /// </para>
@@ -91,8 +93,26 @@ public sealed class AscStreamSource : IFrameSource, IErrorTolerantFrameSource
     /// </summary>
     private readonly TimeZoneInfo _TimestampTimeZone;
 
-    /// <summary>Start time from the file header in seconds since Unix epoch.</summary>
-    private double _BaseEpoch;
+    /// <summary>
+    /// Running file clock. Relative headers add each frame-producing line.
+    /// Absolute headers replace it with the line time. Single-threaded with <see cref="NextFrame"/>.
+    /// </summary>
+    private AscTimestamp _RunningOffset;
+
+    /// <summary>True after the header selects <c>timestamps relative</c>.</summary>
+    private bool _RelativeClock;
+
+    /// <summary>One physical line pushed back because it was not an Ethernet continuation.</summary>
+    private byte[]? _Pushback;
+
+    /// <summary>Valid length of <see cref="_Pushback"/>.</summary>
+    private int _PushbackLength;
+
+    /// <summary>When true, the next line read returns <see cref="_Pushback"/>.</summary>
+    private bool _HasPushback;
+
+    /// <summary>Reusable buffer for an Ethernet packet plus its continuation lines.</summary>
+    private readonly byte[] _EthernetRecord = new byte[AscEthernetParser.MaxRecordBytes];
 
     #endregion
 
@@ -322,8 +342,13 @@ public sealed class AscStreamSource : IFrameSource, IErrorTolerantFrameSource
                 continue;
             }
 
-            // Header section ended. If this first non-header line produces a frame,
-            // parse and capture it; the reader has already advanced past it.
+            // Header section ended. The clock mode must be known before the first data line is folded.
+            _RelativeClock = _Header.TimestampFormat == "relative";
+            if (_RelativeClock && _Header.PreviousLogAbsolute is AscTimestamp seed)
+            {
+                _RunningOffset = seed;
+            }
+
             if (!trimmed.IsEmpty)
             {
                 AscLineType firstLineType = AscLineClassifier.Classify(trimmed);
@@ -331,12 +356,14 @@ public sealed class AscStreamSource : IFrameSource, IErrorTolerantFrameSource
                 {
                     _PendingFirstFrame = _ParseLine(trimmed, firstLineType);
                 }
+                else
+                {
+                    _ = AscTimestamp.TryFold(ref _RunningOffset, _RelativeClock, trimmed, out _);
+                }
             }
 
             break;
         }
-
-        _BaseEpoch = _Header.StartTimeEpoch;
     }
 
     /// <summary>
@@ -348,6 +375,13 @@ public sealed class AscStreamSource : IFrameSource, IErrorTolerantFrameSource
     /// </summary>
     private bool _TryReadNextLine(out ReadOnlySpan<byte> line)
     {
+        if (_HasPushback)
+        {
+            _HasPushback = false;
+            line = _Pushback.AsSpan(0, _PushbackLength);
+            return true;
+        }
+
         while (true)
         {
             // Scan from the current buffer position for a \n byte
@@ -485,6 +519,8 @@ public sealed class AscStreamSource : IFrameSource, IErrorTolerantFrameSource
             AscLineType lineType = AscLineClassifier.Classify(trimmed);
             if (!_IsFrameProducingType(lineType))
             {
+                // Relative time is the delta from the preceding event, not only the preceding frame.
+                _ = AscTimestamp.TryFold(ref _RunningOffset, _RelativeClock, trimmed, out _);
                 continue;
             }
 
@@ -515,55 +551,9 @@ public sealed class AscStreamSource : IFrameSource, IErrorTolerantFrameSource
     /// <param name="lineType">Pre-classified line type.</param>
     private Frame? _ParseLine(ReadOnlySpan<byte> span, AscLineType lineType)
     {
-        bool parsed;
-        double timestamp;
-        int channel;
-        byte[] frameData;
-        AscBusType busType;
-        LinkType linkType;
-
-        switch (lineType)
-        {
-            case AscLineType.CanMessage:
-                parsed = AscCanParser.TryParse(span, _Header.NumericBase,
-                    out timestamp, out channel, out frameData);
-                busType = AscBusType.Can;
-                linkType = LinkType.CanSocketcan;
-                break;
-
-            case AscLineType.CanFdMessage:
-                parsed = AscCanFdParser.TryParse(span, _Header.NumericBase,
-                    out timestamp, out channel, out frameData);
-                busType = AscBusType.CanFd;
-                linkType = LinkType.CanSocketcan;
-                break;
-
-            case AscLineType.LinMessage:
-                parsed = AscLinParser.TryParse(span, _Header.NumericBase,
-                    out timestamp, out channel, out frameData);
-                busType = AscBusType.Lin;
-                linkType = LinkType.Lin;
-                break;
-
-            case AscLineType.FlexRayMessage:
-                parsed = AscFlexRayParser.TryParse(span, _Header.NumericBase,
-                    out timestamp, out channel, out frameData);
-                busType = AscBusType.FlexRay;
-                linkType = LinkType.Flexray;
-                break;
-
-            case AscLineType.EthernetPacket:
-                parsed = AscEthernetParser.TryParse(span,
-                    out timestamp, out channel, out frameData);
-                busType = AscBusType.Ethernet;
-                linkType = LinkType.Ethernet;
-                break;
-
-            default:
-                return null;
-        }
-
-        if (!parsed || frameData.Length == 0)
+        // Fold the clock before parsing so a later successful frame still sees this line's delta.
+        if (!AscTimestamp.TryFold(ref _RunningOffset, _RelativeClock, span, out AscTimestamp clock)
+            || !AscTimestamp.TryToUnixNanos(_Header.StartUnixNanos, clock, out long absoluteNanos))
         {
             _HandleSkip(new FrameReadErrorEventArgs
             {
@@ -575,7 +565,83 @@ public sealed class AscStreamSource : IFrameSource, IErrorTolerantFrameSource
             return null;
         }
 
-        long absoluteNanos = (long)((_BaseEpoch + timestamp) * 1_000_000_000.0);
+        bool parsed;
+        int channel;
+        byte[] frameData;
+        AscBusType busType;
+        LinkType linkType;
+        ReadOnlySpan<byte> parseSpan = span;
+        if (lineType == AscLineType.EthernetPacket)
+        {
+            int recordLength = _CollectEthernetRecord(span);
+            parseSpan = _EthernetRecord.AsSpan(0, recordLength);
+        }
+
+        switch (lineType)
+        {
+            case AscLineType.CanMessage:
+                parsed = AscCanParser.TryParse(parseSpan, _Header.NumericBase,
+                    out _, out channel, out frameData);
+                busType = AscBusType.Can;
+                linkType = LinkType.CanSocketcan;
+                break;
+
+            case AscLineType.CanFdMessage:
+                parsed = AscCanFdParser.TryParse(parseSpan, _Header.NumericBase,
+                    out _, out channel, out frameData);
+                busType = AscBusType.CanFd;
+                linkType = LinkType.CanSocketcan;
+                break;
+
+            case AscLineType.CanXlMessage:
+                parsed = AscCanXlParser.TryParse(parseSpan,
+                    out _, out channel, out busType, out frameData);
+                linkType = LinkType.CanSocketcan;
+                break;
+
+            case AscLineType.CanErrorFrame:
+            case AscLineType.CanOverloadFrame:
+                parsed = AscCanErrorParser.TryParse(parseSpan, out _, out channel, out frameData);
+                busType = AscBusType.Can;
+                linkType = LinkType.CanSocketcan;
+                break;
+
+            case AscLineType.LinMessage:
+                parsed = AscLinParser.TryParse(parseSpan, _Header.NumericBase,
+                    out _, out channel, out frameData);
+                busType = AscBusType.Lin;
+                linkType = LinkType.Lin;
+                break;
+
+            case AscLineType.FlexRayMessage:
+                parsed = AscFlexRayParser.TryParse(parseSpan, _Header.NumericBase,
+                    out _, out channel, out frameData);
+                busType = AscBusType.FlexRay;
+                linkType = LinkType.Flexray;
+                break;
+
+            case AscLineType.EthernetPacket:
+                parsed = AscEthernetParser.TryParse(parseSpan, _Header.NumericBase,
+                    out _, out channel, out frameData);
+                busType = AscBusType.Ethernet;
+                linkType = LinkType.Ethernet;
+                break;
+
+            default:
+                return null;
+        }
+
+        if (!parsed)
+        {
+            _HandleSkip(new FrameReadErrorEventArgs
+            {
+                FrameIndex = _FrameIndex,
+                FileOffset = -1,
+                Kind = FrameReadErrorKind.Other,
+                Message = $"Failed to parse {lineType} line.",
+            });
+            return null;
+        }
         FrameInterfaceId interfaceId = _GetOrRegisterInterface(busType, channel, linkType);
 
         int frameId = _FrameIndex++;
@@ -667,15 +733,72 @@ public sealed class AscStreamSource : IFrameSource, IErrorTolerantFrameSource
 
     #region Helpers
 
+    /// <summary>
+    /// Copies the Ethernet packet line and any following continuation lines into <see cref="_EthernetRecord"/>.
+    /// A later logging event is pushed back so the next <see cref="NextFrame"/> call still sees it.
+    /// </summary>
+    private int _CollectEthernetRecord(ReadOnlySpan<byte> firstLine)
+    {
+        if (firstLine.Length > _EthernetRecord.Length)
+        {
+            return 0;
+        }
+
+        firstLine.CopyTo(_EthernetRecord);
+        int written = firstLine.Length;
+        while (written < _EthernetRecord.Length)
+        {
+            if (!_TryReadNextLine(out ReadOnlySpan<byte> next))
+            {
+                return written;
+            }
+
+            ReadOnlySpan<byte> trimmed = AscTokenizerBytes.TrimAscii(next);
+            if (AscEthernetParser.IsNewLoggingEvent(trimmed)
+                || !AscEthernetParser.IsHexContinuation(trimmed))
+            {
+                _PushBack(next);
+                return written;
+            }
+
+            if (written + 1 + next.Length > _EthernetRecord.Length)
+            {
+                _PushBack(next);
+                return written;
+            }
+
+            _EthernetRecord[written] = (byte)'\n';
+            written++;
+            next.CopyTo(_EthernetRecord.AsSpan(written));
+            written += next.Length;
+        }
+
+        return written;
+    }
+
+    /// <summary>
+    /// Keeps one line so the next read returns it. The span from the reader is only valid until the next read.
+    /// </summary>
+    private void _PushBack(ReadOnlySpan<byte> line)
+    {
+        if (_Pushback is null || _Pushback.Length < line.Length)
+        {
+            _Pushback = new byte[Math.Max(line.Length, 256)];
+        }
+
+        line.CopyTo(_Pushback);
+        _PushbackLength = line.Length;
+        _HasPushback = true;
+    }
+
     /// <summary>Returns <c>true</c> when the line type corresponds to a parseable frame.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static bool _IsFrameProducingType(AscLineType lineType) => lineType switch
     {
-        AscLineType.CanMessage => true,
-        AscLineType.CanFdMessage => true,
-        AscLineType.LinMessage => true,
-        AscLineType.FlexRayMessage => true,
-        AscLineType.EthernetPacket => true,
+        AscLineType.CanMessage or AscLineType.CanFdMessage or AscLineType.CanXlMessage
+            or AscLineType.CanErrorFrame or AscLineType.CanOverloadFrame
+            or AscLineType.LinMessage or AscLineType.FlexRayMessage
+            or AscLineType.EthernetPacket => true,
         _ => false,
     };
 

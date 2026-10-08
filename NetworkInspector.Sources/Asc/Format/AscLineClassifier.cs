@@ -59,13 +59,6 @@ internal static class AscLineClassifier
             return AscLineType.StartOfMeasurement;
         }
 
-        // CAN FD — lines starting with "CANFD" (no timestamp prefix, CANFD is the line start in some variants)
-        // Or lines with timestamp where the second/third token is "CANFD"
-        if (_ContainsCanFdToken(line))
-        {
-            return AscLineType.CanFdMessage;
-        }
-
         // From here, data lines typically start with a timestamp: <digits>.<digits> <...>
         // Find the first space after the timestamp
         int firstSpace = line.IndexOf(' ');
@@ -87,6 +80,17 @@ internal static class AscLineClassifier
         if (rest.IsEmpty)
         {
             return AscLineType.Unknown;
+        }
+
+        // CANXL and CANFD are the token after the timestamp. A later symbolic name must not steal the line.
+        if (_NextTokenEquals(rest, "CANXL"))
+        {
+            return AscLineType.CanXlMessage;
+        }
+
+        if (_NextTokenEquals(rest, "CANFD"))
+        {
+            return AscLineType.CanFdMessage;
         }
 
         // ErrorFrame — can appear as "<time> <ch> ErrorFrame" or "<time> <ch>  ErrorFrame"
@@ -114,8 +118,8 @@ internal static class AscLineClassifier
             return AscLineType.CanBusStatistics;
         }
 
-        // LIN — channel like "L1", "L2", etc. or "Lin"
-        if (rest[0] == 'L' && rest.Length > 1 && char.IsDigit(rest[1]))
+        // LIN channel 1 is "Li". Channels 2..255 are "L" plus digits. "L*" is not a channel.
+        if (_IsLinChannel(rest))
         {
             return _ClassifyLinEvent(rest);
         }
@@ -127,9 +131,9 @@ internal static class AscLineClassifier
             return _ClassifyFlexRayEvent(rest);
         }
 
-        // Ethernet — "ETH" or "AFDX" prefix
-        if (rest.StartsWith("ETH ", StringComparison.OrdinalIgnoreCase)
-            || rest.StartsWith("AFDX ", StringComparison.OrdinalIgnoreCase))
+        // Ethernet or AFDX packet: bus, channel, then Rx / Tx / TxRq / TxFwd.
+        // STAT, RxEr, and AFDX BUS stay Unknown.
+        if (_IsEthernetPacket(rest))
         {
             return AscLineType.EthernetPacket;
         }
@@ -156,6 +160,12 @@ internal static class AscLineClassifier
         if (rest.StartsWith("GPS", StringComparison.OrdinalIgnoreCase))
         {
             return AscLineType.GpsEvent;
+        }
+
+        // "<channel> Statistic:" is a bus-statistics event, not a CAN frame.
+        if (_IsChannelStatistic(rest))
+        {
+            return AscLineType.CanBusStatistics;
         }
 
         // Default: if the first char of rest is a digit (channel number), it's a CAN message
@@ -214,12 +224,6 @@ internal static class AscLineClassifier
             return AscLineType.StartOfMeasurement;
         }
 
-        // CAN FD
-        if (_ContainsCanFdToken(line))
-        {
-            return AscLineType.CanFdMessage;
-        }
-
         // Timestamp-prefixed lines: find the first space
         int firstSpace = line.IndexOf((byte)' ');
         if (firstSpace <= 0)
@@ -238,6 +242,16 @@ internal static class AscLineClassifier
         if (rest.IsEmpty)
         {
             return AscLineType.Unknown;
+        }
+
+        if (_NextTokenEquals(rest, "CANXL"u8))
+        {
+            return AscLineType.CanXlMessage;
+        }
+
+        if (_NextTokenEquals(rest, "CANFD"u8))
+        {
+            return AscLineType.CanFdMessage;
         }
 
         if (_ContainsByteTokenIgnoreCase(rest, "ErrorFrame"u8))
@@ -260,8 +274,8 @@ internal static class AscLineClassifier
             return AscLineType.CanBusStatistics;
         }
 
-        // LIN: L<digit>
-        if (rest[0] == (byte)'L' && rest.Length > 1 && _IsAsciiDigit(rest[1]))
+        // LIN channel 1 is "Li". Channels 2..255 are "L" plus digits. "L*" is not a channel.
+        if (_IsLinChannel(rest))
         {
             return _ClassifyLinEvent(rest);
         }
@@ -274,10 +288,14 @@ internal static class AscLineClassifier
             return _ClassifyFlexRayEvent(rest);
         }
 
-        // Ethernet
-        if (StartsWithAsciiIgnoreCase(rest, "ETH "u8) || StartsWithAsciiIgnoreCase(rest, "AFDX "u8))
+        if (_IsEthernetPacket(rest))
         {
             return AscLineType.EthernetPacket;
+        }
+
+        if (_IsChannelStatistic(rest))
+        {
+            return AscLineType.CanBusStatistics;
         }
 
         if (StartsWithAsciiIgnoreCase(rest, "EnvVar:"u8))
@@ -312,10 +330,106 @@ internal static class AscLineClassifier
 
     #region Char helpers
 
-    private static bool _ContainsCanFdToken(ReadOnlySpan<char> line)
+    private static bool _NextTokenEquals(ReadOnlySpan<char> rest, string expected)
     {
-        int idx = line.IndexOf("CANFD", StringComparison.OrdinalIgnoreCase);
-        return idx >= 0;
+        ReadOnlySpan<char> trimmed = rest.TrimStart();
+        if (!trimmed.StartsWith(expected, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (trimmed.Length == expected.Length)
+        {
+            return true;
+        }
+
+        char next = trimmed[expected.Length];
+        return next == ' ' || next == '\t';
+    }
+
+    private static bool _IsEthernetPacket(ReadOnlySpan<char> rest)
+    {
+        AscTokenizer tokenizer = new(rest);
+        if (!tokenizer.TryNextToken(out ReadOnlySpan<char> bus)
+            || !_IsEthernetBus(bus))
+        {
+            return false;
+        }
+
+        if (!tokenizer.TryNextToken(out _))
+        {
+            return false;
+        }
+
+        if (!tokenizer.TryNextToken(out ReadOnlySpan<char> direction))
+        {
+            return false;
+        }
+
+        return _IsEthernetDirection(direction);
+    }
+
+    private static bool _IsEthernetBus(ReadOnlySpan<char> bus) =>
+        (bus.Length == 3 && bus.Equals("ETH", StringComparison.OrdinalIgnoreCase))
+        || (bus.Length == 4 && bus.Equals("AFDX", StringComparison.OrdinalIgnoreCase));
+
+    private static bool _IsEthernetDirection(ReadOnlySpan<char> direction) =>
+        direction.Equals("Rx", StringComparison.OrdinalIgnoreCase)
+        || direction.Equals("Tx", StringComparison.OrdinalIgnoreCase)
+        || direction.Equals("TxRq", StringComparison.OrdinalIgnoreCase)
+        || direction.Equals("TxFwd", StringComparison.OrdinalIgnoreCase);
+
+    private static bool _IsLinChannel(ReadOnlySpan<char> rest)
+    {
+        if (rest.Length < 2 || (rest[0] != 'L' && rest[0] != 'l'))
+        {
+            return false;
+        }
+
+        int end = rest.IndexOfAny(' ', '\t');
+        ReadOnlySpan<char> token = end < 0 ? rest : rest[..end];
+        if (token.Length == 2 && (token[1] == 'i' || token[1] == 'I'))
+        {
+            return true;
+        }
+
+        if (token.Length < 2)
+        {
+            return false;
+        }
+
+        for (int i = 1; i < token.Length; i++)
+        {
+            if (!char.IsDigit(token[i]))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Statistics are <c>&lt;channel&gt; Statistic:</c>. The channel is decimal and comes first.
+    /// </summary>
+    private static bool _IsChannelStatistic(ReadOnlySpan<char> rest)
+    {
+        int end = rest.IndexOfAny(' ', '\t');
+        if (end <= 0)
+        {
+            return false;
+        }
+
+        for (int i = 0; i < end; i++)
+        {
+            if (!char.IsDigit(rest[i]))
+            {
+                return false;
+            }
+        }
+
+        ReadOnlySpan<char> after = rest[(end + 1)..].TrimStart();
+        return after.StartsWith("Statistic:", StringComparison.OrdinalIgnoreCase);
     }
 
     private static AscLineType _ClassifyLinEvent(ReadOnlySpan<char> rest)
@@ -330,9 +444,35 @@ internal static class AscLineClassifier
 
     private static AscLineType _ClassifyFlexRayEvent(ReadOnlySpan<char> rest)
     {
-        if (_ContainsToken(rest, "Cycle"))
+        AscTokenizer tokenizer = new(rest);
+        if (!tokenizer.TryNextToken(out _)
+            || !tokenizer.TryNextToken(out ReadOnlySpan<char> kind))
         {
-            return AscLineType.FlexRayStartCycle;
+            return AscLineType.Unknown;
+        }
+
+        // RMSG and PDU are frames. A numeric token is the old V9 channel.
+        // SCE, SE, EE, and StartCycleEvent are not frames.
+        if (kind.Equals("RMSG", StringComparison.OrdinalIgnoreCase)
+            || kind.Equals("PDU", StringComparison.OrdinalIgnoreCase))
+        {
+            return AscLineType.FlexRayMessage;
+        }
+
+        if (kind.Equals("SCE", StringComparison.OrdinalIgnoreCase)
+            || kind.Equals("SE", StringComparison.OrdinalIgnoreCase)
+            || kind.Equals("EE", StringComparison.OrdinalIgnoreCase)
+            || kind.Equals("StartCycleEvent", StringComparison.OrdinalIgnoreCase))
+        {
+            return AscLineType.Unknown;
+        }
+
+        for (int i = 0; i < kind.Length; i++)
+        {
+            if (!char.IsDigit(kind[i]))
+            {
+                return AscLineType.Unknown;
+            }
         }
 
         return AscLineType.FlexRayMessage;
@@ -373,11 +513,104 @@ internal static class AscLineClassifier
 
     #region Byte helpers
 
-    private static bool _ContainsCanFdToken(ReadOnlySpan<byte> line)
+    private static bool _NextTokenEquals(ReadOnlySpan<byte> rest, ReadOnlySpan<byte> expected)
     {
-        // Search for 'C'/'c' followed by 'A'/'a' 'N'/'n' 'F'/'f' 'D'/'d'
-        ReadOnlySpan<byte> canfd = "CANFD"u8;
-        return _IndexOfAsciiIgnoreCase(line, canfd) >= 0;
+        ReadOnlySpan<byte> trimmed = AscTokenizerBytes.TrimStartAscii(rest);
+        if (trimmed.Length < expected.Length
+            || !StartsWithAsciiIgnoreCase(trimmed, expected))
+        {
+            return false;
+        }
+
+        if (trimmed.Length == expected.Length)
+        {
+            return true;
+        }
+
+        byte next = trimmed[expected.Length];
+        return next == (byte)' ' || next == (byte)'\t';
+    }
+
+    private static bool _IsEthernetPacket(ReadOnlySpan<byte> rest)
+    {
+        AscTokenizerBytes tokenizer = new(rest);
+        if (!tokenizer.TryNextToken(out ReadOnlySpan<byte> bus)
+            || !_IsEthernetBus(bus))
+        {
+            return false;
+        }
+
+        if (!tokenizer.TryNextToken(out _))
+        {
+            return false;
+        }
+
+        if (!tokenizer.TryNextToken(out ReadOnlySpan<byte> direction))
+        {
+            return false;
+        }
+
+        return _IsEthernetDirection(direction);
+    }
+
+    private static bool _IsEthernetBus(ReadOnlySpan<byte> bus) =>
+        (bus.Length == 3 && StartsWithAsciiIgnoreCase(bus, "ETH"u8))
+        || (bus.Length == 4 && StartsWithAsciiIgnoreCase(bus, "AFDX"u8));
+
+    private static bool _IsEthernetDirection(ReadOnlySpan<byte> direction) =>
+        (direction.Length == 2 && StartsWithAsciiIgnoreCase(direction, "Rx"u8))
+        || (direction.Length == 2 && StartsWithAsciiIgnoreCase(direction, "Tx"u8))
+        || (direction.Length == 4 && StartsWithAsciiIgnoreCase(direction, "TxRq"u8))
+        || (direction.Length == 5 && StartsWithAsciiIgnoreCase(direction, "TxFwd"u8));
+
+    private static bool _IsLinChannel(ReadOnlySpan<byte> rest)
+    {
+        if (rest.Length < 2 || (rest[0] != (byte)'L' && rest[0] != (byte)'l'))
+        {
+            return false;
+        }
+
+        int end = rest.IndexOfAny(" \t"u8);
+        ReadOnlySpan<byte> token = end < 0 ? rest : rest[..end];
+        if (token.Length == 2 && (token[1] == (byte)'i' || token[1] == (byte)'I'))
+        {
+            return true;
+        }
+
+        if (token.Length < 2)
+        {
+            return false;
+        }
+
+        for (int i = 1; i < token.Length; i++)
+        {
+            if (!_IsAsciiDigit(token[i]))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool _IsChannelStatistic(ReadOnlySpan<byte> rest)
+    {
+        int end = rest.IndexOfAny(" \t"u8);
+        if (end <= 0)
+        {
+            return false;
+        }
+
+        for (int i = 0; i < end; i++)
+        {
+            if (!_IsAsciiDigit(rest[i]))
+            {
+                return false;
+            }
+        }
+
+        ReadOnlySpan<byte> after = AscTokenizerBytes.TrimStartAscii(rest[(end + 1)..]);
+        return StartsWithAsciiIgnoreCase(after, "Statistic:"u8);
     }
 
     private static AscLineType _ClassifyLinEvent(ReadOnlySpan<byte> rest)
@@ -392,13 +625,39 @@ internal static class AscLineClassifier
 
     private static AscLineType _ClassifyFlexRayEvent(ReadOnlySpan<byte> rest)
     {
-        if (_ContainsByteTokenIgnoreCase(rest, "Cycle"u8))
+        AscTokenizerBytes tokenizer = new(rest);
+        if (!tokenizer.TryNextToken(out _)
+            || !tokenizer.TryNextToken(out ReadOnlySpan<byte> kind))
         {
-            return AscLineType.FlexRayStartCycle;
+            return AscLineType.Unknown;
+        }
+
+        if (_TokenEquals(kind, "RMSG"u8) || _TokenEquals(kind, "PDU"u8))
+        {
+            return AscLineType.FlexRayMessage;
+        }
+
+        if (_TokenEquals(kind, "SCE"u8)
+            || _TokenEquals(kind, "SE"u8)
+            || _TokenEquals(kind, "EE"u8)
+            || _TokenEquals(kind, "StartCycleEvent"u8))
+        {
+            return AscLineType.Unknown;
+        }
+
+        for (int i = 0; i < kind.Length; i++)
+        {
+            if (!_IsAsciiDigit(kind[i]))
+            {
+                return AscLineType.Unknown;
+            }
         }
 
         return AscLineType.FlexRayMessage;
     }
+
+    private static bool _TokenEquals(ReadOnlySpan<byte> token, ReadOnlySpan<byte> expected) =>
+        token.Length == expected.Length && StartsWithAsciiIgnoreCase(token, expected);
 
     private static bool _LooksLikeTimestamp(ReadOnlySpan<byte> span)
     {

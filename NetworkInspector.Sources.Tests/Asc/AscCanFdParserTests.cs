@@ -19,10 +19,11 @@ internal sealed class AscCanFdParserTests
         // CANFD <ch> <dir> <id> <symbolic> <flags> <dlc> <data_len> <data...>
         bool ok = AscCanFdParser.TryParse(
             "0.100000 CANFD 1 Rx 200 1 0 8 8 01 02 03 04 05 06 07 08"u8,
-            16, out double ts, out int ch, out byte[] frame);
+            16, out AscTimestamp ts, out int ch, out byte[] frame);
 
         await Assert.That(ok).IsTrue();
-        await Assert.That(ts).IsEqualTo(0.1).Within(0.0001);
+        await Assert.That(ts.WholeSeconds).IsEqualTo(0);
+        await Assert.That(ts.Nanoseconds).IsEqualTo(100_000_000);
         await Assert.That(ch).IsEqualTo(1);
         await Assert.That(frame.Length).IsGreaterThan(8);
 
@@ -93,12 +94,12 @@ internal sealed class AscCanFdParserTests
     {
         // CAN FD DLC 12 → 16 bytes of data
         bool ok = AscCanFdParser.TryParse(
-            "0.500000 CANFD 1 Rx 100 0 0 12 16 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F 10"u8,
+            "0.500000 CANFD 1 Rx 100 0 0 C 16 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F 10"u8,
             16, out _, out _, out byte[] frame);
 
         await Assert.That(ok).IsTrue();
-        // 8 header + 16 data = 24 bytes
-        await Assert.That(frame.Length).IsGreaterThanOrEqualTo(24);
+        await Assert.That(frame[4]).IsEqualTo((byte)16);
+        await Assert.That(frame.Length).IsEqualTo(24);
     }
 
     // ========================================================================
@@ -137,5 +138,73 @@ internal sealed class AscCanFdParserTests
         bool ok = AscCanFdParser.TryParse("0.100000 CANFD"u8, 16, out _, out _, out _);
 
         await Assert.That(ok).IsFalse();
+    }
+
+    [Test]
+    public async Task Dlc15Maps64DataBytes()
+    {
+        System.Text.StringBuilder builder = new("0.700000 CANFD 1 Rx 100 0 0 F 64");
+        for (int i = 0; i < 64; i++)
+        {
+            builder.Append(" 01");
+        }
+
+        bool ok = AscCanFdParser.TryParse(
+            Encoding.ASCII.GetBytes(builder.ToString()),
+            16, out _, out _, out byte[] frame);
+
+        await Assert.That(ok).IsTrue();
+        await Assert.That(frame[4]).IsEqualTo((byte)64);
+        await Assert.That(frame.Length).IsEqualTo(72);
+        await Assert.That((frame[5] & 0x04) != 0).IsTrue();
+    }
+
+    [Test]
+    public async Task DecimalBaseDlc12IsTwelve()
+    {
+        bool ok = AscCanFdParser.TryParse(
+            "0.500000 CANFD 1 Rx 100 0 0 12 16 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F 10"u8,
+            10, out _, out _, out byte[] frame);
+
+        await Assert.That(ok).IsTrue();
+        await Assert.That(frame[4]).IsEqualTo((byte)16);
+    }
+
+    [Test]
+    public async Task HexBaseDlcToken12IsRejected()
+    {
+        bool ok = AscCanFdParser.TryParse(
+            "0.500000 CANFD 1 Rx 100 0 0 12 16 01"u8,
+            16, out _, out _, out _);
+
+        await Assert.That(ok).IsFalse();
+    }
+
+    [Test]
+    public async Task CanFdErrorFrameSetsErrFlag()
+    {
+        bool ok = AscCanFdParser.TryParse(
+            "0.051203 CANFD 1 Rx ErrorFrame Stuff Error fffe 82 20a2"u8,
+            16, out _, out int channel, out byte[] frame);
+
+        await Assert.That(ok).IsTrue();
+        await Assert.That(channel).IsEqualTo(1);
+        uint id = BinaryPrimitives.ReadUInt32BigEndian(frame);
+        await Assert.That(id).IsEqualTo(0x20000000u);
+    }
+
+    [Test]
+    public async Task OldColumnOrderReadsIdAndData()
+    {
+        bool ok = AscCanFdParser.TryParse(
+            "0.010460 CANFD 1 101 Tx 1 0 d 8 8 F1 F1 F1 F1 F1 F1 F1 F1"u8,
+            16, out _, out _, out byte[] frame);
+
+        await Assert.That(ok).IsTrue();
+        uint id = BinaryPrimitives.ReadUInt32BigEndian(frame);
+        await Assert.That(id & 0x1FFFFFFFu).IsEqualTo(0x101u);
+        await Assert.That(frame[4]).IsEqualTo((byte)8);
+        await Assert.That(frame[5] & 0x01).IsEqualTo((byte)0x01);
+        await Assert.That(frame[8]).IsEqualTo((byte)0xF1);
     }
 }

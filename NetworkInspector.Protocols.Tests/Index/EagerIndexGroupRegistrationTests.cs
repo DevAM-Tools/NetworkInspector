@@ -409,7 +409,12 @@ internal sealed class EagerIndexGroupRegistrationTests
             FrameInterfaceId.Invalid,
             stack.FrameInterfaceRegistry).Value;
 
-        Packet packet = Packet.ParseFrameIndexed(new PacketId(0), stack, parsedFrame, index);
+        ParseOptions options = new(index: index);
+        if (!Packet.TryParse(new PacketId(0), stack, parsedFrame, in options, out Packet? packet, out ParseFailure failure)
+            || packet is null)
+        {
+            throw new InvalidOperationException(failure.ToString());
+        }
 
         // Snapshot the eagerly-recorded groups BEFORE materialization. Any group an emitted field
         // depends on must already be in this set; otherwise the index would be a false negative.

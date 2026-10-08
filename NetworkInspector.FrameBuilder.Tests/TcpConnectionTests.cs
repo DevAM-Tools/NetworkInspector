@@ -606,5 +606,36 @@ internal sealed class TcpConnectionTests
         await Assert.That(() => conn.EmitHandshake(sink)).Throws<ObjectDisposedException>();
     }
 
+    [Test]
+    public async Task SynAndFin_AdvanceSequenceByTwo()
+    {
+        using TcpConnection<IPv4Layer, StatelessStack<EthernetLayer, StackEnd>> conn = _OpenDefault(
+            new TcpConnectionOptions(ClientIsn: 1000, ServerIsn: 9000));
+        (FrameSink sink, List<byte[]> frames) = _NewFrameCollector();
+        conn.EmitHandshake(sink);
+        frames.Clear();
+        conn.OnSegment = (ref TcpSegmentDescriptor descriptor, in TcpSegmentContext _) =>
+        {
+            descriptor.Flags = (byte)(TcpFlags.Syn | TcpFlags.Fin | TcpFlags.Ack);
+        };
+        conn.WriteFromClient(ReadOnlySpan<byte>.Empty, sink, push: true);
+        await Assert.That(conn.ClientNextSeq).IsEqualTo(1003u);
+    }
+
+    [Test]
+    public async Task Handshake_ClientSynOptions_OnlyOnFirstFrame()
+    {
+        TcpOptionsBuilder builder = new();
+        builder.Mss(1460);
+        using TcpConnection<IPv4Layer, StatelessStack<EthernetLayer, StackEnd>> conn = _OpenDefault(
+            new TcpConnectionOptions(ClientIsn: 1000, ServerIsn: 9000, ClientSynOptions: builder.Build()));
+        (FrameSink sink, List<byte[]> frames) = _NewFrameCollector();
+        conn.EmitHandshake(sink);
+        await Assert.That(frames[0][_TcpHeaderOffset + 12] >> 4).IsEqualTo(6);
+        await Assert.That(frames[1][_TcpHeaderOffset + 12] >> 4).IsEqualTo(5);
+        await Assert.That(frames[2][_TcpHeaderOffset + 12] >> 4).IsEqualTo(5);
+        await Assert.That(frames[0][_TcpHeaderOffset + 20]).IsEqualTo((byte)2);
+    }
+
     #endregion
 }

@@ -157,7 +157,7 @@ dotnet test CopilotAIWorkflow.slnx -c Release --no-build
 dotnet pack path/Proj.csproj -c Release
 ```
 
-Do not add a wrapper script without approval. File-in-use during build: concurrent agent (Section 4.14).
+`dotnet test` on the solution is the full run. A scoped project run uses `tech-tunit.md`. Do not add a wrapper script without approval. File-in-use during build: concurrent agent (Section 4.14).
 
 ## Source File Copyright Header
 

@@ -35,7 +35,21 @@ internal sealed class ValueCacheConcurrencyTests
                 FrameInterfaceId.Invalid,
                 stack.FrameInterfaceRegistry).Value;
             proto.ResetParseState();
-            packets[i] = Packet.ParseFrame(new PacketId(i), stack, frame, protoId);
+            {
+                ParseOptions options = new(firstProtocol: protoId);
+                if (!Packet.TryParse(
+                    new PacketId(i),
+                    stack,
+                    frame,
+                    in options,
+                    out Packet? parsed,
+                    out ParseFailure failure) || parsed is null)
+                {
+                    throw new InvalidOperationException(failure.ToString());
+                }
+
+                packets[i] = parsed;
+            }
         }
 
         using CancellationTokenSource cts = new();
@@ -105,7 +119,21 @@ internal sealed class ValueCacheConcurrencyTests
                 FrameInterfaceId.Invalid,
                 stack.FrameInterfaceRegistry).Value;
             proto.ResetParseState();
-            packets[i] = Packet.ParseFrame(new PacketId(i), stack, frame, protoId);
+            {
+                ParseOptions options = new(firstProtocol: protoId);
+                if (!Packet.TryParse(
+                    new PacketId(i),
+                    stack,
+                    frame,
+                    in options,
+                    out Packet? parsed,
+                    out ParseFailure failure) || parsed is null)
+                {
+                    throw new InvalidOperationException(failure.ToString());
+                }
+
+                packets[i] = parsed;
+            }
         }
 
         using CancellationTokenSource cts = new();

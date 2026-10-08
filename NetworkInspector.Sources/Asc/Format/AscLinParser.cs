@@ -6,8 +6,9 @@ namespace NetworkInspector.Sources.Asc.Format;
 /// Parses an ASC LIN message line into a DLT_LIN binary frame.
 ///
 /// ASC LIN line format:
-///   &lt;time&gt; L&lt;n&gt; &lt;id&gt; [ &lt;dir&gt; ] &lt;dlc&gt; &lt;data...&gt; checksum = &lt;cs&gt; ... CSM = enhanced|classic
-/// The direction token (Tx/Rx/Slave/Master) is optional in some exports.
+///   &lt;time&gt; Li|&lt;L2..L255&gt; &lt;id&gt; [ &lt;dir&gt; ] &lt;dlc&gt; &lt;data...&gt; checksum = &lt;cs&gt; ... CSM = enhanced|classic
+/// Channel 1 is the token <c>Li</c>. <c>L1</c> is not a channel.
+/// The direction token (Tx/Rx/Slave/Master) is optional in some exports and is discarded.
 ///
 /// DLT_LIN frame layout (Wireshark <c>packet-lin.h</c>):
 /// 8-byte header, then data padded to 4 or 8 bytes.
@@ -31,223 +32,29 @@ internal static class AscLinParser
     /// </summary>
     /// <param name="line">The full trimmed ASC line (including timestamp).</param>
     /// <param name="numericBase">16 for hex, 10 for dec.</param>
-    /// <param name="timestamp">Parsed timestamp in seconds.</param>
+    /// <param name="timestamp">Parsed line timestamp. Not scaled to Unix time.</param>
     /// <param name="channel">Parsed LIN channel number.</param>
-    /// <param name="frame">The resulting DLT_LIN binary frame.</param>
+    /// <param name="frame">The resulting DLT_LIN binary frame. Empty when this method returns <c>false</c>.</param>
     /// <returns><c>true</c> if parsing succeeded.</returns>
     internal static bool TryParse(
-        ReadOnlySpan<char> line, int numericBase,
-        out double timestamp, out int channel, out byte[] frame)
-    {
-        timestamp = 0.0;
-        channel = 0;
-        frame = [];
-
-        AscTokenizer tokenizer = new(line);
-
-        // Token 0: timestamp
-        if (!tokenizer.TryNextToken(out ReadOnlySpan<char> tsToken)
-            || !AscCanParser.TryParseTimestamp(tsToken, out timestamp))
-        {
-            return false;
-        }
-
-        // Token 1: LIN channel "L<n>" (e.g., "L1", "L2")
-        if (!tokenizer.TryNextToken(out ReadOnlySpan<char> chToken))
-        {
-            return false;
-        }
-
-        if (chToken.Length < 2 || chToken[0] != 'L')
-        {
-            return false;
-        }
-
-        if (!int.TryParse(chToken[1..], NumberStyles.Integer, CultureInfo.InvariantCulture, out channel))
-        {
-            return false;
-        }
-
-        // Token 2: LIN frame ID
-        if (!tokenizer.TryNextToken(out ReadOnlySpan<char> idToken))
-        {
-            return false;
-        }
-
-        NumberStyles idStyle = numericBase == 16 ? NumberStyles.HexNumber : NumberStyles.Integer;
-        if (!byte.TryParse(idToken, idStyle, CultureInfo.InvariantCulture, out byte frameId))
-        {
-            return false;
-        }
-
-        // After frame ID: optional direction (Tx/Rx/Slave/Master), then DLC.
-        if (!tokenizer.TryNextToken(out ReadOnlySpan<char> dirOrDlcToken))
-        {
-            return false;
-        }
-
-        ReadOnlySpan<char> dlcToken;
-        if (_IsLikelyLinDirectionToken(dirOrDlcToken))
-        {
-            if (!tokenizer.TryNextToken(out dlcToken))
-            {
-                return false;
-            }
-        }
-        else
-        {
-            dlcToken = dirOrDlcToken;
-        }
-
-        if (!int.TryParse(dlcToken, NumberStyles.Integer, CultureInfo.InvariantCulture, out int dlc))
-        {
-            return false;
-        }
-
-        int dataLength = Math.Min(dlc, _MaxLinDataLength);
-
-        // Parse data bytes
-        Span<byte> dataBytes = stackalloc byte[_MaxLinDataLength];
-        dataBytes.Clear();
-        int parsedCount = 0;
-
-        for (int i = 0; i < dataLength; i++)
-        {
-            if (!tokenizer.TryNextToken(out ReadOnlySpan<char> dataToken))
-            {
-                break;
-            }
-
-            // Stop at keyword tokens like "checksum", "HeaderTime", etc.
-            // In hex mode, valid bytes like AB, CD start with letters too,
-            // so only treat longer tokens starting with a letter as metadata.
-            if (dataToken.Length > 2 && char.IsLetter(dataToken[0]))
-            {
-                break;
-            }
-
-            if (AscCanParser.TryParseByte(dataToken, numericBase, out byte b))
-            {
-                dataBytes[i] = b;
-                parsedCount++;
-            }
-            else
-            {
-                break;
-            }
-        }
-
-        // Parse trailing metadata for checksum value
-        byte checksum = 0;
-        ReadOnlySpan<char> remaining = tokenizer.Remaining;
-        int csIdx = remaining.IndexOf("checksum", StringComparison.OrdinalIgnoreCase);
-        if (csIdx >= 0)
-        {
-            ReadOnlySpan<char> afterCs = remaining[(csIdx + 8)..].TrimStart();
-            // Skip "=" or ":" if present
-            if (afterCs.Length > 0 && (afterCs[0] == '=' || afterCs[0] == ':'))
-            {
-                afterCs = afterCs[1..].TrimStart();
-            }
-
-            // Read the checksum value
-            int endIdx = afterCs.IndexOfAny(' ', '\t');
-            ReadOnlySpan<char> csValue = endIdx >= 0 ? afterCs[..endIdx] : afterCs;
-            _ = byte.TryParse(csValue, idStyle, CultureInfo.InvariantCulture, out checksum);
-        }
-
-        byte pid = ComputePid(frameId);
-        frame = _BuildDltLinFrame(pid, parsedCount, dataBytes[..parsedCount], checksum);
-        return true;
-    }
-
-    #endregion
-
-    #region Helpers
-
-    private static byte[] _BuildDltLinFrame(byte pid, int dlc, ReadOnlySpan<byte> data, byte checksum)
-    {
-        int clampedDlc = Math.Clamp(dlc, 0, _MaxLinDataLength);
-        int dataPad = clampedDlc <= 4 ? 4 : 8;
-        byte[] frame = new byte[_DltLinHeaderSize + dataPad];
-        frame[0] = 1;
-        frame[4] = (byte)(clampedDlc << 4);
-        frame[5] = pid;
-        frame[6] = checksum;
-        int copyLen = Math.Min(clampedDlc, data.Length);
-        if (copyLen > 0)
-        {
-            data[..copyLen].CopyTo(frame.AsSpan(_DltLinHeaderSize));
-        }
-
-        return frame;
-    }
-
-    private static bool _IsLikelyLinDirectionToken(ReadOnlySpan<char> token) =>
-        token.Equals("Tx", StringComparison.OrdinalIgnoreCase)
-        || token.Equals("Rx", StringComparison.OrdinalIgnoreCase)
-        || token.Equals("Slave", StringComparison.OrdinalIgnoreCase)
-        || token.Equals("Master", StringComparison.OrdinalIgnoreCase);
-
-    /// <summary>
-    /// Computes the LIN PID (Protected Identifier) from a 6-bit frame ID.
-    /// P0 = ID0 ⊕ ID1 ⊕ ID2 ⊕ ID4 (even parity over bits 0,1,2,4)
-    /// P1 = ¬(ID1 ⊕ ID3 ⊕ ID4 ⊕ ID5) (odd parity over bits 1,3,4,5)
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal static byte ComputePid(byte id)
-    {
-        int frameId = id & 0x3F;
-        int p0 = ((frameId >> 0) ^ (frameId >> 1) ^ (frameId >> 2) ^ (frameId >> 4)) & 1;
-        int p1 = (~((frameId >> 1) ^ (frameId >> 3) ^ (frameId >> 4) ^ (frameId >> 5))) & 1;
-        return (byte)(frameId | (p0 << 6) | (p1 << 7));
-    }
-
-    private static bool _IsLikelyLinDirectionToken(ReadOnlySpan<byte> token) =>
-        _AscLinDirectionBytesEqual(token, "Tx"u8)
-        || _AscLinDirectionBytesEqual(token, "Rx"u8)
-        || _AscLinDirectionBytesEqual(token, "Slave"u8)
-        || _AscLinDirectionBytesEqual(token, "Master"u8);
-
-    private static bool _AscLinDirectionBytesEqual(ReadOnlySpan<byte> token, ReadOnlySpan<byte> ascii) =>
-        token.Length == ascii.Length && AscLineClassifier.StartsWithAsciiIgnoreCase(token, ascii);
-
-    #endregion
-
-    #region Byte-span overload (zero-allocation path)
-
-    /// <summary>
-    /// Byte-span overload of <see cref="TryParse(ReadOnlySpan{char}, int, out double, out int, out byte[])"/>.
-    /// Works directly on raw ASCII bytes without converting to a <see cref="string"/>.
-    /// </summary>
-    internal static bool TryParse(
         ReadOnlySpan<byte> line, int numericBase,
-        out double timestamp, out int channel, out byte[] frame)
+        out AscTimestamp timestamp, out int channel, out byte[] frame)
     {
-        timestamp = 0.0;
+        timestamp = default;
         channel = 0;
         frame = [];
 
         AscTokenizerBytes tokenizer = new(line);
 
         if (!tokenizer.TryNextToken(out ReadOnlySpan<byte> tsToken)
-            || !AscCanParser.TryParseTimestamp(tsToken, out timestamp))
+            || !AscTimestamp.TryParse(tsToken, out timestamp))
         {
             return false;
         }
 
-        // Channel token: "L<n>"
-        if (!tokenizer.TryNextToken(out ReadOnlySpan<byte> chToken))
-        {
-            return false;
-        }
-
-        if (chToken.Length < 2 || chToken[0] != (byte)'L')
-        {
-            return false;
-        }
-
-        if (!System.Buffers.Text.Utf8Parser.TryParse(chToken[1..], out channel, out _))
+        // Channel token: "Li" is channel 1. "L2".."L255" are the other channels.
+        if (!tokenizer.TryNextToken(out ReadOnlySpan<byte> chToken)
+            || !_TryParseLinChannel(chToken, out channel))
         {
             return false;
         }
@@ -262,24 +69,24 @@ internal static class AscLinParser
         byte frameId;
         if (isHex)
         {
-            if (!System.Buffers.Text.Utf8Parser.TryParse(idToken, out uint u, out _, 'X') || u > 0x3F)
+            if (!System.Buffers.Text.Utf8Parser.TryParse(idToken, out uint parsedId, out _, 'X') || parsedId > 0x3F)
             {
                 return false;
             }
 
-            frameId = (byte)u;
+            frameId = (byte)parsedId;
         }
         else
         {
-            if (!System.Buffers.Text.Utf8Parser.TryParse(idToken, out int si, out _) || si > 0x3F)
+            if (!System.Buffers.Text.Utf8Parser.TryParse(idToken, out int signedId, out _) || signedId > 0x3F)
             {
                 return false;
             }
 
-            frameId = (byte)si;
+            frameId = (byte)signedId;
         }
 
-        // After frame ID: optional direction token, then DLC.
+        // After frame ID: optional direction token, then DLC. Direction is discarded.
         if (!tokenizer.TryNextToken(out ReadOnlySpan<byte> dirOrDlcToken))
         {
             return false;
@@ -321,9 +128,9 @@ internal static class AscLinParser
                 break;
             }
 
-            if (AscCanParser.TryParseByte(dataToken, numericBase, out byte b))
+            if (AscCanParser.TryParseByte(dataToken, numericBase, out byte parsed))
             {
-                dataBytes[i] = b;
+                dataBytes[i] = parsed;
                 parsedCount++;
             }
             else
@@ -357,9 +164,9 @@ internal static class AscLinParser
             ReadOnlySpan<byte> csValue = endIdx >= 0 ? afterCs[..endIdx] : afterCs;
             if (isHex)
             {
-                if (System.Buffers.Text.Utf8Parser.TryParse(csValue, out uint u, out _, 'X') && u <= 255)
+                if (System.Buffers.Text.Utf8Parser.TryParse(csValue, out uint checksumValue, out _, 'X') && checksumValue <= 255)
                 {
-                    checksum = (byte)u;
+                    checksum = (byte)checksumValue;
                 }
             }
             else
@@ -374,9 +181,78 @@ internal static class AscLinParser
         return true;
     }
 
+    #endregion
+
+    #region Helpers
+
+    private static byte[] _BuildDltLinFrame(byte pid, int dlc, ReadOnlySpan<byte> data, byte checksum)
+    {
+        int clampedDlc = Math.Clamp(dlc, 0, _MaxLinDataLength);
+        int dataPad = clampedDlc <= 4 ? 4 : 8;
+        byte[] frame = new byte[_DltLinHeaderSize + dataPad];
+        frame[0] = 1;
+        frame[4] = (byte)(clampedDlc << 4);
+        frame[5] = pid;
+        frame[6] = checksum;
+        int copyLen = Math.Min(clampedDlc, data.Length);
+        if (copyLen > 0)
+        {
+            data[..copyLen].CopyTo(frame.AsSpan(_DltLinHeaderSize));
+        }
+
+        return frame;
+    }
+
+    /// <summary>
+    /// Computes the LIN PID (Protected Identifier) from a 6-bit frame ID.
+    /// P0 = ID0 ⊕ ID1 ⊕ ID2 ⊕ ID4 (even parity over bits 0,1,2,4)
+    /// P1 = ¬(ID1 ⊕ ID3 ⊕ ID4 ⊕ ID5) (odd parity over bits 1,3,4,5)
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static bool _IsAsciiLetter(byte b) =>
-        (b >= (byte)'A' && b <= (byte)'Z') || (b >= (byte)'a' && b <= (byte)'z');
+    internal static byte ComputePid(byte id)
+    {
+        int frameId = id & 0x3F;
+        int p0 = ((frameId >> 0) ^ (frameId >> 1) ^ (frameId >> 2) ^ (frameId >> 4)) & 1;
+        int p1 = (~((frameId >> 1) ^ (frameId >> 3) ^ (frameId >> 4) ^ (frameId >> 5))) & 1;
+        return (byte)(frameId | (p0 << 6) | (p1 << 7));
+    }
+
+    /// <summary>
+    /// <c>Li</c> is channel 1. <c>L2</c> through <c>L255</c> are the numbered channels.
+    /// <c>L1</c> is not defined by the LIN ASC channel symbol.
+    /// </summary>
+    private static bool _TryParseLinChannel(ReadOnlySpan<byte> token, out int channel)
+    {
+        channel = 0;
+        if (token.Length < 2 || (token[0] != (byte)'L' && token[0] != (byte)'l'))
+        {
+            return false;
+        }
+
+        if (token.Length == 2 && (token[1] == (byte)'i' || token[1] == (byte)'I'))
+        {
+            channel = 1;
+            return true;
+        }
+
+        return System.Buffers.Text.Utf8Parser.TryParse(token[1..], out channel, out int consumed)
+            && consumed == token.Length - 1
+            && channel >= 2
+            && channel <= 255;
+    }
+
+    private static bool _IsLikelyLinDirectionToken(ReadOnlySpan<byte> token) =>
+        _AscLinDirectionBytesEqual(token, "Tx"u8)
+        || _AscLinDirectionBytesEqual(token, "Rx"u8)
+        || _AscLinDirectionBytesEqual(token, "Slave"u8)
+        || _AscLinDirectionBytesEqual(token, "Master"u8);
+
+    private static bool _AscLinDirectionBytesEqual(ReadOnlySpan<byte> token, ReadOnlySpan<byte> ascii) =>
+        token.Length == ascii.Length && AscLineClassifier.StartsWithAsciiIgnoreCase(token, ascii);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool _IsAsciiLetter(byte value) =>
+        (value >= (byte)'A' && value <= (byte)'Z') || (value >= (byte)'a' && value <= (byte)'z');
 
     private static int _IndexOfAsciiIgnoreCase(ReadOnlySpan<byte> haystack, ReadOnlySpan<byte> needle)
     {

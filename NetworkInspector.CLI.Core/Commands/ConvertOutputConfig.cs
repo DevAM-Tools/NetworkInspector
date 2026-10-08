@@ -33,7 +33,7 @@ internal abstract class ConvertOutputConfig
     ///   <item><c>blf:compression=fast</c> — BLF, fastest compression</item>
     ///   <item><c>blf:compression=default</c> — BLF, default compression</item>
     ///   <item><c>blf:compression=best|high</c> — BLF, best compression</item>
-    ///   <item><c>asc</c> — CANalyzer ASCII log (CAN, CAN FD, LIN, FlexRay)</item>
+    ///   <item><c>asc</c> — CANalyzer ASCII log (CAN classic, CAN FD, CAN XL, LIN, FlexRay, Ethernet). AFDX data frames are read. AFDX status, AFDX bus statistics, ETH STAT, and ETH RxEr are not read.</item>
     /// </list>
     /// </remarks>
     internal static ConvertOutputConfig Parse(string spec)

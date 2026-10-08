@@ -61,7 +61,21 @@ internal sealed class ParseContextDispatchTests
             FrameInterfaceId.Invalid,
             stack.FrameInterfaceRegistry).Value;
 
-        return Packet.ParseFrame(new PacketId(0), stack, frame, firstProtocolId);
+        {
+            ParseOptions options = new(firstProtocol: firstProtocolId);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            return parsed;
+        }
     }
 
     #endregion
@@ -184,7 +198,19 @@ internal sealed class ParseContextDispatchTests
                 LinkType.Ethernet,
                 FrameInterfaceId.Invalid,
                 stack.FrameInterfaceRegistry).Value;
-            _ = Packet.ParseFrame(packet, new PacketId(1), stack, frame, parentId);
+            {
+                ParseOptions options = new(firstProtocol: parentId);
+                if (!Packet.TryParse(
+                    packet,
+                    new PacketId(1),
+                    stack,
+                    frame,
+                    in options,
+                    out ParseFailure failure))
+                {
+                    throw new InvalidOperationException(failure.ToString());
+                }
+            }
             await Assert.That(parent.ReceivedSelfProtocolId).IsEqualTo(parentId);
         }
     }
@@ -255,11 +281,35 @@ internal sealed class ParseContextDispatchTests
             LinkType.Ethernet, FrameInterfaceId.Invalid, stack.FrameInterfaceRegistry).Value;
 
         // Parse via parent1 — child must see parent1Id as caller
-        _ = Packet.ParseFrame(new PacketId(0), stack, frame, parent1Id);
+        {
+            ParseOptions options = new(firstProtocol: parent1Id);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? _,
+                out ParseFailure failure))
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+        }
         ProtocolId callerAfterParent1 = child.ReceivedCallerProtocolId;
 
         // Parse via parent2 — child must see parent2Id as caller
-        _ = Packet.ParseFrame(new PacketId(1), stack, frame, parent2Id);
+        {
+            ParseOptions options = new(firstProtocol: parent2Id);
+            if (!Packet.TryParse(
+                new PacketId(1),
+                stack,
+                frame,
+                in options,
+                out Packet? _,
+                out ParseFailure failure))
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+        }
         ProtocolId callerAfterParent2 = child.ReceivedCallerProtocolId;
 
         await Assert.That(callerAfterParent1).IsEqualTo(parent1Id);

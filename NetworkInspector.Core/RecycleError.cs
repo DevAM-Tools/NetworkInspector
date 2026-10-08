@@ -5,12 +5,9 @@ namespace NetworkInspector.Core;
 /// <summary>
 /// Describes why a recycling parse operation cannot proceed.
 /// <para>
-/// Returned by the hot-path <c>TryParseFrame(Packet recycle, …)</c> and
-/// <c>TryParseFrameIndexed(Packet recycle, …)</c> factory methods instead of throwing,
-/// so that tight recycling loops remain completely exception-free.
-/// The corresponding throwing <c>ParseFrame(Packet recycle, …)</c> overloads translate
-/// these codes into the appropriate <see cref="System.InvalidOperationException"/> or
-/// <see cref="System.ArgumentException"/>.
+/// <see cref="Packet.PrepareForReuse"/> returns <see cref="RecycleError"/>?
+/// and <see cref="Packet.TryParse(Packet, PacketId, Stack, Frame, in ParseOptions, out ParseFailure)"/>
+/// maps that code to <see cref="ParseFailure"/> without throwing.
 /// </para>
 /// </summary>
 public enum RecycleError

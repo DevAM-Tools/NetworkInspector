@@ -284,5 +284,79 @@ internal sealed class TcpHeuristicTests
         await ProtocolTestHelper.AssertProtocolPresent(stack, pTls, "tls").ConfigureAwait(false);
     }
 
+    [Test]
+    public async Task Heuristic_Http2_RandomNineBytes_NotDetected()
+    {
+        using Stack stack = ProtocolTestHelper.BuildStack();
+        _DoHandshake(stack);
+        byte[] noise = [0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01];
+        Packet packet = ProtocolTestHelper.ParseFrame(
+            stack, _ClientFrame(1001, 2001, TcpFlags.PshAck, noise), 3, Timestamp.FromMillis(20));
+        await ProtocolTestHelper.AssertProtocolNotPresent(stack, packet, "http2").ConfigureAwait(false);
+    }
+
+    [Test]
+    public async Task Heuristic_BareGet_NotDetected()
+    {
+        using Stack stack = ProtocolTestHelper.BuildStack();
+        _DoHandshake(stack);
+        Packet packet = ProtocolTestHelper.ParseFrame(
+            stack, _ClientFrame(1001, 2001, TcpFlags.PshAck, "GET "u8), 3, Timestamp.FromMillis(20));
+        await ProtocolTestHelper.AssertProtocolNotPresent(stack, packet, "http").ConfigureAwait(false);
+    }
+
+    [Test]
+    public async Task Heuristic_ClientPort80_DoesNotStealServerPort()
+    {
+        using Stack stack = ProtocolTestHelper.BuildStack();
+        byte[] tls = [0x16, 0x03, 0x03, 0x00, 0x01, 0x00];
+        EthernetLayer ethC = new(_DstMac, _SrcMac);
+        IPv4Layer ipC = new(_ClientIp, _ServerIp);
+        TcpLayer synTcp = new(80, 9, seqNum: 1000, ackNum: 0, flags: TcpFlags.Syn);
+        byte[] synFrame = FrameStack.Start(ethC).Then(ipC).Then(synTcp).CreateWithFixedValues()
+            .EmitFrame(ReadOnlySpan<byte>.Empty);
+        ProtocolTestHelper.ParseFrame(stack, synFrame, 0, Timestamp.FromMillis(0));
+        EthernetLayer eth = new(_SrcMac, _DstMac);
+        IPv4Layer ip = new(_ServerIp, _ClientIp);
+        TcpLayer synAck = new(9, 80, seqNum: 2000, ackNum: 1001, flags: TcpFlags.SynAck);
+        byte[] synAckFrame = FrameStack.Start(eth).Then(ip).Then(synAck).CreateWithFixedValues()
+            .EmitFrame(ReadOnlySpan<byte>.Empty);
+        ProtocolTestHelper.ParseFrame(stack, synAckFrame, 1, Timestamp.FromMillis(10));
+        TcpLayer data = new(80, 9, seqNum: 1001, ackNum: 2001, flags: TcpFlags.PshAck);
+        byte[] frame = FrameStack.Start(ethC).Then(ipC).Then(data).CreateWithFixedValues().EmitFrame(tls);
+        Packet packet = ProtocolTestHelper.ParseFrame(stack, frame, 2, Timestamp.FromMillis(20));
+        await ProtocolTestHelper.AssertProtocolNotPresent(stack, packet, "http").ConfigureAwait(false);
+        await ProtocolTestHelper.AssertProtocolPresent(stack, packet, "tls").ConfigureAwait(false);
+    }
+
+    [Test]
+    public async Task HttpOnPort80_NotHttpBytes_SetsError()
+    {
+        using Stack stack = ProtocolTestHelper.BuildStack();
+        _DoHandshake(stack, dstPort: 80);
+        byte[] noise = [0x00, 0x01, 0x02];
+        Packet packet = ProtocolTestHelper.ParseFrame(
+            stack, _ClientFrame(1001, 2001, TcpFlags.PshAck, noise, dstPort: 80), 3, Timestamp.FromMillis(20));
+        await ProtocolTestHelper.AssertFieldExists(stack, packet, "http.error.not_http").ConfigureAwait(false);
+    }
+
+    [Test]
+    public async Task HttpOnPort80_SplitRequest_OneMessage()
+    {
+        using Stack stack = ProtocolTestHelper.BuildStack();
+        _DoHandshake(stack, dstPort: 80);
+        byte[] part1 = "GET / HTTP/1.1\r\nHos"u8.ToArray();
+        byte[] part2 = "t: example.com\r\n\r\n"u8.ToArray();
+        Packet first = ProtocolTestHelper.ParseFrame(
+            stack, _ClientFrame(1001, 2001, TcpFlags.PshAck, part1, dstPort: 80), 3, Timestamp.FromMillis(20));
+        await ProtocolTestHelper.AssertProtocolNotPresent(stack, first, "http").ConfigureAwait(false);
+        Packet second = ProtocolTestHelper.ParseFrame(
+            stack,
+            _ClientFrame(1001 + (uint)part1.Length, 2001, TcpFlags.PshAck, part2, dstPort: 80),
+            4,
+            Timestamp.FromMillis(21));
+        await ProtocolTestHelper.AssertFieldExists(stack, second, "http.request.method").ConfigureAwait(false);
+    }
+
     #endregion
 }

@@ -205,18 +205,28 @@ public sealed class Stack : IStack, IDisposable
     #region Parse sequence
 
     /// <summary>
-    /// Classifies this <see cref="Packet.ParseFrame(PacketId, Stack, Frame, FieldTreeMode, ValueCache, Boolean)"/> call as a first parse or a replay and
+    /// Classifies a
+    /// <see cref="Packet.TryParse(PacketId, Stack, Frame, in ParseOptions, out Packet?, out ParseFailure)"/>
+    /// call as a first parse or a replay and
     /// rejects jumps. First parses on a stack must use dense ids <c>0, 1, 2, …</c>.
     /// Returns <see langword="true"/> when <paramref name="id"/> was already first-parsed
     /// (<c>id ≤ watermark</c>) and must replay; <see langword="false"/> when this is the next
     /// first parse (<c>id == watermark + 1</c>).
     /// </summary>
     /// <exception cref="InvalidOperationException">
-    /// Thrown when <paramref name="id"/> is greater than the next expected first-parse id.
+    /// Thrown when <paramref name="id"/> is <see cref="PacketId.Invalid"/> or otherwise not
+    /// <see cref="PacketId.IsValid"/>, and when <paramref name="id"/> is greater than the next
+    /// expected first-parse id.
     /// </exception>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal bool ObserveParse(PacketId id)
     {
+        if (!id.IsValid)
+        {
+            throw new InvalidOperationException(
+                "Packet id is invalid. First-parse ids are 0, 1, 2, … PacketId.Invalid is not a replay.");
+        }
+
         int value = id.Value;
         int current = _ParseWatermark;
         if (value <= current)
@@ -235,7 +245,7 @@ public sealed class Stack : IStack, IDisposable
 
     /// <summary>
     /// Returns whether <paramref name="id"/> would throw from <see cref="ObserveParse"/> as a
-    /// first-parse gap. No watermark mutation. Used by <c>TryParseFrame</c> so a recycle target
+    /// first-parse gap. No watermark mutation. Used by <c>Packet.TryParse</c> so a recycle target
     /// stays unchanged when the caller skipped an id.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -648,7 +658,9 @@ public sealed class Stack : IStack, IDisposable
     {
         if (!_IsValidIndex(protocolId.Value, _ParseDelegates.Length))
         {
-            return ParseError.Custom("stack", $"Invalid protocol ID: {protocolId.Value}");
+            return ParseError.Custom(
+                "stack",
+                string.Create(CultureInfo.InvariantCulture, $"Invalid protocol ID: {protocolId.Value}"));
         }
 
         ParseContext contextWithSelf = context.WithSelfProtocol(protocolId);

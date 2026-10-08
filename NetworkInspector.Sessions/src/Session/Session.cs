@@ -141,7 +141,7 @@ public sealed class Session : ISession, ISessionReader
     // Random-access capable sources keyed by FrameSourceId for GetPacket().
     // Copy-on-write: written only during _AddFrameSourceInternal (rare), read during TryGetPacket (hot).
     // Volatile reference swap replaces the previous lock(object) pattern for lock-free reads.
-    private volatile Dictionary<FrameSourceId, IRandomAccessFrameSource> _RandomAccessSources = new();
+    private volatile Dictionary<FrameSourceId, IRandomAccessFrameSource> _RandomAccessSources = [];
 
     // -- Listener registry --
 
@@ -1583,23 +1583,13 @@ public sealed class Session : ISession, ISessionReader
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private Packet _ParseFrameCore(PacketId id, Frame frame)
     {
-        ValueCache? ingest = _IngestValueCache;
-        if (ingest is not null)
+        ParseOptions options = new(_IngestFieldTreeMode, _IngestValueCache, index: _PacketIndex);
+        if (!Packet.TryParse(id, _Stack, frame, in options, out Packet? packet, out ParseFailure failure))
         {
-            if (_PacketIndex is not null)
-            {
-                return Packet.ParseFrameIndexed(id, _Stack, frame, _PacketIndex, _IngestFieldTreeMode, ingest);
-            }
-
-            return Packet.ParseFrame(id, _Stack, frame, _IngestFieldTreeMode, ingest);
+            throw new InvalidOperationException(failure.ToString());
         }
 
-        if (_PacketIndex is not null)
-        {
-            return Packet.ParseFrameIndexed(id, _Stack, frame, _PacketIndex, _IngestFieldTreeMode);
-        }
-
-        return Packet.ParseFrame(id, _Stack, frame, _IngestFieldTreeMode);
+        return packet!;
     }
 
     /// <summary>
@@ -1616,23 +1606,8 @@ public sealed class Session : ISession, ISessionReader
             PacketId id = packetId ?? _AllocateNextPacketId();
             if (recycle is not null)
             {
-                RecycleError? error;
-                ValueCache? ingest = _IngestValueCache;
-                FieldTreeMode ingestTree = _IngestFieldTreeMode;
-                if (ingest is not null)
-                {
-                    error = _PacketIndex is not null
-                        ? Packet.TryParseFrameIndexed(recycle, id, _Stack, frame, _PacketIndex, ingestTree, ingest)
-                        : Packet.TryParseFrame(recycle, id, _Stack, frame, ingestTree, ingest);
-                }
-                else
-                {
-                    error = _PacketIndex is not null
-                        ? Packet.TryParseFrameIndexed(recycle, id, _Stack, frame, _PacketIndex, ingestTree)
-                        : Packet.TryParseFrame(recycle, id, _Stack, frame, ingestTree);
-                }
-
-                if (error is null)
+                ParseOptions options = new(_IngestFieldTreeMode, _IngestValueCache, index: _PacketIndex);
+                if (Packet.TryParse(recycle, id, _Stack, frame, in options, out _))
                 {
                     return recycle;
                 }
@@ -1649,8 +1624,7 @@ public sealed class Session : ISession, ISessionReader
     /// would be a first parse on an arbitrary thread and is therefore not allowed.
     /// <para>
     /// A non-<see langword="null"/> <paramref name="recycle"/> is reused in place. A rejected recycle
-    /// (see <see cref="RecycleError"/>) is not an error for the caller: the re-parse repeats into a
-    /// fresh packet.
+    /// is not an error for the caller: the re-parse repeats into a fresh packet.
     /// </para>
     /// <para>
     /// Truncated or malformed frames become error packets. Unexpected failures
@@ -1661,21 +1635,19 @@ public sealed class Session : ISession, ISessionReader
     private bool _TryReparseFrame(
         Frame frame, PacketId packetId, Packet? recycle, [NotNullWhen(true)] out Packet? packet)
     {
-        if (recycle is not null)
+        ParseOptions options = new(FieldTreeMode.Build, index: _PacketIndex);
+        if (recycle is not null && Packet.TryParse(recycle, packetId, _Stack, frame, in options, out _))
         {
-            RecycleError? error = _PacketIndex is not null
-                ? Packet.TryParseFrameIndexed(recycle, packetId, _Stack, frame, _PacketIndex, FieldTreeMode.Build)
-                : Packet.TryParseFrame(recycle, packetId, _Stack, frame, FieldTreeMode.Build);
-            if (error is null)
-            {
-                packet = recycle;
-                return true;
-            }
+            packet = recycle;
+            return true;
         }
 
-        packet = _PacketIndex is not null
-            ? Packet.ParseFrameIndexed(packetId, _Stack, frame, _PacketIndex, FieldTreeMode.Build)
-            : Packet.ParseFrame(packetId, _Stack, frame, FieldTreeMode.Build);
+        if (!Packet.TryParse(packetId, _Stack, frame, in options, out Packet? created, out ParseFailure failure) || created is null)
+        {
+            throw new InvalidOperationException(failure.ToString());
+        }
+
+        packet = created;
         return true;
     }
 
@@ -2028,7 +2000,7 @@ public sealed class Session : ISession, ISessionReader
         }
 
         PacketFilter? filter = slot.Filter;
-        if (filter is null || filter.IsAlwaysMatch)
+        if (filter?.IsAlwaysMatch is not false)
         {
             count = ReadPackets(startId, destination, out idLayout);
             return true;

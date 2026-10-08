@@ -25,7 +25,22 @@ internal sealed class ValueCacheSeriesTests
             LinkType.Ethernet,
             FrameInterfaceId.Invalid,
             stack.FrameInterfaceRegistry).Value;
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, protoId);
+        Packet packet;
+        {
+            ParseOptions options = new(firstProtocol: protoId);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
         return (stack, proto, protoId, packet);
     }
 
@@ -203,7 +218,22 @@ internal sealed class ValueCacheSeriesTests
             LinkType.Ethernet,
             FrameInterfaceId.Invalid,
             stack.FrameInterfaceRegistry).Value;
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, protoId);
+        Packet packet;
+        {
+            ParseOptions options = new(firstProtocol: protoId);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
         ValueCache cache = new(stack, [new ValueCacheFieldConfig(proto.BytesId)]);
         cache.RecordPacket(packet);
         ValueCacheSeries<byte[]> series = cache.GetSeries<byte[]>(proto.BytesId);

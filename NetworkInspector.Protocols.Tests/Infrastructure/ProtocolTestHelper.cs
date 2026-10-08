@@ -47,7 +47,13 @@ internal static class ProtocolTestHelper
             FrameInterfaceId.Invalid,
             stack.FrameInterfaceRegistry).Value;
 
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame);
+        ParseOptions options = new();
+        if (!Packet.TryParse(new PacketId(0), stack, frame, in options, out Packet? packet, out ParseFailure failure)
+            || packet is null)
+        {
+            throw new InvalidOperationException(failure.ToString());
+        }
+
         return (stack, packet);
     }
 
@@ -77,7 +83,13 @@ internal static class ProtocolTestHelper
             FrameInterfaceId.Invalid,
             stack.FrameInterfaceRegistry).Value;
 
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame);
+        ParseOptions options = new();
+        if (!Packet.TryParse(new PacketId(0), stack, frame, in options, out Packet? packet, out ParseFailure failure)
+            || packet is null)
+        {
+            throw new InvalidOperationException(failure.ToString());
+        }
+
         return (stack, packet);
     }
 
@@ -96,7 +108,14 @@ internal static class ProtocolTestHelper
             FrameInterfaceId.Invalid,
             stack.FrameInterfaceRegistry).Value;
 
-        return Packet.ParseFrame(new PacketId(0), stack, frame);
+        ParseOptions options = new();
+        if (!Packet.TryParse(new PacketId(0), stack, frame, in options, out Packet? packet, out ParseFailure failure)
+            || packet is null)
+        {
+            throw new InvalidOperationException(failure.ToString());
+        }
+
+        return packet;
     }
 
     /// <summary>
@@ -212,24 +231,33 @@ internal static class ProtocolTestHelper
 
     /// <summary>
     /// Parses a single frame on an existing stack. Use for multi-packet scenarios
-    /// where state must accumulate across sequential <see cref="Packet.ParseFrame"/> calls.
+    /// where state must accumulate across sequential parses.
     /// </summary>
     internal static Packet ParseFrame(
         Stack stack,
         byte[] frameData,
         int packetIndex,
         Timestamp timestamp,
-        LinkType linkType = LinkType.Ethernet)
+        LinkType linkType = LinkType.Ethernet,
+        FrameInterfaceId? interfaceId = null)
     {
         Frame frame = Frame.Create(
             new FrameId(packetIndex),
             timestamp,
             frameData,
             linkType,
-            FrameInterfaceId.Invalid,
+            interfaceId ?? FrameInterfaceId.Invalid,
             stack.FrameInterfaceRegistry).Value;
 
-        return Packet.ParseFrame(new PacketId(packetIndex), stack, frame);
+        ParseOptions options = new();
+        PacketId id = new(packetIndex);
+        if (!Packet.TryParse(id, stack, frame, in options, out Packet? packet, out ParseFailure failure)
+            || packet is null)
+        {
+            throw new InvalidOperationException(failure.ToString());
+        }
+
+        return packet;
     }
 
     /// <summary>

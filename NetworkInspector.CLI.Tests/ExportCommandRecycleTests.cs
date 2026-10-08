@@ -9,8 +9,9 @@ namespace NetworkInspector.CLI.Tests;
 /// </summary>
 /// <remarks>
 /// Each test builds its own <see cref="FrameInterfaceRegistry"/> and <see cref="Stack"/> so that
-/// the shared-registry invariant required by <see cref="Packet.TryParseFrame"/> is satisfied
-/// without cross-test interference, and so tests can run safely in parallel.
+/// the shared-registry invariant required by
+/// <see cref="Packet.TryParse(Packet, PacketId, Stack, Frame, in ParseOptions, out ParseFailure)"/>
+/// is satisfied without cross-test interference, and so tests can run safely in parallel.
 /// </remarks>
 internal sealed class ExportCommandRecycleTests
 {
@@ -278,8 +279,21 @@ internal sealed class ExportCommandRecycleTests
         // Dense first parses (0 then 1); evaluating 1 then 0 poisons a stateful filter.
         PacketFilter filter = _Compile(stack, "flank(ip.ttl, changed, within: 1s)");
         Frame frame = poisonSource.NextFrame()!.Value;
-        _ = Packet.ParseFrame(new PacketId(0), stack, frame);
-        _ = filter.TryIsMatch(Packet.ParseFrame(new PacketId(1), stack, frame), out _, out _);
+        ParseOptions options = new();
+        PacketId firstId = new(0);
+        if (!Packet.TryParse(firstId, stack, frame, in options, out _, out ParseFailure firstFailure))
+        {
+            throw new InvalidOperationException(firstFailure.ToString());
+        }
+
+        PacketId secondId = new(1);
+        if (!Packet.TryParse(secondId, stack, frame, in options, out Packet? second, out ParseFailure secondFailure)
+            || second is null)
+        {
+            throw new InvalidOperationException(secondFailure.ToString());
+        }
+
+        _ = filter.TryIsMatch(second, out _, out _);
 
         bool aborted = false;
         string message = string.Empty;

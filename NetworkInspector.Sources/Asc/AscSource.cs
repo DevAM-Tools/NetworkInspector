@@ -373,9 +373,12 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
             dataStartLine = i + 1;
         }
 
-        // Phase 2: classify and index frame-producing lines
+        // Phase 2: classify and index frame-producing lines.
+        // The clock is folded here, in file order, so later random access does not re-walk the file.
         List<AscFrameIndexEntry> entries = [];
         HashSet<(AscBusType, int, LinkType)> discovered = [];
+        AscTimestamp runningClock = _InitialClock(header);
+        bool relativeClock = header.TimestampFormat == "relative";
 
         for (int i = dataStartLine; i < lines.Length; i++)
         {
@@ -385,23 +388,7 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
                 continue;
             }
 
-            AscLineType lineType = AscLineClassifier.Classify(trimmed);
-            if (!_IsFrameProducingType(lineType))
-            {
-                continue;
-            }
-
-            // Collect interface metadata for pre-registration
-            (AscBusType busType, LinkType linkType) = _LineTypeToInterface(lineType);
-            int channel = _PeekChannel(trimmed, lineType);
-            if (channel >= 0)
-            {
-                discovered.Add((busType, channel, linkType));
-            }
-
-            // Location == line index into the byte[][] array
-            ArrayIndexIdRange.ThrowIfInvalidNextIndex(entries.Count, "frame");
-            entries.Add(new AscFrameIndexEntry { Location = i, LineType = lineType });
+            _IndexFrameLine(trimmed, i, ref runningClock, relativeClock, entries, discovered);
         }
 
         return new AscSource(lines, null, header, [.. entries], discovered, options.ErrorTolerance, uiName);
@@ -425,6 +412,8 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
         bool headerDone = false;
         List<AscFrameIndexEntry> entries = [];
         HashSet<(AscBusType, int, LinkType)> discovered = [];
+        AscTimestamp runningClock = default;
+        bool relativeClock = false;
 
         // Primary read buffer — raw bytes from disk, no string conversions during the scan pass.
         byte[] buffer = new byte[AscSourceOptions.DiskReadBufferSize];
@@ -453,7 +442,7 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
                     _ProcessDiskLine(
                         AscTokenizerBytes.TrimAscii(carryBuffer.AsSpan(0, carryLen)),
                         lineStartOffset,
-                        ref header, ref headerDone, entries, discovered);
+                        ref header, ref headerDone, ref runningClock, ref relativeClock, entries, discovered);
                 }
 
                 break;
@@ -513,7 +502,7 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
                     _ProcessDiskLine(
                         AscTokenizerBytes.TrimAscii(rawLine),
                         lineStartOffset,
-                        ref header, ref headerDone, entries, discovered);
+                        ref header, ref headerDone, ref runningClock, ref relativeClock, entries, discovered);
                 }
 
                 // Reset carry and advance line pointers
@@ -555,6 +544,7 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
     private static void _ProcessDiskLine(
         ReadOnlySpan<byte> trimmed, long lineByteOffset,
         ref AscHeader header, ref bool headerDone,
+        ref AscTimestamp runningClock, ref bool relativeClock,
         List<AscFrameIndexEntry> entries,
         HashSet<(AscBusType, int, LinkType)> discovered)
     {
@@ -563,6 +553,8 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
             if (!header.TryParseLine(trimmed))
             {
                 headerDone = true;
+                relativeClock = header.TimestampFormat == "relative";
+                runningClock = _InitialClock(header);
                 // Fall through: the first data line may produce a frame
             }
             else
@@ -576,22 +568,44 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
             return;
         }
 
-        ArrayIndexIdRange.ThrowIfInvalidNextIndex(entries.Count, "frame");
+        _IndexFrameLine(trimmed, lineByteOffset, ref runningClock, relativeClock, entries, discovered);
+    }
 
+    /// <summary>
+    /// Indexes one frame-producing line and folds its timestamp into <paramref name="runningClock"/>.
+    /// Non-frame lines return without moving the clock. Continuation hex is not a logging event, so it is not indexed.
+    /// </summary>
+    private static void _IndexFrameLine(
+        ReadOnlySpan<byte> trimmed,
+        long location,
+        ref AscTimestamp runningClock,
+        bool relativeClock,
+        List<AscFrameIndexEntry> entries,
+        HashSet<(AscBusType, int, LinkType)> discovered)
+    {
         AscLineType lineType = AscLineClassifier.Classify(trimmed);
+        // Every timestamped event moves a relative clock, including statistics and status lines.
+        bool folded = AscTimestamp.TryFold(ref runningClock, relativeClock, trimmed, out AscTimestamp clock);
         if (!_IsFrameProducingType(lineType))
         {
             return;
         }
 
-        (AscBusType busType, LinkType linkType) = _LineTypeToInterface(lineType);
+        // A line that is not a timestamp still gets an entry so the skip is visible at parse time.
+        if (!folded)
+        {
+            clock = runningClock;
+        }
+
+        (AscBusType busType, LinkType linkType) = _ResolveInterface(trimmed, lineType);
         int channel = _PeekChannel(trimmed, lineType);
         if (channel >= 0)
         {
             discovered.Add((busType, channel, linkType));
         }
 
-        entries.Add(new AscFrameIndexEntry { Location = lineByteOffset, LineType = lineType });
+        ArrayIndexIdRange.ThrowIfInvalidNextIndex(entries.Count, "frame");
+        entries.Add(new AscFrameIndexEntry(location, lineType, clock));
     }
 
     #endregion
@@ -615,9 +629,24 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
 
         if (_InMemoryLines is not null)
         {
-            // In-memory path: O(1) array lookup — byte span directly from the slice (zero copy)
-            ReadOnlySpan<byte> span = AscTokenizerBytes.TrimAscii(_InMemoryLines[(int)entry.Location].Span);
+            // Ethernet may continue on the next physical lines, so the window includes the bytes after this line.
+            ReadOnlySpan<byte> span = entry.LineType == AscLineType.EthernetPacket
+                ? _InMemoryWindow((int)entry.Location)
+                : AscTokenizerBytes.TrimAscii(_InMemoryLines[(int)entry.Location].Span);
             return _ParseAndBuildFrame(span, entry, frameIndex, reportErrors);
+        }
+        else if (entry.LineType == AscLineType.EthernetPacket)
+        {
+            byte[] rented = ArrayPool<byte>.Shared.Rent(AscEthernetParser.MaxRecordBytes);
+            try
+            {
+                int read = _ReadWindowFromDisk(entry.Location, rented.AsSpan(0, AscEthernetParser.MaxRecordBytes));
+                return _ParseAndBuildFrame(rented.AsSpan(0, read), entry, frameIndex, reportErrors);
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(rented);
+            }
         }
         else
         {
@@ -642,6 +671,43 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
                 AscTokenizerBytes.TrimAscii(lineBytes.AsSpan()),
                 entry, frameIndex, reportErrors);
         }
+    }
+
+    /// <summary>
+    /// Bytes from the start of an in-memory line through the following file bytes, capped so a wrapped
+    /// Ethernet packet fits. The slice includes newlines, which the Ethernet parser treats as continuation.
+    /// </summary>
+    private ReadOnlySpan<byte> _InMemoryWindow(int lineIndex)
+    {
+        ReadOnlyMemory<byte> line = _InMemoryLines![lineIndex];
+        if (MemoryMarshal.TryGetArray(line, out ArraySegment<byte> segment) && segment.Array is not null)
+        {
+            int available = segment.Array.Length - segment.Offset;
+            int take = available < AscEthernetParser.MaxRecordBytes
+                ? available
+                : AscEthernetParser.MaxRecordBytes;
+            return segment.Array.AsSpan(segment.Offset, take);
+        }
+
+        return line.Span;
+    }
+
+    /// <summary>
+    /// Reads up to <paramref name="destination"/> bytes starting at <paramref name="byteOffset"/>.
+    /// Returns the number of bytes placed in the span. Zero at or past EOF.
+    /// </summary>
+    private int _ReadWindowFromDisk(long byteOffset, Span<byte> destination)
+    {
+        SafeFileHandle handle = _DiskHandle!;
+        long fileLength = RandomAccess.GetLength(handle);
+        if (byteOffset >= fileLength || destination.IsEmpty)
+        {
+            return 0;
+        }
+
+        long available = fileLength - byteOffset;
+        int toRead = available < destination.Length ? (int)available : destination.Length;
+        return RandomAccess.Read(handle, destination[..toRead], byteOffset);
     }
 
     /// <summary>
@@ -705,7 +771,6 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
     private Frame? _ParseAndBuildFrame(ReadOnlySpan<byte> span, AscFrameIndexEntry entry, int frameIndex, bool reportErrors)
     {
         bool parsed;
-        double timestamp;
         int channel;
         byte[] frameData;
         AscBusType busType;
@@ -715,35 +780,48 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
         {
             case AscLineType.CanMessage:
                 parsed = AscCanParser.TryParse(span, _Header.NumericBase,
-                    out timestamp, out channel, out frameData);
+                    out _, out channel, out frameData);
                 busType = AscBusType.Can;
                 linkType = LinkType.CanSocketcan;
                 break;
 
             case AscLineType.CanFdMessage:
                 parsed = AscCanFdParser.TryParse(span, _Header.NumericBase,
-                    out timestamp, out channel, out frameData);
+                    out _, out channel, out frameData);
                 busType = AscBusType.CanFd;
+                linkType = LinkType.CanSocketcan;
+                break;
+
+            case AscLineType.CanXlMessage:
+                parsed = AscCanXlParser.TryParse(span,
+                    out _, out channel, out busType, out frameData);
+                linkType = LinkType.CanSocketcan;
+                break;
+
+            case AscLineType.CanErrorFrame:
+            case AscLineType.CanOverloadFrame:
+                parsed = AscCanErrorParser.TryParse(span, out _, out channel, out frameData);
+                busType = AscBusType.Can;
                 linkType = LinkType.CanSocketcan;
                 break;
 
             case AscLineType.LinMessage:
                 parsed = AscLinParser.TryParse(span, _Header.NumericBase,
-                    out timestamp, out channel, out frameData);
+                    out _, out channel, out frameData);
                 busType = AscBusType.Lin;
                 linkType = LinkType.Lin;
                 break;
 
             case AscLineType.FlexRayMessage:
                 parsed = AscFlexRayParser.TryParse(span, _Header.NumericBase,
-                    out timestamp, out channel, out frameData);
+                    out _, out channel, out frameData);
                 busType = AscBusType.FlexRay;
                 linkType = LinkType.Flexray;
                 break;
 
             case AscLineType.EthernetPacket:
-                parsed = AscEthernetParser.TryParse(span,
-                    out timestamp, out channel, out frameData);
+                parsed = AscEthernetParser.TryParse(span, _Header.NumericBase,
+                    out _, out channel, out frameData);
                 busType = AscBusType.Ethernet;
                 linkType = LinkType.Ethernet;
                 break;
@@ -752,7 +830,8 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
                 return null;
         }
 
-        if (!parsed || frameData.Length == 0)
+        if (!parsed
+            || !AscTimestamp.TryToUnixNanos(_Header.StartUnixNanos, entry.ClockOffset, out long absoluteNanos))
         {
             if (reportErrors)
             {
@@ -766,8 +845,6 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
             }
             return null;
         }
-
-        long absoluteNanos = (long)((_Header.StartTimeEpoch + timestamp) * 1_000_000_000.0);
 
         // Always go through _RegisterInterface: it performs the locked cache lookup and
         // returns the existing ID without registering a duplicate. A bare _InterfaceMap
@@ -884,11 +961,10 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static bool _IsFrameProducingType(AscLineType lineType) => lineType switch
     {
-        AscLineType.CanMessage => true,
-        AscLineType.CanFdMessage => true,
-        AscLineType.LinMessage => true,
-        AscLineType.FlexRayMessage => true,
-        AscLineType.EthernetPacket => true,
+        AscLineType.CanMessage or AscLineType.CanFdMessage or AscLineType.CanXlMessage
+            or AscLineType.CanErrorFrame or AscLineType.CanOverloadFrame
+            or AscLineType.LinMessage or AscLineType.FlexRayMessage
+            or AscLineType.EthernetPacket => true,
         _ => false,
     };
 
@@ -899,13 +975,30 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
     private static (AscBusType BusType, LinkType LinkType) _LineTypeToInterface(AscLineType lineType) =>
         lineType switch
         {
-            AscLineType.CanMessage => (AscBusType.Can, LinkType.CanSocketcan),
+            AscLineType.CanMessage or AscLineType.CanErrorFrame or AscLineType.CanOverloadFrame
+                => (AscBusType.Can, LinkType.CanSocketcan),
             AscLineType.CanFdMessage => (AscBusType.CanFd, LinkType.CanSocketcan),
+            AscLineType.CanXlMessage => (AscBusType.CanXl, LinkType.CanSocketcan),
             AscLineType.LinMessage => (AscBusType.Lin, LinkType.Lin),
             AscLineType.FlexRayMessage => (AscBusType.FlexRay, LinkType.Flexray),
             AscLineType.EthernetPacket => (AscBusType.Ethernet, LinkType.Ethernet),
             _ => (AscBusType.Unknown, LinkType.Null),
         };
+
+    /// <summary>
+    /// CAN XL rows share one line type. The format token selects CAN, CAN FD, or CAN XL.
+    /// </summary>
+    private static (AscBusType BusType, LinkType LinkType) _ResolveInterface(
+        ReadOnlySpan<byte> line, AscLineType lineType)
+    {
+        if (lineType == AscLineType.CanXlMessage
+            && AscCanXlParser.TryPeekBusType(line, out AscBusType busType))
+        {
+            return (busType, LinkType.CanSocketcan);
+        }
+
+        return _LineTypeToInterface(lineType);
+    }
 
     /// <summary>
     /// Quickly extracts the channel number from a trimmed ASC line for interface pre-discovery.
@@ -935,6 +1028,7 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
                 break;
 
             case AscLineType.CanFdMessage:
+            case AscLineType.CanXlMessage:
                 if (tok.TryNextToken(out _) && tok.TryNextToken(out ReadOnlySpan<byte> fdCh)
                     && System.Buffers.Text.Utf8Parser.TryParse(fdCh, out int canFdCh, out _))
                 {
@@ -943,21 +1037,55 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
 
                 break;
 
+            case AscLineType.CanErrorFrame:
+            case AscLineType.CanOverloadFrame:
+                if (tok.TryNextToken(out ReadOnlySpan<byte> errCh)
+                    && System.Buffers.Text.Utf8Parser.TryParse(errCh, out int errChannel, out _))
+                {
+                    return errChannel;
+                }
+
+                break;
+
             case AscLineType.LinMessage:
                 if (tok.TryNextToken(out ReadOnlySpan<byte> linToken)
-                    && linToken.Length >= 2 && linToken[0] == (byte)'L'
-                    && System.Buffers.Text.Utf8Parser.TryParse(linToken[1..], out int linCh, out _))
+                    && linToken.Length >= 2
+                    && (linToken[0] == (byte)'L' || linToken[0] == (byte)'l'))
                 {
-                    return linCh;
+                    if (linToken.Length == 2 && (linToken[1] == (byte)'i' || linToken[1] == (byte)'I'))
+                    {
+                        return 1;
+                    }
+
+                    if (System.Buffers.Text.Utf8Parser.TryParse(linToken[1..], out int linCh, out _))
+                    {
+                        return linCh;
+                    }
                 }
 
                 break;
 
             case AscLineType.FlexRayMessage:
-                if (tok.TryNextToken(out _) && tok.TryNextToken(out ReadOnlySpan<byte> frCh)
-                    && System.Buffers.Text.Utf8Parser.TryParse(frCh, out int flexCh, out _))
+                if (tok.TryNextToken(out _) && tok.TryNextToken(out ReadOnlySpan<byte> frKind))
                 {
-                    return flexCh;
+                    bool newFormat = frKind.Length == 4
+                        && (AscLineClassifier.StartsWithAsciiIgnoreCase(frKind, "RMSG"u8)
+                            || AscLineClassifier.StartsWithAsciiIgnoreCase(frKind, "PDU"u8));
+                    if (newFormat)
+                    {
+                        // cluster, client, then the application channel
+                        if (tok.TryNextToken(out _)
+                            && tok.TryNextToken(out _)
+                            && tok.TryNextToken(out ReadOnlySpan<byte> appChannel)
+                            && System.Buffers.Text.Utf8Parser.TryParse(appChannel, out int newCh, out _))
+                        {
+                            return newCh;
+                        }
+                    }
+                    else if (System.Buffers.Text.Utf8Parser.TryParse(frKind, out int flexCh, out _))
+                    {
+                        return flexCh;
+                    }
                 }
 
                 break;
@@ -973,6 +1101,20 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
         }
 
         return -1;
+    }
+
+    /// <summary>
+    /// Relative split files start at the previous file's last absolute timestamp.
+    /// Absolute files start at zero because each line replaces the clock.
+    /// </summary>
+    private static AscTimestamp _InitialClock(AscHeader header)
+    {
+        if (header.TimestampFormat == "relative" && header.PreviousLogAbsolute is AscTimestamp seed)
+        {
+            return seed;
+        }
+
+        return default;
     }
 
     /// <summary>

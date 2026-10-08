@@ -371,7 +371,14 @@ internal sealed class PduTransportRegistrationTests
             LinkType.Ethernet,
             FrameInterfaceId.Invalid,
             stack.FrameInterfaceRegistry).Value;
-        return Packet.ParseFrame(new PacketId(0), stack, frame, pduId);
+        ParseOptions options = new(firstProtocol: pduId);
+        if (!Packet.TryParse(new PacketId(0), stack, frame, in options, out Packet? packet, out ParseFailure failure)
+            || packet is null)
+        {
+            throw new InvalidOperationException(failure.ToString());
+        }
+
+        return packet;
     }
 
     private static bool _TryGetString(Stack stack, Packet packet, string fieldName, out string? value)

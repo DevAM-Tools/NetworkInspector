@@ -26,7 +26,22 @@ internal sealed class TcpProtocolTests
             FrameInterfaceId.Invalid,
             stack.FrameInterfaceRegistry).Value;
 
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame);
+        Packet packet;
+        {
+            ParseOptions options = new();
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
         return (stack, packet);
     }
 
@@ -63,7 +78,7 @@ internal sealed class TcpProtocolTests
             bool hasSeq = packet.TryGetFieldValue(seqId!.Value, out FieldValue seqVal, materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasSeq).IsTrue();
             seqVal.Data.TryGetAsU64(out ulong u64Val3);
-            await Assert.That(u64Val3).IsEqualTo(1000UL);
+            await Assert.That(u64Val3).IsEqualTo(0UL);
 
             // ACK number is 0 for SYN
             FieldId? ackId = stack.GetFieldId("tcp.ack");
@@ -283,7 +298,19 @@ internal sealed class TcpProtocolTests
                 stack.FrameInterfaceRegistry).Value;
 
             PacketIndex index = new(stack);
-            Packet.ParseFrameIndexed(new PacketId(0), stack, frame, index);
+            {
+                ParseOptions options = new(index: index);
+                if (!Packet.TryParse(
+                    new PacketId(0),
+                    stack,
+                    frame,
+                    in options,
+                    out Packet? _,
+                    out ParseFailure failure))
+                {
+                    throw new InvalidOperationException(failure.ToString());
+                }
+            }
 
             // TCP fields should be indexed
             FieldId? srcPortId = stack.GetFieldId("tcp.srcport");
@@ -320,7 +347,19 @@ internal sealed class TcpProtocolTests
                 stack.FrameInterfaceRegistry).Value;
 
             PacketIndex index = new(stack);
-            Packet.ParseFrameIndexed(new PacketId(0), stack, frame, index);
+            {
+                ParseOptions options = new(index: index);
+                if (!Packet.TryParse(
+                    new PacketId(0),
+                    stack,
+                    frame,
+                    in options,
+                    out Packet? _,
+                    out ParseFailure failure))
+                {
+                    throw new InvalidOperationException(failure.ToString());
+                }
+            }
 
             // Payload IS present since we have data
             FieldId? payloadId = stack.GetFieldId("tcp.payload");

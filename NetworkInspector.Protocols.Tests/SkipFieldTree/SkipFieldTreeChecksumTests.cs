@@ -68,10 +68,10 @@ internal sealed class SkipFieldTreeChecksumTests
         ValueCacheFieldConfig[] configs = [new(checksumId), new(streamId)];
 
         ValueCache build = new(stack, configs);
-        _ = Packet.ParseFrame(new PacketId(0), stack, frame, FieldTreeMode.Build, build);
+        _ = _ParseExpected(stack, frame, 0, FieldTreeMode.Build, build);
 
         ValueCache skip = new(stack, configs);
-        _ = Packet.ParseFrame(new PacketId(1), stack, frame, FieldTreeMode.Skip, skip);
+        _ = _ParseExpected(stack, frame, 1, FieldTreeMode.Skip, skip);
 
         await Assert.That(skip.GetSeries<ulong>(checksumId).Count).IsEqualTo(build.GetSeries<ulong>(checksumId).Count);
         await Assert.That(skip.GetSeries<ulong>(checksumId)[0].Value).IsEqualTo(build.GetSeries<ulong>(checksumId)[0].Value);
@@ -88,10 +88,10 @@ internal sealed class SkipFieldTreeChecksumTests
         ValueCacheFieldConfig[] configs = [new(checksumId)];
 
         ValueCache build = new(stack, configs);
-        _ = Packet.ParseFrame(new PacketId(0), stack, frame, FieldTreeMode.Build, build);
+        _ = _ParseExpected(stack, frame, 0, FieldTreeMode.Build, build);
 
         ValueCache skip = new(stack, configs);
-        _ = Packet.ParseFrame(new PacketId(1), stack, frame, FieldTreeMode.Skip, skip);
+        _ = _ParseExpected(stack, frame, 1, FieldTreeMode.Skip, skip);
 
         await Assert.That(skip.GetSeries<ulong>(checksumId).Count).IsEqualTo(build.GetSeries<ulong>(checksumId).Count);
         await Assert.That(skip.GetSeries<ulong>(checksumId)[0].Value).IsEqualTo(build.GetSeries<ulong>(checksumId)[0].Value);
@@ -104,7 +104,7 @@ internal sealed class SkipFieldTreeChecksumTests
         ProtocolId udpId = stack.GetProtocolId("udp")!.Value;
         Frame frame = _Frame(stack, _BareUdpDatagram());
 
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, udpId, FieldTreeMode.Skip);
+        Packet packet = _ParseExpected(stack, frame, 0, FieldTreeMode.Skip, firstProtocol: udpId);
 
         await Assert.That(packet.HasFieldTree).IsFalse();
         await Assert.That(packet.FieldCount(materialize: false)).IsEqualTo(1);
@@ -120,10 +120,10 @@ internal sealed class SkipFieldTreeChecksumTests
         ValueCacheFieldConfig[] configs = [new(statusId)];
 
         ValueCache build = new(stack, configs);
-        _ = Packet.ParseFrame(new PacketId(0), stack, frame, FieldTreeMode.Build, build);
+        _ = _ParseExpected(stack, frame, 0, FieldTreeMode.Build, build);
 
         ValueCache skip = new(stack, configs);
-        _ = Packet.ParseFrame(new PacketId(1), stack, frame, FieldTreeMode.Skip, skip);
+        _ = _ParseExpected(stack, frame, 1, FieldTreeMode.Skip, skip);
 
         await Assert.That(_StringRow(skip, statusId)).IsEqualTo(_StringRow(build, statusId));
         await Assert.That(_StringRow(skip, statusId)).IsNotEqualTo("[Unverified]");
@@ -140,10 +140,10 @@ internal sealed class SkipFieldTreeChecksumTests
         ValueCacheFieldConfig[] configs = [new(checksumId), new(statusId)];
 
         ValueCache build = new(stack, configs);
-        _ = Packet.ParseFrame(new PacketId(0), stack, frame, FieldTreeMode.Build, build);
+        _ = _ParseExpected(stack, frame, 0, FieldTreeMode.Build, build);
 
         ValueCache skip = new(stack, configs);
-        _ = Packet.ParseFrame(new PacketId(1), stack, frame, FieldTreeMode.Skip, skip);
+        _ = _ParseExpected(stack, frame, 1, FieldTreeMode.Skip, skip);
 
         await Assert.That(_StringRow(skip, statusId)).IsEqualTo(_StringRow(build, statusId));
         await Assert.That(_StringRow(skip, statusId)).IsEqualTo("[Good]");
@@ -160,14 +160,36 @@ internal sealed class SkipFieldTreeChecksumTests
         ValueCacheFieldConfig[] configs = [new(typeId), new(statusId)];
 
         ValueCache build = new(stack, configs);
-        _ = Packet.ParseFrame(new PacketId(0), stack, frame, FieldTreeMode.Build, build);
+        _ = _ParseExpected(stack, frame, 0, FieldTreeMode.Build, build);
 
         ValueCache skip = new(stack, configs);
-        _ = Packet.ParseFrame(new PacketId(1), stack, frame, FieldTreeMode.Skip, skip);
+        _ = _ParseExpected(stack, frame, 1, FieldTreeMode.Skip, skip);
 
         await Assert.That(_StringRow(skip, statusId)).IsEqualTo(_StringRow(build, statusId));
         await Assert.That(_StringRow(skip, statusId)).IsNotEqualTo("[Bad]");
         await Assert.That(_StringRow(skip, statusId)).IsEqualTo("[Good]");
+    }
+
+    /// <summary>
+    /// Parses a frame the test expects to succeed. A false return means the fixture is broken.
+    /// </summary>
+    private static Packet _ParseExpected(
+        Stack stack,
+        Frame frame,
+        int packetId,
+        FieldTreeMode fieldTree = FieldTreeMode.Build,
+        ValueCache? cache = null,
+        ProtocolId? firstProtocol = null)
+    {
+        ParseOptions options = new(fieldTree, cache, firstProtocol: firstProtocol);
+        PacketId id = new(packetId);
+        if (!Packet.TryParse(id, stack, frame, in options, out Packet? packet, out ParseFailure failure)
+            || packet is null)
+        {
+            throw new InvalidOperationException(failure.ToString());
+        }
+
+        return packet;
     }
 
     private static byte[] _Icmpv6EchoFrame()

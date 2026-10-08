@@ -59,36 +59,102 @@ internal sealed class SkipFieldTreeZeroAllocTests
         ValueCache buildCache = new(buildStack, [new ValueCacheFieldConfig(buildPortId)]);
         Frame skipWarmup = _Ipv6UdpFrame(skipStack, 0);
         Frame buildWarmup = _Ipv6UdpFrame(buildStack, 0);
-        Packet skipPacket = Packet.ParseFrame(new PacketId(0), skipStack, skipWarmup, FieldTreeMode.Skip, skipCache);
-        Packet buildPacket = Packet.ParseFrame(new PacketId(0), buildStack, buildWarmup, FieldTreeMode.Build, buildCache);
+        Packet skipPacket;
+        {
+            ParseOptions options = new(FieldTreeMode.Skip, skipCache);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                skipStack,
+                skipWarmup,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            skipPacket = parsed;
+        }
+        Packet buildPacket;
+        {
+            ParseOptions options = new(FieldTreeMode.Build, buildCache);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                buildStack,
+                buildWarmup,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            buildPacket = parsed;
+        }
 
         const int warmup = 8;
         for (int i = 0; i < warmup; i++)
         {
             Frame skipFrame = _Ipv6UdpFrame(skipStack, i + 1);
             Frame buildFrame = _Ipv6UdpFrame(buildStack, i + 1);
-            RecycleError? skipErr = Packet.TryParseFrame(
-                skipPacket, new PacketId(i + 1), skipStack, skipFrame, FieldTreeMode.Skip, skipCache);
-            RecycleError? buildErr = Packet.TryParseFrame(
-                buildPacket, new PacketId(i + 1), buildStack, buildFrame, FieldTreeMode.Build, buildCache);
-            await Assert.That(skipErr).IsNull();
-            await Assert.That(buildErr).IsNull();
+            bool skipErrParsed;
+            {
+                ParseOptions options = new(FieldTreeMode.Skip, skipCache);
+                skipErrParsed = Packet.TryParse(
+                    skipPacket,
+                    new PacketId(i + 1),
+                    skipStack,
+                    skipFrame,
+                    in options,
+                    out ParseFailure _);
+            }
+            bool buildErrParsed;
+            {
+                ParseOptions options = new(FieldTreeMode.Build, buildCache);
+                buildErrParsed = Packet.TryParse(
+                    buildPacket,
+                    new PacketId(i + 1),
+                    buildStack,
+                    buildFrame,
+                    in options,
+                    out ParseFailure _);
+            }
+            await Assert.That(skipErrParsed).IsTrue();
+            await Assert.That(buildErrParsed).IsTrue();
         }
 
         Frame skipMeasure = _Ipv6UdpFrame(skipStack, warmup + 1);
         Frame buildMeasure = _Ipv6UdpFrame(buildStack, warmup + 1);
         long beforeSkip = GC.GetAllocatedBytesForCurrentThread();
-        RecycleError? measuredSkip = Packet.TryParseFrame(
-            skipPacket, new PacketId(warmup + 1), skipStack, skipMeasure, FieldTreeMode.Skip, skipCache);
+        bool measuredSkipParsed;
+        {
+            ParseOptions options = new(FieldTreeMode.Skip, skipCache);
+            measuredSkipParsed = Packet.TryParse(
+                skipPacket,
+                new PacketId(warmup + 1),
+                skipStack,
+                skipMeasure,
+                in options,
+                out ParseFailure _);
+        }
         long skipAlloc = GC.GetAllocatedBytesForCurrentThread() - beforeSkip;
 
         long beforeBuild = GC.GetAllocatedBytesForCurrentThread();
-        RecycleError? measuredBuild = Packet.TryParseFrame(
-            buildPacket, new PacketId(warmup + 1), buildStack, buildMeasure, FieldTreeMode.Build, buildCache);
+        bool measuredBuildParsed;
+        {
+            ParseOptions options = new(FieldTreeMode.Build, buildCache);
+            measuredBuildParsed = Packet.TryParse(
+                buildPacket,
+                new PacketId(warmup + 1),
+                buildStack,
+                buildMeasure,
+                in options,
+                out ParseFailure _);
+        }
         long buildAlloc = GC.GetAllocatedBytesForCurrentThread() - beforeBuild;
 
-        await Assert.That(measuredSkip).IsNull();
-        await Assert.That(measuredBuild).IsNull();
+        await Assert.That(measuredSkipParsed).IsTrue();
+        await Assert.That(measuredBuildParsed).IsTrue();
         await Assert.That(skipAlloc).IsLessThan(buildAlloc);
     }
 
@@ -99,7 +165,22 @@ internal sealed class SkipFieldTreeZeroAllocTests
         using (stack)
         {
             Frame frame = _EmptyFrame(stack);
-            Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, protoId, FieldTreeMode.Skip);
+            Packet packet;
+            {
+                ParseOptions options = new(FieldTreeMode.Skip, firstProtocol: protoId);
+                if (!Packet.TryParse(
+                    new PacketId(0),
+                    stack,
+                    frame,
+                    in options,
+                    out Packet? parsed,
+                    out ParseFailure failure) || parsed is null)
+                {
+                    throw new InvalidOperationException(failure.ToString());
+                }
+
+                packet = parsed;
+            }
 
             await Assert.That(packet.FieldCount(materialize: false)).IsEqualTo(1);
             await Assert.That(proto.AppendCalls).IsEqualTo(2);

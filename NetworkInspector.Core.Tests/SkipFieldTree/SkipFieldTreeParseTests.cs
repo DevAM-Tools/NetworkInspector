@@ -64,7 +64,22 @@ internal sealed class SkipFieldTreeParseTests
         using Stack stack = _BuildStandardStack();
         Frame frame = _Ipv6UdpFrame(stack);
 
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, FieldTreeMode.Skip);
+        Packet packet;
+        {
+            ParseOptions options = new(FieldTreeMode.Skip);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
 
         await Assert.That(packet.HasFieldTree).IsFalse();
         await Assert.That(packet.FieldCount(materialize: false)).IsEqualTo(1);
@@ -84,7 +99,22 @@ internal sealed class SkipFieldTreeParseTests
         using Stack stack = _BuildStandardStack();
         Frame frame = _Ipv6UdpFrame(stack);
 
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame);
+        Packet packet;
+        {
+            ParseOptions options = new();
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
 
         await Assert.That(packet.HasFieldTree).IsTrue();
         await Assert.That(packet.FieldCount(materialize: false)).IsGreaterThan(1);
@@ -96,10 +126,40 @@ internal sealed class SkipFieldTreeParseTests
         using Stack stack = _BuildStandardStack();
         Frame frame = _Ipv6UdpFrame(stack);
 
-        Packet defaultPacket = Packet.ParseFrame(new PacketId(0), stack, frame);
+        Packet defaultPacket;
+        {
+            ParseOptions options = new();
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            defaultPacket = parsed;
+        }
         using Stack stack2 = _BuildStandardStack();
         Frame frame2 = _Ipv6UdpFrame(stack2);
-        Packet explicitBuild = Packet.ParseFrame(new PacketId(0), stack2, frame2, FieldTreeMode.Build);
+        Packet explicitBuild;
+        {
+            ParseOptions options = new(FieldTreeMode.Build);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack2,
+                frame2,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            explicitBuild = parsed;
+        }
 
         await Assert.That(explicitBuild.HasFieldTree).IsTrue();
         await Assert.That(explicitBuild.FieldCount(materialize: false))
@@ -112,7 +172,19 @@ internal sealed class SkipFieldTreeParseTests
         (Stack? stack, SkipCursorProbeProtocol proto, ProtocolId protoId) = _BuildProbeStack();
         using (stack)
         {
-            _ = Packet.ParseFrame(new PacketId(0), stack, _EmptyFrame(stack), protoId, FieldTreeMode.Skip);
+            {
+                ParseOptions options = new(FieldTreeMode.Skip, firstProtocol: protoId);
+                if (!Packet.TryParse(
+                    new PacketId(0),
+                    stack,
+                    _EmptyFrame(stack),
+                    in options,
+                    out Packet? _,
+                    out ParseFailure failure))
+                {
+                    throw new InvalidOperationException(failure.ToString());
+                }
+            }
 
             await Assert.That(proto.ContextHasFieldTree).IsFalse();
             await Assert.That(proto.MutFieldHasFieldTree).IsFalse();
@@ -127,7 +199,22 @@ internal sealed class SkipFieldTreeParseTests
         using Stack stack = _BuildStandardStack();
         Frame frame = _Ipv6UdpFrame(stack);
 
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, FieldTreeMode.Skip);
+        Packet packet;
+        {
+            ParseOptions options = new(FieldTreeMode.Skip);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
 
         await Assert.That(packet.IsFinalized).IsTrue();
         await Assert.That(packet.FieldCount(materialize: false)).IsEqualTo(1);
@@ -148,8 +235,32 @@ internal sealed class SkipFieldTreeParseTests
         PacketIndex buildIndex = new(buildStack);
         PacketIndex skipIndex = new(skipStack);
 
-        _ = Packet.ParseFrameIndexed(new PacketId(0), buildStack, buildFrame, buildIndex);
-        _ = Packet.ParseFrameIndexed(new PacketId(0), skipStack, skipFrame, skipIndex, FieldTreeMode.Skip);
+        {
+            ParseOptions options = new(index: buildIndex);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                buildStack,
+                buildFrame,
+                in options,
+                out Packet? _,
+                out ParseFailure failure))
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+        }
+        {
+            ParseOptions options = new(FieldTreeMode.Skip, index: skipIndex);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                skipStack,
+                skipFrame,
+                in options,
+                out Packet? _,
+                out ParseFailure failure))
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+        }
 
         FieldId srcPortId = skipStack.GetFieldId("udp.srcport")!.Value;
         ProtocolId udpId = skipStack.GetProtocolId("udp")!.Value;
@@ -169,10 +280,34 @@ internal sealed class SkipFieldTreeParseTests
         FieldId portId = stack.GetFieldId("udp.srcport")!.Value;
 
         ValueCache buildCache = new(stack, [new ValueCacheFieldConfig(portId)]);
-        _ = Packet.ParseFrame(new PacketId(0), stack, frame, FieldTreeMode.Build, buildCache);
+        {
+            ParseOptions options = new(FieldTreeMode.Build, buildCache);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? _,
+                out ParseFailure failure))
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+        }
 
         ValueCache skipCache = new(stack, [new ValueCacheFieldConfig(portId)]);
-        _ = Packet.ParseFrame(new PacketId(1), stack, frame, FieldTreeMode.Skip, skipCache);
+        {
+            ParseOptions options = new(FieldTreeMode.Skip, skipCache);
+            if (!Packet.TryParse(
+                new PacketId(1),
+                stack,
+                frame,
+                in options,
+                out Packet? _,
+                out ParseFailure failure))
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+        }
 
         await Assert.That(skipCache.GetSeries<ulong>(portId).Count).IsEqualTo(1);
         await Assert.That(skipCache.GetSeries<ulong>(portId).Count)
@@ -189,10 +324,34 @@ internal sealed class SkipFieldTreeParseTests
         FieldId portId = stack.GetFieldId("udp.srcport")!.Value;
 
         ValueCache first = new(stack, [new ValueCacheFieldConfig(portId)]);
-        _ = Packet.ParseFrame(new PacketId(0), stack, frame, FieldTreeMode.Skip, first);
+        {
+            ParseOptions options = new(FieldTreeMode.Skip, first);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? _,
+                out ParseFailure failure))
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+        }
 
         ValueCache replay = new(stack, [new ValueCacheFieldConfig(portId)]);
-        _ = Packet.ParseFrame(new PacketId(0), stack, frame, FieldTreeMode.Skip, replay);
+        {
+            ParseOptions options = new(FieldTreeMode.Skip, replay);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? _,
+                out ParseFailure failure))
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+        }
 
         await Assert.That(replay.GetSeries<ulong>(portId).Count).IsEqualTo(0);
     }
@@ -205,11 +364,34 @@ internal sealed class SkipFieldTreeParseTests
         FieldId portId = stack.GetFieldId("udp.srcport")!.Value;
 
         ValueCache first = new(stack, [new ValueCacheFieldConfig(portId)]);
-        _ = Packet.ParseFrame(new PacketId(0), stack, frame, FieldTreeMode.Skip, first);
+        {
+            ParseOptions options = new(FieldTreeMode.Skip, first);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? _,
+                out ParseFailure failure))
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+        }
 
         ValueCache replay = new(stack, [new ValueCacheFieldConfig(portId)]);
-        _ = Packet.ParseFrame(
-            new PacketId(0), stack, frame, FieldTreeMode.Skip, replay, recordOnReplay: true);
+        {
+            ParseOptions options = new(FieldTreeMode.Skip, replay, recordOnReplay: true);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? _,
+                out ParseFailure failure))
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+        }
 
         await Assert.That(replay.GetSeries<ulong>(portId).Count).IsEqualTo(1);
         await Assert.That(replay.GetSeries<ulong>(portId)[0].Value)
@@ -226,10 +408,16 @@ internal sealed class SkipFieldTreeParseTests
         using Stack stack = _BuildStandardStack();
         Frame frame = _Ipv6UdpFrame(stack);
 
-        ArgumentOutOfRangeException ex = Assert.Throws<ArgumentOutOfRangeException>(
-            () => Packet.ParseFrame(new PacketId(0), stack, frame, (FieldTreeMode)2));
-
-        await Assert.That(ex.ParamName).IsEqualTo("fieldTree");
+        ParseOptions options = new((FieldTreeMode)2);
+        bool parsed = Packet.TryParse(
+            new PacketId(0),
+            stack,
+            frame,
+            in options,
+            out Packet? _,
+            out ParseFailure failure);
+        await Assert.That(parsed).IsFalse();
+        await Assert.That(failure).IsEqualTo(ParseFailure.InvalidFieldTree);
     }
 
     [Test]
@@ -238,8 +426,38 @@ internal sealed class SkipFieldTreeParseTests
         using Stack stack = _BuildStandardStack();
         Frame frame = _Ipv6UdpFrame(stack);
 
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, FieldTreeMode.Skip);
-        Packet recycled = Packet.ParseFrame(packet, new PacketId(1), stack, frame, FieldTreeMode.Build);
+        Packet packet;
+        {
+            ParseOptions options = new(FieldTreeMode.Skip);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
+        Packet recycled;
+        {
+            ParseOptions options = new(FieldTreeMode.Build);
+            if (!Packet.TryParse(
+                packet,
+                new PacketId(1),
+                stack,
+                frame,
+                in options,
+                out ParseFailure failure))
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            recycled = packet;
+        }
 
         await Assert.That(ReferenceEquals(packet, recycled)).IsTrue();
         await Assert.That(recycled.HasFieldTree).IsTrue();
@@ -253,8 +471,38 @@ internal sealed class SkipFieldTreeParseTests
         using Stack stack = _BuildStandardStack();
         Frame frame = _Ipv6UdpFrame(stack);
 
-        Packet packet = Packet.ParseFrame(new PacketId(0), stack, frame, FieldTreeMode.Build);
-        Packet recycled = Packet.ParseFrame(packet, new PacketId(1), stack, frame, FieldTreeMode.Skip);
+        Packet packet;
+        {
+            ParseOptions options = new(FieldTreeMode.Build);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            packet = parsed;
+        }
+        Packet recycled;
+        {
+            ParseOptions options = new(FieldTreeMode.Skip);
+            if (!Packet.TryParse(
+                packet,
+                new PacketId(1),
+                stack,
+                frame,
+                in options,
+                out ParseFailure failure))
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            recycled = packet;
+        }
 
         await Assert.That(recycled.HasFieldTree).IsFalse();
         await Assert.That(recycled.FieldCount(materialize: false)).IsEqualTo(1);
@@ -267,7 +515,22 @@ internal sealed class SkipFieldTreeParseTests
         using Stack stack = _BuildStandardStack();
         Frame frame = _Ipv6UdpFrame(stack);
 
-        Packet skip = Packet.ParseFrame(new PacketId(0), stack, frame, FieldTreeMode.Skip);
+        Packet skip;
+        {
+            ParseOptions options = new(FieldTreeMode.Skip);
+            if (!Packet.TryParse(
+                new PacketId(0),
+                stack,
+                frame,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            skip = parsed;
+        }
         int dfsSkip = 0;
         foreach (Field _ in skip.IterFieldsDfs(materialize: false))
         {
@@ -283,7 +546,22 @@ internal sealed class SkipFieldTreeParseTests
         await Assert.That(dfsSkip).IsEqualTo(0);
         await Assert.That(flatSkip).IsEqualTo(0);
 
-        Packet build = Packet.ParseFrame(new PacketId(1), stack, frame, FieldTreeMode.Build);
+        Packet build;
+        {
+            ParseOptions options = new(FieldTreeMode.Build);
+            if (!Packet.TryParse(
+                new PacketId(1),
+                stack,
+                frame,
+                in options,
+                out Packet? parsed,
+                out ParseFailure failure) || parsed is null)
+            {
+                throw new InvalidOperationException(failure.ToString());
+            }
+
+            build = parsed;
+        }
         int dfsBuild = 0;
         foreach (Field _ in build.IterFieldsDfs(materialize: false))
         {

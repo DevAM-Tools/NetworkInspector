@@ -22,8 +22,11 @@ internal enum AscBusType : byte
     /// <summary>FlexRay automotive bus.</summary>
     FlexRay = 4,
 
-    /// <summary>Ethernet / AFDX.</summary>
+    /// <summary>Ethernet. An AFDX data frame is stored on this bus. AFDX status is not.</summary>
     Ethernet = 5,
+
+    /// <summary>CAN XL (<c>XLFF</c>). Classic and FD rows wrapped in <c>CANXL</c> use <see cref="Can"/> and <see cref="CanFd"/>.</summary>
+    CanXl = 6,
 }
 
 /// <summary>
@@ -42,6 +45,7 @@ internal static class AscBusTypeExtensions
         AscBusType.Lin => "LIN",
         AscBusType.FlexRay => "FlexRay",
         AscBusType.Ethernet => "Ethernet",
+        AscBusType.CanXl => "CAN XL",
         _ => "Unknown",
     };
 
@@ -56,6 +60,7 @@ internal static class AscBusTypeExtensions
         AscBusType.Lin => LinkType.Lin,
         AscBusType.FlexRay => LinkType.Flexray,
         AscBusType.Ethernet => LinkType.Ethernet,
+        AscBusType.CanXl => LinkType.CanSocketcan,
         _ => LinkType.Null,
     };
 }

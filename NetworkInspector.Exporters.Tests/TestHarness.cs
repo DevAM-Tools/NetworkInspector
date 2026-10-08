@@ -97,8 +97,17 @@ internal static class TestHarness
     /// Parses a <see cref="Frame"/> into a <see cref="Packet"/> using this thread's stack
     /// and the next dense packet id.
     /// </summary>
-    internal static Packet ParseFrame(Frame frame) =>
-        Packet.ParseFrame(NextPacketId(), GetStack(), frame);
+    internal static Packet ParseFrame(Frame frame)
+    {
+        ParseOptions options = new();
+        if (!Packet.TryParse(NextPacketId(), GetStack(), frame, in options, out Packet? packet, out ParseFailure failure)
+            || packet is null)
+        {
+            throw new InvalidOperationException(failure.ToString());
+        }
+
+        return packet;
+    }
 
     /// <summary>
     /// Creates a <see cref="NullFrameSource"/> instance for test interface registration.

@@ -38,7 +38,7 @@ Load on `/complex-task`. Orchestrates requirements (if needed), plan, implement,
 
 ## Stage 5 — Stop Conditions
 
-- Preview success: latest review iteration has zero Error findings per step, every scoped step and `TEST{n}` `✅`.
+- Preview success: latest review iteration has zero Error findings per step, every scoped step and test ID `✅`.
 - Require full-scope `reviews/briefing_<slug>.md`. Rewrite if missing or step-only. Legacy `reviews/brief_<slug>.md` may be read; new writes use `briefing_`.
 - Then run one **Exam** (`workflow-council.md` Exam mode) on the full built scope. Same agent; no subagents.
 - Exam **Holds** → Success.
@@ -58,9 +58,9 @@ Load on `/complex-task`. Orchestrates requirements (if needed), plan, implement,
 
 ## Stage 7 — Final Report
 
-- Output implementation status table for all steps, `TEST{n}` rows, gates, Briefing, and Closing Exam.
+- Output implementation status table for all steps, test ID rows, gates, Briefing, and Closing Exam.
 - Output review iteration table: path, error count, status.
 - Cite the briefing and the Exam artifact. Goal verdict requires Exam **Holds**.
 - List deferred Cosmetic, Refactoring, Performance findings.
-- State goal-achievement verdict vs every `REQ{n}` with Done-when, every `TEST{n}`, and plan done criteria.
+- State goal-achievement verdict vs every requirement ID with Done-when, every test ID, and plan done criteria.
 - Chat: artifact paths; do not recap bodies.

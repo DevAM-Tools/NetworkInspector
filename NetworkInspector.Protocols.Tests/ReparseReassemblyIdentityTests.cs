@@ -57,8 +57,7 @@ internal sealed class ReparseReassemblyIdentityTests
         await Assert.That(_HasUdpPayload(stack, completingFirstParse)).IsTrue();
 
         int lastId = fragments.Count - 1;
-        Packet reparse = Packet.ParseFrame(
-            new PacketId(lastId), stack, _CreateFrame(stack, fragments[lastId], lastId));
+        Packet reparse = _ParseExpected(stack, _CreateFrame(stack, fragments[lastId], lastId), lastId);
 
         await PacketFieldComparer.AssertFieldIdentical(stack, completingFirstParse, reparse);
     }
@@ -79,8 +78,7 @@ internal sealed class ReparseReassemblyIdentityTests
 
         await Parallel.ForAsync(0, readers, async (_, _) =>
         {
-            Packet reparse = Packet.ParseFrame(
-                new PacketId(lastId), stack, _CreateFrame(stack, fragments[lastId], lastId));
+            Packet reparse = _ParseExpected(stack, _CreateFrame(stack, fragments[lastId], lastId), lastId);
             await PacketFieldComparer.AssertMatchesSnapshot(stack, reference, reparse);
         });
     }
@@ -104,8 +102,7 @@ internal sealed class ReparseReassemblyIdentityTests
         await Assert.That(_HasUdpPayload(stack, completingFirstParse)).IsTrue();
 
         int lastId = fragments.Count - 1;
-        Packet reparse = Packet.ParseFrame(
-            new PacketId(lastId), stack, _CreateFrame(stack, fragments[lastId], lastId));
+        Packet reparse = _ParseExpected(stack, _CreateFrame(stack, fragments[lastId], lastId), lastId);
 
         await PacketFieldComparer.AssertFieldIdentical(stack, completingFirstParse, reparse);
     }
@@ -135,10 +132,25 @@ internal sealed class ReparseReassemblyIdentityTests
         await Assert.That(lastFirstParse.TryGetFieldValue(payloadFieldId, out _, materialize: true)).IsTrue();
 
         int lastId = segments.Count - 1;
-        Packet reparse = Packet.ParseFrame(
-            new PacketId(lastId), stack, _CreateFrame(stack, segments[lastId], lastId));
+        Packet reparse = _ParseExpected(stack, _CreateFrame(stack, segments[lastId], lastId), lastId);
 
         await PacketFieldComparer.AssertFieldIdentical(stack, lastFirstParse, reparse);
+    }
+
+    /// <summary>
+    /// Parses a frame the test expects to succeed. A false return means the fixture is broken.
+    /// </summary>
+    private static Packet _ParseExpected(Stack stack, Frame frame, int packetId)
+    {
+        ParseOptions options = new();
+        PacketId id = new(packetId);
+        if (!Packet.TryParse(id, stack, frame, in options, out Packet? packet, out ParseFailure failure)
+            || packet is null)
+        {
+            throw new InvalidOperationException(failure.ToString());
+        }
+
+        return packet;
     }
 
     /// <summary>Parses every frame once in order, mimicking the ordered first parse of a capture.</summary>
@@ -147,7 +159,7 @@ internal sealed class ReparseReassemblyIdentityTests
         Packet[] parsed = new Packet[frames.Count];
         for (int i = 0; i < frames.Count; i++)
         {
-            parsed[i] = Packet.ParseFrame(new PacketId(i), stack, _CreateFrame(stack, frames[i], i));
+            parsed[i] = _ParseExpected(stack, _CreateFrame(stack, frames[i], i), i);
         }
 
         return parsed;
@@ -159,7 +171,7 @@ internal sealed class ReparseReassemblyIdentityTests
 
         for (int i = 0; i < frames.Count; i++)
         {
-            Packet reparse = Packet.ParseFrame(new PacketId(i), stack, _CreateFrame(stack, frames[i], i));
+            Packet reparse = _ParseExpected(stack, _CreateFrame(stack, frames[i], i), i);
             await PacketFieldComparer.AssertFieldIdentical(stack, firstParsed[i], reparse);
         }
     }
