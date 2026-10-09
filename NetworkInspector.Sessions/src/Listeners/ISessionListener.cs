@@ -28,6 +28,8 @@ namespace NetworkInspector.Sessions.Listeners;
 /// </summary>
 public interface ISessionListener
 {
+    #region API
+
     /// <summary>User-visible name for monitoring and diagnostics.</summary>
     string UiName
     {
@@ -92,4 +94,6 @@ public interface ISessionListener
     void OnUnsubscribed()
     {
     }
+
+    #endregion
 }

@@ -48,6 +48,8 @@ namespace NetworkInspector.Sessions;
 /// </summary>
 public sealed class Session : ISession, ISessionReader
 {
+    #region Construction
+
     /// <summary>Creates a new session bound to <paramref name="stack"/>.</summary>
     /// <param name="stack">Protocol stack used for the first parse of each frame.</param>
     /// <param name="options">Construction-time options. <see langword="null"/> uses <see cref="SessionOptions.Default"/>.</param>
@@ -69,14 +71,19 @@ public sealed class Session : ISession, ISessionReader
         _InitializeValueCaches();
     }
 
+    #endregion
+
+    #region Fields
+
     // -- Configuration --
 
     // Non-readonly: Restart() swaps the stack for a new one.
-    private Stack _Stack;
+    // Volatile so readers on other threads observe the swap without a lock.
+    private volatile Stack _Stack;
 
     // True when the session created the stack via factory (Restart). False for the
     // initial stack passed to the constructor (caller manages its lifetime).
-    private bool _OwnsStack;
+    private volatile bool _OwnsStack;
 
     // Session-owned registry: shared across all stacks. Extracted from the
     // initial stack so that source and interface IDs remain stable across restarts.
@@ -112,18 +119,23 @@ public sealed class Session : ISession, ISessionReader
     private readonly ManualResetEventSlim _ParseGate = new(initialState: true);
 
     // Guards against concurrent Restart() calls.
-    // 0 = idle, 1 = restart in progress.
+    // 0 = idle, 1 = restart in progress. Shutdown waits for 0 before disposing the parse gate.
     private volatile int _RestartInProgress;
+
+    // Serialises Restart's swap with Shutdown. Not taken on the parse hot path.
+    private readonly object _LifecycleLock = new();
 
     // -- Shared stores --
 
     // PacketId → packed (FrameId, FrameSourceId). Dense sequential appends; miss = index >= Count.
-    private const int _PacketToFrameChunkShift = 16;
+    // 8192 longs = 64 KB, under the ~85 KB large-object threshold.
+    // Shift 16 would be 512 KB and would be collected with generation 2.
+    private const int _PacketToFrameChunkShift = 13;
     private readonly ChunkedGrowOnlyStore<long> _PacketToFrame = new(_PacketToFrameChunkShift);
 
     // Roaring Bitmap index populated during parsing (protocol presence, field groups).
     // Created by _StartInternal(), set to null by Restart().
-    private PacketIndex? _PacketIndex;
+    private volatile PacketIndex? _PacketIndex;
 
     // -- Source registry --
 
@@ -134,9 +146,8 @@ public sealed class Session : ISession, ISessionReader
     private readonly SnapshotList<FrameSourceInfo> _SourceInfos = new();
 
 
-    // Running source jobs (populated at Start() time, replaced on Restart()).
-    // Non-readonly: reassigned by _StartInternal() on each start/restart cycle.
-    private Job[] _SourceJobs = [];
+    // Running source jobs (populated at Start() time). Published only after every slot is filled.
+    private volatile Job[] _SourceJobs = [];
 
     // Random-access capable sources keyed by FrameSourceId for GetPacket().
     // Copy-on-write: written only during _AddFrameSourceInternal (rare), read during TryGetPacket (hot).
@@ -161,7 +172,7 @@ public sealed class Session : ISession, ISessionReader
 
     private readonly ValueCacheRequest? _IngestRequest;
     private readonly IValueCacheListener? _IngestListener;
-    private ValueCache? _IngestValueCache;
+    private volatile ValueCache? _IngestValueCache;
     private ValueCacheInfo? _IngestInfo;
     private readonly SnapshotList<ValueCacheSlot> _ValueCacheSlots = new();
     private readonly SnapshotList<ValueCacheInfo> _ValueCacheInfos = new();
@@ -187,6 +198,10 @@ public sealed class Session : ISession, ISessionReader
     // Set during shutdown after source jobs finish, cleared on restart.
     private volatile bool _QueriesDisabled;
 
+    #endregion
+
+    #region ISessionReader
+
     // -- ISessionReader: Status --
 
     /// <inheritdoc/>
@@ -200,6 +215,9 @@ public sealed class Session : ISession, ISessionReader
 
     /// <inheritdoc/>
     public bool MorePacketsExpected => _ActiveSourceCount > 0;
+
+    /// <inheritdoc/>
+    public bool QueriesEnabled => !_QueriesDisabled;
 
     /// <summary>Ingest never retains a field tree.</summary>
     private static FieldTreeMode _IngestFieldTreeMode => FieldTreeMode.Skip;
@@ -229,17 +247,25 @@ public sealed class Session : ISession, ISessionReader
     /// <remarks>Returns the current immutable snapshot array; no per-call allocation copy.</remarks>
     public IReadOnlyList<ValueCacheInfo> GetValueCaches() => _ValueCacheInfos.CurrentSnapshot;
 
+    #endregion
+
+    #region Sources
+
     // -- ISession: Source management --
 
     /// <inheritdoc/>
-    public bool TryAddFrameSource(IFrameSource source, [NotNullWhen(true)] out FrameSourceInfo? info) =>
-        TryAddFrameSource(source, FrameSourceAddOptions.Default, out info);
+    public bool TryAddFrameSource(
+        IFrameSource source,
+        [NotNullWhen(true)] out FrameSourceInfo? info,
+        [NotNullWhen(false)] out SessionFailure? failure) =>
+        TryAddFrameSource(source, FrameSourceAddOptions.Default, out info, out failure);
 
     /// <inheritdoc/>
     public bool TryAddFrameSource(
         IFrameSource source,
         FrameSourceAddOptions addOptions,
-        [NotNullWhen(true)] out FrameSourceInfo? info)
+        [NotNullWhen(true)] out FrameSourceInfo? info,
+        [NotNullWhen(false)] out SessionFailure? failure)
     {
         ArgumentNullException.ThrowIfNull(source);
         _ThrowIfDisposed();
@@ -247,11 +273,15 @@ public sealed class Session : ISession, ISessionReader
         if (_State.Phase != SessionPhase.Idle)
         {
             info = null;
+            failure = new SessionFailure(
+                SessionErrorCode.InvalidPhase,
+                "Frame sources can only be added while the session is Idle.");
             return false;
         }
 
         IFrameSource bound = _BindSource(source, addOptions);
         info = _AddFrameSourceInternal(bound);
+        failure = null;
         return true;
     }
 
@@ -343,38 +373,58 @@ public sealed class Session : ISession, ISessionReader
         return true;
     }
 
+    #endregion
+
+    #region Lifecycle
+
     // -- ISession: Lifecycle --
 
     /// <inheritdoc/>
-    public bool TryStart()
+    public bool TryStart([NotNullWhen(false)] out SessionFailure? failure)
     {
         _ThrowIfDisposed();
 
         if (_State.Phase != SessionPhase.Idle)
         {
+            failure = new SessionFailure(SessionErrorCode.InvalidPhase, "TryStart requires the Idle phase.");
             return false;
         }
 
         _StartInternal();
+        failure = null;
         return true;
     }
 
     /// <inheritdoc/>
     public bool WaitForCompletion(TimeSpan? timeout = null)
     {
+        Job[] jobs;
+        lock (_LifecycleLock)
+        {
+            jobs = _SourceJobs;
+        }
+
         if (timeout is null)
         {
-            foreach (Job job in _SourceJobs)
+            foreach (Job job in jobs)
             {
                 job.Join();
             }
+
             return true;
         }
 
-        TimeSpan limit = timeout.Value;
-        foreach (Job job in _SourceJobs)
+        TimeSpan budget = timeout.Value;
+        long start = Stopwatch.GetTimestamp();
+        foreach (Job job in jobs)
         {
-            if (!job.Join(limit))
+            TimeSpan elapsed = Stopwatch.GetElapsedTime(start);
+            if (elapsed >= budget)
+            {
+                return false;
+            }
+
+            if (!job.Join(budget - elapsed))
             {
                 return false;
             }
@@ -389,27 +439,56 @@ public sealed class Session : ISession, ISessionReader
         ArgumentNullException.ThrowIfNull(stackFactory);
         _ThrowIfDisposed();
 
-        if (_State.Phase is SessionPhase.ShuttingDown or SessionPhase.Idle)
+        lock (_LifecycleLock)
         {
-            throw new SessionException(
-                SessionErrorCode.InvalidPhase,
-                $"Restart() requires a Running or Stopped phase. " +
-                $"Current phase: {_State.Phase}.");
+            if (_ShutdownStarted != 0
+                || _State.Phase is SessionPhase.ShuttingDown or SessionPhase.Idle)
+            {
+                throw new SessionException(
+                    SessionErrorCode.InvalidPhase,
+                    $"Restart() requires a Running or Stopped phase and no shutdown. Current phase: {_State.Phase}.");
+            }
+
+            if (_RestartInProgress != 0)
+            {
+                throw new InvalidOperationException("A restart is already in progress.");
+            }
+
+            _RestartInProgress = 1;
         }
 
-        // Prevent concurrent Restart() calls.
-        if (Interlocked.CompareExchange(ref _RestartInProgress, 1, 0) != 0)
-        {
-            throw new InvalidOperationException("A restart is already in progress.");
-        }
-
+        Stack? built = null;
         try
         {
-            _RestartCore(stackFactory);
+            built = stackFactory(_FrameInterfaceRegistry)
+                ?? throw new InvalidOperationException("The stack factory returned null.");
+            if (!ReferenceEquals(built.FrameInterfaceRegistry, _FrameInterfaceRegistry))
+            {
+                throw new ArgumentException(
+                    "The stack returned by the factory must use the FrameInterfaceRegistry that was passed to the factory. Do not create a new registry.",
+                    nameof(stackFactory));
+            }
+
+            lock (_LifecycleLock)
+            {
+                if (_ShutdownStarted != 0)
+                {
+                    throw new SessionException(
+                        SessionErrorCode.InvalidPhase,
+                        "Restart was abandoned because shutdown has started.");
+                }
+
+                _RestartCore(built);
+                built = null;
+            }
         }
         finally
         {
-            _RestartInProgress = 0;
+            built?.Dispose();
+            lock (_LifecycleLock)
+            {
+                _RestartInProgress = 0;
+            }
         }
     }
 
@@ -437,20 +516,9 @@ public sealed class Session : ISession, ISessionReader
     /// <see cref="NotifyFlags.NewPackets"/> for the partial rewrite.
     /// </para>
     /// </summary>
-    private void _RestartCore(Func<FrameInterfaceRegistry, Stack> stackFactory)
+    private void _RestartCore(Stack newStack)
     {
-        // ── Phase 0: Build the new stack (outside any lock) ──────────────────
-        Stack newStack = stackFactory(_FrameInterfaceRegistry)
-            ?? throw new InvalidOperationException("The stack factory returned null.");
-
-        if (!ReferenceEquals(newStack.FrameInterfaceRegistry, _FrameInterfaceRegistry))
-        {
-            throw new ArgumentException(
-                "The stack returned by the factory must use the FrameInterfaceRegistry " +
-                "that was passed to the factory. Do not create a new registry.",
-                nameof(stackFactory));
-        }
-
+        // Caller holds _LifecycleLock and has already validated the registry.
         // ── Phase 1: Gate source threads and swap the stack ──────────────────
         _State.SetPhase(SessionPhase.Restarting);
         _NotifyAllListeners(NotifyFlags.PhaseChanged);
@@ -661,19 +729,22 @@ public sealed class Session : ISession, ISessionReader
         ReadOnlySpan<ListenerSlot> slots = _ListenerSlots.Current;
         foreach (ListenerSlot slot in slots)
         {
-            PacketFilter? filter = slot.Filter;
-            if (filter is null)
+            lock (slot.FilterGate)
             {
-                continue;
-            }
+                PacketFilter? filter = slot.Filter;
+                if (filter is null)
+                {
+                    continue;
+                }
 
-            if (filter.TryDerive(_Stack, out PacketFilter? derived, out FilterError? failure))
-            {
-                slot.SetFilter(derived);
-                continue;
-            }
+                if (filter.TryDerive(_Stack, out PacketFilter? derived, out FilterError? failure))
+                {
+                    slot.SetFilter(derived);
+                    continue;
+                }
 
-            slot.SetFilterFault(failure);
+                slot.SetFilterFault(failure);
+            }
         }
     }
 
@@ -708,18 +779,35 @@ public sealed class Session : ISession, ISessionReader
     /// <inheritdoc/>
     public void Shutdown(TimeSpan? timeout = null)
     {
-        // CAS gate: only one thread executes shutdown. Concurrent callers wait
-        // for the executing thread to finish (spin on _ListenersTornDown).
         if (Interlocked.CompareExchange(ref _ShutdownStarted, 1, 0) != 0)
         {
-            // Another thread is performing or has completed shutdown — wait for it.
-            SpinWait spinner = new();
-            while (_ListenersTornDown == 0)
-            {
-                spinner.SpinOnce();
-            }
+            ThreadWaitHelper.WaitUntil(() => _ListenersTornDown != 0);
             return;
         }
+
+        try
+        {
+            // Do not hold _LifecycleLock while waiting. Restart drops the flag only after it
+            // releases the lock, so this wait cannot deadlock with the swap.
+            ThreadWaitHelper.WaitUntil(() => _RestartInProgress == 0);
+            lock (_LifecycleLock)
+            {
+                _ShutdownUnderLock(timeout);
+            }
+        }
+        finally
+        {
+            _ListenersTornDown = 1;
+        }
+    }
+
+    /// <summary>
+    /// Tears the session down. Caller holds <see cref="_LifecycleLock"/> and has waited
+    /// until no restart is in progress.
+    /// </summary>
+    private void _ShutdownUnderLock(TimeSpan? timeout)
+    {
+        Job[] sourceJobs = _SourceJobs;
 
         // Allow Shutdown() on Stopped phase so that listener slots are properly
         // cancelled and OnUnsubscribed is called. The session may transition to
@@ -739,7 +827,7 @@ public sealed class Session : ISession, ISessionReader
         }
 
         // Step 1: Cancel all source jobs. Sources observe this via CancellationToken.
-        foreach (Job job in _SourceJobs)
+        foreach (Job job in sourceJobs)
         {
             job.Cancel();
         }
@@ -848,7 +936,7 @@ public sealed class Session : ISession, ISessionReader
         // thrown as an AggregateException after all cleanup completes.
         List<Exception>? cleanupErrors = null;
 
-        foreach (Job job in _SourceJobs)
+        foreach (Job job in sourceJobs)
         {
             try
             {
@@ -893,17 +981,28 @@ public sealed class Session : ISession, ISessionReader
         // Dispose the current stack if the session owns it (factory-created via Restart).
         if (_OwnsStack)
         {
-            _Stack.Dispose();
-            _OwnsStack = false;
+            try
+            {
+                _Stack.Dispose();
+                _OwnsStack = false;
+            }
+            catch (Exception ex)
+            {
+                (cleanupErrors ??= []).Add(ex);
+            }
         }
 
         // Dispose the parse gate. Safe because all source threads have finished
         // (they were cancelled and waited for above) and no new Wait() calls
         // can occur after this point.
-        _ParseGate.Dispose();
-
-        // Signal completion so concurrent callers waiting on the CAS gate can proceed.
-        _ListenersTornDown = 1;
+        try
+        {
+            _ParseGate.Dispose();
+        }
+        catch (Exception ex)
+        {
+            (cleanupErrors ??= []).Add(ex);
+        }
 
         // Surface all cleanup failures as a single AggregateException.
         // This ensures no disposal error is silently swallowed.
@@ -951,11 +1050,15 @@ public sealed class Session : ISession, ISessionReader
     /// </summary>
     public AggregateException? ShutdownErrors => _ShutdownErrors;
 
+    #endregion
+
+    #region Private helpers
+
     // -- Internal helpers: Source registration --
 
     /// <summary>
     /// Registers a new frame source in the registry and creates its job.
-    /// Used by <see cref="TryAddFrameSource(IFrameSource, out FrameSourceInfo?)"/> for initial source registration.
+    /// Used by <see cref="TryAddFrameSource(IFrameSource, out FrameSourceInfo?, out SessionFailure?)"/> for initial source registration.
     /// </summary>
     private FrameSourceInfo _AddFrameSourceInternal(IFrameSource source)
     {
@@ -981,7 +1084,7 @@ public sealed class Session : ISession, ISessionReader
         // Wire the convenience API: FrameSourceInfo.Stop() → TryUnsubscribe(job).
         // Captured reference is the entry's JobInfo (same reference stored in _AllJobs).
         JobInfo entryJobInfo = entry.JobInfo;
-        info.RegisterStopCallback(() => TryUnsubscribe(entryJobInfo));
+        info.RegisterStopCallback(() => TryUnsubscribe(entryJobInfo, out _));
 
         // Register random-access capable sources for GetPacket().
         // Copy-on-write: create a new dictionary with the added entry and publish atomically.
@@ -1008,38 +1111,40 @@ public sealed class Session : ISession, ISessionReader
     /// </summary>
     private void _StartInternal()
     {
-        // Create a fresh packet index for this run when indexing is enabled.
-        _PacketIndex = _TryCreatePacketIndex(_Stack);
-
-        // Re-enable queries (may have been disabled by a previous Restart or Shutdown attempt).
-        _QueriesDisabled = false;
-
-        ReadOnlySpan<FrameSourceEntry> entries = _SourceEntries.Current;
-        _SourceJobs = new Job[entries.Length];
-        _ActiveSourceCount = entries.Length;
-
-        if (entries.Length == 0)
+        Job[] jobs;
+        lock (_LifecycleLock)
         {
+            _PacketIndex = _TryCreatePacketIndex(_Stack);
+            _QueriesDisabled = false;
+
+            ReadOnlySpan<FrameSourceEntry> entries = _SourceEntries.Current;
+            jobs = new Job[entries.Length];
+            for (int i = 0; i < entries.Length; i++)
+            {
+                jobs[i] = entries[i].Job;
+            }
+
+            _SourceJobs = jobs;
+            Interlocked.Exchange(ref _ActiveSourceCount, entries.Length);
+
+            if (entries.Length == 0)
+            {
+                _StartListenerSlots();
+                _State.SetPhase(SessionPhase.Stopped);
+                _NotifyAllListeners(NotifyFlags.AllSourcesCompleted | NotifyFlags.PhaseChanged);
+                return;
+            }
+
+            _State.SetPhase(SessionPhase.Running);
+            _NotifyAllListeners(NotifyFlags.PhaseChanged);
             _StartListenerSlots();
-            _State.SetPhase(SessionPhase.Stopped);
-            _NotifyAllListeners(NotifyFlags.AllSourcesCompleted | NotifyFlags.PhaseChanged);
-            return;
         }
 
-        _State.SetPhase(SessionPhase.Running);
-        _NotifyAllListeners(NotifyFlags.PhaseChanged);
-
-        _StartListenerSlots();
-
-        // Start all source jobs. Each start is individually guarded so that
-        // a thread-creation failure (e.g. OOM) for one source does not prevent
-        // the remaining sources from starting.
-        for (int i = 0; i < entries.Length; i++)
+        for (int i = 0; i < jobs.Length; i++)
         {
-            _SourceJobs[i] = entries[i].Job;
             try
             {
-                _SourceJobs[i].Start();
+                jobs[i].Start();
             }
             catch
             {
@@ -1172,17 +1277,10 @@ public sealed class Session : ISession, ISessionReader
                 // which recognises it via token comparison and transitions to Cancelled.
                 _ParseGate.Wait(ct);
 
-                Packet packet = _ParseFrameUnderLock(capturedFrame, packetId: null, ingestRecycle);
-
-                // Record PacketId → FrameId mapping for random-access re-parse.
-                RecordPacketFrame(packet.Id, capturedFrame.Id, sourceInfo.Id);
-
+                // Allocate, parse, and publish the map under one lock so a second source
+                // cannot observe the next id before this frame is stored.
+                Packet packet = _IngestFrameUnderLock(capturedFrame, sourceInfo.Id, ingestRecycle);
                 ingestRecycle = packet;
-
-                // Update global atomic counters.
-                Interlocked.Increment(ref _PacketCount);
-                Interlocked.Increment(ref _FrameCount);
-
                 _NotifyAllListeners(NotifyFlags.NewPackets);
             }
 
@@ -1254,7 +1352,10 @@ public sealed class Session : ISession, ISessionReader
             Job = slot.Info,
         };
         info.SetWriter(writer);
-        info.UnsubscribeCallback = () => TryUnsubscribe(slot.Info);
+        info.UnsubscribeCallback = () =>
+        {
+            _ = TryUnsubscribe(slot.Info, out _);
+        };
         slot.ValueCacheInfo = info;
 
         _ValueCacheSlots.Add(slot);
@@ -1604,17 +1705,53 @@ public sealed class Session : ISession, ISessionReader
         lock (_ParseMutex)
         {
             PacketId id = packetId ?? _AllocateNextPacketId();
-            if (recycle is not null)
-            {
-                ParseOptions options = new(_IngestFieldTreeMode, _IngestValueCache, index: _PacketIndex);
-                if (Packet.TryParse(recycle, id, _Stack, frame, in options, out _))
-                {
-                    return recycle;
-                }
-            }
-
-            return _ParseFrameCore(id, frame);
+            return _ParseAllocatedFrame(id, frame, recycle);
         }
+    }
+
+    /// <summary>
+    /// First parse of one newly read frame. Holds <see cref="_ParseMutex"/> from id allocation
+    /// through the map append and the packet-count publish. Restart must not call this.
+    /// </summary>
+    private Packet _IngestFrameUnderLock(Frame frame, FrameSourceId sourceId, Packet? recycle)
+    {
+        lock (_ParseMutex)
+        {
+            int nextBefore = _NextPacketId;
+            try
+            {
+                PacketId id = _AllocateNextPacketId();
+                Packet packet = _ParseAllocatedFrame(id, frame, recycle);
+                RecordPacketFrame(id, frame.Id, sourceId);
+                Interlocked.Increment(ref _PacketCount);
+                Interlocked.Increment(ref _FrameCount);
+                return packet;
+            }
+            catch
+            {
+                // No other source can have allocated inside this lock. Putting the counter
+                // back keeps the next id equal to the map count.
+                _NextPacketId = nextBefore;
+                throw;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Parses <paramref name="id"/> with the ingest field-tree mode. Caller holds <see cref="_ParseMutex"/>.
+    /// </summary>
+    private Packet _ParseAllocatedFrame(PacketId id, Frame frame, Packet? recycle)
+    {
+        if (recycle is not null)
+        {
+            ParseOptions options = new(_IngestFieldTreeMode, _IngestValueCache, index: _PacketIndex);
+            if (Packet.TryParse(recycle, id, _Stack, frame, in options, out _))
+            {
+                return recycle;
+            }
+        }
+
+        return _ParseFrameCore(id, frame);
     }
 
     /// <summary>
@@ -1687,6 +1824,10 @@ public sealed class Session : ISession, ISessionReader
     private void _OnJobStatusChanged(Job job, JobStatus status)
         => _NotifyAllListeners(NotifyFlags.JobStatusChanged);
 
+    #endregion
+
+    #region Listeners and jobs
+
     // -- ISessionReader: Source info --
 
     /// <inheritdoc/>
@@ -1696,38 +1837,54 @@ public sealed class Session : ISession, ISessionReader
     // -- ISession: Listener management --
 
     /// <inheritdoc/>
-    public bool TryAddListener(ISessionListener listener, [NotNullWhen(true)] out ListenerInfo? info) =>
-        TryAddListener(listener, filter: null, out info);
+    public bool TryAddListener(
+        ISessionListener listener,
+        [NotNullWhen(true)] out ListenerInfo? info,
+        [NotNullWhen(false)] out SessionFailure? failure) =>
+        TryAddListener(listener, filter: null, out info, out failure);
 
     /// <inheritdoc/>
     public bool TryAddListener(
         ISessionListener listener,
         string? filterExpression,
         [NotNullWhen(true)] out ListenerInfo? info,
-        out FilterError? filterFailure)
+        out FilterError? filterFailure,
+        out SessionFailure? failure)
     {
         ArgumentNullException.ThrowIfNull(listener);
         _ThrowIfDisposed();
+        info = null;
+        filterFailure = null;
+        failure = null;
+
+        if (!_TryAcceptSubscription(out failure))
+        {
+            return false;
+        }
 
         // Compile before allocating any listener state so a bad expression leaves the session
         // exactly as it was.
         FilterResult<PacketFilter> compiled = PacketFilter.Compile(filterExpression ?? string.Empty, _Stack);
         if (!compiled.TryGetValue(out PacketFilter? filter))
         {
-            info = null;
             filterFailure = compiled.Error;
             return false;
         }
 
-        filterFailure = null;
-        return TryAddListener(listener, filter, out info);
+        return TryAddListener(listener, filter, out info, out failure);
     }
 
     /// <inheritdoc/>
-    public bool TryAddListener(ISessionListener listener, IFilter? filter, [NotNullWhen(true)] out ListenerInfo? info)
+    public bool TryAddListener(
+        ISessionListener listener,
+        IFilter? filter,
+        [NotNullWhen(true)] out ListenerInfo? info,
+        [NotNullWhen(false)] out SessionFailure? failure)
     {
         ArgumentNullException.ThrowIfNull(listener);
         _ThrowIfDisposed();
+        info = null;
+        failure = null;
 
         if (string.IsNullOrWhiteSpace(listener.UiName))
         {
@@ -1736,11 +1893,17 @@ public sealed class Session : ISession, ISessionReader
                 "Listener UiName cannot be null or whitespace.");
         }
 
-        // Cannot add listeners during shutdown or after stop.
-        if (_State.Phase is SessionPhase.ShuttingDown or SessionPhase.Stopped)
+        if (!_TryAcceptSubscription(out failure))
         {
-            info = null;
             return false;
+        }
+
+        // Reject a foreign filter before any id or slot is stored.
+        if (filter is not null and not PacketFilter)
+        {
+            throw new ArgumentException(
+                "ListenerSlot only accepts NetworkInspector.Filter.Filter instances.",
+                nameof(filter));
         }
 
         ListenerId listenerId = _State.AllocateListenerId();
@@ -1761,7 +1924,10 @@ public sealed class Session : ISession, ISessionReader
         // Wire the convenience API: ListenerInfo.Unsubscribe() → TryUnsubscribe(job).
         // Captured reference is the slot's JobInfo (same reference stored in _AllJobs).
         JobInfo slotJobInfo = slot.Info;
-        info.UnsubscribeCallback = () => TryUnsubscribe(slotJobInfo);
+        info.UnsubscribeCallback = () =>
+        {
+            _ = TryUnsubscribe(slotJobInfo, out _);
+        };
 
         // Track the public view for GetListeners().
         _ListenerInfos.Add(info);
@@ -1779,18 +1945,66 @@ public sealed class Session : ISession, ISessionReader
             slot.Start();
         }
 
+        _BackfillListener(slot);
+        failure = null;
         return true;
+    }
+
+    /// <summary>
+    /// Shared phase and query gate for listeners and value caches.
+    /// <see cref="SessionPhase.Stopped"/> is allowed so a finished capture can still gain a view.
+    /// </summary>
+    private bool _TryAcceptSubscription([NotNullWhen(false)] out SessionFailure? failure)
+    {
+        if (_State.Phase == SessionPhase.ShuttingDown)
+        {
+            failure = new SessionFailure(
+                SessionErrorCode.InvalidPhase,
+                "Subscriptions cannot be added while the session is shutting down.");
+            return false;
+        }
+
+        if (_QueriesDisabled)
+        {
+            failure = new SessionFailure(SessionErrorCode.QueriesDisabled, "Packet queries are disabled.");
+            return false;
+        }
+
+        failure = null;
+        return true;
+    }
+
+    /// <summary>
+    /// Wakes one new listener for packets that already exist. Idle has none yet.
+    /// </summary>
+    private void _BackfillListener(ListenerSlot slot)
+    {
+        if (_State.Phase == SessionPhase.Idle || _QueriesDisabled)
+        {
+            return;
+        }
+
+        NotifyFlags flags = NotifyFlags.NewPackets;
+        if (_State.Phase == SessionPhase.Stopped)
+        {
+            flags |= NotifyFlags.AllSourcesCompleted;
+        }
+
+        slot.Notify(flags);
     }
 
     /// <inheritdoc/>
     public bool TryAddValueCache(
         IValueCacheListener listener,
         ValueCacheRequest request,
-        [NotNullWhen(true)] out ValueCacheInfo? info)
+        [NotNullWhen(true)] out ValueCacheInfo? info,
+        [NotNullWhen(false)] out SessionFailure? failure)
     {
         ArgumentNullException.ThrowIfNull(listener);
         ArgumentNullException.ThrowIfNull(request);
         _ThrowIfDisposed();
+        info = null;
+        failure = null;
 
         if (string.IsNullOrWhiteSpace(listener.UiName))
         {
@@ -1799,9 +2013,8 @@ public sealed class Session : ISession, ISessionReader
                 "Value-cache listener UiName cannot be null or whitespace.");
         }
 
-        if (_State.Phase is SessionPhase.ShuttingDown or SessionPhase.Stopped)
+        if (!_TryAcceptSubscription(out failure))
         {
-            info = null;
             return false;
         }
 
@@ -1818,6 +2031,18 @@ public sealed class Session : ISession, ISessionReader
             slot.Start();
         }
 
+        if (_State.Phase != SessionPhase.Idle && !_QueriesDisabled)
+        {
+            NotifyFlags flags = NotifyFlags.NewPackets;
+            if (_State.Phase == SessionPhase.Stopped)
+            {
+                flags |= NotifyFlags.AllSourcesCompleted;
+            }
+
+            slot.Notify(flags);
+        }
+
+        failure = null;
         return true;
     }
 
@@ -1827,26 +2052,48 @@ public sealed class Session : ISession, ISessionReader
     /// <remarks>Returns the current immutable snapshot array; no per-call allocation copy.</remarks>
     public IReadOnlyList<ListenerInfo> GetListeners() => _ListenerInfos.CurrentSnapshot;
 
+    #endregion
+
+    #region Packet reads
+
     // -- ISessionReader: Packet access --
 
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public bool TryGetPacket(PacketId id, [NotNullWhen(true)] out Packet? packet) =>
-        TryGetPacket(id, recycle: null, out packet);
+    public bool TryGetPacket(
+        PacketId id,
+        [NotNullWhen(true)] out Packet? packet,
+        [NotNullWhen(false)] out SessionFailure? failure) =>
+        TryGetPacket(id, recycle: null, out packet, out failure);
 
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public bool TryGetPacket(PacketId id, Packet? recycle, [NotNullWhen(true)] out Packet? packet)
+    public bool TryGetPacket(
+        PacketId id,
+        Packet? recycle,
+        [NotNullWhen(true)] out Packet? packet,
+        [NotNullWhen(false)] out SessionFailure? failure)
     {
-        if (_QueriesDisabled || !id.IsValid)
+        if (_QueriesDisabled)
         {
             packet = null;
+            failure = new SessionFailure(SessionErrorCode.QueriesDisabled, "Packet queries are disabled.");
+            return false;
+        }
+
+        if (!id.IsValid)
+        {
+            packet = null;
+            failure = new SessionFailure(SessionErrorCode.PacketNotFound, "Packet id is not valid.");
             return false;
         }
 
         if (!_TryGetPacketFrame(id, out FrameId frameId, out FrameSourceId sourceId))
         {
             packet = null;
+            failure = new SessionFailure(
+                SessionErrorCode.PacketNotFound,
+                string.Format(CultureInfo.InvariantCulture, "Packet id {0} is not in the announced range.", id.Value));
             return false;
         }
 
@@ -1854,6 +2101,7 @@ public sealed class Session : ISession, ISessionReader
         if (raSource is null)
         {
             packet = null;
+            failure = new SessionFailure(SessionErrorCode.FrameUnavailable, "The frame source for this packet is not available.");
             return false;
         }
 
@@ -1861,25 +2109,38 @@ public sealed class Session : ISession, ISessionReader
         if (raFrame is null)
         {
             packet = null;
+            failure = new SessionFailure(SessionErrorCode.FrameUnavailable, "The captured frame could not be re-read.");
             return false;
         }
 
+        failure = null;
         return _TryReparseFrame(raFrame.Value, id, recycle, out packet);
     }
 
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public bool TryGetFrame(PacketId id, out Frame frame)
+    public bool TryGetFrame(PacketId id, out Frame frame, [NotNullWhen(false)] out SessionFailure? failure)
     {
-        if (_QueriesDisabled || !id.IsValid)
+        if (_QueriesDisabled)
         {
             frame = default;
+            failure = new SessionFailure(SessionErrorCode.QueriesDisabled, "Packet queries are disabled.");
+            return false;
+        }
+
+        if (!id.IsValid)
+        {
+            frame = default;
+            failure = new SessionFailure(SessionErrorCode.PacketNotFound, "Packet id is not valid.");
             return false;
         }
 
         if (!_TryGetPacketFrame(id, out FrameId frameId, out FrameSourceId sourceId))
         {
             frame = default;
+            failure = new SessionFailure(
+                SessionErrorCode.PacketNotFound,
+                string.Format(CultureInfo.InvariantCulture, "Packet id {0} is not in the announced range.", id.Value));
             return false;
         }
 
@@ -1891,11 +2152,13 @@ public sealed class Session : ISession, ISessionReader
             if (raFrame is not null)
             {
                 frame = raFrame.Value;
+                failure = null;
                 return true;
             }
         }
 
         frame = default;
+        failure = new SessionFailure(SessionErrorCode.FrameUnavailable, "The captured frame could not be re-read.");
         return false;
     }
 
@@ -1918,7 +2181,7 @@ public sealed class Session : ISession, ISessionReader
             }
 
             Packet? recycle = buffer[i];
-            if (!TryGetPacket(new PacketId(id), recycle, out Packet? packet))
+            if (!TryGetPacket(new PacketId(id), recycle, out Packet? packet, out _))
             {
                 buffer[i] = null;
                 filled++;
@@ -1953,7 +2216,7 @@ public sealed class Session : ISession, ISessionReader
 
             PacketId packetId = new(id);
             Packet? recycle = destination[i].Packet;
-            TryGetPacket(packetId, recycle, out Packet? packet);
+            TryGetPacket(packetId, recycle, out Packet? packet, out _);
             destination[i] = new PacketRef(packetId, packet);
             filled++;
         }
@@ -1969,20 +2232,30 @@ public sealed class Session : ISession, ISessionReader
         PacketReadMode mode,
         out int count,
         out PacketIdLayout idLayout,
-        [NotNullWhen(false)] out FilterError? failure)
+        out FilterError? failure,
+        out SessionFailure? sessionFailure)
     {
         count = 0;
         idLayout = PacketIdLayout.Contiguous;
         failure = null;
+        sessionFailure = null;
 
-        ListenerSlot slot = _FindListenerSlot(listenerId)
-            ?? throw new SessionException(
+        ListenerSlot? slot = _FindListenerSlot(listenerId);
+        if (slot is null)
+        {
+            sessionFailure = new SessionFailure(
                 SessionErrorCode.ListenerNotFound,
-                $"No listener is registered with id {listenerId.Value.ToString(CultureInfo.InvariantCulture)}.");
+                string.Format(
+                    CultureInfo.InvariantCulture,
+                    "No listener is registered with id {0}.",
+                    listenerId.Value));
+            return false;
+        }
 
         if (_QueriesDisabled)
         {
-            return true;
+            sessionFailure = new SessionFailure(SessionErrorCode.QueriesDisabled, "Packet queries are disabled.");
+            return false;
         }
 
         if (mode == PacketReadMode.All)
@@ -1991,22 +2264,25 @@ public sealed class Session : ISession, ISessionReader
             return true;
         }
 
-        // A failed re-bind after a stack swap must not degrade into "match everything":
-        // the caller has to learn that its filter is gone.
-        if (slot.FilterFault is FilterError fault)
+        lock (slot.FilterGate)
         {
-            failure = fault;
-            return false;
-        }
+            if (slot.FilterFault is FilterError fault)
+            {
+                failure = fault;
+                sessionFailure = null;
+                return false;
+            }
 
-        PacketFilter? filter = slot.Filter;
-        if (filter?.IsAlwaysMatch is not false)
-        {
-            count = ReadPackets(startId, destination, out idLayout);
-            return true;
-        }
+            PacketFilter? filter = slot.Filter;
+            if (filter is null || filter.IsAlwaysMatch)
+            {
+                count = ReadPackets(startId, destination, out idLayout);
+                sessionFailure = null;
+                return true;
+            }
 
-        return _TryReadMatching(filter, startId, destination, out count, out idLayout, out failure);
+            return _TryReadMatching(filter, startId, destination, out count, out idLayout, out failure);
+        }
     }
 
     /// <summary>
@@ -2056,7 +2332,7 @@ public sealed class Session : ISession, ISessionReader
 
             PacketId packetId = new(id);
             Packet? recycle = destination[filled].Packet;
-            if (!TryGetPacket(packetId, recycle, out Packet? packet) || packet is null)
+            if (!TryGetPacket(packetId, recycle, out Packet? packet, out _) || packet is null)
             {
                 skipped = true;
                 continue;
@@ -2106,14 +2382,24 @@ public sealed class Session : ISession, ISessionReader
     /// <inheritdoc/>
     public PacketIndexReaderView? PacketIndex => _PacketIndex?.AsReadOnlyView();
 
+    #endregion
+
+    #region Listeners and jobs
+
     // -- ISession: Job management --
 
     /// <inheritdoc/>
-    public bool TryAddJob(string uiName, string description, Action<CancellationToken> work,
-        [NotNullWhen(true)] out JobInfo? info)
+    public bool TryAddJob(
+        string uiName,
+        string description,
+        Action<CancellationToken> work,
+        [NotNullWhen(true)] out JobInfo? info,
+        [NotNullWhen(false)] out SessionFailure? failure)
     {
         ArgumentNullException.ThrowIfNull(work);
         _ThrowIfDisposed();
+        info = null;
+        failure = null;
 
         if (string.IsNullOrWhiteSpace(uiName))
         {
@@ -2122,10 +2408,11 @@ public sealed class Session : ISession, ISessionReader
                 "Job UiName cannot be null or whitespace.");
         }
 
-        // Cannot add jobs during shutdown or after stop.
-        if (_State.Phase is SessionPhase.ShuttingDown or SessionPhase.Stopped)
+        if (_State.Phase == SessionPhase.ShuttingDown)
         {
-            info = null;
+            failure = new SessionFailure(
+                SessionErrorCode.InvalidPhase,
+                "Jobs cannot be added while the session is shutting down.");
             return false;
         }
 
@@ -2139,6 +2426,7 @@ public sealed class Session : ISession, ISessionReader
         _NotifyAllListeners(NotifyFlags.JobAdded);
 
         job.Start();
+        failure = null;
         return true;
     }
 
@@ -2147,10 +2435,11 @@ public sealed class Session : ISession, ISessionReader
     public IReadOnlyList<JobInfo> GetJobs() => _AllJobs.CurrentSnapshot;
 
     /// <inheritdoc/>
-    public bool TryRemoveJob(JobInfo job)
+    public bool TryRemoveJob(JobInfo job, [NotNullWhen(false)] out SessionFailure? failure)
     {
         ArgumentNullException.ThrowIfNull(job);
         _ThrowIfDisposed();
+        failure = null;
 
         if (job.Status is JobStatus.Pending or JobStatus.Running)
         {
@@ -2159,9 +2448,9 @@ public sealed class Session : ISession, ISessionReader
                 "Cannot remove a job that is still pending or running. Cancel it and wait for completion first.");
         }
 
-        // Remove from the unified list and notify listeners.
         if (!_AllJobs.Remove(job))
         {
+            failure = new SessionFailure(SessionErrorCode.JobNotFound, "The job is not registered in this session.");
             return false;
         }
 
@@ -2170,22 +2459,23 @@ public sealed class Session : ISession, ISessionReader
     }
 
     /// <inheritdoc/>
-    public bool TryUnsubscribe(JobInfo job)
+    public bool TryUnsubscribe(JobInfo job, [NotNullWhen(false)] out SessionFailure? failure)
     {
         ArgumentNullException.ThrowIfNull(job);
         _ThrowIfDisposed();
+        failure = null;
 
-        // Phase guard: unsubscribe only makes sense during Running/Stopped/Restarting.
-        // During Idle nothing is running yet; during ShuttingDown the session handles cleanup.
-        SessionPhase phase = _State.Phase;
-        if (phase is SessionPhase.Idle or SessionPhase.ShuttingDown)
+        if (_State.Phase == SessionPhase.ShuttingDown)
         {
+            failure = new SessionFailure(
+                SessionErrorCode.InvalidPhase,
+                "Unsubscribe is not available while the session is shutting down.");
             return false;
         }
 
-        // Terminal guard: job is already done — nothing to cancel.
         if (job.Status is JobStatus.Completed or JobStatus.Cancelled or JobStatus.Failed)
         {
+            failure = new SessionFailure(SessionErrorCode.JobTerminal, "The job is already in a terminal state.");
             return false;
         }
 
@@ -2213,6 +2503,7 @@ public sealed class Session : ISession, ISessionReader
         // Must be a user job — cancel only if owned by this session.
         if (!_ContainsJob(job))
         {
+            failure = new SessionFailure(SessionErrorCode.JobNotFound, "The job is not registered in this session.");
             return false;
         }
 
@@ -2258,7 +2549,7 @@ public sealed class Session : ISession, ISessionReader
     /// Finds the <see cref="ListenerSlot"/> and its corresponding <see cref="ListenerInfo"/>
     /// whose job matches the given <paramref name="job"/>. Returns nulls if not found.
     /// The <see cref="ListenerInfo"/> is retrieved from <see cref="ListenerSlot.ListenerInfo"/>
-    /// which is set during <see cref="TryAddListener(ISessionListener, IFilter?, out ListenerInfo?)"/>.
+    /// which is set during <see cref="TryAddListener(ISessionListener, IFilter?, out ListenerInfo?, out SessionFailure?)"/>.
     /// </summary>
     private (ListenerSlot? Slot, ListenerInfo? Info) _FindListenerSlotAndInfo(JobInfo job)
     {
@@ -2276,8 +2567,35 @@ public sealed class Session : ISession, ISessionReader
     /// Stops a source job. The source thread exits after the current frame.
     /// The source remains available for random access and reparse.
     /// </summary>
+    private void _RemoveRandomAccessSource(FrameSourceId sourceId)
+    {
+        Dictionary<FrameSourceId, IRandomAccessFrameSource> current = _RandomAccessSources;
+        if (!current.ContainsKey(sourceId))
+        {
+            return;
+        }
+
+        Dictionary<FrameSourceId, IRandomAccessFrameSource> next = new(current);
+        next.Remove(sourceId);
+        _RandomAccessSources = next;
+    }
+
     private bool _TryUnsubscribeSource(FrameSourceEntry entry)
     {
+        if (entry.Job.Status == JobStatus.Pending)
+        {
+            entry.Info.ClearStopCallback();
+            _SourceEntries.Remove(entry);
+            _SourceInfos.Remove(entry.Info);
+            _AllJobs.Remove(entry.JobInfo);
+            _RemoveRandomAccessSource(entry.Info.Id);
+            entry.Source.Dispose();
+            entry.Job.Dispose();
+            _NotifyAllListeners(NotifyFlags.JobRemoved);
+            return true;
+        }
+
+        entry.Info.ClearStopCallback();
         // Cancel the source job — sets the CancellationToken that _RunSourceLoop observes.
         entry.Job.Cancel();
 
@@ -2347,4 +2665,6 @@ public sealed class Session : ISession, ISessionReader
             throw new SessionException(SessionErrorCode.Disposed, "The session has been disposed.");
         }
     }
+
+    #endregion
 }

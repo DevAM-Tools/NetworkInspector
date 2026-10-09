@@ -97,6 +97,24 @@ internal sealed class FilterIndexPruneTests
     }
 
     [Test]
+    public async Task Prune_GroupedField_UsesIndexGroupBitmap()
+    {
+        using Stack stack = FilterTestHelper.BuildStack();
+        PacketIndex index = _BuildIndex(stack);
+        Filter filter = FilterTestHelper.CompileOrThrow("tcp.dstport == 80", stack);
+        IndexGroupId group = stack.GetFieldIndexGroup(FilterTestHelper.FieldIdOf(stack, "tcp.dstport"));
+
+        await Assert.That(group.IsValid).IsTrue();
+        await Assert.That(filter.TryIsPresenceCandidate(index, 1, out bool tcpPacket)).IsTrue();
+        await Assert.That(tcpPacket).IsTrue();
+        await Assert.That(filter.TryIsPresenceCandidate(index, 0, out bool udpPacket)).IsTrue();
+        await Assert.That(udpPacket).IsFalse();
+        await Assert.That(index.TryGetGroupBitmap(group, out ReadOnlyRoaringBitmap groupBitmap)).IsTrue();
+        await Assert.That(groupBitmap.Contains(1)).IsTrue();
+        await Assert.That(groupBitmap.Contains(0)).IsFalse();
+    }
+
+    [Test]
     public async Task Prune_Conjunction_IntersectsChildren()
     {
         using Stack stack = FilterTestHelper.BuildStack();

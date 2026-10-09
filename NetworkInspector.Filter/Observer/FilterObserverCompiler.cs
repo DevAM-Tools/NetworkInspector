@@ -60,23 +60,46 @@ internal static class FilterObserverCompiler
     private sealed class Emitter(IStack stack, FilterCompileOptions? options)
     {
         private readonly IStack _Stack = stack;
-        private readonly SymbolResolver _Resolver = new SymbolResolver(stack);
+        private readonly SymbolResolver _Resolver = new(stack);
         private readonly TimeSpan _RegexTimeout = options?.RegexTimeout ?? _DefaultRegexTimeout;
         private readonly List<Leaf> _Leaves = [];
         private readonly List<BitNode> _Nodes = [];
         private readonly List<FieldId> _FieldOrder = [];
         private readonly Dictionary<int, List<int>> _ByField = [];
         private FlankRuntime? _Flank;
+        private int _FlankCount;
         private int _WhenRoot = -1;
         private FieldId[] _FlankIds = [];
 
         public FilterResult<FilterObserver> Build(string expression, int root)
         {
-            FieldId[] ids = _FieldOrder.ToArray();
+            FieldId[] ids = [.. _FieldOrder];
             int[][] indexes = new int[ids.Length][];
             for (int i = 0; i < ids.Length; i++)
             {
-                indexes[i] = _ByField[ids[i].Value].ToArray();
+                indexes[i] = [.. _ByField[ids[i].Value]];
+            }
+
+            // Dense FieldId.Value → watch slot. -1 means the field is not watched for leaf tests.
+            int[] slotByFieldId = new int[_Stack.FieldCount];
+            Array.Fill(slotByFieldId, -1);
+            for (int i = 0; i < ids.Length; i++)
+            {
+                int raw = ids[i].Value;
+                if ((uint)raw < (uint)slotByFieldId.Length)
+                {
+                    slotByFieldId[raw] = i;
+                }
+            }
+
+            bool[] flankByFieldId = new bool[_Stack.FieldCount];
+            for (int i = 0; i < _FlankIds.Length; i++)
+            {
+                int raw = _FlankIds[i].Value;
+                if ((uint)raw < (uint)flankByFieldId.Length)
+                {
+                    flankByFieldId[raw] = true;
+                }
             }
 
             FieldWatch watch = ids.Length == 0
@@ -86,14 +109,14 @@ internal static class FilterObserverCompiler
                 expression,
                 _Stack,
                 watch,
-                ids,
                 indexes,
-                _Leaves.ToArray(),
-                _Nodes.ToArray(),
+                [.. _Leaves],
+                [.. _Nodes],
                 root,
                 _Flank,
                 _WhenRoot,
-                _FlankIds);
+                flankByFieldId,
+                slotByFieldId);
         }
 
         public FilterResult<int> Emit(FilterNode node)
@@ -196,23 +219,56 @@ internal static class FilterObserverCompiler
                 return FilterError.UnknownField(node.Name, node.Position, node.Length);
             }
 
-            FieldId[] fields = symbol.Kind == FilterSymbolKind.Protocol
-                ? [symbol.ContainerField]
-                : symbol.Fields;
-            return _AddLeaf(new Leaf { Kind = LeafKind.Presence }, fields);
+            // Skip-tree observers can only latch delivered fields. A protocol without a
+            // container field needs an owner scan over a field tree — refuse here instead of
+            // passing FieldId.Invalid into FieldWatch.Only (which throws).
+            if (symbol.Kind == FilterSymbolKind.Protocol)
+            {
+                if (!symbol.ContainerField.IsValid)
+                {
+                    return FilterError.NeedsFieldTree();
+                }
+
+                return _AddLeaf(new Leaf { Kind = LeafKind.Presence }, [symbol.ContainerField]);
+            }
+
+            return _AddLeaf(new Leaf { Kind = LeafKind.Presence }, symbol.Fields);
         }
 
         private FilterResult<int> _EmitFlank(FlankNode node)
         {
+            // One tracker per observer: a second flank would overwrite Arm/Next state.
+            if (_FlankCount > 0)
+            {
+                return FilterError.Syntax(
+                    "FilterObserver supports at most one flank() expression",
+                    node.Position,
+                    node.Length);
+            }
+
             FilterResult<FilterSymbol> symbol = _Resolver.ResolveValue(node.FieldName, node.Position, node.Length);
             if (!symbol.TryGetValue(out FilterSymbol? field))
             {
                 return symbol.Error;
             }
 
+            if (node.By is not null)
+            {
+                FilterError? typeError = _Resolver.CheckIntegerFields(
+                    field,
+                    node.FieldName,
+                    node.Position,
+                    node.Length);
+                if (typeError is not null)
+                {
+                    return typeError;
+                }
+            }
+
             ValueAccessor accessor = ValueAccessor.Direct(field.Fields);
             _Flank = new FlankRuntime(accessor, node.From, node.To, node.By, node.IsAnyChange, node.Window);
             _FlankIds = field.Fields;
+            _FlankCount = 1;
             for (int i = 0; i < field.Fields.Length; i++)
             {
                 int raw = field.Fields[i].Value;
@@ -222,6 +278,7 @@ internal static class FilterObserverCompiler
                     _FieldOrder.Add(field.Fields[i]);
                 }
             }
+
             if (node.When is FilterNode when)
             {
                 FilterResult<int> gate = Emit(when);

@@ -66,7 +66,7 @@ internal sealed class SessionConcurrentRedissectScenario : IProfilingScenario, I
         _Session = new Session(_Stack!, SessionOptions.RedissectOnly);
         MemoryFrameSource source = new(_Frames!);
 
-        if (!_Session.TryAddFrameSource(source, out _))
+        if (!_Session.TryAddFrameSource(source, out _, out _))
         {
             _Session.Dispose();
             _Session = null;
@@ -76,7 +76,7 @@ internal sealed class SessionConcurrentRedissectScenario : IProfilingScenario, I
         for (int i = 0; i < _ListenerCount; i++)
         {
             RedissectListener listener = new(FormattableString.Invariant($"Redissect{i}"));
-            if (!_Session.TryAddListener(listener, out _))
+            if (!_Session.TryAddListener(listener, out _, out _))
             {
                 _Session.Dispose();
                 _Session = null;
@@ -84,7 +84,7 @@ internal sealed class SessionConcurrentRedissectScenario : IProfilingScenario, I
             }
         }
 
-        if (!_Session.TryStart())
+        if (!_Session.TryStart(out _))
         {
             _Session.Dispose();
             _Session = null;
@@ -135,7 +135,7 @@ internal sealed class SessionConcurrentRedissectScenario : IProfilingScenario, I
         {
             for (int i = fromIndex; i < toIndexExclusive; i++)
             {
-                if (!session.TryGetPacket(new PacketId(i), _Recycle, out Packet? packet) || packet is null)
+                if (!session.TryGetPacket(new PacketId(i), _Recycle, out Packet? packet, out _) || packet is null)
                 {
                     throw new InvalidOperationException(
                         FormattableString.Invariant($"Redissect miss for PacketId {i}."));

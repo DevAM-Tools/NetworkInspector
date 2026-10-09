@@ -25,6 +25,8 @@ namespace NetworkInspector.Sessions.ValueCaches;
 /// </summary>
 public sealed class ValueCacheInfo
 {
+    #region Fields
+
     // Cross-thread status. Plain volatile write; the session is the only writer.
     private volatile int _Status;
 
@@ -39,6 +41,10 @@ public sealed class ValueCacheInfo
     {
         get; set;
     }
+
+    #endregion
+
+    #region Properties
 
     /// <summary>Unique identifier for this value-cache subscription.</summary>
     public ValueCacheId Id
@@ -80,6 +86,8 @@ public sealed class ValueCacheInfo
             return writer.AsReadOnlyView();
         }
     }
+
+    #endregion
 
     /// <summary>
     /// Convenience API: requests that the session unsubscribe this value-cache listener.

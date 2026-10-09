@@ -126,8 +126,8 @@ internal sealed class SessionSkipFieldTreeTests
             {
                 ValueCache = _UdpPortRequest(),
             });
-        session.TryAddFrameSource(source, out _);
-        session.TryStart();
+        session.TryAddFrameSource(source, out _, out _);
+        session.TryStart(out _);
         session.WaitForCompletion();
 
         ReadOnlyValueCache? ingest = session.IngestValueCache;
@@ -135,7 +135,7 @@ internal sealed class SessionSkipFieldTreeTests
         int rows = ingest!.Value.GetSeries<ulong>(stack.GetFieldId("udp.srcport")!.Value).Count;
         await Assert.That(rows).IsEqualTo(frameCount);
 
-        bool got = session.TryGetPacket(new PacketId(1), out Packet? packet);
+        bool got = session.TryGetPacket(new PacketId(1), out Packet? packet, out _);
         await Assert.That(got).IsTrue();
         await Assert.That(packet!.HasFieldTree).IsTrue();
 
@@ -154,8 +154,8 @@ internal sealed class SessionSkipFieldTreeTests
             {
                 ValueCache = _UdpPortRequest(),
             });
-        session.TryAddFrameSource(source, out _);
-        session.TryStart();
+        session.TryAddFrameSource(source, out _, out _);
+        session.TryStart(out _);
         session.WaitForCompletion();
 
         ReadOnlyValueCache? ingest = session.IngestValueCache;
@@ -173,11 +173,11 @@ internal sealed class SessionSkipFieldTreeTests
         using Stack stack = TestHarness.CreateStack();
         using TestFrameSource source = TestFrameSource.WithUdpFrames(frameCount);
         using Session session = new(stack, new SessionOptions { ValueCache = _UdpPortRequest() });
-        session.TryAddFrameSource(source, out _);
-        session.TryStart();
+        session.TryAddFrameSource(source, out _, out _);
+        session.TryStart(out _);
         session.WaitForCompletion();
 
-        bool got = session.TryGetPacket(new PacketId(0), out Packet? packet);
+        bool got = session.TryGetPacket(new PacketId(0), out Packet? packet, out _);
         await Assert.That(got).IsTrue();
         await Assert.That(packet!.HasFieldTree).IsTrue();
 
@@ -191,8 +191,8 @@ internal sealed class SessionSkipFieldTreeTests
         using Stack ingestStack = TestHarness.CreateStack();
         using TestFrameSource ingestSource = TestFrameSource.WithUdpFrames(frameCount);
         using Session ingest = new(ingestStack, new SessionOptions { ValueCache = _UdpPortRequest() });
-        ingest.TryAddFrameSource(ingestSource, out _);
-        ingest.TryStart();
+        ingest.TryAddFrameSource(ingestSource, out _, out _);
+        ingest.TryStart(out _);
         ingest.WaitForCompletion();
         int ingestRows = ingest.IngestValueCache!.Value
             .GetSeries<ulong>(ingestStack.GetFieldId("udp.srcport")!.Value).Count;
@@ -202,16 +202,16 @@ internal sealed class SessionSkipFieldTreeTests
         using TestFrameSource source = TestFrameSource.WithUdpFrames(frameCount);
         RecordingValueCacheListener listener = new();
         using Session session = new(stack);
-        session.TryAddFrameSource(source, out _);
-        bool added = session.TryAddValueCache(listener, _UdpPortRequest(), out ValueCacheInfo? info);
-        session.TryStart();
+        session.TryAddFrameSource(source, out _, out _);
+        bool added = session.TryAddValueCache(listener, _UdpPortRequest(), out ValueCacheInfo? info, out _);
+        session.TryStart(out _);
         session.WaitForCompletion();
         WaitHelper.WaitUntil(() => listener.RowsSeen >= frameCount);
 
         await Assert.That(added).IsTrue();
         int pullRows = info!.Cache.GetSeries<ulong>(stack.GetFieldId("udp.srcport")!.Value).Count;
         await Assert.That(pullRows).IsEqualTo(ingestRows);
-        bool stored = session.TryGetPacket(new PacketId(0), out Packet? packet);
+        bool stored = session.TryGetPacket(new PacketId(0), out Packet? packet, out _);
         await Assert.That(stored).IsTrue();
         await Assert.That(packet!.HasFieldTree).IsTrue();
 
@@ -225,8 +225,8 @@ internal sealed class SessionSkipFieldTreeTests
         using Stack ingestStack = TestHarness.CreateStack();
         using TestFrameSource ingestSource = TestFrameSource.WithUdpFrames(frameCount);
         using Session ingest = new(ingestStack, new SessionOptions { ValueCache = _AllFieldsRequest() });
-        ingest.TryAddFrameSource(ingestSource, out _);
-        ingest.TryStart();
+        ingest.TryAddFrameSource(ingestSource, out _, out _);
+        ingest.TryStart(out _);
         ingest.WaitForCompletion();
         FieldId portId = ingestStack.GetFieldId("udp.srcport")!.Value;
         int ingestSeries = ingest.IngestValueCache!.Value.Series.Count;
@@ -237,9 +237,9 @@ internal sealed class SessionSkipFieldTreeTests
         using TestFrameSource source = TestFrameSource.WithUdpFrames(frameCount);
         RecordingValueCacheListener listener = new("all-fields");
         using Session session = new(stack);
-        session.TryAddFrameSource(source, out _);
-        bool added = session.TryAddValueCache(listener, _AllFieldsRequest(), out ValueCacheInfo? info);
-        session.TryStart();
+        session.TryAddFrameSource(source, out _, out _);
+        bool added = session.TryAddValueCache(listener, _AllFieldsRequest(), out ValueCacheInfo? info, out _);
+        session.TryStart(out _);
         session.WaitForCompletion();
         WaitHelper.WaitUntil(() => listener.RowsSeen >= frameCount);
 
@@ -260,9 +260,9 @@ internal sealed class SessionSkipFieldTreeTests
         using TestFrameSource source = TestFrameSource.WithUdpFrames(frameCount);
         RecordingValueCacheListener listener = new();
         using Session session = new(stack);
-        session.TryAddFrameSource(source, out _);
-        bool added = session.TryAddValueCache(listener, _UdpPortRequest(), out ValueCacheInfo? info);
-        session.TryStart();
+        session.TryAddFrameSource(source, out _, out _);
+        bool added = session.TryAddValueCache(listener, _UdpPortRequest(), out ValueCacheInfo? info, out _);
+        session.TryStart(out _);
         session.WaitForCompletion();
         WaitHelper.WaitUntil(() => listener.RowsSeen >= frameCount);
 
@@ -280,12 +280,12 @@ internal sealed class SessionSkipFieldTreeTests
         using Stack stack = TestHarness.CreateStack();
         using TestFrameSource source = TestFrameSource.WithUdpFrames(frameCount);
         using Session session = new(stack);
-        session.TryAddFrameSource(source, out _);
-        session.TryStart();
+        session.TryAddFrameSource(source, out _, out _);
+        session.TryStart(out _);
         session.WaitForCompletion();
 
-        bool gotPacket = session.TryGetPacket(new PacketId(0), out Packet? packet);
-        bool gotFrame = session.TryGetFrame(new PacketId(0), out Frame frame);
+        bool gotPacket = session.TryGetPacket(new PacketId(0), out Packet? packet, out _);
+        bool gotFrame = session.TryGetFrame(new PacketId(0), out Frame frame, out _);
 
         await Assert.That(gotPacket).IsTrue();
         await Assert.That(gotFrame).IsTrue();
@@ -301,12 +301,12 @@ internal sealed class SessionSkipFieldTreeTests
         using Stack stack = TestHarness.CreateStack();
         using TestFrameSource source = TestFrameSource.WithUdpFrames(frameCount);
         using Session session = new(stack);
-        session.TryAddFrameSource(source, out _);
-        session.TryStart();
+        session.TryAddFrameSource(source, out _, out _);
+        session.TryStart(out _);
         session.WaitForCompletion();
 
-        bool gotPacket = session.TryGetPacket(new PacketId(0), out Packet? packet);
-        bool gotFrame = session.TryGetFrame(new PacketId(0), out Frame frame);
+        bool gotPacket = session.TryGetPacket(new PacketId(0), out Packet? packet, out _);
+        bool gotFrame = session.TryGetFrame(new PacketId(0), out Frame frame, out _);
 
         await Assert.That(gotPacket).IsTrue();
         await Assert.That(gotFrame).IsTrue();
@@ -328,8 +328,8 @@ internal sealed class SessionSkipFieldTreeTests
             {
                 ValueCache = _UdpPortRequest(),
             });
-        session.TryAddFrameSource(source, out _);
-        session.TryStart();
+        session.TryAddFrameSource(source, out _, out _);
+        session.TryStart(out _);
         session.WaitForCompletion();
 
         Packet?[] buffer = new Packet?[frameCount];
@@ -366,11 +366,11 @@ internal sealed class SessionSkipFieldTreeTests
         using BlockingTestFrameSource source = new(frameCount);
         RecordingValueCacheListener listener = new();
         using Session session = new(stack);
-        session.TryAddFrameSource(source, out _);
-        session.TryStart();
+        session.TryAddFrameSource(source, out _, out _);
+        session.TryStart(out _);
         WaitHelper.WaitUntil(() => session.PacketCount >= frameCount);
 
-        bool added = session.TryAddValueCache(listener, _UdpPortRequest(), out _);
+        bool added = session.TryAddValueCache(listener, _UdpPortRequest(), out _, out _);
         await Assert.That(added).IsTrue();
         WaitHelper.WaitUntil(() => listener.RowsSeen >= session.PacketCount);
 
@@ -392,10 +392,10 @@ internal sealed class SessionSkipFieldTreeTests
         using HoleRandomAccessSource source = new(TestFrameSource.WithUdpFrames(frameCount), holeId);
         RecordingValueCacheListener listener = new();
         using Session session = new(stack);
-        session.TryAddFrameSource(source, out _);
-        bool added = session.TryAddValueCache(listener, _UdpPortRequest(), out ValueCacheInfo? info);
+        session.TryAddFrameSource(source, out _, out _);
+        bool added = session.TryAddValueCache(listener, _UdpPortRequest(), out ValueCacheInfo? info, out _);
         await Assert.That(added).IsTrue();
-        session.TryStart();
+        session.TryStart(out _);
         session.WaitForCompletion();
 
         WaitHelper.WaitUntil(() =>

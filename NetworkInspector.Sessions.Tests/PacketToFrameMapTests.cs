@@ -56,12 +56,12 @@ internal sealed class PacketToFrameMapTests
         using Stack stack = TestHarness.CreateStack();
         using TestFrameSource source = TestFrameSource.WithUdpFrames(3);
         using Session session = new(stack);
-        session.TryAddFrameSource(source, out _);
-        session.TryStart();
+        session.TryAddFrameSource(source, out _, out _);
+        session.TryStart(out _);
         session.WaitForCompletion();
 
-        await Assert.That(session.TryGetFrame(new PacketId(0), out Frame first)).IsTrue();
-        await Assert.That(session.TryGetFrame(new PacketId(2), out Frame last)).IsTrue();
+        await Assert.That(session.TryGetFrame(new PacketId(0), out Frame first, out _)).IsTrue();
+        await Assert.That(session.TryGetFrame(new PacketId(2), out Frame last, out _)).IsTrue();
         await Assert.That(first.IsValid).IsTrue();
         await Assert.That(last.IsValid).IsTrue();
         await Assert.That(last.Id).IsEqualTo(new FrameId(2));

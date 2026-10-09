@@ -128,11 +128,23 @@ internal sealed class FilterLexerTests
     [Arguments("0xAB_CD")]
     [Arguments("1_000")]
     [Arguments("-2")]
+    [Arguments("-1_000")]
     public async Task Tokenize_Integer_ProducesIntegerToken(string source)
     {
         List<Token> tokens = _Tokenize(source);
 
         await Assert.That(tokens[0].Kind).IsEqualTo(TokenKind.Integer);
+    }
+
+    [Test]
+    public async Task Tokenize_DecimalWithSeparators_IsOneIntegerToken()
+    {
+        List<Token> tokens = _Tokenize("1_000");
+
+        await Assert.That(tokens.Count).IsEqualTo(2);
+        await Assert.That(tokens[0].Kind).IsEqualTo(TokenKind.Integer);
+        await Assert.That(tokens[0].Text).IsEqualTo("1_000");
+        await Assert.That(tokens[1].Kind).IsEqualTo(TokenKind.Eof);
     }
 
     [Test]

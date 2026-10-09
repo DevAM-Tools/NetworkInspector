@@ -38,6 +38,8 @@ namespace NetworkInspector.Sessions.Listeners;
 [Flags]
 public enum NotifyFlags : int
 {
+    #region Values
+
     /// <summary>No notifications pending.</summary>
     None = 0,
 
@@ -87,4 +89,6 @@ public enum NotifyFlags : int
     /// beginning.
     /// </summary>
     StackChanged = 1 << 9,
+
+    #endregion
 }

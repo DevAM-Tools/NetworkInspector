@@ -10,6 +10,8 @@ namespace NetworkInspector.Sessions.Ids;
 [method: MethodImpl(MethodImplOptions.AggressiveInlining)]
 public readonly struct JobId(int value) : IEquatable<JobId>, IComparable<JobId>
 {
+    #region Fields
+
     /// <summary>Sentinel value representing an invalid or unassigned job ID.</summary>
     public static readonly JobId Invalid = new(-1);
 
@@ -22,6 +24,10 @@ public readonly struct JobId(int value) : IEquatable<JobId>, IComparable<JobId>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         get => Core.Ids.ArrayIndexIdRange.IsValidIndex(Value);
     }
+
+    #endregion
+
+    #region API
 
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -76,4 +82,6 @@ public readonly struct JobId(int value) : IEquatable<JobId>, IComparable<JobId>
 
         return value;
     }
+
+    #endregion
 }

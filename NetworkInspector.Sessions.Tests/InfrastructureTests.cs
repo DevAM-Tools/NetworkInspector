@@ -32,9 +32,19 @@ internal sealed class InfrastructureTests
     [Test]
     public async Task ThreadWaitHelper_WaitUntil_BlocksUntilConditionMet()
     {
+        using ManualResetEventSlim entered = new(false);
         int counter = 0;
-        Task waiter = Task.Run(() => ThreadWaitHelper.WaitUntil(() => Interlocked.CompareExchange(ref counter, 0, 0) >= 2));
-        Thread.Sleep(20);
+        Task waiter = Task.Run(() => ThreadWaitHelper.WaitUntil(() =>
+        {
+            if (Volatile.Read(ref counter) >= 2)
+            {
+                return true;
+            }
+
+            entered.Set();
+            return false;
+        }));
+        entered.Wait();
         Interlocked.Increment(ref counter);
         Interlocked.Increment(ref counter);
         await waiter.WaitAsync(TimeSpan.FromSeconds(5));

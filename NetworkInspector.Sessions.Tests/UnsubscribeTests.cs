@@ -19,9 +19,9 @@ internal sealed class UnsubscribeTests
         TestSessionListener listener = new();
 
         using Session session = new(stack);
-        session.TryAddFrameSource(source, out FrameSourceInfo? sourceInfo);
-        session.TryAddListener(listener, out _);
-        session.TryStart();
+        session.TryAddFrameSource(source, out FrameSourceInfo? sourceInfo, out _);
+        session.TryAddListener(listener, out _, out _);
+        session.TryStart(out _);
 
         // Wait for initial frames to be consumed.
         WaitHelper.WaitUntil(() => session.PacketCount >= initialFrames);
@@ -29,7 +29,7 @@ internal sealed class UnsubscribeTests
         // Unsubscribe the source — should cancel its job.
         JobInfo sourceJob = session.GetJobs().First(
             j => j.UiName == source.UiName);
-        bool result = session.TryUnsubscribe(sourceJob);
+        bool result = session.TryUnsubscribe(sourceJob, out _);
 
         await Assert.That(result).IsTrue();
 
@@ -53,14 +53,14 @@ internal sealed class UnsubscribeTests
         TestSessionListener listener = new();
 
         using Session session = new(stack);
-        session.TryAddFrameSource(source, out _);
-        session.TryAddListener(listener, out _);
-        session.TryStart();
+        session.TryAddFrameSource(source, out _, out _);
+        session.TryAddListener(listener, out _, out _);
+        session.TryStart(out _);
         session.WaitForCompletion();
 
         // Source finished normally. Now verify random access still works
         // (source is NOT disposed until Shutdown).
-        bool found = session.TryGetPacket(new PacketId(0), out Packet? packet);
+        bool found = session.TryGetPacket(new PacketId(0), out Packet? packet, out _);
 
         await Assert.That(found).IsTrue();
         await Assert.That(packet).IsNotNull();
@@ -77,16 +77,16 @@ internal sealed class UnsubscribeTests
         TestSessionListener listener = new();
 
         using Session session = new(stack);
-        session.TryAddFrameSource(source, out _);
-        session.TryAddListener(listener, out _);
-        session.TryStart();
+        session.TryAddFrameSource(source, out _, out _);
+        session.TryAddListener(listener, out _, out _);
+        session.TryStart(out _);
 
         WaitHelper.WaitUntil(() => session.PacketCount >= initialFrames);
 
         // Unsubscribe the only source.
         JobInfo sourceJob = session.GetJobs().First(
             j => j.UiName == source.UiName);
-        bool result = session.TryUnsubscribe(sourceJob);
+        bool result = session.TryUnsubscribe(sourceJob, out _);
 
         await Assert.That(result).IsTrue();
 
@@ -108,8 +108,8 @@ internal sealed class UnsubscribeTests
         using BlockingTestFrameSource source = new(initialFrames);
 
         using Session session = new(stack);
-        session.TryAddFrameSource(source, out FrameSourceInfo? sourceInfo);
-        session.TryStart();
+        session.TryAddFrameSource(source, out FrameSourceInfo? sourceInfo, out _);
+        session.TryStart(out _);
 
         WaitHelper.WaitUntil(() => session.PacketCount >= initialFrames);
 
@@ -137,16 +137,16 @@ internal sealed class UnsubscribeTests
         TestSessionListener listener = new();
 
         using Session session = new(stack);
-        session.TryAddFrameSource(source, out _);
-        session.TryAddListener(listener, out ListenerInfo? listenerInfo);
-        session.TryStart();
+        session.TryAddFrameSource(source, out _, out _);
+        session.TryAddListener(listener, out ListenerInfo? listenerInfo, out _);
+        session.TryStart(out _);
 
         WaitHelper.WaitUntil(() => session.PacketCount >= frameCount);
 
         // Find the listener's job.
         JobInfo listenerJob = session.GetJobs().First(
             j => j.UiName == listener.UiName);
-        bool result = session.TryUnsubscribe(listenerJob);
+        bool result = session.TryUnsubscribe(listenerJob, out _);
 
         await Assert.That(result).IsTrue();
 
@@ -172,9 +172,9 @@ internal sealed class UnsubscribeTests
         TestSessionListener listener = new();
 
         using Session session = new(stack);
-        session.TryAddFrameSource(source, out _);
-        session.TryAddListener(listener, out ListenerInfo? listenerInfo);
-        session.TryStart();
+        session.TryAddFrameSource(source, out _, out _);
+        session.TryAddListener(listener, out ListenerInfo? listenerInfo, out _);
+        session.TryStart(out _);
 
         WaitHelper.WaitUntil(() => session.PacketCount >= frameCount);
 
@@ -197,9 +197,9 @@ internal sealed class UnsubscribeTests
         TestSessionListener listener = new();
 
         using Session session = new(stack);
-        session.TryAddFrameSource(source, out _);
-        session.TryAddListener(listener, out ListenerInfo? listenerInfo);
-        session.TryStart();
+        session.TryAddFrameSource(source, out _, out _);
+        session.TryAddListener(listener, out ListenerInfo? listenerInfo, out _);
+        session.TryStart(out _);
         session.WaitForCompletion();
         session.Shutdown();
 
@@ -216,8 +216,8 @@ internal sealed class UnsubscribeTests
         using BlockingTestFrameSource source = new(10);
 
         using Session session = new(stack);
-        session.TryAddFrameSource(source, out _);
-        session.TryStart();
+        session.TryAddFrameSource(source, out _, out _);
+        session.TryStart(out _);
 
         WaitHelper.WaitUntil(() => session.Phase == SessionPhase.Running);
 
@@ -230,7 +230,7 @@ internal sealed class UnsubscribeTests
                 gate.Wait(ct);
             }
             catch (OperationCanceledException) { /* expected */ }
-        }, out JobInfo? jobInfo);
+        }, out JobInfo? jobInfo, out _);
 
         await Assert.That(added).IsTrue();
         await Assert.That(jobInfo).IsNotNull();
@@ -239,7 +239,7 @@ internal sealed class UnsubscribeTests
         WaitHelper.WaitUntil(() => jobInfo!.Status == JobStatus.Running);
 
         // Unsubscribe the user job.
-        bool result = session.TryUnsubscribe(jobInfo!);
+        bool result = session.TryUnsubscribe(jobInfo!, out _);
 
         await Assert.That(result).IsTrue();
 
@@ -259,8 +259,8 @@ internal sealed class UnsubscribeTests
         using TestFrameSource source = TestFrameSource.WithUdpFrames(5);
 
         using Session session = new(stack);
-        session.TryAddFrameSource(source, out _);
-        session.TryStart();
+        session.TryAddFrameSource(source, out _, out _);
+        session.TryStart(out _);
         session.WaitForCompletion();
 
         // Source job is already completed.
@@ -269,7 +269,7 @@ internal sealed class UnsubscribeTests
         WaitHelper.WaitUntil(
             () => sourceJob.Status is JobStatus.Completed or JobStatus.Cancelled);
 
-        bool result = session.TryUnsubscribe(sourceJob);
+        bool result = session.TryUnsubscribe(sourceJob, out _);
 
         await Assert.That(result).IsFalse();
 
@@ -283,8 +283,8 @@ internal sealed class UnsubscribeTests
         using BlockingTestFrameSource source = new(10);
 
         using Session session = new(stack);
-        session.TryAddFrameSource(source, out _);
-        session.TryStart();
+        session.TryAddFrameSource(source, out _, out _);
+        session.TryStart(out _);
 
         WaitHelper.WaitUntil(() => session.Phase == SessionPhase.Running);
 
@@ -298,7 +298,7 @@ internal sealed class UnsubscribeTests
         foreignJob.Start();
         JobInfo foreignInfo = new(foreignJob);
 
-        bool result = session.TryUnsubscribe(foreignInfo);
+        bool result = session.TryUnsubscribe(foreignInfo, out _);
 
         await Assert.That(result).IsFalse();
         await Assert.That(foreignJob.Status).IsEqualTo(JobStatus.Running);
@@ -311,20 +311,21 @@ internal sealed class UnsubscribeTests
     }
 
     [Test]
-    public async Task TryUnsubscribe_IdlePhase_ReturnsFalse()
+    public async Task TryUnsubscribeIdleSourceRemovesSource()
     {
         using Stack stack = TestHarness.CreateStack();
         using TestFrameSource source = TestFrameSource.WithUdpFrames(5);
 
         using Session session = new(stack);
-        session.TryAddFrameSource(source, out _);
+        session.TryAddFrameSource(source, out FrameSourceInfo? info, out _);
+        await Assert.That(session.Phase).IsEqualTo(SessionPhase.Idle);
 
-        // Session is Idle — TryUnsubscribe should return false.
-        JobInfo sourceJob = session.GetJobs().First(
-            j => j.UiName == source.UiName);
+        info!.Stop();
 
-        bool result = session.TryUnsubscribe(sourceJob);
-
-        await Assert.That(result).IsFalse();
+        await Assert.That(session.GetFrameSources().Count).IsEqualTo(0);
+        await Assert.That(info.IsStoppable).IsFalse();
+        session.TryStart(out _);
+        await Assert.That(session.PacketCount).IsEqualTo(0);
+        session.Shutdown();
     }
 }

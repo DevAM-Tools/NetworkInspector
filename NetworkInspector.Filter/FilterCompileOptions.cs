@@ -79,6 +79,17 @@ public sealed class FilterCompileOptions
     }
 
     /// <summary>
+    /// Whether <see cref="Filter.TryIsMatch"/> stores each packet verdict in the match cache.
+    /// Defaults to <see langword="true"/> (needed for Sessions re-query and stateful re-reads).
+    /// Set <see langword="false"/> for forward-only convert/export so the cache does not grow
+    /// with every evaluated packet id.
+    /// </summary>
+    public bool EnableMatchCache
+    {
+        get; init;
+    } = true;
+
+    /// <summary>
     /// Optional code-generation backend. Leaving this unset uses
     /// <see cref="ExpressionTreeCodegen"/>. The property is internal because
     /// <see cref="IFilterCodegen"/> is an implementation seam rather than public API.

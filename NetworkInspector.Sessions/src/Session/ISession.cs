@@ -15,6 +15,8 @@ namespace NetworkInspector.Sessions;
 /// </summary>
 public interface ISession : ISessionReader, IDisposable
 {
+    #region API
+
     // ── Source management ─────────────────────────────────────────────────────
 
     /// <summary>
@@ -28,7 +30,7 @@ public interface ISession : ISessionReader, IDisposable
     /// <exception cref="SessionException">
     /// <see cref="SessionErrorCode.JobIdExhausted"/> when the job ID limit is reached.
     /// </exception>
-    bool TryAddFrameSource(IFrameSource source, [NotNullWhen(true)] out FrameSourceInfo? info);
+    bool TryAddFrameSource(IFrameSource source, [NotNullWhen(true)] out FrameSourceInfo? info, [NotNullWhen(false)] out SessionFailure? failure);
 
     /// <summary>
     /// Registers a frame source with per-source cache options.
@@ -40,7 +42,8 @@ public interface ISession : ISessionReader, IDisposable
     bool TryAddFrameSource(
         IFrameSource source,
         FrameSourceAddOptions addOptions,
-        [NotNullWhen(true)] out FrameSourceInfo? info);
+        [NotNullWhen(true)] out FrameSourceInfo? info,
+        [NotNullWhen(false)] out SessionFailure? failure);
 
     // ── Listener management ───────────────────────────────────────────────────
 
@@ -54,7 +57,7 @@ public interface ISession : ISessionReader, IDisposable
     /// <see cref="SessionErrorCode.ListenerUiNameEmpty"/> when <see cref="ISessionListener.UiName"/> is null or whitespace.
     /// <see cref="SessionErrorCode.ListenerIdExhausted"/> when the listener ID limit is reached.
     /// </exception>
-    bool TryAddListener(ISessionListener listener, [NotNullWhen(true)] out ListenerInfo? info);
+    bool TryAddListener(ISessionListener listener, [NotNullWhen(true)] out ListenerInfo? info, [NotNullWhen(false)] out SessionFailure? failure);
 
     /// <summary>
     /// Registers a session listener together with the filter it pulls matching packets with.
@@ -83,7 +86,11 @@ public interface ISession : ISessionReader, IDisposable
     /// <see cref="SessionErrorCode.ListenerUiNameEmpty"/> when <see cref="ISessionListener.UiName"/> is null or whitespace.
     /// <see cref="SessionErrorCode.ListenerIdExhausted"/> when the listener ID limit is reached.
     /// </exception>
-    bool TryAddListener(ISessionListener listener, IFilter? filter, [NotNullWhen(true)] out ListenerInfo? info);
+    bool TryAddListener(
+        ISessionListener listener,
+        IFilter? filter,
+        [NotNullWhen(true)] out ListenerInfo? info,
+        [NotNullWhen(false)] out SessionFailure? failure);
 
     /// <summary>
     /// Registers a session listener and compiles <paramref name="filterExpression"/> against the
@@ -110,13 +117,14 @@ public interface ISession : ISessionReader, IDisposable
         ISessionListener listener,
         string? filterExpression,
         [NotNullWhen(true)] out ListenerInfo? info,
-        out FilterError? filterFailure);
+        out FilterError? filterFailure,
+        out SessionFailure? failure);
 
     // ── Value-cache management ───────────────────────────────────────────────
 
     /// <summary>
     /// Registers a dedicated value cache filled from packet id 0 by a pull slot,
-    /// analog to <see cref="TryAddListener(ISessionListener, out ListenerInfo?)"/>.
+    /// analog to <see cref="TryAddListener(ISessionListener, out ListenerInfo?, out SessionFailure?)"/>.
     /// Always constructs a new cache; existing caches are never reused as a cover.
     /// </summary>
     /// <returns>
@@ -129,7 +137,11 @@ public interface ISession : ISessionReader, IDisposable
     /// <see cref="SessionErrorCode.ValueCacheInvalidFieldName"/> when a field or group name is not a valid identifier.
     /// <see cref="SessionErrorCode.ValueCacheUnknownField"/> when a well-formed field or group name is not on the current stack.
     /// </exception>
-    bool TryAddValueCache(IValueCacheListener listener, ValueCacheRequest request, [NotNullWhen(true)] out ValueCacheInfo? info);
+    bool TryAddValueCache(
+        IValueCacheListener listener,
+        ValueCacheRequest request,
+        [NotNullWhen(true)] out ValueCacheInfo? info,
+        [NotNullWhen(false)] out SessionFailure? failure);
 
     // ── Job management ────────────────────────────────────────────────────────
 
@@ -143,7 +155,7 @@ public interface ISession : ISessionReader, IDisposable
     /// <see cref="SessionErrorCode.JobIdExhausted"/> when the job ID limit is reached.
     /// </exception>
     bool TryAddJob(string uiName, string description, Action<CancellationToken> work,
-        [NotNullWhen(true)] out JobInfo? info);
+        [NotNullWhen(true)] out JobInfo? info, [NotNullWhen(false)] out SessionFailure? failure);
 
     /// <summary>
     /// Removes a completed, cancelled, or failed job from the job list.
@@ -153,7 +165,7 @@ public interface ISession : ISessionReader, IDisposable
     /// <exception cref="SessionException">
     /// <see cref="SessionErrorCode.JobStillRunning"/> when the job is still pending or running.
     /// </exception>
-    bool TryRemoveJob(JobInfo job);
+    bool TryRemoveJob(JobInfo job, [NotNullWhen(false)] out SessionFailure? failure);
 
     /// <summary>
     /// Attempts to unsubscribe (stop) a job. The behaviour depends on the job type:
@@ -180,7 +192,7 @@ public interface ISession : ISessionReader, IDisposable
     /// <para>Thread-safe. Multiple concurrent calls for different jobs are safe.
     /// Calling for the same job concurrently is safe (one succeeds, others return false).</para>
     /// </summary>
-    bool TryUnsubscribe(JobInfo job);
+    bool TryUnsubscribe(JobInfo job, [NotNullWhen(false)] out SessionFailure? failure);
 
     // ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -197,12 +209,13 @@ public interface ISession : ISessionReader, IDisposable
     /// <see cref="SessionPhase.Running"/>, <see langword="false"/> if the session
     /// was not in the <see cref="SessionPhase.Idle"/> phase.
     /// </summary>
-    bool TryStart();
+    bool TryStart([NotNullWhen(false)] out SessionFailure? failure);
 
     /// <summary>
     /// Waits for all source jobs to finish. Blocks the calling thread.
     /// Returns <see langword="true"/> if all source jobs completed,
     /// <see langword="false"/> if the <paramref name="timeout"/> elapsed first.
+    /// The timeout is one budget for the whole source set, not a fresh timeout per source.
     /// Pass <see langword="null"/> to wait indefinitely (default).
     /// </summary>
     bool WaitForCompletion(TimeSpan? timeout = null);
@@ -230,7 +243,7 @@ public interface ISession : ISessionReader, IDisposable
     /// throws <see cref="SessionException"/> with
     /// <see cref="SessionErrorCode.FrameUnavailable"/> (fail closed; PacketIds are not compressed).
     /// After that throw, pull queries stay disabled so
-    /// <see cref="ISessionReader.TryGetPacket(PacketId, out Packet?)"/>
+    /// <see cref="ISessionReader.TryGetPacket(PacketId, out Packet?, out SessionFailure?)"/>
     /// cannot read a partial rewrite; <see cref="ISessionReader.PacketCount"/> may be less than
     /// the pre-restart count. Call <see cref="Shutdown"/> to tear down.
     /// </para>
@@ -248,6 +261,8 @@ public interface ISession : ISessionReader, IDisposable
     /// The factory receives the session's internal <see cref="FrameInterfaceRegistry"/>
     /// so the new stack can be built with the same registry. This keeps source and
     /// interface IDs stable without exposing the registry publicly.
+    /// The factory must not call <see cref="Shutdown"/>, <see cref="Restart"/>,
+    /// <see cref="IDisposable.Dispose"/>, or <see cref="TryStart"/>.
     /// </para>
     ///
     /// <example>
@@ -293,8 +308,8 @@ public interface ISession : ISessionReader, IDisposable
     ///
     /// <para>
     /// If <paramref name="timeout"/> is <see langword="null"/>, waits indefinitely for
-    /// graceful completion. If a <see cref="TimeSpan"/> is provided, source jobs are
-    /// given that long to finish before shutdown teardown continues; jobs that are still
+    /// graceful completion. If a <see cref="TimeSpan"/> is provided, that duration is one
+    /// budget for every source job together before shutdown teardown continues; jobs that are still
     /// running remain cancelled but may not have exited yet — inspect job status via
     /// <see cref="ISessionReader.GetJobs"/>. <c>Shutdown(TimeSpan.Zero)</c> skips waiting
     /// for source completion.
@@ -315,4 +330,6 @@ public interface ISession : ISessionReader, IDisposable
     /// Thrown when one or more disposal operations failed during cleanup.
     /// </exception>
     void Shutdown(TimeSpan? timeout = null);
+
+    #endregion
 }

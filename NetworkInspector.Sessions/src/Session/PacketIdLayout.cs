@@ -12,6 +12,8 @@ namespace NetworkInspector.Sessions;
 /// </remarks>
 public enum PacketIdLayout : byte
 {
+    #region Values
+
     /// <summary>
     /// Ids are consecutive integers: <c>destination[i].Id == startId + i</c>. Individual packets may
     /// still be <see langword="null"/> when the frame for that id cannot be re-read.
@@ -23,4 +25,6 @@ public enum PacketIdLayout : byte
     /// scanned range. Read each <see cref="PacketRef.Id"/> instead of deriving it from the index.
     /// </summary>
     Gapped = 1,
+
+    #endregion
 }

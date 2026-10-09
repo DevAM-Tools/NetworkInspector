@@ -10,6 +10,8 @@ namespace NetworkInspector.Sessions;
 /// </summary>
 public sealed class ValueCacheRequest
 {
+    #region Properties
+
     /// <summary>
     /// When true, every field that actually appears gets a payload series. Unused stack fields stay
     /// absent. Explicit <see cref="Fields"/> still add custom-text / custom-representation series
@@ -48,4 +50,6 @@ public sealed class ValueCacheRequest
     /// Log₂ of rows per inner column chunk. Default 12 (4096). Allowed range 4…20.
     /// </summary>
     public int ChunkShift { get; init; } = 12;
+
+    #endregion
 }

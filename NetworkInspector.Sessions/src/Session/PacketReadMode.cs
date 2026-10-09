@@ -7,6 +7,8 @@ namespace NetworkInspector.Sessions;
 /// </summary>
 public enum PacketReadMode : byte
 {
+    #region Values
+
     /// <summary>
     /// Every packet id starting at the requested id, whether or not it matches the listener's
     /// filter. Ids are always consecutive; a slot may still carry a <see langword="null"/> packet
@@ -20,4 +22,6 @@ public enum PacketReadMode : byte
     /// as <see cref="All"/> and performs no per-packet work.
     /// </summary>
     Matching = 1,
+
+    #endregion
 }

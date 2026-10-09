@@ -8,10 +8,11 @@ namespace NetworkInspector.Filter;
 /// <remarks>
 /// <para>
 /// This is not a <see cref="Filter"/>. Resetting or matching one does not change the other.
-/// <see cref="IsMatch"/> is the boolean tree. It is false when a regular-expression failure is stored
-/// or when <see cref="HasFlank"/> is true. Read <see cref="TryReadMatch"/> for flank and for that failure,
-/// before the next parse: the next <see cref="BeginPacket"/> clears the bits and the failure, and keeps
-/// the flank sample. <see cref="ResetState"/> also clears the flank sample.
+/// <see cref="IsMatch"/> is the boolean tree for non-flank observers. When <see cref="HasFlank"/> is
+/// true, reading <see cref="IsMatch"/> throws — call <see cref="TryReadMatch"/> instead. Read
+/// <see cref="TryReadMatch"/> also for a stored regex failure, before the next parse: the next
+/// <see cref="BeginPacket"/> clears the bits and the failure, and keeps the flank sample.
+/// <see cref="ResetState"/> also clears the flank sample.
 /// </para>
 /// <para>
 /// <see cref="AlwaysMatch"/> is immutable and safe to share. Every other instance is single-threaded.
@@ -23,19 +24,20 @@ public sealed class FilterObserver : IFieldObserver
 
     #region Fields
 
-    private readonly FieldId[] _Ids;
     private readonly int[][] _LeafIndexes;
     private readonly Leaf[] _Leaves;
     private readonly BitNode[] _Nodes;
     private readonly int _Root;
     private readonly FlankRuntime? _Flank;
     private readonly int _WhenRoot;
-    private readonly FieldId[] _FlankIds;
+    private readonly bool[] _FlankByFieldId;
+    private readonly int[] _SlotByFieldId;
 
     private FilterError? _Failure;
     private bool _SampleTaken;
     private bool _FlankCommitted;
     private bool _FlankResult;
+    private bool _IgnoreFurtherLeafTests;
     private FieldValueData _Sample;
     private PacketId _PacketId;
     private Timestamp _Timestamp;
@@ -49,11 +51,11 @@ public sealed class FilterObserver : IFieldObserver
         Expression = string.Empty;
         IsAlwaysMatch = true;
         Watch = FieldWatch.None;
-        _Ids = [];
         _LeafIndexes = [];
         _Leaves = [];
         _Nodes = [];
-        _FlankIds = [];
+        _FlankByFieldId = [];
+        _SlotByFieldId = [];
         _WhenRoot = -1;
     }
 
@@ -61,26 +63,26 @@ public sealed class FilterObserver : IFieldObserver
         string expression,
         IStack stack,
         FieldWatch watch,
-        FieldId[] ids,
         int[][] leafIndexes,
         Leaf[] leaves,
         BitNode[] nodes,
         int root,
         FlankRuntime? flank,
         int whenRoot,
-        FieldId[] flankIds)
+        bool[] flankByFieldId,
+        int[] slotByFieldId)
     {
         Expression = expression;
         Stack = stack;
         Watch = watch;
-        _Ids = ids;
         _LeafIndexes = leafIndexes;
         _Leaves = leaves;
         _Nodes = nodes;
         _Root = root;
         _Flank = flank;
         _WhenRoot = whenRoot;
-        _FlankIds = flankIds;
+        _FlankByFieldId = flankByFieldId;
+        _SlotByFieldId = slotByFieldId;
         HasFlank = flank is not null;
     }
 
@@ -103,13 +105,26 @@ public sealed class FilterObserver : IFieldObserver
     /// <summary>Fields the parse must deliver. <see cref="FieldWatch.None"/> for <see cref="AlwaysMatch"/>.</summary>
     public FieldWatch Watch { get; }
 
-    /// <summary>Whether the verdict is a flank transition. <see cref="IsMatch"/> is then false.</summary>
+    /// <summary>Whether the verdict is a flank transition. Use <see cref="TryReadMatch"/>, not <see cref="IsMatch"/>.</summary>
     public bool HasFlank { get; }
 
     /// <summary>
-    /// Boolean tree after the parse. False when a regex failure is stored or when <see cref="HasFlank"/> is true.
+    /// Boolean tree after the parse. Not defined for flank observers — call <see cref="TryReadMatch"/>.
     /// </summary>
-    public bool IsMatch => _Failure is null && !HasFlank && (IsAlwaysMatch || _Eval(_Root));
+    /// <exception cref="InvalidOperationException">When <see cref="HasFlank"/> is true.</exception>
+    public bool IsMatch
+    {
+        get
+        {
+            if (HasFlank)
+            {
+                throw new InvalidOperationException(
+                    "FilterObserver.IsMatch is not defined for flank filters. Call TryReadMatch.");
+            }
+
+            return _Failure is null && (IsAlwaysMatch || _Eval(_Root));
+        }
+    }
 
     #endregion
 
@@ -151,7 +166,13 @@ public sealed class FilterObserver : IFieldObserver
             return;
         }
 
+        // Flank samples must still be captured even when the boolean tree is already decided.
         _CaptureFlank(visit.FieldId, visit.Value.Data);
+
+        if (_IgnoreFurtherLeafTests)
+        {
+            return;
+        }
 
         int slot = _Slot(visit.FieldId);
         if (slot < 0)
@@ -161,6 +182,7 @@ public sealed class FilterObserver : IFieldObserver
 
         int[] indexes = _LeafIndexes[slot];
         FieldValueData data = visit.Value.Data;
+        bool anyNewHit = false;
         for (int i = 0; i < indexes.Length; i++)
         {
             ref Leaf leaf = ref _Leaves[indexes[i]];
@@ -172,12 +194,21 @@ public sealed class FilterObserver : IFieldObserver
             if (_Test(ref leaf, data))
             {
                 leaf.Hit = true;
+                anyNewHit = true;
             }
 
             if (_Failure is not null)
             {
                 return;
             }
+        }
+
+        // Hits only go false→true in a frame. Once the root is permanently decided, further
+        // leaf tests cannot change the boolean verdict. Flank observers keep testing: the
+        // when-gate shares the leaf table and must still latch before commit.
+        if (anyNewHit && !HasFlank && _IsPermanentlyDecided(_Root))
+        {
+            _IgnoreFurtherLeafTests = true;
         }
     }
 
@@ -224,6 +255,7 @@ public sealed class FilterObserver : IFieldObserver
         _Failure = null;
         _SampleTaken = false;
         _FlankCommitted = false;
+        _IgnoreFurtherLeafTests = false;
         _Sample = default;
         for (int i = 0; i < _Leaves.Length; i++)
         {
@@ -239,17 +271,7 @@ public sealed class FilterObserver : IFieldObserver
         }
 
         int raw = fieldId.Value;
-        bool mine = false;
-        for (int i = 0; i < _FlankIds.Length; i++)
-        {
-            if (_FlankIds[i].Value == raw)
-            {
-                mine = true;
-                break;
-            }
-        }
-
-        if (!mine)
+        if ((uint)raw >= (uint)_FlankByFieldId.Length || !_FlankByFieldId[raw])
         {
             return;
         }
@@ -327,18 +349,13 @@ public sealed class FilterObserver : IFieldObserver
         }
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private int _Slot(FieldId fieldId)
     {
         int raw = fieldId.Value;
-        for (int i = 0; i < _Ids.Length; i++)
-        {
-            if (_Ids[i].Value == raw)
-            {
-                return i;
-            }
-        }
-
-        return -1;
+        return (uint)raw < (uint)_SlotByFieldId.Length
+            ? _SlotByFieldId[raw]
+            : -1;
     }
 
     private bool _Eval(int index)
@@ -351,6 +368,43 @@ public sealed class FilterObserver : IFieldObserver
             BitOp.And => _Eval(node.Left) && _Eval(node.Right),
             BitOp.Or => _Eval(node.Left) || _Eval(node.Right),
             _ => node.LeafIndex != 0,
+        };
+    }
+
+    /// <summary>
+    /// Whether further leaf hits cannot change the root verdict.
+    /// Hits only rise during a frame, so a permanently true OR/AND root stays true, and a
+    /// permanently false AND (for example via <c>!hit</c>) stays false.
+    /// </summary>
+    private bool _IsPermanentlyDecided(int index) =>
+        _IsPermanentlyTrue(index) || _IsPermanentlyFalse(index);
+
+    private bool _IsPermanentlyTrue(int index)
+    {
+        ref BitNode node = ref _Nodes[index];
+        return node.Op switch
+        {
+            BitOp.Leaf => _Leaves[node.LeafIndex].Hit,
+            BitOp.Not => _IsPermanentlyFalse(node.Left),
+            BitOp.And => _IsPermanentlyTrue(node.Left) && _IsPermanentlyTrue(node.Right),
+            BitOp.Or => _IsPermanentlyTrue(node.Left) || _IsPermanentlyTrue(node.Right),
+            BitOp.Const => node.LeafIndex != 0,
+            _ => false,
+        };
+    }
+
+    private bool _IsPermanentlyFalse(int index)
+    {
+        ref BitNode node = ref _Nodes[index];
+        return node.Op switch
+        {
+            // A miss is not permanent — a later occurrence can still hit.
+            BitOp.Leaf => false,
+            BitOp.Not => _IsPermanentlyTrue(node.Left),
+            BitOp.And => _IsPermanentlyFalse(node.Left) || _IsPermanentlyFalse(node.Right),
+            BitOp.Or => _IsPermanentlyFalse(node.Left) && _IsPermanentlyFalse(node.Right),
+            BitOp.Const => node.LeafIndex == 0,
+            _ => false,
         };
     }
 
@@ -422,10 +476,13 @@ internal enum BitOp : byte
     /// <summary>Negation.</summary>
     Not = 1,
 
-    /// <summary>Conjunction. Evaluated after the parse, so it does not stop dissection.</summary>
+    /// <summary>
+    /// Conjunction. Evaluated after the parse for the final verdict; during the parse the
+    /// observer may stop further leaf tests once the root is permanently decided.
+    /// </summary>
     And = 2,
 
-    /// <summary>Disjunction. Evaluated after the parse.</summary>
+    /// <summary>Disjunction. Evaluated after the parse; permanent true can stop further leaf tests.</summary>
     Or = 3,
 
     /// <summary>A constant. <see cref="BitNode.LeafIndex"/> is 1 for true.</summary>

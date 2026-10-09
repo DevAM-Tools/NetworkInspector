@@ -13,7 +13,7 @@ namespace NetworkInspector.Filter.Jit;
 /// </para>
 /// <para>
 /// Implementations perform name binding and therefore report
-/// <see cref="FilterErrorKind.UnknownField"/>, <see cref="FilterErrorKind.UnknownProtocol"/> and
+/// <see cref="FilterErrorKind.UnknownField"/> and
 /// <see cref="FilterErrorKind.TypeMismatch"/>.
 /// </para>
 /// </summary>

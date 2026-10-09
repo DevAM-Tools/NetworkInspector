@@ -8,6 +8,8 @@ namespace NetworkInspector.Sessions;
 /// </summary>
 internal sealed class SessionState
 {
+    #region Fields
+
     // Written after the last ID (ArrayIndexIdRange.MaxValue) is handed out; any negative value means exhausted.
     private const int _IdsExhaustedSentinel = int.MinValue;
 
@@ -18,6 +20,10 @@ internal sealed class SessionState
     private volatile int _NextListenerId;
     private volatile int _NextJobId;
     private volatile int _NextValueCacheId;
+
+    #endregion
+
+    #region API
 
     /// <summary>Current session phase. Volatile read — always up to date.</summary>
     internal SessionPhase Phase => (SessionPhase)_Phase;
@@ -128,4 +134,6 @@ internal sealed class SessionState
             }
         }
     }
+
+    #endregion
 }

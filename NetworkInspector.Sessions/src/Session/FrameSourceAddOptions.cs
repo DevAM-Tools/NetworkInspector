@@ -3,7 +3,7 @@
 namespace NetworkInspector.Sessions;
 
 /// <summary>
-/// Per-source options for <see cref="ISession.TryAddFrameSource(IFrameSource, FrameSourceAddOptions, out FrameSourceInfo)"/>.
+/// Per-source options for <see cref="ISession.TryAddFrameSource(IFrameSource, FrameSourceAddOptions, out FrameSourceInfo?, out SessionFailure?)"/>.
 /// </summary>
 /// <remarks>
 /// Immutable value type. Thread-safety is not applicable.

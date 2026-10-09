@@ -15,8 +15,8 @@ internal sealed class ExitPointCoverageTests
         using TestFrameSource source = TestFrameSource.WithUdpFrames(3);
 
         using Session session = new(stack);
-        session.TryAddFrameSource(source, out _);
-        session.TryStart();
+        session.TryAddFrameSource(source, out _, out _);
+        session.TryStart(out _);
         session.WaitForCompletion();
 
         Stack wrongStack = TestHarness.CreateStack();
@@ -31,7 +31,7 @@ internal sealed class ExitPointCoverageTests
             InvalidOperationException? caught = null;
             try
             {
-                session.TryGetPacket(new PacketId(0), out Packet? _);
+                session.TryGetPacket(new PacketId(0), out Packet? _, out _);
             }
             catch (InvalidOperationException exception)
             {
@@ -55,7 +55,7 @@ internal sealed class ExitPointCoverageTests
         using TestFrameSource source = TestFrameSource.WithUdpFrames(1);
 
         using Session session = new(stack);
-        session.TryAddFrameSource(source, out _);
+        session.TryAddFrameSource(source, out _, out _);
 
         int maxPacketId = Array.MaxLength - 1;
         FieldInfo nextPacketIdField = typeof(Session).GetField(
@@ -63,7 +63,7 @@ internal sealed class ExitPointCoverageTests
             BindingFlags.Instance | BindingFlags.NonPublic)!;
         nextPacketIdField.SetValue(session, maxPacketId + 1);
 
-        session.TryStart();
+        session.TryStart(out _);
 
         JobInfo sourceJob = session.GetJobs().First(j => j.UiName == source.UiName);
         WaitHelper.WaitUntil(() => sourceJob.Status == JobStatus.Failed);
@@ -83,8 +83,8 @@ internal sealed class ExitPointCoverageTests
         using BlockingTestFrameSource source = new(3);
 
         using Session session = new(stack);
-        session.TryAddFrameSource(source, out _);
-        session.TryStart();
+        session.TryAddFrameSource(source, out _, out _);
+        session.TryStart(out _);
 
         WaitHelper.WaitUntil(() => session.Phase == SessionPhase.Running);
 
@@ -116,7 +116,7 @@ internal sealed class ExitPointCoverageTests
 
         try
         {
-            session.TryAddListener(listener, out _);
+            session.TryAddListener(listener, out _, out _);
             throw new InvalidOperationException("Expected SessionException was not thrown.");
         }
         catch (SessionException ex)

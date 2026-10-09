@@ -8,6 +8,8 @@ namespace NetworkInspector.Sessions;
 /// </summary>
 public enum SessionPhase
 {
+    #region Values
+
     /// <summary>Session created, sources and listeners may be added. Not yet started.</summary>
     Idle,
 
@@ -22,4 +24,6 @@ public enum SessionPhase
 
     /// <summary>Session has fully stopped. All jobs completed or cancelled.</summary>
     Stopped,
+
+    #endregion
 }

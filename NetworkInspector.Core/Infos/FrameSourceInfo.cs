@@ -17,8 +17,8 @@ public sealed class FrameSourceInfo(FrameSourceId id, IFrameSource? source)
 {
     #region Fields
     // Callback set by the session to implement the Stop convenience API.
-    // Invoked at most once via Interlocked.Exchange in Stop().
-    private volatile Action? _StopCallback;
+    // Cleared only when the callback returns true, so a refused stop can be retried.
+    private volatile Func<bool>? _StopCallback;
 
     #endregion
 
@@ -30,7 +30,7 @@ public sealed class FrameSourceInfo(FrameSourceId id, IFrameSource? source)
     /// </summary>
     /// <param name="callback">The stop callback to register.</param>
     /// <exception cref="InvalidOperationException">A stop callback is already registered.</exception>
-    public void RegisterStopCallback(Action callback)
+    public void RegisterStopCallback(Func<bool> callback)
     {
         ArgumentNullException.ThrowIfNull(callback);
         if (Interlocked.CompareExchange(ref _StopCallback, callback, null) is not null)
@@ -38,6 +38,13 @@ public sealed class FrameSourceInfo(FrameSourceId id, IFrameSource? source)
             throw new InvalidOperationException("A stop callback is already registered.");
         }
     }
+
+    /// <summary>
+    /// Drops the stop callback without invoking it.
+    /// Used by the session when a source is removed or unsubscribed so
+    /// <see cref="IsStoppable"/> becomes false without calling <see cref="Stop"/>.
+    /// </summary>
+    public void ClearStopCallback() => Interlocked.Exchange(ref _StopCallback, null);
 
     #endregion
 
@@ -86,9 +93,25 @@ public sealed class FrameSourceInfo(FrameSourceId id, IFrameSource? source)
     ///
     /// <para>
     /// Equivalent to calling <c>ISession.TryUnsubscribe</c> with this source's job.
+    /// The callback is cleared only when it returns <see langword="true"/>.
+    /// A false return leaves <see cref="IsStoppable"/> true so the caller can retry.
     /// </para>
     /// </summary>
-    public void Stop() => Interlocked.Exchange(ref _StopCallback, null)?.Invoke();
+    public void Stop()
+    {
+        Func<bool>? callback = _StopCallback;
+        if (callback is null)
+        {
+            return;
+        }
+
+        if (!callback())
+        {
+            return;
+        }
+
+        Interlocked.CompareExchange(ref _StopCallback, null, callback);
+    }
 
     #endregion
 }

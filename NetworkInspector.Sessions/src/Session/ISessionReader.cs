@@ -13,6 +13,8 @@ namespace NetworkInspector.Sessions;
 /// </summary>
 public interface ISessionReader
 {
+    #region API
+
     // ── Counters ─────────────────────────────────────────────────────────────
 
     /// <summary>Total packets parsed so far. Volatile read.</summary>
@@ -42,6 +44,15 @@ public interface ISessionReader
         get;
     }
 
+    /// <summary>
+    /// False while restart is rewriting packets, after restart fails closed, and after shutdown disables reads.
+    /// A false packet read, or a zero <c>ReadPackets</c> result, means "no row" only when this is true.
+    /// </summary>
+    bool QueriesEnabled
+    {
+        get;
+    }
+
     // ── Packet access ────────────────────────────────────────────────────────
 
     /// <summary>
@@ -50,10 +61,10 @@ public interface ISessionReader
     /// can be loaded (cached stream source or random-access source). Returns <see langword="false"/>
     /// if the id is invalid, the frame cannot be re-read, or queries are disabled.
     /// </summary>
-    bool TryGetPacket(PacketId id, [NotNullWhen(true)] out Packet? packet);
+    bool TryGetPacket(PacketId id, [NotNullWhen(true)] out Packet? packet, [NotNullWhen(false)] out SessionFailure? failure);
 
     /// <summary>
-    /// Like <see cref="TryGetPacket(PacketId, out Packet?)"/>, but reuses the caller's
+    /// Like <see cref="TryGetPacket(PacketId, out Packet?, out SessionFailure?)"/>, but reuses the caller's
     /// <paramref name="recycle"/> packet when the id has to be re-parsed, which keeps the hot path
     /// free of packet allocations. Pass <see langword="null"/> to always allocate.
     ///
@@ -72,7 +83,7 @@ public interface ISessionReader
     /// <see cref="MutField"/> reference — still reads it.
     /// </para>
     /// </summary>
-    bool TryGetPacket(PacketId id, Packet? recycle, [NotNullWhen(true)] out Packet? packet);
+    bool TryGetPacket(PacketId id, Packet? recycle, [NotNullWhen(true)] out Packet? packet, [NotNullWhen(false)] out SessionFailure? failure);
 
     /// <summary>
     /// Attempts to retrieve the captured frame for <paramref name="id"/> without parsing a packet.
@@ -81,7 +92,7 @@ public interface ISessionReader
     /// unreachable, or queries are disabled. On failure <paramref name="frame"/> is
     /// <see cref="Frame.Invalid"/>.
     /// </summary>
-    bool TryGetFrame(PacketId id, out Frame frame);
+    bool TryGetFrame(PacketId id, out Frame frame, [NotNullWhen(false)] out SessionFailure? failure);
 
     /// <summary>
     /// Reads a contiguous range of packets into <paramref name="buffer"/> by re-parsing each id.
@@ -145,12 +156,12 @@ public interface ISessionReader
     /// <param name="mode">Whether to return every packet or only matching ones.</param>
     /// <param name="count">Receives the number of slots filled.</param>
     /// <param name="idLayout">Receives whether the returned ids are consecutive.</param>
-    /// <param name="failure">Receives the filter error when the read failed.</param>
+    /// <param name="failure">Receives the filter error when the filter refuses a verdict.</param>
+    /// <param name="sessionFailure">
+    /// Receives the session error when the listener is unknown or queries are disabled.
+    /// Exactly one of <paramref name="failure"/> and <paramref name="sessionFailure"/> is non-null when the method returns false.
+    /// </param>
     /// <returns><see langword="true"/> when the read completed.</returns>
-    /// <exception cref="SessionException">
-    /// <see cref="SessionErrorCode.ListenerNotFound"/> when <paramref name="listenerId"/> does not
-    /// identify a listener currently registered with this session.
-    /// </exception>
     bool TryReadPackets(
         ListenerId listenerId,
         int startId,
@@ -158,7 +169,8 @@ public interface ISessionReader
         PacketReadMode mode,
         out int count,
         out PacketIdLayout idLayout,
-        [NotNullWhen(false)] out FilterError? failure);
+        out FilterError? failure,
+        out SessionFailure? sessionFailure);
 
     // ── Source info ──────────────────────────────────────────────────────────
 
@@ -219,4 +231,6 @@ public interface ISessionReader
     /// Ingest without a listener is included with UiName <c>ingest</c>.
     /// </summary>
     IReadOnlyList<ValueCacheInfo> GetValueCaches();
+
+    #endregion
 }

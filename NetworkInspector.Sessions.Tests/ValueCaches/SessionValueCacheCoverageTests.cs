@@ -119,6 +119,7 @@ internal sealed class SessionValueCacheCoverageTests
             _ = session.TryAddValueCache(
                 new CoverListener(),
                 new ValueCacheRequest { FieldNames = ["  "] },
+                out _,
                 out _);
             throw new InvalidOperationException("Expected SessionException was not thrown.");
         }
@@ -138,6 +139,7 @@ internal sealed class SessionValueCacheCoverageTests
             _ = session.TryAddValueCache(
                 new CoverListener(),
                 new ValueCacheRequest { GroupNames = ["no.such.group"] },
+                out _,
                 out _);
             throw new InvalidOperationException("Expected SessionException was not thrown.");
         }
@@ -157,6 +159,7 @@ internal sealed class SessionValueCacheCoverageTests
             _ = session.TryAddValueCache(
                 new CoverListener(),
                 new ValueCacheRequest { GroupNames = ["  "] },
+                out _,
                 out _);
             throw new InvalidOperationException("Expected SessionException was not thrown.");
         }
@@ -174,7 +177,7 @@ internal sealed class SessionValueCacheCoverageTests
         bool added = session.TryAddValueCache(
             new CoverListener(),
             new ValueCacheRequest { GroupNames = ["udp"] },
-            out ValueCacheInfo? info);
+            out ValueCacheInfo? info, out _);
         await Assert.That(added).IsTrue();
         await Assert.That(info).IsNotNull();
     }
@@ -191,8 +194,8 @@ internal sealed class SessionValueCacheCoverageTests
                 ValueCache = new ValueCacheRequest { FieldNames = ["udp.srcport"] },
                 IndexPackets = false,
             });
-        session.TryAddFrameSource(source, out _);
-        session.TryStart();
+        session.TryAddFrameSource(source, out _, out _);
+        session.TryStart(out _);
         session.WaitForCompletion();
         ReadOnlyValueCache? ingest = session.IngestValueCache;
         await Assert.That(ingest.HasValue).IsTrue();
@@ -208,13 +211,13 @@ internal sealed class SessionValueCacheCoverageTests
         using Session session = new(stack);
         _SetPrivateInt(_GetState(session), "_NextValueCacheId", ArrayIndexIdRange.MaxValue);
 
-        bool added = session.TryAddValueCache(new CoverListener(), new ValueCacheRequest { FieldNames = ["udp.srcport"] }, out ValueCacheInfo? info);
+        bool added = session.TryAddValueCache(new CoverListener(), new ValueCacheRequest { FieldNames = ["udp.srcport"] }, out ValueCacheInfo? info, out _);
         await Assert.That(added).IsTrue();
         await Assert.That(info!.Id.Value).IsEqualTo(ArrayIndexIdRange.MaxValue);
 
         try
         {
-            _ = session.TryAddValueCache(new CoverListener(), new ValueCacheRequest { FieldNames = ["udp.srcport"] }, out _);
+            _ = session.TryAddValueCache(new CoverListener(), new ValueCacheRequest { FieldNames = ["udp.srcport"] }, out _, out _);
             throw new InvalidOperationException("Expected SessionException was not thrown.");
         }
         catch (SessionException ex)
@@ -231,7 +234,7 @@ internal sealed class SessionValueCacheCoverageTests
         _SetPrivateInt(_GetState(session), "_NextValueCacheId", int.MinValue);
         try
         {
-            _ = session.TryAddValueCache(new CoverListener(), new ValueCacheRequest { FieldNames = ["udp.srcport"] }, out _);
+            _ = session.TryAddValueCache(new CoverListener(), new ValueCacheRequest { FieldNames = ["udp.srcport"] }, out _, out _);
             throw new InvalidOperationException("Expected SessionException was not thrown.");
         }
         catch (SessionException ex)
@@ -267,6 +270,7 @@ internal sealed class SessionValueCacheCoverageTests
         session.TryAddValueCache(
             new CoverListener(),
             new ValueCacheRequest { FieldNames = ["udp.srcport"] },
+            out _,
             out _);
         ValueCacheSlot slot = _FirstSlot(session);
         _ = slot.Id;
@@ -288,8 +292,8 @@ internal sealed class SessionValueCacheCoverageTests
                 ValueCache = new ValueCacheRequest { FieldNames = ["udp.srcport"] },
                 ValueCacheListener = listener,
             });
-        session.TryAddFrameSource(source, out _);
-        session.TryStart();
+        session.TryAddFrameSource(source, out _, out _);
+        session.TryStart(out _);
         session.WaitForCompletion();
 
         ValueCacheSlot slot = _FirstSlot(session);
@@ -306,13 +310,16 @@ internal sealed class SessionValueCacheCoverageTests
         using Session session = new(stack);
         try
         {
-            _ = session.TryAddListener(new TestSessionListener(), new FakeFilter(), out _);
+            _ = session.TryAddListener(new TestSessionListener(), new FakeFilter(), out _, out _);
             throw new InvalidOperationException("Expected ArgumentException was not thrown.");
         }
         catch (ArgumentException ex)
         {
             await Assert.That(ex.Message).Contains("Filter");
         }
+
+        await Assert.That(session.GetJobs().Count).IsEqualTo(0);
+        await Assert.That(session.GetListeners().Count).IsEqualTo(0);
     }
 
     #endregion

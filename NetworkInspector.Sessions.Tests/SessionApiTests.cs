@@ -15,7 +15,7 @@ internal sealed class SessionApiTests
         using Stack stack = TestHarness.CreateStack();
         using Session session = new(stack);
 
-        bool started = session.TryStart();
+        bool started = session.TryStart(out _);
 
         await Assert.That(started).IsTrue();
         await Assert.That(session.Phase).IsEqualTo(SessionPhase.Stopped);
@@ -30,8 +30,8 @@ internal sealed class SessionApiTests
         using TestFrameSource source = TestFrameSource.WithUdpFrames(frameCount);
 
         using Session session = new(stack);
-        session.TryAddFrameSource(source, out _);
-        session.TryStart();
+        session.TryAddFrameSource(source, out _, out _);
+        session.TryStart(out _);
         session.WaitForCompletion();
 
         Packet?[] buffer = new Packet?[frameCount];
@@ -51,8 +51,8 @@ internal sealed class SessionApiTests
         using TestFrameSource source = TestFrameSource.WithUdpFrames(3);
 
         using Session session = new(stack);
-        session.TryAddFrameSource(source, out _);
-        session.TryStart();
+        session.TryAddFrameSource(source, out _, out _);
+        session.TryStart(out _);
         session.WaitForCompletion();
         session.Shutdown();
 
@@ -69,14 +69,14 @@ internal sealed class SessionApiTests
         using TestFrameSource source = TestFrameSource.WithUdpFrames(3);
 
         using Session session = new(stack);
-        session.TryAddFrameSource(source, out _);
-        session.TryStart();
+        session.TryAddFrameSource(source, out _, out _);
+        session.TryStart(out _);
         session.WaitForCompletion();
 
         JobInfo sourceJob = session.GetJobs().First(j => j.UiName == source.UiName);
         WaitHelper.WaitUntil(() => sourceJob.Status is JobStatus.Completed or JobStatus.Cancelled);
 
-        bool removed = session.TryRemoveJob(sourceJob);
+        bool removed = session.TryRemoveJob(sourceJob, out _);
 
         await Assert.That(removed).IsTrue();
         await Assert.That(session.GetJobs().Contains(sourceJob)).IsFalse();
@@ -91,15 +91,15 @@ internal sealed class SessionApiTests
         using TestFrameSource source = TestFrameSource.WithUdpFrames(3);
 
         using Session session = new(stack);
-        session.TryAddFrameSource(source, out _);
-        session.TryStart();
+        session.TryAddFrameSource(source, out _, out _);
+        session.TryStart(out _);
         session.WaitForCompletion();
 
         JobInfo sourceJob = session.GetJobs().First(j => j.UiName == source.UiName);
         WaitHelper.WaitUntil(() => sourceJob.Status is JobStatus.Completed or JobStatus.Cancelled);
 
-        await Assert.That(session.TryRemoveJob(sourceJob)).IsTrue();
-        await Assert.That(session.TryRemoveJob(sourceJob)).IsFalse();
+        await Assert.That(session.TryRemoveJob(sourceJob, out _)).IsTrue();
+        await Assert.That(session.TryRemoveJob(sourceJob, out _)).IsFalse();
 
         session.Shutdown();
     }
@@ -120,7 +120,7 @@ internal sealed class SessionApiTests
         foreignJob.Join();
         JobInfo foreignInfo = new(foreignJob);
 
-        bool removed = session.TryRemoveJob(foreignInfo);
+        bool removed = session.TryRemoveJob(foreignInfo, out _);
 
         await Assert.That(removed).IsFalse();
     }
@@ -132,15 +132,15 @@ internal sealed class SessionApiTests
         using BlockingTestFrameSource source = new(5);
 
         using Session session = new(stack);
-        session.TryAddFrameSource(source, out _);
-        session.TryStart();
+        session.TryAddFrameSource(source, out _, out _);
+        session.TryStart(out _);
 
         JobInfo sourceJob = session.GetJobs().First(j => j.UiName == source.UiName);
         WaitHelper.WaitUntil(() => sourceJob.Status == JobStatus.Running);
 
         try
         {
-            session.TryRemoveJob(sourceJob);
+            session.TryRemoveJob(sourceJob, out _);
             throw new InvalidOperationException("Expected SessionException was not thrown.");
         }
         catch (SessionException ex)
@@ -161,8 +161,8 @@ internal sealed class SessionApiTests
         using BlockingTestFrameSource source = new(100);
 
         using Session session = new(stack);
-        session.TryAddFrameSource(source, out _);
-        session.TryStart();
+        session.TryAddFrameSource(source, out _, out _);
+        session.TryStart(out _);
 
         bool completed = session.WaitForCompletion(TimeSpan.FromMilliseconds(50));
 
@@ -182,7 +182,7 @@ internal sealed class SessionApiTests
 
         try
         {
-            session.TryAddListener(listener, out _);
+            session.TryAddListener(listener, out _, out _);
             throw new InvalidOperationException("Expected SessionException was not thrown.");
         }
         catch (SessionException ex)
@@ -199,7 +199,7 @@ internal sealed class SessionApiTests
 
         try
         {
-            session.TryAddJob("  ", "desc", _ => { }, out _);
+            session.TryAddJob("  ", "desc", _ => { }, out _, out _);
             throw new InvalidOperationException("Expected SessionException was not thrown.");
         }
         catch (SessionException ex)
@@ -215,15 +215,16 @@ internal sealed class SessionApiTests
         using TestFrameSource source = TestFrameSource.WithUdpFrames(3);
 
         using Session session = new(stack);
-        session.TryAddFrameSource(source, out _);
-        session.TryStart();
+        session.TryAddFrameSource(source, out _, out _);
+        session.TryStart(out _);
         session.WaitForCompletion();
         session.Shutdown();
 
-        bool added = session.TryAddJob("LateJob", "desc", _ => { }, out JobInfo? info);
+        bool added = session.TryAddJob("LateJob", "desc", _ => { }, out JobInfo? info, out SessionFailure? failure);
 
-        await Assert.That(added).IsFalse();
-        await Assert.That(info).IsNull();
+        await Assert.That(added).IsTrue();
+        await Assert.That(failure).IsNull();
+        info!.Join();
     }
 
     [Test]
@@ -251,8 +252,8 @@ internal sealed class SessionApiTests
         using TestFrameSource source = TestFrameSource.WithUdpFrames(frameCount);
 
         using Session session = new(stack);
-        session.TryAddFrameSource(source, out _);
-        session.TryStart();
+        session.TryAddFrameSource(source, out _, out _);
+        session.TryStart(out _);
         session.WaitForCompletion();
 
         using ManualResetEventSlim otherStarted = new(false);
@@ -302,8 +303,8 @@ internal sealed class SessionApiTests
             source.ThrowOnDispose = true;
 
             Session session = new(stack);
-            session.TryAddFrameSource(source, out _);
-            session.TryStart();
+            session.TryAddFrameSource(source, out _, out _);
+            session.TryStart(out _);
             session.WaitForCompletion();
             session.Dispose();
 
@@ -325,9 +326,9 @@ internal sealed class SessionApiTests
         TestSessionListener listener = new();
 
         using Session session = new(stack);
-        session.TryAddFrameSource(source, out _);
-        session.TryAddListener(listener, out _);
-        session.TryStart();
+        session.TryAddFrameSource(source, out _, out _);
+        session.TryAddListener(listener, out _, out _);
+        session.TryStart(out _);
 
         await Assert.That(session.GetListeners().Count).IsGreaterThanOrEqualTo(1);
         await Assert.That(session.GetJobs().Count).IsGreaterThanOrEqualTo(2);
@@ -344,15 +345,15 @@ internal sealed class SessionApiTests
         using TestFrameSource source = TestFrameSource.WithUdpFrames(frameCount);
 
         using Session session = new(stack);
-        session.TryAddFrameSource(source, out _);
-        session.TryStart();
+        session.TryAddFrameSource(source, out _, out _);
+        session.TryStart(out _);
         session.WaitForCompletion();
 
         PacketIndexReaderView? indexBefore = session.PacketIndex;
         await Assert.That(indexBefore).IsNotNull();
         await Assert.That(indexBefore!.Value.Source).IsNotNull();
 
-        bool found = session.TryGetPacket(new PacketId(0), out Packet? packet);
+        bool found = session.TryGetPacket(new PacketId(0), out Packet? packet, out _);
 
         await Assert.That(found).IsTrue();
         await Assert.That(packet).IsNotNull();
@@ -374,7 +375,7 @@ internal sealed class SessionApiTests
 
         try
         {
-            session.TryAddFrameSource(source, out _);
+            session.TryAddFrameSource(source, out _, out _);
             throw new InvalidOperationException("Expected SessionException was not thrown.");
         }
         catch (SessionException ex)
@@ -399,14 +400,14 @@ internal sealed class SessionApiTests
         using TestFrameSource first = TestFrameSource.WithUdpFrames(1);
         using TestFrameSource second = TestFrameSource.WithUdpFrames(1);
 
-        bool added = session.TryAddFrameSource(first, out FrameSourceInfo? info);
+        bool added = session.TryAddFrameSource(first, out FrameSourceInfo? info, out _);
 
         await Assert.That(added).IsTrue();
         await Assert.That(info).IsNotNull();
 
         try
         {
-            session.TryAddFrameSource(second, out _);
+            session.TryAddFrameSource(second, out _, out _);
             throw new InvalidOperationException("Expected SessionException was not thrown.");
         }
         catch (SessionException ex)
@@ -425,14 +426,14 @@ internal sealed class SessionApiTests
         SessionState state = _GetState(session);
         _SetPrivateInt(state, "_NextListenerId", ArrayIndexIdRange.MaxValue);
 
-        bool added = session.TryAddListener(new TestSessionListener(), out ListenerInfo? info);
+        bool added = session.TryAddListener(new TestSessionListener(), out ListenerInfo? info, out _);
 
         await Assert.That(added).IsTrue();
         await Assert.That(info!.Id.Value).IsEqualTo(ArrayIndexIdRange.MaxValue);
 
         try
         {
-            session.TryAddListener(new TestSessionListener(), out _);
+            session.TryAddListener(new TestSessionListener(), out _, out _);
             throw new InvalidOperationException("Expected SessionException was not thrown.");
         }
         catch (SessionException ex)
@@ -470,13 +471,112 @@ internal sealed class SessionApiTests
 
         try
         {
-            session.TryStart();
+            session.TryStart(out _);
             throw new InvalidOperationException("Expected SessionException was not thrown.");
         }
         catch (SessionException ex)
         {
             await Assert.That(ex.Code).IsEqualTo(SessionErrorCode.Disposed);
         }
+    }
+
+    [Test]
+    public async Task RestartAbandonedWhenShutdownStarts()
+    {
+        using Stack stack = TestHarness.CreateStack();
+        using TestFrameSource source = TestFrameSource.WithUdpFrames(1);
+        using Session session = new(stack);
+        session.TryAddFrameSource(source, out _, out _);
+        session.TryStart(out _);
+        session.WaitForCompletion();
+
+        using ManualResetEventSlim entered = new(false);
+        using ManualResetEventSlim release = new(false);
+        Exception? restartError = null;
+        Thread restartThread = new(() =>
+        {
+            try
+            {
+                session.Restart(registry =>
+                {
+                    entered.Set();
+                    release.Wait();
+                    return TestHarness.CreateStack(registry);
+                });
+            }
+            catch (Exception ex)
+            {
+                restartError = ex;
+            }
+        })
+        {
+            Name = "restart-shutdown",
+            IsBackground = true,
+        };
+        restartThread.Start();
+        entered.Wait();
+
+        // Shutdown waits until the in-progress restart drops its flag, so the factory
+        // has to be released from this thread while Shutdown runs on another.
+        Thread shutdownThread = new(() => session.Shutdown())
+        {
+            Name = "shutdown-during-restart",
+            IsBackground = true,
+        };
+        shutdownThread.Start();
+        release.Set();
+
+        await Assert.That(shutdownThread.Join(TimeSpan.FromSeconds(10))).IsTrue();
+        await Assert.That(restartThread.Join(TimeSpan.FromSeconds(10))).IsTrue();
+        await Assert.That(session.Phase).IsEqualTo(SessionPhase.Stopped);
+        if (restartError is not null)
+        {
+            await Assert.That(restartError).IsTypeOf<SessionException>();
+            await Assert.That(((SessionException)restartError).Code).IsEqualTo(SessionErrorCode.InvalidPhase);
+        }
+
+        session.Shutdown();
+    }
+
+    [Test]
+    public async Task WaitForCompletionTimeoutIsASingleBudget()
+    {
+        using Stack stack = TestHarness.CreateStack();
+        using BlockingTestFrameSource first = new(10000);
+        using BlockingTestFrameSource second = new(10000);
+        using Session session = new(stack);
+        session.TryAddFrameSource(first, out _, out _);
+        session.TryAddFrameSource(second, out _, out _);
+        session.TryStart(out _);
+
+        Stopwatch watch = Stopwatch.StartNew();
+        bool completed = session.WaitForCompletion(TimeSpan.FromMilliseconds(200));
+        watch.Stop();
+
+        await Assert.That(completed).IsFalse();
+        await Assert.That(watch.Elapsed).IsLessThan(TimeSpan.FromMilliseconds(500));
+
+        first.Release();
+        second.Release();
+        session.Shutdown();
+    }
+
+    [Test]
+    public async Task TryAddJobAfterStoppedRuns()
+    {
+        using Stack stack = TestHarness.CreateStack();
+        using TestFrameSource source = TestFrameSource.WithUdpFrames(1);
+        using Session session = new(stack);
+        session.TryAddFrameSource(source, out _, out _);
+        session.TryStart(out _);
+        session.WaitForCompletion();
+
+        int ran = 0;
+        bool added = session.TryAddJob("export", "after stop", _ => Interlocked.Increment(ref ran), out JobInfo? info, out _);
+        await Assert.That(added).IsTrue();
+        info!.Join();
+        await Assert.That(Volatile.Read(ref ran)).IsEqualTo(1);
+        session.Shutdown();
     }
 
     private sealed class EmptyNameListener : ISessionListener

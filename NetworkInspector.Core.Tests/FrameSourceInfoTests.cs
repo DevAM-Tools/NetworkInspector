@@ -29,7 +29,11 @@ internal sealed class FrameSourceInfoTests
         using DescribedSource source = new("src", null);
         FrameSourceInfo info = new(new FrameSourceId(0), source);
         int calls = 0;
-        info.RegisterStopCallback(() => calls++);
+        info.RegisterStopCallback(() =>
+        {
+            calls++;
+            return true;
+        });
 
         await Assert.That(info.IsStoppable).IsTrue();
         info.Stop();
@@ -43,7 +47,11 @@ internal sealed class FrameSourceInfoTests
         using DescribedSource source = new("src", null);
         FrameSourceInfo info = new(new FrameSourceId(0), source);
         int calls = 0;
-        info.RegisterStopCallback(() => calls++);
+        info.RegisterStopCallback(() =>
+        {
+            calls++;
+            return true;
+        });
 
         info.Stop();
         info.Stop();
@@ -56,10 +64,30 @@ internal sealed class FrameSourceInfoTests
     {
         using DescribedSource source = new("src", null);
         FrameSourceInfo info = new(new FrameSourceId(0), source);
-        info.RegisterStopCallback(() => { });
+        info.RegisterStopCallback(() => true);
 
-        await Assert.That(() => info.RegisterStopCallback(() => { }))
+        await Assert.That(() => info.RegisterStopCallback(() => true))
             .Throws<InvalidOperationException>();
+    }
+
+    [Test]
+    public async Task StopWhenCallbackReturnsFalseStaysStoppable()
+    {
+        using DescribedSource source = new("src", null);
+        FrameSourceInfo info = new(new FrameSourceId(0), source);
+        int calls = 0;
+        info.RegisterStopCallback(() =>
+        {
+            calls++;
+            return false;
+        });
+
+        info.Stop();
+        await Assert.That(calls).IsEqualTo(1);
+        await Assert.That(info.IsStoppable).IsTrue();
+
+        info.Stop();
+        await Assert.That(calls).IsEqualTo(2);
     }
 
     [Test]

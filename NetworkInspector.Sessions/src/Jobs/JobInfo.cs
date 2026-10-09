@@ -8,13 +8,19 @@ namespace NetworkInspector.Sessions.Jobs;
 /// </summary>
 public sealed class JobInfo
 {
+    #region Fields
+
     private readonly Job _Job;
+
+    #endregion
 
     /// <summary>Creates a <see cref="JobInfo"/> that wraps the given internal job.</summary>
     internal JobInfo(Job job)
     {
         _Job = job;
     }
+
+    #region Properties
 
     /// <summary>Unique job identifier within the session.</summary>
     public JobId Id => _Job.Id;
@@ -36,6 +42,8 @@ public sealed class JobInfo
 
     /// <summary>Exception that caused job failure, if any.</summary>
     public Exception? FailureException => _Job.FailureException;
+
+    #endregion
 
     /// <summary>Requests cancellation. Thread-safe.</summary>
     public void Cancel() => _Job.Cancel();

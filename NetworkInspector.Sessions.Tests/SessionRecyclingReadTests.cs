@@ -16,13 +16,13 @@ internal sealed class SessionRecyclingReadTests
         using TestFrameSource source = TestFrameSource.WithUdpFrames(frameCount);
 
         using Session session = new(stack, SessionOptions.RedissectOnly);
-        session.TryAddFrameSource(source, out _);
-        session.TryStart();
+        session.TryAddFrameSource(source, out _, out _);
+        session.TryStart(out _);
         session.WaitForCompletion();
 
         // First read allocates, the following reads must land in that same object.
-        session.TryGetPacket(new PacketId(0), recycle: null, out Packet? recycle);
-        bool found = session.TryGetPacket(new PacketId(1), recycle, out Packet? packet);
+        session.TryGetPacket(new PacketId(0), recycle: null, out Packet? recycle, out _);
+        bool found = session.TryGetPacket(new PacketId(1), recycle, out Packet? packet, out _);
 
         await Assert.That(found).IsTrue();
         await Assert.That(ReferenceEquals(packet, recycle)).IsTrue();
@@ -43,13 +43,13 @@ internal sealed class SessionRecyclingReadTests
         using TestFrameSource source = TestFrameSource.WithUdpFrames(frameCount);
 
         using Session session = new(stack, SessionOptions.RedissectOnly);
-        session.TryAddFrameSource(source, out _);
-        session.TryStart();
+        session.TryAddFrameSource(source, out _, out _);
+        session.TryStart(out _);
         session.WaitForCompletion();
 
-        session.TryGetPacket(new PacketId(0), recycle: null, out Packet? recycle);
-        session.TryGetPacket(new PacketId(3), recycle, out Packet? recycled);
-        session.TryGetPacket(new PacketId(3), recycle: null, out Packet? allocated);
+        session.TryGetPacket(new PacketId(0), recycle: null, out Packet? recycle, out _);
+        session.TryGetPacket(new PacketId(3), recycle, out Packet? recycled, out _);
+        session.TryGetPacket(new PacketId(3), recycle: null, out Packet? allocated, out _);
 
         await Assert.That(_FieldIds(recycled!)).IsEquivalentTo(_FieldIds(allocated!));
 
@@ -68,8 +68,8 @@ internal sealed class SessionRecyclingReadTests
         using TestFrameSource source = TestFrameSource.WithUdpFrames(frameCount);
 
         using Session session = new(stack, SessionOptions.RedissectOnly);
-        session.TryAddFrameSource(source, out _);
-        session.TryStart();
+        session.TryAddFrameSource(source, out _, out _);
+        session.TryStart(out _);
         session.WaitForCompletion();
 
         Packet? recycle = null;
@@ -92,12 +92,12 @@ internal sealed class SessionRecyclingReadTests
         using TestFrameSource source = TestFrameSource.WithUdpFrames(frameCount);
 
         using Session session = new(stack);
-        session.TryAddFrameSource(source, out _);
-        session.TryStart();
+        session.TryAddFrameSource(source, out _, out _);
+        session.TryStart(out _);
         session.WaitForCompletion();
 
-        session.TryGetPacket(new PacketId(0), recycle: null, out Packet? recycle);
-        bool found = session.TryGetPacket(new PacketId(2), recycle, out Packet? packet);
+        session.TryGetPacket(new PacketId(0), recycle: null, out Packet? recycle, out _);
+        bool found = session.TryGetPacket(new PacketId(2), recycle, out Packet? packet, out _);
 
         await Assert.That(found).IsTrue();
         await Assert.That(ReferenceEquals(packet, recycle)).IsTrue();
@@ -115,14 +115,14 @@ internal sealed class SessionRecyclingReadTests
         using TestFrameSource source = TestFrameSource.WithUdpFrames(frameCount);
 
         using Session session = new(stack);
-        session.TryAddFrameSource(source, out _);
-        session.TryStart();
+        session.TryAddFrameSource(source, out _, out _);
+        session.TryStart(out _);
         session.WaitForCompletion();
 
         Packet?[] buffer = new Packet?[frameCount];
         for (int i = 0; i < frameCount; i++)
         {
-            session.TryGetPacket(new PacketId(i), out buffer[i]);
+            session.TryGetPacket(new PacketId(i), out buffer[i], out _);
         }
 
         Packet?[] originals = new Packet?[frameCount];
@@ -154,17 +154,17 @@ internal sealed class SessionRecyclingReadTests
         using TestFrameSource foreignSource = TestFrameSource.WithUdpFrames(frameCount);
 
         using Session foreignSession = new(foreignStack, SessionOptions.RedissectOnly);
-        foreignSession.TryAddFrameSource(foreignSource, out _);
-        foreignSession.TryStart();
+        foreignSession.TryAddFrameSource(foreignSource, out _, out _);
+        foreignSession.TryStart(out _);
         foreignSession.WaitForCompletion();
-        foreignSession.TryGetPacket(new PacketId(0), recycle: null, out Packet? foreignPacket);
+        foreignSession.TryGetPacket(new PacketId(0), recycle: null, out Packet? foreignPacket, out _);
 
         using Session session = new(stack, SessionOptions.RedissectOnly);
-        session.TryAddFrameSource(source, out _);
-        session.TryStart();
+        session.TryAddFrameSource(source, out _, out _);
+        session.TryStart(out _);
         session.WaitForCompletion();
 
-        bool found = session.TryGetPacket(new PacketId(1), foreignPacket, out Packet? packet);
+        bool found = session.TryGetPacket(new PacketId(1), foreignPacket, out Packet? packet, out _);
 
         await Assert.That(found).IsTrue();
         await Assert.That(ReferenceEquals(packet, foreignPacket)).IsFalse();
@@ -189,10 +189,10 @@ internal sealed class SessionRecyclingReadTests
         RecyclingListener listener2 = new("R2");
 
         using Session session = new(stack, SessionOptions.RedissectOnly);
-        session.TryAddFrameSource(source, out _);
-        session.TryAddListener(listener1, out _);
-        session.TryAddListener(listener2, out _);
-        session.TryStart();
+        session.TryAddFrameSource(source, out _, out _);
+        session.TryAddListener(listener1, out _, out _);
+        session.TryAddListener(listener2, out _, out _);
+        session.TryStart(out _);
         session.WaitForCompletion();
         session.Shutdown();
 
@@ -207,7 +207,7 @@ internal sealed class SessionRecyclingReadTests
         List<int> counts = [];
         for (int i = 0; i < frameCount; i++)
         {
-            if (!session.TryGetPacket(new PacketId(i), recycle, out Packet? packet))
+            if (!session.TryGetPacket(new PacketId(i), recycle, out Packet? packet, out _))
             {
                 counts.Add(-1);
                 continue;
@@ -253,7 +253,7 @@ internal sealed class SessionRecyclingReadTests
         {
             for (int i = fromIndex; i < toIndexExclusive; i++)
             {
-                if (!session.TryGetPacket(new PacketId(i), _Recycle, out Packet? packet))
+                if (!session.TryGetPacket(new PacketId(i), _Recycle, out Packet? packet, out _))
                 {
                     Interlocked.Increment(ref _Misses);
                     continue;

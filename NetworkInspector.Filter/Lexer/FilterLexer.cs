@@ -283,12 +283,13 @@ internal sealed class FilterLexer
     /// <summary>
     /// Lexes a decimal integer with a leading minus (<c>-2</c>). Hex prefixes and duration
     /// suffixes are not part of the signed form; <c>-0x10</c> and <c>-2s</c> are not tokens.
+    /// Digit separators (<c>-1_000</c>) are allowed the same way as in unsigned decimals.
     /// </summary>
     private FilterResult<Token> _LexSignedInteger()
     {
         int start = _Position;
         _Position++;
-        _ConsumeDigits();
+        _ConsumeDigitsWithSeparators();
         return new Token(TokenKind.Integer, new FilterSpan(start, _Position - start), _Slice(start));
     }
 
@@ -412,7 +413,7 @@ internal sealed class FilterLexer
 
     private FilterResult<Token> _LexDecimalOrIpv4(int start)
     {
-        _ConsumeDigits();
+        _ConsumeDigitsWithSeparators();
 
         if (_Position < _Source.Length && _Source[_Position] == '.')
         {
@@ -424,6 +425,7 @@ internal sealed class FilterLexer
 
             if (char.IsAsciiDigit(_Peek(1)))
             {
+                // IPv4 octets never use digit separators — keep a plain digit probe.
                 int probe = _Position;
                 int groups = 1;
                 while (probe < _Source.Length && _Source[probe] == '.' && groups < 4)
@@ -452,9 +454,9 @@ internal sealed class FilterLexer
                     return new Token(TokenKind.Ipv4Address, new FilterSpan(start, ipText.Length), ipText);
                 }
 
-                // Two dot-separated groups form a decimal fraction.
+                // Two dot-separated groups form a decimal fraction (separators allowed in each run).
                 _Position++;
-                _ConsumeDigits();
+                _ConsumeDigitsWithSeparators();
                 return _FinishNumber(start);
             }
         }
@@ -562,6 +564,37 @@ internal sealed class FilterLexer
         while (_Position < _Source.Length && char.IsAsciiDigit(_Source[_Position]))
         {
             _Position++;
+        }
+    }
+
+    /// <summary>
+    /// Consumes a decimal digit run that may include <c>_</c> separators between digits
+    /// (<c>1_000</c>). A trailing or doubled underscore stops the run so the next token
+    /// can report the bad form.
+    /// </summary>
+    private void _ConsumeDigitsWithSeparators()
+    {
+        bool sawDigit = false;
+        while (_Position < _Source.Length)
+        {
+            char c = _Source[_Position];
+            if (char.IsAsciiDigit(c))
+            {
+                sawDigit = true;
+                _Position++;
+                continue;
+            }
+
+            if (c == '_'
+                && sawDigit
+                && _Position + 1 < _Source.Length
+                && char.IsAsciiDigit(_Source[_Position + 1]))
+            {
+                _Position++;
+                continue;
+            }
+
+            break;
         }
     }
 

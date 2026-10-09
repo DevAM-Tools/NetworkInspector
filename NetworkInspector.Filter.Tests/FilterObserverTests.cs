@@ -353,6 +353,65 @@ internal sealed class FilterObserverTests
     }
 
     [Test]
+    public async Task Observer_TwoFlanks_ReportsSyntaxError()
+    {
+        using Stack stack = FilterTestHelper.BuildStack();
+        FilterResult<FilterObserver> result = Filter.Compile(
+            "flank(ip.ttl, changed, within: 1s) && flank(udp.srcport, changed, within: 1s)",
+            stack,
+            in _Options);
+
+        await Assert.That(result.TryGetValue(out _)).IsFalse();
+        await Assert.That(result.Error.Kind).IsEqualTo(FilterErrorKind.SyntaxError);
+        await Assert.That(result.Error.Message).Contains("at most one flank");
+    }
+
+    [Test]
+    public async Task Observer_ByOnStringField_ReportsTypeMismatch()
+    {
+        using Stack stack = FilterTestHelper.BuildStack();
+        FilterResult<FilterObserver> result = Filter.Compile(
+            "flank(dns.qry.name, by: 1, within: 1s)",
+            stack,
+            in _Options);
+
+        await Assert.That(result.TryGetValue(out _)).IsFalse();
+        await Assert.That(result.Error.Kind).IsEqualTo(FilterErrorKind.TypeMismatch);
+    }
+
+    [Test]
+    public async Task Observer_ProtocolWithoutContainer_ReportsNeedsFieldTree()
+    {
+        using Stack stack = FilterTestHelper.BuildStackWithContainerlessProtocol();
+        FilterResult<FilterObserver> result = Filter.Compile("noctr", stack, in _Options);
+
+        await Assert.That(result.TryGetValue(out _)).IsFalse();
+        await Assert.That(result.Error.Kind).IsEqualTo(FilterErrorKind.NeedsFieldTree);
+    }
+
+    [Test]
+    public async Task Flank_IsMatch_Throws()
+    {
+        (Stack stack, ObserverProbe probe, ProtocolId protocolId) = _Probe();
+        using (stack)
+        {
+            FilterObserver observer = Filter.Compile(
+                "flank(probe.a, changed, within: 1s)",
+                stack,
+                in _Options).Value;
+            probe.Values = [1];
+            _ = _ProbeParse(stack, protocolId, 0, observer, FieldTreeMode.Skip);
+
+            await Assert.That(observer.HasFlank).IsTrue();
+            await Assert.That(() => _ = observer.IsMatch).Throws<InvalidOperationException>();
+            bool read = observer.TryReadMatch(out bool matched, out FilterError? error);
+            await Assert.That(read).IsTrue();
+            await Assert.That(error).IsNull();
+            await Assert.That(matched).IsFalse();
+        }
+    }
+
+    [Test]
     public async Task Flank_AgreesAndSurvivesBeginPacket()
     {
         (Stack left, ObserverProbe leftProbe, ProtocolId leftId) = _Probe();

@@ -16,8 +16,8 @@ namespace NetworkInspector.Sessions.ValueCaches;
 ///
 /// <para>
 /// <b>Threading:</b>
-    /// All methods are called on the dedicated value-cache slot thread,
-    /// the same threading contract as <see cref="ISessionListener"/>.
+/// All methods are called on the dedicated value-cache slot thread,
+/// the same threading contract as <see cref="ISessionListener"/>.
 /// Do not block for extended periods — it stalls notification processing.
 /// </para>
 ///
@@ -30,6 +30,8 @@ namespace NetworkInspector.Sessions.ValueCaches;
 /// </summary>
 public interface IValueCacheListener
 {
+    #region API
+
     /// <summary>User-visible name for monitoring and diagnostics.</summary>
     string UiName
     {
@@ -49,7 +51,10 @@ public interface IValueCacheListener
     /// Pull columns from <paramref name="cache"/> or packets from <paramref name="session"/>.
     /// </summary>
     /// <param name="session">Read-only session view.</param>
-    /// <param name="cache">Current read-only view of this subscription's cache. Keep the compile-time struct; do not box onto <see cref="IReadOnlyValueCache"/>.</param>
+    /// <param name="cache">
+    /// Current read-only view of this subscription's cache.
+    /// Keep the compile-time struct; do not box onto <see cref="IReadOnlyValueCache"/>.
+    /// </param>
     /// <param name="fromIndex">First new packet id (inclusive).</param>
     /// <param name="toIndexExclusive">One past the last new packet id.</param>
     void OnNewRows(ISessionReader session, ReadOnlyValueCache cache, int fromIndex, int toIndexExclusive);
@@ -101,4 +106,6 @@ public interface IValueCacheListener
     void OnUnsubscribed()
     {
     }
+
+    #endregion
 }

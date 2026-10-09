@@ -35,7 +35,7 @@ graph TD
 Typical flow:
 
 1. Create `Session` with a `Stack`.
-2. `TryAddFrameSource` (Idle only) and `TryAddListener` (Idle, Running, or Restarting).
+2. `TryAddFrameSource` (Idle only) and `TryAddListener` (Idle, Running, Restarting, or Stopped).
 3. `TryStart()` — launches source and listener threads.
 4. `WaitForCompletion()` — blocks until all source jobs finish.
 5. `Shutdown()` or `Dispose()` — cancels listeners, disposes jobs and sources.
@@ -140,8 +140,9 @@ session.TryAddListener(listener, out info);
 ```
 
 An empty or whitespace-only expression compiles to the always-match filter. A bad expression
-leaves the session untouched: no listener is registered and `failure` explains why. Filters are
-single-threaded and are only evaluated on their own listener thread.
+leaves the session untouched: no listener is registered and `failure` explains why. Each listener
+filter is single-threaded. `TryReadPackets` in `Matching` mode and restart rebind share that
+listener's filter gate. `All` reads do not take the gate.
 
 ## Filtered Pulls
 
@@ -212,7 +213,7 @@ session.Restart(registry =>
 
 Convenience APIs: `FrameSourceInfo.Stop()` and `ListenerInfo.Unsubscribe()` delegate to `TryUnsubscribe`.
 
-`TryUnsubscribe` returns `false` for foreign jobs, terminal jobs, or when the session is Idle/ShuttingDown.
+`TryUnsubscribe` returns `false` with a `SessionFailure` for foreign jobs, terminal jobs, or when the session is shutting down. A source that has not started can be removed during `Idle`.
 
 ## TryRemoveJob
 
@@ -220,13 +221,18 @@ Removes a **terminal** job (Completed, Cancelled, or Failed) from the job list. 
 
 ## Error Handling
 
-- Validation and state errors throw `SessionException` with a `SessionErrorCode`.
+- Operational `Try*` refusals return `false` and a `SessionFailure`. Validation faults (null arguments, empty UI names, a disposed session, exhausted ids) still throw `SessionException`.
+- `QueriesEnabled` is false while restart rewrites packets, after a restart fails closed, and after shutdown disables reads.
 - `Shutdown()` throws `AggregateException` when cleanup (dispose) fails for one or more items.
 - `Dispose()` captures shutdown failures in `Session.ShutdownErrors` instead of throwing (standard .NET dispose pattern).
 
 ## Thread Safety
 
 All public `Session` methods are thread-safe. Counters use `Interlocked`; phase and flags use `Volatile`. First-parse is serialised under a shared Monitor across source threads; re-parse of announced ids is lock-free.
+
+Listeners, value caches, and user jobs may be added while the session is `Idle`, `Running`, `Restarting`, or `Stopped`. `ShuttingDown` is refused. A listener or value cache added after packets exist is notified for the current id range. Frame sources stay `Idle` only.
+
+Each listener filter is single-threaded. `TryReadPackets` in `Matching` mode and restart rebind share that listener's filter gate. `All` reads do not take the gate. Do not call `TryIsMatch` on the session's filter from outside `TryReadPackets`.
 
 ## Dependencies
 

@@ -10,7 +10,13 @@ namespace NetworkInspector.Sessions;
 /// </summary>
 internal static class ThreadWaitHelper
 {
+    #region Fields
+
     private const int _SpinIterationsBeforeSleep = 1024;
+
+    #endregion
+
+    #region API
 
     /// <summary>Blocks until <paramref name="condition"/> returns <see langword="true"/>.</summary>
     internal static void WaitUntil(Func<bool> condition)
@@ -61,4 +67,6 @@ internal static class ThreadWaitHelper
 
         return true;
     }
+
+    #endregion
 }

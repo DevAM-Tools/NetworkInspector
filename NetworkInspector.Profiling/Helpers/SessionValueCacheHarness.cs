@@ -67,13 +67,13 @@ internal static class SessionValueCacheHarness
                 ValueCacheListener = resolved.ValueCacheListener,
             });
         SequentialMemoryFrameSource source = new(frames);
-        if (!session.TryAddFrameSource(source, out _))
+        if (!session.TryAddFrameSource(source, out _, out _))
         {
             session.Dispose();
             throw new InvalidOperationException("Failed to add sequential frame source.");
         }
 
-        if (!session.TryStart())
+        if (!session.TryStart(out _))
         {
             session.Dispose();
             throw new InvalidOperationException("Failed to start session.");
@@ -137,19 +137,19 @@ internal static class SessionValueCacheHarness
         bool triggerAdded = false;
         try
         {
-            if (!session.TryAddFrameSource(source, out _))
+            if (!session.TryAddFrameSource(source, out _, out _))
             {
                 throw new InvalidOperationException("Failed to add sequential frame source.");
             }
 
-            if (!session.TryAddFrameSource(trigger, out _))
+            if (!session.TryAddFrameSource(trigger, out _, out _))
             {
                 throw new InvalidOperationException("Failed to add trigger frame source.");
             }
 
             triggerAdded = true;
 
-            if (!session.TryStart())
+            if (!session.TryStart(out _))
             {
                 throw new InvalidOperationException("Failed to start session.");
             }
@@ -193,7 +193,7 @@ internal static class SessionValueCacheHarness
         ValueCacheFillListener listener = new(listenerUiName, expectedUdpSrcPortRows);
         try
         {
-            if (!session.TryAddValueCache(listener, request, out _))
+            if (!session.TryAddValueCache(listener, request, out _, out _))
             {
                 throw new InvalidOperationException(
                     "TryAddValueCache returned false — session must stay Running for on-demand add.");

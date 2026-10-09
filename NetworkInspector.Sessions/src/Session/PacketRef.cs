@@ -14,4 +14,22 @@ namespace NetworkInspector.Sessions;
 /// <para><b>Thread-safety:</b> readonly struct; the referenced <see cref="Packet"/> follows its own rules.</para>
 /// </remarks>
 [StructLayout(LayoutKind.Auto)]
-public readonly record struct PacketRef(PacketId Id, Packet? Packet);
+public readonly record struct PacketRef
+{
+    #region Properties
+
+    /// <summary>Packet id this slot was read from.</summary>
+    public PacketId Id { get; init; }
+
+    /// <summary>Parsed packet, or <see langword="null"/> when the frame for <see cref="Id"/> cannot be re-read.</summary>
+    public Packet? Packet { get; init; }
+
+    #endregion
+
+    /// <summary>Creates a pull-result slot for <paramref name="id"/> and <paramref name="packet"/>.</summary>
+    public PacketRef(PacketId id, Packet? packet)
+    {
+        Id = id;
+        Packet = packet;
+    }
+}

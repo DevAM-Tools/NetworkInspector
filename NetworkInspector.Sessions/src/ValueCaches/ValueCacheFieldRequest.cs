@@ -8,6 +8,8 @@ namespace NetworkInspector.Sessions;
 /// </summary>
 public sealed class ValueCacheFieldRequest
 {
+    #region Properties
+
     /// <summary>
     /// Ordinal field name as registered on the stack (for example <c>udp.srcport</c>).
     /// Must pass <see cref="NameValidation.IsValidName"/> when Session binds the request.
@@ -25,4 +27,6 @@ public sealed class ValueCacheFieldRequest
 
     /// <summary>When true, create a custom-representation series for the resolved field.</summary>
     public bool RecordCustomRepresentation { get; init; }
+
+    #endregion
 }

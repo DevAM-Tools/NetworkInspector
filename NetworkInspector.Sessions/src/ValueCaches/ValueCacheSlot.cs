@@ -346,7 +346,7 @@ internal sealed class ValueCacheSlot : IDisposable
     {
         for (int id = fromId; id < toIdExclusive; id++)
         {
-            if (!_SessionReader.TryGetFrame(new PacketId(id), out Frame frame))
+            if (!_SessionReader.TryGetFrame(new PacketId(id), out Frame frame, out _))
             {
                 throw new SessionException(
                     SessionErrorCode.FrameUnavailable,

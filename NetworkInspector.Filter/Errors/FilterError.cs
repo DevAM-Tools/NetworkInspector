@@ -71,10 +71,6 @@ public sealed class FilterError
     public static FilterError UnknownField(string name, int position, int length) =>
         new(FilterErrorKind.UnknownField, $"Unknown field or protocol '{name}'", position, length);
 
-    /// <summary>Creates an error for a protocol name that is unknown on the compile-time stack.</summary>
-    public static FilterError UnknownProtocol(string name, int position, int length) =>
-        new(FilterErrorKind.UnknownProtocol, $"Unknown protocol '{name}'", position, length);
-
     /// <summary>Creates an operand/operator mismatch error.</summary>
     public static FilterError TypeMismatch(string message, int position, int length) =>
         new(FilterErrorKind.TypeMismatch, message, position, length);

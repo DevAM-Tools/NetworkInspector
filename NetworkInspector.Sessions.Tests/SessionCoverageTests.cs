@@ -13,28 +13,30 @@ internal sealed class SessionCoverageTests
         using Stack stack = TestHarness.CreateStack();
         using Session session = new(stack);
 
-        await Assert.That(session.TryStart()).IsTrue();
-        await Assert.That(session.TryStart()).IsFalse();
+        await Assert.That(session.TryStart(out _)).IsTrue();
+        await Assert.That(session.TryStart(out _)).IsFalse();
 
         session.Shutdown();
     }
 
     [Test]
-    public async Task TryAddListener_AfterStopped_ReturnsFalse()
+    public async Task TryAddListenerAfterStoppedBackfillsPackets()
     {
         using Stack stack = TestHarness.CreateStack();
         using TestFrameSource source = TestFrameSource.WithUdpFrames(3);
         TestSessionListener listener = new();
 
         using Session session = new(stack);
-        session.TryAddFrameSource(source, out _);
-        session.TryStart();
+        session.TryAddFrameSource(source, out _, out _);
+        session.TryStart(out _);
         session.WaitForCompletion();
 
-        bool added = session.TryAddListener(listener, out ListenerInfo? info);
+        bool added = session.TryAddListener(listener, out ListenerInfo? info, out SessionFailure? failure);
 
-        await Assert.That(added).IsFalse();
-        await Assert.That(info).IsNull();
+        await Assert.That(added).IsTrue();
+        await Assert.That(info).IsNotNull();
+        await Assert.That(failure).IsNull();
+        WaitHelper.WaitUntil(() => listener.TotalPacketsSeen >= 3 && listener.AllSourcesCompletedCount >= 1);
 
         session.Shutdown();
     }
@@ -46,11 +48,11 @@ internal sealed class SessionCoverageTests
         using TestFrameSource source = TestFrameSource.WithUdpFrames(5);
 
         using Session session = new(stack);
-        session.TryAddFrameSource(source, out _);
-        session.TryStart();
+        session.TryAddFrameSource(source, out _, out _);
+        session.TryStart(out _);
         session.WaitForCompletion();
 
-        bool found = session.TryGetPacket(new PacketId(100), out Packet? packet);
+        bool found = session.TryGetPacket(new PacketId(100), out Packet? packet, out _);
 
         await Assert.That(found).IsFalse();
         await Assert.That(packet).IsNull();
@@ -65,14 +67,14 @@ internal sealed class SessionCoverageTests
         using ForwardOnlyFrameSource source = new(2);
 
         using Session session = new(stack);
-        session.TryAddFrameSource(source, out _);
-        session.TryStart();
+        session.TryAddFrameSource(source, out _, out _);
+        session.TryStart(out _);
         session.WaitForCompletion();
 
         for (int i = 0; i < 2; i++)
         {
-            bool gotFrame = session.TryGetFrame(new PacketId(i), out Frame frame);
-            bool gotPacket = session.TryGetPacket(new PacketId(i), out Packet? packet);
+            bool gotFrame = session.TryGetFrame(new PacketId(i), out Frame frame, out _);
+            bool gotPacket = session.TryGetPacket(new PacketId(i), out Packet? packet, out _);
             await Assert.That(gotFrame).IsTrue();
             await Assert.That(frame.IsValid).IsTrue();
             await Assert.That(gotPacket).IsTrue();
@@ -91,13 +93,13 @@ internal sealed class SessionCoverageTests
         using TestFrameSource source = TestFrameSource.WithUdpFrames(frameCount);
 
         using Session session = new(stack);
-        session.TryAddFrameSource(source, out _);
-        session.TryStart();
+        session.TryAddFrameSource(source, out _, out _);
+        session.TryStart(out _);
         session.WaitForCompletion();
 
         _SetPacketIndex(session, null);
 
-        bool found = session.TryGetPacket(new PacketId(0), out Packet? packet);
+        bool found = session.TryGetPacket(new PacketId(0), out Packet? packet, out _);
 
         await Assert.That(found).IsTrue();
         await Assert.That(packet).IsNotNull();
@@ -113,8 +115,8 @@ internal sealed class SessionCoverageTests
         using TestFrameSource source = TestFrameSource.WithUdpFrames(5);
 
         using Session session = new(stack);
-        session.TryAddFrameSource(source, out _);
-        session.TryStart();
+        session.TryAddFrameSource(source, out _, out _);
+        session.TryStart(out _);
         session.WaitForCompletion();
 
         try
@@ -162,8 +164,8 @@ internal sealed class SessionCoverageTests
         TestSessionListener listener = new();
 
         using Session session = new(stack);
-        session.TryAddListener(listener, out ListenerInfo? info);
-        session.TryStart();
+        session.TryAddListener(listener, out ListenerInfo? info, out _);
+        session.TryStart(out _);
 
         ListenerSlot slot = _GetListenerSlots(session)[0];
 
@@ -181,8 +183,8 @@ internal sealed class SessionCoverageTests
         using TestFrameSource source = TestFrameSource.WithUdpFrames(3);
 
         using Session session = new(stack);
-        session.TryAddFrameSource(source, out _);
-        session.TryStart();
+        session.TryAddFrameSource(source, out _, out _);
+        session.TryStart(out _);
         session.WaitForCompletion();
 
         bool completed = session.WaitForCompletion(TimeSpan.FromSeconds(5));

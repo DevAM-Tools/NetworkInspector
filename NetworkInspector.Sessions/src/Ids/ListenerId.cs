@@ -10,6 +10,8 @@ namespace NetworkInspector.Sessions.Ids;
 [method: MethodImpl(MethodImplOptions.AggressiveInlining)]
 public readonly struct ListenerId(int value) : IEquatable<ListenerId>, IComparable<ListenerId>
 {
+    #region Fields
+
     /// <summary>Sentinel value representing an invalid or unassigned listener ID.</summary>
     public static readonly ListenerId Invalid = new(-1);
 
@@ -22,6 +24,10 @@ public readonly struct ListenerId(int value) : IEquatable<ListenerId>, IComparab
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         get => Core.Ids.ArrayIndexIdRange.IsValidIndex(Value);
     }
+
+    #endregion
+
+    #region API
 
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -76,4 +82,6 @@ public readonly struct ListenerId(int value) : IEquatable<ListenerId>, IComparab
 
         return value;
     }
+
+    #endregion
 }

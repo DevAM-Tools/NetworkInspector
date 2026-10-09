@@ -46,6 +46,7 @@ public sealed class Filter : IFilter
     private readonly DependencyNode? _Dependencies;
     /// <summary>Null on <see cref="AlwaysMatch"/> — that singleton must stay immutable.</summary>
     private readonly MatchCache? _Cache;
+    private readonly bool _EnableMatchCache;
 
     /// <inheritdoc />
     public FilterError? PoisonError { get; private set; }
@@ -70,7 +71,8 @@ public sealed class Filter : IFilter
         FilterProgram program,
         CompiledFilterProgram compiled,
         DependencyNode dependencies,
-        ProtocolId[] fieldOwners)
+        ProtocolId[] fieldOwners,
+        bool enableMatchCache)
     {
         Expression = expression;
         Stack = stack;
@@ -78,6 +80,7 @@ public sealed class Filter : IFilter
         _Compiled = compiled;
         _Dependencies = dependencies;
         _Context = new FilterEvalContext(fieldOwners);
+        _EnableMatchCache = enableMatchCache;
         _Cache = new();
     }
 
@@ -345,7 +348,7 @@ public sealed class Filter : IFilter
         }
 
         MatchCache cache = _Cache!;
-        if (cache.TryGet(packet.Id, out bool cached))
+        if (_EnableMatchCache && cache.TryGet(packet.Id, out bool cached))
         {
             matched = cached;
             failure = null;
@@ -386,7 +389,11 @@ public sealed class Filter : IFilter
                 return _Poison(runtimeError, out matched, out failure);
             }
 
-            cache.Store(packet.Id, result);
+            if (_EnableMatchCache)
+            {
+                cache.Store(packet.Id, result);
+            }
+
             if (packetId > _HighestEvaluatedId)
             {
                 _HighestEvaluatedId = packetId;
@@ -478,7 +485,9 @@ public sealed class Filter : IFilter
             return true;
         }
 
-        FilterResult<Filter> result = _Bind(Expression, _Program!, stack, null);
+        // Keep the caller's cache policy across rebinds (forward-only convert stays forward-only).
+        FilterCompileOptions deriveOptions = new() { EnableMatchCache = _EnableMatchCache };
+        FilterResult<Filter> result = _Bind(Expression, _Program!, stack, deriveOptions);
         if (result.TryGetValue(out Filter? filter))
         {
             derived = filter;
@@ -544,7 +553,15 @@ public sealed class Filter : IFilter
         }
 
         DependencyNode dependencies = DependencyAnalyzer.Analyze(program, resolver);
-        return new Filter(expression, stack, program, compiledProgram, dependencies, resolver.FieldOwners);
+        bool enableMatchCache = options?.EnableMatchCache ?? true;
+        return new Filter(
+            expression,
+            stack,
+            program,
+            compiledProgram,
+            dependencies,
+            resolver.FieldOwners,
+            enableMatchCache);
     }
 
     private bool _Poison(FilterError reason, out bool matched, out FilterError? failure)

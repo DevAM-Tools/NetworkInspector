@@ -42,20 +42,20 @@ internal sealed class SessionFixture : IDisposable
             Session = new Session(_InitialStack);
             stackToDispose = null;
 
-            if (!Session.TryAddFrameSource(_Source, out _))
+            if (!Session.TryAddFrameSource(_Source, out _, out _))
             {
                 throw new InvalidOperationException("The test frame source was rejected.");
             }
 
             IFilter? filter = filterFactory?.Invoke(_InitialStack);
-            if (!Session.TryAddListener(_Listener, filter, out ListenerInfo? info))
+            if (!Session.TryAddListener(_Listener, filter, out ListenerInfo? info, out _))
             {
                 throw new InvalidOperationException("The test listener was rejected.");
             }
 
             ListenerId = info.Id;
 
-            Session.TryStart();
+            Session.TryStart(out _);
             Session.WaitForCompletion();
             WaitHelper.WaitUntil(() => Session.PacketCount >= _FrameCount);
         }

@@ -152,8 +152,8 @@ internal sealed class SessionValueCacheTests
         using Stack stack = TestHarness.CreateStack();
         using TestFrameSource source = TestFrameSource.WithUdpFrames(frameCount);
         using Session session = new(stack, new SessionOptions { ValueCache = _UdpPortRequest() });
-        session.TryAddFrameSource(source, out _);
-        session.TryStart();
+        session.TryAddFrameSource(source, out _, out _);
+        session.TryStart(out _);
         session.WaitForCompletion();
 
         ReadOnlyValueCache? ingest = session.IngestValueCache;
@@ -183,10 +183,11 @@ internal sealed class SessionValueCacheTests
                 ValueCache = _UdpPortRequest(),
                 ValueCacheListener = listener,
             });
-        session.TryAddFrameSource(source, out _);
-        session.TryStart();
+        session.TryAddFrameSource(source, out _, out _);
+        session.TryStart(out _);
         session.WaitForCompletion();
-        WaitHelper.WaitUntil(() => listener.RowsSeen >= frameCount);
+        // RowsSeen is published before the window list; wait for both so the assert cannot race.
+        WaitHelper.WaitUntil(() => listener.RowsSeen >= frameCount && listener.Windows.Length > 0);
 
         (int From, int To)[] windows = listener.Windows;
         int covered = 0;
@@ -208,8 +209,8 @@ internal sealed class SessionValueCacheTests
         using Session session = new(
             stack,
             new SessionOptions { ValueCache = new ValueCacheRequest { RecordAllFields = true } });
-        session.TryAddFrameSource(source, out _);
-        session.TryStart();
+        session.TryAddFrameSource(source, out _, out _);
+        session.TryStart(out _);
         session.WaitForCompletion();
 
         ReadOnlyValueCache? ingest = session.IngestValueCache;
@@ -227,8 +228,8 @@ internal sealed class SessionValueCacheTests
         using Session session = new(
             stack,
             new SessionOptions { ValueCache = _UdpPortRequest(), IndexPackets = true });
-        session.TryAddFrameSource(source, out _);
-        session.TryStart();
+        session.TryAddFrameSource(source, out _, out _);
+        session.TryStart(out _);
         session.WaitForCompletion();
 
         await Assert.That(session.PacketIndex.HasValue).IsTrue();
@@ -250,14 +251,14 @@ internal sealed class SessionValueCacheTests
         using BlockingTestFrameSource source = new(frameCount);
         RecordingValueCacheListener listener = new();
         using Session session = new(stack);
-        session.TryAddFrameSource(source, out _);
-        session.TryStart();
+        session.TryAddFrameSource(source, out _, out _);
+        session.TryStart(out _);
         WaitHelper.WaitUntil(() => session.PacketCount >= frameCount);
 
-        bool added = session.TryAddValueCache(listener, _UdpPortRequest(), out ValueCacheInfo? info);
+        bool added = session.TryAddValueCache(listener, _UdpPortRequest(), out ValueCacheInfo? info, out _);
         await Assert.That(added).IsTrue();
         await Assert.That(info).IsNotNull();
-        WaitHelper.WaitUntil(() => listener.RowsSeen >= session.PacketCount);
+        WaitHelper.WaitUntil(() => listener.RowsSeen >= session.PacketCount && listener.Windows.Length > 0);
 
         int packetCount = session.PacketCount;
         int lastTo = listener.Windows[^1].To;
@@ -278,11 +279,11 @@ internal sealed class SessionValueCacheTests
         using BlockingTestFrameSource source = new(2);
         RecordingValueCacheListener listener = new();
         using Session session = new(stack);
-        session.TryAddFrameSource(source, out _);
-        session.TryStart();
+        session.TryAddFrameSource(source, out _, out _);
+        session.TryStart(out _);
         WaitHelper.WaitUntil(() => session.PacketCount >= 2);
 
-        session.TryAddValueCache(listener, _UdpPortRequest(), out _);
+        session.TryAddValueCache(listener, _UdpPortRequest(), out _, out _);
         WaitHelper.WaitUntil(() => session.PacketCount >= 4 && listener.RowsSeen >= 4);
 
         int seen = listener.RowsSeen;
@@ -301,10 +302,10 @@ internal sealed class SessionValueCacheTests
         using Stack stack2 = TestHarness.CreateStack();
         using TestFrameSource source2 = TestFrameSource.WithUdpFrames(frameCount);
         using Session live = new(stack2);
-        live.TryAddFrameSource(source2, out _);
-        bool firstAdded = live.TryAddValueCache(first, _UdpPortRequest(), out ValueCacheInfo? info1);
-        bool secondAdded = live.TryAddValueCache(second, _UdpPortRequest(), out ValueCacheInfo? info2);
-        live.TryStart();
+        live.TryAddFrameSource(source2, out _, out _);
+        bool firstAdded = live.TryAddValueCache(first, _UdpPortRequest(), out ValueCacheInfo? info1, out _);
+        bool secondAdded = live.TryAddValueCache(second, _UdpPortRequest(), out ValueCacheInfo? info2, out _);
+        live.TryStart(out _);
         live.WaitForCompletion();
         WaitHelper.WaitUntil(() => first.RowsSeen >= frameCount && second.RowsSeen >= frameCount);
 
@@ -327,12 +328,12 @@ internal sealed class SessionValueCacheTests
         using Stack stack = TestHarness.CreateStack();
         using TestFrameSource source = TestFrameSource.WithUdpFrames(frameCount);
         using Session session = new(stack);
-        session.TryAddFrameSource(source, out _);
+        session.TryAddFrameSource(source, out _, out _);
         bool added = session.TryAddValueCache(
             listener,
             new ValueCacheRequest { FieldNames = ["udp.srcport"] },
-            out ValueCacheInfo? info);
-        session.TryStart();
+            out ValueCacheInfo? info, out _);
+        session.TryStart(out _);
         session.WaitForCompletion();
         WaitHelper.WaitUntil(() => listener.Seen >= frameCount);
 
@@ -395,6 +396,7 @@ internal sealed class SessionValueCacheTests
             _ = session.TryAddValueCache(
                 listener,
                 new ValueCacheRequest { FieldNames = ["no.such.field"] },
+                out _,
                 out _);
             throw new InvalidOperationException("Expected SessionException was not thrown.");
         }
@@ -421,6 +423,7 @@ internal sealed class SessionValueCacheTests
             _ = session.TryAddValueCache(
                 listener,
                 new ValueCacheRequest { FieldNames = [name] },
+                out _,
                 out _);
             throw new InvalidOperationException("Expected SessionException was not thrown.");
         }
@@ -446,6 +449,7 @@ internal sealed class SessionValueCacheTests
                 {
                     Fields = [new ValueCacheFieldRequest { FieldName = "eth." }],
                 },
+                out _,
                 out _);
             throw new InvalidOperationException("Expected SessionException was not thrown.");
         }
@@ -465,6 +469,7 @@ internal sealed class SessionValueCacheTests
             _ = session.TryAddValueCache(
                 new RecordingValueCacheListener(),
                 new ValueCacheRequest { GroupNames = ["eth."] },
+                out _,
                 out _);
             throw new InvalidOperationException("Expected SessionException was not thrown.");
         }
@@ -481,7 +486,7 @@ internal sealed class SessionValueCacheTests
         using Session session = new(stack);
         try
         {
-            _ = session.TryAddValueCache(new EmptyNameListener(), _UdpPortRequest(), out _);
+            _ = session.TryAddValueCache(new EmptyNameListener(), _UdpPortRequest(), out _, out _);
             throw new InvalidOperationException("Expected SessionException was not thrown.");
         }
         catch (SessionException ex)
@@ -508,18 +513,21 @@ internal sealed class SessionValueCacheTests
     }
 
     [Test]
-    public async Task TryAddValueCache_WhenStopped_ReturnsFalse()
+    public async Task TryAddValueCacheAfterStoppedFillsRows()
     {
         using Stack stack = TestHarness.CreateStack();
         using TestFrameSource source = TestFrameSource.WithUdpFrames(2);
+        RecordingValueCacheListener listener = new();
         using Session session = new(stack);
-        session.TryAddFrameSource(source, out _);
-        session.TryStart();
+        session.TryAddFrameSource(source, out _, out _);
+        session.TryStart(out _);
         session.WaitForCompletion();
 
-        bool added = session.TryAddValueCache(new RecordingValueCacheListener(), _UdpPortRequest(), out ValueCacheInfo? info);
-        await Assert.That(added).IsFalse();
-        await Assert.That(info).IsNull();
+        bool added = session.TryAddValueCache(listener, _UdpPortRequest(), out ValueCacheInfo? info, out SessionFailure? failure);
+        await Assert.That(added).IsTrue();
+        await Assert.That(info).IsNotNull();
+        await Assert.That(failure).IsNull();
+        WaitHelper.WaitUntil(() => listener.SeriesCount == 2);
         session.Shutdown();
     }
 
@@ -535,9 +543,9 @@ internal sealed class SessionValueCacheTests
         using Stack stack = TestHarness.CreateStack();
         using TestFrameSource source = TestFrameSource.WithUdpFrames(frameCount);
         using Session session = new(stack, new SessionOptions { ValueCache = _UdpPortRequest() });
-        session.TryAddFrameSource(source, out _);
-        bool added = session.TryAddValueCache(runtime, _UdpPortRequest(), out ValueCacheInfo? runtimeInfo);
-        session.TryStart();
+        session.TryAddFrameSource(source, out _, out _);
+        bool added = session.TryAddValueCache(runtime, _UdpPortRequest(), out ValueCacheInfo? runtimeInfo, out _);
+        session.TryStart(out _);
         session.WaitForCompletion();
         WaitHelper.WaitUntil(() => runtime.RowsSeen >= frameCount);
 
@@ -563,9 +571,9 @@ internal sealed class SessionValueCacheTests
         using Stack stack = TestHarness.CreateStack();
         using TestFrameSource source = TestFrameSource.WithUdpFrames(frameCount);
         using Session session = new(stack, SessionOptions.RedissectOnly);
-        session.TryAddFrameSource(source, out _);
-        session.TryAddValueCache(listener, _UdpPortRequest(), out ValueCacheInfo? info);
-        session.TryStart();
+        session.TryAddFrameSource(source, out _, out _);
+        session.TryAddValueCache(listener, _UdpPortRequest(), out ValueCacheInfo? info, out _);
+        session.TryStart(out _);
         session.WaitForCompletion();
         WaitHelper.WaitUntil(() => listener.RowsSeen >= frameCount);
 
@@ -581,9 +589,9 @@ internal sealed class SessionValueCacheTests
         using BlockingTestFrameSource source = new(3);
         RecordingValueCacheListener listener = new();
         using Session session = new(stack);
-        session.TryAddFrameSource(source, out _);
-        session.TryAddValueCache(listener, _UdpPortRequest(), out ValueCacheInfo? info);
-        session.TryStart();
+        session.TryAddFrameSource(source, out _, out _);
+        session.TryAddValueCache(listener, _UdpPortRequest(), out ValueCacheInfo? info, out _);
+        session.TryStart(out _);
         WaitHelper.WaitUntil(() => listener.RowsSeen >= 3);
 
         int countBefore = info!.Cache.GetSeries<ulong>(stack.GetFieldId("udp.srcport")!.Value).Count;
@@ -622,8 +630,8 @@ internal sealed class SessionValueCacheTests
                     ],
                 },
             });
-        session.TryAddFrameSource(source, out _);
-        session.TryStart();
+        session.TryAddFrameSource(source, out _, out _);
+        session.TryStart(out _);
         session.WaitForCompletion();
 
         ReadOnlyValueCache? ingest = session.IngestValueCache;

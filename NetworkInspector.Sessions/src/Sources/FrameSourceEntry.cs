@@ -18,6 +18,8 @@ internal sealed class FrameSourceEntry
         JobInfo = new JobInfo(job);
     }
 
+    #region Fields
+
     /// <summary>Stack-registered metadata for this source.</summary>
     internal FrameSourceInfo Info
     {
@@ -45,4 +47,6 @@ internal sealed class FrameSourceEntry
     {
         get;
     }
+
+    #endregion
 }

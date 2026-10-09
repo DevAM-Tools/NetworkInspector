@@ -24,6 +24,8 @@ namespace NetworkInspector.Sessions.Listeners;
 /// </summary>
 public sealed class ListenerInfo
 {
+    #region Fields
+
     // Cross-thread status. Plain volatile read/write; the session is the only writer.
     private volatile int _Status;
 
@@ -33,6 +35,10 @@ public sealed class ListenerInfo
     {
         get; set;
     }
+
+    #endregion
+
+    #region Properties
 
     /// <summary>Unique identifier for this subscription.</summary>
     public ListenerId Id
@@ -45,6 +51,8 @@ public sealed class ListenerInfo
 
     /// <summary>Current subscription status (thread-safe read).</summary>
     public SubscriptionStatus Status => (SubscriptionStatus)_Status;
+
+    #endregion
 
     /// <summary>
     /// Convenience API: requests that the session unsubscribe this listener.

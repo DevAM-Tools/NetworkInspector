@@ -158,6 +158,15 @@ internal static class CandidateBitmapBuilder
             return false;
         }
 
+        // Canonical fields often share one presence group — one bitmap instead of N field clones.
+        if (symbol.Kind == FilterSymbolKind.Field
+            && symbol.IndexGroup.IsValid
+            && index.TryGetGroupBitmap(symbol.IndexGroup, out ReadOnlyRoaringBitmap groupBitmap))
+        {
+            candidates = groupBitmap.ToBitmap();
+            return true;
+        }
+
         RoaringBitmap? accumulated = null;
         foreach (FieldId fieldId in symbol.Fields)
         {
@@ -279,6 +288,14 @@ internal static class CandidateBitmapBuilder
 
             isCandidate = true;
             return false;
+        }
+
+        if (symbol.Kind == FilterSymbolKind.Field
+            && symbol.IndexGroup.IsValid
+            && index.TryGetGroupBitmap(symbol.IndexGroup, out ReadOnlyRoaringBitmap groupBitmap))
+        {
+            isCandidate = groupBitmap.Contains(packetId);
+            return true;
         }
 
         bool anyField = false;

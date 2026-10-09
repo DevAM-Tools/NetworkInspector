@@ -62,15 +62,6 @@ internal sealed class FilterErrorTests
     }
 
     [Test]
-    public async Task UnknownProtocol_NamesTheProtocol()
-    {
-        FilterError error = FilterError.UnknownProtocol("nope", 0, 4);
-
-        await Assert.That(error.Kind).IsEqualTo(FilterErrorKind.UnknownProtocol);
-        await Assert.That(error.Message).Contains("nope");
-    }
-
-    [Test]
     public async Task TypeMismatch_CarriesKind()
     {
         FilterError error = FilterError.TypeMismatch("cannot compare", 2, 3);

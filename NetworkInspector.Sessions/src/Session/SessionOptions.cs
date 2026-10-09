@@ -20,7 +20,7 @@ public sealed class SessionOptions
 
     /// <summary>
     /// No packet index — listeners re-parse in parallel without roaring-bitmap overhead.
-    /// Frames from stream sources are still cached so <see cref="ISessionReader.TryGetPacket(PacketId, out Packet?)"/> works.
+    /// Frames from stream sources are still cached so <see cref="ISessionReader.TryGetPacket(PacketId, out Packet?, out SessionFailure?)"/> works.
     /// </summary>
     public static SessionOptions RedissectOnly { get; } = new()
     {

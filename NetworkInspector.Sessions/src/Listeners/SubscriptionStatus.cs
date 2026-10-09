@@ -5,6 +5,8 @@ namespace NetworkInspector.Sessions.Listeners;
 /// <summary>Subscription state for a signal listener.</summary>
 public enum SubscriptionStatus
 {
+    #region Values
+
     /// <summary>Listener is active and receiving signals.</summary>
     Active,
 
@@ -13,4 +15,6 @@ public enum SubscriptionStatus
 
     /// <summary>Session ended while the listener was still active.</summary>
     SessionEnded,
+
+    #endregion
 }

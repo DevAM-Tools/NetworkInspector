@@ -23,10 +23,13 @@ public enum FilterErrorKind : byte
 
     #region Binding
 
-    /// <summary>Referenced field does not exist on the compile-time stack.</summary>
+    /// <summary>Referenced field or protocol does not exist on the compile-time stack.</summary>
     UnknownField = 4,
 
-    /// <summary>Referenced protocol does not exist on the compile-time stack.</summary>
+    /// <summary>
+    /// Reserved. Unknown protocol names report <see cref="UnknownField"/> (same message shape as
+    /// unknown fields) so callers have one failure kind for bind misses.
+    /// </summary>
     UnknownProtocol = 5,
 
     /// <summary>Operator applied to incompatible operand kinds.</summary>

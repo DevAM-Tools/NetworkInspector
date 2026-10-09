@@ -8,6 +8,8 @@ namespace NetworkInspector.Sessions.Jobs;
 /// </summary>
 public enum JobStatus
 {
+    #region Values
+
     /// <summary>Job created but not yet started.</summary>
     Pending,
 
@@ -22,4 +24,6 @@ public enum JobStatus
 
     /// <summary>Job terminated due to an unhandled exception.</summary>
     Failed,
+
+    #endregion
 }

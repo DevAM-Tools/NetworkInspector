@@ -8,6 +8,10 @@ namespace NetworkInspector.Sessions;
 public sealed class SessionException(SessionErrorCode code, string message)
     : Exception(message)
 {
+    #region Fields
+
     /// <summary>Identifies the root cause of the failure.</summary>
     public SessionErrorCode Code { get; } = code;
+
+    #endregion
 }

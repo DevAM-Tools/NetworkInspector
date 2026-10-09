@@ -98,7 +98,7 @@ internal sealed class SessionListenerScenario : IProfilingScenario, IDisposable
 
         CountingListener listener = new(_Materialize);
 
-        if (!_Session.TryAddFrameSource(source, out _))
+        if (!_Session.TryAddFrameSource(source, out _, out _))
         {
             _Session.Dispose();
             _Session = null;
@@ -106,7 +106,7 @@ internal sealed class SessionListenerScenario : IProfilingScenario, IDisposable
                 "Failed to add frame source — session is not in the Idle phase.");
         }
 
-        if (!_Session.TryAddListener(listener, out _))
+        if (!_Session.TryAddListener(listener, out _, out _))
         {
             _Session.Dispose();
             _Session = null;
@@ -114,7 +114,7 @@ internal sealed class SessionListenerScenario : IProfilingScenario, IDisposable
                 "Failed to add listener — session may be shutting down.");
         }
 
-        if (!_Session.TryStart())
+        if (!_Session.TryStart(out _))
         {
             _Session.Dispose();
             _Session = null;
@@ -176,7 +176,7 @@ internal sealed class SessionListenerScenario : IProfilingScenario, IDisposable
         {
             for (int i = fromIndex; i < toIndexExclusive; i++)
             {
-                if (!session.TryGetPacket(new PacketId(i), _Recycle, out Packet? packet) || packet is null)
+                if (!session.TryGetPacket(new PacketId(i), _Recycle, out Packet? packet, out _) || packet is null)
                 {
                     continue;
                 }

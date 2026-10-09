@@ -88,6 +88,19 @@ internal sealed class FilterLifecycleTests
     }
 
     [Test]
+    public async Task Cache_Disabled_DoesNotStoreVerdicts()
+    {
+        using Stack stack = FilterTestHelper.BuildStack();
+        FilterCompileOptions options = new() { EnableMatchCache = false };
+        Filter filter = Filter.Compile("udp.srcport == 53", stack, options).Value;
+        Packet packet = FilterTestHelper.Parse(stack, FilterTestHelper.BuildUdpFrame(53, 1024), 0);
+
+        await Assert.That(FilterTestHelper.MatchOrThrow(filter, packet)).IsTrue();
+        await Assert.That(FilterTestHelper.MatchOrThrow(filter, packet)).IsTrue();
+        await Assert.That(filter.EvaluatedCount).IsEqualTo(0L);
+    }
+
+    [Test]
     public async Task TryIsMatch_NullPacket_Throws()
     {
         using Stack stack = FilterTestHelper.BuildStack();

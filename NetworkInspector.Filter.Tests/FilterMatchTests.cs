@@ -47,6 +47,8 @@ internal sealed class FilterMatchTests
     [Arguments("udp.srcport > 52", true)]
     [Arguments("udp.srcport >= 54", false)]
     [Arguments("udp.dstport == 1024", true)]
+    [Arguments("udp.srcport == 1_000", false)]
+    [Arguments("udp.dstport == 1_024", true)]
     [Arguments("ip.ttl == 64", true)]
     [Arguments("ip.ttl == 0x40", true)]
     [Arguments("ip.ttl == 0b1000000", true)]

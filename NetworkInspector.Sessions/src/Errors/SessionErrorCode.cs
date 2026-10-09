@@ -7,6 +7,8 @@ namespace NetworkInspector.Sessions;
 /// </summary>
 public enum SessionErrorCode
 {
+    #region Values
+
     /// <summary>The operation is not valid in the current session phase.</summary>
     InvalidPhase,
 
@@ -68,4 +70,18 @@ public enum SessionErrorCode
     /// <see cref="SessionOptions.ValueCache"/>.
     /// </summary>
     ValueCacheListenerWithoutRequest,
+
+    /// <summary>Packet and frame reads are disabled for a restart or after shutdown.</summary>
+    QueriesDisabled,
+
+    /// <summary>The packet id is not valid or not in the announced range.</summary>
+    PacketNotFound,
+
+    /// <summary>The job is not registered in this session.</summary>
+    JobNotFound,
+
+    /// <summary>The job is already completed, cancelled, or failed.</summary>
+    JobTerminal,
+
+    #endregion
 }

@@ -15,7 +15,13 @@ namespace NetworkInspector.Sessions;
 /// <typeparam name="T">Element type.</typeparam>
 internal sealed class SnapshotList<T>
 {
+    #region Fields
+
     private volatile T[] _Snapshot = [];
+
+    #endregion
+
+    #region API
 
     /// <summary>
     /// The current snapshot as a span. O(1), no allocation, no lock.
@@ -82,4 +88,6 @@ internal sealed class SnapshotList<T>
     /// Returns the number of elements in the current snapshot.
     /// </summary>
     internal int Count => _Snapshot.Length;
+
+    #endregion
 }

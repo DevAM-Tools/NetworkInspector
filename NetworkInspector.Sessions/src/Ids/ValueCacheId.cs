@@ -10,6 +10,8 @@ namespace NetworkInspector.Sessions.Ids;
 [method: MethodImpl(MethodImplOptions.AggressiveInlining)]
 public readonly struct ValueCacheId(int value) : IEquatable<ValueCacheId>, IComparable<ValueCacheId>
 {
+    #region Fields
+
     /// <summary>Sentinel value representing an invalid or unassigned value-cache ID.</summary>
     public static readonly ValueCacheId Invalid = new(-1);
 
@@ -22,6 +24,10 @@ public readonly struct ValueCacheId(int value) : IEquatable<ValueCacheId>, IComp
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         get => Core.Ids.ArrayIndexIdRange.IsValidIndex(Value);
     }
+
+    #endregion
+
+    #region API
 
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -76,4 +82,6 @@ public readonly struct ValueCacheId(int value) : IEquatable<ValueCacheId>, IComp
 
         return value;
     }
+
+    #endregion
 }

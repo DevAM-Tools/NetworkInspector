@@ -17,6 +17,8 @@ internal sealed class PartialPacketIndexReader(
     private readonly PacketIndex _Inner = inner;
     private readonly ProtocolId _HiddenProtocol = hiddenProtocol;
     private readonly FieldId _HiddenField = hiddenField;
+    private readonly IndexGroupId _HiddenGroup =
+        hiddenField.IsValid ? inner.Stack.GetFieldIndexGroup(hiddenField) : IndexGroupId.Invalid;
 
     #endregion
 
@@ -54,8 +56,18 @@ internal sealed class PartialPacketIndexReader(
     public PresenceQuery Query() => _Inner.Query();
 
     /// <inheritdoc />
-    public bool TryGetGroupBitmap(IndexGroupId groupId, out ReadOnlyRoaringBitmap bitmap) =>
-        _Inner.TryGetGroupBitmap(groupId, out bitmap);
+    public bool TryGetGroupBitmap(IndexGroupId groupId, out ReadOnlyRoaringBitmap bitmap)
+    {
+        // Field prune prefers IndexGroup; hide the field's group too or the partial index
+        // would still look fully tracked.
+        if (_HiddenGroup.IsValid && groupId == _HiddenGroup)
+        {
+            bitmap = ReadOnlyRoaringBitmap.Empty;
+            return false;
+        }
+
+        return _Inner.TryGetGroupBitmap(groupId, out bitmap);
+    }
 
     /// <inheritdoc />
     public bool TryGetProtocolBitmap(ProtocolId protocolId, out ReadOnlyRoaringBitmap bitmap)

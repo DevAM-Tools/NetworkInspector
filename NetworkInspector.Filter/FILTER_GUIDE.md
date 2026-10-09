@@ -11,7 +11,7 @@ Implementation plan: [`../plans/plans_filter-migration-modernization.md`](../pla
 
 **Not in v1:** `seq`, `stream`, `window`, `let`, `where`, public `nav(…)`, children/parent/siblings, relative short names in scopes, bytecode VM, AOT, MCP completer UI. Filters do not read `ValueCache` (values still come from the field tree). Columnar scans: [`VALUECACHE_GUIDE.md`](../NetworkInspector.Core/VALUECACHE_GUIDE.md). A packet parsed with `FieldTreeMode.Skip` is not a valid eval input: `TryIsMatch` returns `FilterErrorKind.NoFieldTree` (not a negative match), except `AlwaysMatch` / empty compile.
 
-`Filter.Compile(expression, stack, in FilterObserverOptions)` compiles the same expression into a `FilterObserver`. That object is not a `Filter`. It latches values during a skip parse and does not share reset or match state with a field-tree filter of the same text. A subtree scope (`$udp { ... }`) fails that compile with `FilterErrorKind.NeedsFieldTree`; use `Filter.Compile` and `FieldTreeMode.Build` for it. Read `IsMatch` after `TryParse` returns. When `HasFlank` is true, read `TryReadMatch` instead. `BeginPacket` clears the per-frame bits and keeps the flank sample. `ResetState` clears the sample too.
+`Filter.Compile(expression, stack, in FilterObserverOptions)` compiles the same expression into a `FilterObserver`. That object is not a `Filter`. It latches values during a skip parse and does not share reset or match state with a field-tree filter of the same text. A subtree scope (`$udp { ... }`) fails that compile with `FilterErrorKind.NeedsFieldTree`; use `Filter.Compile` and `FieldTreeMode.Build` for it. Protocol presence without a container field also fails observer compile with `NeedsFieldTree` (skip parse cannot scan owners). At most one `flank(...)` per observer — a second flank is a compile error. After `TryParse` returns, read `IsMatch` for non-flank observers. When `HasFlank` is true, `IsMatch` throws; call `TryReadMatch` instead. `BeginPacket` clears the per-frame bits and keeps the flank sample. `ResetState` clears the sample too.
 
 ---
 
@@ -129,11 +129,13 @@ tcp || udp
 
 ```text
 udp.port == 53
-udp.srcport == 53
+udp.srcport == 1_000
 tcp.dstport != 443
 frame.len > 100
 ip.ttl >= 64
 ```
+
+Integer / hex / binary / octal literals allow `_` digit separators (`1_000`, `0xFF_00`). A trailing or doubled `_` ends the number token; the underscore is not absorbed into the literal.
 
 **Cost:** index group prune (candidates) → one FieldTree gather for required fields → compare. Materialize lazy fields only on miss.
 
@@ -1019,6 +1021,8 @@ Filter.TryParse("tcp.por == ", options);
 ### 8.2 Match cache (evaluated + result)
 
 After the first successful eval of packet id `N`, a later `TryIsMatch` for `N` must **not** re-run the JIT body.
+
+`FilterCompileOptions.EnableMatchCache` defaults to `true`. Set it to `false` when a long-lived filter will touch unbounded packet ids and you cannot afford the per-id bitmaps (for example a streaming convert that never re-queries). Derive copies the flag from the source filter.
 
 Important: cache must distinguish:
 

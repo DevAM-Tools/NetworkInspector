@@ -19,7 +19,7 @@ internal sealed class SessionFilterTests
         TestSessionListener listener = new();
         PacketFilter filter = SessionFixture.CompileOrThrow(stack, "udp.dstport == 53");
 
-        bool added = session.TryAddListener(listener, filter, out ListenerInfo? info);
+        bool added = session.TryAddListener(listener, filter, out ListenerInfo? info, out _);
 
         await Assert.That(added).IsTrue();
         await Assert.That(info).IsNotNull();
@@ -33,7 +33,7 @@ internal sealed class SessionFilterTests
         using Session session = new(stack);
         TestSessionListener listener = new();
 
-        bool added = session.TryAddListener(listener, out ListenerInfo? info);
+        bool added = session.TryAddListener(listener, out ListenerInfo? info, out _);
 
         await Assert.That(added).IsTrue();
         await Assert.That(info).IsNotNull();
@@ -46,7 +46,7 @@ internal sealed class SessionFilterTests
         using Stack stack = TestHarness.CreateStack();
         using Session session = new(stack);
 
-        bool added = session.TryAddListener(new TestSessionListener(), filter: null, out ListenerInfo? info);
+        bool added = session.TryAddListener(new TestSessionListener(), filter: null, out ListenerInfo? info, out _);
 
         await Assert.That(added).IsTrue();
         await Assert.That(info).IsNotNull();
@@ -60,7 +60,7 @@ internal sealed class SessionFilterTests
         using Session session = new(stack);
 
         bool added = session.TryAddListener(
-            new TestSessionListener(), "udp.dstport == 53", out ListenerInfo? info, out FilterError? filterFailure);
+            new TestSessionListener(), "udp.dstport == 53", out ListenerInfo? info, out FilterError? filterFailure, out _);
 
         await Assert.That(added).IsTrue();
         await Assert.That(filterFailure).IsNull();
@@ -74,7 +74,7 @@ internal sealed class SessionFilterTests
         using Stack stack = TestHarness.CreateStack();
         using Session session = new(stack);
 
-        bool added = session.TryAddListener(new TestSessionListener(), "   ", out ListenerInfo? _, out FilterError? filterFailure);
+        bool added = session.TryAddListener(new TestSessionListener(), "   ", out ListenerInfo? _, out FilterError? filterFailure, out _);
 
         await Assert.That(added).IsTrue();
         await Assert.That(filterFailure).IsNull();
@@ -88,7 +88,7 @@ internal sealed class SessionFilterTests
         using Session session = new(stack);
 
         bool added = session.TryAddListener(
-            new TestSessionListener(), filterExpression: null, out ListenerInfo? _, out FilterError? filterFailure);
+            new TestSessionListener(), filterExpression: null, out ListenerInfo? _, out FilterError? filterFailure, out _);
 
         await Assert.That(added).IsTrue();
         await Assert.That(filterFailure).IsNull();
@@ -102,7 +102,7 @@ internal sealed class SessionFilterTests
         using Session session = new(stack);
 
         bool added = session.TryAddListener(
-            new TestSessionListener(), "nosuch.field == 1", out ListenerInfo? info, out FilterError? filterFailure);
+            new TestSessionListener(), "nosuch.field == 1", out ListenerInfo? info, out FilterError? filterFailure, out _);
 
         await Assert.That(added).IsFalse();
         await Assert.That(info).IsNull();
@@ -115,12 +115,12 @@ internal sealed class SessionFilterTests
     {
         using Stack stack = TestHarness.CreateStack();
         using Session session = new(stack);
-        session.TryStart();
+        session.TryStart(out _);
         session.WaitForCompletion();
         session.Shutdown();
 
         bool added = session.TryAddListener(
-            new TestSessionListener(), "udp", out ListenerInfo? info, out FilterError? filterFailure);
+            new TestSessionListener(), "udp", out ListenerInfo? info, out FilterError? filterFailure, out _);
 
         await Assert.That(added).IsFalse();
         await Assert.That(info).IsNull();
@@ -133,7 +133,7 @@ internal sealed class SessionFilterTests
         using Stack stack = TestHarness.CreateStack();
         using Session session = new(stack);
 
-        await Assert.That(() => session.TryAddListener(null!, "udp", out _, out _)).Throws<ArgumentNullException>();
+        await Assert.That(() => session.TryAddListener(null!, "udp", out _, out _, out _)).Throws<ArgumentNullException>();
     }
 
     [Test]
@@ -142,7 +142,7 @@ internal sealed class SessionFilterTests
         using Stack stack = TestHarness.CreateStack();
         using Session session = new(stack);
 
-        await Assert.That(() => session.TryAddListener(null!, PacketFilter.AlwaysMatch, out _))
+        await Assert.That(() => session.TryAddListener(null!, PacketFilter.AlwaysMatch, out _, out _))
             .Throws<ArgumentNullException>();
     }
 
@@ -207,7 +207,7 @@ internal sealed class SessionFilterTests
             PacketReadMode.All,
             out int count,
             out PacketIdLayout idLayout,
-            out FilterError? failure);
+            out FilterError? failure, out _);
 
         await Assert.That(read).IsTrue();
         await Assert.That(failure).IsNull();
@@ -228,7 +228,7 @@ internal sealed class SessionFilterTests
             PacketReadMode.Matching,
             out int count,
             out PacketIdLayout idLayout,
-            out FilterError? failure);
+            out FilterError? failure, out _);
 
         await Assert.That(read).IsTrue();
         await Assert.That(failure).IsNull();
@@ -247,7 +247,7 @@ internal sealed class SessionFilterTests
 
         PacketRef[] buffer = new PacketRef[4];
         bool read = fixture.Session.TryReadPackets(
-            fixture.ListenerId, 0, buffer, PacketReadMode.Matching, out int count, out PacketIdLayout idLayout, out _);
+            fixture.ListenerId, 0, buffer, PacketReadMode.Matching, out int count, out PacketIdLayout idLayout, out _, out _);
 
         await Assert.That(read).IsTrue();
         await Assert.That(count).IsEqualTo(4);
@@ -261,7 +261,7 @@ internal sealed class SessionFilterTests
 
         PacketRef[] buffer = new PacketRef[2];
         bool read = fixture.Session.TryReadPackets(
-            fixture.ListenerId, 0, buffer, PacketReadMode.Matching, out int count, out _, out _);
+            fixture.ListenerId, 0, buffer, PacketReadMode.Matching, out int count, out _, out _, out _);
 
         await Assert.That(read).IsTrue();
         await Assert.That(count).IsEqualTo(2);
@@ -275,7 +275,7 @@ internal sealed class SessionFilterTests
 
         PacketRef[] buffer = new PacketRef[3];
         bool read = fixture.Session.TryReadPackets(
-            fixture.ListenerId, -5, buffer, PacketReadMode.Matching, out int count, out _, out _);
+            fixture.ListenerId, -5, buffer, PacketReadMode.Matching, out int count, out _, out _, out _);
 
         await Assert.That(read).IsTrue();
         await Assert.That(count).IsEqualTo(3);
@@ -289,7 +289,7 @@ internal sealed class SessionFilterTests
 
         PacketRef[] buffer = new PacketRef[4];
         bool read = fixture.Session.TryReadPackets(
-            fixture.ListenerId, 0, buffer, PacketReadMode.Matching, out int count, out PacketIdLayout idLayout, out _);
+            fixture.ListenerId, 0, buffer, PacketReadMode.Matching, out int count, out PacketIdLayout idLayout, out _, out _);
 
         await Assert.That(read).IsTrue();
         await Assert.That(count).IsEqualTo(2);
@@ -305,7 +305,7 @@ internal sealed class SessionFilterTests
 
         PacketRef[] buffer = new PacketRef[4];
         bool read = fixture.Session.TryReadPackets(
-            fixture.ListenerId, 0, buffer, PacketReadMode.Matching, out int count, out PacketIdLayout idLayout, out _);
+            fixture.ListenerId, 0, buffer, PacketReadMode.Matching, out int count, out PacketIdLayout idLayout, out _, out _);
 
         await Assert.That(read).IsTrue();
         await Assert.That(count).IsEqualTo(4);
@@ -319,7 +319,7 @@ internal sealed class SessionFilterTests
 
         PacketRef[] buffer = new PacketRef[4];
         bool read = fixture.Session.TryReadPackets(
-            fixture.ListenerId, 0, buffer, PacketReadMode.Matching, out int count, out PacketIdLayout idLayout, out _);
+            fixture.ListenerId, 0, buffer, PacketReadMode.Matching, out int count, out PacketIdLayout idLayout, out _, out _);
 
         await Assert.That(read).IsTrue();
         await Assert.That(count).IsEqualTo(4);
@@ -333,7 +333,7 @@ internal sealed class SessionFilterTests
 
         PacketRef[] buffer = new PacketRef[2];
         bool read = fixture.Session.TryReadPackets(
-            fixture.ListenerId, 10, buffer, PacketReadMode.Matching, out int count, out PacketIdLayout idLayout, out _);
+            fixture.ListenerId, 10, buffer, PacketReadMode.Matching, out int count, out PacketIdLayout idLayout, out _, out _);
 
         await Assert.That(read).IsTrue();
         await Assert.That(count).IsEqualTo(0);
@@ -341,25 +341,22 @@ internal sealed class SessionFilterTests
     }
 
     [Test]
-    public async Task TryReadPackets_UnknownListener_Throws()
+    public async Task TryReadPacketsUnknownListenerReturnsListenerNotFound()
     {
         using SessionFixture fixture = SessionFixture.WithDnsPorts(1);
         PacketRef[] buffer = new PacketRef[1];
 
-        try
-        {
-            _ = fixture.Session.TryReadPackets(
-                new ListenerId(4242), 0, buffer, PacketReadMode.All, out _, out _, out _);
-            throw new InvalidOperationException("Expected SessionException was not thrown.");
-        }
-        catch (SessionException exception)
-        {
-            await Assert.That(exception.Code).IsEqualTo(SessionErrorCode.ListenerNotFound);
-        }
+        bool read = fixture.Session.TryReadPackets(
+            new ListenerId(4242), 0, buffer, PacketReadMode.All, out _, out _, out FilterError? failure, out SessionFailure? sessionFailure);
+
+        await Assert.That(read).IsFalse();
+        await Assert.That(failure).IsNull();
+        await Assert.That(sessionFailure).IsNotNull();
+        await Assert.That(sessionFailure.Value.Code).IsEqualTo(SessionErrorCode.ListenerNotFound);
     }
 
     [Test]
-    public async Task TryReadPackets_WhenQueriesDisabled_ReturnsEmptySuccess()
+    public async Task TryReadPacketsWhenQueriesDisabledReturnsQueriesDisabled()
     {
         using SessionFixture fixture = SessionFixture.WithDnsPorts(2, "udp.dstport == 53");
         ListenerId listenerId = fixture.ListenerId;
@@ -367,11 +364,13 @@ internal sealed class SessionFilterTests
 
         PacketRef[] buffer = new PacketRef[2];
         bool read = fixture.Session.TryReadPackets(
-            listenerId, 0, buffer, PacketReadMode.Matching, out int count, out _, out FilterError? failure);
+            listenerId, 0, buffer, PacketReadMode.Matching, out int count, out _, out FilterError? failure, out SessionFailure? sessionFailure);
 
-        await Assert.That(read).IsTrue();
+        await Assert.That(read).IsFalse();
         await Assert.That(count).IsEqualTo(0);
         await Assert.That(failure).IsNull();
+        await Assert.That(sessionFailure).IsNotNull();
+        await Assert.That(sessionFailure.Value.Code).IsEqualTo(SessionErrorCode.QueriesDisabled);
     }
 
     [Test]
@@ -381,7 +380,7 @@ internal sealed class SessionFilterTests
 
         PacketRef[] buffer = new PacketRef[2];
         bool read = fixture.Session.TryReadPackets(
-            fixture.ListenerId, 0, buffer, PacketReadMode.Matching, out int count, out _, out FilterError? failure);
+            fixture.ListenerId, 0, buffer, PacketReadMode.Matching, out int count, out _, out FilterError? failure, out _);
 
         await Assert.That(read).IsFalse();
         await Assert.That(count).IsEqualTo(0);
@@ -397,9 +396,9 @@ internal sealed class SessionFilterTests
         PacketRef[] buffer = new PacketRef[4];
 
         _ = fixture.Session.TryReadPackets(
-            fixture.ListenerId, 2, buffer, PacketReadMode.Matching, out _, out _, out _);
+            fixture.ListenerId, 2, buffer, PacketReadMode.Matching, out _, out _, out _, out _);
         bool replay = fixture.Session.TryReadPackets(
-            fixture.ListenerId, 0, buffer, PacketReadMode.Matching, out int count, out _, out FilterError? failure);
+            fixture.ListenerId, 0, buffer, PacketReadMode.Matching, out int count, out _, out FilterError? failure, out _);
 
         await Assert.That(replay).IsFalse();
         await Assert.That(count).IsEqualTo(0);
@@ -415,7 +414,7 @@ internal sealed class SessionFilterTests
 
         PacketRef[] buffer = new PacketRef[4];
         bool read = fixture.Session.TryReadPackets(
-            fixture.ListenerId, 0, buffer, PacketReadMode.Matching, out int count, out _, out FilterError? failure);
+            fixture.ListenerId, 0, buffer, PacketReadMode.Matching, out int count, out _, out FilterError? failure, out _);
 
         await Assert.That(read).IsTrue();
         await Assert.That(failure).IsNull();
@@ -449,7 +448,7 @@ internal sealed class SessionFilterTests
 
         PacketRef[] buffer = new PacketRef[6];
         bool read = fixture.Session.TryReadPackets(
-            fixture.ListenerId, 0, buffer, PacketReadMode.Matching, out int count, out _, out _);
+            fixture.ListenerId, 0, buffer, PacketReadMode.Matching, out int count, out _, out _, out _);
 
         await Assert.That(read).IsTrue();
         await Assert.That(count).IsEqualTo(3);
@@ -492,7 +491,7 @@ internal sealed class SessionFilterTests
 
         PacketRef[] buffer = new PacketRef[3];
         bool read = fixture.Session.TryReadPackets(
-            fixture.ListenerId, 0, buffer, PacketReadMode.Matching, out int count, out _, out FilterError? failure);
+            fixture.ListenerId, 0, buffer, PacketReadMode.Matching, out int count, out _, out FilterError? failure, out _);
 
         await Assert.That(read).IsFalse();
         await Assert.That(count).IsEqualTo(0);
@@ -509,11 +508,58 @@ internal sealed class SessionFilterTests
 
         PacketRef[] buffer = new PacketRef[3];
         bool read = fixture.Session.TryReadPackets(
-            fixture.ListenerId, 0, buffer, PacketReadMode.All, out int count, out _, out FilterError? failure);
+            fixture.ListenerId, 0, buffer, PacketReadMode.All, out int count, out _, out FilterError? failure, out _);
 
         await Assert.That(read).IsTrue();
         await Assert.That(count).IsEqualTo(3);
         await Assert.That(failure).IsNull();
+    }
+
+    [Test]
+    public async Task MatchingReadsAreSerializedPerListener()
+    {
+        using SessionFixture fixture = SessionFixture.WithDnsPorts(4, "udp.dstport == 53");
+        PacketRef[] left = new PacketRef[4];
+        PacketRef[] right = new PacketRef[4];
+        Task<bool> first = Task.Run(() =>
+        {
+            bool ok = true;
+            for (int i = 0; i < 50; i++)
+            {
+                ok &= fixture.Session.TryReadPackets(
+                    fixture.ListenerId,
+                    0,
+                    left,
+                    PacketReadMode.Matching,
+                    out _,
+                    out _,
+                    out _,
+                    out _);
+            }
+
+            return ok;
+        });
+        Task<bool> second = Task.Run(() =>
+        {
+            bool ok = true;
+            for (int i = 0; i < 50; i++)
+            {
+                ok &= fixture.Session.TryReadPackets(
+                    fixture.ListenerId,
+                    0,
+                    right,
+                    PacketReadMode.Matching,
+                    out _,
+                    out _,
+                    out _,
+                    out _);
+            }
+
+            return ok;
+        });
+
+        await Assert.That(await first).IsTrue();
+        await Assert.That(await second).IsTrue();
     }
 
     #endregion

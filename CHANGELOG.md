@@ -7,6 +7,47 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.15.0] — SessionFailure host control and filter observer hardening
+
+Delta since 0.14.0. Version is `0.15.0` in `Directory.Build.props`.
+
+This release makes `Session` operable after a capture stops: operational `Try*` calls return a `SessionFailure`, listeners and value caches may attach in `Stopped` and backfill the current packet range, and multi-source ingest records the packet-to-frame map under the parse lock. `FilterObserver` rejects a second `flank`, fails containerless protocol presence closed, throws from `IsMatch` when `HasFlank` is true, and densifies field dispatch. Classic filters can turn off the match cache and prune via index groups; decimal digit separators lex as one integer.
+
+### Added
+
+- **`SessionFailure`** — operational `Try*` refusals return `false` with a `SessionFailure` (`SessionErrorCode` plus invariant message). New codes include `QueriesDisabled`, `PacketNotFound`, `JobNotFound`, and `JobTerminal`. Validation faults still throw `SessionException`.
+- **`QueriesEnabled`** — false while restart rewrites packets, after restart fails closed, and after shutdown disables reads. A false packet read means “no row” only when this is true.
+- **`FilterCompileOptions.EnableMatchCache`** — defaults to `true`. Set `false` for forward-only convert/export so per-id match bitmaps do not grow without bound. Derive keeps the caller's flag.
+
+### Changed
+
+- **Post-Stopped attach** — listeners, value caches, and jobs may be added in `Idle`, `Running`, `Restarting`, or `Stopped`. `ShuttingDown` is refused. An attach after packets exist is notified for the current id range. Frame sources stay `Idle` only.
+- **Listener filter gate** — `Matching` `TryReadPackets` and restart rebind share one gate per listener. `All` reads do not take the gate.
+- **Wait and shutdown timeout** — one budget for every source job together, not a fresh timeout per source.
+- **Idle source remove** — `TryUnsubscribe` can remove a not-yet-started source. `FrameSourceInfo.Stop` clears the callback only when unsubscribe returns true.
+- **Packet-to-frame chunks** — 8192 `long` entries (64 KB), under the large-object heap threshold.
+- **Observer field dispatch** — dense field-id → slot tables; leaf tests can stop once the boolean root is permanently decided (flank still samples).
+- **Index-group prune** — `CandidateBitmapBuilder` uses `FilterSymbol.IndexGroup` bitmaps when present.
+- **`UnknownProtocol`** — reserved; unknown protocol names report `UnknownField` (same message shape as unknown fields).
+
+### Breaking
+
+- **Session `Try*` outs** — operational methods take a trailing `out SessionFailure?`. `TryReadPackets` keeps `out FilterError?` and adds `out SessionFailure? sessionFailure`; exactly one is set on failure. Update every call site.
+- **`FrameSourceInfo.RegisterStopCallback`** — takes `Func<bool>` instead of `Action`. Return true only when stop/unsubscribe succeeded.
+- **`FilterObserver.IsMatch`** — throws when `HasFlank` is true. Call `TryReadMatch` for flank observers.
+- **Observer multi-flank** — a second `flank(...)` in one observer expression is a compile error (at most one flank).
+- **Containerless protocol presence on observers** — fails compile with `NeedsFieldTree` instead of throwing from `FieldWatch.Only`.
+
+### Fixed
+
+- **Multi-source ingest** — allocate, parse, and append the packet-to-frame map under one lock so a second source cannot observe the next id before the first frame is stored.
+- **Restart / Shutdown** — mutually exclusive; shutdown waiters are always released; the restart factory must not call `Shutdown`, `Restart`, `Dispose`, or `TryStart`.
+- **Source-job publication** — `_SourceJobs` is published only when every slot is filled.
+- **Foreign listener filter** — a non-`Filter` `IFilter` is rejected before any listener state is stored.
+- **Observer `by:` check** — non-integer fields fail the same integer-field check as tree `Filter.Compile`.
+- **Decimal digit separators** — `1_000` lexes as one integer (radix forms already did).
+- **Lazy materialize coverage** — Filter.Tests exercise two-pass lazy field materialization on miss.
+
 ## [0.14.0] — Field watches, Vector ASC layout, and TCP corrections
 
 Delta since 0.13.0. Version is `0.14.0` in `Directory.Build.props`.

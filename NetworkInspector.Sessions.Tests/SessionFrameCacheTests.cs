@@ -17,13 +17,13 @@ internal sealed class SessionFrameCacheTests
         using TestFrameSource source = TestFrameSource.WithUdpFrames(frameCount);
 
         using Session session = new(stack);
-        session.TryAddFrameSource(source, out _);
-        session.TryStart();
+        session.TryAddFrameSource(source, out _, out _);
+        session.TryStart(out _);
         session.WaitForCompletion();
 
         for (int i = 0; i < frameCount; i++)
         {
-            bool got = session.TryGetPacket(new PacketId(i), out Packet? packet);
+            bool got = session.TryGetPacket(new PacketId(i), out Packet? packet, out _);
             await Assert.That(got).IsTrue();
             await Assert.That(packet!.HasFieldTree).IsTrue();
         }
@@ -42,10 +42,11 @@ internal sealed class SessionFrameCacheTests
         bool added = session.TryAddFrameSource(
             source,
             new FrameSourceAddOptions { CacheRandomAccess = true },
+            out _,
             out _);
         await Assert.That(added).IsTrue();
 
-        session.TryStart();
+        session.TryStart(out _);
         session.WaitForCompletion();
 
         for (int i = 0; i < frameCount; i++)
@@ -53,7 +54,7 @@ internal sealed class SessionFrameCacheTests
             Frame? inner = source.FrameById(new FrameId(i));
             await Assert.That(inner.HasValue).IsTrue();
 
-            bool got = session.TryGetFrame(new PacketId(i), out Frame cached);
+            bool got = session.TryGetFrame(new PacketId(i), out Frame cached, out _);
             await Assert.That(got).IsTrue();
             await Assert.That(cached.Id).IsEqualTo(inner!.Value.Id);
             await Assert.That(cached.Timestamp).IsEqualTo(inner.Value.Timestamp);
@@ -73,10 +74,10 @@ internal sealed class SessionFrameCacheTests
         using TestFrameSource second = TestFrameSource.WithUdpFrames(1);
 
         using Session session = new(stack);
-        session.TryAddFrameSource(first, out _);
-        session.TryStart();
+        session.TryAddFrameSource(first, out _, out _);
+        session.TryStart(out _);
 
-        bool added = session.TryAddFrameSource(second, out FrameSourceInfo? info);
+        bool added = session.TryAddFrameSource(second, out FrameSourceInfo? info, out _);
         await Assert.That(added).IsFalse();
         await Assert.That(info).IsNull();
 
@@ -89,11 +90,11 @@ internal sealed class SessionFrameCacheTests
         using Stack stack = TestHarness.CreateStack();
         using TestFrameSource source = TestFrameSource.WithUdpFrames(1);
         using Session session = new(stack);
-        session.TryAddFrameSource(source, out _);
-        session.TryStart();
+        session.TryAddFrameSource(source, out _, out _);
+        session.TryStart(out _);
         session.WaitForCompletion();
 
-        bool found = session.TryGetPacket(PacketId.Invalid, out Packet? packet);
+        bool found = session.TryGetPacket(PacketId.Invalid, out Packet? packet, out _);
         await Assert.That(found).IsFalse();
         await Assert.That(packet).IsNull();
 
