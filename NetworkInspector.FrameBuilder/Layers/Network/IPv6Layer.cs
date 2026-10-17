@@ -42,9 +42,6 @@ public readonly struct IPv6Layer :
     private readonly IPv6Address _DstAddr;
     private readonly byte _HopLimit;
 
-    /// <summary>IP-layer MTU in bytes (IPv6 header + payload).  Zero means no limit.</summary>
-    private readonly ushort _Mtu;
-
     /// <summary>Explicit NextHeader value when caller pinned one; meaningful only when <see cref="_NextHeaderIsExplicit"/> is <c>true</c>.</summary>
     private readonly byte _ExplicitNextHeader;
 
@@ -56,24 +53,6 @@ public readonly struct IPv6Layer :
     /// </summary>
     private readonly bool _NextHeaderIsExplicit;
 
-    /// <summary>
-    /// Maximum IPv6 payload size in bytes (MTU minus the 40-byte IPv6 header).
-    /// Returns <see cref="int.MaxValue"/> when no MTU is set.
-    /// </summary>
-    public int MaxPayloadSize
-    {
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get
-        {
-            if (_Mtu == 0)
-            {
-                return int.MaxValue;
-            }
-
-            return _Mtu - IPv6Header.Size;
-        }
-    }
-
     /// <summary>Creates an IPv6 layer.  PayloadLength is always patched in post-fix.</summary>
     /// <param name="srcAddr">Source address.</param>
     /// <param name="dstAddr">Destination address.</param>
@@ -81,17 +60,18 @@ public readonly struct IPv6Layer :
     /// <param name="nextHeader">
     /// NextHeader field; <see cref="Auto.Compute"/> (default) means auto-patch from inner layer.
     /// </param>
-    /// <param name="mtu">
-    /// IP-layer MTU in bytes (IPv6 header + payload, not including Ethernet).
-    /// Zero (default) means no fragmentation limit.
-    /// </param>
+    /// <remarks>
+    /// IPv6 carries no MTU of its own in this library: the smallest
+    /// <see cref="IProvidesMtu.LinkMtu"/> along the cons-list (for example
+    /// <see cref="EthernetLayer"/> <c>maxFrameSize</c>) limits the frame, and an
+    /// <see cref="IPv6FragmentExtensionLayer"/> enables splitting.
+    /// </remarks>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public IPv6Layer(IPv6Address srcAddr, IPv6Address dstAddr, byte hopLimit = 64, Auto<byte> nextHeader = default, ushort mtu = 0)
+    public IPv6Layer(IPv6Address srcAddr, IPv6Address dstAddr, byte hopLimit = 64, Auto<byte> nextHeader = default)
     {
         _SrcAddr = srcAddr;
         _DstAddr = dstAddr;
         _HopLimit = hopLimit;
-        _Mtu = mtu;
         _NextHeaderIsExplicit = nextHeader.TryGetExplicit(out byte nh);
         _ExplicitNextHeader = nh;
     }
@@ -135,10 +115,15 @@ public readonly struct IPv6Layer :
         switch (phase)
         {
             case FixPhase.Length:
-                // PayloadLength = total - IPv6 header size.
-                BinaryPrimitives.WriteUInt16BigEndian(
-                    frame.Slice(myOffset + 4, 2),
-                    (ushort)(myLength - IPv6Header.Size));
+                // RFC 8200 §3: PayloadLength (total minus the 40-byte header) is 16 bits;
+                // jumbograms are not supported.  Report instead of wrapping (post-fix must not throw).
+                int payloadLength = myLength - IPv6Header.Size;
+                if (payloadLength > ushort.MaxValue)
+                {
+                    ctx.Status = BuildStatus.InvalidLayerState;
+                    break;
+                }
+                BinaryPrimitives.WriteUInt16BigEndian(frame.Slice(myOffset + 4, 2), (ushort)payloadLength);
                 break;
 
             case FixPhase.PublishPseudoHeader:

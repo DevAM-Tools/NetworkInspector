@@ -17,6 +17,12 @@ public readonly struct IPv6RoutingLayer :
     IProvidesProtocolType, IProvidesNextProtocolValue<IpNextProtocolKind>,
     IConsumesNextProtocolValue<IpNextProtocolKind>, IProvidesPseudoHeader
 {
+    /// <summary>
+    /// Largest type-specific data block: HdrExtLen is 8 bits, so the header is at most
+    /// 2048 bytes, which leaves 2040 bytes after the 8-byte fixed part (RFC 8200 §4.4).
+    /// </summary>
+    public const int MaxTypeSpecificDataBytes = 2040;
+
     private readonly byte _ExplicitNextHeader;
     private readonly bool _NextHeaderIsExplicit;
     private readonly byte _RoutingType;
@@ -60,10 +66,16 @@ public readonly struct IPv6RoutingLayer :
     /// <summary>Creates a generic Routing header with caller-specified type and data.</summary>
     /// <param name="routingType">Routing type byte.</param>
     /// <param name="segmentsLeft">Segments left field.</param>
-    /// <param name="typeSpecificData">Type-specific data; padded to 8-byte boundary.</param>
+    /// <param name="typeSpecificData">
+    /// Type-specific data (at most <see cref="MaxTypeSpecificDataBytes"/>); padded to an
+    /// 8-byte boundary.  Referenced, not copied.
+    /// </param>
     /// <param name="nextHeader">
     /// NextHeader field; <see cref="Auto.Compute"/> (default) means auto-patch from inner.
     /// </param>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// <paramref name="typeSpecificData"/> is longer than <see cref="MaxTypeSpecificDataBytes"/>.
+    /// </exception>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public IPv6RoutingLayer(
         byte routingType,
@@ -71,6 +83,12 @@ public readonly struct IPv6RoutingLayer :
         ReadOnlyMemory<byte> typeSpecificData,
         Auto<byte> nextHeader = default)
     {
+        if (typeSpecificData.Length > MaxTypeSpecificDataBytes)
+        {
+            throw new ArgumentOutOfRangeException(nameof(typeSpecificData), typeSpecificData.Length,
+                "IPv6 Routing type-specific data must not exceed 2040 bytes (HdrExtLen is 8 bits).");
+        }
+
         _NextHeaderIsExplicit = nextHeader.TryGetExplicit(out byte nh);
         _ExplicitNextHeader = nh;
         _RoutingType = routingType;
@@ -115,7 +133,8 @@ public readonly struct IPv6RoutingLayer :
     {
         // Byte 0: NextHeader (patched later via PatchNextProtocol)
         dst[0] = _ExplicitNextHeader;
-        // Byte 1: HdrExtLen = (totalLen / 8) - 1
+        // Byte 1: HdrExtLen = (totalLen / 8) - 1; fits a byte because the data is capped
+        // at MaxTypeSpecificDataBytes (the Type 2 form is fixed at 24 bytes).
         dst[1] = (byte)((HeaderSize / 8) - 1);
         // Byte 2: Routing Type
         dst[2] = _RoutingType;

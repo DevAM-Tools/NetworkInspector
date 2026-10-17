@@ -146,8 +146,9 @@ public static class StackThenAnyPseudoHeaderExtensions
 
 /// <summary>
 /// Extensions to attach an <see cref="ITrailerLayer"/> trailer to a stateless
-/// cons-list (concept §4.4 / §11.2).  Orthogonal to the <c>Then(...)</c>
-/// composition surface above.
+/// cons-list.  Trailers are orthogonal to header order (an FCS covers the whole
+/// frame, whatever the stack), so they attach after composition instead of being
+/// a <c>Then(...)</c> step.
 /// </summary>
 public static class StatelessStackTrailerExtensions
 {

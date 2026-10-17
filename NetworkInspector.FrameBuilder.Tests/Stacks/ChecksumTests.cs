@@ -122,7 +122,7 @@ internal sealed class ChecksumTests
     {
         EthernetLayer eth = new(_DstMac, _SrcMac);
         IPv4Layer ip = new(new IPv4Address(0xC0A80001), new IPv4Address(0xC0A80002));
-        IcmpV4EchoLayer icmp = new(1, 1);
+        IcmpV4EchoLayer icmp = new(identifier: 1, sequenceNumber: 1);
         byte[] buf = new byte[eth.HeaderSize + ip.HeaderSize + icmp.HeaderSize + _Payload.Length];
         FB.FrameStack.Start(eth).Then(ip).Then(icmp).CreateWithFixedValues().Build(_Payload).MoveNext(buf, out int total);
 
@@ -140,7 +140,7 @@ internal sealed class ChecksumTests
     {
         EthernetLayer eth = new(_DstMac, _SrcMac);
         IPv6Layer ip6 = new(_SrcIpv6, _DstIpv6);
-        IcmpV6EchoLayer icmp = new(1, 1);
+        IcmpV6EchoLayer icmp = new(identifier: 1, sequenceNumber: 1);
         byte[] buf = new byte[eth.HeaderSize + ip6.HeaderSize + icmp.HeaderSize + _Payload.Length];
         FB.FrameStack.Start(eth).Then(ip6).Then(icmp).CreateWithFixedValues().Build(_Payload).MoveNext(buf, out int total);
 

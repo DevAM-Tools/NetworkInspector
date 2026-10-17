@@ -13,8 +13,9 @@ namespace NetworkInspector.FrameBuilder;
 ///   <item><see cref="IRootLayer"/> — root link layer.</item>
 ///   <item><see cref="IConsumesNextProtocolValue"/> — patches its EtherType
 ///   from the next-inner layer's <see cref="IProvidesProtocolType.ProtocolType"/>.</item>
-///   <item><see cref="IProvidesMtu"/> — exposes the configured link MTU
-///   (default 1500 bytes) to fragmenting layers above.</item>
+///   <item><see cref="IProvidesMtu"/> — exposes the configured maximum frame
+///   size (default 1518 bytes = 1500 MAC client data + 14 header + 4 FCS) to
+///   fragmenting layers beneath it.</item>
 /// </list>
 /// </remarks>
 public readonly struct EthernetLayer :

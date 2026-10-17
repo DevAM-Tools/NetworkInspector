@@ -47,11 +47,12 @@ public readonly struct SocketCanFdLayer : IStatelessLayer, IRootLayer
     private readonly ulong _Data7;
 
     /// <summary>Creates a SocketCAN-FD frame layer.</summary>
-    /// <param name="canId">CAN identifier (11 or 29 bits).</param>
+    /// <param name="canId">CAN identifier: 0..0x7FF (standard) or 0..0x1FFFFFFF (<paramref name="extended"/>).</param>
     /// <param name="data">Frame data (0..64 bytes).  Excess bytes are dropped.</param>
     /// <param name="extended">Use 29-bit extended identifier (EFF).</param>
     /// <param name="brs">BRS flag (bit rate switch for the data phase).</param>
     /// <param name="errorStateIndicator">ESI flag (error state indicator).</param>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="canId"/> does not fit 11 or 29 bits.</exception>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public SocketCanFdLayer(
         uint canId,
@@ -60,10 +61,19 @@ public readonly struct SocketCanFdLayer : IStatelessLayer, IRootLayer
         bool brs = false,
         bool errorStateIndicator = false)
     {
+        // Linux SocketCAN: 11-bit standard or 29-bit extended identifier; bits 29..31 are
+        // the ERR/RTR/EFF flags and must not leak in through the id.
+        uint maxId = extended ? 0x1FFF_FFFFu : 0x7FFu;
+        if (canId > maxId)
+        {
+            throw new ArgumentOutOfRangeException(nameof(canId), canId,
+                extended ? "Extended CAN identifier is 29 bits (0..0x1FFFFFFF)." : "Standard CAN identifier is 11 bits (0..0x7FF).");
+        }
+
         uint id = canId;
         if (extended)
         {
-            id |= 0x80000000u;
+            id |= SocketCanHeader.EffFlag;
         }
         _CanIdWithFlags = id;
 

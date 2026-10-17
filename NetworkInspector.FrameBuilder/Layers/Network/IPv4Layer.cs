@@ -80,7 +80,8 @@ public readonly struct IPv4Layer :
     /// <param name="ttl">Time-to-Live; default 64.</param>
     /// <param name="identification">
     /// IP Identification field.  Stateless: caller decides.  Default 0.
-    /// Cross-frame counters require the stateful layer variant (see roadmap).
+    /// For a per-packet counter use <see cref="IPv4LayerWithAutoIpId"/> inside a
+    /// <see cref="Session{TStack,TTrailer,TInterceptor}"/>.
     /// </param>
     /// <param name="protocol">
     /// IP Protocol field; <see cref="Auto.Compute"/> (default) means auto-patch
@@ -148,7 +149,14 @@ public readonly struct IPv4Layer :
         switch (phase)
         {
             case FixPhase.Length:
-                // Patch the TotalLength field (covers IPv4 header + everything inside).
+                // RFC 791: TotalLength (IPv4 header + everything inside) is 16 bits.
+                // Post-fix must not throw; report the violation through the context
+                // status so the driving sequence aborts before any byte is committed.
+                if (myLength > ushort.MaxValue)
+                {
+                    ctx.Status = BuildStatus.InvalidLayerState;
+                    break;
+                }
                 BinaryPrimitives.WriteUInt16BigEndian(frame.Slice(myOffset + 2, 2), (ushort)myLength);
                 break;
 

@@ -7,6 +7,87 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.17.0] — FrameBuilder hardening and package READMEs that compile
+
+Delta since 0.16.0. Version is `0.17.0` in `Directory.Build.props`.
+
+This release makes FrameBuilder keep its promises: a build allocates nothing per frame (proven for single-frame,
+fragmenting and session builds), the stateless and the stateful path run one engine and report the same
+`BuildStatus`, length fields never wrap, padding never leaks buffer residue, constructors reject values the wire
+format cannot carry, and `TcpConnection` fails loudly instead of delivering empty or partial segments. Sequences
+gain `Dispose` and are declared with `using`. Every package README is rewritten around a quick start that compiles
+against the current API, and Filter ships its own package readme.
+
+### Added
+
+- **`FrameSequence.Dispose` / `StatefulFrameSequence.Dispose`** — declare sequences with `using`; disposing a
+  sequence that stopped before its last fragment releases the per-thread scratch buffer. Before, one abandoned
+  fragmenting build made every later fragmenting build on that thread allocate a private buffer.
+- **`BuildStatus.SessionDisposed`** — a `StatefulFrameSequence` whose `Session` was disposed (and maybe re-rented)
+  returns `false` with this status instead of writing into the new session's counters.
+- **Limit constants** — `IPv6HopByHopLayer.MaxOptionBytes` (2046), `IPv6RoutingLayer.MaxTypeSpecificDataBytes`
+  (2040), `FlexRayLayer.MaxPayloadBytes` (254).
+
+### Fixed
+
+- **FrameBuilder allocations** — the capability probes boxed the layer struct about seven times per Eth/IPv4/UDP
+  frame; builds now allocate 0 bytes after warm-up.
+- **Stateful status** — sessions rejected nothing a layer reported: UDP over IPv6 with a pinned zero checksum was
+  emitted in a session but rejected stateless. Both paths now return `InvalidLayerState`, and a packet that fails
+  before its first frame leaves IP ids, TCP sequence numbers and SOME/IP session ids unchanged.
+- **Length fields** — IPv4 TotalLength, IPv6 PayloadLength and UDP Length above 65 535 wrapped silently (raw-IP
+  roots, large MTUs); the build now returns `InvalidLayerState` and writes no frame.
+- **IPv6 Hop-by-Hop padding** — the options form left up to five padding bytes uninitialised (previous-frame residue);
+  they are Pad1 zero bytes now.
+- **`TcpConnection`** — SYN with options ignored a failed build and handed an empty span to the sink, a late fragment
+  failure was lost, and the mutator and session window were bypassed for SYN / SYN-ACK with options. A segment the
+  carrier cannot build now throws `InvalidOperationException` naming the status, none of its frames reaches the sink,
+  and sequence, ACK and window state stay unchanged; `OnSegment` sees SYN and SYN-ACK with options.
+- **`TcpConnection.Open`** — an explicit `WindowSize: 0` was rewritten to 65535; it is emitted as a zero window now.
+- **Debug and Release** — the IPv6 fragment layer no longer asserts in Debug builds only.
+
+### Changed
+
+- **WebSocket masking** — writes straight into the writer span: one copy less and no `ArrayPool` rental per frame.
+- **Producer buffer cap** — `TcpConnection.WriteFromClient<TProducer>` / `WriteFromServer` keep producer buffers up
+  to 64 KiB per thread and release larger ones after the write.
+- **Docs** — every package README is rewritten around highlights, install, and a quick start that compiles and
+  runs against the current API; shields show NuGet version, downloads, .NET 10, and license. New
+  [`NetworkInspector.Filter/README.md`](NetworkInspector.Filter/README.md), now the Filter package readme instead of
+  `FILTER_GUIDE.md`. The root README lists the Filter package and maps goals to packages.
+- **Docs fixes** — Values constructors and text formats (uppercase hex, ISO-8601 timestamps), Generators hook names
+  and attribute assembly, Sessions `TryStart(out failure)`, the lifecycle diagram (`Idle → Stopped`,
+  `Idle → ShuttingDown`, no `Stopped → ShuttingDown`), CLI `pcap` alias, export extension inference, exit codes,
+  `--tolerant` scope, exporter defaults, the Parquet `value_timestamp_ns` column, and the CSV delimiter rule.
+  Removed links to the missing `docs/` folder.
+- **FrameBuilder docs** — [`FRAMEBUILDER_GUIDE.md`](NetworkInspector.FrameBuilder/FRAMEBUILDER_GUIDE.md) describes
+  FrameBuilder as the public library it ships as, lists every file, the constructor limits and the `using` rule; the
+  FrameBuilder README "Limits" states the memory-ownership rule (`ReadOnlyMemory<byte>` arguments are referenced, not
+  copied), the closed session-state slot set and the scope of the TCP helper.
+
+### Breaking
+
+- **Constructor validation** — out-of-range values throw `ArgumentOutOfRangeException`: `SocketCanLayer` /
+  `SocketCanFdLayer` ids above 0x7FF (standard) or 0x1FFFFFFF (extended), `LinLayer` checksum types other than 1 and
+  2, `FlexRayLayer` payloads above 254 bytes and type indexes above 127, `IPv6HopByHopLayer` options above 2046 bytes,
+  `IPv6RoutingLayer` data above 2040 bytes. Before, the layers masked or wrapped the value and emitted a
+  self-inconsistent frame.
+- **`TcpConnection.Open`** — `options` is `TcpConnectionOptions?`; omit it for the defaults. `Mss: 0` throws.
+  `default(TcpConnectionOptions)` passed explicitly has every field at zero and is rejected.
+- **`IcmpV4EchoLayer` / `IcmpV6EchoLayer`** — constructors are `(identifier, sequenceNumber, isReply, code,
+  checksum)`; `type` is gone. Positional calls such as `new IcmpV4EchoLayer(8, 1)` still compile but now mean
+  identifier 8, sequence 1; use named arguments. Other ICMP types go through `IcmpV4Layer` / `IcmpV6Layer`.
+- **`IPv6Layer`** — the `mtu` parameter and `MaxPayloadSize` are removed; they never limited anything. Use
+  `EthernetLayer(maxFrameSize: …)` and an `IPv6FragmentExtensionLayer`.
+- **`WebSocketLayer`** — implements only `IStreamProducer`; `Then(new WebSocketLayer(...))` no longer compiles (it
+  emitted a TCP segment without WebSocket bytes). Pass it to `TcpConnection.WriteFromClient` / `WriteFromServer` or
+  call `WriteStream`.
+- **`ArpWriter`** — removed; use `ArpLayer.OpcodeRequest` / `ArpLayer.OpcodeReply`.
+- **`TcpStreamLayer`** — public (its constructor stays internal), because the public `TcpConnection` session types
+  name it.
+
+---
+
 ## [0.16.0] — Filter completion, frame slabs, and capture round-trip fidelity
 
 Delta since 0.15.0. Version is `0.16.0` in `Directory.Build.props`.
@@ -157,19 +238,19 @@ This release makes `Session` operable after a capture stops: operational `Try*` 
 
 Delta since 0.13.0. Version is `0.14.0` in `Directory.Build.props`.
 
-This release parses through `Packet.TryParse` and a `ParseOptions` struct, so a field tree, a value cache, and a field watch are independent choices on one call. A filter expression can compile to a tree-free `FilterObserver`. ASC import and export follow the Vector line layout, including Ethernet section 4.2 and CAN XL. TCP analysis, reassembly, and port dispatch match the handshake that was actually seen. `PacketId.Invalid`, a default field cursor, and a full parse-buffer table fail closed.
+This release parses through `Packet.TryParse` and a `ParseOptions` struct, so a field tree, a value cache, and a field watch are independent choices on one call. A filter expression can compile to a tree-free `FilterObserver`. ASC import and export cover Ethernet and CAN XL. TCP analysis, reassembly, and port dispatch match the handshake that was actually seen. `PacketId.Invalid`, a default field cursor, and a full parse-buffer table fail closed.
 
 ### Added
 
 - **Field watch** — `ParseOptions.Observers` is a `ParseObserver` list (`IFieldObserver` plus `FieldWatch`) for that parse only. `FieldWatch.None` is the default and reports nothing. `FieldWatch.All` reports every produced field and expands every deferred group. `FieldWatch.Only` names one field or several. `BeginPacket` runs before any `OnField`. The synthetic packet root is not reported. A skip parse delivers `FieldVisit.Value` and no cursor. A build parse can navigate to the parent and to siblings already linked.
 - **Filter observer** — `Filter.Compile(expression, stack, in FilterObserverOptions)` or `Filter.TryCompile` returns a `FilterObserver`. It is not a `Filter`. Read `IsMatch` after `TryParse`. When `HasFlank` is true, read `TryReadMatch` before the next frame. A subtree scope (`$udp { ... }`) fails with `FilterErrorKind.NeedsFieldTree`.
-- **ASC Ethernet and CAN XL export** — `AscExporter` writes Ethernet as one section 4.2 `ETH` line (hex length, no FCS) and CAN XL as `CANXL` / `XLFF`. 0.13 skipped both as `UnsupportedType`. A length outside the allowed range is `ExportErrorKind.MalformedData`.
+- **ASC Ethernet and CAN XL export** — `AscExporter` writes Ethernet as one `ETH` line (hex length, no FCS) and CAN XL as `CANXL` / `XLFF`. 0.13 skipped both as `UnsupportedType`. A length outside the allowed range is `ExportErrorKind.MalformedData`.
 - **TCP stream-key settings** — `tcp.stream_key_last_vlan` and `tcp.stream_key_frame` default to false. Set either to true to split `tcp.stream` on the innermost VLAN id or the capture interface.
 
 ### Changed
 
 - **ASC timestamps** — line time is whole seconds plus a nanosecond fraction, scaled in `long`. A tenth digit of 5 or more rounds up. Absolute lines replace the clock and add to the header date. Relative lines accumulate, including timestamped lines that are not frames. A relative split file starts at the previous-log absolute time.
-- **ASC Ethernet import** — section 4.2 `ETH` and `AFDX` data frames are Ethernet. Wrapped hex joins until `DataLen` is met. `ETH STAT`, `ETH RxEr`, `AFDX STAT`, and `AFDX BUS` are not frames.
+- **ASC Ethernet import** — `ETH` and `AFDX` data frames are Ethernet. Wrapped hex joins until `DataLen` is met. `ETH STAT`, `ETH RxEr`, `AFDX STAT`, and `AFDX BUS` are not frames.
 - **ASC CAN XL import** — `XLFF` is CAN XL. `CBFF` / `CEFF` stay classic. `FBFF` / `FEFF` stay CAN FD. Channel and the data-length column are decimal. Other numeric columns stay hex under `base dec`. Error and overload frames are SocketCAN error frames.
 
 ### Breaking

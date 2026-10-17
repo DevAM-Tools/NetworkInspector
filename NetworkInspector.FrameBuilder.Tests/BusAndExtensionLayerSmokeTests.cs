@@ -360,6 +360,75 @@ internal sealed class BusAndExtensionLayerSmokeTests
 
     #endregion
 
+    #region Constructor validation
+
+    [Test]
+    public async Task SocketCanStandardIdAbove11BitsThrows()
+    {
+        await Assert.That(() => new FB.SocketCanLayer(0x800)).Throws<ArgumentOutOfRangeException>();
+    }
+
+    [Test]
+    public async Task SocketCanExtendedIdAbove29BitsThrows()
+    {
+        await Assert.That(() => new FB.SocketCanLayer(0x2000_0000, extended: true)).Throws<ArgumentOutOfRangeException>();
+    }
+
+    [Test]
+    public async Task SocketCanFdStandardIdAbove11BitsThrows()
+    {
+        await Assert.That(() => new FB.SocketCanFdLayer(0x800)).Throws<ArgumentOutOfRangeException>();
+    }
+
+    [Test]
+    public async Task SocketCanFdExtendedIdAbove29BitsThrows()
+    {
+        await Assert.That(() => new FB.SocketCanFdLayer(0x2000_0000, extended: true)).Throws<ArgumentOutOfRangeException>();
+    }
+
+    [Test]
+    public async Task SocketCanMaximumIdsBuild()
+    {
+        // Boundaries: 0x7FF standard, 0x1FFFFFFF extended (EFF flag set; CanId is big-endian on the wire).
+        byte[] standard = new byte[SocketCanHeader.Size];
+        byte[] extended = new byte[SocketCanHeader.Size];
+
+        new FB.SocketCanLayer(0x7FF).WriteHeader(standard);
+        new FB.SocketCanLayer(0x1FFF_FFFF, extended: true).WriteHeader(extended);
+
+        await Assert.That(BinaryPrimitives.ReadUInt32BigEndian(standard.AsSpan(0, 4))).IsEqualTo(0x7FFu);
+        await Assert.That(BinaryPrimitives.ReadUInt32BigEndian(extended.AsSpan(0, 4))).IsEqualTo(0x9FFF_FFFFu);
+    }
+
+    [Test]
+    public async Task FlexRayPayloadAbove254Throws()
+    {
+        byte[] payload = new byte[FB.FlexRayLayer.MaxPayloadBytes + 1];
+
+        await Assert.That(() => new FB.FlexRayLayer(1, 0, payload)).Throws<ArgumentOutOfRangeException>();
+    }
+
+    [Test]
+    public async Task FlexRayTypeIndexAbove127Throws()
+    {
+        await Assert.That(() => new FB.FlexRayLayer(1, 0, typeIndex: 0x80)).Throws<ArgumentOutOfRangeException>();
+    }
+
+    [Test]
+    public async Task FlexRayMaximumPayloadBuildsWithLengthWord127()
+    {
+        FB.FlexRayLayer flexray = new(1, 0, new byte[FB.FlexRayLayer.MaxPayloadBytes], typeIndex: 0x7F);
+        byte[] frame = new byte[flexray.HeaderSize];
+
+        flexray.WriteHeader(frame);
+
+        await Assert.That(frame.Length).IsEqualTo(7 + 254);
+        await Assert.That(frame[0] & 0x7F).IsEqualTo(0x7F);
+        await Assert.That(frame[4] >> 1).IsEqualTo(127);
+    }
+
+    #endregion
+
     #region Helpers
 
     /// <summary>Sync helper that emits a single frame and returns its byte length.</summary>
@@ -371,7 +440,7 @@ internal sealed class BusAndExtensionLayerSmokeTests
         where TTrailer : struct, FB.ITrailerLayer
         where TInterceptor : struct, FB.IFrameInterceptor
     {
-        FB.FrameSequence<TStack, TTrailer, TInterceptor> seq = created.Build(payload);
+        using FB.FrameSequence<TStack, TTrailer, TInterceptor> seq = created.Build(payload);
         seq.MoveNext(dst, out int written);
         return written;
     }

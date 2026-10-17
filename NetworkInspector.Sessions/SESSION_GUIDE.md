@@ -112,13 +112,14 @@ graph TD
     Stopped -->|"Restart"| Restarting
     Restarting -->|"sources active"| Running
     Restarting -->|"no source active"| Stopped
+    Idle -->|"Shutdown"| ShuttingDown
     Running -->|"Shutdown"| ShuttingDown
-    Stopped -->|"Shutdown"| ShuttingDown
     ShuttingDown -->|"teardown done"| Stopped
 ```
 
 `Stopped` is reached twice: when all sources finished (the session is still fully usable) and after
-`Shutdown` (reads are disabled). `QueriesEnabled` tells the two apart.
+`Shutdown` (reads are disabled). `QueriesEnabled` tells the two apart. `Shutdown` on a `Stopped` session keeps
+the phase `Stopped`; listeners receive `OnShuttingDown` without a phase change.
 
 | Operation | Allowed | Refused (`false` + `SessionFailure`) |
 |-----------|---------|--------------------------------------|

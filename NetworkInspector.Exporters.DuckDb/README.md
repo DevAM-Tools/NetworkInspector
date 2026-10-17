@@ -1,22 +1,32 @@
-<!-- Copyright © 2026 DevAM. All rights reserved. -->
+<!-- Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information. -->
 
 # NetworkInspector.Exporters.DuckDb
 
-[![NuGet](https://img.shields.io/nuget/v/NetworkInspector.Exporters.DuckDb)](https://www.nuget.org/packages/NetworkInspector.Exporters.DuckDb)
+[![NuGet][nuget-badge]][nuget]
+[![Downloads][downloads-badge]][nuget]
+[![.NET 10](https://img.shields.io/badge/.NET-10.0-512BD4?logo=dotnet)](https://dotnet.microsoft.com/download/dotnet/10.0)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](../LICENSE)
 
-Columnar packet exporter that writes a single `.duckdb` database file for direct SQL analysis.
+[nuget-badge]: https://img.shields.io/nuget/v/NetworkInspector.Exporters.DuckDb?logo=nuget&label=NuGet
+[downloads-badge]: https://img.shields.io/nuget/dt/NetworkInspector.Exporters.DuckDb?logo=nuget&label=downloads
+[nuget]: https://www.nuget.org/packages/NetworkInspector.Exporters.DuckDb
 
-This package is separate from `NetworkInspector.Exporters` so DuckDB's native runtime is only
-pulled in by consumers that actually export to DuckDB.
+Export parsed packets into a single DuckDB database file and query them with SQL right away: no load step, no
+schema to write.
 
-## What This Is
+This package is separate from `NetworkInspector.Exporters`, so DuckDB's native runtime is only pulled in by
+applications that export to DuckDB.
 
-The `DuckDbExporter` serializes parsed packets through `IPacketListener` into a DuckDB database,
-built on the same `ColumnarPacketBatch` accumulator shared by the PBF columnar format and the
-Parquet exporter in `NetworkInspector.Exporters`.
+## Highlights
 
-**Overwrite semantics:** exporting to an existing `.duckdb` path deletes the previous file (and
-its `.wal` sidecar) before writing, so re-exports replace rather than append.
+- **SQL immediately.** Open the `.duckdb` file in the DuckDB CLI, DBeaver, Python, or .NET and query packets.
+- **Bulk load.** Every table is filled through `DuckDBAppender`, one transaction per batch, one `CHECKPOINT` at
+  the end. Never row-at-a-time `INSERT`.
+- **Native types.** `U64` fields become `UBIGINT`, timestamps `BIGINT` nanoseconds, strings `VARCHAR`.
+- **Self-describing.** `catalog` and `protocols` tables name every value field and its protocol without the
+  dissector assemblies.
+- **Same columnar model as Parquet and PBF Columnar**, with the same detail flags.
+- **Available from the CLI:** `ni export capture.pcapng -o packets.duckdb`.
 
 ## Install
 
@@ -24,87 +34,112 @@ its `.wal` sidecar) before writing, so re-exports replace rather than append.
 dotnet add package NetworkInspector.Exporters.DuckDb
 ```
 
-`NetworkInspector.Exporters` is a package dependency and does not need to be referenced separately.
+`NetworkInspector.Exporters` comes in as a dependency. To read captures and parse them you also need
+`NetworkInspector.Sources` and `NetworkInspector.Protocols`; see the end-to-end example in the
+[Exporters README](../NetworkInspector.Exporters/README.md).
 
-## Why Use It
+## Quick Start
 
-- Query the export immediately with SQL — no separate load step.
-- Bulk-loaded via `DuckDBAppender`, never row-at-a-time `INSERT`.
-- `FieldType.U64` is stored as DuckDB's native `UBIGINT`.
+```csharp
+using NetworkInspector.Core;
+using NetworkInspector.Exporters.DuckDb;
+
+// packets: parsed packets with a field tree (FieldTreeMode.Build, the default).
+static void WriteDuckDb(IEnumerable<Packet> packets)
+{
+    using DuckDbExporter exporter = DuckDbExporter.CreateBuilder()
+        .ToFile("packets.duckdb")
+        .Build();
+
+    foreach (Packet packet in packets)
+    {
+        if (!exporter.OnPacket(packet))
+        {
+            break;
+        }
+    }
+
+    exporter.OnFinish();
+}
+```
+
+Then query it:
+
+```sql
+-- Which fields were captured, per protocol?
+SELECT p.name AS protocol, c.name AS field, c.field_id
+FROM catalog c JOIN protocols p USING (protocol_id)
+ORDER BY protocol, field;
+
+-- Values of one field (field id from the catalog) next to the packet time
+SELECT pk.packet_id, pk.timestamp_ns, f.value
+FROM packets pk JOIN field_42 f USING (packet_id);
+```
 
 ## Table Layout
 
 | Table | Contents |
 | --- | --- |
-| `packets(packet_id INTEGER, timestamp_ns BIGINT [, info VARCHAR] [, frame_bytes BLOB])` | One row per packet; `packet_id` matches Core `PacketId` (`int`) |
-| `topology(packet_id INTEGER, node_id INTEGER, field_id INTEGER, parent_node_id INTEGER)` | One row per field-tree node |
-| `catalog(field_id INTEGER, name VARCHAR, ui_name VARCHAR, field_type INTEGER, protocol_id INTEGER, table_name VARCHAR, description VARCHAR)` | One row per distinct field ID observed; `description` is `NULL` when the field has none |
-| `protocols(protocol_id INTEGER, name VARCHAR, ui_name VARCHAR)` | One row per protocol registered in the parsing stack |
-| `field_{id}(packet_id INTEGER, node_id INTEGER, value <type> [, custom_repr VARCHAR] [, custom_text VARCHAR])` | One row per field occurrence; `value` is `VARCHAR` for `FieldType.String` |
+| `packets` | `packet_id INTEGER`, `timestamp_ns BIGINT`, optional `info VARCHAR`, `frame_bytes BLOB` |
+| `topology` | `packet_id`, `node_id`, `field_id`, `parent_node_id` (all `INTEGER`) |
+| `catalog` | `field_id`, `name`, `ui_name`, `field_type`, `protocol_id`, `table_name`, `description` |
+| `protocols` | `protocol_id`, `name`, `ui_name` for every protocol in the stack |
+| `field_{id}` | `packet_id`, `node_id`, `value`, optional `custom_repr`, `custom_text` |
 
-Catalog is populated once in `OnFinish()`. The `protocols` table is populated once at the start
-(first `OnPacket()`), because the protocol set is fixed by the stack. Field data tables are
-created lazily. Join `catalog.protocol_id` to `protocols.protocol_id` to label fields by protocol
-without the dissector assemblies. New catalog columns are only ever appended, so positional
-readers stay valid.
+Value types of `field_{id}.value`:
 
-## Quick Start
+| `FieldType` | DuckDB type |
+| --- | --- |
+| `Bool` | `BOOLEAN` |
+| `I64` / `U64` | `BIGINT` / `UBIGINT` |
+| `F64` | `DOUBLE` |
+| `Timestamp` | `BIGINT` (nanoseconds) |
+| `String` | `VARCHAR` |
+| addresses, UUID, bytes | `BLOB` (MAC 6, IPv4 4, IPv6 16, EUI-64 8, UUID 16 bytes) |
 
-```csharp
-using NetworkInspector.Exporters.DuckDb;
-
-using DuckDbExporter exporter = DuckDbExporter.CreateBuilder()
-    .ToFile("packets.duckdb")
-    .Build();
-
-foreach (Packet packet in packets)
-{
-    if (!exporter.OnPacket(packet))
-    {
-        break;
-    }
-}
-
-exporter.OnFinish();
-```
-
-```sql
-SELECT p.packet_id, p.timestamp_ns, f.value
-FROM packets p
-JOIN field_42 f USING (packet_id);
-```
+- `packet_id` matches Core `PacketId`.
+- The catalog has one row per field that carries a value; protocol and container nodes appear only in the
+  topology. `description` is `NULL` when a field has none.
+- `protocols` is filled at the first packet, `catalog` in `OnFinish()`. Field tables are created lazily.
+  `topology`, `catalog`, and `protocols` always exist, possibly empty.
+- New catalog columns are only ever appended, so positional readers stay valid.
+- Exporting to an existing path deletes the old `.duckdb` file and its `.wal` sidecar first: re-exports replace,
+  they never append.
 
 ## Builder Options
 
-| Method | Purpose |
-| --- | --- |
-| `ToFile(path)` | Required. Output `.duckdb` file, created lazily on the first `OnPacket()` call |
-| `WithUiName(name)` / `WithDescription(text)` | Set user-facing metadata |
-| `WithCancellationToken(token)` | Enable cooperative cancellation |
-| `WithTargetPacketCount(count)` | Stop after N packets (`0` = unlimited) |
-| `WithMaxPacketsPerBlock(count)` | Flush (and commit) the in-memory batch after N packets |
-| `WithMaxBlockSize(bytes)` | Flush the in-memory batch by estimated size threshold |
-| `WithDetailFlags(flags)` | Choose optional columns (info, frame bytes, custom representation/text, topology) |
-| `WithTimestampSorted(sorted)` | Declares packets arrive in non-decreasing timestamp order |
-| `WithMemoryLimit(bytes)` | DuckDB `memory_limit` in bytes (`> 0`). Default: DuckDB's own default (no `SET` issued) |
-| `WithThreads(threads)` | DuckDB `threads` (`> 0`). Default: DuckDB's own default (no `SET` issued) |
+| Method | Purpose | Default |
+| --- | --- | --- |
+| `ToFile(path)` | Output `.duckdb` file, created on the first packet | required |
+| `WithUiName` / `WithDescription` | User-facing metadata | — |
+| `WithMaxPacketsPerBlock(int)` | Flush and commit a batch after N packets | 50 000 |
+| `WithMaxBlockSize(long)` | Flush a batch at this estimated size | 16 MiB |
+| `WithDetailFlags(ColumnarDetailFlags)` | Optional columns (info, frame bytes, custom texts, topology) | `All` |
+| `WithTimestampSorted(bool)` | Declare non-decreasing timestamps | `false` |
+| `WithMemoryLimit(long)` | DuckDB `memory_limit` in bytes (`> 0`) | DuckDB default |
+| `WithThreads(int)` | DuckDB `threads` (`> 0`) | DuckDB default |
+| `WithTargetPacketCount(int)` | Stop after N packets (`0` = no limit) | 0 |
+| `WithCancellationToken` | Cooperative cancellation | none |
 
-`WithMemoryLimit` and `WithThreads` throw `ArgumentOutOfRangeException` for zero or negative
-values. Leave them uncalled to keep DuckDB's defaults.
-
-## Write Performance
-
-- Every `WriteBatch` call wraps appends in a single explicit `BEGIN`/`COMMIT` transaction.
-- All data tables use `DuckDBAppender` — never row-at-a-time `INSERT`.
-- `CHECKPOINT` runs exactly once at the end of `OnFinish()`.
-- `threads` and `memory_limit` are set once per connection, and only when configured through
-  `WithThreads` / `WithMemoryLimit`; otherwise DuckDB's own defaults apply.
+`WithMemoryLimit` and `WithThreads` throw `ArgumentOutOfRangeException` for zero or negative values; without them
+no `SET` is issued. `ColumnarDetailFlags` lives in `NetworkInspector.Exporters.Columnar`.
 
 ## Limits And Thread-Safety Notes
 
-- Not thread-safe; call `OnPacket()`/`OnFinish()` sequentially.
-- If no packets are ever added, no database file is created.
+- Not thread-safe; call `OnPacket()` and `OnFinish()` from one thread.
+- There is no stream or stdout target.
+- If no packets arrive, no database file is created.
+- In tolerant mode an unwritable path raises `ItemSkipped` and the export ends cleanly; strict mode aborts.
+- Packets parsed with `FieldTreeMode.Skip` are reported as `SerializationError`.
 - Call `OnFinish()` (or dispose) to release the file handle.
+
+## Links
+
+- [Exporters overview](../NetworkInspector.Exporters/README.md)
+- [Parquet exporter](../NetworkInspector.Exporters/Parquet/README.md) (the same data as Parquet files)
+- [CLI](../NetworkInspector.CLI/README.md)
+- [GitHub repository](https://github.com/DevAM-Tools/NetworkInspector)
+- [Issue tracker](https://github.com/DevAM-Tools/NetworkInspector/issues)
 
 ## License
 

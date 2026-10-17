@@ -67,6 +67,9 @@ public readonly struct LinLayer : IStatelessLayer, IRootLayer
     /// 2 = Enhanced (includes PID, per ISO 17987); default 2.
     /// </param>
     /// <param name="errorFlags">Error flags byte (default 0 = no errors).</param>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// <paramref name="frameId"/> &gt; 63 or <paramref name="checksumType"/> is not 1 or 2.
+    /// </exception>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public LinLayer(
         byte frameId,
@@ -76,7 +79,13 @@ public readonly struct LinLayer : IStatelessLayer, IRootLayer
     {
         if (frameId > 0x3F)
         {
-            throw new ArgumentOutOfRangeException(nameof(frameId));
+            throw new ArgumentOutOfRangeException(nameof(frameId), frameId, "LIN frame identifier is 6 bits (0..63).");
+        }
+        // DLT_LIN checksum type: 1 = classic (data only), 2 = enhanced (PID + data, ISO 17987).
+        // Any other value would declare a checksum type that the computed checksum does not follow.
+        if (checksumType is not (1 or 2))
+        {
+            throw new ArgumentOutOfRangeException(nameof(checksumType), checksumType, "LIN checksum type must be 1 (classic) or 2 (enhanced).");
         }
         _FrameId = frameId;
         _ChecksumType = checksumType;
@@ -108,47 +117,19 @@ public readonly struct LinLayer : IStatelessLayer, IRootLayer
         byte pid = _WithParity(_FrameId);
 
         // Byte 4: payloadLength[7:4] | msgType[3:2] | checksumType[1:0]
-        // msgType = 0 (Frame), so bits 3-2 are 00.
-        byte byte4 = (byte)((_DataLen << 4) | (_ChecksumType & 0x03));
-        int padded = _PaddedDataLength(_DataLen);
+        // msgType = 0 (Frame), so bits 3-2 are 00; the constructor limits the
+        // checksum type to 1 or 2.
+        byte byte4 = (byte)((_DataLen << 4) | _ChecksumType);
 
-        // Checksum covers the real data bytes only. Pad bytes stay zero and are not summed.
-        Span<byte> dataSlice = dst.Length >= 8 + _DataLen ? dst.Slice(8, _DataLen) : stackalloc byte[_DataLen];
+        // dst is exactly HeaderSize = 8 + padded bytes (IStatelessLayer contract), so the
+        // data area is always present.  Clear it first: pad bytes are zero and the
+        // destination may hold residue from an earlier frame.
+        Span<byte> data = dst.Slice(8, _PaddedDataLength(_DataLen));
+        data.Clear();
+        _WriteData(data);
 
-        if (_DataLen > 0)
-        {
-            dataSlice[0] = _D0;
-        }
-        if (_DataLen > 1)
-        {
-            dataSlice[1] = _D1;
-        }
-        if (_DataLen > 2)
-        {
-            dataSlice[2] = _D2;
-        }
-        if (_DataLen > 3)
-        {
-            dataSlice[3] = _D3;
-        }
-        if (_DataLen > 4)
-        {
-            dataSlice[4] = _D4;
-        }
-        if (_DataLen > 5)
-        {
-            dataSlice[5] = _D5;
-        }
-        if (_DataLen > 6)
-        {
-            dataSlice[6] = _D6;
-        }
-        if (_DataLen > 7)
-        {
-            dataSlice[7] = _D7;
-        }
-
-        byte checksum = _ComputeChecksum(dataSlice[.._DataLen], pid, _ChecksumType);
+        // The checksum covers the real data bytes only; pad bytes are not summed.
+        byte checksum = _ComputeChecksum(data[.._DataLen], pid, _ChecksumType);
 
         dst[0] = 1;           // msg_format_rev = 1
         dst[1] = 0;           // reserved
@@ -158,17 +139,43 @@ public readonly struct LinLayer : IStatelessLayer, IRootLayer
         dst[5] = pid;
         dst[6] = checksum;
         dst[7] = _ErrorFlags;
+    }
 
-        // Data bytes are already written to dataSlice when it aliases dst.
-        // The stack fallback must be copied before the pad is cleared.
-        if (!dataSlice.Overlaps(dst) && _DataLen > 0)
+    /// <summary>Writes the first <see cref="_DataLen"/> stored data bytes into <paramref name="data"/>.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void _WriteData(scoped Span<byte> data)
+    {
+        if (_DataLen > 0)
         {
-            dataSlice.CopyTo(dst[8..]);
+            data[0] = _D0;
         }
-
-        if (padded > _DataLen && dst.Length >= 8 + padded)
+        if (_DataLen > 1)
         {
-            dst.Slice(8 + _DataLen, padded - _DataLen).Clear();
+            data[1] = _D1;
+        }
+        if (_DataLen > 2)
+        {
+            data[2] = _D2;
+        }
+        if (_DataLen > 3)
+        {
+            data[3] = _D3;
+        }
+        if (_DataLen > 4)
+        {
+            data[4] = _D4;
+        }
+        if (_DataLen > 5)
+        {
+            data[5] = _D5;
+        }
+        if (_DataLen > 6)
+        {
+            data[6] = _D6;
+        }
+        if (_DataLen > 7)
+        {
+            data[7] = _D7;
         }
     }
 

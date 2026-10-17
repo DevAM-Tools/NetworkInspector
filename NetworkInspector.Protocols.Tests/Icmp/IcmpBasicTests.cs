@@ -34,7 +34,7 @@ internal sealed class IcmpBasicTests
         MacAddress srcMac = MacAddress.FromBytes([0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB]);
         EthernetLayer eth = new(dstMac, srcMac);
         IPv4Layer ip = new(new IPv4Address(0xC0A80102), new IPv4Address(0xC0A80101));
-        IcmpV4EchoLayer icmp = new(type: IcmpV4EchoLayer.TypeEchoReply);
+        IcmpV4EchoLayer icmp = new(isReply: true);
         byte[] frame = FrameStack.Start(eth).Then(ip).Then(icmp).CreateWithFixedValues().EmitFrame(ReadOnlySpan<byte>.Empty);
 
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
@@ -52,7 +52,7 @@ internal sealed class IcmpBasicTests
         MacAddress srcMac = MacAddress.FromBytes([0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB]);
         EthernetLayer eth = new(dstMac, srcMac);
         IPv4Layer ip = new(new IPv4Address(0xC0A80101), new IPv4Address(0xC0A80102));
-        IcmpV4EchoLayer icmp = new(type: IcmpV4EchoLayer.TypeEchoRequest);
+        IcmpV4EchoLayer icmp = new(isReply: false);
         byte[] frame = FrameStack.Start(eth).Then(ip).Then(icmp).CreateWithFixedValues().EmitFrame(ReadOnlySpan<byte>.Empty);
 
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
@@ -70,7 +70,7 @@ internal sealed class IcmpBasicTests
         MacAddress srcMac = MacAddress.FromBytes([0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB]);
         EthernetLayer eth = new(dstMac, srcMac);
         IPv4Layer ip = new(new IPv4Address(0xC0A80101), new IPv4Address(0xC0A80102));
-        IcmpV4EchoLayer icmp = new(type: IcmpV4EchoLayer.TypeEchoRequest);
+        IcmpV4EchoLayer icmp = new(isReply: false);
         byte[] frame = FrameStack.Start(eth).Then(ip).Then(icmp).CreateWithFixedValues().EmitFrame(ReadOnlySpan<byte>.Empty);
 
         string? tsharkValue = TsharkVerifier.GetFieldValue(frame, "icmp.type");

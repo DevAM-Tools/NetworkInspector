@@ -8,7 +8,7 @@ namespace NetworkInspector.FrameBuilder;
 /// <see cref="IPv6Layer"/> and the transport layer; they all carry an
 /// 8-bit NextHeader field that is patched from the next-inner layer's
 /// <see cref="IProvidesProtocolType"/>, and they all forward the outer
-/// IPv6's pseudo-header to the transport layer (concept §4.2 / RFC 8200).
+/// IPv6's pseudo-header to the transport layer (RFC 8200 §4, §8.1).
 /// </summary>
 /// <remarks>
 /// <para>

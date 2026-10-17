@@ -9,11 +9,12 @@ namespace NetworkInspector.FrameBuilder;
 /// <remarks>
 /// <para>Typical usage:</para>
 /// <code>
-/// var stack = FrameStack
-///     .Start(new EthernetLayer(dstMac, srcMac))
-///     .Then(new IPv4Layer(srcIp, dstIp))
-///     .Then(new UdpLayer(srcPort, dstPort))
-///     .CreateWithFixedValues();
+/// CreatedStack&lt;StatelessStack&lt;UdpLayer, StatelessStack&lt;IPv4Layer, StatelessStack&lt;EthernetLayer, StackEnd&gt;&gt;&gt;, NoTrailer, NoInterceptor&gt; stack =
+///     FrameStack
+///         .Start(new EthernetLayer(dstMac, srcMac))
+///         .Then(new IPv4Layer(srcIp, dstIp))
+///         .Then(new UdpLayer(srcPort, dstPort))
+///         .CreateWithFixedValues();
 /// </code>
 /// </remarks>
 public static partial class FrameStack
@@ -28,9 +29,9 @@ public static partial class FrameStack
         => new(in link, default);
 
     /// <summary>
-    /// Alias of <see cref="Start{TLink}(in TLink)"/> for the value-reuse pattern
-    /// (concept §3.3 / §11.4): build a template once with placeholder values, then
-    /// supply concrete values per <c>Build(in values, payload)</c>.
+    /// Alias of <see cref="Start{TLink}(in TLink)"/>, kept for call sites that read
+    /// better as a template: compose once with placeholder values, then supply the
+    /// concrete values per <c>Build(in values, payload)</c> on the created stack.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static StatelessStack<TLink, StackEnd> Values<TLink>(in TLink link)

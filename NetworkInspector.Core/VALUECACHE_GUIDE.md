@@ -2,7 +2,7 @@
 
 # ValueCache — Usage Guide
 
-How to fill and read RAM columnar field series. Design and invariants: [`docs/value-cache-design.md`](../docs/value-cache-design.md).
+How to fill and read RAM columnar field series.
 
 **Audience:** callers who want selected field values over many packets without walking a field tree.
 
@@ -206,7 +206,6 @@ public void OnNewRows(ISessionReader session, ReadOnlyValueCache cache, int from
 
 ## Links
 
-- Design: [`docs/value-cache-design.md`](../docs/value-cache-design.md)
-- Skip parse: [`docs/skip-field-tree.md`](../docs/skip-field-tree.md)
+- Skip parse: [Core README, Parse Without A Field Tree](README.md#parse-without-a-field-tree)
 - Core package: [`README.md`](README.md)
 - Session: [`../NetworkInspector.Sessions/README.md`](../NetworkInspector.Sessions/README.md)

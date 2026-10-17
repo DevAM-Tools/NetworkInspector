@@ -14,6 +14,7 @@ global using System.Runtime.InteropServices;
 global using System.Runtime.Intrinsics;
 global using System.Text;
 global using System.Threading;
+global using static System.FormattableString;
 #endregion
 
 #region NetworkInspector.FrameBuilder

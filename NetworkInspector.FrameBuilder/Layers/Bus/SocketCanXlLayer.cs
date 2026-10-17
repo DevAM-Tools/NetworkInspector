@@ -16,9 +16,11 @@ namespace NetworkInspector.FrameBuilder;
 ///   <item><see cref="IRootLayer"/> — terminal frame.</item>
 /// </list>
 /// <para>The frame always writes a fixed 2048-byte data area (zero-padded beyond the
-/// actual data length) to match the in-kernel <c>struct canxl_frame</c> layout. The data
-/// payload is copied at construction time, so callers may mutate or release their buffer
-/// immediately after constructing the layer.</para>
+/// actual data length) to match the in-kernel <c>struct canxl_frame</c> layout.</para>
+/// <para>The layer keeps a reference to the <c>data</c> memory; it must stay unchanged
+/// until the last frame built from this layer has been emitted (same rule as
+/// <see cref="PduTransportMultiLayer"/> and every other layer that accepts
+/// <see cref="ReadOnlyMemory{T}"/>).</para>
 /// <para>Thread safety: immutable struct, safe for concurrent use.</para>
 /// </remarks>
 public readonly struct SocketCanXlLayer : IStatelessLayer, IRootLayer
@@ -42,14 +44,13 @@ public readonly struct SocketCanXlLayer : IStatelessLayer, IRootLayer
     private readonly byte _Flags;
     private readonly byte _Sdt;
     private readonly uint _Af;
-    // Actual data stored in-struct using 256 ulongs (2048 bytes) — zero-padded.
-    // Fields _D0.._D255 store data in 8-byte chunks; allocated via fixed fields.
+    /// <summary>Caller-owned payload view (at most <see cref="MaxXlData"/> bytes); referenced, not copied.</summary>
     private readonly ReadOnlyMemory<byte> _Data;
     private readonly ushort _DataLen; // actual data length (capped at MaxXlData)
 
     /// <summary>Creates a SocketCAN-XL frame layer.</summary>
     /// <param name="priority">Priority/VCID composite field (32-bit, big-endian on wire for LINKTYPE_CAN_SOCKETCAN).</param>
-    /// <param name="data">Frame data (0..2048 bytes). Excess bytes are dropped.</param>
+    /// <param name="data">Frame data (0..2048 bytes). Excess bytes are dropped. Referenced, not copied.</param>
     /// <param name="sdt">Service Data Unit Type byte; default 0.</param>
     /// <param name="af">Acceptance field (32-bit); default 0.</param>
     /// <param name="sec">SEC flag (Simple Extended Content); default false.</param>
@@ -99,7 +100,7 @@ public readonly struct SocketCanXlLayer : IStatelessLayer, IRootLayer
         // Data area: copy actual data, then explicitly zero the tail. We must NOT rely on
         // the destination being pre-zeroed: FrameSequence/StatefulFrameSequence allocate
         // pooled buffers that may carry residual bytes from a previous frame. Leaving the
-        // tail unzeroed would emit caller-buffer or scratch contents on the wire (review B1).
+        // tail unzeroed would emit caller-buffer or scratch contents on the wire.
         ReadOnlySpan<byte> src = _Data.Span[.._DataLen];
         Span<byte> dataArea = dst.Slice(HeaderBytes, MaxXlData);
         src.CopyTo(dataArea);

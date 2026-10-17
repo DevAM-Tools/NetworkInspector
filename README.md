@@ -1,233 +1,274 @@
-<!-- Copyright © 2026 DevAM. All rights reserved. -->
+<!-- Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information. -->
 
 # NetworkInspector
 
-High-performance packet analysis for .NET 10 with a modular package ecosystem for parsing, capture I/O, export pipelines, and frame construction.
+[![NuGet](https://img.shields.io/nuget/v/NetworkInspector.Core?logo=nuget&label=NuGet)](https://www.nuget.org/packages?q=NetworkInspector)
+[![.NET 10](https://img.shields.io/badge/.NET-10.0-512BD4?logo=dotnet)](https://dotnet.microsoft.com/download/dotnet/10.0)
+[![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-informational)](#build-from-source)
+[![License: MIT](https://img.shields.io/github/license/DevAM-Tools/NetworkInspector)](LICENSE)
 
-[![NuGet](https://img.shields.io/nuget/v/NetworkInspector.Core?label=NetworkInspector.Core)](https://www.nuget.org/packages/NetworkInspector.Core)
-[![NuGet](https://img.shields.io/nuget/v/NetworkInspector.Protocols?label=NetworkInspector.Protocols)](https://www.nuget.org/packages/NetworkInspector.Protocols)
-[![NuGet](https://img.shields.io/nuget/v/NetworkInspector.Values?label=NetworkInspector.Values)](https://www.nuget.org/packages/NetworkInspector.Values)
-[![NuGet](https://img.shields.io/nuget/v/NetworkInspector.FrameBuilder?label=NetworkInspector.FrameBuilder)](https://www.nuget.org/packages/NetworkInspector.FrameBuilder)
-[![NuGet](https://img.shields.io/nuget/v/NetworkInspector.Sources?label=NetworkInspector.Sources)](https://www.nuget.org/packages/NetworkInspector.Sources)
-[![NuGet](https://img.shields.io/nuget/v/NetworkInspector.Exporters?label=NetworkInspector.Exporters)](https://www.nuget.org/packages/NetworkInspector.Exporters)
-[![NuGet](https://img.shields.io/nuget/v/NetworkInspector.Exporters.DuckDb?label=NetworkInspector.Exporters.DuckDb)](https://www.nuget.org/packages/NetworkInspector.Exporters.DuckDb)
-[![NuGet](https://img.shields.io/nuget/v/NetworkInspector.Sessions?label=NetworkInspector.Sessions)](https://www.nuget.org/packages/NetworkInspector.Sessions)
-[![NuGet](https://img.shields.io/nuget/v/NetworkInspector.CLI?label=NetworkInspector.CLI)](https://www.nuget.org/packages/NetworkInspector.CLI)
-
-## What This Is
-
-NetworkInspector is a .NET toolkit for teams that need to process network captures end-to-end:
-
-- ingest frame data from common capture formats,
-- parse protocol stacks into structured packet fields,
-- export results into operational or analytics-friendly outputs.
-
-Custom dissectors implement `IProtocol.Parse`. See `NetworkInspector.Protocols/PROTOCOL_GUIDE.md`.
-Columnar field values over many packets: `NetworkInspector.Core/VALUECACHE_GUIDE.md`.
-Embedding a live session (sources, listeners, filtered pulls, restart): [`NetworkInspector.Sessions/SESSION_GUIDE.md`](NetworkInspector.Sessions/SESSION_GUIDE.md).
-
-The project is intentionally modular. You can adopt only the packages needed for your scenario.
-
-## Why It Stands Out
-
-- **Composable package architecture**: parse-only, source-only, export-only, or full pipeline.
-- **Broad built-in protocol coverage**: enterprise and automotive traffic in one stack.
-- **Production workflow support**: conversion, streaming, cancellation, and tolerant modes.
-- **Practical developer ergonomics**: quick stack setup, typed values, and CLI tooling.
-
-## Install
-
-Start with parser essentials:
+Packet analysis for .NET 10: read network and automotive captures, dissect them into typed fields, filter them
+with Wireshark-style expressions, and export them to formats for tools, spreadsheets, and SQL. Use it as a
+library, or from the command line with `ni`.
 
 ```bash
-dotnet add package NetworkInspector.Core
-dotnet add package NetworkInspector.Protocols
+dotnet tool install -g NetworkInspector.CLI
+ni export capture.pcapng -o packets.duckdb      # every packet, every field, queryable with SQL
 ```
 
-Add workflow packages as required:
+## Why NetworkInspector
+
+- **Enterprise and automotive traffic in one stack.** Ethernet, IP, TCP/UDP, DNS, DHCP, HTTP/1.x, HTTP/2, TLS,
+  WebSocket *and* CAN, CAN FD, CAN XL, LIN, FlexRay, SOME/IP, and JSON-configured signal decoding.
+- **Capture formats both worlds use.** PCAP, PCAPNG, Vector BLF, and Vector ASC in and out, with round trips that
+  keep interface metadata and bus details (CAN DLC 9–15, LIN protected id).
+- **Fast.** Millions of frames per second from memory-mapped files and streams, allocation-aware parsing with
+  packet recycling, skip-parse modes, and Roaring-bitmap presence indexes for filtering huge captures.
+- **Analytics built in.** Export to JSON, CSV, Text, PBF, Parquet, or a single DuckDB file with a field catalog
+  and native types; record selected fields into columnar RAM caches while parsing.
+- **Wireshark-style filters, compiled.** `tcp.port in {80, 443} && !tls`, checked against the stack at compile
+  time with "did you mean" hints, plus subtree scopes and edge detection across packets.
+- **Live sessions for applications.** Multi-source, multi-listener sessions with per-listener filters, background
+  value caches, and hot protocol-stack swaps.
+- **Verified against Wireshark.** More than 5,000 tests; dissectors, readers, writers, and the frame builder are
+  cross-validated against `tshark` 4.6.
+- **Modular.** Take only what you need: values, parser, readers, writers, filters, sessions, or the CLI.
+
+## Quick Start
+
+### Command Line
+
+```bash
+dotnet tool install -g NetworkInspector.CLI
+
+ni convert capture.blf -o capture.pcapng                       # Vector BLF -> Wireshark
+ni export capture.pcapng -o packets.json                       # parsed packets as JSON
+ni export capture.pcapng -o dns.json --filter "udp.port == 53" # only DNS
+ni export capture.pcapng -o out -f parquet                     # Parquet dataset for pandas, Polars, Spark
+```
+
+More: [CLI README](NetworkInspector.CLI/README.md).
+
+### Library
 
 ```bash
 dotnet add package NetworkInspector.Sources
-dotnet add package NetworkInspector.Exporters
-dotnet add package NetworkInspector.Exporters.DuckDb
-dotnet add package NetworkInspector.Values
-dotnet add package NetworkInspector.FrameBuilder
+dotnet add package NetworkInspector.Protocols
+dotnet add package NetworkInspector.Filter
 ```
 
-## Build Baseline
+Read a capture, parse every frame, and print the DNS packets:
 
-NetworkInspector is validated for .NET SDK 10.0.100 and newer.
+```csharp
+using NetworkInspector.Core;
+using NetworkInspector.Core.Ids;
+using NetworkInspector.Core.Settings;
+using NetworkInspector.Filter;
+using NetworkInspector.Filter.Errors;
+using NetworkInspector.Protocols;
+using NetworkInspector.Sources.Pcapng;
 
-## Local Development
+// One registry for the stack and the source.
+FrameInterfaceRegistry registry = new();
+StackBuilder builder = new(new SettingsManager(), registry);
+builder.RegisterStandardProtocols();
+using Stack stack = builder.Build();
 
-### Prerequisites
+if (!Filter.TryCompile("udp.port == 53", stack, out Filter? dns, out FilterError? error))
+{
+    throw new InvalidOperationException(error.ToString());
+}
 
-The full test suite includes protocol cross-validation tests that require
-[tshark 4.6.x](https://www.wireshark.org/download/) (part of the Wireshark distribution) to be
-available on `PATH`.
+using PcapngSource source = PcapngSource.Open("capture.pcapng"); // PCAPNG and legacy PCAP
+source.Start(registry.RegisterSource(source), registry);
+
+ParseOptions options = new();
+int nextId = 0; // first-parse ids are dense: 0, 1, 2, ...
+while (source.NextFrame() is { } frame)
+{
+    if (!Packet.TryParse(new PacketId(nextId), stack, frame, in options, out Packet? packet, out ParseFailure failure)
+        || packet is null)
+    {
+        Console.Error.WriteLine($"frame {frame.Id.Value}: {failure}");
+        continue;
+    }
+
+    nextId++;
+    if (dns.TryIsMatch(packet, out bool matched, out _) && matched)
+    {
+        Console.WriteLine($"#{packet.Id.Value} {frame.Timestamp} {packet.Info}");
+    }
+}
+```
+
+Next steps: walk the field tree ([Core](NetworkInspector.Core/README.md)), write the packets to a file
+([Exporters](NetworkInspector.Exporters/README.md)), or run the same pipeline on background threads with
+listeners ([Sessions](NetworkInspector.Sessions/README.md)).
+
+## Packages
+
+| Package | Version | Downloads | Purpose |
+| --- | --- | --- | --- |
+| [NetworkInspector.Core](NetworkInspector.Core/README.md) | [![v][core-v]][core] | [![d][core-d]][core] | Parser engine, field tree, index, value cache |
+| [NetworkInspector.Protocols](NetworkInspector.Protocols/README.md) | [![v][prot-v]][prot] | [![d][prot-d]][prot] | Built-in dissectors |
+| [NetworkInspector.Sources](NetworkInspector.Sources/README.md) | [![v][src-v]][src] | [![d][src-d]][src] | Read PCAP, PCAPNG, BLF, ASC |
+| [NetworkInspector.Exporters](NetworkInspector.Exporters/README.md) | [![v][exp-v]][exp] | [![d][exp-d]][exp] | Write capture and analysis formats |
+| [NetworkInspector.Exporters.DuckDb](NetworkInspector.Exporters.DuckDb/README.md) | [![v][duck-v]][duck] | [![d][duck-d]][duck] | Write a DuckDB database |
+| [NetworkInspector.Filter](NetworkInspector.Filter/README.md) | [![v][filt-v]][filt] | [![d][filt-d]][filt] | Compiled display filters |
+| [NetworkInspector.Sessions](NetworkInspector.Sessions/README.md) | [![v][sess-v]][sess] | [![d][sess-d]][sess] | Multi-threaded capture sessions |
+| [NetworkInspector.FrameBuilder](NetworkInspector.FrameBuilder/README.md) | [![v][fb-v]][fb] | [![d][fb-d]][fb] | Build wire frames from typed layers |
+| [NetworkInspector.Values](NetworkInspector.Values/README.md) | [![v][val-v]][val] | [![d][val-d]][val] | MAC, IP, EUI-64, UUID, timestamp values |
+| [NetworkInspector.CLI](NetworkInspector.CLI/README.md) | [![v][cli-v]][cli] | [![d][cli-d]][cli] | `ni` command-line tool |
+
+[core]: https://www.nuget.org/packages/NetworkInspector.Core
+[core-v]: https://img.shields.io/nuget/v/NetworkInspector.Core?label=
+[core-d]: https://img.shields.io/nuget/dt/NetworkInspector.Core?label=
+[prot]: https://www.nuget.org/packages/NetworkInspector.Protocols
+[prot-v]: https://img.shields.io/nuget/v/NetworkInspector.Protocols?label=
+[prot-d]: https://img.shields.io/nuget/dt/NetworkInspector.Protocols?label=
+[src]: https://www.nuget.org/packages/NetworkInspector.Sources
+[src-v]: https://img.shields.io/nuget/v/NetworkInspector.Sources?label=
+[src-d]: https://img.shields.io/nuget/dt/NetworkInspector.Sources?label=
+[exp]: https://www.nuget.org/packages/NetworkInspector.Exporters
+[exp-v]: https://img.shields.io/nuget/v/NetworkInspector.Exporters?label=
+[exp-d]: https://img.shields.io/nuget/dt/NetworkInspector.Exporters?label=
+[duck]: https://www.nuget.org/packages/NetworkInspector.Exporters.DuckDb
+[duck-v]: https://img.shields.io/nuget/v/NetworkInspector.Exporters.DuckDb?label=
+[duck-d]: https://img.shields.io/nuget/dt/NetworkInspector.Exporters.DuckDb?label=
+[filt]: https://www.nuget.org/packages/NetworkInspector.Filter
+[filt-v]: https://img.shields.io/nuget/v/NetworkInspector.Filter?label=
+[filt-d]: https://img.shields.io/nuget/dt/NetworkInspector.Filter?label=
+[sess]: https://www.nuget.org/packages/NetworkInspector.Sessions
+[sess-v]: https://img.shields.io/nuget/v/NetworkInspector.Sessions?label=
+[sess-d]: https://img.shields.io/nuget/dt/NetworkInspector.Sessions?label=
+[fb]: https://www.nuget.org/packages/NetworkInspector.FrameBuilder
+[fb-v]: https://img.shields.io/nuget/v/NetworkInspector.FrameBuilder?label=
+[fb-d]: https://img.shields.io/nuget/dt/NetworkInspector.FrameBuilder?label=
+[val]: https://www.nuget.org/packages/NetworkInspector.Values
+[val-v]: https://img.shields.io/nuget/v/NetworkInspector.Values?label=
+[val-d]: https://img.shields.io/nuget/dt/NetworkInspector.Values?label=
+[cli]: https://www.nuget.org/packages/NetworkInspector.CLI
+[cli-v]: https://img.shields.io/nuget/v/NetworkInspector.CLI?label=
+[cli-d]: https://img.shields.io/nuget/dt/NetworkInspector.CLI?label=
+
+The source generator ([NetworkInspector.Generators](NetworkInspector.Generators/README.md)) ships inside
+`NetworkInspector.Core`. Packages pull in their own dependencies: Sources, Exporters, and Filter bring Core;
+Core brings Values.
+
+### Which Packages Do I Need?
+
+| Goal | Packages |
+| --- | --- |
+| Convert or export captures without code | `NetworkInspector.CLI` (tool) |
+| Parse frames you already have | Core + Protocols |
+| Read capture files | Sources (+ Protocols to parse) |
+| Write captures or analysis files | Exporters (+ Exporters.DuckDb for DuckDB) |
+| Filter packets | Filter (+ Protocols) |
+| Build an analysis application with live views | Sessions + Protocols |
+| Generate test traffic | FrameBuilder (+ Exporters to save it) |
+| Typed addresses and timestamps only | Values |
+| Write your own dissector | Core + Protocols ([Protocol guide](NetworkInspector.Protocols/PROTOCOL_GUIDE.md)) |
+
+## Capabilities
+
+### Protocols
+
+| Layer | Protocols |
+| --- | --- |
+| Link | Ethernet II, VLAN (802.1Q, 802.1ad), LLC/SNAP, Linux SLL, Linux SLL2 |
+| Network | IPv4, IPv6 (with fragment reassembly), ARP, ICMPv4, ICMPv6 |
+| Transport | TCP (stream reassembly and analysis), UDP |
+| Application | DNS, DHCPv4, DHCPv6, HTTP/1.x, HTTP/2, TLS, DTLS, WebSocket, JSON, Text |
+| Automotive | CAN (classic, FD, XL), LIN, FlexRay, SOME/IP (SD, TP), PDU Transport, signal messages |
+
+Details and configuration: [Protocols README](NetworkInspector.Protocols/README.md).
+
+### Formats
+
+| Format | Read | Write | Kind |
+| --- | :---: | :---: | --- |
+| PCAPNG | ✅ | ✅ | frames |
+| PCAP (legacy) | ✅ | — | frames |
+| Vector BLF | ✅ | ✅ | frames |
+| Vector ASC | ✅ | ✅ | frames |
+| JSON, CSV, Text | — | ✅ | packets |
+| PBF (NetworkInspector binary) | — | ✅ | packets |
+| Apache Parquet | — | ✅ | packets |
+| DuckDB | — | ✅ | packets |
+
+### Performance
+
+Measured with the `NetworkInspector.Profiling` scenarios on 50 000 PCAPNG frames (64 KiB frame slabs):
+
+| Read path | Frames per second |
+| --- | --- |
+| Stream source, frames dropped | 7.55 M |
+| Memory-mapped file, frames dropped | 3.72 M |
+| Stream source, frames held | 3.45 M |
+| Memory-mapped file, frames held | 2.40 M |
+
+The parser recycles packets, decodes lazily, and can skip the field tree entirely when only values, indexes, or
+filter verdicts are needed. Run `NetworkInspector.Profiling` to measure parse, filter, export, and session
+throughput on your hardware.
+
+## Quality
+
+- More than 5,000 tests (TUnit on Microsoft.Testing.Platform), including round trips through every capture format.
+- Dissectors, capture readers and writers, and frame-builder output are cross-validated against `tshark` 4.6.
+- Warnings are errors; .NET analyzers and a style checker run on every build.
+- Untrusted-input hardening: bounded lengths, counts, and nesting; decompression-bomb limits; process-seeded
+  connection hashing; linear-time regular expressions where possible.
+
+## Limits And Thread-Safety Notes
+
+- Build a protocol stack once and reuse it; construction is single-threaded. First parses run in packet-id order;
+  re-parses may run concurrently.
+- Exporters and filters are single-threaded per instance. `Session` is thread-safe. Package READMEs state the rules
+  for each type.
+- Dispose stacks, sources, exporters, and sessions to release memory maps and files promptly.
+- No live capture from network interfaces; inputs are capture files, streams, and in-memory frames.
+- NativeAOT and trimming are not supported.
+
+## Safe Usage (STRIDE)
+
+- **Spoofing**: Treat captures as untrusted input and check their provenance where it matters.
+- **Tampering**: Expect malformed records; use tolerant processing and inspect the reported errors.
+- **Repudiation**: Keep source metadata and command settings when results must be reproducible.
+- **Information disclosure**: Captures and exports can contain credentials and personal data; control access.
+- **Denial of service**: Use split, count, size, and cancellation limits on large or unknown inputs.
+- **Elevation of privilege**: Run processing with least-privilege file-system and process rights.
+
+## Build From Source
+
+Requires the .NET SDK 10.0.100 or newer (see [`global.json`](global.json)). Windows, Linux, and macOS on x64 and
+ARM64.
+
+```bash
+dotnet build NetworkInspector.slnx -c Release
+dotnet test NetworkInspector.slnx -c Release
+```
+
+The cross-validation tests need [tshark 4.6.x](https://www.wireshark.org/download/) (part of Wireshark) on `PATH`:
 
 | Platform | Install |
-|---|---|
+| --- | --- |
 | Windows | [Wireshark installer](https://www.wireshark.org/download/) (includes tshark) or `choco install wireshark` |
 | Ubuntu / Debian | `sudo add-apt-repository ppa:wireshark-dev/wireshark && sudo apt-get install tshark` |
 | macOS | `brew install wireshark` |
 
-### Running Tests
+Without Wireshark, set `NETWORKINSPECTOR_ALLOW_MISSING_TSHARK=1` to skip the tests that opt into
+`TsharkAvailability.ShouldSkip()`; all other tests still run. Do not set it in CI or release runs, so
+cross-validation evidence is never discarded silently.
 
-```bash
-dotnet test NetworkInspector.slnx
-```
-
-### Skipping Cross-Validation Locally
-
-If Wireshark is not installed, set `NETWORKINSPECTOR_ALLOW_MISSING_TSHARK=1` to skip
-tshark-dependent tests. Tests that opt into this escape hatch via
-`TsharkAvailability.ShouldSkip()` will be skipped; the remaining tests run normally.
-
-Do not set this variable in CI or release runs — tshark must be present so that
-cross-validation evidence is never silently discarded.
-
-## Transitive Dependency And Generator Behavior
-
-- `NetworkInspector.Core` bundles `NetworkInspector.Generators` in the package analyzer assets.
-- NetworkInspector library packages keep `ZeroAlloc` as a transitive dependency, including analyzer/source-generator assets.
-- Consumers that reference NetworkInspector packages do not need extra package references to activate generator support.
-
-## Quick Start
-
-### Parse One Frame
-
-```csharp
-using NetworkInspector.Core;
-using NetworkInspector.Protocols;
-
-StackBuilder builder = new(new SettingsManager(), new FrameInterfaceRegistry());
-ProtocolRegistration.RegisterStandardProtocols(builder);
-Stack stack = builder.Build();
-
-Frame frame = Frame.Create(
-    new FrameId(0),
-    Timestamp.FromSecs(0),
-    rawBytes,
-    LinkType.Ethernet,
-    FrameInterfaceId.Invalid,
-    stack.FrameInterfaceRegistry).Value;
-
-ParseOptions options = new();
-if (!Packet.TryParse(new PacketId(0), stack, frame, in options, out Packet? packet, out ParseFailure failure))
-{
-    throw new InvalidOperationException(failure.ToString());
-}
-foreach (Field field in packet)
-{
-    Console.WriteLine($"{field.Info.UiName}: {field.Value}");
-}
-
-stack.Dispose();
-```
-
-## Recommended Adoption Paths
-
-### Path 1: Parse And Inspect Packets In Code
-
-Use Core + Protocols to build a parser stack and inspect packet fields programmatically.
-
-Best for:
-
-- custom observability tools,
-- packet validation,
-- protocol-aware data extraction.
-
-### Path 2: Convert Capture Files
-
-Use `NetworkInspector.CLI` for frame-level conversion without full packet export:
-
-```bash
-ni convert input.blf --output output.pcapng
-ni convert input.pcapng --output split/ --split-size 100
-```
-
-Best for:
-
-- capture normalization,
-- archive conversion,
-- frame-level operational workflows.
-
-### Path 3: Export Parsed Data
-
-Use CLI export or packet exporters for analysis outputs:
-
-```bash
-ni export input.pcapng --format json --output packets.json
-ni export input.pcapng --format pbf:format=columnar,compressed --output packets.pbf
-```
-
-Best for:
-
-- analytics pipelines,
-- report generation,
-- downstream BI/data tooling.
-
-## Package Map
-
-| Package | What You Use It For | Guide |
-|---------|---------------------|-------|
-| NetworkInspector.Core | Build parser stack and parse frames to packets | [NetworkInspector.Core/README.md](NetworkInspector.Core/README.md) |
-| NetworkInspector.Protocols | Register built-in dissectors | [NetworkInspector.Protocols/README.md](NetworkInspector.Protocols/README.md) |
-| NetworkInspector.Sources | Read captures from PCAP/PCAPNG/BLF/ASC | [NetworkInspector.Sources/README.md](NetworkInspector.Sources/README.md) |
-| NetworkInspector.Exporters | Write PCAPNG/BLF/ASC/JSON/PBF/CSV/Text/Parquet | [NetworkInspector.Exporters/README.md](NetworkInspector.Exporters/README.md) |
-| NetworkInspector.Exporters.DuckDb | Write DuckDB (`.duckdb`) from parsed packets | [NetworkInspector.Exporters.DuckDb/README.md](NetworkInspector.Exporters.DuckDb/README.md) |
-| NetworkInspector.Values | Use typed addresses and timestamps | [NetworkInspector.Values/README.md](NetworkInspector.Values/README.md) |
-| NetworkInspector.FrameBuilder | Construct protocol stacks into wire frames | [NetworkInspector.FrameBuilder/README.md](NetworkInspector.FrameBuilder/README.md) |
-| NetworkInspector.Sessions | Orchestrate sources, stack parsing, listeners, and jobs | [NetworkInspector.Sessions/README.md](NetworkInspector.Sessions/README.md) |
-| NetworkInspector.CLI | Convert/export from the command line (`ni`) | [NetworkInspector.CLI/README.md](NetworkInspector.CLI/README.md) |
-| NetworkInspector.Generators | Source generation bundled with Core | [NetworkInspector.Generators/README.md](NetworkInspector.Generators/README.md) |
-
-## Protocol Coverage Snapshot
-
-Built-in dissectors include link, network, transport, application, and automotive layers, including:
-
-- Ethernet, VLAN, Linux SLL/SLL2,
-- IPv4, IPv6, ARP, ICMPv4, ICMPv6,
-- TCP, UDP,
-- DNS, DHCPv4/v6, HTTP/1.x, HTTP/2, TLS, DTLS, WebSocket,
-- CAN (classic/FD/XL), FlexRay, LIN, SOME/IP.
-
-For full and current protocol list, see [NetworkInspector.Protocols/README.md](NetworkInspector.Protocols/README.md).
-
-## Limits And Thread-Safety Notes
-
-- Treat parser stack construction and exporter/listener workflows as single-threaded unless a package README states otherwise.
-- Dispose stacks and exporter instances promptly to release resources predictably.
-- Prefer streaming pipelines and explicit cancellation for large capture workloads.
-
-## Safe Usage (STRIDE)
-
-- **Spoofing**: Treat captures as untrusted input and validate source provenance where possible.
-- **Tampering**: Expect malformed records from third-party data and use tolerant/error-aware processing.
-- **Repudiation**: Retain source metadata and command settings when reproducibility is required.
-- **Information disclosure**: Assume exports can contain sensitive payload data and control access accordingly.
-- **Denial of service**: Apply split/target-count/cancellation controls on large jobs.
-- **Elevation of privilege**: Run processing with least-privilege filesystem and process rights.
+`NetworkInspector.Core` bundles `NetworkInspector.Generators` in its analyzer assets, and the library packages
+carry `ZeroAlloc` (including its generator) transitively, so consumers need no extra references.
 
 ## Links
 
-- [GitHub repository](https://github.com/DevAM-Tools/NetworkInspector)
-- [Issue tracker](https://github.com/DevAM-Tools/NetworkInspector/issues)
-
-### NuGet Package Pages
-
-| Package | NuGet |
-|---------|-------|
-| NetworkInspector.Core | <https://www.nuget.org/packages/NetworkInspector.Core> |
-| NetworkInspector.Protocols | <https://www.nuget.org/packages/NetworkInspector.Protocols> |
-| NetworkInspector.Values | <https://www.nuget.org/packages/NetworkInspector.Values> |
-| NetworkInspector.FrameBuilder | <https://www.nuget.org/packages/NetworkInspector.FrameBuilder> |
-| NetworkInspector.Sources | <https://www.nuget.org/packages/NetworkInspector.Sources> |
-| NetworkInspector.Exporters | <https://www.nuget.org/packages/NetworkInspector.Exporters> |
-| NetworkInspector.Exporters.DuckDb | <https://www.nuget.org/packages/NetworkInspector.Exporters.DuckDb> |
-| NetworkInspector.Sessions | <https://www.nuget.org/packages/NetworkInspector.Sessions> |
-| NetworkInspector.CLI | <https://www.nuget.org/packages/NetworkInspector.CLI> |
+- [Changelog](CHANGELOG.md)
+- [GitHub repository](https://github.com/DevAM-Tools/NetworkInspector) ·
+  [Issue tracker](https://github.com/DevAM-Tools/NetworkInspector/issues) ·
+  [Packages on NuGet](https://www.nuget.org/packages?q=NetworkInspector)
 
 ## License
 

@@ -78,7 +78,7 @@ internal sealed class SessionPoolStressTests
                         NoTrailer,
                         NoInterceptor> session = stack.OpenSession();
 
-                    StatefulFrameSequence<
+                    using StatefulFrameSequence<
                         Stack<UdpLayer,
                             Stack<IPv4LayerWithAutoIpId,
                                 StatelessStack<EthernetLayer, StackEnd>>>,

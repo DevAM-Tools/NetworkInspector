@@ -34,6 +34,12 @@ namespace NetworkInspector.FrameBuilder;
 /// </remarks>
 public readonly struct FlexRayLayer : IStatelessLayer, IRootLayer
 {
+    /// <summary>
+    /// Largest payload: the length field is 7 bits of 16-bit words, so at most 127 words
+    /// = 254 bytes (ISO 17458-2 §8).
+    /// </summary>
+    public const int MaxPayloadBytes = 254;
+
     private readonly ushort _FrameId;
     private readonly byte _CycleCount;
     private readonly bool _ChannelB;
@@ -49,17 +55,25 @@ public readonly struct FlexRayLayer : IStatelessLayer, IRootLayer
     /// <summary>Creates a FlexRay frame layer.</summary>
     /// <param name="frameId">FlexRay frame identifier (0..2047, 11 bits).</param>
     /// <param name="cycleCount">Cycle count (0..63, 6 bits).</param>
-    /// <param name="payload">Payload bytes (0..254 bytes; length must be even, or one byte is zero-padded).</param>
+    /// <param name="payload">
+    /// Payload bytes (0..<see cref="MaxPayloadBytes"/>; an odd length is zero-padded by one
+    /// byte).  Referenced, not copied.
+    /// </param>
     /// <param name="channelB">
     /// <c>false</c> for channel A (default), <c>true</c> for channel B.
     /// </param>
-    /// <param name="typeIndex">Type index in the measurement header (default 1 = Frame).</param>
+    /// <param name="typeIndex">Type index in the measurement header, 0..127 (default 1 = Frame).</param>
     /// <param name="nfi"><c>true</c> if the Null Frame Indicator is set.</param>
     /// <param name="sfi"><c>true</c> if the Sync Frame Indicator is set.</param>
     /// <param name="stfi"><c>true</c> if the Startup Frame Indicator is set.</param>
     /// <param name="ppi"><c>true</c> if the Payload Preamble Indicator is set.</param>
     /// <param name="hcrc">Header CRC (11 bits); default 0 (no verification in FrameBuilder).</param>
     /// <param name="errorFlags">Error flags byte (default 0 = no errors).</param>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// <paramref name="frameId"/> &gt; 2047, <paramref name="cycleCount"/> &gt; 63,
+    /// <paramref name="payload"/> longer than <see cref="MaxPayloadBytes"/>, or
+    /// <paramref name="typeIndex"/> &gt; 127.
+    /// </exception>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public FlexRayLayer(
         ushort frameId,
@@ -76,11 +90,20 @@ public readonly struct FlexRayLayer : IStatelessLayer, IRootLayer
     {
         if (frameId > 0x7FF)
         {
-            throw new ArgumentOutOfRangeException(nameof(frameId));
+            throw new ArgumentOutOfRangeException(nameof(frameId), frameId, "FlexRay frame identifier is 11 bits (0..2047).");
         }
         if (cycleCount > 63)
         {
-            throw new ArgumentOutOfRangeException(nameof(cycleCount));
+            throw new ArgumentOutOfRangeException(nameof(cycleCount), cycleCount, "FlexRay cycle count is 6 bits (0..63).");
+        }
+        if (payload.Length > MaxPayloadBytes)
+        {
+            throw new ArgumentOutOfRangeException(nameof(payload), payload.Length, "FlexRay payload must not exceed 254 bytes (127 words).");
+        }
+        // Measurement header: bit 7 is the channel, bits 6..0 the type index.
+        if (typeIndex > 0x7F)
+        {
+            throw new ArgumentOutOfRangeException(nameof(typeIndex), typeIndex, "FlexRay type index is 7 bits (0..127).");
         }
         _FrameId = frameId;
         _CycleCount = cycleCount;
@@ -112,7 +135,9 @@ public readonly struct FlexRayLayer : IStatelessLayer, IRootLayer
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void WriteHeader(scoped Span<byte> dst)
     {
-        byte measurementHeader = (byte)((_ChannelB ? 0x80 : 0x00) | (_TypeIndex & 0x7F));
+        // The constructor guarantees _TypeIndex <= 0x7F and a payload of at most 127
+        // words, so neither field needs masking here.
+        byte measurementHeader = (byte)((_ChannelB ? 0x80 : 0x00) | _TypeIndex);
 
         // Byte 2: [7] Reserved | [6] PPI | [5] NFI | [4] SFI | [3] STFI | [2:0] FID[10:8]
         byte byte2 = (byte)((_Ppi ? 0x40 : 0)
@@ -128,7 +153,7 @@ public readonly struct FlexRayLayer : IStatelessLayer, IRootLayer
         int payloadWords = (payloadBytes + 1) / 2;
 
         // Byte 4: [7:1] Payload Length (7 bits, words) | [0] HCRC[10]
-        byte byte4 = (byte)(((payloadWords & 0x7F) << 1) | ((_Hcrc >> 10) & 0x01));
+        byte byte4 = (byte)((payloadWords << 1) | ((_Hcrc >> 10) & 0x01));
         // Byte 5: HCRC[9:2]
         byte byte5 = (byte)((_Hcrc >> 2) & 0xFF);
         // Byte 6: HCRC[1:0] | Cycle Count[5:0]

@@ -33,7 +33,7 @@ internal static class FrameBuilderTestExtensions
         // Allocate exactly headerSize + payloadSize. For non-fragmented frames
         // (the common test case) MoveNext writes exactly that much.
         byte[] buffer = new byte[created.HeaderSize + payload.Length];
-        FrameSequence<TStack, TTrailer, TInterceptor> seq = created.Build(payload);
+        using FrameSequence<TStack, TTrailer, TInterceptor> seq = created.Build(payload);
         seq.MoveNext(buffer, out int written);
         // Slice to the actual written length so callers can rely on buffer.Length.
         if (written == buffer.Length)

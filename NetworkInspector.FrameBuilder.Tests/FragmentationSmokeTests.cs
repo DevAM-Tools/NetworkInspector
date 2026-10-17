@@ -149,7 +149,7 @@ internal sealed class FragmentationSmokeTests
         int written;
         FB.BuildStatus status;
         {
-            FB.FrameSequence<
+            using FB.FrameSequence<
                 FB.StatelessStack<FB.UdpLayer,
                     FB.StatelessStack<FB.IPv4Layer,
                         FB.StatelessStack<FB.EthernetLayer, FB.StackEnd>>>,
@@ -261,6 +261,51 @@ internal sealed class FragmentationSmokeTests
 
     #endregion
 
+    #region Lifetime
+
+    [Test]
+    public async Task AbandonedFragmentSequenceReleasesScratchOnDispose()
+    {
+        bool reservedBefore = FB.FrameSequenceScratch.IsPooledInUse;
+        (bool reservedWhileIterating, ushort secondFragmentOffset) = _EmitTwoFragmentsThenAbandon();
+        bool reservedAfterDispose = FB.FrameSequenceScratch.IsPooledInUse;
+
+        await Assert.That(reservedBefore).IsFalse();
+        await Assert.That(reservedWhileIterating).IsTrue();
+        // 1464 / 8: the using-declared sequence advanced in place (no defensive copy).
+        await Assert.That(secondFragmentOffset).IsEqualTo((ushort)183);
+        await Assert.That(reservedAfterDispose).IsFalse();
+    }
+
+    /// <summary>
+    /// Emits two of three fragments and leaves the scope without draining.  Synchronous
+    /// so the probe reads the same thread-static slot as the build.
+    /// </summary>
+    private static (bool ReservedWhileIterating, ushort SecondFragmentOffset) _EmitTwoFragmentsThenAbandon()
+    {
+        FB.CreatedStack<
+            FB.StatelessStack<FB.UdpLayer, FB.StatelessStack<FB.IPv4Layer, FB.StatelessStack<FB.EthernetLayer, FB.StackEnd>>>,
+            FB.NoTrailer,
+            FB.NoInterceptor> stack = FB.FrameStack
+                .Start(new FB.EthernetLayer(_DstMac, _SrcMac, maxFrameSize: _MtuFrameBytes))
+                .Then(new FB.IPv4Layer(_SrcIp4, _DstIp4, dontFragment: false))
+                .Then(new FB.UdpLayer(53, 53, FB.Auto.Explicit((ushort)0)))
+                .CreateWithFixedValues();
+        byte[] payload = new byte[3000];
+        byte[] dst = new byte[_MtuFrameBytes];
+
+        using FB.FrameSequence<
+            FB.StatelessStack<FB.UdpLayer, FB.StatelessStack<FB.IPv4Layer, FB.StatelessStack<FB.EthernetLayer, FB.StackEnd>>>,
+            FB.NoTrailer,
+            FB.NoInterceptor> seq = stack.Build(payload);
+        _ = seq.MoveNext(dst, out _);
+        _ = seq.MoveNext(dst, out _);
+        ushort offset = (ushort)(BinaryPrimitives.ReadUInt16BigEndian(dst.AsSpan(_EthHeaderSize + 6, 2)) & 0x1FFF);
+        return (FB.FrameSequenceScratch.IsPooledInUse, offset);
+    }
+
+    #endregion
+
     #region Helpers
 
     /// <summary>Drains a <see cref="FB.FrameSequence{TStack,TTrailer,TInterceptor}"/> into a list of frame copies.</summary>
@@ -272,7 +317,7 @@ internal sealed class FragmentationSmokeTests
         where TTrailer : struct, FB.ITrailerLayer
         where TInterceptor : struct, FB.IFrameInterceptor
     {
-        FB.FrameSequence<TStack, TTrailer, TInterceptor> seq = created.Build(payload);
+        using FB.FrameSequence<TStack, TTrailer, TInterceptor> seq = created.Build(payload);
         List<byte[]> result = [];
         byte[] scratch = new byte[frameBufferBytes];
         while (seq.MoveNext(scratch, out int written))

@@ -545,6 +545,165 @@ internal sealed class TcpConnectionTests
         await Assert.That(frames.Count).IsGreaterThanOrEqualTo(2);
     }
 
+    [Test]
+    public async Task WriteFromClientFragmentingCarrierDeliversAllFragmentsAndTotalBytes()
+    {
+        // MTU 68 → 34 IP payload bytes per fragment, aligned to 32.  One segment of
+        // 20 (TCP) + 40 (MSS) = 60 bytes → fragments of 32 and 28 bytes.
+        const ushort SmallMtu = 68;
+        using TcpConnection<IPv4Layer, StatelessStack<EthernetLayer, StackEnd>> conn = TcpConnection.Open(
+            FrameStack.Start(new EthernetLayer(_ServerMac, _ClientMac, maxFrameSize: SmallMtu)).Then(new IPv4Layer(_ClientIp, _ServerIp, dontFragment: false)),
+            FrameStack.Start(new EthernetLayer(_ClientMac, _ServerMac, maxFrameSize: SmallMtu)).Then(new IPv4Layer(_ServerIp, _ClientIp, dontFragment: false)),
+            1234, 80, new TcpConnectionOptions(ClientIsn: 0, ServerIsn: 0, Mss: 40, WindowSize: 65535));
+        (FrameSink sink, List<byte[]> frames) = _NewFrameCollector();
+        conn.EmitHandshake(sink);
+        frames.Clear();
+        byte[] payload = new byte[40];
+        for (int i = 0; i < payload.Length; i++)
+        {
+            payload[i] = (byte)(0xA0 + i);
+        }
+
+        conn.WriteFromClient(payload, sink);
+
+        // Reassemble the IPv4 payloads in offset order: TCP header + application bytes.
+        List<byte> datagram = [];
+        foreach (byte[] frame in frames)
+        {
+            ushort totalLength = BinaryPrimitives.ReadUInt16BigEndian(frame.AsSpan(_EthHeaderSize + 2, 2));
+            datagram.AddRange(frame.AsSpan(_TcpHeaderOffset, totalLength - _IPv4HeaderSize).ToArray());
+        }
+        await Assert.That(frames.Count).IsEqualTo(2);
+        await Assert.That(datagram.Count).IsEqualTo(_TcpHeaderSize + payload.Length);
+        await Assert.That(datagram.Skip(_TcpHeaderSize).SequenceEqual(payload)).IsTrue();
+        await Assert.That(conn.ClientNextSeq).IsEqualTo(1u + 40u);
+    }
+
+    [Test]
+    public async Task EmitHandshakeSynOptionsBuildFailureThrows()
+    {
+        // A 40-byte frame budget cannot hold the 14 + 20 + 24 byte SYN with an MSS
+        // option, and DF is set, so the build reports FragmentationRequired.
+        TcpOptionsBuilder builder = new();
+        builder.Mss(1460);
+        const ushort TinyMtu = 40;
+        using TcpConnection<IPv4Layer, StatelessStack<EthernetLayer, StackEnd>> conn = TcpConnection.Open(
+            FrameStack.Start(new EthernetLayer(_ServerMac, _ClientMac, maxFrameSize: TinyMtu)).Then(new IPv4Layer(_ClientIp, _ServerIp)),
+            FrameStack.Start(new EthernetLayer(_ClientMac, _ServerMac, maxFrameSize: TinyMtu)).Then(new IPv4Layer(_ServerIp, _ClientIp)),
+            1234, 80, new TcpConnectionOptions(ClientSynOptions: builder.Build()));
+        (FrameSink sink, List<byte[]> frames) = _NewFrameCollector();
+
+        await Assert.That(() => conn.EmitHandshake(sink)).Throws<InvalidOperationException>();
+        await Assert.That(frames.Count).IsEqualTo(0);
+        await Assert.That(conn.ClientNextSeq).IsEqualTo(1000u);
+    }
+
+    [Test]
+    public async Task WriteFromClientBuildFailureThrowsAndKeepsSequence()
+    {
+        // DF set and a 60-byte frame budget: a 40-byte segment (14 + 20 + 20 + 40 = 94)
+        // cannot be emitted.  Nothing reaches the sink and the sequence does not move.
+        const ushort SmallMtu = 60;
+        using TcpConnection<IPv4Layer, StatelessStack<EthernetLayer, StackEnd>> conn = TcpConnection.Open(
+            FrameStack.Start(new EthernetLayer(_ServerMac, _ClientMac, maxFrameSize: SmallMtu)).Then(new IPv4Layer(_ClientIp, _ServerIp)),
+            FrameStack.Start(new EthernetLayer(_ClientMac, _ServerMac, maxFrameSize: SmallMtu)).Then(new IPv4Layer(_ServerIp, _ClientIp)),
+            1234, 80, new TcpConnectionOptions(ClientIsn: 100, ServerIsn: 900, Mss: 40));
+        (FrameSink sink, List<byte[]> frames) = _NewFrameCollector();
+        conn.EmitHandshake(sink);
+        frames.Clear();
+
+        await Assert.That(() => conn.WriteFromClient(new byte[40], sink)).Throws<InvalidOperationException>();
+        await Assert.That(frames.Count).IsEqualTo(0);
+        await Assert.That(conn.ClientNextSeq).IsEqualTo(101u);
+    }
+
+    [Test]
+    public async Task MutatorSeesSynWithOptions()
+    {
+        TcpOptionsBuilder builder = new();
+        builder.Mss(1460);
+        using TcpConnection<IPv4Layer, StatelessStack<EthernetLayer, StackEnd>> conn = _OpenDefault(
+            new TcpConnectionOptions(ClientIsn: 1000, ServerIsn: 9000, ClientSynOptions: builder.Build(), ServerSynOptions: builder.Build()));
+        (FrameSink sink, List<byte[]> frames) = _NewFrameCollector();
+        List<(TcpDirection Dir, TcpLifecycle Phase, int Idx)> log = [];
+        conn.OnSegment = (ref TcpSegmentDescriptor seg, in TcpSegmentContext ctx) =>
+        {
+            log.Add((ctx.Direction, ctx.Phase, ctx.SegmentIndex));
+            if (ctx.SegmentIndex == 0)
+            {
+                seg.Flags |= TcpFlags.Cwr;
+            }
+        };
+
+        conn.EmitHandshake(sink);
+
+        await Assert.That(log.Count).IsEqualTo(3);
+        await Assert.That(log[0]).IsEqualTo((TcpDirection.ClientToServer, TcpLifecycle.Handshake, 0));
+        await Assert.That(log[1]).IsEqualTo((TcpDirection.ServerToClient, TcpLifecycle.Handshake, 1));
+        await Assert.That(_ReadTcpFlags(frames[0])).IsEqualTo((byte)(TcpFlags.Syn | TcpFlags.Cwr));
+        // Option bytes and DataOffset of the SYN are unchanged by the mutator path.
+        await Assert.That(frames[0][_TcpHeaderOffset + 12] >> 4).IsEqualTo(6);
+        await Assert.That(frames[0][_TcpHeaderOffset + 20]).IsEqualTo((byte)2);
+        // SYN-ACK acknowledges the client SYN through the live session state.
+        await Assert.That(_ReadTcpAck(frames[1])).IsEqualTo(1001u);
+    }
+
+    [Test]
+    public async Task SynWithOptionsOnFragmentingCarrierDeliversEveryFragment()
+    {
+        // MTU 68 with DF cleared: a SYN with a 24-byte option block plus a mutator-added
+        // 40-byte payload (20 + 4 + 40 = 64 IP payload bytes) needs two IPv4 fragments,
+        // and both must reach the sink.
+        TcpOptionsBuilder builder = new();
+        builder.Mss(1460);
+        const ushort SmallMtu = 68;
+        using TcpConnection<IPv4Layer, StatelessStack<EthernetLayer, StackEnd>> conn = TcpConnection.Open(
+            FrameStack.Start(new EthernetLayer(_ServerMac, _ClientMac, maxFrameSize: SmallMtu)).Then(new IPv4Layer(_ClientIp, _ServerIp, dontFragment: false)),
+            FrameStack.Start(new EthernetLayer(_ClientMac, _ServerMac, maxFrameSize: SmallMtu)).Then(new IPv4Layer(_ServerIp, _ClientIp, dontFragment: false)),
+            1234, 80, new TcpConnectionOptions(ClientIsn: 0, ServerIsn: 0, Mss: 40, ClientSynOptions: builder.Build()));
+        byte[] synPayload = new byte[40];
+        conn.OnSegment = (ref TcpSegmentDescriptor seg, in TcpSegmentContext ctx) =>
+        {
+            if (ctx.SegmentIndex == 0)
+            {
+                seg.Payload = synPayload;
+            }
+        };
+        (FrameSink sink, List<byte[]> frames) = _NewFrameCollector();
+
+        conn.EmitHandshake(sink);
+
+        // Frames 0 and 1 are the two SYN fragments; their IPv4 payloads add up to 64 bytes.
+        int synBytes = 0;
+        for (int i = 0; i < 2; i++)
+        {
+            synBytes += BinaryPrimitives.ReadUInt16BigEndian(frames[i].AsSpan(_EthHeaderSize + 2, 2)) - _IPv4HeaderSize;
+        }
+        await Assert.That(frames.Count).IsEqualTo(4);
+        await Assert.That(synBytes).IsEqualTo(_TcpHeaderSize + 4 + synPayload.Length);
+        // SYN consumed its payload plus one sequence number.
+        await Assert.That(conn.ClientNextSeq).IsEqualTo(1u + 40u);
+    }
+
+    [Test]
+    public async Task OpenWithZeroWindowEmitsZeroWindow()
+    {
+        using TcpConnection<IPv4Layer, StatelessStack<EthernetLayer, StackEnd>> conn = _OpenDefault(
+            new TcpConnectionOptions(WindowSize: 0));
+        (FrameSink sink, List<byte[]> frames) = _NewFrameCollector();
+
+        conn.EmitHandshake(sink);
+
+        await Assert.That(_ReadTcpWindow(frames[0])).IsEqualTo((ushort)0);
+        await Assert.That(_ReadTcpWindow(frames[1])).IsEqualTo((ushort)0);
+    }
+
+    [Test]
+    public async Task OpenWithZeroMssThrows()
+    {
+        await Assert.That(() => _OpenDefault(new TcpConnectionOptions(Mss: 0))).Throws<ArgumentOutOfRangeException>();
+    }
+
     /// <summary>
     /// Verifies that <see cref="TcpConnection{TOld,TTail}.WriteFromClient"/> emits
     /// all TCP segments when the payload exceeds MSS (multi-segment write).

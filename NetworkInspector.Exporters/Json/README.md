@@ -1,89 +1,82 @@
-<!-- Copyright © 2026 DevAM. All rights reserved. -->
+<!-- Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information. -->
 
 # JSON Exporter
 
-Packet-level JSON exporter for analysis and integration workflows.
+[![NuGet][nuget-badge]][nuget]
 
-## What This Is
+[nuget-badge]: https://img.shields.io/nuget/v/NetworkInspector.Exporters?logo=nuget&label=NetworkInspector.Exporters
+[nuget]: https://www.nuget.org/packages/NetworkInspector.Exporters
 
-The `JsonExporter` serializes parsed packets through `IPacketListener` to JSON output.
+`JsonExporter` writes the full field tree of every parsed packet as JSON, for scripts, log pipelines, and any
+tool that reads JSON. It is a packet exporter (`IPacketListener`): packets must be parsed with a field tree
+(`FieldTreeMode.Build`, the default).
 
-## Why Use It
+## Highlights
 
-- Multiple output styles for different consumers.
-- Compact mode reduces repeated payload through deduplication-oriented encoding.
-- File, stream, and stdout targets for both batch and pipeline usage.
+- **Three styles:** compact for volume, pretty for people, a flat array for downstream tools.
+- **Compact by default.** Repeated field metadata is deduplicated, which keeps large exports small.
+- **SIMD string escaping** on the hot path.
+- **Valid JSON always.** Every style writes one JSON array; an empty export is an empty array.
 
 ## Output Styles
 
 | Style | Best For |
 | --- | --- |
-| `JsonExportFormat.Compact` | Smallest payload, machine-driven ingestion |
+| `JsonExportFormat.Compact` (default) | Smallest output, machine ingestion |
 | `JsonExportFormat.Pretty` | Human inspection and debugging |
-| `JsonExportFormat.Array` | Flat full-key array output for downstream tooling |
+| `JsonExportFormat.Array` | Flat full-key records for downstream tooling |
 
-Field metadata key `type` / `TY` uses the numeric `FieldType` enum value in **Compact**
-format and the enum member name (for example `"MacAddress"`, `"U64"`) in **Pretty**
-and **Array** formats.
+The field metadata key `type` / `TY` holds the numeric `FieldType` value in **Compact** and the enum member
+name (for example `"MacAddress"`, `"U64"`) in **Pretty** and **Array**.
 
 ## Quick Start
 
 ```csharp
+using NetworkInspector.Core;
 using NetworkInspector.Exporters.Json;
 
-using JsonExporter exporter = JsonExporter.CreateBuilder()
-    .ToFile("packets.json")
-    .WithFormat(JsonExportFormat.Pretty)
-    .Build();
-
-foreach (Packet packet in packets)
+// packets: parsed packets with a field tree, see the end-to-end example in the Exporters README.
+static void WriteJson(IEnumerable<Packet> packets)
 {
-    if (!exporter.OnPacket(packet))
+    using JsonExporter exporter = JsonExporter.CreateBuilder()
+        .ToFile("packets.json")
+        .WithFormat(JsonExportFormat.Pretty)
+        .Build();
+
+    foreach (Packet packet in packets)
     {
-        break;
+        if (!exporter.OnPacket(packet))
+        {
+            break;
+        }
     }
+
+    exporter.OnFinish();
 }
-
-exporter.OnFinish();
 ```
-
-## Common Tasks
-
-### Stream JSON To Stdout
-
-Use `ToStdout()` for pipeline scenarios.
-
-### Reduce Output Size
-
-Use `WithFormat(JsonExportFormat.Compact)` for high-volume exports.
-
-### Flush Per Packet
-
-Use `WithFlushPerPacket(true)` when downstream consumers require immediate visibility.
 
 ## Builder Options
 
-| Method | Purpose |
-| --- | --- |
-| `ToFile(path)` / `ToStream(stream)` / `ToStdout()` | Select output target |
-| `WithUiName(name)` / `WithDescription(text)` | Set user-facing metadata |
-| `WithFormat(format)` | Choose JSON style |
-| `WithFlushPerPacket(flush)` | Flush output after each packet |
-| `WithTargetPacketCount(count)` | Stop after N packets (`0` = unlimited) |
-| `WithCancellationToken(token)` | Enable cooperative cancellation |
+| Method | Purpose | Default |
+| --- | --- | --- |
+| `ToFile` / `ToStream` / `ToStdout` | Output target | required |
+| `WithUiName` / `WithDescription` | User-facing metadata (not written to the output) | — |
+| `WithFormat(format)` | JSON style | `Compact` |
+| `WithFlushPerPacket(bool)` | Flush after each packet for live consumers | `false` |
+| `WithTargetPacketCount(int)` | Stop after N packets (`0` = no limit) | 0 |
+| `WithCancellationToken` | Cooperative cancellation | none |
 
 ## Limits And Thread-Safety Notes
 
-- Not thread-safe; call `OnPacket()`/`OnFinish()` sequentially.
-- Output reflects current packet parse tree, including any sensitive payload-derived text.
-- Use cancellation and packet limits for bounded long-running exports.
+- Not thread-safe; call `OnPacket()` and `OnFinish()` from one thread.
+- The output is one JSON array, not newline-delimited JSON.
+- Packets parsed with `FieldTreeMode.Skip` are skipped.
+- The output contains every decoded field, including payload-derived text. Treat it as sensitive.
 
 ## Links
 
-- [Exporters hub](../README.md)
-- [JSON source folder](https://github.com/DevAM-Tools/NetworkInspector/tree/main/NetworkInspector.Exporters/Json)
-- [GitHub repository](https://github.com/DevAM-Tools/NetworkInspector)
-- [NuGet package](https://www.nuget.org/packages/NetworkInspector.Exporters)
+- [Exporters overview](../README.md)
+- [Exporter guide](../EXPORTER_GUIDE.md)
 - [Issue tracker](https://github.com/DevAM-Tools/NetworkInspector/issues)
 
 ## License

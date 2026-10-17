@@ -3,8 +3,8 @@
 namespace NetworkInspector.FrameBuilder;
 
 /// <summary>
-/// Per-thread scratch storage used by the fragmentation paths of
-/// <see cref="FrameSequence{TStack,TTrailer,TInterceptor}"/> and
+/// Per-thread scratch storage used by the fragmentation path of the shared build
+/// engine behind <see cref="FrameSequence{TStack,TTrailer,TInterceptor}"/> and
 /// <see cref="StatefulFrameSequence{TStack,TTrailer,TInterceptor}"/>.
 /// </summary>
 /// <remarks>
@@ -25,7 +25,9 @@ namespace NetworkInspector.FrameBuilder;
 /// back to a freshly-allocated non-pooled buffer pair.  Outer (top-level)
 /// callers must pair <see cref="TryAcquire"/> with <see cref="Release"/>
 /// when they finish their fragment loop so a subsequent top-level call on
-/// the same thread reuses the pooled buffers.
+/// the same thread reuses the pooled buffers.  The engine releases on the last
+/// fragment, on every failure and on <c>Dispose</c> of the sequence, so a
+/// caller that stops early must dispose the sequence.
 /// </para>
 /// <para>
 /// Thread safety: every accessor operates exclusively on the calling thread's
@@ -44,6 +46,9 @@ internal static class FrameSequenceScratch
     /// <summary>Re-entrancy depth on the calling thread; 0 = pooled buffers free.</summary>
     [ThreadStatic]
     private static int _InUseDepth;
+
+    /// <summary>Test probe: <c>true</c> while the calling thread's pooled buffer pair is reserved.</summary>
+    internal static bool IsPooledInUse => _InUseDepth > 0;
 
     /// <summary>
     /// Attempts to reserve the per-thread scratch buffer pair.

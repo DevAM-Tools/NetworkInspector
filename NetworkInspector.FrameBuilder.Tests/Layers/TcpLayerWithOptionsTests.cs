@@ -37,6 +37,32 @@ internal sealed class TcpLayerWithOptionsTests
     }
 
     [Test]
+    public async Task SynOptionsTwiceExceedsFortyBytesThrows()
+    {
+        // 22 option bytes + 22 more > the 40-byte option area (RFC 9293 §3.1).
+        TcpOptionsBuilder builder = new();
+        builder.SynOptions();
+
+        await Assert.That(() => builder.SynOptions()).Throws<InvalidOperationException>();
+    }
+
+    [Test]
+    public async Task TenMssOptionsFillTheFortyByteAreaExactly()
+    {
+        // Boundary: 10 × 4 = 40 bytes is legal and gives the maximum 60-byte header.
+        TcpOptionsBuilder builder = new();
+        for (int i = 0; i < 10; i++)
+        {
+            builder.Mss(1460);
+        }
+
+        TcpLayerWithOptions tcp = new(srcPort: 1234, dstPort: 80, opts: builder.Build());
+
+        await Assert.That(tcp.HeaderSize).IsEqualTo(60);
+        await Assert.That(() => builder.Mss(1460)).Throws<InvalidOperationException>();
+    }
+
+    [Test]
     public async Task SynOptions_HeaderSize_Is44()
     {
         // MSS(4) + SACKPermitted(2) + NOP+NOP+Timestamps(12) + NOP(1) + WindowScale(3) = 22 → padded to 24

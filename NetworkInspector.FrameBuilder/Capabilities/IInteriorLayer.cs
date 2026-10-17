@@ -18,9 +18,9 @@ namespace NetworkInspector.FrameBuilder;
 /// <para>
 /// A layer that is <see cref="IInteriorLayer"/> must not also be
 /// <see cref="IPayloadLayer"/>; the two markers are mutually exclusive by
-/// design.  Pure terminal layers (ARP, ICMP echo, SOME/IP) implement
-/// neither <see cref="IInteriorLayer"/> nor <see cref="IPayloadLayer"/>
-/// is exclusively reserved for application-payload layers.
+/// design.  Pure terminals that publish a protocol type to their outer layer
+/// (ARP, ICMP echo) implement neither marker; application payload carriers
+/// (SOME/IP, DNS, TLS records) implement <see cref="IPayloadLayer"/>.
 /// </para>
 /// </remarks>
 public interface IInteriorLayer : IProtocolLayer

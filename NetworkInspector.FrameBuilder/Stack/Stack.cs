@@ -58,8 +58,8 @@ public readonly struct Stack<THead, TTail> : IStackNode
     public int MaxFrameLength
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => StackHelpers.TryCast<THead, IProvidesMtu>(in Head, out IProvidesMtu? mtu)
-            ? Math.Min(mtu.LinkMtu, Tail.MaxFrameLength)
+        get => StackHelpers.TryGetLinkMtu(in Head, out ushort linkMtu)
+            ? Math.Min(linkMtu, Tail.MaxFrameLength)
             : Tail.MaxFrameLength;
     }
 
@@ -67,7 +67,7 @@ public readonly struct Stack<THead, TTail> : IStackNode
     public bool HasFragmentable
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => StackHelpers.Is<THead, IFragmentable>(in Head) || Tail.HasFragmentable;
+        get => StackHelpers.IsFragmentable(in Head) || Tail.HasFragmentable;
     }
 
     /// <inheritdoc />
@@ -98,21 +98,14 @@ public readonly struct Stack<THead, TTail> : IStackNode
         Span<byte> headerSlice = dst.Slice(headOffset, Head.HeaderSize);
 
         // JIT-folded dispatch: per concrete THead the JIT picks one branch.
-        if (StackHelpers.TryCast<THead, IStatefulLayer>(in Head, out IStatefulLayer? stateful))
-        {
-            stateful.WriteHeader(headerSlice, ref state);
-        }
-        else if (StackHelpers.TryCast<THead, IStatelessLayer>(in Head, out IStatelessLayer? stateless))
-        {
-            stateless.WriteHeader(headerSlice);
-        }
+        StackHelpers.WriteHeader(in Head, headerSlice, ref state);
 
         interceptor.OnHeaderWritten(in Head, headerSlice);
 
-        if (Tail.Depth > 0 && StackHelpers.TryCast<THead, IProvidesProtocolType>(in Head, out IProvidesProtocolType? pt))
+        if (Tail.Depth > 0 && StackHelpers.TryGetProtocolType(in Head, out ushort protocolType))
         {
             int outerOffset = offsets[Tail.Depth - 1];
-            Tail.PatchHeadAsOuterFromInner(dst, outerOffset, pt.ProtocolType);
+            Tail.PatchHeadAsOuterFromInner(dst, outerOffset, protocolType);
         }
 
         return headOffset + Head.HeaderSize;
@@ -124,21 +117,13 @@ public readonly struct Stack<THead, TTail> : IStackNode
     {
         // Walk outer→inner: tail first, then Head.
         Tail.InitializeStatefulState(ref state);
-        if (StackHelpers.TryCast<THead, IStatefulLayer>(in Head, out IStatefulLayer? statefulInit))
-        {
-            statefulInit.InitializeState(ref state);
-        }
+        StackHelpers.InitializeState(in Head, ref state);
     }
 
     /// <inheritdoc />
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void PatchHeadAsOuterFromInner(scoped Span<byte> frame, int myHeadOffset, ushort innerProtocol)
-    {
-        if (StackHelpers.TryCast<THead, IConsumesNextProtocolValue>(in Head, out IConsumesNextProtocolValue? provider))
-        {
-            provider.PatchNextProtocol(frame, myHeadOffset, innerProtocol);
-        }
-    }
+        => StackHelpers.PatchNextProtocol(in Head, frame, myHeadOffset, innerProtocol);
 
     /// <inheritdoc />
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -149,14 +134,14 @@ public readonly struct Stack<THead, TTail> : IStackNode
     {
         // Walk outer→inner so the innermost fragmentable wins.
         bool found = Tail.TryGetFragmentableInfo(offsets, out headerOffset, out headerEndOffset, out canFragment, out kind, out alignment);
-        if (StackHelpers.TryCast<THead, IFragmentable>(in Head, out IFragmentable? f))
+        if (StackHelpers.TryGetFragmentation(in Head, out bool headCanFragment, out FragmentationKind headKind, out int headAlignment))
         {
             int myOffset = offsets[Tail.Depth];
             headerOffset = myOffset;
             headerEndOffset = myOffset + Head.HeaderSize;
-            canFragment = f.CanFragment;
-            kind = f.FragmentationKind;
-            alignment = f.FragmentAlignment;
+            canFragment = headCanFragment;
+            kind = headKind;
+            alignment = headAlignment;
             found = true;
         }
         return found;
@@ -170,11 +155,8 @@ public readonly struct Stack<THead, TTail> : IStackNode
         bool moreFragments, FragmentationKind activeKind)
     {
         Tail.PatchFragmentable(frame, offsets, frameDataLength, fragmentPayloadOffset, moreFragments, activeKind);
-        if (StackHelpers.TryCast<THead, IFragmentable>(in Head, out IFragmentable? pf) && pf.FragmentationKind == activeKind)
-        {
-            int myOffset = offsets[Tail.Depth];
-            pf.PatchFragmentHeader(frame, myOffset, frameDataLength - myOffset, fragmentPayloadOffset, moreFragments);
-        }
+        int myOffset = offsets[Tail.Depth];
+        StackHelpers.PatchFragmentHeader(in Head, frame, myOffset, frameDataLength - myOffset, fragmentPayloadOffset, moreFragments, activeKind);
     }
 
     /// <inheritdoc />

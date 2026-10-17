@@ -261,7 +261,7 @@ internal sealed class ReparseReassemblyIdentityTests
         where TTrailer : struct, ITrailerLayer
         where TInterceptor : struct, IFrameInterceptor
     {
-        FrameSequence<TStack, TTrailer, TInterceptor> sequence = created.Build(payload);
+        using FrameSequence<TStack, TTrailer, TInterceptor> sequence = created.Build(payload);
         List<byte[]> frames = [];
         byte[] scratch = new byte[_MtuFrameBytes];
         while (sequence.MoveNext(scratch, out int written))

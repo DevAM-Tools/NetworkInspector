@@ -268,6 +268,77 @@ internal sealed class StatefulSessionSmokeTests
 
     #endregion
 
+    #region Layer-reported status
+
+    [Test]
+    public async Task StatefulUdpOverIPv6PinnedZeroChecksumReturnsInvalidLayerState()
+    {
+        IPv6Address src = IPv6Address.FromBytes([0x20, 0x01, 0x0D, 0xB8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]);
+        IPv6Address dst = IPv6Address.FromBytes([0x20, 0x01, 0x0D, 0xB8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2]);
+        StatefulCreatedStack<
+            Stack<UdpLayer, Stack<IPv6FragmentExtensionLayerWithAutoId, StatelessStack<IPv6Layer, StatelessStack<EthernetLayer, StackEnd>>>>,
+            NoTrailer,
+            NoInterceptor> stack = StatefulFrameStack.CreateForSession(
+                FrameStack.Start(new EthernetLayer(_DstMac, _SrcMac))
+                    .Then(new IPv6Layer(src, dst))
+                    .Then(new IPv6FragmentExtensionLayerWithAutoId(initialIdentification: 7))
+                    .Then(new UdpLayer(1, 2, Auto.Explicit((ushort)0))));
+        byte[] buffer = new byte[stack.HeaderSize + 4];
+
+        using Session<
+            Stack<UdpLayer, Stack<IPv6FragmentExtensionLayerWithAutoId, StatelessStack<IPv6Layer, StatelessStack<EthernetLayer, StackEnd>>>>,
+            NoTrailer,
+            NoInterceptor> session = stack.OpenSession();
+
+        (bool wrote, int written, BuildStatus status) = _EmitFirst(session, [1, 2, 3, 4], buffer);
+
+        await Assert.That(wrote).IsFalse();
+        await Assert.That(written).IsEqualTo(0);
+        await Assert.That(status).IsEqualTo(BuildStatus.InvalidLayerState);
+    }
+
+    [Test]
+    public async Task StatefulOversizePayloadReturnsInvalidLayerStateAndKeepsCounters()
+    {
+        // Raw-IP root without IProvidesMtu: the single-frame path runs, the IPv4
+        // TotalLength cannot represent the frame, and the TCP sequence must not
+        // advance for a packet that was never emitted.
+        StatefulCreatedStack<Stack<TcpLayerWithAutoSequence, StatelessStack<IPv4Layer, StackEnd>>, NoTrailer, NoInterceptor> stack =
+            StatefulFrameStack.CreateForSession(
+                FrameStack.Start(new IPv4Layer(_SrcIp4, _DstIp4))
+                    .Then(new TcpLayerWithAutoSequence(srcPort: 1, dstPort: 2, initialSequence: 1000, flags: TcpFlags.Ack)));
+        byte[] oversize = new byte[70_000];
+        byte[] buffer = new byte[stack.HeaderSize + oversize.Length];
+
+        using Session<Stack<TcpLayerWithAutoSequence, StatelessStack<IPv4Layer, StackEnd>>, NoTrailer, NoInterceptor> session = stack.OpenSession();
+
+        (bool wroteOversize, int writtenOversize, BuildStatus oversizeStatus) = _EmitFirst(session, oversize, buffer);
+        (bool wroteNext, int writtenNext, BuildStatus nextStatus) = _EmitFirst(session, [1, 2], buffer);
+
+        await Assert.That(wroteOversize).IsFalse();
+        await Assert.That(writtenOversize).IsEqualTo(0);
+        await Assert.That(oversizeStatus).IsEqualTo(BuildStatus.InvalidLayerState);
+        await Assert.That(wroteNext).IsTrue();
+        await Assert.That(nextStatus).IsEqualTo(BuildStatus.Success);
+        await Assert.That(BinaryPrimitives.ReadUInt32BigEndian(buffer.AsSpan(_IPv4HeaderSize + 4, 4))).IsEqualTo(1000U);
+        await Assert.That(writtenNext).IsEqualTo(_IPv4HeaderSize + _TcpHeaderSize + 2);
+    }
+
+    /// <summary>
+    /// Runs the first <c>MoveNext</c> of a session packet.  Synchronous so the
+    /// <c>ref struct</c> sequence never lives across an <c>await</c>.
+    /// </summary>
+    private static (bool Wrote, int Written, BuildStatus Status) _EmitFirst<TStack>(
+        Session<TStack, NoTrailer, NoInterceptor> session, ReadOnlySpan<byte> payload, Span<byte> buffer)
+        where TStack : struct, IStackNode
+    {
+        using StatefulFrameSequence<TStack, NoTrailer, NoInterceptor> sequence = session.NextPacket(payload);
+        bool wrote = sequence.MoveNext(buffer, out int written);
+        return (wrote, written, sequence.Status);
+    }
+
+    #endregion
+
     #region Session pool
 
     [Test]
@@ -463,6 +534,75 @@ internal sealed class StatefulSessionSmokeTests
             }
             await Assert.That(threwAfterReuse).IsTrue();
         }
+    }
+
+    /// <summary>Marker interceptor that gives the stale-sequence test its own pool.</summary>
+    private readonly struct StaleSequenceMarkerInterceptor : IFrameInterceptor
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public void OnHeaderWritten<TLayer>(in TLayer layer, scoped Span<byte> headerSlice) where TLayer : struct, IProtocolLayer
+        {
+        }
+
+        public void OnFrameComplete(scoped Span<byte> frame)
+        {
+        }
+    }
+
+    [Test]
+    public async Task StaleSequenceAfterDisposeReturnsSessionDisposed()
+    {
+        StatefulCreatedStack<
+            Stack<UdpLayer, Stack<IPv4LayerWithAutoIpId, StatelessStack<EthernetLayer, StackEnd>>>,
+            NoTrailer,
+            StaleSequenceMarkerInterceptor> stack = StatefulFrameStack.CreateForSession<
+                Stack<UdpLayer, Stack<IPv4LayerWithAutoIpId, StatelessStack<EthernetLayer, StackEnd>>>,
+                StaleSequenceMarkerInterceptor>(
+                FrameStack.Start(new EthernetLayer(_DstMac, _SrcMac))
+                    .Then(new IPv4LayerWithAutoIpId(_SrcIp4, _DstIp4, initialIdentification: 500))
+                    .Then(new UdpLayer(1, 2)),
+                new());
+
+        (bool staleWrote, BuildStatus staleStatus, ushort freshId) = _RunStaleSequenceAgainstReRentedSession(in stack);
+
+        await Assert.That(staleWrote).IsFalse();
+        await Assert.That(staleStatus).IsEqualTo(BuildStatus.SessionDisposed);
+        // The re-rented session starts at its seed; the stale sequence must not
+        // have advanced its IP-ID counter.
+        await Assert.That(freshId).IsEqualTo<ushort>(500);
+    }
+
+    /// <summary>
+    /// Creates a sequence on session A, disposes A, opens B (re-renting the pooled
+    /// internals), drives the stale sequence, then emits one packet from B.
+    /// Synchronous so the <c>ref struct</c> sequences never cross an <c>await</c>.
+    /// </summary>
+    private static (bool StaleWrote, BuildStatus StaleStatus, ushort FreshId) _RunStaleSequenceAgainstReRentedSession(
+        in StatefulCreatedStack<
+            Stack<UdpLayer, Stack<IPv4LayerWithAutoIpId, StatelessStack<EthernetLayer, StackEnd>>>,
+            NoTrailer,
+            StaleSequenceMarkerInterceptor> stack)
+    {
+        byte[] buffer = new byte[stack.HeaderSize + 2];
+        Session<Stack<UdpLayer, Stack<IPv4LayerWithAutoIpId, StatelessStack<EthernetLayer, StackEnd>>>, NoTrailer, StaleSequenceMarkerInterceptor> a =
+            stack.OpenSession();
+        using StatefulFrameSequence<
+            Stack<UdpLayer, Stack<IPv4LayerWithAutoIpId, StatelessStack<EthernetLayer, StackEnd>>>,
+            NoTrailer,
+            StaleSequenceMarkerInterceptor> stale = a.NextPacket([1, 2]);
+        a.Dispose();
+
+        using Session<Stack<UdpLayer, Stack<IPv4LayerWithAutoIpId, StatelessStack<EthernetLayer, StackEnd>>>, NoTrailer, StaleSequenceMarkerInterceptor> b =
+            stack.OpenSession();
+        bool staleWrote = stale.MoveNext(buffer, out _);
+        BuildStatus staleStatus = stale.Status;
+
+        using StatefulFrameSequence<
+            Stack<UdpLayer, Stack<IPv4LayerWithAutoIpId, StatelessStack<EthernetLayer, StackEnd>>>,
+            NoTrailer,
+            StaleSequenceMarkerInterceptor> fresh = b.NextPacket([1, 2]);
+        _ = fresh.MoveNext(buffer, out int written);
+        return (staleWrote, staleStatus, _ReadIPv4Id(buffer.AsSpan(0, written)));
     }
 
     #endregion

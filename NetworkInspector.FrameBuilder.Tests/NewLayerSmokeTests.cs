@@ -428,7 +428,7 @@ internal sealed class NewLayerSmokeTests
         where TTrailer : struct, FB.ITrailerLayer
         where TInterceptor : struct, FB.IFrameInterceptor
     {
-        FB.FrameSequence<TStack, TTrailer, TInterceptor> seq = created.Build(payload);
+        using FB.FrameSequence<TStack, TTrailer, TInterceptor> seq = created.Build(payload);
         seq.MoveNext(dst, out int written);
         return written;
     }

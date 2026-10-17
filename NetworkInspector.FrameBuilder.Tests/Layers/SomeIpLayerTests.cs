@@ -36,7 +36,7 @@ internal sealed class SomeIpLayerTests
                 .CreateWithFixedValues();
 
         byte[] buf = new byte[2048];
-        FB.FrameSequence<
+        using FB.FrameSequence<
             FB.StatelessStack<TApp,
                 FB.StatelessStack<FB.UdpLayer,
                     FB.StatelessStack<FB.IPv4Layer,

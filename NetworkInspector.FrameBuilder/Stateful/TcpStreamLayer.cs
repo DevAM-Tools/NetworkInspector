@@ -3,8 +3,10 @@
 namespace NetworkInspector.FrameBuilder;
 
 /// <summary>
-/// Internal stateful TCP layer used exclusively by
-/// <see cref="TcpConnection{TCarrierOld,TCarrierTail}"/>.  Distinct from
+/// Stateful TCP layer driven by <see cref="TcpConnection{TCarrierOld,TCarrierTail}"/>.
+/// Public because the connection's public session type names it; the constructor
+/// is internal, so only <see cref="TcpConnection.Open{TOld,TTail}"/> creates
+/// instances.  Distinct from
 /// <see cref="TcpLayerWithAutoSequence"/>: this layer reads <em>every</em>
 /// per-segment value (flags, window, ack, urgent) from dedicated
 /// <see cref="SessionState"/> slots that the connection populates before
@@ -39,7 +41,7 @@ namespace NetworkInspector.FrameBuilder;
 /// </para>
 /// <para>Thread safety: the struct is immutable; the per-frame state lives in <see cref="SessionState"/>.</para>
 /// </remarks>
-internal readonly struct TcpStreamLayer :
+public readonly struct TcpStreamLayer :
     IStatefulLayer, IInteriorLayer, IProvidesProtocolType,
     IProvidesNextProtocolValue<IpNextProtocolKind>, IRequiresPseudoHeader, IStreamCarrier
 {

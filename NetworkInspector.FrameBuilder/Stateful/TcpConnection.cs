@@ -21,36 +21,35 @@ public static class TcpConnection
     /// <param name="serverCarrier">Carrier stack used for server→client segments.</param>
     /// <param name="clientPort">Source port the client uses (= destination port the server sees).</param>
     /// <param name="serverPort">Source port the server uses (= destination port the client sees).</param>
-    /// <param name="options">Connection-level options (ISN per side, MSS, default window).</param>
+    /// <param name="options">
+    /// Connection-level options (ISN per side, MSS, default window).  Omitted or
+    /// <c>null</c> means <c>new TcpConnectionOptions()</c> with its documented
+    /// defaults.  Explicit values are used as given: a zero window is emitted as 0.
+    /// </param>
     /// <typeparam name="TOld">Outer-most carrier layer (must publish a pseudo-header).</typeparam>
     /// <typeparam name="TTail">Inner cons-list tail of the carrier stack.</typeparam>
+    /// <exception cref="ArgumentOutOfRangeException"><see cref="TcpConnectionOptions.Mss"/> is 0.</exception>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static TcpConnection<TOld, TTail> Open<TOld, TTail>(
         in StatelessStack<TOld, TTail> clientCarrier,
         in StatelessStack<TOld, TTail> serverCarrier,
         ushort clientPort,
         ushort serverPort,
-        TcpConnectionOptions options = default)
+        TcpConnectionOptions? options = null)
         where TOld : struct, IStatelessLayer, IInteriorLayer, IProvidesPseudoHeader
         where TTail : struct, IStackNode, IStatelessStack
     {
-        if (options.Mss == 0)
+        // MSS 0 cannot segment anything; reject it here as _WriteStream does for the
+        // per-call override.  WindowSize 0 is a legal TCP state (zero window) and is
+        // passed through unchanged.
+        TcpConnectionOptions effectiveOptions = options ?? new TcpConnectionOptions();
+        if (effectiveOptions.Mss == 0)
         {
-            options = options with
-            {
-                Mss = 1460,
-            };
-        }
-        if (options.WindowSize == 0)
-        {
-            options = options with
-            {
-                WindowSize = 65535,
-            };
+            throw new ArgumentOutOfRangeException(nameof(options), "TcpConnectionOptions.Mss must be > 0.");
         }
 
-        TcpStreamLayer clientLayer = new(clientPort, serverPort, options.ClientIsn, initialAck: 0u, options.WindowSize);
-        TcpStreamLayer serverLayer = new(serverPort, clientPort, options.ServerIsn, initialAck: 0u, options.WindowSize);
+        TcpStreamLayer clientLayer = new(clientPort, serverPort, effectiveOptions.ClientIsn, initialAck: 0u, effectiveOptions.WindowSize);
+        TcpStreamLayer serverLayer = new(serverPort, clientPort, effectiveOptions.ServerIsn, initialAck: 0u, effectiveOptions.WindowSize);
 
         Stack<TcpStreamLayer, StatelessStack<TOld, TTail>> clientStack = clientCarrier.Then(clientLayer);
         Stack<TcpStreamLayer, StatelessStack<TOld, TTail>> serverStack = serverCarrier.Then(serverLayer);
@@ -64,18 +63,46 @@ public static class TcpConnection
         Session<Stack<TcpStreamLayer, StatelessStack<TOld, TTail>>, NoTrailer, NoInterceptor> serverSession = serverCreated.OpenSession();
 
         return new TcpConnection<TOld, TTail>(
-            clientSession, serverSession, options, clientPort, serverPort, clientCarrier, serverCarrier);
+            clientSession, serverSession, effectiveOptions, clientPort, serverPort, clientCarrier, serverCarrier);
     }
 
     /// <summary>
-    /// Thread-local <see cref="ArrayBufferWriter{T}"/> reused across all
+    /// Largest producer-buffer capacity, in bytes, that a thread keeps between
     /// <see cref="TcpConnection{TOld,TTail}.WriteFromClient{TProducer}"/> /
-    /// <see cref="TcpConnection{TOld,TTail}.WriteFromServer{TProducer}"/> calls
-    /// on this thread.  Safe to reuse because <see cref="TcpConnection{TOld,TTail}"/>
-    /// is not reentrant and all calls on the same thread are serialised.
+    /// <c>WriteFromServer</c> calls.  Messages of any size still work; a buffer that
+    /// grew beyond this cap is released after its write instead of being retained,
+    /// so one large message does not pin memory on the thread for its lifetime.
+    /// Constant (not configurable).
+    /// </summary>
+    internal const int MaxRetainedProducerBufferBytes = 64 * 1024;
+
+    /// <summary>
+    /// Thread-local <see cref="ArrayBufferWriter{T}"/> reused across producer writes
+    /// on this thread.  Reuse relies on <see cref="TcpConnection{TOld,TTail}"/> not
+    /// being reentrant on one thread.
     /// </summary>
     [ThreadStatic]
-    internal static ArrayBufferWriter<byte>? _SharedProducerBuffer;
+    private static ArrayBufferWriter<byte>? _SharedProducerBuffer;
+
+    /// <summary>Returns the calling thread's producer buffer, emptied and ready for one message.</summary>
+    internal static ArrayBufferWriter<byte> RentProducerBuffer()
+    {
+        ArrayBufferWriter<byte> writer = _SharedProducerBuffer ??= new ArrayBufferWriter<byte>(initialCapacity: 1024);
+        writer.ResetWrittenCount();
+        return writer;
+    }
+
+    /// <summary>
+    /// Ends the use of a buffer from <see cref="RentProducerBuffer"/>: a buffer that grew
+    /// beyond <see cref="MaxRetainedProducerBufferBytes"/> is dropped for the GC.
+    /// </summary>
+    internal static void ReturnProducerBuffer(ArrayBufferWriter<byte> writer)
+    {
+        if (writer.Capacity > MaxRetainedProducerBufferBytes && ReferenceEquals(writer, _SharedProducerBuffer))
+        {
+            _SharedProducerBuffer = null;
+        }
+    }
 }
 
 /// <summary>
@@ -89,9 +116,19 @@ public static class TcpConnection
 /// <para>
 /// <b>On-the-fly emission.</b>  Every Emit/Write method runs the layer
 /// machinery synchronously and invokes <c>sink</c> once per
-/// produced segment, in wire order, before returning.  No internal
-/// segment buffering; the caller may stream arbitrarily large payloads
-/// in incremental Write calls.
+/// produced frame, in wire order, before returning.  Segments are not
+/// buffered across calls; the caller may stream arbitrarily large payloads
+/// in incremental Write calls.  When the carrier fragments one segment into
+/// several frames, those frames are built completely before the first one is
+/// handed to the sink.
+/// </para>
+/// <para>
+/// <b>Failure.</b>  A segment the carrier cannot build (for example a frame
+/// budget below the segment size with DF set) throws
+/// <see cref="InvalidOperationException"/> naming the <see cref="BuildStatus"/>.
+/// No frame of that segment reaches the sink and the connection's sequence and
+/// acknowledgement state is unchanged, so the caller may continue with a smaller
+/// write.
 /// </para>
 /// <para>
 /// <b>Mutator hook.</b>  An optional <see cref="OnSegment"/> mutator (or
@@ -138,6 +175,16 @@ public sealed class TcpConnection<TOld, TTail> : IDisposable
 
     /// <summary>Reusable scratch buffer; sized to <c>HeaderSize + MSS</c> at construction and grown on demand.</summary>
     private byte[] _Scratch;
+
+    /// <summary>Second frame buffer, same size as <see cref="_Scratch"/>, for the fragments after the first.</summary>
+    private byte[] _Fragment;
+
+    /// <summary>
+    /// Frames of one fragmented segment, held back until the whole segment built
+    /// successfully so a late failure never leaves a partial segment in the sink.
+    /// Allocated once; only a fragmenting carrier fills it.
+    /// </summary>
+    private readonly List<byte[]> _PendingFrames = [];
 
     private bool _Disposed;
     private bool _HandshakeDone;
@@ -195,6 +242,7 @@ public sealed class TcpConnection<TOld, TTail> : IDisposable
         // but take the max in case caller-supplied asymmetric carriers differ in header size.
         HeaderSize = Math.Max(clientSession.HeaderSize, serverSession.HeaderSize);
         _Scratch = new byte[HeaderSize + options.Mss];
+        _Fragment = new byte[HeaderSize + options.Mss];
     }
 
     #region Lifecycle: Handshake / Teardown / Reset
@@ -217,9 +265,11 @@ public sealed class TcpConnection<TOld, TTail> : IDisposable
 
         TcpSegmentMutator? effective = mutator ?? OnSegment;
 
+        // SYN and SYN-ACK with options take a separate serialiser (TcpLayerWithOptions)
+        // but the same defaults, mutator and sequence bookkeeping as every other segment.
         if (_Options.ClientSynOptions.Data.Length > 0)
         {
-            _EmitSynWithOptions(isClient: true, flags: TcpFlags.Syn, seq: _Options.ClientIsn, ack: 0, _Options.ClientSynOptions, sink);
+            _EmitSynWithOptions(isClient: true, TcpFlags.Syn, _Options.ClientSynOptions, segmentIndex: 0, sink, effective);
         }
         else
         {
@@ -236,13 +286,7 @@ public sealed class TcpConnection<TOld, TTail> : IDisposable
 
         if (_Options.ServerSynOptions.Data.Length > 0)
         {
-            _EmitSynWithOptions(
-                isClient: false,
-                flags: TcpFlags.SynAck,
-                seq: _Options.ServerIsn,
-                ack: _Options.ClientIsn + 1u,
-                _Options.ServerSynOptions,
-                sink);
+            _EmitSynWithOptions(isClient: false, TcpFlags.SynAck, _Options.ServerSynOptions, segmentIndex: 1, sink, effective);
         }
         else
         {
@@ -383,19 +427,19 @@ public sealed class TcpConnection<TOld, TTail> : IDisposable
         ObjectDisposedException.ThrowIf(_Disposed, this);
         ArgumentNullException.ThrowIfNull(sink);
 
-        // Rent a thread-local buffer to avoid a per-call heap allocation.
-        // Safe to reuse on the same thread: TcpConnection is not reentrant,
-        // so the buffer is never accessed concurrently from within a single call chain.
-        // If a previous call grew the buffer beyond 65536 bytes, reset to a fresh small
-        // writer so the thread-static slot does not permanently retain a large allocation.
-        ArrayBufferWriter<byte> writer = TcpConnection._SharedProducerBuffer ??= new ArrayBufferWriter<byte>(initialCapacity: 1024);
-        if (writer.Capacity > 65536)
+        // The producer serialises the whole message into the thread's reusable buffer
+        // (no per-call allocation up to MaxRetainedProducerBufferBytes); the buffer is
+        // handed back even when the producer or the sink throws.
+        ArrayBufferWriter<byte> writer = TcpConnection.RentProducerBuffer();
+        try
         {
-            TcpConnection._SharedProducerBuffer = writer = new ArrayBufferWriter<byte>(initialCapacity: 1024);
+            producer.WriteStream(writer);
+            _WriteStream(isClient, writer.WrittenSpan, sink, push, mss, mutator);
         }
-        writer.ResetWrittenCount();
-        producer.WriteStream(writer);
-        _WriteStream(isClient, writer.WrittenSpan, sink, push, mss, mutator);
+        finally
+        {
+            TcpConnection.ReturnProducerBuffer(writer);
+        }
     }
 
     private void _WriteStream(bool isClient, ReadOnlySpan<byte> payload, FrameSink sink, bool push, ushort? mss, TcpSegmentMutator? mutator)
@@ -442,47 +486,140 @@ public sealed class TcpConnection<TOld, TTail> : IDisposable
     #region Per-segment emission core
 
     /// <summary>
-    /// The single point through which every emitted segment flows.
-    /// Builds a <see cref="TcpSegmentDescriptor"/> from the connection's
-    /// current state, optionally invokes the mutator, writes the
-    /// (possibly mutated) per-frame state into the session's
-    /// <see cref="SessionState"/> slots, runs the layer machinery into
-    /// the scratch buffer, then forwards the wire bytes to the sink and
-    /// updates the peer's expected ACK.
+    /// Fills the values of one segment: the session's current defaults first, then the
+    /// mutator (when one is registered) may change any of them.  Every emission path
+    /// goes through here, so the mutator contract holds for every segment, including
+    /// SYN and SYN-ACK with options.
     /// </summary>
-    private void _EmitSynWithOptions(
-        bool isClient, byte flags, uint seq, uint ack, TcpOptions options, FrameSink sink)
+    private TcpSegmentDescriptor _ResolveSegment(
+        bool isClient,
+        TcpLifecycle phase,
+        byte defaultFlags,
+        ReadOnlySpan<byte> payload,
+        int segmentIndex,
+        int segmentCount,
+        TcpSegmentMutator? mutator,
+        ushort? overrideMss)
     {
+        Session<Stack<TcpStreamLayer, StatelessStack<TOld, TTail>>, NoTrailer, NoInterceptor> session = isClient ? _ClientSession : _ServerSession;
+
+        // Defaults the layer uses unless the mutator overrides them.
+        TcpSegmentDescriptor descriptor = default;
+        descriptor.Sequence = session.PeekTcpStreamNextSeq();
+        descriptor.Acknowledgment = session.PeekTcpStreamAck();
+        descriptor.Flags = defaultFlags;
+        descriptor.WindowSize = session.PeekTcpStreamWindow();
+        descriptor.UrgentPointer = 0;
+        descriptor.Payload = payload;
+        if (mutator is null)
+        {
+            // Hot path: no context, no delegate call.
+            return descriptor;
+        }
+
+        TcpSegmentContext ctx = new()
+        {
+            Direction = isClient ? TcpDirection.ClientToServer : TcpDirection.ServerToClient,
+            Phase = phase,
+            SegmentIndex = segmentIndex,
+            SegmentCount = segmentCount,
+            Mss = overrideMss ?? _Options.Mss,
+        };
+        mutator(ref descriptor, in ctx);
+        return descriptor;
+    }
+
+    /// <summary>
+    /// Emits SYN or SYN-ACK with TCP options.  The stateful <see cref="TcpStreamLayer"/>
+    /// writes a fixed 20-byte header, so this segment is serialised with a stateless
+    /// <see cref="TcpLayerWithOptions"/> on the same carrier; defaults, mutator and the
+    /// sequence bookkeeping are the same as in <see cref="_EmitOneSegment"/>.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">The carrier cannot build the segment (status in the message).</exception>
+    private void _EmitSynWithOptions(
+        bool isClient, byte defaultFlags, TcpOptions options, int segmentIndex, FrameSink sink, TcpSegmentMutator? mutator)
+    {
+        Session<Stack<TcpStreamLayer, StatelessStack<TOld, TTail>>, NoTrailer, NoInterceptor> session = isClient ? _ClientSession : _ServerSession;
+        TcpSegmentDescriptor segment = _ResolveSegment(
+            isClient, TcpLifecycle.Handshake, defaultFlags, ReadOnlySpan<byte>.Empty, segmentIndex, segmentCount: 3, mutator, overrideMss: null);
+
+        // Build into a private buffer; nothing reaches the sink or the session state on failure.
         TcpLayerWithOptions layer = new(
             isClient ? ClientPort : ServerPort,
             isClient ? ServerPort : ClientPort,
             options,
-            seqNum: seq,
-            ackNum: ack,
-            flags: flags,
-            windowSize: _Options.WindowSize);
-
+            seqNum: segment.Sequence,
+            ackNum: segment.Acknowledgment,
+            flags: segment.Flags,
+            windowSize: segment.WindowSize,
+            urgentPointer: segment.UrgentPointer);
         CreatedStack<StatelessStack<TcpLayerWithOptions, StatelessStack<TOld, TTail>>, NoTrailer, NoInterceptor> created =
             (isClient ? _ClientCarrier : _ServerCarrier).Then(layer).CreateWithFixedValues();
-        byte[] frame = new byte[created.HeaderSize];
-        FrameSequence<StatelessStack<TcpLayerWithOptions, StatelessStack<TOld, TTail>>, NoTrailer, NoInterceptor> sequence =
-            created.Build(ReadOnlySpan<byte>.Empty);
-        sequence.MoveNext(frame, out int written);
-        sink(frame.AsSpan(0, written));
+        byte[] frame = new byte[created.HeaderSize + segment.Payload.Length];
 
-        uint next = seq + 1u;
-        if (isClient)
+        // Every fragment is at most as large as the whole frame; the shared fragment
+        // buffer is sized for option-less segments and may be smaller than a SYN with options.
+        byte[] fragmentBuffer = _Fragment.Length >= frame.Length ? _Fragment : new byte[frame.Length];
+        _PendingFrames.Clear();
+        int written;
+        BuildStatus status;
         {
-            _ClientSession.SetTcpStreamNextSeq(next);
-            _ServerSession.SetTcpStreamAck(next);
+            using FrameSequence<StatelessStack<TcpLayerWithOptions, StatelessStack<TOld, TTail>>, NoTrailer, NoInterceptor> sequence =
+                created.Build(segment.Payload);
+            bool built = sequence.MoveNext(frame, out written);
+
+            // A fragmenting carrier emits further frames (for example when a mutator gave
+            // the SYN a payload): build them all before delivering any, as _EmitOneSegment does.
+            if (built && sequence.MoveNext(fragmentBuffer, out int fragmentLength))
+            {
+                _PendingFrames.Add(frame.AsSpan(0, written).ToArray());
+                _PendingFrames.Add(fragmentBuffer.AsSpan(0, fragmentLength).ToArray());
+                while (sequence.MoveNext(fragmentBuffer, out fragmentLength))
+                {
+                    _PendingFrames.Add(fragmentBuffer.AsSpan(0, fragmentLength).ToArray());
+                }
+            }
+
+            status = built ? sequence.Status : _FailureStatus(sequence.Status);
+        }
+
+        if (status != BuildStatus.Success)
+        {
+            _PendingFrames.Clear();
+            throw new InvalidOperationException(Invariant($"TcpConnection SYN build failed with status {status}."));
+        }
+
+        if (_PendingFrames.Count == 0)
+        {
+            sink(frame.AsSpan(0, written));
         }
         else
         {
-            _ServerSession.SetTcpStreamNextSeq(next);
-            _ClientSession.SetTcpStreamAck(next);
+            foreach (byte[] pending in _PendingFrames)
+            {
+                sink(pending);
+            }
+
+            _PendingFrames.Clear();
         }
+
+        // The stateless serialiser does not advance the stream slots: set the next
+        // sequence (payload, plus one each for SYN and FIN) and the peer's ACK here.
+        uint next = unchecked(segment.Sequence + _ConsumedSequenceSpace(segment.Flags, segment.Payload.Length));
+        session.SetTcpStreamNextSeq(next);
+        (isClient ? _ServerSession : _ClientSession).SetTcpStreamAck(next);
     }
 
+    /// <summary>
+    /// The single point through which every segment without SYN options flows: resolves
+    /// the segment values, stages them into the session's <see cref="SessionState"/>
+    /// slots, builds every frame of the segment, delivers them in wire order and updates
+    /// the peer's expected ACK.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">
+    /// The carrier cannot build the segment (status in the message).  No frame of the
+    /// segment reached the sink and the stream slots are unchanged.
+    /// </exception>
     private void _EmitOneSegment(
         bool isClient,
         TcpLifecycle phase,
@@ -495,85 +632,77 @@ public sealed class TcpConnection<TOld, TTail> : IDisposable
         ushort? overrideMss = null)
     {
         Session<Stack<TcpStreamLayer, StatelessStack<TOld, TTail>>, NoTrailer, NoInterceptor> session = isClient ? _ClientSession : _ServerSession;
+        TcpSegmentDescriptor segment = _ResolveSegment(isClient, phase, defaultFlags, payload, segmentIndex, segmentCount, mutator, overrideMss);
 
-        // Read the defaults the layer will use unless the mutator overrides.
-        uint defaultSeq = session.PeekTcpStreamNextSeq();
-        uint defaultAck = session.PeekTcpStreamAck();
-        ushort defaultWindow = session.PeekTcpStreamWindow();
+        // Stage the per-frame values; the layer reads them in WriteHeader.  Keep the
+        // previous slots so a failed segment can restore them.
+        uint previousSeq = session.PeekTcpStreamNextSeq();
+        uint previousAck = session.PeekTcpStreamAck();
+        ushort previousWindow = session.PeekTcpStreamWindow();
+        session.PrepareTcpStreamFrame(segment.Sequence, segment.Acknowledgment, segment.Flags, segment.WindowSize, segment.UrgentPointer);
 
-        uint seq;
-        uint ack;
-        byte flags;
-        ushort window;
-        ushort urgent;
-        ReadOnlySpan<byte> finalPayload;
-
-        if (mutator is null)
+        // Build first, deliver second: a failure on fragment N must not leave fragments
+        // 0..N-1 in the sink.  A single-frame segment stays in _Scratch; only a
+        // fragmenting carrier copies frames into _PendingFrames.
+        _EnsureScratch(payloadLength: segment.Payload.Length);
+        _PendingFrames.Clear();
+        int firstLength;
+        BuildStatus status;
         {
-            // Hot path: skip the descriptor-and-mutator dance entirely.
-            seq = defaultSeq;
-            ack = defaultAck;
-            flags = defaultFlags;
-            window = defaultWindow;
-            urgent = 0;
-            finalPayload = payload;
+            using StatefulFrameSequence<Stack<TcpStreamLayer, StatelessStack<TOld, TTail>>, NoTrailer, NoInterceptor> sequence =
+                session.NextPacket(segment.Payload);
+            bool built = sequence.MoveNext(_Scratch, out firstLength);
+            if (built && sequence.MoveNext(_Fragment, out int fragmentLength))
+            {
+                _PendingFrames.Add(_Scratch.AsSpan(0, firstLength).ToArray());
+                _PendingFrames.Add(_Fragment.AsSpan(0, fragmentLength).ToArray());
+                while (sequence.MoveNext(_Fragment, out fragmentLength))
+                {
+                    _PendingFrames.Add(_Fragment.AsSpan(0, fragmentLength).ToArray());
+                }
+            }
+
+            status = built ? sequence.Status : _FailureStatus(sequence.Status);
+        }
+
+        if (status != BuildStatus.Success)
+        {
+            session.SetTcpStreamNextSeq(previousSeq);
+            session.SetTcpStreamAck(previousAck);
+            session.SetTcpStreamWindow(previousWindow);
+            _PendingFrames.Clear();
+            throw new InvalidOperationException(Invariant($"TcpConnection segment build failed with status {status}."));
+        }
+
+        // Deliver in wire order.
+        if (_PendingFrames.Count == 0)
+        {
+            sink(_Scratch.AsSpan(0, firstLength));
         }
         else
         {
-            TcpSegmentDescriptor descriptor = default;
-            descriptor.Sequence = defaultSeq;
-            descriptor.Acknowledgment = defaultAck;
-            descriptor.Flags = defaultFlags;
-            descriptor.WindowSize = defaultWindow;
-            descriptor.UrgentPointer = 0;
-            descriptor.Payload = payload;
-
-            TcpSegmentContext ctx = new()
+            foreach (byte[] frame in _PendingFrames)
             {
-                Direction = isClient ? TcpDirection.ClientToServer : TcpDirection.ServerToClient,
-                Phase = phase,
-                SegmentIndex = segmentIndex,
-                SegmentCount = segmentCount,
-                Mss = overrideMss ?? _Options.Mss,
-            };
+                sink(frame);
+            }
 
-            mutator(ref descriptor, in ctx);
-
-            seq = descriptor.Sequence;
-            ack = descriptor.Acknowledgment;
-            flags = descriptor.Flags;
-            window = descriptor.WindowSize;
-            urgent = descriptor.UrgentPointer;
-            finalPayload = descriptor.Payload;
+            _PendingFrames.Clear();
         }
 
-        // Stage the per-frame values into SessionState; the layer reads them in WriteHeader.
-        session.PrepareTcpStreamFrame(seq, ack, flags, window, urgent);
-
-        // Build the frame(s) in the scratch buffer.  Fragmentation is rare for TCP
-        // (the TcpStreamLayer keeps segments within MSS), but the carrier can in principle
-        // produce more than one frame (e.g. an IPv4 fragmenting layer above the TCP session).
-        // Drain every frame so none are silently dropped.
-        _EnsureScratch(payloadLength: finalPayload.Length);
-        StatefulFrameSequence<Stack<TcpStreamLayer, StatelessStack<TOld, TTail>>, NoTrailer, NoInterceptor> sequence = session.NextPacket(finalPayload);
-        bool hasFrame = false;
-        while (sequence.MoveNext(_Scratch, out int bytesWritten))
+        // Peer ACK tracks the sender's next sequence after this segment.  An empty ACK
+        // consumes no sequence space and does not move the peer.
+        if (_ConsumedSequenceSpace(segment.Flags, segment.Payload.Length) > 0)
         {
-            hasFrame = true;
-
-            // Hand the wire bytes to the sink.
-            sink(_Scratch.AsSpan(0, bytesWritten));
+            Session<Stack<TcpStreamLayer, StatelessStack<TOld, TTail>>, NoTrailer, NoInterceptor> peer =
+                isClient ? _ServerSession : _ClientSession;
+            peer.SetTcpStreamAck(session.PeekTcpStreamNextSeq());
         }
+    }
 
-        if (!hasFrame)
-        {
-            throw new InvalidOperationException(
-                $"TcpConnection segment build failed with status {sequence.Status}.");
-        }
-
-        // Peer ACK tracks the sender's next sequence after this segment.
-        // SYN and FIN each consume one sequence number. An empty ACK does not move the peer.
-        uint consumed = (uint)finalPayload.Length;
+    /// <summary>Sequence space a segment consumes: its payload, plus one each for SYN and FIN (RFC 9293 §3.4).</summary>
+    private static uint _ConsumedSequenceSpace(byte flags, int payloadLength)
+    {
+        uint consumed = (uint)payloadLength;
         if ((flags & TcpFlags.Syn) != 0)
         {
             consumed++;
@@ -584,22 +713,31 @@ public sealed class TcpConnection<TOld, TTail> : IDisposable
             consumed++;
         }
 
-        if (consumed > 0)
-        {
-            Session<Stack<TcpStreamLayer, StatelessStack<TOld, TTail>>, NoTrailer, NoInterceptor> peer =
-                isClient ? _ServerSession : _ClientSession;
-            peer.SetTcpStreamAck(session.PeekTcpStreamNextSeq());
-        }
+        return consumed;
     }
 
+    /// <summary>
+    /// Status of a sequence whose first <c>MoveNext</c> returned <c>false</c>.  The engine
+    /// always records a failure in that case; the fallback keeps the exception honest
+    /// should that invariant ever break.
+    /// </summary>
+    private static BuildStatus _FailureStatus(BuildStatus status)
+        => status == BuildStatus.Success
+            ? BuildStatus.InvalidLayerState
+            : status;
+
+    /// <summary>
+    /// Grows both frame buffers to <c>HeaderSize + payloadLength</c>.  That bound covers
+    /// every frame: TcpConnection uses <see cref="NoTrailer"/>, a single frame is exactly
+    /// that size and every fragment of a fragmenting carrier is smaller.
+    /// </summary>
     private void _EnsureScratch(int payloadLength)
     {
-        // Exact frame size: carrier headers + TCP header (from HeaderSize) + payload.
-        // No trailer: TcpConnection uses NoTrailer exclusively.
         int needed = HeaderSize + payloadLength;
         if (_Scratch.Length < needed)
         {
             _Scratch = new byte[needed];
+            _Fragment = new byte[needed];
         }
     }
 

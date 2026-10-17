@@ -180,6 +180,11 @@ public sealed class Session<TStack, TTrailer, TInterceptor> : IDisposable
     /// iterator yields one frame per <c>MoveNext</c>.  Counters and per-flow
     /// state are advanced as part of the write walk.
     /// </summary>
+    /// <remarks>
+    /// The iterator refers to this session's state.  If the session is disposed
+    /// before the iterator finishes, its next <c>MoveNext</c> returns <c>false</c>
+    /// with <see cref="BuildStatus.SessionDisposed"/>.
+    /// </remarks>
     /// <param name="payload">Payload for this packet (after every layer's header).</param>
     /// <exception cref="ObjectDisposedException">If the session has been disposed or the handle is stale.</exception>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -187,7 +192,7 @@ public sealed class Session<TStack, TTrailer, TInterceptor> : IDisposable
     {
         _ThrowIfDisposed();
         return new StatefulFrameSequence<TStack, TTrailer, TInterceptor>(
-            _I.Values, _I.Trailer, _I.Interceptor, ref _I.State, payload);
+            _I.Values, _I.Trailer, _I.Interceptor, ref _I.State, in _I.Version, payload);
     }
 
     /// <summary>

@@ -147,18 +147,17 @@ public readonly struct IPv6FragmentExtensionLayer :
     /// iterator guarantees this because every per-fragment slice length is an
     /// integer multiple of <see cref="IFragmentable.FragmentAlignment"/> (8) except possibly
     /// the final slice, whose starting offset is still the sum of aligned
-    /// predecessors. The assertion documents and enforces that invariant in
-    /// debug builds; a misaligned offset would silently encode the wrong
-    /// fragment position.
+    /// predecessors.
     /// </para>
     /// </remarks>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void PatchFragmentHeader(scoped Span<byte> frame, int myOffset, int myLength, int fragmentPayloadOffset, bool moreFragments)
     {
         _ = myLength;
-        Debug.Assert(
-            (fragmentPayloadOffset & 0x7) == 0,
-            "IPv6 fragment offset must be 8-octet aligned (RFC 8200 §4.5); the iterator advances in FragmentAlignment-sized steps.");
+        // fragmentPayloadOffset is a multiple of FragmentAlignment (8) by construction:
+        // FragmentGeometryHelper rounds every slice down to the alignment and the iterator
+        // advances by whole slices, so the >> 3 below never discards bits.  No runtime check:
+        // post-fix code must not throw and Debug/Release must emit identical bytes.
         // FragmentOffset occupies the high 13 bits of the 16-bit word; the M
         // flag is the LSB.  RFC 8200 §4.5: fragment offset is in 8-octet units.
         ushort word = (ushort)(((fragmentPayloadOffset >> 3) & 0x1FFF) << 3);

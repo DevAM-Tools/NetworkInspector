@@ -1,5 +1,14 @@
 <!-- Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root. -->
 <Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <!--
+      AllocationTests prove the zero-allocation hot path. Tier-0 code never removes
+      boxes, so with tiering the measured loop would run unoptimised code and report
+      allocations a steady-state caller never sees. Full JIT optimisation from the
+      first call makes that measurement deterministic.
+    -->
+    <TieredCompilation>false</TieredCompilation>
+  </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="ZeroAlloc" />
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" />

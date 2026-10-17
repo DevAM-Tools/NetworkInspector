@@ -23,10 +23,11 @@ public enum BuildStatus : byte
     FragmentationRequired = 2,
 
     /// <summary>
-    /// The fragmentation scratch could not be acquired or the active
-    /// fragmentable layer reported a non-power-of-two / negative alignment.
-    /// Indicates an internal layer state that the dispatcher considers invalid;
-    /// no bytes are written.
+    /// A layer reported a state the frame cannot carry; no frame is emitted.
+    /// Reported when the active fragmentable layer has a non-power-of-two or
+    /// negative alignment, when UDP over IPv6 has a pinned zero checksum
+    /// (RFC 8200 §8.1), and when a length field cannot represent the frame
+    /// (IPv4 TotalLength, IPv6 PayloadLength, UDP Length &gt; 65535).
     /// </summary>
     InvalidLayerState = 3,
 
@@ -35,4 +36,11 @@ public enum BuildStatus : byte
     /// frame is written; raising the budget requires a library change.
     /// </summary>
     StackTooDeep = 4,
+
+    /// <summary>
+    /// The <see cref="Session{TStack,TTrailer,TInterceptor}"/> that produced this
+    /// sequence was disposed before the sequence finished.  No frame is written and
+    /// the state of any session that re-rented the pooled internals is untouched.
+    /// </summary>
+    SessionDisposed = 5,
 }

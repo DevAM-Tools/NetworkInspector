@@ -29,7 +29,13 @@ public readonly struct IPv6HopByHopLayer :
     /// <summary><c>true</c> when the caller pinned NextHeader via <see cref="Auto.Explicit"/>.</summary>
     private readonly bool _NextHeaderIsExplicit;
 
-    /// <summary>Caller-supplied option bytes (may be empty).</summary>
+    /// <summary>
+    /// Largest option block: HdrExtLen is 8 bits, so the header is at most 2048 bytes,
+    /// which leaves 2046 option bytes (RFC 8200 §4.3).
+    /// </summary>
+    public const int MaxOptionBytes = 2046;
+
+    /// <summary>Caller-supplied option bytes (may be empty); referenced, not copied.</summary>
     private readonly ReadOnlyMemory<byte> _OptionsData;
 
     /// <summary>Creates a minimal 8-byte Hop-by-Hop options header (PadN only).</summary>
@@ -46,15 +52,26 @@ public readonly struct IPv6HopByHopLayer :
 
     /// <summary>Creates a Hop-by-Hop options header with caller-supplied option bytes.</summary>
     /// <param name="options">
-    /// Raw option bytes to include in the header.  The header is padded to
-    /// the next multiple of 8 bytes per RFC 8200 §4.3.
+    /// Raw option bytes to include in the header (at most <see cref="MaxOptionBytes"/>).
+    /// The header is padded with Pad1 (zero) bytes to the next multiple of 8 bytes per
+    /// RFC 8200 §4.3.  The memory is referenced, not copied, and must stay unchanged
+    /// until the last frame built from this layer was emitted.
     /// </param>
     /// <param name="nextHeader">
     /// NextHeader field; <see cref="Auto.Compute"/> (default) means auto-patch from inner.
     /// </param>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// <paramref name="options"/> is longer than <see cref="MaxOptionBytes"/>.
+    /// </exception>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public IPv6HopByHopLayer(ReadOnlyMemory<byte> options, Auto<byte> nextHeader = default)
     {
+        if (options.Length > MaxOptionBytes)
+        {
+            throw new ArgumentOutOfRangeException(nameof(options), options.Length,
+                "IPv6 Hop-by-Hop options must not exceed 2046 bytes (HdrExtLen is 8 bits).");
+        }
+
         _NextHeaderIsExplicit = nextHeader.TryGetExplicit(out byte nh);
         _ExplicitNextHeader = nh;
         _OptionsData = options;
@@ -100,12 +117,16 @@ public readonly struct IPv6HopByHopLayer :
             return;
         }
 
-        // Variable-size form: write NextHeader + HdrExtLen + options + zero-padding.
+        // Variable-size form: NextHeader + HdrExtLen + options, then explicit padding.
+        // The destination is never pre-zeroed (caller buffer or pooled scratch with
+        // residue), so the tail must be cleared here.  RFC 8200 §4.2: 0x00 bytes are
+        // Pad1 options, which is a valid filler.  HdrExtLen fits a byte because the
+        // constructor caps the options at MaxOptionBytes.
         dst[0] = _ExplicitNextHeader;
         dst[1] = (byte)((HeaderSize / 8) - 1); // HdrExtLen = (total_octets / 8) - 1
         ReadOnlySpan<byte> options = _OptionsData.Span;
         options.CopyTo(dst.Slice(2, options.Length));
-        // Remaining bytes in dst (padding) are left as zero (caller zeroes the buffer).
+        dst[(2 + options.Length)..].Clear();
     }
 
     /// <inheritdoc />

@@ -118,7 +118,7 @@ internal sealed class EthernetTsharkTests
 
         int total = stack.HeaderSize + payload.Length + EthernetFcs.Size;
         byte[] frame = new byte[total];
-        FrameSequence<
+        using FrameSequence<
             StatelessStack<UdpLayer,
                 StatelessStack<IPv4Layer,
                     StatelessStack<EthernetLayer, StackEnd>>>,

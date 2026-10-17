@@ -46,8 +46,8 @@ public readonly struct StatelessStack<THead, TTail> : IStackNode, IStatelessStac
     public int MaxFrameLength
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => StackHelpers.TryCast<THead, IProvidesMtu>(in Head, out IProvidesMtu? mtu)
-            ? Math.Min(mtu.LinkMtu, Tail.MaxFrameLength)
+        get => StackHelpers.TryGetLinkMtu(in Head, out ushort linkMtu)
+            ? Math.Min(linkMtu, Tail.MaxFrameLength)
             : Tail.MaxFrameLength;
     }
 
@@ -55,7 +55,7 @@ public readonly struct StatelessStack<THead, TTail> : IStackNode, IStatelessStac
     public bool HasFragmentable
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => StackHelpers.Is<THead, IFragmentable>(in Head) || Tail.HasFragmentable;
+        get => StackHelpers.IsFragmentable(in Head) || Tail.HasFragmentable;
     }
 
     /// <inheritdoc />
@@ -83,18 +83,12 @@ public readonly struct StatelessStack<THead, TTail> : IStackNode, IStatelessStac
         interceptor.OnHeaderWritten(in Head, headerSlice);
 
         // Patch the immediately-outer layer's next-protocol field with Head's
-        // protocol type.  The capability dispatch uses 'is'-pattern; the JIT
-        // resolves both type tests to constants for each concrete THead/TTail
-        // specialisation, so non-matching branches become dead code.
-        //
-        // CA1508 is suppressed: the analyzer cannot see through the generic
-        // struct dispatch and (incorrectly) concludes the test is always true.
-        // For each concrete THead the JIT folds the test to true OR false; both
-        // branches are reachable across the whole instantiation surface.
-        if (Tail.Depth > 0 && StackHelpers.TryCast<THead, IProvidesProtocolType>(in Head, out IProvidesProtocolType? pt))
+        // protocol type.  The probe folds to a constant per concrete THead and
+        // never boxes; see the StackHelpers remarks for the required shape.
+        if (Tail.Depth > 0 && StackHelpers.TryGetProtocolType(in Head, out ushort protocolType))
         {
             int outerOffset = offsets[Tail.Depth - 1];
-            Tail.PatchHeadAsOuterFromInner(dst, outerOffset, pt.ProtocolType);
+            Tail.PatchHeadAsOuterFromInner(dst, outerOffset, protocolType);
         }
 
         return headOffset + Head.HeaderSize;
@@ -131,12 +125,7 @@ public readonly struct StatelessStack<THead, TTail> : IStackNode, IStatelessStac
     /// <inheritdoc />
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void PatchHeadAsOuterFromInner(scoped Span<byte> frame, int myHeadOffset, ushort innerProtocol)
-    {
-        if (StackHelpers.TryCast<THead, IConsumesNextProtocolValue>(in Head, out IConsumesNextProtocolValue? provider))
-        {
-            provider.PatchNextProtocol(frame, myHeadOffset, innerProtocol);
-        }
-    }
+        => StackHelpers.PatchNextProtocol(in Head, frame, myHeadOffset, innerProtocol);
 
     /// <inheritdoc />
     /// <remarks>
@@ -170,14 +159,14 @@ public readonly struct StatelessStack<THead, TTail> : IStackNode, IStatelessStac
     {
         // Walk outer→inner so the innermost fragmentable wins.
         bool found = Tail.TryGetFragmentableInfo(offsets, out headerOffset, out headerEndOffset, out canFragment, out kind, out alignment);
-        if (StackHelpers.TryCast<THead, IFragmentable>(in Head, out IFragmentable? f))
+        if (StackHelpers.TryGetFragmentation(in Head, out bool headCanFragment, out FragmentationKind headKind, out int headAlignment))
         {
             int myOffset = offsets[Tail.Depth];
             headerOffset = myOffset;
             headerEndOffset = myOffset + Head.HeaderSize;
-            canFragment = f.CanFragment;
-            kind = f.FragmentationKind;
-            alignment = f.FragmentAlignment;
+            canFragment = headCanFragment;
+            kind = headKind;
+            alignment = headAlignment;
             found = true;
         }
         return found;
@@ -191,11 +180,8 @@ public readonly struct StatelessStack<THead, TTail> : IStackNode, IStatelessStac
         bool moreFragments, FragmentationKind activeKind)
     {
         Tail.PatchFragmentable(frame, offsets, frameDataLength, fragmentPayloadOffset, moreFragments, activeKind);
-        if (StackHelpers.TryCast<THead, IFragmentable>(in Head, out IFragmentable? pf) && pf.FragmentationKind == activeKind)
-        {
-            int myOffset = offsets[Tail.Depth];
-            pf.PatchFragmentHeader(frame, myOffset, frameDataLength - myOffset, fragmentPayloadOffset, moreFragments);
-        }
+        int myOffset = offsets[Tail.Depth];
+        StackHelpers.PatchFragmentHeader(in Head, frame, myOffset, frameDataLength - myOffset, fragmentPayloadOffset, moreFragments, activeKind);
     }
 
     /// <inheritdoc />

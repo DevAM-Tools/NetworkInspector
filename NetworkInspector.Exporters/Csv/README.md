@@ -1,43 +1,75 @@
-<!-- Copyright © 2026 DevAM. All rights reserved. -->
+<!-- Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information. -->
 
 # CSV Exporter
 
-Packet-level CSV exporter for spreadsheet and tabular processing workflows.
+[![NuGet][nuget-badge]][nuget]
 
-## What This Is
+[nuget-badge]: https://img.shields.io/nuget/v/NetworkInspector.Exporters?logo=nuget&label=NetworkInspector.Exporters
+[nuget]: https://www.nuget.org/packages/NetworkInspector.Exporters
 
-The `CsvExporter` serializes parsed packets through `IPacketListener` into configurable CSV rows.
+`CsvExporter` writes one row per parsed packet, ready for Excel, LibreOffice, pandas, or any SQL import. It is a
+packet exporter (`IPacketListener`): packets must be parsed with a field tree (`FieldTreeMode.Build`, the default).
 
-## Why Use It
+## Highlights
 
-- Friendly for analysts working in spreadsheets and SQL-style import pipelines.
-- Custom column selection for compact task-specific exports.
-- Built-in CSV quoting and escaping for robust machine parsing.
+- **Pick your columns:** packet number, time, info, frame length, plus any protocol field by name.
+- **Correct quoting.** Values that contain the delimiter, a quote, CR, or LF are quoted and escaped.
+- **Any ASCII delimiter**, so TSV and semicolon-separated files for European spreadsheet locales work too.
+- **Spreadsheet friendly by default:** UTF-8 BOM, header row, CRLF line endings.
 
 ## Quick Start
 
 ```csharp
+using NetworkInspector.Core;
 using NetworkInspector.Exporters.Csv;
 
-using CsvExporter exporter = CsvExporter.CreateBuilder()
-    .ToFile("packets.csv")
-    .WithDefaultColumns()
-    .Build();
-
-foreach (Packet packet in packets)
+// packets: parsed packets with a field tree, see the end-to-end example in the Exporters README.
+static void WriteCsv(IEnumerable<Packet> packets)
 {
-    if (!exporter.OnPacket(packet))
-    {
-        break;
-    }
-}
+    using CsvExporter exporter = CsvExporter.CreateBuilder()
+        .ToFile("packets.csv")
+        .Build(); // no columns configured: No., Time, Info, Length
 
-exporter.OnFinish();
+    foreach (Packet packet in packets)
+    {
+        if (!exporter.OnPacket(packet))
+        {
+            break;
+        }
+    }
+
+    exporter.OnFinish();
+}
 ```
 
 ## Common Tasks
 
-### Use Custom Delimiter And Header
+### Select Protocol Fields As Columns
+
+Resolve field ids once from the stack, then add them as columns. Only the first occurrence of a field in a
+packet is written.
+
+```csharp
+using NetworkInspector.Core;
+using NetworkInspector.Core.Ids;
+using NetworkInspector.Exporters.Csv;
+
+static CsvExporter CreateAddressExporter(Stack stack)
+{
+    FieldId ipSrc = stack.GetFieldId("ip.src") ?? throw new InvalidOperationException("ip.src is not registered");
+    FieldId ipDst = stack.GetFieldId("ip.dst") ?? throw new InvalidOperationException("ip.dst is not registered");
+
+    return CsvExporter.CreateBuilder()
+        .ToFile("addresses.csv")
+        .WithColumn(CsvColumnKind.PacketNumber)
+        .WithColumn(CsvColumnKind.Timestamp)
+        .WithFieldColumn("ip.src", ipSrc, "SourceIP")
+        .WithFieldColumn("ip.dst", ipDst, "DestinationIP")
+        .Build();
+}
+```
+
+### Write TSV Without A BOM
 
 ```csharp
 using NetworkInspector.Exporters.Csv;
@@ -45,51 +77,40 @@ using NetworkInspector.Exporters.Csv;
 using CsvExporter exporter = CsvExporter.CreateBuilder()
     .ToFile("packets.tsv")
     .WithDelimiter('\t')
-    .WithHeader(true)
-    .Build();
-```
-
-### Select Custom Columns
-
-```csharp
-using NetworkInspector.Exporters.Csv;
-
-using CsvExporter exporter = CsvExporter.CreateBuilder()
-    .ToFile("packets.csv")
-    .WithColumn(CsvColumnKind.PacketNumber)
-    .WithColumn(CsvColumnKind.Timestamp)
-    .WithFieldColumn("ip.src", ipSourceFieldId, "SourceIP")
-    .WithFieldColumn("ip.dst", ipDestFieldId, "DestinationIP")
+    .WithBom(false)
     .Build();
 ```
 
 ## Builder Options
 
-| Method | Purpose |
-| --- | --- |
-| `ToFile(path)` / `ToStream(stream)` / `ToStdout()` | Select output target |
-| `WithUiName(name)` / `WithDescription(text)` | Set user-facing metadata |
-| `WithBom(write)` | Enable or disable UTF-8 BOM |
-| `WithDelimiter(delimiter)` | Set ASCII delimiter character |
-| `WithHeader(write)` | Enable or disable header row |
-| `WithColumn(kind, header?)` | Add built-in column |
-| `WithFieldColumn(name, fieldId, header?)` | Add field-driven custom column |
-| `WithDefaultColumns()` | Add `No.`, `Time`, `Info`, `Length` |
-| `WithTargetPacketCount(count)` | Stop after N packets (`0` = unlimited) |
-| `WithCancellationToken(token)` | Enable cooperative cancellation |
+| Method | Purpose | Default |
+| --- | --- | --- |
+| `ToFile` / `ToStream` / `ToStdout` | Output target | required |
+| `WithUiName` / `WithDescription` | User-facing metadata | — |
+| `WithBom(bool)` | UTF-8 byte order mark | `true` |
+| `WithDelimiter(char)` | Column delimiter | `,` |
+| `WithHeader(bool)` | Header row | `true` |
+| `WithColumn(kind, header?)` | Built-in column (`PacketNumber`, `Timestamp`, `Info`, `FrameLength`) | — |
+| `WithFieldColumn(name, fieldId, header?)` | Column from a protocol field | — |
+| `WithDefaultColumns()` | `No.`, `Time`, `Info`, `Length` | used when none set |
+| `WithTargetPacketCount(int)` | Stop after N packets (`0` = no limit) | 0 |
+| `WithCancellationToken` | Cooperative cancellation | none |
+
+`name` in `WithFieldColumn` is only the default header; the lookup uses the `FieldId`.
 
 ## Limits And Thread-Safety Notes
 
-- Not thread-safe; call `OnPacket()`/`OnFinish()` sequentially.
-- Delimiter must be valid ASCII and not a control/quote character.
-- Treat CSV output as potentially sensitive if packet text contains secrets.
+- Not thread-safe; call `OnPacket()` and `OnFinish()` from one thread.
+- The delimiter must be ASCII (≤ 0x7F) and must not be NUL, CR, LF, or `"`.
+- Packets parsed with `FieldTreeMode.Skip` are skipped.
+- No file is created until the first packet arrives.
+- CSV is available from the library only; the `ni` CLI has no CSV format.
+- Treat CSV output as sensitive when packet text can contain secrets.
 
 ## Links
 
-- [Exporters hub](../README.md)
-- [CSV source folder](https://github.com/DevAM-Tools/NetworkInspector/tree/main/NetworkInspector.Exporters/Csv)
-- [GitHub repository](https://github.com/DevAM-Tools/NetworkInspector)
-- [NuGet package](https://www.nuget.org/packages/NetworkInspector.Exporters)
+- [Exporters overview](../README.md)
+- [Exporter guide](../EXPORTER_GUIDE.md)
 - [Issue tracker](https://github.com/DevAM-Tools/NetworkInspector/issues)
 
 ## License

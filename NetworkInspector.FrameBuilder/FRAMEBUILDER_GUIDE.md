@@ -46,11 +46,17 @@
 
 ## 1. Architecture Overview
 
-`NetworkInspector.FrameBuilder` is a **test-helper library**. It composes
-fully-typed protocol stacks at compile time, writes binary frames into a
-caller-supplied `Span<byte>`, and is used by the protocol and exporter
-test suites to produce reference wire images. It is not a runtime parser
-and not a public API — every type is `internal`.
+`NetworkInspector.FrameBuilder` is a **public, allocation-free frame construction
+library** shipped as the NuGet package `NetworkInspector.FrameBuilder`. It composes
+fully-typed protocol stacks at compile time and writes wire frames into a
+caller-supplied `Span<byte>`. The protocol and exporter test suites of this
+repository are its first consumers. Every layer, marker and sequence type is
+`public`; only helpers that no caller needs (`StackHelpers`, `FrameEngine`,
+`ISequenceState` and its implementations, `FrameSequenceScratch`,
+`FragmentGeometryHelper`, `FrameLimits`, `PduTransportEncoding`,
+`IPv6ExtensionLayerHelpers`, the header structs) are `internal`. Public members
+follow `copilot-instructions.md` §4.12 (misuse analysis, Try-APIs at
+expected-failure boundaries) and document every limit.
 
 ### 1.1 Generic Cons-List
 
@@ -80,14 +86,14 @@ StatelessStack<UdpLayer, StatelessStack<IPv4Layer, StatelessStack<EthernetLayer,
 CreatedStack<…, NoTrailer, NoInterceptor> created = stack.CreateWithFixedValues();
 
 byte[] buf = new byte[2048];
-FrameSequence<…> seq = created.Build(payload);
+using FrameSequence<…> seq = created.Build(payload);
 seq.MoveNext(buf, out int written);
 ```
 
 The cons-list type is fully visible to the compiler, so the JIT
-specialises every walk: every `is`-pattern dispatch over capability
-markers folds to a constant per concrete `THead`/`TTail`, and
-`NoInterceptor` / `NoTrailer` calls are erased.
+specialises every walk: every capability probe in `StackHelpers` folds to a
+constant per concrete `THead`/`TTail`, and `NoInterceptor` / `NoTrailer` calls
+are erased (see §17.1 for the probe shape that keeps this allocation-free).
 
 ### 1.3 Build & Iterate
 
@@ -96,11 +102,22 @@ markers folds to a constant per concrete `THead`/`TTail`, and
 `MoveNext(dst, out written)` is **throw-free**: every expected runtime
 condition is reported via a `BuildStatus` enum:
 `Success`, `BufferTooSmall`, `FragmentationRequired`, `InvalidLayerState`,
-`StackTooDeep`.
+`StackTooDeep`, `SessionDisposed` (§16.2).
 
 Multi-frame iteration is automatic: when the unfragmented frame exceeds
 the smallest MTU asserted along the cons-list and the stack contains an
 `IFragmentable` layer, `MoveNext` yields one frame per fragment.
+
+Both sequence types are thin wrappers over one internal engine
+(`FrameEngine<TStack, TTrailer, TInterceptor, TState>`); `TState` is
+`NoSessionState` for stateless stacks and `SessionSequenceState` for a session.
+A fix to the build state machine therefore lands once for both.
+
+**Lifetime:** declare every sequence with `using`. A fragmenting build reserves
+the calling thread's pooled scratch buffer until the last fragment is emitted;
+`Dispose` releases it when the caller stops early. Without it an abandoned
+fragmenting build keeps the per-thread scratch reserved, and every later
+fragmenting build on that thread allocates a private buffer.
 
 ---
 
@@ -130,10 +147,12 @@ A layer **must implement exactly one** of `IStatelessLayer` /
 
 ### 2.3 By Carrier Behaviour
 
-`IStreamCarrier` (TCP-like) and `IStreamProducer` (HTTP/2, WebSocket, TLS
-records) are orthogonal byte-stream segmentation markers.  Stream
-producers compose through dedicated helpers (`TcpConnection<>`); stream
-carriers are normal transport layers with the additional marker.
+`IStreamCarrier` (TCP-like) and `IStreamProducer` (today only
+`WebSocketLayer`) are orthogonal byte-stream segmentation markers.  A stream
+producer is **not** a stack layer: it cannot be appended with `Then(...)` and is
+handed to `TcpConnection<>.WriteFromClient/WriteFromServer` instead.  Stream
+carriers are normal transport layers with the additional marker.  The HTTP/2,
+TLS and DTLS record layers are payload layers (`IPayloadLayer`), not producers.
 
 ---
 
@@ -216,49 +235,66 @@ NetworkInspector.FrameBuilder/
     IIPv6ExtensionLayer.cs
     IStreamCarrier.cs / IStreamProducer.cs
     IStackNode.cs / IStatelessStack.cs
+    ITrailerLayer.cs
     EtherTypeKind.cs / IpNextProtocolKind.cs    ← phantom-type discriminators
   Headers/                                  ← [BinaryWritable] header structs
-    EthernetHeader.cs
+    EthernetHeader.cs / VlanTag.cs / ArpHeader.cs
     IPv4Header.cs / IPv6Header.cs
-    UdpHeader.cs / TcpHeader.cs
-    SocketCanHeader.cs / SocketCanFdHeader.cs / SocketCanXlHeader.cs
-    SomeIpHeader.cs / VlanTag.cs / ArpHeader.cs
-    IcmpV4Header.cs / IcmpV6Header.cs
     IPv6FragmentExtensionHeader.cs / IPv6OptionsExtensionHeader.cs
+    UdpHeader.cs / TcpHeader.cs
+    IcmpV4Header.cs / IcmpV6Header.cs
+    SocketCanHeader.cs / SocketCanFdHeader.cs / SocketCanXlHeader.cs
+    SomeIpHeader.cs
   Constants/                                ← Cross-protocol constants only
-    EtherTypes.cs   / IpProtocols.cs
-    TcpFlags.cs     / ArpOpcodes.cs / SomeIpMessageType.cs
+    EtherTypes.cs / IpProtocols.cs
+    TcpFlags.cs / SomeIpMessageType.cs
   Layers/
     Bus/                                    ← Self-contained bus frames
       SocketCanLayer.cs / SocketCanFdLayer.cs / SocketCanXlLayer.cs
+      FlexRayLayer.cs / LinLayer.cs
     Link/                                   ← Ethernet & friends
-      EthernetLayer.cs
+      EthernetLayer.cs / VlanLayer.cs / LlcLayer.cs
+      LinuxSllLayer.cs / LinuxSll2Layer.cs
     Network/                                ← IP-family layers
-      IPv4Layer.cs / IPv4LayerWithOptions.cs
-      IPv6Layer.cs / IPv6RoutingLayer.cs / IPv6FragmentExtensionLayer.cs
       ArpLayer.cs
+      IPv4Layer.cs / IPv4LayerWithOptions.cs
+      IPv6Layer.cs
+      IPv6HopByHopLayer.cs / IPv6RoutingLayer.cs / IPv6DestinationOptionsLayer.cs
+      IPv6FragmentExtensionLayer.cs / IPv6ExtensionLayerHelpers.cs
     Transport/                              ← Checksum-bearing transports
-      UdpLayer.cs / TcpLayer.cs / TcpOptions.cs / TcpOptionsBuilder.cs
-      IcmpV4EchoLayer.cs / IcmpV6EchoLayer.cs
-    Application/                            ← AUTOSAR / SOME-IP / SignalPDU
+      UdpLayer.cs
+      TcpLayer.cs / TcpLayerWithOptions.cs / TcpOptions.cs / TcpOptionsBuilder.cs
+      IcmpV4Layer.cs / IcmpV4EchoLayer.cs
+      IcmpV4DestUnreachLayer.cs / IcmpV4RedirectLayer.cs / IcmpV4TimeExceededLayer.cs
+      IcmpV6Layer.cs / IcmpV6EchoLayer.cs
+      IcmpV6NeighborSolicitationLayer.cs / IcmpV6NeighborAdvertisementLayer.cs
+      IcmpV6RouterSolicitationLayer.cs / IcmpV6RouterAdvertisementLayer.cs
+    Application/                            ← Application protocols and stream producers
       SomeIpLayer.cs / SomeIpTpLayer.cs
-      PduTransportLayer.cs / PduTransportMultiLayer.cs / PduTransportConfigFb.cs
+      PduTransportLayer.cs / PduTransportMultiLayer.cs / PduTransportSlot.cs / PduTransportConfigFb.cs
       SignalMessageLayer.cs / SignalMessageLayout.cs / SignalMessageValueSet.cs
+      DnsLayer.cs
+      DhcpV4Layer.cs / DhcpV4Option.cs / DhcpV6Layer.cs / DhcpV6Option.cs
+      TlsRecordLayer.cs / DtlsRecordLayer.cs / Http2Layer.cs
+      WebSocketLayer.cs / WebSocketFrameOptions.cs / WebSocketOpcode.cs
   Stack/                                    ← Cons-list infrastructure
-    FrameStack.cs / Stack.cs / StatelessStack.cs / StackEnd.cs
+    FrameStack.cs / Stack.cs / StatelessStack.cs / StackEnd.cs / StackHelpers.cs
     CreatedStack.cs / TrailerStack.cs / FrameLimits.cs
   Stateful/                                 ← Stateful layer & session machinery
-    Session.cs / SessionState.cs
+    Session.cs / SessionState.cs / SessionSequenceState.cs
     IPv4LayerWithAutoIpId.cs / TcpLayerWithAutoSequence.cs / TcpStreamLayer.cs
     IPv6FragmentExtensionLayerWithAutoId.cs / SomeIpTpLayerWithAutoCounter.cs
-    StatefulFrameStack.cs / StatefulFrameSequence.cs
-    TcpConnection.cs / TcpDirection.cs / TcpSegmentDescriptor.cs / FrameSink.cs
+    StatefulFrameStack.cs / StatefulCreatedStack.cs / StatefulFrameSequence.cs
+    TcpConnection.cs / TcpConnectionOptions.cs / TcpDirection.cs
+    TcpSegmentDescriptor.cs / FrameSink.cs
   Composition/                              ← `Then(...)` extension classes
     StackThenExtensions.cs
   Trailers/                                 ← FCS, padding, MIC
     EthernetFcs.cs / NoTrailer.cs
-  Build/                                    ← FrameSequence, FixPhase, BuildStatus, Auto, interceptors
-    FrameSequence.cs / FixPhase.cs / BuildStatus.cs / PostFixContext.cs
+  Build/                                    ← Build engine, sequences, phases, status, interceptors
+    FrameEngine.cs / ISequenceState.cs / NoSessionState.cs
+    FrameSequence.cs / FrameSequenceScratch.cs / FragmentGeometryHelper.cs
+    FixPhase.cs / BuildStatus.cs / PostFixContext.cs
     Auto.cs / IFrameInterceptor.cs / DelegateInterceptor.cs / NoInterceptor.cs
   Core/                                     ← Shared utilities
     ChecksumUtils.cs
@@ -324,10 +360,10 @@ Use `XxxMask` only for bit masks (never for byte offsets) and reserve
 
 ### 6.1 Skeleton
 
-Every layer is a `readonly struct`:
+Every layer is a `public readonly struct`:
 
 ```csharp
-internal readonly struct XxxLayer :
+public readonly struct XxxLayer :
     IStatelessLayer,           // OR IStatefulLayer
     IRootLayer,                // optional, if root-eligible
     IInteriorLayer,            // OR IPayloadLayer (mutually exclusive)
@@ -349,9 +385,9 @@ internal readonly struct XxxLayer :
     private readonly ushort _ExplicitChecksum;
     private readonly bool _ChecksumIsExplicit;
 
-    // 3. Constructor (or factory) — see §6.2
+    // 3. Constructor (or factory) — see §6.2; validates every argument (§16.1)
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal XxxLayer(ushort srcPort, ushort dstPort, Auto<ushort> checksum = default) { ... }
+    public XxxLayer(ushort srcPort, ushort dstPort, Auto<ushort> checksum = default) { ... }
 
     // 4. HeaderSize (constant per instance)
     public int HeaderSize
@@ -383,9 +419,10 @@ internal readonly struct XxxLayer :
 
 ### 6.2 Public Constructor vs Factory
 
-- **Use a public/internal constructor** when every parameter combination
-  is valid and the parameter set is small.  Examples: `EthernetLayer`,
-  `UdpLayer`, `IPv4Layer`, `SomeIpLayer`.
+- **Use a public constructor** when the parameter set is small and the
+  constructor can validate every argument itself (range-check and throw
+  `ArgumentOutOfRangeException`, §16.1).  Examples: `EthernetLayer`,
+  `UdpLayer`, `IPv4Layer`, `SomeIpLayer`, `FlexRayLayer`, `SocketCanLayer`.
 - **Use a factory** (and keep the constructor `private`) when validation
   must run before the struct is constructed or when multiple flavours
   share storage but differ in semantics.  Examples:
@@ -406,6 +443,13 @@ internal readonly struct XxxLayer :
 Layers are ref-shareable across multiple frames in a sequence and across
 threads (when stateless).  Field mutability would break determinism and
 introduce hidden race conditions.
+
+**Memory ownership:** `ReadOnlyMemory<byte>` constructor parameters are
+**referenced, not copied**; every layer follows this rule (zero-copy at
+construction).  The caller's memory must stay unchanged until the last frame
+built from the layer has been emitted.  Say so in the parameter's XML doc.
+Fixed-size inline data passed as `ReadOnlySpan<byte>` (CAN, CAN FD, LIN) is
+copied into the struct because a span cannot be stored.
 
 ### 6.4 Aggressive Inlining
 
@@ -484,7 +528,7 @@ Header fields with two sources — caller-pinned vs auto-computed — use
 `Auto<T>`:
 
 ```csharp
-internal UdpLayer(ushort srcPort, ushort dstPort,
+public UdpLayer(ushort srcPort, ushort dstPort,
                   Auto<ushort> checksum = default,
                   bool computeChecksum = true)
 {
@@ -530,7 +574,7 @@ trailer bytes:
 |-------|---------------|-----|
 | `Length` | outer → inner | Patch length fields (IPv4 TotalLength, IPv6 PayloadLength, UDP Length, SOME/IP Length, PDU-Transport Length, …). |
 | `PublishPseudoHeader` | outer → inner | Network layers copy src/dst into `PostFixContext`, set `PseudoIpLength`, `PseudoIsIPv6`, `PseudoProtocol`, `TransportOffset`, `TransportEnd`. |
-| `InnerChecksum` | outer → inner (effect inner-then-outer because outer-most layer rarely participates) | Transport-layer checksums (UDP, TCP, ICMPv6) read the published pseudo-header. |
+| `InnerChecksum` | outer → inner | Transport-layer checksums (UDP, TCP, ICMPv6) read the published pseudo-header.  The separate `OuterChecksum` phase that follows lets header-only checksums see the final transport bytes. |
 | `OuterChecksum` | outer → inner | Header-only checksums (IPv4 header checksum). |
 | `Trailer` | outer → inner | FCS, padding, MIC. Runs last. |
 
@@ -546,6 +590,12 @@ public void ApplyPostFix(FixPhase phase, scoped Span<byte> frame, int myOffset, 
     switch (phase)
     {
         case FixPhase.Length:
+            // A 16-bit length field cannot represent every frame: report, never wrap.
+            if (myLength > ushort.MaxValue)
+            {
+                ctx.Status = BuildStatus.InvalidLayerState;
+                break;
+            }
             BinaryPrimitives.WriteUInt16BigEndian(
                 frame.Slice(myOffset + LengthOffset, 2), (ushort)myLength);
             break;
@@ -581,7 +631,11 @@ public void ApplyPostFix(FixPhase phase, scoped Span<byte> frame, int myOffset, 
 
 1. **Never throw from `ApplyPostFix`.**  Use defensive checks at
    construction time instead.  Throwing aborts the iterator and the
-   caller's fragment loop is left in an inconsistent state.
+   caller's fragment loop is left in an inconsistent state.  A violation
+   that only the frame can reveal (a length field that cannot represent the
+   frame, UDP over IPv6 with a pinned zero checksum) sets
+   `ctx.Status = BuildStatus.InvalidLayerState`; the engine checks the status
+   after the `Length` and `InnerChecksum` walks and aborts the build.
 2. **`myOffset` is the absolute offset of this layer's header inside
    `frame`.**  `myLength` is the number of bytes from `myOffset` to the
    end of the frame (this header + everything beneath it).
@@ -595,6 +649,10 @@ public void ApplyPostFix(FixPhase phase, scoped Span<byte> frame, int myOffset, 
 5. **Use `BinaryPrimitives.WriteUInt*BigEndian`** for direct frame
    writes inside post-fix — header serialisation already happened in
    `WriteHeader`, and we now patch raw bytes by offset.
+6. **Never rely on a pre-zeroed destination.**  `WriteHeader` writes into the
+   caller's buffer or into pooled scratch that holds residue from the previous
+   frame; clear every padding byte explicitly (see `IPv6HopByHopLayer`,
+   `LinLayer`, `SocketCanXlLayer`).
 
 ### 9.3 Pseudo-Header Publication
 
@@ -686,14 +744,14 @@ combination already in `Layers/**/` is known to compose correctly.
 
 ## 11. Stateful Layers
 
-### 11.1 The `SessionState` Ref Struct
+### 11.1 The `SessionState` Struct
 
-All cross-frame state lives in **one** `ref struct SessionState`
-threaded through the write walk.  Each stateful slot is paired with a
-`Has*` flag:
+All cross-frame state lives in **one** `public struct SessionState` owned
+by the session's pooled internals and passed by `ref` through the write walk.
+Each stateful slot is paired with a `Has*` flag:
 
 ```csharp
-internal ref struct SessionState
+public struct SessionState
 {
     public bool   HasIPv4AutoId;       public ushort IPv4NextId;
     public bool   HasTcpAutoSeq;       public uint   TcpNextSeq;       public uint TcpAck;
@@ -738,10 +796,27 @@ public void WriteHeader(scoped Span<byte> dst, ref SessionState state)
    `IStatelessStack` constraint on the stateless `Build(...)` overload
    rejects mixed stacks.
 3. Two stateful layers from the *same family* (e.g.
-   `TcpLayerWithAutoSequence` and `TcpStreamLayer`) must not coexist —
-   document slot ownership in the layer XML doc.
+   `TcpLayerWithAutoSequence` and `TcpStreamLayer`, or two
+   `IPv4LayerWithAutoIpId` in a tunnel) must not coexist — they share one
+   slot.  The compiler does not reject this; document slot ownership in the
+   layer XML doc.
 4. Counters wrap with `unchecked` arithmetic; all counters are unsigned
    so wrap-around is well-defined.
+5. A packet whose build fails before its first frame reaches the caller does
+   not advance any counter: the engine snapshots `SessionState` before the
+   write walk and restores it on failure.
+
+### 11.3 Deliberate Limit: Closed Slot Set
+
+The slot set of `SessionState` is closed.  A new stateful layer needs a new
+slot (and `Has*` flag) in this library, so **consumers of the package cannot
+add their own stateful layers** in this version.  This is a recorded decision,
+not an oversight: the target model is typed per-layer state (a state cons-list
+that mirrors the layer cons-list, `IStatefulLayer<TState>`), to be implemented
+through a separate plan before FrameBuilder enters the Rust port.  The engine is
+already generic over the state provider (`ISequenceState`), so that change does
+not touch the build state machine.  Appendix B is therefore a template for
+layers added *inside this repository*.
 
 ---
 
@@ -752,7 +827,7 @@ public void WriteHeader(scoped Span<byte> dst, ref SessionState state)
 Implementing layers participate in multi-frame iteration:
 
 ```csharp
-internal readonly struct IPv4Layer : ..., IFragmentable
+public readonly struct IPv4Layer : ..., IFragmentable
 {
     public bool CanFragment => _AllowFragmentation;         // !DontFragment
     public FragmentationKind FragmentationKind => FragmentationKind.NetworkLayer;
@@ -772,7 +847,7 @@ internal readonly struct IPv4Layer : ..., IFragmentable
 
 | Kind | Strategy | Inner-checksum coverage |
 |------|----------|-------------------------|
-| `NetworkLayer` (default, alignment 8) | Build-once, slice-many.  `Length`, `PublishPseudoHeader`, `InnerChecksum` run **once** on the unfragmented scratch.  Per fragment: `Length` + `OuterChecksum` + `Trailer` re-runs on the smaller frame. | The full unfragmented datagram (lives only in fragment 0). |
+| `NetworkLayer` (default, alignment 8) | Build-once, slice-many.  `Length`, `PublishPseudoHeader`, `InnerChecksum` run **once** on the unfragmented scratch.  Per fragment: `Length` + `OuterChecksum` + `Trailer` re-runs on the smaller frame. | Once, on the unfragmented scratch; the transport header carrying it is present in fragment 0 only. |
 | `ApplicationSegmentation` (alignment 16, e.g. SOME/IP-TP) | Per-segment full post-fix walk.  Every emitted segment is its own complete network-layer datagram with its own transport checksum.  Outer `IFragmentable` layers (e.g. IPv4 with DF cleared) are **not** patched — they keep their full headers. | Per segment. |
 
 ### 12.2 Implementation Rules
@@ -837,13 +912,13 @@ type:
 /// the FrameBuilder layer (wire format), the parser settings/JSON
 /// (decode rule) and the tshark UAT profile (reference dissector).
 /// </summary>
-internal sealed class PduTransportConfigFb
+public sealed class PduTransportConfigFb
 {
-    internal byte IdFieldSize { get; }     // 1, 2 or 4
-    internal byte LengthFieldSize { get; } // 1, 2 or 4
-    internal ImmutableArray<PduEntry> Pdus { get; }
+    public byte IdFieldSize { get; }     // 1, 2 or 4
+    public byte LengthFieldSize { get; } // 1, 2 or 4
+    public ImmutableArray<PduEntry> Pdus { get; }
 
-    internal PduTransportConfigFb(byte idFieldSize, byte lengthFieldSize, ImmutableArray<PduEntry> pdus)
+    public PduTransportConfigFb(byte idFieldSize, byte lengthFieldSize, ImmutableArray<PduEntry> pdus)
     {
         if (idFieldSize is not (1 or 2 or 4))
             throw new ArgumentOutOfRangeException(...);
@@ -971,8 +1046,12 @@ via `BuildStatus`:
 | `Success` | A frame was written. |
 | `BufferTooSmall` | Caller's buffer is shorter than the frame. |
 | `FragmentationRequired` | Frame > MTU and either no `IFragmentable` is in the stack or `CanFragment` is `false`. |
-| `InvalidLayerState` | Internal layer state is inconsistent (negative alignment, missing scratch, …).  No bytes are written. |
+| `InvalidLayerState` | A layer reported a state the frame cannot carry: a length field that cannot represent the frame (IPv4 TotalLength, IPv6 PayloadLength, UDP Length > 65535), UDP over IPv6 with a pinned zero checksum, or a non-power-of-two fragment alignment.  No frame is emitted. |
 | `StackTooDeep` | Cons-list depth > `FrameLimits.MaxSupportedDepth` (32). |
+| `SessionDisposed` | The `Session<>` that produced a `StatefulFrameSequence<>` was disposed before the sequence finished.  The state of a session that re-rented the pooled internals is untouched. |
+
+A failure before the first frame of a packet reaches the caller leaves the
+session counters unchanged (§11.2 rule 5).
 
 ### 16.3 Layer-Internal Validation in `WriteHeader`
 
@@ -988,6 +1067,21 @@ no configured group — a structural mismatch that cannot be caught at
 construction time but should also never occur in well-formed test data.
 Document any such throw-from-write site explicitly.
 
+### 16.4 Constructor Limits
+
+Trust-boundary limits enforced by the constructors; all are constants fixed by
+the wire format, not configuration:
+
+| Layer | Limit | Source |
+|-------|-------|--------|
+| `SocketCanLayer`, `SocketCanFdLayer` | `canId` ≤ 0x7FF (standard) / ≤ 0x1FFFFFFF (extended) | Linux SocketCAN |
+| `LinLayer` | `frameId` ≤ 63; `checksumType` ∈ {1, 2} | ISO 17987, DLT_LIN |
+| `FlexRayLayer` | `frameId` ≤ 2047; `cycleCount` ≤ 63; payload ≤ 254 bytes; `typeIndex` ≤ 127 | ISO 17458-2 |
+| `IPv6HopByHopLayer` | option bytes ≤ 2046 (`MaxOptionBytes`) | RFC 8200 §4.3 |
+| `IPv6RoutingLayer` | type-specific data ≤ 2040 bytes (`MaxTypeSpecificDataBytes`) | RFC 8200 §4.4 |
+| `TcpOptionsBuilder` | option area ≤ 40 bytes | RFC 9293 §3.1 |
+| `TcpConnection.Open` | `Mss` > 0 | — |
+
 ---
 
 ## 17. Performance & Allocation Rules
@@ -1001,10 +1095,17 @@ strict.
 - All public hot-path members are
   `[MethodImpl(MethodImplOptions.AggressiveInlining)]`.
 - `WriteHeader` and `ApplyPostFix` do **not** allocate.
-- Cross-cell capability tests use the `is`-pattern; the JIT folds them
-  to constants per concrete `THead`/`TTail`.  The `#pragma warning
-  disable CA1508` markers on the cons-list types are intentional — see
-  `StatelessStack.WriteHeaders` for the rationale.
+- Cross-cell capability tests go through the probes in `StackHelpers`
+  (`TryGetLinkMtu`, `TryGetProtocolType`, `PatchNextProtocol`,
+  `TryGetFragmentation`, `PatchFragmentHeader`, `WriteHeader`, …).  Each probe
+  tests `value is IFoo` without a pattern variable (the JIT folds the test to a
+  constant per concrete `THead`) and then calls `((IFoo)value).Member`
+  directly (the JIT devirtualises the call and drops the box).  Never probe a
+  layer through `object`, a `NoInlining` helper, or an interface reference held
+  in a local or `out` parameter: that boxes the struct on every frame.
+- `AllocationTests` proves 0 allocated bytes per build for the single-frame and
+  the fragmenting path and per packet of an open session.  The test project disables tiered compilation so the
+  measurement runs optimised code; Tier-0 code never removes boxes.
 
 ### 17.2 Strongly Encouraged
 
@@ -1039,8 +1140,9 @@ strict.
 |------|-----------|----------------------|
 | Stateless layer struct | Immutable; safe to share across threads. | None. |
 | Stateful layer struct | Immutable; per-frame state lives in `SessionState`. | One `Session<>` per producer thread. |
-| `SessionState` | `ref struct`; lives on the stack. | Single-threaded by construction. |
-| `FrameSequence<>` / `StatefulFrameSequence<>` | Single-use, single-thread. | Never share an iterator. |
+| `SessionState` | Plain struct owned by the session's pooled internals; not thread-safe. | Drive a session from one thread at a time. |
+| `FrameSequence<>` / `StatefulFrameSequence<>` | `ref struct`; single-use, single-thread. | Never share an iterator; declare it with `using`. |
+| `TcpConnection<,>` | Not thread-safe and not reentrant on one thread. | One connection per thread; a sink must not write on another connection of the same thread while a producer write is in progress. |
 | `SignalMessageLayout`, `PduTransportConfigFb`, `SignalMessageValueSet` (read-only consumption) | Immutable. | None. |
 | `SignalMessageValueSet` (mutation) | Not thread-safe. | One value set per emitted frame. |
 
@@ -1079,26 +1181,40 @@ Tests live in `NetworkInspector.FrameBuilder.Tests`:
 
 ```
 NetworkInspector.FrameBuilder.Tests/
+  Application/DhcpLayerValidationTests.cs         ← Application-layer validation
+  Application/DnsLayerValidationTests.cs
+  Application/PduTransportMultiLayerTests.cs
+  Application/SignalMessageLayerWriteRoundTripTests.cs
+  Application/TlsRecordLayerValidationTests.cs
   Capabilities/CapabilitySanityTests.cs           ← Marker / overload-set tests
   Capabilities/RawIPv6SmokeTests.cs               ← Position-class tests
+  Core/ChecksumUtilsTests.cs
+  Frames/FrameTests.cs                            ← Frame bytes and build status
   Layers/SomeIpLayerTests.cs                      ← One file per layer family
   Layers/TcpLayerWithOptionsTests.cs
   Layers/IPv6ExtensionLayerTests.cs
-  Stacks/InterceptorTests.cs
-  Stacks/ChecksumTests.cs
-  Stacks/FrameStackAutoInferenceTests.cs
+  Layers/LinLayerTests.cs
+  Layers/LinuxSllLayerTests.cs / Layers/LinuxSll2LayerTests.cs
+  Layers/LlcLayerTests.cs
+  Layers/IcmpV4DestUnreachLayerTests.cs / Layers/IcmpV4RedirectLayerTests.cs
+  Layers/IcmpV4TimeExceededLayerTests.cs
   Negative/NegativeCompileTests.cs                ← Compile-time rejections
   Negative/NegativeCompileHarness.cs
-  FragmentationSmokeTests.cs / StatefulFragmentationTests.cs
-  TcpConnectionTests.cs / TcpConnectionTsharkTests.cs
-  StreamCapabilitySmokeTests.cs
-  TrailerAndInterceptorSmokeTests.cs
-  StatefulSessionSmokeTests.cs
-  SessionPoolStressTests.cs
-  NewLayerSmokeTests.cs / NewFrameStackSmokeTests.cs
+  Negative/Snippets/*_must_not_compile.cs.txt
+  Stacks/ChecksumTests.cs
+  Stacks/FrameDepthLimitTests.cs
+  Stacks/FrameStackAutoInferenceTests.cs
+  Stacks/InterceptorTests.cs
+  AllocationTests.cs                              ← Zero-allocation hot path
   BusAndExtensionLayerSmokeTests.cs
-  Frames/FrameTests.cs
-  Core/ChecksumUtilsTests.cs
+  FragmentationSmokeTests.cs / StatefulFragmentationTests.cs
+  FrameBuilderReviewExtensionTests.cs
+  NewLayerSmokeTests.cs / NewFrameStackSmokeTests.cs
+  SessionPoolStressTests.cs
+  StatefulSessionSmokeTests.cs
+  StreamCapabilitySmokeTests.cs
+  TcpConnectionTests.cs / TcpConnectionTsharkTests.cs
+  TrailerAndInterceptorSmokeTests.cs
   GlobalUsings.cs
 ```
 
@@ -1114,7 +1230,10 @@ NetworkInspector.FrameBuilder.Tests/
 | Pseudo-header | Validate the address bytes, length and protocol number written into `PostFixContext` (use a delegating interceptor). |
 | Composition | Each marker combination compiles only the legal `Then(...)` overloads; document expected compile errors via `NegativeCompileTests`. |
 | Fragmentation | For `IFragmentable` layers: full unfragmented build, multi-fragment build with min-size MTU, edge alignment cases. |
-| Stateful state | Counter wrap-around, multiple-frame increments, restart between sessions. |
+| Stateful state | Counter wrap-around, multiple-frame increments, restart between sessions, counters unchanged after a failed packet. |
+| Constructor limits | Every limit in §16.4: the boundary value builds, the next value throws `ArgumentOutOfRangeException`. |
+| Build status | Each `BuildStatus` the layer can cause is asserted on both the stateless and the stateful engine. |
+| Allocation | New hot-path code keeps `AllocationTests` at 0 bytes. |
 | Round-trip parity | A frame built with the layer and the corresponding parser-side definition produces matching bytes; tshark UAT (where available) decodes the frame the same way. |
 
 ### 20.3 Test Helpers
@@ -1139,7 +1258,8 @@ guarantees that cannot be exercised at runtime.
 
 ### Do
 
-- ✅ Use `internal readonly struct` for every layer.
+- ✅ Use `public readonly struct` for every layer.
+- ✅ Declare every `FrameSequence<>` / `StatefulFrameSequence<>` with `using`.
 - ✅ Use `[MethodImpl(MethodImplOptions.AggressiveInlining)]` on every
   hot-path member.
 - ✅ Pick the correct capability marker set the first time
@@ -1189,7 +1309,7 @@ guarantees that cannot be exercised at runtime.
 
 ### Class Structure
 
-- [ ] `internal readonly struct XxxLayer : IStatelessLayer | IStatefulLayer, …`
+- [ ] `public readonly struct XxxLayer : IStatelessLayer | IStatefulLayer, …`
 - [ ] Layer file under `Layers/{Bus,Link,Network,Transport,Application}/`
 - [ ] One layer per file (helper types may live in the same file when small)
 - [ ] All fields `private readonly`, named `_PascalCase`
@@ -1208,11 +1328,13 @@ guarantees that cannot be exercised at runtime.
 
 ### Construction
 
-- [ ] Public/internal constructor for valid-by-default parameter sets, OR
+- [ ] Public constructor that range-checks every argument, OR
 - [ ] Private constructor + named factory (`Single`, `Multi`, `Create`,
       `FromXxx`) when validation is non-trivial
-- [ ] All invariants validated in the factory (no validation in
-      `WriteHeader` / `ApplyPostFix`)
+- [ ] All invariants validated in the constructor / factory (no validation in
+      `WriteHeader` / `ApplyPostFix`); every limit listed in §16.4
+- [ ] `ReadOnlyMemory<byte>` parameters documented as referenced, not copied (§6.3)
+- [ ] 16-bit length fields report `BuildStatus.InvalidLayerState` instead of wrapping (§9.1)
 - [ ] `Auto<T>` used for caller-pinnable fields with a separate
       `_XxxIsExplicit` flag
 
@@ -1291,7 +1413,7 @@ namespace NetworkInspector.FrameBuilder;
 /// </list>
 /// <para>Thread safety: immutable struct, safe for concurrent use.</para>
 /// </remarks>
-internal readonly struct XxxLayer :
+public readonly struct XxxLayer :
     IStatelessLayer, IInteriorLayer, IRequiresPseudoHeader,
     IProvidesProtocolType, IProvidesNextProtocolValue<IpNextProtocolKind>
 {
@@ -1304,7 +1426,7 @@ internal readonly struct XxxLayer :
     private readonly bool _ChecksumIsExplicit;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal XxxLayer(ushort srcPort, ushort dstPort, Auto<ushort> checksum = default)
+    public XxxLayer(ushort srcPort, ushort dstPort, Auto<ushort> checksum = default)
     {
         _SrcPort = srcPort;
         _DstPort = dstPort;
@@ -1334,6 +1456,12 @@ internal readonly struct XxxLayer :
         switch (phase)
         {
             case FixPhase.Length:
+                // 16-bit Length: report a frame it cannot represent instead of wrapping.
+                if (myLength > ushort.MaxValue)
+                {
+                    ctx.Status = BuildStatus.InvalidLayerState;
+                    break;
+                }
                 BinaryPrimitives.WriteUInt16BigEndian(
                     frame.Slice(myOffset + LengthOffset, 2), (ushort)myLength);
                 break;
@@ -1379,6 +1507,11 @@ internal readonly struct XxxLayer :
 
 ## Appendix B: Minimal Stateful Layer Template
 
+> **In-repository template.**  `SessionState` has a closed slot set (§11.3): the
+> `XxxNextCounter` / `HasXxxCounter` slot below must be added to
+> `Stateful/SessionState.cs` in this library.  Consumers of the NuGet package
+> cannot add stateful layers in this version.
+
 ```csharp
 // Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root.
 
@@ -1396,13 +1529,13 @@ namespace NetworkInspector.FrameBuilder;
 /// <para>Thread safety: the struct is immutable; the per-frame counter
 /// lives in <see cref="SessionState"/>.</para>
 /// </remarks>
-internal readonly struct XxxStatefulLayer :
+public readonly struct XxxStatefulLayer :
     IStatefulLayer, IInteriorLayer, IPseudoHeaderIndependent, IProvidesProtocolType
 {
     private readonly ushort _SeedCounter;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal XxxStatefulLayer(ushort initialCounter = 0) => _SeedCounter = initialCounter;
+    public XxxStatefulLayer(ushort initialCounter = 0) => _SeedCounter = initialCounter;
 
     /// <inheritdoc />
     public int HeaderSize { get => XxxHeader.Size; }

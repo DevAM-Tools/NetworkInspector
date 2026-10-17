@@ -23,8 +23,9 @@ public enum FixPhase : byte
     PublishPseudoHeader = 1,
 
     /// <summary>
-    /// Compute transport-layer checksums (TCP/UDP/ICMPv6).  Walked inner→outer
-    /// so transport runs before any outer checksum that might cover it.
+    /// Compute transport-layer checksums (TCP/UDP/ICMPv6).  Like every phase the
+    /// walk is outer→inner; the separate <see cref="OuterChecksum"/> phase that
+    /// follows guarantees that header-only checksums (IPv4) see the final transport bytes.
     /// </summary>
     InnerChecksum = 2,
 

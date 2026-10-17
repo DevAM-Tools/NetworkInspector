@@ -47,6 +47,11 @@ internal sealed class NegativeCompileTests
     public async Task Stack_onto_payload_layer_does_not_compile()
         => await _AssertSnippetFails("Stack_onto_payload_layer_must_not_compile.cs.txt");
 
+    /// <summary>TCP -&gt; WebSocket: WebSocketLayer is a stream producer, not a stack layer.</summary>
+    [Test]
+    public async Task TcpThenWebSocketDoesNotCompile()
+        => await _AssertSnippetFails("Tcp_then_WebSocket_must_not_compile.cs.txt");
+
     private static async Task _AssertSnippetFails(string snippetName)
     {
         IReadOnlyList<Diagnostic> diagnostics = NegativeCompileHarness.Compile(snippetName);

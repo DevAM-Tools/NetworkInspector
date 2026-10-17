@@ -1,94 +1,96 @@
-<!-- Copyright © 2026 DevAM. All rights reserved. -->
+<!-- Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information. -->
 
 # PBF Exporter
 
-Packet binary exporter for compact and high-throughput packet persistence.
+[![NuGet][nuget-badge]][nuget]
 
-## What This Is
+[nuget-badge]: https://img.shields.io/nuget/v/NetworkInspector.Exporters?logo=nuget&label=NetworkInspector.Exporters
+[nuget]: https://www.nuget.org/packages/NetworkInspector.Exporters
 
-The `PbfExporter` serializes parsed packets through `IPacketListener` into the NetworkInspector PBF
-format (magic `NETWORK-INSPECTOR-PBF-FORMAT-v1`).
+`PbfExporter` writes parsed packets to the NetworkInspector Packet Binary Format (`.pbf`, magic
+`NETWORK-INSPECTOR-PBF-FORMAT-v1`): a compact, protobuf-based file for storing large parse results and reading
+them back fast. It is a packet exporter (`IPacketListener`): packets must be parsed with a field tree
+(`FieldTreeMode.Build`, the default).
 
-## Why Use It
+## Highlights
 
-- More compact than text-oriented formats for large datasets.
-- Supports row-like (`Standard`) and analytics-oriented (`Columnar`) layouts.
-- Optional per-block compression and trailer indexing.
-- `Columnar` blocks share the same `ColumnarPacketBatch` accumulator as the Parquet and DuckDB
-  exporters (typed values, topology, detail flags).
+- **Compact.** Typed binary values, LZ4 block compression, and delta-encoded ids and timestamps.
+- **Two layouts.** `Standard` is packet-oriented; `Columnar` stores one typed column block per field for
+  analytical post-processing.
+- **Indexed.** The trailer holds a block index and per-block field-presence bitmaps, so readers can skip blocks.
+- **Same columnar model as Parquet and DuckDB**, with the same detail flags.
 
-## Layout Options
+## Layouts
 
-| Option | Purpose |
+| Layout | Purpose |
 | --- | --- |
-| `PbfExportFormat.Standard` | Sequential packet-oriented layout (typed payloads; same-as-previous without string formatting) |
-| `PbfExportFormat.Columnar` | Columnar layout for analytical post-processing |
+| `PbfExportFormat.Standard` (default) | Sequential packet records with typed payloads |
+| `PbfExportFormat.Columnar` | Packet ids, timestamps, topology, and one field block per field id |
 
-## Columnar Format
+A `Columnar` block contains:
 
-`Columnar` blocks wrap a `ColumnarPacketBatch` (see `NetworkInspector.Exporters/Columnar/`) and
-serialize it to protobuf:
+- packet ids and timestamps (delta `sint64`), optional info strings and frame bytes,
+- topology rows (`packet_id`, `node_id`, `field_id`, `parent_node_id`) with `ColumnarDetailFlags.IncludeTopology`,
+- one field block per distinct field id, with typed value columns and optional custom representation and text.
 
-- Packet IDs (delta `sint64`) and timestamps (delta `sint64`), plus optional per-packet info
-  strings and frame bytes.
-- Topology rows (`packet_id`, `node_id`, `field_id`, `parent_node_id`) when
-  `ColumnarDetailFlags.IncludeTopology` is set.
-- One field block per distinct field ID, each carrying typed value columns and optional plain
-  string custom representation/text columns.
-
-Field-number layout is documented in `PbfFieldNumbers.cs`. The per-block field-presence trailer
-(`TrailerFieldBitmap`) unions topology field IDs and field-column bag keys.
+Field numbers are defined in [PbfFieldNumbers.cs](PbfFieldNumbers.cs).
 
 ## Quick Start
 
 ```csharp
+using NetworkInspector.Core;
 using NetworkInspector.Exporters.Pbf;
 
-using PbfExporter exporter = PbfExporter.CreateBuilder()
-    .ToFile("packets.pbf")
-    .WithFormat(PbfExportFormat.Columnar)
-    .WithCompressed(true)
-    .WithTrailerIndex(true)
-    .Build();
-
-foreach (Packet packet in packets)
+// packets: parsed packets with a field tree, see the end-to-end example in the Exporters README.
+static void WritePbf(IEnumerable<Packet> packets)
 {
-    if (!exporter.OnPacket(packet))
-    {
-        break;
-    }
-}
+    using PbfExporter exporter = PbfExporter.CreateBuilder()
+        .ToFile("packets.pbf")
+        .WithFormat(PbfExportFormat.Columnar)
+        .Build(); // compressed, with trailer index
 
-exporter.OnFinish();
+    foreach (Packet packet in packets)
+    {
+        if (!exporter.OnPacket(packet))
+        {
+            break;
+        }
+    }
+
+    exporter.OnFinish();
+}
 ```
 
 ## Builder Options
 
-| Method | Purpose |
-| --- | --- |
-| `ToFile(path)` / `ToStream(stream)` / `ToStdout()` | Select output target |
-| `WithUiName(name)` / `WithDescription(text)` | Set user-facing metadata |
-| `WithFormat(format)` | Choose Standard or Columnar layout |
-| `WithCompressed(compressed)` | Enable or disable block compression |
-| `WithMaxPacketsPerBlock(count)` | Flush block after N packets |
-| `WithMaxBlockSize(bytes)` | Flush block by size threshold |
-| `WithTrailerIndex(include)` | Include block index in trailer |
-| `WithTargetPacketCount(count)` | Stop after N packets (`0` = unlimited) |
-| `WithCancellationToken(token)` | Enable cooperative cancellation |
-| `WithDetailFlags(flags)` | Optional columnar columns (info, frame bytes, customs, topology) |
-| `WithTimestampSorted(sorted)` | Declares packets arrive in non-decreasing timestamp order |
+| Method | Purpose | Default |
+| --- | --- | --- |
+| `ToFile` / `ToStream` / `ToStdout` | Output target | required |
+| `WithUiName` / `WithDescription` | User-facing metadata | — |
+| `WithFormat(format)` | `Standard` or `Columnar` | `Standard` |
+| `WithCompressed(bool)` | LZ4 block compression | `true` |
+| `WithMaxPacketsPerBlock(int)` | Flush a block after N packets | 50 000 |
+| `WithMaxBlockSize(long)` | Flush a block at this estimated size | 16 MiB |
+| `WithTrailerIndex(bool)` | Block index in the trailer | `true` |
+| `WithDetailFlags(ColumnarDetailFlags)` | Optional columnar columns (`Columnar` only) | `All` |
+| `WithTimestampSorted(bool)` | Declare non-decreasing timestamps (metadata) | `false` |
+| `WithTargetPacketCount(int)` | Stop after N packets (`0` = no limit) | 0 |
+| `WithCancellationToken` | Cooperative cancellation | none |
+
+`ColumnarDetailFlags` lives in `NetworkInspector.Exporters.Columnar`: `IncludeInfo`, `IncludeFrameBytes`,
+`IncludeCustomRepresentation`, `IncludeCustomText`, `IncludeTopology`, `All`, `None`.
 
 ## Limits And Thread-Safety Notes
 
-- Not thread-safe; call `OnPacket()`/`OnFinish()` sequentially.
-- Format is binary and optimized for tooling, not manual inspection.
+- Not thread-safe; call `OnPacket()` and `OnFinish()` from one thread.
+- Blocks of 64 bytes or less, and blocks that do not shrink, are stored uncompressed.
+- The per-block field-presence bitmap covers up to 32 768 field ids.
+- Packets parsed with `FieldTreeMode.Skip` are skipped.
 
 ## Links
 
-- [Exporters hub](../README.md)
-- [PBF source folder](https://github.com/DevAM-Tools/NetworkInspector/tree/main/NetworkInspector.Exporters/Pbf)
-- [GitHub repository](https://github.com/DevAM-Tools/NetworkInspector)
-- [NuGet package](https://www.nuget.org/packages/NetworkInspector.Exporters)
+- [Exporters overview](../README.md)
+- [Exporter guide](../EXPORTER_GUIDE.md)
 - [Issue tracker](https://github.com/DevAM-Tools/NetworkInspector/issues)
 
 ## License

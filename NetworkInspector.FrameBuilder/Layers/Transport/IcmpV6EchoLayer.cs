@@ -40,29 +40,27 @@ public readonly struct IcmpV6EchoLayer : IStatelessLayer, IProvidesProtocolType,
     private readonly bool _ChecksumIsExplicit;
 
     /// <summary>Creates an ICMPv6 echo layer.</summary>
-    /// <param name="type">ICMP type (<see cref="TypeEchoRequest"/> or <see cref="TypeEchoReply"/>).</param>
     /// <param name="identifier">Echo identifier.</param>
     /// <param name="sequenceNumber">Echo sequence number.</param>
+    /// <param name="isReply">
+    /// <c>false</c> (default) emits <see cref="TypeEchoRequest"/>, <c>true</c> emits
+    /// <see cref="TypeEchoReply"/>.  Other ICMPv6 types belong to <see cref="IcmpV6Layer"/>.
+    /// </param>
     /// <param name="code">ICMP code; default 0.</param>
     /// <param name="checksum">
     /// Checksum field; <see cref="Auto.Compute"/> (default) means auto-compute over
     /// the IPv6 pseudo-header + ICMP message.
     /// </param>
-    /// <param name="isReply">
-    /// Convenience flag: when <c>true</c> sets type to <see cref="TypeEchoReply"/>,
-    /// overriding <paramref name="type"/>.  When <c>false</c> (default) the
-    /// <paramref name="type"/> parameter is used unchanged.
-    /// </param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public IcmpV6EchoLayer(
-        byte type = TypeEchoRequest,
         ushort identifier = 1,
         ushort sequenceNumber = 1,
+        bool isReply = false,
         byte code = 0,
-        Auto<ushort> checksum = default,
-        bool isReply = false)
+        Auto<ushort> checksum = default)
     {
-        _Type = isReply ? TypeEchoReply : type;
+        // Echo has exactly two types, so one flag selects it.
+        _Type = isReply ? TypeEchoReply : TypeEchoRequest;
         _Code = code;
         _Identifier = identifier;
         _SequenceNumber = sequenceNumber;

@@ -1,0 +1,9 @@
+// WebSocketLayer is a stream producer, not a stack layer: a WebSocket frame is a
+// byte stream carried by TCP, not a fixed header. No `Then(...)` overload may
+// accept it, otherwise the stack silently emits a TCP segment without any
+// WebSocket bytes.
+_ = FrameStack
+    .Start(new EthernetLayer(_Dst, _Src))
+    .Then(new IPv4Layer(_SrcIp, _DstIp))
+    .Then(new TcpLayer(1, 2))
+    .Then(new WebSocketLayer(new byte[1], WebSocketOpcode.Text));

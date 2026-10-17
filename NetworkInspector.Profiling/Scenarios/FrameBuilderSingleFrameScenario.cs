@@ -61,7 +61,7 @@ internal sealed class FrameBuilderSingleFrameScenario : FrameBuilderScenarioBase
         Span<byte> dst = _Buffer;
         for (int i = 0; i < _FrameCount; i++)
         {
-            FrameSequence<StatelessStack<UdpLayer, StatelessStack<IPv4Layer, StatelessStack<EthernetLayer, StackEnd>>>, NoTrailer, NoInterceptor> seq
+            using FrameSequence<StatelessStack<UdpLayer, StatelessStack<IPv4Layer, StatelessStack<EthernetLayer, StackEnd>>>, NoTrailer, NoInterceptor> seq
                 = _Stack.Build(_Payload);
             seq.MoveNext(dst, out _);
         }

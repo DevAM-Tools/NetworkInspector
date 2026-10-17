@@ -1,100 +1,109 @@
-<!-- Copyright © 2026 DevAM. All rights reserved. -->
+<!-- Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information. -->
 
 # Parquet Exporter
 
-Columnar packet exporter that writes a directory of Apache Parquet files for analytics workloads
-(DuckDB, pandas, Spark, Polars, etc.).
+[![NuGet][nuget-badge]][nuget]
 
-## What This Is
+[nuget-badge]: https://img.shields.io/nuget/v/NetworkInspector.Exporters?logo=nuget&label=NetworkInspector.Exporters
+[nuget]: https://www.nuget.org/packages/NetworkInspector.Exporters
 
-The `ParquetExporter` serializes parsed packets through `IPacketListener` into a small relational
-dataset of Parquet files, built on the same `ColumnarPacketBatch` accumulator shared by the PBF
-columnar format and the DuckDB exporter.
+`ParquetExporter` writes parsed packets as a small relational dataset of Apache Parquet files that DuckDB,
+pandas, Polars, Spark, and other Parquet tools query directly. It is a packet exporter (`IPacketListener`):
+packets must be parsed with a field tree (`FieldTreeMode.Build`, the default).
 
-**Overwrite semantics:** exporting into an existing directory clears prior `packets` /
-`topology` / `catalog` / `protocols` parquet files and all `fields/*.parquet` artifacts before writing, so
-re-exports do not leave orphan field files from a previous FieldId set.
+## Highlights
 
-## Why Use It
-
-- Directly queryable by any Parquet-aware tool without a custom reader.
-- One file per logical table (packets, topology, catalog, one per distinct field ID) keeps schemas
-  narrow and avoids a single wide, mostly-null table.
-- Native typed columns (including `UINT_64` for `FieldType.U64` and 16-byte blobs for IPv6/UUID).
-
-## Directory Layout
-
-| File | Contents |
-| --- | --- |
-| `packets.parquet` | One row per packet: `packet_id` (INT32 / Core `PacketId`), `timestamp_ns`, optional `info` / `frame_bytes` |
-| `topology.parquet` | One row per field-tree node: `packet_id`, `node_id`, `field_id`, `parent_node_id` |
-| `catalog.parquet` | One row per distinct field ID observed: `field_id`, `name`, `ui_name`, `field_type`, `protocol_id`, `table_name`, `description` (nullable) |
-| `protocols.parquet` | One row per protocol registered in the parsing stack: `protocol_id`, `name`, `ui_name` |
-| `fields/field_{id}.parquet` | One row per field occurrence: `packet_id`, `node_id`, type-specific `value`, optional `custom_repr` / `custom_text` |
-
-Each table file is written incrementally: one row group per flushed batch, closed once in
-`OnFinish()`. The catalog file is written once at the end. The protocols file is written once at
-the start (first `OnPacket()`), because the protocol set is fixed by the stack. Join
-`catalog.protocol_id` to `protocols.protocol_id` to label fields by protocol without the dissector
-assemblies. New catalog columns are only ever appended, so positional readers stay valid.
+- **No custom reader needed.** Any Parquet-aware tool opens the dataset.
+- **Narrow tables.** One file per logical table and one file per field id, instead of one wide, mostly empty table.
+- **Native types**, including unsigned 64-bit (`UINT_64`) and 16-byte blobs for IPv6 and UUID.
+- **Self-describing.** A field catalog and a protocol table name every value field and its protocol without the
+  dissector assemblies.
+- **Clean re-exports.** Exporting into an existing directory removes the previous dataset files first, so no
+  orphan field files remain.
 
 ## Quick Start
 
 ```csharp
+using NetworkInspector.Core;
 using NetworkInspector.Exporters.Parquet;
 
-using ParquetExporter exporter = ParquetExporter.CreateBuilder()
-    .ToDirectory("packets_dataset")
-    .Build();
-
-foreach (Packet packet in packets)
+// packets: parsed packets with a field tree, see the end-to-end example in the Exporters README.
+static void WriteParquet(IEnumerable<Packet> packets)
 {
-    if (!exporter.OnPacket(packet))
-    {
-        break;
-    }
-}
+    using ParquetExporter exporter = ParquetExporter.CreateBuilder()
+        .ToDirectory("packets_dataset")
+        .Build();
 
-exporter.OnFinish();
+    foreach (Packet packet in packets)
+    {
+        if (!exporter.OnPacket(packet))
+        {
+            break;
+        }
+    }
+
+    exporter.OnFinish();
+}
 ```
 
+Query it with DuckDB (look up the field id in `catalog.parquet` first):
+
 ```sql
+SELECT c.name, c.field_id FROM 'packets_dataset/catalog.parquet' c WHERE c.name = 'udp.dstport';
+
 SELECT p.packet_id, p.timestamp_ns, f.value
 FROM 'packets_dataset/packets.parquet' p
 JOIN 'packets_dataset/fields/field_42.parquet' f USING (packet_id);
 ```
 
+## Directory Layout
+
+| File | Contents |
+| --- | --- |
+| `packets.parquet` | `packet_id` (INT32), `timestamp_ns` (INT64), optional `info`, `frame_bytes` |
+| `topology.parquet` | `packet_id`, `node_id`, `field_id`, `parent_node_id` (−1 at the top level) |
+| `catalog.parquet` | `field_id`, `name`, `ui_name`, `field_type`, `protocol_id`, `table_name`, `description` |
+| `protocols.parquet` | `protocol_id`, `name`, `ui_name` for every protocol in the stack |
+| `fields/field_{id}.parquet` | `packet_id`, `node_id`, `value`, optional `custom_repr`, `custom_text` |
+
+- The value column of a `FieldType.Timestamp` field is named `value_timestamp_ns`.
+- The catalog has one row per field that carries a value. Protocol and container nodes appear in the topology but
+  not in the catalog.
+- `topology.parquet` is written only with `ColumnarDetailFlags.IncludeTopology` and a non-empty topology. Empty
+  catalog and protocol files are omitted.
+- Each table file gets one row group per flushed batch. The protocols file is written at the start, the catalog at
+  the end. New catalog columns are only ever appended, so positional readers stay valid.
+
 ## Builder Options
 
-| Method | Purpose |
-| --- | --- |
-| `ToDirectory(path)` | Required. Output directory, created lazily on the first `OnPacket()` call |
-| `WithUiName(name)` / `WithDescription(text)` | Set user-facing metadata |
-| `WithCancellationToken(token)` | Enable cooperative cancellation |
-| `WithTargetPacketCount(count)` | Stop after N packets (`0` = unlimited) |
-| `WithMaxPacketsPerBlock(count)` | Flush the in-memory batch after N packets |
-| `WithMaxBlockSize(bytes)` | Flush the in-memory batch by estimated size threshold |
-| `WithDetailFlags(flags)` | Choose optional columns (info, frame bytes, custom representation/text, topology) |
-| `WithTimestampSorted(sorted)` | Declares packets arrive in non-decreasing timestamp order |
+| Method | Purpose | Default |
+| --- | --- | --- |
+| `ToDirectory(path)` | Output directory, created on the first packet | required |
+| `WithUiName` / `WithDescription` | User-facing metadata | — |
+| `WithMaxPacketsPerBlock(int)` | Flush a row group after N packets | 50 000 |
+| `WithMaxBlockSize(long)` | Flush a row group at this estimated size | 16 MiB |
+| `WithDetailFlags(ColumnarDetailFlags)` | Optional columns (info, frame bytes, custom texts, topology) | `All` |
+| `WithTimestampSorted(bool)` | Declare non-decreasing timestamps | `false` |
+| `WithTargetPacketCount(int)` | Stop after N packets (`0` = no limit) | 0 |
+| `WithCancellationToken` | Cooperative cancellation | none |
+
+`ColumnarDetailFlags` lives in `NetworkInspector.Exporters.Columnar`.
 
 ## Limits And Thread-Safety Notes
 
-- Not thread-safe; call `OnPacket()`/`OnFinish()` sequentially.
-- If no packets are ever added, no directory or files are created.
-- `FieldType.U64` is stored as a native Parquet unsigned 64-bit column (`DataField<ulong>` /
-  `UINT_64` logical type).
-- Do not run the Parquet exporter on a thread with a `SynchronizationContext` (UI thread); the
-  writer blocks on Parquet.Net's async API. `Parquet.Net` has no synchronous writer and the
-  `IPacketListener` contract is synchronous, so the exporter waits with
-  `ConfigureAwait(false).GetAwaiter().GetResult()` in one place (an approved exception to the
-  "no `.Result` / `.Wait()`" rule).
+- Not thread-safe; call `OnPacket()` and `OnFinish()` from one thread.
+- There is no stream or stdout target; the output is always a directory.
+- If no packets arrive, no directory is created. The first packet creates the directory and clears old dataset
+  files, even when that packet is then skipped.
+- Do not run the exporter on a thread with a `SynchronizationContext` (a UI thread). Parquet.Net has only an
+  asynchronous writer and `IPacketListener` is synchronous, so the exporter waits in one place with
+  `ConfigureAwait(false).GetAwaiter().GetResult()`.
 
 ## Links
 
-- [Exporters hub](../README.md)
-- [Parquet source folder](https://github.com/DevAM-Tools/NetworkInspector/tree/main/NetworkInspector.Exporters/Parquet)
-- [GitHub repository](https://github.com/DevAM-Tools/NetworkInspector)
-- [NuGet package](https://www.nuget.org/packages/NetworkInspector.Exporters)
+- [Exporters overview](../README.md)
+- [DuckDB exporter](../../NetworkInspector.Exporters.DuckDb/README.md) (same data in one `.duckdb` file)
+- [Exporter guide](../EXPORTER_GUIDE.md)
 - [Issue tracker](https://github.com/DevAM-Tools/NetworkInspector/issues)
 
 ## License

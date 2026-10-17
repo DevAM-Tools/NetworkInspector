@@ -198,7 +198,7 @@ internal sealed class StatefulFragmentationTests
         Session<Stack<UdpLayer, Stack<IPv4LayerWithAutoIpId, StatelessStack<EthernetLayer, StackEnd>>>, NoTrailer, NoInterceptor> session,
         ReadOnlySpan<byte> payload)
     {
-        StatefulFrameSequence<Stack<UdpLayer, Stack<IPv4LayerWithAutoIpId, StatelessStack<EthernetLayer, StackEnd>>>,
+        using StatefulFrameSequence<Stack<UdpLayer, Stack<IPv4LayerWithAutoIpId, StatelessStack<EthernetLayer, StackEnd>>>,
             NoTrailer, NoInterceptor> seq = session.NextPacket(payload);
         byte[] scratch = new byte[_MtuFrameBytes];
         int fragIdx = 0;
@@ -257,7 +257,7 @@ internal sealed class StatefulFragmentationTests
         Session<Stack<TcpLayerWithAutoSequence, Stack<IPv4LayerWithAutoIpId, StatelessStack<EthernetLayer, StackEnd>>>, NoTrailer, NoInterceptor> session,
         ReadOnlySpan<byte> payload)
     {
-        StatefulFrameSequence<Stack<TcpLayerWithAutoSequence, Stack<IPv4LayerWithAutoIpId, StatelessStack<EthernetLayer, StackEnd>>>,
+        using StatefulFrameSequence<Stack<TcpLayerWithAutoSequence, Stack<IPv4LayerWithAutoIpId, StatelessStack<EthernetLayer, StackEnd>>>,
             NoTrailer, NoInterceptor> seq = session.NextPacket(payload);
         byte[] scratch = new byte[_MtuFrameBytes];
         uint firstSeq = 0;
@@ -405,7 +405,7 @@ internal sealed class StatefulFragmentationTests
                 payload[i] = (byte)(0x80 ^ (i & 0xFF));
             }
 
-            FB.FrameSequence<
+            using FB.FrameSequence<
                 FB.StatelessStack<FB.UdpLayer,
                     FB.StatelessStack<FB.IPv4Layer,
                         FB.StatelessStack<FB.EthernetLayer, FB.StackEnd>>>,

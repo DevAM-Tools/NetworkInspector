@@ -4,13 +4,19 @@ namespace NetworkInspector.FrameBuilder;
 
 /// <summary>
 /// Construction-time configuration for a
-/// <see cref="TcpConnection{TCarrierOld,TCarrierTail}"/>.  All fields have
-/// safe defaults; callers override only what their test scenario needs.
+/// <see cref="TcpConnection{TCarrierOld,TCarrierTail}"/>.  Every constructor
+/// parameter has a safe default; callers override only what their scenario needs.
 /// </summary>
+/// <remarks>
+/// <c>default(TcpConnectionOptions)</c> is not the same as <c>new TcpConnectionOptions()</c>:
+/// it has every field at zero, including <see cref="Mss"/>, which
+/// <see cref="TcpConnection.Open{TOld,TTail}"/> rejects.  Omit the argument of
+/// <c>Open</c> to get the documented defaults.
+/// </remarks>
 /// <param name="ClientIsn">Initial Send Sequence number used by the client (SEQ of the SYN). Default <c>1000</c>.</param>
 /// <param name="ServerIsn">Initial Send Sequence number used by the server (SEQ of the SYN+ACK). Default <c>9000</c>.</param>
-/// <param name="Mss">Maximum Segment Size used to split application-data Writes into TCP segments. Default <c>1460</c> bytes.</param>
-/// <param name="WindowSize">Default window size advertised in every emitted segment. Default <c>65535</c>.</param>
+/// <param name="Mss">Maximum Segment Size used to split application-data Writes into TCP segments; must be &gt; 0. Default <c>1460</c> bytes.</param>
+/// <param name="WindowSize">Default window size advertised in every emitted segment. Default <c>65535</c>; 0 is allowed and emits a zero window.</param>
 /// <param name="ClientSynOptions">Options written only on the client SYN. Empty keeps a 20-byte header.</param>
 /// <param name="ServerSynOptions">Options written only on the server SYN-ACK. Empty keeps a 20-byte header.</param>
 public readonly record struct TcpConnectionOptions(

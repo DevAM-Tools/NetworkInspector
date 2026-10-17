@@ -7,7 +7,7 @@
       Presence-index pruning, bounded flank state, and subtree scope ($Name[i?]{Filter}).
     </Description>
     <PackageTags>network;filter;packet;jit;display-filter</PackageTags>
-    <PackageReadmeFile>FILTER_GUIDE.md</PackageReadmeFile>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
     <!-- Runtime codegen (expression trees / DynamicMethod) — not AOT/trim compatible. -->
     <IsAotCompatible>false</IsAotCompatible>
     <IsTrimmable>false</IsTrimmable>

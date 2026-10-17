@@ -9,11 +9,11 @@ namespace NetworkInspector.FrameBuilder;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Stream-producing application layers (WebSocket, HTTP/2 frames, TLS
-/// records) are themselves rahmungsorientiert — they own a length-prefixed
-/// or framed wire format.  Once serialized, the resulting bytes are an
+/// A stream producer owns a framed, length-prefixed wire format (today:
+/// <see cref="WebSocketLayer"/>).  Once serialized, the resulting bytes are an
 /// opaque byte stream from the carrier's perspective; the carrier is free
-/// to slice them on any boundary.
+/// to slice them on any boundary.  The HTTP/2, TLS and DTLS record layers are
+/// payload layers, not stream producers.
 /// </para>
 /// <para>
 /// Implementations write their full byte stream by appending into the

@@ -138,6 +138,12 @@ public readonly struct IPv4LayerWithAutoIpId :
         switch (phase)
         {
             case FixPhase.Length:
+                // RFC 791: TotalLength is 16 bits; report instead of wrapping (post-fix must not throw).
+                if (myLength > ushort.MaxValue)
+                {
+                    ctx.Status = BuildStatus.InvalidLayerState;
+                    break;
+                }
                 BinaryPrimitives.WriteUInt16BigEndian(frame.Slice(myOffset + 2, 2), (ushort)myLength);
                 break;
 

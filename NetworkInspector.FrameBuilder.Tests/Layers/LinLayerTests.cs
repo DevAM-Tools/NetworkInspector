@@ -53,4 +53,30 @@ internal sealed class LinLayerTests
         await Assert.That(frame[14]).IsEqualTo((byte)0);
         await Assert.That(frame[15]).IsEqualTo((byte)0);
     }
+
+    [Test]
+    [Arguments((byte)0)]
+    [Arguments((byte)3)]
+    [Arguments((byte)255)]
+    public async Task LinInvalidChecksumTypeThrows(byte checksumType)
+    {
+        await Assert.That(() => new LinLayer(frameId: 1, checksumType: checksumType)).Throws<ArgumentOutOfRangeException>();
+    }
+
+    [Test]
+    public async Task WriteHeaderInDirtyBufferClearsPadAndKeepsChecksumOverDataOnly()
+    {
+        // Classic checksum over [0x01] only: ~0x01 = 0xFE.  Pad bytes must be zero even
+        // when the destination holds residue from an earlier frame.
+        LinLayer layer = new(frameId: 1, data: [0x01], checksumType: 1);
+        byte[] frame = new byte[layer.HeaderSize];
+        frame.AsSpan().Fill(0xEE);
+
+        layer.WriteHeader(frame);
+
+        await Assert.That(frame[4] & 0x03).IsEqualTo(1);
+        await Assert.That(frame[6]).IsEqualTo((byte)0xFE);
+        await Assert.That(frame[8]).IsEqualTo((byte)0x01);
+        await Assert.That(frame.AsSpan(9, 3).SequenceEqual(new byte[3])).IsTrue();
+    }
 }

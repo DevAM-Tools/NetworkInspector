@@ -3,14 +3,10 @@
 namespace NetworkInspector.FrameBuilder;
 
 /// <summary>
-/// Shared geometry helpers for <see cref="FrameSequence{TValues,TTrailer,TInterceptor}"/>
-/// and <see cref="StatefulFrameSequence{TValues,TTrailer,TInterceptor}"/>.
+/// Fragmentation geometry and post-fix context setup for the build engine behind
+/// <see cref="FrameSequence{TValues,TTrailer,TInterceptor}"/> and
+/// <see cref="StatefulFrameSequence{TValues,TTrailer,TInterceptor}"/>.
 /// </summary>
-/// <remarks>
-/// Both frame-sequence types share identical fragmentation geometry validation and
-/// per-fragment slice setup.  This class centralises those calculations to keep the
-/// two types in sync.
-/// </remarks>
 internal static class FragmentGeometryHelper
 {
     /// <summary>

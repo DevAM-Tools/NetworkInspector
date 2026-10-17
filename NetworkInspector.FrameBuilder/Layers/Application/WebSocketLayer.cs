@@ -3,19 +3,18 @@
 namespace NetworkInspector.FrameBuilder;
 
 /// <summary>
-/// WebSocket application-layer frame encoder for the <see cref="FrameStack"/> API
-/// (RFC 6455 §5.2).
+/// WebSocket frame encoder (RFC 6455 §5.2).  A <b>stream producer</b>, not a stack
+/// layer: it cannot be appended with <c>Then(...)</c> because a WebSocket frame is a
+/// byte stream carried by TCP, not a fixed header.  Hand it to
+/// <see cref="TcpConnection{TOld,TTail}.WriteFromClient{TProducer}"/> /
+/// <c>WriteFromServer</c>, or call <see cref="WriteStream"/> yourself.
 /// </summary>
 /// <remarks>
 /// <para>Capabilities:</para>
 /// <list type="bullet">
-///   <item><see cref="IPayloadLayer"/> — terminal payload carrier; nothing chains
-///   underneath it.</item>
 ///   <item><see cref="IStreamProducer"/> — <see cref="WriteStream"/> writes the
 ///   complete RFC 6455 frame (header + masked/unmasked payload) into the supplied
-///   <see cref="IBufferWriter{T}"/>.  Used via
-///   <c>TcpConnection.WriteFromClient&lt;WebSocketLayer&gt;(...)</c>.</item>
-///   <item><see cref="IPseudoHeaderIndependent"/> — needs no transport pseudo-header.</item>
+///   <see cref="IBufferWriter{T}"/>.</item>
 /// </list>
 /// <para><b>Frame layout (RFC 6455 §5.2):</b></para>
 /// <code>
@@ -26,21 +25,13 @@ namespace NetworkInspector.FrameBuilder;
 /// [4 bytes]  masking key            (only if MASK == 1)
 /// [N bytes]  payload data           (XOR'd with masking key if MASK == 1)
 /// </code>
-/// <para><b>Allocation strategy:</b></para>
-/// <list type="bullet">
-///   <item>For payloads ≤ 125 bytes the masking key application uses a
-///   fixed-size <c>Span&lt;byte&gt;</c> scratch on the stack —
-///   <b>zero heap allocations</b>.</item>
-///   <item>For payloads larger than 125 bytes an
-///   <see cref="ArrayPool{T}"/> rental is used (returned before
-///   <see cref="WriteStream"/> returns).</item>
-/// </list>
+/// <para><b>Allocation strategy:</b> masking writes directly into the writer span;
+/// no intermediate buffer.</para>
 /// <para><b>Thread safety:</b> instances are immutable after construction.
 /// <see cref="WriteStream"/> may be called concurrently on the same instance
-/// without external synchronisation; each call uses per-call stack or pool
-/// storage for masking.</para>
+/// with distinct writers.</para>
 /// </remarks>
-public readonly struct WebSocketLayer : IStatelessLayer, IPayloadLayer, IStreamProducer, IPseudoHeaderIndependent
+public readonly struct WebSocketLayer : IStreamProducer
 {
     /// <summary>The RFC 6455 base payload-length sentinel indicating 16-bit extended length.</summary>
     private const byte _Len16Sentinel = 126;
@@ -48,9 +39,7 @@ public readonly struct WebSocketLayer : IStatelessLayer, IPayloadLayer, IStreamP
     /// <summary>The RFC 6455 base payload-length sentinel indicating 64-bit extended length.</summary>
     private const byte _Len64Sentinel = 127;
 
-    /// <summary>Maximum payload length that can be inlined on the stack for masking (avoids heap allocation).</summary>
-    private const int _StackMaskThreshold = 125;
-
+    /// <summary>Caller-owned payload view; referenced, not copied.</summary>
     private readonly ReadOnlyMemory<byte> _Payload;
     private readonly byte _Opcode;
     private readonly WebSocketFrameOptions _Options;
@@ -58,7 +47,10 @@ public readonly struct WebSocketLayer : IStatelessLayer, IPayloadLayer, IStreamP
     /// <summary>
     /// Creates a <see cref="WebSocketLayer"/> that encodes a single RFC 6455 frame.
     /// </summary>
-    /// <param name="payload">Application data to carry in the frame payload.</param>
+    /// <param name="payload">
+    /// Application data to carry in the frame payload.  Referenced, not copied: it must
+    /// stay unchanged until <see cref="WriteStream"/> has run.
+    /// </param>
     /// <param name="opcode">
     /// RFC 6455 opcode; use constants from <see cref="WebSocketOpcode"/>
     /// (e.g. <see cref="WebSocketOpcode.Text"/>, <see cref="WebSocketOpcode.Binary"/>).
@@ -78,35 +70,10 @@ public readonly struct WebSocketLayer : IStatelessLayer, IPayloadLayer, IStreamP
     }
 
     /// <inheritdoc />
-    /// <remarks>Zero — the frame header and payload are both written by <see cref="WriteStream"/>.</remarks>
-    public int HeaderSize
-    {
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => 0;
-    }
-
-    /// <inheritdoc />
-    /// <remarks>No-op: the entire frame is written by <see cref="WriteStream"/>.</remarks>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public void WriteHeader(scoped Span<byte> dst)
-    {
-        // Nothing to write; WriteStream handles the complete frame.
-    }
-
-    /// <inheritdoc />
-    /// <remarks>No post-fix phases required; all fields are written in <see cref="WriteStream"/>.</remarks>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public void ApplyPostFix(FixPhase phase, scoped Span<byte> frame, int myOffset, int myLength, scoped ref PostFixContext ctx)
-    {
-        // No post-fix operations needed for WebSocket frames.
-    }
-
-    /// <inheritdoc />
     /// <remarks>
     /// Writes the complete RFC 6455 frame (2-byte header + optional extended length +
-    /// optional masking key + payload) into <paramref name="writer"/>.
-    /// For payloads ≤ 125 bytes the masked copy is performed on a stack-allocated
-    /// buffer; larger payloads use an <see cref="ArrayPool{T}"/> rental.
+    /// optional masking key + payload) into <paramref name="writer"/>.  The masked
+    /// payload is XORed straight into the writer's span.
     /// </remarks>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void WriteStream(IBufferWriter<byte> writer)
@@ -197,34 +164,12 @@ public readonly struct WebSocketLayer : IStatelessLayer, IPayloadLayer, IStreamP
             return;
         }
 
-        // Masked path: XOR each byte with the repeating 4-byte masking key.
-        // Algorithm: apply the masking key byte-by-byte with index modulo 4.
-        // For small payloads use a stack buffer; for large payloads rent from the pool.
+        // Masked path: mask straight into the writer's span.  Source and destination
+        // never alias (the payload is the caller's memory, the span belongs to the
+        // writer), so one pass suffices.
         uint maskKey = _Options.MaskingKey!.Value;
-        Span<byte> dst2 = writer.GetSpan(payloadLen);
-
-        if (payloadLen <= _StackMaskThreshold)
-        {
-            // Stack-allocated copy: zero heap allocations.
-            Span<byte> scratch = stackalloc byte[_StackMaskThreshold];
-            _ApplyMask(payload, scratch[..payloadLen], maskKey);
-            scratch[..payloadLen].CopyTo(dst2);
-        }
-        else
-        {
-            // Pool-based copy for larger payloads.
-            byte[] rental = ArrayPool<byte>.Shared.Rent(payloadLen);
-            try
-            {
-                _ApplyMask(payload, rental.AsSpan(0, payloadLen), maskKey);
-                rental.AsSpan(0, payloadLen).CopyTo(dst2);
-            }
-            finally
-            {
-                ArrayPool<byte>.Shared.Return(rental);
-            }
-        }
-
+        Span<byte> maskedDst = writer.GetSpan(payloadLen);
+        _ApplyMask(payload, maskedDst[..payloadLen], maskKey);
         writer.Advance(payloadLen);
     }
 

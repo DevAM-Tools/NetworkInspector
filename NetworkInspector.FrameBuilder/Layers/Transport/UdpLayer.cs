@@ -110,7 +110,13 @@ public readonly struct UdpLayer : IStatelessLayer, IInteriorLayer, IProvidesProt
         switch (phase)
         {
             case FixPhase.Length:
-                // UDP Length covers the UDP header plus everything inside it.
+                // RFC 768: UDP Length (header plus everything inside it) is 16 bits;
+                // report instead of wrapping (post-fix must not throw).
+                if (myLength > ushort.MaxValue)
+                {
+                    ctx.Status = BuildStatus.InvalidLayerState;
+                    break;
+                }
                 BinaryPrimitives.WriteUInt16BigEndian(frame.Slice(myOffset + _LengthOffset, 2), (ushort)myLength);
                 break;
 

@@ -4,7 +4,8 @@ namespace NetworkInspector.FrameBuilder;
 
 /// <summary>
 /// Convenience interceptor that forwards events to caller-supplied
-/// <c>delegate*</c> function pointers (concept §6.3).
+/// <c>delegate*</c> function pointers.  Function pointers avoid a delegate
+/// allocation and a hand-written interceptor struct per callback.
 /// </summary>
 /// <remarks>
 /// <para>

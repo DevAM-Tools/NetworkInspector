@@ -66,8 +66,10 @@ public readonly struct CreatedStack<TStack, TTrailer, TInterceptor>
         => new(_Values, _Trailer, _Interceptor, payload);
 
     /// <summary>
-    /// Starts a build with caller-supplied values overriding the stored ones.
-    /// Enables the value-reuse pattern from new_concept.md §3.3 / §11.4.
+    /// Starts a build with caller-supplied layer values overriding the stored ones.
+    /// Use it to keep one <see cref="CreatedStack{TStack,TTrailer,TInterceptor}"/>
+    /// (and its JIT-specialised walks) while varying addresses or ports per frame
+    /// without composing a new stack.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public FrameSequence<TStack, TTrailer, TInterceptor> Build(in TStack values, ReadOnlySpan<byte> payload)

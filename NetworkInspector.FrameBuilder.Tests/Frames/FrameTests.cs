@@ -171,7 +171,7 @@ internal sealed class FrameTests
     public async Task EthArp_ProducesCorrectLength()
     {
         EthernetLayer eth = new(_DstMac, _SrcMac);
-        ArpLayer arp = new(ArpWriter.OpcodeRequest,
+        ArpLayer arp = new(ArpLayer.OpcodeRequest,
             _SrcMac, new IPv4Address(0xC0A80001).RawValue,
             MacAddress.FromBytes([0, 0, 0, 0, 0, 0]), new IPv4Address(0xC0A80002).RawValue);
 
@@ -185,7 +185,7 @@ internal sealed class FrameTests
     public async Task EthArp_HasCorrectEtherType()
     {
         EthernetLayer eth = new(_DstMac, _SrcMac);
-        ArpLayer arp = new(ArpWriter.OpcodeRequest,
+        ArpLayer arp = new(ArpLayer.OpcodeRequest,
             _SrcMac, new IPv4Address(0xC0A80001).RawValue,
             MacAddress.FromBytes([0, 0, 0, 0, 0, 0]), new IPv4Address(0xC0A80002).RawValue);
 
@@ -374,7 +374,7 @@ internal sealed class FrameTests
         IPv6Layer ip6 = new(_SrcIpv6, _DstIpv6);
         UdpLayer udp = new(1234, 80);
         TcpLayer tcp = new(1234, 80);
-        ArpLayer arp = new(ArpWriter.OpcodeRequest,
+        ArpLayer arp = new(ArpLayer.OpcodeRequest,
             _SrcMac, 0xC0A80001u,
             MacAddress.FromBytes([0, 0, 0, 0, 0, 0]), 0xC0A80002u);
         IcmpV4EchoLayer icmpV4 = new();
@@ -415,6 +415,118 @@ internal sealed class FrameTests
         int udpOffset = EthernetHeader.Size + IPv4Header.Size;
         ushort udpLength = BinaryPrimitives.ReadUInt16BigEndian(buffer.AsSpan(udpOffset + 4, 2));
         await Assert.That(udpLength).IsEqualTo((ushort)8);
+    }
+
+    #endregion
+
+    #region Build status
+
+    [Test]
+    public async Task UdpOverIPv6PinnedZeroChecksumReturnsInvalidLayerState()
+    {
+        CreatedStack<StatelessStack<UdpLayer, StatelessStack<IPv6Layer, StatelessStack<EthernetLayer, StackEnd>>>, NoTrailer, NoInterceptor> stack =
+            FB.FrameStack.Start(new EthernetLayer(_DstMac, _SrcMac))
+                .Then(new IPv6Layer(_SrcIpv6, _DstIpv6))
+                .Then(new UdpLayer(1234, 80, Auto.Explicit((ushort)0)))
+                .CreateWithFixedValues();
+        byte[] buffer = new byte[stack.HeaderSize + _Payload.Length];
+
+        (bool wrote, int written, BuildStatus status) = _BuildFirst(in stack, _Payload, buffer);
+
+        await Assert.That(wrote).IsFalse();
+        await Assert.That(written).IsEqualTo(0);
+        await Assert.That(status).IsEqualTo(BuildStatus.InvalidLayerState);
+    }
+
+    [Test]
+    public async Task BufferTooSmallReturnsStatusAndWritesNothing()
+    {
+        CreatedStack<StatelessStack<UdpLayer, StatelessStack<IPv4Layer, StatelessStack<EthernetLayer, StackEnd>>>, NoTrailer, NoInterceptor> stack =
+            FB.FrameStack.Start(new EthernetLayer(_DstMac, _SrcMac))
+                .Then(new IPv4Layer(new IPv4Address(0xC0A80001), new IPv4Address(0xC0A80002)))
+                .Then(new UdpLayer(1234, 80))
+                .CreateWithFixedValues();
+        byte[] buffer = new byte[stack.HeaderSize + _Payload.Length - 1];
+        buffer.AsSpan().Fill(0xA5);
+
+        (bool wrote, int written, BuildStatus status) = _BuildFirst(in stack, _Payload, buffer);
+
+        await Assert.That(wrote).IsFalse();
+        await Assert.That(written).IsEqualTo(0);
+        await Assert.That(status).IsEqualTo(BuildStatus.BufferTooSmall);
+        await Assert.That(buffer.All(b => b == 0xA5)).IsTrue();
+    }
+
+    [Test]
+    public async Task RawIPv4OversizePayloadReturnsInvalidLayerState()
+    {
+        // No IProvidesMtu on a raw-IP root: the single-frame path runs and the
+        // 16-bit TotalLength / UDP Length cannot represent 70 028 bytes.
+        CreatedStack<StatelessStack<UdpLayer, StatelessStack<IPv4Layer, StackEnd>>, NoTrailer, NoInterceptor> stack =
+            FB.FrameStack.Start(new IPv4Layer(new IPv4Address(0xC0A80001), new IPv4Address(0xC0A80002)))
+                .Then(new UdpLayer(1234, 80))
+                .CreateWithFixedValues();
+        byte[] payload = new byte[70_000];
+        byte[] buffer = new byte[stack.HeaderSize + payload.Length];
+
+        (bool wrote, int written, BuildStatus status) = _BuildFirst(in stack, payload, buffer);
+
+        await Assert.That(wrote).IsFalse();
+        await Assert.That(written).IsEqualTo(0);
+        await Assert.That(status).IsEqualTo(BuildStatus.InvalidLayerState);
+    }
+
+    [Test]
+    public async Task RawIPv6OversizePayloadReturnsInvalidLayerState()
+    {
+        CreatedStack<StatelessStack<UdpLayer, StatelessStack<IPv6Layer, StackEnd>>, NoTrailer, NoInterceptor> stack =
+            FB.FrameStack.Start(new IPv6Layer(_SrcIpv6, _DstIpv6))
+                .Then(new UdpLayer(1234, 80))
+                .CreateWithFixedValues();
+        byte[] payload = new byte[70_000];
+        byte[] buffer = new byte[stack.HeaderSize + payload.Length];
+
+        (bool wrote, int written, BuildStatus status) = _BuildFirst(in stack, payload, buffer);
+
+        await Assert.That(wrote).IsFalse();
+        await Assert.That(written).IsEqualTo(0);
+        await Assert.That(status).IsEqualTo(BuildStatus.InvalidLayerState);
+    }
+
+    [Test]
+    public async Task MaximumIPv4TotalLengthStillBuilds()
+    {
+        // Boundary: TotalLength = 20 + 8 + 65 507 = 65 535 is the largest legal value.
+        CreatedStack<StatelessStack<UdpLayer, StatelessStack<IPv4Layer, StackEnd>>, NoTrailer, NoInterceptor> stack =
+            FB.FrameStack.Start(new IPv4Layer(new IPv4Address(0xC0A80001), new IPv4Address(0xC0A80002)))
+                .Then(new UdpLayer(1234, 80))
+                .CreateWithFixedValues();
+        byte[] payload = new byte[ushort.MaxValue - stack.HeaderSize];
+        byte[] buffer = new byte[stack.HeaderSize + payload.Length];
+
+        (bool wrote, int written, BuildStatus status) = _BuildFirst(in stack, payload, buffer);
+
+        await Assert.That(wrote).IsTrue();
+        await Assert.That(written).IsEqualTo(ushort.MaxValue);
+        await Assert.That(status).IsEqualTo(BuildStatus.Success);
+        await Assert.That(BinaryPrimitives.ReadUInt16BigEndian(buffer.AsSpan(2, 2))).IsEqualTo(ushort.MaxValue);
+    }
+
+    #endregion
+
+    #region Helpers
+
+    /// <summary>
+    /// Runs the first <c>MoveNext</c> of a build and reports its outcome.  Synchronous
+    /// so the <c>ref struct</c> sequence never lives across an <c>await</c>.
+    /// </summary>
+    private static (bool Wrote, int Written, BuildStatus Status) _BuildFirst<TStack>(
+        in CreatedStack<TStack, NoTrailer, NoInterceptor> stack, ReadOnlySpan<byte> payload, Span<byte> buffer)
+        where TStack : struct, IStackNode, IStatelessStack
+    {
+        using FrameSequence<TStack, NoTrailer, NoInterceptor> sequence = stack.Build(payload);
+        bool wrote = sequence.MoveNext(buffer, out int written);
+        return (wrote, written, sequence.Status);
     }
 
     #endregion

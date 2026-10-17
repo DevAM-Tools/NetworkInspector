@@ -9,9 +9,8 @@ namespace NetworkInspector.FrameBuilder.Headers;
 /// </summary>
 /// <remarks>
 /// This minimal 8-byte form encodes <c>HdrExtLen = 0</c> and pads the data
-/// area with PadN options (per RFC 8200 §4.2).  Larger extension headers
-/// require a different layer that emits TLV options; out of scope for the
-/// initial M5a layer set.
+/// area with PadN options (per RFC 8200 §4.2).  Larger option blocks need the
+/// variable-size <see cref="IPv6HopByHopLayer"/> constructor that takes option bytes.
 /// </remarks>
 [BinaryWritable]
 internal readonly partial struct IPv6OptionsExtensionHeader

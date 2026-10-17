@@ -79,6 +79,48 @@ internal sealed class IPv6ExtensionLayerTests
         await Assert.That(hbh.HeaderSize).IsEqualTo(16);
     }
 
+    [Test]
+    public async Task HopByHopWithOptionsPaddingIsZeroInDirtyBuffer()
+    {
+        // 2 + 3 option bytes → 8-byte header: bytes 5..7 are padding.  The buffer is
+        // pre-filled with 0xFF and reused, as a generation loop would do.
+        IPv6Layer ip6 = new(_SrcIp6, _DstIp6);
+        IPv6HopByHopLayer hbh = new(new byte[] { 1, 2, 3 });
+        UdpLayer udp = new(1234, 80);
+        byte[] buf = new byte[_Eth.HeaderSize + ip6.HeaderSize + hbh.HeaderSize + udp.HeaderSize];
+        buf.AsSpan().Fill(0xFF);
+
+        bool first = FB.FrameStack.Start(_Eth).Then(ip6).Then(hbh).Then(udp).CreateWithFixedValues().Build([]).MoveNext(buf, out _);
+        bool second = FB.FrameStack.Start(_Eth).Then(ip6).Then(hbh).Then(udp).CreateWithFixedValues().Build([]).MoveNext(buf, out _);
+
+        int hbhOffset = 14 + IPv6Header.Size;
+        await Assert.That(first).IsTrue();
+        await Assert.That(second).IsTrue();
+        await Assert.That(buf[hbhOffset + 1]).IsEqualTo((byte)0);
+        await Assert.That(buf.AsSpan(hbhOffset + 2, 3).SequenceEqual(new byte[] { 1, 2, 3 })).IsTrue();
+        await Assert.That(buf.AsSpan(hbhOffset + 5, 3).SequenceEqual(new byte[3])).IsTrue();
+    }
+
+    [Test]
+    public async Task HopByHopOptionsAbove2046Throws()
+    {
+        byte[] options = new byte[IPv6HopByHopLayer.MaxOptionBytes + 1];
+
+        await Assert.That(() => new IPv6HopByHopLayer(options)).Throws<ArgumentOutOfRangeException>();
+    }
+
+    [Test]
+    public async Task HopByHopOptionsAt2046BuildWithMaximumHdrExtLen()
+    {
+        IPv6HopByHopLayer hbh = new(new byte[IPv6HopByHopLayer.MaxOptionBytes]);
+        byte[] header = new byte[hbh.HeaderSize];
+
+        hbh.WriteHeader(header);
+
+        await Assert.That(hbh.HeaderSize).IsEqualTo(2048);
+        await Assert.That(header[1]).IsEqualTo((byte)255);
+    }
+
     #endregion
 
     #region Routing
@@ -121,6 +163,26 @@ internal sealed class IPv6ExtensionLayerTests
         byte[] data = new byte[5];
         IPv6RoutingLayer rt = new(routingType: 0, segmentsLeft: 0, typeSpecificData: data);
         await Assert.That(rt.HeaderSize).IsEqualTo(16);
+    }
+
+    [Test]
+    public async Task RoutingDataAbove2040Throws()
+    {
+        byte[] data = new byte[IPv6RoutingLayer.MaxTypeSpecificDataBytes + 1];
+
+        await Assert.That(() => new IPv6RoutingLayer(routingType: 0, segmentsLeft: 0, typeSpecificData: data)).Throws<ArgumentOutOfRangeException>();
+    }
+
+    [Test]
+    public async Task RoutingDataAt2040BuildsWithMaximumHdrExtLen()
+    {
+        IPv6RoutingLayer rt = new(routingType: 0, segmentsLeft: 0, typeSpecificData: new byte[IPv6RoutingLayer.MaxTypeSpecificDataBytes]);
+        byte[] header = new byte[rt.HeaderSize];
+
+        rt.WriteHeader(header);
+
+        await Assert.That(rt.HeaderSize).IsEqualTo(2048);
+        await Assert.That(header[1]).IsEqualTo((byte)255);
     }
 
     #endregion
