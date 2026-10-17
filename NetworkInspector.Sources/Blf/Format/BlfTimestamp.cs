@@ -53,6 +53,23 @@ internal static class BlfTimestamp
     }
 
     /// <summary>
+    /// Adds the file start offset to a relative object time; saturates at <see cref="long.MaxValue"/> instead of
+    /// wrapping. <see cref="ToNanoseconds"/> already saturates the relative part, so without this a saturated object
+    /// time plus a positive start offset would wrap to a timestamp before 1970.
+    /// </summary>
+    /// <param name="startOffsetNanos">File start offset in nanoseconds since the Unix epoch (0 for an invalid date).</param>
+    /// <param name="relativeNanos">Object time relative to the file start, from <see cref="ToNanoseconds"/>.</param>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static long ToAbsolute(long startOffsetNanos, long relativeNanos)
+    {
+        // Both operands are non-negative here (start offset >= 0, relative >= 0): a negative sum is an overflow.
+        long sum = unchecked(startOffsetNanos + relativeNanos);
+        return startOffsetNanos >= 0 && relativeNanos >= 0 && sum < 0
+            ? long.MaxValue
+            : sum;
+    }
+
+    /// <summary>
     /// Converts a <see cref="BlfDate"/> (Windows SYSTEMTIME) to nanoseconds since Unix epoch.
     /// <para>
     /// The BLF specification does not say whether the SYSTEMTIME fields are UTC or local

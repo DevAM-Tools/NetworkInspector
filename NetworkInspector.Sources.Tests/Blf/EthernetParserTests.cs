@@ -31,7 +31,7 @@ internal sealed class EthernetParserTests
     }
 
     [Test]
-    public async Task Type71_TpidWithoutTci_DoesNotInsertVlan()
+    public async Task Type71TpidWithTciZeroInsertsVlanTag()
     {
         byte[] payload = new byte[32 + 2];
         BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(16), 0x0800);
@@ -40,10 +40,25 @@ internal sealed class EthernetParserTests
 
         bool ok = EthernetParser.TryParseType71(payload, out byte[] frame, out _);
 
+        // A priority tag (TCI 0: priority 0, VID 0) is a real 802.1Q tag: 81 00 00 00, then the EtherType.
         await Assert.That(ok).IsTrue();
+        await Assert.That(frame.Length).IsEqualTo(20);
+        await Assert.That(frame.AsSpan(12, 6).ToArray()).IsEquivalentTo(new byte[] { 0x81, 0x00, 0x00, 0x00, 0x08, 0x00 });
+    }
+
+    [Test]
+    public async Task Type71TpidZeroDoesNotInsertVlan()
+    {
+        byte[] payload = new byte[32 + 2];
+        BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(16), 0x0800);
+        BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(22), 2);
+
+        bool ok = EthernetParser.TryParseType71(payload, out byte[] frame, out _);
+
+        await Assert.That(ok).IsTrue();
+        await Assert.That(frame.Length).IsEqualTo(16);
         await Assert.That(frame[12]).IsEqualTo((byte)0x08);
         await Assert.That(frame[13]).IsEqualTo((byte)0x00);
-        await Assert.That(frame.Length).IsEqualTo(16);
     }
 
     [Test]

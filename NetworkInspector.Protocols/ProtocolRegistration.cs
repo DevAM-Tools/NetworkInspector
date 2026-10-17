@@ -8,6 +8,46 @@ namespace NetworkInspector.Protocols;
 public static class ProtocolRegistration
 {
     /// <summary>
+    /// Registers the lean protocol set for profiling: Frame, Ethernet, IPv4, IPv6, UDP, and TCP, in this order. No TCP
+    /// heuristics, no stream reassembly configurations, no application protocols.
+    /// </summary>
+    /// <param name="builder">The stack builder to register protocols with.</param>
+    /// <returns>An empty warning list: none of these protocols reads an external configuration.</returns>
+    public static IReadOnlyList<SettingsLoadWarning> RegisterFairProfilingProtocols(this IStackBuilder builder)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+
+        // Eagerly initialize display tables so the timed phase never pays first-use cost.
+        DisplayTables.EnsureInitialized();
+
+        FrameProtocol frame = new();
+        ProtocolId frameId = builder.RegisterProtocol(frame);
+        frame.RegisterFields(builder, frameId);
+
+        EthernetProtocol ethernet = new();
+        ProtocolId ethId = builder.RegisterProtocol(ethernet);
+        ethernet.RegisterFields(builder, ethId);
+
+        IPv4Protocol ipv4 = new();
+        ProtocolId ipv4Id = builder.RegisterProtocol(ipv4);
+        ipv4.RegisterFields(builder, ipv4Id);
+
+        IPv6Protocol ipv6 = new();
+        ProtocolId ipv6Id = builder.RegisterProtocol(ipv6);
+        ipv6.RegisterFields(builder, ipv6Id);
+
+        UdpProtocol udp = new();
+        ProtocolId udpId = builder.RegisterProtocol(udp);
+        udp.RegisterFields(builder, udpId);
+
+        TcpProtocol tcp = new();
+        ProtocolId tcpId = builder.RegisterProtocol(tcp);
+        tcp.RegisterFields(builder, tcpId);
+
+        return [];
+    }
+
+    /// <summary>
     /// Registers all standard protocols and wires up dispatch tables.
     /// </summary>
     /// <param name="builder">The stack builder to register protocols with.</param>
@@ -17,7 +57,7 @@ public static class ProtocolRegistration
     ///   <item><b>Meta / link:</b> Frame, Ethernet, VLAN (802.1Q), LLC/SNAP, Linux SLL, Linux SLL2.</item>
     ///   <item><b>Network:</b> IPv4 (options + fragmentation), IPv6 (extension headers + fragmentation), ARP, ICMPv4, ICMPv6.</item>
     ///   <item><b>Transport:</b> TCP (options, stateful analysis, heuristic detection, stream reassembly for DNS-over-TCP), UDP.</item>
-    ///   <item><b>Application:</b> DNS, DHCPv4, DHCPv6, TLS, DTLS, HTTP/1.x, HTTP/2 (HPACK), WebSocket, SOME/IP, JSON, Text.</item>
+    ///   <item><b>Application:</b> DNS, DHCPv4, DHCPv6, TLS, DTLS, HTTP/1.x, HTTP/2 (HPACK), WebSocket, SOME/IP, JSON, Data.</item>
     /// <item><b>Automotive:</b> CAN (classic / FD / XL), FlexRay, LIN, PDU Transport, Signal messages (<see cref="SignalMessage.SignalMessageRegistration"/>).</item>
     ///   <item><b>Fallback:</b> Data (raw bytes when no specific dissector applies).</item>
     /// </list>
@@ -206,11 +246,11 @@ public static class ProtocolRegistration
         #region TCP Heuristic Protocol Detection
         // Register the heuristic table on TCP and wire up content-based parsers.
         // This must come after all target protocols (HTTP, TLS, HTTP/2) are registered
-        // so their ProtocolIds are available for the heuristic parsers.
+        // so their ProtocolIds are available for the heuristic parsers. TCP finds the table by
+        // its name when the stack starts.
         HeuristicProtocolTableId tcpHeuristicTableId = builder.RegisterHeuristicProtocolTable(
             tcpId, TcpProtocol.HeuristicTableName, "TCP Heuristic",
             "Content-based application protocol detection for TCP payload");
-        tcp.SetHeuristicTableId(tcpHeuristicTableId);
 
         builder.RegisterHeuristicParser(tcpHeuristicTableId, new HttpHeuristicParser(httpId));
         builder.RegisterHeuristicParser(tcpHeuristicTableId, new TlsHeuristicParser(tlsId));

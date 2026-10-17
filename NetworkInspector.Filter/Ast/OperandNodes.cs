@@ -49,12 +49,21 @@ internal sealed class SliceOperandNode(string name, int start, int end, int posi
     public int End { get; } = end;
 }
 
-/// <summary>The byte length of a field value, e.g. <c>len(udp.payload)</c>.</summary>
-internal sealed class LengthOperandNode(string name, int position, int length)
+/// <summary>
+/// The length in bytes of a field value, e.g. <c>len(udp.payload)</c>: the byte count of byte fields, the UTF-8
+/// byte count of strings, and the wire width of fixed-width values (see <see cref="ValueAccessor"/>).
+/// </summary>
+internal sealed class LengthOperandNode(string name, int namePosition, int position, int length)
     : OperandNode(position, length)
 {
     /// <inheritdoc />
     public override string Name { get; } = name;
+
+    /// <summary>
+    /// Start offset of the field name inside the parentheses. <c>len</c>, <c>(</c> and the name may be
+    /// separated by whitespace, so the name position cannot be derived from <see cref="FilterNode.Position"/>.
+    /// </summary>
+    public int NamePosition { get; } = namePosition;
 }
 
 #endregion

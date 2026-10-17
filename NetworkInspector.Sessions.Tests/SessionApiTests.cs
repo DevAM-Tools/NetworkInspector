@@ -208,8 +208,12 @@ internal sealed class SessionApiTests
         }
     }
 
+    /// <summary>
+    /// After shutdown nobody would cancel or join a job, so it is refused like listeners and value caches.
+    /// <see cref="TryAddJobAfterStoppedRuns"/> covers the allowed Stopped phase without shutdown.
+    /// </summary>
     [Test]
-    public async Task TryAddJob_DuringShutdown_ReturnsFalse()
+    public async Task TryAddJobAfterShutdownReturnsFalse()
     {
         using Stack stack = TestHarness.CreateStack();
         using TestFrameSource source = TestFrameSource.WithUdpFrames(3);
@@ -220,11 +224,71 @@ internal sealed class SessionApiTests
         session.WaitForCompletion();
         session.Shutdown();
 
-        bool added = session.TryAddJob("LateJob", "desc", _ => { }, out JobInfo? info, out SessionFailure? failure);
+        int ran = 0;
+        bool added = session.TryAddJob("LateJob", "desc", _ => Interlocked.Increment(ref ran), out JobInfo? info, out SessionFailure? failure);
 
-        await Assert.That(added).IsTrue();
-        await Assert.That(failure).IsNull();
-        info!.Join();
+        await Assert.That(added).IsFalse();
+        await Assert.That(info).IsNull();
+        await Assert.That(failure!.Value.Code).IsEqualTo(SessionErrorCode.InvalidPhase);
+        await Assert.That(session.GetJobs().Any(job => job.UiName == "LateJob")).IsFalse();
+        await Assert.That(Volatile.Read(ref ran)).IsEqualTo(0);
+    }
+
+    /// <summary>
+    /// <see cref="SessionState"/> claims thread-safe allocation. Many threads draw from one sequence; every id
+    /// must be handed out exactly once and the sequence must end dense (no id skipped or repeated).
+    /// </summary>
+    [Test]
+    [Arguments(0)]
+    [Arguments(1)]
+    [Arguments(2)]
+    public async Task AllocateIdFromManyThreadsIsUniqueAndDense(int sequence)
+    {
+        SessionState state = new();
+        const int threadCount = 8;
+        const int perThread = 1_000;
+        int[] ids = new int[threadCount * perThread];
+        using Barrier start = new(threadCount);
+        Thread[] threads = new Thread[threadCount];
+        for (int t = 0; t < threadCount; t++)
+        {
+            int offset = t * perThread;
+            threads[t] = new Thread(() =>
+            {
+                // Release every thread at once so the CAS loops actually contend.
+                start.SignalAndWait();
+                for (int i = 0; i < perThread; i++)
+                {
+                    ids[offset + i] = sequence switch
+                    {
+                        0 => state.AllocateJobId().Value,
+                        1 => state.AllocateListenerId().Value,
+                        _ => state.AllocateValueCacheId().Value,
+                    };
+                }
+            })
+            {
+                Name = "id-allocator",
+                IsBackground = true,
+                CurrentCulture = CultureInfo.InvariantCulture,
+            };
+        }
+
+        foreach (Thread thread in threads)
+        {
+            thread.Start();
+        }
+
+        foreach (Thread thread in threads)
+        {
+            thread.Join();
+        }
+
+        int[] sorted = [.. ids.Order()];
+
+        await Assert.That(sorted.Distinct().Count()).IsEqualTo(ids.Length);
+        await Assert.That(sorted[0]).IsEqualTo(0);
+        await Assert.That(sorted[^1]).IsEqualTo(ids.Length - 1);
     }
 
     [Test]

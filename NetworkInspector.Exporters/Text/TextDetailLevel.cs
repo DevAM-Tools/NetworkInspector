@@ -9,8 +9,7 @@ public enum TextDetailLevel : byte
 {
     /// <summary>
     /// Only protocol container fields (<see cref="FieldType.None"/>) are shown.
-    /// Value fields are omitted. Provides a structural protocol overview similar to
-    /// Wireshark's "Protocol Summary" view.
+    /// Value fields are omitted. Provides a structural protocol overview: one line per protocol layer.
     /// </summary>
     Summary = 0,
 

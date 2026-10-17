@@ -107,6 +107,7 @@ internal static class FilterRuntime
     /// <summary>Evaluates a scope body over the breadth-first anchor hits of the current domain.</summary>
     public static bool Scope(FilterEvalContext context, ScopeRuntime scope)
     {
+        // The parser bounds Occurrence to ArrayIndexIdRange.MaxValue (< int.MaxValue), so "+ 1" cannot overflow.
         int limit = scope.Occurrence is int occurrence ? occurrence + 1 : 0;
         int count = context.FindAnchors(scope.AnchorFields, scope.AnchorProtocol, limit, out int hitsBase);
 

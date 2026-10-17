@@ -203,7 +203,7 @@ internal sealed class AscExporterTests
         using MemoryStream ms = new();
         using AscExporter exporter = AscExporter.CreateBuilder().ToStream(ms).Build();
 
-        byte[] linData = LinGenerators.BuildLinFrame(0x3F, [0x11, 0x22, 0x33], checksum: 0x7A);
+        byte[] linData = LinGenerators.BuildLinFrame(0x3F, [0x11, 0x22, 0x33], checksum: 0x7A, checksumTypeBits: 2);
         Frame frame = TestHarness.CreateFrame(new FrameId(0), 0L, linData, LinkType.Lin);
         exporter.OnFrame(frame);
         exporter.OnFinish();
@@ -711,7 +711,7 @@ internal sealed class AscExporterTests
             new FrameId(1), 2_000_000L, fdData, LinkType.CanSocketcan));
 
         // LIN
-        byte[] linData = LinGenerators.BuildLinFrame(0x05, [0x11, 0x22, 0x33], checksum: 0x42);
+        byte[] linData = LinGenerators.BuildLinFrame(0x05, [0x11, 0x22, 0x33], checksum: 0x42, checksumTypeBits: 2);
         exporter.OnFrame(TestHarness.CreateFrame(
             new FrameId(2), 3_000_000L, linData, LinkType.Lin));
 

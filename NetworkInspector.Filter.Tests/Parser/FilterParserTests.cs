@@ -16,7 +16,7 @@ internal sealed class FilterParserTests
             throw new InvalidOperationException($"Lexing '{source}' failed: {tokens.Error}");
         }
 
-        FilterParser parser = new(tokenList, source, callback);
+        FilterParser parser = new(tokenList, source, callback, FilterBinder.DefaultRegexTimeout);
         FilterResult<FilterProgram> program = parser.Parse();
         if (!program.TryGetValue(out FilterProgram? parsed))
         {
@@ -34,7 +34,7 @@ internal sealed class FilterParserTests
             return tokens.Error;
         }
 
-        FilterParser parser = new(tokenList, source, callback);
+        FilterParser parser = new(tokenList, source, callback, FilterBinder.DefaultRegexTimeout);
         FilterResult<FilterProgram> program = parser.Parse();
         if (program.IsSuccess)
         {
@@ -435,11 +435,105 @@ internal sealed class FilterParserTests
     [Arguments("flank(ip.ttl, changed, within: 1s, when: )")]
     [Arguments("$udp[99999999999999999999999] { udp }")]
     [Arguments("$udp[4294967296] { udp }")]
+    [Arguments("$udp[2147483647] { udp }")]
+    [Arguments("udp.payload[0:2147483647] == 00")]
     public async Task Parse_Malformed_ReportsError(string source)
     {
         FilterError error = _ParseError(source);
 
         await Assert.That(error.HasPosition).IsTrue();
+    }
+
+    [Test]
+    public async Task Parse_LargestIndex_IsAccepted()
+    {
+        string source = Invariant($"$udp[{ArrayIndexIdRange.MaxValue}] {{ udp }}");
+
+        FilterProgram program = _Parse(source);
+
+        await Assert.That(((ScopeNode)program.Root).Occurrence).IsEqualTo(ArrayIndexIdRange.MaxValue);
+    }
+
+    #endregion
+
+    #region Limits
+
+    [Test]
+    [Arguments("(", ")")]
+    [Arguments("!", "")]
+    [Arguments("not ", "")]
+    [Arguments("$udp { ", " }")]
+    [Arguments("flank(ip.ttl, within: 1s, when: ", ")")]
+    public async Task Parse_NestingAtTheLimit_IsAcceptedAndOneMoreIsRejected(string open, string close)
+    {
+        string allowed = _Nest(open, close, FilterParser.MaxNestingDepth);
+        string tooDeep = _Nest(open, close, FilterParser.MaxNestingDepth + 1);
+
+        FilterProgram program = _Parse(allowed);
+        FilterError error = _ParseError(tooDeep);
+
+        await Assert.That(program.Root).IsNotNull();
+        await Assert.That(error.Kind).IsEqualTo(FilterErrorKind.SyntaxError);
+        await Assert.That(error.Message).Contains("nests deeper than 64");
+        await Assert.That(error.HasPosition).IsTrue();
+    }
+
+    [Test]
+    public async Task Parse_VeryDeepNesting_ReportsErrorInsteadOfOverflowingTheStack()
+    {
+        string deep = new string('(', 100_000) + "udp" + new string(')', 100_000);
+
+        FilterError error = _ParseError(deep);
+
+        await Assert.That(error.Kind).IsEqualTo(FilterErrorKind.SyntaxError);
+        await Assert.That(error.Position).IsEqualTo(FilterParser.MaxNestingDepth);
+    }
+
+    [Test]
+    public async Task Parse_TermsAtTheLimit_AreAcceptedAndOneMoreIsRejected()
+    {
+        string allowed = string.Join(" || ", Enumerable.Repeat("udp", FilterParser.MaxTermCount));
+        string tooMany = allowed + " || tcp";
+
+        FilterProgram program = _Parse(allowed);
+        FilterError error = _ParseError(tooMany);
+
+        await Assert.That(program.Root).IsTypeOf<LogicalNode>();
+        await Assert.That(error.Kind).IsEqualTo(FilterErrorKind.SyntaxError);
+        await Assert.That(error.Message).Contains("more than 1024 terms");
+        await Assert.That(error.Position).IsEqualTo(tooMany.Length - 3);
+        await Assert.That(error.Length).IsEqualTo(3);
+    }
+
+    [Test]
+    public async Task Compile_LongestAllowedChain_CompilesAndMatches()
+    {
+        using Stack stack = FilterTestHelper.BuildStack();
+        string chain = string.Join(" || ", Enumerable.Repeat("tcp", FilterParser.MaxTermCount - 1)) + " || udp";
+        Packet packet = FilterTestHelper.Parse(stack, FilterTestHelper.BuildUdpFrame(53, 1024));
+
+        Filter filter = FilterTestHelper.CompileOrThrow(chain, stack);
+        FilterObserver observer = Filter.Compile(chain, stack, FilterObserverOptions.Default).Value;
+
+        await Assert.That(FilterTestHelper.MatchOrThrow(filter, packet)).IsTrue();
+        await Assert.That(observer.IsAlwaysMatch).IsFalse();
+    }
+
+    private static string _Nest(string open, string close, int depth)
+    {
+        StringBuilder builder = new();
+        for (int i = 0; i < depth; i++)
+        {
+            builder.Append(open);
+        }
+
+        builder.Append("udp");
+        for (int i = 0; i < depth; i++)
+        {
+            builder.Append(close);
+        }
+
+        return builder.ToString();
     }
 
     #endregion
@@ -482,6 +576,26 @@ internal sealed class FilterParserTests
         _ = _Parse("len(udp.payload) > 1", Callback);
 
         await Assert.That(reported).IsEqualTo("udp.payload");
+    }
+
+    [Test]
+    [Arguments("len ( udp.payload ) > 1", 6)]
+    [Arguments("len(  udp.payload) > 1", 6)]
+    [Arguments("LEN\t(udp.payload) > 1", 5)]
+    public async Task Parse_LengthOperandWithWhitespace_ReportsTheNameSpan(string source, int expectedStart)
+    {
+        string? reported = null;
+        int start = -1;
+        void Callback(ReadOnlySpan<char> expression, int spanStart, int length, FilterFieldNameKind kind)
+        {
+            reported = expression.Slice(spanStart, length).ToString();
+            start = spanStart;
+        }
+
+        _ = _Parse(source, Callback);
+
+        await Assert.That(reported).IsEqualTo("udp.payload");
+        await Assert.That(start).IsEqualTo(expectedStart);
     }
 
     [Test]

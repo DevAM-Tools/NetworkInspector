@@ -4,24 +4,23 @@
 
 This document is the **example-driven specification** of the v1 filter language and runtime
 behavior, and the single source of truth for it. It was promoted here from the drafting copy under
-`plans/`, which now only points at this file.
-Implementation plan: [`../plans/plans_filter-migration-modernization.md`](../plans/plans_filter-migration-modernization.md).
+`plans/`. Implementation plan: none retained; this guide is the specification.
 
-**Audience:** users writing filter expressions; implementers locking semantics.
+**Audience:** users writing filter expressions; implementers locking semantics; editor and UI authors (§11).
 
-**Not in v1:** `seq`, `stream`, `window`, `let`, `where`, public `nav(…)`, children/parent/siblings, relative short names in scopes, bytecode VM, AOT, MCP completer UI. Filters do not read `ValueCache` (values still come from the field tree). Columnar scans: [`VALUECACHE_GUIDE.md`](../NetworkInspector.Core/VALUECACHE_GUIDE.md). A packet parsed with `FieldTreeMode.Skip` is not a valid eval input: `TryIsMatch` returns `FilterErrorKind.NoFieldTree` (not a negative match), except `AlwaysMatch` / empty compile.
+**Not in v1:** `seq`, `stream`, `window`, `let`, `where`, public `nav(…)`, children/parent/siblings, relative short names in scopes, bytecode VM, AOT, MCP filter tools. Filters do not read `ValueCache` (values still come from the field tree). Columnar scans: [`VALUECACHE_GUIDE.md`](../NetworkInspector.Core/VALUECACHE_GUIDE.md). A packet parsed with `FieldTreeMode.Skip` is not a valid eval input: `TryIsMatch` returns `FilterErrorKind.NoFieldTree` (not a negative match), except `AlwaysMatch` / empty compile.
 
-`Filter.Compile(expression, stack, in FilterObserverOptions)` compiles the same expression into a `FilterObserver`. That object is not a `Filter`. It latches values during a skip parse and does not share reset or match state with a field-tree filter of the same text. A subtree scope (`$udp { ... }`) fails that compile with `FilterErrorKind.NeedsFieldTree`; use `Filter.Compile` and `FieldTreeMode.Build` for it. Protocol presence without a container field also fails observer compile with `NeedsFieldTree` (skip parse cannot scan owners). At most one `flank(...)` per observer — a second flank is a compile error. After `TryParse` returns, read `IsMatch` for non-flank observers. When `HasFlank` is true, `IsMatch` throws; call `TryReadMatch` instead. `BeginPacket` clears the per-frame bits and keeps the flank sample. `ResetState` clears the sample too.
+`Filter.Compile(expression, stack, in FilterObserverOptions)` compiles the same expression into a `FilterObserver`. That object is not a `Filter`. It latches values during a skip parse and does not share reset or match state with a field-tree filter of the same text. A subtree scope (`$udp { ... }`) fails that compile with `FilterErrorKind.NeedsFieldTree`; use `Filter.Compile` and `FieldTreeMode.Build` for it. Protocol presence without a container field also fails observer compile with `NeedsFieldTree` (skip parse cannot scan owners). At most one `flank(...)` per observer — a second flank is a compile error. After `Packet.TryParse` returns, read `IsMatch` for non-flank observers. When `HasFlank` is true, `IsMatch` throws; call `TryReadMatch` instead. The flank is one leaf of the observer's boolean tree, decided when the frame is committed (the first `TryReadMatch`, or the next `BeginPacket`), so terms around it count exactly as in a `Filter`: `udp.srcport == 53 && flank(ip.ttl, changed, within: 1s)` matches only on port 53, `!flank(…)` is the negation. `BeginPacket` clears the per-frame bits and keeps the flank sample. `ResetState` clears the sample too.
 
 ---
 
 ## 1. Mental model
 
 ```mermaid
-TD
+flowchart TD
   S[Filter expression + IStack]
   C[Compile: lex parse bind IDs JIT]
-  P[Optional TryParse for UI spans only]
+  P[Optional TryParse / GetCompletions for editors]
   I[PacketIndex presence prune]
   E[JIT eval per packet using IDs only]
   M[Match cache on filter]
@@ -54,6 +53,7 @@ TD
 |-----|-----------------|--------|
 | `Filter.Compile(expr, stack[, options])` | **Yes** (except empty → `AlwaysMatch`) | Matchable filter, or error (syntax **or** unknown name) |
 | `Filter.TryParse(expr[, options])` | No | Syntax/spans only — **not** for `TryIsMatch` |
+| `Filter.GetCompletions(expr, caret, stack?)` | Optional | Sorted completion candidates at the caret (§11) |
 | `filter.TryDerive(newStack)` | Yes | New matchable instance; source unchanged |
 | `TryIsMatch` | — | Ready after successful Compile/Derive |
 
@@ -64,14 +64,20 @@ if (!compiled.TryGetValue(out Filter? filter))
     // syntax error OR unknown field/protocol/alias on this stack
 }
 
-// Hot path: FieldId slots only — no Resolve call
-filter.TryIsMatch(packet, session.PacketIndex, out bool matched, out FilterError? err);
+// Hot path: FieldId slots only — no Resolve call. Keep the index as the struct type (no boxing).
+bool evaluated = session.PacketIndex is PacketIndexReaderView index
+    ? filter.TryIsMatch(packet, index, out bool matched, out FilterError? err)
+    : filter.TryIsMatch(packet, out matched, out err);
 ```
 
 ```text
 # Stack without field/protocol "ab"
 Filter.Compile("ab == 1", stackWithoutAb)
-→ FilterError: unknown field or protocol 'ab'
+→ FilterError: Unknown field or protocol 'ab'
+
+# Close to a known name: the error names it and carries it as FilterError.Suggestion
+Filter.Compile("udp.srcprot == 53", stack)
+→ [UnknownField] at 0 (length 11): Unknown field or protocol 'udp.srcprot'. Did you mean 'udp.srcport'?
 ```
 
 ```csharp
@@ -163,12 +169,31 @@ http.host contains "foo"
 http.host matches ".*\\.example\\.com"
 ```
 
+`contains` is an ordinal substring test. `matches` takes a .NET regular expression (`RegexOptions.CultureInvariant`); an invalid pattern is an `InvalidValue` compile error at the pattern's position. Each pattern is compiled **once** at parse time and runs on the linear-time `NonBacktracking` engine whenever that engine supports it — such patterns can never time out, however adversarial (`^(a+)+$` is safe). Only patterns that need backtracking (lookaround `(?=…)`, backreferences `\1`, atomic groups, conditionals) use the backtracking engine, bounded by `FilterCompileOptions.RegexTimeout` (default 1 s); a timeout poisons the filter with `RuntimeError` (§8.3). A derived filter (§8.4) keeps the patterns and their timeout.
+
 ### 3.6 Slice and length
 
 ```text
 eth.src[0:3] == 00:11:22
+udp.payload[10:12] == 0a:0b        # any bounds, including two-digit ones
 len(udp.payload) > 0
+len(http.host) <= 253              # UTF-8 bytes
+udp.srcport[6:8] == 00:35          # port 53 as the low two bytes of its 8-byte value
 ```
+
+A slice `name[start:end]` is the half-open byte range `[start, end)`, `end > start`; bounds are non-negative integers up to `2 147 483 590`. `len(name)` is a **length in bytes** for every type. Both use the same byte view of a value:
+
+| Field type | `len()` | Slice source |
+|------------|---------|--------------|
+| Bytes | byte count | the bytes |
+| String | UTF-8 byte count (`"äb"` → 3) | not sliceable (no match) |
+| Bool | 1 | `00` / `01` |
+| I64, U64, F64, Timestamp, Eui64 | 8 | big-endian; F64 is the IEEE 754 bit pattern, Timestamp the signed nanoseconds |
+| MacAddress | 6 | network order |
+| IPv4Address | 4 | network order |
+| IPv6Address, Uuid | 16 | network order (Uuid as in `Uuid.ToBytes`) |
+
+A slice past the end of the value, or on a type without bytes, is not an error: that occurrence simply does not match ("missing data never matches"). A slice or `len()` operand needs a comparison (`len(x)` alone is a syntax error).
 
 ### 3.7 Multi-occurrence fields (same `FieldId`)
 
@@ -229,6 +254,21 @@ tcp.port == 80 || tcp.port == 443
 # Or scope under a subtree (qualified names inside)
 $tcp { tcp.port == 80 || tcp.port == 443 }
 ```
+
+**Size limits.** Filter text is untrusted input (CLI, UI editors). Two constants bound every expression; beyond them `Compile` / `TryParse` fail with a `SyntaxError` at the first offending token instead of risking a stack overflow:
+
+| Limit | Value | Counts |
+|-------|-------|--------|
+| Nesting depth | 64 | nested `(`, `!` / `not`, scope bodies `$x { … }`, `when:` gates |
+| Terms | 1024 | comparisons, presence tests, `true` / `false`, `flank(…)`, scopes in one expression |
+
+```text
+((((… 65 levels … udp …))))       → SyntaxError: Expression nests deeper than 64 levels …
+udp || udp || … (1025 terms)       → SyntaxError: Expression has more than 1024 terms; use 'in { … }' for long value lists
+ip.src in {10.0.0.1, 10.0.0.2, …}  # one term, any number of values
+```
+
+A `within:` window must stay below about 292 years (`long.MaxValue` nanoseconds); larger windows are an `InvalidValue` error.
 
 ---
 
@@ -1001,7 +1041,13 @@ if (!compiled.TryGetValue(out Filter? filter))
 }
 
 // Filter is immediately matchable — FieldId / ProtocolId / IndexGroupId / FieldAliasGroupId slots bound.
-if (!filter.TryIsMatch(packet, session.PacketIndex, out bool matched, out FilterError? err))
+// PacketIndex is a nullable struct; unwrap it so TryIsMatch<TIndex> stays generic and does not box.
+if (session.PacketIndex is not PacketIndexReaderView index)
+{
+    return; // no index yet: use filter.TryIsMatch(packet, out …) instead
+}
+
+if (!filter.TryIsMatch(packet, index, out bool matched, out FilterError? err))
 {
     // err.Kind == NoFieldTree: skip-tree packet; not a miss; IsPoisoned stays false.
     // Other runtime failures may poison (see §8.3). Do not treat TryIsMatch false as “no match”.
@@ -1014,7 +1060,7 @@ Filter.Compile("ab == 1", stack); // FilterError: unknown 'ab'
 ```
 
 ```csharp
-// UI spans without stack (not matchable)
+// UI spans without stack (not matchable); completion lists: Filter.GetCompletions (§11)
 Filter.TryParse("tcp.por == ", options);
 ```
 
@@ -1022,7 +1068,7 @@ Filter.TryParse("tcp.por == ", options);
 
 After the first successful eval of packet id `N`, a later `TryIsMatch` for `N` must **not** re-run the JIT body.
 
-`FilterCompileOptions.EnableMatchCache` defaults to `true`. Set it to `false` when a long-lived filter will touch unbounded packet ids and you cannot afford the per-id bitmaps (for example a streaming convert that never re-queries). Derive copies the flag from the source filter.
+`FilterCompileOptions.EnableMatchCache` defaults to `true`. Set it to `false` when a long-lived filter will touch unbounded packet ids and you cannot afford the per-id bitmaps (for example a streaming convert that never re-queries). Derive copies the flag from the source filter. The flag is **ignored for stateful filters** (any `flank(…)`): they always keep the cache, because re-querying a packet without it would feed its sample to the tracker a second time.
 
 Important: cache must distinguish:
 
@@ -1076,7 +1122,9 @@ if (!oldFilter.TryDerive(newStack, out Filter? rebound, out FilterError? err))
 
 `AlwaysMatch.TryDerive` → `AlwaysMatch`.
 
-Internally Derive re-binds symbols + re-JITs (may skip lex/parse if AST retained). There is **no** public in-place rebind.
+Internally Derive re-binds symbols and re-JITs from the retained AST (no lex/parse). The match-cache policy and the compiled `matches` patterns, with their `RegexTimeout`, carry over. There is **no** public in-place rebind.
+
+Through the interface, `IFilter.TryDerive(stack, out IFilter? derived, out FilterError? failure)` returns an `IFilter`; `Filter` additionally offers the concrete `TryDerive(stack, out Filter? derived, out FilterError? failure)` used above.
 
 ---
 
@@ -1086,15 +1134,16 @@ Internally Derive re-binds symbols + re-JITs (may skip lex/parse if AST retained
 
 ```csharp
 FilterResult<Filter> fr = Filter.Compile("tcp.port == 443", sessionStack);
-session.TryAddListener(myListener, fr.Value, out ListenerInfo? info);
-session.TryAddListener(otherListener, filter: null, out _); // no filter ≡ all packets
+session.TryAddListener(myListener, fr.Value, out ListenerInfo? info, out SessionFailure? failure);
+session.TryAddListener(otherListener, filter: null, out _, out _); // no filter ≡ all packets
 
 // Or let the session compile against its own stack:
 session.TryAddListener(
     thirdListener,
     "tcp.port == 443",
     out ListenerInfo? thirdInfo,
-    out FilterError? filterFailure); // false + filterFailure when the expression is bad
+    out FilterError? filterFailure,      // set when the expression does not compile
+    out SessionFailure? sessionFailure); // set when the session refuses the subscription
 ```
 
 ### 9.2 Notifications vs pull
@@ -1118,7 +1167,8 @@ bool read = session.TryReadPackets(
     mode: PacketReadMode.Matching,
     out int count,
     out PacketIdLayout layout,
-    out FilterError? failure);
+    out FilterError? failure,
+    out SessionFailure? sessionFailure);
 
 // layout == Gapped when Matching skipped ids
 // layout == Contiguous for All (ids startId, startId+1, ...) even if Packet is null (store hole)
@@ -1135,8 +1185,9 @@ refuses to produce a verdict the read returns `false` with `count == 0` and `fai
 the filter is poisoned, a packet failed to evaluate, or the filter could not be re-bound after a
 stack swap. `All` reads keep working in all three cases.
 
-An unknown `listenerId` is a caller bug, not a filter failure, and throws
-`SessionException(SessionErrorCode.ListenerNotFound)`.
+An unknown `listenerId` is not a filter failure: the read returns `false` with
+`sessionFailure.Code == SessionErrorCode.ListenerNotFound` and `failure == null`. On any failed
+read exactly one of `failure` and `sessionFailure` is set.
 
 ### 9.4 Stack restart
 
@@ -1173,37 +1224,102 @@ writing a partially filtered output.
 
 ---
 
-## 11. Compile-time UI hooks (no full completer yet)
+## 11. Editor support: completion, errors, spans
 
-Prefer `TryParse` when no stack is available yet (typing). With a stack, `Compile` may still invoke the same span callback before failing on unknown names.
+Three APIs serve a filter editor. None of them needs a valid expression.
+
+| Need | API |
+|------|-----|
+| Completion list at the caret | `Filter.GetCompletions(expression, caret, stack?)` |
+| Why and where a finished expression is wrong | `Filter.Compile(expression, stack)` → `FilterError` |
+| Name spans for highlighting, without a stack | `Filter.TryParse(expression, options)` + `OnFieldNameSpan` |
+
+### 11.1 Completion
+
+```csharp
+FilterCompletions completions = Filter.GetCompletions("udp.sr && tcp", caretPosition: 6, stack);
+// completions.Prefix        == "udp.sr"
+// completions.ReplaceStart  == 0, completions.ReplaceLength == 6
+// completions.Items         == [ udp.srcport (Field, U64), … ]   alphabetical, ignoring case
+
+FilterCompletionItem chosen = completions.Items[0];
+string edited = expression.Remove(completions.ReplaceStart, completions.ReplaceLength)
+                          .Insert(completions.ReplaceStart, chosen.Text);
+```
+
+- **Replace range.** The word (letters, digits, `_`, `.`) or symbolic operator (`= ! < > & |`) the caret touches. Accepting in the middle of a word replaces the whole word. `Prefix` is the part before the caret; every item starts with it, ignoring case (`UD` offers `udp`).
+- **Order.** Alphabetical (ordinal, ignoring case), one entry per name. A protocol and its same-named container field (`udp`) appear once, as `Protocol`, because that is what the name binds to.
+- **Items.** `Text`, `Kind` (`Protocol`, `Field`, `FieldAlias`, `Keyword`, `Operator`, `FlankArgument`) and `ValueType` (the `FieldType` of a field, or of an alias whose members share one type; `None` otherwise) — enough for icons and type hints.
+- **Without a stack** only keywords and operators are offered.
+- **Cost.** Linear in the expression length plus a binary search. The sorted name catalog is built once per stack and cached for the stack's lifetime, so calling it on every keystroke is fine. Thread-safe.
+
+What is offered depends on the grammar at the caret:
+
+| Caret position | Offered |
+|----------------|---------|
+| Start of a term: empty text, after `(`, `!`, `not`, `&&`, `||`, `and`, `or`, `$x {`, `when:` | protocols, fields, aliases, `flank`, `len`, `not`, `true`, `false` |
+| After `$` | protocols, fields, aliases (scope anchors) |
+| After `flank(` or `len(` | fields and aliases only (protocols have no value) |
+| After `,` inside `flank(…)` | `by:`, `changed`, `from:`, `to:`, `when:`, `within:` |
+| After an operand (`udp.port `, `len(x) `, `x[0:2] `) | `==`, `!=`, `<`, `<=`, `>`, `>=`, `in`, `contains`, `matches`, `&&`, `||`, `and`, `or` |
+| After a complete term (`… == 53 `, `) `, `} `) | `&&`, `||`, `and`, `or` |
+| Where a value or punctuation is expected (after `==`, inside `{ … }`, `[ … ]`, after `within:`), inside a string, or inside a number/address | nothing |
+
+```text
+"udp.srcport =|"   → ==                    (operator prefix)
+"udp.srcport co|"  → contains
+"flank(ip.ttl, wi|" → within:
+"$ud|"             → udp, udp.checksum, …  (names only)
+"len(ud|"          → udp.checksum, udp.dstport, …  (no protocol "udp")
+```
+
+### 11.2 Errors with position and suggestion
+
+Every compile or parse failure is a `FilterError` with `Kind`, a readable `Message`, and — where the text is to blame — `Position` / `Length` (UTF-16 offsets into the expression; `HasPosition` tells whether they are set). An editor underlines `[Position, Position + Length)`.
+
+```text
+udp.payload[10:12 == 00            → SyntaxError   "Expected ] but found '=='"
+udp.srcport ==                     → SyntaxError   "Unexpected end of expression — a literal value is required here"
+flank(ip.ttl, changed)             → SyntaxError   "'flank' requires a 'within:' window"
+udp.srcprot == 53                  → UnknownField  "Unknown field or protocol 'udp.srcprot'. Did you mean 'udp.srcport'?"
+```
+
+For `UnknownField`, `FilterError.Suggestion` holds the closest known name when one is near enough (edit distance 1 for names up to 4 characters, 2 up to 10, else 3; case differences count as near), so the editor can offer a one-click fix that replaces the error span with the suggestion. It is `null` when nothing is close.
+
+### 11.3 Name spans
+
+`FilterCompileOptions.OnFieldNameSpan` reports every field, protocol and scope-anchor span while parsing, and a trailing incomplete name as `FilterFieldNameKind.Incomplete`, even when the expression fails. Prefer `TryParse` when no stack is available yet; with a stack, `Compile` invokes the same callback before failing on unknown names. A callback that throws turns into `CallbackFailed`.
 
 ```csharp
 FilterCompileOptions options = new()
 {
-    CaretPosition = 7, // optional
     OnFieldNameSpan = (expr, start, length, kind) =>
     {
-        // Called even when the expression is incomplete/invalid
-        // e.g. "tcp.por" while typing
+        // Called even when the expression is incomplete/invalid, e.g. "tcp.por" while typing.
     },
 };
 
 Filter.TryParse("tcp.por == ", options);
-// or, when stack exists:
 Filter.Compile("tcp.por == ", stack, options); // may fail bind; spans still reported
 ```
 
-Full `TryGetCompletions` / MCP tools: **later**.
+MCP filter tools: **later**.
 
 ---
 
 ## 12. Profiling scenario names (JIT only)
 
+Every scenario has a `-nomatch` twin that measures the miss path on the same traffic.
+
 | Name | Intent |
 |------|--------|
-| `filter-simple` | Simple classic expr throughput |
-| `filter-complex` | Multi-clause classic |
-| `filter-indexed` | Lazy packets + PacketIndex prune path |
+| `filter-simple` | `udp.port == 12345` without index — classic value test per packet |
+| `filter-complex` | Compound classic expression with matches on UDP traffic |
+| `filter-indexed` | `udp.port == 12345` with candidate prune and `PacketIndex` passed in |
+| `filter-scoped` | `$udp[0] { udp.port == 12345 }` on indexed packets |
+| `filter-flank` | Stateful `from: < 100, to: >= 200` within 50 packets |
+| `filter-flank-prune` | `tcp && flank(…)` on UDP-only traffic — no candidate bitmap for stateful programs |
+| `filter-*-nomatch` | Same expressions (or a TCP twin) where nothing matches |
 
 ---
 
@@ -1245,4 +1361,9 @@ Full `TryGetCompletions` / MCP tools: **later**.
 | Flank equality only | Equality **+ any-change + relational endpoints** (`to: >= D`, …) |
 | Verbose nav / children/parent/siblings | **`$Name[i?] { Filter }`** — BFS find + brace subtree scope; **`[i]`** for occurrence; qualified names only |
 | Alias support | **Required**: `FieldAliasGroup` any-member match |
+| Completion via `CaretPosition` option (never read) | **`Filter.GetCompletions(expr, caret, stack?)`**; `CaretPosition` removed |
+| `FilterErrorKind.UnknownProtocol` (reserved, never produced) | Removed; unknown protocols report `UnknownField` (+ `Suggestion`); value 5 stays unused, other values unchanged |
+| Unbounded expression depth | Nesting ≤ 64, terms ≤ 1024 (§4) |
+| `len(string)` in UTF-16 units | `len()` is a byte length for every type (UTF-8 for strings, §3.6) |
+| `matches` on the backtracking interpreter | Linear `NonBacktracking` engine first; backtracking + timeout only where needed (§3.5) |
 | MCP filter tools | Deferred |

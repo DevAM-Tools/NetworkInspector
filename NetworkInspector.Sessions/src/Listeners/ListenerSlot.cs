@@ -91,7 +91,7 @@ internal sealed class ListenerSlot : IDisposable
     }
     /// <summary>
     /// The <see cref="ListenerInfo"/> associated with this slot.
-    /// Set by <see cref="Session.TryAddListener(ISessionListener, IFilter?, out ListenerInfo?, out SessionFailure?)"/> after construction so that
+    /// Set by <see cref="Session.TryAddListener(ISessionListener, PacketFilter?, out ListenerInfo?, out SessionFailure?)"/> after construction so that
     /// <see cref="Session.TryUnsubscribe"/> can locate the matching info without
     /// fragile name-based correlation.
     /// </summary>
@@ -120,25 +120,12 @@ internal sealed class ListenerSlot : IDisposable
     internal FilterError? FilterFault => _FilterFault;
 
     /// <summary>Installs the filter for this listener and clears any previous re-bind failure.</summary>
-    internal void SetFilter(IFilter? filter)
+    /// <param name="filter">The filter, already bound to the session stack; <see langword="null"/> means no filter.</param>
+    internal void SetFilter(PacketFilter? filter)
     {
         lock (FilterGate)
         {
-            if (filter is null)
-            {
-                _Filter = null;
-            }
-            else if (filter is PacketFilter concrete)
-            {
-                _Filter = concrete;
-            }
-            else
-            {
-                throw new ArgumentException(
-                    "ListenerSlot only accepts NetworkInspector.Filter.Filter instances.",
-                    nameof(filter));
-            }
-
+            _Filter = filter;
             _FilterFault = null;
         }
     }

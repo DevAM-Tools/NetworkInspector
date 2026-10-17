@@ -148,7 +148,20 @@ internal static class LiteralParser
             return FilterError.InvalidValue($"Unknown duration unit '{suffix}'", token.Position, token.Length);
         }
 
-        return FlankWindow.FromNanoseconds((long)(amount * nanosPerUnit));
+        // A window beyond long.MaxValue nanoseconds (about 292 years) cannot be represented. Reject it instead of
+        // relying on the saturating double→long conversion, which would turn a typo into "never expires".
+        // long.MaxValue is not exactly representable as a double (it rounds up to 2^63), so ">=" also rejects
+        // products that would round onto the boundary.
+        double nanos = amount * nanosPerUnit;
+        if (nanos >= long.MaxValue)
+        {
+            return FilterError.InvalidValue(
+                $"Window '{text}' exceeds the supported range of about 292 years",
+                token.Position,
+                token.Length);
+        }
+
+        return FlankWindow.FromNanoseconds((long)nanos);
     }
 
     #endregion

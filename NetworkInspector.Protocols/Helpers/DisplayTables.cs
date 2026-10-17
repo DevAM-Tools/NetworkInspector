@@ -535,7 +535,8 @@ internal static class DisplayTables
 
     /// <summary>
     /// Returns a display string for the LLC SAP field (DSAP or SSAP).
-    /// The low bit (I/G for DSAP, C/R for SSAP) is masked out before lookup.
+    /// The full byte is looked up: odd values name group addresses (for example 0x03, 0xFF), so the I/G or C/R bit
+    /// is part of the key.
     /// </summary>
     internal static string GetLlcSapDisplayText(byte sap) => _LlcSapTable[sap];
 
@@ -898,8 +899,10 @@ internal static class DisplayTables
         string[] table = new string[256];
         for (int i = 0; i < 256; i++)
         {
+            // An unnamed kind is its number already; print it once, as the IPv4 and IPv6 option tables do.
             string name = _TcpOptionNameTable[i];
-            table[i] = $"{name} ({i})";
+            string number = i.ToString(CultureInfo.InvariantCulture);
+            table[i] = name == number ? number : $"{name} ({i})";
         }
         return table;
     }

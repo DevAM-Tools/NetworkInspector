@@ -8,12 +8,12 @@ namespace NetworkInspector.CLI.Tests;
 internal sealed class SourceConfigTests
 {
     [Test]
-    public async Task Parse_BarePcapngPath_ReturnsPcapSourceConfig()
+    public async Task Parse_BarePcapngPath_ReturnsPcapngSourceConfig()
     {
         SourceConfig config = SourceConfig.Parse("capture.pcapng");
 
-        await Assert.That(config).IsTypeOf<PcapSourceConfig>();
-        await Assert.That(((PcapSourceConfig)config).Path).IsEqualTo("capture.pcapng");
+        await Assert.That(config).IsTypeOf<PcapngSourceConfig>();
+        await Assert.That(((PcapngSourceConfig)config).Path).IsEqualTo("capture.pcapng");
     }
 
     [Test]
@@ -33,12 +33,12 @@ internal sealed class SourceConfigTests
     }
 
     [Test]
-    public async Task Parse_TypedPcapSpec_ReturnsPcapSourceConfig()
+    public async Task Parse_TypedPcapSpec_ReturnsPcapngSourceConfig()
     {
         SourceConfig config = SourceConfig.Parse("pcap:path=file.pcap");
 
-        await Assert.That(config).IsTypeOf<PcapSourceConfig>();
-        await Assert.That(((PcapSourceConfig)config).Path).IsEqualTo("file.pcap");
+        await Assert.That(config).IsTypeOf<PcapngSourceConfig>();
+        await Assert.That(((PcapngSourceConfig)config).Path).IsEqualTo("file.pcap");
     }
 
     [Test]
@@ -77,7 +77,7 @@ internal sealed class SourceConfigTests
     [Test]
     public async Task ValidateBeforeStart_MissingPcapFile_ThrowsArgumentException()
     {
-        PcapSourceConfig config = new("definitely-missing-file-xyz.pcapng");
+        PcapngSourceConfig config = new("definitely-missing-file-xyz.pcapng");
 
         await Assert.That(() => config.ValidateBeforeStart())
             .Throws<ArgumentException>();

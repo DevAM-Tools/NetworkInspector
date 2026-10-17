@@ -5,12 +5,12 @@ namespace NetworkInspector.Sources.Tests.Pcapng;
 /// <summary>
 /// Stream-source coverage matching the file-source PCAPNG parity cases.
 /// </summary>
-internal sealed class PcapStreamSourceParityTests
+internal sealed class PcapngStreamSourceParityTests
 {
     private const ushort _UnknownDlt = 302;
 
-    private static PcapStreamSource _CreateSource(byte[] data) =>
-        PcapStreamSource.FromStream(new MemoryStream(data), "test.pcapng");
+    private static PcapngStreamSource _CreateSource(byte[] data) =>
+        PcapngStreamSource.FromStream(new MemoryStream(data), "test.pcapng");
 
     [Test]
     public async Task IfTsOffsetSeconds_ShiftsTimestampByWholeSeconds()
@@ -19,7 +19,7 @@ internal sealed class PcapStreamSourceParityTests
         writer.AddInterface(LinkType.Ethernet, nanosecondResolution: false, timestampOffsetSeconds: 1);
         writer.WriteFrame(0, 0, [0xDE, 0xAD, 0xBE, 0xEF]);
 
-        using PcapStreamSource source = _CreateSource(writer.Build());
+        using PcapngStreamSource source = _CreateSource(writer.Build());
         SourceTestFixture.InitializeAndStartSource(source);
         Frame? frame = source.NextFrame();
 
@@ -35,7 +35,7 @@ internal sealed class PcapStreamSourceParityTests
         writer.AddInterface(LinkType.Ethernet, nanosecondResolution: true);
         writer.WriteFrame(0, 1_000_000_000, captured, originalLength: 512);
 
-        using PcapStreamSource source = _CreateSource(writer.Build());
+        using PcapngStreamSource source = _CreateSource(writer.Build());
         SourceTestFixture.InitializeAndStartSource(source);
         Frame? frame = source.NextFrame();
 
@@ -45,31 +45,33 @@ internal sealed class PcapStreamSourceParityTests
     }
 
     [Test]
-    public async Task UnknownDlt_SkipsFrame_DoesNotForgeEthernet()
+    public async Task UnknownDltPassesThroughWithItsNumberAndBytes()
     {
+        byte[] payload = [0xAA, 0xBB, 0xCC, 0xDD];
         using PcapNgTestWriter writer = new();
         writer.AddInterface(LinkType.Ethernet, nanosecondResolution: true, rawLinkType: _UnknownDlt);
-        writer.WriteFrame(0, 1_000_000_000, [0xAA, 0xBB, 0xCC, 0xDD]);
+        writer.WriteFrame(0, 1_000_000_000, payload);
 
-        using PcapStreamSource source = _CreateSource(writer.Build());
-        source.ErrorTolerance = ErrorToleranceMode.Tolerant;
+        using PcapngStreamSource source = _CreateSource(writer.Build());
         List<FrameReadErrorEventArgs> errors = [];
         source.FrameSkipped += (_, e) => errors.Add(e);
-        SourceTestFixture.InitializeAndStartSource(source);
+        FrameInterfaceRegistry registry = SourceTestFixture.InitializeAndStartSource(source);
 
         Frame? frame = source.NextFrame();
 
-        await Assert.That(frame).IsNull();
-        await Assert.That(errors.Count).IsEqualTo(1);
-        await Assert.That(errors[0].Kind).IsEqualTo(FrameReadErrorKind.Other);
-        await Assert.That(source.ErrorCount).IsGreaterThanOrEqualTo(1);
+        await Assert.That(frame).IsNotNull();
+        await Assert.That(errors.Count).IsEqualTo(0);
+        await Assert.That((ushort)frame!.Value.LinkType).IsEqualTo(_UnknownDlt);
+        await Assert.That(frame.Value.Data.Span.SequenceEqual(payload)).IsTrue();
+        FrameInterfaceInfo? info = registry.Get(frame.Value.InterfaceId);
+        await Assert.That(info!.Properties[PcapInterfacePropertyKeys.RawLinkType]).IsEqualTo((object)_UnknownDlt);
     }
 
     [Test]
     public async Task FirstShb_Length29_RoundedReadDoesNotFit_ReturnsNull()
     {
         byte[] data = PcapNgBlockFactory.TruncatedShbHeader(29);
-        using PcapStreamSource source = _CreateSource(data);
+        using PcapngStreamSource source = _CreateSource(data);
         SourceTestFixture.InitializeAndStartSource(source);
 
         // 29 rounds to 32. The stream only has the 12-byte prefix, so initialization fails closed.
@@ -84,7 +86,7 @@ internal sealed class PcapStreamSourceParityTests
             PcapNgBlockFactory.ShbAndEthernetIdb(),
             PcapNgBlockFactory.EpbLengthHeader(33));
 
-        using PcapStreamSource source = _CreateSource(data);
+        using PcapngStreamSource source = _CreateSource(data);
         source.ErrorTolerance = ErrorToleranceMode.Tolerant;
         List<FrameReadErrorEventArgs> errors = [];
         source.FrameSkipped += (_, e) => errors.Add(e);
@@ -106,7 +108,7 @@ internal sealed class PcapStreamSourceParityTests
         byte[] epb = PcapNgBlockFactory.EnhancedPacket(0, payload, trailingLength: 32);
         byte[] data = PcapNgBlockFactory.Append(PcapNgBlockFactory.ShbAndEthernetIdb(), epb);
 
-        using PcapStreamSource source = _CreateSource(data);
+        using PcapngStreamSource source = _CreateSource(data);
         source.ErrorTolerance = ErrorToleranceMode.Tolerant;
         List<FrameReadErrorEventArgs> errors = [];
         source.FrameSkipped += (_, e) => errors.Add(e);
@@ -131,7 +133,7 @@ internal sealed class PcapStreamSourceParityTests
         byte[] epb = PcapNgBlockFactory.EnhancedPacket(0, payload, trailingLength: leading - (uint)shortfall);
         byte[] data = PcapNgBlockFactory.Append(PcapNgBlockFactory.ShbAndEthernetIdb(), epb);
 
-        using PcapStreamSource source = _CreateSource(data);
+        using PcapngStreamSource source = _CreateSource(data);
         SourceTestFixture.InitializeAndStartSource(source);
         Frame? frame = source.NextFrame();
 
@@ -149,7 +151,7 @@ internal sealed class PcapStreamSourceParityTests
         byte[] epb = PcapNgBlockFactory.EnhancedPacket(0, payload, trailingLength: leading + 4);
         byte[] data = PcapNgBlockFactory.Append(PcapNgBlockFactory.ShbAndEthernetIdb(), epb);
 
-        using PcapStreamSource source = _CreateSource(data);
+        using PcapngStreamSource source = _CreateSource(data);
         source.ErrorTolerance = ErrorToleranceMode.Tolerant;
         List<FrameReadErrorEventArgs> errors = [];
         source.FrameSkipped += (_, e) => errors.Add(e);
@@ -168,7 +170,7 @@ internal sealed class PcapStreamSourceParityTests
         byte[] epb = PcapNgBlockFactory.EnhancedPacket(5, [0x01, 0x02, 0x03, 0x04]);
         byte[] data = PcapNgBlockFactory.Append(PcapNgBlockFactory.ShbAndEthernetIdb(), epb);
 
-        using PcapStreamSource source = _CreateSource(data);
+        using PcapngStreamSource source = _CreateSource(data);
         source.ErrorTolerance = ErrorToleranceMode.Tolerant;
         List<FrameReadErrorEventArgs> errors = [];
         source.FrameSkipped += (_, e) => errors.Add(e);
@@ -188,7 +190,7 @@ internal sealed class PcapStreamSourceParityTests
         byte[] epb = PcapNgBlockFactory.EnhancedPacket(0, payload, capturedLength: 65);
         byte[] data = PcapNgBlockFactory.Append(PcapNgBlockFactory.ShbAndEthernetIdb(), epb);
 
-        using PcapStreamSource source = _CreateSource(data);
+        using PcapngStreamSource source = _CreateSource(data);
         source.ErrorTolerance = ErrorToleranceMode.Tolerant;
         List<FrameReadErrorEventArgs> errors = [];
         source.FrameSkipped += (_, e) => errors.Add(e);
@@ -210,7 +212,7 @@ internal sealed class PcapStreamSourceParityTests
         byte[] epb = PcapNgBlockFactory.EnhancedPacket(0, payload, options: options);
         byte[] data = PcapNgBlockFactory.Append(PcapNgBlockFactory.ShbAndEthernetIdb(), epb);
 
-        using PcapStreamSource source = _CreateSource(data);
+        using PcapngStreamSource source = _CreateSource(data);
         SourceTestFixture.InitializeAndStartSource(source);
         Frame? frame = source.NextFrame();
 
@@ -233,7 +235,7 @@ internal sealed class PcapStreamSourceParityTests
             PcapNgBlockFactory.Append(PcapNgBlockFactory.ShbAndEthernetIdb(), first),
             second);
 
-        using PcapStreamSource source = _CreateSource(data);
+        using PcapngStreamSource source = _CreateSource(data);
         SourceTestFixture.InitializeAndStartSource(source);
         Frame? frame = source.NextFrame();
         Frame? next = source.NextFrame();
@@ -251,7 +253,7 @@ internal sealed class PcapStreamSourceParityTests
         writer.AddInterface(LinkType.Ethernet, nanosecondResolution: true, name: "eth0");
         writer.WriteFrame(0, 1_000_000_000, [0x00, 0x11, 0x22, 0x33]);
 
-        using PcapStreamSource source = _CreateSource(writer.Build());
+        using PcapngStreamSource source = _CreateSource(writer.Build());
         FrameInterfaceRegistry registry = SourceTestFixture.InitializeAndStartSource(source);
         Frame? frame = source.NextFrame();
 

@@ -221,5 +221,27 @@ internal sealed class LiteralParserTests
         await Assert.That(result.Error.Kind).IsEqualTo(FilterErrorKind.SyntaxError);
     }
 
+    [Test]
+    [Arguments("99999999999999999999h")]
+    [Arguments("2562048h")]
+    [Arguments("9223372036854775807ns")]
+    public async Task ParseWindow_BeyondTheNanosecondRange_ReportsInvalidValue(string text)
+    {
+        FilterResult<FlankWindow> result = LiteralParser.ParseWindow(_Token(TokenKind.Duration, text));
+
+        await Assert.That(result.Error.Kind).IsEqualTo(FilterErrorKind.InvalidValue);
+        await Assert.That(result.Error.Message).Contains("exceeds the supported range");
+    }
+
+    [Test]
+    public async Task ParseWindow_JustBelowTheNanosecondRange_IsAccepted()
+    {
+        // 2 562 047 h ≈ 9.2234 × 10^18 ns, below long.MaxValue (9.2234 × 10^18 is the next whole hour above).
+        FilterResult<FlankWindow> result = LiteralParser.ParseWindow(_Token(TokenKind.Duration, "2562047h"));
+
+        await Assert.That(result.IsSuccess).IsTrue();
+        await Assert.That(result.Value.Nanoseconds).IsEqualTo(2_562_047L * 3_600_000_000_000L);
+    }
+
     #endregion
 }

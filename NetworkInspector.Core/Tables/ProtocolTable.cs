@@ -469,6 +469,16 @@ public readonly struct BytesKey : IEquatable<BytesKey>
 
     #endregion
 
+    #region Formatting
+
+    /// <summary>
+    /// Upper-case hexadecimal text of the key bytes without separators (<c>AB01</c> for <c>[0xAB, 0x01]</c>); empty for
+    /// an empty or default key. Used as the label of the <c>packet.choice</c> container of an ambiguous bytes dispatch.
+    /// </summary>
+    public override string ToString() => Convert.ToHexString(Span);
+
+    #endregion
+
     #region Operators
 
     /// <summary>Returns <see langword="true"/> if <paramref name="left"/> and <paramref name="right"/> contain identical bytes.</summary>

@@ -222,23 +222,48 @@ internal sealed class PcapngWriter
     /// Optional interface FCS length in bytes (<c>if_fcslen</c>). Omitted when null.
     /// Per-packet EPB flags are not written: <see cref="Frame"/> does not store them.
     /// </param>
+    /// <param name="description">Optional interface description (<c>if_description</c>). Omitted when null or empty.</param>
+    /// <param name="properties">
+    /// Interface properties of the source. Every key of the shared PCAPNG option table
+    /// (<c>PcapInterfacePropertyKeys.InterfaceOptions</c>) is written back as its IDB option; other keys are ignored.
+    /// </param>
     internal void WriteInterfaceDescription(
         LinkType linkType,
         uint snapLength,
         byte tsResolution,
         string? name,
-        byte? fcsLength = null)
+        byte? fcsLength = null,
+        string? description = null,
+        IReadOnlyDictionary<string, object>? properties = null)
     {
-        // if_tsresol is always present. if_name and if_fcslen are optional.
+        // Interface metadata the reader stored as properties goes back into the same IDB options (one shared table),
+        // so a PCAPNG -> PCAPNG copy keeps speed, filter, OS, hardware, and TX / RX speed. Encoded up front: the block
+        // length must be known before the header is written. IDBs are written once per interface, not per frame.
+        List<(ushort Code, byte[] Value)> tableOptions = _EncodeInterfaceOptions(properties);
+        byte[]? descriptionBytes = description is { Length: > 0 } && Encoding.UTF8.GetByteCount(description) <= ushort.MaxValue
+            ? Encoding.UTF8.GetBytes(description)
+            : null;
+
+        // if_tsresol is always present. if_name, if_description, if_fcslen, and the table options are optional.
         int optionsSize = PcapPadding.OptionSize(1);
         if (name is not null)
         {
             optionsSize += PcapPadding.OptionSize(Encoding.UTF8.GetByteCount(name));
         }
 
+        if (descriptionBytes is not null)
+        {
+            optionsSize += PcapPadding.OptionSize(descriptionBytes.Length);
+        }
+
         if (fcsLength.HasValue)
         {
             optionsSize += PcapPadding.OptionSize(1);
+        }
+
+        foreach ((ushort _, byte[] value) in tableOptions)
+        {
+            optionsSize += PcapPadding.OptionSize(value.Length);
         }
 
         optionsSize += PcapPadding.EndOfOptionsSize;
@@ -259,10 +284,21 @@ internal sealed class PcapngWriter
         {
             _WriteOptionToBuffer(_BlockBuffer, PcapConstants.OptIfName, name);
         }
+
+        if (descriptionBytes is not null)
+        {
+            _WriteOptionRawToBuffer(_BlockBuffer, PcapConstants.OptIfDescription, descriptionBytes);
+        }
+
         _WriteOptionRawToBuffer(_BlockBuffer, PcapConstants.OptIfTsResol, [tsResolution]);
         if (fcsLength.HasValue)
         {
             _WriteOptionRawToBuffer(_BlockBuffer, PcapConstants.OptIfFcsLen, [fcsLength.Value]);
+        }
+
+        foreach ((ushort code, byte[] value) in tableOptions)
+        {
+            _WriteOptionRawToBuffer(_BlockBuffer, code, value);
         }
 
         _WriteEndOfOptionsToBuffer(_BlockBuffer);
@@ -367,6 +403,84 @@ internal sealed class PcapngWriter
     #endregion
 
     #region Private helpers
+
+    /// <summary>
+    /// Encodes the interface properties listed in <see cref="PcapInterfacePropertyKeys.InterfaceOptions"/> as IDB option
+    /// values, in table order: 64-bit values little-endian, text as UTF-8, a filter as kind byte 0 plus the text. A value
+    /// of the wrong type, a negative number, or text longer than an option can hold (65 535 bytes) is left out.
+    /// </summary>
+    private static List<(ushort Code, byte[] Value)> _EncodeInterfaceOptions(IReadOnlyDictionary<string, object>? properties)
+    {
+        List<(ushort Code, byte[] Value)> options = [];
+        if (properties is null || properties.Count == 0)
+        {
+            return options;
+        }
+
+        foreach (PcapInterfaceOption entry in PcapInterfacePropertyKeys.InterfaceOptions)
+        {
+            if (!properties.TryGetValue(entry.Key, out object? value))
+            {
+                continue;
+            }
+
+            byte[]? encoded = entry.Kind switch
+            {
+                PcapOptionValueKind.UInt64 => _EncodeUInt64(value),
+                PcapOptionValueKind.Utf8 => _EncodeText(value, kindPrefix: false),
+                PcapOptionValueKind.Filter => _EncodeText(value, kindPrefix: true),
+                _ => null,
+            };
+
+            if (encoded is not null)
+            {
+                options.Add((entry.Code, encoded));
+            }
+        }
+
+        return options;
+    }
+
+    /// <summary>Little-endian 64-bit option value from an unsigned or non-negative integer property.</summary>
+    private static byte[]? _EncodeUInt64(object value)
+    {
+        ulong? number = value switch
+        {
+            ulong u => u,
+            long l when l >= 0 => (ulong)l,
+            uint ui => ui,
+            int i when i >= 0 => (ulong)i,
+            _ => null,
+        };
+        if (number is not { } raw)
+        {
+            return null;
+        }
+
+        byte[] bytes = new byte[8];
+        BinaryPrimitives.WriteUInt64LittleEndian(bytes, raw);
+        return bytes;
+    }
+
+    /// <summary>UTF-8 option value, optionally behind a filter-kind byte 0 (<c>if_filter</c>: libpcap filter string).</summary>
+    private static byte[]? _EncodeText(object value, bool kindPrefix)
+    {
+        if (value is not string text || text.Length == 0)
+        {
+            return null;
+        }
+
+        int prefix = kindPrefix ? 1 : 0;
+        int length = prefix + Encoding.UTF8.GetByteCount(text);
+        if (length > ushort.MaxValue)
+        {
+            return null;
+        }
+
+        byte[] bytes = new byte[length];
+        Encoding.UTF8.GetBytes(text, bytes.AsSpan(prefix));
+        return bytes;
+    }
 
     /// <summary>Writes bytes to the stream and updates <see cref="_BytesWritten"/>.</summary>
     private void _WriteToStream(ReadOnlySpan<byte> data)

@@ -31,7 +31,15 @@ internal sealed class ColumnarPacketBatch : IDisposable
     private readonly Dictionary<int, FieldColumnBag> _FieldBags = new(64);
     private readonly Dictionary<int, FieldCatalogEntry> _Catalog = new(64);
 
+    /// <summary>Estimated bytes of the packet-level lists (ids, timestamps, infos, frame bytes).</summary>
     private long _BatchEstimatedSize { get; set; }
+
+    /// <summary>
+    /// Running total of the bytes appended to all <see cref="FieldColumnBag"/>s since the last <see cref="Reset"/>.
+    /// Kept incrementally so the flush check in <see cref="AddPacket"/> is O(1) instead of O(distinct fields).
+    /// </summary>
+    private long _FieldBagsEstimatedSize { get; set; }
+
     private bool _Disposed;
 
     #endregion
@@ -90,22 +98,17 @@ internal sealed class ColumnarPacketBatch : IDisposable
     internal IReadOnlyDictionary<int, FieldColumnBag> FieldBags => _FieldBags;
 
     /// <summary>
-    /// Rough estimate of the memory consumed by this batch, in bytes. Recomputed from
-    /// per-field bag totals, which is inexpensive because the number of distinct field IDs in
-    /// any realistic protocol mix is bounded (typically ≤ 10 000 — see <see cref="FieldColumnBag"/>).
+    /// Rough estimate of the memory consumed by this batch, in bytes: the packet-level lists plus
+    /// <see cref="FieldBagsEstimatedSizeBytes"/>. O(1); both parts are running totals.
     /// </summary>
-    internal long EstimatedSizeBytes
-    {
-        get
-        {
-            long total = _BatchEstimatedSize;
-            foreach (FieldColumnBag bag in _FieldBags.Values)
-            {
-                total += bag.EstimatedSizeBytes;
-            }
-            return total;
-        }
-    }
+    internal long EstimatedSizeBytes => _BatchEstimatedSize + _FieldBagsEstimatedSize;
+
+    /// <summary>
+    /// Running total of the estimated bytes held by all <see cref="FieldBags"/>. Always equal to the sum of
+    /// every bag's <see cref="FieldColumnBag.EstimatedSizeBytes"/>; maintained incrementally by <see cref="AddPacket"/>
+    /// and reset by <see cref="Reset"/>.
+    /// </summary>
+    internal long FieldBagsEstimatedSizeBytes => _FieldBagsEstimatedSize;
 
     #endregion
 
@@ -168,12 +171,18 @@ internal sealed class ColumnarPacketBatch : IDisposable
     /// </summary>
     internal void Reset()
     {
+        // The running total must match the summed form; checked here (once per block) rather than per packet.
+        System.Diagnostics.Debug.Assert(
+            _FieldBagsEstimatedSize == _SumFieldBagSizes(),
+            "Running field-bag size total diverged from the sum of the bags.");
+
         _PacketIds.Clear();
         _Timestamps.Clear();
         _Infos.Clear();
         _FrameBytesList.Clear();
         _Topology.Clear();
         _BatchEstimatedSize = 0;
+        _FieldBagsEstimatedSize = 0;
 
         foreach (FieldColumnBag bag in _FieldBags.Values)
         {
@@ -198,6 +207,7 @@ internal sealed class ColumnarPacketBatch : IDisposable
         _FieldBags.Clear();
         _Catalog.Clear();
         _BatchEstimatedSize = 0;
+        _FieldBagsEstimatedSize = 0;
     }
 
     #endregion
@@ -219,12 +229,17 @@ internal sealed class ColumnarPacketBatch : IDisposable
             FieldValue fieldValue = field.Value;
             FieldValueData data = fieldValue.Data;
             FieldColumnBag bag = _GetOrCreateBag(field, packet.Stack, data.Type);
+
+            // Account only the bytes this row appends, so the batch total stays O(1) to read. A type mismatch
+            // throws before the bag mutates, so the delta is never applied for a rejected row.
+            long bagSizeBefore = bag.EstimatedSizeBytes;
             bag.Add(
                 packetIdValue,
                 nodeId,
                 in data,
                 FieldValueMaterializer.GetCustomRepresentation(fieldValue, Flags),
                 FieldValueMaterializer.GetCustomText(field, Flags));
+            _FieldBagsEstimatedSize += bag.EstimatedSizeBytes - bagSizeBefore;
         }
 
         if (field.HasChildren(materialize: true))
@@ -234,6 +249,18 @@ internal sealed class ColumnarPacketBatch : IDisposable
                 _EncodeField(packet, child, nodeId, ref nodeCounter);
             }
         }
+    }
+
+    /// <summary>Sums every bag's estimate; the reference form of <see cref="_FieldBagsEstimatedSize"/> for the debug check.</summary>
+    /// <returns>Sum of <see cref="FieldColumnBag.EstimatedSizeBytes"/> over all bags.</returns>
+    private long _SumFieldBagSizes()
+    {
+        long total = 0;
+        foreach (FieldColumnBag bag in _FieldBags.Values)
+        {
+            total += bag.EstimatedSizeBytes;
+        }
+        return total;
     }
 
     private FieldColumnBag _GetOrCreateBag(Field field, Stack stack, FieldType extractedType)
@@ -254,7 +281,7 @@ internal sealed class ColumnarPacketBatch : IDisposable
         string uiName = info?.UiName ?? name;
         int protocolIdValue = info?.ProtocolId.Value ?? -1;
         _Catalog[fieldIdValue] = new(
-            fieldIdValue, name, uiName, fieldType, protocolIdValue, $"field_{fieldIdValue}");
+            fieldIdValue, name, uiName, fieldType, protocolIdValue, $"field_{fieldIdValue}", info?.Description);
 
         return bag;
     }

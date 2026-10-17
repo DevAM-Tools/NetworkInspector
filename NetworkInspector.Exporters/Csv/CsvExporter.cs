@@ -145,7 +145,39 @@ public sealed class CsvExporter : IPacketListener, IErrorTolerantExporter, IDisp
         }
 
         _Finished = true;
-        _FlushAndClose();
+
+        // Shared finish sequence (same order as every exporter): final flush, buffer return, output disposal.
+        ExporterFinish.Run(
+            "CSV",
+            () => _Output?.Flush(),
+            _ReportFinishError,
+            new ExporterReleaseStep("buffer return", _Buffer.Return),
+            new ExporterReleaseStep("output disposal", _DisposeOutput));
+    }
+
+    /// <summary>Disposes the output once (closes the stream unless the caller owns it).</summary>
+    private void _DisposeOutput()
+    {
+        ExportOutput? output = _Output;
+        _Output = null;
+        output?.Dispose();
+    }
+
+    /// <summary>Error channel of the finish sequence: marks the error, counts it, and raises <see cref="ItemSkipped"/>.</summary>
+    private void _ReportFinishError(ExportErrorKind kind, string message)
+    {
+        _HasError = true;
+        if (ErrorCount < int.MaxValue)
+        {
+            ErrorCount++;
+        }
+
+        ItemSkipped?.Invoke(this, new ExportErrorEventArgs
+        {
+            ItemIndex = PacketCount,
+            Kind = kind,
+            Message = message,
+        });
     }
 
     /// <inheritdoc/>
@@ -503,67 +535,6 @@ public sealed class CsvExporter : IPacketListener, IErrorTolerantExporter, IDisp
         }
 
         _Buffer.Write("\""u8);
-    }
-
-    /// <summary>Flushes remaining data and closes the output.</summary>
-    private void _FlushAndClose()
-    {
-        // Always return the rented buffer, even on flush/dispose failure.
-        try
-        {
-            if (_Output is null)
-            {
-                return;
-            }
-
-            try
-            {
-                _Output.Flush();
-            }
-            catch (Exception ex)
-            {
-                // Surface the flush failure: setting _HasError is enough to make
-                // IsFinished/HasErrors observable, and the caller's ItemSkipped
-                // handler is invoked with an IO/Serialization classification so
-                // it is never lost silently.
-                _HasError = true;
-                if (ErrorCount < int.MaxValue) ErrorCount++;
-                ItemSkipped?.Invoke(this, new ExportErrorEventArgs
-                {
-                    ItemIndex = PacketCount,
-                    Kind = ex is IOException ? ExportErrorKind.IoError : ExportErrorKind.SerializationError,
-                    Message = $"CSV final flush failed: {ex.Message}",
-                });
-            }
-
-            // Surface disposal failures via the error channel rather than discarding them silently.
-            Exception? disposalError = null;
-            try
-            {
-                _Output.Dispose();
-            }
-            catch (Exception ex)
-            {
-                disposalError = ex;
-            }
-            _Output = null;
-            if (disposalError is not null)
-            {
-                _HasError = true;
-                if (ErrorCount < int.MaxValue) ErrorCount++;
-                ItemSkipped?.Invoke(this, new ExportErrorEventArgs
-                {
-                    ItemIndex = PacketCount,
-                    Kind = disposalError is IOException ? ExportErrorKind.IoError : ExportErrorKind.SerializationError,
-                    Message = $"Output disposal failed: {disposalError.Message}",
-                });
-                throw new AggregateException("Exporter cleanup failed.", disposalError);
-            }
-        }
-        finally
-        {
-            _Buffer.Return();
-        }
     }
 
     /// <summary>Raises the <see cref="ItemSkipped"/> event.</summary>

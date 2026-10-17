@@ -8,7 +8,7 @@ namespace NetworkInspector.Core.Settings;
 /// Provides thread-safe registration, access, persistence, and change notification.
 /// Supports JSON-based persistence via <see cref="Load"/> and <see cref="Save"/>.
 /// When no storage path is set, both <see cref="Load"/> and <see cref="Save"/>
-/// throw <see cref="PersistenceSettingsException"/>.
+/// throw <see cref="PersistenceSettingsException"/>; file-system failures, including access denials, throw it as well.
 /// <para>
 /// Uses <see cref="ReaderWriterLockSlim"/> to allow concurrent readers while
 /// serializing writers (registration, persistence, bulk mutations).
@@ -312,8 +312,10 @@ public sealed class SettingsManager : IDisposable
             {
                 try
                 {
-                    setting.SetPendingValue(preloaded);
-                    setting.Apply();
+                    // Same path as an orphaned persisted value: validate, then set current and pending. Unlike
+                    // SetPendingValue + Apply it does not refuse while Load runs, so registering during Load cannot
+                    // throw after the preload was consumed and the group was created.
+                    setting.ApplyFromPersistence(preloaded);
                     loadResult = SettingLoadResult.Success;
                 }
                 catch (SettingsException)
@@ -856,7 +858,7 @@ public sealed class SettingsManager : IDisposable
     /// Each entry describes one skipped setting or skipped group file.
     /// </returns>
     /// <exception cref="PersistenceSettingsException">
-    /// Thrown when no storage path is configured or on I/O or JSON errors.
+    /// Thrown when no storage path is configured or on I/O, access, or JSON errors.
     /// </exception>
     /// <exception cref="InvalidOperationException">
     /// Thrown when another <see cref="Load"/> is already in progress.
@@ -887,6 +889,10 @@ public sealed class SettingsManager : IDisposable
         catch (IOException ex)
         {
             throw PersistenceSettingsException.ForIo(ex);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            throw PersistenceSettingsException.ForAccessDenied(ex);
         }
         finally
         {
@@ -923,25 +929,37 @@ public sealed class SettingsManager : IDisposable
                 return;
             }
 
+            // Size cap on the reported length first, then on the bytes actually read: the file can grow between the
+            // length check and the parse, and a non-regular file reports no useful length.
             JsonNode? root;
             using (FileStream stream = SettingsFileAccess.OpenSharedRead(filePath))
             {
                 if (MaxConfigFileBytes > 0 && stream.Length > MaxConfigFileBytes)
                 {
-                    warnings.Add(new SettingsLoadWarning(
-                        SettingsLoadWarningKind.InvalidGroupFileShape,
-                        groupName,
-                        string.Empty,
-                        string.Create(
-                            CultureInfo.InvariantCulture,
-                            $"Settings file '{fileLabel}' exceeds {MaxConfigFileBytes} bytes. The file is skipped.")));
+                    warnings.Add(_OversizedGroupFileWarning(groupName, fileLabel));
                     return;
                 }
 
-                root = JsonNode.Parse(
-                    stream,
-                    nodeOptions: null,
-                    documentOptions: new JsonDocumentOptions { MaxDepth = EffectiveJsonMaxDepth(MaxJsonDepth) });
+                using BoundedReadStream? bounded = MaxConfigFileBytes > 0 ? new BoundedReadStream(stream, MaxConfigFileBytes) : null;
+                try
+                {
+                    root = JsonNode.Parse(
+                        bounded ?? (Stream)stream,
+                        nodeOptions: null,
+                        documentOptions: new JsonDocumentOptions { MaxDepth = EffectiveJsonMaxDepth(MaxJsonDepth) });
+                }
+                catch (JsonException) when (bounded is { Exceeded: true })
+                {
+                    // Cut at the cap: report the size, not the syntax error the cut produced.
+                    warnings.Add(_OversizedGroupFileWarning(groupName, fileLabel));
+                    return;
+                }
+
+                if (bounded is { Exceeded: true })
+                {
+                    warnings.Add(_OversizedGroupFileWarning(groupName, fileLabel));
+                    return;
+                }
             }
             if (root is not JsonObject obj)
             {
@@ -952,6 +970,22 @@ public sealed class SettingsManager : IDisposable
                     string.Empty,
                     $"Settings file '{fileLabel}' does not contain a JSON object at the root. " +
                     "Expected an object with setting name/value pairs. The file is skipped."));
+                return;
+            }
+
+            // Enumerating a JsonObject decodes and indexes every property name first. A repeated or undecodable name
+            // makes the file invalid JSON for settings: skip it like any other syntax error instead of aborting Load.
+            try
+            {
+                _ = obj.Count;
+            }
+            catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
+            {
+                warnings.Add(new SettingsLoadWarning(
+                    SettingsLoadWarningKind.InvalidGroupFileSyntax,
+                    groupName,
+                    string.Empty,
+                    $"Settings file '{fileLabel}' contains invalid JSON: {ex.Message} The file is skipped."));
                 return;
             }
 
@@ -1054,7 +1088,21 @@ public sealed class SettingsManager : IDisposable
         {
             throw PersistenceSettingsException.ForIo(ex);
         }
+        catch (UnauthorizedAccessException ex)
+        {
+            throw PersistenceSettingsException.ForAccessDenied(ex);
+        }
     }
+
+    /// <summary>Warning for a group file above <see cref="MaxConfigFileBytes"/> (reported length or bytes read).</summary>
+    private SettingsLoadWarning _OversizedGroupFileWarning(string groupName, string fileLabel) =>
+        new(
+            SettingsLoadWarningKind.InvalidGroupFileShape,
+            groupName,
+            string.Empty,
+            string.Create(
+                CultureInfo.InvariantCulture,
+                $"Settings file '{fileLabel}' exceeds {MaxConfigFileBytes} bytes. The file is skipped."));
 
     /// <summary>
     /// Saves all settings to JSON files in the storage path.
@@ -1062,7 +1110,7 @@ public sealed class SettingsManager : IDisposable
     /// Stale cleanup deletes only group files listed in the previous save manifest,
     /// never unrelated JSON in <see cref="StoragePath"/>.
     /// </summary>
-    /// <exception cref="PersistenceSettingsException">Thrown when no storage path is configured or on I/O/JSON errors.</exception>
+    /// <exception cref="PersistenceSettingsException">Thrown when no storage path is configured or on I/O, access, or JSON errors.</exception>
     public void Save()
     {
         if (StoragePath is null)
@@ -1139,6 +1187,10 @@ public sealed class SettingsManager : IDisposable
         {
             throw PersistenceSettingsException.ForIo(ex);
         }
+        catch (UnauthorizedAccessException ex)
+        {
+            throw PersistenceSettingsException.ForAccessDenied(ex);
+        }
     }
 
     /// <summary>
@@ -1161,7 +1213,9 @@ public sealed class SettingsManager : IDisposable
                 return owned;
             }
 
-            using StreamReader reader = new(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+            // The cap also holds for the bytes actually read; one overlong line cannot exhaust memory.
+            using BoundedReadStream? bounded = MaxConfigFileBytes > 0 ? new BoundedReadStream(stream, MaxConfigFileBytes) : null;
+            using StreamReader reader = new(bounded ?? (Stream)stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
             string? line;
             while ((line = reader.ReadLine()) is not null)
             {
@@ -1180,6 +1234,12 @@ public sealed class SettingsManager : IDisposable
                 }
 
                 owned.Add(fileName);
+            }
+
+            // A manifest that grew past the cap while it was read counts as oversized: nothing is deleted.
+            if (bounded is { Exceeded: true })
+            {
+                owned.Clear();
             }
         }
         catch (IOException)
@@ -1276,6 +1336,11 @@ public sealed class SettingsManager : IDisposable
         catch (FormatException)
         {
             // JSON value cannot be converted to the target number/string format.
+            return (null, SettingLoadResult.DeserializationError, null);
+        }
+        catch (ArgumentException)
+        {
+            // An enum object repeats a property name: malformed content, not an exception for Load or registration.
             return (null, SettingLoadResult.DeserializationError, null);
         }
     }

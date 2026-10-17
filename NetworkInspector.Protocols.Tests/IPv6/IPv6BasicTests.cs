@@ -268,6 +268,84 @@ internal sealed class IPv6BasicTests
         }
     }
 
+    [Test]
+    public async Task Parse_IPv6_Pad1AndPadN_TextsHaveNoUnderscorePrefix()
+    {
+        // Hop-by-Hop (nxt UDP, len 0): Pad1, then PadN with 3 data bytes (5 bytes) fill the 6 option bytes.
+        byte[] frame = _BuildIPv6WithExtension(0, [17, 0, 0x00, 0x01, 0x03, 0, 0, 0]);
+        (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
+        using (stack)
+        {
+            await ProtocolTestHelper.AssertDisplayText(stack, packet, "ipv6.opt.pad1", "Pad1").ConfigureAwait(false);
+            await ProtocolTestHelper.AssertDisplayText(stack, packet, "ipv6.opt.padn", "PadN (5 bytes)").ConfigureAwait(false);
+        }
+    }
+
+    [Test]
+    public async Task Parse_IPv6_WithExtensionHeaders_ContainerRepresentationNamesStoredLength()
+    {
+        byte[] withChain = _BuildIPv6WithExtension(0, [17, 0, 0x01, 0x04, 0, 0, 0, 0]);
+        byte[] plain = _BuildIPv6UdpFrame();
+
+        await Assert.That(_ContainerRepresentation(withChain)).IsEqualTo("48 bytes");
+        await Assert.That(_ContainerRepresentation(plain)).IsEqualTo("40 bytes");
+    }
+
+    [Test]
+    public async Task Parse_IPv6_AhWithPayloadLengthZero_IsMalformed()
+    {
+        // AH (nxt UDP, payload length 0 = 8 bytes): no room for the sequence number, so the header is not decoded.
+        byte[] frame = _BuildIPv6WithExtension(51, [17, 0, 0, 0, 0x12, 0x34, 0x56, 0x78, 0xAA, 0xBB, 0xCC, 0xDD]);
+        (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
+        using (stack)
+        {
+            await ProtocolTestHelper.AssertFieldExists(stack, packet, "ipv6.src").ConfigureAwait(false);
+            await ProtocolTestHelper.AssertFieldNotPresent(stack, packet, "ipv6.ah.seq").ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>The custom representation of the materialized <c>ipv6</c> container value.</summary>
+    private static string _ContainerRepresentation(byte[] frame)
+    {
+        (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
+        using (stack)
+        {
+            FieldId containerId = stack.GetFieldId("ipv6")!.Value;
+            return packet.TryGetFieldValue(containerId, out FieldValue value, materialize: true)
+                ? (string)value.CustomRepresentation
+                : "<missing>";
+        }
+    }
+
+    /// <summary>
+    /// Ethernet + IPv6 (next header <paramref name="firstNextHeader"/>) + <paramref name="extension"/> + UDP (8) +
+    /// 4 payload bytes. The extension carries its own next-header byte.
+    /// </summary>
+    private static byte[] _BuildIPv6WithExtension(byte firstNextHeader, byte[] extension)
+    {
+        byte[] frame = new byte[14 + 40 + extension.Length + 8 + 4];
+        Span<byte> s = frame;
+        _ = _DstMac.ToBytes(s);
+        _ = _SrcMac.ToBytes(s[6..]);
+        BinaryPrimitives.WriteUInt16BigEndian(s[12..], 0x86DD);
+
+        int ipOff = 14;
+        s[ipOff] = 0x60;
+        BinaryPrimitives.WriteUInt16BigEndian(s[(ipOff + 4)..], (ushort)(extension.Length + 12));
+        s[ipOff + 6] = firstNextHeader;
+        s[ipOff + 7] = 64;
+        _SrcAddrBytes.CopyTo(s[(ipOff + 8)..]);
+        _DstAddrBytes.CopyTo(s[(ipOff + 24)..]);
+        extension.CopyTo(s[(ipOff + 40)..]);
+
+        int udpOff = ipOff + 40 + extension.Length;
+        BinaryPrimitives.WriteUInt16BigEndian(s[udpOff..], 1234);
+        BinaryPrimitives.WriteUInt16BigEndian(s[(udpOff + 2)..], 5678);
+        BinaryPrimitives.WriteUInt16BigEndian(s[(udpOff + 4)..], 12);
+        new byte[] { 0xDE, 0xAD, 0xBE, 0xEF }.CopyTo(s[(udpOff + 8)..]);
+        return frame;
+    }
+
     /// <summary>
     /// Manually builds an Ethernet + IPv6 frame with a minimal Hop-by-Hop Options header
     /// (PadN option) followed by a UDP payload.

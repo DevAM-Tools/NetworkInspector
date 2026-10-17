@@ -12,7 +12,7 @@ dataset of Parquet files, built on the same `ColumnarPacketBatch` accumulator sh
 columnar format and the DuckDB exporter.
 
 **Overwrite semantics:** exporting into an existing directory clears prior `packets` /
-`topology` / `catalog` parquet files and all `fields/*.parquet` artifacts before writing, so
+`topology` / `catalog` / `protocols` parquet files and all `fields/*.parquet` artifacts before writing, so
 re-exports do not leave orphan field files from a previous FieldId set.
 
 ## Why Use It
@@ -28,11 +28,15 @@ re-exports do not leave orphan field files from a previous FieldId set.
 | --- | --- |
 | `packets.parquet` | One row per packet: `packet_id` (INT32 / Core `PacketId`), `timestamp_ns`, optional `info` / `frame_bytes` |
 | `topology.parquet` | One row per field-tree node: `packet_id`, `node_id`, `field_id`, `parent_node_id` |
-| `catalog.parquet` | One row per distinct field ID observed: `field_id`, `name`, `ui_name`, `field_type`, `protocol_id`, `table_name` |
+| `catalog.parquet` | One row per distinct field ID observed: `field_id`, `name`, `ui_name`, `field_type`, `protocol_id`, `table_name`, `description` (nullable) |
+| `protocols.parquet` | One row per protocol registered in the parsing stack: `protocol_id`, `name`, `ui_name` |
 | `fields/field_{id}.parquet` | One row per field occurrence: `packet_id`, `node_id`, type-specific `value`, optional `custom_repr` / `custom_text` |
 
 Each table file is written incrementally: one row group per flushed batch, closed once in
-`OnFinish()`. The catalog file is written once at the end.
+`OnFinish()`. The catalog file is written once at the end. The protocols file is written once at
+the start (first `OnPacket()`), because the protocol set is fixed by the stack. Join
+`catalog.protocol_id` to `protocols.protocol_id` to label fields by protocol without the dissector
+assemblies. New catalog columns are only ever appended, so positional readers stay valid.
 
 ## Quick Start
 
@@ -79,9 +83,11 @@ JOIN 'packets_dataset/fields/field_42.parquet' f USING (packet_id);
 - If no packets are ever added, no directory or files are created.
 - `FieldType.U64` is stored as a native Parquet unsigned 64-bit column (`DataField<ulong>` /
   `UINT_64` logical type).
-- `Parquet.Net`'s low-level writer API is async-only; this exporter blocks on it synchronously
-  (`GetAwaiter().GetResult()`), which is safe here because each write targets a dedicated
-  `FileStream` with no captured synchronization context.
+- Do not run the Parquet exporter on a thread with a `SynchronizationContext` (UI thread); the
+  writer blocks on Parquet.Net's async API. `Parquet.Net` has no synchronous writer and the
+  `IPacketListener` contract is synchronous, so the exporter waits with
+  `ConfigureAwait(false).GetAwaiter().GetResult()` in one place (an approved exception to the
+  "no `.Result` / `.Wait()`" rule).
 
 ## Links
 

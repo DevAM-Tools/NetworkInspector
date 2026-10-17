@@ -182,7 +182,8 @@ internal static class CandidateBitmapBuilder
                 continue;
             }
 
-            accumulated.OrWith(fieldBitmap.ToBitmap());
+            // Only the first member is cloned; later members are OR-ed straight from the view.
+            accumulated.OrWith(fieldBitmap);
         }
 
         candidates = accumulated;

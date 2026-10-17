@@ -981,7 +981,7 @@ public readonly ref struct MutField
             return stack.CallProtocol(protocols[0], in this, data, in dispatchedContext);
         }
 
-        return _DispatchMultipleProtocols(protocols, data, in dispatchedContext, table.Name, key.ToString() ?? string.Empty);
+        return _DispatchMultipleProtocols(protocols, data, in dispatchedContext, table.Name, key.ToString());
     }
 
     /// <summary>

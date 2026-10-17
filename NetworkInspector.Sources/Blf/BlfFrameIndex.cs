@@ -10,12 +10,12 @@ namespace NetworkInspector.Sources.Blf;
 ///
 /// Layout (32 bytes, sequential):
 ///   ContainerOffset  (8B) — file offset of the container holding this object
-///   ObjectOffset     (4B) — byte offset within the decompressed container
+///   ObjectOffset     (4B) — byte offset within the decompressed container (-1 = raw object)
 ///   ObjectLength     (4B) — total object byte length in the container
 ///   ObjectType       (4B) — BLF object type (CAN, Ethernet, etc.)
 ///   Channel          (2B) — BLF channel number
-///   HeaderSize       (2B) — total header size (block + log object)
-///   TimestampNanos   (8B) — resolved timestamp in nanoseconds
+///   (padding)        (2B) — alignment of TimestampNanos; carries no data
+///   TimestampNanos   (8B) — absolute timestamp in nanoseconds since the Unix epoch
 /// </summary>
 [StructLayout(LayoutKind.Sequential)]
 internal struct BlfFrameEntry
@@ -39,10 +39,7 @@ internal struct BlfFrameEntry
     /// <summary>Channel number.</summary>
     internal ushort Channel;
 
-    /// <summary>Total header size (block header + log object header).</summary>
-    internal ushort HeaderSize;
-
-    /// <summary>Resolved timestamp in nanoseconds (relative or absolute).</summary>
+    /// <summary>Absolute timestamp in nanoseconds since the Unix epoch (file start offset plus object time, saturated).</summary>
     internal long TimestampNanos;
 }
 
@@ -69,16 +66,6 @@ internal sealed class BlfFrameIndex
     #region Fields
 
     private readonly ChunkedGrowOnlyStore<BlfFrameEntry> _Entries = new(chunkShift: 12);
-
-    #endregion
-
-    #region Constructors
-
-    /// <summary>Creates a new BLF frame index. <paramref name="initialCapacity"/> is ignored; chunks grow on demand.</summary>
-    internal BlfFrameIndex(int initialCapacity = 1024)
-    {
-        _ = initialCapacity;
-    }
 
     #endregion
 

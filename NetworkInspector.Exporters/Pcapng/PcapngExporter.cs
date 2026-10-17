@@ -143,7 +143,7 @@ public sealed class PcapngExporter : IFrameListener, IErrorTolerantExporter, IDi
         }
 
         // Lazy initialization: open file and write SHB on first frame
-        if (!_Started && !_Start())
+        if (!_Started && !_Start(frame))
         {
             return false;
         }
@@ -160,70 +160,60 @@ public sealed class PcapngExporter : IFrameListener, IErrorTolerantExporter, IDi
         }
         _Finished = true;
 
-        // try/finally guarantees the underlying output is disposed even if
-        // lazy init or final flush throws — prevents resource leaks on
-        // partial-failure shutdown. cleanupErrors is declared here so the
-        // throw can occur after the finally block — CA2219 prohibits throwing inside finally.
-        List<Exception> cleanupErrors = [];
-        try
-        {
-            // If never started and output target is set, trigger lazy init
-            // so that even empty exports produce a valid SHB file.
-            // Skip if an error already occurred — do not write a partial file.
-            if (!_Started && !_HasError && _Output is not null)
-            {
-                _Start();
-            }
+        // Shared finish sequence: finalize, then release every resource even when a step fails.
+        ExporterFinish.Run(
+            "PCAPNG",
+            _FinalizeFile,
+            _ReportFinishError,
+            new ExporterReleaseStep("writer buffer return", _ReturnWriterBuffers),
+            new ExporterReleaseStep("output disposal", _DisposeOutput));
+    }
 
-            _Writer?.Flush();
-        }
-        catch (Exception ex)
+    /// <summary>
+    /// Flushes the writer. Starts it first when no frame ever arrived, so an empty export is still a valid file with an
+    /// SHB; skipped after an error so no partial file is started.
+    /// </summary>
+    private void _FinalizeFile()
+    {
+        if (!_Started && !_HasError && _Output is not null)
         {
-            _HasError = true;
-            if (ErrorCount < int.MaxValue)
-            {
-                ErrorCount++;
-            }
-            ItemSkipped?.Invoke(this, new ExportErrorEventArgs
-            {
-                ItemIndex = FrameCount,
-                Kind = ExportErrorKind.IoError,
-                Message = $"PCAPNG finalization failed: {ex.Message}",
-            });
+            _Start(null);
         }
-        finally
-        {
-            _Writer?.ReturnBuffers();
-            _Writer = null;
 
-            // Surface disposal failures via the error channel rather than discarding them silently.
-            // cleanupErrors is declared before the try so the throw can occur after
-            // the finally block — CA2219 prohibits throwing from within a finally clause.
-            try
-            {
-                _Output?.Dispose();
-            }
-            catch (Exception ex)
-            {
-                cleanupErrors.Add(ex);
-                _HasError = true;
-                if (ErrorCount < int.MaxValue)
-                {
-                    ErrorCount++;
-                }
-                ItemSkipped?.Invoke(this, new ExportErrorEventArgs
-                {
-                    ItemIndex = FrameCount,
-                    Kind = ExportErrorKind.IoError,
-                    Message = $"PCAPNG output disposal failed: {ex.Message}",
-                });
-            }
-            _Output = null;
-        }
-        if (cleanupErrors.Count > 0)
+        _Writer?.Flush();
+    }
+
+    /// <summary>Returns the writer's pooled buffers and drops the writer.</summary>
+    private void _ReturnWriterBuffers()
+    {
+        PcapngWriter? writer = _Writer;
+        _Writer = null;
+        writer?.ReturnBuffers();
+    }
+
+    /// <summary>Disposes the output once (closes the stream unless the caller owns it).</summary>
+    private void _DisposeOutput()
+    {
+        ExportOutput? output = _Output;
+        _Output = null;
+        output?.Dispose();
+    }
+
+    /// <summary>Error channel of the finish sequence: marks the error, counts it, and raises <see cref="ItemSkipped"/>.</summary>
+    private void _ReportFinishError(ExportErrorKind kind, string message)
+    {
+        _HasError = true;
+        if (ErrorCount < int.MaxValue)
         {
-            throw new AggregateException("PCAPNG exporter cleanup failed.", cleanupErrors);
+            ErrorCount++;
         }
+
+        ItemSkipped?.Invoke(this, new ExportErrorEventArgs
+        {
+            ItemIndex = FrameCount,
+            Kind = kind,
+            Message = message,
+        });
     }
 
     /// <inheritdoc/>
@@ -233,9 +223,14 @@ public sealed class PcapngExporter : IFrameListener, IErrorTolerantExporter, IDi
     // Private implementation
     // ========================================================================
 
-    /// <summary>Lazily initializes output and writes the SHB.</summary>
+    /// <summary>
+    /// Lazily initializes output and writes the SHB. SHB options set on the builder win; options it leaves unset come
+    /// from the <c>capture.*</c> properties of the first frame's interface (the SHB of the source capture), so a
+    /// PCAPNG -> PCAPNG copy keeps hardware, OS, and capture application.
+    /// </summary>
+    /// <param name="firstFrame">The first frame, or null for an empty export.</param>
     /// <returns>True if initialization succeeded.</returns>
-    private bool _Start()
+    private bool _Start(Frame? firstFrame)
     {
         if (_Output is null)
         {
@@ -257,7 +252,7 @@ public sealed class PcapngExporter : IFrameListener, IErrorTolerantExporter, IDi
             // SHB write may throw on a broken stream — surface as an export error
             // through the standard pipeline rather than escaping to the caller.
             _Writer = new PcapngWriter(underlyingStream);
-            _Writer.WriteSectionHeader(_ShbOptions);
+            _Writer.WriteSectionHeader(_EffectiveShbOptions(firstFrame));
         }
         catch (Exception ex)
         {
@@ -318,12 +313,18 @@ public sealed class PcapngExporter : IFrameListener, IErrorTolerantExporter, IDi
         // Preserve the registry display name as IDB if_name so NI→PCAPNG→NI keeps eth0 etc.
         // if_fcslen is written only when the property is a byte. A missing or non-byte
         // value omits the option; it does not fail the frame.
+        // Description and the reader's interface properties (speed, filter, OS, hardware, TX / RX speed) travel back
+        // into the IDB through the option table shared with the reader.
         string? idbName = null;
+        string? idbDescription = null;
+        IReadOnlyDictionary<string, object>? idbProperties = null;
         byte? fcsLength = null;
         if (needsIdb && interfaceId != FrameInterfaceId.Invalid)
         {
             FrameInterfaceInfo? ifInfo = frame.Registry.Get(frame.InterfaceId);
             idbName = ifInfo?.UiName;
+            idbDescription = ifInfo?.Description;
+            idbProperties = ifInfo?.Properties;
             if (ifInfo is not null
                 && ifInfo.Properties.TryGetValue(PcapInterfacePropertyKeys.FcsLength, out object? fcsValue)
                 && fcsValue is byte fcsByte)
@@ -337,7 +338,8 @@ public sealed class PcapngExporter : IFrameListener, IErrorTolerantExporter, IDi
         {
             if (needsIdb)
             {
-                _Writer!.WriteInterfaceDescription(linkType, _SnapLength, _TsResolution, idbName, fcsLength);
+                _Writer!.WriteInterfaceDescription(
+                    linkType, _SnapLength, _TsResolution, idbName, fcsLength, idbDescription, idbProperties);
                 // IDB written successfully — now commit the interface mapping so that
                 // subsequent frames can reuse the same ID.  Doing this after the write
                 // means a write failure cannot leave a dangling dict entry.
@@ -361,6 +363,43 @@ public sealed class PcapngExporter : IFrameListener, IErrorTolerantExporter, IDi
         FrameCount++;
         return true;
     }
+
+    /// <summary>
+    /// SHB options for this file: the builder's options, with every option it leaves unset taken from the
+    /// <c>capture.hardware</c> / <c>capture.os</c> / <c>capture.application</c> properties of the first frame's interface.
+    /// </summary>
+    private ShbOptions? _EffectiveShbOptions(Frame? firstFrame)
+    {
+        FrameInterfaceInfo? info = firstFrame is { HasInterface: true } frame
+            ? frame.Registry.Get(frame.InterfaceId)
+            : null;
+        if (info is null)
+        {
+            return _ShbOptions;
+        }
+
+        string? hardware = _ShbOptions?.Hardware ?? _TextProperty(info, PcapInterfacePropertyKeys.CaptureHardware);
+        string? os = _ShbOptions?.Os ?? _TextProperty(info, PcapInterfacePropertyKeys.CaptureOs);
+        string? application = _ShbOptions?.Application ?? _TextProperty(info, PcapInterfacePropertyKeys.CaptureApplication);
+        if (hardware is null && os is null && application is null)
+        {
+            return _ShbOptions;
+        }
+
+        return new ShbOptions
+        {
+            Hardware = hardware,
+            Os = os,
+            Application = application,
+            Comment = _ShbOptions?.Comment,
+        };
+    }
+
+    /// <summary>A non-empty string property, or null.</summary>
+    private static string? _TextProperty(FrameInterfaceInfo info, string key) =>
+        info.Properties.TryGetValue(key, out object? value) && value is string { Length: > 0 } text
+            ? text
+            : null;
 
     /// <summary>
     /// Handles a skipped frame: increments counters, fires the event in Tolerant mode,

@@ -196,6 +196,14 @@ internal static class TestHarness
     }
 
     /// <summary>
+    /// Returns the session's private parse lock. A test holds it to pin a source or restart thread at a
+    /// known point; the monitor must be entered and exited on the same thread, without an <c>await</c> between.
+    /// </summary>
+    internal static object ParseMutexOf(Session session) =>
+        typeof(Session).GetField("_ParseMutex", BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(session)
+        ?? throw new InvalidOperationException("Session no longer has a _ParseMutex field.");
+
+    /// <summary>
     /// Computes the one's-complement IPv4 header checksum.
     /// </summary>
     private static ushort _CalculateIpv4Checksum(ReadOnlySpan<byte> header)

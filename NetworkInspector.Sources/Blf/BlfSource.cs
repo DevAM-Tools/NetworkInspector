@@ -55,8 +55,24 @@ public sealed partial class BlfSource : IRandomAccessFrameSource, IErrorTolerant
     /// </summary>
     private readonly Lock _InterfaceLock = new();
 
-    /// <summary>Discovered channel names from AppText objects (busType + channel → name).</summary>
-    private IReadOnlyDictionary<(byte BusType, byte Channel), string>? _ChannelNames;
+    /// <summary>
+    /// Channel names from AppText objects (busType + channel → name) once the scan has finished. While a lazy scan
+    /// runs, the scanner's published snapshot is read instead (<see cref="_CurrentChannelNames"/>).
+    /// </summary>
+    private volatile IReadOnlyDictionary<(byte BusType, byte Channel), string>? _ChannelNames;
+
+    /// <summary>
+    /// The container most recently decoded by the scanner, held strongly so sequential <see cref="NextFrame"/> never
+    /// depends on the cache budget and never inflates a container twice. Written and read on the NextFrame thread only;
+    /// <see cref="FrameById"/> does not read it (it uses the cache).
+    /// </summary>
+    private long _SequentialContainerOffset = -1;
+
+    /// <summary>Decompressed bytes of the container at <see cref="_SequentialContainerOffset"/>.</summary>
+    private byte[]? _SequentialContainer;
+
+    /// <summary>Frame slab allocator of the sequential path; null when <see cref="BlfSourceOptions.FrameSlabSize"/> is 0.</summary>
+    private FrameSlabAllocator? _Slabs;
 
     // Sequential read state
     private int _NextFrameIndex;
@@ -79,6 +95,27 @@ public sealed partial class BlfSource : IRandomAccessFrameSource, IErrorTolerant
     /// <summary>Tracks scanner tail-truncation events already reported via HandleSkip.</summary>
     private long _LastReportedTruncatedObjectCount;
 
+    /// <summary>Tracks scanner unparsable frame objects already reported via HandleSkip.</summary>
+    private long _LastReportedUnparsableObjectCount;
+
+    /// <summary>Tracks scanner corrupt inner objects already reported via HandleSkip.</summary>
+    private long _LastReportedCorruptedInnerObjectCount;
+
+    /// <summary>Tracks scanner objects cut by end of file already reported via HandleSkip.</summary>
+    private long _LastReportedTruncatedFileObjectCount;
+
+    /// <summary>
+    /// The scanner's failure marks in file order (<see cref="BlfIncrementalScanner.Marks"/>), each with the number of frames
+    /// indexed before it; <see cref="NextFrame"/> replays them before the frame they precede
+    /// (<see cref="_ReplayPendingDiagnosticsBefore"/>). Set once after a full scan, re-read after every lazy scan step
+    /// (the list only grows; the cursor stays valid). Null when nothing failed or everything was replayed so far.
+    /// NextFrame thread only.
+    /// </summary>
+    private List<BlfScanDiagnosticsMark>? _PendingScanDiagnostics;
+
+    /// <summary>Next mark of <see cref="_PendingScanDiagnostics"/> to replay. NextFrame thread only.</summary>
+    private int _PendingScanDiagnosticsCursor;
+
     /// <summary>
     /// Guards the lifetime of the mmap-backed <see cref="_Backend"/> against a Dispose/read race.
     /// <see cref="FrameById"/> acquires the read lock for the duration of <see cref="_TryBuildFrame"/>
@@ -94,6 +131,12 @@ public sealed partial class BlfSource : IRandomAccessFrameSource, IErrorTolerant
 
     /// <summary>Counts silent random-access failures (decompression errors, OOM) that would otherwise be invisible to callers.</summary>
     private long _RandomAccessFailureCount;
+
+    /// <summary>
+    /// Containers this source inflated itself (sequential fallback and random access), not counting the scanner.
+    /// Written with <see cref="Interlocked.Increment(ref long)"/> from any reading thread.
+    /// </summary>
+    private long _SourceDecompressionCount;
 
     /// <summary>
     /// Tracks containers that are currently being decompressed by exactly one "winner" thread.
@@ -127,9 +170,17 @@ public sealed partial class BlfSource : IRandomAccessFrameSource, IErrorTolerant
         _Options = options;
         UiName = uiName;
         ErrorTolerance = options.ErrorTolerance;
-        _ContainerCache = TwoQueueCache.Create2Q<long, byte[]>(
-            options.CacheBudget,
-            ContainerWeigher.Instance);
+
+        // A1in gets the whole budget: with the standard 25 % share a single container larger than a quarter of the
+        // budget is evicted by its own insertion. Sequential reads do not depend on this cache at all (they hold the
+        // current container themselves); it serves FrameById and the first frames after a full scan.
+        _ContainerCache = options.CacheBudget == 0
+            ? TwoQueueCache.Create2Q<long, byte[]>(0, ContainerWeigher.Instance)
+            : TwoQueueCache.Create2QCustom<long, byte[]>(
+                options.CacheBudget,
+                a1InMaxWeight: options.CacheBudget,
+                ghostMaxWeight: options.CacheBudget / 2,
+                ContainerWeigher.Instance);
         _DecompressionSemaphore = new SemaphoreSlim(
             options.MaxDecompressionConcurrency,
             options.MaxDecompressionConcurrency);
@@ -182,6 +233,12 @@ public sealed partial class BlfSource : IRandomAccessFrameSource, IErrorTolerant
     /// </summary>
     public long RandomAccessFailureCount => Volatile.Read(ref _RandomAccessFailureCount);
 
+    /// <summary>
+    /// Containers the source decompressed itself, outside the scanner. Diagnostic for tests: a sequential read reuses the
+    /// scanner's blob, so this stays 0 until a cache miss forces a second inflate.
+    /// </summary>
+    internal long SourceDecompressionCount => Interlocked.Read(ref _SourceDecompressionCount);
+
     /// <inheritdoc/>
     public ErrorToleranceMode ErrorTolerance
     {
@@ -201,10 +258,10 @@ public sealed partial class BlfSource : IRandomAccessFrameSource, IErrorTolerant
 
     /// <summary>
     /// Opens a BLF file from disk.
-    /// Files whose size is within <see cref="BlfSourceOptions.PreloadBudget"/> are fully
-    /// loaded into memory for zero-copy container access. Larger files are memory-mapped
-    /// using a pool of <see cref="BlfSourceOptions.MmapSlotCount"/> view accessors, which
-    /// protects the heap from unbounded LOH pressure on large captures.
+    /// Files whose size is within <see cref="BlfSourceOptions.PreloadBudget"/> (and within
+    /// <see cref="Array.MaxLength"/>) are fully loaded into memory for zero-copy container access.
+    /// Larger files are memory-mapped with one read-only view, which protects the heap from
+    /// unbounded LOH pressure on large captures.
     /// </summary>
     /// <param name="path">Path to the BLF file.</param>
     /// <param name="options">Source configuration options. If null, defaults are used.</param>
@@ -225,11 +282,11 @@ public sealed partial class BlfSource : IRandomAccessFrameSource, IErrorTolerant
 
         long fileSize = fileInfo.Length;
 
-        // Choose backend: in-memory when the file fits within the preload budget;
+        // Choose backend: in-memory when the file fits within the preload budget and a .NET array;
         // memory-mapped otherwise to avoid pinning large LOH allocations.
-        BlfDataBackend backend = options.PreloadBudget.HasValue && fileSize <= options.PreloadBudget.Value
+        BlfDataBackend backend = PreloadDecision.ShouldPreload(fileSize, options.PreloadBudget)
             ? BlfDataBackend.FromMemory(File.ReadAllBytes(path))
-            : BlfDataBackend.FromMmap(path, options.MmapSlotCount);
+            : BlfDataBackend.FromMmap(path);
 
         return _OpenFromBackend(backend, uiName, options);
     }
@@ -258,8 +315,8 @@ public sealed partial class BlfSource : IRandomAccessFrameSource, IErrorTolerant
     /// </summary>
     private static BlfSource _OpenFromBackend(BlfDataBackend backend, string uiName, BlfSourceOptions options)
     {
-        // Parse file header from the first bytes of the backend
-        ReadOnlySpan<byte> header = backend.GetSpan(0, Format.BlfConstants.FileHeaderMinSize + 128);
+        // TryParse reads the 144-byte minimum file header only; the rest of a longer header is skipped by the scanner.
+        ReadOnlySpan<byte> header = backend.GetSpan(0, BlfConstants.FileHeaderMinSize);
 
         if (!BlfFileInfo.TryParse(header, options.TimestampTimeZone, out BlfFileInfo? fileInfo))
         {
@@ -292,23 +349,19 @@ public sealed partial class BlfSource : IRandomAccessFrameSource, IErrorTolerant
         _SourceId = sourceId;
         _Registry = registry;
         _NextFrameIndex = 0;
-        _Started = true;
+        _Slabs = FrameSlabAllocator.CreateOrNull(_Options.FrameSlabSize);
 
-        // If fully scanned, store discovered channel names for interface naming.
-        // Read _Scanner so a parallel Dispose() (allowed by SOURCE_GUIDE
-        // §13.1) can never present us with a torn null reference between the
-        // null-check and the dereference.
-        BlfIncrementalScanner? scanner = _Scanner;
-        if (_FullyScanned && scanner is not null)
-        {
-            _ChannelNames = scanner.ChannelNames;
-        }
+        // Channel names: a full scan stored them in _ChannelNames already; a lazy scan publishes snapshots that
+        // _CurrentChannelNames reads while the scan runs.
+        _Started = true;
     }
 
     /// <inheritdoc/>
     /// <remarks>
     /// This method is <b>not</b> thread-safe. It must be called from a single thread only.
     /// For thread-safe random access, use <see cref="FrameById"/> instead.
+    /// A <see cref="Dispose"/> on another thread is safe: a call already reading finishes its frame on the still-mapped
+    /// view; a call that starts after disposal began returns <c>null</c> or throws <see cref="ObjectDisposedException"/>.
     /// </remarks>
     public Frame? NextFrame(CancellationToken cancellationToken = default)
     {
@@ -324,6 +377,28 @@ public sealed partial class BlfSource : IRandomAccessFrameSource, IErrorTolerant
             return null;
         }
 
+        // The sequential path reads the mapped view without the lifetime lock (FrameSkipped handlers run inside this
+        // call and may call FrameById, which a read lock without recursion would refuse). One view lease per call keeps
+        // the pages mapped while this call reads, also when Dispose runs concurrently (a session shutdown with a timeout
+        // disposes sources whose read loop may still be inside NextFrame). Disposed before the lease: nothing more is read.
+        if (!_Backend.TryAcquireScanLease())
+        {
+            return null;
+        }
+
+        try
+        {
+            return _NextFrameCore(cancellationToken);
+        }
+        finally
+        {
+            _Backend.ReleaseScanLease();
+        }
+    }
+
+    /// <summary>The body of <see cref="NextFrame"/>, run while the caller holds a view lease.</summary>
+    private Frame? _NextFrameCore(CancellationToken cancellationToken)
+    {
         // If not fully scanned, try to scan more. Snapshot _Scanner
         // so a concurrent Dispose() does not null out the reference between checks.
         // NextFrame() is single-threaded by contract (SOURCE_GUIDE §13.1) but Dispose()
@@ -336,68 +411,17 @@ public sealed partial class BlfSource : IRandomAccessFrameSource, IErrorTolerant
                 cancellationToken.ThrowIfCancellationRequested();
                 scanner.ScanNext(cancellationToken);
 
-                // Report any new decompression failures from the scanner
-                long failures = scanner.DecompressionFailures;
-                while (_LastReportedDecompressionFailures < failures)
-                {
-                    _LastReportedDecompressionFailures++;
-                    _HandleSkip(new FrameReadErrorEventArgs
-                    {
-                        FrameIndex = _NextFrameIndex,
-                        FileOffset = -1,
-                        Kind = FrameReadErrorKind.Other,
-                        Message = $"Container decompression failed (failure #{_LastReportedDecompressionFailures})."
-                    });
-
-                    if (_Aborted)
-                    {
-                        return null;
-                    }
-                }
-
-                // Report any new corrupted-container-header errors from the scanner.
-                long corrupted = scanner.CorruptedContainerCount;
-                while (_LastReportedCorruptedContainerCount < corrupted)
-                {
-                    _LastReportedCorruptedContainerCount++;
-                    _HandleSkip(new FrameReadErrorEventArgs
-                    {
-                        FrameIndex = _NextFrameIndex,
-                        FileOffset = -1,
-                        Kind = FrameReadErrorKind.CorruptedBlock,
-                        Message = $"Container header offset out of bounds (corrupted container #{_LastReportedCorruptedContainerCount})."
-                    });
-
-                    if (_Aborted)
-                    {
-                        return null;
-                    }
-                }
-
-                // Report any new tail-truncation events from the scanner.
-                long truncated = scanner.TruncatedObjectCount;
-                while (_LastReportedTruncatedObjectCount < truncated)
-                {
-                    _LastReportedTruncatedObjectCount++;
-                    _HandleSkip(new FrameReadErrorEventArgs
-                    {
-                        FrameIndex = _NextFrameIndex,
-                        FileOffset = -1,
-                        Kind = FrameReadErrorKind.CorruptedBlock,
-                        Message = $"Truncated BLF object at container boundary (dropped #{_LastReportedTruncatedObjectCount})."
-                    });
-
-                    if (_Aborted)
-                    {
-                        return null;
-                    }
-                }
+                // The scanner notes each failure with its frame position (also inside a container); the frame loop
+                // below reports it before the frame it precedes, so strict mode stops exactly at the first failure.
+                _PendingScanDiagnostics = scanner.Marks;
             }
 
             if (scanner.IsExhausted && !_FullyScanned)
             {
-                _FullyScanned = true;
+                // Snapshot the names before the scanner is released; FrameById reads _ChannelNames from now on.
                 _ChannelNames = scanner.ChannelNames;
+                _FullyScanned = true;
+                _Scanner = null;
             }
         }
 
@@ -405,6 +429,13 @@ public sealed partial class BlfSource : IRandomAccessFrameSource, IErrorTolerant
         while (_NextFrameIndex < _Index.Count)
         {
             cancellationToken.ThrowIfCancellationRequested();
+
+            // Full scan: failures the open-time scan found in front of this frame are reported first (file order).
+            if (!_ReplayPendingDiagnosticsBefore(_NextFrameIndex))
+            {
+                return null;
+            }
+
             int frameIndex = _NextFrameIndex++;
             Frame? frame = _BuildFrame(frameIndex, cancellationToken);
             if (frame is not null)
@@ -422,7 +453,38 @@ public sealed partial class BlfSource : IRandomAccessFrameSource, IErrorTolerant
             }
         }
 
+        // Failures behind the last frame (a truncated tail, a broken last container) are reported at the end.
+        _ = _ReplayPendingDiagnosticsBefore(int.MaxValue);
         return null;
+    }
+
+    /// <summary>
+    /// Reports the full-scan failures that lie in front of frame <paramref name="frameIndex"/> (marks with
+    /// <c>FrameIndex &lt;= frameIndex</c>), in file order. Returns false when strict mode aborted.
+    /// </summary>
+    private bool _ReplayPendingDiagnosticsBefore(int frameIndex)
+    {
+        List<BlfScanDiagnosticsMark>? marks = _PendingScanDiagnostics;
+        if (marks is null)
+        {
+            return true;
+        }
+
+        while (_PendingScanDiagnosticsCursor < marks.Count && marks[_PendingScanDiagnosticsCursor].FrameIndex <= frameIndex)
+        {
+            BlfScanDiagnosticsMark mark = marks[_PendingScanDiagnosticsCursor++];
+            if (!_ReportScannerDiagnostics(mark.Counts))
+            {
+                return false;
+            }
+        }
+
+        if (_PendingScanDiagnosticsCursor == marks.Count)
+        {
+            _PendingScanDiagnostics = null;
+        }
+
+        return true;
     }
 
     #endregion
@@ -431,12 +493,12 @@ public sealed partial class BlfSource : IRandomAccessFrameSource, IErrorTolerant
 
     /// <inheritdoc/>
     /// <remarks>
-    /// Returns <c>null</c> before <see cref="Start"/> has been called or while a lazy scan
-    /// is still in progress, because the frame index, channel map and registry are mutated
-    /// by the scanning thread and a concurrent random-access read would race with those
-    /// mutations. Frame construction failures are reported via the return value only — this
-    /// method never increments error counters, raises <see cref="FrameSkipped"/>, or sets
-    /// the abort flag, so callers (e.g. UI threads) cannot poison sequential consumption.
+    /// Thread-safe, also while a lazy scan runs on the <see cref="NextFrame"/> thread: the frame index is a
+    /// single-writer / multi-reader store, channel names are published as immutable snapshots, and interface
+    /// registration is locked. Returns the frame for every id the index already holds and <c>null</c> for ids not
+    /// indexed yet; it never waits for the scan. Frame construction failures are reported via the return value only —
+    /// this method never increments error counters, raises <see cref="FrameSkipped"/>, or sets the abort flag, so
+    /// callers (e.g. UI threads) cannot poison sequential consumption. Allocates one array per call (no frame slabs).
     /// <para>
     /// Thread-safety: a <see cref="ReaderWriterLockSlim"/> read lock is held for the entire
     /// duration of <see cref="_TryBuildFrame"/> so that the mmap primary view pointer cannot be
@@ -457,13 +519,6 @@ public sealed partial class BlfSource : IRandomAccessFrameSource, IErrorTolerant
             if (!_Started)
             {
                 throw new InvalidOperationException("BlfSource has not been started.");
-            }
-
-            // While a lazy scan is still appending entries the index / channel map
-            // are not stable; mirror PcapSource.FrameById and refuse the call.
-            if (!_FullyScanned)
-            {
-                return null;
             }
 
             cancellationToken.ThrowIfCancellationRequested();
@@ -487,6 +542,13 @@ public sealed partial class BlfSource : IRandomAccessFrameSource, IErrorTolerant
     #region IDisposable
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// Idempotent. Waits for running <see cref="FrameById"/> calls, releases the cache, scanner and registry
+    /// reference, then the backend. A failure to release the memory mapping is an OS error, not a frame read error:
+    /// it propagates as <see cref="AggregateException"/> (the same rule as <see cref="Pcapng.PcapngSource"/> and
+    /// <see cref="Asc.AscSource"/>) after the lifetime lock has been released.
+    /// </remarks>
+    /// <exception cref="AggregateException">Releasing the memory mapping failed.</exception>
     public void Dispose()
     {
         if (Interlocked.Exchange(ref _Disposed, 1) != 0)
@@ -513,26 +575,26 @@ public sealed partial class BlfSource : IRandomAccessFrameSource, IErrorTolerant
                 _ContainerCache.Clear();
             }
             _Scanner = null;
-            // Wrapped so that a backend disposal failure does not prevent the write lock
-            // from being released by the finally block.
-            try
-            {
-                _Backend.Dispose();
-            }
-            catch (Exception) { _ErrorCount.Increment(); }
+            _SequentialContainer = null;
+            _Slabs = null;
+
+            // Backend disposal failures are OS errors, not frame read errors: propagate like PcapngSource and
+            // AscSource do. The write lock is released by the enclosing finally, so a throw here cannot deadlock
+            // later readers; the semaphore and finalizer suppression run in the outer finally.
+            _Backend.Dispose();
         }
         finally
         {
             _LifetimeLock.ExitWriteLock();
-        }
 
-        // _LifetimeLock is intentionally NOT disposed here. It holds only managed state
-        // that the GC will collect once BlfSource is unreachable. Disposing it while
-        // concurrent FrameById callers may still be entering the read lock (they observe
-        // _Disposed != 0 and exit, but the window is not zero) would cause a
-        // SynchronizationLockException. Leaving it undisposed is safe and correct.
-        _DecompressionSemaphore.Dispose();
-        GC.SuppressFinalize(this);
+            // _LifetimeLock is intentionally NOT disposed here. It holds only managed state
+            // that the GC will collect once BlfSource is unreachable. Disposing it while
+            // concurrent FrameById callers may still be entering the read lock (they observe
+            // _Disposed != 0 and exit, but the window is not zero) would cause a
+            // SynchronizationLockException. Leaving it undisposed is safe and correct.
+            _DecompressionSemaphore.Dispose();
+            GC.SuppressFinalize(this);
+        }
     }
 
     #endregion

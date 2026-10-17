@@ -30,7 +30,7 @@ internal sealed class SessionFixture : IDisposable
     /// Builds the session, registers the source and one listener, runs the capture to completion
     /// and waits until every packet is visible to pull queries.
     /// </summary>
-    private SessionFixture(byte[][] frames, Func<Stack, IFilter?>? filterFactory)
+    private SessionFixture(byte[][] frames, Func<Stack, PacketFilter?>? filterFactory)
     {
         _FrameCount = frames.Length;
         _InitialStack = TestHarness.CreateStack(_Registry);
@@ -47,7 +47,7 @@ internal sealed class SessionFixture : IDisposable
                 throw new InvalidOperationException("The test frame source was rejected.");
             }
 
-            IFilter? filter = filterFactory?.Invoke(_InitialStack);
+            PacketFilter? filter = filterFactory?.Invoke(_InitialStack);
             if (!Session.TryAddListener(_Listener, filter, out ListenerInfo? info, out _))
             {
                 throw new InvalidOperationException("The test listener was rejected.");
@@ -126,7 +126,7 @@ internal sealed class SessionFixture : IDisposable
     }
 
     /// <summary>A UDP-only capture whose listener filter is produced by <paramref name="filterFactory"/>.</summary>
-    internal static SessionFixture WithDnsPortsAndFilter(int count, Func<Stack, IFilter?> filterFactory)
+    internal static SessionFixture WithDnsPortsAndFilter(int count, Func<Stack, PacketFilter?> filterFactory)
     {
         byte[][] frames = new byte[count][];
         for (int i = 0; i < count; i++)
@@ -184,7 +184,7 @@ internal sealed class SessionFixture : IDisposable
     /// </summary>
     internal void RestartWithEthernetOnlyStack()
     {
-        Session.Restart(_BuildEthernetOnlyStack);
+        Session.Restart(BuildEthernetOnlyStack);
         WaitHelper.WaitUntil(() => Session.PacketCount >= _FrameCount);
     }
 
@@ -196,7 +196,7 @@ internal sealed class SessionFixture : IDisposable
     /// Turns an optional expression into a factory: <see langword="null"/> registers no filter at
     /// all, which is a different slot state than an always-match filter.
     /// </summary>
-    private static Func<Stack, IFilter?>? _FilterFactory(string? filterExpression)
+    private static Func<Stack, PacketFilter?>? _FilterFactory(string? filterExpression)
     {
         if (filterExpression is null)
         {
@@ -219,7 +219,7 @@ internal sealed class SessionFixture : IDisposable
     }
 
     /// <summary>Builds a stack that registers Ethernet only, on the session's own registry.</summary>
-    private static Stack _BuildEthernetOnlyStack(FrameInterfaceRegistry registry)
+    internal static Stack BuildEthernetOnlyStack(FrameInterfaceRegistry registry)
     {
         SettingsManager? settings = new();
         try

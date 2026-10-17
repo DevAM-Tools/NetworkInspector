@@ -146,6 +146,100 @@ internal sealed class SessionFilterTests
             .Throws<ArgumentNullException>();
     }
 
+    /// <summary>
+    /// A filter compiled against another stack carries that stack's field ids. The session must install a
+    /// copy re-bound to its own stack, leave the caller's instance untouched, and match correctly.
+    /// </summary>
+    [Test]
+    public async Task TryAddListenerFilterFromOtherStackIsRebound()
+    {
+        using Stack other = TestHarness.CreateStack();
+        using SessionFixture fixture = SessionFixture.WithAlternatingPorts(4, filterExpression: null);
+        PacketFilter foreign = SessionFixture.CompileOrThrow(other, "udp.dstport == 53");
+
+        bool added = fixture.Session.TryAddListener(new TestSessionListener(), foreign, out ListenerInfo? info, out _);
+        PacketFilter? installed = _ListenerFilters(fixture.Session)[1];
+        PacketRef[] buffer = new PacketRef[4];
+        bool read = fixture.Session.TryReadPackets(
+            info!.Id, 0, buffer, PacketReadMode.Matching, out int count, out _, out FilterError? failure, out _);
+
+        await Assert.That(added).IsTrue();
+        await Assert.That(installed).IsNotSameReferenceAs(foreign);
+        await Assert.That(installed!.Stack).IsSameReferenceAs(fixture.Session.Stack);
+        await Assert.That(foreign.Stack).IsSameReferenceAs(other);
+        await Assert.That(read).IsTrue();
+        await Assert.That(failure).IsNull();
+        await Assert.That(count).IsEqualTo(2);
+        await Assert.That(buffer[0].Id.Value).IsEqualTo(0);
+        await Assert.That(buffer[1].Id.Value).IsEqualTo(2);
+    }
+
+    /// <summary>
+    /// The retired-stack case: a filter compiled before a Restart is handed in afterwards. It must be
+    /// re-bound to the stack the session uses now, not evaluated against the disposed one.
+    /// </summary>
+    [Test]
+    public async Task TryAddListenerFilterFromBeforeRestartIsRebound()
+    {
+        using SessionFixture fixture = SessionFixture.WithAlternatingPorts(6, filterExpression: null);
+        Stack before = fixture.Session.Stack;
+        PacketFilter stale = SessionFixture.CompileOrThrow(before, "udp.dstport == 53");
+        fixture.Restart();
+
+        bool added = fixture.Session.TryAddListener(new TestSessionListener(), stale, out ListenerInfo? info, out _);
+        PacketFilter? installed = _ListenerFilters(fixture.Session)[1];
+        PacketRef[] buffer = new PacketRef[6];
+        bool read = fixture.Session.TryReadPackets(
+            info!.Id, 0, buffer, PacketReadMode.Matching, out int count, out _, out _, out _);
+
+        await Assert.That(added).IsTrue();
+        await Assert.That(fixture.Session.Stack).IsNotSameReferenceAs(before);
+        await Assert.That(installed!.Stack).IsSameReferenceAs(fixture.Session.Stack);
+        await Assert.That(read).IsTrue();
+        await Assert.That(count).IsEqualTo(3);
+    }
+
+    /// <summary>
+    /// A foreign filter that names a field the session stack does not define is a caller error: the call
+    /// throws and registers nothing, instead of installing a filter that compares the wrong field ids.
+    /// </summary>
+    [Test]
+    public async Task TryAddListenerFilterThatCannotBeReboundThrowsAndRegistersNothing()
+    {
+        using Stack full = TestHarness.CreateStack();
+        using Stack ethernetOnly = SessionFixture.BuildEthernetOnlyStack(new());
+        using Session session = new(ethernetOnly);
+        PacketFilter foreign = SessionFixture.CompileOrThrow(full, "udp.dstport == 53");
+
+        ArgumentException? thrown = null;
+        try
+        {
+            _ = session.TryAddListener(new TestSessionListener(), foreign, out _, out _);
+        }
+        catch (ArgumentException ex)
+        {
+            thrown = ex;
+        }
+
+        await Assert.That(thrown).IsNotNull();
+        await Assert.That(thrown!.ParamName).IsEqualTo("filter");
+        await Assert.That(session.GetListeners().Count).IsEqualTo(0);
+        await Assert.That(session.GetJobs().Count).IsEqualTo(0);
+    }
+
+    /// <summary>The always-match singleton has no stack and is installed as is on any session.</summary>
+    [Test]
+    public async Task TryAddListenerAlwaysMatchIsInstalledAsIs()
+    {
+        using Stack stack = TestHarness.CreateStack();
+        using Session session = new(stack);
+
+        bool added = session.TryAddListener(new TestSessionListener(), PacketFilter.AlwaysMatch, out _, out _);
+
+        await Assert.That(added).IsTrue();
+        await Assert.That(_ListenerFilters(session)[0]).IsSameReferenceAs(PacketFilter.AlwaysMatch);
+    }
+
     #endregion
 
     #region ReadPackets with PacketRef
@@ -430,11 +524,11 @@ internal sealed class SessionFilterTests
     public async Task Restart_DerivesNewFilterInstance()
     {
         using SessionFixture fixture = SessionFixture.WithDnsPorts(3, "udp.dstport == 53");
-        IFilter original = _ListenerFilters(fixture.Session)[0]!;
+        PacketFilter original = _ListenerFilters(fixture.Session)[0]!;
 
         fixture.Restart();
 
-        IFilter? rebound = _ListenerFilters(fixture.Session)[0];
+        PacketFilter? rebound = _ListenerFilters(fixture.Session)[0];
         await Assert.That(rebound).IsNotNull();
         await Assert.That(rebound).IsNotSameReferenceAs(original);
         await Assert.That(rebound!.Expression).IsEqualTo(original.Expression);
@@ -585,7 +679,7 @@ internal sealed class SessionFilterTests
     /// state; reading it directly is the only way to prove that <c>Restart</c> installs a new
     /// filter instance rather than merely producing the same verdicts.
     /// </summary>
-    private static IFilter?[] _ListenerFilters(Session session)
+    private static PacketFilter?[] _ListenerFilters(Session session)
     {
         System.Reflection.FieldInfo field = typeof(Session)
             .GetField("_ListenerSlots", BindingFlags.Instance | BindingFlags.NonPublic)
@@ -594,7 +688,7 @@ internal sealed class SessionFilterTests
         SnapshotList<ListenerSlot> slots = (SnapshotList<ListenerSlot>)field.GetValue(session)!;
         ListenerSlot[] snapshot = slots.CurrentSnapshot;
 
-        IFilter?[] filters = new IFilter?[snapshot.Length];
+        PacketFilter?[] filters = new PacketFilter?[snapshot.Length];
         for (int i = 0; i < snapshot.Length; i++)
         {
             filters[i] = snapshot[i].Filter;

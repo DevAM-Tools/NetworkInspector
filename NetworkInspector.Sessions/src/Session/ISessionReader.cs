@@ -141,7 +141,7 @@ public interface ISessionReader
     /// because it is poisoned by an earlier evaluation failure, because a packet failed to
     /// evaluate now, or because it could not be re-bound after a stack swap. In that case
     /// <paramref name="failure"/> carries the reason, <paramref name="count"/> is 0, and the
-    /// caller must repair the filter (<see cref="IFilter.ResetState"/>, or registering a new
+    /// caller must repair the filter (<see cref="PacketFilter.ResetState"/>, or registering a new
     /// listener) before matching pulls succeed again.
     /// </para>
     ///

@@ -62,14 +62,27 @@ The exporter writes these BLF object types:
 | LIN data | 57 (`object_version` 1) |
 | LIN send / CRC / receive error | 58 / 60 / 61 |
 | LIN sleep / wakeup | 20 / 62 |
+| Channel name | 65 (`APP_TEXT`, once per named channel, before its first frame) |
 
 Compression is zlib inside LOG_CONTAINER objects (or none when `BlfCompressionLevel.None` is selected). Object timestamps are nanoseconds (flags word 2) relative to the millisecond `start_date` anchor. Direction is written as 0 (RX) because `Frame` does not carry direction — see [BlfObjectPayloads.cs](BlfObjectPayloads.cs).
+
+`start_date` is a SYSTEMTIME without a zone. The exporter writes civil time in `WithTimestampTimeZone` (default
+`TimeZoneInfo.Utc`, the same default as `BlfSourceOptions.TimestampTimeZone`). Vector tools and `tshark` read it as
+local time: pass `TimeZoneInfo.Local` for files they will open.
+
+CAN classic writes the bus DLC: `len8_dlc` (SocketCAN byte 7) when it holds 9–15, else byte 4 (the requested count
+for remote frames). LIN writes the 6-bit id (`PID & 0x3F`) and the checksum model from DLT_LIN byte 4 bits 1–0.
 
 Type 120 copies the Ethernet bytes as-is, so VLAN TCI 0, QinQ inner tags, and FCS trailers survive a BLF round-trip. The Type 71 builder remains for decomposed-header tests; it is not the exporter path.
 
 FlexRay Type 50 stores Channel A/B in `channelMask` and writes the ISO header CRC into both `headerCrc1` and `headerCrc2`. LIN sleep (event byte 0x01 or 0x02), wakeup (0x04), and error bits 0x08 / 0x02 / 0x01 are written as Types 20, 62, 60, 61, and 58. They are not written as Type 57.
 
-`blf.channel` is written as stored, including 0. When the property is absent the channel is 1. `blf.hw_channel` (`ushort`) is written at Type 120 offset 6 with flags bit 0x0002.
+The channel comes from the interface, resolved once per interface: `blf.channel` as stored (including 0), else
+`asc.channel` (interfaces read from ASC), else a trailing number ≥ 1 in the interface name (`"CAN 3"`), else 1.
+A channel property that exists but is unusable (out of range, wrong type) skips the interface's frames with
+`ItemSkipped`. `blf.hw_channel` (`ushort`) is written at Type 120 offset 6 with flags bit 0x0002. An interface name
+other than the default (`"CAN 2"`, `"Ethernet 1"`) is written as an AppText channel name, which the BLF reader turns
+back into the interface name.
 
 ## Builder Options
 
@@ -78,6 +91,7 @@ FlexRay Type 50 stores Channel A/B in `channelMask` and writes the ISO header CR
 | `ToFile(path)` / `ToStream(stream)` / `ToStdout()` | Select output target |
 | `WithUiName(name)` / `WithDescription(text)` | Set user-facing metadata |
 | `WithCompressionLevel(level)` | Choose compression/throughput trade-off |
+| `WithTimestampTimeZone(zone)` | Zone of the `start_date` civil time (default `TimeZoneInfo.Utc`) |
 | `WithTargetFrameCount(count)` | Stop after N frames (`0` = unlimited) |
 | `WithCancellationToken(token)` | Enable cooperative cancellation |
 

@@ -22,6 +22,34 @@ internal sealed class CanBasicTests
     }
 
     [Test]
+    public async Task RegisterFields_NullMessageEntry_IsSkippedWithWarning()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            string configPath = Path.Combine(directory, "can.json");
+            await File.WriteAllTextAsync(configPath, """{"messages":[null, {"id": 291, "name": "Engine"}]}""").ConfigureAwait(false);
+            using SettingsManager settings = new(directory);
+            settings.PreloadValue("can.config_file", "can.json");
+            StackBuilder builder = new(settings, new FrameInterfaceRegistry());
+            FrameProtocol frame = new();
+            frame.RegisterFields(builder, builder.RegisterProtocol(frame));
+            CanProtocol can = new();
+
+            can.RegisterFields(builder, builder.RegisterProtocol(can));
+
+            await Assert.That(can.ConfigLoadWarning).IsNotNull();
+            await Assert.That(can.ConfigLoadWarning!.Value.Kind).IsEqualTo(SettingsLoadWarningKind.DeserializationError);
+            await Assert.That(can.ConfigLoadWarning!.Value.SettingName).IsEqualTo("can.config_file");
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Test]
     public async Task Parse_ClassicStandardId()
     {
         byte[] frame = _BuildClassic(0x123u, [0xDE, 0xAD, 0xBE, 0xEF]);

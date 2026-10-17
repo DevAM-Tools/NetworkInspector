@@ -97,5 +97,20 @@ public sealed class AscSourceOptions : IFileSourceOptions
     /// </summary>
     public TimeZoneInfo TimestampTimeZone { get; init; } = TimeZoneInfo.Utc;
 
+    /// <summary>
+    /// Slab size in bytes for the frame buffers of sequential reads (<c>NextFrame</c> of <see cref="AscSource"/> and
+    /// <see cref="AscStreamSource"/>). 0 (default) allocates one array per frame. Values from 1 024 to 16 777 216 group
+    /// consecutive frames into shared slabs: fewer GC objects, but a consumer that keeps one frame alive keeps its whole
+    /// slab alive. Frames above a quarter of the slab get their own array. CAN XL and FlexRay frames, and
+    /// <see cref="AscSource.FrameById"/>, always use one array per frame.
+    /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException">The value is neither 0 nor in 1 024 … 16 777 216.</exception>
+    public int FrameSlabSize
+    {
+        get => _FrameSlabSize;
+        init => _FrameSlabSize = FrameSlabAllocator.ValidateOption(value);
+    }
+    private readonly int _FrameSlabSize;
+
     #endregion
 }

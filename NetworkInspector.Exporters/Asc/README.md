@@ -52,6 +52,18 @@ AFDX data frames are read as Ethernet. AFDX status, AFDX bus statistics, `ETH ST
 | `WithUiName(name)` / `WithDescription(text)` | Set user-facing metadata |
 | `WithTargetFrameCount(count)` | Stop after N frames (`0` = unlimited) |
 | `WithCancellationToken(token)` | Enable cooperative cancellation |
+| `WithTimestampDecimals(digits)` | Fraction digits of the line timestamps, `AscExporter.MinTimestampDecimals` (6) to `MaxTimestampDecimals` (9); default 6 |
+
+## Line Format Details
+
+- Timestamps are computed in integers from the frame nanoseconds and rounded to the configured digits (a carry
+  moves into the seconds), so 9 digits round-trip nanoseconds exactly.
+- Classic CAN: the DLC is one hex digit (`base hex`). A bus DLC of 9–15 (SocketCAN `len8_dlc`, byte 7) is written as
+  `9`–`F` with 8 data bytes. Remote frames write `r {dlc}` with the requested count from byte 4.
+- LIN: the 6-bit id (`PID & 0x3F`), the checksum, and `CSM = classic` or `CSM = enhanced` from DLT_LIN byte 4
+  bits 1–0 (enhanced when the bits do not state a model).
+- The channel comes from the interface, resolved once per interface: `blf.channel`, else `asc.channel`, else a trailing
+  number ≥ 1 in the interface name, else 1. An unusable channel property falls back to channel 1.
 
 ## Common Tasks
 

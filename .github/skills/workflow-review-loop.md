@@ -26,13 +26,15 @@ For each iteration starting at `1`:
 1. **Review** — Execute `workflow-review.md` Stages 2–5 on current scope.
    - Persist output to `reviews/review_<slug>_<iteration>.md` (file mode).
    - In chat: bucket counts, release verdict, artifact path, prioritized action list only.
-2. **Assess** — Count open findings (`⬜` or `⚠️`) per bucket in the latest review artifact.
+2. **Assess** — Count open findings (`⬜` or `⚠️`) per bucket from the Summary
+   **Findings** Status column in the latest review artifact. The finding
+   `Status` line must show the same mark.
 3. **Remediate** — If any finding is still open, execute `workflow-implement.md` for every
    open finding in Priority Action List order. Do not skip Cosmetic, Refactoring, or
-   Performance unless the user explicitly defers them in this session. Mark each finding
-   `✅` in the review artifact only after Verify pass and alignment confirmed. Skip
-   implement Stage 5 Exam. Run Stage 4 (extensive **briefing**). If nothing is open, skip
-   remediations.
+   Performance unless the user explicitly defers them in this session. That skill ticks
+   each finding on both status surfaces (`⚠️` before the first edit, `✅` only after
+   Verify pass and alignment). A deferred finding stays `⬜`. Skip implement Stage 5
+   Exam. Run Stage 4 (extensive **briefing**). If nothing is open, skip remediations.
 4. **Stop** — When Stage 3 success is met on the **latest review** (zero open findings in
    all buckets, or every leftover finding explicitly deferred), exit the loop. Do not treat
    zero Errors alone as enough while other buckets are still open. Else go to Increment.
@@ -45,7 +47,7 @@ findings are still `⬜` or `⚠️` unless they are deferred.
 
 - **Success (default):** Latest review iteration has zero open findings in **all** buckets
   (Error, Cosmetic, Refactoring, Performance), or every remaining finding is explicitly
-  deferred with user approval documented in the review Summary.
+  deferred with user approval documented in the review Summary. A deferred row stays `⬜`.
 - **Success (errors only):** When the user says `errors only` / `nur Errors` — latest
   iteration has zero open **Error** findings. Other buckets may remain. `/review` Ready
   stays zero Errors (`workflow-review.md`); this loop’s default is stricter.

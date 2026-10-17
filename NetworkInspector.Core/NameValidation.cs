@@ -57,7 +57,8 @@ public static class NameValidation
     /// Group names follow the same dot-separated ASCII C-style identifier rules as
     /// protocol/field names, but are additionally restricted to lowercase letters,
     /// digits, underscores, and dots — no uppercase letters allowed.
-    /// The empty string is a valid group name (the default/root group).
+    /// The empty string is a valid group name (the default/root group). The name <c>default</c> is reserved: the
+    /// default group is saved as <c>default.json</c>, so a group of that name would share its file.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool IsValidGroupName(ReadOnlySpan<char> name)
@@ -70,6 +71,12 @@ public static class NameValidation
 
         // Must satisfy the general name rules first.
         if (!IsValidName(name))
+        {
+            return false;
+        }
+
+        // Reserved for the default group's file (default.json).
+        if (name.SequenceEqual("default"))
         {
             return false;
         }

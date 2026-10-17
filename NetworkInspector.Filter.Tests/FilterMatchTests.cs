@@ -113,6 +113,32 @@ internal sealed class FilterMatchTests
         await Assert.That(FilterTestHelper.MatchOrThrow(filter, packet)).IsEqualTo(expected);
     }
 
+    [Test]
+    [Arguments("udp.payload[10:12] == 00:11", false)]
+    [Arguments("udp.payload[10:12] == 0a:0b", true)]
+    [Arguments("udp.payload[14:16] == 0e:0f", true)]
+    [Arguments("udp.payload[0:2] == 00:01", true)]
+    [Arguments("udp.payload[15:17] == 0f:10", false)]
+    [Arguments("len(udp.payload) == 16", true)]
+    [Arguments("len ( udp.payload ) == 16", true)]
+    [Arguments("udp.srcport[6:8] == 00:35", true)]
+    [Arguments("ip.ttl[6:8] == 00:40", true)]
+    [Arguments("udp.payload[0:2147483590] == 00:01", false)]
+    public async Task Match_TwoDigitSliceBoundsAndFixedWidths(string expression, bool expected)
+    {
+        using Stack stack = FilterTestHelper.BuildStack();
+        Filter filter = FilterTestHelper.CompileOrThrow(expression, stack);
+        byte[] payload = new byte[16];
+        for (int i = 0; i < payload.Length; i++)
+        {
+            payload[i] = (byte)i;
+        }
+
+        Packet packet = FilterTestHelper.Parse(stack, FilterTestHelper.BuildUdpFrame(53, 1024, payload: payload));
+
+        await Assert.That(FilterTestHelper.MatchOrThrow(filter, packet)).IsEqualTo(expected);
+    }
+
     #endregion
 
     #region String predicates

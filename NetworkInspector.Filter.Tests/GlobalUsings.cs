@@ -4,7 +4,11 @@
 global using System;
 global using System.Collections.Generic;
 global using System.Globalization;
+global using System.Linq;
+global using System.Text;
+global using System.Threading;
 global using System.Threading.Tasks;
+global using static System.FormattableString;
 #endregion
 
 #region NetworkInspector
@@ -19,6 +23,7 @@ global using NetworkInspector.Core.Settings;
 global using NetworkInspector.Filter;
 global using NetworkInspector.Filter.Analysis;
 global using NetworkInspector.Filter.Ast;
+global using NetworkInspector.Filter.Completion;
 global using NetworkInspector.Filter.Errors;
 global using NetworkInspector.Filter.Eval;
 global using NetworkInspector.Filter.Jit;

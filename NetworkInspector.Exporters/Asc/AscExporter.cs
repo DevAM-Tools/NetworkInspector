@@ -28,6 +28,16 @@ namespace NetworkInspector.Exporters.Asc;
 /// </summary>
 public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDisposable
 {
+    #region Public constants
+
+    /// <summary>Fewest timestamp fraction digits <see cref="Builder.WithTimestampDecimals"/> accepts (microseconds).</summary>
+    public const int MinTimestampDecimals = 6;
+
+    /// <summary>Most timestamp fraction digits <see cref="Builder.WithTimestampDecimals"/> accepts (nanoseconds).</summary>
+    public const int MaxTimestampDecimals = 9;
+
+    #endregion
+
     #region SocketCAN constants
 
     /// <summary>SocketCAN FD format flag (byte 5, bit 2).</summary>
@@ -79,21 +89,17 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
 
     #endregion
 
-    #region Channel property keys
-
-    /// <summary>
-    /// Interface property key for the ASC channel number written by AscSource.
-    /// The matching constant lives with the ASC reader. This exporter keeps the
-    /// string locally so it does not reference the Sources assembly.
-    /// </summary>
-    private const string _AscChannelKey = "asc.channel";
-
-    #endregion
-
     #region Instance fields
 
     private readonly CancellationToken _CancellationToken;
     private readonly int _TargetFrameCount;
+    private readonly int _TimestampDecimals;
+
+    /// <summary>
+    /// Channel per interface. Interfaces are immutable once registered, so the registry and property bag are consulted
+    /// once per interface instead of once per frame.
+    /// </summary>
+    private readonly Dictionary<FrameInterfaceId, int> _InterfaceChannels = [];
 
     /// <summary>Output target. Cleared to <c>null</c> after disposal to prevent double-dispose.</summary>
     private ExportOutput? _Output;
@@ -122,12 +128,14 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
         string uiName,
         string? description,
         int targetFrameCount,
+        int timestampDecimals,
         CancellationToken cancellationToken)
     {
         _Output = output;
         UiName = uiName;
         Description = description;
         _TargetFrameCount = targetFrameCount;
+        _TimestampDecimals = timestampDecimals;
         _CancellationToken = cancellationToken;
     }
 
@@ -180,81 +188,53 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
 
         _Finished = true;
 
-        // Produce a valid (header-only) ASC file even when no frames were written.
-        // This keeps the exporter contract deterministic: a successfully-built exporter
-        // always produces a parseable file on close, regardless of frame count.
+        // Shared finish sequence: finalize, then release every resource even when a step fails.
+        ExporterFinish.Run(
+            "ASC",
+            _FinalizeFile,
+            _ReportFinishError,
+            new ExporterReleaseStep("writer return", () => _Writer?.Return()),
+            new ExporterReleaseStep("output disposal", _DisposeOutput));
+    }
+
+    /// <summary>
+    /// Writes the trigger-block footer. Starts the writer first when no frame ever arrived, so an empty export is still
+    /// a valid (header-only) ASC file.
+    /// </summary>
+    private void _FinalizeFile()
+    {
         if (!_Started && !_HasError && _Output is not null)
         {
             _AnchorNs = 0L;
             _Start();
         }
 
-        // Wrap clean-up in try/finally so resources are always released even when
-        // the footer write throws (e.g. broken stream or disk full). cleanupErrors
-        // is declared here so the throw can occur after the finally block — CA2219
-        // prohibits throwing inside finally.
-        List<Exception> cleanupErrors = [];
-        try
-        {
-            _Writer?.Finish();
-        }
-        catch (Exception ex)
-        {
-            _HasError = true;
-            if (ErrorCount < int.MaxValue) ErrorCount++;
-            ItemSkipped?.Invoke(this, new ExportErrorEventArgs
-            {
-                ItemIndex = FrameCount,
-                Kind = ExportErrorKind.IoError,
-                Message = $"ASC finalization failed: {ex.Message}",
-            });
-        }
-        finally
-        {
-            // Each cleanup step is independent so a failure in one step does not
-            // prevent remaining resources from being released. Failures are surfaced
-            // via the error channel. cleanupErrors is declared before the try so the
-            // throw can occur after the finally block — CA2219 prohibits throwing inside finally.
-            try
-            {
-                _Writer?.Return();
-            }
-            catch (Exception ex)
-            {
-                cleanupErrors.Add(ex);
-                _HasError = true;
-                if (ErrorCount < int.MaxValue) ErrorCount++;
-                ItemSkipped?.Invoke(this, new ExportErrorEventArgs
-                {
-                    ItemIndex = FrameCount,
-                    Kind = ExportErrorKind.IoError,
-                    Message = $"ASC writer return failed: {ex.Message}",
-                });
-            }
+        _Writer?.Finish();
+    }
 
-            try
-            {
-                _Output?.Dispose();
-            }
-            catch (Exception ex)
-            {
-                cleanupErrors.Add(ex);
-                _HasError = true;
-                if (ErrorCount < int.MaxValue) ErrorCount++;
-                ItemSkipped?.Invoke(this, new ExportErrorEventArgs
-                {
-                    ItemIndex = FrameCount,
-                    Kind = ExportErrorKind.IoError,
-                    Message = $"ASC output disposal failed: {ex.Message}",
-                });
-            }
+    /// <summary>Disposes the output once (closes the stream unless the caller owns it).</summary>
+    private void _DisposeOutput()
+    {
+        ExportOutput? output = _Output;
+        _Output = null;
+        output?.Dispose();
+    }
 
-            _Output = null;
-        }
-        if (cleanupErrors.Count > 0)
+    /// <summary>Error channel of the finish sequence: marks the error, counts it, and raises <see cref="ItemSkipped"/>.</summary>
+    private void _ReportFinishError(ExportErrorKind kind, string message)
+    {
+        _HasError = true;
+        if (ErrorCount < int.MaxValue)
         {
-            throw new AggregateException("ASC exporter cleanup failed.", cleanupErrors);
+            ErrorCount++;
         }
+
+        ItemSkipped?.Invoke(this, new ExportErrorEventArgs
+        {
+            ItemIndex = FrameCount,
+            Kind = kind,
+            Message = message,
+        });
     }
 
     #endregion
@@ -346,7 +326,7 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
 
         try
         {
-            _Writer = new AscWriter(stream, _AnchorNs);
+            _Writer = new AscWriter(stream, _AnchorNs, _TimestampDecimals);
         }
         catch (Exception ex)
         {
@@ -438,7 +418,7 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
                 currentIndex);
         }
 
-        int channel = _GetChannel(frame, 1);
+        int channel = _GetChannel(frame);
 
         try
         {
@@ -484,7 +464,7 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
                 currentIndex);
         }
 
-        int channel = _GetChannel(frame, 1);
+        int channel = _GetChannel(frame);
         try
         {
             _Writer!.WriteCanXlFrame(timestampNs, channel, data);
@@ -513,7 +493,7 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
                 currentIndex);
         }
 
-        int channel = _GetChannel(frame, 1);
+        int channel = _GetChannel(frame);
         try
         {
             _Writer!.WriteEthernetFrame(timestampNs, channel, data);
@@ -534,7 +514,7 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
     private bool _HandleLinFrame(
         ReadOnlySpan<byte> data, long timestampNs, int currentIndex, Frame frame)
     {
-        if (!_TryParseLinFrame(data, out byte frameId, out ReadOnlySpan<byte> payload, out byte checksum))
+        if (!_TryParseLinFrame(data, out byte frameId, out ReadOnlySpan<byte> payload, out byte checksum, out byte checksumTypeBits))
         {
             return _HandleSkip(
                 ExportErrorKind.MalformedData,
@@ -542,11 +522,11 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
                 currentIndex);
         }
 
-        int channel = _GetChannel(frame, 1);
+        int channel = _GetChannel(frame);
 
         try
         {
-            _Writer!.WriteLinMessage(timestampNs, channel, frameId, payload, checksum);
+            _Writer!.WriteLinMessage(timestampNs, channel, frameId, payload, checksum, checksumTypeBits);
         }
         catch (Exception ex)
         {
@@ -638,7 +618,7 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
     /// <item>Bytes 0–3: CAN ID (big-endian uint32 with flag bits 31–29).</item>
     /// <item>Byte 4: Payload byte count (classic 0–8; FD 0–64) — not a DLC code.</item>
     /// <item>Byte 5: FD flags — bit 2 = FDF (FD Format), bit 1 = ESI, bit 0 = BRS.</item>
-    /// <item>Bytes 6–7: Reserved (ignored).</item>
+    /// <item>Byte 6: reserved. Byte 7: <c>len8_dlc</c> (classic CAN DLC 9–15, else 0).</item>
     /// <item>Bytes 8+: Data payload.</item>
     /// </list>
     /// The ASC writer expects a DLC code (0–15) for CAN FD lines, so FD byte counts are
@@ -688,35 +668,45 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
         }
         else
         {
-            // Classic CAN: byte count equals DLC (clamped to 8).
+            // Classic CAN: byte 4 is the payload count (0-8). A remote frame carries the requested length there but no
+            // payload bytes, so its DLC is byte 4, not the bytes present. A bus DLC of 9-15 is kept in len8_dlc (byte 7).
             int classicLen = Math.Min((int)payloadByteCount, 8);
             classicLen = Math.Min(classicLen, available);
-            payload = data.Slice(_SocketCanHeaderSize, classicLen);
-            dlc = (byte)classicLen;
+            payload = isRemote
+                ? ReadOnlySpan<byte>.Empty
+                : data.Slice(_SocketCanHeaderSize, classicLen);
+            byte requested = (byte)Math.Min((int)payloadByteCount, 8);
+            byte len8Dlc = data[BlfConstants.SocketCanLen8DlcOffset];
+            dlc = len8Dlc is > 8 and <= 15
+                ? len8Dlc
+                : isRemote
+                    ? requested
+                    : (byte)classicLen;
         }
 
         return true;
     }
 
     /// <summary>
-    /// Parses a DLT_LIN binary frame (Wireshark <c>packet-lin.h</c> layout).
+    /// Parses a DLT_LIN binary frame (LINKTYPE_LIN, 212).
     /// </summary>
     /// <remarks>
     /// <list type="bullet">
     /// <item>Byte 0: message format revision.</item>
-    /// <item>Byte 4: DLC in bits 7-4.</item>
-    /// <item>Byte 5: Protected ID.</item>
+    /// <item>Byte 4: DLC in bits 7-4, checksum type in bits 1-0 (1 = classic, 2 = enhanced).</item>
+    /// <item>Byte 5: protected identifier; the 6-bit frame id is recovered with <c>&amp; 0x3F</c> (with or without parity).</item>
     /// <item>Byte 6: checksum.</item>
     /// <item>Bytes 8+: data payload.</item>
     /// </list>
     /// </remarks>
     private static bool _TryParseLinFrame(
         ReadOnlySpan<byte> data,
-        out byte frameId, out ReadOnlySpan<byte> payload, out byte checksum)
+        out byte frameId, out ReadOnlySpan<byte> payload, out byte checksum, out byte checksumTypeBits)
     {
         frameId = 0;
         payload = default;
         checksum = 0;
+        checksumTypeBits = 0;
 
         if (data.Length < _LinMinSize)
         {
@@ -725,6 +715,7 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
 
         frameId = (byte)(data[5] & 0x3F);
         checksum = data[6];
+        checksumTypeBits = (byte)(data[4] & 0x03);
         int length = data[4] >> 4;
         int available = data.Length - _LinHeaderSize;
         if (length > available)
@@ -777,36 +768,34 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
     }
 
     /// <summary>
-    /// Resolves the CAN/LIN channel number from the frame's interface property bag.
-    /// Checks the ASC-native key (<c>"asc.channel"</c>) first, then
-    /// <see cref="BlfInterfacePropertyKeys.Channel"/>, and falls back to
-    /// <paramref name="defaultChannel"/> when neither is present or the value cannot
-    /// be converted.
+    /// Resolves the channel number of the frame's interface once per interface, with the lookup shared with the BLF
+    /// exporter (<see cref="InterfaceChannelConverter.TryGetChannel"/>: <c>blf.channel</c>, <c>asc.channel</c>, a trailing
+    /// number in the interface name). Falls back to channel 1 when the interface has no usable hint.
     /// </summary>
-    /// <param name="frame">The frame whose interface properties to inspect.</param>
-    /// <param name="defaultChannel">Channel to return when no property is found.</param>
+    /// <param name="frame">The frame whose interface to inspect.</param>
     /// <returns>Resolved channel number.</returns>
-    private static int _GetChannel(Frame frame, int defaultChannel)
+    private int _GetChannel(Frame frame)
     {
-        if (!frame.HasInterface
-            || !frame.Registry.TryGet(frame.InterfaceId, out FrameInterfaceInfo? info))
+        const int defaultChannel = 1;
+        if (!frame.HasInterface)
         {
             return defaultChannel;
         }
 
-        if (info.Properties.TryGetValue(_AscChannelKey, out object? ascCh)
-            && InterfaceChannelConverter.TryConvertToInt32(ascCh, out int ascChannel))
+        if (_InterfaceChannels.TryGetValue(frame.InterfaceId, out int cached))
         {
-            return ascChannel;
+            return cached;
         }
 
-        if (info.Properties.TryGetValue(BlfInterfacePropertyKeys.Channel, out object? blfCh)
-            && InterfaceChannelConverter.TryConvertToInt32(blfCh, out int blfChannel))
+        int channel = defaultChannel;
+        if (frame.Registry.TryGet(frame.InterfaceId, out FrameInterfaceInfo? info)
+            && InterfaceChannelConverter.TryGetChannel(info, out int resolved, out _) == InterfaceChannelLookup.Found)
         {
-            return blfChannel;
+            channel = resolved;
         }
 
-        return defaultChannel;
+        _InterfaceChannels[frame.InterfaceId] = channel;
+        return channel;
     }
 
     #endregion
@@ -825,6 +814,7 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
         private string? _Description;
         private CancellationToken _CancellationToken;
         private int _TargetFrameCount;
+        private int _TimestampDecimals = MinTimestampDecimals;
 
         #region Output target
 
@@ -913,6 +903,20 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
             return this;
         }
 
+        /// <summary>
+        /// Sets the number of fraction digits of the line timestamps: <see cref="MinTimestampDecimals"/> (6, microseconds,
+        /// the default and what CANoe writes) to <see cref="MaxTimestampDecimals"/> (9, nanoseconds). Values are rounded
+        /// half up; 9 keeps the full nanosecond resolution of the source frames (the ASC reader keeps nine digits).
+        /// </summary>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="decimals"/> is outside 6..9.</exception>
+        public Builder WithTimestampDecimals(int decimals)
+        {
+            ArgumentOutOfRangeException.ThrowIfLessThan(decimals, MinTimestampDecimals);
+            ArgumentOutOfRangeException.ThrowIfGreaterThan(decimals, MaxTimestampDecimals);
+            _TimestampDecimals = decimals;
+            return this;
+        }
+
         #endregion
 
         /// <summary>
@@ -936,6 +940,7 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
                 _UiName,
                 _Description,
                 _TargetFrameCount,
+                _TimestampDecimals,
                 _CancellationToken);
         }
     }

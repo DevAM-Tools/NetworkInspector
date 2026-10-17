@@ -128,6 +128,15 @@ internal static class PcapConstants
     /// <summary>Timestamp offset in seconds applied after converting packet timestamps (PCAPNG if_tsoffset).</summary>
     internal const ushort OptIfTsOffset = 14;
 
+    /// <summary>Hardware description of the interface (PCAPNG if_hardware).</summary>
+    internal const ushort OptIfHardware = 15;
+
+    /// <summary>Transmit speed in bits per second (PCAPNG if_txspeed).</summary>
+    internal const ushort OptIfTxSpeed = 16;
+
+    /// <summary>Receive speed in bits per second (PCAPNG if_rxspeed).</summary>
+    internal const ushort OptIfRxSpeed = 17;
+
     // EPB options
     /// <summary>Packet flags (EPB).</summary>
     internal const ushort OptEpbFlags = 2;

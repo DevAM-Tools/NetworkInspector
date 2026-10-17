@@ -119,6 +119,16 @@ internal static class Program
             new SessionListenerScenario(materialize: true),
             new RandomSourceParseScenario(materialize: false),
             new RandomSourceParseScenario(materialize: true),
+
+            // ── Frame copies: per-frame arrays vs frame slabs (PcapngSourceOptions.FrameSlabSize) ──
+            new ReadPcapngCopyScenario(PcapngCopyBackend.Mapped, frameSlabSize: 0, holdFrames: false),
+            new ReadPcapngCopyScenario(PcapngCopyBackend.Mapped, frameSlabSize: 64 * 1024, holdFrames: false),
+            new ReadPcapngCopyScenario(PcapngCopyBackend.Mapped, frameSlabSize: 0, holdFrames: true),
+            new ReadPcapngCopyScenario(PcapngCopyBackend.Mapped, frameSlabSize: 64 * 1024, holdFrames: true),
+            new ReadPcapngCopyScenario(PcapngCopyBackend.Stream, frameSlabSize: 0, holdFrames: false),
+            new ReadPcapngCopyScenario(PcapngCopyBackend.Stream, frameSlabSize: 64 * 1024, holdFrames: false),
+            new ReadPcapngCopyScenario(PcapngCopyBackend.Stream, frameSlabSize: 0, holdFrames: true),
+            new ReadPcapngCopyScenario(PcapngCopyBackend.Stream, frameSlabSize: 64 * 1024, holdFrames: true),
         ];
 
         IProfilingScenario[] discovered = ScenarioDiscovery.Discover();

@@ -47,56 +47,6 @@ internal sealed class SessionValueCacheCoverageTests
         }
     }
 
-    private sealed class FakeFilter : IFilter
-    {
-        public string Expression => "fake";
-        public bool IsAlwaysMatch => false;
-        public bool IsStateful => false;
-        public bool IsPoisoned => false;
-        public FilterError? PoisonError => null;
-        public IStack? Stack => null;
-
-        public bool TryIsMatch(Packet packet, out bool matched, [NotNullWhen(false)] out FilterError? failure)
-        {
-            matched = false;
-            failure = null;
-            return true;
-        }
-
-        public bool TryIsMatch<TIndex>(Packet packet, TIndex? index, out bool matched, [NotNullWhen(false)] out FilterError? failure)
-            where TIndex : IPacketIndexReader
-        {
-            matched = false;
-            failure = null;
-            return true;
-        }
-
-        public bool TryBuildCandidates<TIndex>(TIndex index, [NotNullWhen(true)] out RoaringBitmap? candidates)
-            where TIndex : IPacketIndexReader
-        {
-            candidates = null;
-            return false;
-        }
-
-        public bool TryIsPresenceCandidate<TIndex>(TIndex index, uint packetId, out bool isCandidate)
-            where TIndex : IPacketIndexReader
-        {
-            isCandidate = false;
-            return false;
-        }
-
-        public void ResetState()
-        {
-        }
-
-        public bool TryDerive(IStack stack, [NotNullWhen(true)] out PacketFilter? derived, [NotNullWhen(false)] out FilterError? failure)
-        {
-            derived = PacketFilter.AlwaysMatch;
-            failure = null;
-            return true;
-        }
-    }
-
     #endregion
 
     #region Tests
@@ -303,23 +253,35 @@ internal sealed class SessionValueCacheCoverageTests
         session.Shutdown();
     }
 
+    /// <summary>
+    /// The NotifyOnly listener of the ingest cache attaches to the ingest info and burns no
+    /// <see cref="ValueCacheId"/>: the first runtime cache gets the id right after the ingest cache.
+    /// </summary>
     [Test]
-    public async Task TryAddListener_NonPacketFilter_ThrowsArgumentException()
+    public async Task IngestListenerAllocatesNoValueCacheId()
     {
         using Stack stack = TestHarness.CreateStack();
-        using Session session = new(stack);
-        try
-        {
-            _ = session.TryAddListener(new TestSessionListener(), new FakeFilter(), out _, out _);
-            throw new InvalidOperationException("Expected ArgumentException was not thrown.");
-        }
-        catch (ArgumentException ex)
-        {
-            await Assert.That(ex.Message).Contains("Filter");
-        }
+        using Session session = new(
+            stack,
+            new SessionOptions
+            {
+                ValueCache = new ValueCacheRequest { FieldNames = ["udp.srcport"] },
+                ValueCacheListener = new CoverListener(),
+            });
 
-        await Assert.That(session.GetJobs().Count).IsEqualTo(0);
-        await Assert.That(session.GetListeners().Count).IsEqualTo(0);
+        bool added = session.TryAddValueCache(
+            new CoverListener(),
+            new ValueCacheRequest { FieldNames = ["udp.srcport"] },
+            out ValueCacheInfo? runtime,
+            out _);
+        IReadOnlyList<ValueCacheInfo> caches = session.GetValueCaches();
+
+        await Assert.That(added).IsTrue();
+        await Assert.That(caches.Count).IsEqualTo(2);
+        await Assert.That(caches[0].Id.Value).IsEqualTo(0);
+        await Assert.That(caches[0].Job).IsNotNull();
+        await Assert.That(runtime!.Id.Value).IsEqualTo(1);
+        session.Shutdown();
     }
 
     #endregion

@@ -583,7 +583,9 @@ public sealed partial class IPv6Protocol : IProtocol
 
                 byte ahPayloadLen = span[extOffset + 1];
                 int ahTotalLen = (ahPayloadLen + 2) * 4;
-                if (remaining < ahTotalLen)
+                // Payload length 0 (8 bytes) leaves no room for the sequence number: malformed, as the lazy parser
+                // treats it.
+                if (ahTotalLen < 12 || remaining < ahTotalLen)
                 {
                     break;
                 }
@@ -639,8 +641,10 @@ public sealed partial class IPv6Protocol : IProtocol
             ? Math.Min(IPv6Header.HeaderSize + extTotalLen, data.Length)
             : IPv6Header.HeaderSize;
         ReadOnlyMemory<byte> headerBytes = data[..storedLen];
+        // The stored value holds the extension-header chain too; its representation names the stored length. The
+        // common case without extension headers keeps the static text (no per-packet formatting).
         FieldValue headerValue = FieldValue.NewBytes(headerBytes)
-            .WithCustomRepresentation(new LazyString("40 bytes"));
+            .WithCustomRepresentation(hasExtHeaders ? new LazyString(ZA.String(storedLen, " bytes")) : new LazyString("40 bytes"));
         MutField protoField = parentField.AppendLazyWithCustomText(
             _ProtocolFieldId, headerValue, "Internet Protocol Version 6, Src: ", src, ", Dst: ", dst, _Populator);
 

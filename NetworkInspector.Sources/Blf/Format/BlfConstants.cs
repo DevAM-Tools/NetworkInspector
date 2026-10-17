@@ -175,6 +175,18 @@ internal static class BlfConstants
     /// <summary>Ethernet frame EX (raw frame).</summary>
     internal const uint ObjTypeEthernetFrameEx = 120;
 
+    /// <summary>Ethernet frame forwarded (Type 121). Same 32-byte header as <see cref="ObjTypeEthernetFrameEx"/>.</summary>
+    internal const uint ObjTypeEthernetFrameForwarded = 121;
+
+    /// <summary>
+    /// Ethernet error frame EX (Type 122). Same 32-byte header as <see cref="ObjTypeEthernetFrameEx"/>; the
+    /// <c>error</c> field at offset 28 is non-zero and the captured bytes follow at offset 32.
+    /// </summary>
+    internal const uint ObjTypeEthernetErrorEx = 122;
+
+    /// <summary>Ethernet error frame forwarded (Type 123). Same layout as <see cref="ObjTypeEthernetErrorEx"/>.</summary>
+    internal const uint ObjTypeEthernetErrorForwarded = 123;
+
     /// <summary>CAN XL channel frame (object type 139).</summary>
     internal const uint ObjTypeCanXlChannelFrame = 139;
 
@@ -318,6 +330,29 @@ internal static class BlfConstants
     /// <summary>SocketCAN Error Frame flag (bit 29).</summary>
     internal const uint SocketCanErr = 0x20000000;
 
+    /// <summary>Offset of the payload byte count (<c>can_frame.len</c>, 0–8) in a classic SocketCAN frame.</summary>
+    internal const int SocketCanLenOffset = 4;
+
+    /// <summary>
+    /// Offset of <c>can_frame.len8_dlc</c> in a classic SocketCAN frame. Byte 4 carries the payload byte count
+    /// (0–8); a bus DLC of 9–15 is kept here so writers can restore it, and the byte is 0 for DLC 0–8. All readers
+    /// (BLF, ASC) and writers (BLF, ASC) of this product use this convention.
+    /// </summary>
+    internal const int SocketCanLen8DlcOffset = 7;
+
+    /// <summary>
+    /// Bus DLC of a classic SocketCAN frame under the <see cref="SocketCanLen8DlcOffset"/> convention:
+    /// <c>len8_dlc</c> when it holds 9–15, otherwise the payload byte count. For a remote frame the payload count is the
+    /// requested length. The frame must be at least 8 bytes long.
+    /// </summary>
+    internal static byte ClassicCanDlc(ReadOnlySpan<byte> socketCanFrame)
+    {
+        byte len8Dlc = socketCanFrame[SocketCanLen8DlcOffset];
+        return len8Dlc is > 8 and <= 15
+            ? len8Dlc
+            : socketCanFrame[SocketCanLenOffset];
+    }
+
     /// <summary>Classic CAN DLC to data length mapping (indices 0–15).</summary>
     internal static ReadOnlySpan<byte> CanDlcToLength =>
         [0, 1, 2, 3, 4, 5, 6, 7, 8, 8, 8, 8, 8, 8, 8, 8];
@@ -421,8 +456,9 @@ internal static class BlfConstants
     internal const uint AppTextSourceChannel = 1;
 
     /// <summary>
-    /// Shift of the 1-based channel number inside the AppText reserved u32 at offset 4
-    /// (<c>(reserved &gt;&gt; 8) &amp; 0xFF</c>).
+    /// Shift of the channel number inside the AppText reserved u32 at offset 4
+    /// (<c>(reserved &gt;&gt; 8) &amp; 0xFF</c>). AppText and the object channel field are both 1-based
+    /// (CANoe "CAN 1" = 1), so readers and writers compare and copy the value unchanged.
     /// </summary>
     internal const int AppTextReservedChannelShift = 8;
 
@@ -460,8 +496,13 @@ internal static class BlfConstants
         or ObjTypeFlexRayRcvMessageEx
         or ObjTypeEthernetFrame or ObjTypeCanErrorExt or ObjTypeCanMessage2
         or ObjTypeCanFdMessage or ObjTypeCanFdMessage64 or ObjTypeEthernetRxError
-        or ObjTypeCanFdError64 or ObjTypeEthernetFrameEx or ObjTypeCanXlChannelFrame => true,
+        or ObjTypeCanFdError64 or ObjTypeEthernetFrameEx or ObjTypeEthernetFrameForwarded
+        or ObjTypeEthernetErrorEx or ObjTypeEthernetErrorForwarded or ObjTypeCanXlChannelFrame => true,
         _ => false,
     };
+
+    /// <summary>True for the object types that share the 32-byte Type 120 Ethernet header (120, 121, 122, 123).</summary>
+    internal static bool IsEthernetExType(uint objectType) => objectType is ObjTypeEthernetFrameEx
+        or ObjTypeEthernetFrameForwarded or ObjTypeEthernetErrorEx or ObjTypeEthernetErrorForwarded;
     #endregion
 }

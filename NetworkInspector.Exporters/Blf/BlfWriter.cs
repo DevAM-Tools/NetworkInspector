@@ -74,6 +74,9 @@ internal sealed class BlfWriter
     // 4-byte alignment padding).
     private long _UncompressedBytesWritten;
 
+    /// <summary>Zone of the header SYSTEMTIME fields (see the constructor).</summary>
+    private readonly TimeZoneInfo _TimestampTimeZone;
+
     #endregion
 
     #region Constructors
@@ -85,12 +88,19 @@ internal sealed class BlfWriter
     /// <param name="startNs">_Start timestamp in nanoseconds since Unix epoch.</param>
     /// <param name="compression">Compression level for container output. Use
     /// <see cref="CompressionLevel.NoCompression"/> to disable compression.</param>
+    /// <param name="timestampTimeZone">
+    /// Zone in which the header <c>start_date</c> / <c>end_date</c> SYSTEMTIME fields are written; null means UTC.
+    /// The SYSTEMTIME carries no zone, so the reader must use the same zone
+    /// (<c>BlfSourceOptions.TimestampTimeZone</c>) to recover the absolute timestamps.
+    /// </param>
     internal BlfWriter(
         Stream stream,
         long startNs,
-        CompressionLevel compression = CompressionLevel.Optimal)
+        CompressionLevel compression = CompressionLevel.Optimal,
+        TimeZoneInfo? timestampTimeZone = null)
     {
         _Stream = stream;
+        _TimestampTimeZone = timestampTimeZone ?? TimeZoneInfo.Utc;
         // start_date is a SYSTEMTIME with millisecond precision. The object timestamp is
         // nanoseconds relative to that millisecond anchor (flags word 2). Flooring _StartNs
         // keeps the sub-millisecond residual in the object field. Leaving it on _StartNs
@@ -435,7 +445,7 @@ internal sealed class BlfWriter
     /// shift every reported frame timestamp by the local UTC offset.
     /// </para>
     /// </summary>
-    private static void _WriteBlfDate(Span<byte> dest, long unixNanos)
+    private void _WriteBlfDate(Span<byte> dest, long unixNanos)
     {
         if (unixNanos <= 0)
         {
@@ -443,8 +453,10 @@ internal sealed class BlfWriter
             return;
         }
 
+        // The BLF header stores wall-clock SYSTEMTIME without a zone; the zone is a builder option (default UTC) so
+        // writer and reader agree on a machine-independent zone, independent of the host's local time.
         DateTimeOffset dto = DateTimeOffset.FromUnixTimeMilliseconds(unixNanos / 1_000_000);
-        DateTime local = dto.LocalDateTime;
+        DateTime local = TimeZoneInfo.ConvertTime(dto, _TimestampTimeZone).DateTime;
 
         BinaryPrimitives.WriteUInt16LittleEndian(dest, (ushort)local.Year);
         BinaryPrimitives.WriteUInt16LittleEndian(dest.Slice(2), (ushort)local.Month);

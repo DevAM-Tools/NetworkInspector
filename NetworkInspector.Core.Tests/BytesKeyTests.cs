@@ -172,4 +172,23 @@ internal sealed class BytesKeyTests
         BytesKey missing = new([0xFF]);
         await Assert.That(dict.ContainsKey(missing)).IsFalse();
     }
+
+    // === Formatting ===
+
+    [Test]
+    public async Task ToStringIsUpperCaseHexWithoutSeparators()
+    {
+        BytesKey key = new([0xAB, 0x01, 0x0F]);
+
+        await Assert.That(key.ToString()).IsEqualTo("AB010F");
+    }
+
+    [Test]
+    public async Task ToStringOfDefaultAndEmptyIsEmpty()
+    {
+        BytesKey empty = new(ReadOnlySpan<byte>.Empty);
+
+        await Assert.That(default(BytesKey).ToString()).IsEqualTo(string.Empty);
+        await Assert.That(empty.ToString()).IsEqualTo(string.Empty);
+    }
 }

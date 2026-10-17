@@ -54,10 +54,23 @@ internal static class AscCanFdParser
     internal static bool TryParse(
         ReadOnlySpan<byte> line, int numericBase,
         out AscTimestamp timestamp, out int channel, out byte[] frame)
+        => FrameSlabAllocator.ToArray(
+            TryParse(line, numericBase, null, out timestamp, out channel, out ReadOnlyMemory<byte> memory), memory, out frame);
+
+    /// <inheritdoc cref="TryParse(ReadOnlySpan{byte}, int, out AscTimestamp, out int, out byte[])"/>
+    /// <param name="line">The full trimmed ASC line (including timestamp).</param>
+    /// <param name="numericBase">16 for hex, 10 for dec.</param>
+    /// <param name="slabs">Frame slab allocator of the sequential reader, or null for a new array.</param>
+    /// <param name="timestamp">Parsed line timestamp. Not scaled to Unix time.</param>
+    /// <param name="channel">Parsed channel number.</param>
+    /// <param name="frame">The resulting SocketCAN FD binary frame. Empty when this method returns <c>false</c>.</param>
+    internal static bool TryParse(
+        ReadOnlySpan<byte> line, int numericBase, FrameSlabAllocator? slabs,
+        out AscTimestamp timestamp, out int channel, out ReadOnlyMemory<byte> frame)
     {
         timestamp = default;
         channel = 0;
-        frame = [];
+        frame = default;
 
         AscTokenizerBytes tokenizer = new(line);
 
@@ -99,8 +112,9 @@ internal static class AscCanFdParser
 
             if (_TokenIs(idOrError, "ErrorFrame"u8))
             {
-                frame = new byte[_SocketCanHeaderSize + 8];
-                BinaryPrimitives.WriteUInt32BigEndian(frame, 0x20000000);
+                Memory<byte> errorFrame = FrameSlabAllocator.RentZeroed(slabs, _SocketCanHeaderSize + 8);
+                BinaryPrimitives.WriteUInt32BigEndian(errorFrame.Span, 0x20000000);
+                frame = errorFrame;
                 return true;
             }
 
@@ -244,13 +258,15 @@ internal static class AscCanFdParser
             socketDataLen = 0;
         }
 
-        frame = new byte[_SocketCanHeaderSize + socketDataLen];
-        BinaryPrimitives.WriteUInt32BigEndian(frame, socketCanId);
-        frame[4] = (byte)socketDataLen;
-        frame[5] = fdFlags;
+        Memory<byte> buffer = FrameSlabAllocator.RentZeroed(slabs, _SocketCanHeaderSize + socketDataLen);
+        Span<byte> socketCanFd = buffer.Span;
+        BinaryPrimitives.WriteUInt32BigEndian(socketCanFd, socketCanId);
+        socketCanFd[4] = (byte)socketDataLen;
+        socketCanFd[5] = fdFlags;
 
         int copyLen = Math.Min(parsedCount, socketDataLen);
-        dataBytes[..copyLen].CopyTo(frame.AsSpan(_SocketCanHeaderSize));
+        dataBytes[..copyLen].CopyTo(socketCanFd[_SocketCanHeaderSize..]);
+        frame = buffer;
         return true;
     }
 

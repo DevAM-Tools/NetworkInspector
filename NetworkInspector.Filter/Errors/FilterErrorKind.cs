@@ -23,14 +23,13 @@ public enum FilterErrorKind : byte
 
     #region Binding
 
-    /// <summary>Referenced field or protocol does not exist on the compile-time stack.</summary>
-    UnknownField = 4,
-
     /// <summary>
-    /// Reserved. Unknown protocol names report <see cref="UnknownField"/> (same message shape as
-    /// unknown fields) so callers have one failure kind for bind misses.
+    /// Referenced field, alias or protocol does not exist on the compile-time stack. Unknown protocol names
+    /// report this kind too, so callers have one failure kind for bind misses; <see cref="FilterError.Suggestion"/>
+    /// names the closest known name when one is near enough. Value 5 is unused (it was the never-produced
+    /// <c>UnknownProtocol</c>); the remaining values keep their numbers.
     /// </summary>
-    UnknownProtocol = 5,
+    UnknownField = 4,
 
     /// <summary>Operator applied to incompatible operand kinds.</summary>
     TypeMismatch = 6,

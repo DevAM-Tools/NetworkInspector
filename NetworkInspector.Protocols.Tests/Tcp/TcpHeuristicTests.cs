@@ -86,6 +86,50 @@ internal sealed class TcpHeuristicTests
     }
 
     [Test]
+    public async Task HeuristicTableRegisteredUnderTcpName_IsUsedWithoutSetter()
+    {
+        // Only the table name links TCP to its heuristic table: no reference to the TCP instance is needed.
+        using SettingsManager settings = new();
+        StackBuilder builder = new(settings, new FrameInterfaceRegistry());
+        _ = builder.RegisterFairProfilingProtocols();
+        HttpProtocol http = new();
+        ProtocolId httpId = builder.RegisterProtocol(http);
+        http.RegisterFields(builder, httpId);
+        HeuristicProtocolTableId table = builder.RegisterHeuristicProtocolTable(
+            builder.GetProtocolId("tcp")!.Value, TcpProtocol.HeuristicTableName, "TCP Heuristic", "Test table");
+        builder.RegisterHeuristicParser(table, new HttpHeuristicParser(httpId));
+        using Stack stack = builder.Build();
+        _DoHandshake(stack);
+
+        byte[] data = _ClientFrame(1001, 2001, TcpFlags.PshAck, "GET / HTTP/1.1\r\nHost: example.com\r\n\r\n"u8.ToArray());
+        Packet pData = ProtocolTestHelper.ParseFrame(stack, data, 3, Timestamp.FromMillis(20));
+
+        await ProtocolTestHelper.AssertProtocolPresent(stack, pData, "http").ConfigureAwait(false);
+    }
+
+    [Test]
+    public async Task HeuristicTableOfAnotherName_IsNotUsed()
+    {
+        // Heuristic table id 0, but not TCP's: without a "tcp.heuristic" table TCP must not fall back to id 0.
+        using SettingsManager settings = new();
+        StackBuilder builder = new(settings, new FrameInterfaceRegistry());
+        _ = builder.RegisterFairProfilingProtocols();
+        HttpProtocol http = new();
+        ProtocolId httpId = builder.RegisterProtocol(http);
+        http.RegisterFields(builder, httpId);
+        HeuristicProtocolTableId table = builder.RegisterHeuristicProtocolTable(
+            builder.GetProtocolId("tcp")!.Value, "other.heuristic", "Other", "Test table");
+        builder.RegisterHeuristicParser(table, new HttpHeuristicParser(httpId));
+        using Stack stack = builder.Build();
+        _DoHandshake(stack);
+
+        byte[] data = _ClientFrame(1001, 2001, TcpFlags.PshAck, "GET / HTTP/1.1\r\nHost: example.com\r\n\r\n"u8.ToArray());
+        Packet pData = ProtocolTestHelper.ParseFrame(stack, data, 3, Timestamp.FromMillis(20));
+
+        await ProtocolTestHelper.AssertProtocolNotPresent(stack, pData, "http").ConfigureAwait(false);
+    }
+
+    [Test]
     public async Task Heuristic_Http_PostRequest_Detected()
     {
         using Stack stack = ProtocolTestHelper.BuildStack();

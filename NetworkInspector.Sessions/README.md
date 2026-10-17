@@ -12,6 +12,9 @@ Session orchestration library for NetworkInspector.
 
 Each frame source runs on a dedicated thread. Listeners pull by packet id on notification instead of receiving pushed copies.
 
+How to embed a session in an application (setup order, threads, reading, recipes for packet lists, filtered
+lists, value caches and field observers, restart, shutdown): [`SESSION_GUIDE.md`](SESSION_GUIDE.md).
+
 ## Lifecycle
 
 ```mermaid
@@ -35,7 +38,7 @@ graph TD
 Typical flow:
 
 1. Create `Session` with a `Stack`.
-2. `TryAddFrameSource` (Idle only) and `TryAddListener` (Idle, Running, Restarting, or Stopped).
+2. `TryAddFrameSource` (Idle only) and `TryAddListener` (Idle, Running, or Stopped; refused while a restart runs).
 3. `TryStart()` — launches source and listener threads.
 4. `WaitForCompletion()` — blocks until all source jobs finish.
 5. `Shutdown()` or `Dispose()` — cancels listeners, disposes jobs and sources.
@@ -59,7 +62,8 @@ Typical flow:
 | `PacketRef` | A `PacketId` paired with its packet, so a filtered pull can report gapped ids |
 | `PacketReadMode` | `All` or `Matching` — whether a pull applies the listener's filter |
 | `PacketIdLayout` | `Contiguous` or `Gapped` — whether returned ids are consecutive |
-| `SessionException` | Typed errors with `SessionErrorCode` |
+| `SessionFailure` | Why an operational `Try*` call returned `false` (`Code`, `Message`) |
+| `SessionException` | Caller bugs and hard limits, typed with `SessionErrorCode` |
 
 ## Pull-Based Listeners
 
@@ -110,7 +114,11 @@ sealed class UdpPortCacheListener : IValueCacheListener
     private int _RowWatermark;
 }
 
-session.TryAddValueCache(new UdpPortCacheListener(), new ValueCacheRequest { FieldNames = ["udp.srcport"] }, out ValueCacheInfo? info);
+session.TryAddValueCache(
+    new UdpPortCacheListener(),
+    new ValueCacheRequest { FieldNames = ["udp.srcport"] },
+    out ValueCacheInfo? info,
+    out SessionFailure? failure);
 // info.Cache is a ReadOnlyValueCache — no RecordPacket
 ```
 
@@ -123,24 +131,27 @@ using Session session = new(stack, new SessionOptions
 });
 ```
 
-`session.IngestValueCache` is the read-only view filled by `Packet.TryParse` with `ParseOptions.Cache`. Restart abandons the previous writer and rebinds surviving runtime slots. Field and group names are validated with `NameValidation.IsValidName` when the request is bound (construction, `TryAddValueCache`, Restart).
+`session.IngestValueCache` is the read-only view filled by `Packet.TryParse` with `ParseOptions.Cache`. Restart abandons the previous writer and rebinds surviving runtime slots. Field and group names are validated with `NameValidation.IsValidName` when the request is bound (construction, `TryAddValueCache`, Restart). Restart builds the new ingest cache before it changes anything, so a field the new stack lacks throws `ValueCacheUnknownField` and leaves the session as it was. A runtime cache whose field the new stack lacks fails only its own slot. A read refused while a restart runs only pauses a runtime fill; it does not fail the slot.
 
 ## Per-Listener Filters
 
 A listener can register a filter, which then applies to that listener's pulls only:
 
 ```csharp
-session.TryAddListener(listener, "tcp.port == 443", out ListenerInfo? info, out FilterError? failure);
+session.TryAddListener(listener, "tcp.port == 443", out ListenerInfo? info, out FilterError? filterFailure, out SessionFailure? failure);
 
-// Or hand over a filter you compiled yourself against the session stack:
-session.TryAddListener(listener, myFilter, out info);
+// Or hand over a NetworkInspector.Filter.Filter you compiled yourself:
+session.TryAddListener(listener, myFilter, out info, out failure);
 
 // No filter at all — every packet:
-session.TryAddListener(listener, out info);
+session.TryAddListener(listener, out info, out failure);
 ```
 
 An empty or whitespace-only expression compiles to the always-match filter. A bad expression
-leaves the session untouched: no listener is registered and `failure` explains why. Each listener
+leaves the session untouched: no listener is registered and `filterFailure` explains why. A filter
+compiled against another stack (another session, or this session before a restart) is re-bound to
+the session stack with `TryDerive`; the session installs that copy and leaves your instance untouched.
+A filter that cannot be re-bound throws `ArgumentException` and registers nothing. Each listener
 filter is single-threaded. `TryReadPackets` in `Matching` mode and restart rebind share that
 listener's filter gate. `All` reads do not take the gate.
 
@@ -165,7 +176,8 @@ bool read = reader.TryReadPackets(
     PacketReadMode.Matching,
     out int count,
     out PacketIdLayout layout,
-    out FilterError? failure);
+    out FilterError? filterFailure,
+    out SessionFailure? sessionFailure);
 ```
 
 `Matching` scans from `startId` to the current `PacketCount` and keeps only what the filter
@@ -174,10 +186,16 @@ a filter, or one whose filter is always-match, takes the unfiltered fast path an
 per-packet work. Otherwise the filter's presence-index candidate set prunes the range first, and
 only the survivors are evaluated.
 
-`TryReadPackets` returns `false` with `count == 0` when the filter refuses to produce a verdict:
-it is poisoned by an earlier failure, a packet failed to evaluate, or the filter could not be
-re-bound after a stack swap. `All` reads keep working in every one of those cases. An unknown
-`ListenerId` throws `SessionException(SessionErrorCode.ListenerNotFound)`.
+`TryReadPackets` returns `false` with `count == 0` and `filterFailure` set when the filter refuses
+to produce a verdict: it is poisoned by an earlier failure, a packet failed to evaluate, or the
+filter could not be re-bound after a stack swap. `All` reads keep working in every one of those
+cases. An unknown `ListenerId` makes `TryReadPackets` return `false` with
+`sessionFailure.Code == SessionErrorCode.ListenerNotFound`; disabled queries (restart, shutdown)
+return `false` with `SessionErrorCode.QueriesDisabled`.
+
+The `Matching` scan runs up to the current `PacketCount`, which can be past the window of the
+current `OnNewPackets` call. Keep a watermark (last returned id + 1) and start the next read at
+`max(watermark, fromIndex)`; see [`SESSION_GUIDE.md`](SESSION_GUIDE.md) section 7.3.
 
 Filtering never affects notifications: `OnNewPackets` always reports the raw, unfiltered id
 window.
@@ -204,6 +222,14 @@ session.Restart(registry =>
 });
 ```
 
+- The ingest value cache and the packet index of the new stack are built before anything changes. A field
+  of `SessionOptions.ValueCache` that the new stack lacks throws `ValueCacheUnknownField` and leaves the
+  session exactly as it was (same stack, same phase, queries enabled).
+- A source thread that passed the parse gate just before the restart closed it parks again under the
+  parse lock; it never allocates an id from the reset counter, so no frame is lost.
+- `Restart` blocks until every frame is re-parsed; run it off a UI thread. A frame that cannot be re-read
+  throws `FrameUnavailable` and leaves queries disabled (fail closed).
+
 ## TryUnsubscribe vs Shutdown
 
 | Operation | Source job | Listener job | User job |
@@ -213,7 +239,7 @@ session.Restart(registry =>
 
 Convenience APIs: `FrameSourceInfo.Stop()` and `ListenerInfo.Unsubscribe()` delegate to `TryUnsubscribe`.
 
-`TryUnsubscribe` returns `false` with a `SessionFailure` for foreign jobs, terminal jobs, or when the session is shutting down. A source that has not started can be removed during `Idle`.
+`TryUnsubscribe` returns `false` with a `SessionFailure` for foreign jobs, terminal jobs, or when the session is shutting down. A source that has not started can be removed during `Idle`. Do not unsubscribe a listener from its own callback: the call waits for that listener's thread.
 
 ## TryRemoveJob
 
@@ -230,7 +256,9 @@ Removes a **terminal** job (Completed, Cancelled, or Failed) from the job list. 
 
 All public `Session` methods are thread-safe. Counters use `Interlocked`; phase and flags use `Volatile`. First-parse is serialised under a shared Monitor across source threads; re-parse of announced ids is lock-free.
 
-Listeners, value caches, and user jobs may be added while the session is `Idle`, `Running`, `Restarting`, or `Stopped`. `ShuttingDown` is refused. A listener or value cache added after packets exist is notified for the current id range. Frame sources stay `Idle` only.
+Listeners and value caches may be added while the session is `Idle`, `Running`, or `Stopped`; they are refused while shutting down (`InvalidPhase`) and while packet queries are disabled (`QueriesDisabled`: restart in progress or failed, or after shutdown). User jobs may be added in every phase until `Shutdown` starts. A listener or value cache added after packets exist is notified for the current id range. Frame sources stay `Idle` only.
+
+`Shutdown` waits for a running restart; later `Shutdown` callers wait for the first one. Both waits are kernel waits.
 
 Each listener filter is single-threaded. `TryReadPackets` in `Matching` mode and restart rebind share that listener's filter gate. `All` reads do not take the gate. Do not call `TryIsMatch` on the session's filter from outside `TryReadPackets`.
 

@@ -47,8 +47,11 @@ public sealed class DatagramDefragmenter<TKey> where TKey : struct, IEquatable<T
     /// <summary>In-progress reassembly buffers keyed by fragment identification tuple.</summary>
     private readonly Dictionary<TKey, DatagramFragmentBuffer> _Buffers = [];
 
-    /// <summary>Insertion order for deterministic FIFO eviction.</summary>
-    private readonly Queue<TKey> _InsertionOrder = new();
+    /// <summary>
+    /// Insertion order for deterministic FIFO eviction. Each entry names the buffer it queued: after a discard or a
+    /// completion the key may start a new buffer, and only the entry of the live buffer counts.
+    /// </summary>
+    private readonly Queue<(TKey Key, DatagramFragmentBuffer Buffer)> _InsertionOrder = new();
 
     /// <summary>Maximum concurrent reassembly entries to prevent unbounded memory usage.</summary>
     private readonly int _MaxEntries = _DefaultMaxEntries;
@@ -150,7 +153,7 @@ public sealed class DatagramDefragmenter<TKey> where TKey : struct, IEquatable<T
         // queue would grow linearly with every reassembled datagram on long-running
         // captures. Bounded work per call: at most O(stale prefix length) and amortized
         // O(1) because each enqueue can only be drained once.
-        while (_InsertionOrder.TryPeek(out TKey staleHead) && !_Buffers.ContainsKey(staleHead))
+        while (_InsertionOrder.TryPeek(out (TKey Key, DatagramFragmentBuffer Buffer) staleHead) && !_IsLive(staleHead))
         {
             _InsertionOrder.Dequeue();
         }
@@ -169,7 +172,7 @@ public sealed class DatagramDefragmenter<TKey> where TKey : struct, IEquatable<T
 
             buffer = new();
             _Buffers[key] = buffer;
-            _InsertionOrder.Enqueue(key);
+            _InsertionOrder.Enqueue((key, buffer));
         }
 
         // buffer is guaranteed non-null: either found by TryGetValue or freshly created above.
@@ -245,15 +248,23 @@ public sealed class DatagramDefragmenter<TKey> where TKey : struct, IEquatable<T
         // Only count an actual buffer removal as an eviction — stale queue entries are not.
         while (_InsertionOrder.Count > 0)
         {
-            TKey oldest = _InsertionOrder.Dequeue();
-            if (_Buffers.Remove(oldest, out DatagramFragmentBuffer? evicted))
+            (TKey Key, DatagramFragmentBuffer Buffer) oldest = _InsertionOrder.Dequeue();
+            if (_IsLive(oldest))
             {
-                evicted.Release();
+                _ = _Buffers.Remove(oldest.Key);
+                oldest.Buffer.Release();
                 Interlocked.Increment(ref _EvictedCount);
                 return;
             }
         }
     }
+
+    /// <summary>
+    /// Whether a queue entry still names the buffer stored under its key. An entry left by a completed or discarded
+    /// datagram is stale even when the key has started a new buffer since.
+    /// </summary>
+    private bool _IsLive((TKey Key, DatagramFragmentBuffer Buffer) entry) =>
+        _Buffers.TryGetValue(entry.Key, out DatagramFragmentBuffer? live) && ReferenceEquals(live, entry.Buffer);
 
     #endregion
 }

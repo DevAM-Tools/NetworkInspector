@@ -13,7 +13,10 @@ internal enum ValueAccessorKind : byte
     /// <summary>Take a half-open byte slice, e.g. <c>eth.src[0:3]</c>.</summary>
     Slice = 1,
 
-    /// <summary>Take the value's byte length, e.g. <c>len(udp.payload)</c>.</summary>
+    /// <summary>
+    /// Take the value's length in bytes, e.g. <c>len(udp.payload)</c>: byte count for byte fields, UTF-8 byte
+    /// count for strings, wire width for fixed-width types.
+    /// </summary>
     Length = 2,
 }
 
@@ -37,7 +40,12 @@ internal sealed class ValueAccessor
 {
     #region Fields
 
-    private readonly byte[] _SliceBuffer;
+    /// <summary>
+    /// Reusable slice destination, created on the first value that is long enough. Allocating it lazily keeps a
+    /// user-written <c>[0:2000000000]</c> from reserving gigabytes at compile time; it is only ever as large as a
+    /// value that really exists.
+    /// </summary>
+    private byte[]? _SliceBuffer;
 
     #endregion
 
@@ -49,7 +57,6 @@ internal sealed class ValueAccessor
         Kind = kind;
         SliceStart = sliceStart;
         SliceEnd = sliceEnd;
-        _SliceBuffer = kind == ValueAccessorKind.Slice ? new byte[sliceEnd - sliceStart] : [];
     }
 
     /// <summary>Creates an accessor that passes raw field values through.</summary>
@@ -132,8 +139,10 @@ internal sealed class ValueAccessor
             return false;
         }
 
-        source[SliceStart..SliceEnd].CopyTo(_SliceBuffer);
-        transformed = FieldValueData.NewBytes(_SliceBuffer);
+        // The parser guarantees 0 <= SliceStart < SliceEnd <= ArrayIndexIdRange.MaxValue, so the width is positive.
+        byte[] buffer = _SliceBuffer ??= new byte[SliceEnd - SliceStart];
+        source[SliceStart..SliceEnd].CopyTo(buffer);
+        transformed = FieldValueData.NewBytes(buffer);
         return true;
     }
 
@@ -145,9 +154,11 @@ internal sealed class ValueAccessor
             return true;
         }
 
+        // Strings measure in UTF-8 bytes, the encoding a payload carries on the wire, so len() is a byte length
+        // for every type. Unpaired UTF-16 surrogates count as the 3-byte replacement character.
         if (raw.Type == FieldType.String && raw.TryGetAsString(out string text))
         {
-            transformed = FieldValueData.NewU64((ulong)text.Length);
+            transformed = FieldValueData.NewU64((ulong)Encoding.UTF8.GetByteCount(text));
             return true;
         }
 
@@ -167,8 +178,10 @@ internal sealed class ValueAccessor
     #region Byte layout
 
     /// <summary>
-    /// Writes the network-order bytes of a fixed-width value so slices work on addresses as well
-    /// as on raw byte fields.
+    /// Writes the network-order (big-endian) bytes of a fixed-width value so slices work on numbers, timestamps,
+    /// UUIDs and addresses as well as on raw byte fields. Every type <see cref="_FixedWidth"/> reports is written
+    /// here with exactly that width, so <c>len()</c> and slicing always agree. <paramref name="destination"/> holds
+    /// at least 16 bytes.
     /// </summary>
     private static bool _TryWriteFixedWidth(in FieldValueData raw, Span<byte> destination, out int written)
     {
@@ -176,6 +189,58 @@ internal sealed class ValueAccessor
 
         switch (raw.Type)
         {
+            case FieldType.Bool:
+            {
+                _ = raw.TryGetAsBool(out bool value);
+                destination[0] = value ? (byte)1 : (byte)0;
+                written = 1;
+                return true;
+            }
+
+            case FieldType.I64:
+            {
+                _ = raw.TryGetAsI64(out long value);
+                BinaryPrimitives.WriteInt64BigEndian(destination, value);
+                written = 8;
+                return true;
+            }
+
+            case FieldType.U64:
+            {
+                _ = raw.TryGetAsU64(out ulong value);
+                BinaryPrimitives.WriteUInt64BigEndian(destination, value);
+                written = 8;
+                return true;
+            }
+
+            case FieldType.F64:
+            {
+                // IEEE 754 binary64 bit pattern, sign byte first.
+                _ = raw.TryGetAsF64(out double value);
+                BinaryPrimitives.WriteDoubleBigEndian(destination, value);
+                written = 8;
+                return true;
+            }
+
+            case FieldType.Timestamp:
+            {
+                // Signed nanoseconds since the Unix epoch.
+                _ = raw.TryGetAsTimestamp(out Timestamp value);
+                BinaryPrimitives.WriteInt64BigEndian(destination, value.AsNanos);
+                written = 8;
+                return true;
+            }
+
+            case FieldType.Uuid:
+            {
+                // Same layout as Uuid.ToBytes: High then Low, both big-endian (RFC 9562 byte order).
+                _ = raw.TryGetAsUuid(out Values.Uuid value);
+                BinaryPrimitives.WriteUInt64BigEndian(destination, value.High);
+                BinaryPrimitives.WriteUInt64BigEndian(destination[8..], value.Low);
+                written = 16;
+                return true;
+            }
+
             case FieldType.MacAddress:
             {
                 _ = raw.TryGetAsMacAddress(out MacAddress mac);
@@ -218,6 +283,7 @@ internal sealed class ValueAccessor
         }
     }
 
+    /// <summary>Wire width in bytes of a fixed-width type, or -1 when the type has no fixed width.</summary>
     private static int _FixedWidth(FieldType type) => type switch
     {
         FieldType.Bool => 1,

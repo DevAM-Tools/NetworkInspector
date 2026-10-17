@@ -370,4 +370,56 @@ internal sealed class FilterLexerTests
     }
 
     #endregion
+
+    #region Brackets
+
+    [Test]
+    [Arguments("x[10:12]")]
+    [Arguments("x[16:32]")]
+    [Arguments("x[99:99]")]
+    [Arguments("x[0:2]")]
+    public async Task Tokenize_TwoDigitSliceBounds_StayIntegers(string source)
+    {
+        List<Token> tokens = _Tokenize(source);
+
+        await Assert.That(tokens[2].Kind).IsEqualTo(TokenKind.Integer);
+        await Assert.That(tokens[3].Kind).IsEqualTo(TokenKind.Colon);
+        await Assert.That(tokens[4].Kind).IsEqualTo(TokenKind.Integer);
+        await Assert.That(tokens[5].Kind).IsEqualTo(TokenKind.RightBracket);
+    }
+
+    [Test]
+    public async Task Tokenize_HexLikeIdentifiersInsideBrackets_StayIdentifiers()
+    {
+        List<Token> tokens = _Tokenize("x[ab:cd]");
+
+        await Assert.That(tokens[2].Kind).IsEqualTo(TokenKind.Identifier);
+        await Assert.That(tokens[3].Kind).IsEqualTo(TokenKind.Colon);
+        await Assert.That(tokens[4].Kind).IsEqualTo(TokenKind.Identifier);
+    }
+
+    [Test]
+    [Arguments("x[10:12] == 00:11", TokenKind.HexBytes)]
+    [Arguments("x[0:6] == 00:11:22:33:44:55", TokenKind.MacAddress)]
+    [Arguments("$udp[1] { ip.addr == 2001:db8::1 }", TokenKind.Ipv6Address)]
+    public async Task Tokenize_LiteralsAfterTheClosingBracket_KeepTheirKind(string source, TokenKind expected)
+    {
+        List<Token> tokens = _Tokenize(source);
+
+        await Assert.That(tokens.Exists(token => token.Kind == expected)).IsTrue();
+    }
+
+    [Test]
+    public async Task TokenizeLenient_StopsAtTheFirstErrorAndFlagsOpenStrings()
+    {
+        List<Token> stopped = new FilterLexer("udp.port = 5").TokenizeLenient(out bool firstInString);
+        List<Token> open = new FilterLexer("http.host contains \"ab").TokenizeLenient(out bool secondInString);
+
+        await Assert.That(stopped.Count).IsEqualTo(1);
+        await Assert.That(firstInString).IsFalse();
+        await Assert.That(open.Count).IsEqualTo(2);
+        await Assert.That(secondInString).IsTrue();
+    }
+
+    #endregion
 }

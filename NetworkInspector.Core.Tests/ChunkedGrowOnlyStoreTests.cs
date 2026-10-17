@@ -33,14 +33,7 @@ internal sealed class ChunkedGrowOnlyStoreTests
     public async Task ReferenceStore_AppendPastIndexRange_Throws()
     {
         Collections.ChunkedGrowOnlyStore<object> store = new(chunkShift: 4);
-        System.Reflection.FieldInfo countField = typeof(Collections.ChunkedGrowOnlyStore<object>)
-            .GetField("_Store", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .FieldType
-            .GetField("_Count", BindingFlags.Instance | BindingFlags.NonPublic)!;
-        object slotStore = typeof(Collections.ChunkedGrowOnlyStore<object>)
-            .GetField("_Store", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .GetValue(store)!;
-        countField.SetValue(slotStore, Ids.ArrayIndexIdRange.MaxValue + 1);
+        _SetPublishedCount(store, Ids.ArrayIndexIdRange.MaxValue + 1);
 
         await Assert
             .That(() => store.Append(new()))
@@ -309,39 +302,17 @@ internal sealed class ChunkedGrowOnlyStoreTests
     [Test]
     public async Task GrowOnlyStore_ConcurrentAppend_ThrowsInvalidOperationException()
     {
-        Collections.ChunkedGrowOnlyStore<object> store = new(chunkShift: 4);
         object value0 = new();
         object value1 = new();
-        const int total = 65_536;
-        int ready = 0;
-        int threw = 0;
 
-        void Writer(object value)
-        {
-            _ = Interlocked.Increment(ref ready);
-            while (Volatile.Read(ref ready) < 2)
-            {
-            }
+        // Fresh store per round; the probe repeats rounds until both writers overlapped once.
+        Collections.ChunkedGrowOnlyStore<object>? rejected = await ConcurrentWriterProbe.SecondWriterIsRejectedAsync(
+            static () => new Collections.ChunkedGrowOnlyStore<object>(chunkShift: 4),
+            (store, _) => store.Append(value0),
+            (store, _) => store.Append(value1),
+            burst: 65_536);
 
-            for (int i = 0; i < total; i++)
-            {
-                try
-                {
-                    store.Append(value);
-                }
-                catch (InvalidOperationException)
-                {
-                    _ = Interlocked.Exchange(ref threw, 1);
-                    return;
-                }
-            }
-        }
-
-        Task first = Task.Run(() => Writer(value0));
-        Task second = Task.Run(() => Writer(value1));
-        await Task.WhenAll(first, second);
-
-        await Assert.That(Volatile.Read(ref threw)).IsEqualTo(1);
+        await Assert.That(rejected).IsNotNull();
     }
 
     [Test]
@@ -617,14 +588,7 @@ internal sealed class ChunkedGrowOnlyStoreTests
     public async Task GrowOnlyStore_AppendRange_PastIndexRange_Throws()
     {
         Collections.ChunkedGrowOnlyStore<int> store = new(chunkShift: 4);
-        System.Reflection.FieldInfo countField = typeof(Collections.ChunkedGrowOnlyStore<int>)
-            .GetField("_Store", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .FieldType
-            .GetField("_Count", BindingFlags.Instance | BindingFlags.NonPublic)!;
-        object slotStore = typeof(Collections.ChunkedGrowOnlyStore<int>)
-            .GetField("_Store", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .GetValue(store)!;
-        countField.SetValue(slotStore, Ids.ArrayIndexIdRange.MaxValue);
+        _SetPublishedCount(store, Ids.ArrayIndexIdRange.MaxValue);
         int[] values = [1, 2];
 
         await Assert
@@ -648,37 +612,14 @@ internal sealed class ChunkedGrowOnlyStoreTests
     [Test]
     public async Task Append_ConcurrentSecondWriter_ThrowsInvalidOperationException()
     {
-        Collections.ChunkedAppendOnlyStore<KeyedItem> store = new(chunkShift: 4);
-        const int total = 65_536;
-        int ready = 0;
-        int threw = 0;
+        // Fresh store per round; the probe repeats rounds until both writers overlapped once.
+        Collections.ChunkedAppendOnlyStore<KeyedItem>? rejected = await ConcurrentWriterProbe.SecondWriterIsRejectedAsync(
+            static () => new Collections.ChunkedAppendOnlyStore<KeyedItem>(chunkShift: 4),
+            static (store, i) => store.Append(new KeyedItem(i, i)),
+            static (store, i) => store.Append(new KeyedItem(unchecked(1_000_000 + i), i)),
+            burst: 65_536);
 
-        void Writer(int keyBase)
-        {
-            _ = Interlocked.Increment(ref ready);
-            while (Volatile.Read(ref ready) < 2)
-            {
-            }
-
-            for (int i = 0; i < total; i++)
-            {
-                try
-                {
-                    store.Append(new KeyedItem(keyBase + i, i));
-                }
-                catch (InvalidOperationException)
-                {
-                    _ = Interlocked.Exchange(ref threw, 1);
-                    return;
-                }
-            }
-        }
-
-        Task first = Task.Run(() => Writer(0));
-        Task second = Task.Run(() => Writer(1_000_000));
-        await Task.WhenAll(first, second);
-
-        await Assert.That(Volatile.Read(ref threw)).IsEqualTo(1);
+        await Assert.That(rejected).IsNotNull();
     }
 
     [Test]
@@ -776,23 +717,146 @@ internal sealed class ChunkedGrowOnlyStoreTests
         await Assert.That(() => store!.ReadRange(0, buffer)).Throws<ArgumentNullException>();
     }
 
+    /// <summary>
+    /// The factory runs inside the allocating call, so a second allocation from it overlaps the first: the
+    /// single-allocator gate throws instead of risking a lost chunk, and releases on the way out.
+    /// </summary>
     [Test]
-    public async Task ChunkedOuterArray_ConcurrentDisjointAllocation_BothChunksReadable()
+    public async Task ChunkedOuterArrayOverlappingAllocationThrows()
     {
         Collections.ChunkedOuterArray<object[]> outer = new(chunkShift: 4);
-        object[] chunk0 = new object[16];
-        object[] chunk272 = new object[16];
 
-        for (int attempt = 0; attempt < 64; attempt++)
+        await Assert
+            .That(() => outer.GetOrAllocateChunk(0, () => outer.GetOrAllocateChunk(1, () => new object[16])))
+            .Throws<InvalidOperationException>();
+
+        object[] chunk = outer.GetOrAllocateChunk(0, () => new object[16]);
+        await Assert.That(outer.GetChunk(0)).IsSameReferenceAs(chunk);
+        await Assert.That(outer.GetChunk(1)).IsNull();
+    }
+
+    /// <summary><c>Clear</c> during an allocating call overlaps it and throws; the allocation then installs nothing.</summary>
+    [Test]
+    public async Task ChunkedOuterArrayClearDuringAllocationThrows()
+    {
+        Collections.ChunkedOuterArray<object[]> outer = new(chunkShift: 4);
+
+        await Assert
+            .That(() => outer.GetOrAllocateChunk(2, () =>
+            {
+                outer.Clear();
+                return new object[16];
+            }))
+            .Throws<InvalidOperationException>();
+
+        await Assert.That(outer.GetChunk(2)).IsNull();
+    }
+
+    /// <summary>
+    /// Returning an installed chunk takes no gate, so it succeeds even while an allocation runs; only allocating
+    /// calls must not overlap.
+    /// </summary>
+    [Test]
+    public async Task ChunkedOuterArrayInstalledChunkIsReturnedDuringAnAllocation()
+    {
+        Collections.ChunkedOuterArray<object[]> outer = new(chunkShift: 4);
+        object[] first = outer.GetOrAllocateChunk(0, () => new object[16]);
+        object[]? seen = null;
+
+        object[] second = outer.GetOrAllocateChunk(5, () =>
         {
-            outer.Clear();
-            Task first = Task.Run(() => outer.GetOrAllocateChunk(0, () => chunk0));
-            Task second = Task.Run(() => outer.GetOrAllocateChunk(17, () => chunk272));
-            await Task.WhenAll(first, second);
+            seen = outer.GetOrAllocateChunk(0, () => throw new InvalidOperationException("factory must not run"));
+            return new object[16];
+        });
 
-            await Assert.That(outer.GetChunk(0)).IsSameReferenceAs(chunk0);
-            await Assert.That(outer.GetChunk(17)).IsSameReferenceAs(chunk272);
+        await Assert.That(seen).IsSameReferenceAs(first);
+        await Assert.That(outer.GetChunk(5)).IsSameReferenceAs(second);
+    }
+
+    /// <summary>A throwing factory installs nothing and releases the gate; the next allocation of the index succeeds.</summary>
+    [Test]
+    public async Task ChunkedOuterArrayFailedFactoryLeavesTheArrayUsable()
+    {
+        Collections.ChunkedOuterArray<object[]> outer = new(chunkShift: 4);
+
+        await Assert
+            .That(() => outer.GetOrAllocateChunk(3, () => throw new InvalidOperationException("factory failed")))
+            .Throws<InvalidOperationException>();
+        await Assert.That(outer.GetChunk(3)).IsNull();
+
+        object[] chunk = outer.GetOrAllocateChunk(3, () => new object[16]);
+        await Assert.That(outer.GetChunk(3)).IsSameReferenceAs(chunk);
+    }
+
+    /// <summary>Allocations one after the other on different threads are allowed; the second one grows the outer array.</summary>
+    [Test]
+    public async Task ChunkedOuterArraySequentialAllocationsOnDifferentThreadsKeepEveryChunk()
+    {
+        Collections.ChunkedOuterArray<object[]> outer = new(chunkShift: 4);
+
+        object[] first = await Task.Run(() => outer.GetOrAllocateChunk(0, () => new object[16]));
+        object[] second = await Task.Run(() => outer.GetOrAllocateChunk(17, () => new object[16]));
+
+        await Assert.That(outer.GetChunk(0)).IsSameReferenceAs(first);
+        await Assert.That(outer.GetChunk(17)).IsSameReferenceAs(second);
+    }
+
+    /// <summary>
+    /// One allocator installs chunks 0 … 255 in order, growing the outer array nine times, while four readers poll.
+    /// A reader that saw n chunks published must find each of them, also across a growth that replaced the outer array.
+    /// </summary>
+    [Test]
+    public async Task ChunkedOuterArrayReadersDuringGrowthSeeEveryInstalledChunk()
+    {
+        const int chunkCount = 256;
+        const int readerCount = 4;
+        Collections.ChunkedOuterArray<object[]> outer = new(chunkShift: 4);
+        object[][] expected = new object[chunkCount][];
+        for (int index = 0; index < chunkCount; index++)
+        {
+            expected[index] = new object[16];
         }
+
+        // Shared between the allocator and the readers: published through Volatile, counted with Interlocked.
+        int published = 0;
+        int missing = 0;
+
+        Task allocator = Task.Run(() =>
+        {
+            for (int index = 0; index < chunkCount; index++)
+            {
+                object[] chunk = expected[index];
+                _ = outer.GetOrAllocateChunk(index, () => chunk);
+                Volatile.Write(ref published, index + 1);
+            }
+        });
+
+        // Readers stop once everything is published, or when the allocator failed (its exception surfaces below).
+        Task[] readers = new Task[readerCount];
+        for (int reader = 0; reader < readerCount; reader++)
+        {
+            readers[reader] = Task.Run(() =>
+            {
+                int seen;
+                do
+                {
+                    seen = Volatile.Read(ref published);
+                    for (int index = 0; index < seen; index++)
+                    {
+                        if (!ReferenceEquals(outer.GetChunk(index), expected[index]))
+                        {
+                            _ = Interlocked.Increment(ref missing);
+                        }
+                    }
+                }
+                while (seen < chunkCount && !allocator.IsFaulted);
+            });
+        }
+
+        await allocator;
+        await Task.WhenAll(readers);
+
+        await Assert.That(missing).IsEqualTo(0);
     }
 
     [Test]
@@ -808,46 +872,16 @@ internal sealed class ChunkedGrowOnlyStoreTests
     [Test]
     public async Task GrowOnlyStore_ConcurrentAppendRange_Throws()
     {
-        bool sawConcurrent = false;
-        for (int attempt = 0; attempt < 64; attempt++)
-        {
-            Collections.ChunkedGrowOnlyStore<int> store = new(chunkShift: 4);
-            int[] data = new int[200_000];
-            using Barrier barrier = new(2);
-            Thread worker = new(() =>
-            {
-                barrier.SignalAndWait();
-                try
-                {
-                    store.AppendRange(data);
-                }
-                catch (InvalidOperationException)
-                {
-                    Volatile.Write(ref sawConcurrent, true);
-                }
-            })
-            {
-                Name = "grow-only-append-range-worker",
-            };
-            worker.Start();
-            barrier.SignalAndWait();
-            try
-            {
-                store.Append(1);
-            }
-            catch (InvalidOperationException)
-            {
-                sawConcurrent = true;
-            }
+        int[] data = new int[50_000];
 
-            worker.Join();
-            if (sawConcurrent)
-            {
-                break;
-            }
-        }
+        // Fresh store per round: the first writer appends ranges, the second single values until the first is done.
+        Collections.ChunkedGrowOnlyStore<int>? rejected = await ConcurrentWriterProbe.SecondWriterIsRejectedAsync(
+            static () => new Collections.ChunkedGrowOnlyStore<int>(chunkShift: 4),
+            (store, _) => store.AppendRange(data),
+            static (store, _) => store.Append(1),
+            burst: 16);
 
-        await Assert.That(sawConcurrent).IsTrue();
+        await Assert.That(rejected).IsNotNull();
     }
 
     [Test]
@@ -892,44 +926,16 @@ internal sealed class ChunkedGrowOnlyStoreTests
     [Test]
     public async Task AppendRange_ConcurrentAppend_Throws()
     {
-        bool sawConcurrent = false;
-        for (int attempt = 0; attempt < 64; attempt++)
-        {
-            Collections.ChunkedAppendOnlyStore<int> store = new(chunkShift: 4);
-            int[] data = new int[200_000];
-            using Barrier barrier = new(2);
-            Thread worker = new(() =>
-            {
-                barrier.SignalAndWait();
-                try
-                {
-                    store.AppendRange(data);
-                }
-                catch (InvalidOperationException)
-                {
-                    Volatile.Write(ref sawConcurrent, true);
-                }
-            })
-            {
-                Name = "append-range-worker",
-            };
-            worker.Start();
-            barrier.SignalAndWait();
-            try
-            {
-                store.Append(1);
-            }
-            catch (InvalidOperationException)
-            {
-                sawConcurrent = true;
-                worker.Join();
-                break;
-            }
+        int[] data = new int[50_000];
 
-            worker.Join();
-        }
+        // Fresh store per round: the first writer appends ranges, the second single values until the first is done.
+        Collections.ChunkedAppendOnlyStore<int>? rejected = await ConcurrentWriterProbe.SecondWriterIsRejectedAsync(
+            static () => new Collections.ChunkedAppendOnlyStore<int>(chunkShift: 4),
+            (store, _) => store.AppendRange(data),
+            static (store, _) => store.Append(1),
+            burst: 16);
 
-        await Assert.That(sawConcurrent).IsTrue();
+        await Assert.That(rejected).IsNotNull();
     }
 
     [Test]
@@ -1042,7 +1048,7 @@ internal sealed class ChunkedGrowOnlyStoreTests
                     continue;
                 }
 
-                // Clear's odd epoch makes TryReadPublished miss before Count drops.
+                // A Clear that replaced the generation makes TryReadPublished miss.
                 // A hit is still the pair just written, never the unset sentinel.
                 if (!firstFound || !secondFound)
                 {
@@ -1070,6 +1076,119 @@ internal sealed class ChunkedGrowOnlyStoreTests
         await Assert.That(stablePublishes).IsGreaterThan(0);
         await _AssertPackedPrefixHasNoUnset(store);
         await Assert.That(store.Count).IsGreaterThan(0);
+    }
+
+    [Test]
+    public async Task PackedStoreAppendAfterClearPublishesIntoTheNewGeneration()
+    {
+        Collections.ChunkedAppendOnlyStore<KeyedItem> store = new(chunkShift: 4);
+        for (int i = 0; i < 20; i++)
+        {
+            store.Append(new KeyedItem(i, 1));
+        }
+
+        store.Clear();
+        store.Append(new KeyedItem(0, 2));
+
+        await Assert.That(store.Count).IsEqualTo(1);
+        await Assert.That(store.ItemRef(0)).IsEqualTo(new KeyedItem(0, 2));
+        await Assert.That(store.TryReadPublished(1, out _)).IsFalse();
+        await Assert.That(store.TryReadPublished(17, out _)).IsFalse();
+        await Assert.That(store.BinarySearch(17)).IsEqualTo(-1);
+    }
+
+    [Test]
+    public async Task GrowOnlyStoreTryGetPublishedChunkAfterClearReturnsFalse()
+    {
+        Collections.ChunkedGrowOnlyStore<long> store = new(chunkShift: 4);
+        for (int i = 0; i < 20; i++)
+        {
+            store.Append(i);
+        }
+
+        store.Clear();
+        bool firstChunk = store.TryGetPublishedChunk(0, 20, out _);
+        bool secondChunk = store.TryGetPublishedChunk(1, 20, out _);
+
+        await Assert.That(firstChunk).IsFalse();
+        await Assert.That(secondChunk).IsFalse();
+    }
+
+    [Test]
+    public async Task PackedStoreReadersDuringAppendAndClearSeeOnlyPublishedEntries()
+    {
+        // Every generation holds Key == index and a round tag >= 1. A reader that mixed a count with the
+        // chunks of another generation, or read an unpublished slot, would see a default entry or a wrong key.
+        Collections.ChunkedAppendOnlyStore<KeyedItem> store = new(chunkShift: 4);
+        const int rounds = 200;
+        const int entriesPerRound = 100;
+        int finished = 0;
+        int violation = 0;
+
+        Task writer = Task.Run(() =>
+        {
+            for (int round = 1; round <= rounds; round++)
+            {
+                for (int i = 0; i < entriesPerRound; i++)
+                {
+                    store.Append(new KeyedItem(i, round));
+                }
+
+                store.Clear();
+            }
+
+            Volatile.Write(ref finished, 1);
+        });
+
+        Task[] readers = new Task[4];
+        for (int r = 0; r < readers.Length; r++)
+        {
+            int seed = r;
+            readers[r] = Task.Run(() =>
+            {
+                int probe = seed;
+                while (Volatile.Read(ref finished) == 0)
+                {
+                    probe = (probe + 37) % entriesPerRound;
+                    if (store.TryReadPublished(probe, out KeyedItem item) && (item.Key != probe || item.Payload < 1))
+                    {
+                        _ = Interlocked.Exchange(ref violation, 1);
+                        return;
+                    }
+
+                    int found = store.BinarySearch(probe);
+                    if (found >= 0 && found != probe)
+                    {
+                        _ = Interlocked.Exchange(ref violation, 1);
+                        return;
+                    }
+                }
+            });
+        }
+
+        await writer;
+        await Task.WhenAll(readers);
+
+        await Assert.That(Volatile.Read(ref violation)).IsEqualTo(0);
+        await Assert.That(store.Count).IsEqualTo(0);
+    }
+
+    /// <summary>
+    /// Sets the published count of the live generation, so a test can reach the index-range limit
+    /// without appending two billion entries.
+    /// </summary>
+    private static void _SetPublishedCount<TStore>(TStore store, int count)
+        where TStore : class
+    {
+        object slotStore = typeof(TStore)
+            .GetField("_Store", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .GetValue(store)!;
+        object generation = slotStore.GetType()
+            .GetField("_Current", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .GetValue(slotStore)!;
+        generation.GetType()
+            .GetField("Count", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .SetValue(generation, count);
     }
 
     private static async Task _AssertPackedPrefixHasNoUnset(Collections.ChunkedAppendOnlyStore<int> store)

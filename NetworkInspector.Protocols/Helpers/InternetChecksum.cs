@@ -3,12 +3,19 @@
 namespace NetworkInspector.Protocols.Helpers;
 
 /// <summary>
-/// RFC 1071 Internet Checksum (one's complement sum) with SIMD acceleration.
+/// RFC 1071 Internet Checksum (one's complement sum) with SIMD acceleration. Every path sums the same
+/// network-order 16-bit words and keeps every carry, so the result does not depend on the hardware path.
 /// Provides three tiers: Vector256 (AVX2), Vector128 (SSE2/NEON), scalar fallback.
 /// Used for IPv4 header checksum and UDP/TCP checksum validation.
 /// </summary>
 internal static class InternetChecksum
 {
+    /// <summary>
+    /// Vector blocks after which the u32 lanes move into the u64 sum: each block adds at most 2 × 0xFFFF to a lane,
+    /// and 0x8000 × 2 × 0xFFFF = 0xFFFF0000 still fits a lane.
+    /// </summary>
+    private const int _BlocksPerFlush = 0x8000;
+
     /// <summary>
     /// Computes the one's complement checksum of the given data.
     /// Returns 0x0000 if the checksum is valid (when verifying a received packet).
@@ -56,8 +63,14 @@ internal static class InternetChecksum
             sum = _ComputeScalar(data);
         }
 
-        sum += pseudoHeaderSum;
-        return _FoldAndFinalize(sum);
+        // End-around carry: a wrap past 2^64 is worth 1 in one's complement arithmetic (2^64 ≡ 1 mod 0xFFFF).
+        ulong total = sum + pseudoHeaderSum;
+        if (total < sum)
+        {
+            total++;
+        }
+
+        return _FoldAndFinalize(total);
     }
 
     /// <summary>
@@ -173,14 +186,32 @@ internal static class InternetChecksum
         int offset = 0;
         int length = data.Length;
 
-        // Accumulator: 8 × u32 lanes (avoids u16 overflow within the vector)
+        // Accumulator: 8 × u32 lanes (avoids u16 overflow within the vector). Each block adds at most 2 × 0xFFFF
+        // to a lane, so the lanes move into the u64 sum every _BlocksPerFlush blocks, before they could wrap.
         Vector256<uint> acc = Vector256<uint>.Zero;
+        ulong sum = 0;
+        int blocks = 0;
 
         // Process 32 bytes per iteration
         while (offset + 31 < length)
         {
+            if (blocks == _BlocksPerFlush)
+            {
+                sum += Vector256.Sum(Vector256.WidenLower(acc)) + Vector256.Sum(Vector256.WidenUpper(acc));
+                acc = Vector256<uint>.Zero;
+                blocks = 0;
+            }
+
+            blocks++;
             // Load 32 bytes as 16 × u16
             Vector256<ushort> v = Vector256.Create<byte>(data[offset..]).AsUInt16();
+
+            // The lanes were read in machine order (little-endian); swap each to the network-order word the
+            // scalar path and the remainder read, so every path sums the same RFC 1071 words.
+            if (BitConverter.IsLittleEndian)
+            {
+                v = Vector256.ShiftLeft(v, 8) | Vector256.ShiftRightLogical(v, 8);
+            }
 
             // Widen lower and upper halves to u32 and accumulate
             (Vector256<uint> lo, Vector256<uint> hi) = Vector256.Widen(v);
@@ -191,7 +222,6 @@ internal static class InternetChecksum
         }
 
         // Horizontal sum of all 8 u32 lanes
-        ulong sum = 0;
         for (int i = 0; i < Vector256<uint>.Count; i++)
         {
             sum += acc.GetElement(i);
@@ -220,14 +250,30 @@ internal static class InternetChecksum
         int offset = 0;
         int length = data.Length;
 
-        // Accumulator: 4 × u32 lanes
+        // Accumulator: 4 × u32 lanes, moved into the u64 sum before they could wrap (as in the Vector256 path).
         Vector128<uint> acc = Vector128<uint>.Zero;
+        ulong sum = 0;
+        int blocks = 0;
 
         // Process 16 bytes per iteration
         while (offset + 15 < length)
         {
+            if (blocks == _BlocksPerFlush)
+            {
+                sum += Vector128.Sum(Vector128.WidenLower(acc)) + Vector128.Sum(Vector128.WidenUpper(acc));
+                acc = Vector128<uint>.Zero;
+                blocks = 0;
+            }
+
+            blocks++;
             // Load 16 bytes as 8 × u16
             Vector128<ushort> v = Vector128.Create<byte>(data[offset..]).AsUInt16();
+
+            // Machine-order lanes to network-order words, as in the Vector256 path.
+            if (BitConverter.IsLittleEndian)
+            {
+                v = Vector128.ShiftLeft(v, 8) | Vector128.ShiftRightLogical(v, 8);
+            }
 
             // Widen to u32 and accumulate
             (Vector128<uint> lo, Vector128<uint> hi) = Vector128.Widen(v);
@@ -238,7 +284,6 @@ internal static class InternetChecksum
         }
 
         // Horizontal sum of all 4 u32 lanes
-        ulong sum = 0;
         for (int i = 0; i < Vector128<uint>.Count; i++)
         {
             sum += acc.GetElement(i);
@@ -261,16 +306,17 @@ internal static class InternetChecksum
 
     /// <summary>
     /// Folds the 64-bit accumulator into 16-bit one's complement and returns the complement.
-    /// Repeated folding handles carry chains from very large packets.
+    /// Folding repeats until no carry is left above bit 15, so even sums near 2^64 (a large pseudo-header sum)
+    /// keep every carry.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static ushort _FoldAndFinalize(ulong sum)
     {
-        // Fold 64→32
-        sum = (sum >> 32) + (sum & 0xFFFF_FFFF);
-        // Fold 32→16 (twice to handle carry)
-        sum = (sum >> 16) + (sum & 0xFFFF);
-        sum = (sum >> 16) + (sum & 0xFFFF);
+        while ((sum >> 16) != 0)
+        {
+            sum = (sum >> 16) + (sum & 0xFFFF);
+        }
+
         return (ushort)~sum;
     }
 }

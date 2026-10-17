@@ -96,6 +96,7 @@ internal readonly record struct FlankDelta(CompareOp Op, FieldValueData Value);
 /// </summary>
 internal sealed class FlankNode(
     string fieldName,
+    int fieldPosition,
     FlankEndpoint? from,
     FlankEndpoint? to,
     FlankDelta? by,
@@ -108,6 +109,9 @@ internal sealed class FlankNode(
 {
     /// <summary>The qualified field whose samples are tracked.</summary>
     public string FieldName { get; } = fieldName;
+
+    /// <summary>Start offset of <see cref="FieldName"/>, so bind errors underline the name rather than the whole flank.</summary>
+    public int FieldPosition { get; } = fieldPosition;
 
     /// <summary>Optional predecessor-region endpoint.</summary>
     public FlankEndpoint? From { get; } = from;

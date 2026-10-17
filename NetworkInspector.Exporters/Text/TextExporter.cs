@@ -5,8 +5,8 @@ namespace NetworkInspector.Exporters.Text;
 /// <summary>
 /// Exports packets to a human-readable text format with configurable detail level.
 /// <para>
-/// Output is a plain-text representation of the parsed protocol field tree, similar
-/// to Wireshark's packet details view. Each packet begins with a header line showing
+/// Output is a plain-text representation of the parsed protocol field tree, one indented
+/// line per field. Each packet begins with a header line showing
 /// the packet number and timestamp, followed by the field tree with two-space
 /// indentation per nesting level, and a separator line after the tree.
 /// </para>
@@ -182,7 +182,56 @@ public sealed class TextExporter : IPacketListener, IErrorTolerantExporter, IDis
         }
 
         _Finished = true;
-        _FlushAndClose();
+
+        // Shared finish sequence (same order as every exporter): final write and flush, buffer return, output disposal.
+        ExporterFinish.Run(
+            "Text",
+            _FinalizeFile,
+            _ReportFinishError,
+            new ExporterReleaseStep("buffer return", _Buffer.Return),
+            new ExporterReleaseStep("output disposal", _DisposeOutput));
+    }
+
+    /// <summary>Writes the single newline of an empty export, then flushes.</summary>
+    private void _FinalizeFile()
+    {
+        if (_Output is null)
+        {
+            return;
+        }
+
+        if (!_Started && !_HasError)
+        {
+            _Started = true;
+            _Output.Write("\n"u8);
+        }
+
+        _Output.Flush();
+    }
+
+    /// <summary>Disposes the output once (closes the stream unless the caller owns it).</summary>
+    private void _DisposeOutput()
+    {
+        ExportOutput? output = _Output;
+        _Output = null;
+        output?.Dispose();
+    }
+
+    /// <summary>Error channel of the finish sequence: marks the error, counts it, and raises <see cref="ItemSkipped"/>.</summary>
+    private void _ReportFinishError(ExportErrorKind kind, string message)
+    {
+        _HasError = true;
+        if (ErrorCount < int.MaxValue)
+        {
+            ErrorCount++;
+        }
+
+        ItemSkipped?.Invoke(this, new ExportErrorEventArgs
+        {
+            ItemIndex = PacketCount,
+            Kind = kind,
+            Message = message,
+        });
     }
 
     /// <inheritdoc/>
@@ -632,87 +681,6 @@ public sealed class TextExporter : IPacketListener, IErrorTolerantExporter, IDis
             }
             int written = Encoding.UTF8.GetBytes(text, _Utf8Scratch);
             _Buffer.Write(_Utf8Scratch.AsSpan(0, written));
-        }
-    }
-
-    /// <summary>Flushes remaining data and closes the output.</summary>
-    private void _FlushAndClose()
-    {
-        // Always return the rented buffer, even on flush/dispose failure.
-        try
-        {
-            if (_Output is null)
-            {
-                return;
-            }
-
-            if (!_Started && !_HasError)
-            {
-                _Started = true;
-                try
-                {
-                    _Output.Write("\n"u8);
-                }
-                catch (Exception ex)
-                {
-                    _HasError = true;
-                    if (ErrorCount < int.MaxValue) ErrorCount++;
-                    ItemSkipped?.Invoke(this, new ExportErrorEventArgs
-                    {
-                        ItemIndex = 0,
-                        Kind = ex is IOException ? ExportErrorKind.IoError : ExportErrorKind.SerializationError,
-                        Message = $"Text empty-export write failed: {ex.Message}",
-                    });
-                }
-            }
-
-            try
-            {
-                _Output.Flush();
-            }
-            catch (Exception ex)
-            {
-                // Surface the flush failure: setting _HasError is enough to make
-                // IsFinished/HasErrors observable, and the caller's ItemSkipped
-                // handler is invoked with an IO/Serialization classification so
-                // it is never lost silently.
-                _HasError = true;
-                if (ErrorCount < int.MaxValue) ErrorCount++;
-                ItemSkipped?.Invoke(this, new ExportErrorEventArgs
-                {
-                    ItemIndex = PacketCount,
-                    Kind = ex is IOException ? ExportErrorKind.IoError : ExportErrorKind.SerializationError,
-                    Message = $"Text final flush failed: {ex.Message}",
-                });
-            }
-
-            // Surface disposal failures via the error channel rather than discarding them silently.
-            Exception? disposalError = null;
-            try
-            {
-                _Output.Dispose();
-            }
-            catch (Exception ex)
-            {
-                disposalError = ex;
-            }
-            _Output = null;
-            if (disposalError is not null)
-            {
-                _HasError = true;
-                if (ErrorCount < int.MaxValue) ErrorCount++;
-                ItemSkipped?.Invoke(this, new ExportErrorEventArgs
-                {
-                    ItemIndex = PacketCount,
-                    Kind = disposalError is IOException ? ExportErrorKind.IoError : ExportErrorKind.SerializationError,
-                    Message = $"Output disposal failed: {disposalError.Message}",
-                });
-                throw new AggregateException("Exporter cleanup failed.", disposalError);
-            }
-        }
-        finally
-        {
-            _Buffer.Return();
         }
     }
 

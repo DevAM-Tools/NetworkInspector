@@ -21,6 +21,21 @@ Load when `*.cs` files are in scope. C# mechanisms for Section 4 in `copilot-ins
 
 ## Style
 - ❗Always pass `CultureInfo.InvariantCulture` as parameter when strings are built or parsed unless another locale is required.
+- Prefer invariant interpolated strings via `FormattableString.Invariant`. Put `global using static System.FormattableString;` in `GlobalUsings.cs`, then call `Invariant($"…")`. Still pass `CultureInfo.InvariantCulture` on `ToString` / `Parse` / `TryParse` / `string.Format` / `StringBuilder.AppendFormat` when those APIs are used. Fine for typical code; on hot paths prefer `string.Create(CultureInfo.InvariantCulture, $"…")` or `StringBuilder.Append(CultureInfo.InvariantCulture, $"…")` (fewer allocations than `FormattableString.Invariant`).
+
+```csharp
+// GlobalUsings.cs
+global using static System.FormattableString;
+
+// usage
+string message = Invariant($"Gap rate: {rate:P1}, count={count}");
+string text = value.ToString(CultureInfo.InvariantCulture);
+if (!int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out int parsed))
+{
+    // …
+}
+```
+
 - Always brace control-flow blocks.
 - At most one callable exit point per source line; `?:`, switch expressions, `??`, and `??=` are allowed when each arm is on its own line.
 - ❗Structure each file with `#region` blocks by content (fields, lifecycle, public API, private helpers).

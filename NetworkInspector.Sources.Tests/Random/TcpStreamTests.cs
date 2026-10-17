@@ -80,6 +80,23 @@ internal sealed class TcpStreamTests
     }
 
     [Test]
+    public async Task Validate_LayoutBeyondIntMax_Throws()
+    {
+        TcpStreamOptions tooManySegments = new() { StreamCount = 1, SegmentsPerStream = int.MaxValue };
+        TcpStreamOptions tooManyStreams = new() { StreamCount = 2, SegmentsPerStream = int.MaxValue / 2 };
+        TcpStreamOptions edge = new()
+        {
+            StreamCount = 1,
+            SegmentsPerStream = int.MaxValue - 7,
+        };
+
+        await Assert.That(tooManySegments.Validate).Throws<ArgumentOutOfRangeException>();
+        await Assert.That(tooManyStreams.Validate).Throws<ArgumentOutOfRangeException>();
+        edge.Validate();
+        await Assert.That(new TcpStreamLayout(edge).TotalFrameCount).IsEqualTo(int.MaxValue);
+    }
+
+    [Test]
     public async Task Layout_NoHandshakeNoTeardown()
     {
         TcpStreamOptions options = new()

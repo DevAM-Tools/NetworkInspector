@@ -371,4 +371,76 @@ internal sealed class TcpReassemblyE2ETests
     }
 
     #endregion
+
+    #region Degenerate boundary detector
+
+    private const ushort _ZeroProbePort = 65001;
+
+    /// <summary>Inner protocol that only counts how often TCP hands it a PDU.</summary>
+    private sealed class CountingProbeProtocol : IProtocol
+    {
+        private int _CallCount;
+
+        public string Name => "zero.probe";
+        public string UiName => "Zero Probe";
+
+        /// <summary>Number of <see cref="Parse"/> calls; read after the parse on the test thread.</summary>
+        public int CallCount => Volatile.Read(ref _CallCount);
+
+        public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
+        {
+            Interlocked.Increment(ref _CallCount);
+            return data.Length;
+        }
+    }
+
+    /// <summary>
+    /// A custom detector that reports a complete PDU of length 0 must not keep the TCP dispatch loop alive: the
+    /// first parse of the data segment returns, the stream stops reassembling, and no empty PDU reaches the inner
+    /// protocol. Before the guard the parse never returned; the timeout turns such a regression into a failure.
+    /// </summary>
+    [Test]
+    public async Task ReassemblyZeroLengthDetectorDoesNotLoop()
+    {
+#pragma warning disable CA2000 // SettingsManager ownership transfers to Stack via StackBuilder.
+        StackBuilder builder = new(new SettingsManager(), new FrameInterfaceRegistry());
+#pragma warning restore CA2000
+        ProtocolRegistration.RegisterStandardProtocols(builder);
+        CountingProbeProtocol probe = new();
+        builder.RegisterProtocol(probe, static (b, id, _) =>
+        {
+            b.RegisterParserInU64TableByName(TcpProtocol.PortTableName, _ZeroProbePort, id);
+            b.RegisterStreamReassemblyConfig(id, new StreamReassemblyConfig { BoundaryDetector = new ZeroLengthDetector() });
+        });
+        using Stack stack = builder.Build();
+        uint cIsn = 7000, sIsn = 8000;
+        byte[][] frames =
+        [
+            _BuildTcpFrame(_ClientIp, _ServerIp, _ClientPort, _ZeroProbePort, cIsn, 0, TcpFlags.Syn),
+            _BuildTcpFrame(_ServerIp, _ClientIp, _ZeroProbePort, _ClientPort, sIsn, cIsn + 1, TcpFlags.SynAck),
+            _BuildTcpFrame(_ClientIp, _ServerIp, _ClientPort, _ZeroProbePort, cIsn + 1, sIsn + 1, TcpFlags.Ack),
+            _BuildTcpFrame(_ClientIp, _ServerIp, _ClientPort, _ZeroProbePort, cIsn + 1, sIsn + 1, TcpFlags.Psh | TcpFlags.Ack,
+                [0x01, 0x02, 0x03, 0x04]),
+        ];
+
+        Task parseAll = Task.Run(() =>
+        {
+            for (int i = 0; i < frames.Length; i++)
+            {
+                _ = ProtocolTestHelper.ParseFrame(stack, frames[i], i, Timestamp.FromSecs(i));
+            }
+        });
+        await parseAll.WaitAsync(TimeSpan.FromSeconds(30)).ConfigureAwait(false);
+
+        await Assert.That(parseAll.IsCompletedSuccessfully).IsTrue();
+        await Assert.That(probe.CallCount).IsEqualTo(0);
+    }
+
+    #endregion
+}
+
+/// <summary>Boundary detector stub that reports a complete PDU of length 0 for any data.</summary>
+file sealed class ZeroLengthDetector : IPduBoundaryDetector
+{
+    public PduBoundaryResult Detect(ReadOnlySpan<byte> data) => PduBoundaryResult.Complete(0);
 }

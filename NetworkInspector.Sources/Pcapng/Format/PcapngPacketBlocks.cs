@@ -184,11 +184,6 @@ internal static class PcapngPacketBlocks
             return ScanPacketResult.SkipNoInterface;
         }
 
-        if (iface.LinkType is null)
-        {
-            return ScanPacketResult.SkipUnknownLinkType;
-        }
-
         if (!iface.HasSupportedTimestampResolution)
         {
             return ScanPacketResult.SkipUnsupportedTimestampResolution;
@@ -420,20 +415,18 @@ internal static class PcapngPacketBlocks
         out EpbFields fields)
     {
         fields = default;
-        if (interfaceId > (uint)int.MaxValue)
+
+        // A section holds at most MaxInterfaceCount interfaces (frame entries store the index as ushort),
+        // so a larger id can never name a declared interface.
+        if (interfaceId >= SectionInfo.MaxInterfaceCount)
         {
-            return ScanPacketResult.SkipMalformed;
+            return ScanPacketResult.SkipNoInterface;
         }
 
         InterfaceInfo? iface = section.Interface((int)interfaceId);
         if (iface is null)
         {
             return ScanPacketResult.SkipNoInterface;
-        }
-
-        if (iface.LinkType is null)
-        {
-            return ScanPacketResult.SkipUnknownLinkType;
         }
 
         if (!iface.HasSupportedTimestampResolution)

@@ -116,13 +116,27 @@ public sealed class Session : ISession, ISessionReader
     // Initially signalled (open): Wait() returns immediately during normal parsing.
     // During Restart(), the gate is Reset() (closed) to park source threads,
     // then Set() (opened) after all frames have been re-parsed.
+    // The ingest re-checks IsSet under _ParseMutex, because a source thread can pass Wait() just before
+    // Restart closes the gate. Never disposed: a source thread that outlives Shutdown(timeout) may still
+    // wait on it, and the event holds no kernel handle unless a thread actually blocked.
     private readonly ManualResetEventSlim _ParseGate = new(initialState: true);
 
-    // Guards against concurrent Restart() calls.
-    // 0 = idle, 1 = restart in progress. Shutdown waits for 0 before disposing the parse gate.
-    private volatile int _RestartInProgress;
+    // Number of times a source thread found the gate closed under _ParseMutex and parked again instead of
+    // allocating an id. Diagnostic only; tests use it to prove the re-check ran.
+    private volatile int _IngestGateRefusals;
+
+    // Set while no restart runs; Reset under _LifecycleLock when a restart begins, Set again in its finally.
+    // Doubles as the "restart in progress" flag (read under _LifecycleLock) and as the event Shutdown waits on.
+    // Never disposed, for the same reason as _ParseGate.
+    private readonly ManualResetEventSlim _RestartIdle = new(initialState: true);
+
+    // Set once the first Shutdown caller finished teardown. Later callers wait on it. Never disposed.
+    private readonly ManualResetEventSlim _ShutdownDone = new(initialState: false);
 
     // Serialises Restart's swap with Shutdown. Not taken on the parse hot path.
+    // Lock order: _LifecycleLock → _ParseMutex → ListenerSlot.FilterGate. Never acquire them in reverse.
+    // Subscriptions (TryAddListener, TryAddValueCache) do not take it: Shutdown joins listener threads
+    // while it holds this lock, so a listener callback that subscribes must never block on it.
     private readonly object _LifecycleLock = new();
 
     // -- Shared stores --
@@ -187,11 +201,7 @@ public sealed class Session : ISession, ISessionReader
     // Dispose() returns to detect cleanup failures without Dispose() throwing.
     private volatile AggregateException? _ShutdownErrors;
 
-    // Guards against double shutdown (Shutdown() called explicitly then via Dispose()).
-    // Accessed atomically via Interlocked — multiple threads may call Shutdown() concurrently.
-    private volatile int _ListenersTornDown; // 0 = false, 1 = true
-
-    // Ensures only one thread executes the shutdown body. Others wait for completion.
+    // Ensures only one thread executes the shutdown body. Others wait on _ShutdownDone.
     private volatile int _ShutdownStarted; // 0 = not started, 1 = started
 
     // When true, TryGetPacket and ReadPackets return immediately without data.
@@ -449,12 +459,12 @@ public sealed class Session : ISession, ISessionReader
                     $"Restart() requires a Running or Stopped phase and no shutdown. Current phase: {_State.Phase}.");
             }
 
-            if (_RestartInProgress != 0)
+            if (!_RestartIdle.IsSet)
             {
                 throw new InvalidOperationException("A restart is already in progress.");
             }
 
-            _RestartInProgress = 1;
+            _RestartIdle.Reset();
         }
 
         Stack? built = null;
@@ -478,8 +488,9 @@ public sealed class Session : ISession, ISessionReader
                         "Restart was abandoned because shutdown has started.");
                 }
 
-                _RestartCore(built);
-                built = null;
+                // Clears 'built' as soon as the session owns the stack, so the finally below disposes it
+                // only when the restart failed before the swap.
+                _RestartCore(ref built);
             }
         }
         finally
@@ -487,7 +498,8 @@ public sealed class Session : ISession, ISessionReader
             built?.Dispose();
             lock (_LifecycleLock)
             {
-                _RestartInProgress = 0;
+                // Wakes a Shutdown that waits for the restart to finish.
+                _RestartIdle.Set();
             }
         }
     }
@@ -501,9 +513,20 @@ public sealed class Session : ISession, ISessionReader
     /// Source threads are blocked on <see cref="_ParseGate"/> (kernel-level wait,
     /// no CPU burn) after their current <see cref="IFrameSource.NextFrame"/> call
     /// returns. This ensures no frame is lost: the source keeps capturing while
-    /// the thread simply waits before parsing. After the re-parse finishes and
-    /// the gate opens, source threads resume with the new stack and continue
-    /// allocating sequential PacketIds from where the re-parse left off.
+    /// the thread simply waits before parsing. A source thread that passed the gate
+    /// just before it closed finds it closed under <see cref="_ParseMutex"/>, allocates
+    /// nothing, and parks again. After the re-parse finishes and the gate opens, source
+    /// threads resume with the new stack and continue allocating sequential PacketIds
+    /// from where the re-parse left off.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Failure before any change:</b>
+    /// The ingest value cache and the packet index for the new stack are built before
+    /// the phase, the gate, or the queries change. A request the new stack cannot satisfy
+    /// (<see cref="SessionErrorCode.ValueCacheUnknownField"/>,
+    /// <see cref="SessionErrorCode.ValueCacheInvalidFieldName"/>) therefore throws with the
+    /// session exactly as it was; the caller disposes the unused stack.
     /// </para>
     ///
     /// <para>
@@ -516,9 +539,20 @@ public sealed class Session : ISession, ISessionReader
     /// <see cref="NotifyFlags.NewPackets"/> for the partial rewrite.
     /// </para>
     /// </summary>
-    private void _RestartCore(Stack newStack)
+    /// <param name="built">
+    /// The new stack, non-null on entry. Set to <see langword="null"/> in the same step that installs it
+    /// as the session stack: from then on the session owns and disposes it, also when a later step throws.
+    /// </param>
+    private void _RestartCore(ref Stack? built)
     {
-        // Caller holds _LifecycleLock and has already validated the registry.
+        // Caller holds _LifecycleLock and has already validated the registry and checked built for null.
+        Stack newStack = built!;
+
+        // Build everything the new stack needs before touching session state, so a request the new
+        // stack cannot satisfy leaves the session as it was (old stack, open gate, enabled queries).
+        ValueCache? newIngest = _TryCreateIngestValueCache(newStack);
+        PacketIndex? newIndex = _TryCreatePacketIndex(newStack);
+
         // ── Phase 1: Gate source threads and swap the stack ──────────────────
         _State.SetPhase(SessionPhase.Restarting);
         _NotifyAllListeners(NotifyFlags.PhaseChanged);
@@ -530,78 +564,80 @@ public sealed class Session : ISession, ISessionReader
         // Disable queries while frames are re-parsed onto the new stack.
         _QueriesDisabled = true;
 
-        int totalToReparse;
-        lock (_ParseMutex)
-        {
-            // Wait for any in-flight parse to finish — once we own the lock
-            // no source thread is inside the parse section (they are either
-            // still in NextFrame or blocked on the gate).
-            totalToReparse = _NextPacketId;
-
-            // Dispose the old stack if the session owns it (factory-created).
-            Stack oldStack = _Stack;
-            if (_OwnsStack)
-            {
-                oldStack.Dispose();
-            }
-
-            // Swap the protocol stack. Session owns factory-created stacks.
-            _Stack = newStack;
-            _OwnsStack = true;
-
-            // Old parse results are discarded (the session does not retain packets).
-            // Do NOT clear the mapping — it stores frame order needed for re-parse
-            // and the PacketId → (FrameId, SourceId) data remains valid.
-
-            // Create a fresh packet index for the new stack's field definitions.
-            _PacketIndex = _TryCreatePacketIndex(_Stack);
-
-            // Abandon previous writers, then rebuild ingest from the stored request.
-            // Runtime PullFill slots stay registered (C18); they rebind on StackChanged.
-            _IngestValueCache?.Abandon();
-            foreach (ValueCacheSlot slot in _ValueCacheSlots.Current)
-            {
-                if (slot.FillMode == ValueCacheFillMode.PullFill)
-                {
-                    slot.AbandonWriter();
-                }
-            }
-
-            _IngestValueCache = _TryCreateIngestValueCache(_Stack);
-            if (_IngestValueCache is not null)
-            {
-                if (_IngestInfo is null)
-                {
-                    _IngestInfo = _CreateIngestInfo(_IngestValueCache);
-                    _ValueCacheInfos.Add(_IngestInfo);
-                }
-                else
-                {
-                    _IngestInfo.SetWriter(_IngestValueCache);
-                }
-
-                foreach (ValueCacheSlot slot in _ValueCacheSlots.Current)
-                {
-                    if (slot.FillMode == ValueCacheFillMode.NotifyOnly)
-                    {
-                        slot.BindWriter(_IngestValueCache);
-                    }
-                }
-            }
-
-            // Reset counters so re-parse fills them from 0.
-            Interlocked.Exchange(ref _PacketCount, 0);
-            Interlocked.Exchange(ref _FrameCount, 0);
-            Interlocked.Exchange(ref _NextPacketId, 0);
-        }
-
-        // ── Phase 2 + 3: Re-parse and resume ─────────────────────────────────
-        // Wrapped in try/finally to guarantee the parse gate is reopened even
-        // if _ReparseAllFrames throws (OOM, FrameUnavailable, etc.). Without this,
-        // source threads would remain parked on the closed gate indefinitely.
+        // -1 until the swap block read the counter; the fail-closed path restores it only when it is known.
+        int totalToReparse = -1;
         bool reparseCompleted = false;
+
+        // The swap and the re-parse share one try/finally: whatever throws after the gate closed, the
+        // finally reopens it, so source threads never stay parked.
         try
         {
+            lock (_ParseMutex)
+            {
+                // Once we own the lock no source thread is inside the parse section. A source thread that
+                // passed the gate before Reset() and waits for this lock re-checks the gate under the lock
+                // and parks again (see _TryIngestFrameUnderLock), so it cannot allocate from the reset counter.
+                totalToReparse = _NextPacketId;
+
+                // Dispose the old stack if the session owns it (factory-created).
+                Stack oldStack = _Stack;
+                if (_OwnsStack)
+                {
+                    oldStack.Dispose();
+                }
+
+                // Swap the protocol stack. Session owns factory-created stacks from here on.
+                _Stack = newStack;
+                _OwnsStack = true;
+                built = null;
+
+                // Old parse results are discarded (the session does not retain packets).
+                // Do NOT clear the mapping — it stores frame order needed for re-parse
+                // and the PacketId → (FrameId, SourceId) data remains valid.
+
+                // Fresh packet index for the new stack's field definitions (built above).
+                _PacketIndex = newIndex;
+
+                // Abandon previous writers, then install the ingest cache built above.
+                // Runtime PullFill slots stay registered; they rebind on StackChanged.
+                _IngestValueCache?.Abandon();
+                foreach (ValueCacheSlot slot in _ValueCacheSlots.Current)
+                {
+                    if (slot.FillMode == ValueCacheFillMode.PullFill)
+                    {
+                        slot.AbandonWriter();
+                    }
+                }
+
+                _IngestValueCache = newIngest;
+                if (newIngest is not null)
+                {
+                    if (_IngestInfo is null)
+                    {
+                        _IngestInfo = _CreateIngestInfo(newIngest);
+                        _ValueCacheInfos.Add(_IngestInfo);
+                    }
+                    else
+                    {
+                        _IngestInfo.SetWriter(newIngest);
+                    }
+
+                    foreach (ValueCacheSlot slot in _ValueCacheSlots.Current)
+                    {
+                        if (slot.FillMode == ValueCacheFillMode.NotifyOnly)
+                        {
+                            slot.BindWriter(newIngest);
+                        }
+                    }
+                }
+
+                // Reset counters so re-parse fills them from 0.
+                Interlocked.Exchange(ref _PacketCount, 0);
+                Interlocked.Exchange(ref _FrameCount, 0);
+                Interlocked.Exchange(ref _NextPacketId, 0);
+            }
+
+            // ── Phase 2 + 3: Re-parse and resume ─────────────────────────────────
             _ReparseAllFrames(totalToReparse);
             reparseCompleted = true;
         }
@@ -637,7 +673,10 @@ public sealed class Session : ISession, ISessionReader
                 // Fail closed: the old stack is already disposed and counters/mapping
                 // are a partial rewrite. Do not re-enable queries or announce NewPackets.
                 // Restore _NextPacketId so a still-running source cannot reuse 0 … N-1.
-                Interlocked.Exchange(ref _NextPacketId, totalToReparse);
+                if (totalToReparse >= 0)
+                {
+                    Interlocked.Exchange(ref _NextPacketId, totalToReparse);
+                }
 
                 NotifyFlags flags = NotifyFlags.PhaseChanged;
                 if (!sourcesStillActive)
@@ -716,7 +755,7 @@ public sealed class Session : ISession, ISessionReader
     /// Re-binds every listener filter to the current <see cref="_Stack"/> after a stack swap.
     ///
     /// <para>
-    /// <see cref="IFilter.TryDerive"/> produces a new instance from the same parsed expression with
+    /// <see cref="PacketFilter.TryDerive"/> produces a new instance from the same parsed expression with
     /// empty flank state, an empty match cache, and no poison — the old instance is left untouched
     /// and simply dropped. A filter that cannot be re-bound (for example because the new stack no
     /// longer defines a referenced field) is removed and the failure is recorded on the slot, so
@@ -779,17 +818,19 @@ public sealed class Session : ISession, ISessionReader
     /// <inheritdoc/>
     public void Shutdown(TimeSpan? timeout = null)
     {
+        // Later callers block until the first caller finished teardown (kernel wait, no polling).
         if (Interlocked.CompareExchange(ref _ShutdownStarted, 1, 0) != 0)
         {
-            ThreadWaitHelper.WaitUntil(() => _ListenersTornDown != 0);
+            _ShutdownDone.Wait();
             return;
         }
 
         try
         {
-            // Do not hold _LifecycleLock while waiting. Restart drops the flag only after it
-            // releases the lock, so this wait cannot deadlock with the swap.
-            ThreadWaitHelper.WaitUntil(() => _RestartInProgress == 0);
+            // Do not hold _LifecycleLock while waiting. Restart sets the event in its own lock block after
+            // it released the swap, so this wait cannot deadlock with it. A restart that has not begun yet
+            // sees _ShutdownStarted under the lock and refuses.
+            _RestartIdle.Wait();
             lock (_LifecycleLock)
             {
                 _ShutdownUnderLock(timeout);
@@ -797,7 +838,7 @@ public sealed class Session : ISession, ISessionReader
         }
         finally
         {
-            _ListenersTornDown = 1;
+            _ShutdownDone.Set();
         }
     }
 
@@ -992,17 +1033,9 @@ public sealed class Session : ISession, ISessionReader
             }
         }
 
-        // Dispose the parse gate. Safe because all source threads have finished
-        // (they were cancelled and waited for above) and no new Wait() calls
-        // can occur after this point.
-        try
-        {
-            _ParseGate.Dispose();
-        }
-        catch (Exception ex)
-        {
-            (cleanupErrors ??= []).Add(ex);
-        }
+        // The parse gate is deliberately not disposed: with a timeout, a cancelled source thread may still
+        // return from NextFrame after this point and wait on the gate. Its cancelled token then makes the
+        // wait throw OperationCanceledException, so the job ends Cancelled instead of failing on a disposed event.
 
         // Surface all cleanup failures as a single AggregateException.
         // This ensures no disposal error is silently swallowed.
@@ -1037,7 +1070,7 @@ public sealed class Session : ISession, ISessionReader
         }
         catch (AggregateException ex)
         {
-    // Publish shutdown errors with a release fence so post-Dispose readers observe them.
+            // Publish shutdown errors with a release fence so post-Dispose readers observe them.
             _ShutdownErrors = ex;
         }
     }
@@ -1209,13 +1242,7 @@ public sealed class Session : ISession, ISessionReader
     }
 
     /// <summary>
-    /// Creates a <see cref="NetworkInspector.Core.Index.PacketIndex"/> for the given stack.
-    /// </summary>
-    private static NetworkInspector.Core.Index.PacketIndex _CreatePacketIndex(Stack stack) =>
-        new(stack);
-
-    /// <summary>
-    /// Creates a packet index when <see cref="IndexPackets"/> is enabled; otherwise null.
+    /// Creates a packet index for <paramref name="stack"/> when <see cref="IndexPackets"/> is enabled; otherwise null.
     /// </summary>
     private PacketIndex? _TryCreatePacketIndex(Stack stack)
     {
@@ -1224,7 +1251,7 @@ public sealed class Session : ISession, ISessionReader
             return null;
         }
 
-        return _CreatePacketIndex(stack);
+        return new PacketIndex(stack);
     }
 
     // -- Source job loop --
@@ -1275,11 +1302,16 @@ public sealed class Session : ISession, ISessionReader
                 // CancellationToken ensures Shutdown can still interrupt.
                 // Throws OperationCanceledException on cancellation → caught by Job.RunCore
                 // which recognises it via token comparison and transitions to Cancelled.
-                _ParseGate.Wait(ct);
+                // The gate may close between Wait and the parse lock (Restart resets it before it takes
+                // the lock). The ingest then refuses without allocating an id, and this thread parks on
+                // the gate again; the same frame is parsed with the new stack once the gate reopens.
+                Packet? packet;
+                do
+                {
+                    _ParseGate.Wait(ct);
+                }
+                while (!_TryIngestFrameUnderLock(capturedFrame, sourceInfo.Id, ingestRecycle, out packet));
 
-                // Allocate, parse, and publish the map under one lock so a second source
-                // cannot observe the next id before this frame is stored.
-                Packet packet = _IngestFrameUnderLock(capturedFrame, sourceInfo.Id, ingestRecycle);
                 ingestRecycle = packet;
                 _NotifyAllListeners(NotifyFlags.NewPackets);
             }
@@ -1324,7 +1356,9 @@ public sealed class Session : ISession, ISessionReader
     }
 
     /// <summary>
-    /// Creates a <see cref="ValueCacheSlot"/>, public info, and registers both.
+    /// Creates a <see cref="ValueCacheSlot"/> and registers it. A PullFill slot gets its own public
+    /// <see cref="ValueCacheInfo"/> and <see cref="ValueCacheId"/>; a NotifyOnly slot attaches to the
+    /// existing ingest info and allocates neither.
     /// </summary>
     private ValueCacheSlot _RegisterValueCacheSlot(
         IValueCacheListener listener,
@@ -1332,7 +1366,10 @@ public sealed class Session : ISession, ISessionReader
         ValueCache writer,
         ValueCacheFillMode fillMode)
     {
-        ValueCacheId cacheId = _State.AllocateValueCacheId();
+        bool attachesToIngest = fillMode == ValueCacheFillMode.NotifyOnly && _IngestInfo is not null;
+
+        // Allocate ids before any slot exists, so an exhausted id range leaves nothing behind.
+        ValueCacheId cacheId = attachesToIngest ? ValueCacheId.Invalid : _State.AllocateValueCacheId();
         JobId jobId = _State.AllocateJobId();
         ValueCacheSlot slot = new(
             jobId,
@@ -1344,33 +1381,34 @@ public sealed class Session : ISession, ISessionReader
             stack => _BuildValueCache(stack, request),
             () => _IngestValueCache,
             _OnJobStatusChanged);
-
-        ValueCacheInfo info = new()
-        {
-            Id = cacheId,
-            UiName = listener.UiName,
-            Job = slot.Info,
-        };
-        info.SetWriter(writer);
-        info.UnsubscribeCallback = () =>
+        Action unsubscribe = () =>
         {
             _ = TryUnsubscribe(slot.Info, out _);
         };
-        slot.ValueCacheInfo = info;
 
-        _ValueCacheSlots.Add(slot);
-        if (fillMode == ValueCacheFillMode.NotifyOnly && _IngestInfo is not null)
+        ValueCacheInfo info;
+        if (attachesToIngest)
         {
-            _IngestInfo.UnsubscribeCallback = info.UnsubscribeCallback;
-            _IngestInfo.Job = slot.Info;
-            _IngestInfo.SetStatus(SubscriptionStatus.Active);
-            slot.ValueCacheInfo = _IngestInfo;
+            // The ingest cache already has a public view (and an id); the listener job attaches to it.
+            info = _IngestInfo!;
+            info.Job = slot.Info;
+            info.SetStatus(SubscriptionStatus.Active);
         }
         else
         {
+            info = new ValueCacheInfo
+            {
+                Id = cacheId,
+                UiName = listener.UiName,
+                Job = slot.Info,
+            };
+            info.SetWriter(writer);
             _ValueCacheInfos.Add(info);
         }
 
+        info.UnsubscribeCallback = unsubscribe;
+        slot.ValueCacheInfo = info;
+        _ValueCacheSlots.Add(slot);
         _AllJobs.Add(slot.Info);
         return slot;
     }
@@ -1589,6 +1627,12 @@ public sealed class Session : ISession, ISessionReader
     // -- Parse helper --
 
     /// <summary>
+    /// How often a source thread found the parse gate closed under <see cref="_ParseMutex"/> and parked
+    /// again instead of allocating an id. Diagnostic; tests use it to prove the restart race was taken.
+    /// </summary>
+    internal int IngestGateRefusalCount => _IngestGateRefusals;
+
+    /// <summary>
     /// Fail-closed path when a freshly allocated packet id cannot be recorded in the map.
     /// Extracted so ExitPointGaps can exercise the throw without corrupting a live source loop.
     /// </summary>
@@ -1710,22 +1754,38 @@ public sealed class Session : ISession, ISessionReader
     }
 
     /// <summary>
-    /// First parse of one newly read frame. Holds <see cref="_ParseMutex"/> from id allocation
-    /// through the map append and the packet-count publish. Restart must not call this.
+    /// First parse of one newly read frame. Returns <see langword="false"/> without allocating an id
+    /// when the parse gate is closed: Restart resets the gate before it takes this lock, so a source
+    /// thread that passed the gate earlier must wait again instead of allocating from the reset counter.
+    /// Holds <see cref="_ParseMutex"/> from the gate check through the map append and the packet-count
+    /// publish. Restart must not call this.
     /// </summary>
-    private Packet _IngestFrameUnderLock(Frame frame, FrameSourceId sourceId, Packet? recycle)
+    /// <returns><see langword="true"/> when the frame was parsed and announced; <paramref name="packet"/> is then set.</returns>
+    private bool _TryIngestFrameUnderLock(
+        Frame frame,
+        FrameSourceId sourceId,
+        Packet? recycle,
+        [NotNullWhen(true)] out Packet? packet)
     {
         lock (_ParseMutex)
         {
+            // Restart closed the gate after this thread passed it. Parsing now would race the re-parse.
+            if (!_ParseGate.IsSet)
+            {
+                Interlocked.Increment(ref _IngestGateRefusals);
+                packet = null;
+                return false;
+            }
+
             int nextBefore = _NextPacketId;
             try
             {
                 PacketId id = _AllocateNextPacketId();
-                Packet packet = _ParseAllocatedFrame(id, frame, recycle);
+                packet = _ParseAllocatedFrame(id, frame, recycle);
                 RecordPacketFrame(id, frame.Id, sourceId);
                 Interlocked.Increment(ref _PacketCount);
                 Interlocked.Increment(ref _FrameCount);
-                return packet;
+                return true;
             }
             catch
             {
@@ -1799,7 +1859,6 @@ public sealed class Session : ISession, ISessionReader
     /// (O(frames × listeners) atomic ORs). Listener slots coalesce duplicate
     /// flags between wake cycles; each frame still issues one OR per listener.
     /// </remarks>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void _NotifyAllListeners(NotifyFlags flags)
     {
         ReadOnlySpan<ListenerSlot> slots = _ListenerSlots.Current;
@@ -1863,7 +1922,8 @@ public sealed class Session : ISession, ISessionReader
         }
 
         // Compile before allocating any listener state so a bad expression leaves the session
-        // exactly as it was.
+        // exactly as it was. A Restart that swaps the stack after this point is caught by the core:
+        // it re-binds the filter, and a field the new stack lacks is reported here as a filter failure.
         FilterResult<PacketFilter> compiled = PacketFilter.Compile(filterExpression ?? string.Empty, _Stack);
         if (!compiled.TryGetValue(out PacketFilter? filter))
         {
@@ -1871,20 +1931,58 @@ public sealed class Session : ISession, ISessionReader
             return false;
         }
 
-        return TryAddListener(listener, filter, out info, out failure);
+        return _TryAddListenerCore(listener, filter, out info, out filterFailure, out failure);
     }
 
     /// <inheritdoc/>
     public bool TryAddListener(
         ISessionListener listener,
-        IFilter? filter,
+        PacketFilter? filter,
         [NotNullWhen(true)] out ListenerInfo? info,
         [NotNullWhen(false)] out SessionFailure? failure)
     {
         ArgumentNullException.ThrowIfNull(listener);
         _ThrowIfDisposed();
+
+        if (_TryAddListenerCore(listener, filter, out info, out FilterError? bindFailure, out failure))
+        {
+            return true;
+        }
+
+        // A caller-supplied filter that names fields this session does not have is a caller error.
+        if (bindFailure is not null)
+        {
+            throw new ArgumentException(
+                FormattableString.Invariant(
+                    $"The filter '{filter!.Expression}' was compiled for another stack and cannot be re-bound to the session stack: ")
+                + bindFailure.Message,
+                nameof(filter));
+        }
+
+        // Without a bind failure the core returns false only for a refused subscription, which sets failure.
+        Debug.Assert(failure is not null, "A refused subscription always carries a SessionFailure.");
+        return false;
+    }
+
+    /// <summary>
+    /// Shared body of both filtered <c>TryAddListener</c> overloads. Returns <see langword="false"/> with
+    /// <paramref name="failure"/> when the session refuses the subscription, or with
+    /// <paramref name="bindFailure"/> when a filter compiled for another stack cannot be re-bound to the
+    /// session stack. In both cases no id, slot, or info exists afterwards.
+    /// </summary>
+    /// <exception cref="SessionException">
+    /// <see cref="SessionErrorCode.ListenerUiNameEmpty"/>, <see cref="SessionErrorCode.ListenerIdExhausted"/>,
+    /// <see cref="SessionErrorCode.JobIdExhausted"/>.
+    /// </exception>
+    private bool _TryAddListenerCore(
+        ISessionListener listener,
+        PacketFilter? filter,
+        [NotNullWhen(true)] out ListenerInfo? info,
+        out FilterError? bindFailure,
+        out SessionFailure? failure)
+    {
         info = null;
-        failure = null;
+        bindFailure = null;
 
         if (string.IsNullOrWhiteSpace(listener.UiName))
         {
@@ -1898,19 +1996,22 @@ public sealed class Session : ISession, ISessionReader
             return false;
         }
 
-        // Reject a foreign filter before any id or slot is stored.
-        if (filter is not null and not PacketFilter)
+        // A filter carries field ids of the stack it was compiled for. Re-bind a foreign one before any
+        // id or slot exists; a filter that cannot be re-bound names fields this session does not have.
+        if (!_TryBindFilterToStack(filter, _Stack, out PacketFilter? bound, out bindFailure))
         {
-            throw new ArgumentException(
-                "ListenerSlot only accepts NetworkInspector.Filter.Filter instances.",
-                nameof(filter));
+            return false;
         }
 
         ListenerId listenerId = _State.AllocateListenerId();
         JobId jobId = _State.AllocateJobId();
 
         ListenerSlot slot = _RegisterListenerSlot(jobId, listener);
-        slot.SetFilter(filter);
+        slot.SetFilter(bound);
+
+        // A Restart may have swapped the stack between the bind above and the registration. Restart
+        // re-binds only the slots it can see, so check again now that this slot is visible to it.
+        _RebindIfStackChanged(slot);
 
         info = new ListenerInfo()
         {
@@ -1948,6 +2049,62 @@ public sealed class Session : ISession, ISessionReader
         _BackfillListener(slot);
         failure = null;
         return true;
+    }
+
+    /// <summary>
+    /// Yields <paramref name="filter"/> when it is null, always-match, or already bound to
+    /// <paramref name="stack"/>; otherwise a re-bound copy from <see cref="PacketFilter.TryDerive"/>.
+    /// The caller's instance is never mutated.
+    /// </summary>
+    /// <returns><see langword="false"/> with <paramref name="failure"/> when the filter cannot be re-bound to <paramref name="stack"/>.</returns>
+    private static bool _TryBindFilterToStack(
+        PacketFilter? filter,
+        Stack stack,
+        out PacketFilter? bound,
+        [NotNullWhen(false)] out FilterError? failure)
+    {
+        if (filter is null || filter.IsAlwaysMatch || ReferenceEquals(filter.Stack, stack))
+        {
+            bound = filter;
+            failure = null;
+            return true;
+        }
+
+        if (!filter.TryDerive(stack, out PacketFilter? derived, out failure))
+        {
+            bound = null;
+            return false;
+        }
+
+        bound = derived;
+        return true;
+    }
+
+    /// <summary>
+    /// Re-binds the filter of a freshly registered <paramref name="slot"/> when the session stack changed
+    /// after the filter was bound. Mirrors <see cref="_DeriveListenerFilters"/>: a filter that cannot be
+    /// re-bound is dropped and the failure is recorded on the slot. Runs under the slot's filter gate, so it
+    /// serialises with a concurrent Restart re-binding the same slot; re-binding twice is harmless.
+    /// </summary>
+    private void _RebindIfStackChanged(ListenerSlot slot)
+    {
+        lock (slot.FilterGate)
+        {
+            PacketFilter? filter = slot.Filter;
+            Stack current = _Stack;
+            if (filter is null || filter.IsAlwaysMatch || ReferenceEquals(filter.Stack, current))
+            {
+                return;
+            }
+
+            if (filter.TryDerive(current, out PacketFilter? derived, out FilterError? failure))
+            {
+                slot.SetFilter(derived);
+                return;
+            }
+
+            slot.SetFilterFault(failure);
+        }
     }
 
     /// <summary>
@@ -2059,7 +2216,6 @@ public sealed class Session : ISession, ISessionReader
     // -- ISessionReader: Packet access --
 
     /// <inheritdoc/>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool TryGetPacket(
         PacketId id,
         [NotNullWhen(true)] out Packet? packet,
@@ -2067,8 +2223,27 @@ public sealed class Session : ISession, ISessionReader
         TryGetPacket(id, recycle: null, out packet, out failure);
 
     /// <inheritdoc/>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool TryGetPacket(
+        PacketId id,
+        Packet? recycle,
+        [NotNullWhen(true)] out Packet? packet,
+        [NotNullWhen(false)] out SessionFailure? failure)
+    {
+        RandomAccessLookup sources = new(_RandomAccessSources);
+        return _TryGetPacketCore(ref sources, id, recycle, out packet, out failure);
+    }
+
+    /// <summary>
+    /// Per-id body shared by <see cref="TryGetPacket(PacketId, Packet?, out Packet?, out SessionFailure?)"/>
+    /// and the read loops. <paramref name="sources"/> is a snapshot the caller takes once per call, so a loop
+    /// neither re-reads the volatile dictionary nor hashes the source id again for a run of packets from one source.
+    /// </summary>
+    /// <remarks>
+    /// The <see cref="_QueriesDisabled"/> check stays per id on purpose: it is one volatile load, and it is the
+    /// guard that keeps a long read from re-parsing ids on a stack that a concurrent Restart has just swapped in.
+    /// </remarks>
+    private bool _TryGetPacketCore(
+        ref RandomAccessLookup sources,
         PacketId id,
         Packet? recycle,
         [NotNullWhen(true)] out Packet? packet,
@@ -2097,8 +2272,7 @@ public sealed class Session : ISession, ISessionReader
             return false;
         }
 
-        _RandomAccessSources.TryGetValue(sourceId, out IRandomAccessFrameSource? raSource);
-        if (raSource is null)
+        if (!sources.TryGet(sourceId, out IRandomAccessFrameSource? raSource))
         {
             packet = null;
             failure = new SessionFailure(SessionErrorCode.FrameUnavailable, "The frame source for this packet is not available.");
@@ -2118,7 +2292,6 @@ public sealed class Session : ISession, ISessionReader
     }
 
     /// <inheritdoc/>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool TryGetFrame(PacketId id, out Frame frame, [NotNullWhen(false)] out SessionFailure? failure)
     {
         if (_QueriesDisabled)
@@ -2172,6 +2345,7 @@ public sealed class Session : ISession, ISessionReader
 
         int filled = 0;
         int limit = _PacketCount;
+        RandomAccessLookup sources = new(_RandomAccessSources);
         for (int i = 0; i < buffer.Length; i++)
         {
             int id = fromIndex + i;
@@ -2181,7 +2355,7 @@ public sealed class Session : ISession, ISessionReader
             }
 
             Packet? recycle = buffer[i];
-            if (!TryGetPacket(new PacketId(id), recycle, out Packet? packet, out _))
+            if (!_TryGetPacketCore(ref sources, new PacketId(id), recycle, out Packet? packet, out _))
             {
                 buffer[i] = null;
                 filled++;
@@ -2206,6 +2380,7 @@ public sealed class Session : ISession, ISessionReader
 
         int filled = 0;
         int limit = _PacketCount;
+        RandomAccessLookup sources = new(_RandomAccessSources);
         for (int i = 0; i < destination.Length; i++)
         {
             int id = startId + i;
@@ -2216,7 +2391,7 @@ public sealed class Session : ISession, ISessionReader
 
             PacketId packetId = new(id);
             Packet? recycle = destination[i].Packet;
-            TryGetPacket(packetId, recycle, out Packet? packet, out _);
+            _ = _TryGetPacketCore(ref sources, packetId, recycle, out Packet? packet, out _);
             destination[i] = new PacketRef(packetId, packet);
             filled++;
         }
@@ -2290,10 +2465,10 @@ public sealed class Session : ISession, ISessionReader
     /// that <paramref name="filter"/> accepts.
     ///
     /// <para>
-    /// Presence pruning uses <see cref="IFilter.TryIsPresenceCandidate"/> on the live index:
+    /// Presence pruning uses <see cref="PacketFilter.TryIsPresenceCandidate"/> on the live index:
     /// each packet id is tested with <see cref="ReadOnlyRoaringBitmap.Contains"/> so the index
     /// can keep growing without cloning bitmaps. Packets outside the prune set are skipped
-    /// without touching the field tree. Survivors reach <see cref="IFilter.TryIsMatch"/>.
+    /// without touching the field tree. Survivors reach <see cref="PacketFilter.TryIsMatch"/>.
     /// </para>
     /// </summary>
     private bool _TryReadMatching(
@@ -2319,6 +2494,7 @@ public sealed class Session : ISession, ISessionReader
         int first = Math.Max(startId, 0);
         bool skipped = false;
         int filled = 0;
+        RandomAccessLookup sources = new(_RandomAccessSources);
 
         for (int id = first; id < limit && filled < destination.Length; id++)
         {
@@ -2332,7 +2508,7 @@ public sealed class Session : ISession, ISessionReader
 
             PacketId packetId = new(id);
             Packet? recycle = destination[filled].Packet;
-            if (!TryGetPacket(packetId, recycle, out Packet? packet, out _) || packet is null)
+            if (!_TryGetPacketCore(ref sources, packetId, recycle, out Packet? packet, out _))
             {
                 skipped = true;
                 continue;
@@ -2408,11 +2584,12 @@ public sealed class Session : ISession, ISessionReader
                 "Job UiName cannot be null or whitespace.");
         }
 
-        if (_State.Phase == SessionPhase.ShuttingDown)
+        // Refuse once shutdown has started, also after it finished: nobody would cancel or join the job.
+        if (_ShutdownStarted != 0 || _State.Phase == SessionPhase.ShuttingDown)
         {
             failure = new SessionFailure(
                 SessionErrorCode.InvalidPhase,
-                "Jobs cannot be added while the session is shutting down.");
+                "Jobs cannot be added once the session has started shutting down.");
             return false;
         }
 
@@ -2549,7 +2726,7 @@ public sealed class Session : ISession, ISessionReader
     /// Finds the <see cref="ListenerSlot"/> and its corresponding <see cref="ListenerInfo"/>
     /// whose job matches the given <paramref name="job"/>. Returns nulls if not found.
     /// The <see cref="ListenerInfo"/> is retrieved from <see cref="ListenerSlot.ListenerInfo"/>
-    /// which is set during <see cref="TryAddListener(ISessionListener, IFilter?, out ListenerInfo?, out SessionFailure?)"/>.
+    /// which is set during <see cref="TryAddListener(ISessionListener, PacketFilter?, out ListenerInfo?, out SessionFailure?)"/>.
     /// </summary>
     private (ListenerSlot? Slot, ListenerInfo? Info) _FindListenerSlotAndInfo(JobInfo job)
     {
@@ -2663,6 +2840,44 @@ public sealed class Session : ISession, ISessionReader
         if (_Disposed)
         {
             throw new SessionException(SessionErrorCode.Disposed, "The session has been disposed.");
+        }
+    }
+
+    #endregion
+
+    #region Nested types
+
+    /// <summary>
+    /// Snapshot of the random-access source map for one read call, plus a one-entry cache of the last hit.
+    /// A read loop over packets of one source then does one dictionary lookup instead of one per id.
+    /// <para>
+    /// Thread-safety: a mutable value that lives on the calling thread's stack for one call and is passed
+    /// by <see langword="ref"/>; it is never shared. The dictionary itself is an immutable copy-on-write snapshot.
+    /// </para>
+    /// </summary>
+    private struct RandomAccessLookup(Dictionary<FrameSourceId, IRandomAccessFrameSource> sources)
+    {
+        private readonly Dictionary<FrameSourceId, IRandomAccessFrameSource> _Sources = sources;
+        private FrameSourceId _LastId = FrameSourceId.Invalid;
+        private IRandomAccessFrameSource? _LastSource;
+
+        /// <summary>Looks up the random-access source of <paramref name="sourceId"/>; false when it has none.</summary>
+        internal bool TryGet(FrameSourceId sourceId, [NotNullWhen(true)] out IRandomAccessFrameSource? source)
+        {
+            if (_LastSource is not null && _LastId == sourceId)
+            {
+                source = _LastSource;
+                return true;
+            }
+
+            if (!_Sources.TryGetValue(sourceId, out source))
+            {
+                return false;
+            }
+
+            _LastId = sourceId;
+            _LastSource = source;
+            return true;
         }
     }
 

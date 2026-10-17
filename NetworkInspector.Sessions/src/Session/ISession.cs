@@ -50,8 +50,11 @@ public interface ISession : ISessionReader, IDisposable
     /// <summary>
     /// Attempts to register a session listener. May be called while the session is
     /// <see cref="SessionPhase.Idle"/>, <see cref="SessionPhase.Running"/>, or
-    /// <see cref="SessionPhase.Restarting"/>.
-    /// Returns <see langword="false"/> if the session is shutting down or stopped.
+    /// <see cref="SessionPhase.Stopped"/>. A listener added after packets exist is notified for the
+    /// current id range.
+    /// Returns <see langword="false"/> with <see cref="SessionErrorCode.InvalidPhase"/> while the session is
+    /// shutting down, and with <see cref="SessionErrorCode.QueriesDisabled"/> while packet queries are disabled
+    /// (a restart is in progress or failed closed, or shutdown has finished).
     /// </summary>
     /// <exception cref="SessionException">
     /// <see cref="SessionErrorCode.ListenerUiNameEmpty"/> when <see cref="ISessionListener.UiName"/> is null or whitespace.
@@ -72,23 +75,34 @@ public interface ISession : ISessionReader, IDisposable
     /// <para>
     /// A <see langword="null"/> filter means "no filter" and is equivalent to
     /// <see cref="NetworkInspector.Filter.Filter.AlwaysMatch"/>.
-    /// The filter must have been compiled against the session's current stack; a
-    /// <see cref="Restart"/> re-binds it automatically via
-    /// <see cref="IFilter.TryDerive"/>.
+    /// A filter compiled against the session's current <see cref="ISessionReader.Stack"/> is installed as is.
+    /// A filter compiled against any other stack (another session, or this session before a
+    /// <see cref="Restart"/>) is never evaluated against the wrong field ids: the session installs a re-bound
+    /// copy from <see cref="NetworkInspector.Filter.Filter.TryDerive"/> and leaves the caller's instance
+    /// untouched. A later <see cref="Restart"/> re-binds the installed filter the same way.
     /// </para>
     ///
     /// <para>
     /// A filter instance is single-threaded and must not be shared between listeners; each
     /// listener evaluates its own filter on its own thread.
     /// </para>
+    ///
+    /// <para>
+    /// Phase rules and refusals are those of
+    /// <see cref="TryAddListener(ISessionListener, out ListenerInfo?, out SessionFailure?)"/>.
+    /// </para>
     /// </summary>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="filter"/> was compiled for another stack and cannot be re-bound to the session stack
+    /// (it names a field the session stack does not define). No listener is registered.
+    /// </exception>
     /// <exception cref="SessionException">
     /// <see cref="SessionErrorCode.ListenerUiNameEmpty"/> when <see cref="ISessionListener.UiName"/> is null or whitespace.
     /// <see cref="SessionErrorCode.ListenerIdExhausted"/> when the listener ID limit is reached.
     /// </exception>
     bool TryAddListener(
         ISessionListener listener,
-        IFilter? filter,
+        PacketFilter? filter,
         [NotNullWhen(true)] out ListenerInfo? info,
         [NotNullWhen(false)] out SessionFailure? failure);
 
@@ -104,8 +118,11 @@ public interface ISession : ISessionReader, IDisposable
     ///
     /// <para>
     /// Returns <see langword="false"/> when the expression does not compile — then
-    /// <paramref name="filterFailure"/> describes the problem and no listener is registered — or
-    /// when the session is shutting down or stopped, in which case both out parameters are
+    /// <paramref name="filterFailure"/> describes the problem, <paramref name="failure"/> is
+    /// <see langword="null"/>, and no listener is registered — or when the session refuses the
+    /// subscription (shutting down, or packet queries disabled; see
+    /// <see cref="TryAddListener(ISessionListener, out ListenerInfo?, out SessionFailure?)"/>), in which case
+    /// <paramref name="failure"/> carries the reason and <paramref name="filterFailure"/> is
     /// <see langword="null"/>.
     /// </para>
     /// </summary>
@@ -128,7 +145,10 @@ public interface ISession : ISessionReader, IDisposable
     /// Always constructs a new cache; existing caches are never reused as a cover.
     /// </summary>
     /// <returns>
-    /// <see langword="false"/> when the session is shutting down or stopped.
+    /// <see langword="false"/> with <see cref="SessionErrorCode.InvalidPhase"/> while the session is shutting
+    /// down, and with <see cref="SessionErrorCode.QueriesDisabled"/> while packet queries are disabled
+    /// (restart in progress or failed closed, or shutdown finished). Allowed in
+    /// <see cref="SessionPhase.Idle"/>, <see cref="SessionPhase.Running"/>, and <see cref="SessionPhase.Stopped"/>.
     /// </returns>
     /// <exception cref="ArgumentNullException"><paramref name="listener"/> or <paramref name="request"/> is null.</exception>
     /// <exception cref="SessionException">
@@ -147,8 +167,10 @@ public interface ISession : ISessionReader, IDisposable
 
     /// <summary>
     /// Attempts to add a user-defined background job. The job starts immediately
-    /// on a dedicated thread if successful.
-    /// Returns <see langword="false"/> if the session is shutting down or stopped.
+    /// on a dedicated thread if successful. Allowed in every phase until shutdown starts, including
+    /// <see cref="SessionPhase.Stopped"/> after all sources finished (for example an export job).
+    /// Returns <see langword="false"/> with <see cref="SessionErrorCode.InvalidPhase"/> once
+    /// <see cref="Shutdown"/> has started, also after it finished: nobody would cancel or join the job.
     /// </summary>
     /// <exception cref="SessionException">
     /// <see cref="SessionErrorCode.JobUiNameEmpty"/> when <paramref name="uiName"/> is null or whitespace.
@@ -186,7 +208,13 @@ public interface ISession : ISessionReader, IDisposable
     /// Returns <see langword="false"/> if the job is not owned by this session, is already
     /// in a terminal state (<see cref="JobStatus.Completed"/>, <see cref="JobStatus.Cancelled"/>,
     /// or <see cref="JobStatus.Failed"/>), or if the session is in the
-    /// <see cref="SessionPhase.Idle"/> or <see cref="SessionPhase.ShuttingDown"/> phase.
+    /// <see cref="SessionPhase.ShuttingDown"/> phase. In <see cref="SessionPhase.Idle"/> a source that
+    /// has not started is removed (and disposed) instead of cancelled.
+    /// </para>
+    ///
+    /// <para>
+    /// Do not unsubscribe a listener or value-cache job from its own callback: the call waits for that
+    /// job's thread to exit, which is the calling thread.
     /// </para>
     ///
     /// <para>Thread-safe. Multiple concurrent calls for different jobs are safe.
@@ -265,6 +293,28 @@ public interface ISession : ISessionReader, IDisposable
     /// <see cref="IDisposable.Dispose"/>, or <see cref="TryStart"/>.
     /// </para>
     ///
+    /// <para>
+    /// <b>Failure before any change:</b> the ingest value cache of <see cref="SessionOptions.ValueCache"/>
+    /// and the packet index are built on the new stack before the phase, the parse gate, or the queries
+    /// change. A request field the new stack does not define therefore throws
+    /// (<see cref="SessionErrorCode.ValueCacheUnknownField"/> /
+    /// <see cref="SessionErrorCode.ValueCacheInvalidFieldName"/>) and leaves the session exactly as it was:
+    /// same stack, same phase, queries enabled. The session disposes the unused new stack.
+    /// From the stack swap on, the session owns the new stack, also when a later step fails.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Runtime value caches:</b> slots added with <see cref="TryAddValueCache"/> rebuild their cache
+    /// from the stored request on their own thread when they receive <see cref="NotifyFlags.StackChanged"/>.
+    /// A request field the new stack does not define fails that slot (its job ends
+    /// <see cref="JobStatus.Failed"/>), not the restart.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Blocking:</b> the call returns after every frame was re-parsed. Run it off a UI thread; while it
+    /// runs, <see cref="ISessionReader.QueriesEnabled"/> is <see langword="false"/> and pull reads are refused.
+    /// </para>
+    ///
     /// <example>
     /// <code>
     /// session.Restart(registry =>
@@ -288,9 +338,12 @@ public interface ISession : ISessionReader, IDisposable
     /// A restart is already in progress, or the factory returned <see langword="null"/>.
     /// </exception>
     /// <exception cref="SessionException">
-    /// The session is not in the <see cref="SessionPhase.Running"/> or
-    /// <see cref="SessionPhase.Stopped"/> phase, or a mapped frame cannot be
-    /// re-read (<see cref="SessionErrorCode.FrameUnavailable"/>).
+    /// <see cref="SessionErrorCode.InvalidPhase"/> when the session is not in the <see cref="SessionPhase.Running"/>
+    /// or <see cref="SessionPhase.Stopped"/> phase, or shutdown has started (also while the factory ran).
+    /// <see cref="SessionErrorCode.ValueCacheUnknownField"/> or <see cref="SessionErrorCode.ValueCacheInvalidFieldName"/>
+    /// when the new stack cannot satisfy <see cref="SessionOptions.ValueCache"/>; thrown before any state changes.
+    /// <see cref="SessionErrorCode.FrameUnavailable"/> when a mapped frame cannot be re-read; queries then stay
+    /// disabled (fail closed).
     /// </exception>
     void Restart(Func<FrameInterfaceRegistry, Stack> stackFactory);
 

@@ -106,6 +106,7 @@ internal sealed class FlankNodeTests
     {
         FlankNode node = new(
             "ip.ttl",
+            fieldPosition: 0,
             new FlankEndpoint(CompareOp.Equal, FieldValueData.NewU64(1)),
             new FlankEndpoint(CompareOp.Equal, FieldValueData.NewU64(2)),
             by: null,
@@ -123,6 +124,7 @@ internal sealed class FlankNodeTests
     {
         FlankNode node = new(
             "ip.ttl",
+            fieldPosition: 0,
             new FlankEndpoint(CompareOp.Equal, FieldValueData.NewU64(1)),
             to: null,
             by: null,

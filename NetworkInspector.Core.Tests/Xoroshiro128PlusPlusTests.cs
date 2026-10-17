@@ -534,34 +534,6 @@ internal sealed class Xoroshiro128PlusPlusTests
     }
 
     [Test]
-    public async Task FillBytes_ForceScalarBulkPath_FillsBuffer()
-    {
-        Xoroshiro128PlusPlus rng = new(42UL);
-        byte[] buffer = new byte[256];
-        Xoroshiro128PlusPlus.ForceScalarBulkFillForTesting = true;
-        try
-        {
-            rng.FillBytes(buffer);
-        }
-        finally
-        {
-            Xoroshiro128PlusPlus.ForceScalarBulkFillForTesting = false;
-        }
-
-        bool anyNonZero = false;
-        foreach (byte b in buffer)
-        {
-            if (b != 0)
-            {
-                anyNonZero = true;
-                break;
-            }
-        }
-
-        await Assert.That(anyNonZero).IsTrue();
-    }
-
-    [Test]
     public async Task FillBytes_ScalarPathViaPrivateAccessor_FillsBuffer()
     {
         Xoroshiro128PlusPlus rng = new(321UL);

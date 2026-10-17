@@ -329,4 +329,29 @@ internal sealed class DatagramDefragmenterTests
         bool complete = (bool)isComplete!.Invoke(buffer, null)!;
         await Assert.That(complete).IsFalse();
     }
+
+    [Test]
+    public async Task ProcessFragment_KeyRestartedAfterDiscard_EvictsTheOlderDatagramFirst()
+    {
+        DatagramDefragmenter<IntKey> d = new(maxEntries: 2);
+        IntKey a = new(1);
+        IntKey b = new(2);
+        IntKey c = new(3);
+
+        // A starts, then is dropped (a fragment past 65535 bytes); its queue entry stays behind.
+        _ = d.ProcessFragment(a, 0, moreFragments: true, [1, 2, 3, 4, 5, 6, 7, 8]);
+        _ = d.ProcessFragment(a, 65528, moreFragments: false, new byte[16]);
+        // B starts, then A starts again: B is now the older pending datagram.
+        _ = d.ProcessFragment(b, 0, moreFragments: true, [1, 2, 3, 4, 5, 6, 7, 8]);
+        _ = d.ProcessFragment(a, 0, moreFragments: true, [9, 9, 9, 9, 9, 9, 9, 9]);
+
+        // C at the limit evicts B, not the restarted A.
+        _ = d.ProcessFragment(c, 0, moreFragments: true, [1, 2, 3, 4, 5, 6, 7, 8]);
+        byte[]? completedA = d.ProcessFragment(a, 8, moreFragments: false, [7, 7]);
+
+        await Assert.That(d.EvictedCount).IsEqualTo(1);
+        await Assert.That(completedA).IsNotNull();
+        await Assert.That(completedA!.Length).IsEqualTo(10);
+        await Assert.That(d.ProcessFragment(b, 8, moreFragments: false, [7, 7])).IsNull();
+    }
 }

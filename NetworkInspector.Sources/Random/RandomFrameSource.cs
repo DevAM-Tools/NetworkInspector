@@ -100,7 +100,7 @@ public sealed class RandomFrameSource(RandomSourceOptions options, string? uiNam
 
     /// <summary>Resolved options (never null after construction). Validated eagerly so
     /// invalid options surface at construction time, matching <c>BlfSource.Open</c> /
-    /// <c>PcapSource.Open</c>.</summary>
+    /// <c>PcapngSource.Open</c>.</summary>
     private readonly RandomSourceOptions _Options = _ValidateOptions(options);
 
     /// <summary>Resolved master seed (derived from options or entropy at Start time).</summary>
@@ -878,7 +878,7 @@ public sealed class RandomFrameSource(RandomSourceOptions options, string? uiNam
     /// <summary>
     /// Validates the supplied options at construction time so invalid configurations surface
     /// immediately rather than at the first <see cref="Start"/> call. Mirrors the eager
-    /// validation done by <c>BlfSource.Open</c> and <c>PcapSource.Open</c>.
+    /// validation done by <c>BlfSource.Open</c> and <c>PcapngSource.Open</c>.
     /// </summary>
     /// <exception cref="ArgumentNullException"><paramref name="options"/> is null.</exception>
     /// <exception cref="ArgumentOutOfRangeException">An option is outside its allowed range.</exception>

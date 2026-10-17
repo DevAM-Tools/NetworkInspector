@@ -6,72 +6,66 @@ namespace NetworkInspector.Sessions.Tests;
 internal sealed class InfrastructureTests
 {
     [Test]
-    public async Task SnapshotList_AddRemoveClearAndCount()
+    public async Task SnapshotListAddAndRemove()
     {
         SnapshotList<string> list = new();
-
-        await Assert.That(list.Count).IsEqualTo(0);
+        int emptyLength = list.Current.Length;
 
         list.Add("a");
         list.Add("b");
-
-        await Assert.That(list.Count).IsEqualTo(2);
-        await Assert.That(list.Current[0]).IsEqualTo("a");
-
+        int afterAdd = list.Current.Length;
+        string first = list.Current[0];
         bool removed = list.Remove("a");
-        await Assert.That(removed).IsTrue();
-        await Assert.That(list.Count).IsEqualTo(1);
-
         bool missing = list.Remove("missing");
+        string[] remaining = list.CurrentSnapshot;
+
+        await Assert.That(emptyLength).IsEqualTo(0);
+        await Assert.That(afterAdd).IsEqualTo(2);
+        await Assert.That(first).IsEqualTo("a");
+        await Assert.That(removed).IsTrue();
         await Assert.That(missing).IsFalse();
-
-        list.Clear();
-        await Assert.That(list.Count).IsEqualTo(0);
+        await Assert.That(remaining).IsEquivalentTo(["b"]);
     }
 
+    /// <summary>Concurrent writers must not lose an element: every Add goes through the CAS retry loop.</summary>
     [Test]
-    public async Task ThreadWaitHelper_WaitUntil_BlocksUntilConditionMet()
+    public async Task SnapshotListConcurrentAddsKeepEveryItem()
     {
-        using ManualResetEventSlim entered = new(false);
-        int counter = 0;
-        Task waiter = Task.Run(() => ThreadWaitHelper.WaitUntil(() =>
+        SnapshotList<int> list = new();
+        const int threadCount = 8;
+        const int perThread = 250;
+        Thread[] threads = new Thread[threadCount];
+        for (int t = 0; t < threadCount; t++)
         {
-            if (Volatile.Read(ref counter) >= 2)
+            int offset = t * perThread;
+            threads[t] = new Thread(() =>
             {
-                return true;
-            }
+                for (int i = 0; i < perThread; i++)
+                {
+                    list.Add(offset + i);
+                }
+            })
+            {
+                Name = "snapshot-writer",
+                IsBackground = true,
+                CurrentCulture = CultureInfo.InvariantCulture,
+            };
+        }
 
-            entered.Set();
-            return false;
-        }));
-        entered.Wait();
-        Interlocked.Increment(ref counter);
-        Interlocked.Increment(ref counter);
-        await waiter.WaitAsync(TimeSpan.FromSeconds(5));
-    }
-
-    [Test]
-    public async Task ThreadWaitHelper_WaitUntilWithTimeout_ReturnsFalseOnTimeout()
-    {
-        bool result = ThreadWaitHelper.WaitUntil(static () => false, TimeSpan.FromMilliseconds(20));
-
-        await Assert.That(result).IsFalse();
-    }
-
-    [Test]
-    public async Task ThreadWaitHelper_WaitUntilWithTimeout_ReturnsTrueWhenConditionMet()
-    {
-        int flag = 0;
-        Task setter = Task.Run(async () =>
+        foreach (Thread thread in threads)
         {
-            await Task.Delay(10);
-            Interlocked.Exchange(ref flag, 1);
-        });
+            thread.Start();
+        }
 
-        bool result = ThreadWaitHelper.WaitUntil(() => Volatile.Read(ref flag) == 1, TimeSpan.FromSeconds(5));
+        foreach (Thread thread in threads)
+        {
+            thread.Join();
+        }
 
-        await setter;
-        await Assert.That(result).IsTrue();
+        int[] items = list.CurrentSnapshot;
+
+        await Assert.That(items.Length).IsEqualTo(threadCount * perThread);
+        await Assert.That(items.Distinct().Count()).IsEqualTo(threadCount * perThread);
     }
 
     [Test]

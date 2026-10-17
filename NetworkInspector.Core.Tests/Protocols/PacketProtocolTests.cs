@@ -45,6 +45,7 @@ internal sealed class PacketProtocolTests
 
         await Assert.That(found).IsTrue();
         await Assert.That(msg.Contains("frame dispatch failed", StringComparison.Ordinal)).IsTrue();
+        await Assert.That(msg.StartsWith("frame dispatch failed\n", StringComparison.Ordinal)).IsTrue();
         await Assert.That(msg.Contains('\n')).IsTrue();
     }
 

@@ -16,12 +16,13 @@ public sealed class FilterError
     #region Construction
 
     /// <summary>Creates a filter error with optional position information.</summary>
-    private FilterError(FilterErrorKind kind, string message, int position, int length)
+    private FilterError(FilterErrorKind kind, string message, int position, int length, string? suggestion = null)
     {
         Kind = kind;
         Message = message;
         Position = position;
         Length = length;
+        Suggestion = suggestion;
     }
 
     #endregion
@@ -42,6 +43,14 @@ public sealed class FilterError
 
     /// <summary>Whether <see cref="Position"/> and <see cref="Length"/> carry usable values.</summary>
     public bool HasPosition => Position >= 0;
+
+    /// <summary>
+    /// A replacement for the text at <see cref="Position"/> / <see cref="Length"/> that would likely fix the
+    /// error, or <see langword="null"/>. Set for <see cref="FilterErrorKind.UnknownField"/> when the stack knows
+    /// a name close to the one written (for example <c>udp.srcport</c> for <c>udp.srcprot</c>), so an editor can
+    /// offer a quick fix. The <see cref="Message"/> already mentions it.
+    /// </summary>
+    public string? Suggestion { get; }
 
     #endregion
 
@@ -69,7 +78,21 @@ public sealed class FilterError
 
     /// <summary>Creates an error for a field name that is unknown on the compile-time stack.</summary>
     public static FilterError UnknownField(string name, int position, int length) =>
-        new(FilterErrorKind.UnknownField, $"Unknown field or protocol '{name}'", position, length);
+        UnknownField(name, position, length, suggestion: null);
+
+    /// <summary>
+    /// Creates an error for a field name that is unknown on the compile-time stack, naming the closest known
+    /// name as <see cref="Suggestion"/> when there is one.
+    /// </summary>
+    public static FilterError UnknownField(string name, int position, int length, string? suggestion) =>
+        new(
+            FilterErrorKind.UnknownField,
+            suggestion is null
+                ? $"Unknown field or protocol '{name}'"
+                : $"Unknown field or protocol '{name}'. Did you mean '{suggestion}'?",
+            position,
+            length,
+            suggestion);
 
     /// <summary>Creates an operand/operator mismatch error.</summary>
     public static FilterError TypeMismatch(string message, int position, int length) =>

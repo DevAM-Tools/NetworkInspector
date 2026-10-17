@@ -14,18 +14,16 @@ namespace NetworkInspector.Sources.Blf;
 ///   Chosen when the file size is within <see cref="BlfSourceOptions.PreloadBudget"/>.
 /// </item>
 /// <item>
-///   <b>Memory-mapped:</b> the OS memory-maps the file. Sequential scanning uses a primary
-///   <see cref="System.IO.MemoryMappedFiles.MemoryMappedViewAccessor"/> (lock-free span reads);
-///   concurrent random-access reads use a pool of per-slot accessors.
+///   <b>Memory-mapped:</b> the OS memory-maps the file with one read-only view
+///   (<see cref="MmapPool"/>). Sequential scanning and random access both read through it.
 ///   Chosen when the file size exceeds <see cref="BlfSourceOptions.PreloadBudget"/>.
 /// </item>
 /// </list>
 /// </summary>
 /// <remarks>
-    /// <b>Thread-safety:</b> <see cref="GetSpan"/> is the sequential-scan path
-    /// (lock-free primary mmap view). Concurrent random-access reads use
-    /// <see cref="ReadRegion"/>, which hashes <c>frameId</c> onto the mmap slot pool.
-    /// Both the in-memory array and the mmap primary view are read-only once created.
+/// <b>Thread-safety:</b> <see cref="GetSpan"/> may be called from any thread; for the mapped backend the caller
+/// must keep the span inside the <c>BlfSource</c> lifetime read lock (or be the scanning thread), so a concurrent
+/// dispose cannot unmap it. Both the in-memory array and the mapped view are read-only once created.
 /// </remarks>
 internal sealed class BlfDataBackend : IDisposable
 {
@@ -82,16 +80,10 @@ internal sealed class BlfDataBackend : IDisposable
     /// <summary>Creates an in-memory backend from a pre-loaded byte array.</summary>
     internal static BlfDataBackend FromMemory(byte[] data) => new(data);
 
-    /// <summary>
-    /// Creates a memory-mapped backend for the given file.
-    /// </summary>
+    /// <summary>Creates a memory-mapped backend for the given file (one read-only view).</summary>
     /// <param name="path">Path to the BLF file.</param>
-    /// <param name="slotCount">
-    /// Number of random-access pool slots.
-    /// <c>0</c> selects <see cref="Environment.ProcessorCount"/>, clamped to [1, 256].
-    /// </param>
-    internal static BlfDataBackend FromMmap(string path, int slotCount = 0) =>
-        new(new MmapPool(path, slotCount));
+    internal static BlfDataBackend FromMmap(string path) =>
+        new(new MmapPool(path));
 
     #endregion
 
@@ -110,8 +102,9 @@ internal sealed class BlfDataBackend : IDisposable
     /// </returns>
     /// <remarks>
     /// <b>Span lifetime:</b> the returned span is valid only while the caller
-    /// holds the <see cref="BlfSource"/>._LifetimeLock read lock (or, for in-memory
-    /// backends, until the backing array is garbage-collected). Callers must never escape
+    /// holds the <see cref="BlfSource"/>._LifetimeLock read lock (random access) or a lease of
+    /// <see cref="TryAcquireScanLease"/> (the sequential thread), or, for in-memory
+    /// backends, until the backing array is garbage-collected. Callers must never escape
     /// the span beyond the lock scope or store it in a field. For mmap backends the
     /// pointer is borrowed from the OS-mapped view; the pinned pointer is released as
     /// part of <see cref="MmapPool.GetPrimarySpan"/>'s internal accounting, and the
@@ -155,49 +148,15 @@ internal sealed class BlfDataBackend : IDisposable
     }
 
     /// <summary>
-    /// Reads a file region for concurrent random access.
-    /// In-memory backends return a slice of the loaded array (no copy).
-    /// Mmap backends copy through the slot selected by <c>frameId % poolSize</c>.
+    /// Starts one sequential step (<see cref="BlfSource"/>.NextFrame) that reads through <see cref="GetSpan"/> without
+    /// the lifetime lock: the mapped backend takes a reference on its view, so a concurrent <see cref="Dispose"/> defers
+    /// the unmap until <see cref="ReleaseScanLease"/>. In-memory data needs no lease (always true). False means disposal
+    /// started: read nothing. Every true result needs exactly one <see cref="ReleaseScanLease"/>.
     /// </summary>
-    internal ReadOnlyMemory<byte> ReadRegion(int frameId, long offset, int length)
-    {
-        if (_Disposed != 0)
-        {
-            return ReadOnlyMemory<byte>.Empty;
-        }
+    internal bool TryAcquireScanLease() => _MmapPool is null || _MmapPool.TryAcquireScanLease();
 
-        if (offset < 0 || length <= 0)
-        {
-            return ReadOnlyMemory<byte>.Empty;
-        }
-
-        if (_InMemoryData is not null)
-        {
-            if (offset >= _InMemoryData.Length)
-            {
-                return ReadOnlyMemory<byte>.Empty;
-            }
-
-            int safeLength = (int)Math.Min(length, _InMemoryData.Length - offset);
-            return safeLength <= 0
-                ? ReadOnlyMemory<byte>.Empty
-                : new ReadOnlyMemory<byte>(_InMemoryData, (int)offset, safeLength);
-        }
-
-        MmapPool? pool = _MmapPool;
-        if (pool is null)
-        {
-            return ReadOnlyMemory<byte>.Empty;
-        }
-
-        int readable = (int)Math.Min(length, Math.Max(0, FileSize - offset));
-        if (readable <= 0)
-        {
-            return ReadOnlyMemory<byte>.Empty;
-        }
-
-        return pool.ReadAt(frameId, offset, readable);
-    }
+    /// <summary>Ends a step started by <see cref="TryAcquireScanLease"/>.</summary>
+    internal void ReleaseScanLease() => _MmapPool?.ReleaseScanLease();
 
     #endregion
 

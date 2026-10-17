@@ -35,7 +35,7 @@ internal sealed class BlfRoundtripTests
         using TestDir dir = new("rt_blf_empty");
         string path = dir.FilePath("empty.blf");
 
-        using (BlfExporter exporter = BlfExporter.CreateBuilder().ToFile(path).Build())
+        using (BlfExporter exporter = _CreateLocalTimeBuilder().ToFile(path).Build())
         {
             exporter.OnFinish();
         }
@@ -49,7 +49,7 @@ internal sealed class BlfRoundtripTests
         int count = TsharkVerifier.GetPacketCount(path);
         await Assert.That(count).IsEqualTo(0);
 
-        using BlfSource source = BlfSource.Open(path);
+        using BlfSource source = BlfSource.Open(path, _LocalTimeOptions(ScanMode.Lazy));
         RoundtripAssertions.StartSource(source);
         await Assert.That(source.NextFrame()).IsNull();
     }
@@ -394,7 +394,7 @@ internal sealed class BlfRoundtripTests
                 FrameGenerators.BuildEthernetIpv4UdpFrame(64 + (i % 32)));
         }
 
-        using (BlfExporter exporter = BlfExporter.CreateBuilder()
+        using (BlfExporter exporter = _CreateLocalTimeBuilder()
             .ToFile(path)
             .WithCompressionLevel(level)
             .Build())
@@ -517,7 +517,7 @@ internal sealed class BlfRoundtripTests
 
         using (MemoryStream ms = new())
         {
-            using (BlfExporter exporter = BlfExporter.CreateBuilder()
+            using (BlfExporter exporter = _CreateLocalTimeBuilder()
                 .ToStream(ms).Build())
             {
                 foreach (Frame f in originals)
@@ -532,7 +532,8 @@ internal sealed class BlfRoundtripTests
 
         RoundtripAssertions.AssertTsharkMatchesOriginals(path, originals, RoundtripAssertions.ExactNs);
 
-        using BlfSource source = BlfSource.FromData(await File.ReadAllBytesAsync(path).ConfigureAwait(false), "stream.blf");
+        using BlfSource source = BlfSource.FromData(
+            await File.ReadAllBytesAsync(path).ConfigureAwait(false), "stream.blf", _LocalTimeOptions(ScanMode.Lazy));
         FrameInterfaceRegistry registry = RoundtripAssertions.StartSource(source);
         RoundtripAssertions.AssertReimportMatchesOriginals(source, registry, originals, RoundtripAssertions.ExactNs);
 
@@ -565,14 +566,14 @@ internal sealed class BlfRoundtripTests
         RoundtripAssertions.AssertTsharkMatchesOriginals(path, originals, RoundtripAssertions.ExactNs);
 
         // Pass 1: lazy scan
-        using (BlfSource lazy = BlfSource.Open(path, new BlfSourceOptions { ScanMode = ScanMode.Lazy }))
+        using (BlfSource lazy = BlfSource.Open(path, _LocalTimeOptions(ScanMode.Lazy)))
         {
             FrameInterfaceRegistry reg = RoundtripAssertions.StartSource(lazy);
             RoundtripAssertions.AssertReimportMatchesOriginals(lazy, reg, originals, RoundtripAssertions.ExactNs);
         }
 
         // Pass 2: full scan
-        using (BlfSource full = BlfSource.Open(path, new BlfSourceOptions { ScanMode = ScanMode.Full }))
+        using (BlfSource full = BlfSource.Open(path, _LocalTimeOptions(ScanMode.Full)))
         {
             FrameInterfaceRegistry reg = RoundtripAssertions.StartSource(full);
             RoundtripAssertions.AssertReimportMatchesOriginals(full, reg, originals, RoundtripAssertions.ExactNs);
@@ -606,7 +607,7 @@ internal sealed class BlfRoundtripTests
         _ExportAndClose(path, originals);
 
         // Random access requires the index to be populated → use Full scan.
-        using BlfSource source = BlfSource.Open(path, new BlfSourceOptions { ScanMode = ScanMode.Full });
+        using BlfSource source = BlfSource.Open(path, _LocalTimeOptions(ScanMode.Full));
         RoundtripAssertions.StartSource(source);
 
         int[] order = new int[count];
@@ -631,9 +632,21 @@ internal sealed class BlfRoundtripTests
     // Helpers
     // ========================================================================
 
+    /// <summary>
+    /// Exporter builder for the tshark-verified round trips. tshark (like the Vector tools) reads the BLF start date
+    /// (SYSTEMTIME) as local civil time, while the exporter writes UTC by default. Writing local time here makes the
+    /// external reader and the original timestamps agree on any machine time zone.
+    /// </summary>
+    private static BlfExporter.Builder _CreateLocalTimeBuilder() =>
+        BlfExporter.CreateBuilder().WithTimestampTimeZone(TimeZoneInfo.Local);
+
+    /// <summary>Reader options matching <see cref="_CreateLocalTimeBuilder"/>: the start date is read as local time.</summary>
+    private static BlfSourceOptions _LocalTimeOptions(ScanMode scanMode) =>
+        new() { ScanMode = scanMode, TimestampTimeZone = TimeZoneInfo.Local };
+
     private static void _ExportAndClose(string path, IReadOnlyList<Frame> frames)
     {
-        using BlfExporter exporter = BlfExporter.CreateBuilder()
+        using BlfExporter exporter = _CreateLocalTimeBuilder()
             .ToFile(path)
             .Build();
 
@@ -658,7 +671,7 @@ internal sealed class BlfRoundtripTests
 
     private static void _ReimportAndAssert(string path, IReadOnlyList<Frame> originals)
     {
-        using BlfSource source = BlfSource.Open(path);
+        using BlfSource source = BlfSource.Open(path, _LocalTimeOptions(ScanMode.Lazy));
         FrameInterfaceRegistry registry = RoundtripAssertions.StartSource(source);
         RoundtripAssertions.AssertReimportMatchesOriginals(source, registry, originals, RoundtripAssertions.ExactNs);
     }

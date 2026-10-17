@@ -69,8 +69,9 @@ public interface IFilter
     /// Evaluates one packet without a presence index.
     /// <para>
     /// Verdicts are cached per packet id, so re-querying a packet is cheap and, for stateful
-    /// filters, does not replay the state machine. Use <see cref="TryIsMatch{TIndex}"/> when an
-    /// index is available so protocol presence stays O(1).
+    /// filters, does not replay the state machine (stateful filters always keep the cache, even when
+    /// <see cref="FilterCompileOptions.EnableMatchCache"/> is <see langword="false"/>). Use
+    /// <see cref="TryIsMatch{TIndex}"/> when an index is available so protocol presence stays O(1).
     /// </para>
     /// <para>
     /// A packet parsed with <see cref="FieldTreeMode.Skip"/> has no field tree. Evaluation then
@@ -102,8 +103,9 @@ public interface IFilter
 
     /// <summary>
     /// Builds a materialized candidate bitmap by copying presence bitmaps and combining them.
-    /// Use only when <paramref name="index"/> is no longer growing — each call clones bitmaps.
-    /// While capture is live, use <see cref="TryIsPresenceCandidate{TIndex}"/> instead.
+    /// Use only when <paramref name="index"/> is no longer growing: the bitmaps are read without a
+    /// snapshot (alias members are OR-ed straight from the index views), so an append during the call
+    /// is not supported. While capture is live, use <see cref="TryIsPresenceCandidate{TIndex}"/> instead.
     /// <para>
     /// Do not pass a <see cref="PacketIndexReaderView"/> as <see cref="IPacketIndexReader"/> —
     /// that boxes. Let <typeparamref name="TIndex"/> be the struct or <see cref="PacketIndex"/>.
@@ -137,8 +139,12 @@ public interface IFilter
     /// <summary>
     /// Re-binds the already parsed expression to another stack and returns a fresh instance with
     /// empty state. The source filter is left untouched, including its poison flag.
+    /// <see cref="Filter"/> also offers a concrete overload that returns a <see cref="Filter"/>.
     /// </summary>
-    bool TryDerive(IStack stack, [NotNullWhen(true)] out Filter? derived, [NotNullWhen(false)] out FilterError? failure);
+    /// <param name="stack">The stack to bind names against.</param>
+    /// <param name="derived">Receives the new, independent filter on success.</param>
+    /// <param name="failure">Receives the bind error, for example a name the new stack does not know.</param>
+    bool TryDerive(IStack stack, [NotNullWhen(true)] out IFilter? derived, [NotNullWhen(false)] out FilterError? failure);
 
     #endregion
 }

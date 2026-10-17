@@ -314,4 +314,132 @@ internal sealed class ColumnarPacketBatchTests
         await Assert.That(bag.CustomRepresentations[0]).IsNull();
         await Assert.That(bag.CustomTexts[0]).IsNull();
     }
+
+    #region Running size estimate
+
+    /// <summary>
+    /// The incrementally maintained field-bag total must equal the sum over all bags after every packet, and the
+    /// batch estimate must contain it (packet-level bytes come on top).
+    /// </summary>
+    /// <param name="flags">Detail flags; custom strings and info change the per-row byte counts.</param>
+    [Test]
+    [Arguments(ColumnarDetailFlags.None)]
+    [Arguments(ColumnarDetailFlags.All)]
+    public async Task RunningFieldBagTotalEqualsSumOfBags(ColumnarDetailFlags flags)
+    {
+        using ColumnarPacketBatch batch = new(flags, maxPacketsPerBlock: 1000, maxBlockSize: long.MaxValue, isTimestampSorted: true);
+        Packet[] packets = PacketGenerators.CreateDnsQueryPackets("example.com", "a.example.org", "b.example.net");
+
+        foreach (Packet packet in packets)
+        {
+            batch.AddPacket(packet);
+
+            long sum = _SumBagSizes(batch);
+            await Assert.That(batch.FieldBagsEstimatedSizeBytes).IsEqualTo(sum);
+            await Assert.That(batch.EstimatedSizeBytes).IsGreaterThan(sum);
+        }
+        await Assert.That(batch.FieldBagsEstimatedSizeBytes).IsGreaterThan(0);
+    }
+
+    /// <summary><see cref="ColumnarPacketBatch.Reset"/> must zero the running totals, and they must track again afterwards.</summary>
+    [Test]
+    public async Task ResetZeroesRunningTotalAndTrackingResumes()
+    {
+        using ColumnarPacketBatch batch = new(
+            ColumnarDetailFlags.All, maxPacketsPerBlock: 1000, maxBlockSize: long.MaxValue, isTimestampSorted: true);
+        Packet[] packets = PacketGenerators.CreateEthernetUdpPackets(3);
+        batch.AddPacket(packets[0]);
+        batch.AddPacket(packets[1]);
+
+        batch.Reset();
+        long afterReset = batch.EstimatedSizeBytes;
+        long bagsAfterReset = batch.FieldBagsEstimatedSizeBytes;
+        batch.AddPacket(packets[2]);
+
+        await Assert.That(afterReset).IsEqualTo(0);
+        await Assert.That(bagsAfterReset).IsEqualTo(0);
+        await Assert.That(batch.FieldBagsEstimatedSizeBytes).IsEqualTo(_SumBagSizes(batch));
+        await Assert.That(batch.FieldBagsEstimatedSizeBytes).IsGreaterThan(0);
+    }
+
+    /// <summary>
+    /// Flush semantics are unchanged: <see cref="ColumnarPacketBatch.AddPacket"/> signals a flush exactly when the
+    /// estimate reaches the size threshold (packet-count threshold out of reach).
+    /// </summary>
+    [Test]
+    public async Task AddPacketSignalsFlushExactlyWhenEstimateReachesThreshold()
+    {
+        const long maxBlockSize = 600;
+        using ColumnarPacketBatch batch = new(
+            ColumnarDetailFlags.All, maxPacketsPerBlock: 10_000, maxBlockSize: maxBlockSize, isTimestampSorted: true);
+        Packet[] packets = PacketGenerators.CreateEthernetUdpPackets(20);
+        bool sawFlush = false;
+
+        foreach (Packet packet in packets)
+        {
+            bool flush = batch.AddPacket(packet);
+
+            await Assert.That(flush).IsEqualTo(batch.EstimatedSizeBytes >= maxBlockSize);
+            if (flush)
+            {
+                sawFlush = true;
+                batch.Reset();
+            }
+        }
+        await Assert.That(sawFlush).IsTrue();
+    }
+
+    /// <summary>Sums every bag's estimate: the reference the running total is checked against.</summary>
+    /// <param name="batch">The batch to inspect.</param>
+    /// <returns>Sum of <see cref="FieldColumnBag.EstimatedSizeBytes"/>.</returns>
+    private static long _SumBagSizes(ColumnarPacketBatch batch)
+    {
+        long sum = 0;
+        foreach (FieldColumnBag bag in batch.FieldBags.Values)
+        {
+            sum += bag.EstimatedSizeBytes;
+        }
+        return sum;
+    }
+
+    #endregion
+
+    #region Catalog description
+
+    /// <summary>
+    /// The catalog entry carries <see cref="FieldInfo.Description"/>: the registered text for a described field and
+    /// <see langword="null"/> for a field without one.
+    /// </summary>
+    [Test]
+    public async Task CatalogEntryCarriesFieldDescription()
+    {
+        using DescribedFieldCapture capture = DescribedFieldCapture.Create(1);
+        using ColumnarPacketBatch batch = new(
+            ColumnarDetailFlags.All, maxPacketsPerBlock: 100, maxBlockSize: long.MaxValue, isTimestampSorted: true);
+
+        batch.AddPacket(capture.Packets[0]);
+        FieldCatalogEntry described = _FindEntry(batch, DescribedFieldCapture.DescribedFieldName);
+        FieldCatalogEntry plain = _FindEntry(batch, DescribedFieldCapture.PlainFieldName);
+
+        await Assert.That(described.Description).IsEqualTo(DescribedFieldCapture.FieldDescription);
+        await Assert.That(plain.Description).IsNull();
+    }
+
+    /// <summary>Returns the catalog entry with the given field name; throws when absent so the test fails visibly.</summary>
+    /// <param name="batch">The batch to inspect.</param>
+    /// <param name="name">Field name.</param>
+    /// <returns>The matching entry.</returns>
+    private static FieldCatalogEntry _FindEntry(ColumnarPacketBatch batch, string name)
+    {
+        foreach (FieldCatalogEntry entry in batch.Catalog.Values)
+        {
+            if (string.Equals(entry.Name, name, StringComparison.Ordinal))
+            {
+                return entry;
+            }
+        }
+        throw new InvalidOperationException($"Catalog entry '{name}' not found.");
+    }
+
+    #endregion
 }

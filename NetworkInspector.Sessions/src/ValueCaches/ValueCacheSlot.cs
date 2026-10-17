@@ -278,13 +278,19 @@ internal sealed class ValueCacheSlot : IDisposable
             int cursor = _PacketCursor;
             if (current > cursor)
             {
+                // PullFill may stop early when a restart or shutdown disables queries. The cursor then
+                // stays at the first id that was not filled; Restart resets it and refills from 0.
+                int filledTo = current;
                 if (_FillMode == ValueCacheFillMode.PullFill)
                 {
-                    _FillWindow(cursor, current);
+                    filledTo = _FillWindow(cursor, current);
                 }
 
-                _Listener.OnNewRows(_SessionReader, _Writer.AsReadOnlyView(), cursor, current);
-                _PacketCursor = current;
+                if (filledTo > cursor)
+                {
+                    _Listener.OnNewRows(_SessionReader, _Writer.AsReadOnlyView(), cursor, filledTo);
+                    _PacketCursor = filledTo;
+                }
             }
         }
 
@@ -342,12 +348,28 @@ internal sealed class ValueCacheSlot : IDisposable
     /// captured frame via <see cref="ISessionReader.TryGetFrame"/>. Replay ids still record because
     /// <c>recordOnReplay</c> is true. The slot-private recycle packet is never published.
     /// </summary>
-    private void _FillWindow(int fromId, int toIdExclusive)
+    /// <returns>
+    /// The first id that was <b>not</b> filled: <paramref name="toIdExclusive"/> on success, or the id at
+    /// which the session refused the read because queries are disabled (restart or shutdown in progress),
+    /// or at which the writer was abandoned. The caller keeps its cursor there.
+    /// </returns>
+    /// <exception cref="SessionException">
+    /// <see cref="SessionErrorCode.FrameUnavailable"/> when an announced frame cannot be re-read; that
+    /// fails the slot, as documented on <see cref="IValueCacheListener.OnNewRows"/>.
+    /// </exception>
+    private int _FillWindow(int fromId, int toIdExclusive)
     {
         for (int id = fromId; id < toIdExclusive; id++)
         {
-            if (!_SessionReader.TryGetFrame(new PacketId(id), out Frame frame, out _))
+            if (!_SessionReader.TryGetFrame(new PacketId(id), out Frame frame, out SessionFailure? failure))
             {
+                // A paused session is not a missing frame: Restart resets the cursor and refills,
+                // Shutdown cancels the slot. Only a genuine miss fails the slot.
+                if (failure?.Code == SessionErrorCode.QueriesDisabled)
+                {
+                    return id;
+                }
+
                 throw new SessionException(
                     SessionErrorCode.FrameUnavailable,
                     FormattableString.Invariant(
@@ -356,7 +378,7 @@ internal sealed class ValueCacheSlot : IDisposable
 
             if (_Writer.IsAbandoned)
             {
-                return;
+                return id;
             }
 
             PacketId packetId = new(id);
@@ -368,7 +390,8 @@ internal sealed class ValueCacheSlot : IDisposable
                 {
                     if (!Packet.TryParse(packetId, _SessionReader.Stack, frame, in options, out Packet? parsed, out _))
                     {
-                        return;
+                        // A rejected parse is not retried: the window counts as delivered, as before.
+                        return toIdExclusive;
                     }
 
                     _Recycle = parsed;
@@ -376,9 +399,11 @@ internal sealed class ValueCacheSlot : IDisposable
             }
             catch (InvalidOperationException) when (_Writer.IsAbandoned)
             {
-                return;
+                return id;
             }
         }
+
+        return toIdExclusive;
     }
 
     #endregion

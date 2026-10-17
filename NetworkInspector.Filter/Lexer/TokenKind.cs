@@ -18,129 +18,129 @@ internal enum TokenKind : byte
     #region Literals
 
     /// <summary>Integer literal: <c>80</c>, <c>0xFF</c>, <c>0b1010</c>, <c>0o755</c>.</summary>
-    Integer,
+    Integer = 0,
 
     /// <summary>Floating-point literal: <c>3.14</c>.</summary>
-    Float,
+    Float = 1,
 
     /// <summary>Quoted string literal: <c>"hello"</c>.</summary>
-    StringLiteral,
+    StringLiteral = 2,
 
     /// <summary>Dotted identifier: <c>tcp</c>, <c>udp.port</c>.</summary>
-    Identifier,
+    Identifier = 3,
 
     /// <summary>IPv4 address literal: <c>192.168.1.1</c>.</summary>
-    Ipv4Address,
+    Ipv4Address = 4,
 
     /// <summary>IPv6 address literal: <c>2001:db8::1</c>.</summary>
-    Ipv6Address,
+    Ipv6Address = 5,
 
     /// <summary>MAC address literal (exactly six hex pairs): <c>00:11:22:33:44:55</c>.</summary>
-    MacAddress,
+    MacAddress = 6,
 
     /// <summary>Colon-separated hex byte sequence with a length other than six: <c>00:11:22</c>.</summary>
-    HexBytes,
+    HexBytes = 7,
 
     /// <summary>Duration or packet-count literal: <c>100ms</c>, <c>5s</c>, <c>10packets</c>.</summary>
-    Duration,
+    Duration = 8,
 
     #endregion
 
     #region Comparison operators
 
     /// <summary><c>==</c>.</summary>
-    Equal,
+    Equal = 9,
 
     /// <summary><c>!=</c>.</summary>
-    NotEqual,
+    NotEqual = 10,
 
     /// <summary><c>&lt;</c>.</summary>
-    LessThan,
+    LessThan = 11,
 
     /// <summary><c>&lt;=</c>.</summary>
-    LessEqual,
+    LessEqual = 12,
 
     /// <summary><c>&gt;</c>.</summary>
-    GreaterThan,
+    GreaterThan = 13,
 
     /// <summary><c>&gt;=</c>.</summary>
-    GreaterEqual,
+    GreaterEqual = 14,
 
     #endregion
 
     #region Logical operators
 
     /// <summary><c>&amp;&amp;</c>, <c>&amp;</c> or <c>and</c>.</summary>
-    And,
+    And = 15,
 
     /// <summary><c>||</c>, <c>|</c> or <c>or</c>.</summary>
-    Or,
+    Or = 16,
 
     /// <summary><c>!</c> or <c>not</c>.</summary>
-    Not,
+    Not = 17,
 
     #endregion
 
     #region Punctuation
 
     /// <summary><c>(</c>.</summary>
-    LeftParen,
+    LeftParen = 18,
 
     /// <summary><c>)</c>.</summary>
-    RightParen,
+    RightParen = 19,
 
     /// <summary><c>[</c>.</summary>
-    LeftBracket,
+    LeftBracket = 20,
 
     /// <summary><c>]</c>.</summary>
-    RightBracket,
+    RightBracket = 21,
 
     /// <summary><c>{</c>.</summary>
-    LeftBrace,
+    LeftBrace = 22,
 
     /// <summary><c>}</c>.</summary>
-    RightBrace,
+    RightBrace = 23,
 
     /// <summary><c>,</c>.</summary>
-    Comma,
+    Comma = 24,
 
     /// <summary><c>:</c>.</summary>
-    Colon,
+    Colon = 25,
 
     /// <summary><c>..</c> range operator.</summary>
-    Range,
+    Range = 26,
 
     /// <summary><c>$</c> scope-anchor prefix.</summary>
-    Dollar,
+    Dollar = 27,
 
     #endregion
 
     #region Keywords
 
     /// <summary><c>in</c>.</summary>
-    In,
+    In = 28,
 
     /// <summary><c>contains</c>.</summary>
-    Contains,
+    Contains = 29,
 
     /// <summary><c>matches</c>.</summary>
-    Matches,
+    Matches = 30,
 
     /// <summary><c>true</c>.</summary>
-    True,
+    True = 31,
 
     /// <summary><c>false</c>.</summary>
-    False,
+    False = 32,
 
     /// <summary><c>flank</c>.</summary>
-    Flank,
+    Flank = 33,
 
     #endregion
 
     #region Special
 
     /// <summary>End of input.</summary>
-    Eof,
+    Eof = 34,
 
     #endregion
 }

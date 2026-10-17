@@ -8,21 +8,22 @@ namespace NetworkInspector.Filter;
 /// </summary>
 internal static class FilterObserverCompiler
 {
-    private static readonly TimeSpan _DefaultRegexTimeout = TimeSpan.FromSeconds(1);
-
     /// <summary>Binds <paramref name="program"/> to <paramref name="stack"/> as an observer.</summary>
+    /// <remarks>
+    /// Compile options are consumed by the parser (span callback, regex timeout); the observer itself has no
+    /// match cache, so nothing else of <see cref="FilterCompileOptions"/> applies here.
+    /// </remarks>
     public static FilterResult<FilterObserver> Compile(
         string expression,
         FilterProgram program,
-        IStack stack,
-        FilterCompileOptions? options)
+        IStack stack)
     {
         if (_HasScope(program.Root))
         {
             return FilterError.NeedsFieldTree();
         }
 
-        Emitter emitter = new(stack, options);
+        Emitter emitter = new(stack);
         FilterResult<int> root = emitter.Emit(program.Root);
         if (!root.TryGetValue(out int rootIndex))
         {
@@ -57,11 +58,10 @@ internal static class FilterObserverCompiler
         return false;
     }
 
-    private sealed class Emitter(IStack stack, FilterCompileOptions? options)
+    private sealed class Emitter(IStack stack)
     {
         private readonly IStack _Stack = stack;
         private readonly SymbolResolver _Resolver = new(stack);
-        private readonly TimeSpan _RegexTimeout = options?.RegexTimeout ?? _DefaultRegexTimeout;
         private readonly List<Leaf> _Leaves = [];
         private readonly List<BitNode> _Nodes = [];
         private readonly List<FieldId> _FieldOrder = [];
@@ -69,6 +69,7 @@ internal static class FilterObserverCompiler
         private FlankRuntime? _Flank;
         private int _FlankCount;
         private int _WhenRoot = -1;
+        private int _FlankLeaf = -1;
         private FieldId[] _FlankIds = [];
 
         public FilterResult<FilterObserver> Build(string expression, int root)
@@ -115,6 +116,7 @@ internal static class FilterObserverCompiler
                 root,
                 _Flank,
                 _WhenRoot,
+                _FlankLeaf,
                 flankByFieldId,
                 slotByFieldId);
         }
@@ -204,8 +206,14 @@ internal static class FilterObserverCompiler
             }
             else
             {
+                // The parser compiled and validated the pattern once; a matches node without it is a bug.
+                if (node.Regex is null)
+                {
+                    return FilterError.Compiler("A 'matches' predicate reached the observer compiler without a compiled pattern.");
+                }
+
                 leaf.Kind = LeafKind.Matches;
-                leaf.Regex = new Regex(node.Pattern, RegexOptions.CultureInvariant, _RegexTimeout);
+                leaf.Regex = node.Regex;
             }
 
             return _AddLeaf(leaf, valueAccessor.Fields);
@@ -216,7 +224,7 @@ internal static class FilterObserverCompiler
             FilterSymbol? symbol = _Resolver.Resolve(node.Name);
             if (symbol is null)
             {
-                return FilterError.UnknownField(node.Name, node.Position, node.Length);
+                return _Resolver.UnknownName(node.Name, node.Position, node.Length);
             }
 
             // Skip-tree observers can only latch delivered fields. A protocol without a
@@ -246,28 +254,14 @@ internal static class FilterObserverCompiler
                     node.Length);
             }
 
-            FilterResult<FilterSymbol> symbol = _Resolver.ResolveValue(node.FieldName, node.Position, node.Length);
-            if (!symbol.TryGetValue(out FilterSymbol? field))
+            FilterResult<FlankRuntime> tracker = FilterBinder.BuildFlank(_Resolver, node, out FilterSymbol? field);
+            if (!tracker.TryGetValue(out FlankRuntime? flank))
             {
-                return symbol.Error;
+                return tracker.Error;
             }
 
-            if (node.By is not null)
-            {
-                FilterError? typeError = _Resolver.CheckIntegerFields(
-                    field,
-                    node.FieldName,
-                    node.Position,
-                    node.Length);
-                if (typeError is not null)
-                {
-                    return typeError;
-                }
-            }
-
-            ValueAccessor accessor = ValueAccessor.Direct(field.Fields);
-            _Flank = new FlankRuntime(accessor, node.From, node.To, node.By, node.IsAnyChange, node.Window);
-            _FlankIds = field.Fields;
+            _Flank = flank;
+            _FlankIds = field!.Fields;
             _FlankCount = 1;
             for (int i = 0; i < field.Fields.Length; i++)
             {
@@ -290,29 +284,17 @@ internal static class FilterObserverCompiler
                 _WhenRoot = whenRoot;
             }
 
-            return _Const(false);
+            // The flank is a leaf of the bit tree whose hit the observer writes at commit time, so the
+            // surrounding boolean tree (A && flank, A || flank, !flank) is evaluated like any other tree.
+            // The leaf is registered under no field, so OnField never tests it.
+            _FlankLeaf = _Leaves.Count;
+            _Leaves.Add(new Leaf { Kind = LeafKind.Flank });
+            int nodeIndex = _Nodes.Count;
+            _Nodes.Add(new BitNode { Op = BitOp.Leaf, LeafIndex = _FlankLeaf, Left = -1, Right = -1 });
+            return nodeIndex;
         }
 
-        private FilterResult<ValueAccessor> _Accessor(OperandNode node)
-        {
-            FilterResult<FilterSymbol> symbol = _Resolver.ResolveValue(node.Name, node.Position, node.Length);
-            if (!symbol.TryGetValue(out FilterSymbol? field))
-            {
-                return symbol.Error;
-            }
-
-            if (node is SliceOperandNode slice)
-            {
-                return ValueAccessor.Slice(field.Fields, slice.Start, slice.End);
-            }
-
-            if (node is LengthOperandNode)
-            {
-                return ValueAccessor.Length(field.Fields);
-            }
-
-            return ValueAccessor.Direct(field.Fields);
-        }
+        private FilterResult<ValueAccessor> _Accessor(OperandNode node) => FilterBinder.BuildAccessor(_Resolver, node);
 
         private int _AddLeaf(Leaf leaf, FieldId[] fields)
         {

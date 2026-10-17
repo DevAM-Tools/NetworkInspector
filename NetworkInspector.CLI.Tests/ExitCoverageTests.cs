@@ -218,7 +218,7 @@ internal sealed class ExitCoverageTests
     {
         await Assert.That(SourceConfig.Parse("blf:path=x.blf")).IsTypeOf<BlfSourceConfig>();
         await Assert.That(SourceConfig.Parse("asc:path=x.asc")).IsTypeOf<AscSourceConfig>();
-        await Assert.That(SourceConfig.Parse("pcapng:path=x.pcapng")).IsTypeOf<PcapSourceConfig>();
+        await Assert.That(SourceConfig.Parse("pcapng:path=x.pcapng")).IsTypeOf<PcapngSourceConfig>();
 
         await Assert.That(() => SourceConfig.Parse("pcap:path=")).Throws<ArgumentException>();
         await Assert.That(() => SourceConfig.Parse("blf:")).Throws<ArgumentException>();
@@ -239,7 +239,7 @@ internal sealed class ExitCoverageTests
             ]);
             await Assert.That(convertCode).IsEqualTo((int)ExitCode.Success);
 
-            PcapSourceConfig pcap = new(path);
+            PcapngSourceConfig pcap = new(path);
             pcap.ValidateBeforeStart();
             using SettingsManager settings = new();
             using (IFrameSource source = pcap.CreateSource(settings.ReadOnly))

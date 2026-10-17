@@ -4,7 +4,7 @@ namespace NetworkInspector.Sources.Tests.ErrorTolerance;
 
 /// <summary>
 /// Tests for <see cref="ErrorToleranceMode"/> behavior across both
-/// <see cref="PcapStreamSource"/> and <see cref="BlfStreamSource"/>.
+/// <see cref="PcapngStreamSource"/> and <see cref="BlfStreamSource"/>.
 /// Verifies strict/tolerant modes, FrameSkipped events, error counters,
 /// and stream truncation handling (H1 / H4 / M6 audit items).
 /// </summary>
@@ -17,9 +17,9 @@ internal sealed class ErrorToleranceTests
     // Helper methods
     // ========================================================================
 
-    /// <summary>Creates a PcapStreamSource from raw bytes.</summary>
-    private static PcapStreamSource _CreatePcapSource(byte[] data) =>
-        PcapStreamSource.FromStream(new MemoryStream(data), "truncated.pcapng");
+    /// <summary>Creates a PcapngStreamSource from raw bytes.</summary>
+    private static PcapngStreamSource _CreatePcapngSource(byte[] data) =>
+        PcapngStreamSource.FromStream(new MemoryStream(data), "truncated.pcapng");
 
     /// <summary>Creates a BlfStreamSource from raw bytes.</summary>
     private static BlfStreamSource _CreateBlfSource(byte[] data) =>
@@ -102,7 +102,7 @@ internal sealed class ErrorToleranceTests
         // We want to cut mid-third EPB, so cut a few bytes before end
         byte[] truncated = fullData[..(fullData.Length - 4)];
 
-        using PcapStreamSource source = _CreatePcapSource(truncated);
+        using PcapngStreamSource source = _CreatePcapngSource(truncated);
         source.ErrorTolerance = ErrorToleranceMode.Tolerant;
 
         List<FrameReadErrorEventArgs> errors = [];
@@ -144,7 +144,7 @@ internal sealed class ErrorToleranceTests
         // Truncate mid-third frame
         byte[] truncated = fullData[..(fullData.Length - 4)];
 
-        using PcapStreamSource source = _CreatePcapSource(truncated);
+        using PcapngStreamSource source = _CreatePcapngSource(truncated);
         source.ErrorTolerance = ErrorToleranceMode.Strict;
 
         List<FrameReadErrorEventArgs> errors = [];
@@ -185,7 +185,7 @@ internal sealed class ErrorToleranceTests
         writer.WriteFrame(0, 2_000_000, eth);
         byte[] pcapData = writer.Build();
 
-        using PcapStreamSource source = _CreatePcapSource(pcapData);
+        using PcapngStreamSource source = _CreatePcapngSource(pcapData);
         source.ErrorTolerance = ErrorToleranceMode.Tolerant;
 
         List<FrameReadErrorEventArgs> errors = [];
@@ -220,7 +220,7 @@ internal sealed class ErrorToleranceTests
         // Truncate within the SHB (first 28 bytes is SHB, cut at 20)
         byte[] truncated = fullData[..20];
 
-        using PcapStreamSource source = _CreatePcapSource(truncated);
+        using PcapngStreamSource source = _CreatePcapngSource(truncated);
         source.ErrorTolerance = ErrorToleranceMode.Tolerant;
 
         SourceTestFixture.InitializeAndStartSource(source);
@@ -362,7 +362,7 @@ internal sealed class ErrorToleranceTests
         writer.WriteFrame(0, 3_000_000, eth);
         byte[] pcapData = writer.Build();
 
-        using PcapStreamSource source = _CreatePcapSource(pcapData);
+        using PcapngStreamSource source = _CreatePcapngSource(pcapData);
         source.ErrorTolerance = ErrorToleranceMode.Tolerant;
 
         SourceTestFixture.InitializeAndStartSource(source);
@@ -433,7 +433,7 @@ internal sealed class ErrorToleranceTests
         writer.WriteFrame(0, 1_000_000, eth);
         byte[] pcapData = writer.Build();
 
-        using PcapStreamSource source = _CreatePcapSource(pcapData);
+        using PcapngStreamSource source = _CreatePcapngSource(pcapData);
         // Do NOT set ErrorTolerance — should default to Tolerant
         await Assert.That(source.ErrorTolerance).IsEqualTo(ErrorToleranceMode.Tolerant);
     }

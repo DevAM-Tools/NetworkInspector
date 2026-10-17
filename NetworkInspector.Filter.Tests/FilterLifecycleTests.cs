@@ -101,6 +101,42 @@ internal sealed class FilterLifecycleTests
     }
 
     [Test]
+    public async Task Cache_DisabledOnStatefulFilter_IsStillUsed()
+    {
+        using Stack stack = FilterTestHelper.BuildStack();
+        FilterCompileOptions options = new() { EnableMatchCache = false };
+        Filter filter = Filter.Compile("flank(ip.ttl, changed, within: 1s)", stack, options).Value;
+        Packet first = FilterTestHelper.Parse(stack, FilterTestHelper.BuildUdpFrame(53, 1024, 64), 0, 0);
+        Packet second = FilterTestHelper.Parse(stack, FilterTestHelper.BuildUdpFrame(53, 1024, 63), 1, 1_000_000L);
+        Packet third = FilterTestHelper.Parse(stack, FilterTestHelper.BuildUdpFrame(53, 1024, 63), 2, 2_000_000L);
+
+        _ = FilterTestHelper.MatchOrThrow(filter, first);
+        bool once = FilterTestHelper.MatchOrThrow(filter, second);
+        bool twice = FilterTestHelper.MatchOrThrow(filter, second);
+        bool next = FilterTestHelper.MatchOrThrow(filter, third);
+
+        await Assert.That(once).IsTrue();
+        await Assert.That(twice).IsTrue();
+        await Assert.That(next).IsFalse();
+        await Assert.That(filter.EvaluatedCount).IsEqualTo(3L);
+    }
+
+    [Test]
+    public async Task Cache_DisabledOnDerivedStatefulFilter_IsStillUsed()
+    {
+        using Stack stack = FilterTestHelper.BuildStack();
+        using Stack other = FilterTestHelper.BuildStack();
+        FilterCompileOptions options = new() { EnableMatchCache = false };
+        Filter source = Filter.Compile("flank(ip.ttl, changed, within: 1s)", stack, options).Value;
+        _ = source.TryDerive(other, out Filter? derived, out _);
+        Packet packet = FilterTestHelper.Parse(other, FilterTestHelper.BuildUdpFrame(53, 1024, 64), 0, 0);
+
+        _ = FilterTestHelper.MatchOrThrow(derived!, packet);
+
+        await Assert.That(derived!.EvaluatedCount).IsEqualTo(1L);
+    }
+
+    [Test]
     public async Task TryIsMatch_NullPacket_Throws()
     {
         using Stack stack = FilterTestHelper.BuildStack();

@@ -699,8 +699,9 @@ internal sealed class BlfCompressionTests
             .AddLogContainer(BlfConstants.CompressionLz4, _InnerCanFrames(5))
             .Build();
 
-        using BlfStreamSource source = _CreateStreamSource(blfData);
-        source.MaxUncompressedContainerSize = 10;   // far below actual container size
+        // Far below the actual container size.
+        using BlfStreamSource source = BlfStreamSource.FromStream(
+            new MemoryStream(blfData), "test.blf", options: new BlfSourceOptions { MaxUncompressedContainerSize = 10 });
         SourceTestFixture.InitializeAndStartSource(source);
 
         await Assert.That(() => _ReadAll(source)).Throws<BlfDecompressionLimitExceededException>();
@@ -717,8 +718,8 @@ internal sealed class BlfCompressionTests
             .AddLogContainer(BlfConstants.CompressionLz4, _InnerCanFrames(5))
             .Build();
 
-        using BlfStreamSource source = _CreateStreamSource(blfData);
-        source.MaxUncompressedContainerSize = 1024 * 1024;
+        using BlfStreamSource source = BlfStreamSource.FromStream(
+            new MemoryStream(blfData), "test.blf", options: new BlfSourceOptions { MaxUncompressedContainerSize = 1024 * 1024 });
         SourceTestFixture.InitializeAndStartSource(source);
 
         List<Frame> frames = _ReadAll(source);
@@ -737,15 +738,22 @@ internal sealed class BlfCompressionTests
     }
 
     /// <summary>
-    /// <see cref="BlfStreamSource.MaxUncompressedContainerSize"/> must reject a negative
-    /// value with <see cref="ArgumentOutOfRangeException"/>.
+    /// <see cref="BlfStreamSource.FromStream"/> takes the limit, tolerance, and time zone from the options; without
+    /// options it uses the option defaults.
     /// </summary>
     [Test]
-    public async Task BlfStreamSource_NegativeLimit_ThrowsArgumentOutOfRange()
+    public async Task BlfStreamSourceFromStreamOptionsAreApplied()
     {
-        using BlfStreamSource source = _CreateStreamSource([]);
-        await Assert.That(() => source.MaxUncompressedContainerSize = -1)
-            .Throws<ArgumentOutOfRangeException>();
+        using BlfStreamSource configured = BlfStreamSource.FromStream(
+            new MemoryStream([]),
+            "test.blf",
+            options: new BlfSourceOptions { MaxUncompressedContainerSize = 4096, ErrorTolerance = ErrorToleranceMode.Strict });
+        using BlfStreamSource defaults = _CreateStreamSource([]);
+
+        await Assert.That(configured.MaxUncompressedContainerSize).IsEqualTo(4096L);
+        await Assert.That(configured.ErrorTolerance).IsEqualTo(ErrorToleranceMode.Strict);
+        await Assert.That(defaults.MaxUncompressedContainerSize).IsEqualTo(BlfSourceOptions.DefaultMaxUncompressedContainerSize);
+        await Assert.That(defaults.ErrorTolerance).IsEqualTo(ErrorToleranceMode.Tolerant);
     }
 
     /// <summary>

@@ -95,6 +95,19 @@ exporter.OnFinish();
 | `CsvExporter` | `.csv` | Spreadsheet and tabular workflows | [Csv/README.md](Csv/README.md) |
 | `TextExporter` | `.txt` | Readable protocol-tree output | [Text/README.md](Text/README.md) |
 | `ParquetExporter` | directory of `.parquet` files | Analytics tooling (DuckDB, pandas, Spark, Polars) | [Parquet/README.md](Parquet/README.md) |
+| `DuckDbExporter` (package `NetworkInspector.Exporters.DuckDb`) | `.duckdb` | SQL over packets in one file | [DuckDb/README.md](../NetworkInspector.Exporters.DuckDb/README.md) |
+
+## Round Trips
+
+Frames read by `NetworkInspector.Sources` and written back keep their bus fields and interface metadata:
+
+- Classic CAN bus DLC 9–15 (`len8_dlc`), remote-frame DLC, LIN protected id and checksum model survive BLF and ASC.
+- BLF and ASC take the channel from `blf.channel`, `asc.channel`, or a trailing number in the interface name;
+  BLF writes interface names back as AppText channel names.
+- PCAPNG writes `if_name`, `if_description`, and the `if.*` interface options back, and passes unknown DLT values through.
+- BLF start dates use UTC on both sides by default (`BlfExporter.Builder.WithTimestampTimeZone`); use
+  `TimeZoneInfo.Local` for files that Vector tools or `tshark` will read.
+- ASC timestamps carry 6 to 9 fraction digits (`AscExporter.Builder.WithTimestampDecimals`, default 6, rounded).
 
 ## Common Tasks
 
@@ -108,7 +121,9 @@ Pair exporters with upstream count/time/cancellation controls to avoid unbounded
 
 ### Finalize Correctly
 
-Call `OnFinish()` before disposal to flush final metadata and trailing structures.
+Call `OnFinish()` before disposal to flush final metadata and trailing structures. A failing trailer or flush is
+reported through `ItemSkipped` and `HasErrors`; every buffer and the output are still released. If releasing fails,
+`OnFinish()` throws one `AggregateException` with all release failures after everything ran.
 
 ## Limits And Thread-Safety Notes
 

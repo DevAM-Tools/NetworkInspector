@@ -8,6 +8,13 @@ namespace NetworkInspector.Sources.Pcapng.Format;
 /// </summary>
 internal sealed class SectionInfo
 {
+    #region Constants
+
+    /// <summary>Number of interfaces a section can address: frame entries store the index as <see cref="ushort"/>.</summary>
+    internal const int MaxInterfaceCount = ushort.MaxValue + 1;
+
+    #endregion
+
     #region Properties
 
     /// <summary>Whether this section uses swapped byte order (big-endian file on LE host, or vice versa).</summary>
@@ -68,9 +75,19 @@ internal sealed class SectionInfo
 
     #region Internal API
 
-    /// <summary>Adds an interface to this section. Returns the zero-based interface index.</summary>
+    /// <summary>
+    /// Adds an interface to this section. Returns the zero-based interface index, or -1 when the section
+    /// already holds <see cref="MaxInterfaceCount"/> interfaces (the IDB is then ignored).
+    /// </summary>
     internal int AddInterface(InterfaceInfo info)
     {
+        // Frame index entries store the interface index as ushort; a 65 537th interface would wrap
+        // onto interface 0 and misattribute its packets, so it is not added at all.
+        if (_Interfaces.Count >= MaxInterfaceCount)
+        {
+            return -1;
+        }
+
         int index = _Interfaces.Count;
         _Interfaces.Add(info);
         return index;
@@ -130,18 +147,8 @@ internal sealed class SectionInfo
                 case PcapConstants.OptIfDescription when option.Value.Length > 0:
                     info.SetDescription(Encoding.UTF8.GetString(option.Value));
                     break;
-                case PcapConstants.OptIfSpeed when option.Value.Length == 8:
-                    info.SetSpeed(reader.ReadU64(option.Value));
-                    break;
                 case PcapConstants.OptIfTsResol when option.Value.Length == 1:
                     _ = info.TrySetTimestampResolution(option.Value[0]);
-                    break;
-                case PcapConstants.OptIfFilter when option.Value.Length > 1:
-                    // First byte is the filter type, rest is the filter string
-                    info.SetFilter(Encoding.UTF8.GetString(option.Value[1..]));
-                    break;
-                case PcapConstants.OptIfOs when option.Value.Length > 0:
-                    info.SetOs(Encoding.UTF8.GetString(option.Value));
                     break;
                 case PcapConstants.OptIfFcsLen when option.Value.Length == 1:
                     info.SetFcsLength(option.Value[0]);
@@ -149,10 +156,46 @@ internal sealed class SectionInfo
                 case PcapConstants.OptIfTsOffset when option.Value.Length == 8:
                     info.SetTimestampOffset(reader.ReadI64(option.Value));
                     break;
+                default:
+                    // Speed, filter, OS, hardware, TX / RX speed: one table shared with the PCAPNG exporter.
+                    _TryApplyTableOption(info, option, reader);
+                    break;
             }
         }
 
         return info;
+    }
+
+    /// <summary>
+    /// Decodes an IDB option that <see cref="PcapInterfacePropertyKeys.InterfaceOptions"/> lists and stores it on
+    /// <paramref name="info"/>. Options of the wrong size (an 8-byte speed that is not 8 bytes, an empty text) are
+    /// ignored like any other malformed option.
+    /// </summary>
+    private static void _TryApplyTableOption(InterfaceInfo info, RawOption option, EndianReader reader)
+    {
+        foreach (PcapInterfaceOption entry in PcapInterfacePropertyKeys.InterfaceOptions)
+        {
+            if (entry.Code != option.Code)
+            {
+                continue;
+            }
+
+            switch (entry.Kind)
+            {
+                case PcapOptionValueKind.UInt64 when option.Value.Length == 8:
+                    info.SetOptionProperty(entry.Key, reader.ReadU64(option.Value));
+                    break;
+                case PcapOptionValueKind.Utf8 when option.Value.Length > 0:
+                    info.SetOptionProperty(entry.Key, Encoding.UTF8.GetString(option.Value));
+                    break;
+                case PcapOptionValueKind.Filter when option.Value.Length > 1:
+                    // First byte is the filter kind, the rest is the filter text.
+                    info.SetOptionProperty(entry.Key, Encoding.UTF8.GetString(option.Value[1..]));
+                    break;
+            }
+
+            return;
+        }
     }
 
     #endregion

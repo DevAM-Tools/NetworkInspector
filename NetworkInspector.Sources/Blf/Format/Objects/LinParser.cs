@@ -10,9 +10,9 @@ namespace NetworkInspector.Sources.Blf.Format.Objects;
 ///   [0]     message format revision (1)
 ///   [1..4)  reserved
 ///   [4]     DLC nibble (bits 7-4) | message type (bits 3-2) | checksum type (bits 1-0)
-    ///   [5]     6-bit frame ID (parity is not reconstructed)
-    ///   [6]     checksum
-    ///   [7]     error flags
+///   [5]     protected identifier (6-bit frame ID plus parity bits P0/P1)
+///   [6]     checksum
+///   [7]     error flags
 ///   [8..]   data, padded to 4 or 8 bytes
 /// </code>
 /// Sleep and wakeup objects reconstruct the 12-byte DLT_LIN event (message type 3).
@@ -105,8 +105,17 @@ internal static class LinParser
     /// </summary>
     internal static bool TryParseLinMessageV1(
         ReadOnlySpan<byte> payload, out byte[] frame, out ushort channel)
+        => FrameSlabAllocator.ToArray(TryParseLinMessageV1(payload, null, out ReadOnlyMemory<byte> memory, out channel), memory, out frame);
+
+    /// <inheritdoc cref="TryParseLinMessageV1(ReadOnlySpan{byte}, out byte[], out ushort)"/>
+    /// <param name="payload">BLF object payload.</param>
+    /// <param name="slabs">Frame slab allocator of the sequential reader, or null for a new array.</param>
+    /// <param name="frame">DLT_LIN bytes on success; empty on failure.</param>
+    /// <param name="channel">Channel from the header.</param>
+    internal static bool TryParseLinMessageV1(
+        ReadOnlySpan<byte> payload, FrameSlabAllocator? slabs, out ReadOnlyMemory<byte> frame, out ushort channel)
     {
-        frame = [];
+        frame = default;
         channel = 0;
 
         if (payload.Length < _LinMessageV1MinSize)
@@ -119,12 +128,14 @@ internal static class LinParser
         byte dlc = (byte)(payload[3] & 0x0F);
         int dataLen = Math.Min((int)dlc, _MaxLinDataLength);
 
-        byte pid = rawId;
+        // DLT_LIN byte 5 carries the protected identifier as the bus transmits it: 6-bit id plus parity bits.
+        byte pid = LinProtectedId.Compute(rawId);
         byte checksum = payload.Length >= _LinMessageV1CrcOffset + 2
             ? payload[_LinMessageV1CrcOffset]
             : (byte)0;
 
         frame = _BuildDltLinFrame(
+            slabs,
             pid,
             dataLen,
             payload.Length >= 4 + dataLen ? payload.Slice(4, dataLen) : payload[4..],
@@ -156,8 +167,17 @@ internal static class LinParser
     /// </summary>
     internal static bool TryParseLinMessageV2(
         ReadOnlySpan<byte> payload, out byte[] frame, out ushort channel)
+        => FrameSlabAllocator.ToArray(TryParseLinMessageV2(payload, null, out ReadOnlyMemory<byte> memory, out channel), memory, out frame);
+
+    /// <inheritdoc cref="TryParseLinMessageV2(ReadOnlySpan{byte}, out byte[], out ushort)"/>
+    /// <param name="payload">BLF object payload.</param>
+    /// <param name="slabs">Frame slab allocator of the sequential reader, or null for a new array.</param>
+    /// <param name="frame">DLT_LIN bytes on success; empty on failure.</param>
+    /// <param name="channel">Channel from the header.</param>
+    internal static bool TryParseLinMessageV2(
+        ReadOnlySpan<byte> payload, FrameSlabAllocator? slabs, out ReadOnlyMemory<byte> frame, out ushort channel)
     {
-        frame = [];
+        frame = default;
         channel = 0;
 
         if (payload.Length < _LinMessageV2MinSize)
@@ -172,8 +192,9 @@ internal static class LinParser
         byte checksum = payload[120];
         byte checksumModel = payload[39];
 
-        // DLT byte 5 holds the 6-bit Vector id. Checksum model 0 = classic, 1 = enhanced.
-        byte pid = rawId;
+        // DLT byte 5 holds the protected identifier (id plus parity). Checksum model 0 = classic, 1 = enhanced; it goes
+        // into bits 1-0 of byte 4 (1 = classic, 2 = enhanced) so writers can restore it.
+        byte pid = LinProtectedId.Compute(rawId);
         byte checksumTypeBits = checksumModel == 1
             ? (byte)2
             : checksumModel == 0
@@ -184,7 +205,7 @@ internal static class LinParser
             ? payload.Slice(112, dataLen)
             : payload[112..];
 
-        frame = _BuildDltLinFrame(pid, dataLen, data, checksum, errors: 0, checksumTypeBits);
+        frame = _BuildDltLinFrame(slabs, pid, dataLen, data, checksum, errors: 0, checksumTypeBits);
         return true;
     }
 
@@ -208,8 +229,19 @@ internal static class LinParser
     /// <param name="channel">BLF channel number.</param>
     internal static bool TryParseLinErrorV1(
         ReadOnlySpan<byte> payload, byte errorType, out byte[] frame, out ushort channel)
+        => FrameSlabAllocator.ToArray(
+            TryParseLinErrorV1(payload, errorType, null, out ReadOnlyMemory<byte> memory, out channel), memory, out frame);
+
+    /// <inheritdoc cref="TryParseLinErrorV1(ReadOnlySpan{byte}, byte, out byte[], out ushort)"/>
+    /// <param name="payload">Raw payload bytes.</param>
+    /// <param name="errorType">Error flag byte.</param>
+    /// <param name="slabs">Frame slab allocator of the sequential reader, or null for a new array.</param>
+    /// <param name="frame">DLT_LIN error bytes on success; empty on failure.</param>
+    /// <param name="channel">BLF channel number.</param>
+    internal static bool TryParseLinErrorV1(
+        ReadOnlySpan<byte> payload, byte errorType, FrameSlabAllocator? slabs, out ReadOnlyMemory<byte> frame, out ushort channel)
     {
-        frame = [];
+        frame = default;
         channel = 0;
 
         if (payload.Length < _LinErrorV1MinSize)
@@ -221,8 +253,8 @@ internal static class LinParser
         byte rawId = (byte)(payload[2] & 0x3F);
         byte dlc = (byte)(payload[3] & 0x0F);
 
-        // Byte 5 is the masked 6-bit id. Parity bits are not reconstructed.
-        frame = _BuildDltLinErrorFrame(rawId, Math.Min((int)dlc, _MaxLinDataLength), errorType);
+        // Byte 5 is the protected identifier (6-bit id plus parity), as for message frames.
+        frame = _BuildDltLinErrorFrame(slabs, LinProtectedId.Compute(rawId), Math.Min((int)dlc, _MaxLinDataLength), errorType);
         return true;
     }
 
@@ -238,8 +270,19 @@ internal static class LinParser
     /// <param name="channel">BLF channel number.</param>
     internal static bool TryParseLinErrorV2(
         ReadOnlySpan<byte> payload, byte errorType, out byte[] frame, out ushort channel)
+        => FrameSlabAllocator.ToArray(
+            TryParseLinErrorV2(payload, errorType, null, out ReadOnlyMemory<byte> memory, out channel), memory, out frame);
+
+    /// <inheritdoc cref="TryParseLinErrorV2(ReadOnlySpan{byte}, byte, out byte[], out ushort)"/>
+    /// <param name="payload">Raw payload bytes.</param>
+    /// <param name="errorType">Error flag byte.</param>
+    /// <param name="slabs">Frame slab allocator of the sequential reader, or null for a new array.</param>
+    /// <param name="frame">DLT_LIN error bytes on success; empty on failure.</param>
+    /// <param name="channel">BLF channel number.</param>
+    internal static bool TryParseLinErrorV2(
+        ReadOnlySpan<byte> payload, byte errorType, FrameSlabAllocator? slabs, out ReadOnlyMemory<byte> frame, out ushort channel)
     {
-        frame = [];
+        frame = default;
         channel = 0;
 
         if (payload.Length < _LinErrorV2MinSize)
@@ -253,8 +296,8 @@ internal static class LinParser
             ? (byte)(payload[38] & 0x0F)
             : (byte)0;
 
-        // Byte 5 is the masked 6-bit id. Parity bits are not reconstructed.
-        frame = _BuildDltLinErrorFrame(rawId, Math.Min((int)dlc, _MaxLinDataLength), errorType);
+        // Byte 5 is the protected identifier (6-bit id plus parity), as for message frames.
+        frame = _BuildDltLinErrorFrame(slabs, LinProtectedId.Compute(rawId), Math.Min((int)dlc, _MaxLinDataLength), errorType);
         return true;
     }
 
@@ -269,8 +312,17 @@ internal static class LinParser
     /// </summary>
     internal static bool TryParseLinSleep(
         ReadOnlySpan<byte> payload, out byte[] frame, out ushort channel)
+        => FrameSlabAllocator.ToArray(TryParseLinSleep(payload, null, out ReadOnlyMemory<byte> memory, out channel), memory, out frame);
+
+    /// <inheritdoc cref="TryParseLinSleep(ReadOnlySpan{byte}, out byte[], out ushort)"/>
+    /// <param name="payload">BLF object payload.</param>
+    /// <param name="slabs">Frame slab allocator of the sequential reader, or null for a new array.</param>
+    /// <param name="frame">DLT_LIN bytes on success; empty on failure.</param>
+    /// <param name="channel">Channel from the header.</param>
+    internal static bool TryParseLinSleep(
+        ReadOnlySpan<byte> payload, FrameSlabAllocator? slabs, out ReadOnlyMemory<byte> frame, out ushort channel)
     {
-        frame = [];
+        frame = default;
         channel = 0;
 
         if (payload.Length < _LinSleepMinSize)
@@ -281,7 +333,7 @@ internal static class LinParser
         channel = BinaryPrimitives.ReadUInt16LittleEndian(payload);
         byte reason = payload[2];
         byte flags = payload[3];
-        frame = _BuildDltLinEvent(_SleepEventByte(reason, flags));
+        frame = _BuildDltLinEvent(slabs, _SleepEventByte(reason, flags));
         return true;
     }
 
@@ -290,8 +342,17 @@ internal static class LinParser
     /// </summary>
     internal static bool TryParseLinWakeup(
         ReadOnlySpan<byte> payload, out byte[] frame, out ushort channel)
+        => FrameSlabAllocator.ToArray(TryParseLinWakeup(payload, null, out ReadOnlyMemory<byte> memory, out channel), memory, out frame);
+
+    /// <inheritdoc cref="TryParseLinWakeup(ReadOnlySpan{byte}, out byte[], out ushort)"/>
+    /// <param name="payload">BLF object payload.</param>
+    /// <param name="slabs">Frame slab allocator of the sequential reader, or null for a new array.</param>
+    /// <param name="frame">DLT_LIN bytes on success; empty on failure.</param>
+    /// <param name="channel">Channel from the header.</param>
+    internal static bool TryParseLinWakeup(
+        ReadOnlySpan<byte> payload, FrameSlabAllocator? slabs, out ReadOnlyMemory<byte> frame, out ushort channel)
     {
-        frame = [];
+        frame = default;
         channel = 0;
 
         if (payload.Length < _LinWakeupV1MinSize)
@@ -300,7 +361,7 @@ internal static class LinParser
         }
 
         channel = BinaryPrimitives.ReadUInt16LittleEndian(payload);
-        frame = _BuildDltLinEvent(0x04);
+        frame = _BuildDltLinEvent(slabs, 0x04);
         return true;
     }
 
@@ -310,8 +371,17 @@ internal static class LinParser
     /// </summary>
     internal static bool TryParseLinWakeup2(
         ReadOnlySpan<byte> payload, out byte[] frame, out ushort channel)
+        => FrameSlabAllocator.ToArray(TryParseLinWakeup2(payload, null, out ReadOnlyMemory<byte> memory, out channel), memory, out frame);
+
+    /// <inheritdoc cref="TryParseLinWakeup2(ReadOnlySpan{byte}, out byte[], out ushort)"/>
+    /// <param name="payload">BLF object payload.</param>
+    /// <param name="slabs">Frame slab allocator of the sequential reader, or null for a new array.</param>
+    /// <param name="frame">DLT_LIN bytes on success; empty on failure.</param>
+    /// <param name="channel">Channel from the header.</param>
+    internal static bool TryParseLinWakeup2(
+        ReadOnlySpan<byte> payload, FrameSlabAllocator? slabs, out ReadOnlyMemory<byte> frame, out ushort channel)
     {
-        frame = [];
+        frame = default;
         channel = 0;
 
         if (payload.Length < _LinWakeupV2MinSize)
@@ -320,7 +390,7 @@ internal static class LinParser
         }
 
         channel = BinaryPrimitives.ReadUInt16LittleEndian(payload[12..]);
-        frame = _BuildDltLinEvent(0x04);
+        frame = _BuildDltLinEvent(slabs, 0x04);
         return true;
     }
 
@@ -416,12 +486,13 @@ internal static class LinParser
     /// Builds a DLT_LIN frame: 8-byte header plus data padded to 4 or 8 bytes.
     /// <paramref name="checksumTypeBits"/> occupy bits 1-0 of byte 4 (1 = classic, 2 = enhanced).
     /// </summary>
-    private static byte[] _BuildDltLinFrame(
-        byte pid, int dlc, ReadOnlySpan<byte> data, byte checksum, byte errors, byte checksumTypeBits = 0)
+    private static ReadOnlyMemory<byte> _BuildDltLinFrame(
+        FrameSlabAllocator? slabs, byte pid, int dlc, ReadOnlySpan<byte> data, byte checksum, byte errors, byte checksumTypeBits = 0)
     {
         int clampedDlc = Math.Clamp(dlc, 0, _MaxLinDataLength);
         int dataPad = clampedDlc <= 4 ? 4 : 8;
-        byte[] frame = new byte[_DltLinHeaderSize + dataPad];
+        Memory<byte> buffer = FrameSlabAllocator.RentZeroed(slabs, _DltLinHeaderSize + dataPad);
+        Span<byte> frame = buffer.Span;
         frame[0] = 1;
         frame[4] = (byte)((clampedDlc << 4) | (checksumTypeBits & 0x03));
         frame[5] = pid;
@@ -431,31 +502,33 @@ internal static class LinParser
         int copyLen = Math.Min(clampedDlc, data.Length);
         if (copyLen > 0)
         {
-            data[..copyLen].CopyTo(frame.AsSpan(_DltLinHeaderSize));
+            data[..copyLen].CopyTo(frame[_DltLinHeaderSize..]);
         }
 
-        return frame;
+        return buffer;
     }
 
     /// <summary>
     /// Builds a 12-byte DLT_LIN error frame (8-byte header plus four reserved payload bytes;
     /// DLC is still encoded in byte 4).
     /// </summary>
-    private static byte[] _BuildDltLinErrorFrame(byte pid, int dlc, byte errors)
+    private static ReadOnlyMemory<byte> _BuildDltLinErrorFrame(FrameSlabAllocator? slabs, byte pid, int dlc, byte errors)
     {
         int clampedDlc = Math.Clamp(dlc, 0, _MaxLinDataLength);
-        byte[] frame = new byte[12];
+        Memory<byte> buffer = FrameSlabAllocator.RentZeroed(slabs, 12);
+        Span<byte> frame = buffer.Span;
         frame[0] = 1;
         frame[4] = (byte)(clampedDlc << 4);
         frame[5] = pid;
         frame[7] = errors;
-        return frame;
+        return buffer;
     }
 
     /// <summary>Builds the 12-byte DLT_LIN event used for sleep and wakeup objects.</summary>
-    private static byte[] _BuildDltLinEvent(byte eventCode)
+    private static ReadOnlyMemory<byte> _BuildDltLinEvent(FrameSlabAllocator? slabs, byte eventCode)
     {
-        byte[] frame = new byte[12];
+        Memory<byte> buffer = FrameSlabAllocator.RentZeroed(slabs, 12);
+        Span<byte> frame = buffer.Span;
         frame[0] = 1;
         frame[4] = _DltLinEventTypeByte;
         if (eventCode != 0)
@@ -464,7 +537,8 @@ internal static class LinParser
             frame[9] = 0xB0;
             frame[11] = eventCode;
         }
-        return frame;
+
+        return buffer;
     }
 
     /// <summary>

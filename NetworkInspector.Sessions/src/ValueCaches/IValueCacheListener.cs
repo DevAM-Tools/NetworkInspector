@@ -45,8 +45,10 @@ public interface IValueCacheListener
     /// <paramref name="fromIndex"/> (inclusive) to <paramref name="toIndexExclusive"/>
     /// (exclusive) are packet ids, the same coalescing window as
     /// <see cref="ISessionListener.OnNewPackets"/>. They are not series row indexes:
-    /// a packet without the configured field adds no rows. A <c>TryGetFrame</c> miss
-    /// fails the slot rather than skipping the id. Index columns with
+    /// a packet without the configured field adds no rows. A frame that cannot be re-read
+    /// fails the slot rather than skipping the id. A read refused because queries are disabled
+    /// (restart or shutdown in progress) only pauses the fill: the window ends at the refused id,
+    /// and a restart then delivers the full re-parsed range from 0. Index columns with
     /// <see cref="ValueCacheSeries.Count"/>, not with these packet ids.
     /// Pull columns from <paramref name="cache"/> or packets from <paramref name="session"/>.
     /// </summary>

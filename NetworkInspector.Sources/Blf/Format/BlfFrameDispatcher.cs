@@ -37,8 +37,12 @@ internal static class BlfFrameDispatcher
     /// </summary>
     /// <param name="objectInfo">Parsed object metadata and payload.</param>
     /// <param name="result">Frame result with data, link type, and channel on success.</param>
+    /// <param name="slabs">
+    /// Frame slab allocator of the sequential reader, or null for one array per frame (random access, tests).
+    /// FlexRay frames always get their own array (the frame builder is shared with the protocol layer).
+    /// </param>
     /// <returns>True if a frame was produced; false if the object type is unknown or parsing failed.</returns>
-    internal static bool TryDispatch(in BlfObjectInfo objectInfo, out BlfFrameResult result)
+    internal static bool TryDispatch(in BlfObjectInfo objectInfo, out BlfFrameResult result, FrameSlabAllocator? slabs = null)
     {
         result = default;
 
@@ -46,7 +50,7 @@ internal static class BlfFrameDispatcher
         {
             #region Ethernet
             case BlfConstants.ObjTypeEthernetFrame:
-                if (!EthernetParser.TryParseType71(objectInfo.Payload, out byte[] ethFrame71, out ushort ethCh71))
+                if (!EthernetParser.TryParseType71(objectInfo.Payload, slabs, out ReadOnlyMemory<byte> ethFrame71, out ushort ethCh71))
                 {
                     return false;
                 }
@@ -60,8 +64,12 @@ internal static class BlfFrameDispatcher
                 return true;
 
             case BlfConstants.ObjTypeEthernetFrameEx:
+            case BlfConstants.ObjTypeEthernetFrameForwarded:
+            case BlfConstants.ObjTypeEthernetErrorEx:
+            case BlfConstants.ObjTypeEthernetErrorForwarded:
+                // Types 121-123 share the Type 120 header; error frames carry the captured bytes like 120 does.
                 if (!EthernetParser.TryParseType120(
-                    objectInfo.Payload, objectInfo.PayloadMemory, out ReadOnlyMemory<byte> ethFrame120, out ushort ethCh120))
+                    objectInfo.Payload, objectInfo.PayloadMemory, slabs, out ReadOnlyMemory<byte> ethFrame120, out ushort ethCh120))
                 {
                     return false;
                 }
@@ -77,7 +85,7 @@ internal static class BlfFrameDispatcher
 
             case BlfConstants.ObjTypeEthernetRxError:
                 if (!EthernetParser.TryParseType102(
-                    objectInfo.Payload, objectInfo.PayloadMemory, out ReadOnlyMemory<byte> ethFrame102, out ushort ethCh102))
+                    objectInfo.Payload, objectInfo.PayloadMemory, slabs, out ReadOnlyMemory<byte> ethFrame102, out ushort ethCh102))
                 {
                     return false;
                 }
@@ -95,76 +103,76 @@ internal static class BlfFrameDispatcher
 
             #region CAN (classic)
             case BlfConstants.ObjTypeCanMessage:
-                return _TryDispatchCan(CanParser.TryParseCanMessage, objectInfo, out result);
+                return _TryDispatchCan(CanParser.TryParseCanMessage, objectInfo, slabs, out result);
 
             case BlfConstants.ObjTypeCanMessage2:
-                return _TryDispatchCan(CanParser.TryParseCanMessage2, objectInfo, out result);
+                return _TryDispatchCan(CanParser.TryParseCanMessage2, objectInfo, slabs, out result);
 
             case BlfConstants.ObjTypeCanError:
-                return _TryDispatchCan(CanParser.TryParseCanError, objectInfo, out result);
+                return _TryDispatchCan(CanParser.TryParseCanError, objectInfo, slabs, out result);
 
             case BlfConstants.ObjTypeCanOverload:
-                return _TryDispatchCan(CanParser.TryParseCanOverload, objectInfo, out result);
+                return _TryDispatchCan(CanParser.TryParseCanOverload, objectInfo, slabs, out result);
 
             case BlfConstants.ObjTypeCanErrorExt:
-                return _TryDispatchCan(CanParser.TryParseCanErrorExt, objectInfo, out result);
+                return _TryDispatchCan(CanParser.TryParseCanErrorExt, objectInfo, slabs, out result);
 
             #endregion
 
             #region CAN FD
             case BlfConstants.ObjTypeCanFdMessage:
-                return _TryDispatchCan(CanParser.TryParseCanFdMessage, objectInfo, out result);
+                return _TryDispatchCan(CanParser.TryParseCanFdMessage, objectInfo, slabs, out result);
 
             case BlfConstants.ObjTypeCanFdMessage64:
-                return _TryDispatchCan(CanParser.TryParseCanFdMessage64, objectInfo, out result);
+                return _TryDispatchCan(CanParser.TryParseCanFdMessage64, objectInfo, slabs, out result);
 
             case BlfConstants.ObjTypeCanFdError64:
-                return _TryDispatchCan(CanParser.TryParseCanFdError64, objectInfo, out result);
+                return _TryDispatchCan(CanParser.TryParseCanFdError64, objectInfo, slabs, out result);
 
             #endregion
 
             #region CAN XL
             case BlfConstants.ObjTypeCanXlChannelFrame:
-                return _TryDispatchCan(CanParser.TryParseCanXlChannelFrame, objectInfo, out result);
+                return _TryDispatchCan(CanParser.TryParseCanXlChannelFrame, objectInfo, slabs, out result);
 
             #endregion
 
             #region LIN (V1)
             case BlfConstants.ObjTypeLinMessage:
-                return _TryDispatchLin(LinParser.TryParseLinMessageV1, objectInfo, out result);
+                return _TryDispatchLin(LinParser.TryParseLinMessageV1, objectInfo, slabs, out result);
 
             case BlfConstants.ObjTypeLinCrcError:
-                return _TryDispatchLinError(BlfConstants.LinErrorCrc, objectInfo, isV2: false, out result);
+                return _TryDispatchLinError(BlfConstants.LinErrorCrc, objectInfo, isV2: false, slabs, out result);
 
             case BlfConstants.ObjTypeLinRcvError:
-                return _TryDispatchLinError(BlfConstants.LinErrorRcv, objectInfo, isV2: false, out result);
+                return _TryDispatchLinError(BlfConstants.LinErrorRcv, objectInfo, isV2: false, slabs, out result);
 
             case BlfConstants.ObjTypeLinSndError:
-                return _TryDispatchLinError(BlfConstants.LinErrorSnd, objectInfo, isV2: false, out result);
+                return _TryDispatchLinError(BlfConstants.LinErrorSnd, objectInfo, isV2: false, slabs, out result);
 
             #endregion
 
             #region LIN (V2)
             case BlfConstants.ObjTypeLinMessage2:
-                return _TryDispatchLin(LinParser.TryParseLinMessageV2, objectInfo, out result);
+                return _TryDispatchLin(LinParser.TryParseLinMessageV2, objectInfo, slabs, out result);
 
             case BlfConstants.ObjTypeLinCrcError2:
-                return _TryDispatchLinError(BlfConstants.LinErrorCrc, objectInfo, isV2: true, out result);
+                return _TryDispatchLinError(BlfConstants.LinErrorCrc, objectInfo, isV2: true, slabs, out result);
 
             case BlfConstants.ObjTypeLinRcvError2:
-                return _TryDispatchLinError(BlfConstants.LinErrorRcv, objectInfo, isV2: true, out result);
+                return _TryDispatchLinError(BlfConstants.LinErrorRcv, objectInfo, isV2: true, slabs, out result);
 
             case BlfConstants.ObjTypeLinSndError2:
-                return _TryDispatchLinError(BlfConstants.LinErrorSnd, objectInfo, isV2: true, out result);
+                return _TryDispatchLinError(BlfConstants.LinErrorSnd, objectInfo, isV2: true, slabs, out result);
 
             case BlfConstants.ObjTypeLinSleep:
-                return _TryDispatchLin(LinParser.TryParseLinSleep, objectInfo, out result);
+                return _TryDispatchLin(LinParser.TryParseLinSleep, objectInfo, slabs, out result);
 
             case BlfConstants.ObjTypeLinWakeup:
-                return _TryDispatchLin(LinParser.TryParseLinWakeup, objectInfo, out result);
+                return _TryDispatchLin(LinParser.TryParseLinWakeup, objectInfo, slabs, out result);
 
             case BlfConstants.ObjTypeLinWakeup2:
-                return _TryDispatchLin(LinParser.TryParseLinWakeup2, objectInfo, out result);
+                return _TryDispatchLin(LinParser.TryParseLinWakeup2, objectInfo, slabs, out result);
 
             #endregion
 
@@ -195,7 +203,8 @@ internal static class BlfFrameDispatcher
     internal static LinkType LinkTypeForObject(uint objectType) => objectType switch
     {
         BlfConstants.ObjTypeEthernetFrame or BlfConstants.ObjTypeEthernetFrameEx
-            or BlfConstants.ObjTypeEthernetRxError => LinkType.Ethernet,
+            or BlfConstants.ObjTypeEthernetFrameForwarded or BlfConstants.ObjTypeEthernetErrorEx
+            or BlfConstants.ObjTypeEthernetErrorForwarded or BlfConstants.ObjTypeEthernetRxError => LinkType.Ethernet,
 
         BlfConstants.ObjTypeCanMessage or BlfConstants.ObjTypeCanError
             or BlfConstants.ObjTypeCanOverload or BlfConstants.ObjTypeCanErrorExt
@@ -229,7 +238,10 @@ internal static class BlfFrameDispatcher
         return objectType switch
         {
             BlfConstants.ObjTypeEthernetFrame => EthernetParser.TryGetChannelType71(payload, out channel),
-            BlfConstants.ObjTypeEthernetFrameEx => EthernetParser.TryGetChannelType120(payload, out channel),
+            BlfConstants.ObjTypeEthernetFrameEx
+                or BlfConstants.ObjTypeEthernetFrameForwarded
+                or BlfConstants.ObjTypeEthernetErrorEx
+                or BlfConstants.ObjTypeEthernetErrorForwarded => EthernetParser.TryGetChannelType120(payload, out channel),
             BlfConstants.ObjTypeEthernetRxError => EthernetParser.TryGetChannelType102(payload, out channel),
             BlfConstants.ObjTypeCanMessage
                 or BlfConstants.ObjTypeCanMessage2
@@ -276,15 +288,19 @@ internal static class BlfFrameDispatcher
         return hardwareChannel;
     }
 
-    /// <summary>Parser delegate for CAN/LIN/FlexRay object types.</summary>
+    /// <summary>Parser delegate for FlexRay object types (per-frame array).</summary>
     private delegate bool TryParseDelegate(ReadOnlySpan<byte> payload, out byte[] frame, out ushort channel);
+
+    /// <summary>Parser delegate for CAN / LIN object types that can build into a frame slab.</summary>
+    private delegate bool TryParseSlabDelegate(
+        ReadOnlySpan<byte> payload, FrameSlabAllocator? slabs, out ReadOnlyMemory<byte> frame, out ushort channel);
 
     /// <summary>Dispatches a CAN object type to its parser, producing SocketCAN link type.</summary>
     private static bool _TryDispatchCan(
-        TryParseDelegate parser, in BlfObjectInfo objectInfo, out BlfFrameResult result)
+        TryParseSlabDelegate parser, in BlfObjectInfo objectInfo, FrameSlabAllocator? slabs, out BlfFrameResult result)
     {
         result = default;
-        if (!parser(objectInfo.Payload, out byte[] canFrame, out ushort canChannel))
+        if (!parser(objectInfo.Payload, slabs, out ReadOnlyMemory<byte> canFrame, out ushort canChannel))
         {
             return false;
         }
@@ -300,10 +316,10 @@ internal static class BlfFrameDispatcher
 
     /// <summary>Dispatches a LIN object type to its parser, producing DLT_LIN link type.</summary>
     private static bool _TryDispatchLin(
-        TryParseDelegate parser, in BlfObjectInfo objectInfo, out BlfFrameResult result)
+        TryParseSlabDelegate parser, in BlfObjectInfo objectInfo, FrameSlabAllocator? slabs, out BlfFrameResult result)
     {
         result = default;
-        if (!parser(objectInfo.Payload, out byte[] linFrame, out ushort linChannel))
+        if (!parser(objectInfo.Payload, slabs, out ReadOnlyMemory<byte> linFrame, out ushort linChannel))
         {
             return false;
         }
@@ -319,20 +335,20 @@ internal static class BlfFrameDispatcher
 
     /// <summary>Dispatches a LIN error object type to its parser.</summary>
     private static bool _TryDispatchLinError(
-        byte errorType, in BlfObjectInfo objectInfo, bool isV2, out BlfFrameResult result)
+        byte errorType, in BlfObjectInfo objectInfo, bool isV2, FrameSlabAllocator? slabs, out BlfFrameResult result)
     {
         result = default;
         bool success;
-        byte[] linFrame;
+        ReadOnlyMemory<byte> linFrame;
         ushort linChannel;
 
         if (isV2)
         {
-            success = LinParser.TryParseLinErrorV2(objectInfo.Payload, errorType, out linFrame, out linChannel);
+            success = LinParser.TryParseLinErrorV2(objectInfo.Payload, errorType, slabs, out linFrame, out linChannel);
         }
         else
         {
-            success = LinParser.TryParseLinErrorV1(objectInfo.Payload, errorType, out linFrame, out linChannel);
+            success = LinParser.TryParseLinErrorV1(objectInfo.Payload, errorType, slabs, out linFrame, out linChannel);
         }
 
         if (!success)

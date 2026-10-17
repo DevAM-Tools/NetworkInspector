@@ -37,7 +37,8 @@ public readonly struct ParseError
     /// Human-readable error message. Pre-computed at construction time.
     /// This is acceptable because <see cref="ParseError"/> is only constructed on the
     /// error path, which is rare — the success path never touches this field.
-    /// Returns <see cref="ParseErrorKind"/> name when unset (default instance or empty message).
+    /// Empty for the default instance or an empty message; <see cref="ToString"/> substitutes the
+    /// <see cref="ParseErrorKind"/> name in that case.
     /// </summary>
     public string Message
     {

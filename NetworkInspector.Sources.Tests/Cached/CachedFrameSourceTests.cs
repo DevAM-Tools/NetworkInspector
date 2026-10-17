@@ -131,8 +131,8 @@ internal sealed class CachedFrameSourceTests
             pcapData = writer.Build();
         }
 
-        using NetworkInspector.Sources.Pcapng.PcapSource inner =
-            NetworkInspector.Sources.Pcapng.PcapSource.FromData(pcapData, "test.pcapng");
+        using NetworkInspector.Sources.Pcapng.PcapngSource inner =
+            NetworkInspector.Sources.Pcapng.PcapngSource.FromData(pcapData, "test.pcapng");
 
         await Assert.That(() => new CachedFrameSource(inner)).Throws<ArgumentException>();
     }

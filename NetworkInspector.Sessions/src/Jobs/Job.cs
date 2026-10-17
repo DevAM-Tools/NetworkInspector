@@ -19,6 +19,9 @@ internal sealed class Job : IDisposable
 
     private readonly Action<CancellationToken> _Work;
     private readonly CancellationTokenSource _Cts = new();
+    // Captured once. Shutdown with a timeout may dispose this job while its thread still runs; reading
+    // _Cts.Token after that throws ObjectDisposedException, so the cancel check compares against this copy.
+    private readonly CancellationToken _Token;
     private readonly Action<Job, JobStatus> _OnStatusChanged;
     private readonly ManualResetEventSlim _Completed = new(initialState: false);
     // Status stored as int for Volatile/Interlocked compatibility.
@@ -55,6 +58,7 @@ internal sealed class Job : IDisposable
         Description = description;
         _Work = work;
         _OnStatusChanged = onStatusChanged;
+        _Token = _Cts.Token;
     }
 
     #endregion
@@ -217,12 +221,12 @@ internal sealed class Job : IDisposable
     {
         try
         {
-            _Work(_Cts.Token);
+            _Work(_Token);
             _EndTimeValue = DateTimeOffset.UtcNow;
             _EndTimeSet = 1;
             _SetStatus(JobStatus.Completed);
         }
-        catch (OperationCanceledException oce) when (oce.CancellationToken == _Cts.Token)
+        catch (OperationCanceledException oce) when (oce.CancellationToken == _Token)
         {
             // Only treat as Cancelled when this job's own token was triggered.
             // An OperationCanceledException from a different token (e.g. an external

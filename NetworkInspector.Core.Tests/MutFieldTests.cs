@@ -957,6 +957,7 @@ internal sealed class MutFieldTests
             Frame frame = Frame.Create(
                 new FrameId(1), Timestamp.FromSecs(0), data, LinkType.Ethernet,
                 FrameInterfaceId.Invalid, stack.FrameInterfaceRegistry).Value;
+            Packet packet;
             {
                 ParseOptions options = new(firstProtocol: parentId);
                 if (!Packet.TryParse(
@@ -964,15 +965,35 @@ internal sealed class MutFieldTests
                     stack,
                     frame,
                     in options,
-                    out Packet? _,
-                    out ParseFailure failure))
+                    out Packet? parsed,
+                    out ParseFailure failure) || parsed is null)
                 {
                     throw new InvalidOperationException(failure.ToString());
                 }
+
+                packet = parsed;
             }
 
             await Assert.That(parent.MultiMatchHits).IsEqualTo(4);
             await Assert.That(childA.CallCount + childB.CallCount).IsEqualTo(8);
+
+            // The bytes choice is labelled with the key as upper-case hex, not with the key's type name.
+            List<string> choiceLabels = [];
+            _CollectCustomTexts(packet.RootField(), stack.PacketChoiceFieldId, choiceLabels);
+            await Assert.That(choiceLabels).Contains("Choice: multi.bytes: 01");
+        }
+    }
+
+    private static void _CollectCustomTexts(Field field, FieldId fieldId, List<string> into)
+    {
+        if (field.FieldId == fieldId && !field.CustomText.IsNull)
+        {
+            into.Add(field.CustomText.ToString());
+        }
+
+        foreach (Field child in field.Children(materialize: true))
+        {
+            _CollectCustomTexts(child, fieldId, into);
         }
     }
 

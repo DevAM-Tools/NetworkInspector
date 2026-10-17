@@ -25,7 +25,8 @@ internal sealed class LinParserTests
         await Assert.That(channel).IsEqualTo((ushort)1);
         await Assert.That(frame[0]).IsEqualTo((byte)1);
         await Assert.That(frame[4]).IsEqualTo((byte)(4 << 4));
-        await Assert.That(frame[5]).IsEqualTo((byte)0x10);
+        // Byte 5 is the protected identifier: id 0x10 plus parity P0 = 1, P1 = 0.
+        await Assert.That(frame[5]).IsEqualTo((byte)0x50);
         await Assert.That(frame.AsSpan(8, 4).ToArray()).IsEquivalentTo(new byte[] { 0xAA, 0xBB, 0xCC, 0xDD });
         await Assert.That(frame.Length).IsEqualTo(12);
         await Assert.That(frame[6]).IsEqualTo((byte)0);
@@ -104,7 +105,7 @@ internal sealed class LinParserTests
     }
 
     [Test]
-    public async Task TryParseLinErrorV1MaskedIdOmitsParityBits()
+    public async Task TryParseLinErrorV1IdCarriesParityBits()
     {
         byte[] payload = new byte[4];
         payload[2] = 0x01;
@@ -113,7 +114,8 @@ internal sealed class LinParserTests
         bool ok = LinParser.TryParseLinErrorV1(payload, BlfConstants.LinErrorSnd, out byte[] frame, out _);
 
         await Assert.That(ok).IsTrue();
-        await Assert.That(frame[5]).IsEqualTo((byte)0x01);
+        // Protected identifier of id 0x01: P0 = 1, P1 = 1.
+        await Assert.That(frame[5]).IsEqualTo((byte)0xC1);
         await Assert.That(frame[6]).IsEqualTo((byte)0);
         await Assert.That(frame[7]).IsEqualTo(BlfConstants.LinErrorSnd);
     }
@@ -133,7 +135,7 @@ internal sealed class LinParserTests
     }
 
     [Test]
-    public async Task TryParseLinErrorV2MaskedIdOmitsParityBits()
+    public async Task TryParseLinErrorV2IdCarriesParityBits()
     {
         byte[] payload = new byte[38];
         payload[37] = 0x01;
@@ -141,7 +143,8 @@ internal sealed class LinParserTests
         bool ok = LinParser.TryParseLinErrorV2(payload, BlfConstants.LinErrorRcv, out byte[] frame, out _);
 
         await Assert.That(ok).IsTrue();
-        await Assert.That(frame[5]).IsEqualTo((byte)0x01);
+        // Protected identifier of id 0x01: P0 = 1, P1 = 1.
+        await Assert.That(frame[5]).IsEqualTo((byte)0xC1);
         await Assert.That(frame[7]).IsEqualTo(BlfConstants.LinErrorRcv);
     }
 
@@ -207,7 +210,8 @@ internal sealed class LinParserTests
         bool ok = LinParser.TryParseLinMessageV2(payload, out byte[] frame, out _);
 
         await Assert.That(ok).IsTrue();
-        await Assert.That(frame[5]).IsEqualTo((byte)0x05);
+        // Protected identifier of id 0x05: P0 = 0, P1 = 1.
+        await Assert.That(frame[5]).IsEqualTo((byte)0x85);
         await Assert.That((byte)(frame[4] & 0x03)).IsEqualTo((byte)2);
         await Assert.That(frame[6]).IsEqualTo((byte)0x42);
     }
@@ -223,7 +227,8 @@ internal sealed class LinParserTests
         bool ok = LinParser.TryParseLinMessageV2(payload, out byte[] frame, out _);
 
         await Assert.That(ok).IsTrue();
-        await Assert.That(frame[5]).IsEqualTo((byte)0x05);
+        // Protected identifier of id 0x05: P0 = 0, P1 = 1.
+        await Assert.That(frame[5]).IsEqualTo((byte)0x85);
         await Assert.That((byte)(frame[4] & 0x03)).IsEqualTo((byte)1);
     }
 }

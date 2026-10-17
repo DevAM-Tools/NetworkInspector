@@ -44,6 +44,15 @@ internal sealed class NameValidationTests
     }
 
     [Test]
+    public async Task IsValidGroupName_Default_IsReserved()
+    {
+        // The default group is saved as default.json; a group named "default" would share that file.
+        await Assert.That(NameValidation.IsValidGroupName("default".AsSpan())).IsFalse();
+        await Assert.That(NameValidation.IsValidGroupName("default.sub".AsSpan())).IsTrue();
+        await Assert.That(NameValidation.IsValidGroupName("defaults".AsSpan())).IsTrue();
+    }
+
+    [Test]
     public async Task IsValidUiName_RejectsEmptyAndControlCharacters()
     {
         await Assert.That(NameValidation.IsValidUiName(ReadOnlySpan<char>.Empty)).IsFalse();

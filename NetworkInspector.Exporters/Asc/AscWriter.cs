@@ -38,6 +38,9 @@ internal sealed class AscWriter
     /// <summary>Anchor timestamp for computing relative offsets (nanoseconds since Unix epoch).</summary>
     private readonly long _AnchorNs;
 
+    /// <summary>Fraction digits of the line timestamps (6 to 9).</summary>
+    private readonly int _TimestampDecimals;
+
     /// <summary>Target stream. Owned by the caller; not disposed here.</summary>
     private readonly Stream _Stream;
 
@@ -82,10 +85,17 @@ internal sealed class AscWriter
     /// date/time in the header and as the baseline for computing relative timestamps.
     /// Pass 0 to produce an epoch-zero header (suitable for empty exports).
     /// </param>
-    internal AscWriter(Stream stream, long anchorNs)
+    /// <param name="timestampDecimals">
+    /// Fraction digits of the line timestamps, 6 (microseconds, the CANoe default) to 9 (nanoseconds). Values are
+    /// rounded half up to that many digits; the ASC reader keeps up to nine.
+    /// </param>
+    internal AscWriter(Stream stream, long anchorNs, int timestampDecimals = 6)
     {
+        ArgumentOutOfRangeException.ThrowIfLessThan(timestampDecimals, 6);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(timestampDecimals, 9);
         _Stream = stream;
         _AnchorNs = Math.Max(0L, anchorNs);
+        _TimestampDecimals = timestampDecimals;
         _WriteHeader(_AnchorNs);
     }
 
@@ -99,11 +109,12 @@ internal sealed class AscWriter
     /// <remarks>
     /// Output format: <c>{ts} {ch} {id}[x] Rx d|r {dlc} [data bytes...]</c>
     /// <list type="bullet">
-    /// <item>Timestamp: decimal seconds, 6 decimal places.</item>
+    /// <item>Timestamp: decimal seconds with the configured number of fraction digits (6 to 9).</item>
     /// <item>Channel: decimal integer.</item>
     /// <item>CAN ID: 3-char uppercase hex for standard frames (11-bit);
     ///   8-char uppercase hex with trailing <c>x</c> for extended frames (29-bit).</item>
-    /// <item>DLC: decimal integer.</item>
+    /// <item>DLC: one uppercase hex digit (<c>0</c>–<c>F</c>), because the header declares <c>base hex</c>; 0–9 read the
+    ///   same in both bases, a bus DLC of 10–15 must be <c>A</c>–<c>F</c>.</item>
     /// <item>Data bytes: 2-char uppercase hex each, space-separated.</item>
     /// </list>
     /// </remarks>
@@ -116,7 +127,7 @@ internal sealed class AscWriter
     /// <param name="rawCanId">29-bit CAN ID without flag bits (bits 28–0).</param>
     /// <param name="isExtended">Whether the frame uses the Extended Frame Format (29-bit ID).</param>
     /// <param name="isRemote">Whether the frame is a Remote Transmission Request (RTR).</param>
-    /// <param name="dlc">Data Length Code (0–8).</param>
+    /// <param name="dlc">Bus Data Length Code (0–15; 9–15 still carry 8 data bytes).</param>
     /// <param name="data">Payload bytes (0–8 bytes).</param>
     internal void WriteCanMessage(
         long timestampNs, int channel,
@@ -143,7 +154,7 @@ internal sealed class AscWriter
         _LineBuffer.Write(" Rx "u8);
         _LineBuffer.WriteByte(isRemote ? (byte)'r' : (byte)'d');
         _LineBuffer.WriteByte((byte)' ');
-        _AppendDecimalInt(dlc);
+        _LineBuffer.WriteByte(_HexDigits[dlc & 0x0F]);
 
         // Remote frames carry no data bytes.
         if (!isRemote)
@@ -229,14 +240,15 @@ internal sealed class AscWriter
     /// </summary>
     /// <remarks>
     /// Output format:
-    /// <c>{ts} Li|{L2..} {frameId:X2} Rx {dlc} [data bytes...] checksum = {cs:X2} CSM = enhanced</c>
+    /// <c>{ts} Li|{L2..} {frameId:X2} Rx {dlc} [data bytes...] checksum = {cs:X2} CSM = classic|enhanced</c>
     /// <list type="bullet">
     /// <item>Channel 1 is <c>Li</c>. Channels 2 and above are <c>L</c> plus the decimal number.</item>
     /// <item>Frame ID: 2-char uppercase hex (6-bit value, 0x00–0x3F).</item>
     /// <item>DLC: decimal integer (data byte count).</item>
     /// <item>Data bytes: 2-char uppercase hex each, space-separated.</item>
     /// <item>Checksum: 2-char uppercase hex.</item>
-    /// <item>Checksum method: always <c>enhanced</c> (most common in LIN 2.x).</item>
+    /// <item>Checksum model: <c>classic</c> or <c>enhanced</c> from DLT_LIN byte 4 bits 1-0 (1 = classic, 2 = enhanced);
+    ///   <c>enhanced</c> (the LIN 2.x default) when the frame does not state it.</item>
     /// </list>
     /// </remarks>
     /// <remarks>
@@ -248,9 +260,10 @@ internal sealed class AscWriter
     /// <param name="frameId">6-bit LIN frame identifier (0–63).</param>
     /// <param name="data">Payload bytes (0–8 bytes).</param>
     /// <param name="checksum">LIN checksum byte.</param>
+    /// <param name="checksumTypeBits">DLT_LIN checksum-type bits: 1 = classic, 2 = enhanced, 0 = not stated.</param>
     internal void WriteLinMessage(
         long timestampNs, int channel,
-        byte frameId, ReadOnlySpan<byte> data, byte checksum)
+        byte frameId, ReadOnlySpan<byte> data, byte checksum, byte checksumTypeBits = 0)
     {
         _AppendTimestamp(timestampNs);
         _LineBuffer.WriteByte((byte)' ');
@@ -277,7 +290,9 @@ internal sealed class AscWriter
 
         _LineBuffer.Write(" checksum = "u8);
         _AppendHexByte(checksum);
-        _LineBuffer.Write(" CSM = enhanced"u8);
+        _LineBuffer.Write(checksumTypeBits == 1
+            ? " CSM = classic"u8
+            : " CSM = enhanced"u8);
         _LineBuffer.Write(_CrLf);
         _FlushLine();
     }
@@ -515,19 +530,38 @@ internal sealed class AscWriter
     }
 
     /// <summary>
-    /// Appends the relative timestamp (6 decimal places) to <see cref="_LineBuffer"/>.
-    /// The relative time is <c>max(0, (timestampNs − anchorNs) / 1e9)</c>.
-    /// Uses <c>Utf8Formatter.TryFormat</c> with format specifier <c>F6</c> for
-    /// zero-allocation decimal formatting.
+    /// Appends the relative timestamp <c>max(0, timestampNs - anchorNs)</c> in seconds with
+    /// <see cref="_TimestampDecimals"/> fraction digits to <see cref="_LineBuffer"/>. Integer arithmetic, rounded half up:
+    /// exact at nanosecond resolution for any capture length (a double loses nanoseconds after about 100 days).
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void _AppendTimestamp(long timestampNs)
     {
-        double relSec = Math.Max(0.0, (timestampNs - _AnchorNs) / 1_000_000_000.0);
+        // timestampNs <= anchor gives 0; otherwise the difference of two values with anchor >= 0 cannot overflow.
+        long relative = timestampNs <= _AnchorNs ? 0L : timestampNs - _AnchorNs;
+        long seconds = relative / 1_000_000_000L;
+        long fraction = relative % 1_000_000_000L;
+
+        // Round the nanosecond fraction to the configured digits; a carry moves into the seconds.
+        long divisor = _PowersOfTen[9 - _TimestampDecimals];
+        long unit = _PowersOfTen[_TimestampDecimals];
+        long rounded = (fraction + (divisor / 2)) / divisor;
+        if (rounded >= unit)
+        {
+            seconds++;
+            rounded -= unit;
+        }
+
         Span<byte> scratch = stackalloc byte[32];
-        Utf8Formatter.TryFormat(relSec, scratch, out int written, new StandardFormat('F', 6));
-        _LineBuffer.Write(scratch[..written]);
+        Utf8Formatter.TryFormat(seconds, scratch, out int written);
+        scratch[written++] = (byte)'.';
+        Utf8Formatter.TryFormat(rounded, scratch[written..], out int fractionWritten, new StandardFormat('D', (byte)_TimestampDecimals));
+        _LineBuffer.Write(scratch[..(written + fractionWritten)]);
     }
+
+    /// <summary>10^0 … 10^9 for the timestamp rounding.</summary>
+    private static ReadOnlySpan<long> _PowersOfTen =>
+        [1L, 10L, 100L, 1_000L, 10_000L, 100_000L, 1_000_000L, 10_000_000L, 100_000_000L, 1_000_000_000L];
 
     /// <summary>
     /// Appends exactly 2 uppercase hex ASCII digits for the given byte

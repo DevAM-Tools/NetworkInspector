@@ -4,10 +4,10 @@ namespace NetworkInspector.Profiling.Scenarios;
 
 /// <summary>
 /// Profiling scenario that reads a pre-generated PCAPNG file by iterating all frames
-/// via <see cref="PcapSource"/>.
+/// via <see cref="PcapngSource"/>.
 ///
 /// <para>
-/// <b>Hot path:</b> <see cref="PcapSource.NextFrame"/> — block parsing, section/interface
+/// <b>Hot path:</b> <see cref="PcapngSource.NextFrame"/> — block parsing, section/interface
 /// tracking, and frame materialisation from the PCAPNG binary format.
 /// The sample file is generated once in <see cref="IProfilingScenario.Setup"/>.
 /// </para>
@@ -34,7 +34,7 @@ internal sealed class ReadPcapngScenario : ReadScenarioBase
     /// <inheritdoc/>
     protected override void RunIteration(string filePath)
     {
-        using PcapSource source = PcapSource.Open(filePath);
+        using PcapngSource source = PcapngSource.Open(filePath);
 
         FrameInterfaceRegistry registry = new();
         FrameSourceId sourceId = registry.RegisterSource(source);

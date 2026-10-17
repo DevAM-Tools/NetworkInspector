@@ -387,9 +387,10 @@ internal static class IPv6ExtensionHeaderParser
 
         byte nextHeader = data[offset];
         byte payloadLen = data[offset + 1];
-        // AH length: (payload_len + 2) * 4 bytes
+        // AH length: (payload_len + 2) * 4 bytes. Below 12 bytes (payload length 0) the header has no room for the
+        // sequence number, so it is malformed; reading on would take the sequence number from the next header.
         int totalLen = (payloadLen + 2) * 4;
-        if (remaining < totalLen)
+        if (totalLen < _AhMinSize || remaining < totalLen)
         {
             return (0, 0);
         }
@@ -478,8 +479,8 @@ internal static class IPv6ExtensionHeaderParser
 
             if (optType == _Pad1)
             {
-                // _Pad1: single byte, no length field
-                parentField.AppendWithCustomText(fields.OptPad1FieldId, FieldValue.None, "_Pad1");
+                // Pad1: single byte, no length field
+                parentField.AppendWithCustomText(fields.OptPad1FieldId, FieldValue.None, "Pad1");
                 pos += 1;
                 continue;
             }
@@ -501,7 +502,7 @@ internal static class IPv6ExtensionHeaderParser
             {
                 parentField.AppendWithCustomText(
                     fields.OptPadnFieldId, FieldValue.None,
-                    (string)ZA.String("_PadN (", optTotal, " bytes)"));
+                    (string)ZA.String("PadN (", optTotal, " bytes)"));
             }
             else
             {

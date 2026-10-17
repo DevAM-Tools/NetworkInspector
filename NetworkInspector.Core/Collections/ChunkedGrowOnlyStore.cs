@@ -38,17 +38,45 @@ public delegate ref TField GetRefField<T, TField>(ref T item) where TField : cla
 /// Shared slot engine for dense <see cref="ChunkedGrowOnlyStore{T}"/> and packed
 /// <see cref="ChunkedAppendOnlyStore{T}"/>. Not part of the public API.
 /// </summary>
+/// <remarks>
+/// <para>
+/// <b>Generations:</b> the chunks and the published count between two <see cref="Clear"/> calls form one
+/// <see cref="Generation"/>. <see cref="Clear"/> replaces the whole generation with one volatile write, so a
+/// reader always pairs a count with the chunks it belongs to, and the count of a generation never goes back.
+/// The GC keeps a replaced generation alive while a reader still uses it; no epoch or retire step is needed.
+/// </para>
+/// <para>
+/// <b>Append cost:</b> the gate compare-exchange is the only full fence. The publish is a volatile write of the
+/// generation's count (a plain store on x64, a store-release on ARM64), and nothing is undone after a racing
+/// <see cref="Clear"/>: an entry written into a replaced generation is unreachable for every reader that loads
+/// the store after that <see cref="Clear"/>.
+/// </para>
+/// </remarks>
 internal sealed class ChunkedSlotStore<T>
 {
+    #region Nested types
+
+    /// <summary>
+    /// The slots between two <see cref="Clear"/> calls: their chunks and their published count.
+    /// Only the single writer changes <see cref="Count"/>, and only upward.
+    /// </summary>
+    private sealed class Generation(int chunkShift)
+    {
+        internal readonly ChunkedOuterArray<T[]> Outer = new(chunkShift);
+        internal volatile int Count;
+    }
+
+    #endregion
+
     #region Fields
 
-    private readonly ChunkedOuterArray<T[]> _Outer;
+    private readonly int _ChunkShift;
+    private readonly int _ChunkSize;
     private readonly T _UnsetValue;
     private readonly bool _FillUnset;
     private readonly Func<T[]> _ChunkFactory;
 
-    private volatile int _Count;
-    private volatile int _Epoch;
+    private volatile Generation _Current;
     private volatile int _AppendGate;
 
     #endregion
@@ -57,7 +85,10 @@ internal sealed class ChunkedSlotStore<T>
 
     internal ChunkedSlotStore(int chunkShift, T unsetValue)
     {
-        _Outer = new(chunkShift);
+        // ChunkedOuterArray validates chunkShift and throws ArgumentOutOfRangeException.
+        _Current = new(chunkShift);
+        _ChunkShift = chunkShift;
+        _ChunkSize = _Current.Outer.ChunkSize;
         _UnsetValue = unsetValue;
         _FillUnset = !EqualityComparer<T>.Default.Equals(unsetValue, default!);
         _ChunkFactory = _CreateChunk;
@@ -67,7 +98,7 @@ internal sealed class ChunkedSlotStore<T>
 
     #region Properties
 
-    internal int Count => _Count;
+    internal int Count => _Current.Count;
 
     #endregion
 
@@ -87,76 +118,43 @@ internal sealed class ChunkedSlotStore<T>
 
     internal bool TryGet(int index, out T value)
     {
-        if (!Ids.ArrayIndexIdRange.IsValidIndex(index) || (uint)index >= (uint)_Count)
+        // One generation snapshot: count and chunks always belong together.
+        Generation generation = _Current;
+        if (!Ids.ArrayIndexIdRange.IsValidIndex(index) || (uint)index >= (uint)generation.Count)
         {
             value = _UnsetValue;
             return false;
         }
 
-        (int chunkIdx, int slotIdx) = _Outer.DecomposeIndex(index);
-        T[]? chunk = _Outer.GetChunk(chunkIdx);
-        if (chunk is null)
-        {
-            value = _UnsetValue;
-            return false;
-        }
-
-        value = _ReadSlot(ref chunk[slotIdx]);
-        return true;
+        return _TryReadPublishedUnchecked(generation, index, out value);
     }
 
     internal void Append(in T item)
     {
-        if (Interlocked.CompareExchange(ref _AppendGate, 1, 0) != 0)
-        {
-            throw new InvalidOperationException("Concurrent Append is not supported.");
-        }
-
+        _EnterAppendGate();
         try
         {
             while (true)
             {
-                // Odd epoch: Clear is in progress. Do not publish against a prefix it is dropping.
-                // _Epoch is volatile, so this read is the acquire. Volatile.Read cannot take
-                // a ref to a volatile field.
-                int epoch = _Epoch;
-                if ((epoch & 1) != 0)
-                {
-                    continue;
-                }
-
-                int index = _Count;
+                // Volatile read (acquire). A Clear after this read leaves the write below in a replaced,
+                // unreachable generation; the re-check after the publish moves the entry to the live one.
+                Generation generation = _Current;
+                int index = generation.Count;
                 Ids.ArrayIndexIdRange.ThrowIfInvalidNextIndex(index, "entry");
-                _WriteLiveSlot(index, item);
+                _WriteLiveSlot(generation, index, item);
 
-                // Keep the slot write before the epoch re-read. A Clear that already
-                // finished resets Count to 0, so a CAS of index 0 would otherwise succeed
-                // against the discarded chunk.
-                Interlocked.MemoryBarrier();
-                if (_Epoch != epoch)
-                {
-                    continue;
-                }
-
-                if (Interlocked.CompareExchange(ref _Count, index + 1, index) != index)
-                {
-                    continue;
-                }
-
-                Interlocked.MemoryBarrier();
-                if (_Epoch == epoch)
+                // Volatile write (release): readers that see the new count see the written slot. No CAS and
+                // no undo: the count of a generation is never reset, only the generation is replaced.
+                generation.Count = index + 1;
+                if (ReferenceEquals(_Current, generation))
                 {
                     return;
                 }
-
-                // Clear landed between the check and the CAS. index was 0, so the CAS
-                // matched the reset count. Undo only this publish, then retry.
-                _ = Interlocked.CompareExchange(ref _Count, index, index + 1);
             }
         }
         finally
         {
-            _ = Interlocked.Exchange(ref _AppendGate, 0);
+            _AppendGate = 0;
         }
     }
 
@@ -167,25 +165,14 @@ internal sealed class ChunkedSlotStore<T>
             return;
         }
 
-        if (Interlocked.CompareExchange(ref _AppendGate, 1, 0) != 0)
-        {
-            throw new InvalidOperationException("Concurrent Append is not supported.");
-        }
-
+        _EnterAppendGate();
         try
         {
             while (true)
             {
-                // Odd epoch: Clear is in progress. Do not publish against a prefix it is dropping.
-                // _Epoch is volatile, so this read is the acquire. Volatile.Read cannot take
-                // a ref to a volatile field.
-                int epoch = _Epoch;
-                if ((epoch & 1) != 0)
-                {
-                    continue;
-                }
-
-                int index = _Count;
+                // Same protocol as Append: one generation per attempt, publish once, retry on a replaced generation.
+                Generation generation = _Current;
+                int index = generation.Count;
                 int last;
                 try
                 {
@@ -198,41 +185,22 @@ internal sealed class ChunkedSlotStore<T>
                 }
 
                 Ids.ArrayIndexIdRange.ThrowIfInvalidNextIndex(last, "entry");
-                SetRange(index, values);
-                int published = checked(index + values.Length);
+                _SetRange(generation, index, values);
 
-                // Keep the slot write before the epoch re-read. A Clear that already
-                // finished resets Count to 0, so a CAS of index 0 would otherwise succeed
-                // against the discarded chunk.
-                Interlocked.MemoryBarrier();
-                if (_Epoch != epoch)
-                {
-                    continue;
-                }
-
-                if (Interlocked.CompareExchange(ref _Count, published, index) != index)
-                {
-                    continue;
-                }
-
-                Interlocked.MemoryBarrier();
-                if (_Epoch == epoch)
+                generation.Count = checked(index + values.Length);
+                if (ReferenceEquals(_Current, generation))
                 {
                     return;
                 }
-
-                // Clear landed between the check and the CAS. index was 0, so the CAS
-                // matched the reset count. Undo only this publish, then retry.
-                _ = Interlocked.CompareExchange(ref _Count, index, published);
             }
         }
         finally
         {
-            _ = Interlocked.Exchange(ref _AppendGate, 0);
+            _AppendGate = 0;
         }
     }
 
-    internal void SetRange(int startIndex, ReadOnlySpan<T> values)
+    private void _SetRange(Generation generation, int startIndex, ReadOnlySpan<T> values)
     {
         if (values.Length == 0)
         {
@@ -255,13 +223,16 @@ internal sealed class ChunkedSlotStore<T>
 
         Ids.ArrayIndexIdRange.ValidateIndexOrThrow(last, nameof(values));
 
+        // The generation is the only allocator of its outer array and never clears it, so a chunk returned by
+        // GetOrAllocateChunk stays the live chunk of its index (single-allocator contract of ChunkedOuterArray).
+        ChunkedOuterArray<T[]> outer = generation.Outer;
         int offset = 0;
         while (offset < values.Length)
         {
             int index = startIndex + offset;
-            (int chunkIdx, int slotIdx) = _Outer.DecomposeIndex(index);
-            T[] chunk = _Outer.GetOrAllocateChunk(chunkIdx, _ChunkFactory);
-            int run = Math.Min(_Outer.ChunkSize - slotIdx, values.Length - offset);
+            (int chunkIdx, int slotIdx) = outer.DecomposeIndex(index);
+            T[] chunk = outer.GetOrAllocateChunk(chunkIdx, _ChunkFactory);
+            int run = Math.Min(outer.ChunkSize - slotIdx, values.Length - offset);
             ReadOnlySpan<T> slice = values.Slice(offset, run);
             if (_CanBulkCopy())
             {
@@ -275,30 +246,30 @@ internal sealed class ChunkedSlotStore<T>
                 }
             }
 
-            if (ReferenceEquals(_Outer.GetChunk(chunkIdx), chunk))
-            {
-                offset += run;
-            }
+            offset += run;
         }
     }
 
     internal ref T ItemRef(int index)
     {
-        if ((uint)index >= (uint)_Count)
+        Generation generation = _Current;
+        int count = generation.Count;
+        if ((uint)index >= (uint)count)
         {
-            _ThrowIndexOutOfRange(index);
+            _ThrowIndexOutOfRange(index, count);
         }
 
-        return ref _ItemRefUnchecked(index);
+        return ref _ItemRefUnchecked(generation, index, count);
     }
 
     internal bool TryReadPublished(int index, out T value)
     {
-        int epoch = _Epoch;
-        if (_PackedSnapshotInvalid(epoch)
-            || (uint)index >= (uint)_Count
-            || !TryGet(index, out value)
-            || _PackedSnapshotInvalid(epoch))
+        // A generation replaced before this read returns is a miss, not a hit from the cleared log
+        // (the contract the packed epoch gave before).
+        Generation generation = _Current;
+        if ((uint)index >= (uint)generation.Count
+            || !_TryReadPublishedUnchecked(generation, index, out value)
+            || !ReferenceEquals(_Current, generation))
         {
             value = _UnsetValue;
             return false;
@@ -311,20 +282,17 @@ internal sealed class ChunkedSlotStore<T>
     {
         ArgumentNullException.ThrowIfNull(getSortKey);
 
-        int epoch = _Epoch;
-        if ((epoch & 1) != 0)
-        {
-            return -1;
-        }
-
-        int count = _Count;
+        // Every probe reads the same generation, so the search never mixes entries of a cleared log
+        // with entries appended after the Clear.
+        Generation generation = _Current;
+        int count = generation.Count;
         int lo = 0;
         int hi = count - 1;
         int found = -1;
         while (lo <= hi)
         {
             int mid = lo + ((hi - lo) >> 1);
-            if ((uint)mid >= (uint)count || !_TryReadPublishedUnchecked(mid, out T published))
+            if (!_TryReadPublishedUnchecked(generation, mid, out T published))
             {
                 found = -1;
                 break;
@@ -347,15 +315,8 @@ internal sealed class ChunkedSlotStore<T>
             }
         }
 
-        if (found >= 0
-            && ((uint)found >= (uint)count
-                || !_TryReadPublishedUnchecked(found, out T check)
-                || getSortKey(in check) != sortKey))
-        {
-            found = -1;
-        }
-
-        if (_PackedSnapshotInvalid(epoch))
+        // A Clear that replaced the generation during the search makes the result a miss.
+        if (!ReferenceEquals(_Current, generation))
         {
             return -1;
         }
@@ -368,21 +329,21 @@ internal sealed class ChunkedSlotStore<T>
     {
         ArgumentNullException.ThrowIfNull(getter);
 
-        int epoch = _Epoch;
-        if (_PackedSnapshotInvalid(epoch) || (uint)index >= (uint)_Count)
+        Generation generation = _Current;
+        if ((uint)index >= (uint)generation.Count)
         {
             return null;
         }
 
-        (int chunkIdx, int slotIdx) = _Outer.DecomposeIndex(index);
-        T[]? chunk = _Outer.GetChunk(chunkIdx);
+        (int chunkIdx, int slotIdx) = generation.Outer.DecomposeIndex(index);
+        T[]? chunk = generation.Outer.GetChunk(chunkIdx);
         if (chunk is null)
         {
             return null;
         }
 
         TField? value = Volatile.Read(ref getter(ref chunk[slotIdx]));
-        if (_PackedSnapshotInvalid(epoch))
+        if (!ReferenceEquals(_Current, generation))
         {
             return null;
         }
@@ -392,18 +353,18 @@ internal sealed class ChunkedSlotStore<T>
 
     internal void Clear()
     {
-        // Seqlock: odd epoch means Clear is in progress; even means a stable prefix.
-        _ = Interlocked.Increment(ref _Epoch);
-        Interlocked.Exchange(ref _Count, 0);
-        _Outer.Clear();
-        _ = Interlocked.Increment(ref _Epoch);
+        // One volatile write replaces chunks and count together. Readers still on the old generation finish
+        // on it; the GC reclaims it afterwards. A concurrent Append notices the swap and retries.
+        _Current = new(_ChunkShift);
     }
 
     internal bool TryGetPublishedChunk(int chunkIndex, int publishedCount, out ReadOnlySpan<T> span)
     {
-        if (publishedCount > _Count)
+        Generation generation = _Current;
+        int count = generation.Count;
+        if (publishedCount > count)
         {
-            publishedCount = _Count;
+            publishedCount = count;
         }
 
         if (publishedCount <= 0 || chunkIndex < 0)
@@ -412,7 +373,8 @@ internal sealed class ChunkedSlotStore<T>
             return false;
         }
 
-        int shift = _Outer.ChunkShift;
+        ChunkedOuterArray<T[]> outer = generation.Outer;
+        int shift = outer.ChunkShift;
         if (chunkIndex > (int.MaxValue >> shift))
         {
             span = default;
@@ -426,14 +388,14 @@ internal sealed class ChunkedSlotStore<T>
             return false;
         }
 
-        T[]? chunk = _Outer.GetChunk(chunkIndex);
+        T[]? chunk = outer.GetChunk(chunkIndex);
         if (chunk is null)
         {
             span = default;
             return false;
         }
 
-        int length = Math.Min(_Outer.ChunkSize, publishedCount - start);
+        int length = Math.Min(outer.ChunkSize, publishedCount - start);
         span = chunk.AsSpan(0, length);
         return true;
     }
@@ -442,9 +404,28 @@ internal sealed class ChunkedSlotStore<T>
 
     #region Private helpers
 
+    /// <summary>
+    /// Takes the single-writer gate. It is a misuse detector, not a lock: a second concurrent writer is a
+    /// caller bug and gets <see cref="InvalidOperationException"/>. The compare-exchange is the only full
+    /// fence of an append; the release in <c>finally</c> is a volatile write.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void _EnterAppendGate()
+    {
+        if (Interlocked.CompareExchange(ref _AppendGate, 1, 0) != 0)
+        {
+            _ThrowConcurrentAppend();
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    [DoesNotReturn]
+    private static void _ThrowConcurrentAppend() =>
+        throw new InvalidOperationException("Concurrent Append is not supported.");
+
     private T[] _CreateChunk()
     {
-        T[] chunk = new T[_Outer.ChunkSize];
+        T[] chunk = new T[_ChunkSize];
         if (_FillUnset)
         {
             Array.Fill(chunk, _UnsetValue);
@@ -453,18 +434,14 @@ internal sealed class ChunkedSlotStore<T>
         return chunk;
     }
 
-    private void _WriteLiveSlot(int index, T value)
+    private void _WriteLiveSlot(Generation generation, int index, T value)
     {
-        (int chunkIdx, int slotIdx) = _Outer.DecomposeIndex(index);
-        while (true)
-        {
-            T[] chunk = _Outer.GetOrAllocateChunk(chunkIdx, _ChunkFactory);
-            _WriteSlot(ref chunk[slotIdx], value);
-            if (ReferenceEquals(_Outer.GetChunk(chunkIdx), chunk))
-            {
-                return;
-            }
-        }
+        // The generation is the only allocator of its outer array and never clears it, so the returned chunk stays
+        // the live chunk of its index (single-allocator contract of ChunkedOuterArray); no re-check is needed.
+        ChunkedOuterArray<T[]> outer = generation.Outer;
+        (int chunkIdx, int slotIdx) = outer.DecomposeIndex(index);
+        T[] chunk = outer.GetOrAllocateChunk(chunkIdx, _ChunkFactory);
+        _WriteSlot(ref chunk[slotIdx], value);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -555,11 +532,12 @@ internal sealed class ChunkedSlotStore<T>
         }
     }
 
+    /// <summary>Reads a published slot of <paramref name="generation"/>; the caller checked the index against its count.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private bool _TryReadPublishedUnchecked(int index, out T value)
+    private bool _TryReadPublishedUnchecked(Generation generation, int index, out T value)
     {
-        (int chunkIdx, int slotIdx) = _Outer.DecomposeIndex(index);
-        T[]? chunk = _Outer.GetChunk(chunkIdx);
+        (int chunkIdx, int slotIdx) = generation.Outer.DecomposeIndex(index);
+        T[]? chunk = generation.Outer.GetChunk(chunkIdx);
         if (chunk is null)
         {
             value = _UnsetValue;
@@ -571,33 +549,25 @@ internal sealed class ChunkedSlotStore<T>
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private ref T _ItemRefUnchecked(int index)
+    private static ref T _ItemRefUnchecked(Generation generation, int index, int count)
     {
-        (int chunkIdx, int slotIdx) = _Outer.DecomposeIndex(index);
-        T[]? chunk = _Outer.GetChunk(chunkIdx);
+        (int chunkIdx, int slotIdx) = generation.Outer.DecomposeIndex(index);
+        T[]? chunk = generation.Outer.GetChunk(chunkIdx);
         if (chunk is null)
         {
-            _ThrowIndexOutOfRange(index);
+            _ThrowIndexOutOfRange(index, count);
         }
 
         return ref chunk[slotIdx];
     }
 
-    /// <summary>
-    /// Packed seqlock: odd epoch means <see cref="Clear"/> is in progress; a changed epoch means the
-    /// sampled prefix is no longer the live one. Either case is a miss, not a hit from a new generation.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private bool _PackedSnapshotInvalid(int epoch) =>
-        (epoch & 1) != 0 || _Epoch != epoch;
-
     [MethodImpl(MethodImplOptions.NoInlining)]
     [DoesNotReturn]
-    private void _ThrowIndexOutOfRange(int index) =>
+    private static void _ThrowIndexOutOfRange(int index, int count) =>
         throw new ArgumentOutOfRangeException(
             nameof(index),
             index,
-            $"Index must be in the range 0..{Math.Max(_Count - 1, 0).ToString(CultureInfo.InvariantCulture)} (published entries).");
+            $"Index must be in the range 0..{Math.Max(count - 1, 0).ToString(CultureInfo.InvariantCulture)} (published entries).");
 
     #endregion
 }
@@ -618,9 +588,8 @@ internal sealed class ChunkedSlotStore<T>
 /// </typeparam>
 /// <remarks>
 /// <para>
-/// Chunk allocation uses <see cref="Interlocked.CompareExchange{T}"/> on
-/// <see cref="ChunkedOuterArray{TChunk}"/>. Slot writes retry until the inner chunk is still the
-/// live chunk, so a concurrent outer-array grow cannot drop a completed write.
+/// Chunks are allocated through <see cref="ChunkedOuterArray{TChunk}"/>. The single appender is its only
+/// allocator, so a chunk it receives stays the live chunk of its index and a slot write needs no re-check.
 /// </para>
 /// <para>
 /// <b>Single-writer <see cref="Append"/> / <see cref="AppendRange"/>:</b> Concurrent
@@ -633,11 +602,11 @@ internal sealed class ChunkedSlotStore<T>
 /// returns the unset sentinel / <see langword="false"/>.
 /// </para>
 /// <para>
-/// <b><see cref="Clear"/>:</b> publishes an empty outer array and resets <see cref="Count"/> to 0.
-/// A concurrent <see cref="Append"/> retries onto the live prefix. A concurrent
-/// <see cref="Get"/> / <see cref="TryGet"/> that already sampled the previous outer array may still
-/// return that snapshot; a load that samples the outer array after <see cref="Clear"/> observes
-/// unset / false.
+/// <b><see cref="Clear"/>:</b> replaces the chunks and <see cref="Count"/> together with one empty
+/// generation (one volatile write). A concurrent <see cref="Append"/> retries onto the live generation.
+/// A concurrent <see cref="Get"/> / <see cref="TryGet"/> that already loaded the previous generation may
+/// still return that snapshot; a load after <see cref="Clear"/> observes unset / false. An append costs
+/// one interlocked operation (the single-writer gate); the publish is a volatile write of the count.
 /// </para>
 /// </remarks>
 public sealed class ChunkedGrowOnlyStore<T>
@@ -751,17 +720,17 @@ public sealed class ChunkedGrowOnlyStore<T>
 /// <remarks>
 /// <para>
 /// One writer for <see cref="Count"/>; lock-free readers. The writer writes the live slot first, then
-/// publishes with <see cref="Interlocked.CompareExchange(ref int, int, int)"/> of <see cref="Count"/>.
-    /// Concurrent <see cref="Append"/> / <see cref="AppendRange"/> throws <see cref="InvalidOperationException"/>.
+/// publishes with a volatile write of <see cref="Count"/>.
+/// Concurrent <see cref="Append"/> / <see cref="AppendRange"/> throws <see cref="InvalidOperationException"/>.
 /// Mutation through <see cref="ItemRef"/> is single-writer.
 /// </para>
 /// <para>
-/// <b><see cref="Clear"/>:</b> seqlock on a packed epoch — odd means mutation in progress, even
-/// means a stable prefix. Packed readers that sample an odd epoch, or whose epoch changes before
-/// they return, observe a miss (<c>-1</c> / <see langword="false"/>). They do not return
-/// post-refill entries under a stale snapshot. <see cref="ItemRef"/> throws
-/// <see cref="ArgumentOutOfRangeException"/> when the index is no longer published.
-/// A concurrent <see cref="Append"/> retries against the empty prefix.
+/// <b><see cref="Clear"/>:</b> replaces the chunks and <see cref="Count"/> together with one empty
+/// generation (one volatile write). Packed readers read one generation; when <see cref="Clear"/>
+/// replaced it before they return, they observe a miss (<c>-1</c> / <see langword="false"/>). They never
+/// mix entries of the cleared log with entries appended after <see cref="Clear"/>. <see cref="ItemRef"/>
+/// throws <see cref="ArgumentOutOfRangeException"/> when the index is not published in the live generation.
+/// A concurrent <see cref="Append"/> retries onto the empty generation.
 /// </para>
 /// <para>
 /// Reference-type fields inside a value-type <typeparamref name="T"/> that the writer mutates after
@@ -846,7 +815,7 @@ public sealed class ChunkedAppendOnlyStore<T>
         ref _Store.ItemRef(index);
 
     /// <summary>
-    /// Copies the packed entry at <paramref name="index"/> when it is still published in the same epoch.
+    /// Copies the packed entry at <paramref name="index"/> when it is still published in the live generation.
     /// Returns <see langword="false"/> when the index is outside <see cref="Count"/>, the chunk is
     /// missing, or <see cref="Clear"/> raced.
     /// </summary>
@@ -878,9 +847,8 @@ public sealed class ChunkedAppendOnlyStore<T>
         _Store.ReadVolatileRefField(index, getter);
 
     /// <summary>
-    /// Drops all chunk references and resets the packed prefix. Concurrent readers that sampled a
-    /// pre-clear epoch, or that observe an in-progress (odd) epoch, miss; they do not observe the
-    /// refilled log under that snapshot.
+    /// Drops all chunk references and resets the packed prefix in one generation swap. Concurrent packed
+    /// readers that loaded the pre-clear generation miss; they do not observe the refilled log under that snapshot.
     /// </summary>
     public void Clear() =>
         _Store.Clear();
@@ -989,14 +957,33 @@ public static class ChunkedGrowOnlyStoreExtensions
 /// Shared outer-chunk growth helper. Each outer slot holds one inner chunk (e.g. <c>Frame[]</c>).
 /// </summary>
 /// <remarks>
-/// <b>Thread-safety:</b> Concurrent disjoint chunk allocation and concurrent readers are supported.
-/// Outer-array growth uses <see cref="Interlocked.CompareExchange{T}"/> with retry; inner-chunk
-/// installation uses <see cref="Interlocked.CompareExchange{T}"/>. A losing inner-chunk race parks
-/// the factory-produced chunk as a spare for the next allocation. <see cref="Clear"/> replaces the
-/// outer array with empty; concurrent <see cref="GetChunk"/> may then observe
-/// <see langword="null"/>, and <see cref="GetOrAllocateChunk"/> retries onto the live array.
-/// Packed stores zero count and bump the packed epoch (odd while clearing, even when stable)
-/// before calling this method so packed readers do not treat a dropped chunk as a published slot.
+/// <para>
+/// <b>Thread-safety:</b> one allocator, any number of readers, no locks. Calls of <see cref="GetOrAllocateChunk"/>
+/// that allocate and calls of <see cref="Clear"/> must not overlap; they may come from different threads one after
+/// the other. <see cref="GetChunk"/>, and <see cref="GetOrAllocateChunk"/> for an installed chunk, may run on any
+/// number of threads at any time, also while the allocator grows the outer array or installs a chunk. Growth copies
+/// the outer array and publishes the copy with one volatile write; a chunk is installed with one volatile write into
+/// the live outer array. A reader sees the old or the new outer array, and each holds every chunk installed before
+/// it was published.
+/// </para>
+/// <para>
+/// <b>Why one allocator:</b> copy-then-publish growth cannot absorb a concurrent install. A chunk written into the
+/// old array after the copy and before the publish would be lost. Every user allocates from one thread at a time
+/// (the chunked stores under their single-writer gate, <c>CachedFrameSource</c> from its source thread), so the
+/// contract costs nothing and keeps reads and installs free of locks.
+/// </para>
+/// <para>
+/// <b>Misuse detection:</b> the allocating path takes a compare-exchange gate and throws
+/// <see cref="InvalidOperationException"/> when a second allocating call or <see cref="Clear"/> overlaps it. It is a
+/// misuse detector, not a lock: nobody waits, an installed chunk is returned without touching it, and an overlap
+/// fails loudly instead of losing a chunk. Gate entry (full fence) and release (volatile write) also order calls that
+/// follow one another on different threads.
+/// </para>
+/// <para>
+/// <see cref="Clear"/> replaces the outer array with an empty one; a concurrent <see cref="GetChunk"/> may still
+/// return a chunk of the replaced array. The chunked stores do not call <see cref="Clear"/>: they replace a whole
+/// generation (a new outer array plus its count), so a reader never pairs a count with chunks of another generation.
+/// </para>
 /// </remarks>
 public sealed class ChunkedOuterArray<TChunk> where TChunk : class
 {
@@ -1012,7 +999,9 @@ public sealed class ChunkedOuterArray<TChunk> where TChunk : class
     private readonly int _MaxOuterChunks;
 
     private volatile TChunk?[] _Chunks;
-    private volatile TChunk? _Spare;
+
+    /// <summary>Single-allocator gate: 1 while an allocating call or <see cref="Clear"/> runs. A misuse detector, not a lock.</summary>
+    private volatile int _AllocationGate;
 
     #endregion
 
@@ -1079,107 +1068,136 @@ public sealed class ChunkedOuterArray<TChunk> where TChunk : class
     /// <paramref name="factory"/> when absent.
     /// </summary>
     /// <remarks>
-    /// The factory runs only after a null slot is observed and no spare is available. A losing
-    /// install <see cref="Interlocked.CompareExchange{T}"/> parks the unused chunk for reuse.
-    /// A chunk that won the slot CAS and then lost the live-outer check is not spared.
+    /// An installed chunk is returned without calling the factory and without touching the allocation gate; this is
+    /// the per-item path of the stores and may run on any thread. Otherwise the call allocates: it takes the gate,
+    /// grows the outer array when needed, calls the factory once, and installs the result. Allocating calls must not
+    /// overlap (see the type remarks). The factory must not call back into this instance; such a call overlaps the
+    /// running one. A factory exception propagates; the array then keeps any growth but no new chunk.
     /// </remarks>
     /// <exception cref="ArgumentNullException"><paramref name="factory"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentOutOfRangeException">
     /// <paramref name="chunkIndex"/> is negative or not less than the maximum outer-chunk count
     /// for this <see cref="ChunkShift"/>.
     /// </exception>
+    /// <exception cref="InvalidOperationException">
+    /// Another allocating call or <see cref="Clear"/> runs at the same time (single-allocator contract).
+    /// </exception>
     public TChunk GetOrAllocateChunk(int chunkIndex, Func<TChunk> factory)
     {
         ArgumentNullException.ThrowIfNull(factory);
+        if ((uint)chunkIndex >= (uint)_MaxOuterChunks)
+        {
+            _ThrowChunkIndexOutOfRange(chunkIndex);
+        }
 
-        TChunk? localSpare = null;
+        // Installed chunk: lock-free read, no gate, no factory.
+        TChunk? existing = GetChunk(chunkIndex);
+        if (existing is not null)
+        {
+            return existing;
+        }
+
+        return _AllocateChunk(chunkIndex, factory);
+    }
+
+    /// <summary>Drops all chunk references.</summary>
+    /// <exception cref="InvalidOperationException">An allocating <see cref="GetOrAllocateChunk"/> call runs at the same time.</exception>
+    public void Clear()
+    {
+        _EnterAllocationGate();
         try
         {
-            while (true)
-            {
-                _EnsureOuterCapacity(chunkIndex);
-
-                TChunk?[] chunks = _Chunks;
-                if ((uint)chunkIndex >= (uint)chunks.Length)
-                {
-                    continue;
-                }
-
-                TChunk? chunk = Volatile.Read(ref chunks[chunkIndex]);
-                if (chunk is not null)
-                {
-                    return chunk;
-                }
-
-                TChunk created = localSpare ?? Interlocked.Exchange(ref _Spare, null) ?? factory();
-                localSpare = null;
-                TChunk? previous = Interlocked.CompareExchange(ref chunks[chunkIndex], created, null);
-                if (previous is null)
-                {
-                    TChunk?[] live = _Chunks;
-                    if ((uint)chunkIndex < (uint)live.Length
-                        && ReferenceEquals(Volatile.Read(ref live[chunkIndex]), created))
-                    {
-                        return created;
-                    }
-
-                    continue;
-                }
-
-                localSpare = created;
-                TChunk?[] liveAfter = _Chunks;
-                if ((uint)chunkIndex < (uint)liveAfter.Length
-                    && ReferenceEquals(Volatile.Read(ref liveAfter[chunkIndex]), previous))
-                {
-                    return previous;
-                }
-            }
+            _Chunks = [];
         }
         finally
         {
-            if (localSpare is not null)
-            {
-                _ = Interlocked.CompareExchange(ref _Spare, localSpare, null);
-            }
+            _AllocationGate = 0;
         }
     }
-
-    /// <summary>Drops all chunk references. A never-installed spare is kept for reuse.</summary>
-    public void Clear() =>
-        _Chunks = [];
 
     #endregion
 
     #region Private helpers
 
-    private void _EnsureOuterCapacity(int chunkIndex)
+    /// <summary>
+    /// Allocating path of <see cref="GetOrAllocateChunk"/>: grows the outer array when needed and installs a new chunk.
+    /// Rare (once per chunk), so it is kept out of line.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private TChunk _AllocateChunk(int chunkIndex, Func<TChunk> factory)
     {
-        if ((uint)chunkIndex >= (uint)_MaxOuterChunks)
+        _EnterAllocationGate();
+        try
         {
-            throw new ArgumentOutOfRangeException(
-                nameof(chunkIndex),
-                chunkIndex,
-                $"Chunk index must be in the range 0..{(_MaxOuterChunks - 1).ToString(CultureInfo.InvariantCulture)}.");
-        }
-
-        while (true)
-        {
+            // Re-read under the gate: a call that finished before this one entered may have installed the chunk.
             TChunk?[] chunks = _Chunks;
-            if ((uint)chunkIndex < (uint)chunks.Length)
+            if ((uint)chunkIndex >= (uint)chunks.Length)
             {
-                return;
+                chunks = _Grow(chunks, chunkIndex);
             }
 
-            int doubled = chunks.Length == 0 ? 1 : checked(chunks.Length * 2);
-            int newLength = Math.Min(Math.Max(chunkIndex + 1, doubled), _MaxOuterChunks);
-            TChunk?[] resized = new TChunk[newLength];
-            Array.Copy(chunks, resized, chunks.Length);
-            if (Interlocked.CompareExchange(ref _Chunks, resized, chunks) == chunks)
+            TChunk? installed = chunks[chunkIndex];
+            if (installed is not null)
             {
-                return;
+                return installed;
             }
+
+            // Install with a volatile write (release): a reader that sees the chunk sees it fully constructed. No
+            // compare-exchange is needed, because nothing else writes slots or the outer array while the gate is held.
+            TChunk created = factory();
+            Volatile.Write(ref chunks[chunkIndex], created);
+            return created;
+        }
+        finally
+        {
+            _AllocationGate = 0;
         }
     }
+
+    /// <summary>
+    /// Copies <paramref name="chunks"/> into an outer array long enough for <paramref name="chunkIndex"/> (at least
+    /// doubled, at most <see cref="_MaxOuterChunks"/>) and publishes it. Caller holds the allocation gate, so no install
+    /// can land in <paramref name="chunks"/> between the copy and the publish.
+    /// </summary>
+    private TChunk?[] _Grow(TChunk?[] chunks, int chunkIndex)
+    {
+        // chunks.Length <= chunkIndex < _MaxOuterChunks <= (int.MaxValue >> 4) + 1, so the doubling cannot overflow.
+        int doubled = chunks.Length == 0 ? 1 : chunks.Length * 2;
+        int newLength = Math.Min(Math.Max(chunkIndex + 1, doubled), _MaxOuterChunks);
+        TChunk?[] resized = new TChunk[newLength];
+        Array.Copy(chunks, resized, chunks.Length);
+
+        // Volatile write (release): a reader that loads the new array sees every copied chunk.
+        _Chunks = resized;
+        return resized;
+    }
+
+    /// <summary>
+    /// Takes the single-allocator gate. A misuse detector, not a lock: an overlapping allocating call or
+    /// <see cref="Clear"/> is a caller bug and gets <see cref="InvalidOperationException"/>; nobody waits.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void _EnterAllocationGate()
+    {
+        if (Interlocked.CompareExchange(ref _AllocationGate, 1, 0) != 0)
+        {
+            _ThrowConcurrentAllocation();
+        }
+    }
+
+    [DoesNotReturn]
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void _ThrowConcurrentAllocation() =>
+        throw new InvalidOperationException(
+            "Concurrent allocation is not supported: allocating GetOrAllocateChunk calls and Clear must not overlap.");
+
+    [DoesNotReturn]
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private void _ThrowChunkIndexOutOfRange(int chunkIndex) =>
+        throw new ArgumentOutOfRangeException(
+            nameof(chunkIndex),
+            chunkIndex,
+            $"Chunk index must be in the range 0..{(_MaxOuterChunks - 1).ToString(CultureInfo.InvariantCulture)}.");
 
     #endregion
 }

@@ -75,7 +75,7 @@ internal static class SocketCanGenerators
 
     /// <summary>
     /// Builds a SocketCAN CAN XL frame (12-byte header + payload).
-    /// Wire layout (LINKTYPE_CAN_SOCKETCAN / Wireshark <c>blf_read_canxlchannelframe</c>):
+    /// Wire layout (LINKTYPE_CAN_SOCKETCAN, as the BLF reader reconstructs it from Type 139):
     /// <c>[0]=0, vcid, priority(2 BE), flags (XLF=0x80), sdt, len(2 LE), af(4 LE), data</c>.
     /// </summary>
     /// <param name="priority">11-bit CAN XL priority (bits 0–10).</param>

@@ -39,6 +39,12 @@ public sealed class DuckDbExporter : IPacketListener, IErrorTolerantExporter, ID
     private readonly ColumnarDetailFlags _ColumnarDetailFlags;
     private readonly bool _IsTimestampSorted;
 
+    /// <summary>DuckDB <c>memory_limit</c> in bytes; <c>0</c> = DuckDB's default (no <c>SET</c> issued).</summary>
+    private readonly long _MemoryLimitBytes;
+
+    /// <summary>DuckDB <c>threads</c>; <c>0</c> = DuckDB's default (no <c>SET</c> issued).</summary>
+    private readonly int _Threads;
+
     private ColumnarPacketBatch? _Batch;
     private DuckDbBulkWriter? _Writer;
     private long _FlushedOutputBytes;
@@ -61,8 +67,12 @@ public sealed class DuckDbExporter : IPacketListener, IErrorTolerantExporter, ID
         int targetPacketCount,
         ColumnarDetailFlags columnarDetailFlags,
         bool isTimestampSorted,
+        long memoryLimitBytes,
+        int threads,
         CancellationToken cancellationToken)
     {
+        _MemoryLimitBytes = memoryLimitBytes;
+        _Threads = threads;
         _FilePath = filePath;
         UiName = uiName;
         Description = description;
@@ -147,7 +157,7 @@ public sealed class DuckDbExporter : IPacketListener, IErrorTolerantExporter, ID
 
         if (!_Started)
         {
-            _Start();
+            _Start(packet);
             if (_HasError)
             {
                 return false;
@@ -172,55 +182,57 @@ public sealed class DuckDbExporter : IPacketListener, IErrorTolerantExporter, ID
             return;
         }
 
-        // try/finally guarantees the writer and batch are disposed even if the final flush or
-        // Complete() throws. cleanupErrors is declared here so the throw can occur after the
-        // finally block — CA2219 prohibits throwing inside finally.
-        List<Exception> cleanupErrors = [];
-        try
+        // Shared finish sequence: final flush and commit, then writer and batch release even when a step fails.
+        ExporterFinish.Run(
+            "DuckDB",
+            _FinalizeDatabase,
+            _ReportFinishError,
+            new ExporterReleaseStep("writer disposal", _DisposeWriter),
+            new ExporterReleaseStep("batch disposal", _DisposeBatch));
+    }
+
+    /// <summary>Flushes the last batch and completes the writer (catalog rows, appender close, commit).</summary>
+    private void _FinalizeDatabase()
+    {
+        if (_Batch is not null && _Batch.PacketCount > 0)
         {
-            if (_Batch is not null && _Batch.PacketCount > 0)
-            {
-                _FlushBatch();
-            }
-            _Writer?.Complete();
+            _FlushBatch();
         }
-        catch (Exception ex)
+
+        _Writer?.Complete();
+    }
+
+    /// <summary>Disposes the writer once (closes the connection and the database file).</summary>
+    private void _DisposeWriter()
+    {
+        DuckDbBulkWriter? writer = _Writer;
+        _Writer = null;
+        writer?.Dispose();
+    }
+
+    /// <summary>Disposes the batch once (returns its pooled column buffers).</summary>
+    private void _DisposeBatch()
+    {
+        ColumnarPacketBatch? batch = _Batch;
+        _Batch = null;
+        batch?.Dispose();
+    }
+
+    /// <summary>Error channel of the finish sequence: marks the error, counts it, and raises <see cref="ItemSkipped"/>.</summary>
+    private void _ReportFinishError(ExportErrorKind kind, string message)
+    {
+        _HasError = true;
+        if (ErrorCount < int.MaxValue)
         {
-            _HasError = true;
-            if (ErrorCount < int.MaxValue) ErrorCount++;
-            ItemSkipped?.Invoke(this, new ExportErrorEventArgs
-            {
-                ItemIndex = PacketCount,
-                Kind = ex is IOException ? ExportErrorKind.IoError : ExportErrorKind.SerializationError,
-                Message = $"DuckDB finalization failed: {ex.Message}",
-            });
+            ErrorCount++;
         }
-        finally
+
+        ItemSkipped?.Invoke(this, new ExportErrorEventArgs
         {
-            try
-            {
-                _Writer?.Dispose();
-            }
-            catch (Exception ex)
-            {
-                cleanupErrors.Add(ex);
-                _HasError = true;
-                if (ErrorCount < int.MaxValue) ErrorCount++;
-                ItemSkipped?.Invoke(this, new ExportErrorEventArgs
-                {
-                    ItemIndex = PacketCount,
-                    Kind = ExportErrorKind.IoError,
-                    Message = $"DuckDB writer disposal failed: {ex.Message}",
-                });
-            }
-            _Writer = null;
-            _Batch?.Dispose();
-            _Batch = null;
-        }
-        if (cleanupErrors.Count > 0)
-        {
-            throw new AggregateException("DuckDB exporter cleanup failed.", cleanupErrors);
-        }
+            ItemIndex = PacketCount,
+            Kind = kind,
+            Message = message,
+        });
     }
 
     /// <inheritdoc/>
@@ -230,13 +242,22 @@ public sealed class DuckDbExporter : IPacketListener, IErrorTolerantExporter, ID
 
     #region Private Helpers
 
-    /// <summary>Lazily opens the DuckDB file, creates the base tables, and creates the batch accumulator.</summary>
-    private void _Start()
+    /// <summary>
+    /// Lazily opens the DuckDB file, creates the base tables, and creates the batch accumulator. The protocol catalog is
+    /// taken from the first packet's stack: all packets of one export come from the same parsing stack.
+    /// </summary>
+    /// <param name="firstPacket">The first packet of the export.</param>
+    private void _Start(Packet firstPacket)
     {
         _Started = true;
         try
         {
-            _Writer = new DuckDbBulkWriter(_FilePath, _ColumnarDetailFlags);
+            _Writer = new DuckDbBulkWriter(
+                _FilePath,
+                _ColumnarDetailFlags,
+                ProtocolCatalogEntry.FromStack(firstPacket.Stack),
+                _MemoryLimitBytes,
+                _Threads);
             _Batch = new ColumnarPacketBatch(
                 _ColumnarDetailFlags, _MaxPacketsPerBlock, _MaxBlockSize, _IsTimestampSorted);
         }
@@ -345,6 +366,8 @@ public sealed class DuckDbExporter : IPacketListener, IErrorTolerantExporter, ID
         private int _TargetPacketCount;
         private ColumnarDetailFlags _ColumnarDetailFlags = ColumnarDetailFlags.All;
         private bool _IsTimestampSorted;
+        private long _MemoryLimitBytes;
+        private int _Threads;
 
         /// <summary>
         /// Sets the output <c>.duckdb</c> file path. Required — DuckDB output is always a single
@@ -437,6 +460,34 @@ public sealed class DuckDbExporter : IPacketListener, IErrorTolerantExporter, ID
             return this;
         }
 
+        /// <summary>
+        /// Sets DuckDB's <c>memory_limit</c> for the export connection, in bytes. When not called, no <c>SET</c> is issued and
+        /// DuckDB's own default applies.
+        /// </summary>
+        /// <param name="bytes">Memory limit in bytes; must be greater than zero.</param>
+        /// <returns>This builder.</returns>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="bytes"/> is zero or negative.</exception>
+        public Builder WithMemoryLimit(long bytes)
+        {
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(bytes);
+            _MemoryLimitBytes = bytes;
+            return this;
+        }
+
+        /// <summary>
+        /// Sets DuckDB's <c>threads</c> for the export connection. When not called, no <c>SET</c> is issued and DuckDB's own
+        /// default applies.
+        /// </summary>
+        /// <param name="threads">Number of DuckDB worker threads; must be greater than zero.</param>
+        /// <returns>This builder.</returns>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="threads"/> is zero or negative.</exception>
+        public Builder WithThreads(int threads)
+        {
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(threads);
+            _Threads = threads;
+            return this;
+        }
+
         /// <summary>Builds the exporter. Throws if no output file was configured.</summary>
         /// <exception cref="InvalidOperationException">No output file was configured.</exception>
         public DuckDbExporter Build()
@@ -455,6 +506,8 @@ public sealed class DuckDbExporter : IPacketListener, IErrorTolerantExporter, ID
                 _TargetPacketCount,
                 _ColumnarDetailFlags,
                 _IsTimestampSorted,
+                _MemoryLimitBytes,
+                _Threads,
                 _CancellationToken);
         }
     }

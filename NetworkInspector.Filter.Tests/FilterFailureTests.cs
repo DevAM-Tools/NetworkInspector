@@ -43,7 +43,7 @@ internal sealed class FilterFailureTests
     {
         using Stack stack = FilterTestHelper.BuildStack();
         FilterCompileOptions options = new() { RegexTimeout = TimeSpan.FromTicks(1) };
-        FilterResult<Filter> compiled = Filter.Compile("dns.qry.name matches \"^(a+)+$\"", stack, options);
+        FilterResult<Filter> compiled = Filter.Compile("dns.qry.name matches \"(?=^(a+)+$)\"", stack, options);
         await Assert.That(compiled.IsSuccess).IsTrue();
 
         Packet packet = FilterTestHelper.Parse(
@@ -56,6 +56,24 @@ internal sealed class FilterFailureTests
         await Assert.That(matched).IsFalse();
         await Assert.That(failure!.Kind).IsEqualTo(FilterErrorKind.RuntimeError);
         await Assert.That(compiled.Value.IsPoisoned).IsTrue();
+    }
+
+    [Test]
+    public async Task Match_NestedQuantifierWithoutLookaround_RunsLinearAndNeverTimesOut()
+    {
+        using Stack stack = FilterTestHelper.BuildStack();
+        FilterCompileOptions options = new() { RegexTimeout = TimeSpan.FromTicks(1) };
+        Filter filter = Filter.Compile("dns.qry.name matches \"^(a+)+$\"", stack, options).Value;
+        Packet packet = FilterTestHelper.Parse(
+            stack,
+            FilterTestHelper.BuildDnsQueryFrame(label: new string('a', 60) + "b"));
+
+        bool produced = filter.TryIsMatch(packet, out bool matched, out FilterError? failure);
+
+        await Assert.That(produced).IsTrue();
+        await Assert.That(failure).IsNull();
+        await Assert.That(matched).IsFalse();
+        await Assert.That(filter.IsPoisoned).IsFalse();
     }
 
     #endregion

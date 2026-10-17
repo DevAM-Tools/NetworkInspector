@@ -151,7 +151,7 @@ public sealed class SequenceStreamBuffer
     private bool _Rebase(uint sequence, ReadOnlyMemory<byte> payload)
     {
         // Refuse before discarding the current prefix. Overlap can only shrink the total.
-        if (_ContiguousLength + _HeldBytes + payload.Length > _MaxBufferSize)
+        if (_WouldExceedMax(payload.Length))
         {
             return false;
         }
@@ -209,7 +209,7 @@ public sealed class SequenceStreamBuffer
 
         if (sequence == _NextExpected)
         {
-            if (_ContiguousLength + _HeldBytes + payload.Length > _MaxBufferSize)
+            if (_WouldExceedMax(payload.Length))
             {
                 return false;
             }
@@ -221,7 +221,7 @@ public sealed class SequenceStreamBuffer
         }
 
         // Hole: hold until the cursor reaches this sequence.
-        if (_ContiguousLength + _HeldBytes + payload.Length > _MaxBufferSize)
+        if (_WouldExceedMax(payload.Length))
         {
             return false;
         }
@@ -229,6 +229,13 @@ public sealed class SequenceStreamBuffer
         _Hold(sequence, payload);
         return true;
     }
+
+    /// <summary>
+    /// Whether adding <paramref name="payloadLength"/> bytes would exceed the buffer cap. Summed in <see cref="long"/>:
+    /// with a cap near <see cref="int.MaxValue"/> the <see cref="int"/> sum would wrap and let the payload in.
+    /// </summary>
+    private bool _WouldExceedMax(int payloadLength) =>
+        (long)_ContiguousLength + _HeldBytes + payloadLength > _MaxBufferSize;
 
     private void _DrainHeld()
     {
@@ -253,11 +260,13 @@ public sealed class SequenceStreamBuffer
                 return;
             }
 
+            // Copy the tail before removing the segment: removal returns its array to the shared pool, where another
+            // renter could overwrite it while it is still being read.
             int skip = (int)(_NextExpected - held.Sequence);
             ReadOnlySpan<byte> tail = held.Data.Span[skip..];
-            _RemoveHeld(index);
             _AppendContiguous(tail);
             _NextExpected += (uint)tail.Length;
+            _RemoveHeld(index);
         }
     }
 

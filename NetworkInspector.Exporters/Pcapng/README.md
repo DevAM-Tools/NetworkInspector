@@ -12,7 +12,7 @@ It is designed for format-preserving conversion and tool interoperability.
 ## Why Use It
 
 - Broad ecosystem compatibility with other PCAPNG readers.
-- On-demand interface registration for multi-interface captures. `FrameInterfaceInfo.UiName` is written as IDB `if_name`. A `if.fcs_length` byte is written as `if_fcslen`. Per-packet EPB flags are not written.
+- On-demand interface registration for multi-interface captures. `FrameInterfaceInfo.UiName` is written as IDB `if_name`, `Description` as `if_description`. A `if.fcs_length` byte is written as `if_fcslen`. The interface options the PCAPNG reader stores (`if.hardware`, `if.os`, `if.speed`, `if.txspeed`, `if.rxspeed`, `if.filter`) are written back as IDB options through the same table the reader uses. Per-packet EPB flags are not written.
 - Configurable snap length and timestamp resolution. Snap truncation writes EPB `orig_len` from the pre-snap `Frame.Length`. Readers later expose captured bytes only.
 
 ## Quick Start
@@ -56,6 +56,10 @@ Use SHB metadata options to include capture context:
 - `WithApplication(...)`
 - `WithComment(...)`
 
+Without a builder value, `shb_hardware`, `shb_os`, and `shb_userappl` come from the first frame's interface
+properties `capture.hardware`, `capture.os`, `capture.application` (what the PCAPNG reader stores from the source
+file's SHB), so a PCAPNG-to-PCAPNG conversion keeps the capture context.
+
 ## Builder Options
 
 | Method | Purpose |
@@ -71,7 +75,7 @@ Use SHB metadata options to include capture context:
 ## Limits And Thread-Safety Notes
 
 - Not thread-safe; call `OnFrame()`/`OnFinish()` sequentially.
-- Link types are written through as PCAPNG DLT values (no exporter-side DLT whitelist). Malformed write failures can be skipped and reported through exporter diagnostics.
+- Link types are written through as PCAPNG DLT values (no exporter-side DLT whitelist), also values outside the `LinkType` enum, which the PCAPNG reader passes through. Malformed write failures can be skipped and reported through exporter diagnostics.
 - Lazy initialization delays file creation until first write (or explicit finish for empty outputs).
 
 ## Links

@@ -198,39 +198,21 @@ internal sealed class EffectStoreTests
     [Test]
     public async Task Record_ConcurrentSecondWriter_ThrowsInvalidOperationException()
     {
-        EffectStore<int> store = new();
-        store.Record(4, 1, 100);
-        const int total = 4096;
-        int ready = 0;
-        int threw = 0;
-
-        void Writer(int layerBase)
-        {
-            _ = Interlocked.Increment(ref ready);
-            while (Volatile.Read(ref ready) < 2)
+        // Fresh store per round; layer keys of the two writers are disjoint, so the only possible
+        // InvalidOperationException is the concurrent-writer rejection (one packet id: no order error, no duplicate key).
+        EffectStore<int>? rejected = await ConcurrentWriterProbe.SecondWriterIsRejectedAsync(
+            static () =>
             {
-            }
+                EffectStore<int> store = new();
+                store.Record(4, 1, 100);
+                return store;
+            },
+            static (store, i) => store.Record(4, 1_000 + i, 1_000 + i),
+            static (store, i) => store.Record(4, unchecked(2_000_000 + i), unchecked(2_000_000 + i)),
+            burst: 4096);
 
-            for (int i = 0; i < total; i++)
-            {
-                try
-                {
-                    store.Record(4, layerBase + i, layerBase + i);
-                }
-                catch (InvalidOperationException)
-                {
-                    _ = Interlocked.Exchange(ref threw, 1);
-                    return;
-                }
-            }
-        }
-
-        Task first = Task.Run(() => Writer(1_000));
-        Task second = Task.Run(() => Writer(2_000_000));
-        await Task.WhenAll(first, second);
-
-        await Assert.That(Volatile.Read(ref threw)).IsEqualTo(1);
-        await Assert.That(store.Count).IsEqualTo(1);
+        await Assert.That(rejected).IsNotNull();
+        await Assert.That(rejected!.Count).IsEqualTo(1);
     }
 
     [Test]

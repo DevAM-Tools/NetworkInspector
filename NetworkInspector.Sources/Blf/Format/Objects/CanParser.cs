@@ -103,7 +103,16 @@ internal static class CanParser
     /// </summary>
     internal static bool TryParseCanMessage(
         ReadOnlySpan<byte> payload, out byte[] frame, out ushort channel)
-        => _TryParseCanMessageCore(payload, out frame, out channel);
+        => FrameSlabAllocator.ToArray(TryParseCanMessage(payload, null, out ReadOnlyMemory<byte> memory, out channel), memory, out frame);
+
+    /// <inheritdoc cref="TryParseCanMessage(ReadOnlySpan{byte}, out byte[], out ushort)"/>
+    /// <param name="payload">BLF object payload.</param>
+    /// <param name="slabs">Frame slab allocator of the sequential reader, or null for a new array.</param>
+    /// <param name="frame">SocketCAN classic bytes on success.</param>
+    /// <param name="channel">Channel from the header.</param>
+    internal static bool TryParseCanMessage(
+        ReadOnlySpan<byte> payload, FrameSlabAllocator? slabs, out ReadOnlyMemory<byte> frame, out ushort channel)
+        => _TryParseCanMessageCore(payload, slabs, out frame, out channel);
 
     /// <summary>
     /// Parses a BLF Type 86 (CAN_MESSAGE2) payload into a SocketCAN classic frame.
@@ -111,7 +120,16 @@ internal static class CanParser
     /// </summary>
     internal static bool TryParseCanMessage2(
         ReadOnlySpan<byte> payload, out byte[] frame, out ushort channel)
-        => _TryParseCanMessageCore(payload, out frame, out channel);
+        => FrameSlabAllocator.ToArray(TryParseCanMessage2(payload, null, out ReadOnlyMemory<byte> memory, out channel), memory, out frame);
+
+    /// <inheritdoc cref="TryParseCanMessage2(ReadOnlySpan{byte}, out byte[], out ushort)"/>
+    /// <param name="payload">BLF object payload.</param>
+    /// <param name="slabs">Frame slab allocator of the sequential reader, or null for a new array.</param>
+    /// <param name="frame">SocketCAN classic bytes on success.</param>
+    /// <param name="channel">Channel from the header.</param>
+    internal static bool TryParseCanMessage2(
+        ReadOnlySpan<byte> payload, FrameSlabAllocator? slabs, out ReadOnlyMemory<byte> frame, out ushort channel)
+        => _TryParseCanMessageCore(payload, slabs, out frame, out channel);
 
     /// <summary>
     /// Parses a BLF Type 2 (CAN_ERROR) payload into a SocketCAN error frame.
@@ -125,8 +143,17 @@ internal static class CanParser
     /// </summary>
     internal static bool TryParseCanError(
         ReadOnlySpan<byte> payload, out byte[] frame, out ushort channel)
+        => FrameSlabAllocator.ToArray(TryParseCanError(payload, null, out ReadOnlyMemory<byte> memory, out channel), memory, out frame);
+
+    /// <inheritdoc cref="TryParseCanError(ReadOnlySpan{byte}, out byte[], out ushort)"/>
+    /// <param name="payload">BLF object payload.</param>
+    /// <param name="slabs">Frame slab allocator of the sequential reader, or null for a new array.</param>
+    /// <param name="frame">SocketCAN bytes on success; empty on failure.</param>
+    /// <param name="channel">Channel from the header.</param>
+    internal static bool TryParseCanError(
+        ReadOnlySpan<byte> payload, FrameSlabAllocator? slabs, out ReadOnlyMemory<byte> frame, out ushort channel)
     {
-        frame = [];
+        frame = default;
         channel = 0;
 
         if (payload.Length < _CanErrorMinSize)
@@ -135,7 +162,7 @@ internal static class CanParser
         }
 
         channel = BinaryPrimitives.ReadUInt16LittleEndian(payload);
-        frame = _BuildSocketCanErrorFrame(BlfConstants.SocketCanErr);
+        frame = _BuildSocketCanErrorFrame(slabs, BlfConstants.SocketCanErr);
         return true;
     }
 
@@ -150,8 +177,17 @@ internal static class CanParser
     /// </summary>
     internal static bool TryParseCanOverload(
         ReadOnlySpan<byte> payload, out byte[] frame, out ushort channel)
+        => FrameSlabAllocator.ToArray(TryParseCanOverload(payload, null, out ReadOnlyMemory<byte> memory, out channel), memory, out frame);
+
+    /// <inheritdoc cref="TryParseCanOverload(ReadOnlySpan{byte}, out byte[], out ushort)"/>
+    /// <param name="payload">BLF object payload.</param>
+    /// <param name="slabs">Frame slab allocator of the sequential reader, or null for a new array.</param>
+    /// <param name="frame">SocketCAN bytes on success; empty on failure.</param>
+    /// <param name="channel">Channel from the header.</param>
+    internal static bool TryParseCanOverload(
+        ReadOnlySpan<byte> payload, FrameSlabAllocator? slabs, out ReadOnlyMemory<byte> frame, out ushort channel)
     {
-        frame = [];
+        frame = default;
         channel = 0;
 
         if (payload.Length < _CanOverloadMinSize)
@@ -161,7 +197,7 @@ internal static class CanParser
 
         channel = BinaryPrimitives.ReadUInt16LittleEndian(payload);
         // CAN overload is a bus-level condition; produce a generic SocketCAN error frame
-        frame = _BuildSocketCanErrorFrame(BlfConstants.SocketCanErr);
+        frame = _BuildSocketCanErrorFrame(slabs, BlfConstants.SocketCanErr);
         return true;
     }
 
@@ -186,8 +222,17 @@ internal static class CanParser
     /// </summary>
     internal static bool TryParseCanErrorExt(
         ReadOnlySpan<byte> payload, out byte[] frame, out ushort channel)
+        => FrameSlabAllocator.ToArray(TryParseCanErrorExt(payload, null, out ReadOnlyMemory<byte> memory, out channel), memory, out frame);
+
+    /// <inheritdoc cref="TryParseCanErrorExt(ReadOnlySpan{byte}, out byte[], out ushort)"/>
+    /// <param name="payload">BLF object payload.</param>
+    /// <param name="slabs">Frame slab allocator of the sequential reader, or null for a new array.</param>
+    /// <param name="frame">SocketCAN bytes on success; empty on failure.</param>
+    /// <param name="channel">Channel from the header.</param>
+    internal static bool TryParseCanErrorExt(
+        ReadOnlySpan<byte> payload, FrameSlabAllocator? slabs, out ReadOnlyMemory<byte> frame, out ushort channel)
     {
-        frame = [];
+        frame = default;
         channel = 0;
 
         if (payload.Length < _CanErrorExtMinSize)
@@ -196,7 +241,7 @@ internal static class CanParser
         }
 
         channel = BinaryPrimitives.ReadUInt16LittleEndian(payload);
-        frame = _BuildSocketCanErrorFrame(BlfConstants.SocketCanErr);
+        frame = _BuildSocketCanErrorFrame(slabs, BlfConstants.SocketCanErr);
         return true;
     }
 
@@ -216,8 +261,17 @@ internal static class CanParser
     /// <param name="channel">Channel from payload byte 0, zero-extended.</param>
     internal static bool TryParseCanXlChannelFrame(
         ReadOnlySpan<byte> payload, out byte[] frame, out ushort channel)
+        => FrameSlabAllocator.ToArray(TryParseCanXlChannelFrame(payload, null, out ReadOnlyMemory<byte> memory, out channel), memory, out frame);
+
+    /// <inheritdoc cref="TryParseCanXlChannelFrame(ReadOnlySpan{byte}, out byte[], out ushort)"/>
+    /// <param name="payload">BLF object payload.</param>
+    /// <param name="slabs">Frame slab allocator of the sequential reader, or null for a new array.</param>
+    /// <param name="frame">SocketCAN bytes on success; empty on failure.</param>
+    /// <param name="channel">Channel from the header.</param>
+    internal static bool TryParseCanXlChannelFrame(
+        ReadOnlySpan<byte> payload, FrameSlabAllocator? slabs, out ReadOnlyMemory<byte> frame, out ushort channel)
     {
-        frame = [];
+        frame = default;
         channel = 0;
 
         if (payload.Length < BlfConstants.CanXlChannelFrameHeaderSize)
@@ -241,7 +295,7 @@ internal static class CanParser
             // Pass the declared length. Classic rejects a payload that does not contain
             // those data bytes. The CAN FD branch clamps to the bytes that are present.
             return _TryParseNestedClassicOrFdFromCanXl(
-                payload, flags, frameIdentifier, declaredDataLength, out frame);
+                payload, slabs, flags, frameIdentifier, declaredDataLength, out frame);
         }
 
         byte socketFlags = BlfConstants.SocketCanXlXlf;
@@ -255,18 +309,21 @@ internal static class CanParser
             socketFlags |= BlfConstants.SocketCanXlRrs;
         }
 
-        frame = new byte[12 + actualDataLen];
-        frame[1] = vcid;
-        BinaryPrimitives.WriteUInt16BigEndian(frame.AsSpan(2), (ushort)(frameIdentifier & 0x7FFu));
-        frame[4] = socketFlags;
-        frame[5] = sduType;
-        BinaryPrimitives.WriteUInt16LittleEndian(frame.AsSpan(6), (ushort)actualDataLen);
-        BinaryPrimitives.WriteUInt32LittleEndian(frame.AsSpan(8), acceptanceField);
+        Memory<byte> buffer = FrameSlabAllocator.RentZeroed(slabs, 12 + actualDataLen);
+        Span<byte> xl = buffer.Span;
+        xl[1] = vcid;
+        BinaryPrimitives.WriteUInt16BigEndian(xl[2..], (ushort)(frameIdentifier & 0x7FFu));
+        xl[4] = socketFlags;
+        xl[5] = sduType;
+        BinaryPrimitives.WriteUInt16LittleEndian(xl[6..], (ushort)actualDataLen);
+        BinaryPrimitives.WriteUInt32LittleEndian(xl[8..], acceptanceField);
 
         if (actualDataLen > 0)
         {
-            payload.Slice(BlfConstants.CanXlChannelFrameHeaderSize, actualDataLen).CopyTo(frame.AsSpan(12));
+            payload.Slice(BlfConstants.CanXlChannelFrameHeaderSize, actualDataLen).CopyTo(xl[12..]);
         }
+
+        frame = buffer;
 
         return true;
     }
@@ -296,8 +353,17 @@ internal static class CanParser
     /// <param name="channel">Channel from the header.</param>
     internal static bool TryParseCanFdMessage(
         ReadOnlySpan<byte> payload, out byte[] frame, out ushort channel)
+        => FrameSlabAllocator.ToArray(TryParseCanFdMessage(payload, null, out ReadOnlyMemory<byte> memory, out channel), memory, out frame);
+
+    /// <inheritdoc cref="TryParseCanFdMessage(ReadOnlySpan{byte}, out byte[], out ushort)"/>
+    /// <param name="payload">BLF object payload.</param>
+    /// <param name="slabs">Frame slab allocator of the sequential reader, or null for a new array.</param>
+    /// <param name="frame">SocketCAN bytes on success; empty on failure.</param>
+    /// <param name="channel">Channel from the header.</param>
+    internal static bool TryParseCanFdMessage(
+        ReadOnlySpan<byte> payload, FrameSlabAllocator? slabs, out ReadOnlyMemory<byte> frame, out ushort channel)
     {
-        frame = [];
+        frame = default;
         channel = 0;
 
         if (payload.Length < _CanFdMessageHeaderSize)
@@ -343,7 +409,7 @@ internal static class CanParser
         }
 
         frame = _BuildSocketCanFdFrame(
-            socketCanId, socketFdFlags, payload.Slice(_CanFdMessageHeaderSize, actualDataLen));
+            slabs, socketCanId, socketFdFlags, payload.Slice(_CanFdMessageHeaderSize, actualDataLen));
         return true;
     }
 
@@ -367,8 +433,17 @@ internal static class CanParser
     /// <param name="channel">Channel from payload byte 0, zero-extended.</param>
     internal static bool TryParseCanFdMessage64(
         ReadOnlySpan<byte> payload, out byte[] frame, out ushort channel)
+        => FrameSlabAllocator.ToArray(TryParseCanFdMessage64(payload, null, out ReadOnlyMemory<byte> memory, out channel), memory, out frame);
+
+    /// <inheritdoc cref="TryParseCanFdMessage64(ReadOnlySpan{byte}, out byte[], out ushort)"/>
+    /// <param name="payload">BLF object payload.</param>
+    /// <param name="slabs">Frame slab allocator of the sequential reader, or null for a new array.</param>
+    /// <param name="frame">SocketCAN bytes on success; empty on failure.</param>
+    /// <param name="channel">Channel from the header.</param>
+    internal static bool TryParseCanFdMessage64(
+        ReadOnlySpan<byte> payload, FrameSlabAllocator? slabs, out ReadOnlyMemory<byte> frame, out ushort channel)
     {
-        frame = [];
+        frame = default;
         channel = 0;
 
         if (payload.Length < _CanFdMessage64HeaderSize)
@@ -421,7 +496,7 @@ internal static class CanParser
         }
 
         frame = _BuildSocketCanFdFrame(
-            socketCanId, socketFdFlags, payload.Slice(_CanFdMessage64HeaderSize, actualDataLen));
+            slabs, socketCanId, socketFdFlags, payload.Slice(_CanFdMessage64HeaderSize, actualDataLen));
         return true;
     }
 
@@ -431,8 +506,17 @@ internal static class CanParser
     /// </summary>
     internal static bool TryParseCanFdError64(
         ReadOnlySpan<byte> payload, out byte[] frame, out ushort channel)
+        => FrameSlabAllocator.ToArray(TryParseCanFdError64(payload, null, out ReadOnlyMemory<byte> memory, out channel), memory, out frame);
+
+    /// <inheritdoc cref="TryParseCanFdError64(ReadOnlySpan{byte}, out byte[], out ushort)"/>
+    /// <param name="payload">BLF object payload.</param>
+    /// <param name="slabs">Frame slab allocator of the sequential reader, or null for a new array.</param>
+    /// <param name="frame">SocketCAN bytes on success; empty on failure.</param>
+    /// <param name="channel">Channel from the header.</param>
+    internal static bool TryParseCanFdError64(
+        ReadOnlySpan<byte> payload, FrameSlabAllocator? slabs, out ReadOnlyMemory<byte> frame, out ushort channel)
     {
-        frame = [];
+        frame = default;
         channel = 0;
 
         if (payload.Length < _CanFdError64HeaderSize)
@@ -441,7 +525,7 @@ internal static class CanParser
         }
 
         channel = payload[0];
-        frame = _BuildSocketCanErrorFrame(BlfConstants.SocketCanErr);
+        frame = _BuildSocketCanErrorFrame(slabs, BlfConstants.SocketCanErr);
         return true;
     }
 
@@ -545,9 +629,9 @@ internal static class CanParser
     /// Reads the Type 1 / Type 86 header: flags at offset 2, DLC at 3, EFF in ID bit 31.
     /// </summary>
     private static bool _TryParseCanMessageCore(
-        ReadOnlySpan<byte> payload, out byte[] frame, out ushort channel)
+        ReadOnlySpan<byte> payload, FrameSlabAllocator? slabs, out ReadOnlyMemory<byte> frame, out ushort channel)
     {
-        frame = [];
+        frame = default;
         channel = 0;
 
         if (payload.Length < _CanMessageMinSize)
@@ -581,13 +665,20 @@ internal static class CanParser
         // copyLen is at most 8, and _CanMessageMinSize is 16, so the object already contains
         // those data bytes. A shorter object returned false above.
         int copyLen = Math.Min((int)dataLen, _CanMaxDataLength);
-        frame = new byte[8 + copyLen];
-        BinaryPrimitives.WriteUInt32BigEndian(frame, socketCanId);
-        frame[4] = dlc;
+        Memory<byte> buffer = FrameSlabAllocator.RentZeroed(slabs, 8 + copyLen);
+        Span<byte> socketCan = buffer.Span;
+        BinaryPrimitives.WriteUInt32BigEndian(socketCan, socketCanId);
+
+        // SocketCAN classic: byte 4 is the payload byte count (0-8; for RTR the requested count). A bus DLC of 9-15 is
+        // kept in byte 7 (can_frame.len8_dlc) so writers can restore it. The ASC reader and both writers use the same rule.
+        socketCan[BlfConstants.SocketCanLenOffset] = (byte)Math.Min((int)dlc, _CanMaxDataLength);
+        socketCan[BlfConstants.SocketCanLen8DlcOffset] = dlc > _CanMaxDataLength ? dlc : (byte)0;
         if (copyLen > 0)
         {
-            payload.Slice(8, copyLen).CopyTo(frame.AsSpan(8));
+            payload.Slice(8, copyLen).CopyTo(socketCan[8..]);
         }
+
+        frame = buffer;
 
         return true;
     }
@@ -595,28 +686,29 @@ internal static class CanParser
     /// <summary>
     /// Builds a SocketCAN FD frame: id BE, len as byte count, flags at byte 5, data of <paramref name="data"/>.Length.
     /// </summary>
-    private static byte[] _BuildSocketCanFdFrame(
-        uint socketCanId, byte socketFdFlags, ReadOnlySpan<byte> data)
+    private static ReadOnlyMemory<byte> _BuildSocketCanFdFrame(
+        FrameSlabAllocator? slabs, uint socketCanId, byte socketFdFlags, ReadOnlySpan<byte> data)
     {
-        byte[] frame = new byte[_SocketCanFdHeaderSize + data.Length];
+        Memory<byte> buffer = FrameSlabAllocator.RentZeroed(slabs, _SocketCanFdHeaderSize + data.Length);
+        Span<byte> frame = buffer.Span;
         BinaryPrimitives.WriteUInt32BigEndian(frame, socketCanId);
         frame[4] = (byte)data.Length;
         frame[5] = socketFdFlags;
         if (data.Length > 0)
         {
-            data.CopyTo(frame.AsSpan(8));
+            data.CopyTo(frame[8..]);
         }
 
-        return frame;
+        return buffer;
     }
 
     /// <summary>
     /// Builds a minimal 16-byte SocketCAN error frame with the given error flag.
     /// </summary>
-    private static byte[] _BuildSocketCanErrorFrame(uint socketCanErrId)
+    private static ReadOnlyMemory<byte> _BuildSocketCanErrorFrame(FrameSlabAllocator? slabs, uint socketCanErrId)
     {
-        byte[] errorFrame = new byte[_SocketCanClassicSize];
-        BinaryPrimitives.WriteUInt32BigEndian(errorFrame, socketCanErrId);
+        Memory<byte> errorFrame = FrameSlabAllocator.RentZeroed(slabs, _SocketCanClassicSize);
+        BinaryPrimitives.WriteUInt32BigEndian(errorFrame.Span, socketCanErrId);
         return errorFrame;
     }
 
@@ -626,10 +718,11 @@ internal static class CanParser
     /// </summary>
     private static bool _TryParseNestedClassicOrFdFromCanXl(
         ReadOnlySpan<byte> payload,
+        FrameSlabAllocator? slabs,
         uint flags,
         uint frameIdentifier,
         int actualDataLen,
-        out byte[] frame)
+        out ReadOnlyMemory<byte> frame)
     {
         bool isCanFd = (flags & BlfConstants.BlfCanXlFlagFdf) != 0;
         uint socketCanId = frameIdentifier & 0x1FFF_FFFFu;
@@ -656,6 +749,7 @@ internal static class CanParser
             }
 
             frame = _BuildSocketCanFdFrame(
+                slabs,
                 socketCanId,
                 socketFdFlags,
                 payload.Slice(BlfConstants.CanXlChannelFrameHeaderSize, actualDataLen));
@@ -673,17 +767,21 @@ internal static class CanParser
         actualDataLen = Math.Min(actualDataLen, _CanMaxDataLength);
         if (payload.Length < BlfConstants.CanXlChannelFrameHeaderSize + actualDataLen)
         {
-            frame = [];
+            frame = default;
             return false;
         }
 
-        frame = new byte[8 + actualDataLen];
-        BinaryPrimitives.WriteUInt32BigEndian(frame, socketCanId);
-        frame[4] = (byte)actualDataLen;
+        // The nested classic frame carries a byte count (dataLength), never a DLC above 8, so len8_dlc stays 0.
+        Memory<byte> buffer = FrameSlabAllocator.RentZeroed(slabs, 8 + actualDataLen);
+        Span<byte> classic = buffer.Span;
+        BinaryPrimitives.WriteUInt32BigEndian(classic, socketCanId);
+        classic[BlfConstants.SocketCanLenOffset] = (byte)actualDataLen;
         if (actualDataLen > 0)
         {
-            payload.Slice(BlfConstants.CanXlChannelFrameHeaderSize, actualDataLen).CopyTo(frame.AsSpan(8));
+            payload.Slice(BlfConstants.CanXlChannelFrameHeaderSize, actualDataLen).CopyTo(classic[8..]);
         }
+
+        frame = buffer;
 
         return true;
     }

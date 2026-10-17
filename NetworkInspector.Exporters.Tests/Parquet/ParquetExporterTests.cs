@@ -1,5 +1,7 @@
 // Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
+using DescribedFieldCapture = NetworkInspector.Exporters.Tests.Columnar.DescribedFieldCapture;
+
 namespace NetworkInspector.Exporters.Tests.Parquet;
 
 /// <summary>
@@ -359,9 +361,162 @@ internal sealed class ParquetExporterTests
         await Assert.That(exporter.IsFinished).IsTrue();
     }
 
+    #region Catalog description and protocols
+
+    /// <summary>
+    /// <c>catalog.parquet</c> keeps its original column order and appends a nullable <c>description</c> column that
+    /// carries <see cref="FieldInfo.Description"/> (text for a described field, null otherwise).
+    /// </summary>
+    [Test]
+    public async Task CatalogFileAppendsDescriptionAsLastColumn()
+    {
+        using TestDir dir = new("parquet_catalog_description");
+        string outputPath = Path.Combine(dir.DirectoryPath, "dataset");
+        using DescribedFieldCapture capture = DescribedFieldCapture.Create(2);
+        string catalogPath = Path.Combine(outputPath, "catalog.parquet");
+
+        _Export(outputPath, capture.Packets, ErrorToleranceMode.Tolerant);
+        string[] columns = await _ReadColumnNames(catalogPath);
+        string[] names = await _ReadStringColumn(catalogPath, "name");
+        string?[] descriptions = await _ReadNullableStringColumn(catalogPath, "description");
+
+        await Assert.That(string.Join(',', columns))
+            .IsEqualTo("field_id,name,ui_name,field_type,protocol_id,table_name,description");
+        int described = Array.IndexOf(names, DescribedFieldCapture.DescribedFieldName);
+        int plain = Array.IndexOf(names, DescribedFieldCapture.PlainFieldName);
+        await Assert.That(described).IsGreaterThanOrEqualTo(0);
+        await Assert.That(plain).IsGreaterThanOrEqualTo(0);
+        await Assert.That(descriptions[described]).IsEqualTo(DescribedFieldCapture.FieldDescription);
+        await Assert.That(descriptions[plain]).IsNull();
+    }
+
+    /// <summary><c>protocols.parquet</c> holds one row per protocol of the parsing stack: id, name and display name.</summary>
+    [Test]
+    public async Task ProtocolsFileListsStackProtocols()
+    {
+        using TestDir dir = new("parquet_protocols");
+        string outputPath = Path.Combine(dir.DirectoryPath, "dataset");
+        using DescribedFieldCapture capture = DescribedFieldCapture.Create(1);
+        string protocolsPath = Path.Combine(outputPath, "protocols.parquet");
+        ReadOnlyMemory<ProtocolInfo> protocols = capture.Stack.Protocols;
+
+        _Export(outputPath, capture.Packets, ErrorToleranceMode.Tolerant);
+        string[] columns = await _ReadColumnNames(protocolsPath);
+        int?[] ids = await _ReadNullableIntColumn(protocolsPath, "protocol_id");
+        string[] names = await _ReadStringColumn(protocolsPath, "name");
+        string[] uiNames = await _ReadStringColumn(protocolsPath, "ui_name");
+
+        await Assert.That(string.Join(',', columns)).IsEqualTo("protocol_id,name,ui_name");
+        await Assert.That(ids.Length).IsEqualTo(protocols.Length);
+        for (int i = 0; i < ids.Length; i++)
+        {
+            ProtocolInfo info = protocols.Span[i];
+            await Assert.That(ids[i]).IsEqualTo(info.Id.Value);
+            await Assert.That(names[i]).IsEqualTo(info.Name);
+            await Assert.That(uiNames[i]).IsEqualTo(info.UiName);
+        }
+        await Assert.That(Array.IndexOf(names, DescribedFieldCapture.ProtocolName)).IsGreaterThanOrEqualTo(0);
+    }
+
+    #endregion
+
+    #region Error tolerance
+
+    /// <summary>
+    /// Tolerant mode: when a table file cannot be created (a directory occupies <c>packets.parquet</c>), every failed
+    /// flush raises <see cref="ParquetExporter.ItemSkipped"/>, the export continues, and no packet counts as written.
+    /// The Parquet exporter writes only to a directory, so an unwritable table file stands in for a failing stream.
+    /// </summary>
+    [Test]
+    public async Task TolerantUnwritableTableFileRaisesItemSkipped()
+    {
+        using TestDir dir = new("parquet_tolerant_failure");
+        string outputPath = Path.Combine(dir.DirectoryPath, "dataset");
+        Directory.CreateDirectory(Path.Combine(outputPath, "packets.parquet"));
+        using ParquetExporter exporter = ParquetExporter.CreateBuilder()
+            .ToDirectory(outputPath)
+            .WithMaxPacketsPerBlock(1)
+            .Build();
+        exporter.ErrorTolerance = ErrorToleranceMode.Tolerant;
+        int skippedRaised = 0;
+        exporter.ItemSkipped += (_, _) => Interlocked.Increment(ref skippedRaised);
+        Packet[] packets = PacketGenerators.CreateEthernetUdpPackets(3);
+
+        bool[] results = new bool[packets.Length];
+        for (int i = 0; i < packets.Length; i++)
+        {
+            results[i] = exporter.OnPacket(packets[i]);
+        }
+        exporter.OnFinish();
+
+        await Assert.That(Array.TrueForAll(results, static result => result)).IsTrue()
+            .Because("tolerant mode must keep accepting packets after a failed flush");
+        await Assert.That(skippedRaised).IsGreaterThanOrEqualTo(packets.Length);
+        await Assert.That(exporter.HasErrors).IsTrue();
+        await Assert.That(exporter.WrittenCount).IsEqualTo(0);
+    }
+
+    /// <summary>Strict mode: the first failed flush aborts the export (<c>false</c>, errors set, finished).</summary>
+    [Test]
+    public async Task StrictUnwritableTableFileAbortsExport()
+    {
+        using TestDir dir = new("parquet_strict_failure");
+        string outputPath = Path.Combine(dir.DirectoryPath, "dataset");
+        Directory.CreateDirectory(Path.Combine(outputPath, "packets.parquet"));
+        using ParquetExporter exporter = ParquetExporter.CreateBuilder()
+            .ToDirectory(outputPath)
+            .WithMaxPacketsPerBlock(1)
+            .Build();
+        exporter.ErrorTolerance = ErrorToleranceMode.Strict;
+        Packet[] packets = PacketGenerators.CreateEthernetUdpPackets(2);
+
+        bool first = exporter.OnPacket(packets[0]);
+        bool second = exporter.OnPacket(packets[1]);
+
+        await Assert.That(first).IsFalse();
+        await Assert.That(second).IsFalse();
+        await Assert.That(exporter.HasErrors).IsTrue();
+        await Assert.That(exporter.IsFinished).IsTrue();
+        await Assert.That(exporter.WrittenCount).IsEqualTo(0);
+    }
+
+    #endregion
+
     // ========================================================================
     // Parquet read-back helpers
     // ========================================================================
+
+    /// <summary>Exports <paramref name="packets"/> into <paramref name="outputPath"/> with default options.</summary>
+    /// <param name="outputPath">Output directory.</param>
+    /// <param name="packets">Packets to export.</param>
+    /// <param name="mode">Error tolerance mode.</param>
+    private static void _Export(string outputPath, Packet[] packets, ErrorToleranceMode mode)
+    {
+        using ParquetExporter exporter = ParquetExporter.CreateBuilder()
+            .ToDirectory(outputPath)
+            .Build();
+        exporter.ErrorTolerance = mode;
+        foreach (Packet packet in packets)
+        {
+            exporter.OnPacket(packet);
+        }
+        exporter.OnFinish();
+    }
+
+    /// <summary>Returns the data column names of a Parquet file in schema order.</summary>
+    /// <param name="path">Parquet file path.</param>
+    /// <returns>Column names.</returns>
+    private static async Task<string[]> _ReadColumnNames(string path)
+    {
+        await using ParquetReader reader = await ParquetReader.CreateAsync(path);
+        DataField[] fields = reader.Schema.GetDataFields();
+        string[] names = new string[fields.Length];
+        for (int i = 0; i < fields.Length; i++)
+        {
+            names[i] = fields[i].Name;
+        }
+        return names;
+    }
 
     private static async Task<(int[] PacketIds, long[] Timestamps)> _ReadPacketsFile(string path)
     {

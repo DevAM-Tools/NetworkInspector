@@ -77,17 +77,5 @@ internal sealed class SnapshotList<T>
         return true;
     }
 
-    /// <summary>
-    /// Replaces the snapshot with an empty array.
-    /// Not safe to call concurrently with Add/Remove — intended for use during
-    /// session restart when no source jobs are active.
-    /// </summary>
-    internal void Clear() => _Snapshot = [];
-
-    /// <summary>
-    /// Returns the number of elements in the current snapshot.
-    /// </summary>
-    internal int Count => _Snapshot.Length;
-
     #endregion
 }

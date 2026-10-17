@@ -590,7 +590,30 @@ internal sealed class PacketExitPointTests
 
         await Assert.That(found).IsTrue();
         await Assert.That(msg.Contains("ThrowingFrameProto", StringComparison.Ordinal)).IsTrue();
+        // One format for every catch site: the message, a newline, then the stack trace (no exception type prefix).
+        await Assert.That(msg.StartsWith("ThrowingFrameProto failed\n", StringComparison.Ordinal)).IsTrue();
         await Assert.That(msg.Contains('\n')).IsTrue();
+    }
+
+    [Test]
+    public async Task BuildCaughtExceptionText_OnePolicyForEveryCatchSite()
+    {
+        // Thrown, so the runtime fills StackTrace; a never-thrown exception has none.
+        InvalidOperationException thrown;
+        try
+        {
+            throw new InvalidOperationException("boom");
+        }
+        catch (InvalidOperationException ex)
+        {
+            thrown = ex;
+        }
+
+        InvalidOperationException neverThrown = new("quiet");
+
+        await Assert.That(Packet.BuildCaughtExceptionText(thrown, includeStackTrace: false)).IsEqualTo("boom");
+        await Assert.That(Packet.BuildCaughtExceptionText(thrown, includeStackTrace: true)).IsEqualTo("boom\n" + thrown.StackTrace);
+        await Assert.That(Packet.BuildCaughtExceptionText(neverThrown, includeStackTrace: true)).IsEqualTo("quiet");
     }
 
     [Test]
@@ -2045,11 +2068,11 @@ internal sealed class PacketExitPointTests
 
             packet = parsed;
         }
-        using CancellationTokenSource cts = new(TimeSpan.FromSeconds(5));
 
+        // No wall-clock budget: under a fully parallel test run the pool may start late iterations after any fixed
+        // deadline, which would fail the test without a defect. The walkers run a fixed number of steps.
         Parallel.For(0, 16, i =>
         {
-            cts.Token.ThrowIfCancellationRequested();
             if (i < 8)
             {
                 packet.MaterializeAll();
@@ -2128,21 +2151,64 @@ internal sealed class PacketExitPointTests
         using Stack stack = builder.Build();
         ValueCache cache = new(stack, [], options: new ValueCacheBuildOptions { RecordAllFields = true });
         proto.Cache = cache;
+        ParseOptions options = new(FieldTreeMode.Build, cache, firstProtocol: protoId);
 
-        await Assert.That(() =>
+        // The failing record is caught at the parse boundary; recording that error into the abandoned cache
+        // fails again, so the error is stored without the cache instead of escaping TryParse.
+        bool parsed = Packet.TryParse(
+            new PacketId(0),
+            stack,
+            _MakeFrame(stack, new byte[14]),
+            in options,
+            out Packet? packet,
+            out ParseFailure _);
+
+        await Assert.That(parsed).IsTrue();
+        await Assert.That(packet!.IsFinalized).IsTrue();
+        await Assert.That(_ErrorTexts(packet, stack)).Contains("ValueCache was evicted");
+        await Assert.That(cache.IsAbandoned).IsTrue();
+    }
+
+    [Test]
+    public async Task TryParse_FieldLimitReached_RecordsErrorInsteadOfThrowing()
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        FillToLimitProtocol proto = new();
+        ProtocolId protoId = builder.RegisterProtocol(proto);
+        proto.RegisterFields(builder, protoId);
+        using Stack stack = builder.Build();
+        ParseOptions options = new(FieldTreeMode.Build, firstProtocol: protoId);
+
+        bool parsed = Packet.TryParse(
+            new PacketId(0),
+            stack,
+            _MakeFrame(stack, new byte[14]),
+            in options,
+            out Packet? packet,
+            out ParseFailure _);
+
+        // Every regular append below the limit succeeds; the last slot holds the recorded limit error.
+        await Assert.That(parsed).IsTrue();
+        await Assert.That(packet!.IsFinalized).IsTrue();
+        await Assert.That(packet.FieldCount(materialize: false)).IsEqualTo(ushort.MaxValue - 1);
+        await Assert.That(_ErrorTexts(packet, stack)).Contains("Maximum field count exceeded");
+    }
+
+    /// <summary>Every <c>packet.error</c> text of the packet, joined; tombstones have no text.</summary>
+    private static string _ErrorTexts(Packet packet, Stack stack)
+    {
+        System.Text.StringBuilder texts = new();
+        FieldLookupCookie cookie = FieldLookupCookie.Start;
+        while (packet.TryGetNextFieldValue(stack.PacketErrorFieldId, ref cookie, out FieldValue error, materialize: false))
         {
-            ParseOptions options = new(FieldTreeMode.Build, cache, firstProtocol: protoId);
-            if (!Packet.TryParse(
-                new PacketId(0),
-                stack,
-                _MakeFrame(stack, new byte[14]),
-                in options,
-                out Packet? _,
-                out ParseFailure failure))
+            if (error.Data.TryGetAsString(out string text))
             {
-                throw new InvalidOperationException(failure.ToString());
+                texts.Append(text).Append('|');
             }
-        }).Throws<InvalidOperationException>();
+        }
+
+        return texts.ToString();
     }
 
     [Test]
@@ -2900,6 +2966,28 @@ internal sealed class PacketExitPointTests
             Cache!.Abandon();
             parentField.Append(_LeafId, FieldValue.NewU64(1));
             return 14;
+        }
+    }
+
+    private sealed class FillToLimitProtocol : IProtocol
+    {
+        private FieldId _LeafId;
+
+        public string Name => "fill.limit";
+        public string UiName => "Fill To Limit";
+
+        public void RegisterFields(StackBuilder builder, ProtocolId protocolId)
+        {
+            _LeafId = builder.RegisterField(protocolId, "fill.limit.leaf", "Leaf", FieldType.U64);
+        }
+
+        public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
+        {
+            // Appends until the field store refuses; the FieldAppendException leaves the protocol.
+            for (ulong i = 0; ; i++)
+            {
+                parentField.Append(_LeafId, FieldValue.NewU64(i));
+            }
         }
     }
 

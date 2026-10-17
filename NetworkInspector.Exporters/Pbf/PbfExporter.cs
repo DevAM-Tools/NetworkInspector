@@ -209,116 +209,70 @@ public sealed class PbfExporter : IPacketListener, IErrorTolerantExporter, IDisp
         }
         _Finished = true;
 
-        // try/finally guarantees the underlying output is disposed even if
-        // the final block flush or trailer write throws. cleanupErrors is declared
-        // here so the throw can occur after the finally block — CA2219 prohibits
-        // throwing inside finally.
-        List<Exception> cleanupErrors = [];
-        try
-        {
-            if (!_Started && _Output is not null)
-            {
-                _Start();
-            }
+        // Shared finish sequence: finalize, then release every resource even when a step fails.
+        ExporterFinish.Run(
+            "PBF",
+            _FinalizeFile,
+            _ReportFinishError,
+            new ExporterReleaseStep("block buffer return", _BlockBuf.Return),
+            new ExporterReleaseStep("columnar builder disposal", _DisposeColumnarBuilder),
+            new ExporterReleaseStep("standard builder disposal", _DisposeStandardBuilder),
+            new ExporterReleaseStep("output disposal", _DisposeOutput));
+    }
 
-            // Flush remaining block
-            _FlushCurrentBlock();
+    /// <summary>Flushes the last block, writes the trailer, and flushes the stream (starting first for an empty export).</summary>
+    private void _FinalizeFile()
+    {
+        if (!_Started && _Output is not null)
+        {
+            _Start();
+        }
 
-            // Write trailer
-            _WriteTrailer();
+        _FlushCurrentBlock();
+        _WriteTrailer();
+        _DirectStream?.Flush();
+    }
 
-            _DirectStream?.Flush();
-        }
-        catch (Exception ex)
+    /// <summary>Disposes the columnar block builder once.</summary>
+    private void _DisposeColumnarBuilder()
+    {
+        ColumnarBlockBuilder? builder = _ColumnarBuilder;
+        _ColumnarBuilder = null;
+        builder?.Dispose();
+    }
+
+    /// <summary>Disposes the standard block builder once.</summary>
+    private void _DisposeStandardBuilder()
+    {
+        StandardBlockBuilder? builder = _StandardBuilder;
+        _StandardBuilder = null;
+        builder?.Dispose();
+    }
+
+    /// <summary>Disposes the output once (closes the stream unless the caller owns it).</summary>
+    private void _DisposeOutput()
+    {
+        ExportOutput? output = _Output;
+        _Output = null;
+        _DirectStream = null;
+        output?.Dispose();
+    }
+
+    /// <summary>Error channel of the finish sequence: marks the error, counts it, and raises <see cref="ItemSkipped"/>.</summary>
+    private void _ReportFinishError(ExportErrorKind kind, string message)
+    {
+        _HasError = true;
+        if (ErrorCount < int.MaxValue)
         {
-            _HasError = true;
-            if (ErrorCount < int.MaxValue) ErrorCount++;
-            ItemSkipped?.Invoke(this, new ExportErrorEventArgs
-            {
-                ItemIndex = PacketCount,
-                Kind = ex is IOException ? ExportErrorKind.IoError : ExportErrorKind.SerializationError,
-                Message = $"PBF finalization failed: {ex.Message}",
-            });
+            ErrorCount++;
         }
-        finally
+
+        ItemSkipped?.Invoke(this, new ExportErrorEventArgs
         {
-            // Each cleanup step is independent so a failure in one step does not
-            // prevent remaining resources from being released. Failures are surfaced
-            // via the error channel. cleanupErrors is declared before the try so the
-            // throw can occur after the finally block — CA2219 prohibits throwing inside finally.
-            try
-            {
-                _BlockBuf.Return();
-            }
-            catch (Exception ex)
-            {
-                cleanupErrors.Add(ex);
-                _HasError = true;
-                if (ErrorCount < int.MaxValue) ErrorCount++;
-                ItemSkipped?.Invoke(this, new ExportErrorEventArgs
-                {
-                    ItemIndex = PacketCount,
-                    Kind = ExportErrorKind.IoError,
-                    Message = $"PBF block buffer return failed: {ex.Message}",
-                });
-            }
-            try
-            {
-                _ColumnarBuilder?.Dispose();
-            }
-            catch (Exception ex)
-            {
-                cleanupErrors.Add(ex);
-                _HasError = true;
-                if (ErrorCount < int.MaxValue) ErrorCount++;
-                ItemSkipped?.Invoke(this, new ExportErrorEventArgs
-                {
-                    ItemIndex = PacketCount,
-                    Kind = ExportErrorKind.IoError,
-                    Message = $"PBF columnar builder disposal failed: {ex.Message}",
-                });
-            }
-            _ColumnarBuilder = null;
-            try
-            {
-                _StandardBuilder?.Dispose();
-            }
-            catch (Exception ex)
-            {
-                cleanupErrors.Add(ex);
-                _HasError = true;
-                if (ErrorCount < int.MaxValue) ErrorCount++;
-                ItemSkipped?.Invoke(this, new ExportErrorEventArgs
-                {
-                    ItemIndex = PacketCount,
-                    Kind = ExportErrorKind.IoError,
-                    Message = $"PBF standard builder disposal failed: {ex.Message}",
-                });
-            }
-            _StandardBuilder = null;
-            try
-            {
-                _Output?.Dispose();
-            }
-            catch (Exception ex)
-            {
-                cleanupErrors.Add(ex);
-                _HasError = true;
-                if (ErrorCount < int.MaxValue) ErrorCount++;
-                ItemSkipped?.Invoke(this, new ExportErrorEventArgs
-                {
-                    ItemIndex = PacketCount,
-                    Kind = ExportErrorKind.IoError,
-                    Message = $"PBF output disposal failed: {ex.Message}",
-                });
-            }
-            _Output = null;
-            _DirectStream = null;
-        }
-        if (cleanupErrors.Count > 0)
-        {
-            throw new AggregateException("PBF exporter cleanup failed.", cleanupErrors);
-        }
+            ItemIndex = PacketCount,
+            Kind = kind,
+            Message = message,
+        });
     }
 
     /// <inheritdoc/>

@@ -35,8 +35,18 @@ internal static class ConfigLoader
             return null;
         }
 
-        // Resolve to absolute path
-        string resolvedPath = Path.GetFullPath(filePath);
+        // Resolve to absolute path. A path the OS cannot represent (for example one with a NUL character) is a
+        // configuration error like a missing file, not an exception for the caller.
+        string resolvedPath;
+        try
+        {
+            resolvedPath = Path.GetFullPath(filePath);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            error = $"Invalid configuration path: {ex.Message}";
+            return null;
+        }
 
         if (!File.Exists(resolvedPath))
         {
@@ -55,6 +65,11 @@ internal static class ConfigLoader
         catch (JsonException ex)
         {
             error = $"Failed to parse JSON in '{resolvedPath}': {ex.Message}";
+            return null;
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            error = $"Access to '{resolvedPath}' is denied: {ex.Message}";
             return null;
         }
         catch (IOException ex)

@@ -7,8 +7,7 @@ namespace NetworkInspector.Core.Settings;
 /// Thread-safe: reads are lock-free via an immutable snapshot reference,
 /// writes use a lock for mutual exclusion and atomically swap the snapshot.
 ///
-/// Setting is a reference type so that cloning shares the same mutable state
-/// (equivalent to Rust's <c>Arc&lt;SettingState&gt;</c> pattern).
+/// Setting is a reference type so that every copy of the reference shares the same mutable state.
 /// <para>
 /// <b>Load coordination:</b> After registration with a <see cref="SettingsManager"/>,
 /// <see cref="SetPendingValue"/>, <see cref="Apply"/>, <see cref="Reset"/>, and
@@ -358,15 +357,15 @@ public sealed class Setting : IReadOnlySetting
     {
         if (!double.IsFinite(v))
         {
-            return $"F64 setting value must be finite, got {v}";
+            return string.Create(CultureInfo.InvariantCulture, $"F64 setting value must be finite, got {v}");
         }
         if (MinValue is not null && MinValue.Value.TryGetAsF64(out double minF64) && v < minF64)
         {
-            return $"Value {v} is below minimum {minF64}";
+            return string.Create(CultureInfo.InvariantCulture, $"Value {v} is below minimum {minF64}");
         }
         if (MaxValue is not null && MaxValue.Value.TryGetAsF64(out double maxF64) && v > maxF64)
         {
-            return $"Value {v} is above maximum {maxF64}";
+            return string.Create(CultureInfo.InvariantCulture, $"Value {v} is above maximum {maxF64}");
         }
         return null;
     }
@@ -375,11 +374,11 @@ public sealed class Setting : IReadOnlySetting
     {
         if (MinValue is not null && MinValue.Value.TryGetAsU64(out ulong minU64) && v < minU64)
         {
-            return $"Value {v} is below minimum {minU64}";
+            return string.Create(CultureInfo.InvariantCulture, $"Value {v} is below minimum {minU64}");
         }
         if (MaxValue is not null && MaxValue.Value.TryGetAsU64(out ulong maxU64) && v > maxU64)
         {
-            return $"Value {v} is above maximum {maxU64}";
+            return string.Create(CultureInfo.InvariantCulture, $"Value {v} is above maximum {maxU64}");
         }
         return null;
     }
@@ -388,11 +387,11 @@ public sealed class Setting : IReadOnlySetting
     {
         if (MinValue is not null && MinValue.Value.TryGetAsI64(out long minI64) && v < minI64)
         {
-            return $"Value {v} is below minimum {minI64}";
+            return string.Create(CultureInfo.InvariantCulture, $"Value {v} is below minimum {minI64}");
         }
         if (MaxValue is not null && MaxValue.Value.TryGetAsI64(out long maxI64) && v > maxI64)
         {
-            return $"Value {v} is above maximum {maxI64}";
+            return string.Create(CultureInfo.InvariantCulture, $"Value {v} is above maximum {maxI64}");
         }
         return null;
     }
@@ -409,7 +408,7 @@ public sealed class Setting : IReadOnlySetting
         }
         if (!EnumMetadata.IsAllowedNumeric(e.numericValue))
         {
-            return $"Value {e.numericValue} is not an allowed enum value";
+            return string.Create(CultureInfo.InvariantCulture, $"Value {e.numericValue} is not an allowed enum value");
         }
         return null;
     }
@@ -498,27 +497,27 @@ public sealed class Setting : IReadOnlySetting
     {
         if (!double.IsFinite(defaultValue))
         {
-            throw ValidationSettingsException.For($"default f64 value must be finite, got {defaultValue}");
+            throw ValidationSettingsException.For(string.Create(CultureInfo.InvariantCulture, $"default f64 value must be finite, got {defaultValue}"));
         }
         if (min.HasValue && !double.IsFinite(min.Value))
         {
-            throw ValidationSettingsException.For($"min f64 value must be finite, got {min.Value}");
+            throw ValidationSettingsException.For(string.Create(CultureInfo.InvariantCulture, $"min f64 value must be finite, got {min.Value}"));
         }
         if (max.HasValue && !double.IsFinite(max.Value))
         {
-            throw ValidationSettingsException.For($"max f64 value must be finite, got {max.Value}");
+            throw ValidationSettingsException.For(string.Create(CultureInfo.InvariantCulture, $"max f64 value must be finite, got {max.Value}"));
         }
         if (min.HasValue && max.HasValue && min.Value > max.Value)
         {
-            throw ValidationSettingsException.For($"min ({min.Value}) must be <= max ({max.Value})");
+            throw ValidationSettingsException.For(string.Create(CultureInfo.InvariantCulture, $"min ({min.Value}) must be <= max ({max.Value})"));
         }
         if (min.HasValue && defaultValue < min.Value)
         {
-            throw ValidationSettingsException.For($"default ({defaultValue}) must be >= min ({min.Value})");
+            throw ValidationSettingsException.For(string.Create(CultureInfo.InvariantCulture, $"default ({defaultValue}) must be >= min ({min.Value})"));
         }
         if (max.HasValue && defaultValue > max.Value)
         {
-            throw ValidationSettingsException.For($"default ({defaultValue}) must be <= max ({max.Value})");
+            throw ValidationSettingsException.For(string.Create(CultureInfo.InvariantCulture, $"default ({defaultValue}) must be <= max ({max.Value})"));
         }
 
         SettingValue def = SettingValue.F64(defaultValue);
@@ -540,15 +539,15 @@ public sealed class Setting : IReadOnlySetting
     {
         if (min.HasValue && max.HasValue && min.Value > max.Value)
         {
-            throw ValidationSettingsException.For($"min ({min.Value}) must be <= max ({max.Value})");
+            throw ValidationSettingsException.For(string.Create(CultureInfo.InvariantCulture, $"min ({min.Value}) must be <= max ({max.Value})"));
         }
         if (min.HasValue && defaultValue < min.Value)
         {
-            throw ValidationSettingsException.For($"default ({defaultValue}) must be >= min ({min.Value})");
+            throw ValidationSettingsException.For(string.Create(CultureInfo.InvariantCulture, $"default ({defaultValue}) must be >= min ({min.Value})"));
         }
         if (max.HasValue && defaultValue > max.Value)
         {
-            throw ValidationSettingsException.For($"default ({defaultValue}) must be <= max ({max.Value})");
+            throw ValidationSettingsException.For(string.Create(CultureInfo.InvariantCulture, $"default ({defaultValue}) must be <= max ({max.Value})"));
         }
 
         SettingValue def = SettingValue.U64(defaultValue);
@@ -570,15 +569,15 @@ public sealed class Setting : IReadOnlySetting
     {
         if (min.HasValue && max.HasValue && min.Value > max.Value)
         {
-            throw ValidationSettingsException.For($"min ({min.Value}) must be <= max ({max.Value})");
+            throw ValidationSettingsException.For(string.Create(CultureInfo.InvariantCulture, $"min ({min.Value}) must be <= max ({max.Value})"));
         }
         if (min.HasValue && defaultValue < min.Value)
         {
-            throw ValidationSettingsException.For($"default ({defaultValue}) must be >= min ({min.Value})");
+            throw ValidationSettingsException.For(string.Create(CultureInfo.InvariantCulture, $"default ({defaultValue}) must be >= min ({min.Value})"));
         }
         if (max.HasValue && defaultValue > max.Value)
         {
-            throw ValidationSettingsException.For($"default ({defaultValue}) must be <= max ({max.Value})");
+            throw ValidationSettingsException.For(string.Create(CultureInfo.InvariantCulture, $"default ({defaultValue}) must be <= max ({max.Value})"));
         }
 
         SettingValue def = SettingValue.I64(defaultValue);
@@ -640,15 +639,15 @@ public sealed class Setting : IReadOnlySetting
         ArgumentNullException.ThrowIfNull(defaultValue);
         if (min.HasValue && !double.IsFinite(min.Value))
         {
-            throw ValidationSettingsException.For($"min f64 value must be finite, got {min.Value}");
+            throw ValidationSettingsException.For(string.Create(CultureInfo.InvariantCulture, $"min f64 value must be finite, got {min.Value}"));
         }
         if (max.HasValue && !double.IsFinite(max.Value))
         {
-            throw ValidationSettingsException.For($"max f64 value must be finite, got {max.Value}");
+            throw ValidationSettingsException.For(string.Create(CultureInfo.InvariantCulture, $"max f64 value must be finite, got {max.Value}"));
         }
         if (min.HasValue && max.HasValue && min.Value > max.Value)
         {
-            throw ValidationSettingsException.For($"min ({min.Value}) must be <= max ({max.Value})");
+            throw ValidationSettingsException.For(string.Create(CultureInfo.InvariantCulture, $"min ({min.Value}) must be <= max ({max.Value})"));
         }
 
         for (int i = 0; i < defaultValue.Length; i++)
@@ -656,15 +655,15 @@ public sealed class Setting : IReadOnlySetting
             double element = defaultValue[i];
             if (!double.IsFinite(element))
             {
-                throw ValidationSettingsException.For($"default f64 value must be finite, got {element}");
+                throw ValidationSettingsException.For(string.Create(CultureInfo.InvariantCulture, $"default f64 value must be finite, got {element}"));
             }
             if (min.HasValue && element < min.Value)
             {
-                throw ValidationSettingsException.For($"default ({element}) must be >= min ({min.Value})");
+                throw ValidationSettingsException.For(string.Create(CultureInfo.InvariantCulture, $"default ({element}) must be >= min ({min.Value})"));
             }
             if (max.HasValue && element > max.Value)
             {
-                throw ValidationSettingsException.For($"default ({element}) must be <= max ({max.Value})");
+                throw ValidationSettingsException.For(string.Create(CultureInfo.InvariantCulture, $"default ({element}) must be <= max ({max.Value})"));
             }
         }
 
@@ -688,7 +687,7 @@ public sealed class Setting : IReadOnlySetting
         ArgumentNullException.ThrowIfNull(defaultValue);
         if (min.HasValue && max.HasValue && min.Value > max.Value)
         {
-            throw ValidationSettingsException.For($"min ({min.Value}) must be <= max ({max.Value})");
+            throw ValidationSettingsException.For(string.Create(CultureInfo.InvariantCulture, $"min ({min.Value}) must be <= max ({max.Value})"));
         }
 
         for (int i = 0; i < defaultValue.Length; i++)
@@ -696,11 +695,11 @@ public sealed class Setting : IReadOnlySetting
             ulong element = defaultValue[i];
             if (min.HasValue && element < min.Value)
             {
-                throw ValidationSettingsException.For($"default ({element}) must be >= min ({min.Value})");
+                throw ValidationSettingsException.For(string.Create(CultureInfo.InvariantCulture, $"default ({element}) must be >= min ({min.Value})"));
             }
             if (max.HasValue && element > max.Value)
             {
-                throw ValidationSettingsException.For($"default ({element}) must be <= max ({max.Value})");
+                throw ValidationSettingsException.For(string.Create(CultureInfo.InvariantCulture, $"default ({element}) must be <= max ({max.Value})"));
             }
         }
 
@@ -724,7 +723,7 @@ public sealed class Setting : IReadOnlySetting
         ArgumentNullException.ThrowIfNull(defaultValue);
         if (min.HasValue && max.HasValue && min.Value > max.Value)
         {
-            throw ValidationSettingsException.For($"min ({min.Value}) must be <= max ({max.Value})");
+            throw ValidationSettingsException.For(string.Create(CultureInfo.InvariantCulture, $"min ({min.Value}) must be <= max ({max.Value})"));
         }
 
         for (int i = 0; i < defaultValue.Length; i++)
@@ -732,11 +731,11 @@ public sealed class Setting : IReadOnlySetting
             long element = defaultValue[i];
             if (min.HasValue && element < min.Value)
             {
-                throw ValidationSettingsException.For($"default ({element}) must be >= min ({min.Value})");
+                throw ValidationSettingsException.For(string.Create(CultureInfo.InvariantCulture, $"default ({element}) must be >= min ({min.Value})"));
             }
             if (max.HasValue && element > max.Value)
             {
-                throw ValidationSettingsException.For($"default ({element}) must be <= max ({max.Value})");
+                throw ValidationSettingsException.For(string.Create(CultureInfo.InvariantCulture, $"default ({element}) must be <= max ({max.Value})"));
             }
         }
 
@@ -777,7 +776,8 @@ public sealed class Setting : IReadOnlySetting
         }
 
         EnumSettingValue? defaultEntry = metadata.GetByNumeric(defaultValue)
-            ?? throw ValidationSettingsException.For($"Default value ({defaultValue}) must be one of the allowed enum values");
+            ?? throw ValidationSettingsException.For(
+                string.Create(CultureInfo.InvariantCulture, $"Default value ({defaultValue}) must be one of the allowed enum values"));
 
         SettingValue def = SettingValue.Enum(defaultEntry.Value.Name, defaultValue);
         return new Setting(name, uiName, description, groupName,

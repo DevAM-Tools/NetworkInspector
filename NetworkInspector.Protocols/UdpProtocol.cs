@@ -54,6 +54,14 @@ public sealed partial class UdpProtocol : IProtocol
 
     #region Fields
 
+    /// <summary>
+    /// The error of a re-parse whose first parse recorded no stream effect for this UDP layer. The payload is
+    /// present, so an insufficient-data error would mislead.
+    /// </summary>
+    private static readonly ParseError _MissingStreamEffectError = ParseError.Custom(
+        ProtocolName,
+        "No recorded UDP stream for this layer: the packet is a re-parse, but its first parse recorded none.");
+
     // BytesField container carries header byte range for UI highlighting
     [BytesField("udp", "UDP", IndexGroup = _UdpIndexGroup)]
     private FieldId _ProtocolFieldId;
@@ -295,7 +303,7 @@ public sealed partial class UdpProtocol : IProtocol
             UdpConnectionKey connKey = UdpConnectionKey.FromIPv4(src4.RawValue, dst4.RawValue, srcPort, dstPort);
             if (!_TryAppendUdpStream(in parentField, in context, in connKey, layerKey, isReplay))
             {
-                return ParseError.InsufficientDataWithInfo(ProtocolName, UdpHeader.HeaderSize, (ulong)data.Length);
+                return _MissingStreamEffectError;
             }
         }
         else if (!callerIsIpv4 && IPv6Protocol.TryGetCachedAddresses(packetId, out IPv6Address src6, out IPv6Address dst6))
@@ -304,7 +312,7 @@ public sealed partial class UdpProtocol : IProtocol
             UdpConnectionKey connKey = new(new UInt128(src6.High, src6.Low), new UInt128(dst6.High, dst6.Low), srcPort, dstPort);
             if (!_TryAppendUdpStream(in parentField, in context, in connKey, layerKey, isReplay))
             {
-                return ParseError.InsufficientDataWithInfo(ProtocolName, UdpHeader.HeaderSize, (ulong)data.Length);
+                return _MissingStreamEffectError;
             }
         }
         else if (parentField.HasFieldTree
@@ -314,7 +322,7 @@ public sealed partial class UdpProtocol : IProtocol
             UdpConnectionKey connKey = UdpConnectionKey.FromIPv4(fbSrc4.RawValue, fbDst4.RawValue, srcPort, dstPort);
             if (!_TryAppendUdpStream(in parentField, in context, in connKey, layerKey, isReplay))
             {
-                return ParseError.InsufficientDataWithInfo(ProtocolName, UdpHeader.HeaderSize, (ulong)data.Length);
+                return _MissingStreamEffectError;
             }
         }
         else if (parentField.HasFieldTree
@@ -324,7 +332,7 @@ public sealed partial class UdpProtocol : IProtocol
             UdpConnectionKey connKey = new(new UInt128(fbSrc6.High, fbSrc6.Low), new UInt128(fbDst6.High, fbDst6.Low), srcPort, dstPort);
             if (!_TryAppendUdpStream(in parentField, in context, in connKey, layerKey, isReplay))
             {
-                return ParseError.InsufficientDataWithInfo(ProtocolName, UdpHeader.HeaderSize, (ulong)data.Length);
+                return _MissingStreamEffectError;
             }
         }
         else

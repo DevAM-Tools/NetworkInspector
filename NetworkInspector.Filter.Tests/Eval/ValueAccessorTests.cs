@@ -108,7 +108,52 @@ internal sealed class ValueAccessorTests
     {
         ValueAccessor accessor = ValueAccessor.Slice([new FieldId(1)], 0, 2);
 
-        await Assert.That(accessor.TryTransform(FieldValueData.NewU64(5), out _)).IsFalse();
+        await Assert.That(accessor.TryTransform(FieldValueData.NewString("abc"), out _)).IsFalse();
+        await Assert.That(accessor.TryTransform(default, out _)).IsFalse();
+    }
+
+    [Test]
+    [Arguments(FieldType.Bool, 0, 1, "01")]
+    [Arguments(FieldType.I64, 0, 8, "FFFFFFFFFFFFFFFE")]
+    [Arguments(FieldType.U64, 6, 8, "0102")]
+    [Arguments(FieldType.F64, 0, 2, "3FF0")]
+    [Arguments(FieldType.Timestamp, 0, 8, "0000000000000400")]
+    [Arguments(FieldType.Uuid, 7, 9, "0708")]
+    [Arguments(FieldType.Eui64, 0, 2, "0011")]
+    [Arguments(FieldType.IPv4Address, 0, 2, "0102")]
+    public async Task Slice_OnFixedWidthValues_UsesBigEndianBytes(FieldType type, int start, int end, string expectedHex)
+    {
+        ValueAccessor accessor = ValueAccessor.Slice([new FieldId(1)], start, end);
+
+        bool transformed = accessor.TryTransform(_Sample(type), out FieldValueData value);
+
+        await Assert.That(transformed).IsTrue();
+        _ = value.TryGetAsBytes(out ReadOnlyMemory<byte> bytes);
+        await Assert.That(Convert.ToHexString(bytes.Span)).IsEqualTo(expectedHex);
+    }
+
+    [Test]
+    [Arguments(FieldType.Bool)]
+    [Arguments(FieldType.I64)]
+    [Arguments(FieldType.U64)]
+    [Arguments(FieldType.F64)]
+    [Arguments(FieldType.Timestamp)]
+    [Arguments(FieldType.Uuid)]
+    [Arguments(FieldType.Eui64)]
+    [Arguments(FieldType.MacAddress)]
+    [Arguments(FieldType.IPv4Address)]
+    [Arguments(FieldType.IPv6Address)]
+    public async Task SliceAndLength_AgreeOnEveryFixedWidth(FieldType type)
+    {
+        FieldValueData raw = _Sample(type);
+        _ = ValueAccessor.Length([new FieldId(1)]).TryTransform(raw, out FieldValueData lengthValue);
+        _ = lengthValue.TryGetAsU64(out ulong width);
+
+        bool fullSlice = ValueAccessor.Slice([new FieldId(1)], 0, (int)width).TryTransform(raw, out _);
+        bool pastEnd = ValueAccessor.Slice([new FieldId(1)], 0, (int)width + 1).TryTransform(raw, out _);
+
+        await Assert.That(fullSlice).IsTrue();
+        await Assert.That(pastEnd).IsFalse();
     }
 
     [Test]
@@ -146,20 +191,30 @@ internal sealed class ValueAccessorTests
     }
 
     [Test]
-    public async Task Length_OnString_CountsCharacters()
+    [Arguments("", 0UL)]
+    [Arguments("abcd", 4UL)]
+    [Arguments("äb", 3UL)]
+    [Arguments("€", 3UL)]
+    [Arguments("😀", 4UL)]
+    public async Task Length_OnString_CountsUtf8Bytes(string text, ulong expected)
     {
         ValueAccessor accessor = ValueAccessor.Length([new FieldId(1)]);
 
-        bool transformed = accessor.TryTransform(FieldValueData.NewString("abcd"), out FieldValueData value);
+        bool transformed = accessor.TryTransform(FieldValueData.NewString(text), out FieldValueData value);
 
         await Assert.That(transformed).IsTrue();
         _ = value.TryGetAsU64(out ulong length);
-        await Assert.That(length).IsEqualTo(4UL);
+        await Assert.That(length).IsEqualTo(expected);
     }
 
     [Test]
     [Arguments(FieldType.Bool, 1UL)]
+    [Arguments(FieldType.I64, 8UL)]
     [Arguments(FieldType.U64, 8UL)]
+    [Arguments(FieldType.F64, 8UL)]
+    [Arguments(FieldType.Timestamp, 8UL)]
+    [Arguments(FieldType.Uuid, 16UL)]
+    [Arguments(FieldType.Eui64, 8UL)]
     [Arguments(FieldType.MacAddress, 6UL)]
     [Arguments(FieldType.IPv4Address, 4UL)]
     [Arguments(FieldType.IPv6Address, 16UL)]
@@ -193,6 +248,24 @@ internal sealed class ValueAccessorTests
         {
             case FieldType.Bool:
                 return FieldValueData.NewBool(true);
+
+            case FieldType.I64:
+                return FieldValueData.NewI64(-2);
+
+            case FieldType.U64:
+                return FieldValueData.NewU64(0x0102);
+
+            case FieldType.F64:
+                return FieldValueData.NewF64(1.0);
+
+            case FieldType.Timestamp:
+                return FieldValueData.NewTimestamp(new Timestamp(1024));
+
+            case FieldType.Uuid:
+                return FieldValueData.NewUuid(new NetworkInspector.Values.Uuid(0x0001020304050607, 0x08090A0B0C0D0E0F));
+
+            case FieldType.Eui64:
+                return FieldValueData.NewEui64(new Eui64(0x0011223344556677));
 
             case FieldType.MacAddress:
                 _ = MacAddress.TryParse("00:11:22:33:44:55", out MacAddress mac);

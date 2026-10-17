@@ -5,8 +5,8 @@ namespace NetworkInspector.Exporters.Parquet;
 /// <summary>
 /// Parquet packet exporter. Writes parsed packets to a directory of Parquet files forming a
 /// small relational dataset: <c>packets.parquet</c>, <c>topology.parquet</c>,
-/// <c>catalog.parquet</c>, and one <c>fields/field_{id}.parquet</c> file per distinct field ID
-/// observed (see <see cref="ParquetBatchSink"/> for the full layout).
+/// <c>catalog.parquet</c>, <c>protocols.parquet</c>, and one <c>fields/field_{id}.parquet</c> file per distinct
+/// field ID observed (see <see cref="ParquetBatchSink"/> for the full layout).
 /// <para>
 /// Shares the <see cref="ColumnarPacketBatch"/> accumulator with the PBF columnar format and
 /// the DuckDB exporter, so <see cref="ColumnarDetailFlags"/> is configured identically across
@@ -16,7 +16,8 @@ namespace NetworkInspector.Exporters.Parquet;
 /// <para>
 /// <b>Thread safety:</b> Not thread-safe. <see cref="OnPacket"/> and <see cref="OnFinish"/>
 /// must be called sequentially from a single thread. Statistics are valid to read after
-/// <see cref="OnFinish"/> returns.
+/// <see cref="OnFinish"/> returns. Parquet.Net exposes only async writers, so the exporter blocks on them;
+/// do not call it from a thread with a <see cref="SynchronizationContext"/> (UI thread).
 /// </para>
 /// <para>
 /// <b>Single-use:</b> Once <see cref="OnFinish"/> (or <see cref="Dispose"/>) is called, this
@@ -149,7 +150,7 @@ public sealed class ParquetExporter : IPacketListener, IErrorTolerantExporter, I
 
         if (!_Started)
         {
-            _Start();
+            _Start(packet);
             if (_HasError)
             {
                 return false;
@@ -174,55 +175,57 @@ public sealed class ParquetExporter : IPacketListener, IErrorTolerantExporter, I
             return;
         }
 
-        // try/finally guarantees the sink and batch are disposed even if the final flush
-        // or Complete() throws. cleanupErrors is declared here so the throw can occur after
-        // the finally block — CA2219 prohibits throwing inside finally.
-        List<Exception> cleanupErrors = [];
-        try
+        // Shared finish sequence: final flush and footers, then sink and batch release even when a step fails.
+        ExporterFinish.Run(
+            "Parquet",
+            _FinalizeFiles,
+            _ReportFinishError,
+            new ExporterReleaseStep("sink disposal", _DisposeSink),
+            new ExporterReleaseStep("batch disposal", _DisposeBatch));
+    }
+
+    /// <summary>Flushes the last batch and completes the sink (writes the catalog and closes the row groups).</summary>
+    private void _FinalizeFiles()
+    {
+        if (_Batch is not null && _Batch.PacketCount > 0)
         {
-            if (_Batch is not null && _Batch.PacketCount > 0)
-            {
-                _FlushBatch();
-            }
-            _Sink?.Complete();
+            _FlushBatch();
         }
-        catch (Exception ex)
+
+        _Sink?.Complete();
+    }
+
+    /// <summary>Disposes the sink once (closes every table file).</summary>
+    private void _DisposeSink()
+    {
+        ParquetBatchSink? sink = _Sink;
+        _Sink = null;
+        sink?.Dispose();
+    }
+
+    /// <summary>Disposes the batch once (returns its pooled column buffers).</summary>
+    private void _DisposeBatch()
+    {
+        ColumnarPacketBatch? batch = _Batch;
+        _Batch = null;
+        batch?.Dispose();
+    }
+
+    /// <summary>Error channel of the finish sequence: marks the error, counts it, and raises <see cref="ItemSkipped"/>.</summary>
+    private void _ReportFinishError(ExportErrorKind kind, string message)
+    {
+        _HasError = true;
+        if (ErrorCount < int.MaxValue)
         {
-            _HasError = true;
-            if (ErrorCount < int.MaxValue) ErrorCount++;
-            ItemSkipped?.Invoke(this, new ExportErrorEventArgs
-            {
-                ItemIndex = PacketCount,
-                Kind = ex is IOException ? ExportErrorKind.IoError : ExportErrorKind.SerializationError,
-                Message = $"Parquet finalization failed: {ex.Message}",
-            });
+            ErrorCount++;
         }
-        finally
+
+        ItemSkipped?.Invoke(this, new ExportErrorEventArgs
         {
-            try
-            {
-                _Sink?.Dispose();
-            }
-            catch (Exception ex)
-            {
-                cleanupErrors.Add(ex);
-                _HasError = true;
-                if (ErrorCount < int.MaxValue) ErrorCount++;
-                ItemSkipped?.Invoke(this, new ExportErrorEventArgs
-                {
-                    ItemIndex = PacketCount,
-                    Kind = ExportErrorKind.IoError,
-                    Message = $"Parquet sink disposal failed: {ex.Message}",
-                });
-            }
-            _Sink = null;
-            _Batch?.Dispose();
-            _Batch = null;
-        }
-        if (cleanupErrors.Count > 0)
-        {
-            throw new AggregateException("Parquet exporter cleanup failed.", cleanupErrors);
-        }
+            ItemIndex = PacketCount,
+            Kind = kind,
+            Message = message,
+        });
     }
 
     /// <inheritdoc/>
@@ -232,14 +235,18 @@ public sealed class ParquetExporter : IPacketListener, IErrorTolerantExporter, I
 
     #region Private Helpers
 
-    /// <summary>Lazily creates the output directory, sink, and batch accumulator.</summary>
-    private void _Start()
+    /// <summary>
+    /// Lazily creates the output directory, sink, and batch accumulator. The protocol catalog is taken from the first
+    /// packet's stack: all packets of one export come from the same parsing stack, so its protocol set is fixed.
+    /// </summary>
+    /// <param name="firstPacket">The first packet of the export.</param>
+    private void _Start(Packet firstPacket)
     {
         _Started = true;
         try
         {
             Directory.CreateDirectory(_RootDirectory);
-            _Sink = new ParquetBatchSink(_RootDirectory, _ColumnarDetailFlags);
+            _Sink = new ParquetBatchSink(_RootDirectory, _ColumnarDetailFlags, ProtocolCatalogEntry.FromStack(firstPacket.Stack));
             _Batch = new ColumnarPacketBatch(
                 _ColumnarDetailFlags, _MaxPacketsPerBlock, _MaxBlockSize, _IsTimestampSorted);
         }

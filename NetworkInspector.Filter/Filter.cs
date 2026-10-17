@@ -28,7 +28,6 @@ namespace NetworkInspector.Filter;
 /// </summary>
 public sealed class Filter : IFilter
 {
-
     #region Fields
 
     /// <inheritdoc />
@@ -162,7 +161,7 @@ public sealed class Filter : IFilter
             return parsed.Error;
         }
 
-        return FilterObserverCompiler.Compile(expression, program, stack, options.Compile);
+        return FilterObserverCompiler.Compile(expression, program, stack);
     }
 
     /// <summary>
@@ -246,6 +245,40 @@ public sealed class Filter : IFilter
     /// <summary>Parses an expression without binding it to a stack.</summary>
     public static bool TryParse(string expression, FilterCompileOptions? options = null) =>
         TryParse(expression, options, out _);
+
+    /// <summary>
+    /// Lists what may be typed at <paramref name="caretPosition"/>, for editor auto-completion while the user types.
+    /// <para>
+    /// The expression may be incomplete or invalid. The result names the word (or symbolic operator) touching the
+    /// caret as <see cref="FilterCompletions.ReplaceStart"/> / <see cref="FilterCompletions.ReplaceLength"/>, the
+    /// part typed before the caret as <see cref="FilterCompletions.Prefix"/>, and every candidate that starts with
+    /// that prefix (ignoring case) in alphabetical order. The candidates follow the grammar at the caret: protocol,
+    /// field and alias names plus <c>flank</c>, <c>len</c>, <c>not</c>, <c>true</c>, <c>false</c> where a term may
+    /// start; only fields and aliases inside <c>flank(</c> and <c>len(</c>; flank argument names after a comma in
+    /// <c>flank(…)</c>; comparison, <c>in</c>, <c>contains</c>, <c>matches</c> and connectives after an operand;
+    /// connectives after a complete term. Where a literal value is expected, or inside a string, the list is empty.
+    /// </para>
+    /// <para>
+    /// Without a <paramref name="stack"/> only keywords and operators are offered. Names come from a per-stack catalog
+    /// that is built once and cached for the stack's lifetime, so calling this on every keystroke is cheap. Errors
+    /// of a finished expression, with position and a "Did you mean …?" <see cref="FilterError.Suggestion"/> for
+    /// unknown names, come from <see cref="Compile(string, IStack?, FilterCompileOptions?)"/>.
+    /// </para>
+    /// <para><b>Thread-safety:</b> safe to call concurrently, also for the same stack.</para>
+    /// </summary>
+    /// <param name="expression">The text in the editor.</param>
+    /// <param name="caretPosition">Caret offset in UTF-16 code units, <c>0 … expression.Length</c>.</param>
+    /// <param name="stack">The stack whose names to offer; <see langword="null"/> offers the language words only.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="expression"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="caretPosition"/> is outside the expression.</exception>
+    public static FilterCompletions GetCompletions(string expression, int caretPosition, IStack? stack)
+    {
+        ArgumentNullException.ThrowIfNull(expression);
+        ArgumentOutOfRangeException.ThrowIfNegative(caretPosition);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(caretPosition, expression.Length);
+
+        return FilterCompletionEngine.Complete(expression, caretPosition, stack);
+    }
 
     #endregion
 
@@ -470,7 +503,14 @@ public sealed class Filter : IFilter
         _Compiled?.ResetState();
     }
 
-    /// <inheritdoc />
+    /// <summary>
+    /// Re-binds the already parsed expression to another stack and returns a fresh <see cref="Filter"/> with
+    /// empty state. The source filter is left untouched, including its poison flag. The match-cache policy and
+    /// the compiled <c>matches</c> patterns (with their timeout) carry over from the source.
+    /// </summary>
+    /// <param name="stack">The stack to bind names against.</param>
+    /// <param name="derived">Receives the new filter on success.</param>
+    /// <param name="failure">Receives the bind error, for example a name the new stack does not know.</param>
     public bool TryDerive(
         IStack stack,
         [NotNullWhen(true)] out Filter? derived,
@@ -498,6 +538,14 @@ public sealed class Filter : IFilter
         derived = null;
         failure = result.Error;
         return false;
+    }
+
+    /// <inheritdoc />
+    bool IFilter.TryDerive(IStack stack, [NotNullWhen(true)] out IFilter? derived, [NotNullWhen(false)] out FilterError? failure)
+    {
+        bool ok = TryDerive(stack, out Filter? concrete, out failure);
+        derived = concrete;
+        return ok;
     }
 
     #endregion
@@ -533,7 +581,11 @@ public sealed class Filter : IFilter
             return FilterResult.Fail<FilterProgram>(tokens.Error);
         }
 
-        FilterParser parser = new(tokenList, expression, options?.OnFieldNameSpan);
+        FilterParser parser = new(
+            tokenList,
+            expression,
+            options?.OnFieldNameSpan,
+            options?.RegexTimeout ?? FilterBinder.DefaultRegexTimeout);
         return parser.Parse();
     }
 
@@ -553,7 +605,11 @@ public sealed class Filter : IFilter
         }
 
         DependencyNode dependencies = DependencyAnalyzer.Analyze(program, resolver);
-        bool enableMatchCache = options?.EnableMatchCache ?? true;
+
+        // A stateful program needs the cache to keep the documented "re-query never replays the tracker"
+        // guarantee: without it a repeated id passes the ascending-order guard (== is not <) and feeds the
+        // same sample twice. Stateless programs may opt out for forward-only streaming.
+        bool enableMatchCache = (options?.EnableMatchCache ?? true) || compiledProgram.IsStateful;
         return new Filter(
             expression,
             stack,

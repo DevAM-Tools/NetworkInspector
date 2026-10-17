@@ -11,7 +11,7 @@ namespace NetworkInspector.Core.Cache;
 /// <para>
 /// Unlike a simple count-based ghost set, this implementation tracks per-entry
 /// weight so the ghost budget aligns with the cache's weight-based eviction
-/// semantics (matching the Rust implementation). Removal is O(1) via
+/// semantics. Removal is O(1) via
 /// tracked <see cref="LinkedListNode{T}"/> references in the dictionary.
 /// </para>
 /// <para>

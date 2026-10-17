@@ -4,7 +4,7 @@
 
 - Apply these instructions to every change, technology, and workflow phase.
 - Optional: if `custom_instructions.md` exists at the repository root, read and apply it. Missing is not an error. Do not create it. It extends these instructions; it does not replace them. It cannot weaken Section 4.
-- Treat natural-language equivalents of `/plan`, `/implement`, `/review`, `/review-loop`, `/complex-task`, `/council`, `/commit-message`, `/requirements`, `/illustrate` as the same workflow trigger.
+- Treat natural-language equivalents of `/plan`, `/implement`, `/review`, `/review-loop`, `/complex-task`, `/council`, `/commit-message`, `/requirements`, `/illustrate`, `/port-dotnet-rust`, `/port-dotnet-rust-loop` as the same workflow trigger.
 - ❗ Edit only files inside the current workspace. Paths outside it need an explicit user request.
 - ❗ When the user attaches or names files, **read that file in full**. User-given docs are context, not optional background.
 - Stop and ask when out-of-scope work is discovered.
@@ -48,6 +48,7 @@ Chat follows the user. Skills, instructions, and non-temporary documents are Eng
 | `*.csproj`, `*.props`, `*.targets` | `tech-solution.md` |
 | `*.rs`, `Cargo.toml`, `Cargo.lock` | `tech-rust.md` |
 | Rust tests (`#[cfg(test)]`, `tests/`) | `tech-test.md`, `tech-rust-test.md` |
+| .NET → Rust port, `port/**` | `workflow-port-dotnet-rust.md`, `workflow-port-dotnet-rust-loop.md`, `workflow-port-dotnet-rust-books.md`, `tech-dotnet-rust.md`, `tech-csharp.md`, `tech-rust.md`, `tech-test.md`, `tech-rust-test.md` |
 | `*.py`, `pyproject.toml`, `*.pyi` | `tech-python.md`, `tech-test.md` |
 | `test_*.py`, `*_test.py`, `pytest` | `tech-python.md`, `tech-test.md`, `tech-pytest.md` |
 | `*.spec.ts`, Playwright | `tech-playwright.md`, `tech-test.md` |
@@ -177,7 +178,8 @@ for `illustrations/**`.
 - The editor’s integrated browser is available for a running product web UI,
   and using it is recommended. **Cursor:** the agent-driven Browser (open the
   page, navigate, click, type, read what rendered). **VS Code:** Integrated
-  Browser, the same way. It does not replace Playwright journeys. Mechanism:
+  Browser, the same way. **Claude Code:** the desktop app browser pane, the
+  same way. It does not replace Playwright journeys. Mechanism:
   `tech-playwright.md`.
 
 ### 4.9 Structure
@@ -223,7 +225,7 @@ for `illustrations/**`.
 
 - ❗ Design apps and libraries so an agent can debug them: smallest native toolchain command, filterable tests, observable errors, traces. Do not require a human-only debugger for core logic.
 - When `Verify` fails: reproduce with that command, then debug, then change code. Do not redesign on the first red run.
-- For web UI, the editor’s integrated browser is available and recommended, alongside a Playwright trace, screenshot, or headed debug. **Cursor:** integrated Browser. **VS Code:** Integrated Browser. Mechanism: `tech-playwright.md`.
+- For web UI, the editor’s integrated browser is available and recommended, alongside a Playwright trace, screenshot, or headed debug. **Cursor:** integrated Browser. **VS Code:** Integrated Browser. **Claude Code:** desktop app browser pane. Mechanism: `tech-playwright.md`.
 - Consider concurrent-agent collision before treating a failure as a product defect.
 - After two failed remediations of the same root cause: exponential backoff then retry, or stop and report a blocker.
 
@@ -234,6 +236,9 @@ for `illustrations/**`.
 - `⚠️` At risk / Blocked
 - `⬜` Not started / Open
 - Tick every plan status surface together: Step Overview, Shared Block, Task Checklist. Never leave the overview stale.
+- Tick every review finding status surface together: the Summary **Findings**
+  Status column and the finding Shared Block `Status` line. Never leave the
+  summary table stale.
 
 ## 5.1 Terms
 
@@ -262,3 +267,5 @@ Load this file, then `custom_instructions.md` when present, then the matching sk
 | `/council` | `workflow-council.md` |
 | `/commit-message` | `workflow-commit-message.md` |
 | `/illustrate` | `workflow-illustrate.md` |
+| `/port-dotnet-rust` | `workflow-port-dotnet-rust.md` |
+| `/port-dotnet-rust-loop` | `workflow-port-dotnet-rust-loop.md` |

@@ -13,6 +13,12 @@ internal static class AscLineClassifier
     private static readonly SearchValues<char> _AsciiTimestampDigits = SearchValues.Create("0123456789");
     private static readonly SearchValues<byte> _AsciiTimestampDigitBytes = SearchValues.Create("0123456789"u8);
 
+    /// <summary>Characters a timestamp body may contain (digits and the decimal point).</summary>
+    private static readonly SearchValues<char> _TimestampBodyChars = SearchValues.Create("0123456789.");
+
+    /// <summary>Bytes a timestamp body may contain (digits and the decimal point).</summary>
+    private static readonly SearchValues<byte> _TimestampBodyBytes = SearchValues.Create("0123456789."u8);
+
     #region Char overload
 
     /// <summary>
@@ -232,7 +238,7 @@ internal static class AscLineClassifier
         }
 
         ReadOnlySpan<byte> tsBytes = line[..firstSpace];
-        if (!_LooksLikeTimestamp(tsBytes))
+        if (!LooksLikeTimestamp(tsBytes))
         {
             return AscLineType.Unknown;
         }
@@ -485,22 +491,10 @@ internal static class AscLineClassifier
             return false;
         }
 
-        int start = span[0] == '-' ? 1 : 0;
-        bool hasDigit = false;
-        for (int i = start; i < span.Length; i++)
-        {
-            char c = span[i];
-            if (_AsciiTimestampDigits.Contains(c))
-            {
-                hasDigit = true;
-            }
-            else if (c != '.')
-            {
-                return false;
-            }
-        }
-
-        return hasDigit;
+        // Vectorised: every character after an optional leading '-' is a digit or '.', and at least one is a digit.
+        ReadOnlySpan<char> body = span[0] == '-' ? span[1..] : span;
+        return body.IndexOfAnyExcept(_TimestampBodyChars) < 0
+            && body.ContainsAny(_AsciiTimestampDigits);
     }
 
     private static bool _ContainsToken(ReadOnlySpan<char> span, ReadOnlySpan<char> token)
@@ -659,29 +653,21 @@ internal static class AscLineClassifier
     private static bool _TokenEquals(ReadOnlySpan<byte> token, ReadOnlySpan<byte> expected) =>
         token.Length == expected.Length && StartsWithAsciiIgnoreCase(token, expected);
 
-    private static bool _LooksLikeTimestamp(ReadOnlySpan<byte> span)
+    /// <summary>
+    /// True when <paramref name="span"/> has the shape of an ASC timestamp: an optional leading '-', then only digits
+    /// and '.', with at least one digit. Shared by the line classifier and the Ethernet continuation check.
+    /// </summary>
+    internal static bool LooksLikeTimestamp(ReadOnlySpan<byte> span)
     {
         if (span.IsEmpty)
         {
             return false;
         }
 
-        int start = span[0] == (byte)'-' ? 1 : 0;
-        bool hasDigit = false;
-        for (int i = start; i < span.Length; i++)
-        {
-            byte b = span[i];
-            if (_AsciiTimestampDigitBytes.Contains(b))
-            {
-                hasDigit = true;
-            }
-            else if (b != (byte)'.')
-            {
-                return false;
-            }
-        }
-
-        return hasDigit;
+        // Vectorised: every byte after an optional leading '-' is a digit or '.', and at least one is a digit.
+        ReadOnlySpan<byte> body = span[0] == (byte)'-' ? span[1..] : span;
+        return body.IndexOfAnyExcept(_TimestampBodyBytes) < 0
+            && body.ContainsAny(_AsciiTimestampDigitBytes);
     }
 
     /// <summary>

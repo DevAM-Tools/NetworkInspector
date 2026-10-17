@@ -13,7 +13,9 @@ namespace NetworkInspector.Exporters.Parquet;
 ///     <c>field_id</c>, <c>parent_node_id</c>.</item>
 ///   <item><c>catalog.parquet</c> — one row per distinct field ID observed, written once in
 ///     <see cref="Complete"/>: <c>field_id</c>, <c>name</c>, <c>ui_name</c>, <c>field_type</c>,
-///     <c>protocol_id</c>, <c>table_name</c>.</item>
+///     <c>protocol_id</c>, <c>table_name</c>, <c>description</c> (nullable).</item>
+///   <item><c>protocols.parquet</c> — one row per protocol registered in the parsing stack, written once
+///     when the sink is created: <c>protocol_id</c>, <c>name</c>, <c>ui_name</c>.</item>
 ///   <item><c>fields/field_{id}.parquet</c> — one row per field occurrence: <c>packet_id</c>,
 ///     <c>node_id</c>, a type-specific <c>value</c> column (including <c>DataField&lt;string&gt;</c>
 ///     for <see cref="FieldType.String"/>), and optional <c>custom_repr</c> / <c>custom_text</c>
@@ -55,11 +57,17 @@ internal sealed class ParquetBatchSink : IColumnarBatchSink, IDisposable
 
     #region Constructor
 
-    /// <summary>Creates a sink writing into <paramref name="rootDirectory"/> (must already exist).</summary>
+    /// <summary>
+    /// Creates a sink writing into <paramref name="rootDirectory"/> (must already exist) and writes
+    /// <c>protocols.parquet</c> immediately, because the protocol set is fixed by the stack for the whole export.
+    /// </summary>
     /// <param name="rootDirectory">Root output directory.</param>
     /// <param name="flags">Detail flags the batches were configured with; controls optional columns.</param>
-    internal ParquetBatchSink(string rootDirectory, ColumnarDetailFlags flags)
+    /// <param name="protocols">Protocols of the parsing stack; no <c>protocols.parquet</c> is written when empty.</param>
+    internal ParquetBatchSink(string rootDirectory, ColumnarDetailFlags flags, IReadOnlyList<ProtocolCatalogEntry> protocols)
     {
+        ArgumentNullException.ThrowIfNull(protocols);
+
         _FieldsDirectory = Path.Combine(rootDirectory, "fields");
         _Flags = flags;
         _ClearPriorArtifacts(rootDirectory);
@@ -70,6 +78,8 @@ internal sealed class ParquetBatchSink : IColumnarBatchSink, IDisposable
         _PacketsPath = PacketsPath();
         _TopologyPath = TopologyPath();
         _CatalogPath = Path.Combine(rootDirectory, "catalog.parquet");
+
+        _WriteProtocols(Path.Combine(rootDirectory, "protocols.parquet"), protocols);
     }
 
     private readonly string _PacketsPath;
@@ -173,7 +183,8 @@ internal sealed class ParquetBatchSink : IColumnarBatchSink, IDisposable
                  [
                      "packets.parquet",
                      "topology.parquet",
-                     "catalog.parquet"
+                     "catalog.parquet",
+                     "protocols.parquet"
                  ])
         {
             string path = Path.Combine(rootDirectory, name);
@@ -222,15 +233,15 @@ internal sealed class ParquetBatchSink : IColumnarBatchSink, IDisposable
         _PacketsWriter ??= new ParquetFileWriter(_PacketsPath, new ParquetSchema(fields));
         _PacketsWriter.WriteRowGroup(rowGroup =>
         {
-            rowGroup.WriteAsync<int>(_PacketIdField, _ToArray(batch.PacketIds)).GetAwaiter().GetResult();
-            rowGroup.WriteAsync<long>(_TimestampField, _ToArray(batch.Timestamps)).GetAwaiter().GetResult();
+            ParquetFileWriter.Block(rowGroup.WriteAsync<int>(_PacketIdField, _ToArray(batch.PacketIds)));
+            ParquetFileWriter.Block(rowGroup.WriteAsync<long>(_TimestampField, _ToArray(batch.Timestamps)));
             if (includeInfo)
             {
-                rowGroup.WriteAsync(_InfoField, batch.Infos).GetAwaiter().GetResult();
+                ParquetFileWriter.Block(rowGroup.WriteAsync(_InfoField, batch.Infos));
             }
             if (includeFrameBytes)
             {
-                rowGroup.WriteAsync(_FrameBytesField, batch.FrameBytesList).GetAwaiter().GetResult();
+                ParquetFileWriter.Block(rowGroup.WriteAsync(_FrameBytesField, batch.FrameBytesList));
             }
         });
     }
@@ -257,10 +268,10 @@ internal sealed class ParquetBatchSink : IColumnarBatchSink, IDisposable
             new ParquetSchema(_TopoPacketIdField, _TopoNodeIdField, _TopoFieldIdField, _TopoParentNodeIdField));
         _TopologyWriter.WriteRowGroup(rowGroup =>
         {
-            rowGroup.WriteAsync<int>(_TopoPacketIdField, packetIds).GetAwaiter().GetResult();
-            rowGroup.WriteAsync<int>(_TopoNodeIdField, nodeIds).GetAwaiter().GetResult();
-            rowGroup.WriteAsync<int>(_TopoFieldIdField, fieldIds).GetAwaiter().GetResult();
-            rowGroup.WriteAsync<int>(_TopoParentNodeIdField, parentNodeIds).GetAwaiter().GetResult();
+            ParquetFileWriter.Block(rowGroup.WriteAsync<int>(_TopoPacketIdField, packetIds));
+            ParquetFileWriter.Block(rowGroup.WriteAsync<int>(_TopoNodeIdField, nodeIds));
+            ParquetFileWriter.Block(rowGroup.WriteAsync<int>(_TopoFieldIdField, fieldIds));
+            ParquetFileWriter.Block(rowGroup.WriteAsync<int>(_TopoParentNodeIdField, parentNodeIds));
         });
     }
 
@@ -304,6 +315,8 @@ internal sealed class ParquetBatchSink : IColumnarBatchSink, IDisposable
         DataField fieldType = new DataField<int>("field_type");
         DataField protocolId = new DataField<int>("protocol_id");
         DataField tableName = new DataField<string>("table_name");
+        // Appended last so readers that address catalog columns by position keep working.
+        DataField description = new DataField<string?>("description");
 
         int count = _Catalog.Count;
         int[] fieldIds = new int[count];
@@ -312,6 +325,7 @@ internal sealed class ParquetBatchSink : IColumnarBatchSink, IDisposable
         int[] fieldTypes = new int[count];
         int[] protocolIds = new int[count];
         string[] tableNames = new string[count];
+        string?[] descriptions = new string?[count];
         int row = 0;
         foreach (FieldCatalogEntry entry in _Catalog.Values)
         {
@@ -321,19 +335,59 @@ internal sealed class ParquetBatchSink : IColumnarBatchSink, IDisposable
             fieldTypes[row] = (int)entry.FieldType;
             protocolIds[row] = entry.ProtocolIdValue;
             tableNames[row] = entry.TableName;
+            descriptions[row] = entry.Description;
             row++;
         }
 
         using ParquetFileWriter writer = new(
-            _CatalogPath, new ParquetSchema(fieldId, name, uiName, fieldType, protocolId, tableName));
+            _CatalogPath, new ParquetSchema(fieldId, name, uiName, fieldType, protocolId, tableName, description));
         writer.WriteRowGroup(rowGroup =>
         {
-            rowGroup.WriteAsync<int>(fieldId, fieldIds).GetAwaiter().GetResult();
-            rowGroup.WriteAsync(name, names).GetAwaiter().GetResult();
-            rowGroup.WriteAsync(uiName, uiNames).GetAwaiter().GetResult();
-            rowGroup.WriteAsync<int>(fieldType, fieldTypes).GetAwaiter().GetResult();
-            rowGroup.WriteAsync<int>(protocolId, protocolIds).GetAwaiter().GetResult();
-            rowGroup.WriteAsync(tableName, tableNames).GetAwaiter().GetResult();
+            ParquetFileWriter.Block(rowGroup.WriteAsync<int>(fieldId, fieldIds));
+            ParquetFileWriter.Block(rowGroup.WriteAsync(name, names));
+            ParquetFileWriter.Block(rowGroup.WriteAsync(uiName, uiNames));
+            ParquetFileWriter.Block(rowGroup.WriteAsync<int>(fieldType, fieldTypes));
+            ParquetFileWriter.Block(rowGroup.WriteAsync<int>(protocolId, protocolIds));
+            ParquetFileWriter.Block(rowGroup.WriteAsync(tableName, tableNames));
+            ParquetFileWriter.Block(rowGroup.WriteAsync(description, descriptions));
+        });
+    }
+
+    /// <summary>
+    /// Writes <c>protocols.parquet</c> (<c>protocol_id</c>, <c>name</c>, <c>ui_name</c>) as a single row group.
+    /// Skipped when <paramref name="protocols"/> is empty, mirroring the empty-catalog behaviour.
+    /// </summary>
+    /// <param name="path">Target file path.</param>
+    /// <param name="protocols">Protocols of the parsing stack.</param>
+    private static void _WriteProtocols(string path, IReadOnlyList<ProtocolCatalogEntry> protocols)
+    {
+        if (protocols.Count == 0)
+        {
+            return;
+        }
+
+        DataField protocolId = new DataField<int>("protocol_id");
+        DataField name = new DataField<string>("name");
+        DataField uiName = new DataField<string>("ui_name");
+
+        int count = protocols.Count;
+        int[] protocolIds = new int[count];
+        string[] names = new string[count];
+        string[] uiNames = new string[count];
+        for (int row = 0; row < count; row++)
+        {
+            ProtocolCatalogEntry entry = protocols[row];
+            protocolIds[row] = entry.ProtocolIdValue;
+            names[row] = entry.Name;
+            uiNames[row] = entry.UiName;
+        }
+
+        using ParquetFileWriter writer = new(path, new ParquetSchema(protocolId, name, uiName));
+        writer.WriteRowGroup(rowGroup =>
+        {
+            ParquetFileWriter.Block(rowGroup.WriteAsync<int>(protocolId, protocolIds));
+            ParquetFileWriter.Block(rowGroup.WriteAsync(name, names));
+            ParquetFileWriter.Block(rowGroup.WriteAsync(uiName, uiNames));
         });
     }
 
@@ -342,9 +396,12 @@ internal sealed class ParquetBatchSink : IColumnarBatchSink, IDisposable
 
 /// <summary>
 /// Thin wrapper around a lazily-opened <see cref="global::Parquet.ParquetWriter"/> for a single
-/// table file. Bridges the writer's async-only API to the synchronous exporter pipeline via
-/// <c>GetAwaiter().GetResult()</c> — safe here because file I/O on a dedicated stream has no
-/// captured synchronization context to deadlock against.
+/// table file. Bridges the writer's async-only API to the synchronous exporter pipeline through
+/// <see cref="Block(System.Threading.Tasks.Task)"/> / <see cref="Block{T}(System.Threading.Tasks.Task{T})"/>, the only blocking sites of the Parquet exporter.
+/// Callers must not run the exporter on a thread with a <see cref="SynchronizationContext"/> (UI thread).
+/// <para>
+/// <b>Thread safety:</b> Not thread-safe; owned by one <see cref="ParquetBatchSink"/> and used from its single caller thread.
+/// </para>
 /// </summary>
 internal sealed class ParquetFileWriter : IDisposable
 {
@@ -355,7 +412,29 @@ internal sealed class ParquetFileWriter : IDisposable
     internal ParquetFileWriter(string path, ParquetSchema schema)
     {
         _Stream = File.Create(path);
-        _Writer = ParquetWriter.CreateAsync(schema, _Stream).GetAwaiter().GetResult();
+        _Writer = Block(ParquetWriter.CreateAsync(schema, _Stream));
+    }
+
+    /// <summary>Synchronously waits for a Parquet.Net operation; exceptions surface unwrapped (not as <see cref="AggregateException"/>).</summary>
+    /// <param name="task">The pending Parquet.Net operation.</param>
+    internal static void Block(System.Threading.Tasks.Task task)
+    {
+        // Parquet.Net exposes only async writers; the IPacketListener contract is synchronous. Approved sync-over-async
+        // (rule "no .Result/.Wait", reason: no sync API, scope: this method, user approved). Callers must not run the
+        // exporter on a thread with a SynchronizationContext.
+        task.ConfigureAwait(false).GetAwaiter().GetResult();
+    }
+
+    /// <summary>Synchronously waits for a Parquet.Net operation and returns its result; exceptions surface unwrapped.</summary>
+    /// <typeparam name="T">Result type.</typeparam>
+    /// <param name="task">The pending Parquet.Net operation.</param>
+    /// <returns>The operation's result.</returns>
+    internal static T Block<T>(System.Threading.Tasks.Task<T> task)
+    {
+        // Parquet.Net exposes only async writers; the IPacketListener contract is synchronous. Approved sync-over-async
+        // (rule "no .Result/.Wait", reason: no sync API, scope: this method, user approved). Callers must not run the
+        // exporter on a thread with a SynchronizationContext.
+        return task.ConfigureAwait(false).GetAwaiter().GetResult();
     }
 
     /// <summary>Writes one row group, invoking <paramref name="writeColumns"/> to populate it.</summary>
@@ -367,15 +446,14 @@ internal sealed class ParquetFileWriter : IDisposable
 
     /// <summary>
     /// Finalizes the file's footer and releases the stream. <see cref="ParquetWriter"/> only
-    /// exposes <see cref="IAsyncDisposable"/>; blocked on synchronously for the same reason as
-    /// <see cref="WriteRowGroup"/> (see the type-level remarks).
+    /// exposes <see cref="IAsyncDisposable"/>; blocked on through <see cref="Block(System.Threading.Tasks.Task)"/> (see the type-level remarks).
     /// </summary>
     public void Dispose()
     {
         // ValueTask.AsTask() materializes it into an ordinary Task before blocking, avoiding the
         // "may not be safe to consume twice / while pending" hazard CA2012 warns about for raw
         // ValueTask instances.
-        _Writer.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        Block(_Writer.DisposeAsync().AsTask());
         _Stream.Dispose();
     }
 }
@@ -434,18 +512,18 @@ internal sealed class FieldWriterState : IDisposable
 
         _Writer.WriteRowGroup(rowGroup =>
         {
-            rowGroup.WriteAsync<int>(_PacketIdField, _ToArray(bag.PacketIds)).GetAwaiter().GetResult();
-            rowGroup.WriteAsync<int>(_NodeIdField, _ToArray(bag.NodeIds)).GetAwaiter().GetResult();
+            ParquetFileWriter.Block(rowGroup.WriteAsync<int>(_PacketIdField, _ToArray(bag.PacketIds)));
+            ParquetFileWriter.Block(rowGroup.WriteAsync<int>(_NodeIdField, _ToArray(bag.NodeIds)));
 
             _WriteTypedValue(rowGroup, bag);
 
             if ((flags & ColumnarDetailFlags.IncludeCustomRepresentation) != 0)
             {
-                rowGroup.WriteAsync(_CustomReprField, _ToNullableStringArray(bag.CustomRepresentations)).GetAwaiter().GetResult();
+                ParquetFileWriter.Block(rowGroup.WriteAsync(_CustomReprField, _ToNullableStringArray(bag.CustomRepresentations)));
             }
             if ((flags & ColumnarDetailFlags.IncludeCustomText) != 0)
             {
-                rowGroup.WriteAsync(_CustomTextField, _ToNullableStringArray(bag.CustomTexts)).GetAwaiter().GetResult();
+                ParquetFileWriter.Block(rowGroup.WriteAsync(_CustomTextField, _ToNullableStringArray(bag.CustomTexts)));
             }
         });
     }
@@ -491,25 +569,25 @@ internal sealed class FieldWriterState : IDisposable
         switch (_FieldType)
         {
             case FieldType.Bool:
-                rowGroup.WriteAsync<bool>(_ValueField!, _ToArray(bag.BoolValues)).GetAwaiter().GetResult();
+                ParquetFileWriter.Block(rowGroup.WriteAsync<bool>(_ValueField!, _ToArray(bag.BoolValues)));
                 break;
             case FieldType.I64:
-                rowGroup.WriteAsync<long>(_ValueField!, _ToArray(bag.I64Values)).GetAwaiter().GetResult();
+                ParquetFileWriter.Block(rowGroup.WriteAsync<long>(_ValueField!, _ToArray(bag.I64Values)));
                 break;
             case FieldType.U64:
-                rowGroup.WriteAsync<ulong>(_ValueField!, _ToArray(bag.U64Values)).GetAwaiter().GetResult();
+                ParquetFileWriter.Block(rowGroup.WriteAsync<ulong>(_ValueField!, _ToArray(bag.U64Values)));
                 break;
             case FieldType.F64:
-                rowGroup.WriteAsync<double>(_ValueField!, _ToArray(bag.F64Values)).GetAwaiter().GetResult();
+                ParquetFileWriter.Block(rowGroup.WriteAsync<double>(_ValueField!, _ToArray(bag.F64Values)));
                 break;
             case FieldType.Timestamp:
-                rowGroup.WriteAsync<long>(_ValueField!, _ToArray(bag.TimestampValues)).GetAwaiter().GetResult();
+                ParquetFileWriter.Block(rowGroup.WriteAsync<long>(_ValueField!, _ToArray(bag.TimestampValues)));
                 break;
             case FieldType.String:
-                rowGroup.WriteAsync(_ValueField!, _ToNullableStringArray(bag.StringValues)).GetAwaiter().GetResult();
+                ParquetFileWriter.Block(rowGroup.WriteAsync(_ValueField!, _ToNullableStringArray(bag.StringValues)));
                 break;
             default:
-                rowGroup.WriteAsync(_ValueField!, bag.BytesValues).GetAwaiter().GetResult();
+                ParquetFileWriter.Block(rowGroup.WriteAsync(_ValueField!, bag.BytesValues));
                 break;
         }
     }

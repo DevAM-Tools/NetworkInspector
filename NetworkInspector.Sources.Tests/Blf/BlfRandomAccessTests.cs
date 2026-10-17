@@ -165,7 +165,7 @@ internal sealed class BlfRandomAccessTests
             .Build();
 
         using BlfSource source = _CreateSource(blfData);
-        // FrameById() before Start() must throw, consistent with AscSource and PcapSource.
+        // FrameById() before Start() must throw, consistent with AscSource and PcapngSource.
         await Assert.That(() => source.FrameById(new FrameId(0))).Throws<InvalidOperationException>();
     }
 
@@ -329,7 +329,7 @@ internal sealed class BlfRandomAccessTests
     }
 
     [Test]
-    public async Task MmapOpen_PreloadBudgetZero_FrameByIdUsesSlots()
+    public async Task MmapOpenPreloadBudgetZeroFrameByIdReadsThroughMapping()
     {
         byte[] eth = FrameBuilders.BuildEthernetFrame(_BroadcastMac, _SrcMac, 0x0800, [0xDE, 0xAD]);
         byte[] can = FrameBuilders.BuildSocketCanClassic(0x123, [1, 2, 3, 4, 5, 6, 7, 8]);
@@ -355,7 +355,6 @@ internal sealed class BlfRandomAccessTests
             {
                 ScanMode = ScanMode.Full,
                 PreloadBudget = 0,
-                MmapSlotCount = 4,
             });
             SourceTestFixture.InitializeAndStartSource(source);
 

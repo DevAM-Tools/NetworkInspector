@@ -41,7 +41,7 @@ namespace NetworkInspector.Protocols;
 /// </code>
 /// <para>Field tree structure (CAN XL):</para>
 /// <code>
-/// canxl: CAN XL, Priority: 5, VCID: 0x1A, Length: 128
+/// canxl: CAN XL, Priority: 5, VCID: 0x1a, Length: 128
 /// ├── canxl.priority: 5
 /// ├── canxl.vcid: 0x1A
 /// ├── canxl.flags
@@ -285,12 +285,31 @@ public sealed partial class CanProtocol : IProtocol
         if (config?.Messages is { Length: > 0 })
         {
             Dictionary<uint, string> names = new(config.Messages.Length);
-            foreach (CanMessageEntry msg in config.Messages)
+            int nullEntries = 0;
+            foreach (CanMessageEntry? msg in config.Messages)
             {
+                // A JSON null entry names no message: skip it (reported below) instead of failing the registration.
+                if (msg is null)
+                {
+                    nullEntries++;
+                    continue;
+                }
+
                 // Store with the raw CAN ID — the lookup uses the masked extracted ID
                 names.TryAdd(msg.Id, msg.Name);
             }
             _MessageNames = names.ToFrozenDictionary();
+
+            if (nullEntries > 0)
+            {
+                ConfigLoadWarning = new SettingsLoadWarning(
+                    SettingsLoadWarningKind.DeserializationError,
+                    "can",
+                    "can.config_file",
+                    string.Create(
+                        CultureInfo.InvariantCulture,
+                        $"The CAN configuration contains {nullEntries} null entries in 'messages'. They are ignored."));
+            }
         }
         else
         {
@@ -507,13 +526,13 @@ public sealed partial class CanProtocol : IProtocol
 
         // Build summary text: "CAN XL, Priority: N, VCID: 0xNN, Length: N"
         parentField.SetPacketInfo(ZA.Lazy(
-            "CAN XL P:", priority, " VCID:0x", Helpers.DisplayTables.FormatHexU8((byte)vcid)));
+            "CAN XL P:", priority, " VCID:", Helpers.DisplayTables.FormatHexU8((byte)vcid)));
 
         // Append protocol container with frame slice bytes
         MutField xlField = parentField.AppendWithCustomText(
             _CanxlProtocolFieldId, FieldValue.NewBytes(data[..totalLen]),
             "CAN XL, Priority: ", priority,
-            ", VCID: 0x", Helpers.DisplayTables.FormatHexU8((byte)vcid),
+            ", VCID: ", Helpers.DisplayTables.FormatHexU8((byte)vcid),
             ", Length: ", payloadLength);
 
         // Priority (11-bit, bits 0-10 of the priority/VCID word)

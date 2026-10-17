@@ -78,11 +78,21 @@ internal static class EthernetParser
     ///   [32..)    L3 payload bytes
     /// </code>
     /// Reconstructed Ethernet uses wire big-endian EtherType/VLAN.
-    /// VLAN is inserted only when both TPID and TCI are non-zero.
+    /// A VLAN tag is inserted whenever the TPID is non-zero: Vector writes TPID 0 for an untagged frame, and a
+    /// tag with TCI 0 (priority 0, VID 0) is a real 802.1Q tag that must survive.
     /// </summary>
     internal static bool TryParseType71(ReadOnlySpan<byte> payload, out byte[] frame, out ushort channel)
+        => FrameSlabAllocator.ToArray(TryParseType71(payload, null, out ReadOnlyMemory<byte> memory, out channel), memory, out frame);
+
+    /// <inheritdoc cref="TryParseType71(ReadOnlySpan{byte}, out byte[], out ushort)"/>
+    /// <param name="payload">BLF object payload.</param>
+    /// <param name="slabs">Frame slab allocator of the sequential reader, or null for a new array.</param>
+    /// <param name="frame">Ethernet bytes on success; empty on failure.</param>
+    /// <param name="channel">Channel from the header.</param>
+    internal static bool TryParseType71(
+        ReadOnlySpan<byte> payload, FrameSlabAllocator? slabs, out ReadOnlyMemory<byte> frame, out ushort channel)
     {
-        frame = [];
+        frame = default;
         channel = 0;
 
         if (payload.Length < _Type71HeaderSize)
@@ -102,30 +112,33 @@ internal static class EthernetParser
         payloadLen = Math.Min(payloadLen, Math.Min(availablePayload, _MaxEthernetPayload));
         ReadOnlySpan<byte> innerPayload = payload.Slice(_Type71HeaderSize, payloadLen);
 
-        // Insert a VLAN tag only when both TPID and TCI are non-zero.
-        bool hasVlan = tpid != 0 && tci != 0;
+        // Vector writes tpid = 0 when the frame carried no tag. A tag with TCI 0 (priority 0, VID 0) is a real
+        // 802.1Q tag and must survive, so only the TPID decides.
+        bool hasVlan = tpid != 0;
         int frameLen = 12 + (hasVlan ? 4 : 0) + 2 + payloadLen;
-        frame = new byte[frameLen];
+        Memory<byte> buffer = FrameSlabAllocator.RentZeroed(slabs, frameLen);
+        Span<byte> ethernet = buffer.Span;
 
         int offset = 0;
-        dstMac.CopyTo(frame.AsSpan(offset));
+        dstMac.CopyTo(ethernet[offset..]);
         offset += 6;
-        srcMac.CopyTo(frame.AsSpan(offset));
+        srcMac.CopyTo(ethernet[offset..]);
         offset += 6;
 
         if (hasVlan)
         {
-            BinaryPrimitives.WriteUInt16BigEndian(frame.AsSpan(offset), tpid);
+            BinaryPrimitives.WriteUInt16BigEndian(ethernet[offset..], tpid);
             offset += 2;
-            BinaryPrimitives.WriteUInt16BigEndian(frame.AsSpan(offset), tci);
+            BinaryPrimitives.WriteUInt16BigEndian(ethernet[offset..], tci);
             offset += 2;
         }
 
-        BinaryPrimitives.WriteUInt16BigEndian(frame.AsSpan(offset), etherType);
+        BinaryPrimitives.WriteUInt16BigEndian(ethernet[offset..], etherType);
         offset += 2;
-        innerPayload.CopyTo(frame.AsSpan(offset));
+        innerPayload.CopyTo(ethernet[offset..]);
 
-        return frame.Length >= _MinEthernetFrameSize;
+        frame = buffer;
+        return frameLen >= _MinEthernetFrameSize;
     }
 
     /// <summary>
@@ -162,6 +175,20 @@ internal static class EthernetParser
         ReadOnlySpan<byte> payload,
         ReadOnlyMemory<byte> payloadMemory,
         out ReadOnlyMemory<byte> frame,
+        out ushort channel) =>
+        TryParseType120(payload, payloadMemory, null, out frame, out channel);
+
+    /// <summary>
+    /// Parses a Type 120 payload, or one of the Types 121–123 that share its 32-byte header
+    /// (<see cref="BlfConstants.IsEthernetExType"/>). With <paramref name="slabs"/> set, the Ethernet bytes are copied
+    /// into a slab region (bounded retention); without, they alias <paramref name="payloadMemory"/> when it covers the
+    /// payload (a held frame then keeps the whole decompressed container alive), else they are copied into a new array.
+    /// </summary>
+    internal static bool TryParseType120(
+        ReadOnlySpan<byte> payload,
+        ReadOnlyMemory<byte> payloadMemory,
+        FrameSlabAllocator? slabs,
+        out ReadOnlyMemory<byte> frame,
         out ushort channel)
     {
         frame = default;
@@ -186,7 +213,7 @@ internal static class EthernetParser
 
         int actualLen = frameLength;
 
-        frame = _SliceOrCopyEthernet(payload, payloadMemory, _Type120HeaderSize, actualLen);
+        frame = _SliceOrCopyEthernet(payload, payloadMemory, slabs, _Type120HeaderSize, actualLen);
         return true;
     }
 
@@ -213,6 +240,18 @@ internal static class EthernetParser
         ReadOnlySpan<byte> payload,
         ReadOnlyMemory<byte> payloadMemory,
         out ReadOnlyMemory<byte> frame,
+        out ushort channel) =>
+        TryParseType102(payload, payloadMemory, null, out frame, out channel);
+
+    /// <summary>
+    /// Parses a Type 102 payload. Memory rules as for
+    /// <see cref="TryParseType120(ReadOnlySpan{byte}, ReadOnlyMemory{byte}, FrameSlabAllocator?, out ReadOnlyMemory{byte}, out ushort)"/>.
+    /// </summary>
+    internal static bool TryParseType102(
+        ReadOnlySpan<byte> payload,
+        ReadOnlyMemory<byte> payloadMemory,
+        FrameSlabAllocator? slabs,
+        out ReadOnlyMemory<byte> frame,
         out ushort channel)
     {
         frame = default;
@@ -235,7 +274,7 @@ internal static class EthernetParser
 
         int actualLen = frameLength;
 
-        frame = _SliceOrCopyEthernet(payload, payloadMemory, _Type102HeaderSize, actualLen);
+        frame = _SliceOrCopyEthernet(payload, payloadMemory, slabs, _Type102HeaderSize, actualLen);
         return true;
     }
 
@@ -267,14 +306,14 @@ internal static class EthernetParser
 
     /// <summary>
     /// Reads the hardware channel when the object carries one.
-    /// Type 120 stores it at offset 6 and sets flags bit 0x0002 when it is valid.
+    /// Types 120–123 store it at offset 6 and set flags bit 0x0002 when it is valid.
     /// Type 102 stores it at offset 6; zero means the field is absent.
     /// </summary>
     internal static bool TryReadHardwareChannel(uint objectType, ReadOnlySpan<byte> payload, out ushort hardwareChannel)
     {
         hardwareChannel = 0;
         const ushort hardwareChannelFlag = 0x0002;
-        if (objectType == BlfConstants.ObjTypeEthernetFrameEx)
+        if (BlfConstants.IsEthernetExType(objectType))
         {
             if (payload.Length < 8)
             {
@@ -322,20 +361,32 @@ internal static class EthernetParser
 
     #region Private Helpers
 
+    /// <summary>
+    /// Returns the Ethernet bytes: a slab copy when slabs are on (bounded retention), else a slice of the container
+    /// when <paramref name="payloadMemory"/> covers the payload (zero copy), else a new array.
+    /// </summary>
     private static ReadOnlyMemory<byte> _SliceOrCopyEthernet(
         ReadOnlySpan<byte> payload,
         ReadOnlyMemory<byte> payloadMemory,
+        FrameSlabAllocator? slabs,
         int headerSize,
         int actualLen)
     {
+        ReadOnlySpan<byte> ethernet = payload.Slice(headerSize, actualLen);
+        if (slabs is not null)
+        {
+            // Every byte is copied, so the uninitialised slab region needs no clearing.
+            Memory<byte> region = slabs.Allocate(actualLen);
+            ethernet.CopyTo(region.Span);
+            return region;
+        }
+
         if (payloadMemory.Length == payload.Length && payloadMemory.Length >= headerSize + actualLen)
         {
             return payloadMemory.Slice(headerSize, actualLen);
         }
 
-        byte[] copy = new byte[actualLen];
-        payload.Slice(headerSize, actualLen).CopyTo(copy);
-        return copy;
+        return ethernet.ToArray();
     }
 
     #endregion

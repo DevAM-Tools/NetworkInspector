@@ -28,14 +28,26 @@ internal sealed class LegacyPcapInfo
         get;
     }
 
-    /// <summary>Resolved link type, or null when the raw DLT is not a defined <see cref="Core.LinkType"/> member.</summary>
-    internal LinkType? LinkType
+    /// <summary>
+    /// Link type from the global header. The enum is open: a DLT that is not a named member keeps its
+    /// number and the frames pass through undissected.
+    /// </summary>
+    internal LinkType LinkType
     {
         get;
     }
 
-    /// <summary>Snapshot length — maximum captured octets per packet.</summary>
+    /// <summary>
+    /// Snapshot length — maximum captured octets per packet. A header value of 0 becomes
+    /// <see cref="PcapConstants.DefaultSnapLength"/>.
+    /// </summary>
     internal uint SnapLength
+    {
+        get;
+    }
+
+    /// <summary>Snapshot length exactly as the global header declares it (0 = not declared).</summary>
+    internal uint DeclaredSnapLength
     {
         get;
     }
@@ -50,8 +62,8 @@ internal sealed class LegacyPcapInfo
         ByteSwapped = byteSwapped;
         NanosecondTimestamps = nanosecondTimestamps;
         RawLinkType = rawLinkType;
-        LinkType linkCandidate = (LinkType)rawLinkType;
-        LinkType = Enum.IsDefined(linkCandidate) ? linkCandidate : null;
+        LinkType = (LinkType)rawLinkType;
+        DeclaredSnapLength = snapLength;
         SnapLength = snapLength == 0 ? PcapConstants.DefaultSnapLength : snapLength;
     }
 

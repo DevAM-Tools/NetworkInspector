@@ -70,19 +70,6 @@ internal sealed class FrameIndex
 
     #endregion
 
-    #region Constructors
-
-    /// <summary>
-    /// Creates an empty frame index.
-    /// <paramref name="capacity"/> is ignored; chunks grow on demand.
-    /// </summary>
-    internal FrameIndex(int capacity = 0)
-    {
-        _ = capacity;
-    }
-
-    #endregion
-
     #region Public API
 
     /// <summary>

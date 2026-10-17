@@ -24,6 +24,15 @@ Load on `/implement`. Apply `copilot-instructions.md` for all quality, tech, git
 - **Checklist status:** `⚠️` before first edit · `✅` after Verify, alignment,
   requirement/test ticks, Step `{n}R` clean (review of step n).
 - Tick **all three** plan surfaces together: Step Overview, Shared Block, Task Checklist.
+- **Finding status:** for each accepted review finding, tick both surfaces in
+  that review file together: the finding `Status` line and the Summary
+  **Findings** Status cell (Section 5). `⚠️` before the first edit of that
+  finding. `✅` only after its `Verify` passes and alignment holds. Never
+  leave the summary cell on `⬜` once work on that finding has started. Do
+  not rewrite **Release** or **Counts**; those stay the review-time verdict.
+  A deferred finding stays `⬜`. Chat-only reviews have no file: record the
+  finding in the Implementation Status Table and say the Summary Status cell
+  was not persisted.
 - Process **every** checklist step, dedicated test step, and finding in scope; skip none.
 - Follow topological order per plan dependencies.
 - Implement **only** current step or finding scope — match `What` and `How` exactly, including plan Before/After or finding Problem/Fix.
@@ -46,7 +55,10 @@ Load on `/implement`. Apply `copilot-instructions.md` for all quality, tech, git
 
 ## Stage 3 — Final Verification
 
-- Confirm **every** scoped step, test ID, and finding is `✅`; leftover `⬜` / `⚠️` = blocker.
+- Confirm **every** scoped step, test ID, and finding is `✅` on every status
+  surface for that item (plan: Step Overview, Shared Block, Task Checklist;
+  review finding: `Status` line and Summary **Findings** Status cell).
+  Leftover `⬜` / `⚠️` = blocker.
 - Re-run alignment: every requirement ID with Done-when Met ✅, every test ID ✅, or all accepted findings resolved.
 - Run full build and all tests in optimized/Release. Commands from the loaded tech skill.
 - For web UI: run the planned Playwright journeys. The editor’s integrated browser is available and recommended (`tech-playwright.md`).

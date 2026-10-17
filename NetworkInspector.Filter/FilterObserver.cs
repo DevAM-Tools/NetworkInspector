@@ -15,13 +15,18 @@ namespace NetworkInspector.Filter;
 /// <see cref="ResetState"/> also clears the flank sample.
 /// </para>
 /// <para>
+/// A flank is one leaf of the boolean tree. Its hit is decided when the frame is committed (first
+/// <see cref="TryReadMatch"/> or the next <see cref="BeginPacket"/>), so terms around it
+/// (<c>udp.srcport == 53 &amp;&amp; flank(…)</c>, <c>!flank(…)</c>) take part in the verdict exactly as in a
+/// field-tree <see cref="Filter"/> of the same expression.
+/// </para>
+/// <para>
 /// <see cref="AlwaysMatch"/> is immutable and safe to share. Every other instance is single-threaded.
 /// Do not pass one mutable instance into two overlapping parses.
 /// </para>
 /// </remarks>
 public sealed class FilterObserver : IFieldObserver
 {
-
     #region Fields
 
     private readonly int[][] _LeafIndexes;
@@ -30,13 +35,13 @@ public sealed class FilterObserver : IFieldObserver
     private readonly int _Root;
     private readonly FlankRuntime? _Flank;
     private readonly int _WhenRoot;
+    private readonly int _FlankLeaf;
     private readonly bool[] _FlankByFieldId;
     private readonly int[] _SlotByFieldId;
 
     private FilterError? _Failure;
     private bool _SampleTaken;
     private bool _FlankCommitted;
-    private bool _FlankResult;
     private bool _IgnoreFurtherLeafTests;
     private FieldValueData _Sample;
     private PacketId _PacketId;
@@ -57,8 +62,10 @@ public sealed class FilterObserver : IFieldObserver
         _FlankByFieldId = [];
         _SlotByFieldId = [];
         _WhenRoot = -1;
+        _FlankLeaf = -1;
     }
 
+    /// <summary>Creates a compiled observer; <paramref name="flankLeaf"/> is the flank's leaf index, or -1 without a flank.</summary>
     internal FilterObserver(
         string expression,
         IStack stack,
@@ -69,9 +76,11 @@ public sealed class FilterObserver : IFieldObserver
         int root,
         FlankRuntime? flank,
         int whenRoot,
+        int flankLeaf,
         bool[] flankByFieldId,
         int[] slotByFieldId)
     {
+        _FlankLeaf = flankLeaf;
         Expression = expression;
         Stack = stack;
         Watch = watch;
@@ -105,7 +114,10 @@ public sealed class FilterObserver : IFieldObserver
     /// <summary>Fields the parse must deliver. <see cref="FieldWatch.None"/> for <see cref="AlwaysMatch"/>.</summary>
     public FieldWatch Watch { get; }
 
-    /// <summary>Whether the verdict is a flank transition. Use <see cref="TryReadMatch"/>, not <see cref="IsMatch"/>.</summary>
+    /// <summary>
+    /// Whether the expression contains a <c>flank(…)</c>. The verdict then depends on the tracker commit:
+    /// use <see cref="TryReadMatch"/>, not <see cref="IsMatch"/>.
+    /// </summary>
     public bool HasFlank { get; }
 
     /// <summary>
@@ -213,9 +225,10 @@ public sealed class FilterObserver : IFieldObserver
     }
 
     /// <summary>
-    /// Reads the flank verdict or a stored regex failure.
-    /// For a port filter this agrees with <see cref="IsMatch"/>.
-    /// Call it before the next parse.
+    /// Reads the verdict of the whole boolean tree for the current frame, or a stored regex failure.
+    /// For an observer without a flank this agrees with <see cref="IsMatch"/>. With a flank, the first call
+    /// commits the frame to the tracker and sets the flank leaf; further calls for the same frame return the
+    /// same verdict. Call it before the next parse.
     /// </summary>
     public bool TryReadMatch(out bool matched, out FilterError? failure)
     {
@@ -233,12 +246,10 @@ public sealed class FilterObserver : IFieldObserver
             return false;
         }
 
+        // The flank leaf is only known after the commit; every other leaf already latched during the parse.
         if (HasFlank)
         {
             _CommitFlank();
-            matched = _FlankResult;
-            failure = null;
-            return true;
         }
 
         matched = _Eval(_Root);
@@ -285,6 +296,11 @@ public sealed class FilterObserver : IFieldObserver
         _SampleTaken = true;
     }
 
+    /// <summary>
+    /// Feeds the frame's sample to the tracker once and stores the outcome in the flank leaf. A frame without
+    /// a sample, or whose <c>when:</c> gate is false, is invisible to the tracker and leaves the leaf false.
+    /// <see cref="_ClearFrame"/> resets the leaf, so it never leaks into the next frame.
+    /// </summary>
     private void _CommitFlank()
     {
         if (_FlankCommitted || _Flank is null)
@@ -293,19 +309,13 @@ public sealed class FilterObserver : IFieldObserver
         }
 
         _FlankCommitted = true;
-        if (!_SampleTaken)
+        bool fired = false;
+        if (_SampleTaken && (_WhenRoot < 0 || _Eval(_WhenRoot)))
         {
-            _FlankResult = false;
-            return;
+            fired = _Flank.Advance(_Sample, _Timestamp.AsNanos, _PacketId.Value);
         }
 
-        if (_WhenRoot >= 0 && !_Eval(_WhenRoot))
-        {
-            _FlankResult = false;
-            return;
-        }
-
-        _FlankResult = _Flank.Advance(_Sample, _Timestamp.AsNanos, _PacketId.Value);
+        _Leaves[_FlankLeaf].Hit = fired;
     }
 
     private bool _Test(ref Leaf leaf, in FieldValueData data)
@@ -434,6 +444,9 @@ internal enum LeafKind : byte
 
     /// <summary>Slice or length, then a comparison.</summary>
     Transform = 6,
+
+    /// <summary>The flank tracker fired for this frame. Written at commit, never by <see cref="FilterObserver.OnField"/>.</summary>
+    Flank = 7,
 }
 
 /// <summary>One value test. <see cref="Hit"/> is set during the parse and cleared per frame.</summary>

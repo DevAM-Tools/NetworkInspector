@@ -23,6 +23,15 @@ internal sealed class LengthPrefixDetectorTests
     }
 
     [Test]
+    public async Task Ctor_OffsetPlusSizeOverflow_Throws()
+    {
+        await Assert.That(() => new LengthPrefixDetector(int.MaxValue - 1, 2))
+            .Throws<ArgumentOutOfRangeException>();
+        LengthPrefixDetector edge = new(int.MaxValue - 2, 2);
+        await Assert.That(edge.Detect([0x01, 0x02, 0x03]).IsIncomplete).IsTrue();
+    }
+
+    [Test]
     public async Task Ctor_RejectsNegativeOffsetOrHeaderSize()
     {
         await Assert.That(() => new LengthPrefixDetector(-1, 2))

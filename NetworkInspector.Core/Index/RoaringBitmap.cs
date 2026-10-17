@@ -11,7 +11,7 @@ namespace NetworkInspector.Core.Index;
 /// and <see cref="Xor"/> produce detached results — single-side chunks are cloned before insert.
 /// <see cref="And"/> always allocates fresh containers via <see cref="IContainer.And(IContainer)"/>.
 /// In-place <see cref="AndWith"/> and <see cref="AndNotWith"/> clone <see cref="BitmapContainer"/>
-/// operands before SIMD mutation; <see cref="OrWith"/> and <see cref="XorWith"/> clone chunks
+/// operands before SIMD mutation; <see cref="OrWith(RoaringBitmap)"/> and <see cref="XorWith"/> clone chunks
 /// adopted from the other operand only.
 /// </para>
 /// <para>
@@ -20,6 +20,12 @@ namespace NetworkInspector.Core.Index;
 /// <see cref="Clone"/>, cardinality and rank/select while a single writer is appending.
 /// A seqlock retries the reader when it overlaps an in-flight mutation, so a held
 /// <see cref="ReadOnlyRoaringBitmap"/> view of an index bitmap stays valid as the index grows.
+/// The writer moves the sequence with <see cref="Interlocked.Increment(ref int)"/> (a full fence, so its data
+/// writes cannot become visible before the odd value), and every reader issues
+/// <see cref="Interlocked.MemoryBarrier"/> before it validates (so its data loads complete before the second
+/// sequence load). Both edges are required on weakly ordered CPUs such as ARM64. A read section that throws while
+/// a writer changes the arrays under it (a half-grown array read with the new count) is a torn read and retries; an
+/// exception in a section whose sequence did not move propagates.
 /// Set operations that allocate a new bitmap (<see cref="And"/>, <see cref="Or"/>, …) copy
 /// containers and are intended for a private result or a bitmap that is no longer growing.
 /// </para>
@@ -35,6 +41,7 @@ public sealed class RoaringBitmap
     private long _Cardinality;
 
     // Even = stable; odd = writer in Add / in-place set op. Readers retry while odd or changed.
+    // Written only with Interlocked.Increment, read with Volatile.Read (see _BeginWrite / _ReadStillValid).
     private int _SeqLock;
 
     #endregion
@@ -68,7 +75,7 @@ public sealed class RoaringBitmap
                 }
 
                 long cardinality = _Cardinality;
-                if (_ReadSeqLock() == seq)
+                if (_ReadStillValid(seq))
                 {
                     return cardinality;
                 }
@@ -94,6 +101,63 @@ public sealed class RoaringBitmap
         }
     }
 
+    /// <summary>
+    /// Converts every array or bitmap container whose run-length form is smaller to a run container (Roaring
+    /// serialized sizes: runs <c>2 + 4·runs</c> bytes, arrays <c>2 + 2·cardinality</c>, bitmaps 8192). The values do
+    /// not change. Call after bulk adds, not per add; later adds to a run container keep it a run container.
+    /// </summary>
+    /// <returns><see langword="true"/> when at least one container was converted.</returns>
+    /// <remarks>Single writer, like <see cref="Add"/>; concurrent readers retry through the seqlock.</remarks>
+    public bool RunOptimize() => RunOptimizeKeys(0, ushort.MaxValue + 1);
+
+    /// <summary>
+    /// <see cref="RunOptimize"/> limited to the chunks whose high 16-bit key lies in
+    /// [<paramref name="firstKey"/>, <paramref name="endKey"/>). Used by <see cref="PacketIndex"/> for chunks that
+    /// are complete.
+    /// </summary>
+    /// <param name="firstKey">First high key, inclusive (0 … 65535).</param>
+    /// <param name="endKey">Last high key, exclusive (≤ 65536).</param>
+    /// <returns><see langword="true"/> when at least one container was converted.</returns>
+    internal bool RunOptimizeKeys(int firstKey, int endKey)
+    {
+        // Containers are replaced, never mutated: a clone or a set-operation result that shares the old container
+        // keeps it unchanged.
+        int index = _FindChunk((ushort)Math.Clamp(firstKey, 0, ushort.MaxValue));
+        if (index < 0)
+        {
+            index = ~index;
+        }
+
+        if (index >= _Count || _Keys[index] < firstKey || _Keys[index] >= endKey)
+        {
+            return false;
+        }
+
+        bool converted = false;
+        _BeginWrite();
+        try
+        {
+            for (; index < _Count && _Keys[index] < endKey; index++)
+            {
+                IContainer current = _Containers[index];
+                if (current is RunContainer
+                    || RunContainer.SerializedSize(RunContainer.CountRuns(current)) >= RunContainer.SerializedSizeOf(current))
+                {
+                    continue;
+                }
+
+                _Containers[index] = RunContainer.FromContainer(current);
+                converted = true;
+            }
+        }
+        finally
+        {
+            _EndWrite();
+        }
+
+        return converted;
+    }
+
     /// <summary>Checks if a 32-bit value is present.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool Contains(uint value)
@@ -109,9 +173,19 @@ public sealed class RoaringBitmap
                 continue;
             }
 
-            int idx = _FindChunk(high);
-            bool present = idx >= 0 && _Containers[idx].Contains(low);
-            if (_ReadSeqLock() == seq)
+            bool present;
+            try
+            {
+                int idx = _FindChunk(high);
+                present = idx >= 0 && _Containers[idx].Contains(low);
+            }
+            catch (Exception) when (!_ReadStillValid(seq))
+            {
+                // Torn read: a writer grew or replaced an array between two loads of this section. Retry.
+                continue;
+            }
+
+            if (_ReadStillValid(seq))
             {
                 return present;
             }
@@ -137,7 +211,7 @@ public sealed class RoaringBitmap
 
                 if (_Count == 0)
                 {
-                    if (_ReadSeqLock() == seq)
+                    if (_ReadStillValid(seq))
                     {
                         _ThrowEmpty();
                     }
@@ -145,8 +219,18 @@ public sealed class RoaringBitmap
                     continue;
                 }
 
-                uint min = ((uint)_Keys[0] << 16) | _Containers[0].Min;
-                if (_ReadSeqLock() == seq)
+                uint min;
+                try
+                {
+                    min = ((uint)_Keys[0] << 16) | _Containers[0].Min;
+                }
+                catch (Exception) when (!_ReadStillValid(seq))
+                {
+                    // Torn read: a writer grew or replaced an array between two loads of this section. Retry.
+                    continue;
+                }
+
+                if (_ReadStillValid(seq))
                 {
                     return min;
                 }
@@ -173,7 +257,7 @@ public sealed class RoaringBitmap
 
                 if (_Count == 0)
                 {
-                    if (_ReadSeqLock() == seq)
+                    if (_ReadStillValid(seq))
                     {
                         _ThrowEmpty();
                     }
@@ -181,8 +265,18 @@ public sealed class RoaringBitmap
                     continue;
                 }
 
-                uint max = ((uint)_Keys[_Count - 1] << 16) | _Containers[_Count - 1].Max;
-                if (_ReadSeqLock() == seq)
+                uint max;
+                try
+                {
+                    max = ((uint)_Keys[_Count - 1] << 16) | _Containers[_Count - 1].Max;
+                }
+                catch (Exception) when (!_ReadStillValid(seq))
+                {
+                    // Torn read: a writer grew or replaced an array between two loads of this section. Retry.
+                    continue;
+                }
+
+                if (_ReadStillValid(seq))
                 {
                     return max;
                 }
@@ -207,7 +301,7 @@ public sealed class RoaringBitmap
 
             if (_Count == 0)
             {
-                if (_ReadSeqLock() == seq)
+                if (_ReadStillValid(seq))
                 {
                     value = 0;
                     return false;
@@ -216,8 +310,18 @@ public sealed class RoaringBitmap
                 continue;
             }
 
-            uint min = ((uint)_Keys[0] << 16) | _Containers[0].Min;
-            if (_ReadSeqLock() == seq)
+            uint min;
+            try
+            {
+                min = ((uint)_Keys[0] << 16) | _Containers[0].Min;
+            }
+            catch (Exception) when (!_ReadStillValid(seq))
+            {
+                // Torn read: a writer grew or replaced an array between two loads of this section. Retry.
+                continue;
+            }
+
+            if (_ReadStillValid(seq))
             {
                 value = min;
                 return true;
@@ -242,7 +346,7 @@ public sealed class RoaringBitmap
 
             if (_Count == 0)
             {
-                if (_ReadSeqLock() == seq)
+                if (_ReadStillValid(seq))
                 {
                     value = 0;
                     return false;
@@ -251,8 +355,18 @@ public sealed class RoaringBitmap
                 continue;
             }
 
-            uint max = ((uint)_Keys[_Count - 1] << 16) | _Containers[_Count - 1].Max;
-            if (_ReadSeqLock() == seq)
+            uint max;
+            try
+            {
+                max = ((uint)_Keys[_Count - 1] << 16) | _Containers[_Count - 1].Max;
+            }
+            catch (Exception) when (!_ReadStillValid(seq))
+            {
+                // Torn read: a writer grew or replaced an array between two loads of this section. Retry.
+                continue;
+            }
+
+            if (_ReadStillValid(seq))
             {
                 value = max;
                 return true;
@@ -277,20 +391,28 @@ public sealed class RoaringBitmap
             }
 
             RoaringBitmap copy = new();
-            if (_Count > 0)
+            try
             {
-                copy._Keys = new ushort[_Count];
-                copy._Containers = new IContainer[_Count];
-                Array.Copy(_Keys, copy._Keys, _Count);
-                for (int i = 0; i < _Count; i++)
+                if (_Count > 0)
                 {
-                    copy._Containers[i] = _Containers[i].Clone();
+                    copy._Keys = new ushort[_Count];
+                    copy._Containers = new IContainer[_Count];
+                    Array.Copy(_Keys, copy._Keys, _Count);
+                    for (int i = 0; i < _Count; i++)
+                    {
+                        copy._Containers[i] = _Containers[i].Clone();
+                    }
+                    copy._Count = _Count;
+                    copy._Cardinality = _Cardinality;
                 }
-                copy._Count = _Count;
-                copy._Cardinality = _Cardinality;
+            }
+            catch (Exception) when (!_ReadStillValid(seq))
+            {
+                // Torn read: a writer grew or replaced an array between two loads of this section. Retry.
+                continue;
             }
 
-            if (_ReadSeqLock() == seq)
+            if (_ReadStillValid(seq))
             {
                 return copy;
             }
@@ -608,6 +730,25 @@ public sealed class RoaringBitmap
     }
 
     /// <summary>
+    /// In-place OR with a read-only view: adds all values from <paramref name="other"/> without first cloning the
+    /// viewed bitmap (<see cref="ReadOnlyRoaringBitmap.ToBitmap"/> would copy every chunk only for
+    /// <see cref="OrWith(RoaringBitmap)"/> to clone the adopted chunks again). An empty view is a no-op.
+    /// </summary>
+    /// <remarks>
+    /// Same precondition as <see cref="OrWith(RoaringBitmap)"/>: the bitmap behind <paramref name="other"/> must
+    /// not be appended to while this runs (for example a <see cref="PacketIndex"/> that is no longer growing).
+    /// </remarks>
+    public void OrWith(ReadOnlyRoaringBitmap other)
+    {
+        if (other.IsEmpty)
+        {
+            return;
+        }
+
+        OrWith(other.Inner);
+    }
+
+    /// <summary>
     /// In-place ANDNOT: removes all values present in <paramref name="other"/>.
     /// Uses SIMD in-place path for BitmapContainer×BitmapContainer.
     /// </summary>
@@ -791,24 +932,32 @@ public sealed class RoaringBitmap
             }
 
             long rank = 0;
-            for (int i = 0; i < _Count; i++)
+            try
             {
-                if (_Keys[i] < high)
+                for (int i = 0; i < _Count; i++)
                 {
-                    rank += _Containers[i].Cardinality;
-                }
-                else if (_Keys[i] == high)
-                {
-                    rank += _ContainerRank(_Containers[i], low);
-                    break;
-                }
-                else
-                {
-                    break;
+                    if (_Keys[i] < high)
+                    {
+                        rank += _Containers[i].Cardinality;
+                    }
+                    else if (_Keys[i] == high)
+                    {
+                        rank += _ContainerRank(_Containers[i], low);
+                        break;
+                    }
+                    else
+                    {
+                        break;
+                    }
                 }
             }
+            catch (Exception) when (!_ReadStillValid(seq))
+            {
+                // Torn read: a writer grew or replaced an array between two loads of this section. Retry.
+                continue;
+            }
 
-            if (_ReadSeqLock() == seq)
+            if (_ReadStillValid(seq))
             {
                 return rank;
             }
@@ -838,20 +987,28 @@ public sealed class RoaringBitmap
             long remaining = position;
             uint? selected = null;
             bool found = false;
-            for (int i = 0; i < _Count; i++)
+            try
             {
-                int card = _Containers[i].Cardinality;
-                if (remaining < card)
+                for (int i = 0; i < _Count; i++)
                 {
-                    ushort low = _ContainerSelect(_Containers[i], (int)remaining);
-                    selected = ((uint)_Keys[i] << 16) | low;
-                    found = true;
-                    break;
+                    int card = _Containers[i].Cardinality;
+                    if (remaining < card)
+                    {
+                        ushort low = _ContainerSelect(_Containers[i], (int)remaining);
+                        selected = ((uint)_Keys[i] << 16) | low;
+                        found = true;
+                        break;
+                    }
+                    remaining -= card;
                 }
-                remaining -= card;
+            }
+            catch (Exception) when (!_ReadStillValid(seq))
+            {
+                // Torn read: a writer grew or replaced an array between two loads of this section. Retry.
+                continue;
             }
 
-            if (_ReadSeqLock() == seq)
+            if (_ReadStillValid(seq))
             {
                 if (found)
                 {
@@ -888,22 +1045,33 @@ public sealed class RoaringBitmap
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static bool _IsWriteInProgress(int seq) => (seq & 1) != 0;
 
+    /// <summary>Acquire load of the sequence; an odd value means a write is in progress.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private int _ReadSeqLock() => Volatile.Read(ref _SeqLock);
 
+    /// <summary>
+    /// Validates a read section that started at <paramref name="seq"/>. The full fence keeps the section's data
+    /// loads before the second sequence load; an acquire load alone orders only later loads, so on ARM64 a reader
+    /// could otherwise validate against the old even value after reading half-updated data.
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void _BeginWrite()
+    private bool _ReadStillValid(int seq)
     {
-        int seq = Volatile.Read(ref _SeqLock);
-        Volatile.Write(ref _SeqLock, seq + 1);
+        Interlocked.MemoryBarrier();
+        return Volatile.Read(ref _SeqLock) == seq;
     }
 
+    /// <summary>
+    /// Makes the sequence odd. <see cref="Interlocked.Increment(ref int)"/> is a full fence, so the data writes that
+    /// follow cannot become visible before the odd value (a release store would order only the earlier writes).
+    /// The sequence wraps after 2^31 writes; parity and equality stay correct under wrap.
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void _EndWrite()
-    {
-        int seq = Volatile.Read(ref _SeqLock);
-        Volatile.Write(ref _SeqLock, seq + 1);
-    }
+    private void _BeginWrite() => _ = Interlocked.Increment(ref _SeqLock);
+
+    /// <summary>Makes the sequence even again after the data writes; full fence on both sides.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void _EndWrite() => _ = Interlocked.Increment(ref _SeqLock);
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void _AddUnsynchronized(uint value)

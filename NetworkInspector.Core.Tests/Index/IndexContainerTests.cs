@@ -154,6 +154,23 @@ internal sealed class IndexContainerTests
         await Assert.That(run.Contains((ushort)1)).IsFalse();
     }
 
+    [Test]
+    public async Task AddToZeroCapacityContainerInserts()
+    {
+        // A zero-length backing array (internal constructor, Clone of an empty container) must grow instead of
+        // running past the array.
+        IContainer empty = new ArrayContainer([], 0);
+        IContainer cloned = new ArrayContainer().Clone();
+
+        empty = empty.Add(5);
+        cloned = cloned.Add(6);
+
+        await Assert.That(empty.Contains(5)).IsTrue();
+        await Assert.That(empty.Cardinality).IsEqualTo(1);
+        await Assert.That(cloned.Contains(6)).IsTrue();
+        await Assert.That(cloned.Cardinality).IsEqualTo(1);
+    }
+
     // === BitmapContainer ===
 
     [Test]
@@ -251,6 +268,18 @@ internal sealed class IndexContainerTests
 
         RunContainer clone = (RunContainer)r.Clone();
         await Assert.That(clone.Cardinality).IsEqualTo(12);
+    }
+
+    [Test]
+    public async Task AddToClonedEmptyContainerInsertsRun()
+    {
+        // Clone of an empty run container has a zero-length run array; the insert must grow it.
+        RunContainer clone = (RunContainer)new RunContainer().Clone();
+
+        RunContainer result = (RunContainer)clone.Add(7);
+
+        await Assert.That(result.Contains(7)).IsTrue();
+        await Assert.That(result.RunCount).IsEqualTo(1);
     }
 
     [Test]

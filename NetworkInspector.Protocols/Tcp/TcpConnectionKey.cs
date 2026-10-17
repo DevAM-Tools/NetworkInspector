@@ -11,9 +11,10 @@ namespace NetworkInspector.Protocols.Tcp;
 /// so all addresses use a uniform 128-bit representation.
 /// </para>
 /// <para>
-/// Uses a fast XOR-rotate hash instead of <see cref="HashCode.Combine{T1,T2,T3,T4}"/>
-/// to reduce per-packet overhead. The hash only mixes the non-redundant parts of
-/// the address fields (lower 64 bits carry all entropy for IPv4-mapped addresses).
+/// The hash is <see cref="HashCode"/>, which is seeded randomly per process. The keys come from captured, possibly
+/// crafted packets: an unkeyed mix would let colliding connections be computed offline and turn every dictionary
+/// insert into a long probe (denial of service). Every field is added as 32-bit words, so no folding step creates
+/// collisions of its own. Hash values are not persisted or shown.
 /// </para>
 /// </summary>
 internal readonly struct TcpConnectionKey : IEquatable<TcpConnectionKey>
@@ -98,38 +99,13 @@ internal readonly struct TcpConnectionKey : IEquatable<TcpConnectionKey>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public override int GetHashCode()
     {
-        // Fast XOR-rotate mixing — avoids SipHash overhead of HashCode.Combine.
-        // For IPv4-mapped addresses the upper 64 bits are always 0, so we focus on
-        // the lower 64 bits which carry all the entropy (0x0000FFFF_xxxxxxxx).
-        // Ports are mixed via shift + XOR to spread their bits across the hash.
-        ulong lo1 = (ulong)_Addr1;
-        ulong lo2 = (ulong)_Addr2;
-        ulong hi1 = (ulong)(_Addr1 >> 64);
-        ulong hi2 = (ulong)(_Addr2 >> 64);
-
-        // Combine ports into a single 32-bit value
-        uint ports = ((uint)_Port1 << 16) | _Port2;
-
-        // XOR-rotate mixing: each rotate uses a different prime shift count
-        // to minimize collision probability on structured network data.
-        ulong h = lo1;
-        h = _RotateLeft(h, 5) ^ lo2;
-        h = _RotateLeft(h, 7) ^ hi1;
-        h = _RotateLeft(h, 11) ^ hi2;
-        h = _RotateLeft(h, 13) ^ ports;
-        h = _RotateLeft(h, 17) ^ _LastVlanId;
-        h = _RotateLeft(h, 19) ^ (uint)_FrameIdentity;
-
-        // Final avalanche — ensures all bits influence the result
-        h ^= h >> 33;
-        h *= 0xFF51AFD7ED558CCD; // Murmur3-style constant
-        h ^= h >> 33;
-
-        return (int)h;
+        // Process-seeded hash over 32-bit words: injective input, unpredictable buckets for crafted keys.
+        HashCode hash = default;
+        ConnectionKeyHash.AddAddress(ref hash, _Addr1);
+        ConnectionKeyHash.AddAddress(ref hash, _Addr2);
+        hash.Add(((uint)_Port1 << 16) | _Port2);
+        hash.Add((uint)_LastVlanId);
+        hash.Add((uint)_FrameIdentity);
+        return hash.ToHashCode();
     }
-
-    /// <summary>Rotates a 64-bit value left by the specified number of bits.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static ulong _RotateLeft(ulong value, int shift) =>
-        (value << shift) | (value >> (64 - shift));
 }

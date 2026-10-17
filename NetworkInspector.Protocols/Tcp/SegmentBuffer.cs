@@ -107,7 +107,11 @@ internal sealed class SegmentBuffer
     /// </summary>
     /// <param name="context">Stream detection context for context-aware detectors.</param>
     /// <param name="pdu">The extracted PDU data on success. The memory is owned by the caller.</param>
-    /// <returns><see langword="true"/> if a complete PDU was extracted.</returns>
+    /// <returns>
+    /// <see langword="true"/> if a complete PDU was extracted. A complete result of length 0, longer than
+    /// the PDU cap, or longer than the contiguous prefix moves the buffer to <see cref="SegmentBufferState.Error"/>
+    /// and returns <see langword="false"/>.
+    /// </returns>
     internal bool TryExtractPdu(in StreamDetectionContext context, out ReadOnlyMemory<byte> pdu)
     {
         pdu = default;
@@ -125,8 +129,10 @@ internal sealed class SegmentBuffer
 
         if (result.IsComplete)
         {
+            // A complete PDU must consume at least one byte. A detector that reports length 0 would hand the
+            // caller's extraction loop the same empty PDU forever, so it is treated like an impossible length.
             int pduLength = result.Length;
-            if (pduLength > _MaxPduSize || pduLength > _Stream.ContiguousLength)
+            if (pduLength <= 0 || pduLength > _MaxPduSize || pduLength > _Stream.ContiguousLength)
             {
                 State = SegmentBufferState.Error;
                 return false;

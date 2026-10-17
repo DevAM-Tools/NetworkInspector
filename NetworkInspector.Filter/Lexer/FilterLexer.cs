@@ -22,6 +22,10 @@ namespace NetworkInspector.Filter.Lexer;
 ///   <item><description>Dotted identifiers and the small keyword set.</description></item>
 /// </list>
 /// <para>
+/// Between <c>[</c> and <c>]</c> steps 2 and 3 are skipped: brackets only hold integers (slice bounds and
+/// scope occurrences), so <c>[10:12]</c> lexes as <c>10</c> <c>:</c> <c>12</c> rather than as a byte literal.
+/// </para>
+/// <para>
 /// Removed v1 constructs (<c>seq</c>, <c>stream</c>, <c>window</c>, <c>nav</c>, <c>let</c>,
 /// <c>where</c>, <c>step</c>) are intentionally <b>not</b> keywords here: they lex as plain
 /// identifiers so that field paths such as <c>tcp.window_size</c> keep working. The parser
@@ -56,6 +60,13 @@ internal sealed class FilterLexer
     /// <summary>Current read offset into <see cref="_Source"/>.</summary>
     private int _Position;
 
+    /// <summary>
+    /// Whether the scanner is between a <c>[</c> and its <c>]</c>. Only integers are legal there (slice bounds
+    /// <c>[10:12]</c>, scope occurrences <c>$udp[1]</c>), so the hex-pair and IPv6 probes must not claim a
+    /// <c>10:12</c> run as a byte literal.
+    /// </summary>
+    private bool _InBrackets;
+
     #endregion
 
     #region Construction
@@ -89,11 +100,43 @@ internal sealed class FilterLexer
                 return FilterResult.Fail<List<Token>>(next.Error);
             }
 
-            _Tokens.Add(token);
+            _Append(token);
         }
 
         _Tokens.Add(Token.Eof(_Position));
         return FilterResult.Ok<List<Token>>(_Tokens);
+    }
+
+    /// <summary>
+    /// Tokenizes as far as the source is lexically valid and stops silently at the first error. Used by
+    /// completion, which must read the context of a half-typed expression such as <c>udp.port =</c>.
+    /// </summary>
+    /// <param name="unterminatedString">
+    /// Receives <see langword="true"/> when lexing stopped inside an open string literal, so the caret is inside
+    /// a string and no name completion applies.
+    /// </param>
+    /// <returns>The tokens before the first error, without a trailing <see cref="TokenKind.Eof"/>.</returns>
+    public List<Token> TokenizeLenient(out bool unterminatedString)
+    {
+        unterminatedString = false;
+        while (true)
+        {
+            _SkipWhitespace();
+            if (_Position >= _Source.Length)
+            {
+                return _Tokens;
+            }
+
+            int start = _Position;
+            FilterResult<Token> next = _NextToken();
+            if (!next.TryGetValue(out Token token))
+            {
+                unterminatedString = _Source[start] == '"';
+                return _Tokens;
+            }
+
+            _Append(token);
+        }
     }
 
     #endregion
@@ -267,14 +310,19 @@ internal sealed class FilterLexer
             }
         }
 
-        if (_TryLexHexGroups(start, out Token hexToken))
+        // Inside "[…]" a digit run can only be a slice bound or a scope occurrence, never a MAC, byte or IPv6
+        // literal: "udp.payload[10:12]" must stay Integer ':' Integer. Literals after '==' / 'in' are unaffected.
+        if (!_InBrackets)
         {
-            return hexToken;
-        }
+            if (_TryLexHexGroups(start, out Token hexToken))
+            {
+                return hexToken;
+            }
 
-        if (_TryLexIpv6(start, out Token ipv6Token))
-        {
-            return ipv6Token;
+            if (_TryLexIpv6(start, out Token ipv6Token))
+            {
+                return ipv6Token;
+            }
         }
 
         return _LexDecimalOrIpv4(start);
@@ -505,8 +553,9 @@ internal sealed class FilterLexer
 
         string firstSegment = _Source[start.._Position];
 
-        // A hex-looking segment followed by ':' may begin a MAC or IPv6 literal.
-        if (_Position < _Source.Length && _Source[_Position] == ':' && _IsAllHex(firstSegment))
+        // A hex-looking segment followed by ':' may begin a MAC or IPv6 literal — but not inside "[…]", where
+        // "[ab:cd]" stays identifier ':' identifier so the parser reports the bad bound at the right span.
+        if (!_InBrackets && _Position < _Source.Length && _Source[_Position] == ':' && _IsAllHex(firstSegment))
         {
             int savedPosition = _Position;
             _Position = start;
@@ -559,11 +608,17 @@ internal sealed class FilterLexer
         }
     }
 
-    private void _ConsumeDigits()
+    /// <summary>Appends a token and tracks the bracket state the number probes depend on.</summary>
+    private void _Append(Token token)
     {
-        while (_Position < _Source.Length && char.IsAsciiDigit(_Source[_Position]))
+        _Tokens.Add(token);
+        if (token.Kind == TokenKind.LeftBracket)
         {
-            _Position++;
+            _InBrackets = true;
+        }
+        else if (token.Kind == TokenKind.RightBracket)
+        {
+            _InBrackets = false;
         }
     }
 

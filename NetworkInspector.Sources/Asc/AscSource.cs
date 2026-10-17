@@ -85,6 +85,12 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
 
     // ── Cross-thread observable state (use Volatile) ──
     private volatile bool _Started;
+
+    /// <summary><see cref="AscSourceOptions.FrameSlabSize"/> of the options this source was opened with.</summary>
+    private readonly int _FrameSlabSize;
+
+    /// <summary>Frame slab allocator of the sequential path; null when slabs are off. NextFrame thread only.</summary>
+    private FrameSlabAllocator? _Slabs;
     /// <summary>Atomic dispose latch (0 = live, 1 = disposed).</summary>
     private volatile int _Disposed;
     private volatile bool _Aborted;
@@ -105,6 +111,7 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
         AscFrameIndexEntry[] frameIndex,
         HashSet<(AscBusType, int, LinkType)> discoveredInterfaces,
         ErrorToleranceMode errorTolerance,
+        int frameSlabSize,
         string uiName)
     {
         _InMemoryLines = inMemoryLines;
@@ -119,6 +126,7 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
         _DiscoveredInterfaces = discoveredInterfaces;
         UiName = uiName;
         ErrorTolerance = errorTolerance;
+        _FrameSlabSize = frameSlabSize;
     }
 
     #endregion
@@ -184,7 +192,7 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
 
         long fileSize = fileInfo.Length;
 
-        bool useInMemory = options.PreloadBudget.HasValue && fileSize <= options.PreloadBudget.Value;
+        bool useInMemory = PreloadDecision.ShouldPreload(fileSize, options.PreloadBudget);
         if (useInMemory)
         {
             // Small file: load all content into memory; split into zero-copy slices for zero-seek random access
@@ -245,6 +253,7 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
         _SourceId = sourceId;
         _Registry = registry;
         _NextFrameIndex = 0;
+        _Slabs = FrameSlabAllocator.CreateOrNull(_FrameSlabSize);
 
         // Pre-register all interfaces discovered during index building.
         // In the common case every (busType, channel) is seen here, making
@@ -330,6 +339,12 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
     #region IDisposable
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// Idempotent. Releases the registry reference and then the disk handle of the disk backend. A failure to close
+    /// the handle is an OS error, not a frame error: it propagates after the source's own state is released (the same
+    /// rule as <see cref="Pcapng.PcapngSource"/> and <see cref="Blf.BlfSource"/>).
+    /// </remarks>
+    /// <exception cref="IOException">Closing the disk handle failed.</exception>
     public void Dispose()
     {
         if (Interlocked.Exchange(ref _Disposed, 1) != 0)
@@ -391,7 +406,7 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
             _IndexFrameLine(trimmed, i, ref runningClock, relativeClock, entries, discovered);
         }
 
-        return new AscSource(lines, null, header, [.. entries], discovered, options.ErrorTolerance, uiName);
+        return new AscSource(lines, null, header, [.. entries], discovered, options.ErrorTolerance, options.FrameSlabSize, uiName);
     }
 
     #endregion
@@ -534,7 +549,7 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
             chunkStartOffset += bytesRead;
         }
 
-        return new AscSource(null, path, header, [.. entries], discovered, options.ErrorTolerance, uiName);
+        return new AscSource(null, path, header, [.. entries], discovered, options.ErrorTolerance, options.FrameSlabSize, uiName);
     }
 
     /// <summary>
@@ -650,26 +665,42 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
         }
         else
         {
-            // Disk path: seek to stored byte offset and read one line as raw bytes
-            byte[]? lineBytes = _ReadLineBytesFromDisk(entry.Location);
-            if (lineBytes is null)
+            // Disk path: read one line window at the stored byte offset and parse it in place from the rental; the
+            // parsers copy the frame bytes out, so no per-line array is needed.
+            byte[] rented = ArrayPool<byte>.Shared.Rent(AscSourceOptions.MaxLineLength);
+            try
             {
-                if (reportErrors)
+                int read = _ReadWindowFromDisk(entry.Location, rented.AsSpan(0, AscSourceOptions.MaxLineLength));
+                if (read == 0)
                 {
-                    _HandleSkip(new FrameReadErrorEventArgs
+                    if (reportErrors)
                     {
-                        FrameIndex = frameIndex,
-                        FileOffset = entry.Location,
-                        Kind = FrameReadErrorKind.TruncatedStream,
-                        Message = $"Could not read line at offset {entry.Location} for frame {frameIndex}.",
-                    });
+                        _HandleSkip(new FrameReadErrorEventArgs
+                        {
+                            FrameIndex = frameIndex,
+                            FileOffset = entry.Location,
+                            Kind = FrameReadErrorKind.TruncatedStream,
+                            Message = $"Could not read line at offset {entry.Location} for frame {frameIndex}.",
+                        });
+                    }
+                    return null;
                 }
-                return null;
-            }
 
-            return _ParseAndBuildFrame(
-                AscTokenizerBytes.TrimAscii(lineBytes.AsSpan()),
-                entry, frameIndex, reportErrors);
+                // One line: cut at the first LF and drop a trailing CR.
+                ReadOnlySpan<byte> window = rented.AsSpan(0, read);
+                int newline = window.IndexOf((byte)'\n');
+                ReadOnlySpan<byte> line = newline >= 0 ? window[..newline] : window;
+                if (!line.IsEmpty && line[^1] == (byte)'\r')
+                {
+                    line = line[..^1];
+                }
+
+                return _ParseAndBuildFrame(AscTokenizerBytes.TrimAscii(line), entry, frameIndex, reportErrors);
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(rented);
+            }
         }
     }
 
@@ -711,53 +742,6 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
     }
 
     /// <summary>
-    /// Re-reads a single line from disk at the given byte offset as a raw byte array.
-    /// Uses the long-lived <see cref="_DiskHandle"/> together with the stateless,
-    /// thread-safe <see cref="RandomAccess.Read(SafeFileHandle, Span{byte}, long)"/>,
-    /// so concurrent random-access reads do not contend on a shared seek position.
-    /// Returns <c>null</c> when the offset is beyond EOF.
-    /// </summary>
-    private byte[]? _ReadLineBytesFromDisk(long byteOffset)
-    {
-        SafeFileHandle handle = _DiskHandle!;
-        long fileLength = RandomAccess.GetLength(handle);
-        if (byteOffset >= fileLength)
-        {
-            return null;
-        }
-
-        byte[] rented = ArrayPool<byte>.Shared.Rent(AscSourceOptions.MaxLineLength);
-        try
-        {
-            int read = RandomAccess.Read(handle, rented.AsSpan(0, AscSourceOptions.MaxLineLength), byteOffset);
-
-            int filled = 0;
-            while (filled < read && rented[filled] != (byte)'\n')
-            {
-                filled++;
-            }
-
-            if (filled == 0 && read == 0)
-            {
-                return null;
-            }
-
-            if (filled > 0 && rented[filled - 1] == (byte)'\r')
-            {
-                filled--;
-            }
-
-            byte[] line = new byte[filled];
-            rented.AsSpan(0, filled).CopyTo(line);
-            return line;
-        }
-        finally
-        {
-            ArrayPool<byte>.Shared.Return(rented);
-        }
-    }
-
-    /// <summary>
     /// Parses a classified ASC line from UTF-8 bytes and constructs a <see cref="Frame"/>.
     /// Used by the disk-backed path and for in-memory lines (zero-copy byte span).
     /// </summary>
@@ -772,21 +756,25 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
     {
         bool parsed;
         int channel;
-        byte[] frameData;
+        ReadOnlyMemory<byte> frameData;
         AscBusType busType;
         LinkType linkType;
+
+        // Sequential frames (reportErrors) go into the frame slab when slabs are on; FrameById always builds its own
+        // arrays. CAN XL and FlexRay always get their own array.
+        FrameSlabAllocator? slabs = reportErrors ? _Slabs : null;
 
         switch (entry.LineType)
         {
             case AscLineType.CanMessage:
-                parsed = AscCanParser.TryParse(span, _Header.NumericBase,
+                parsed = AscCanParser.TryParse(span, _Header.NumericBase, slabs,
                     out _, out channel, out frameData);
                 busType = AscBusType.Can;
                 linkType = LinkType.CanSocketcan;
                 break;
 
             case AscLineType.CanFdMessage:
-                parsed = AscCanFdParser.TryParse(span, _Header.NumericBase,
+                parsed = AscCanFdParser.TryParse(span, _Header.NumericBase, slabs,
                     out _, out channel, out frameData);
                 busType = AscBusType.CanFd;
                 linkType = LinkType.CanSocketcan;
@@ -794,19 +782,20 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
 
             case AscLineType.CanXlMessage:
                 parsed = AscCanXlParser.TryParse(span,
-                    out _, out channel, out busType, out frameData);
+                    out _, out channel, out busType, out byte[] canXlFrame);
+                frameData = canXlFrame;
                 linkType = LinkType.CanSocketcan;
                 break;
 
             case AscLineType.CanErrorFrame:
             case AscLineType.CanOverloadFrame:
-                parsed = AscCanErrorParser.TryParse(span, out _, out channel, out frameData);
+                parsed = AscCanErrorParser.TryParse(span, slabs, out _, out channel, out frameData);
                 busType = AscBusType.Can;
                 linkType = LinkType.CanSocketcan;
                 break;
 
             case AscLineType.LinMessage:
-                parsed = AscLinParser.TryParse(span, _Header.NumericBase,
+                parsed = AscLinParser.TryParse(span, _Header.NumericBase, slabs,
                     out _, out channel, out frameData);
                 busType = AscBusType.Lin;
                 linkType = LinkType.Lin;
@@ -814,13 +803,14 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
 
             case AscLineType.FlexRayMessage:
                 parsed = AscFlexRayParser.TryParse(span, _Header.NumericBase,
-                    out _, out channel, out frameData);
+                    out _, out channel, out byte[] flexRayFrame);
+                frameData = flexRayFrame;
                 busType = AscBusType.FlexRay;
                 linkType = LinkType.Flexray;
                 break;
 
             case AscLineType.EthernetPacket:
-                parsed = AscEthernetParser.TryParse(span, _Header.NumericBase,
+                parsed = AscEthernetParser.TryParse(span, _Header.NumericBase, slabs,
                     out _, out channel, out frameData);
                 busType = AscBusType.Ethernet;
                 linkType = LinkType.Ethernet;

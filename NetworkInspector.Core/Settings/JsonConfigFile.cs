@@ -142,14 +142,28 @@ internal static class JsonConfigFile
             using FileStream stream = SettingsFileAccess.OpenSharedRead(resolvedPath);
             if (maxFileBytes > 0 && stream.Length > maxFileBytes)
             {
-                error = string.Create(
-                    CultureInfo.InvariantCulture,
-                    $"Configuration file '{label}' exceeds {maxFileBytes} bytes.");
+                error = _ExceedsMessage(label, maxFileBytes);
                 value = null;
                 return false;
             }
 
-            return _TryDeserialize(stream, typeInfo, label, maxJsonDepth, out value, out error);
+            // The cap also holds for the bytes actually read: the file can grow between the length check and the
+            // parse. A parse cut at the cap reports the size, not the syntax error the cut produced.
+            if (maxFileBytes <= 0)
+            {
+                return _TryDeserialize(stream, typeInfo, label, maxJsonDepth, out value, out error);
+            }
+
+            using BoundedReadStream bounded = new(stream, maxFileBytes);
+            bool loaded = _TryDeserialize(bounded, typeInfo, label, maxJsonDepth, out value, out error);
+            if (bounded.Exceeded)
+            {
+                error = _ExceedsMessage(label, maxFileBytes);
+                value = null;
+                return false;
+            }
+
+            return loaded;
         }
         catch (FileNotFoundException)
         {
@@ -237,6 +251,10 @@ internal static class JsonConfigFile
     #endregion
 
     #region Deserialize and stream copy
+
+    /// <summary>Error text for a file above the size cap (reported length or bytes read).</summary>
+    private static string _ExceedsMessage(string label, long maxFileBytes) =>
+        string.Create(CultureInfo.InvariantCulture, $"Configuration file '{label}' exceeds {maxFileBytes} bytes.");
 
     /// <summary>
     /// Deserializes <paramref name="stream"/> with AOT-safe <paramref name="typeInfo"/>.

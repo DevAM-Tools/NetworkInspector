@@ -42,9 +42,6 @@ public struct Xoroshiro128PlusPlus
     /// <summary>Second state word (s1).</summary>
     private ulong _S1;
 
-    /// <summary>Test hook: forces the scalar bulk-fill branch in <see cref="FillBytes"/>.</summary>
-    internal static bool ForceScalarBulkFillForTesting;
-
     #endregion
 
     #region Constructor
@@ -175,11 +172,11 @@ public struct Xoroshiro128PlusPlus
             out ulong s0D, out ulong s1D);
 
         // All three paths produce identical byte sequences for the same seed.
-        if (!ForceScalarBulkFillForTesting && Vector256.IsHardwareAccelerated)
+        if (Vector256.IsHardwareAccelerated)
         {
             _FillBytesVector256(buffer, s0B, s1B, s0C, s1C, s0D, s1D);
         }
-        else if (!ForceScalarBulkFillForTesting && Vector128.IsHardwareAccelerated)
+        else if (Vector128.IsHardwareAccelerated)
         {
             _FillBytesVector128(buffer, s0B, s1B, s0C, s1C, s0D, s1D);
         }

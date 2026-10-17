@@ -251,6 +251,10 @@ internal sealed class BlfDecompressionConcurrencyTests
         {
             ScanMode = ScanMode.Full,
             MaxUncompressedContainerSize = BlfSourceOptions.DefaultMaxUncompressedContainerSize,
+
+            // No cache: the open-time scan offers decoded containers to the cache, and this test needs FrameById to
+            // decompress again after the header was corrupted.
+            CacheBudget = 0,
         });
         SourceTestFixture.InitializeAndStartSource(source);
 

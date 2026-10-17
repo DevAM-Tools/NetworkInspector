@@ -66,7 +66,8 @@ internal abstract class ExportScenarioBase<TItem> : IProfilingScenario, IDisposa
     /// <inheritdoc/>
     public void Setup()
     {
-        _Stack = StackHelper.CreateStack();
+        // Mixed capture formats may need protocols outside the fair eth/IP/UDP/TCP cone.
+        _Stack = StackHelper.CreateFullStack();
         Frame[] frames = FrameHelper.CreateSharedFrames(BatchSize, _Stack);
         _Items = CreateItems(_Stack, frames);
         _Stream = new MemoryStream(InitialStreamCapacityBytes);

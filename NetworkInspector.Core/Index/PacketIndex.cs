@@ -56,6 +56,14 @@ public sealed class PacketIndex : IPacketIndexReader
     /// </summary>
     private readonly RoaringBitmap _IndexedPackets = new();
 
+    /// <summary>
+    /// First 65 536-id chunk (high 16 bits of the packet id) not yet run-optimized. Packets are indexed mostly in
+    /// order, so once a packet of a higher chunk commits, every lower chunk is complete and its containers are
+    /// converted to run containers where that is smaller (<see cref="RoaringBitmap.RunOptimizeKeys"/>). Written and
+    /// read only by the single writer in <see cref="EndPacket"/>.
+    /// </summary>
+    private int _NextChunkToOptimize;
+
     #endregion
 
     #region Lifecycle
@@ -184,6 +192,7 @@ public sealed class PacketIndex : IPacketIndexReader
             _IndexedPackets.Add((uint)_CurrentPacketId);
             _ClearDedup(_GroupDedup);
             _ClearDedup(_ProtocolDedup);
+            _RunOptimizeCompletedChunks((int)((uint)_CurrentPacketId >> 16));
         }
 
         _SuppressCommit = false;
@@ -517,6 +526,33 @@ public sealed class PacketIndex : IPacketIndexReader
         {
             Array.Clear(dedup);
         }
+    }
+
+    /// <summary>
+    /// Run-optimizes every chunk below <paramref name="chunk"/> that was not optimized yet, in all group and protocol
+    /// bitmaps and in the indexed-packet set. Each chunk is visited once over the life of the index; a gap of absent
+    /// chunks costs one binary search per bitmap. Rare path (once per 65 536 packets in order).
+    /// </summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private void _RunOptimizeCompletedChunks(int chunk)
+    {
+        if (chunk <= _NextChunkToOptimize)
+        {
+            return;
+        }
+
+        foreach (RoaringBitmap bitmap in _GroupBitmaps)
+        {
+            _ = bitmap.RunOptimizeKeys(_NextChunkToOptimize, chunk);
+        }
+
+        foreach (RoaringBitmap bitmap in _ProtocolBitmaps)
+        {
+            _ = bitmap.RunOptimizeKeys(_NextChunkToOptimize, chunk);
+        }
+
+        _ = _IndexedPackets.RunOptimizeKeys(_NextChunkToOptimize, chunk);
+        _NextChunkToOptimize = chunk;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

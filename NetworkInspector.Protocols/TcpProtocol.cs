@@ -528,15 +528,11 @@ public sealed partial class TcpProtocol : IProtocol
     /// Heuristic dispatch table for payload-based protocol detection.
     /// Used as fallback when port-based dispatch fails to match.
     /// Registered manually in <see cref="ProtocolRegistration"/> because the source generator
-    /// does not support heuristic table attributes.
+    /// does not support heuristic table attributes. TCP finds it by <see cref="HeuristicTableName"/>
+    /// in <c>OnStart</c>, so the registration needs no reference to the TCP instance; invalid when no
+    /// table of that name exists.
     /// </summary>
     private HeuristicProtocolTableId _HeuristicTableId;
-
-    /// <summary>
-    /// Sets the heuristic protocol table ID. Called by <see cref="ProtocolRegistration"/>
-    /// after the table is registered with the stack builder.
-    /// </summary>
-    internal void SetHeuristicTableId(HeuristicProtocolTableId tableId) => _HeuristicTableId = tableId;
 
     #endregion
 
@@ -609,6 +605,7 @@ public sealed partial class TcpProtocol : IProtocol
         _Ipv6DstFieldId = stack.GetFieldId("ipv6.dst") ?? FieldId.Invalid;
         _Ipv4ProtocolId = stack.GetProtocolId("ip") ?? ProtocolId.Invalid;
         _Ipv6ProtocolId = stack.GetProtocolId("ipv6") ?? ProtocolId.Invalid;
+        _HeuristicTableId = stack.GetHeuristicProtocolTableId(HeuristicTableName) ?? HeuristicProtocolTableId.Invalid;
         _Populator = _PopulateTcp;
         _PortSparseCache = stack.BuildU64SparseIdCache(_PortTableId);
         _ReassemblyEngine = new TcpReassemblyEngine(stack);
@@ -791,7 +788,9 @@ public sealed partial class TcpProtocol : IProtocol
     private bool? _ValidateChecksum(in MutField container, ReadOnlySpan<byte> tcpData)
     {
         const byte TcpProtocolNumber = 6;
-        ushort tcpLength = (ushort)tcpData.Length;
+        // The IPv6 pseudo-header carries a 32-bit upper-layer length (jumbograms, reassembled payloads); IPv4 payloads
+        // never exceed 16 bits.
+        int tcpLength = tcpData.Length;
         PacketId packetId = container.Packet.Id;
 
         (IPv4Address Src, IPv4Address Dst)? ipv4 = null;
@@ -819,14 +818,14 @@ public sealed partial class TcpProtocol : IProtocol
         if (ipv4.HasValue)
         {
             pseudoSum = InternetChecksum.ComputeIPv4PseudoHeaderSum(
-                ipv4.Value.Src.RawValue, ipv4.Value.Dst.RawValue, TcpProtocolNumber, tcpLength);
+                ipv4.Value.Src.RawValue, ipv4.Value.Dst.RawValue, TcpProtocolNumber, (ushort)tcpLength);
         }
         else
         {
             IPv6Address s6 = ipv6!.Value.Src;
             IPv6Address d6 = ipv6!.Value.Dst;
             pseudoSum = InternetChecksum.ComputeIPv6PseudoHeaderSum(
-                s6.High, s6.Low, d6.High, d6.Low, TcpProtocolNumber, tcpLength);
+                s6.High, s6.Low, d6.High, d6.Low, TcpProtocolNumber, (uint)tcpLength);
         }
 
         ushort result = InternetChecksum.ComputeWithPseudoHeader(tcpData, pseudoSum);
@@ -1378,10 +1377,10 @@ public sealed partial class TcpProtocol : IProtocol
             Flags: (AnalysisEffectFlags)analysis.Flags,
             DupAckNum: analysis.DupAckNum,
             BytesInFlight: analysis.BytesInFlight,
-            InitialRtt: (float)analysis.InitialRtt,
-            AckRtt: (float)analysis.AckRtt,
-            TimeRelative: (float)analysis.TimeRelative,
-            TimeDelta: (float)analysis.TimeDelta,
+            InitialRtt: analysis.InitialRtt,
+            AckRtt: analysis.AckRtt,
+            TimeRelative: analysis.TimeRelative,
+            TimeDelta: analysis.TimeDelta,
             ScaledWindowSize: analysis.ScaledWindowSize,
             WindowScaleFactor: analysis.WindowScaleFactor,
             Phase: (byte)analysis.Phase,

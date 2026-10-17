@@ -174,86 +174,59 @@ public sealed class JsonExporter : IPacketListener, IErrorTolerantExporter, IDis
         }
         _Finished = true;
 
-        // try/finally guarantees pooled buffer return + output disposal even
-        // if the closing-bracket write or final flush throws on a broken stream.
-        // cleanupErrors is declared here so the throw can occur after the finally
-        // block — CA2219 prohibits throwing inside finally.
-        List<Exception> cleanupErrors = [];
-        try
-        {
-            // If never started, trigger lazy init so empty exports produce "[\n]\n"
-            if (!_Started && _Output is not null)
-            {
-                _Start();
-            }
+        // Shared finish sequence: finalize, then release every resource even when a step fails.
+        ExporterFinish.Run(
+            "JSON",
+            _FinalizeFile,
+            _ReportFinishError,
+            new ExporterReleaseStep("buffer return", _Buffer.Return),
+            new ExporterReleaseStep("output disposal", _DisposeOutput));
+    }
 
-            // Write the closing bracket when it has not been written yet.
-            // A previous OnFinish call may have failed before completing the write;
-            // retrying here ensures the file becomes a valid JSON document when
-            // the underlying stream recovers or is retried by the caller.
-            if (!_ClosingBracketWritten && _DirectStream is not null)
-            {
-                _WriteClosingBracket();
-                _ClosingBracketWritten = true;
-                _DirectStream?.Flush();
-            }
-        }
-        catch (Exception ex)
+    /// <summary>
+    /// Writes the closing bracket and flushes. Starts first for an empty export so it produces <c>"[\n]\n"</c>. A previous
+    /// OnFinish may have failed before completing the write; retrying here makes the file a valid JSON document when the
+    /// underlying stream recovers.
+    /// </summary>
+    private void _FinalizeFile()
+    {
+        if (!_Started && _Output is not null)
         {
-            _HasError = true;
-            if (ErrorCount < int.MaxValue) ErrorCount++;
-            ItemSkipped?.Invoke(this, new ExportErrorEventArgs
-            {
-                ItemIndex = PacketCount,
-                Kind = ex is IOException ? ExportErrorKind.IoError : ExportErrorKind.SerializationError,
-                Message = $"JSON finalization failed: {ex.Message}",
-            });
+            _Start();
         }
-        finally
+
+        if (!_ClosingBracketWritten && _DirectStream is not null)
         {
-            // Each cleanup step is independent so a failure in one step does not
-            // prevent remaining resources from being released. Failures are surfaced
-            // via the error channel. cleanupErrors is declared before the try so the
-            // throw can occur after the finally block — CA2219 prohibits throwing inside finally.
-            try
-            {
-                _Buffer.Return();
-            }
-            catch (Exception ex)
-            {
-                cleanupErrors.Add(ex);
-                _HasError = true;
-                if (ErrorCount < int.MaxValue) ErrorCount++;
-                ItemSkipped?.Invoke(this, new ExportErrorEventArgs
-                {
-                    ItemIndex = PacketCount,
-                    Kind = ExportErrorKind.IoError,
-                    Message = $"JSON buffer return failed: {ex.Message}",
-                });
-            }
-            try
-            {
-                _Output?.Dispose();
-            }
-            catch (Exception ex)
-            {
-                cleanupErrors.Add(ex);
-                _HasError = true;
-                if (ErrorCount < int.MaxValue) ErrorCount++;
-                ItemSkipped?.Invoke(this, new ExportErrorEventArgs
-                {
-                    ItemIndex = PacketCount,
-                    Kind = ExportErrorKind.IoError,
-                    Message = $"JSON output disposal failed: {ex.Message}",
-                });
-            }
-            _Output = null;
-            _DirectStream = null;
+            _WriteClosingBracket();
+            _ClosingBracketWritten = true;
+            _DirectStream?.Flush();
         }
-        if (cleanupErrors.Count > 0)
+    }
+
+    /// <summary>Disposes the output once (closes the stream unless the caller owns it).</summary>
+    private void _DisposeOutput()
+    {
+        ExportOutput? output = _Output;
+        _Output = null;
+        _DirectStream = null;
+        output?.Dispose();
+    }
+
+    /// <summary>Error channel of the finish sequence: marks the error, counts it, and raises <see cref="ItemSkipped"/>.</summary>
+    private void _ReportFinishError(ExportErrorKind kind, string message)
+    {
+        _HasError = true;
+        if (ErrorCount < int.MaxValue)
         {
-            throw new AggregateException("JSON exporter cleanup failed.", cleanupErrors);
+            ErrorCount++;
         }
+
+        ItemSkipped?.Invoke(this, new ExportErrorEventArgs
+        {
+            ItemIndex = PacketCount,
+            Kind = kind,
+            Message = message,
+        });
     }
 
     /// <inheritdoc/>

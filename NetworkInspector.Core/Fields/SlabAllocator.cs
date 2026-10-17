@@ -50,9 +50,25 @@ internal sealed class SlabAllocator<T>
     /// <param name="capacity">Total number of <typeparamref name="T"/> slots in the backing array.
     /// Choose a capacity that keeps the array below the 85 KB LOH threshold for value types.</param>
     internal SlabAllocator(int capacity)
+        : this(capacity, uninitialized: false)
+    {
+    }
+
+    /// <summary>Creates a slab allocator with the specified slot capacity and initialisation policy.</summary>
+    /// <param name="capacity">Total number of <typeparamref name="T"/> slots in the backing array.</param>
+    /// <param name="uninitialized">
+    /// True skips the zeroing pass (<see cref="GC.AllocateUninitializedArray{T}(int, bool)"/>). Only for consumers that
+    /// write every slot of a region before anything reads it (frame byte copies); <c>T</c> with references is still
+    /// zeroed by the runtime.
+    /// </param>
+    /// <remarks>
+    /// This file is link-compiled into <c>NetworkInspector.Sources</c> for frame slabs, so both assemblies use the same
+    /// bump allocator. Each assembly compiles its own internal copy.
+    /// </remarks>
+    internal SlabAllocator(int capacity, bool uninitialized)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(capacity);
-        _Buffer = new T[capacity];
+        _Buffer = uninitialized ? GC.AllocateUninitializedArray<T>(capacity) : new T[capacity];
     }
 
     /// <summary>

@@ -155,16 +155,6 @@ internal ref struct AscTokenizerBytes
         TrimEndAscii(TrimStartAscii(span));
 
     /// <summary>Returns the index of the first space (0x20) or tab (0x09), or -1.</summary>
-    private static int _IndexOfWhitespace(ReadOnlySpan<byte> span)
-    {
-        for (int i = 0; i < span.Length; i++)
-        {
-            if (span[i] == 0x20 || span[i] == 0x09)
-            {
-                return i;
-            }
-        }
-
-        return -1;
-    }
+    private static int _IndexOfWhitespace(ReadOnlySpan<byte> span) =>
+        span.IndexOfAny((byte)0x20, (byte)0x09);
 }

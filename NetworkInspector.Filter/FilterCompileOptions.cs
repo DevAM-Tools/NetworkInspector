@@ -54,24 +54,22 @@ public sealed class FilterCompileOptions
     #region Properties
 
     /// <summary>
-    /// Optional caret offset (<c>0..expression.Length</c>) for UI completers.
-    /// Compilation ignores the value; it is carried through so a completer can decide which
-    /// reported span contains the caret.
+    /// Optional name-span sink used by editors; see <see cref="FilterFieldNameSpanCallback"/>. For completion
+    /// lists at a caret position use <see cref="Filter.GetCompletions"/>.
     /// </summary>
-    public int? CaretPosition
-    {
-        get; init;
-    }
-
-    /// <summary>Optional name-span sink used by editors; see <see cref="FilterFieldNameSpanCallback"/>.</summary>
     public FilterFieldNameSpanCallback? OnFieldNameSpan
     {
         get; init;
     }
 
     /// <summary>
-    /// Optional regular-expression timeout for the <c>matches</c> operator.
-    /// Defaults to one second, bounding the cost of adversarial patterns on untrusted input.
+    /// Optional regular-expression timeout for the <c>matches</c> operator. Defaults to one second.
+    /// <para>
+    /// Patterns run on the linear-time <see cref="RegexOptions.NonBacktracking"/> engine whenever it supports
+    /// them; such patterns cannot time out. The timeout bounds only patterns that need backtracking
+    /// (lookaround, backreferences, atomic groups). The pattern is compiled once at parse time, so a filter
+    /// derived with <see cref="Filter.TryDerive(IStack, out Filter?, out FilterError?)"/> keeps this timeout.
+    /// </para>
     /// </summary>
     public TimeSpan? RegexTimeout
     {
@@ -82,7 +80,8 @@ public sealed class FilterCompileOptions
     /// Whether <see cref="Filter.TryIsMatch"/> stores each packet verdict in the match cache.
     /// Defaults to <see langword="true"/> (needed for Sessions re-query and stateful re-reads).
     /// Set <see langword="false"/> for forward-only convert/export so the cache does not grow
-    /// with every evaluated packet id.
+    /// with every evaluated packet id. Ignored (always on) for stateful programs: <c>flank(…)</c> needs the
+    /// cache so that re-querying a packet never feeds its sample to the tracker twice.
     /// </summary>
     public bool EnableMatchCache
     {

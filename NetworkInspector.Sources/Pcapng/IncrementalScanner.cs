@@ -66,9 +66,6 @@ internal enum ScanPacketResult
     /// <summary>The packet names an interface that was not declared in this section.</summary>
     SkipNoInterface,
 
-    /// <summary>The interface DLT is not a defined <see cref="LinkType"/> member.</summary>
-    SkipUnknownLinkType,
-
     /// <summary>The interface timestamp resolution cannot be represented.</summary>
     SkipUnsupportedTimestampResolution,
 }
@@ -167,10 +164,17 @@ internal sealed class IncrementalScanner
     private bool _Exhausted;
 
     /// <summary>
-    /// Optional skip callback. Set by <see cref="PcapSource"/> so malformed packet blocks
+    /// Optional skip callback. Set by <see cref="PcapngSource"/> so malformed packet blocks
     /// raise <c>FrameSkipped</c>. Null in isolated scanner tests.
     /// </summary>
     internal Action<FrameReadErrorEventArgs>? OnSkip;
+
+    /// <summary>
+    /// Optional callback for every IDB the scanner adds: section index, interface index, section, interface.
+    /// Runs on the scanning thread before any packet of that interface is indexed, so the owner can publish
+    /// the interface before <see cref="FrameIndex.Count"/> covers its first frame. Null in isolated scanner tests.
+    /// </summary>
+    internal Action<ushort, ushort, SectionInfo, InterfaceInfo>? OnInterfaceAdded;
 
     #endregion
 
@@ -439,6 +443,7 @@ internal sealed class IncrementalScanner
             {
                 return _ExhaustCorrupt(
                     $"PCAPNG block length {blockLength} cannot be rounded to a multiple of 4.",
+                    FrameReadErrorKind.CorruptedBlock,
                     out frame);
             }
 
@@ -447,18 +452,20 @@ internal sealed class IncrementalScanner
             {
                 return _ExhaustCorrupt(
                     $"PCAPNG block length {blockLength} is below the minimum block size.",
+                    FrameReadErrorKind.CorruptedBlock,
                     out frame);
             }
 
             if (_Offset + blockLength > fileSize)
             {
-                return _ExhaustCorrupt("PCAPNG block extends past the end of the file.", out frame);
+                return _ExhaustCorrupt("PCAPNG block extends past the end of the file.", FrameReadErrorKind.CorruptedBlock, out frame);
             }
 
             if (blockLength > PcapConstants.MaxBlockSize)
             {
                 return _ExhaustCorrupt(
                     $"Block length {blockLength} exceeds the {PcapConstants.MaxBlockSize / (1024 * 1024)} MiB safety cap.",
+                    FrameReadErrorKind.CorruptedBlock,
                     out frame);
             }
 
@@ -466,13 +473,17 @@ internal sealed class IncrementalScanner
             ReadOnlySpan<byte> blockData = _Backend.GetScanSpan(_Offset, readSize);
             if (blockData.Length < readSize)
             {
-                return _ExhaustCorrupt("PCAPNG block read was shorter than the declared length.", out frame);
+                return _ExhaustCorrupt(
+                    "PCAPNG block read was shorter than the declared length.", FrameReadErrorKind.CorruptedBlock, out frame);
             }
 
             if (!PcapngBlockLayout.TryValidatePcapngBlockLength(
                     blockLength, blockData.Slice(readSize - 4, 4), trailingSwap, out _))
             {
-                return _ExhaustCorrupt("PCAPNG trailing block_total_length does not match the leading length.", out frame);
+                return _ExhaustCorrupt(
+                    "PCAPNG trailing block_total_length does not match the leading length.",
+                    FrameReadErrorKind.CorruptedBlock,
+                    out frame);
             }
 
             // Advance offset past this block (4-byte aligned)
@@ -483,7 +494,8 @@ internal sealed class IncrementalScanner
                 case PcapConstants.BlockTypeSHB:
                     if (!_ProcessSectionHeader(blockData, format, shbSwap, blockLength, _Offset))
                     {
-                        return _ExhaustCorrupt("Failed to parse a subsequent Section Header Block.", out frame);
+                        return _ExhaustCorrupt(
+                            "Failed to parse a subsequent Section Header Block.", FrameReadErrorKind.CorruptedBlock, out frame);
                     }
                     _Offset = nextOffset;
                     continue;
@@ -586,19 +598,27 @@ internal sealed class IncrementalScanner
         uint inclLen = reader.Swap(rec.InclLen.Value);
         // orig_len is parsed but not stored. Frame.Data is captured bytes only.
 
+        // Bound incl_len by the declared snaplen and the block cap before anything reads or allocates
+        // that many bytes: a hostile 16-byte header must not request gigabytes. Same rule and text as the stream reader.
+        if (!PcapngBlockLayout.TryValidateLegacyInclLen(inclLen, format.Info.DeclaredSnapLength, out string? reason))
+        {
+            return _ExhaustCorrupt(reason!, FrameReadErrorKind.MalformedHeader, out frame);
+        }
+
         // Compute timestamp
         long timestampNanos = format.Info.TimestampToNanos(tsSec, tsFrac);
 
-        // Packet data starts after the 16-byte record header
+        // Packet data starts after the 16-byte record header. A record whose data is cut by EOF is reported
+        // as truncated, never returned as a shortened frame.
         long dataOffset = _Offset + PcapConstants.PcapPacketHeaderSize;
-        int capturedLength = (int)Math.Min(inclLen, fileSize - dataOffset);
-
-        if (capturedLength < 0)
+        if (dataOffset + inclLen > fileSize)
         {
-            _Exhausted = true;
-            frame = default;
-            return false;
+            return _ExhaustCorrupt(
+                "Legacy PCAP record is truncated by the end of the file.", FrameReadErrorKind.TruncatedStream, out frame);
         }
+
+        // Validated above: inclLen <= MaxBlockSize < int.MaxValue.
+        int capturedLength = (int)inclLen;
 
         // Build the frame index entry
         int frameIndex = _Index.Push(new PcapFrameEntry
@@ -667,8 +687,12 @@ internal sealed class IncrementalScanner
         return true;
     }
 
-    /// <summary>Processes an Interface Description Block — adds an interface to the current section.</summary>
-    private static void _ProcessInterfaceDescription(ReadOnlySpan<byte> blockData, PcapNgFormat format, uint blockLength)
+    /// <summary>
+    /// Processes an Interface Description Block — adds an interface to the current section and reports it through
+    /// <see cref="OnInterfaceAdded"/>. An IDB beyond <see cref="SectionInfo.MaxInterfaceCount"/> is ignored; packets
+    /// that reference it are skipped as <see cref="ScanPacketResult.SkipNoInterface"/>.
+    /// </summary>
+    private void _ProcessInterfaceDescription(ReadOnlySpan<byte> blockData, PcapNgFormat format, uint blockLength)
     {
         SectionInfo section = format.CurrentSection;
         if (!PcapngPacketBlocks.TryReadIdb(
@@ -682,7 +706,13 @@ internal sealed class IncrementalScanner
         }
 
         InterfaceInfo info = section.ParseIdbOptions(idb.LinkType, idb.SnapLength, idb.OptionData);
-        section.AddInterface(info);
+        int interfaceIndex = section.AddInterface(info);
+        if (interfaceIndex < 0)
+        {
+            return;
+        }
+
+        OnInterfaceAdded?.Invoke(format.CurrentSectionIndex, (ushort)interfaceIndex, section, info);
     }
 
     /// <summary>Scans an Enhanced Packet Block. EPB orig_len is ignored; captured length is the payload.</summary>
@@ -802,21 +832,7 @@ internal sealed class IncrementalScanner
     /// <summary>Reports a packet-block skip through <see cref="OnSkip"/> without exhausting the file.</summary>
     private void _ReportPacketSkip(ScanPacketResult result, long fileOffset)
     {
-        FrameReadErrorKind kind = result switch
-        {
-            ScanPacketResult.SkipNoInterface => FrameReadErrorKind.UnresolvedInterface,
-            ScanPacketResult.SkipUnknownLinkType => FrameReadErrorKind.Other,
-            ScanPacketResult.SkipUnsupportedTimestampResolution => FrameReadErrorKind.Other,
-            _ => FrameReadErrorKind.CorruptedBlock,
-        };
-
-        string message = result switch
-        {
-            ScanPacketResult.SkipNoInterface => "Packet block references an interface that was not declared.",
-            ScanPacketResult.SkipUnknownLinkType => "Packet block uses an unknown link-layer type; frame skipped.",
-            ScanPacketResult.SkipUnsupportedTimestampResolution => "unsupported if_tsresol",
-            _ => "Malformed packet block.",
-        };
+        (FrameReadErrorKind kind, string message) = PcapInterfaceProperties.DescribeSkip(result);
 
         OnSkip?.Invoke(new FrameReadErrorEventArgs
         {
@@ -827,14 +843,14 @@ internal sealed class IncrementalScanner
         });
     }
 
-    /// <summary>Raises a skip for a corrupt block boundary and stops scanning.</summary>
-    private bool _ExhaustCorrupt(string message, out ScannedFrame frame)
+    /// <summary>Raises a skip for a corrupt block or record boundary and stops scanning.</summary>
+    private bool _ExhaustCorrupt(string message, FrameReadErrorKind kind, out ScannedFrame frame)
     {
         OnSkip?.Invoke(new FrameReadErrorEventArgs
         {
             FrameIndex = _Index.Count,
             FileOffset = _Offset,
-            Kind = FrameReadErrorKind.CorruptedBlock,
+            Kind = kind,
             Message = message,
         });
         _Exhausted = true;

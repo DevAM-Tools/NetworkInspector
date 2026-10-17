@@ -387,6 +387,45 @@ internal sealed class TcpReassemblyTests
         await Assert.That(more).IsFalse();
     }
 
+    /// <summary>
+    /// A detector that reports a complete PDU of length 0 must not yield an empty PDU: the extraction loop of the
+    /// caller would receive it again and again. The buffer moves to Error, as for an impossible length.
+    /// </summary>
+    [Test]
+    public async Task SegmentBufferZeroLengthCompleteMovesToError()
+    {
+        StreamReassemblyConfig config = new() { BoundaryDetector = new ZeroLengthDetector() };
+        SegmentBuffer buffer = new(config);
+        byte[] segment = [0x01, 0x02, 0x03, 0x04];
+        buffer.TryAppend(0, segment);
+
+        bool extracted = buffer.TryExtractPdu(_DefaultContext(), out ReadOnlyMemory<byte> pdu);
+        bool extractedAgain = buffer.TryExtractPdu(_DefaultContext(), out _);
+
+        await Assert.That(extracted).IsFalse();
+        await Assert.That(pdu.Length).IsEqualTo(0);
+        await Assert.That(buffer.State).IsEqualTo(SegmentBufferState.Error);
+        await Assert.That(extractedAgain).IsFalse();
+        await Assert.That(buffer.TotalConsumed).IsEqualTo(0);
+    }
+
+    /// <summary>A one-byte PDU is the smallest valid result and is still extracted.</summary>
+    [Test]
+    public async Task SegmentBufferOneByteCompleteIsExtracted()
+    {
+        StreamReassemblyConfig config = new() { BoundaryDetector = new OneByteDetector() };
+        SegmentBuffer buffer = new(config);
+        byte[] segment = [0x7F, 0x80];
+        buffer.TryAppend(0, segment);
+
+        bool extracted = buffer.TryExtractPdu(_DefaultContext(), out ReadOnlyMemory<byte> pdu);
+
+        await Assert.That(extracted).IsTrue();
+        await Assert.That(pdu.Length).IsEqualTo(1);
+        await Assert.That(pdu.Span[0]).IsEqualTo((byte)0x7F);
+        await Assert.That(buffer.State).IsEqualTo(SegmentBufferState.Synchronized);
+    }
+
     #endregion
 
     #region TcpStreamState
@@ -502,4 +541,16 @@ file sealed class AlwaysInvalidDetector : IPduBoundaryDetector
 file sealed class OvershootResyncHeuristic : IResyncHeuristic
 {
     public ResyncResult Resync(ReadOnlySpan<byte> data) => ResyncResult.Skip(int.MaxValue);
+}
+
+/// <summary>Boundary detector stub that reports a complete PDU of length 0 for any data.</summary>
+file sealed class ZeroLengthDetector : IPduBoundaryDetector
+{
+    public PduBoundaryResult Detect(ReadOnlySpan<byte> data) => PduBoundaryResult.Complete(0);
+}
+
+/// <summary>Boundary detector stub that reports a complete PDU of length 1 for any data.</summary>
+file sealed class OneByteDetector : IPduBoundaryDetector
+{
+    public PduBoundaryResult Detect(ReadOnlySpan<byte> data) => PduBoundaryResult.Complete(1);
 }

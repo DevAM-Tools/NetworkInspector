@@ -23,6 +23,23 @@ internal sealed class CacheTests
     }
 
     [Test]
+    public async Task TwoQueueCache_HugeWeightBudget_ConstructsWithoutReservingEntries()
+    {
+        // A weight budget is not an entry count: int.MaxValue must not pre-size the queue maps
+        // (before the fix this reserved two dictionaries of 2^30 entries and failed with OutOfMemoryException).
+        TwoQueueCache<int, int> bounded = TwoQueueCache.CreateBounded<int, int>(int.MaxValue);
+        TwoQueueCache<int, int> twoQueue = TwoQueueCache.Create2Q<int, int>(int.MaxValue);
+
+        bounded.Put(1, 10);
+        twoQueue.Put(1, 10);
+
+        await Assert.That(bounded.Count).IsEqualTo(1);
+        await Assert.That(twoQueue.Count).IsEqualTo(1);
+        await Assert.That(bounded.TryGet(1, out int value)).IsTrue();
+        await Assert.That(value).IsEqualTo(10);
+    }
+
+    [Test]
     public async Task TwoQueueCache_MissReturnsDefault()
     {
         TwoQueueCache<string, int> cache = TwoQueueCache.CreateBounded<string, int>(10);

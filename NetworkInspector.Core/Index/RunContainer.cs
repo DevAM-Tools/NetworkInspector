@@ -515,6 +515,156 @@ internal sealed class RunContainer : IContainer
 
     #endregion
 
+    #region Run optimization
+
+    /// <summary>Serialized size of a bitmap container in bytes (1024 words; Roaring format).</summary>
+    internal const int BitmapContainerBytes = BitmapContainer.BitmapSize * sizeof(ulong);
+
+    /// <summary>Serialized size in bytes of a run container with <paramref name="runCount"/> runs: a count and two
+    /// <see cref="ushort"/> values per run (Roaring format).</summary>
+    internal static int SerializedSize(int runCount) => 2 + (4 * runCount);
+
+    /// <summary>Serialized size in bytes of an array or bitmap container (Roaring format).</summary>
+    internal static int SerializedSizeOf(IContainer container) => container switch
+    {
+        ArrayContainer array => 2 + (2 * array.Cardinality),
+        RunContainer run => SerializedSize(run.RunCount),
+        _ => BitmapContainerBytes,
+    };
+
+    /// <summary>
+    /// Number of maximal runs of consecutive values in <paramref name="container"/>: one per value that does not
+    /// follow its predecessor. O(cardinality) for arrays, O(1024) word operations for bitmaps.
+    /// </summary>
+    internal static int CountRuns(IContainer container)
+    {
+        switch (container)
+        {
+            case RunContainer run:
+                return run.RunCount;
+
+            case ArrayContainer array:
+            {
+                int count = array.Cardinality;
+                int runs = count > 0 ? 1 : 0;
+                for (int i = 1; i < count; i++)
+                {
+                    if (array.ValueAt(i) != array.ValueAt(i - 1) + 1)
+                    {
+                        runs++;
+                    }
+                }
+
+                return runs;
+            }
+
+            case BitmapContainer bitmap:
+            {
+                // A run starts at a set bit whose lower neighbour is clear; the carry brings in bit 63 of the
+                // previous word.
+                int runs = 0;
+                ulong carry = 0;
+                foreach (ulong word in bitmap.Bitmap)
+                {
+                    runs += BitOperations.PopCount(word & ~((word << 1) | carry));
+                    carry = word >> 63;
+                }
+
+                return runs;
+            }
+
+            default:
+                throw new UnreachableException("IContainer has exactly three implementations.");
+        }
+    }
+
+    /// <summary>
+    /// The run container holding the same values as <paramref name="container"/> (an array or bitmap container).
+    /// Bitmap runs are found word by word: fill the zeros below the first set bit, skip full words, then the first
+    /// clear bit ends the run (the CRoaring <c>run_container_from_bitmap</c> scan).
+    /// </summary>
+    internal static RunContainer FromContainer(IContainer container)
+    {
+        if (container is RunContainer existing)
+        {
+            return (RunContainer)existing.Clone();
+        }
+
+        // Exact capacity: the runs are counted first, so the array never grows.
+        (ushort Start, ushort Length)[] runs = new (ushort, ushort)[Math.Max(CountRuns(container), 1)];
+        int count = 0;
+        switch (container)
+        {
+            case ArrayContainer array:
+            {
+                int cardinality = array.Cardinality;
+                int i = 0;
+                while (i < cardinality)
+                {
+                    ushort start = array.ValueAt(i);
+                    int j = i;
+                    while (j + 1 < cardinality && array.ValueAt(j + 1) == array.ValueAt(j) + 1)
+                    {
+                        j++;
+                    }
+
+                    runs[count++] = (start, (ushort)(array.ValueAt(j) - start));
+                    i = j + 1;
+                }
+
+                break;
+            }
+
+            case BitmapContainer bitmap:
+            {
+                ulong[] words = bitmap.Bitmap;
+                int index = 0;
+                ulong current = words[0];
+                while (true)
+                {
+                    while (current == 0 && index < words.Length - 1)
+                    {
+                        current = words[++index];
+                    }
+
+                    if (current == 0)
+                    {
+                        break;
+                    }
+
+                    // First set bit: start of a run. Fill the bits below it so the next clear bit ends the run.
+                    int start = (index * 64) + BitOperations.TrailingZeroCount(current);
+                    ulong filled = current | (current - 1);
+                    while (filled == ulong.MaxValue && index < words.Length - 1)
+                    {
+                        filled = words[++index];
+                    }
+
+                    if (filled == ulong.MaxValue)
+                    {
+                        // The run reaches value 65535.
+                        runs[count++] = ((ushort)start, (ushort)(ushort.MaxValue - start));
+                        break;
+                    }
+
+                    // Exclusive end: the first clear bit; clear the run's bits and continue in the same word.
+                    int end = (index * 64) + BitOperations.TrailingZeroCount(~filled);
+                    runs[count++] = ((ushort)start, (ushort)(end - 1 - start));
+                    current = filled & (filled + 1);
+                }
+
+                break;
+            }
+
+            default:
+                throw new UnreachableException("IContainer has exactly three implementations.");
+        }
+
+        return new RunContainer(runs, count);
+    }
+
+    #endregion
+
     #region Private Helpers
 
     private void _TryMergeAt(int idx)
@@ -534,9 +684,10 @@ internal sealed class RunContainer : IContainer
 
     private void _InsertRunAt(int idx, ushort start, ushort length)
     {
+        // A zero-length run array (Clone of an empty container) grows to the default capacity 4; doubling 0 stays 0.
         if (RunCount == _Runs.Length)
         {
-            Array.Resize(ref _Runs, _Runs.Length * 2);
+            Array.Resize(ref _Runs, Math.Max(_Runs.Length * 2, 4));
         }
         if (idx < RunCount)
         {

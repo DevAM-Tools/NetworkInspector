@@ -27,10 +27,24 @@ internal static class AscCanErrorParser
         out AscTimestamp timestamp,
         out int channel,
         out byte[] frame)
+        => FrameSlabAllocator.ToArray(TryParse(line, null, out timestamp, out channel, out ReadOnlyMemory<byte> memory), memory, out frame);
+
+    /// <inheritdoc cref="TryParse(ReadOnlySpan{byte}, out AscTimestamp, out int, out byte[])"/>
+    /// <param name="line">Trimmed ASC line.</param>
+    /// <param name="slabs">Frame slab allocator of the sequential reader, or null for a new array.</param>
+    /// <param name="timestamp">Line timestamp. Not the file clock.</param>
+    /// <param name="channel">Decimal channel token after the timestamp.</param>
+    /// <param name="frame">16-byte SocketCAN buffer. Empty when this method returns <c>false</c>.</param>
+    internal static bool TryParse(
+        ReadOnlySpan<byte> line,
+        FrameSlabAllocator? slabs,
+        out AscTimestamp timestamp,
+        out int channel,
+        out ReadOnlyMemory<byte> frame)
     {
         timestamp = default;
         channel = 0;
-        frame = [];
+        frame = default;
 
         AscTokenizerBytes tokenizer = new(line);
         if (!tokenizer.TryNextToken(out ReadOnlySpan<byte> timeToken)
@@ -51,14 +65,14 @@ internal static class AscCanErrorParser
             return false;
         }
 
-        frame = _BuildErrorFrame();
+        frame = _BuildErrorFrame(slabs);
         return true;
     }
 
-    private static byte[] _BuildErrorFrame()
+    private static ReadOnlyMemory<byte> _BuildErrorFrame(FrameSlabAllocator? slabs)
     {
-        byte[] frame = new byte[_FrameLength];
-        BinaryPrimitives.WriteUInt32BigEndian(frame, _CanErrFlag);
+        Memory<byte> frame = FrameSlabAllocator.RentZeroed(slabs, _FrameLength);
+        BinaryPrimitives.WriteUInt32BigEndian(frame.Span, _CanErrFlag);
         return frame;
     }
 

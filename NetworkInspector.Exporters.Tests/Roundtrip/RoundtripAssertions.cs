@@ -27,10 +27,9 @@ internal static class RoundtripAssertions
 
     /// <summary>
     /// Maps NetworkInspector <see cref="LinkType"/> values to the corresponding
-    /// Wireshark <c>WTAP_ENCAP_*</c> integer that tshark reports via
+    /// encapsulation integer that tshark reports via
     /// <c>frame.encap_type</c>. Only the link types currently used by roundtrip
     /// tests are listed; extend as needed when new exporter targets land.
-    /// Reference: <c>wiretap/wtap.h</c> in the Wireshark source tree.
     /// </summary>
     private static int _ExpectedTsharkEncap(LinkType linkType) => linkType switch
     {

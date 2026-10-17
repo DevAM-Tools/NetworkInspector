@@ -3,17 +3,17 @@
 namespace NetworkInspector.Sources.Tests.Pcapng;
 
 /// <summary>
-/// Tests for <see cref="PcapStreamSource"/> — stream-based PCAPNG and legacy PCAP reading.
+/// Tests for <see cref="PcapngStreamSource"/> — stream-based PCAPNG and legacy PCAP reading.
 /// Verifies sequential reading, timestamp handling, multi-interface support, and stream lifecycle.
 /// </summary>
-internal sealed class PcapStreamSourceTests
+internal sealed class PcapngStreamSourceTests
 {
     private static readonly byte[] _SrcMac = [0x00, 0x11, 0x22, 0x33, 0x44, 0x55];
     private static readonly byte[] _DstMac = [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
 
-    /// <summary>Creates a PcapStreamSource from a MemoryStream backed by the given data.</summary>
-    private static PcapStreamSource _CreateSource(byte[] data, string uiName = "test.pcapng", bool leaveOpen = false) =>
-        PcapStreamSource.FromStream(new MemoryStream(data), uiName, leaveOpen);
+    /// <summary>Creates a PcapngStreamSource from a MemoryStream backed by the given data.</summary>
+    private static PcapngStreamSource _CreateSource(byte[] data, string uiName = "test.pcapng", bool leaveOpen = false) =>
+        PcapngStreamSource.FromStream(new MemoryStream(data), uiName, leaveOpen);
 
 
 
@@ -31,7 +31,7 @@ internal sealed class PcapStreamSourceTests
         writer.WriteFrame(0, 1_000_000_000, eth);
         byte[] pcapData = writer.Build();
 
-        using PcapStreamSource source = _CreateSource(pcapData);
+        using PcapngStreamSource source = _CreateSource(pcapData);
         // Stream sources always return null for EstimatedFrameCount
         await Assert.That(source.EstimatedFrameCount).IsNull();
 
@@ -65,7 +65,7 @@ internal sealed class PcapStreamSourceTests
             writer.WriteFrame(0, (i + 1) * 1_000_000_000L, eth);
         }
 
-        using PcapStreamSource source = _CreateSource(writer.Build());
+        using PcapngStreamSource source = _CreateSource(writer.Build());
         SourceTestFixture.InitializeAndStartSource(source);
 
         for (int i = 0; i < 5; i++)
@@ -97,7 +97,7 @@ internal sealed class PcapStreamSourceTests
             writer.WriteFrame(0, ts, eth);
         }
 
-        using PcapStreamSource source = _CreateSource(writer.Build());
+        using PcapngStreamSource source = _CreateSource(writer.Build());
         SourceTestFixture.InitializeAndStartSource(source);
 
         long prevTs = long.MinValue;
@@ -126,7 +126,7 @@ internal sealed class PcapStreamSourceTests
         writer.AddInterface(LinkType.Ethernet, nanosecondResolution: false);
         writer.WriteFrame(0, 1_500_000_000, eth);
 
-        using PcapStreamSource source = _CreateSource(writer.Build());
+        using PcapngStreamSource source = _CreateSource(writer.Build());
         SourceTestFixture.InitializeAndStartSource(source);
 
         Frame? frame = source.NextFrame();
@@ -154,7 +154,7 @@ internal sealed class PcapStreamSourceTests
         writer.WriteFrame(0, 1_000_000_000, eth0);
         writer.WriteFrame(1, 2_000_000_000, eth1);
 
-        using PcapStreamSource source = _CreateSource(writer.Build());
+        using PcapngStreamSource source = _CreateSource(writer.Build());
 
         // Start with fresh registry to verify interface IDs
         FrameInterfaceRegistry registry = new();
@@ -186,7 +186,7 @@ internal sealed class PcapStreamSourceTests
         writer.AddInterface(LinkType.Ethernet);
         byte[] pcapData = writer.Build();
 
-        using PcapStreamSource source = _CreateSource(pcapData);
+        using PcapngStreamSource source = _CreateSource(pcapData);
         SourceTestFixture.InitializeAndStartSource(source);
 
         await Assert.That(source.NextFrame()).IsNull();
@@ -203,7 +203,7 @@ internal sealed class PcapStreamSourceTests
         writer.AddInterface(LinkType.Ethernet);
         byte[] pcapData = writer.Build();
 
-        using PcapStreamSource source = _CreateSource(pcapData, uiName: "MyCapture");
+        using PcapngStreamSource source = _CreateSource(pcapData, uiName: "MyCapture");
         await Assert.That(source.UiName).IsEqualTo("MyCapture");
     }
 
@@ -219,7 +219,7 @@ internal sealed class PcapStreamSourceTests
         byte[] pcapData = writer.Build();
 
         MemoryStream stream = new(pcapData);
-        PcapStreamSource source = PcapStreamSource.FromStream(stream, leaveOpen: false);
+        PcapngStreamSource source = PcapngStreamSource.FromStream(stream, leaveOpen: false);
         source.Dispose();
 
         // After disposing with leaveOpen=false, the stream should be disposed
@@ -244,7 +244,7 @@ internal sealed class PcapStreamSourceTests
         byte[] pcapData = writer.Build();
 
         using MemoryStream stream = new(pcapData);
-        PcapStreamSource source = PcapStreamSource.FromStream(stream, leaveOpen: true);
+        PcapngStreamSource source = PcapngStreamSource.FromStream(stream, leaveOpen: true);
         source.Dispose();
 
         // After disposing with leaveOpen=true, the stream should still be usable
@@ -264,7 +264,7 @@ internal sealed class PcapStreamSourceTests
         writer.AddInterface(LinkType.Ethernet);
         byte[] pcapData = writer.Build();
 
-        PcapStreamSource source = _CreateSource(pcapData);
+        PcapngStreamSource source = _CreateSource(pcapData);
         SourceTestFixture.InitializeAndStartSource(source);
 
         source.Dispose();
@@ -284,7 +284,7 @@ internal sealed class PcapStreamSourceTests
         writer.AddInterface(LinkType.Ethernet);
         byte[] pcapData = writer.Build();
 
-        using PcapStreamSource source = _CreateSource(pcapData);
+        using PcapngStreamSource source = _CreateSource(pcapData);
         // Calling NextFrame() without Start() must throw — not silently return null.
         await Assert.That(() => source.NextFrame()).Throws<InvalidOperationException>();
     }
@@ -296,7 +296,7 @@ internal sealed class PcapStreamSourceTests
         writer.AddInterface(LinkType.Ethernet);
         byte[] pcapData = writer.Build();
 
-        PcapStreamSource source = _CreateSource(pcapData);
+        PcapngStreamSource source = _CreateSource(pcapData);
         SourceTestFixture.InitializeAndStartSource(source);
         source.Dispose();
 
@@ -310,7 +310,7 @@ internal sealed class PcapStreamSourceTests
         writer.AddInterface(LinkType.Ethernet);
         byte[] pcapData = writer.Build();
 
-        using PcapStreamSource source = _CreateSource(pcapData);
+        using PcapngStreamSource source = _CreateSource(pcapData);
         await Assert.That(source.IsRunning).IsFalse();
     }
 
@@ -321,7 +321,7 @@ internal sealed class PcapStreamSourceTests
         writer.AddInterface(LinkType.Ethernet);
         byte[] pcapData = writer.Build();
 
-        PcapStreamSource source = _CreateSource(pcapData);
+        PcapngStreamSource source = _CreateSource(pcapData);
         SourceTestFixture.InitializeAndStartSource(source);
 
         await Assert.That(source.IsRunning).IsTrue();
@@ -418,7 +418,7 @@ internal sealed class PcapStreamSourceTests
         const uint oversizedBlockLength = 3_000_000_000u;
         byte[] data = _BuildPcapNgWithOversizedEpb(oversizedBlockLength);
 
-        using PcapStreamSource source = _CreateSource(data, "corrupt.pcapng");
+        using PcapngStreamSource source = _CreateSource(data, "corrupt.pcapng");
         source.ErrorTolerance = ErrorToleranceMode.Tolerant;
 
         List<FrameReadErrorEventArgs> errors = [];
@@ -448,7 +448,7 @@ internal sealed class PcapStreamSourceTests
         const uint oversizedBlockLength = 300_000_000u;
         byte[] data = _BuildPcapNgWithOversizedEpb(oversizedBlockLength);
 
-        using PcapStreamSource source = _CreateSource(data, "corrupt.pcapng");
+        using PcapngStreamSource source = _CreateSource(data, "corrupt.pcapng");
         source.ErrorTolerance = ErrorToleranceMode.Tolerant;
 
         List<FrameReadErrorEventArgs> errors = [];
@@ -475,7 +475,7 @@ internal sealed class PcapStreamSourceTests
         const uint oversizedBlockLength = 300_000_000u;
         byte[] data = _BuildOversizedShb(oversizedBlockLength);
 
-        using PcapStreamSource source = _CreateSource(data, "corrupt.pcapng");
+        using PcapngStreamSource source = _CreateSource(data, "corrupt.pcapng");
 
         List<FrameReadErrorEventArgs> errors = [];
         source.FrameSkipped += (_, e) => errors.Add(e);
@@ -519,7 +519,7 @@ internal sealed class PcapStreamSourceTests
         byte[] eth = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0xDE, 0xAD]);
         byte[] data = _BuildLegacyPcap(eth);
 
-        using PcapStreamSource source = _CreateSource(data, "test.pcap");
+        using PcapngStreamSource source = _CreateSource(data, "test.pcap");
         SourceTestFixture.InitializeAndStartSource(source);
 
         Frame? frame = source.NextFrame();
@@ -543,7 +543,7 @@ internal sealed class PcapStreamSourceTests
         const uint inclLen = 60000;
         byte[] data = _BuildLegacyPcapWithInclLen(inclLen, snapLen);
 
-        using PcapStreamSource source = _CreateSource(data, "corrupt.pcap");
+        using PcapngStreamSource source = _CreateSource(data, "corrupt.pcap");
         source.ErrorTolerance = ErrorToleranceMode.Tolerant;
 
         List<FrameReadErrorEventArgs> errors = [];
@@ -573,7 +573,7 @@ internal sealed class PcapStreamSourceTests
         const uint inclLen = 0x8000_0001u;
         byte[] data = _BuildLegacyPcapWithInclLen(inclLen, snapLen: 0); // snapLen=0 → DefaultSnapLength
 
-        using PcapStreamSource source = _CreateSource(data, "corrupt.pcap");
+        using PcapngStreamSource source = _CreateSource(data, "corrupt.pcap");
         source.ErrorTolerance = ErrorToleranceMode.Tolerant;
 
         List<FrameReadErrorEventArgs> errors = [];
@@ -599,7 +599,7 @@ internal sealed class PcapStreamSourceTests
         using PcapNgTestWriter writer = new();
         writer.AddInterface(LinkType.Ethernet, nanosecondResolution: true);
         byte[] pcapData = writer.Build();
-        using PcapStreamSource source = _CreateSource(pcapData);
+        using PcapngStreamSource source = _CreateSource(pcapData);
         FrameInterfaceRegistry registry = new();
         FrameSourceId sourceId = registry.RegisterSource(source);
 

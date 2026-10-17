@@ -16,14 +16,25 @@ namespace NetworkInspector.Sources.Blf;
 /// <remarks>
 /// All existing format parsing code is reused via span-based APIs:
 /// <see cref="BlfFileInfo"/>, <see cref="BlfObjectHeaderParser"/>,
-/// <see cref="BlfFrameDispatcher"/>, <see cref="BlfContainer"/>.
+/// <see cref="BlfFrameDispatcher"/>, <see cref="BlfContainer"/>; interface naming and container-tail handling are
+/// shared with <see cref="BlfSource"/> (<see cref="BlfInterfaceNaming"/>, <see cref="BlfContainerCarry"/>).
+/// A stream that is neither a <see cref="MemoryStream"/> nor a <see cref="BufferedStream"/> is read through a
+/// <see cref="BufferedStream"/> of <see cref="StreamBufferSize"/> bytes, so the 1- to 16-byte header reads of the
+/// <c>LOBJ</c> resynchronisation do not become one system call each. With <c>leaveOpen = true</c> the buffer may have
+/// read ahead of the last parsed object.
 /// </remarks>
 public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
 {
     #region Fields
 
-    /// <summary>Underlying data stream.</summary>
+    /// <summary>Read buffer for streams that do not buffer themselves: 64 KiB.</summary>
+    public const int StreamBufferSize = 64 * 1024;
+
+    /// <summary>Data stream: the caller's stream, or a <see cref="BufferedStream"/> around it.</summary>
     private readonly Stream _Stream;
+
+    /// <summary>Frame slab allocator; null when <see cref="BlfSourceOptions.FrameSlabSize"/> is 0.</summary>
+    private readonly FrameSlabAllocator? _Slabs;
 
     /// <summary>User-friendly display name.</summary>
     /// <inheritdoc />
@@ -33,8 +44,8 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
     private readonly bool _LeaveOpen;
 
     /// <summary>
-    /// Timezone used to interpret the BLF file header's SYSTEMTIME date fields.
-    /// Defaults to <see cref="TimeZoneInfo.Local"/> to match Vector BLF tooling.
+    /// Timezone used to interpret the BLF file header's SYSTEMTIME date fields
+    /// (<see cref="BlfSourceOptions.TimestampTimeZone"/>, default UTC).
     /// </summary>
     private readonly TimeZoneInfo _TimestampTimeZone;
 
@@ -109,43 +120,33 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
 
     #region Decompression limit
 
-    // `volatile` is illegal on long; cross-thread access uses Volatile.Read / Volatile.Write.
-    private long _MaxUncompressedContainerSize = BlfSourceOptions.DefaultMaxUncompressedContainerSize;
-
     /// <summary>
-    /// Maximum allowed uncompressed size in bytes for a single BLF log container.
+    /// Maximum allowed uncompressed size in bytes for a single BLF log container
+    /// (<see cref="BlfSourceOptions.MaxUncompressedContainerSize"/> of the options passed to <see cref="FromStream"/>).
     /// When a container's <c>uncompressedSize</c> header field exceeds this value,
     /// <see cref="Format.BlfDecompressionLimitExceededException"/> is thrown before any
-    /// allocation is attempted.
-    /// <para>
-    /// A value of <c>0</c> disables the check. Default matches
-    /// <see cref="BlfSourceOptions.DefaultMaxUncompressedContainerSize"/> (128 MiB).
-    /// </para>
-    /// <para>
-    /// Must be set before <see cref="Start"/> is called; changes after start have no effect.
-    /// </para>
+    /// allocation is attempted. A value of <c>0</c> disables the check.
+    /// Fixed at construction: the reader never sees a limit change mid-stream.
     /// </summary>
-    /// <exception cref="ArgumentOutOfRangeException">Value is negative.</exception>
     public long MaxUncompressedContainerSize
     {
-        get => Volatile.Read(ref _MaxUncompressedContainerSize);
-        set
-        {
-            ArgumentOutOfRangeException.ThrowIfNegative(value);
-            Volatile.Write(ref _MaxUncompressedContainerSize, value);
-        }
+        get;
     }
 
     #endregion
 
     #region Construction
 
-    private BlfStreamSource(Stream stream, string uiName, bool leaveOpen, TimeZoneInfo timestampTimeZone)
+    private BlfStreamSource(Stream stream, string uiName, bool leaveOpen, BlfSourceOptions options)
     {
-        _Stream = stream;
+        // The LOBJ resynchronisation reads byte by byte; on an unbuffered stream each read would be a system call.
+        _Stream = stream is MemoryStream or BufferedStream ? stream : new BufferedStream(stream, StreamBufferSize);
         UiName = uiName;
         _LeaveOpen = leaveOpen;
-        _TimestampTimeZone = timestampTimeZone;
+        _TimestampTimeZone = options.TimestampTimeZone;
+        ErrorTolerance = options.ErrorTolerance;
+        MaxUncompressedContainerSize = options.MaxUncompressedContainerSize;
+        _Slabs = FrameSlabAllocator.CreateOrNull(options.FrameSlabSize);
     }
 
     /// <summary>
@@ -158,10 +159,11 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
     /// <param name="leaveOpen">
     /// If <c>true</c>, the stream is not disposed when this source is disposed.
     /// </param>
-    /// <param name="timestampTimeZone">
-    /// Time zone for interpreting SYSTEMTIME components in the stream header's <c>start_date</c>.
-    /// If <see langword="null"/>, defaults to <see cref="TimeZoneInfo.Local"/> (matching Vector
-    /// BLF tooling).
+    /// <param name="options">
+    /// Reader options, or null for defaults. The stream reader applies <see cref="BlfSourceOptions.ErrorTolerance"/>
+    /// (initial <see cref="ErrorTolerance"/>), <see cref="BlfSourceOptions.TimestampTimeZone"/> (default UTC),
+    /// <see cref="BlfSourceOptions.MaxUncompressedContainerSize"/>, and <see cref="BlfSourceOptions.FrameSlabSize"/>;
+    /// the file-only members (scan mode, preload, cache, decompression concurrency) are ignored.
     /// </param>
     /// <returns>A new BlfStreamSource ready for <see cref="Start"/>.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="stream"/> is null.</exception>
@@ -170,7 +172,7 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
         Stream stream,
         string uiName = "Stream",
         bool leaveOpen = false,
-        TimeZoneInfo? timestampTimeZone = null)
+        BlfSourceOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(stream);
         if (!stream.CanRead)
@@ -178,7 +180,7 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
             throw new ArgumentException("Stream must be readable.", nameof(stream));
         }
 
-        return new BlfStreamSource(stream, uiName, leaveOpen, timestampTimeZone ?? TimeZoneInfo.Local);
+        return new BlfStreamSource(stream, uiName, leaveOpen, options ?? new());
     }
 
     #endregion
@@ -210,7 +212,11 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
     public bool HasErrors => _ErrorCount.Value > 0;
 
     /// <inheritdoc/>
-    public ErrorToleranceMode ErrorTolerance { get; set; } = ErrorToleranceMode.Tolerant;
+    /// <remarks>Initialised from <see cref="BlfSourceOptions.ErrorTolerance"/>; may be changed at any time.</remarks>
+    public ErrorToleranceMode ErrorTolerance
+    {
+        get; set;
+    }
 
     /// <inheritdoc/>
     public event EventHandler<FrameReadErrorEventArgs>? FrameSkipped;
@@ -550,7 +556,7 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
         try
         {
             byte[] decoded = BlfContainer.Decompress(payloadData, compressionMethod, uncompressedSize,
-                Volatile.Read(ref _MaxUncompressedContainerSize));
+                MaxUncompressedContainerSize);
             _PendingContainer = _PrependCarry(decoded);
             _ContainerOffset = 0;
         }
@@ -607,7 +613,7 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
                 }
 
                 ReadOnlySpan<byte> skipped = containerSpan.Slice(_ContainerOffset, 1 + nextMagic);
-                if (!_IsAllZeros(skipped))
+                if (!BlfContainerCarry.IsAllZeros(skipped))
                 {
                     _HandleSkip(new FrameReadErrorEventArgs
                     {
@@ -637,17 +643,30 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
                 continue;
             }
 
-            // Try to convert to a frame
-            if (BlfConstants.IsFrameProducingType(objInfo.ObjectType)
-                && BlfFrameDispatcher.TryDispatch(in objInfo, out BlfFrameResult frameResult))
+            if (!BlfConstants.IsFrameProducingType(objInfo.ObjectType))
             {
-                long absoluteTimestamp = _FileInfo!.StartOffsetNanos + objInfo.TimestampNanos;
-                Frame? frame = _BuildFrame(frameResult, absoluteTimestamp);
-                if (frame is not null)
-                {
-                    return frame;
-                }
                 continue;
+            }
+
+            // A frame object that cannot be reconstructed is a lost frame: report it (same kind as the file reader).
+            if (!BlfFrameDispatcher.TryDispatch(in objInfo, out BlfFrameResult frameResult, _Slabs))
+            {
+                _HandleUnparsableFrameObject(objInfo.ObjectType);
+                if (_Exhausted)
+                {
+                    _PendingContainer = null;
+                    _CarryOver = null;
+                    return null;
+                }
+
+                continue;
+            }
+
+            long absoluteTimestamp = BlfTimestamp.ToAbsolute(_FileInfo!.StartOffsetNanos, objInfo.TimestampNanos);
+            Frame? frame = _BuildFrame(frameResult, absoluteTimestamp);
+            if (frame is not null)
+            {
+                return frame;
             }
         }
 
@@ -662,18 +681,17 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
     /// </summary>
     private void _ProcessRawFrameObject(ReadOnlySpan<byte> objectData)
     {
+        // The object buffer is reused for the next block, so frame bytes are always copied (into the slab when slabs
+        // are on); a header or payload that cannot be read is reported, never dropped silently.
         if (!BlfObjectHeaderParser.TryParse(objectData, 0,
-                out BlfObjectInfo objInfo, out _))
+                out BlfObjectInfo objInfo, out _)
+            || !BlfFrameDispatcher.TryDispatch(in objInfo, out BlfFrameResult result, _Slabs))
         {
+            _HandleUnparsableFrameObject(BinaryPrimitives.ReadUInt32LittleEndian(objectData[12..]));
             return;
         }
 
-        if (!BlfFrameDispatcher.TryDispatch(in objInfo, out BlfFrameResult result))
-        {
-            return;
-        }
-
-        long absoluteTimestamp = _FileInfo!.StartOffsetNanos + objInfo.TimestampNanos;
+        long absoluteTimestamp = BlfTimestamp.ToAbsolute(_FileInfo!.StartOffsetNanos, objInfo.TimestampNanos);
         _PendingFrame = _BuildFrame(result, absoluteTimestamp);
     }
 
@@ -789,7 +807,8 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
 
     /// <summary>
     /// Gets or registers a frame interface for the given object type and channel.
-    /// Uses discovered channel names from AppText when available.
+    /// Naming (AppText channel names) and properties come from <see cref="BlfInterfaceNaming"/>, shared with
+    /// <see cref="BlfSource"/>.
     /// </summary>
     private FrameInterfaceId _GetOrRegisterInterface(uint objectType, ushort channel, ushort? hardwareChannel)
     {
@@ -808,115 +827,27 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
             return default;
         }
 
-        string busName = _GetBusName(objectType);
-        string interfaceName = _TryGetChannelName(objectType, channel)
-            ?? $"{busName} {channel}";
-        LinkType linkType = BlfFrameDispatcher.LinkTypeForObject(objectType);
-        Dictionary<string, object> properties = new()
-        {
-            [BlfInterfacePropertyKeys.Channel] = (long)channel,
-            [BlfInterfacePropertyKeys.ObjectType] = objectType,
-            [BlfInterfacePropertyKeys.BusType] = _GetBusTypeForObjectType(objectType),
-        };
-        if (hasHardwareChannel)
-        {
-            properties[BlfInterfacePropertyKeys.HardwareChannel] = hardwareChannelValue;
-        }
-
         FrameInterfaceId id = _Registry.Register(
-            _SourceId, interfaceName, null, linkType, properties);
+            _SourceId,
+            BlfInterfaceNaming.InterfaceName(objectType, channel, _ChannelNames),
+            null,
+            BlfFrameDispatcher.LinkTypeForObject(objectType),
+            BlfInterfaceNaming.BuildProperties(objectType, channel, hardwareChannel));
         _InterfaceMap[key] = id;
         return id;
     }
 
-    /// <summary>
-    /// Tries to find a channel name from AppText channel name discovery.
-    /// Maps the BLF object type to the AppText bus type for lookup.
-    /// </summary>
-    private string? _TryGetChannelName(uint objectType, ushort channel)
+    /// <summary>Reports a frame-producing object that could not be reconstructed (same kind as the file reader).</summary>
+    private void _HandleUnparsableFrameObject(uint objectType)
     {
-        if (_ChannelNames.Count == 0)
+        _HandleSkip(new FrameReadErrorEventArgs
         {
-            return null;
-        }
-
-        byte busType = _GetBusTypeForObjectType(objectType);
-        if (busType == 0)
-        {
-            return null;
-        }
-
-        // AppText channel numbers are 0-based
-        if (!_ChannelNames.TryGetValue((busType, (byte)channel), out string? name))
-        {
-            return null;
-        }
-
-        return name;
+            FrameIndex = _FrameIndex,
+            FileOffset = -1,
+            Kind = FrameReadErrorKind.MalformedHeader,
+            Message = $"Frame object of type {objectType} could not be parsed (header or payload cut off).",
+        });
     }
-
-    /// <summary>
-    /// Returns a bus name string for interface naming.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static string _GetBusName(uint objectType) => objectType switch
-    {
-        BlfConstants.ObjTypeEthernetFrame or BlfConstants.ObjTypeEthernetFrameEx
-            or BlfConstants.ObjTypeEthernetRxError => "Ethernet",
-
-        BlfConstants.ObjTypeCanMessage or BlfConstants.ObjTypeCanError
-            or BlfConstants.ObjTypeCanOverload or BlfConstants.ObjTypeCanErrorExt
-            or BlfConstants.ObjTypeCanMessage2 => "CAN",
-
-        BlfConstants.ObjTypeCanFdMessage or BlfConstants.ObjTypeCanFdMessage64
-            or BlfConstants.ObjTypeCanFdError64 => "CAN FD",
-
-        BlfConstants.ObjTypeCanXlChannelFrame => "CAN XL",
-
-        BlfConstants.ObjTypeLinMessage or BlfConstants.ObjTypeLinMessage2
-            or BlfConstants.ObjTypeLinCrcError or BlfConstants.ObjTypeLinCrcError2
-            or BlfConstants.ObjTypeLinRcvError or BlfConstants.ObjTypeLinRcvError2
-            or BlfConstants.ObjTypeLinSndError or BlfConstants.ObjTypeLinSndError2
-            or BlfConstants.ObjTypeLinSleep or BlfConstants.ObjTypeLinWakeup
-            or BlfConstants.ObjTypeLinWakeup2 => "LIN",
-
-        BlfConstants.ObjTypeFlexRayData or BlfConstants.ObjTypeFlexRayMessage
-            or BlfConstants.ObjTypeFlexRayRcvMessage or BlfConstants.ObjTypeFlexRayRcvMessageEx
-            => "FlexRay",
-
-        _ => "Unknown",
-    };
-
-    /// <summary>
-    /// Maps a BLF object type to the AppText bus type constant for channel name lookup.
-    /// Returns 0 if the object type has no corresponding bus type.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static byte _GetBusTypeForObjectType(uint objectType) => objectType switch
-    {
-        BlfConstants.ObjTypeEthernetFrame or BlfConstants.ObjTypeEthernetFrameEx
-            or BlfConstants.ObjTypeEthernetRxError => BlfConstants.BusTypeEthernet,
-
-        BlfConstants.ObjTypeCanMessage or BlfConstants.ObjTypeCanError
-            or BlfConstants.ObjTypeCanOverload or BlfConstants.ObjTypeCanErrorExt
-            or BlfConstants.ObjTypeCanMessage2 or BlfConstants.ObjTypeCanFdMessage
-            or BlfConstants.ObjTypeCanFdMessage64 or BlfConstants.ObjTypeCanFdError64
-            or BlfConstants.ObjTypeCanXlChannelFrame
-            => BlfConstants.BusTypeCan,
-
-        BlfConstants.ObjTypeLinMessage or BlfConstants.ObjTypeLinMessage2
-            or BlfConstants.ObjTypeLinCrcError or BlfConstants.ObjTypeLinCrcError2
-            or BlfConstants.ObjTypeLinRcvError or BlfConstants.ObjTypeLinRcvError2
-            or BlfConstants.ObjTypeLinSndError or BlfConstants.ObjTypeLinSndError2
-            or BlfConstants.ObjTypeLinSleep or BlfConstants.ObjTypeLinWakeup
-            or BlfConstants.ObjTypeLinWakeup2 => BlfConstants.BusTypeLin,
-
-        BlfConstants.ObjTypeFlexRayData or BlfConstants.ObjTypeFlexRayMessage
-            or BlfConstants.ObjTypeFlexRayRcvMessage or BlfConstants.ObjTypeFlexRayRcvMessageEx
-            => BlfConstants.BusTypeFlexRay,
-
-        _ => 0,
-    };
 
     #endregion
 
@@ -956,19 +887,18 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
     }
 
     /// <summary>
-    /// Prepends pending carry-over bytes to <paramref name="decoded"/>. Drops the carry
-    /// when the stitched size would exceed the decompress cap.
+    /// Prepends pending carry-over bytes to <paramref name="decoded"/>. Drops the carry (and reports it) when the
+    /// stitched size would exceed the decompress cap.
     /// </summary>
     private byte[] _PrependCarry(byte[] decoded)
     {
-        if (_CarryOver is not { Length: > 0 })
+        if (_CarryOver is not { Length: > 0 } carry)
         {
             return decoded;
         }
 
-        long maxUncompressed = Volatile.Read(ref _MaxUncompressedContainerSize);
-        long total = (long)_CarryOver.Length + decoded.Length;
-        if (total > int.MaxValue || (maxUncompressed > 0 && total > maxUncompressed))
+        _CarryOver = null;
+        if (!BlfContainerCarry.TryStitch(carry, decoded, MaxUncompressedContainerSize, out byte[] stitched))
         {
             _HandleSkip(new FrameReadErrorEventArgs
             {
@@ -977,112 +907,37 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
                 Kind = FrameReadErrorKind.Other,
                 Message = "Carried container tail plus the next blob exceeds the uncompressed size cap.",
             });
-            _CarryOver = null;
-            return decoded;
         }
 
-        byte[] stitched = new byte[(int)total];
-        Buffer.BlockCopy(_CarryOver, 0, stitched, 0, _CarryOver.Length);
-        Buffer.BlockCopy(decoded, 0, stitched, _CarryOver.Length, decoded.Length);
-        _CarryOver = null;
         return stitched;
     }
 
     /// <summary>
-    /// Saves a partial LOBJ tail as carry-over or discards padding-only remainder.
+    /// Saves a partial LOBJ tail as carry-over, discards padding, or reports a truncated object
+    /// (rules in <see cref="BlfContainerCarry.ClassifyTail"/>, shared with the file scanner).
     /// </summary>
     private void _FinishContainer(ReadOnlySpan<byte> containerSpan)
     {
-        if (_ContainerOffset < containerSpan.Length)
+        ReadOnlySpan<byte> tail = _ContainerOffset < containerSpan.Length ? containerSpan[_ContainerOffset..] : [];
+        _CarryOver = null;
+        switch (BlfContainerCarry.ClassifyTail(tail))
         {
-            ReadOnlySpan<byte> tail = containerSpan[_ContainerOffset..];
-            if (_LooksLikePartialLobj(tail) && !_DeclaredObjectLengthExceedsCap(tail))
-            {
+            case BlfContainerTailKind.PartialObject:
                 _CarryOver = tail.ToArray();
-            }
-            else
-            {
-                _CarryOver = null;
-            }
-        }
-        else
-        {
-            _CarryOver = null;
+                break;
+            case BlfContainerTailKind.Garbage:
+                _HandleSkip(new FrameReadErrorEventArgs
+                {
+                    FrameIndex = _FrameIndex,
+                    FileOffset = -1,
+                    Kind = FrameReadErrorKind.CorruptedBlock,
+                    Message = "Truncated BLF object at container boundary.",
+                });
+                break;
         }
 
         _PendingContainer = null;
         _ContainerOffset = 0;
-    }
-
-    /// <summary>
-    /// True when <paramref name="tail"/> is padding zeros, optionally followed by a
-    /// <c>LOBJ</c> magic or a truncated prefix of that magic.
-    /// </summary>
-    private static bool _LooksLikePartialLobj(ReadOnlySpan<byte> tail)
-    {
-        if (tail.IsEmpty)
-        {
-            return false;
-        }
-
-        int i = 0;
-        while (i < tail.Length && tail[i] == 0)
-        {
-            i++;
-        }
-
-        if (i == tail.Length)
-        {
-            return false;
-        }
-
-        ReadOnlySpan<byte> candidate = tail[i..];
-        int n = Math.Min(candidate.Length, BlfConstants.ObjectMagicBytes.Length);
-        return candidate[..n].SequenceEqual(BlfConstants.ObjectMagicBytes[..n]);
-    }
-
-    /// <summary>
-    /// True when <paramref name="tail"/> begins with a parseable <c>LOBJ</c> header whose
-    /// skip distance exceeds <see cref="BlfConstants.MaxBlockReadSize"/>.
-    /// </summary>
-    private static bool _DeclaredObjectLengthExceedsCap(ReadOnlySpan<byte> tail)
-    {
-        int i = 0;
-        while (i < tail.Length && tail[i] == 0)
-        {
-            i++;
-        }
-
-        ReadOnlySpan<byte> candidate = tail[i..];
-        if (candidate.Length < BlfConstants.BlockHeaderSize)
-        {
-            return false;
-        }
-
-        if (!BlfBlockHeader.TryParse(candidate, out BlfBlockHeader header, out _)
-            || header.Signature.Value != BlfConstants.ObjectMagic)
-        {
-            return false;
-        }
-
-        long skip = Math.Max(
-            Math.Max((long)BlfConstants.BlockHeaderSize, header.ObjectLength.Value),
-            header.HeaderSize.Value);
-        return skip > BlfConstants.MaxBlockReadSize;
-    }
-
-    /// <summary>True when every byte is zero (alignment padding).</summary>
-    private static bool _IsAllZeros(ReadOnlySpan<byte> data)
-    {
-        for (int i = 0; i < data.Length; i++)
-        {
-            if (data[i] != 0)
-            {
-                return false;
-            }
-        }
-
-        return true;
     }
 
     /// <summary>

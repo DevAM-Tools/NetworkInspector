@@ -282,6 +282,46 @@ internal sealed class Lz4CodecTests
         await Assert.That(output.AsSpan().SequenceEqual(expected)).IsTrue();
     }
 
+    /// <summary>
+    /// A long overlapping match repeats the last <c>offset</c> bytes; the block copy must give the result of the
+    /// byte-by-byte expansion for every period, including periods that do not divide the match length.
+    /// </summary>
+    [Test]
+    [Arguments(1)]
+    [Arguments(2)]
+    [Arguments(3)]
+    [Arguments(5)]
+    [Arguments(7)]
+    [Arguments(13)]
+    public async Task Decompress_LongOverlappingMatch_RepeatsThePeriod(int offset)
+    {
+        // Sequence 1: `offset` literals, offset `offset`, match length 100 (nibble 15 + extension 81).
+        // Sequence 2 (last): one literal 'Z'.
+        const int matchLength = 100;
+        List<byte> compressed = [(byte)((offset << 4) | 0x0F)];
+        for (int i = 0; i < offset; i++)
+        {
+            compressed.Add((byte)('A' + i));
+        }
+
+        compressed.AddRange([(byte)offset, 0x00, matchLength - 4 - 15, 0x10, (byte)'Z']);
+
+        // Byte-by-byte reference expansion.
+        List<byte> expected = [.. compressed.GetRange(1, offset)];
+        for (int i = 0; i < matchLength; i++)
+        {
+            expected.Add(expected[^offset]);
+        }
+
+        expected.Add((byte)'Z');
+
+        byte[] output = new byte[expected.Count];
+        int written = Lz4Codec.Decompress(compressed.ToArray(), output);
+
+        await Assert.That(written).IsEqualTo(expected.Count);
+        await Assert.That(output.AsSpan().SequenceEqual(expected.ToArray())).IsTrue();
+    }
+
     // =========================================================================
     // Decompression error cases
     // =========================================================================

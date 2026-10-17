@@ -4,7 +4,7 @@ namespace NetworkInspector.Sessions;
 
 /// <summary>
 /// Session-internal mutable state: lifecycle phase and ID generators.
-/// All operations are lock-free (Volatile / Interlocked).
+/// All operations are lock-free (Volatile / Interlocked); every allocator is safe to call from any thread.
 /// </summary>
 internal sealed class SessionState
 {
@@ -17,9 +17,12 @@ internal sealed class SessionState
     private volatile int _Phase = (int)SessionPhase.Idle;
 
     // Next ID to hand out (0 … ArrayIndexIdRange.MaxValue). Never wraps past MaxValue.
-    private volatile int _NextListenerId;
-    private volatile int _NextJobId;
-    private volatile int _NextValueCacheId;
+    // Not volatile: each counter is passed by ref to _Allocate, and a volatile field passed by ref loses its
+    // volatile semantics (CS0420). Every access goes through Volatile.Read or Interlocked inside _Allocate,
+    // which gives the same cross-thread visibility as the keyword.
+    private int _NextListenerId;
+    private int _NextJobId;
+    private int _NextValueCacheId;
 
     #endregion
 
@@ -36,101 +39,50 @@ internal sealed class SessionState
         => _Phase = (int)phase;
 
     /// <summary>Allocates the next unique job ID. Thread-safe.</summary>
-    internal JobId AllocateJobId()
-    {
-        int maxId = Core.Ids.ArrayIndexIdRange.MaxValue;
-
-        while (true)
-        {
-            int current = _NextJobId;
-            if (current < 0)
-            {
-                throw new SessionException(
-                    SessionErrorCode.JobIdExhausted,
-                    $"Maximum job ID count exceeded (valid range 0..{maxId.ToString(CultureInfo.InvariantCulture)}).");
-            }
-
-            if (current == maxId)
-            {
-                if (Interlocked.CompareExchange(ref _NextJobId, _IdsExhaustedSentinel, maxId) == maxId)
-                {
-                    return new JobId(maxId);
-                }
-
-                // Another thread claimed the last ID. Re-reading now yields the sentinel, so the
-                // loop exits through the exhaustion check above.
-                continue;
-            }
-
-            if (Interlocked.CompareExchange(ref _NextJobId, current + 1, current) == current)
-            {
-                return new JobId(current);
-            }
-        }
-    }
+    /// <exception cref="SessionException"><see cref="SessionErrorCode.JobIdExhausted"/> after the last valid ID.</exception>
+    internal JobId AllocateJobId() => new(_Allocate(ref _NextJobId, SessionErrorCode.JobIdExhausted, "job"));
 
     /// <summary>Allocates the next unique listener ID. Thread-safe.</summary>
-    internal ListenerId AllocateListenerId()
-    {
-        int maxId = Core.Ids.ArrayIndexIdRange.MaxValue;
-
-        while (true)
-        {
-            int current = _NextListenerId;
-            if (current < 0)
-            {
-                throw new SessionException(
-                    SessionErrorCode.ListenerIdExhausted,
-                    $"Maximum listener ID count exceeded (valid range 0..{maxId.ToString(CultureInfo.InvariantCulture)}).");
-            }
-
-            if (current == maxId)
-            {
-                if (Interlocked.CompareExchange(ref _NextListenerId, _IdsExhaustedSentinel, maxId) == maxId)
-                {
-                    return new ListenerId(maxId);
-                }
-
-                // Another thread claimed the last ID. Re-reading now yields the sentinel, so the
-                // loop exits through the exhaustion check above.
-                continue;
-            }
-
-            if (Interlocked.CompareExchange(ref _NextListenerId, current + 1, current) == current)
-            {
-                return new ListenerId(current);
-            }
-        }
-    }
+    /// <exception cref="SessionException"><see cref="SessionErrorCode.ListenerIdExhausted"/> after the last valid ID.</exception>
+    internal ListenerId AllocateListenerId() =>
+        new(_Allocate(ref _NextListenerId, SessionErrorCode.ListenerIdExhausted, "listener"));
 
     /// <summary>Allocates the next unique value-cache ID. Thread-safe. Independent of listener IDs.</summary>
-    internal ValueCacheId AllocateValueCacheId()
+    /// <exception cref="SessionException"><see cref="SessionErrorCode.ValueCacheIdExhausted"/> after the last valid ID.</exception>
+    internal ValueCacheId AllocateValueCacheId() =>
+        new(_Allocate(ref _NextValueCacheId, SessionErrorCode.ValueCacheIdExhausted, "value-cache"));
+
+    #endregion
+
+    #region Private helpers
+
+    /// <summary>
+    /// Hands out <paramref name="next"/> and advances it. The last valid ID flips the counter to the
+    /// negative sentinel, so the allocation after it fails instead of wrapping into negative IDs.
+    /// </summary>
+    /// <param name="next">The counter of one ID sequence. Accessed only through Volatile.Read and Interlocked.</param>
+    /// <param name="code">Error code thrown once the sequence is exhausted.</param>
+    /// <param name="what">Name of the sequence for the error message.</param>
+    private static int _Allocate(ref int next, SessionErrorCode code, string what)
     {
         int maxId = Core.Ids.ArrayIndexIdRange.MaxValue;
 
+        // CAS loop: a lost race re-reads the counter. After another thread claimed the last ID, the re-read
+        // yields the sentinel and the loop exits through the exhaustion check.
         while (true)
         {
-            int current = _NextValueCacheId;
+            int current = Volatile.Read(ref next);
             if (current < 0)
             {
                 throw new SessionException(
-                    SessionErrorCode.ValueCacheIdExhausted,
-                    $"Maximum value-cache ID count exceeded (valid range 0..{maxId.ToString(CultureInfo.InvariantCulture)}).");
+                    code,
+                    FormattableString.Invariant($"Maximum {what} ID count exceeded (valid range 0..{maxId.ToString(CultureInfo.InvariantCulture)})."));
             }
 
-            if (current == maxId)
+            int replacement = current == maxId ? _IdsExhaustedSentinel : current + 1;
+            if (Interlocked.CompareExchange(ref next, replacement, current) == current)
             {
-                if (Interlocked.CompareExchange(ref _NextValueCacheId, _IdsExhaustedSentinel, maxId) == maxId)
-                {
-                    return new ValueCacheId(maxId);
-                }
-
-                continue;
-            }
-
-            if (Interlocked.CompareExchange(ref _NextValueCacheId, current + 1, current) == current)
-            {
-                return new ValueCacheId(current);
+                return current;
             }
         }
     }

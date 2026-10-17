@@ -38,7 +38,7 @@ internal abstract class SourceConfig
     /// </list>
     /// Auto-detection rules for bare paths:
     /// <list type="bullet">
-    ///   <item><c>.pcap</c> / <c>.pcapng</c> → <see cref="PcapSourceConfig"/></item>
+    ///   <item><c>.pcap</c> / <c>.pcapng</c> → <see cref="PcapngSourceConfig"/></item>
     ///   <item><c>.blf</c> → <see cref="BlfSourceConfig"/></item>
     /// </list>
     /// </remarks>
@@ -102,7 +102,7 @@ internal abstract class SourceConfig
         if (path.EndsWith(".pcap", StringComparison.OrdinalIgnoreCase)
             || path.EndsWith(".pcapng", StringComparison.OrdinalIgnoreCase))
         {
-            return new PcapSourceConfig(path);
+            return new PcapngSourceConfig(path);
         }
 
         if (path.EndsWith(".blf", StringComparison.OrdinalIgnoreCase))
@@ -160,15 +160,15 @@ internal abstract class SourceConfig
         return result;
     }
 
-    /// <summary>Creates a <see cref="PcapSourceConfig"/> from typed parameters.</summary>
-    private static PcapSourceConfig _CreatePcapConfig(Dictionary<string, string> parameters)
+    /// <summary>Creates a <see cref="PcapngSourceConfig"/> from typed parameters.</summary>
+    private static PcapngSourceConfig _CreatePcapConfig(Dictionary<string, string> parameters)
     {
         if (!parameters.TryGetValue("path", out string? path) || string.IsNullOrWhiteSpace(path))
         {
             throw new ArgumentException("PCAP source requires 'path' parameter (e.g., pcap:path=file.pcap).");
         }
 
-        return new PcapSourceConfig(path);
+        return new PcapngSourceConfig(path);
     }
 
     /// <summary>Creates a <see cref="BlfSourceConfig"/> from typed parameters.</summary>
@@ -251,7 +251,7 @@ internal abstract class SourceConfig
 }
 
 /// <summary>Source config for PCAP/PCAPNG files.</summary>
-internal sealed class PcapSourceConfig(string path) : SourceConfig
+internal sealed class PcapngSourceConfig(string path) : SourceConfig
 {
     /// <summary>Path to the PCAP/PCAPNG file.</summary>
     internal string Path { get; } = path;
@@ -268,9 +268,9 @@ internal sealed class PcapSourceConfig(string path) : SourceConfig
     /// <inheritdoc/>
     internal override IFrameSource CreateSource(ReadOnlySettingsManagerView settings)
     {
-        // Settings reserved for future PcapSource options that read profile values.
+        // Settings reserved for future PcapngSource options that read profile values.
         _ = settings;
-        return PcapSource.Open(Path);
+        return PcapngSource.Open(Path);
     }
 }
 

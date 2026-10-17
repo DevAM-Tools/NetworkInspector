@@ -210,6 +210,55 @@ internal sealed class RedissectIdentityTests
     }
 
     [Test]
+    public async Task Udp_ReparseWithoutRecordedEffect_ReportsMissingStream()
+    {
+        using Stack stack = _BuildStack();
+        // The first parse of packet 0 carries TCP, so no UDP layer records a stream effect for it; packet 1 carries
+        // UDP and moves the UDP watermark past packet 0, so a later UDP parse of packet 0 is a replay.
+        byte[] tcpFrame = _BuildTcpFrame(new IPv4Address(0x0A000001), new IPv4Address(0x0A000002), 40000, 80, 1, 0, TcpFlags.Syn);
+        _ = _ParseExpected(stack, _CreateFrame(stack, tcpFrame, 0), 0);
+        _ = _ParseExpected(stack, _CreateFrame(stack, _BuildUdpFrame(srcPort: 12345, dstPort: 9), 1), 1);
+
+        Packet reparse = _ParseExpected(stack, _CreateFrame(stack, _BuildUdpFrame(srcPort: 12345, dstPort: 9), 0), 0);
+
+        bool found = reparse.TryGetFieldValue(stack.GetFieldId("packet.error")!.Value, out FieldValue error, materialize: true);
+        _ = error.Data.TryGetAsString(out string message);
+        await Assert.That(found).IsTrue();
+        await Assert.That(message).Contains("No recorded UDP stream for this layer");
+    }
+
+    [Test]
+    public async Task Tcp_FractionalTimings_ReparseKeepsDoublePrecision()
+    {
+        using Stack stack = _BuildStack();
+
+        IPv4Address client = new(0x0A000001);
+        IPv4Address server = new(0x0A000002);
+        const ushort clientPort = 52001;
+        const ushort serverPort = 80;
+        byte[][] frames =
+        [
+            _BuildTcpFrame(client, server, clientPort, serverPort, 1000, 0, TcpFlags.Syn),
+            _BuildTcpFrame(server, client, serverPort, clientPort, 2000, 1001, TcpFlags.SynAck),
+            _BuildTcpFrame(client, server, clientPort, serverPort, 1001, 2001, TcpFlags.Ack),
+        ];
+
+        // 15.001234 ms steps: the seconds are not representable as float, so a float-narrowed replay would differ.
+        Timestamp _At(int index) => Timestamp.FromNanos(index * 15_001_234L);
+        Packet[] firstParsed = new Packet[frames.Length];
+        for (int i = 0; i < frames.Length; i++)
+        {
+            firstParsed[i] = _ParseExpected(stack, _CreateFrameAt(stack, frames[i], i, _At(i)), i);
+        }
+
+        for (int i = 0; i < frames.Length; i++)
+        {
+            Packet reparse = _ParseExpected(stack, _CreateFrameAt(stack, frames[i], i, _At(i)), i);
+            await PacketFieldComparer.AssertFieldIdentical(stack, firstParsed[i], reparse);
+        }
+    }
+
+    [Test]
     public async Task Tcp_HandshakeThenData_ReparseIdentical()
     {
         using Stack stack = _BuildStack();
@@ -372,9 +421,12 @@ internal sealed class RedissectIdentityTests
     }
 
     private static Frame _CreateFrame(Stack stack, byte[] frameData, int index) =>
+        _CreateFrameAt(stack, frameData, index, Timestamp.FromSecs(index));
+
+    private static Frame _CreateFrameAt(Stack stack, byte[] frameData, int index, Timestamp timestamp) =>
         Frame.Create(
             new FrameId(index),
-            Timestamp.FromSecs(index),
+            timestamp,
             frameData,
             LinkType.Ethernet,
             FrameInterfaceId.Invalid,

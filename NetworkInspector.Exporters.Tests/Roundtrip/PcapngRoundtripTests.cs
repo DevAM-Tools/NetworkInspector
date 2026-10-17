@@ -8,7 +8,7 @@ namespace NetworkInspector.Exporters.Tests.Roundtrip;
 ///   2. Export with <see cref="PcapngExporter"/> (nanosecond timestamps).
 ///   3. Validate the file with tshark 4.6.x (frame count, length, bytes, timestamps,
 ///      interface mapping).
-///   4. Reimport with <see cref="PcapSource"/> and compare every frame against the
+///   4. Reimport with <see cref="PcapngSource"/> and compare every frame against the
 ///      original.
 /// <para>tshark is required — tests fail when it is missing.</para>
 /// </summary>
@@ -40,7 +40,7 @@ internal sealed class PcapngRoundtripTests
         int count = TsharkVerifier.GetPacketCount(path);
         await Assert.That(count).IsEqualTo(0);
 
-        using PcapSource source = PcapSource.Open(path);
+        using PcapngSource source = PcapngSource.Open(path);
         RoundtripAssertions.StartSource(source);
         await Assert.That(source.NextFrame()).IsNull();
     }
@@ -82,7 +82,7 @@ internal sealed class PcapngRoundtripTests
         await Assert.That(records.Count).IsEqualTo(1);
         await Assert.That(records[0].FrameLen).IsEqualTo(originalData.Length);
 
-        using PcapSource source = PcapSource.Open(path);
+        using PcapngSource source = PcapngSource.Open(path);
         RoundtripAssertions.StartSource(source);
         Frame? reimported = source.NextFrame();
         await Assert.That(reimported).IsNotNull();
@@ -370,7 +370,7 @@ internal sealed class PcapngRoundtripTests
         RoundtripAssertions.AssertTsharkMatchesOriginals(path, originals, RoundtripAssertions.ExactNs);
 
         // Reimport via in-memory FromData (the Stream-equivalent code path on the source side).
-        using PcapSource source = PcapSource.FromData(await File.ReadAllBytesAsync(path).ConfigureAwait(false), "stream.pcapng");
+        using PcapngSource source = PcapngSource.FromData(await File.ReadAllBytesAsync(path).ConfigureAwait(false), "stream.pcapng");
         FrameInterfaceRegistry registry = RoundtripAssertions.StartSource(source);
         RoundtripAssertions.AssertReimportMatchesOriginals(source, registry, originals, RoundtripAssertions.ExactNs);
 
@@ -402,14 +402,14 @@ internal sealed class PcapngRoundtripTests
         RoundtripAssertions.AssertTsharkMatchesOriginals(path, originals, RoundtripAssertions.ExactNs);
 
         // Pass 1: lazy scan
-        using (PcapSource lazy = PcapSource.Open(path, new PcapSourceOptions { ScanMode = ScanMode.Lazy }))
+        using (PcapngSource lazy = PcapngSource.Open(path, new PcapngSourceOptions { ScanMode = ScanMode.Lazy }))
         {
             FrameInterfaceRegistry reg = RoundtripAssertions.StartSource(lazy);
             RoundtripAssertions.AssertReimportMatchesOriginals(lazy, reg, originals, RoundtripAssertions.ExactNs);
         }
 
         // Pass 2: full scan
-        using (PcapSource full = PcapSource.Open(path, new PcapSourceOptions { ScanMode = ScanMode.Full }))
+        using (PcapngSource full = PcapngSource.Open(path, new PcapngSourceOptions { ScanMode = ScanMode.Full }))
         {
             FrameInterfaceRegistry reg = RoundtripAssertions.StartSource(full);
             RoundtripAssertions.AssertReimportMatchesOriginals(full, reg, originals, RoundtripAssertions.ExactNs);
@@ -441,7 +441,7 @@ internal sealed class PcapngRoundtripTests
 
         _ExportAndClose(path, originals);
 
-        using PcapSource source = PcapSource.Open(path, new PcapSourceOptions { ScanMode = ScanMode.Full });
+        using PcapngSource source = PcapngSource.Open(path, new PcapngSourceOptions { ScanMode = ScanMode.Full });
         RoundtripAssertions.StartSource(source);
 
         // Visit in reverse plus interleaved — every random access must return a frame
@@ -482,7 +482,7 @@ internal sealed class PcapngRoundtripTests
         await Assert.That(verifier.InterfaceCount).IsEqualTo(1);
         await Assert.That(verifier.Interfaces[0].Name).IsEqualTo("eth0");
 
-        using PcapSource source = PcapSource.FromData(ms.ToArray(), "roundtrip.pcapng");
+        using PcapngSource source = PcapngSource.FromData(ms.ToArray(), "roundtrip.pcapng");
         FrameInterfaceRegistry registry = RoundtripAssertions.StartSource(source);
         Frame? reimported = source.NextFrame();
         await Assert.That(reimported).IsNotNull();
@@ -524,7 +524,7 @@ internal sealed class PcapngRoundtripTests
         writer.ReturnBuffers();
         byte[] originalFile = first.ToArray();
 
-        using PcapSource source = PcapSource.FromData(originalFile, "fcs.pcapng");
+        using PcapngSource source = PcapngSource.FromData(originalFile, "fcs.pcapng");
         FrameInterfaceRegistry registry = RoundtripAssertions.StartSource(source);
         Frame? frame = source.NextFrame();
         await Assert.That(frame).IsNotNull();
@@ -540,7 +540,7 @@ internal sealed class PcapngRoundtripTests
             exporter.OnFinish();
         }
 
-        using PcapSource again = PcapSource.FromData(exported.ToArray(), "fcs-again.pcapng");
+        using PcapngSource again = PcapngSource.FromData(exported.ToArray(), "fcs-again.pcapng");
         FrameInterfaceRegistry registryAgain = RoundtripAssertions.StartSource(again);
         Frame? second = again.NextFrame();
         await Assert.That(second).IsNotNull();
@@ -566,7 +566,7 @@ internal sealed class PcapngRoundtripTests
             exporter.OnFinish();
         }
 
-        using PcapSource source = PcapSource.FromData(ms.ToArray(), "no-fcs.pcapng");
+        using PcapngSource source = PcapngSource.FromData(ms.ToArray(), "no-fcs.pcapng");
         FrameInterfaceRegistry registry = RoundtripAssertions.StartSource(source);
         Frame? reimported = source.NextFrame();
         await Assert.That(reimported).IsNotNull();
@@ -596,11 +596,11 @@ internal sealed class PcapngRoundtripTests
         exporter.OnFinish();
     }
 
-    /// <summary>Opens a <see cref="PcapSource"/>, drains it sequentially and asserts
+    /// <summary>Opens a <see cref="PcapngSource"/>, drains it sequentially and asserts
     /// every frame matches the originals byte-exact and with nanosecond timestamps.</summary>
     private static void _ReimportAndAssert(string path, IReadOnlyList<Frame> originals)
     {
-        using PcapSource source = PcapSource.Open(path);
+        using PcapngSource source = PcapngSource.Open(path);
         FrameInterfaceRegistry registry = RoundtripAssertions.StartSource(source);
         RoundtripAssertions.AssertReimportMatchesOriginals(source, registry, originals, RoundtripAssertions.ExactNs);
     }

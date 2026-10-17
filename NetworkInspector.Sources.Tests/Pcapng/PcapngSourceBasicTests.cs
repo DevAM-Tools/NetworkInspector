@@ -6,14 +6,14 @@ namespace NetworkInspector.Sources.Tests.Pcapng;
 /// Tests for PcapNG source reading.
 /// Verifies single/multiple frame reading, timestamp handling, metadata, and edge cases.
 /// </summary>
-internal sealed class PcapSourceBasicTests
+internal sealed class PcapngSourceBasicTests
 {
     private static readonly byte[] _SrcMac = [0x00, 0x11, 0x22, 0x33, 0x44, 0x55];
     private static readonly byte[] _DstMac = [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
 
-    /// <summary>Creates a <see cref="PcapSource"/> from raw PcapNG data.</summary>
-    private static PcapSource _CreateSource(byte[] pcapData) =>
-        PcapSource.FromData(pcapData, "test.pcapng");
+    /// <summary>Creates a <see cref="PcapngSource"/> from raw PcapNG data.</summary>
+    private static PcapngSource _CreateSource(byte[] pcapData) =>
+        PcapngSource.FromData(pcapData, "test.pcapng");
 
 
 
@@ -31,7 +31,7 @@ internal sealed class PcapSourceBasicTests
         writer.WriteFrame(0, 1_000_000_000, eth);
         byte[] pcapData = writer.Build();
 
-        using PcapSource source = _CreateSource(pcapData);
+        using PcapngSource source = _CreateSource(pcapData);
         await Assert.That(source.EstimatedFrameCount).IsEqualTo(1);
 
         SourceTestFixture.InitializeAndStartSource(source);
@@ -64,7 +64,7 @@ internal sealed class PcapSourceBasicTests
             writer.WriteFrame(0, (i + 1) * 1_000_000_000L, eth);
         }
 
-        using PcapSource source = _CreateSource(writer.Build());
+        using PcapngSource source = _CreateSource(writer.Build());
         await Assert.That(source.EstimatedFrameCount).IsEqualTo(5);
 
         SourceTestFixture.InitializeAndStartSource(source);
@@ -97,7 +97,7 @@ internal sealed class PcapSourceBasicTests
             writer.WriteFrame(0, ts, eth);
         }
 
-        using PcapSource source = _CreateSource(writer.Build());
+        using PcapngSource source = _CreateSource(writer.Build());
         SourceTestFixture.InitializeAndStartSource(source);
 
         long prevTs = long.MinValue;
@@ -127,7 +127,7 @@ internal sealed class PcapSourceBasicTests
         // 1.5 seconds = 1_500_000_000 ns = 1_500_000 µs
         writer.WriteFrame(0, 1_500_000_000, eth);
 
-        using PcapSource source = _CreateSource(writer.Build());
+        using PcapngSource source = _CreateSource(writer.Build());
         SourceTestFixture.InitializeAndStartSource(source);
 
         Frame? frame = source.NextFrame();
@@ -158,7 +158,7 @@ internal sealed class PcapSourceBasicTests
             writer.WriteFrame(0, (i + 1) * 1_000_000_000L, eth);
         }
 
-        using PcapSource source = _CreateSource(writer.Build());
+        using PcapngSource source = _CreateSource(writer.Build());
         SourceTestFixture.InitializeAndStartSource(source);
 
         // Access frame 5 directly
@@ -185,7 +185,7 @@ internal sealed class PcapSourceBasicTests
         byte[] eth = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0x00]);
         writer.WriteFrame(0, 1_000_000_000, eth);
 
-        using PcapSource source = PcapSource.FromData(writer.Build(), "my_capture.pcapng");
+        using PcapngSource source = PcapngSource.FromData(writer.Build(), "my_capture.pcapng");
         await Assert.That(source.UiName).IsEqualTo("my_capture.pcapng");
     }
 
@@ -200,7 +200,7 @@ internal sealed class PcapSourceBasicTests
         writer.AddInterface(LinkType.Ethernet);
         // No frames written
 
-        using PcapSource source = _CreateSource(writer.Build());
+        using PcapngSource source = _CreateSource(writer.Build());
         await Assert.That(source.EstimatedFrameCount).IsEqualTo(0);
 
         SourceTestFixture.InitializeAndStartSource(source);
@@ -216,7 +216,7 @@ internal sealed class PcapSourceBasicTests
     {
         using PcapNgTestWriter writer = new();
         byte[] pcapData = writer.Build();
-        using PcapSource source = _CreateSource(pcapData);
+        using PcapngSource source = _CreateSource(pcapData);
         FrameInterfaceRegistry registry = new();
         FrameSourceId sourceId = registry.RegisterSource(source);
 

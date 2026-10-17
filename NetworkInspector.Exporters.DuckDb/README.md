@@ -38,10 +38,15 @@ dotnet add package NetworkInspector.Exporters.DuckDb
 | --- | --- |
 | `packets(packet_id INTEGER, timestamp_ns BIGINT [, info VARCHAR] [, frame_bytes BLOB])` | One row per packet; `packet_id` matches Core `PacketId` (`int`) |
 | `topology(packet_id INTEGER, node_id INTEGER, field_id INTEGER, parent_node_id INTEGER)` | One row per field-tree node |
-| `catalog(field_id INTEGER, name VARCHAR, ui_name VARCHAR, field_type INTEGER, protocol_id INTEGER, table_name VARCHAR)` | One row per distinct field ID observed |
+| `catalog(field_id INTEGER, name VARCHAR, ui_name VARCHAR, field_type INTEGER, protocol_id INTEGER, table_name VARCHAR, description VARCHAR)` | One row per distinct field ID observed; `description` is `NULL` when the field has none |
+| `protocols(protocol_id INTEGER, name VARCHAR, ui_name VARCHAR)` | One row per protocol registered in the parsing stack |
 | `field_{id}(packet_id INTEGER, node_id INTEGER, value <type> [, custom_repr VARCHAR] [, custom_text VARCHAR])` | One row per field occurrence; `value` is `VARCHAR` for `FieldType.String` |
 
-Catalog is populated once in `OnFinish()`. Field data tables are created lazily.
+Catalog is populated once in `OnFinish()`. The `protocols` table is populated once at the start
+(first `OnPacket()`), because the protocol set is fixed by the stack. Field data tables are
+created lazily. Join `catalog.protocol_id` to `protocols.protocol_id` to label fields by protocol
+without the dissector assemblies. New catalog columns are only ever appended, so positional
+readers stay valid.
 
 ## Quick Start
 
@@ -81,13 +86,19 @@ JOIN field_42 f USING (packet_id);
 | `WithMaxBlockSize(bytes)` | Flush the in-memory batch by estimated size threshold |
 | `WithDetailFlags(flags)` | Choose optional columns (info, frame bytes, custom representation/text, topology) |
 | `WithTimestampSorted(sorted)` | Declares packets arrive in non-decreasing timestamp order |
+| `WithMemoryLimit(bytes)` | DuckDB `memory_limit` in bytes (`> 0`). Default: DuckDB's own default (no `SET` issued) |
+| `WithThreads(threads)` | DuckDB `threads` (`> 0`). Default: DuckDB's own default (no `SET` issued) |
+
+`WithMemoryLimit` and `WithThreads` throw `ArgumentOutOfRangeException` for zero or negative
+values. Leave them uncalled to keep DuckDB's defaults.
 
 ## Write Performance
 
 - Every `WriteBatch` call wraps appends in a single explicit `BEGIN`/`COMMIT` transaction.
 - All data tables use `DuckDBAppender` — never row-at-a-time `INSERT`.
 - `CHECKPOINT` runs exactly once at the end of `OnFinish()`.
-- `threads` and `memory_limit` are set once per connection (`Environment.ProcessorCount`, `4GB`).
+- `threads` and `memory_limit` are set once per connection, and only when configured through
+  `WithThreads` / `WithMemoryLimit`; otherwise DuckDB's own defaults apply.
 
 ## Limits And Thread-Safety Notes
 

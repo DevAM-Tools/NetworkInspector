@@ -94,33 +94,33 @@ public sealed class BlfSourceOptions : IFileSourceOptions
     /// interpreted versus the Unix epoch used by <see cref="BlfSource"/>.
     /// </para>
     /// <para>
-    /// Default: <see cref="TimeZoneInfo.Local"/> — matches mainstream Vector tooling
-    /// end-to-end. Use <see cref="TimeZoneInfo.Utc"/> only if your capture
-    /// pipeline explicitly treats SYSTEMTIME components as UTC (non-standard versus those tools).
+    /// Default: <see cref="TimeZoneInfo.Utc"/> — deterministic, machine-independent timestamps, and the same default
+    /// as <see cref="Asc.AscSourceOptions.TimestampTimeZone"/> and the BLF exporter. Set
+    /// <see cref="TimeZoneInfo.Local"/> to read files written by Vector tools on this machine's zone, or the zone the
+    /// capture was recorded in when it is known.
     /// </para>
     /// </summary>
-    public TimeZoneInfo TimestampTimeZone { get; init; } = TimeZoneInfo.Local;
-
-    private int _MmapSlotCount = Environment.ProcessorCount;
+    public TimeZoneInfo TimestampTimeZone { get; init; } = TimeZoneInfo.Utc;
 
     /// <summary>
-    /// Number of memory-mapped view accessor slots used for concurrent random-access reads
-    /// when the file exceeds <see cref="PreloadBudget"/>. Sequential scan uses the primary
-    /// view; <see cref="BlfSource.FrameById"/> hashes the frame id onto these slots via
-    /// <c>ReadAt</c>/<c>ReadInto</c>.
-    /// Must be positive.
-    /// Default: <see cref="Environment.ProcessorCount"/>. Ignored when the file is loaded in-memory.
+    /// Slab size in bytes for the frame buffers of sequential reads (<c>NextFrame</c>). 0 (default) allocates one
+    /// array per frame. Values from 1 024 to 16 777 216 group consecutive frames into shared slabs: fewer GC objects,
+    /// but a consumer that keeps one frame alive keeps its whole slab alive. Frames above a quarter of the slab get
+    /// their own array.
+    /// <para>
+    /// With 0, Ethernet frames of object types 102 and 120–123 alias the decompressed container (no copy), so a held
+    /// Ethernet frame keeps its whole container (up to <see cref="MaxUncompressedContainerSize"/>) alive. With a slab
+    /// size set, they are copied into the slab as well, which bounds that retention to one slab.
+    /// <see cref="BlfSource.FrameById"/> always allocates one array per frame.
+    /// </para>
     /// </summary>
-    /// <exception cref="ArgumentOutOfRangeException">Value is less than 1.</exception>
-    public int MmapSlotCount
+    /// <exception cref="ArgumentOutOfRangeException">The value is neither 0 nor in 1 024 … 16 777 216.</exception>
+    public int FrameSlabSize
     {
-        get => _MmapSlotCount;
-        init
-        {
-            ArgumentOutOfRangeException.ThrowIfLessThan(value, 1);
-            _MmapSlotCount = value;
-        }
+        get => _FrameSlabSize;
+        init => _FrameSlabSize = FrameSlabAllocator.ValidateOption(value);
     }
+    private readonly int _FrameSlabSize;
 
     private long _MaxUncompressedContainerSize = DefaultMaxUncompressedContainerSize;
 

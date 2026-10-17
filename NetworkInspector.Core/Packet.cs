@@ -62,6 +62,13 @@ public sealed class Packet
 
     private const int _MaxFieldCount = ushort.MaxValue - 1;
 
+    /// <summary>
+    /// Field limit for every append except a recorded caught exception. The last slot below
+    /// <see cref="_MaxFieldCount"/> stays free for <see cref="RecordCaughtError"/>, so a parse that fills the
+    /// tree still records the resulting <c>FieldAppendException</c> instead of throwing out of <c>TryParse</c>.
+    /// </summary>
+    private const int _RegularFieldLimit = _MaxFieldCount - 1;
+
     /// <summary>Number of <see cref="FieldBody"/> slots per chunk (must be power of 2).</summary>
     private const int _FieldBodyChunkSize = 16;
 
@@ -327,10 +334,10 @@ public sealed class Packet
             }
             else
             {
-        // Keep the grown descriptor capacity. Shrinking back to the initial four slots
-        // would publish a new table on the next frame that needs a fifth chunk.
-        _ChunkTable.ResetForReuse(_ChunkTable.Capacity);
-        _ChunkCount = 1;
+                // Keep the grown descriptor capacity. Shrinking back to the initial four slots
+                // would publish a new table on the next frame that needs a fifth chunk.
+                _ChunkTable.ResetForReuse(_ChunkTable.Capacity);
+                _ChunkCount = 1;
             }
 
             ref FieldBodyChunk firstChunk = ref _GetChunk(0);
@@ -1098,7 +1105,7 @@ public sealed class Packet
                     // Catch protocol/parser failures (FieldAppendException, NullReferenceException, etc.)
                     // and attach the error under the lazy container field (not at root). OOM must
                     // propagate — catching it would hide a fatal process condition and allocate.
-                    SetFieldError(fieldIndex, _BuildExceptionMessage(ex, includeStackTrace: false));
+                    RecordCaughtError(fieldIndex, BuildCaughtExceptionText(ex, includeStackTrace: false));
                     return false;
                 }
                 finally
@@ -1543,17 +1550,18 @@ public sealed class Packet
     /// Pre-Seal uses a plain increment of <see cref="_AllocatedFieldCount"/> (single-threaded parse).
     /// Post-Seal uses <see cref="Interlocked.CompareExchange(ref int, int, int)"/> so concurrent
     /// lazy materializers cannot share a slot. Callers write the <see cref="FieldBody"/>, fix
-    /// parent/sibling pointers, then publish via <see cref="_PublishFieldCount"/>.
+    /// parent/sibling pointers, then publish via <see cref="_PublishFieldCount"/>. Throws
+    /// <c>FieldAppendException</c> once <paramref name="limit"/> slots are allocated.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private int _ReserveFieldSlot()
+    private int _ReserveFieldSlot(int limit = _RegularFieldLimit)
     {
         if (_Finalized != 0)
         {
             int current = _AllocatedFieldCount;
             while (true)
             {
-                if (current >= _MaxFieldCount)
+                if (current >= limit)
                 {
                     ThrowHelpers.ThrowFieldAppend(ParseError.Custom("packet", "Maximum field count exceeded"));
                 }
@@ -1568,7 +1576,7 @@ public sealed class Packet
         }
 
         int count = _AllocatedFieldCount;
-        if (count >= _MaxFieldCount)
+        if (count >= limit)
         {
             ThrowHelpers.ThrowFieldAppend(ParseError.Custom("packet", "Maximum field count exceeded"));
         }
@@ -1685,8 +1693,10 @@ public sealed class Packet
     /// Appends a child field to the given parent. Performs all parent / sibling linked-list
     /// updates <b>before</b> publishing the new field count, so that a concurrent reader
     /// post-Seal cannot observe the incremented count while parent pointers are still stale.
+    /// <paramref name="limit"/> is the field limit for this append; only <see cref="RecordCaughtError"/>
+    /// passes <see cref="_MaxFieldCount"/>.
     /// </summary>
-    internal ushort AppendChild(ushort parentIndex, FieldId fieldId, FieldValue value)
+    internal ushort AppendChild(ushort parentIndex, FieldId fieldId, FieldValue value, int limit = _RegularFieldLimit)
     {
         if (!_HasFieldTree)
         {
@@ -1695,36 +1705,36 @@ public sealed class Packet
             return FieldBody.SkipStorageIndex;
         }
 
-        int reservedIndex = _ReserveFieldSlot();
+        int reservedIndex = _ReserveFieldSlot(limit);
         ushort newIndex = (ushort)reservedIndex;
         bool published = false;
         try
         {
-        FieldBody newField = new(fieldId, value)
-        {
-            ParentIndex = parentIndex
-        };
-        _AddFieldBody(in newField, reservedIndex);
+            FieldBody newField = new(fieldId, value)
+            {
+                ParentIndex = parentIndex
+            };
+            _AddFieldBody(in newField, reservedIndex);
 
-        ref FieldBody parent = ref GetFieldRef(parentIndex);
-        if (parent.LastChildIndex == FieldBody.NullIndex)
-        {
-            parent.FirstChildIndex = newIndex;
-            parent.LastChildIndex = newIndex;
-        }
-        else
-        {
-            ushort lastChild = parent.LastChildIndex;
-            GetFieldRef(lastChild).NextIndex = newIndex;
-            GetFieldRef(newIndex).PrevIndex = lastChild;
-            parent.LastChildIndex = newIndex;
-        }
-        parent.IncrementChildCount();
+            ref FieldBody parent = ref GetFieldRef(parentIndex);
+            if (parent.LastChildIndex == FieldBody.NullIndex)
+            {
+                parent.FirstChildIndex = newIndex;
+                parent.LastChildIndex = newIndex;
+            }
+            else
+            {
+                ushort lastChild = parent.LastChildIndex;
+                GetFieldRef(lastChild).NextIndex = newIndex;
+                GetFieldRef(newIndex).PrevIndex = lastChild;
+                parent.LastChildIndex = newIndex;
+            }
+            parent.IncrementChildCount();
 
-        _RecordValueCacheNoText(fieldId, in value);
+            _RecordValueCacheNoText(fieldId, in value);
 
-        // Publish AFTER parent / sibling fix-ups so a concurrent reader that observes
-        // the incremented _FieldCount also sees the consistent linked-list state.
+            // Publish AFTER parent / sibling fix-ups so a concurrent reader that observes
+            // the incremented _FieldCount also sees the consistent linked-list state.
             _PublishFieldCount(reservedIndex + 1);
             published = true;
             _ObserveProducedField(fieldId, in value, newIndex, hasField: true);
@@ -1759,29 +1769,29 @@ public sealed class Packet
         bool published = false;
         try
         {
-        FieldBody newField = new(fieldId, value)
-        {
-            ParentIndex = parentIndex
-        };
-        _AddFieldBody(in newField, reservedIndex);
+            FieldBody newField = new(fieldId, value)
+            {
+                ParentIndex = parentIndex
+            };
+            _AddFieldBody(in newField, reservedIndex);
 
-        ref FieldBody parent = ref GetFieldRef(parentIndex);
-        if (parent.LastChildIndex == FieldBody.NullIndex)
-        {
-            parent.FirstChildIndex = newIndex;
-            parent.LastChildIndex = newIndex;
-        }
-        else
-        {
-            ushort lastChild = parent.LastChildIndex;
-            GetFieldRef(lastChild).NextIndex = newIndex;
-            GetFieldRef(newIndex).PrevIndex = lastChild;
-            parent.LastChildIndex = newIndex;
-        }
-        parent.IncrementChildCount();
-        GetFieldRef(newIndex).SetCustomText(customText);
+            ref FieldBody parent = ref GetFieldRef(parentIndex);
+            if (parent.LastChildIndex == FieldBody.NullIndex)
+            {
+                parent.FirstChildIndex = newIndex;
+                parent.LastChildIndex = newIndex;
+            }
+            else
+            {
+                ushort lastChild = parent.LastChildIndex;
+                GetFieldRef(lastChild).NextIndex = newIndex;
+                GetFieldRef(newIndex).PrevIndex = lastChild;
+                parent.LastChildIndex = newIndex;
+            }
+            parent.IncrementChildCount();
+            GetFieldRef(newIndex).SetCustomText(customText);
 
-        _RecordValueCache(fieldId, in value, customText);
+            _RecordValueCache(fieldId, in value, customText);
 
             _PublishFieldCount(reservedIndex + 1);
             published = true;
@@ -1817,29 +1827,29 @@ public sealed class Packet
         bool published = false;
         try
         {
-        FieldBody newField = new(fieldId, value)
-        {
-            ParentIndex = parentIndex
-        };
-        _AddFieldBody(in newField, reservedIndex);
+            FieldBody newField = new(fieldId, value)
+            {
+                ParentIndex = parentIndex
+            };
+            _AddFieldBody(in newField, reservedIndex);
 
-        ref FieldBody parent = ref GetFieldRef(parentIndex);
-        if (parent.FirstChildIndex == FieldBody.NullIndex)
-        {
-            parent.FirstChildIndex = newIndex;
-            parent.LastChildIndex = newIndex;
-        }
-        else
-        {
-            ushort firstChild = parent.FirstChildIndex;
-            GetFieldRef(firstChild).PrevIndex = newIndex;
-            GetFieldRef(newIndex).NextIndex = firstChild;
-            parent.FirstChildIndex = newIndex;
-        }
-        parent.IncrementChildCount();
-        GetFieldRef(newIndex).SetCustomText(customText);
+            ref FieldBody parent = ref GetFieldRef(parentIndex);
+            if (parent.FirstChildIndex == FieldBody.NullIndex)
+            {
+                parent.FirstChildIndex = newIndex;
+                parent.LastChildIndex = newIndex;
+            }
+            else
+            {
+                ushort firstChild = parent.FirstChildIndex;
+                GetFieldRef(firstChild).PrevIndex = newIndex;
+                GetFieldRef(newIndex).NextIndex = firstChild;
+                parent.FirstChildIndex = newIndex;
+            }
+            parent.IncrementChildCount();
+            GetFieldRef(newIndex).SetCustomText(customText);
 
-        _RecordValueCache(fieldId, in value, customText);
+            _RecordValueCache(fieldId, in value, customText);
 
             _PublishFieldCount(reservedIndex + 1);
             published = true;
@@ -1875,28 +1885,28 @@ public sealed class Packet
         bool published = false;
         try
         {
-        FieldBody newField = new(fieldId, value)
-        {
-            ParentIndex = parentIndex
-        };
-        _AddFieldBody(in newField, reservedIndex);
+            FieldBody newField = new(fieldId, value)
+            {
+                ParentIndex = parentIndex
+            };
+            _AddFieldBody(in newField, reservedIndex);
 
-        ref FieldBody parent = ref GetFieldRef(parentIndex);
-        if (parent.FirstChildIndex == FieldBody.NullIndex)
-        {
-            parent.FirstChildIndex = newIndex;
-            parent.LastChildIndex = newIndex;
-        }
-        else
-        {
-            ushort firstChild = parent.FirstChildIndex;
-            GetFieldRef(firstChild).PrevIndex = newIndex;
-            GetFieldRef(newIndex).NextIndex = firstChild;
-            parent.FirstChildIndex = newIndex;
-        }
-        parent.IncrementChildCount();
+            ref FieldBody parent = ref GetFieldRef(parentIndex);
+            if (parent.FirstChildIndex == FieldBody.NullIndex)
+            {
+                parent.FirstChildIndex = newIndex;
+                parent.LastChildIndex = newIndex;
+            }
+            else
+            {
+                ushort firstChild = parent.FirstChildIndex;
+                GetFieldRef(firstChild).PrevIndex = newIndex;
+                GetFieldRef(newIndex).NextIndex = firstChild;
+                parent.FirstChildIndex = newIndex;
+            }
+            parent.IncrementChildCount();
 
-        _RecordValueCacheNoText(fieldId, in value);
+            _RecordValueCacheNoText(fieldId, in value);
 
             _PublishFieldCount(reservedIndex + 1);
             published = true;
@@ -1943,29 +1953,29 @@ public sealed class Packet
         bool published = false;
         try
         {
-        FieldBody newField = new(fieldId, value)
-        {
-            ParentIndex = parentIndex
-        };
-        _AddFieldBody(in newField, reservedIndex);
+            FieldBody newField = new(fieldId, value)
+            {
+                ParentIndex = parentIndex
+            };
+            _AddFieldBody(in newField, reservedIndex);
 
-        ushort nextSibling = GetFieldRef(siblingIndex).NextIndex;
-        GetFieldRef(siblingIndex).NextIndex = newIndex;
-        GetFieldRef(newIndex).PrevIndex = siblingIndex;
-        GetFieldRef(newIndex).NextIndex = nextSibling;
+            ushort nextSibling = GetFieldRef(siblingIndex).NextIndex;
+            GetFieldRef(siblingIndex).NextIndex = newIndex;
+            GetFieldRef(newIndex).PrevIndex = siblingIndex;
+            GetFieldRef(newIndex).NextIndex = nextSibling;
 
-        if (nextSibling != FieldBody.NullIndex)
-        {
-            GetFieldRef(nextSibling).PrevIndex = newIndex;
-        }
-        else
-        {
-            GetFieldRef(parentIndex).LastChildIndex = newIndex;
-        }
-        GetFieldRef(parentIndex).IncrementChildCount();
-        GetFieldRef(newIndex).SetCustomText(customText);
+            if (nextSibling != FieldBody.NullIndex)
+            {
+                GetFieldRef(nextSibling).PrevIndex = newIndex;
+            }
+            else
+            {
+                GetFieldRef(parentIndex).LastChildIndex = newIndex;
+            }
+            GetFieldRef(parentIndex).IncrementChildCount();
+            GetFieldRef(newIndex).SetCustomText(customText);
 
-        _RecordValueCache(fieldId, in value, customText);
+            _RecordValueCache(fieldId, in value, customText);
 
             _PublishFieldCount(reservedIndex + 1);
             published = true;
@@ -2011,28 +2021,28 @@ public sealed class Packet
         bool published = false;
         try
         {
-        FieldBody newField = new(fieldId, value)
-        {
-            ParentIndex = parentIndex
-        };
-        _AddFieldBody(in newField, reservedIndex);
+            FieldBody newField = new(fieldId, value)
+            {
+                ParentIndex = parentIndex
+            };
+            _AddFieldBody(in newField, reservedIndex);
 
-        ushort nextSibling = GetFieldRef(siblingIndex).NextIndex;
-        GetFieldRef(siblingIndex).NextIndex = newIndex;
-        GetFieldRef(newIndex).PrevIndex = siblingIndex;
-        GetFieldRef(newIndex).NextIndex = nextSibling;
+            ushort nextSibling = GetFieldRef(siblingIndex).NextIndex;
+            GetFieldRef(siblingIndex).NextIndex = newIndex;
+            GetFieldRef(newIndex).PrevIndex = siblingIndex;
+            GetFieldRef(newIndex).NextIndex = nextSibling;
 
-        if (nextSibling != FieldBody.NullIndex)
-        {
-            GetFieldRef(nextSibling).PrevIndex = newIndex;
-        }
-        else
-        {
-            GetFieldRef(parentIndex).LastChildIndex = newIndex;
-        }
-        GetFieldRef(parentIndex).IncrementChildCount();
+            if (nextSibling != FieldBody.NullIndex)
+            {
+                GetFieldRef(nextSibling).PrevIndex = newIndex;
+            }
+            else
+            {
+                GetFieldRef(parentIndex).LastChildIndex = newIndex;
+            }
+            GetFieldRef(parentIndex).IncrementChildCount();
 
-        _RecordValueCacheNoText(fieldId, in value);
+            _RecordValueCacheNoText(fieldId, in value);
 
             _PublishFieldCount(reservedIndex + 1);
             published = true;
@@ -2121,7 +2131,7 @@ public sealed class Packet
         catch (Exception ex)
         {
             _ObserverFailed = true;
-            SetError(_BuildExceptionMessage(ex, Stack.IncludeExceptionStackTrace));
+            RecordCaughtError(0, BuildCaughtExceptionText(ex, Stack.IncludeExceptionStackTrace));
         }
     }
 
@@ -2176,7 +2186,7 @@ public sealed class Packet
         catch (Exception ex)
         {
             _ObserverFailed = true;
-            SetError(_BuildExceptionMessage(ex, Stack.IncludeExceptionStackTrace));
+            RecordCaughtError(0, BuildCaughtExceptionText(ex, Stack.IncludeExceptionStackTrace));
         }
     }
 
@@ -2260,6 +2270,56 @@ public sealed class Packet
             return;
         }
         AppendChild(0, errorFieldId, FieldValue.NewString(message));
+    }
+
+    /// <summary>
+    /// Records an exception caught at a parse, observer, dispatch, or materialization boundary as a
+    /// <c>packet.error</c> child of <paramref name="parentFieldIndex"/>. Unlike <see cref="SetError"/> it does
+    /// not throw: the append may use the slot that <see cref="_RegularFieldLimit"/> keeps free, and when the
+    /// active value cache fails again (for example because it was abandoned), the error is appended once
+    /// more without the cache. A failed attempt leaves an unlinked tombstone, so the tree stays consistent.
+    /// When even the reserved slot is used up, the earlier recorded error stands and this one is dropped.
+    /// </summary>
+    internal void RecordCaughtError(ushort parentFieldIndex, string message)
+    {
+        FieldId errorFieldId = Stack.PacketErrorFieldId;
+        if (!errorFieldId.IsValid)
+        {
+            return;
+        }
+
+        // First attempt: the normal append, including the value cache.
+        try
+        {
+            AppendChild(parentFieldIndex, errorFieldId, FieldValue.NewString(message), _MaxFieldCount);
+            return;
+        }
+        catch (FieldAppendException)
+        {
+            // The reserved slot is used up; nothing more can be stored.
+            return;
+        }
+        catch (Exception) when (_Finalized == 0 && _ActiveValueCache is not null)
+        {
+            // The cache failed while recording the error; retry without it below.
+        }
+
+        // Second attempt without the cache. Before Seal the parse thread is the only writer of the
+        // cache reference, so clearing it for one append is safe.
+        ValueCache? cache = _ActiveValueCache;
+        _ActiveValueCache = null;
+        try
+        {
+            AppendChild(parentFieldIndex, errorFieldId, FieldValue.NewString(message), _MaxFieldCount);
+        }
+        catch (FieldAppendException)
+        {
+            // The first attempt's tombstone took the reserved slot; nothing more can be stored.
+        }
+        finally
+        {
+            _ActiveValueCache = cache;
+        }
     }
 
     /// <summary>
@@ -2482,20 +2542,22 @@ public sealed class Packet
     }
 
     /// <summary>
-    /// Builds the error message for a caught parser exception.
-    /// When <paramref name="includeStackTrace"/> is <see langword="true"/>, returns
-    /// <see cref="Exception.ToString"/> (type, message, and stack when the runtime provides one).
+    /// Text recorded in <c>packet.error</c> for a caught exception: the message, or the message, a newline, and the
+    /// stack trace when <paramref name="includeStackTrace"/> is set and the runtime provides one. One policy for every
+    /// catch boundary (parse, main dispatch in <see cref="Protocols.PacketProtocol"/>, post-parser, observer, lazy
+    /// populator), so the same exception yields the same text wherever it is caught.
     /// </summary>
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private static string _BuildExceptionMessage(Exception ex, bool includeStackTrace)
+    internal static string BuildCaughtExceptionText(Exception ex, bool includeStackTrace)
     {
-        string message = ex.Message;
-        if (includeStackTrace)
+        if (!includeStackTrace || ex.StackTrace is null)
         {
-            message = ex.ToString();
+            return ex.Message;
         }
 
-        return message;
+        // ZeroAlloc: concatenate message + newline + stack trace without intermediate allocations.
+        using TempString temp = ZA.String(ex.Message, "\n", ex.StackTrace);
+        return temp.ToString();
     }
 
     // ── Shared lifecycle helpers ──────────────────────────────────────────────────────────────────
@@ -2559,7 +2621,7 @@ public sealed class Packet
             catch (Exception ex)
             {
                 packet._ObserverFailed = true;
-                packet.SetError(_BuildExceptionMessage(ex, packet.Stack.IncludeExceptionStackTrace));
+                packet.RecordCaughtError(0, BuildCaughtExceptionText(ex, packet.Stack.IncludeExceptionStackTrace));
                 if (indexing)
                 {
                     index!.RollbackCurrentPacket();

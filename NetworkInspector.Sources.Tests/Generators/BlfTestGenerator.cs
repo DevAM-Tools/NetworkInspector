@@ -309,7 +309,25 @@ internal sealed class BlfTestGenerator
     }
 
     /// <summary>
-    /// Adds a CAN Classic message (Type 1) from a SocketCAN frame using the Wireshark
+    /// Adds an Ethernet object with the 32-byte Type 120 header: Type 120 (frame EX), 121 (forwarded),
+    /// 122 (error EX), or 123 (error forwarded). The header holds the channel at offset 4 and the frame length at
+    /// offset 22; the raw Ethernet bytes follow at offset 32.
+    /// </summary>
+    /// <param name="objectType">One of the object types 120 to 123.</param>
+    /// <param name="channel">BLF channel number (1-based).</param>
+    /// <param name="ethernetFrame">Complete raw Ethernet frame.</param>
+    /// <param name="offsetNanos">Timestamp offset from start (nanoseconds).</param>
+    internal BlfTestGenerator AddEthernetFrameEx(uint objectType, ushort channel, ReadOnlySpan<byte> ethernetFrame, long offsetNanos)
+    {
+        byte[] payload = new byte[32 + ethernetFrame.Length];
+        BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(4), channel);
+        BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(22), (ushort)ethernetFrame.Length);
+        ethernetFrame.CopyTo(payload.AsSpan(32));
+        return AddRawObject(objectType, offsetNanos, payload);
+    }
+
+    /// <summary>
+    /// Adds a CAN Classic message (Type 1) from a SocketCAN frame using the
     /// <c>blf_canmessage_t</c> layout (flags at offset 2, dlc at 3, EFF in ID bit 31).
     /// </summary>
     /// <param name="channel">BLF channel number (1-based).</param>
@@ -353,8 +371,8 @@ internal sealed class BlfTestGenerator
     }
 
     /// <summary>
-    /// Adds a CAN XL channel frame (Type 139) from a SocketCAN XL frame, matching
-    /// Wireshark <c>blf_dump_socketcanxl</c> (104-byte header, payload at offset 104).
+    /// Adds a CAN XL channel frame (Type 139) from a SocketCAN XL frame
+    /// (104-byte header, payload at offset 104).
     /// </summary>
     internal BlfTestGenerator AddCanXlChannelFrame(byte channel, ReadOnlySpan<byte> socketCanXlFrame, long offsetNanos)
     {
@@ -404,8 +422,8 @@ internal sealed class BlfTestGenerator
     }
 
     /// <summary>
-    /// Adds a CAN FD message (Type 100) from a SocketCAN FD frame using
-    /// Wireshark <c>blf_canfdmessage_t</c> (20-byte header, data at offset 20).
+    /// Adds a CAN FD message (Type 100) from a SocketCAN FD frame using the
+    /// <c>blf_canfdmessage_t</c> layout (20-byte header, data at offset 20).
     /// </summary>
     internal BlfTestGenerator AddCanFdFrame(ushort channel, ReadOnlySpan<byte> socketCanFrame, long offsetNanos)
     {
@@ -543,7 +561,7 @@ internal sealed class BlfTestGenerator
     internal BlfTestGenerator AddLinMessage2(
         ushort channel, byte frameId, ReadOnlySpan<byte> data, byte checksum, long offsetNanos)
     {
-        // Vector blf_linmessage2_t (132 bytes packed) — matches Wireshark wiretap/blf.h.
+        // Vector blf_linmessage2_t (132 bytes packed).
         // Nested layout (only fields populated by LinParser.TryParseLinMessageV2 are set):
         //   blf_linbusevent (16): sof(8) eventBaudrate(4) channel(2 LE @12) res1(2)
         //   blf_linsynchfieldevent (+16=32): synchBreakLength(8) synchDelLength(8)

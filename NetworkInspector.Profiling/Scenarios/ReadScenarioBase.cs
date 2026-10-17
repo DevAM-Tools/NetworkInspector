@@ -54,7 +54,8 @@ internal abstract class ReadScenarioBase : IProfilingScenario
     /// <inheritdoc/>
     public void Setup()
     {
-        _Stack = StackHelper.CreateStack();
+        // Mixed capture formats may need protocols outside the fair eth/IP/UDP/TCP cone.
+        _Stack = StackHelper.CreateFullStack();
         Frame[] frames = FrameHelper.CreateSharedFrames(FrameCount, _Stack);
         _FilePath = CreateSampleFile(frames);
     }

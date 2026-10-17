@@ -79,6 +79,39 @@ internal static class PcapngBlockLayout
     }
 
     /// <summary>
+    /// Validates a legacy PCAP record <c>incl_len</c> against the declared snaplen (0 = not declared, then
+    /// <see cref="PcapConstants.DefaultSnapLength"/> applies) and the shared <see cref="PcapConstants.MaxBlockSize"/> cap.
+    /// The file reader and the stream reader both call this, so they reject the same records with the same text.
+    /// </summary>
+    /// <param name="inclLen">Captured length from the record header.</param>
+    /// <param name="declaredSnapLength">Snaplen exactly as the global header declares it.</param>
+    /// <param name="reason">Why the record is rejected; <see langword="null"/> when the method returns true.</param>
+    /// <returns>True when the record may be read; false when it is a malformed header.</returns>
+    internal static bool TryValidateLegacyInclLen(uint inclLen, uint declaredSnapLength, out string? reason)
+    {
+        reason = null;
+        if (inclLen > PcapConstants.MaxBlockSize)
+        {
+            reason = $"Legacy PCAP incl_len {inclLen} exceeds the {PcapConstants.MaxBlockSize / (1024 * 1024)} MiB safety cap; malformed header.";
+            return false;
+        }
+
+        // A file without a declared snaplen gets the format default as implicit cap, so a hostile header
+        // cannot request a huge allocation. Captures with larger packets must declare their snaplen.
+        uint effectiveSnapLength = declaredSnapLength > 0 ? declaredSnapLength : PcapConstants.DefaultSnapLength;
+        if (inclLen > effectiveSnapLength)
+        {
+            reason = declaredSnapLength > 0
+                ? $"Legacy PCAP incl_len {inclLen} exceeds snaplen {declaredSnapLength}; malformed header."
+                : $"Legacy PCAP incl_len {inclLen} exceeds the default cap {PcapConstants.DefaultSnapLength};"
+                    + " set an explicit snaplen in the global header to allow larger packets.";
+            return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>
     /// Returns whether captured packet bytes plus 4-byte padding fit in the block before the trailing length.
     /// On success, <paramref name="captured"/> is <paramref name="capturedLength"/> (not truncated into pad or options).
     /// </summary>

@@ -30,9 +30,6 @@ internal sealed class ExpressionTreeCodegen : IFilterCodegen
 {
     #region Fields
 
-    /// <summary>Default bound on <c>matches</c> evaluation; overridable per compilation.</summary>
-    private static readonly TimeSpan _DefaultRegexTimeout = TimeSpan.FromSeconds(1);
-
     private static readonly MethodInfo _HasProtocolMethod = _Method(nameof(FilterRuntime.HasProtocol));
     private static readonly MethodInfo _HasFieldMethod = _Method(nameof(FilterRuntime.HasField));
     private static readonly MethodInfo _CompareMethod = _Method(nameof(FilterRuntime.Compare));
@@ -46,7 +43,6 @@ internal sealed class ExpressionTreeCodegen : IFilterCodegen
     private readonly List<FlankRuntime> _Flanks = [];
 
     private SymbolResolver _Resolver = null!;
-    private TimeSpan _RegexTimeout = _DefaultRegexTimeout;
     private FilterError? _Error;
 
     #endregion
@@ -54,13 +50,16 @@ internal sealed class ExpressionTreeCodegen : IFilterCodegen
     #region Entry point
 
     /// <inheritdoc />
+    /// <remarks>
+    /// <paramref name="options"/> is not read here: the regex timeout is applied by the parser, which compiles
+    /// every <c>matches</c> pattern once into the AST.
+    /// </remarks>
     public FilterResult<CompiledFilterProgram> Compile(
         FilterProgram program,
         SymbolResolver resolver,
         FilterCompileOptions? options)
     {
         _Resolver = resolver;
-        _RegexTimeout = options?.RegexTimeout ?? _DefaultRegexTimeout;
         _Error = null;
         _Flanks.Clear();
 
@@ -172,41 +171,23 @@ internal sealed class ExpressionTreeCodegen : IFilterCodegen
             return _EmitCall(node.Left, context, _ContainsMethod, Expression.Constant(node.Pattern));
         }
 
-        // The parser rejects unparsable patterns before code generation, so construction here
-        // cannot fail on syntax; only the timeout differs between the two.
-        Regex regex = new(node.Pattern, RegexOptions.CultureInvariant, _RegexTimeout);
+        // The parser compiled and validated the pattern once (FilterBinder.TryBuildRegex); a matches node
+        // without it would be a parser bug, reported as a compiler error rather than a crash.
+        if (node.Regex is not Regex regex)
+        {
+            return _Fail(FilterError.Compiler("A 'matches' predicate reached code generation without a compiled pattern."));
+        }
+
         return _EmitCall(node.Left, context, _MatchesMethod, Expression.Constant(regex));
     }
 
     private Expression _EmitFlank(FlankNode flank, ParameterExpression context)
     {
-        FilterResult<FilterSymbol> resolved =
-            _Resolver.ResolveValue(flank.FieldName, flank.Position, flank.Length);
-        if (!resolved.TryGetValue(out FilterSymbol? symbol))
+        FilterResult<FlankRuntime> tracker = FilterBinder.BuildFlank(_Resolver, flank, out _);
+        if (!tracker.TryGetValue(out FlankRuntime? runtime))
         {
-            return _Fail(resolved.Error);
+            return _Fail(tracker.Error);
         }
-
-        if (flank.By is not null)
-        {
-            FilterError? typeError = _Resolver.CheckIntegerFields(
-                symbol,
-                flank.FieldName,
-                flank.Position,
-                flank.Length);
-            if (typeError is not null)
-            {
-                return _Fail(typeError);
-            }
-        }
-
-        FlankRuntime runtime = new(
-            ValueAccessor.Direct(symbol.Fields),
-            flank.From,
-            flank.To,
-            flank.By,
-            flank.IsAnyChange,
-            flank.Window);
 
         if (flank.When is FilterNode gate)
         {
@@ -280,7 +261,7 @@ internal sealed class ExpressionTreeCodegen : IFilterCodegen
         MethodInfo method,
         params Expression[] extraArguments)
     {
-        FilterResult<ValueAccessor> accessor = _BuildAccessor(operand);
+        FilterResult<ValueAccessor> accessor = FilterBinder.BuildAccessor(_Resolver, operand);
         if (!accessor.TryGetValue(out ValueAccessor? value))
         {
             return _Fail(accessor.Error);
@@ -291,23 +272,6 @@ internal sealed class ExpressionTreeCodegen : IFilterCodegen
         arguments[1] = Expression.Constant(value);
         Array.Copy(extraArguments, 0, arguments, 2, extraArguments.Length);
         return Expression.Call(method, arguments);
-    }
-
-    private FilterResult<ValueAccessor> _BuildAccessor(OperandNode operand)
-    {
-        FilterResult<FilterSymbol> resolved =
-            _Resolver.ResolveValue(operand.Name, operand.Position, operand.Length);
-        if (!resolved.TryGetValue(out FilterSymbol? symbol))
-        {
-            return FilterResult.Fail<ValueAccessor>(resolved.Error);
-        }
-
-        return operand switch
-        {
-            SliceOperandNode slice => ValueAccessor.Slice(symbol.Fields, slice.Start, slice.End),
-            LengthOperandNode => ValueAccessor.Length(symbol.Fields),
-            _ => ValueAccessor.Direct(symbol.Fields),
-        };
     }
 
     private ConstantExpression _Fail(FilterError error)

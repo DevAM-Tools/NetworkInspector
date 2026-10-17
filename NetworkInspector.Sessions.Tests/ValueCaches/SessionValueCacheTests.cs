@@ -563,6 +563,170 @@ internal sealed class SessionValueCacheTests
         session.Shutdown();
     }
 
+    /// <summary>
+    /// The new stack cannot satisfy the ingest request. Restart must throw before it changes anything: same
+    /// stack, same phase, queries enabled, old ingest cache intact, and a later restart still possible.
+    /// </summary>
+    [Test]
+    public async Task RestartIngestFieldMissingOnNewStackLeavesSessionUsable()
+    {
+        using Stack stack = TestHarness.CreateStack();
+        using TestFrameSource source = TestFrameSource.WithUdpFrames(3);
+        using Session session = new(stack, new SessionOptions { ValueCache = _UdpPortRequest() });
+        session.TryAddFrameSource(source, out _, out _);
+        session.TryStart(out _);
+        session.WaitForCompletion();
+        ReadOnlyValueCache ingestBefore = session.IngestValueCache!.Value;
+
+        SessionException? thrown = null;
+        try
+        {
+            session.Restart(SessionFixture.BuildEthernetOnlyStack);
+        }
+        catch (SessionException ex)
+        {
+            thrown = ex;
+        }
+
+        SessionPhase phaseAfterFailure = session.Phase;
+        bool queriesAfterFailure = session.QueriesEnabled;
+        Stack stackAfterFailure = session.Stack;
+        bool readAfterFailure = session.TryGetPacket(new PacketId(0), out Packet? packet, out _);
+        bool ingestAbandoned = ingestBefore.IsAbandoned;
+
+        // The gate and the restart flag were reset, so a valid restart still works.
+        session.Restart(registry => TestHarness.CreateStack(registry));
+
+        await Assert.That(thrown).IsNotNull();
+        await Assert.That(thrown!.Code).IsEqualTo(SessionErrorCode.ValueCacheUnknownField);
+        await Assert.That(phaseAfterFailure).IsEqualTo(SessionPhase.Stopped);
+        await Assert.That(queriesAfterFailure).IsTrue();
+        await Assert.That(stackAfterFailure).IsSameReferenceAs(stack);
+        await Assert.That(readAfterFailure).IsTrue();
+        await Assert.That(packet).IsNotNull();
+        await Assert.That(ingestAbandoned).IsFalse();
+        await Assert.That(session.PacketCount).IsEqualTo(3);
+        await Assert.That(session.QueriesEnabled).IsTrue();
+        await Assert.That(session.Stack).IsNotSameReferenceAs(stack);
+        session.Shutdown();
+    }
+
+    /// <summary>
+    /// A restart disables queries while a PullFill slot is in the middle of a window. The slot must stop at the
+    /// refused id (a paused session is not a missing frame), survive, and refill everything after the restart.
+    /// </summary>
+    [Test]
+    public async Task RestartWhilePullFillRunsKeepsTheSlot()
+    {
+        const int frameCount = 6;
+        using Stack stack = TestHarness.CreateStack();
+        using HookRandomAccessSource source = new(TestFrameSource.WithUdpFrames(frameCount));
+        RecordingValueCacheListener listener = new();
+        using Session session = new(stack);
+        session.TryAddFrameSource(source, out _, out _);
+        session.TryStart(out _);
+        session.WaitForCompletion();
+
+        (ValueCacheInfo info, (int From, int To)[] beforeRestart, Exception? restartError) =
+            _RestartWhileSlotFills(session, source, listener);
+        WaitHelper.WaitUntil(
+            () => (listener.StackChangedCount >= 1 && listener.SeriesCount == frameCount) || listener.UnsubscribedCount > 0);
+
+        (int From, int To)[] windows = listener.Windows;
+
+        await Assert.That(restartError).IsNull();
+        await Assert.That(beforeRestart.Length).IsEqualTo(1);
+        await Assert.That(beforeRestart[0]).IsEqualTo((0, 3));
+        await Assert.That(listener.UnsubscribedCount).IsEqualTo(0);
+        await Assert.That(info.Job!.Status).IsEqualTo(JobStatus.Running);
+        await Assert.That(listener.StackChangedCount).IsEqualTo(1);
+        await Assert.That(windows[^1]).IsEqualTo((0, frameCount));
+        await Assert.That(listener.SeriesCount).IsEqualTo(frameCount);
+        session.Shutdown();
+    }
+
+    /// <summary>
+    /// Pins the slot inside id 2 of its first window, starts a restart that disables queries but cannot take
+    /// the parse lock held here (so it cannot abandon the writer yet), then lets the slot run into the refused
+    /// read at id 3. Runs on one thread without <c>await</c>: the parse lock is a monitor.
+    /// </summary>
+    private static (ValueCacheInfo Info, (int From, int To)[] BeforeRestart, Exception? RestartError) _RestartWhileSlotFills(
+        Session session,
+        HookRandomAccessSource source,
+        RecordingValueCacheListener listener)
+    {
+        using ManualResetEventSlim slotEntered = new(false);
+        using ManualResetEventSlim releaseSlot = new(false);
+        int armed = 1;
+        source.OnFrameById = id =>
+        {
+            // Only the first read of id 2 blocks; the restart's re-parse reads it again later.
+            if (id.Value == 2 && Interlocked.Exchange(ref armed, 0) == 1)
+            {
+                slotEntered.Set();
+                releaseSlot.Wait();
+            }
+        };
+
+        Exception? restartError = null;
+        Thread restart = new(() =>
+        {
+            try
+            {
+                session.Restart(registry => TestHarness.CreateStack(registry));
+            }
+            catch (Exception ex)
+            {
+                restartError = ex;
+            }
+        })
+        {
+            Name = "restart-during-fill",
+            IsBackground = true,
+            CurrentCulture = CultureInfo.InvariantCulture,
+        };
+
+        object parseMutex = TestHarness.ParseMutexOf(session);
+        ValueCacheInfo? info;
+        (int From, int To)[] beforeRestart;
+        try
+        {
+            if (!session.TryAddValueCache(listener, _UdpPortRequest(), out info, out _))
+            {
+                throw new InvalidOperationException("The value cache was rejected.");
+            }
+
+            slotEntered.Wait();
+            Monitor.Enter(parseMutex);
+            try
+            {
+                // Restart disables queries, then blocks on the parse lock held here.
+                restart.Start();
+                WaitHelper.WaitUntil(() => !session.QueriesEnabled);
+
+                // The slot finishes id 2, then finds queries disabled at id 3.
+                releaseSlot.Set();
+                WaitHelper.WaitUntil(() => listener.Windows.Length > 0 || listener.UnsubscribedCount > 0);
+                beforeRestart = listener.Windows;
+            }
+            finally
+            {
+                Monitor.Exit(parseMutex);
+            }
+        }
+        finally
+        {
+            releaseSlot.Set();
+            source.OnFrameById = null;
+            if ((restart.ThreadState & System.Threading.ThreadState.Unstarted) == 0)
+            {
+                restart.Join();
+            }
+        }
+
+        return (info, beforeRestart, restartError);
+    }
+
     [Test]
     public async Task RedissectOnly_RuntimeCacheStillFills()
     {
@@ -594,11 +758,14 @@ internal sealed class SessionValueCacheTests
         session.TryStart(out _);
         WaitHelper.WaitUntil(() => listener.RowsSeen >= 3);
 
-        int countBefore = info!.Cache.GetSeries<ulong>(stack.GetFieldId("udp.srcport")!.Value).Count;
-        info.Unsubscribe();
+        // Unsubscribe joins the slot, which may still finish a window that was in flight. Count only after it
+        // returned: from then on nothing may be recorded, however many packets arrive.
+        info!.Unsubscribe();
         WaitHelper.WaitUntil(() => listener.UnsubscribedCount >= 1);
+        int countBefore = info.Cache.GetSeries<ulong>(stack.GetFieldId("udp.srcport")!.Value).Count;
+        int packetsAtUnsubscribe = session.PacketCount;
 
-        WaitHelper.WaitUntil(() => session.PacketCount > 3);
+        WaitHelper.WaitUntil(() => session.PacketCount > packetsAtUnsubscribe + 1);
         int countAfter = info.Cache.GetSeries<ulong>(stack.GetFieldId("udp.srcport")!.Value).Count;
         await Assert.That(countAfter).IsEqualTo(countBefore);
         await Assert.That(listener.UnsubscribedCount).IsEqualTo(1);

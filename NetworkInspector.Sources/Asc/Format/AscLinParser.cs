@@ -10,8 +10,9 @@ namespace NetworkInspector.Sources.Asc.Format;
 /// Channel 1 is the token <c>Li</c>. <c>L1</c> is not a channel.
 /// The direction token (Tx/Rx/Slave/Master) is optional in some exports and is discarded.
 ///
-/// DLT_LIN frame layout (Wireshark <c>packet-lin.h</c>):
-/// 8-byte header, then data padded to 4 or 8 bytes.
+/// DLT_LIN frame layout (LINKTYPE_LIN, 212): 8-byte header, then data padded to 4 or 8 bytes. Byte 5 is the
+/// protected identifier (id plus parity, as the BLF reader writes it); the <c>CSM</c> token goes into bits 1-0 of byte 4
+/// (1 = classic, 2 = enhanced, 0 = not stated).
 /// </summary>
 internal static class AscLinParser
 {
@@ -39,10 +40,23 @@ internal static class AscLinParser
     internal static bool TryParse(
         ReadOnlySpan<byte> line, int numericBase,
         out AscTimestamp timestamp, out int channel, out byte[] frame)
+        => FrameSlabAllocator.ToArray(
+            TryParse(line, numericBase, null, out timestamp, out channel, out ReadOnlyMemory<byte> memory), memory, out frame);
+
+    /// <inheritdoc cref="TryParse(ReadOnlySpan{byte}, int, out AscTimestamp, out int, out byte[])"/>
+    /// <param name="line">The full trimmed ASC line (including timestamp).</param>
+    /// <param name="numericBase">16 for hex, 10 for dec.</param>
+    /// <param name="slabs">Frame slab allocator of the sequential reader, or null for a new array.</param>
+    /// <param name="timestamp">Parsed line timestamp. Not scaled to Unix time.</param>
+    /// <param name="channel">Parsed LIN channel number.</param>
+    /// <param name="frame">The resulting DLT_LIN binary frame. Empty when this method returns <c>false</c>.</param>
+    internal static bool TryParse(
+        ReadOnlySpan<byte> line, int numericBase, FrameSlabAllocator? slabs,
+        out AscTimestamp timestamp, out int channel, out ReadOnlyMemory<byte> frame)
     {
         timestamp = default;
         channel = 0;
-        frame = [];
+        frame = default;
 
         AscTokenizerBytes tokenizer = new(line);
 
@@ -176,8 +190,11 @@ internal static class AscLinParser
             }
         }
 
-        byte pid = ComputePid(frameId);
-        frame = _BuildDltLinFrame(pid, parsedCount, dataBytes[..parsedCount], checksum);
+        // Checksum model: "CSM = classic|enhanced" maps to DLT_LIN byte 4 bits 1-0, so the ASC writer can restore it.
+        byte checksumTypeBits = _ParseChecksumModel(remaining);
+
+        byte pid = LinProtectedId.Compute(frameId);
+        frame = _BuildDltLinFrame(slabs, pid, parsedCount, dataBytes[..parsedCount], checksum, checksumTypeBits);
         return true;
     }
 
@@ -185,36 +202,53 @@ internal static class AscLinParser
 
     #region Helpers
 
-    private static byte[] _BuildDltLinFrame(byte pid, int dlc, ReadOnlySpan<byte> data, byte checksum)
+    private static ReadOnlyMemory<byte> _BuildDltLinFrame(
+        FrameSlabAllocator? slabs, byte pid, int dlc, ReadOnlySpan<byte> data, byte checksum, byte checksumTypeBits)
     {
         int clampedDlc = Math.Clamp(dlc, 0, _MaxLinDataLength);
         int dataPad = clampedDlc <= 4 ? 4 : 8;
-        byte[] frame = new byte[_DltLinHeaderSize + dataPad];
+        Memory<byte> buffer = FrameSlabAllocator.RentZeroed(slabs, _DltLinHeaderSize + dataPad);
+        Span<byte> frame = buffer.Span;
         frame[0] = 1;
-        frame[4] = (byte)(clampedDlc << 4);
+        frame[4] = (byte)((clampedDlc << 4) | (checksumTypeBits & 0x03));
         frame[5] = pid;
         frame[6] = checksum;
         int copyLen = Math.Min(clampedDlc, data.Length);
         if (copyLen > 0)
         {
-            data[..copyLen].CopyTo(frame.AsSpan(_DltLinHeaderSize));
+            data[..copyLen].CopyTo(frame[_DltLinHeaderSize..]);
         }
 
-        return frame;
+        return buffer;
     }
 
     /// <summary>
-    /// Computes the LIN PID (Protected Identifier) from a 6-bit frame ID.
-    /// P0 = ID0 ⊕ ID1 ⊕ ID2 ⊕ ID4 (even parity over bits 0,1,2,4)
-    /// P1 = ¬(ID1 ⊕ ID3 ⊕ ID4 ⊕ ID5) (odd parity over bits 1,3,4,5)
+    /// Reads the <c>CSM = classic|enhanced</c> token after the data bytes. Returns the DLT_LIN checksum-type bits:
+    /// 1 = classic, 2 = enhanced, 0 when the token is missing or unknown.
     /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal static byte ComputePid(byte id)
+    private static byte _ParseChecksumModel(ReadOnlySpan<byte> remaining)
     {
-        int frameId = id & 0x3F;
-        int p0 = ((frameId >> 0) ^ (frameId >> 1) ^ (frameId >> 2) ^ (frameId >> 4)) & 1;
-        int p1 = (~((frameId >> 1) ^ (frameId >> 3) ^ (frameId >> 4) ^ (frameId >> 5))) & 1;
-        return (byte)(frameId | (p0 << 6) | (p1 << 7));
+        int csmIdx = _IndexOfAsciiIgnoreCase(remaining, "CSM"u8);
+        if (csmIdx < 0)
+        {
+            return 0;
+        }
+
+        ReadOnlySpan<byte> afterCsm = AscTokenizerBytes.TrimStartAscii(remaining[(csmIdx + 3)..]);
+        if (afterCsm.IsEmpty || (afterCsm[0] != (byte)'=' && afterCsm[0] != (byte)':'))
+        {
+            return 0;
+        }
+
+        ReadOnlySpan<byte> value = AscTokenizerBytes.TrimStartAscii(afterCsm[1..]);
+        if (AscLineClassifier.StartsWithAsciiIgnoreCase(value, "enhanced"u8))
+        {
+            return 2;
+        }
+
+        return AscLineClassifier.StartsWithAsciiIgnoreCase(value, "classic"u8)
+            ? (byte)1
+            : (byte)0;
     }
 
     /// <summary>

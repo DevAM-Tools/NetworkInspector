@@ -87,10 +87,10 @@ public sealed partial class TcpProtocol
         AnalysisEffectFlags Flags,
         uint DupAckNum,
         ulong BytesInFlight,
-        float InitialRtt,
-        float AckRtt,
-        float TimeRelative,
-        float TimeDelta,
+        double InitialRtt,
+        double AckRtt,
+        double TimeRelative,
+        double TimeDelta,
         ulong ScaledWindowSize,
         int WindowScaleFactor,
         byte Phase,
@@ -99,7 +99,36 @@ public sealed partial class TcpProtocol
         uint RelativeAck,
         bool SequenceIsRelative,
         bool AckIsRelative,
-        bool StreamLimitReached);
+        bool StreamLimitReached)
+    {
+        /// <summary>
+        /// The record text (<c>AnalysisEffect { StreamIndex = …, … }</c>) with the invariant culture, so it does not
+        /// depend on the thread culture (a <c>double</c> would otherwise print <c>0,025</c> or <c>∞</c> on de-DE).
+        /// </summary>
+        /// <returns>The record text.</returns>
+        public override string ToString()
+        {
+            StringBuilder builder = new(512);
+            builder.Append("AnalysisEffect { ");
+            builder.Append(
+                CultureInfo.InvariantCulture,
+                $"StreamIndex = {StreamIndex}, Flags = {Flags}, DupAckNum = {DupAckNum}, BytesInFlight = {BytesInFlight}, ");
+            builder.Append(
+                CultureInfo.InvariantCulture,
+                $"InitialRtt = {InitialRtt}, AckRtt = {AckRtt}, TimeRelative = {TimeRelative}, TimeDelta = {TimeDelta}, ");
+            builder.Append(
+                CultureInfo.InvariantCulture,
+                $"ScaledWindowSize = {ScaledWindowSize}, WindowScaleFactor = {WindowScaleFactor}, Phase = {Phase}, NoIpLayer = {NoIpLayer}, ");
+            builder.Append(
+                CultureInfo.InvariantCulture,
+                $"RelativeSeq = {RelativeSeq}, RelativeAck = {RelativeAck}, SequenceIsRelative = {SequenceIsRelative}, ");
+            builder.Append(
+                CultureInfo.InvariantCulture,
+                $"AckIsRelative = {AckIsRelative}, StreamLimitReached = {StreamLimitReached}");
+            builder.Append(" }");
+            return builder.ToString();
+        }
+    }
 
     /// <summary>A single reassembled PDU emitted during ingest, in dispatch order.</summary>
     public readonly record struct PduEffect(ProtocolId ProtocolId, ReadOnlyMemory<byte> PduBytes);

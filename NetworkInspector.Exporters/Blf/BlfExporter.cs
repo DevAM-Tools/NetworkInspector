@@ -12,9 +12,12 @@ namespace NetworkInspector.Exporters.Blf;
 /// Unsupported link types are skipped (counted in
 /// <see cref="IExporterStatistics.SkippedCount"/>).
 /// Lazy initialization defers file creation until the first frame.
-/// A <see cref="BlfInterfacePropertyKeys.Channel"/> value is preserved, including 0.
-/// When the property is absent the channel defaults to 1.
+/// The channel comes from <see cref="BlfInterfacePropertyKeys.Channel"/> (kept, including 0), else from the ASC
+/// reader's <c>asc.channel</c>, else from a trailing number in the interface name; it defaults to 1.
 /// A <see cref="BlfInterfacePropertyKeys.HardwareChannel"/> value is written into Type 120.
+/// An interface whose name is not the default <c>"{bus} {channel}"</c> gets one AppText channel-name object
+/// (Type 65) before its first frame, so a BLF → BLF copy keeps the channel names.
+/// The header dates are written in <see cref="Builder.WithTimestampTimeZone"/> (default UTC).
 /// </para>
 /// <para>
 /// <b>Thread safety:</b> Not thread-safe. <see cref="OnFrame"/> and <see cref="OnFinish"/>
@@ -35,6 +38,16 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
     private readonly CancellationToken _CancellationToken;
     private readonly CompressionLevel _Compression;
     private readonly int _TargetFrameCount;
+    private readonly TimeZoneInfo _TimestampTimeZone;
+
+    /// <summary>
+    /// Channel facts per interface. Interfaces are immutable once registered, so the registry and property bag are
+    /// consulted once per interface instead of once per frame.
+    /// </summary>
+    private readonly Dictionary<FrameInterfaceId, InterfaceTarget> _InterfaceTargets = [];
+
+    /// <summary>(AppText bus type, channel) pairs whose channel name was already written.</summary>
+    private readonly HashSet<(byte BusType, ushort Channel)> _NamedChannels = [];
 
     // Output target consumed on lazy init
     private ExportOutput? _Output;
@@ -43,6 +56,9 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
 
     // Reusable payload buffer to avoid per-frame allocations
     private readonly PooledBuffer _PayloadBuffer = new(4096);
+
+    // AppText channel-name payloads; created on the first custom interface name.
+    private PooledBuffer? _AppTextBuffer;
 
     private long _FirstTimestampNs;
     private long _LastTimestampNs;
@@ -60,6 +76,7 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
         string? description,
         CompressionLevel compression,
         int targetFrameCount,
+        TimeZoneInfo timestampTimeZone,
         CancellationToken cancellationToken)
     {
         _Output = output;
@@ -68,6 +85,7 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
         _CancellationToken = cancellationToken;
         _Compression = compression;
         _TargetFrameCount = targetFrameCount;
+        _TimestampTimeZone = timestampTimeZone;
     }
 
     /// <summary>Creates a new builder for configuring the exporter.</summary>
@@ -186,96 +204,67 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
         }
         _Finished = true;
 
-        // Use try/finally so the underlying output is always disposed even if
-        // the trailer/header update throws (e.g. broken stream). This prevents
-        // resource leaks during error-path shutdown. cleanupErrors is declared
-        // here so the throw can occur after the finally block — CA2219 prohibits
-        // throwing inside finally.
-        List<Exception> cleanupErrors = [];
-        try
-        {
-            // If no frame ever arrived, lazily start the writer with a zero
-            // base timestamp so we always emit a valid empty BLF (LOGG header
-            // with zero containers) rather than a 0-byte file. This keeps the
-            // exporter contract deterministic: a successfully-built exporter
-            // produces a parseable BLF on close, regardless of frame count.
-            if (!_Started && !_HasError && _Output is not null)
-            {
-                _FirstTimestampNs = 0;
-                _LastTimestampNs = 0;
-                _MinTimestampNs = 0;
-                _MaxTimestampNs = 0;
-                _Start();
-            }
+        // Shared finish sequence: finalize, then release every resource even when a step fails.
+        ExporterFinish.Run(
+            "BLF",
+            _FinalizeFile,
+            _ReportFinishError,
+            new ExporterReleaseStep("payload buffer return", _PayloadBuffer.Return),
+            new ExporterReleaseStep("AppText buffer return", () => _AppTextBuffer?.Return()),
+            new ExporterReleaseStep("output disposal", _DisposeOutput));
+    }
 
-            if (_Writer is not null)
-            {
-                // Finish the writer and update the header (end_date from max timestamp).
-                long endNs = _MinTimestampNs == long.MaxValue ? 0 : _MaxTimestampNs;
-                BlfWriterFinishResult result = _Writer.Finish(endNs);
-                Stream? stream = _Output?.TryGetExistingStream();
-                if (stream is not null)
-                {
-                    result.UpdateHeader(stream);
-                }
-            }
-        }
-        catch (Exception ex)
+    /// <summary>
+    /// Writes the remaining container and patches the file header (object count, sizes, end_date). Starts the writer
+    /// first when no frame ever arrived, so an empty export is still a valid BLF file (header with zero containers).
+    /// </summary>
+    private void _FinalizeFile()
+    {
+        if (!_Started && !_HasError && _Output is not null)
         {
-            // Trailer/header update failed; record the error and continue cleanup.
-            _HasError = true;
-            if (ErrorCount < int.MaxValue) ErrorCount++;
-            ItemSkipped?.Invoke(this, new ExportErrorEventArgs
-            {
-                ItemIndex = FrameCount,
-                Kind = ExportErrorKind.IoError,
-                Message = $"BLF finalization failed: {ex.Message}",
-            });
+            _FirstTimestampNs = 0;
+            _LastTimestampNs = 0;
+            _MinTimestampNs = 0;
+            _MaxTimestampNs = 0;
+            _Start();
         }
-        finally
+
+        if (_Writer is not null)
         {
-            // Each cleanup step is independent so a failure in one step does not
-            // prevent remaining resources from being released. Failures are surfaced
-            // via the error channel. cleanupErrors is declared before the try so the
-            // throw can occur after the finally block — CA2219 prohibits throwing inside finally.
-            try
+            // Finish the writer and update the header (end_date from max timestamp).
+            long endNs = _MinTimestampNs == long.MaxValue ? 0 : _MaxTimestampNs;
+            BlfWriterFinishResult result = _Writer.Finish(endNs);
+            Stream? stream = _Output?.TryGetExistingStream();
+            if (stream is not null)
             {
-                _PayloadBuffer.Return();
+                result.UpdateHeader(stream);
             }
-            catch (Exception ex)
-            {
-                cleanupErrors.Add(ex);
-                _HasError = true;
-                if (ErrorCount < int.MaxValue) ErrorCount++;
-                ItemSkipped?.Invoke(this, new ExportErrorEventArgs
-                {
-                    ItemIndex = FrameCount,
-                    Kind = ExportErrorKind.IoError,
-                    Message = $"BLF payload buffer return failed: {ex.Message}",
-                });
-            }
-            try
-            {
-                _Output?.Dispose();
-            }
-            catch (Exception ex)
-            {
-                cleanupErrors.Add(ex);
-                _HasError = true;
-                if (ErrorCount < int.MaxValue) ErrorCount++;
-                ItemSkipped?.Invoke(this, new ExportErrorEventArgs
-                {
-                    ItemIndex = FrameCount,
-                    Kind = ExportErrorKind.IoError,
-                    Message = $"BLF output disposal failed: {ex.Message}",
-                });
-            }
-            _Output = null;
         }
-        if (cleanupErrors.Count > 0)
+    }
+
+    /// <summary>Disposes the output once (closes the stream unless the caller owns it).</summary>
+    private void _DisposeOutput()
+    {
+        ExportOutput? output = _Output;
+        _Output = null;
+        output?.Dispose();
+    }
+
+    /// <summary>Error channel of the finish sequence: marks the error, counts it, and raises <see cref="ItemSkipped"/>.</summary>
+    private void _ReportFinishError(ExportErrorKind kind, string message)
+    {
+        _HasError = true;
+        if (ErrorCount < int.MaxValue)
         {
-            throw new AggregateException("BLF exporter cleanup failed.", cleanupErrors);
+            ErrorCount++;
         }
+
+        ItemSkipped?.Invoke(this, new ExportErrorEventArgs
+        {
+            ItemIndex = FrameCount,
+            Kind = kind,
+            Message = message,
+        });
     }
 
     /// <inheritdoc/>
@@ -308,7 +297,7 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
         {
             // Writer ctor writes the file header — failures here must be reported
             // through the standard error pipeline rather than escaping to the caller.
-            _Writer = new BlfWriter(underlyingStream, _FirstTimestampNs, _Compression);
+            _Writer = new BlfWriter(underlyingStream, _FirstTimestampNs, _Compression, _TimestampTimeZone);
         }
         catch (Exception ex)
         {
@@ -342,42 +331,20 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
         long timestampNs = frame.Timestamp.AsNanos;
         int currentIndex = FrameCount + SkippedCount;
 
-        // Channel defaults to 1 only when the interface has no blf.channel property.
-        // An explicit 0 is kept. Hardware channel is written only when that property is present.
-        ushort channel = 1;
-        bool hasChannel = false;
-        ushort? hardwareChannel = null;
-        if (frame.HasInterface
-            && frame.Registry.TryGet(frame.InterfaceId, out FrameInterfaceInfo? interfaceInfo))
+        // Channel facts are resolved once per interface (P6) with the lookup shared with the ASC exporter.
+        InterfaceTarget target = _ResolveInterface(frame);
+        if (target.InvalidChannelMessage is { } invalidChannel)
         {
-            if (interfaceInfo.Properties.TryGetValue(BlfInterfacePropertyKeys.Channel, out object? channelValue))
+            return _HandleSkip(new ExportErrorEventArgs
             {
-                if (!InterfaceChannelConverter.TryConvertToUInt16(channelValue, out ushort mapped))
-                {
-                    return _HandleSkip(new ExportErrorEventArgs
-                    {
-                        ItemIndex = currentIndex,
-                        Kind = ExportErrorKind.SerializationError,
-                        Message = $"BLF channel value '{channelValue}' cannot be converted to a UInt16 channel id.",
-                    });
-                }
-
-                channel = mapped;
-                hasChannel = true;
-            }
-
-            if (interfaceInfo.Properties.TryGetValue(
-                    BlfInterfacePropertyKeys.HardwareChannel, out object? hardwareValue)
-                && hardwareValue is ushort hardware)
-            {
-                hardwareChannel = hardware;
-            }
+                ItemIndex = currentIndex,
+                Kind = ExportErrorKind.SerializationError,
+                Message = invalidChannel,
+            });
         }
 
-        if (!hasChannel)
-        {
-            channel = 1;
-        }
+        ushort channel = target.Channel;
+        ushort? hardwareChannel = target.HardwareChannel;
 
         // Determine BLF object type from link type
         uint objectType;
@@ -545,6 +512,13 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
                 });
             }
 
+            // A custom interface name travels as one AppText object per (bus type, channel), written before the first
+            // frame of that channel so a reader names the interface before it registers it.
+            if (target.ChannelName is { } channelName)
+            {
+                _WriteChannelNameOnce(objectType, channel, channelName, timestampNs);
+            }
+
             ushort objectVersion = objectType == BlfConstants.ObjTypeLinMessage2
                 ? (ushort)1
                 : (ushort)0;
@@ -598,6 +572,80 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
     }
 
     /// <summary>
+    /// Resolves (once per interface) the BLF channel, the hardware channel, and the custom name of the frame's interface.
+    /// Frames without an interface use channel 1 and no name.
+    /// </summary>
+    private InterfaceTarget _ResolveInterface(Frame frame)
+    {
+        if (!frame.HasInterface)
+        {
+            return InterfaceTarget.Default;
+        }
+
+        if (_InterfaceTargets.TryGetValue(frame.InterfaceId, out InterfaceTarget cached))
+        {
+            return cached;
+        }
+
+        InterfaceTarget target = InterfaceTarget.Default;
+        if (frame.Registry.TryGet(frame.InterfaceId, out FrameInterfaceInfo? info))
+        {
+            InterfaceChannelLookup lookup = InterfaceChannelConverter.TryGetChannel(info, out int channel, out object? invalid);
+            ushort? hardwareChannel = info.Properties.TryGetValue(BlfInterfacePropertyKeys.HardwareChannel, out object? hardware)
+                && hardware is ushort hardwareValue
+                    ? hardwareValue
+                    : null;
+
+            // A channel property that is not an integer, or one outside 0..65535, skips the interface's frames.
+            target = lookup switch
+            {
+                InterfaceChannelLookup.Invalid => new(1, null, null,
+                    $"BLF channel value '{invalid}' cannot be converted to a UInt16 channel id."),
+                InterfaceChannelLookup.Found when channel is < 0 or > ushort.MaxValue => new(1, null, null,
+                    $"BLF channel value '{channel}' cannot be converted to a UInt16 channel id."),
+                InterfaceChannelLookup.Found => new((ushort)channel, hardwareChannel, info.UiName, null),
+                _ => new(1, hardwareChannel, info.UiName, null),
+            };
+        }
+
+        _InterfaceTargets[frame.InterfaceId] = target;
+        return target;
+    }
+
+    /// <summary>
+    /// Writes the AppText channel-name object for (bus type, channel) the first time it is needed. Names equal to the
+    /// default <c>"{bus} {channel}"</c>, names the AppText encoding cannot carry (<c>;</c>, NUL, channel above 255),
+    /// and object types without an AppText bus type are not written.
+    /// </summary>
+    private void _WriteChannelNameOnce(uint objectType, ushort channel, string name, long timestampNs)
+    {
+        byte busType = BlfInterfaceNaming.BusType(objectType);
+        string defaultName = BlfInterfaceNaming.InterfaceName(objectType, channel, null);
+        if (busType == 0 || name == defaultName || !_NamedChannels.Add((busType, channel)))
+        {
+            return;
+        }
+
+        _AppTextBuffer ??= new PooledBuffer(256);
+        if (BlfObjectPayloads.TryBuildAppTextChannelNamePayload(busType, channel, defaultName, name, _AppTextBuffer))
+        {
+            _Writer!.WriteRawObject(BlfConstants.ObjTypeAppText, 0, timestampNs, _AppTextBuffer.WrittenSpan);
+        }
+    }
+
+    /// <summary>Channel facts of one interface, resolved once (see <see cref="_ResolveInterface"/>).</summary>
+    /// <param name="Channel">BLF channel written into every object of the interface.</param>
+    /// <param name="HardwareChannel">Ethernet hardware channel, when the interface carries one.</param>
+    /// <param name="ChannelName">Interface name, written as AppText unless it is the default name.</param>
+    /// <param name="InvalidChannelMessage">Non-null when the channel property is unusable; the frames are skipped.</param>
+    private readonly record struct InterfaceTarget(
+        ushort Channel, ushort? HardwareChannel, string? ChannelName, string? InvalidChannelMessage)
+    {
+        /// <summary>Frames without an interface: channel 1, no hardware channel, no name.</summary>
+        internal static InterfaceTarget Default => new(1, null, null, null);
+    }
+
+    /// <summary>
     /// Maps <see cref="BlfCompressionLevel"/> to <see cref="CompressionLevel"/>.
     /// </summary>
     private static CompressionLevel _MapCompression(BlfCompressionLevel level) => level switch
@@ -622,6 +670,21 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
         private CancellationToken _CancellationToken;
         private BlfCompressionLevel _Compression = BlfCompressionLevel.Default;
         private int _TargetFrameCount;
+        private TimeZoneInfo _TimestampTimeZone = TimeZoneInfo.Utc;
+
+        /// <summary>
+        /// Sets the zone in which the header <c>start_date</c> / <c>end_date</c> SYSTEMTIME fields are written.
+        /// Default: <see cref="TimeZoneInfo.Utc"/>, the same default as <c>BlfSourceOptions.TimestampTimeZone</c>, so files
+        /// this product writes and reads round-trip on any host. Use <see cref="TimeZoneInfo.Local"/> for tools that read
+        /// the dates as local civil time.
+        /// </summary>
+        /// <exception cref="ArgumentNullException"><paramref name="zone"/> is null.</exception>
+        public Builder WithTimestampTimeZone(TimeZoneInfo zone)
+        {
+            ArgumentNullException.ThrowIfNull(zone);
+            _TimestampTimeZone = zone;
+            return this;
+        }
 
         /// <summary>Sets the output to a file path with a 4 MiB buffer.</summary>
         public Builder ToFile(string path)
@@ -711,6 +774,7 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
                 _Description,
                 _MapCompression(_Compression),
                 _TargetFrameCount,
+                _TimestampTimeZone,
                 _CancellationToken);
         }
     }

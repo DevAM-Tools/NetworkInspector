@@ -118,6 +118,118 @@ internal sealed class FilterCompileTests
 
         await Assert.That(result.IsSuccess).IsFalse();
         await Assert.That(result.Error.Kind).IsEqualTo(FilterErrorKind.UnknownField);
+        await Assert.That(result.Error.Suggestion).IsNull();
+    }
+
+    [Test]
+    [Arguments("udp.srcprot == 53", "udp.srcport", 0, 11)]
+    [Arguments("udp && udp.dstpotr == 53", "udp.dstport", 7, 11)]
+    [Arguments("UDP", "udp", 0, 3)]
+    [Arguments("tpc", "tcp", 0, 3)]
+    [Arguments("len(udp.paylaod) > 1", "udp.payload", 4, 11)]
+    [Arguments("udp.paylod[0:2] == 00:01", "udp.payload", 0, 10)]
+    [Arguments("flank(ip.tll, changed, within: 1s)", "ip.ttl", 6, 6)]
+    public async Task Compile_MisspelledName_SuggestsTheClosestName(string expression, string suggestion, int position, int length)
+    {
+        using Stack stack = FilterTestHelper.BuildStack();
+
+        FilterResult<Filter> tree = Filter.Compile(expression, stack);
+        FilterResult<FilterObserver> observer = Filter.Compile(expression, stack, FilterObserverOptions.Default);
+
+        await Assert.That(tree.Error.Kind).IsEqualTo(FilterErrorKind.UnknownField);
+        await Assert.That(tree.Error.Suggestion).IsEqualTo(suggestion);
+        await Assert.That(tree.Error.Message).Contains(Invariant($"Did you mean '{suggestion}'?"));
+        await Assert.That(tree.Error.Position).IsEqualTo(position);
+        await Assert.That(tree.Error.Length).IsEqualTo(length);
+        await Assert.That(observer.Error.Suggestion).IsEqualTo(suggestion);
+    }
+
+    [Test]
+    [Arguments("udp.payload[10:12 == 00", FilterErrorKind.SyntaxError, "Expected ] but found '=='", 18)]
+    [Arguments("udp.srcport ==", FilterErrorKind.SyntaxError, "Unexpected end of expression — a literal value is required here", 14)]
+    [Arguments("flank(ip.ttl, changed)", FilterErrorKind.SyntaxError, "'flank' requires a 'within:' window", 0)]
+    [Arguments(
+        "udp.srcprot == 53",
+        FilterErrorKind.UnknownField,
+        "Unknown field or protocol 'udp.srcprot'. Did you mean 'udp.srcport'?",
+        0)]
+    public async Task Compile_GuideErrorExamples_ReportTheDocumentedMessages(
+        string expression,
+        FilterErrorKind kind,
+        string message,
+        int position)
+    {
+        using Stack stack = FilterTestHelper.BuildStack();
+
+        FilterError error = Filter.Compile(expression, stack).Error;
+
+        await Assert.That(error.Kind).IsEqualTo(kind);
+        await Assert.That(error.Message).IsEqualTo(message);
+        await Assert.That(error.Position).IsEqualTo(position);
+    }
+
+    [Test]
+    public async Task Derive_ThroughTheInterface_ReturnsAnIndependentFilter()
+    {
+        using Stack stack = FilterTestHelper.BuildStack();
+        using Stack other = FilterTestHelper.BuildStack();
+        using Stack ethernetOnly = FilterTestHelper.BuildEthernetOnlyStack();
+        IFilter source = Filter.Compile("udp.srcport == 53", stack).Value;
+        IFilter always = Filter.AlwaysMatch;
+
+        bool derived = source.TryDerive(other, out IFilter? rebound, out FilterError? failure);
+        bool alwaysDerived = always.TryDerive(other, out IFilter? alwaysRebound, out _);
+        bool missing = source.TryDerive(ethernetOnly, out IFilter? none, out FilterError? missingFailure);
+
+        await Assert.That(derived).IsTrue();
+        await Assert.That(failure).IsNull();
+        await Assert.That(rebound).IsNotSameReferenceAs(source);
+        await Assert.That(rebound!.Stack).IsSameReferenceAs(other);
+        await Assert.That(rebound.Expression).IsEqualTo(source.Expression);
+        await Assert.That(alwaysDerived).IsTrue();
+        await Assert.That(alwaysRebound).IsSameReferenceAs(Filter.AlwaysMatch);
+        await Assert.That(missing).IsFalse();
+        await Assert.That(none).IsNull();
+        await Assert.That(missingFailure!.Kind).IsEqualTo(FilterErrorKind.UnknownField);
+    }
+
+    [Test]
+    public async Task AlwaysMatch_IsSafeFromTwoThreads()
+    {
+        using Stack stack = FilterTestHelper.BuildStack();
+        Packet packet = FilterTestHelper.Parse(stack, FilterTestHelper.BuildUdpFrame(53, 1024));
+        bool[] results = new bool[2];
+        Thread[] threads = new Thread[2];
+        using Barrier start = new(threads.Length);
+        for (int i = 0; i < threads.Length; i++)
+        {
+            int slot = i;
+            threads[i] = new Thread(() =>
+            {
+                start.SignalAndWait();
+                bool ok = true;
+                for (int n = 0; n < 10_000; n++)
+                {
+                    ok &= Filter.AlwaysMatch.TryIsMatch(packet, out bool matched, out _) && matched;
+                    Filter.AlwaysMatch.ResetState();
+                    ok &= Filter.AlwaysMatch.EvaluatedCount == 0;
+                }
+
+                results[slot] = ok;
+            })
+            {
+                Name = Invariant($"AlwaysMatch-{slot}"),
+            };
+            threads[i].Start();
+        }
+
+        foreach (Thread thread in threads)
+        {
+            thread.Join();
+        }
+
+        await Assert.That(results[0] && results[1]).IsTrue();
+        await Assert.That(Filter.AlwaysMatch.IsPoisoned).IsFalse();
     }
 
     [Test]
@@ -278,7 +390,6 @@ internal sealed class FilterCompileTests
         List<string> names = [];
         FilterCompileOptions options = new()
         {
-            CaretPosition = 4,
             OnFieldNameSpan = (expression, start, length, kind) =>
                 names.Add(expression.Slice(start, length).ToString()),
         };
@@ -287,7 +398,6 @@ internal sealed class FilterCompileTests
 
         await Assert.That(parsed).IsFalse();
         await Assert.That(names).Contains("udp.srcport");
-        await Assert.That(options.CaretPosition).IsEqualTo(4);
         await Assert.That(options.RegexTimeout).IsNull();
     }
 

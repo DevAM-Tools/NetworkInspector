@@ -389,6 +389,115 @@ internal sealed class SessionIntegrationTests
         session.Shutdown();
     }
 
+    /// <summary>
+    /// A source thread passes the parse gate just before Restart closes it and then waits for the parse lock.
+    /// When it gets the lock between the counter reset and the re-parse, it must see the closed gate and park
+    /// again instead of allocating id 0 from the reset counter (which would fail the job and lose the frame).
+    /// </summary>
+    [Test]
+    public async Task RestartWithSourceBetweenGateAndLockKeepsEveryFrame()
+    {
+        using ManualResetEventSlim release = new(false);
+        Thread? gatedThread = null;
+        using GateFrameSource gated = new("gated", release, () => Volatile.Write(ref gatedThread, Thread.CurrentThread));
+        using HookRandomAccessSource steady = new(TestFrameSource.WithUdpFrames(4));
+        using Stack stack = TestHarness.CreateStack();
+        using Session session = new(stack);
+        session.TryAddFrameSource(steady, out _, out _);
+        session.TryAddFrameSource(gated, out _, out _);
+        session.TryStart(out _);
+        WaitHelper.WaitUntil(() => session.PacketCount >= 4 && Volatile.Read(ref gatedThread) is not null);
+
+        _RestartWhileSourceWaitsForParseLock(session, release, gated, Volatile.Read(ref gatedThread)!, steady);
+        session.WaitForCompletion();
+
+        await Assert.That(session.IngestGateRefusalCount).IsGreaterThanOrEqualTo(1);
+        await Assert.That(session.GetJobs().All(job => job.Status == JobStatus.Completed)).IsTrue();
+        await Assert.That(session.PacketCount).IsEqualTo(5);
+        await Assert.That(session.FrameCount).IsEqualTo(5);
+        await Assert.That(session.QueriesEnabled).IsTrue();
+        await Assert.That(session.TryGetFrame(new PacketId(4), out Frame late, out _)).IsTrue();
+        await Assert.That(late.IsValid).IsTrue();
+        session.Shutdown();
+    }
+
+    /// <summary>
+    /// Shutdown with a timeout returns while a source thread is still inside NextFrame. When that source later
+    /// returns a frame, its thread must end Cancelled: no parse after shutdown, no failure on a disposed event.
+    /// </summary>
+    [Test]
+    public async Task ShutdownWithTimeoutLetsALateSourceEndCancelled()
+    {
+        using ManualResetEventSlim release = new(false);
+        using ManualResetEventSlim entered = new(false);
+        using StubbornFrameSource stubborn = new(release, entered);
+        using Stack stack = TestHarness.CreateStack();
+        using Session session = new(stack);
+        session.TryAddFrameSource(stubborn, out _, out _);
+        session.TryStart(out _);
+        entered.Wait();
+        JobInfo sourceJob = session.GetJobs()[0];
+
+        session.Shutdown(TimeSpan.Zero);
+        JobStatus atShutdown = sourceJob.Status;
+        release.Set();
+        WaitHelper.WaitUntil(() => sourceJob.Status is JobStatus.Completed or JobStatus.Cancelled or JobStatus.Failed);
+
+        await Assert.That(atShutdown).IsEqualTo(JobStatus.Running);
+        await Assert.That(sourceJob.FailureException).IsNull();
+        await Assert.That(sourceJob.Status).IsEqualTo(JobStatus.Cancelled);
+        await Assert.That(session.PacketCount).IsEqualTo(0);
+        await Assert.That(session.Phase).IsEqualTo(SessionPhase.Stopped);
+    }
+
+    /// <summary>
+    /// Drives the gate/lock window deterministically. Must run on one thread without <c>await</c>: the
+    /// parse lock is a monitor that this thread enters, re-enters through Restart, and exits.
+    /// </summary>
+    private static void _RestartWhileSourceWaitsForParseLock(
+        Session session,
+        ManualResetEventSlim release,
+        GateFrameSource gated,
+        Thread gatedThread,
+        HookRandomAccessSource steady)
+    {
+        object parseMutex = TestHarness.ParseMutexOf(session);
+        int ownerThread = Environment.CurrentManagedThreadId;
+        Monitor.Enter(parseMutex);
+        try
+        {
+            // 1. The gated source returns its frame, passes the still-open gate, and blocks on the parse lock
+            //    held here. Its only blocking point after NextFrame returned is that lock.
+            release.Set();
+            WaitHelper.WaitUntil(
+                () => gated.HasYielded && (gatedThread.ThreadState & System.Threading.ThreadState.WaitSleepJoin) != 0);
+
+            // 2. Restart runs on this thread and re-enters the parse lock (a monitor is reentrant): it closes
+            //    the gate, swaps the stack, and resets the counter. Its first FrameById runs outside the re-parse
+            //    lock; there this thread drops its own hold, so the waiting source takes the lock with the gate
+            //    closed and the counter at 0. The re-parse continues once the source has parked again.
+            steady.OnFrameById = _ =>
+            {
+                if (Environment.CurrentManagedThreadId != ownerThread || !Monitor.IsEntered(parseMutex))
+                {
+                    return;
+                }
+
+                Monitor.Exit(parseMutex);
+                WaitHelper.WaitUntil(() => session.IngestGateRefusalCount > 0);
+            };
+            session.Restart(registry => TestHarness.CreateStack(registry));
+        }
+        finally
+        {
+            steady.OnFrameById = null;
+            if (Monitor.IsEntered(parseMutex))
+            {
+                Monitor.Exit(parseMutex);
+            }
+        }
+    }
+
     private sealed class RedissectListener : ISessionListener
     {
         private int _PacketsSeen;
@@ -443,6 +552,9 @@ internal sealed class SessionIntegrationTests
         public string? Description => null;
 
         public int? EstimatedFrameCount => 1;
+
+        /// <summary>True once <see cref="NextFrame"/> is about to return its frame.</summary>
+        internal bool HasYielded => Volatile.Read(ref _Yielded) != 0;
 
         public bool IsRunning => _Registry is not null;
 

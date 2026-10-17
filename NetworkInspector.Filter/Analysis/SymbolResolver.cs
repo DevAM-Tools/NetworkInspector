@@ -83,7 +83,7 @@ internal sealed class SymbolResolver
         FilterSymbol? symbol = Resolve(name);
         if (symbol is null)
         {
-            return FilterError.UnknownField(name, position, length);
+            return UnknownName(name, position, length);
         }
 
         if (!symbol.IsValueSource)
@@ -125,13 +125,20 @@ internal sealed class SymbolResolver
         return null;
     }
 
+    /// <summary>
+    /// Creates the bind error for a name this stack does not know, naming the closest known name as
+    /// <see cref="FilterError.Suggestion"/> when one is near enough (error path only).
+    /// </summary>
+    public FilterError UnknownName(string name, int position, int length) =>
+        FilterError.UnknownField(name, position, length, FilterNameCatalog.For(_Stack).Suggest(name));
+
     /// <summary>Resolves a name used as a presence test or scope anchor.</summary>
     public FilterResult<FilterSymbol> ResolveAny(string name, int position, int length)
     {
         FilterSymbol? symbol = Resolve(name);
         if (symbol is null)
         {
-            return FilterError.UnknownField(name, position, length);
+            return UnknownName(name, position, length);
         }
         return symbol;
     }

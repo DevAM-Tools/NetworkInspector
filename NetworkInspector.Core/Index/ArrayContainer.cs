@@ -91,10 +91,11 @@ internal sealed class ArrayContainer : IContainer
 
         int insertAt = ~idx;
 
-        // Grow if needed
+        // Grow if needed. A zero-length backing array (Clone of an empty container) grows to the default capacity 4,
+        // because doubling 0 would stay 0 and the store below would run past the array.
         if (Cardinality == _Values.Length)
         {
-            int newCap = Math.Min(_Values.Length * 2, MaxCapacity + 1);
+            int newCap = Math.Min(Math.Max(_Values.Length * 2, 4), MaxCapacity + 1);
             Array.Resize(ref _Values, newCap);
         }
 

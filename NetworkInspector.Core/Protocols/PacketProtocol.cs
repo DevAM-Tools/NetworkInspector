@@ -166,7 +166,7 @@ internal sealed class PacketProtocol : IProtocol
                 // IncludeExceptionStackTrace policy as ParseAndSeal for consistency.
                 // Already-appended fields stay in the tree and in the value cache (Ethernet
                 // must survive a later UDP throw). Post-parsers still run.
-                packet.SetError(_BuildExceptionMessage(ex, stack.IncludeExceptionStackTrace));
+                packet.RecordCaughtError(0, Packet.BuildCaughtExceptionText(ex, stack.IncludeExceptionStackTrace));
             }
         }
 
@@ -188,7 +188,7 @@ internal sealed class PacketProtocol : IProtocol
             }
             catch (Exception ex)
             {
-                packet.SetError(_BuildExceptionMessage(ex, stack.IncludeExceptionStackTrace));
+                packet.RecordCaughtError(0, Packet.BuildCaughtExceptionText(ex, stack.IncludeExceptionStackTrace));
             }
         }
 
@@ -209,24 +209,6 @@ internal sealed class PacketProtocol : IProtocol
         packet.SetInfoFieldIndex(infoField.StorageIndex);
 
         return data.Length;
-    }
-
-    /// <summary>
-    /// Builds an error message for a caught exception, optionally appending the full stack
-    /// trace. Mirrors the policy used by <see cref="Packet"/> parse helpers so that
-    /// post-parser exceptions are formatted identically to main-parse exceptions.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static string _BuildExceptionMessage(Exception ex, bool includeStackTrace)
-    {
-        if (!includeStackTrace || ex.StackTrace is null)
-        {
-            return ex.Message;
-        }
-
-        // ZeroAlloc: concatenate message + newline + stack trace without intermediate allocations.
-        using TempString temp = ZA.String(ex.Message, "\n", ex.StackTrace);
-        return temp.ToString();
     }
 
     #endregion

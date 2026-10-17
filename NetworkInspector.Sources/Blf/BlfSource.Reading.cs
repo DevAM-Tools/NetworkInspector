@@ -11,22 +11,105 @@ public sealed partial class BlfSource
     /// </summary>
     private void _ScanFull()
     {
-        BlfIncrementalScanner scanner = new(_Backend, _FileInfo, _Index, _Options.MaxUncompressedContainerSize);
-        _Scanner = scanner;
-        scanner.ScanToEnd();
+        // RecordMarks: the scanner notes every failure with the frame count at that moment (also inside a container), so
+        // NextFrame can report each one before the frame that follows it — strict mode in file order.
+        BlfIncrementalScanner scanner = new(_Backend, _FileInfo, _Index, _Options.MaxUncompressedContainerSize) { RecordMarks = true };
+        scanner.OnContainerDecoded = _OnContainerDecoded;
+        while (scanner.ScanNext())
+        {
+            // Index the whole file.
+        }
+
+        // Keep what the source needs (channel names, failure marks) and release the scanner with its carry buffers.
+        _ChannelNames = scanner.ChannelNames;
+        _PendingScanDiagnostics = scanner.Marks;
         _FullyScanned = true;
     }
 
     /// <summary>
-    /// Initializes the scanner for lazy/incremental scanning.
-    /// Points _ChannelNames at the scanner's live dictionary so channel names
-    /// discovered during lazy scanning are available for interface registration.
+    /// Initializes the scanner for lazy/incremental scanning. Channel names discovered while scanning are read from the
+    /// scanner's published snapshot (<see cref="_CurrentChannelNames"/>).
     /// </summary>
     private void _InitializeLazyScanner()
     {
-        BlfIncrementalScanner scanner = new(_Backend, _FileInfo, _Index, _Options.MaxUncompressedContainerSize);
+        BlfIncrementalScanner scanner = new(_Backend, _FileInfo, _Index, _Options.MaxUncompressedContainerSize) { RecordMarks = true };
+        scanner.OnContainerDecoded = _OnContainerDecoded;
         _Scanner = scanner;
-        _ChannelNames = scanner.ChannelNames;
+    }
+
+    /// <summary>
+    /// Channel names for interface naming: the scanner's latest immutable snapshot while a lazy scan runs, the final
+    /// names afterwards. Safe from any thread.
+    /// </summary>
+    private IReadOnlyDictionary<(byte BusType, byte Channel), string>? _CurrentChannelNames
+    {
+        get
+        {
+            // One read of the volatile scanner field: a concurrent end of the lazy scan sets _ChannelNames first.
+            BlfIncrementalScanner? scanner = _Scanner;
+            return scanner is not null
+                ? scanner.ChannelNames
+                : _ChannelNames;
+        }
+    }
+
+    /// <summary>
+    /// Scanner callback (scanning thread): keeps the decoded container as the current sequential container, so the
+    /// first <see cref="_BuildFrame"/> of each of its frames needs no second inflate, and offers it to the
+    /// random-access cache. An oversize blob is simply not retained by the cache; the holder still serves it.
+    /// </summary>
+    private void _OnContainerDecoded(long containerFileOffset, byte[] decoded)
+    {
+        _SequentialContainerOffset = containerFileOffset;
+        _SequentialContainer = decoded;
+
+        lock (_ContainerCacheLock)
+        {
+            _ContainerCache.Put(containerFileOffset, decoded);
+        }
+    }
+
+    /// <summary>
+    /// Raises one <see cref="FrameSkipped"/> per scanner failure counted since the last call. Returns false when strict
+    /// mode aborted the read.
+    /// </summary>
+    private bool _ReportScannerDiagnostics(in BlfScanDiagnostics counts)
+    {
+        return _ReportNew(ref _LastReportedDecompressionFailures, counts.DecompressionFailures,
+                FrameReadErrorKind.Other, "Container decompression failed (failure #{0}).")
+            && _ReportNew(ref _LastReportedCorruptedContainerCount, counts.CorruptedContainers,
+                FrameReadErrorKind.CorruptedBlock, "Container header offset out of bounds (corrupted container #{0}).")
+            && _ReportNew(ref _LastReportedTruncatedObjectCount, counts.TruncatedObjects,
+                FrameReadErrorKind.CorruptedBlock, "Truncated BLF object at container boundary (dropped #{0}).")
+            && _ReportNew(ref _LastReportedUnparsableObjectCount, counts.UnparsableObjects,
+                FrameReadErrorKind.MalformedHeader, "Frame object could not be parsed (header or channel field cut off, #{0}).")
+            && _ReportNew(ref _LastReportedCorruptedInnerObjectCount, counts.CorruptedInnerObjects,
+                FrameReadErrorKind.CorruptedBlock, "Corrupt object inside a container skipped by LOBJ resynchronisation (#{0}).")
+            && _ReportNew(ref _LastReportedTruncatedFileObjectCount, counts.TruncatedFileObjects,
+                FrameReadErrorKind.TruncatedStream, "BLF object is truncated by the end of the file (#{0}).");
+    }
+
+    /// <summary>Reports the increments of one counter. Returns false when strict mode aborted the read.</summary>
+    private bool _ReportNew(ref long lastReported, long current, FrameReadErrorKind kind, string messageFormat)
+    {
+        while (lastReported < current)
+        {
+            lastReported++;
+            _HandleSkip(new FrameReadErrorEventArgs
+            {
+                FrameIndex = _NextFrameIndex,
+                FileOffset = -1,
+                Kind = kind,
+                Message = string.Format(CultureInfo.InvariantCulture, messageFormat, lastReported),
+            });
+
+            if (_Aborted)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /// <summary>
@@ -87,26 +170,28 @@ public sealed partial class BlfSource
     /// <summary>
     /// Pure (read-only) variant of <see cref="_ExtractFrameData"/> for random-access callers.
     /// Returns <c>null</c> on any failure without invoking <see cref="_HandleSkip"/>.
-    /// Container bytes are read through mmap slots hashed by <paramref name="frameIndex"/>.
+    /// Runs inside the <see cref="_LifetimeLock"/> read lock, so backend spans stay valid while they are parsed;
+    /// raw objects are parsed straight from the backend and copied once into the frame (never aliased).
     /// </summary>
     private ReadOnlyMemory<byte>? _TryExtractFrameData(
         in BlfFrameEntry entry, int frameIndex, CancellationToken cancellationToken, out ushort? hardwareChannel)
     {
         hardwareChannel = null;
-        ReadOnlyMemory<byte> objectMemory;
+        BlfObjectInfo objInfo;
         if (entry.ObjectOffset >= 0)
         {
-            byte[] containerData = _TryGetContainerData(entry.ContainerOffset, frameIndex, cancellationToken);
+            byte[] containerData = _TryGetContainerData(entry.ContainerOffset, cancellationToken);
             if (containerData.Length == 0)
             {
                 return null;
             }
 
+            ReadOnlyMemory<byte> objectMemory;
             if ((long)entry.ObjectOffset + entry.ObjectLength > containerData.Length)
             {
                 byte[]? stitched = _TryMaterializeSpanningObject(
                     entry.ContainerOffset, entry.ObjectOffset, entry.ObjectLength,
-                    frameIndex, useRandomAccessSlots: true, reportErrors: false, cancellationToken);
+                    frameIndex, randomAccess: true, reportErrors: false, cancellationToken);
                 if (stitched is null)
                 {
                     return null;
@@ -118,6 +203,11 @@ public sealed partial class BlfSource
             {
                 objectMemory = containerData.AsMemory(entry.ObjectOffset, entry.ObjectLength);
             }
+
+            if (!BlfObjectHeaderParser.TryParse(objectMemory.Span, entry.ContainerOffset, objectMemory, out objInfo, out _))
+            {
+                return null;
+            }
         }
         else
         {
@@ -126,17 +216,13 @@ public sealed partial class BlfSource
                 return null;
             }
 
-            objectMemory = _Backend.ReadRegion(frameIndex, entry.ContainerOffset, entry.ObjectLength);
-            if (objectMemory.Length < entry.ObjectLength)
+            // Parse in place: the read lock keeps the mapping alive, and the parsers copy the frame bytes out.
+            ReadOnlySpan<byte> objectSpan = _Backend.GetSpan(entry.ContainerOffset, entry.ObjectLength);
+            if (objectSpan.Length < entry.ObjectLength
+                || !BlfObjectHeaderParser.TryParse(objectSpan, entry.ContainerOffset, out objInfo, out _))
             {
                 return null;
             }
-        }
-
-        if (!BlfObjectHeaderParser.TryParse(
-            objectMemory.Span, entry.ContainerOffset, objectMemory, out BlfObjectInfo objInfo, out _))
-        {
-            return null;
         }
 
         if (!BlfFrameDispatcher.TryDispatch(in objInfo, out BlfFrameResult result))
@@ -235,7 +321,7 @@ public sealed partial class BlfSource
             {
                 byte[]? stitched = _TryMaterializeSpanningObject(
                     entry.ContainerOffset, entry.ObjectOffset, entry.ObjectLength,
-                    frameIndex, useRandomAccessSlots: false, reportErrors: true, cancellationToken);
+                    frameIndex, randomAccess: false, reportErrors: true, cancellationToken);
                 if (stitched is null)
                 {
                     return null;
@@ -285,7 +371,9 @@ public sealed partial class BlfSource
             return null;
         }
 
-        if (!BlfFrameDispatcher.TryDispatch(in objInfo, out BlfFrameResult result))
+        // Sequential frames go into the frame slab when slabs are on (also Ethernet, which then no longer aliases the
+        // container); random access always builds its own arrays.
+        if (!BlfFrameDispatcher.TryDispatch(in objInfo, out BlfFrameResult result, _Slabs))
         {
             _HandleSkip(new FrameReadErrorEventArgs
             {
@@ -329,7 +417,7 @@ public sealed partial class BlfSource
     /// time across all container offsets. Waiting threads do not hold a semaphore slot.
     /// </para>
     /// </remarks>
-    private byte[] _TryGetContainerData(long containerFileOffset, int frameId, CancellationToken cancellationToken = default)
+    private byte[] _TryGetContainerData(long containerFileOffset, CancellationToken cancellationToken = default)
     {
         ContainerDecompressionWork work;
         bool isWinner;
@@ -382,8 +470,8 @@ public sealed partial class BlfSource
         byte[]? decompressed = null;
         Exception? failure = null;
 
-        if (!_TryReadContainerPayload(containerFileOffset, frameId, useRandomAccessSlots: true,
-            out ReadOnlySpan<byte> payloadData, out ReadOnlyMemory<byte> payloadOwner,
+        if (!_TryReadContainerPayload(containerFileOffset,
+            out ReadOnlySpan<byte> payloadData,
             out ushort compressionMethod, out uint uncompressedSize, out _, out _))
         {
             failure = new BlfException($"Failed to parse container headers at offset {containerFileOffset}.");
@@ -397,7 +485,7 @@ public sealed partial class BlfSource
             _DecompressionSemaphore.Wait(CancellationToken.None);
             try
             {
-                _ = payloadOwner;
+                _ = Interlocked.Increment(ref _SourceDecompressionCount);
                 decompressed = BlfContainer.Decompress(
                     payloadData,
                     compressionMethod,
@@ -476,6 +564,12 @@ public sealed partial class BlfSource
     /// </remarks>
     private byte[] _GetContainerData(long containerFileOffset, int frameIndex, CancellationToken cancellationToken = default)
     {
+        // Sequential fast path: the scanner just decoded this container; no lock, no second inflate.
+        if (containerFileOffset == _SequentialContainerOffset && _SequentialContainer is { } current)
+        {
+            return current;
+        }
+
         ContainerDecompressionWork work;
         bool isWinner;
 
@@ -533,8 +627,8 @@ public sealed partial class BlfSource
         Exception? failure = null;
         FrameReadErrorEventArgs? errorArgs = null;
 
-        if (!_TryReadContainerPayload(containerFileOffset, frameIndex, useRandomAccessSlots: false,
-            out ReadOnlySpan<byte> payloadData, out ReadOnlyMemory<byte> payloadOwner,
+        if (!_TryReadContainerPayload(containerFileOffset,
+            out ReadOnlySpan<byte> payloadData,
             out ushort compressionMethod, out uint uncompressedSize,
             out FrameReadErrorKind errorKind, out string? errorMessage))
         {
@@ -556,7 +650,7 @@ public sealed partial class BlfSource
             _DecompressionSemaphore.Wait(CancellationToken.None);
             try
             {
-                _ = payloadOwner;
+                _ = Interlocked.Increment(ref _SourceDecompressionCount);
                 decompressed = BlfContainer.Decompress(
                     payloadData,
                     compressionMethod,
@@ -625,8 +719,8 @@ public sealed partial class BlfSource
         long firstContainerOffset,
         int objectOffset,
         int objectLength,
-        int mmapSlotFrameId,
-        bool useRandomAccessSlots,
+        int frameIndex,
+        bool randomAccess,
         bool reportErrors,
         CancellationToken cancellationToken)
     {
@@ -636,7 +730,7 @@ public sealed partial class BlfSource
             {
                 _HandleSkip(new FrameReadErrorEventArgs
                 {
-                    FrameIndex = mmapSlotFrameId,
+                    FrameIndex = frameIndex,
                     FileOffset = firstContainerOffset,
                     Kind = FrameReadErrorKind.CorruptedBlock,
                     Message = $"Split container object at offset {firstContainerOffset} has invalid bounds.",
@@ -655,9 +749,9 @@ public sealed partial class BlfSource
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            byte[] decoded = useRandomAccessSlots
-                ? _TryGetContainerData(containerOffset, mmapSlotFrameId, cancellationToken)
-                : _GetContainerData(containerOffset, mmapSlotFrameId, cancellationToken);
+            byte[] decoded = randomAccess
+                ? _TryGetContainerData(containerOffset, cancellationToken)
+                : _GetContainerData(containerOffset, frameIndex, cancellationToken);
             if (decoded.Length == 0)
             {
                 return null;
@@ -669,7 +763,7 @@ public sealed partial class BlfSource
                 {
                     _HandleSkip(new FrameReadErrorEventArgs
                     {
-                        FrameIndex = mmapSlotFrameId,
+                        FrameIndex = frameIndex,
                         FileOffset = containerOffset,
                         Kind = FrameReadErrorKind.CorruptedBlock,
                         Message = $"Split object inner offset {skipInContainer} exceeds container size {decoded.Length}.",
@@ -696,7 +790,7 @@ public sealed partial class BlfSource
                 {
                     _HandleSkip(new FrameReadErrorEventArgs
                     {
-                        FrameIndex = mmapSlotFrameId,
+                        FrameIndex = frameIndex,
                         FileOffset = containerOffset,
                         Kind = FrameReadErrorKind.TruncatedStream,
                         Message = $"Split object at offset {firstContainerOffset} has no following log container.",
@@ -792,19 +886,21 @@ public sealed partial class BlfSource
     /// decompress it. All backend I/O and header parsing is done here; no decompression
     /// is performed.
     /// </summary>
+    /// <remarks>
+    /// Both callers read through <see cref="BlfDataBackend.GetSpan"/> without copying the compressed bytes: the
+    /// sequential caller runs on the NextFrame thread, the random-access caller inside the
+    /// <see cref="_LifetimeLock"/> read lock, and <see cref="Dispose"/> takes the write lock before it unmaps.
+    /// The returned span is only valid within that scope.
+    /// </remarks>
     private bool _TryReadContainerPayload(
         long containerFileOffset,
-        int mmapSlotFrameId,
-        bool useRandomAccessSlots,
         out ReadOnlySpan<byte> payloadData,
-        out ReadOnlyMemory<byte> payloadOwner,
         out ushort compressionMethod,
         out uint uncompressedSize,
         out FrameReadErrorKind errorKind,
         out string? errorMessage)
     {
         payloadData = ReadOnlySpan<byte>.Empty;
-        payloadOwner = ReadOnlyMemory<byte>.Empty;
         compressionMethod = 0;
         uncompressedSize = 0;
 
@@ -815,24 +911,8 @@ public sealed partial class BlfSource
             return false;
         }
 
-        ReadOnlySpan<byte> blockData;
-        ReadOnlyMemory<byte> headerMemory = default;
-        if (useRandomAccessSlots)
-        {
-            headerMemory = _Backend.ReadRegion(
-                mmapSlotFrameId,
-                containerFileOffset,
-                (int)Math.Min(_Backend.FileSize - containerFileOffset, BlfConstants.BlockHeaderSize));
-            blockData = headerMemory.Span;
-        }
-        else
-        {
-            int headerFetch = (int)Math.Min(
-                BlfConstants.BlockHeaderSize,
-                _Backend.FileSize - containerFileOffset);
-            blockData = _Backend.GetSpan(containerFileOffset, headerFetch);
-        }
-
+        int headerFetch = (int)Math.Min(BlfConstants.BlockHeaderSize, _Backend.FileSize - containerFileOffset);
+        ReadOnlySpan<byte> blockData = _Backend.GetSpan(containerFileOffset, headerFetch);
         if (!BlfBlockHeader.TryParse(blockData, out BlfBlockHeader blockHeader, out _))
         {
             errorKind = FrameReadErrorKind.MalformedHeader;
@@ -865,23 +945,12 @@ public sealed partial class BlfSource
             return false;
         }
 
-        ReadOnlySpan<byte> fullObjectData;
-        if (useRandomAccessSlots)
+        ReadOnlySpan<byte> fullObjectData = _Backend.GetSpan(containerFileOffset, totalSize);
+        if (fullObjectData.Length < totalSize)
         {
-            payloadOwner = _Backend.ReadRegion(mmapSlotFrameId, containerFileOffset, totalSize);
-            if (payloadOwner.Length < totalSize)
-            {
-                errorKind = FrameReadErrorKind.CorruptedBlock;
-                errorMessage = $"Container at offset {containerFileOffset} with size {totalSize} could not be read.";
-                payloadOwner = ReadOnlyMemory<byte>.Empty;
-                return false;
-            }
-
-            fullObjectData = payloadOwner.Span;
-        }
-        else
-        {
-            fullObjectData = _Backend.GetSpan(containerFileOffset, totalSize);
+            errorKind = FrameReadErrorKind.CorruptedBlock;
+            errorMessage = $"Container at offset {containerFileOffset} with size {totalSize} could not be read.";
+            return false;
         }
 
         int containerHeaderOffset = Math.Max((int)headerSize, BlfConstants.BlockHeaderSize);
@@ -907,16 +976,7 @@ public sealed partial class BlfSource
             return false;
         }
 
-        if (useRandomAccessSlots)
-        {
-            payloadOwner = payloadOwner[containerPayloadOffset..];
-            payloadData = payloadOwner.Span;
-        }
-        else
-        {
-            payloadData = fullObjectData[containerPayloadOffset..];
-        }
-
+        payloadData = fullObjectData[containerPayloadOffset..];
         compressionMethod = containerHeader.CompressionMethod.Value;
         uncompressedSize = containerHeader.UncompressedSize.Value;
         errorKind = FrameReadErrorKind.Other;
@@ -977,116 +1037,18 @@ public sealed partial class BlfSource
                 return existingId;
             }
 
-            string busName = _GetBusName(objectType);
-            string interfaceName = _TryGetChannelName(objectType, channel)
-                ?? $"{busName} {channel}";
-            LinkType linkType = BlfFrameDispatcher.LinkTypeForObject(objectType);
-            Dictionary<string, object> properties = new()
-            {
-                [BlfInterfacePropertyKeys.Channel] = (long)channel,
-                [BlfInterfacePropertyKeys.ObjectType] = objectType,
-                [BlfInterfacePropertyKeys.BusType] = _GetBusTypeForObjectType(objectType),
-            };
-            if (hasHardwareChannel)
-            {
-                properties[BlfInterfacePropertyKeys.HardwareChannel] = hardwareChannelValue;
-            }
-
+            // Naming and properties are shared with BlfStreamSource, so both readers register identical interfaces.
+            string interfaceName = BlfInterfaceNaming.InterfaceName(objectType, channel, _CurrentChannelNames);
             FrameInterfaceId id = registry.Register(
-                _SourceId, interfaceName, null, linkType, properties);
+                _SourceId,
+                interfaceName,
+                null,
+                BlfFrameDispatcher.LinkTypeForObject(objectType),
+                BlfInterfaceNaming.BuildProperties(objectType, channel, hardwareChannel));
             _InterfaceMap[key] = id;
             return id;
         }
     }
-
-    /// <summary>
-    /// Tries to find a channel name from AppText channel name discovery.
-    /// Maps the BLF object type to the AppText bus type for lookup.
-    /// </summary>
-    private string? _TryGetChannelName(uint objectType, ushort channel)
-    {
-        if (_ChannelNames is null || _ChannelNames.Count == 0)
-        {
-            return null;
-        }
-
-        byte busType = _GetBusTypeForObjectType(objectType);
-        if (busType == 0)
-        {
-            return null;
-        }
-
-        // AppText channel numbers are 0-based
-        if (!_ChannelNames.TryGetValue((busType, (byte)channel), out string? name))
-        {
-            return null;
-        }
-
-        return name;
-    }
-
-    /// <summary>
-    /// Returns a bus name string for interface naming.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static string _GetBusName(uint objectType) => objectType switch
-    {
-        BlfConstants.ObjTypeEthernetFrame or BlfConstants.ObjTypeEthernetFrameEx
-            or BlfConstants.ObjTypeEthernetRxError => "Ethernet",
-
-        BlfConstants.ObjTypeCanMessage or BlfConstants.ObjTypeCanError
-            or BlfConstants.ObjTypeCanOverload or BlfConstants.ObjTypeCanErrorExt
-            or BlfConstants.ObjTypeCanMessage2 => "CAN",
-
-        BlfConstants.ObjTypeCanFdMessage or BlfConstants.ObjTypeCanFdMessage64
-            or BlfConstants.ObjTypeCanFdError64 => "CAN FD",
-
-        BlfConstants.ObjTypeCanXlChannelFrame => "CAN XL",
-
-        BlfConstants.ObjTypeLinMessage or BlfConstants.ObjTypeLinMessage2
-            or BlfConstants.ObjTypeLinCrcError or BlfConstants.ObjTypeLinCrcError2
-            or BlfConstants.ObjTypeLinRcvError or BlfConstants.ObjTypeLinRcvError2
-            or BlfConstants.ObjTypeLinSndError or BlfConstants.ObjTypeLinSndError2
-            or BlfConstants.ObjTypeLinSleep or BlfConstants.ObjTypeLinWakeup
-            or BlfConstants.ObjTypeLinWakeup2 => "LIN",
-
-        BlfConstants.ObjTypeFlexRayData or BlfConstants.ObjTypeFlexRayMessage
-            or BlfConstants.ObjTypeFlexRayRcvMessage or BlfConstants.ObjTypeFlexRayRcvMessageEx
-            => "FlexRay",
-
-        _ => "Unknown",
-    };
-
-    /// <summary>
-    /// Maps a BLF object type to the AppText bus type constant for channel name lookup.
-    /// Returns 0 if the object type has no corresponding bus type.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static byte _GetBusTypeForObjectType(uint objectType) => objectType switch
-    {
-        BlfConstants.ObjTypeEthernetFrame or BlfConstants.ObjTypeEthernetFrameEx
-            or BlfConstants.ObjTypeEthernetRxError => BlfConstants.BusTypeEthernet,
-
-        BlfConstants.ObjTypeCanMessage or BlfConstants.ObjTypeCanError
-            or BlfConstants.ObjTypeCanOverload or BlfConstants.ObjTypeCanErrorExt
-            or BlfConstants.ObjTypeCanMessage2 or BlfConstants.ObjTypeCanFdMessage
-            or BlfConstants.ObjTypeCanFdMessage64 or BlfConstants.ObjTypeCanFdError64
-            or BlfConstants.ObjTypeCanXlChannelFrame
-            => BlfConstants.BusTypeCan,
-
-        BlfConstants.ObjTypeLinMessage or BlfConstants.ObjTypeLinMessage2
-            or BlfConstants.ObjTypeLinCrcError or BlfConstants.ObjTypeLinCrcError2
-            or BlfConstants.ObjTypeLinRcvError or BlfConstants.ObjTypeLinRcvError2
-            or BlfConstants.ObjTypeLinSndError or BlfConstants.ObjTypeLinSndError2
-            or BlfConstants.ObjTypeLinSleep or BlfConstants.ObjTypeLinWakeup
-            or BlfConstants.ObjTypeLinWakeup2 => BlfConstants.BusTypeLin,
-
-        BlfConstants.ObjTypeFlexRayData or BlfConstants.ObjTypeFlexRayMessage
-            or BlfConstants.ObjTypeFlexRayRcvMessage or BlfConstants.ObjTypeFlexRayRcvMessageEx
-            => BlfConstants.BusTypeFlexRay,
-
-        _ => 0,
-    };
 
     #endregion
 }

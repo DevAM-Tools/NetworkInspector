@@ -3,7 +3,7 @@
 # Source Implementation Guide
 
 > Canonical reference for implementing, reviewing, and maintaining frame sources.
-> Derived from the established patterns in `PcapSource`, `BlfSource`, `AscSource`,
+> Derived from the established patterns in `PcapngSource`, `BlfSource`, `AscSource`,
 > `RandomFrameSource`, and `CachedFrameSource`.
 
 ---
@@ -123,16 +123,16 @@ NetworkInspector.Sources/
 
 | Element | Pattern | Examples |
 |---------|---------|----------|
-| Random-access source | `XxxSource` | `PcapSource`, `BlfSource`, `AscSource` |
-| Stream source | `XxxStreamSource` | `PcapStreamSource`, `BlfStreamSource` |
-| Options | `XxxSourceOptions` | `PcapSourceOptions`, `BlfSourceOptions` |
+| Random-access source | `XxxSource` | `PcapngSource`, `BlfSource`, `AscSource` |
+| Stream source | `XxxStreamSource` | `PcapngStreamSource`, `BlfStreamSource` |
+| Options | `XxxSourceOptions` | `PcapngSourceOptions`, `BlfSourceOptions` |
 | Frame index | `XxxFrameIndex` or `FrameIndex` | `BlfFrameIndex`, `FrameIndex` |
 | Scanner | `XxxIncrementalScanner` | `BlfIncrementalScanner`, `IncrementalScanner` |
 | Frame entry struct | `XxxFrameEntry` or `FrameOffset` | `BlfFrameEntry`, `FrameOffset` |
 | Display name property | `UiName` | — |
 | Factory: file | `Open(path, options?)` | — |
 | Factory: bytes | `FromData(byte[], uiName, options?)` | — |
-| Factory: stream | `FromStream(stream, uiName, leaveOpen?)` | — |
+| Factory: stream | `FromStream(stream, uiName, leaveOpen?, options?)` — the file source's options class | — |
 | Factory: text | `FromText(string, uiName?, options?)` | — |
 
 ---
@@ -180,6 +180,11 @@ public ScanMode ScanMode { get; set; }
 | `PreloadBudget` | `256 * 1024 * 1024` (256 MiB) | Files ≤ budget kept in memory |
 | `ErrorTolerance` | `ErrorToleranceMode.Tolerant` | Skip errors, don't abort |
 | `UiName` | `null` (derived from filename) | Override display name |
+| `FrameSlabSize` | `0` (one array per frame) | Opt-in slabs for sequential reads (§11.4); validated in the `init` accessor |
+| `TimestampTimeZone` (formats with zone-less dates: BLF, ASC) | `TimeZoneInfo.Utc` | Machine-independent timestamps; the exporters of the same format use the same default |
+
+Every option that the format reader honours must also reach the reader on **every** factory (`Open`, `FromData`,
+`FromStream`). A factory that ignores a member documents it on the parameter.
 
 If a format does not support lazy scanning, make `ScanMode` a read-only property
 returning `ScanMode.Full` and document why.
@@ -340,8 +345,11 @@ foreach ((LinkType linkType, int channel) in _DiscoveredInterfaces)
 ```
 
 **If lazy scan is active**, interfaces may be discovered during `NextFrame()`.
-Register them as they appear and store in the interface map.
-Since `NextFrame()` is single-threaded, no locking is needed for registration.
+Register them as they appear and publish them in a single-writer / multi-reader table
+(`PcapInterfaceTable` over `ChunkedGrowOnlyStore<T>`) **before** the frame index covers their first frame.
+`NextFrame()` is the only writer, so registration needs no lock; `FrameById()` only reads the table.
+BLF registers through one locked helper (`_GetOrRegisterInterface`) and reads AppText channel names from an
+immutable snapshot that the scanner replaces as a whole.
 
 ### 9.2 Stream Sources (Lazy Registration)
 
@@ -359,8 +367,9 @@ if (!_InterfaceMap.TryGetValue(key, out FrameInterfaceId interfaceId))
 ### 9.3 Thread Safety Rule
 
 - **`NextFrame()`** → single-threaded → interface registration needs no lock
-- **`FrameById()`** → concurrent → interface lookup only (pre-registered), no modification
-- If `FrameById()` can trigger registration (lazy scan incomplete), use a lock
+- **`FrameById()`** → concurrent → interface lookup only, no modification, also while a lazy scan runs:
+  it serves every id the index already covers and returns `null` for ids the scan has not reached
+- If `FrameById()` can trigger registration (BLF channel discovery), use a lock
 
 ---
 
@@ -398,7 +407,8 @@ return result.Value;
 - Never construct `Frame` directly — always use `Frame.Create()`
 - Handle `ParseResult` failures — do not discard errors silently
 - The `FrameId` value is the zero-based sequential index of the frame (valid range: `0 … Array.MaxLength - 1`; see `ArrayIndexIdRange` in Core)
-- PCAPNG/PCAP `Frame.Data` is **captured length**. On-wire `orig_len` is not stored on `Frame`. Unknown link types skip the packet and raise `FrameSkipped`.
+- PCAPNG/PCAP `Frame.Data` is **captured length**. On-wire `orig_len` is not stored on `Frame`. A DLT outside the
+  `LinkType` enum is passed through as `(LinkType)rawValue` with unchanged bytes, so exporters can write it back.
 
 ---
 
@@ -406,25 +416,29 @@ return result.Value;
 
 ### 11.1 Backend Decision Tree
 
+```mermaid
+flowchart TD
+    A[File source Open] --> B{PreloadDecision.ShouldPreload}
+    B -->|budget set, file fits budget and Array.MaxLength| C[In-memory backend]
+    B -->|otherwise| D{Format}
+    C --> C1[FrameById slices the array]
+    D -->|binary| E[One read-only mapping]
+    D -->|text| F[Disk backend]
+    E --> E1[Scan and FrameById read the same view]
+    F --> F1[Index of line offsets, seek and read]
 ```
-File-based source:
-  └─ fileSize ≤ PreloadBudget?
-     ├─ YES: In-Memory backend
-     │  • Load entire file into byte[] or string[]
-     │  • FrameById: slice from array (zero-copy)
-     │  • Pro: fastest access, no I/O during FrameById
-     │
-     └─ NO: External backend
-        ├─ Binary formats: Memory-Mapped (MemoryMappedFile)
-        │  • Primary accessor for sequential scan
-        │  • Slot-based pool for concurrent FrameById
-        │  • slots = Math.Clamp(ProcessorCount, 1, 256)
-        │
-        └─ Text formats: Disk-Based (seek + read)
-           • Index stores byte offsets per line
-           • FrameById: FileStream seek + ReadLine
-           • Memory ∝ line count, not file size
-```
+
+- **One rule for all file sources:** `PreloadDecision.ShouldPreload(fileSize, budget)` returns true only when the budget is
+  set and the file fits both the budget and `Array.MaxLength`. A larger file uses the mapped/disk backend even with
+  `PreloadBudget = long.MaxValue`, instead of failing in `File.ReadAllBytes`.
+- **Mapped backend (PCAPNG, BLF):** one `MemoryMappedViewAccessor` over the whole file. Sequential scans and concurrent
+  `FrameById` calls read the same view; each random read holds the view's `SafeHandle` with
+  `DangerousAddRef`/`DangerousRelease` instead of a lock, and every `NextFrame` call holds one such reference for the whole
+  call (`TryAcquireScanLease` / `ReleaseScanLease`), so a concurrent `Dispose` cannot unmap memory under a running copy.
+  This matters in practice: a session shutdown with a timeout disposes sources whose read loop may still run. There is no
+  accessor pool.
+- **Disk backend (ASC):** the index stores byte offsets per line; `FrameById` seeks and reads one line into a rented buffer
+  and parses it in place. Memory grows with the line count, not the file size.
 
 ### 11.2 Buffer Sizes
 
@@ -435,7 +449,8 @@ File-based source:
 | MaxDecompressionConcurrency | `ProcessorCount` | BlfSource |
 | Disk read buffer | 4 MiB | AscSource, AscStreamSource |
 | Container cache (2Q) | 32 MiB | BlfSource |
-| Mmap slot count | `ProcessorCount` | PcapSource, BlfSource |
+| Stream read buffer | 64 KiB `BufferedStream` (unless the stream is a `MemoryStream` / `BufferedStream`) | All stream sources |
+| Frame slab size (`FrameSlabSize`) | 0 = one array per frame; 1 KiB … 16 MiB when set | All sequential reads |
 
 ### 11.3 Cache Pattern (BLF)
 
@@ -443,11 +458,43 @@ BLF uses a **2Q (Two-Queue) eviction cache** for decompressed containers:
 - Prevents scan pollution (full-file scan doesn't evict hot data)
 - The `TwoQueueCache` type is **not** thread-safe; `BlfSource` wraps every `TryGet`/`Put`/`Clear`
   in `_ContainerCacheLock` so concurrent `FrameById` calls cannot corrupt the cache.
-- Sized by `CacheBudget` option
+- Sized by `CacheBudget` option; the probation queue gets the whole budget, so one container as large as the budget
+  is still cached
+- The sequential path offers every container the scanner decoded to the cache (`OnContainerDecoded`), so a container
+  is inflated once, not once by the scanner and again by `NextFrame`; a full scan offers the containers it decoded at open
 
 ---
 
-### 11.4 Large-File Support (Windowed Scanning)
+### 11.4 Frame Memory (Slabs)
+
+Sequential reads copy frame bytes out of the backend or a decompressed container. With `FrameSlabSize = 0`
+(default) every frame gets its own array. With a slab size set, `FrameSlabAllocator` (a frame policy on top of the
+Core `SlabAllocator<T>`, link-compiled) bump-allocates consecutive frames in shared slabs:
+
+- A new slab starts when the rest of the current one is too small; old slabs live on through their frames.
+- Frames above `slabSize / 4` get their own array, so one jumbo frame neither wastes nor pins a slab.
+- Slab memory is uninitialised; parsers that leave header bytes unwritten use `FrameSlabAllocator.RentZeroed`.
+- Retention: a consumer that keeps one frame keeps its whole slab alive.
+- `FrameById` never uses slabs: it runs on any thread, and the allocator is single-threaded.
+- BLF Ethernet objects 102 and 120–123 alias the decompressed container without slabs; with slabs they are copied, so a
+  held frame pins one slab instead of a whole container.
+
+Measured with `NetworkInspector.Profiling` (`read-pcapng-mmap[-hold][-slab64k]`, `read-pcapng-stream[-hold][-slab64k]`,
+50 000 frames, two rounds):
+
+| Path | Off | 64 KiB slabs | GC pause off → on |
+|------|-----|--------------|-------------------|
+| mapped, frames dropped | 3.55 M/s | 3.72 M/s | – |
+| mapped, frames held | 2.09 M/s | 2.40 M/s | 10 % → 7 % |
+| stream, frames dropped | 6.3 M/s | 7.55 M/s | – |
+| stream, frames held | 2.55 M/s | 3.45 M/s | 12 % → 9.5 % |
+
+The gain is +5 % to +35 % throughput, largest when the consumer keeps frames. Because of the retention trade-off
+the option stays opt-in.
+
+---
+
+### 11.5 Large-File Support (Windowed Scanning)
 
 Every scanner (incremental or one-shot) **must** use windowed I/O to support files larger than 2 GiB.
 
@@ -509,7 +556,16 @@ On 64-bit processes this is effectively unlimited for capture files.
 | Mode | Behaviour |
 |------|-----------|
 | `Tolerant` (default) | Skip errored frames, raise `FrameSkipped`, continue |
-| `Strict` | Set `_Aborted`, stop reading, `NextFrame()` returns `null` |
+| `Strict` | Return every frame in front of the first error, raise `FrameSkipped` once, set `_Aborted`, then `NextFrame()` returns `null` |
+
+**File order in every scan mode:** a full scan finds errors while opening. The source keeps them as pending skips with
+their frame index and replays each one when `NextFrame` reaches that index (PCAPNG `_ReplayPendingSkipsBefore`; BLF
+lets the scanner note every counted failure as a `BlfScanDiagnosticsMark` with its frame position, also inside a
+container, and replays the marks in
+`_ReplayPendingDiagnosticsBefore`), so strict mode stops at the same frame as a lazy scan or a stream reader would.
+
+**Every unreadable object raises `FrameSkipped`:** an object cut by the end of the file (`TruncatedStream`), a header or
+payload too short for its type (`MalformedHeader`), a corrupt container tail (`CorruptedBlock`). Never drop one silently.
 
 ### 12.2 HandleSkip Pattern
 
@@ -519,25 +575,19 @@ observe skipped frames in both strict and tolerant scenarios. In strict mode the
 abort flag is additionally set after the event fires.
 
 ```csharp
-private void HandleSkip(int frameIndex, long fileOffset, FrameReadErrorKind kind, string message)
+private void _HandleSkip(FrameReadErrorEventArgs error)
 {
-    // Always count errors
-    Interlocked.Increment(ref _ErrorCount);
-    Interlocked.Increment(ref _SkippedFrameCount);
+    // Always count errors (saturating, see 12.3)
+    _SkippedFrameCount.Increment();
+    _ErrorCount.Increment();
 
     // Always raise the event so callers can observe skipped frames in both modes
-    FrameSkipped?.Invoke(this, new FrameReadErrorEventArgs
-    {
-        FrameIndex = frameIndex,
-        FileOffset = fileOffset,
-        Kind = kind,
-        Message = message,
-    });
+    FrameSkipped?.Invoke(this, error);
 
     if (ErrorTolerance == ErrorToleranceMode.Strict)
     {
-        // Strict: abort after notifying the caller
-        Volatile.Write(ref _Aborted, true);
+        // Strict: abort after notifying the caller (volatile field, see 13.2)
+        _Aborted = true;
     }
 }
 ```
@@ -581,38 +631,44 @@ Capacity: allocating a frame ID beyond `ArrayIndexIdRange.MaxValue` throws `Inva
 
 ### 13.2 Volatile Fields (Mandatory)
 
-All cross-thread observable fields must use `Volatile.Read`/`Volatile.Write`:
+Every cross-thread observable field is either `volatile` or accessed only through `Interlocked`:
 
 ```csharp
 private volatile bool _Started;
-private volatile bool _Disposed;
+private volatile int _Disposed;          // 0 = live, 1 = disposed; latched with Interlocked.Exchange
 private volatile bool _Aborted;
-private volatile int _ReadFrameCount;
-private long _SkippedFrameCount;
-private long _ErrorCount;
+private volatile int _ReadFrameCount;    // written by the NextFrame thread only
+private readonly SaturatingVolatileCounter _SkippedFrameCount = new();
+private readonly SaturatingVolatileCounter _ErrorCount = new();
 ```
 
 **Rules:**
-- **Write** lifecycle flags with `Volatile.Write(ref _Flag, value)`
-- **Read** lifecycle flags with `Volatile.Read(ref _Flag)`
-- **Increment** counters with `Interlocked.Increment(ref _Counter)`
-- **Read** counters with `Volatile.Read(ref _Counter)`
-- **Never** mix direct assignment/reads with Volatile — be symmetric
+- **Dispose latch:** `if (Interlocked.Exchange(ref _Disposed, 1) != 0) return;` — an `int`, so the exchange is atomic and
+  idempotent; public members check it with `ObjectDisposedException.ThrowIf(_Disposed != 0, this)`.
+- **Lifecycle flags** (`_Started`, `_Aborted`) are `volatile` fields: plain reads and writes are already acquire/release.
+  Do not wrap them in `Volatile.Read`/`Volatile.Write` as well.
+- **Error counters** use `SaturatingVolatileCounter` (`Increment`, `.Value`): they stop at `int.MaxValue` instead of wrapping.
+- **Fields read by `FrameById`** that `NextFrame` or `Dispose` replace (scanner, registry, channel-name snapshot) are
+  `volatile` or snapshotted into a local once per call, so one call never sees two different values.
 
 ```csharp
-// ✅ CORRECT — symmetric Volatile usage
-Volatile.Write(ref _Aborted, true);          // write
-if (Volatile.Read(ref _Aborted)) return null; // read
+// ✅ CORRECT — volatile field, plain access
+_Aborted = true;
+if (_Aborted) return null;
 
-// ❌ WRONG — asymmetric (write without Volatile, read with Volatile)
-_Aborted = true;                              // write — broken!
-if (Volatile.Read(ref _Aborted)) return null; // read
+// ✅ CORRECT — snapshot once, then use the local
+FrameInterfaceRegistry? registry = _Registry;
+if (registry is null) return null;
+
+// ❌ WRONG — reads the field twice; a concurrent Dispose can null it in between
+if (_Registry is null) return null;
+return Frame.Create(..., _Registry);
 ```
 
 ### 13.3 IsRunning Property
 
 ```csharp
-public bool IsRunning => Volatile.Read(ref _Started) && !Volatile.Read(ref _Disposed);
+public bool IsRunning => _Started && _Disposed == 0;
 ```
 
 ---
@@ -630,8 +686,11 @@ public bool IsRunning => Volatile.Read(ref _Started) && !Volatile.Read(ref _Disp
 
 - Factory method only parses the file header
 - Frame index grows incrementally during `NextFrame()`
-- Interfaces may be registered during `NextFrame()` as they are discovered
+- Interfaces may be registered during `NextFrame()` as they are discovered (before the index covers their first frame)
 - `EstimatedFrameCount` may be `null` until scan completes
+- `FrameById()` works during the scan for every id already indexed (single-writer / multi-reader index); it does not wait
+  for the scan to finish
+- When the scan is exhausted the source releases the scanner; later reads use the index only
 
 ### 14.3 Implementation Pattern
 
@@ -747,7 +806,10 @@ ObjectDisposedException.ThrowIf(Volatile.Read(ref _Disposed), this);
 - [ ] Unit tests for factory, lifecycle, error tolerance, and edge cases
 - [ ] Integration tests in `NetworkInspector.Sources.Tests`
 - [ ] README.md updated with new source in the table
-- [ ] Scanner uses windowed I/O (see §11.4): holds backend reference, `_Offset` is `long`, no whole-file span passed in
+- [ ] Scanner uses windowed I/O (see §11.5): holds backend reference, `_Offset` is `long`, no whole-file span passed in
+- [ ] Backend choice through `PreloadDecision.ShouldPreload` (§11.1); `FrameSlabSize` honoured on sequential reads (§11.4)
+- [ ] Stream factory takes the options class and wraps unbuffered streams in a `BufferedStream`
+- [ ] Every unreadable object raises `FrameSkipped`; strict mode stops in file order (§12.1)
 - [ ] No `fileSize > int.MaxValue` guard in `Open()` — large files supported by design
 - [ ] `MaxBlockReadSize` (or equivalent) constant applied to all block-level `GetScanSpan`/`GetSpan` calls
 

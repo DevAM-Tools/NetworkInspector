@@ -51,6 +51,14 @@ internal static class BlfContainer
             throw new BlfDecompressionLimitExceededException(maxUncompressedSize, uncompressedSize);
         }
 
+        // A .NET array holds at most Array.MaxLength bytes. Without this guard a size above it (possible with the limit
+        // disabled) would surface as OverflowException or OutOfMemoryException instead of the format error callers catch.
+        if (uncompressedSize > (uint)Array.MaxLength)
+        {
+            throw new BlfException(
+                $"BLF container uncompressedSize {uncompressedSize} exceeds the largest array ({Array.MaxLength} bytes).");
+        }
+
         if (compressionMethod == BlfConstants.CompressionNone)
         {
             if (maxUncompressedSize > 0 && compressedData.Length > maxUncompressedSize)
@@ -86,7 +94,9 @@ internal static class BlfContainer
     /// </summary>
     private static byte[] _DecompressLz4(ReadOnlySpan<byte> compressedData, uint uncompressedSize)
     {
-        byte[] output = new byte[uncompressedSize];
+        // Every byte is overwritten: LZ4 fills exactly uncompressedSize or the size check below throws, so the zeroing
+        // pass of `new byte[]` is pure cost on a buffer of up to MaxUncompressedContainerSize.
+        byte[] output = GC.AllocateUninitializedArray<byte>((int)uncompressedSize);
 
         int decoded = Lz4Codec.Decompress(compressedData, output.AsSpan());
 
@@ -117,7 +127,8 @@ internal static class BlfContainer
             throw new BlfException("BLF zlib decompression failed: compressed payload is empty.");
         }
 
-        byte[] output = new byte[uncompressedSize];
+        // Every byte is overwritten: the inflate loop fills exactly uncompressedSize or the size check below throws.
+        byte[] output = GC.AllocateUninitializedArray<byte>((int)uncompressedSize);
 
         fixed (byte* p = compressedData)
         {

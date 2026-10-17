@@ -132,6 +132,9 @@ public sealed class AscStreamSource : IFrameSource, IErrorTolerantFrameSource
 
     #endregion
 
+    /// <summary>Frame slab allocator; null when <see cref="AscSourceOptions.FrameSlabSize"/> is 0.</summary>
+    private readonly FrameSlabAllocator? _Slabs;
+
     #region Error tolerance statistics
 
     private volatile int _ReadFrameCount;
@@ -143,8 +146,9 @@ public sealed class AscStreamSource : IFrameSource, IErrorTolerantFrameSource
     #region Construction
 
     private AscStreamSource(Stream stream, string uiName, bool leaveOpen,
-        ErrorToleranceMode errorTolerance, TimeZoneInfo timestampTimeZone)
+        ErrorToleranceMode errorTolerance, TimeZoneInfo timestampTimeZone, int frameSlabSize)
     {
+        _Slabs = FrameSlabAllocator.CreateOrNull(frameSlabSize);
         _Stream = stream;
         UiName = uiName;
         _LeaveOpen = leaveOpen;
@@ -179,7 +183,7 @@ public sealed class AscStreamSource : IFrameSource, IErrorTolerantFrameSource
 
         ErrorToleranceMode tolerance = options?.ErrorTolerance ?? ErrorToleranceMode.Tolerant;
         TimeZoneInfo timestampTimeZone = options?.TimestampTimeZone ?? TimeZoneInfo.Utc;
-        return new AscStreamSource(stream, uiName, leaveOpen, tolerance, timestampTimeZone);
+        return new AscStreamSource(stream, uiName, leaveOpen, tolerance, timestampTimeZone, options?.FrameSlabSize ?? 0);
     }
 
     #endregion
@@ -567,7 +571,10 @@ public sealed class AscStreamSource : IFrameSource, IErrorTolerantFrameSource
 
         bool parsed;
         int channel;
-        byte[] frameData;
+        ReadOnlyMemory<byte> frameData;
+
+        // Frames go into the frame slab when slabs are on; CAN XL and FlexRay always get their own array.
+        FrameSlabAllocator? slabs = _Slabs;
         AscBusType busType;
         LinkType linkType;
         ReadOnlySpan<byte> parseSpan = span;
@@ -580,14 +587,14 @@ public sealed class AscStreamSource : IFrameSource, IErrorTolerantFrameSource
         switch (lineType)
         {
             case AscLineType.CanMessage:
-                parsed = AscCanParser.TryParse(parseSpan, _Header.NumericBase,
+                parsed = AscCanParser.TryParse(parseSpan, _Header.NumericBase, slabs,
                     out _, out channel, out frameData);
                 busType = AscBusType.Can;
                 linkType = LinkType.CanSocketcan;
                 break;
 
             case AscLineType.CanFdMessage:
-                parsed = AscCanFdParser.TryParse(parseSpan, _Header.NumericBase,
+                parsed = AscCanFdParser.TryParse(parseSpan, _Header.NumericBase, slabs,
                     out _, out channel, out frameData);
                 busType = AscBusType.CanFd;
                 linkType = LinkType.CanSocketcan;
@@ -595,19 +602,20 @@ public sealed class AscStreamSource : IFrameSource, IErrorTolerantFrameSource
 
             case AscLineType.CanXlMessage:
                 parsed = AscCanXlParser.TryParse(parseSpan,
-                    out _, out channel, out busType, out frameData);
+                    out _, out channel, out busType, out byte[] canXlFrame);
+                frameData = canXlFrame;
                 linkType = LinkType.CanSocketcan;
                 break;
 
             case AscLineType.CanErrorFrame:
             case AscLineType.CanOverloadFrame:
-                parsed = AscCanErrorParser.TryParse(parseSpan, out _, out channel, out frameData);
+                parsed = AscCanErrorParser.TryParse(parseSpan, slabs, out _, out channel, out frameData);
                 busType = AscBusType.Can;
                 linkType = LinkType.CanSocketcan;
                 break;
 
             case AscLineType.LinMessage:
-                parsed = AscLinParser.TryParse(parseSpan, _Header.NumericBase,
+                parsed = AscLinParser.TryParse(parseSpan, _Header.NumericBase, slabs,
                     out _, out channel, out frameData);
                 busType = AscBusType.Lin;
                 linkType = LinkType.Lin;
@@ -615,13 +623,14 @@ public sealed class AscStreamSource : IFrameSource, IErrorTolerantFrameSource
 
             case AscLineType.FlexRayMessage:
                 parsed = AscFlexRayParser.TryParse(parseSpan, _Header.NumericBase,
-                    out _, out channel, out frameData);
+                    out _, out channel, out byte[] flexRayFrame);
+                frameData = flexRayFrame;
                 busType = AscBusType.FlexRay;
                 linkType = LinkType.Flexray;
                 break;
 
             case AscLineType.EthernetPacket:
-                parsed = AscEthernetParser.TryParse(parseSpan, _Header.NumericBase,
+                parsed = AscEthernetParser.TryParse(parseSpan, _Header.NumericBase, slabs,
                     out _, out channel, out frameData);
                 busType = AscBusType.Ethernet;
                 linkType = LinkType.Ethernet;

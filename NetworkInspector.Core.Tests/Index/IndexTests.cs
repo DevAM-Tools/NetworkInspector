@@ -39,6 +39,126 @@ internal sealed class IndexTests
         await Assert.That(bm.Contains(43)).IsFalse();
     }
 
+    /// <summary>
+    /// A container whose first <see cref="Contains"/> simulates a writer that changed the bitmap during the read: it moves
+    /// the sequence by one complete write (+2) and throws, as a reader of a half-grown array would.
+    /// </summary>
+    private sealed class TornReadContainer(RoaringBitmap owner, bool moveSequence) : IContainer
+    {
+        private static readonly System.Reflection.FieldInfo _SeqLockField =
+            typeof(RoaringBitmap).GetField("_SeqLock", BindingFlags.NonPublic | BindingFlags.Instance)!;
+
+        public int Calls { get; private set; }
+
+        public int Cardinality => 1;
+        public ushort Min => 5;
+        public ushort Max => 5;
+
+        public bool Contains(ushort value)
+        {
+            Calls++;
+            if (Calls == 1)
+            {
+                if (moveSequence)
+                {
+                    _SeqLockField.SetValue(owner, (int)_SeqLockField.GetValue(owner)! + 2);
+                }
+
+                throw new ArgumentException("Simulated read of a half-grown array.");
+            }
+
+            return value == 5;
+        }
+
+        public IContainer Add(ushort value) => throw new NotSupportedException();
+        public IContainer And(IContainer other) => throw new NotSupportedException();
+        public IContainer Or(IContainer other) => throw new NotSupportedException();
+        public IContainer AndNot(IContainer other) => throw new NotSupportedException();
+        public IContainer Xor(IContainer other) => throw new NotSupportedException();
+        public IContainer Clone() => throw new NotSupportedException();
+    }
+
+    /// <summary>Puts <paramref name="container"/> as the only chunk (key 0) of <paramref name="bitmap"/>.</summary>
+    private static void _InstallSingleChunk(RoaringBitmap bitmap, IContainer container)
+    {
+        Type type = typeof(RoaringBitmap);
+        BindingFlags flags = BindingFlags.NonPublic | BindingFlags.Instance;
+        ((ushort[])type.GetField("_Keys", flags)!.GetValue(bitmap)!)[0] = 0;
+        ((IContainer[])type.GetField("_Containers", flags)!.GetValue(bitmap)!)[0] = container;
+        type.GetField("_Count", flags)!.SetValue(bitmap, 1);
+        type.GetField("_Cardinality", flags)!.SetValue(bitmap, 1L);
+    }
+
+    [Test]
+    public async Task RoaringBitmap_ReadSectionThrowsAfterAWrite_RetriesInsteadOfThrowing()
+    {
+        RoaringBitmap bitmap = new();
+        TornReadContainer container = new(bitmap, moveSequence: true);
+        _InstallSingleChunk(bitmap, container);
+
+        bool present = bitmap.Contains(5);
+
+        await Assert.That(present).IsTrue();
+        await Assert.That(container.Calls).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task RoaringBitmap_ReadSectionThrowsWithoutAWrite_Propagates()
+    {
+        // A stable section that throws is a bug, not a torn read: the exception must not be swallowed.
+        RoaringBitmap bitmap = new();
+        _InstallSingleChunk(bitmap, new TornReadContainer(bitmap, moveSequence: false));
+
+        await Assert.That(() => bitmap.Contains(5)).Throws<ArgumentException>();
+    }
+
+    [Test]
+    public async Task RoaringBitmap_ConcurrentReadersDuringAdds_NeverObserveTornState()
+    {
+        // One writer adds 0, 7, 14, … in order: the chunks grow, the key/container arrays reallocate, and array
+        // containers promote to bitmap containers while four readers validate their sections against the seqlock.
+        RoaringBitmap bitmap = new();
+        const int total = 200_000;
+        int stop = 0;
+        int violations = 0;
+
+        Task writer = Task.Run(() =>
+        {
+            for (uint i = 0; i < total; i++)
+            {
+                bitmap.Add(i * 7u);
+            }
+
+            _ = Interlocked.Exchange(ref stop, 1);
+        });
+
+        // Adds are monotone, so a reader that saw cardinality c must find the (c-1)-th value; 3 is never added.
+        Task[] readers = new Task[4];
+        for (int r = 0; r < readers.Length; r++)
+        {
+            readers[r] = Task.Run(() =>
+            {
+                while (Volatile.Read(ref stop) == 0)
+                {
+                    long cardinality = bitmap.Cardinality;
+                    bool torn = cardinality > total
+                        || bitmap.Contains(3u)
+                        || (cardinality > 0 && !bitmap.Contains((uint)(cardinality - 1) * 7u));
+                    if (torn)
+                    {
+                        _ = Interlocked.Exchange(ref violations, 1);
+                        return;
+                    }
+                }
+            });
+        }
+
+        await Task.WhenAll([writer, .. readers]);
+
+        await Assert.That(violations).IsEqualTo(0);
+        await Assert.That(bitmap.Cardinality).IsEqualTo((long)total);
+    }
+
     [Test]
     public async Task RoaringBitmap_AddMultiple()
     {
@@ -519,6 +639,27 @@ internal sealed class IndexTests
         RoaringBitmap empty = new();
         a.OrWith(empty);
         await Assert.That(a.Cardinality).IsEqualTo(2L);
+    }
+
+    [Test]
+    public async Task RoaringBitmap_OrWithView_MergesWithoutChangingTheViewedBitmap()
+    {
+        RoaringBitmap a = new();
+        a.Add(1);
+        a.Add(70_000);
+        RoaringBitmap b = new();
+        b.Add(2);
+        b.Add(70_000);
+        b.Add(140_000);
+
+        a.OrWith(b.AsReadOnly());
+        a.Add(3);
+        a.OrWith(ReadOnlyRoaringBitmap.Empty);
+
+        await Assert.That(a.Cardinality).IsEqualTo(5L);
+        await Assert.That(a.Contains(140_000)).IsTrue();
+        await Assert.That(b.Cardinality).IsEqualTo(3L);
+        await Assert.That(b.Contains(3)).IsFalse();
     }
 
     [Test]

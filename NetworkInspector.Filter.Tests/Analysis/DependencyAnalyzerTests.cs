@@ -11,7 +11,7 @@ internal sealed class DependencyAnalyzerTests
     {
         FilterLexer lexer = new(expression);
         List<Token> tokens = lexer.Tokenize().Value;
-        FilterProgram program = new FilterParser(tokens, expression, null).Parse().Value;
+        FilterProgram program = new FilterParser(tokens, expression, null, FilterBinder.DefaultRegexTimeout).Parse().Value;
         return DependencyAnalyzer.Analyze(program, new SymbolResolver(stack));
     }
 

@@ -367,12 +367,9 @@ Return `false` when:
 
 ### 7.4 OnFinish
 
-- Acquires the lock.
-- Checks `if (_Finished) return;` — double-finish is safe.
+- Checks `if (_Finished) return;` and sets `_Finished = true` first — double-finish is safe, also after a failure.
 - If never started: either produce an empty-but-valid file (preferred) or skip output.
-- Writes any trailing data (footers, trailers).
-- Flushes and closes the output.
-- Sets `_Finished = true`.
+- Runs the shared finish sequence `ExporterFinish.Run` (§9.4): trailer and final flush, then every release step.
 
 ### 7.5 Empty Export Behaviour
 
@@ -472,6 +469,38 @@ private bool HandleSkip(ExportErrorKind kind, string message, long itemIndex)
 3. **Strict mode aborts immediately.** Set `_HasError = true` and return `false`.
 4. **Tolerant mode skips and continues.** Fire `ItemSkipped` event with details.
 5. **Increment counters with plain `++`**: `ErrorCount++`, `SkippedCount++`. No `Interlocked` is needed because exporters are single-threaded.
+
+### 9.4 Finish Sequence (`ExporterFinish`)
+
+Every exporter ends through the one internal helper `ExporterFinish.Run`, so a fix to cleanup applies to all formats:
+
+```csharp
+public void OnFinish()
+{
+    if (_Finished)
+    {
+        return;
+    }
+    _Finished = true;
+
+    ExporterFinish.Run(
+        "BLF",                 // format name for the messages
+        _FinalizeFile,         // trailer, header patch, final flush; null when there is nothing to finalize
+        _ReportFinishError,    // sets _HasError, ErrorCount++, raises ItemSkipped
+        new ExporterReleaseStep("payload buffer return", _PayloadBuffer.Return),
+        new ExporterReleaseStep("output disposal", _DisposeOutput)); // the output always comes last
+}
+```
+
+1. **Finalize** — a failure is reported as `"{format} finalization failed: …"` (`IoError` for `IOException`, else
+   `SerializationError`) and not rethrown: the output may already be unusable, and the releases must still run.
+2. **Release** — the steps run in order (pooled buffers, builders, last the output, which closes the stream unless the
+   caller owns it). Every step runs even when an earlier one failed; each failure is reported as `"{format} {what} failed: …"`.
+3. **Aggregate** — when any release step failed, one `AggregateException("{format} exporter cleanup failed.")` carries all
+   of them, thrown after every step has run.
+
+Each release helper clears its field before disposing (`ExportOutput? output = _Output; _Output = null; output?.Dispose();`),
+so a second call can never dispose twice.
 
 ---
 
@@ -577,15 +606,41 @@ no compressed-side **`ArrayPool`** copy.
 
 ### 11.4 BLF `start_date` and relative timestamps
 
-The LOGG **`start_date`** field is **`SYSTEMTIME` in millisecond granularity** using
-local-time components (matching Vector tooling / **`tshark`** expectations). Relative
-LOB object times are **`10 μs`** ticks. The writer **floors the anchor `startNs`**
-to whole milliseconds so sub-ms residuals live only in offsets. **`BlfExporter`**
+The LOGG **`start_date`** field is **`SYSTEMTIME` in millisecond granularity** without a
+zone. The writer fills it as civil time in **`Builder.WithTimestampTimeZone`** (default
+**`TimeZoneInfo.Utc`**, the same default as `BlfSourceOptions.TimestampTimeZone`, so a
+round trip through this product is machine-independent). Vector tools and `tshark` read
+the field as local time: export with `TimeZoneInfo.Local` for them. **ObjectTimeStamp
+holds nanoseconds (`objectFlags = 2`)**; 10 µs ticks (`objectFlags = 1`) are read but never
+written. The writer **floors the anchor `startNs`** to whole milliseconds so sub-ms
+residuals live only in offsets. **`BlfExporter`**
 tracks **min/max epoch nanoseconds**: the anchor aligns to the earliest **ordered**
 revision possible before first written object (**`TryRealignStartEarlier`** on a
 seekable stream), **`measurement_end`** uses the **maximum** timestamp, out-of-order
 frames after data exists **clamp** negative relative ticks (**`BLF`** cannot express
 them) and **`ItemSkipped`** fires **once per export** when that happens.
+
+### 11.5 Bus Fields, Channels, and Interface Metadata
+
+The readers and writers of this product share one representation per bus field, so every exporter writes back what
+every reader produced:
+
+| Field | Frame representation | Writers |
+|-------|---------------------|---------|
+| Classic CAN bus DLC 9–15 | SocketCAN byte 4 = payload count (≤ 8), byte 7 (`len8_dlc`) = bus DLC; `BlfConstants.ClassicCanDlc` | BLF DLC nibble; ASC one hex digit (`base hex`) |
+| CAN remote frame | RTR bit; byte 4 = requested count, no data | ASC `r {dlc}`; BLF flags `0x80` + DLC |
+| LIN protected id | DLT_LIN byte 5 = id + parity (`LinProtectedId`); writers recover the id with `& 0x3F` | BLF, ASC |
+| LIN checksum model | DLT_LIN byte 4 bits 1–0: 1 = classic, 2 = enhanced, 0 = not stated | ASC `CSM = classic/enhanced` (0 → enhanced); BLF LIN_MESSAGE2 |
+| Bus channel | `InterfaceChannelConverter.TryGetChannel`: `blf.channel`, then `asc.channel`, then a trailing number ≥ 1 in the interface name | BLF, ASC (resolved once per interface) |
+| BLF channel name | Interface `UiName` | BLF writes one AppText channel name per channel unless the name is the default (`"CAN 2"`) |
+| PCAPNG interface options | `if.*` properties, one shared table (`PcapInterfacePropertyKeys.InterfaceOptions`) | PCAPNG writes them back as IDB options, plus `if_name` / `if_description` |
+
+In the BLF exporter an interface whose channel property exists but is unusable (out of range, wrong type) is an
+error for its frames (`ItemSkipped`), not a silent fallback to channel 1. The ASC exporter still falls back to its
+default channel in that case. A link type outside the `LinkType` enum is written unchanged by PCAPNG.
+
+ASC timestamps are integer-exact: `AscExporter.Builder.WithTimestampDecimals(6..9)` (default 6) rounds the nanosecond
+fraction to the nearest digit and carries into the seconds.
 
 ---
 
@@ -697,7 +752,7 @@ This ensures:
 2. `OnFinish()` must be idempotent — safe to call multiple times.
 3. After `OnFinish()` / `Dispose()`, subsequent `OnPacket()` / `OnFrame()` calls
    return `false` immediately.
-4. Release all managed resources: call `_Output?.Dispose()`, `_Buffer.Return()`.
+4. Release all managed resources through the release steps of `ExporterFinish.Run` (§9.4).
 
 ---
 
@@ -724,29 +779,23 @@ Every exporter folder must contain a `README.md` with:
 
 ### 16.1 Test Organisation
 
-Tests live in `NetworkInspector.Exporters.Tests` with one test file per exporter:
+Tests live in `NetworkInspector.Exporters.Tests`, one folder per exporter:
 
 ```
 NetworkInspector.Exporters.Tests/
   Generators/                        ← Shared test data generators
-    FrameGenerators.cs
-    PacketGenerators.cs
-    SocketCanGenerators.cs
-    FlexRayGenerators.cs
-    LinGenerators.cs
+    FrameGenerators.cs, PacketGenerators.cs, SocketCanGenerators.cs,
+    FlexRayGenerators.cs, LinGenerators.cs (LIN PID with parity, as the readers produce it)
   Verification/                      ← Format-specific output verifiers
-    PcapngVerifier.cs
-    BlfStructuralVerifier.cs
-    JsonVerifier.cs
-    PbfVerifier.cs
-  CsvExporterTests.cs
-  JsonExporterTests.cs
-  PcapngExporterTests.cs
-  BlfExporterTests.cs
-  PbfExporterTests.cs
-  Parquet/                           ← ParquetExporterTests
-  DuckDb/                            ← DuckDbExporterTests
-  Columnar/                          ← ColumnarPacketBatch unit tests
+    PcapngVerifier.cs, BlfStructuralVerifier.cs, JsonVerifier.cs, PbfVerifier.cs
+  Roundtrip/                         ← Export → re-read
+    InProcessRoundtripTests.cs       ← bus fields, channels, time zone, ASC precision, PCAPNG options, link types
+    BlfRoundtripTests.cs, PcapngRoundtripTests.cs  ← tshark-verified (BLF exports local time for tshark)
+    RoundtripAssertions.cs, RoundtripFrameFactory.cs
+  Helpers/TestStreams.cs             ← Failing / non-seekable streams for I/O error tests
+  Asc/, Blf/, Csv/, Json/, Pbf/, Pcapng/, Text/   ← per-exporter unit tests
+  Parquet/, DuckDb/, Columnar/       ← columnar exporters and the shared batch
+  ErrorToleranceTests.cs             ← strict / tolerant behaviour across exporters
   TestHarness.cs                     ← Shared protocol stack singleton
   TestDir.cs                         ← Temporary directory with auto-cleanup
 ```
@@ -800,7 +849,8 @@ Where feasible, use external tools to verify exported files:
 - [ ] Iterate fields with `foreach (Field f in x.Children(materialize: …))` or `foreach (Field f in x.Descendants(materialize: …))` — never assign to `IEnumerable<Field>` or use LINQ (see §13)
 - [ ] Implement `IsFinished` with full compound condition
 - [ ] Implement `Dispose()` delegating to `OnFinish()`
-- [ ] Call `_Buffer.Return()` and `_Output?.Dispose()` in cleanup
+- [ ] End `OnFinish()` with `ExporterFinish.Run` (§9.4); buffers before the output in the release steps
+- [ ] Bus formats: read and write the shared bus-field representation (§11.5) and add a round trip to `InProcessRoundtripTests`
 - [ ] Create `README.md` in the exporter folder
 - [ ] Add XML doc comments to all public members
 - [ ] Write tests for all scenarios in §16.2

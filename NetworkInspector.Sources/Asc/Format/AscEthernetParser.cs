@@ -18,6 +18,12 @@ internal static class AscEthernetParser
 {
     #region Constants
 
+    /// <summary>Bytes a hex continuation line may contain: hex digits, space, tab.</summary>
+    private static readonly SearchValues<byte> _HexOrBlankBytes = SearchValues.Create("0123456789abcdefABCDEF \t"u8);
+
+    /// <summary>Hex digits; a continuation line needs at least one.</summary>
+    private static readonly SearchValues<byte> _HexDigitBytes = SearchValues.Create("0123456789abcdefABCDEF"u8);
+
     /// <summary>Largest <c>DataLen</c> the spec allows. Allocation never exceeds this.</summary>
     internal const int MaxDataLength = 1518;
 
@@ -47,10 +53,27 @@ internal static class AscEthernetParser
         out AscTimestamp timestamp,
         out int channel,
         out byte[] frame)
+        => FrameSlabAllocator.ToArray(
+            TryParse(record, numericBase, null, out timestamp, out channel, out ReadOnlyMemory<byte> memory), memory, out frame);
+
+    /// <inheritdoc cref="TryParse(ReadOnlySpan{byte}, int, out AscTimestamp, out int, out byte[])"/>
+    /// <param name="record">Packet line plus any continuation text already joined with newlines.</param>
+    /// <param name="numericBase">16 when the header says <c>base hex</c>, 10 when it says <c>base dec</c>.</param>
+    /// <param name="slabs">Frame slab allocator of the sequential reader, or null for a new array.</param>
+    /// <param name="timestamp">Line timestamp. Not the file clock.</param>
+    /// <param name="channel">Decimal channel in <c>1..255</c>.</param>
+    /// <param name="frame">Exactly <c>DataLen</c> bytes. Empty on failure or when <c>DataLen</c> is 0.</param>
+    internal static bool TryParse(
+        ReadOnlySpan<byte> record,
+        int numericBase,
+        FrameSlabAllocator? slabs,
+        out AscTimestamp timestamp,
+        out int channel,
+        out ReadOnlyMemory<byte> frame)
     {
         timestamp = default;
         channel = 0;
-        frame = [];
+        frame = default;
 
         AscTokenizerBytes tokenizer = new(record);
         if (!tokenizer.TryNextToken(out ReadOnlySpan<byte> timeToken)
@@ -111,13 +134,13 @@ internal static class AscEthernetParser
             return !_HasExtraHex(rest[hexStart..]);
         }
 
-        frame = new byte[dataLen];
-        if (!_TryCopyHex(rest[hexStart..], frame))
+        Memory<byte> buffer = FrameSlabAllocator.RentZeroed(slabs, dataLen);
+        if (!_TryCopyHex(rest[hexStart..], buffer.Span))
         {
-            frame = [];
             return false;
         }
 
+        frame = buffer;
         return true;
     }
 
@@ -138,7 +161,7 @@ internal static class AscEthernetParser
             return false;
         }
 
-        if (!_LooksLikeTimestamp(trimmed[..space]))
+        if (!AscLineClassifier.LooksLikeTimestamp(trimmed[..space]))
         {
             return false;
         }
@@ -330,30 +353,11 @@ internal static class AscEthernetParser
     /// </summary>
     internal static bool IsHexContinuation(ReadOnlySpan<byte> line)
     {
+        // Vectorised: only hex digits and blanks, and at least one hex digit. Trimming leaves a non-blank first byte.
         ReadOnlySpan<byte> trimmed = AscTokenizerBytes.TrimAscii(line);
-        if (trimmed.IsEmpty)
-        {
-            return false;
-        }
-
-        bool anyHex = false;
-        for (int i = 0; i < trimmed.Length; i++)
-        {
-            byte current = trimmed[i];
-            if (current == (byte)' ' || current == (byte)'\t')
-            {
-                continue;
-            }
-
-            if (_HexValue(current) < 0)
-            {
-                return false;
-            }
-
-            anyHex = true;
-        }
-
-        return anyHex;
+        return !trimmed.IsEmpty
+            && trimmed.IndexOfAnyExcept(_HexOrBlankBytes) < 0
+            && trimmed.ContainsAny(_HexDigitBytes);
     }
 
     private static bool _IsPacketDirection(ReadOnlySpan<byte> token) =>
@@ -402,43 +406,8 @@ internal static class AscEthernetParser
         return -1;
     }
 
-    private static bool _LooksLikeTimestamp(ReadOnlySpan<byte> span)
-    {
-        if (span.IsEmpty)
-        {
-            return false;
-        }
-
-        int start = span[0] == (byte)'-' ? 1 : 0;
-        bool hasDigit = false;
-        for (int i = start; i < span.Length; i++)
-        {
-            byte current = span[i];
-            if (_IsDigit(current))
-            {
-                hasDigit = true;
-            }
-            else if (current != (byte)'.')
-            {
-                return false;
-            }
-        }
-
-        return hasDigit;
-    }
-
-    private static int _IndexOfSpaceOrTab(ReadOnlySpan<byte> span)
-    {
-        for (int i = 0; i < span.Length; i++)
-        {
-            if (span[i] == (byte)' ' || span[i] == (byte)'\t')
-            {
-                return i;
-            }
-        }
-
-        return -1;
-    }
+    private static int _IndexOfSpaceOrTab(ReadOnlySpan<byte> span) =>
+        span.IndexOfAny((byte)' ', (byte)'\t');
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static bool _IsDigit(byte value) => (uint)(value - (byte)'0') <= 9;

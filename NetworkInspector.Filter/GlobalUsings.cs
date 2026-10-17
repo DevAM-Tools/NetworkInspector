@@ -25,6 +25,7 @@ global using NetworkInspector.Values;
 #region NetworkInspector.Filter
 global using NetworkInspector.Filter.Analysis;
 global using NetworkInspector.Filter.Ast;
+global using NetworkInspector.Filter.Completion;
 global using NetworkInspector.Filter.Errors;
 global using NetworkInspector.Filter.Eval;
 global using NetworkInspector.Filter.Jit;

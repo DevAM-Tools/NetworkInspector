@@ -9,8 +9,8 @@ namespace NetworkInspector.Sources.Asc.Format;
 ///   &lt;time&gt; &lt;channel&gt; &lt;id&gt;[x] &lt;dir&gt; d|r &lt;dlc&gt; [&lt;data...&gt;]
 ///
 /// SocketCAN frame layout (16 bytes):
-///   [id(4BE) | payload length(1) | flags(1) | reserved(2) | data(8)]
-/// Byte 4 is the payload byte count (0–8), not a DLC code above 8.
+///   [id(4BE) | payload length(1) | flags(1) | reserved(1) | len8_dlc(1) | data(8)]
+/// Byte 4 is the payload byte count (0–8); a DLC of 9–15 is kept in byte 7 (<c>len8_dlc</c>), as the BLF reader does.
 /// </summary>
 internal static class AscCanParser
 {
@@ -44,10 +44,23 @@ internal static class AscCanParser
     internal static bool TryParse(
         ReadOnlySpan<byte> line, int numericBase,
         out AscTimestamp timestamp, out int channel, out byte[] frame)
+        => FrameSlabAllocator.ToArray(
+            TryParse(line, numericBase, null, out timestamp, out channel, out ReadOnlyMemory<byte> memory), memory, out frame);
+
+    /// <inheritdoc cref="TryParse(ReadOnlySpan{byte}, int, out AscTimestamp, out int, out byte[])"/>
+    /// <param name="line">The full trimmed ASC line (including timestamp).</param>
+    /// <param name="numericBase">16 for hex, 10 for dec — from the file header.</param>
+    /// <param name="slabs">Frame slab allocator of the sequential reader, or null for a new array.</param>
+    /// <param name="timestamp">Parsed line timestamp. Not scaled to Unix time.</param>
+    /// <param name="channel">Parsed channel number.</param>
+    /// <param name="frame">The resulting SocketCAN binary frame. Empty when this method returns <c>false</c>.</param>
+    internal static bool TryParse(
+        ReadOnlySpan<byte> line, int numericBase, FrameSlabAllocator? slabs,
+        out AscTimestamp timestamp, out int channel, out ReadOnlyMemory<byte> frame)
     {
         timestamp = default;
         channel = 0;
-        frame = [];
+        frame = default;
 
         AscTokenizerBytes tokenizer = new(line);
 
@@ -77,14 +90,17 @@ internal static class AscCanParser
 
         bool isRemote = typeToken.Length == 1 && (typeToken[0] == (byte)'r' || typeToken[0] == (byte)'R');
         int storedLength;
+        int busDlc;
         if (isRemote)
         {
             // Versions before 8.5 omit the DLC. "Length" / "ID" are not a DLC.
             storedLength = 0;
+            busDlc = 0;
             if (body.TryNextToken(out ReadOnlySpan<byte> remoteDlc)
                 && TryParseDlc(remoteDlc, numericBase, out int parsedRemoteDlc))
             {
                 storedLength = Math.Min(parsedRemoteDlc, _MaxDataLength);
+                busDlc = parsedRemoteDlc;
             }
         }
         else if (typeToken.Length != 1 || (typeToken[0] != (byte)'d' && typeToken[0] != (byte)'D'))
@@ -100,6 +116,7 @@ internal static class AscCanParser
         {
             // Classic SocketCAN stores the payload count. DLC above 8 still carries only 8 bytes.
             storedLength = Math.Min(dlc, _MaxDataLength);
+            busDlc = dlc;
         }
 
         uint socketCanId = canId & 0x1FFFFFFF;
@@ -141,10 +158,15 @@ internal static class AscCanParser
             }
         }
 
-        frame = new byte[_SocketCanHeaderSize + _MaxDataLength];
-        BinaryPrimitives.WriteUInt32BigEndian(frame, socketCanId);
-        frame[4] = (byte)storedLength;
-        dataBytes.CopyTo(frame.AsSpan(_SocketCanHeaderSize));
+        Memory<byte> buffer = FrameSlabAllocator.RentZeroed(slabs, _SocketCanHeaderSize + _MaxDataLength);
+        Span<byte> socketCan = buffer.Span;
+        BinaryPrimitives.WriteUInt32BigEndian(socketCan, socketCanId);
+        socketCan[BlfConstants.SocketCanLenOffset] = (byte)storedLength;
+
+        // A bus DLC of 9-15 goes into len8_dlc (byte 7), the convention all readers and writers of this product share.
+        socketCan[BlfConstants.SocketCanLen8DlcOffset] = busDlc is > _MaxDataLength and <= 15 ? (byte)busDlc : (byte)0;
+        dataBytes.CopyTo(socketCan[_SocketCanHeaderSize..]);
+        frame = buffer;
         return true;
     }
 

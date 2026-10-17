@@ -65,6 +65,23 @@ internal sealed class CanXlTsharkTests
 
     #endregion
 
+    #region Display texts
+
+    [Test]
+    public async Task CanXl_VcidText_HasOneHexPrefix()
+    {
+        // Priority word: priority 5 in bits 0-10, VCID 0x1A in bits 16-23.
+        byte[] frame = _BuildXlFrame((0x1Au << 16) | 5u, _CreatePayload(4));
+        (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame, LinkType.CanSocketcan);
+        using (stack)
+        {
+            await ProtocolTestHelper.AssertDisplayText(stack, packet, "canxl", "CAN XL, Priority: 5, VCID: 0x1a, Length: 4").ConfigureAwait(false);
+            await Assert.That(packet.Info).IsEqualTo("CAN XL P:5 VCID:0x1a");
+        }
+    }
+
+    #endregion
+
     #region SEC flag
 
     [Test]

@@ -313,7 +313,7 @@ internal sealed class FilterObserverTests
             {
                 Compile = new FilterCompileOptions { RegexTimeout = TimeSpan.FromMilliseconds(1) },
             };
-            FilterObserver observer = Filter.Compile("probe.host matches \"^(a+)+$\"", stack, in options).Value;
+            FilterObserver observer = Filter.Compile("probe.host matches \"(?=^(a+)+$)\"", stack, in options).Value;
             Filter filter = Filter.Compile("probe.host matches \"a\"", stack).Value;
             bool parsed = true;
             ParseFailure failure = ParseFailure.None;
@@ -462,6 +462,93 @@ internal sealed class FilterObserverTests
             bool cleared = observer.TryReadMatch(out bool clearedMatched, out _);
             await Assert.That(cleared).IsTrue();
             await Assert.That(clearedMatched).IsFalse();
+        }
+    }
+
+    [Test]
+    [Arguments("udp.srcport == 53 && flank(ip.ttl, changed, within: 1s)", 99, false)]
+    [Arguments("udp.srcport == 53 && flank(ip.ttl, changed, within: 1s)", 53, true)]
+    [Arguments("udp.srcport == 53 || flank(ip.ttl, changed, within: 1s)", 99, true)]
+    [Arguments("udp.srcport == 99 || flank(ip.ttl, changed, within: 1s)", 53, true)]
+    [Arguments("!flank(ip.ttl, changed, within: 1s)", 99, false)]
+    [Arguments("!(udp.srcport == 53) && flank(ip.ttl, changed, within: 1s)", 53, false)]
+    public async Task Flank_CombinedWithTerms_AgreesWithTheFieldTreeFilter(string expression, int sourcePort, bool expected)
+    {
+        using Stack stack = FilterTestHelper.BuildStack();
+        FilterObserver observer = Filter.Compile(expression, stack, in _Options).Value;
+        Filter filter = Filter.Compile(expression, stack).Value;
+        ushort port = (ushort)sourcePort;
+
+        _ = _Observe(stack, FilterTestHelper.BuildUdpFrame(port, 80, 64), 0, observer);
+        bool firstRead = observer.TryReadMatch(out bool firstObserverMatched, out _);
+        _ = filter.TryIsMatch(_Build(stack, FilterTestHelper.BuildUdpFrame(port, 80, 64), 0), out bool firstTreeMatched, out _);
+        _ = _Observe(stack, FilterTestHelper.BuildUdpFrame(port, 80, 63), 1, observer);
+        bool read = observer.TryReadMatch(out bool observerMatched, out FilterError? error);
+        bool readAgain = observer.TryReadMatch(out bool observerMatchedAgain, out _);
+        bool tree = filter.TryIsMatch(_Build(stack, FilterTestHelper.BuildUdpFrame(port, 80, 63), 1), out bool treeMatched, out _);
+
+        await Assert.That(firstRead).IsTrue();
+        await Assert.That(firstObserverMatched).IsEqualTo(firstTreeMatched);
+        await Assert.That(read).IsTrue();
+        await Assert.That(error).IsNull();
+        await Assert.That(tree).IsTrue();
+        await Assert.That(observerMatched).IsEqualTo(expected);
+        await Assert.That(treeMatched).IsEqualTo(expected);
+        await Assert.That(readAgain).IsTrue();
+        await Assert.That(observerMatchedAgain).IsEqualTo(expected);
+    }
+
+    [Test]
+    public async Task Flank_LeafDoesNotLeakIntoTheNextFrame()
+    {
+        using Stack stack = FilterTestHelper.BuildStack();
+        FilterObserver observer = Filter.Compile("udp && flank(ip.ttl, changed, within: 1s)", stack, in _Options).Value;
+
+        _ = _Observe(stack, FilterTestHelper.BuildUdpFrame(53, 80, 64), 0, observer);
+        _ = _Observe(stack, FilterTestHelper.BuildUdpFrame(53, 80, 63), 1, observer);
+        _ = observer.TryReadMatch(out bool fired, out _);
+        _ = _Observe(stack, FilterTestHelper.BuildUdpFrame(53, 80, 63), 2, observer);
+        _ = observer.TryReadMatch(out bool steady, out _);
+
+        await Assert.That(fired).IsTrue();
+        await Assert.That(steady).IsFalse();
+    }
+
+    [Test]
+    public async Task Observer_AndWithNegatedHit_StopsFurtherLeafTests()
+    {
+        (Stack stack, ObserverProbe probe, ProtocolId protocolId) = _Probe();
+        using (stack)
+        {
+            // probe.a == 1 hits on the first occurrence, so !(…) is permanently false and the AND is decided
+            // before probe.b is delivered. The verdict must stay false either way.
+            FilterObserver observer = Filter.Compile("!(probe.a == 1) && probe.b == 1", stack, in _Options).Value;
+            probe.Values = [1, 2];
+            probe.Gate = 1;
+            _ = _ProbeParse(stack, protocolId, 0, observer, FieldTreeMode.Skip);
+            bool first = observer.IsMatch;
+
+            probe.Values = [2, 3];
+            _ = _ProbeParse(stack, protocolId, 1, observer, FieldTreeMode.Skip);
+            bool second = observer.IsMatch;
+
+            await Assert.That(first).IsFalse();
+            await Assert.That(second).IsTrue();
+        }
+    }
+
+    [Test]
+    public async Task Observer_OrDecidedByTheFirstOccurrence_StaysTrue()
+    {
+        (Stack stack, ObserverProbe probe, ProtocolId protocolId) = _Probe();
+        using (stack)
+        {
+            FilterObserver observer = Filter.Compile("probe.a == 1 || probe.b == 7", stack, in _Options).Value;
+            probe.Values = [1, 2];
+            probe.Gate = 0;
+            _ = _ProbeParse(stack, protocolId, 0, observer, FieldTreeMode.Skip);
+
+            await Assert.That(observer.IsMatch).IsTrue();
         }
     }
 

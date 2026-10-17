@@ -177,6 +177,10 @@ Reject a `How` that allows more than one implementation, **except** when Consist
 `Where`: clickable relative Markdown link (Section 4.6), approximate line numbers, searchable symbol.
 `Verify`: exact command a later implementer must run (optimized/Release per loaded tech skill) and the expected result. **Full review:** you may have run it already — still record it here for post-fix confirmation. **Static review:** do not run `Verify` during `/review`.
 
+Write `⬜` on the finding `Status` line and in the Summary **Findings** Status
+cell together (`copilot-instructions.md` Section 5). `/implement` advances
+both. A later review file starts every Status at `⬜` again.
+
 ```markdown
 ## {ID} - {Title}
 Status: ⬜ {Initial} · {Depends on / Severity}
@@ -219,9 +223,12 @@ with paragraphs.
 
 - **Release** and **Execution** are single lines.
 - **Counts** is one line. A bucket with zero findings shows `0`.
-- **Findings** has one row per open finding. The Result cell is one sentence:
-  the defect and where it is. Severity sits in the Bucket cell for Errors.
-  Do not paste Problem/Fix here.
+- **Findings** has one row per finding. **Status** uses the Section 5 legend
+  and starts `⬜`. Keep the row when the finding is later fixed; change
+  Status, do not delete the row. The Result cell is one sentence: the defect
+  and where it is. Severity sits in the Bucket cell for Errors. Do not paste
+  Problem/Fix here. **Release** and **Counts** stay the verdict and tally of
+  the review that wrote the file.
 - **Hot paths** names each path this review treated as hot, or `none`.
 - **Checks** has one row per Stage 4 hunt, in the order below. The Result cell
   is finding IDs or `none`. `none` means the hunt ran and found nothing. A
@@ -242,10 +249,10 @@ with paragraphs.
 
 ### Findings
 
-| ID | Bucket | Result |
-|----|--------|--------|
-| E1 | Error · High | {defect and where, one sentence} |
-| R1 | Refactoring | {defect and where, one sentence} |
+| ID | Status | Bucket | Result |
+|----|--------|--------|--------|
+| E1 | ⬜ | Error · High | {defect and where, one sentence} |
+| R1 | ⬜ | Refactoring | {defect and where, one sentence} |
 
 ### Checks
 
@@ -281,9 +288,9 @@ with paragraphs.
 1. {ID} — {what the fix changes}
 ```
 
-When nothing was found, Findings is one row: `| — | — | none |`, and Priority is `none`.
+When nothing was found, Findings is one row: `| — | — | — | none |`, and Priority is `none`.
 
-Patch Output before Completion if any Checks row is missing or a finding is absent from Findings.
+Patch Output before Completion if any Checks row is missing, a finding is absent from Findings, or a Findings row has no Status.
 
 ### Output Modes
 
@@ -323,5 +330,5 @@ Assign exactly one bucket: Error · Cosmetic · Refactoring Opportunity · Perfo
 ## Completion
 
 - Summary **Release** answers the public-release question for this scope.
-- Summary **Findings** lists every open finding. Summary **Checks** has every Stage 4 hunt. No second closer.
+- Summary **Findings** lists every finding and its Status. Summary **Checks** has every Stage 4 hunt. No second closer.
 - Report counts by bucket and prioritized action list.

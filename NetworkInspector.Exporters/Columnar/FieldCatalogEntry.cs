@@ -19,10 +19,15 @@ namespace NetworkInspector.Exporters.Columnar;
 /// <param name="FieldType">The data type of values stored in this field.</param>
 /// <param name="ProtocolIdValue">Identifier of the protocol that owns this field, or -1 if unknown.</param>
 /// <param name="TableName">Stable per-field table/column name, formatted as <c>field_{FieldIdValue}</c>.</param>
+/// <param name="Description">
+/// Optional field description from <see cref="FieldInfo.Description"/>; <see langword="null"/> when the field has none or is
+/// not registered. Written as the last (nullable) catalog column so existing column positions stay stable.
+/// </param>
 internal sealed record FieldCatalogEntry(
     int FieldIdValue,
     string Name,
     string UiName,
     FieldType FieldType,
     int ProtocolIdValue,
-    string TableName);
+    string TableName,
+    string? Description);

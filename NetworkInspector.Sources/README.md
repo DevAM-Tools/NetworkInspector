@@ -34,8 +34,8 @@ dotnet add package NetworkInspector.Core
 
 | Need | Recommended Source |
 |------|--------------------|
-| Random access by frame id | `PcapSource`, `BlfSource`, `AscSource` |
-| Sequential processing with low memory pressure | `PcapStreamSource`, `BlfStreamSource`, `AscStreamSource` |
+| Random access by frame id | `PcapngSource`, `BlfSource`, `AscSource` |
+| Sequential processing with low memory pressure | `PcapngStreamSource`, `BlfStreamSource`, `AscStreamSource` |
 | Test data generation | `RandomFrameSource` |
 | In-memory replay / session stream cache | `CachedFrameSource` |
 | Session stream sources | Session auto-wraps non-random-access sources in `CachedFrameSource` |
@@ -51,26 +51,42 @@ Each published slot holds the inner `Frame`. Payload memory is whatever the inne
 ### Open From File
 
 ```csharp
+using NetworkInspector.Core;
 using NetworkInspector.Sources.Pcapng;
 
-PcapSource source = PcapSource.Open("capture.pcapng");
-foreach (RawFrame rawFrame in source)
+using PcapngSource source = PcapngSource.Open("capture.pcapng");
+
+// Every source registers its interfaces in a registry before the first frame.
+FrameInterfaceRegistry registry = new();
+source.Start(registry.RegisterSource(source), registry);
+
+while (source.NextFrame() is { } frame)
 {
-    // Parse with Core/Protocols pipeline
+    Console.WriteLine($"{frame.Timestamp.AsNanos} {frame.LinkType} {frame.Data.Length} bytes");
 }
 ```
 
 ### Open From Stream
 
 ```csharp
+using NetworkInspector.Core;
 using NetworkInspector.Sources.Asc;
 
-AscStreamSource source = AscStreamSource.FromStream(fileStream, "ASC stream");
-foreach (RawFrame rawFrame in source)
+using FileStream fileStream = File.OpenRead("trace.asc");
+using AscStreamSource source = AscStreamSource.FromStream(fileStream, "ASC stream", leaveOpen: true);
+
+FrameInterfaceRegistry registry = new();
+source.Start(registry.RegisterSource(source), registry);
+while (source.NextFrame() is { } frame)
 {
-    // Parse with Core/Protocols pipeline
+    // Parse with the Core/Protocols pipeline.
 }
 ```
+
+All three stream sources take the file source's options class (`FromStream(stream, uiName, leaveOpen, options)`);
+members that only make sense for files (scan mode, preload, cache) are ignored. A stream that is neither a
+`MemoryStream` nor a `BufferedStream` is wrapped in a 64 KiB `BufferedStream`, so network and pipe streams are not
+read in 1- to 8-byte calls.
 
 ## Common Tasks
 
@@ -100,28 +116,62 @@ BlfSourceOptions options = new()
 };
 ```
 
-For stream-based reading, set `BlfStreamSource.MaxUncompressedContainerSize` before `Start()`.
+For stream-based reading, pass the same options to `BlfStreamSource.FromStream(stream, options: options)`;
+`BlfStreamSource.MaxUncompressedContainerSize` is read-only and reports the configured limit.
+
+A file larger than `Array.MaxLength` is never preloaded, even with `PreloadBudget = long.MaxValue`; it uses the
+mapped backend instead. The rule is the same for PCAPNG, BLF, and ASC.
 
 BLF sources emit frames for the object types in the frame-producing set: classic CAN,
-CAN FD, CAN XL Type 139, LIN, FlexRay, and Ethernet Types 71, 102, and 120. Ethernet
-status/PHY objects (103/133) and AppText are metadata, not reconstructed frames.
+CAN FD, CAN XL Type 139, LIN, FlexRay, and Ethernet Types 71, 102, and 120–123 (frame EX,
+forwarded, error EX, error forwarded). Ethernet status/PHY objects (103/133) and AppText are
+metadata, not reconstructed frames; AppText channel names become interface names.
 `object_length` is unpadded; readers then scan one byte at a time for the next `LOBJ`.
 A leftover inner object at a container tail is prepended to the next decompressed blob.
+Objects that cannot be read (cut by the end of the file, a header or payload too short) raise `FrameSkipped`.
+
+The BLF start date (a SYSTEMTIME without a zone) is read as UTC by default
+(`BlfSourceOptions.TimestampTimeZone`, the same default as ASC and the BLF exporter). Vector tools and other
+readers treat it as local civil time: set `TimeZoneInfo.Local` (or the recording zone) for files from those tools.
 
 ### Combine With Parser Stack
 
-Read `RawFrame` instances from sources, then convert them to `Frame` and parse into `Packet` via Core.
+Sources produce `Frame` values (bytes, timestamp, link type, interface). Hand them to the Core/Protocols stack to
+parse them into `Packet` instances; [`SESSION_GUIDE.md`](../NetworkInspector.Sessions/SESSION_GUIDE.md) shows the
+pipeline a session builds.
 
 ### Use Random Access
 
-Use random-access source variants where frame-id lookups are required for replay, indexing, or test cases.
+`PcapngSource`, `BlfSource`, and `AscSource` implement `FrameById`. It is thread-safe and may run while another
+thread reads sequentially, also during a lazy scan: it returns the frame for every id the scan has indexed and `null`
+for ids it has not reached yet. Each call allocates the frame's own array; it never uses the sequential slabs below.
+
+### Reduce Allocations With Frame Slabs
+
+`FrameSlabSize` (on `PcapngSourceOptions`, `BlfSourceOptions`, `AscSourceOptions`; default 0 = off) groups the
+bytes of sequentially read frames into shared slabs of 1 KiB to 16 MiB. Frames above a quarter of the slab keep
+their own array. Fewer, larger allocations help most when the consumer keeps the frames; the cost is retention: one
+held frame keeps its whole slab alive.
+
+Measured on 50 000 PCAPNG frames (64 KiB slabs, `NetworkInspector.Profiling` scenarios `read-pcapng-*`):
+
+| Path | Off | 64 KiB slabs |
+|------|-----|--------------|
+| mapped, frames dropped | 3.55 M/s | 3.72 M/s |
+| mapped, frames held | 2.09 M/s | 2.40 M/s |
+| stream, frames dropped | 6.3 M/s | 7.55 M/s |
+| stream, frames held | 2.55 M/s | 3.45 M/s |
 
 ## Limits And Thread-Safety Notes
 
 - Choose streaming sources for very large captures to bound memory usage.
 - Validate source format and assumptions before automated ingestion.
 - Use cancellation and external execution limits in long-running jobs.
-- PCAPNG and PCAP readers expose captured packet bytes only (`Frame.Length` / `Frame.Data`). On-wire original length in the file is not kept. Unknown DLT values skip the packet and raise `FrameSkipped`. IDB `if_name` becomes the registry interface `UiName`.
+- PCAPNG and PCAP readers expose captured packet bytes only (`Frame.Length` / `Frame.Data`). On-wire original length in the file is not kept.
+- A DLT value outside the `LinkType` enum is passed through: the frame carries the raw number as its `LinkType` and its bytes unchanged, so exporters can write it back.
+- IDB `if_name` becomes the registry interface `UiName` (an unusable name falls back to `Interface {n}`), `if_description` its `Description`. The IDB options `if_hardware`, `if_os`, `if_speed`, `if_txspeed`, `if_rxspeed`, `if_filter`, `if_fcslen` become interface properties (`if.*`) that the PCAPNG exporter writes back.
+- Legacy PCAP records are bounded by the declared snaplen (`MalformedHeader` above it); a record cut by the end of the file raises `TruncatedStream` instead of a shortened frame. A section holds at most 65 536 interfaces; later IDBs are ignored and their packets skipped.
+- In `ErrorToleranceMode.Strict` every source returns the frames in front of the first error, then stops — also after a full scan that found the error while opening.
 
 ## Safe Usage (STRIDE)
 

@@ -7,6 +7,111 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.16.0] — Filter completion, frame slabs, and capture round-trip fidelity
+
+Delta since 0.15.0. Version is `0.16.0` in `Directory.Build.props`.
+
+This release adds editor completion and "did you mean" suggestions for filter expressions, shared frame slabs and a single memory-mapped view for faster PCAPNG, BLF, and ASC reading, and lock-light chunked stores for faster value-cache ingest. CAN DLC 9–15, the LIN protected identifier, PCAPNG interface metadata, and unknown link types survive a read/write round trip. Session restart and shutdown no longer leave a half-changed session when they race a running source. TCP and UDP connection keys use a process-seeded hash, the Internet checksum is exact on every SIMD path, and settings loads enforce their size cap on the bytes actually read. `PcapSource` is renamed `PcapngSource`.
+
+### Added
+
+- **`Filter.GetCompletions(expression, caret, stack?)`** — editor completion for filter expressions while typing: the word or operator at the caret (`ReplaceStart`, `ReplaceLength`, `Prefix`) and the candidates that fit the grammar there (protocols, fields, aliases, keywords, operators, `flank` arguments) in alphabetical order, with kind and value type (`FilterCompletions`, `FilterCompletionItem`, `FilterCompletionKind`). Names come from a per-stack catalog built once.
+- **`FilterError.Suggestion`** — an unknown name close to a known one reports `… Did you mean 'udp.srcport'?` and carries the name for a quick fix.
+- **`RoaringBitmap.OrWith(ReadOnlyRoaringBitmap)`** — in-place OR from a view without cloning the viewed bitmap.
+- **Filter limits** — expressions nest at most 64 levels and hold at most 1024 terms; beyond that `Compile` / `TryParse` fail with a positioned `SyntaxError` instead of overflowing the stack.
+- **Frame slabs** — `FrameSlabSize` on `PcapngSourceOptions`, `BlfSourceOptions`, `AscSourceOptions` (0 = off, 1 KiB … 16 MiB) groups sequentially read frames into shared slabs: +5 % to +35 % read throughput in the PCAPNG measurement, at the cost that one held frame keeps its slab alive. `FrameById` is unaffected.
+- **BLF Ethernet types 121–123** (forwarded, error EX, error forwarded) are read like Type 120.
+- **BLF time zone and channel names on export** — `BlfExporter.Builder.WithTimestampTimeZone(zone)`; interface names other than the default are written as AppText channel names, which the BLF reader turns back into interface names.
+- **ASC timestamp precision** — `AscExporter.Builder.WithTimestampDecimals(6..9)` (default 6); integer formatting, rounded, 9 digits round-trip nanoseconds.
+- **PCAPNG interface metadata round trip** — the reader stores `if_hardware`, `if_txspeed`, `if_rxspeed` as well; the writer writes `if_description` and every stored `if.*` option back, and SHB options fall back to the source file's `capture.*` values.
+- **Columnar catalogs** — `description` column in the Parquet and DuckDB field catalogs and a `protocols` table (`protocols.parquet`, DuckDB `protocols`).
+- **DuckDB resource settings** — `DuckDbExporter.Builder.WithMemoryLimit(bytes)` / `WithThreads(n)`; without them DuckDB's own defaults apply.
+- **Stream options** — `PcapngStreamSource.FromStream` and `BlfStreamSource.FromStream` take the file options class (`ErrorTolerance`, `FrameSlabSize`, BLF limits); unbuffered streams are wrapped in a 64 KiB `BufferedStream`.
+- **`ProtocolRegistration.RegisterFairProfilingProtocols`** — registers only Frame, Ethernet, IPv4, IPv6, UDP, and TCP, in this order: no TCP heuristics, no stream reassembly configurations, no application protocols. The profiling tool's parse scenarios use it; its export and read scenarios keep `RegisterStandardProtocols`.
+
+### Fixed
+
+- **Session restart race** — a source thread that passed the parse gate just before `Restart` closed it now parks again under the parse lock instead of allocating id 0 from the reset counter; the source job no longer fails and no frame is lost.
+- **Restart with an unsatisfiable ingest cache** — `Restart` builds the new ingest value cache and packet index before it changes anything. `ValueCacheUnknownField` / `ValueCacheInvalidFieldName` now leave the session as it was (old stack, open parse gate, queries enabled) instead of a closed gate and phase `Restarting`. A stack installed by the restart is owned by the session from the swap on and is no longer disposed when a later step fails.
+- **Runtime value cache during restart** — a read refused with `QueriesDisabled` pauses a PullFill window instead of failing the slot.
+- **Listener filters from another stack** — `TryAddListener` re-binds a filter whose `Stack` is not the session stack (and re-checks after registration, so a concurrent `Restart` cannot leave a retired-stack filter installed). A filter that cannot be re-bound throws `ArgumentException`.
+- **Shutdown with a timeout** — a source that returns from `NextFrame` after `Shutdown(timeout)` ends `Cancelled`; the parse gate is no longer disposed under it and the job keeps its cancellation token.
+- **Filter slices with two-digit bounds** — `udp.payload[10:12] == 0a:0b` parses; `10:12` inside brackets is no longer lexed as a byte literal.
+- **Observer with `flank` and other terms** — `FilterObserver.TryReadMatch` evaluates the whole expression (`A && flank(…)`, `!flank(…)`); before, only the flank verdict counted.
+- **Stateful filter without match cache** — `EnableMatchCache = false` is ignored for `flank` filters, so re-querying a packet no longer advances the tracker twice.
+- **`len (name)` with spaces** — the name span reported to `OnFieldNameSpan` covers the name.
+- **Oversized `within:` windows and scope indexes** — rejected with `InvalidValue` instead of a silent saturation or wrap.
+- **PCAPNG error tolerance** — `PcapngSource.Open` / `FromData` apply `ErrorTolerance`; strict mode after a full scan returns the frames in front of the first error instead of none.
+- **Legacy PCAP records** — the file reader bounds `incl_len` by the snaplen (`MalformedHeader`) and reports a record cut by the end of the file as `TruncatedStream` instead of a shortened frame.
+- **PCAPNG interfaces** — a section with more than 65 536 IDBs no longer attributes packets to `id mod 65536`; an invalid `if_name` falls back to `Interface {n}`; `FrameById` works during a lazy scan for every indexed frame (PCAPNG and BLF).
+- **CAN DLC 9–15** — BLF and ASC readers keep the payload count in SocketCAN byte 4 and the bus DLC in `len8_dlc` (byte 7); the BLF and ASC writers restore it (ASC writes the DLC as one hex digit). ASC remote frames keep their requested DLC.
+- **LIN** — both readers write the protected identifier with parity; the checksum model (`CSM = classic|enhanced`) survives ASC and BLF round trips.
+- **BLF robustness** — Type 71 keeps a VLAN tag with TCI 0; unparsable or truncated objects raise `FrameSkipped` (file and stream); absolute timestamps saturate instead of wrapping; a container header above the largest array is a format error; `Dispose` reports mapping failures.
+- **Exporter cleanup** — all exporters finish through one sequence: a failing trailer is reported, every buffer and the output are still released, release failures arrive as one `AggregateException`.
+- **BLF channel routing** — interfaces from ASC (`asc.channel`) and interface names like `CAN 3` keep their channel; an unusable channel property skips the frames with `ItemSkipped`.
+- **Filter lexing and observers** — hex-like identifiers inside brackets stay identifiers and literals after `]` keep their kind; a flank leaf no longer leaks into the next frame; `EnableMatchCache = false` is also ignored on derived `flank` filters.
+- **Dispose during reads** — `Dispose` of a memory-mapped PCAPNG or BLF source while `NextFrame` or `FrameById` runs (for example a `Shutdown` with a timeout) defers the unmap until the running copy ends instead of unmapping under it.
+- **LIN error objects** — BLF LIN error objects v1 and v2 carry the protected identifier with both parity bits, like LIN frames.
+- **Parquet and DuckDB failures** — in tolerant mode an unwritable table file or database path raises `ItemSkipped` and the export ends cleanly; strict mode aborts the export.
+- **PBF strings** — consecutive strings are laid out back to back, also when the buffer grows between them.
+- **Connection-key hashing** — TCP and UDP connection keys hash with the process-seeded `HashCode` over 32-bit words. The previous fixed XOR-rotate mix let colliding connections be computed offline from a crafted capture and turn every table insert into a long probe (denial of service).
+- **Internet checksum** — every SIMD path sums the RFC 1071 network-order words and keeps every carry: u32 lanes move into the u64 sum before they can wrap (payloads above 1 MiB), and large pseudo-header sums fold until no carry is left. TCP over IPv6 uses the 32-bit upper-layer length in the pseudo-header (jumbograms, reassembled payloads).
+- **TCP reassembly with a zero-length PDU** — a boundary detector that reports a complete PDU of length 0 moves the stream to `Error` instead of keeping the dispatch loop alive forever.
+- **IPv6** — an Authentication Header with payload length 0 is malformed instead of taking its sequence number from the next header; option texts read `Pad1` / `PadN` without an underscore; the container text names the stored length including the extension-header chain.
+- **UDP and TCP re-parse** — a UDP re-parse without a recorded stream effect reports a missing stream instead of a misleading insufficient-data error; TCP analysis timings keep double precision on re-parse and print with the invariant culture (`0.025`, not `0,025`, on a German thread).
+- **TCP heuristic table** — TCP finds its heuristic table by `TcpProtocol.HeuristicTableName` when the stack starts, so a custom stack that registers the table under that name gets heuristic detection without the internal setter.
+- **Protocol configuration and display texts** — CAN signal configs skip JSON `null` message entries with a warning; `ConfigLoader` reports a path the OS cannot represent (NUL character) as a configuration error instead of throwing; the CAN XL VCID text has a single `0x` prefix; unknown TCP option kinds print their number once; the LLC SAP lookup uses the full byte, so group addresses get their names.
+- **`RoaringBitmap` readers on ARM64** — the seqlock fences both edges, so a reader no longer validates half-updated data; a read section that throws because a writer grew an array under it retries instead of throwing.
+- **Empty cloned index containers** — `ArrayContainer` and `RunContainer` cloned from an empty container grow on the first add instead of writing past a zero-length array.
+- **`ChunkedOuterArray` concurrent allocation** — two threads that allocated chunks at the same time could lose one: growth copied the outer array, an install landed in the old array after the copy, and the publish of the copy dropped it. The array now has one allocator (see Breaking); an overlapping allocation fails loudly instead of losing a chunk. The chunked stores and `CachedFrameSource` always allocated from one thread and were not affected.
+- **Chunked store append during `Clear`** — an append that races `Clear` publishes into the new generation; readers never pair a count with chunks of another generation.
+- **Full field tree** — a parse that fills the field tree still records the caught exception in `packet.error` instead of throwing out of `TryParse`; every catch boundary formats the message the same way.
+- **Datagram defragmentation** — stale FIFO entries of a key that started a new datagram after a discard are ignored, so the older datagram is evicted first.
+- **Stream reassembly** — a held segment is copied before its array returns to the shared pool; a payload whose size sum would wrap `int` is refused; `LengthPrefixDetector` rejects an offset plus size above `int.MaxValue`.
+- **`TwoQueueCache`** — a byte-sized weight budget no longer reserves millions of map entries up front.
+- **Settings size cap** — settings and configuration loads cap the bytes actually read, not only the length the file system reported, so a file that grows during the load or a non-regular file cannot bypass `MaxConfigFileBytes`.
+- **Settings persistence** — access denials and saving onto a directory throw `PersistenceSettingsException` like every other file-system failure; a group file with a repeated top-level property or an undecodable property name is skipped with a warning and the other files still load; registering a preloaded setting while `Load` runs applies the preload instead of throwing; validation messages use the invariant culture.
+
+### Changed
+
+- **Shutdown waits** — a second `Shutdown` caller and a shutdown that waits for a running restart use kernel events instead of spin-and-sleep polling.
+- **Read loops** — `ReadPackets` and `Matching` pulls snapshot the random-access source map once per call and reuse the last source lookup.
+- **Value-cache ids** — the NotifyOnly listener of the ingest cache no longer burns a `ValueCacheId`; runtime caches are numbered right after the ingest cache.
+- **Docs** — new [`NetworkInspector.Sessions/SESSION_GUIDE.md`](NetworkInspector.Sessions/SESSION_GUIDE.md); phase rules in `ISession` and the Sessions README match the code (listeners and value caches are refused while a restart runs).
+- **Filter `matches`** — each pattern is compiled once at parse time and runs on the linear-time `NonBacktracking` engine when possible; only patterns that need backtracking use the timeout. Derived filters keep the pattern timeout.
+- **Filter alias prune** — candidate bitmaps for alias groups clone only the first member bitmap.
+- **Chunked stores** — `ChunkedGrowOnlyStore` and `ChunkedAppendOnlyStore` (and with them `EffectStore` and the value-cache series) publish an append with one interlocked operation instead of five: chunks and count form one generation, and `Clear` replaces it with one volatile write. Value-cache ingest +24 % to +34 %, `skip-cache-port` +13 %, parse paths that record effects +2 % to +4 %, no profiling scenario slower. Readers that overlap `Clear` still miss; `Clear` allocates one small object per call.
+- **Filter docs** — [`FILTER_GUIDE.md`](NetworkInspector.Filter/FILTER_GUIDE.md) §11 documents completion, errors and spans; Sessions snippets match the current signatures; limits and `len()` / slice semantics are specified.
+- **Memory-mapped reading** — PCAPNG and BLF use one mapped view for scans and concurrent `FrameById` (no accessor pool); files above `Array.MaxLength` are never preloaded.
+- **BLF decompression** — each container is inflated once on the sequential path (the scanner's result is cached); output buffers are not zero-filled first.
+- **ASC reading** — vectorised line classification and tokenising; disk-backed `FrameById` parses the rented line in place.
+- **PBF / columnar** — string encoding without a thread-static scratch buffer; the batch size estimate is O(1).
+- **Packet index** — once a packet of a higher 65 536-id chunk commits, `PacketIndex` converts the completed chunks to run containers where that is smaller (`RoaringBitmap.RunOptimizeKeys`); the values do not change.
+- **LZ4 decompression** — overlapping matches use doubling block copies instead of a byte loop.
+- **Dependencies** — `ZeroAlloc` 0.6.2; `CSharpStyleChecker` is pinned to `1.0.*` until Protocols absorbs the new CSC009 rule.
+- **Docs** — [`SOURCE_GUIDE.md`](NetworkInspector.Sources/SOURCE_GUIDE.md) (backends, frame slabs with measurements, error tolerance in file order, volatile fields), [`EXPORTER_GUIDE.md`](NetworkInspector.Exporters/EXPORTER_GUIDE.md) (finish sequence, BLF nanosecond timestamps and time zone, shared bus-field representation, test layout) and the Sources / Exporters READMEs match the code; the Sources Quick Start compiles.
+
+### Breaking
+
+- **`PcapSource` renamed `PcapngSource`** — also `PcapSourceOptions` → `PcapngSourceOptions`, `PcapStreamSource` → `PcapngStreamSource` (CLI: `PcapngSourceConfig`). The types read PCAPNG and legacy PCAP as before.
+- **Removed `PcapngSourceOptions.MaxHandles` and `BlfSourceOptions.MmapSlotCount`** — there is no view pool any more.
+- **BLF timestamps default to UTC** — `BlfSourceOptions.TimestampTimeZone` and the BLF writer use `TimeZoneInfo.Utc` instead of `TimeZoneInfo.Local`. Pass `TimeZoneInfo.Local` for files from or for Vector tools and `tshark`.
+- **Stream factories** — `PcapngStreamSource.FromStream(stream, uiName, leaveOpen, options)` and `BlfStreamSource.FromStream(stream, uiName, leaveOpen, options)` replace the overloads without options (the BLF time-zone parameter moved into the options); `BlfStreamSource.MaxUncompressedContainerSize` is read-only.
+- **Unknown DLTs pass through** — PCAPNG frames with a link type outside `LinkType` are returned as `(LinkType)raw` with their bytes instead of being skipped, and the PCAPNG exporter writes them back.
+- **SocketCAN byte 4 from BLF** — classic CAN frames with DLC 9–15 now carry 8 in byte 4 (was the raw DLC) and the DLC in byte 7.
+- **LIN byte 5 from BLF** — the protected identifier with parity (was the bare 6-bit id).
+- **`IErrorTolerantFrameSource`** — the contract now states what the sources do: `FrameSkipped` is raised in both modes, strict mode stops in file order.
+- **`ISession.TryAddListener(ISessionListener, IFilter?, …)`** takes `NetworkInspector.Filter.Filter?`. Other `IFilter` implementations were rejected at runtime before; now the compiler rejects them.
+- **`TryAddJob` after `Shutdown`** returns `false` with `InvalidPhase`; before, it started a thread nobody would cancel or join. `Stopped` without shutdown still accepts jobs.
+- **`len()` is a byte length** — strings count UTF-8 bytes (was UTF-16 units); `Bool`, `I64`, `U64`, `F64`, `Timestamp` and `Uuid` can now be sliced, big-endian, matching their `len()`.
+- **`IFilter.TryDerive`** returns `out IFilter?`; `Filter.TryDerive` keeps the concrete `out Filter?` overload.
+- **Removed `FilterCompileOptions.CaretPosition`** (never read; use the caret parameter of `Filter.GetCompletions`) and **`FilterErrorKind.UnknownProtocol`** (never produced; value 5 stays unused, the other values are unchanged).
+- **`ChunkedOuterArray` has one allocator** — allocating `GetOrAllocateChunk` calls and `Clear` must not overlap; an overlap throws `InvalidOperationException` from a compare-exchange gate that never waits (no lock). Reading an installed chunk (`GetChunk`, or `GetOrAllocateChunk` when the chunk exists) stays lock-free on any thread. Calls may follow one another on different threads. The factory runs once per allocation and must not call back into the instance; the spare chunk of a lost install race is gone.
+- **Removed `InsufficientDataInfo`** — the record struct was never produced by any parser.
+- **Settings group name `default` is reserved** — the default group is stored as `default.json`, so a group of that name would share its file. `NameValidation.IsValidGroupName("default")` returns `false`.
+
+---
+
 ## [0.15.0] — SessionFailure host control and filter observer hardening
 
 Delta since 0.14.0. Version is `0.15.0` in `Directory.Build.props`.

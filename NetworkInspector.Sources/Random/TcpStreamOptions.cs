@@ -53,6 +53,20 @@ public sealed class TcpStreamOptions
             throw new ArgumentException(
                 $"{nameof(MinPayloadSize)} ({MinPayloadSize}) must not exceed {nameof(MaxPayloadSize)} ({MaxPayloadSize}).");
         }
+
+        // The layout counts frames in int: frames per connection and their total over all streams must fit.
+        long framesPerConnection = (IncludeHandshake ? 3L : 0L) + SegmentsPerStream + (IncludeTeardown ? 4L : 0L);
+        if (framesPerConnection > int.MaxValue)
+        {
+            throw new ArgumentOutOfRangeException(nameof(SegmentsPerStream), SegmentsPerStream,
+                "Frames per connection (handshake + segments + teardown) must not exceed int.MaxValue.");
+        }
+
+        if (framesPerConnection * StreamCount > int.MaxValue)
+        {
+            throw new ArgumentOutOfRangeException(nameof(StreamCount), StreamCount,
+                "The total frame count (frames per connection × streams) must not exceed int.MaxValue.");
+        }
     }
 
     #endregion

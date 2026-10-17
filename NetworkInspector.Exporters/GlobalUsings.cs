@@ -38,6 +38,7 @@ global using NetworkInspector.Exporters.Pbf.Columnar;
 #endregion
 
 #region NetworkInspector.Sources
+global using NetworkInspector.Sources.Asc;
 global using NetworkInspector.Sources.Blf.Format;
 global using NetworkInspector.Sources.Pcapng.Format;
 #endregion

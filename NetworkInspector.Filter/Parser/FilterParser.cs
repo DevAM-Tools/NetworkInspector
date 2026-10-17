@@ -27,10 +27,28 @@ namespace NetworkInspector.Filter.Parser;
 /// <see cref="FilterFieldNameSpanCallback"/> as soon as it is recognised — before any stack
 /// binding — so an editor still receives spans for expressions that fail to parse.
 /// </para>
+/// <para>
+/// <b>Trust-boundary limits.</b> Expressions come from users, the CLI and UI editors. The parser and every
+/// later phase (code generation, dependency analysis, observer compile and evaluation) recurse over the tree,
+/// and a stack overflow cannot be caught, so the tree is bounded here: at most <see cref="MaxNestingDepth"/>
+/// nested <c>(</c>, <c>!</c>, scope bodies and <c>when:</c> gates, and at most <see cref="MaxTermCount"/> terms
+/// in one expression. Both are constants; no caller needs deeper or larger trees, and long value lists belong
+/// in <c>in { … }</c>.
+/// </para>
 /// </summary>
 internal sealed class FilterParser
 {
     #region Fields
+
+    /// <summary>Maximum nesting of <c>(</c>, <c>!</c> / <c>not</c>, <c>$x { … }</c> bodies and <c>when:</c> gates.</summary>
+    internal const int MaxNestingDepth = 64;
+
+    /// <summary>
+    /// Maximum number of terms (comparisons, presence tests, <c>true</c> / <c>false</c>, <c>flank(…)</c> and scopes)
+    /// in one expression. Bounds the length of <c>&amp;&amp;</c> / <c>||</c> chains, which build trees as deep as
+    /// they are long.
+    /// </summary>
+    internal const int MaxTermCount = 1024;
 
     /// <summary>Constructs removed in v1 that used to be call expressions.</summary>
     private static readonly HashSet<string> _RemovedCalls =
@@ -43,8 +61,11 @@ internal sealed class FilterParser
     private readonly List<Token> _Tokens;
     private readonly string _Source;
     private readonly FilterFieldNameSpanCallback? _OnFieldNameSpan;
+    private readonly TimeSpan _RegexTimeout;
 
     private int _Index;
+    private int _Depth;
+    private int _TermCount;
     private FilterFeature _Features;
     private FilterError? _CallbackError;
 
@@ -53,11 +74,23 @@ internal sealed class FilterParser
     #region Construction
 
     /// <summary>Creates a parser over an already tokenized expression.</summary>
-    public FilterParser(List<Token> tokens, string source, FilterFieldNameSpanCallback? onFieldNameSpan)
+    /// <param name="tokens">Tokens ending with <see cref="TokenKind.Eof"/>.</param>
+    /// <param name="source">The expression the tokens came from.</param>
+    /// <param name="onFieldNameSpan">Optional editor callback for name spans.</param>
+    /// <param name="regexTimeout">
+    /// Match timeout for <c>matches</c> patterns that need the backtracking engine; the pattern is compiled once
+    /// here and shared by every back end and derived filter.
+    /// </param>
+    public FilterParser(
+        List<Token> tokens,
+        string source,
+        FilterFieldNameSpanCallback? onFieldNameSpan,
+        TimeSpan regexTimeout)
     {
         _Tokens = tokens;
         _Source = source;
         _OnFieldNameSpan = onFieldNameSpan;
+        _RegexTimeout = regexTimeout;
         _Index = 0;
         _Features = FilterFeature.Classic;
     }
@@ -159,8 +192,14 @@ internal sealed class FilterParser
         if (_Current.Kind == TokenKind.Not)
         {
             Token notToken = _Current;
+            if (!_TryEnter(notToken, out FilterError? tooDeep))
+            {
+                return tooDeep;
+            }
+
             _Advance();
             FilterResult<FilterNode> operand = _ParseUnary();
+            _Depth--;
             if (!operand.TryGetValue(out FilterNode? node))
             {
                 return operand;
@@ -180,19 +219,32 @@ internal sealed class FilterParser
     {
         Token token = _Current;
 
+        // Every primary except a parenthesised group is one term of the expression.
+        bool isTerm = token.Kind is TokenKind.True or TokenKind.False or TokenKind.Flank or TokenKind.Dollar or TokenKind.Identifier;
+        if (isTerm && !_TryCountTerm(token, out FilterError? tooMany))
+        {
+            return tooMany;
+        }
+
         switch (token.Kind)
         {
             case TokenKind.LeftParen:
             {
+                if (!_TryEnter(token, out FilterError? tooDeep))
+                {
+                    return tooDeep;
+                }
+
                 _Advance();
                 FilterResult<FilterNode> inner = _ParseOr();
+                _Depth--;
                 if (!inner.TryGetValue(out FilterNode? node))
                 {
                     return inner;
                 }
                 if (_Current.Kind != TokenKind.RightParen)
                 {
-                    return _Expected(")");
+                    return _Expected($"')' to close the '(' at offset {token.Position.ToString(CultureInfo.InvariantCulture)}");
                 }
                 _Advance();
                 return FilterResult.Ok<FilterNode>(node);
@@ -285,18 +337,22 @@ internal sealed class FilterParser
                 _Advance();
                 if (_Current.Kind != TokenKind.StringLiteral)
                 {
-                    return _Expected("a quoted string");
+                    return _Expected($"a quoted string after '{op.Text}'");
                 }
                 Token pattern = _Current;
                 _Advance();
-                if (stringOp == StringOp.Matches && !_IsValidRegex(pattern.Text))
+
+                // Compile the pattern exactly once: this both validates it and yields the instance every back end
+                // and every derived filter shares.
+                Regex? regex = null;
+                if (stringOp == StringOp.Matches && !FilterBinder.TryBuildRegex(pattern.Text, _RegexTimeout, out regex))
                 {
                     return FilterError.InvalidValue(
                         $"Invalid regular expression '{pattern.Text}'", pattern.Position, pattern.Length);
                 }
                 return FilterResult.Ok<FilterNode>(
                     new StringPredicateNode(
-                        operand, stringOp, pattern.Text, operand.Position, pattern.End - operand.Position));
+                        operand, stringOp, pattern.Text, regex, operand.Position, pattern.End - operand.Position));
             }
 
             default:
@@ -394,7 +450,7 @@ internal sealed class FilterParser
             Token close = _Current;
             _Advance();
             return FilterResult.Ok<OperandNode>(
-                new LengthOperandNode(inner.Text, nameToken.Position, close.End - nameToken.Position));
+                new LengthOperandNode(inner.Text, inner.Position, nameToken.Position, close.End - nameToken.Position));
         }
 
         _Advance();
@@ -482,9 +538,15 @@ internal sealed class FilterParser
         {
             return _Expected("'{' to open the scope body");
         }
+        Token open = _Current;
+        if (!_TryEnter(open, out FilterError? tooDeep))
+        {
+            return tooDeep;
+        }
         _Advance();
 
         FilterResult<FilterNode> body = _ParseOr();
+        _Depth--;
         if (!body.TryGetValue(out FilterNode? bodyNode))
         {
             return body;
@@ -606,7 +668,13 @@ internal sealed class FilterParser
 
                 case "when":
                 {
+                    if (!_TryEnter(argToken, out FilterError? tooDeep))
+                    {
+                        return tooDeep;
+                    }
+
                     FilterResult<FilterNode> gate = _ParseOr();
+                    _Depth--;
                     if (!gate.TryGetValue(out FilterNode? gateNode))
                     {
                         return gate;
@@ -657,6 +725,7 @@ internal sealed class FilterParser
         _Features |= FilterFeature.Flank;
         return FilterResult.Ok<FilterNode>(new FlankNode(
             fieldToken.Text,
+            fieldToken.Position,
             from,
             to,
             by,
@@ -753,9 +822,14 @@ internal sealed class FilterParser
         {
             return FilterResult.Fail<int>(parsed.Error);
         }
-        if (!value.TryGetAsU64(out ulong raw) || raw > int.MaxValue)
+        // Bounded to ArrayIndexIdRange.MaxValue (below int.MaxValue), so a caller may add one — the scope
+        // occurrence limit "occurrence + 1" and slice widths — without overflow.
+        if (!value.TryGetAsU64(out ulong raw) || raw > (ulong)ArrayIndexIdRange.MaxValue)
         {
-            return FilterError.InvalidValue($"Index '{token.Text}' is out of range", token.Position, token.Length);
+            return FilterError.InvalidValue(
+                $"Index '{token.Text}' is out of range (maximum {ArrayIndexIdRange.MaxValue.ToString(CultureInfo.InvariantCulture)})",
+                token.Position,
+                token.Length);
         }
 
         _Advance();
@@ -780,21 +854,40 @@ internal sealed class FilterParser
         _ => CompareOp.GreaterEqual,
     };
 
-    /// <summary>
-    /// Whether a pattern is well-formed. Only construction is attempted, which performs the full
-    /// pattern parse and throws on bad syntax; unlike matching it can never time out.
-    /// </summary>
-    private static bool _IsValidRegex(string pattern)
+    /// <summary>Counts one nesting level; fails with a positioned syntax error beyond <see cref="MaxNestingDepth"/>.</summary>
+    private bool _TryEnter(Token at, [NotNullWhen(false)] out FilterError? failure)
     {
-        try
+        if (_Depth >= MaxNestingDepth)
         {
-            _ = new Regex(pattern, RegexOptions.None);
-            return true;
-        }
-        catch (ArgumentException)
-        {
+            failure = FilterError.Syntax(
+                $"Expression nests deeper than {MaxNestingDepth.ToString(CultureInfo.InvariantCulture)} levels " +
+                "of '(', '!', scope bodies or 'when:' gates",
+                at.Position,
+                Math.Max(at.Length, 1));
             return false;
         }
+
+        _Depth++;
+        failure = null;
+        return true;
+    }
+
+    /// <summary>Counts one term; fails with a positioned syntax error beyond <see cref="MaxTermCount"/>.</summary>
+    private bool _TryCountTerm(Token at, [NotNullWhen(false)] out FilterError? failure)
+    {
+        if (_TermCount >= MaxTermCount)
+        {
+            failure = FilterError.Syntax(
+                $"Expression has more than {MaxTermCount.ToString(CultureInfo.InvariantCulture)} terms; " +
+                "use 'in { … }' for long value lists",
+                at.Position,
+                Math.Max(at.Length, 1));
+            return false;
+        }
+
+        _TermCount++;
+        failure = null;
+        return true;
     }
 
     private Token _Current => _Tokens[_Index];
@@ -838,12 +931,11 @@ internal sealed class FilterParser
     private void _ReportName(OperandNode operand, FilterFieldNameKind kind)
     {
         // For len(name) and name[a:b] the operand span covers the whole syntax; report the
-        // bare name so completion sees exactly the identifier the user typed.
-        int start = operand switch
-        {
-            LengthOperandNode => operand.Position + 4,
-            _ => operand.Position,
-        };
+        // bare name so completion sees exactly the identifier the user typed. len may be
+        // followed by whitespace, so its name carries its own position.
+        int start = operand is LengthOperandNode length
+            ? length.NamePosition
+            : operand.Position;
         _ReportSpan(start, operand.Name.Length, kind);
     }
 

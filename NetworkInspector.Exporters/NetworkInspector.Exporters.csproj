@@ -33,6 +33,8 @@
     <Compile Include="..\NetworkInspector.Sources\Pcapng\Format\PcapInterfacePropertyKeys.cs" Link="Shared\Pcapng\PcapInterfacePropertyKeys.cs" />
     <Compile Include="..\NetworkInspector.Sources\Blf\Format\BlfConstants.cs" Link="Shared\Blf\BlfConstants.cs" />
     <Compile Include="..\NetworkInspector.Sources\Blf\Format\BlfInterfacePropertyKeys.cs" Link="Shared\Blf\BlfInterfacePropertyKeys.cs" />
+    <Compile Include="..\NetworkInspector.Sources\Blf\Format\BlfInterfaceNaming.cs" Link="Shared\Blf\BlfInterfaceNaming.cs" />
+    <Compile Include="..\NetworkInspector.Sources\Asc\AscInterfacePropertyKeys.cs" Link="Shared\Asc\AscInterfacePropertyKeys.cs" />
     <Compile Include="..\NetworkInspector.Protocols\FlexRayLinkTypeFrame.cs" Link="Shared\FlexRay\FlexRayLinkTypeFrame.cs" />
   </ItemGroup>
 </Project>

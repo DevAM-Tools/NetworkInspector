@@ -119,7 +119,7 @@ internal static class FrameBuilders
     }
 
     /// <summary>
-    /// Builds a SocketCAN XL frame (12 + payload) matching Wireshark Type 139 reconstruction.
+    /// Builds a SocketCAN XL frame (12 + payload), the layout the BLF reader reconstructs from Type 139.
     /// </summary>
     internal static byte[] BuildSocketCanXl(
         uint priority,

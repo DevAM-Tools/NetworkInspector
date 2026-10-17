@@ -3,7 +3,7 @@
 Load when `*.rs`, `Cargo.toml`, or `Cargo.lock` is in scope. Rust mechanisms for Section 4 in `copilot-instructions.md`. Idiomatic Rust.
 
 ## Language
-- Edition 2024. Modern idiomatic Rust.
+- Edition 2024. Minimum toolchain `rust-version = "1.85"` in `[workspace.package]`; stable features only. Modern idiomatic Rust.
 - `clippy -D warnings`. `rustfmt`. Treat warnings as errors.
 - ❗ Require `rustfmt.toml` at repo root with `max_width = 160`.
 - Public signatures fully typed. Locals may infer when the type is obvious; annotate when inference hides a conversion or a heap type.
@@ -120,7 +120,8 @@ Intent: Section 4.7. Never add a crate without user approval.
 #[cfg(windows)]
 {
     #[link(name = "kernel32")]
-    extern "system" {
+    // Edition 2024 requires `unsafe extern`.
+    unsafe extern "system" {
         fn SetConsoleOutputCP(code_page: u32) -> i32;
         fn SetConsoleCP(code_page: u32) -> i32;
     }

@@ -12,8 +12,9 @@ namespace NetworkInspector.Core.Interfaces;
 /// </para>
 /// <para>
 /// When <see cref="ErrorTolerance"/> is <see cref="ErrorToleranceMode.Strict"/>,
-/// the source stops sequential reading on the first recoverable error.
-/// <see cref="IFrameSource.NextFrame(CancellationToken)"/> returns <c>null</c> (source exhausted).
+/// the source stops sequential reading on the first recoverable error in file order: every frame in front of the
+/// error is still returned, then <see cref="IFrameSource.NextFrame(CancellationToken)"/> returns <c>null</c> (source
+/// exhausted). This holds for every scan mode, also when a full scan found the error while opening.
 /// If the source also implements <see cref="IRandomAccessFrameSource"/>,
 /// random access to already-read frames remains available after the abort.
 /// </para>
@@ -42,9 +43,8 @@ public interface IErrorTolerantFrameSource : IFrameSource, IFrameSourceStatistic
     #region Events
 
     /// <summary>
-    /// Event raised when a frame is skipped due to a recoverable error.
-    /// Only raised when <see cref="ErrorTolerance"/> is
-    /// <see cref="ErrorToleranceMode.Tolerant"/>.
+    /// Event raised when a frame is skipped due to a recoverable error, in both modes: in
+    /// <see cref="ErrorToleranceMode.Strict"/> mode it is raised once, for the error that ends sequential reading.
     /// <para>
     /// Subscribers must be thread-safe and non-blocking.
     /// The event is raised synchronously on the calling thread.

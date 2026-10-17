@@ -60,7 +60,7 @@ public sealed class LengthPrefixDetector : IPduBoundaryDetector
     /// <paramref name="lengthOffset"/> or <paramref name="headerSize"/> is negative, when
     /// <paramref name="maxPduSize"/> is not positive, or when the resolved effective header size
     /// is smaller than <c>lengthOffset + lengthSize</c> (the length field would lie outside
-    /// the header).
+    /// the header), or when <c>lengthOffset + lengthSize</c> exceeds <see cref="int.MaxValue"/>.
     /// </exception>
     public LengthPrefixDetector(int lengthOffset, int lengthSize, bool bigEndian = true,
         bool lengthIncludesHeader = false, int headerSize = 0, int maxPduSize = DefaultMaxPduSize)
@@ -73,6 +73,14 @@ public sealed class LengthPrefixDetector : IPduBoundaryDetector
         ArgumentOutOfRangeException.ThrowIfNegative(lengthOffset);
         ArgumentOutOfRangeException.ThrowIfNegative(headerSize);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxPduSize);
+
+        // The length field must end inside the int range; otherwise lengthOffset + lengthSize wraps and Detect would
+        // fail on every input.
+        if (lengthOffset > int.MaxValue - lengthSize)
+        {
+            throw new ArgumentOutOfRangeException(nameof(lengthOffset), lengthOffset,
+                "lengthOffset + lengthSize must not exceed int.MaxValue.");
+        }
 
         _LengthOffset = lengthOffset;
         _LengthSize = lengthSize;

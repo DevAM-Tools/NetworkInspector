@@ -11,12 +11,13 @@ internal sealed class InterfaceInfo
     #region Properties
 
     /// <summary>
-    /// Resolved link type, or null when <see cref="RawLinkType"/> is not a defined <see cref="Core.LinkType"/> member.
-    /// Unknown DLTs do not produce frames; the packet is skipped.
+    /// Link type of the interface: <see cref="RawLinkType"/> as a <see cref="Core.LinkType"/>.
+    /// The enum is open, so a DLT that is not a named member is kept as its number; dissectors find
+    /// no protocol for it and leave the frame raw, and the PCAPNG exporter writes the same DLT back.
     /// </summary>
-    internal LinkType? LinkType
+    internal LinkType LinkType
     {
-        get; private set;
+        get;
     }
 
     /// <summary>Raw link type code from the IDB.</summary>
@@ -55,20 +56,12 @@ internal sealed class InterfaceInfo
         get; private set;
     }
 
-    /// <summary>Interface speed in bits per second from if_speed option.</summary>
-    internal ulong? Speed
-    {
-        get; private set;
-    }
-
-    /// <summary>Capture filter expression from if_filter option.</summary>
-    internal string? Filter
-    {
-        get; private set;
-    }
-
-    /// <summary>Operating system from if_os option.</summary>
-    internal string? Os
+    /// <summary>
+    /// IDB options listed in <see cref="PcapInterfacePropertyKeys.InterfaceOptions"/> (speed, filter, OS,
+    /// hardware, TX / RX speed), decoded into their property key and value, in file order. Null when the IDB
+    /// carried none of them (no allocation for plain interfaces).
+    /// </summary>
+    internal List<KeyValuePair<string, object>>? OptionProperties
     {
         get; private set;
     }
@@ -96,8 +89,7 @@ internal sealed class InterfaceInfo
     internal InterfaceInfo(ushort rawLinkType, uint snapLength)
     {
         RawLinkType = rawLinkType;
-        LinkType linkCandidate = (LinkType)rawLinkType;
-        LinkType = Enum.IsDefined(linkCandidate) ? linkCandidate : null;
+        LinkType = (LinkType)rawLinkType;
         // Per PCAPNG spec §4.2, SnapLength == 0 means "no packet capture length limit".
         // Store uint.MaxValue internally so all Math.Min operations pass the actual packet
         // length through unchanged, rather than capping every packet to zero.
@@ -163,14 +155,24 @@ internal sealed class InterfaceInfo
     /// <summary>Sets the interface description.</summary>
     internal void SetDescription(string description) => Description = description;
 
-    /// <summary>Sets the interface speed in bits per second.</summary>
-    internal void SetSpeed(ulong speed) => Speed = speed;
+    /// <summary>
+    /// Records one table-mapped IDB option. A repeated option keeps the last value, as the
+    /// typed setters did before the table existed.
+    /// </summary>
+    internal void SetOptionProperty(string key, object value)
+    {
+        List<KeyValuePair<string, object>> properties = OptionProperties ??= new(2);
+        for (int i = 0; i < properties.Count; i++)
+        {
+            if (properties[i].Key == key)
+            {
+                properties[i] = new(key, value);
+                return;
+            }
+        }
 
-    /// <summary>Sets the capture filter expression.</summary>
-    internal void SetFilter(string filter) => Filter = filter;
-
-    /// <summary>Sets the operating system.</summary>
-    internal void SetOs(string os) => Os = os;
+        properties.Add(new(key, value));
+    }
 
     /// <summary>Sets the FCS length.</summary>
     internal void SetFcsLength(byte fcsLength) => FcsLength = fcsLength;

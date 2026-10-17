@@ -340,10 +340,13 @@ public static class Lz4Codec
             // Two cases:
             //   a) Non-overlapping (offset >= matchLength): fast bulk copy via
             //      Unsafe.CopyBlockUnaligned.
-            //   b) Overlapping (offset < matchLength): the copy intentionally
-            //      reads bytes that were just written by the same copy — this
-            //      implements run-length expansion (e.g. offset=1 repeats the
-            //      last byte matchLength times).  Must be byte-by-byte.
+            //   b) Overlapping (offset < matchLength): the result repeats the
+            //      last `offset` bytes (run-length expansion; offset=1 repeats
+            //      the last byte matchLength times). The bytes from matchStart
+            //      are periodic with period `offset`, so each block copies the
+            //      whole readable periodic region (`available` bytes) to its end:
+            //      the region doubles per step and no single copy reads what it
+            //      writes (source ends at matchStart + available = destination).
             // ---------------------------------------------------------------
             int matchStart = outputPos - offset;
 
@@ -357,10 +360,19 @@ public static class Lz4Codec
             }
             else
             {
-                // Overlapping: byte-by-byte to preserve run-length semantics.
-                for (int i = 0; i < matchLength; i++)
+                // Overlapping: doubling block copies; log2(matchLength / offset) + 1 copies instead of a byte loop.
+                // available + block never exceeds matchLength + offset, far below int.MaxValue.
+                int available = offset;
+                int copied = 0;
+                while (copied < matchLength)
                 {
-                    output[outputPos + i] = output[matchStart + i];
+                    int block = Math.Min(available, matchLength - copied);
+                    Unsafe.CopyBlockUnaligned(
+                        ref output[outputPos + copied],
+                        ref output[matchStart],
+                        (uint)block);
+                    copied += block;
+                    available += block;
                 }
             }
 

@@ -183,7 +183,9 @@ internal static class BlfObjectPayloads
         output.Reset();
 
         uint canId = BinaryPrimitives.ReadUInt32BigEndian(socketCanFrame);
-        byte dlc = socketCanFrame[4];
+
+        // Bus DLC: len8_dlc (byte 7) when it holds 9-15, else the payload count in byte 4 (the requested count for RTR).
+        byte dlc = BlfConstants.ClassicCanDlc(socketCanFrame);
 
         // BLF stores the 29-bit ID plus EFF in bit 31 (not as a flags-byte bit).
         uint blfId = canId & 0x1FFF_FFFFu;
@@ -781,6 +783,55 @@ internal static class BlfObjectPayloads
         payload.Clear();
         BinaryPrimitives.WriteUInt16LittleEndian(payload, channel);
         payload[2] = reason;
+        return true;
+    }
+
+    #endregion
+
+    #region AppText
+
+    /// <summary>
+    /// Builds a Type 65 AppText channel-name payload: <c>source</c> = <see cref="BlfConstants.AppTextSourceChannel"/>,
+    /// reserved = channel in bits 8–15 and bus type in bits 16–23 (the reader's masks), text length, reserved, then the
+    /// UTF-8 text <c>"{path};{name}"</c>. The BLF reader takes the second <c>;</c>-separated token as the channel name.
+    /// </summary>
+    /// <param name="busType">AppText bus type (<see cref="BlfConstants.BusTypeCan"/>, …).</param>
+    /// <param name="channel">1-based channel number, 1–255 (compared unchanged with the object channel field).</param>
+    /// <param name="path">First text token (the default interface name).</param>
+    /// <param name="name">Channel name; must not contain <c>;</c> or NUL.</param>
+    /// <param name="output">Buffer to write the payload into (reset before use).</param>
+    /// <returns>False when the channel, bus type, or name cannot be represented; nothing is written then.</returns>
+    internal static bool TryBuildAppTextChannelNamePayload(
+        byte busType, ushort channel, string path, string name, PooledBuffer output)
+    {
+        // AppText carries the channel in one byte, and the reader splits the text at ';' and stops at NUL.
+        if (busType == 0
+            || channel is 0 or > byte.MaxValue
+            || name.Length == 0
+            || name.AsSpan().IndexOfAny(';', '\0') >= 0
+            || path.AsSpan().IndexOfAny(';', '\0') >= 0)
+        {
+            return false;
+        }
+
+        const int headerSize = 16;
+        int pathBytes = Encoding.UTF8.GetByteCount(path);
+        int nameBytes = Encoding.UTF8.GetByteCount(name);
+        int textLength = pathBytes + 1 + nameBytes;
+
+        output.Reset();
+        Span<byte> payload = output.Reserve(headerSize + textLength);
+        BinaryPrimitives.WriteUInt32LittleEndian(payload, BlfConstants.AppTextSourceChannel);
+        uint reserved = ((uint)channel << BlfConstants.AppTextReservedChannelShift)
+            | ((uint)busType << BlfConstants.AppTextReservedBusTypeShift);
+        BinaryPrimitives.WriteUInt32LittleEndian(payload[4..], reserved);
+        BinaryPrimitives.WriteUInt32LittleEndian(payload[8..], (uint)textLength);
+        BinaryPrimitives.WriteUInt32LittleEndian(payload[12..], 0);
+
+        Span<byte> text = payload[headerSize..];
+        Encoding.UTF8.GetBytes(path, text);
+        text[pathBytes] = (byte)';';
+        Encoding.UTF8.GetBytes(name, text[(pathBytes + 1)..]);
         return true;
     }
 

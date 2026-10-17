@@ -13,8 +13,10 @@ namespace NetworkInspector.Exporters.DuckDb;
 ///   <item><c>topology(packet_id INTEGER, node_id INTEGER, field_id INTEGER, parent_node_id INTEGER)</c>
 ///     — one row per field-tree node.</item>
 ///   <item><c>catalog(field_id INTEGER, name VARCHAR, ui_name VARCHAR, field_type INTEGER,
-///     protocol_id INTEGER, table_name VARCHAR)</c> — one row per distinct field ID observed,
-///     written once in <see cref="Complete"/>.</item>
+///     protocol_id INTEGER, table_name VARCHAR, description VARCHAR)</c> — one row per distinct field ID observed,
+///     written once in <see cref="Complete"/>. <c>description</c> is <c>NULL</c> when the field has none.</item>
+///   <item><c>protocols(protocol_id INTEGER, name VARCHAR, ui_name VARCHAR)</c> — one row per protocol registered
+///     in the parsing stack, written once when the writer is created.</item>
 ///   <item><c>field_{id}(packet_id INTEGER, node_id INTEGER, value &lt;type&gt;
 ///     [, custom_repr VARCHAR] [, custom_text VARCHAR])</c>
 ///     — one row per field occurrence. <c>value</c> is <c>VARCHAR</c> for
@@ -54,37 +56,104 @@ internal sealed class DuckDbBulkWriter : IColumnarBatchSink, IDisposable
     #region Constructor
 
     /// <summary>
-    /// Opens a fresh DuckDB file at <paramref name="path"/> and creates the base tables.
+    /// Opens a fresh DuckDB file at <paramref name="path"/>, applies the optional resource settings, creates the base
+    /// tables, and writes the <c>protocols</c> table (the protocol set is fixed by the stack for the whole export).
     /// Any pre-existing file (and its <c>.wal</c> sidecar) at the same path is deleted first so
     /// re-exports overwrite rather than appending duplicate rows into an existing database.
     /// </summary>
     /// <param name="path">Target <c>.duckdb</c> file path.</param>
     /// <param name="flags">Detail flags the batches were configured with; controls optional columns.</param>
-    internal DuckDbBulkWriter(string path, ColumnarDetailFlags flags)
+    /// <param name="protocols">Protocols of the parsing stack, written to the <c>protocols</c> table.</param>
+    /// <param name="memoryLimitBytes">DuckDB <c>memory_limit</c> in bytes; <c>0</c> keeps DuckDB's default.</param>
+    /// <param name="threads">DuckDB <c>threads</c>; <c>0</c> keeps DuckDB's default.</param>
+    internal DuckDbBulkWriter(
+        string path,
+        ColumnarDetailFlags flags,
+        IReadOnlyList<ProtocolCatalogEntry> protocols,
+        long memoryLimitBytes,
+        int threads)
     {
+        ArgumentNullException.ThrowIfNull(protocols);
+        string settingsSql = BuildSettingsSql(memoryLimitBytes, threads);
+
         _Flags = flags;
         _DeleteExistingDatabase(path);
         _Connection = new DuckDBConnection($"Data Source={path}");
         _Connection.Open();
 
-        using (DuckDBCommand tuning = _Connection.CreateCommand())
+        // The caller never receives this instance when the constructor throws, so close the connection here
+        // instead of leaking the open database file.
+        try
         {
-            tuning.CommandText = FormattableString.Invariant(
-                $"SET threads TO {Environment.ProcessorCount}; SET memory_limit = '4GB';");
+            _InitializeDatabase(settingsSql, protocols);
+        }
+        catch
+        {
+            _Connection.Dispose();
+            throw;
+        }
+    }
+
+    /// <summary>Applies the resource settings, creates the base tables, and writes the <c>protocols</c> table.</summary>
+    /// <param name="settingsSql">Output of <see cref="BuildSettingsSql"/>; empty when DuckDB's defaults apply.</param>
+    /// <param name="protocols">Protocols of the parsing stack.</param>
+    private void _InitializeDatabase(string settingsSql, IReadOnlyList<ProtocolCatalogEntry> protocols)
+    {
+        // Resource settings are the caller's decision; DuckDB's own defaults apply when the builder left them at 0.
+        if (settingsSql.Length > 0)
+        {
+            using DuckDBCommand tuning = _Connection.CreateCommand();
+            tuning.CommandText = settingsSql;
             tuning.ExecuteNonQuery();
         }
 
         using (DuckDBCommand ddl = _Connection.CreateCommand())
         {
+            // New catalog columns are appended only, so positional readers of older exports keep working.
             ddl.CommandText =
                 "CREATE TABLE IF NOT EXISTS packets(packet_id INTEGER, timestamp_ns BIGINT"
                 + ((_Flags & ColumnarDetailFlags.IncludeInfo) != 0 ? ", info VARCHAR" : string.Empty)
                 + ((_Flags & ColumnarDetailFlags.IncludeFrameBytes) != 0 ? ", frame_bytes BLOB" : string.Empty)
                 + ");"
                 + "CREATE TABLE IF NOT EXISTS topology(packet_id INTEGER, node_id INTEGER, field_id INTEGER, parent_node_id INTEGER);"
-                + "CREATE TABLE IF NOT EXISTS catalog(field_id INTEGER, name VARCHAR, ui_name VARCHAR, field_type INTEGER, protocol_id INTEGER, table_name VARCHAR);";
+                + "CREATE TABLE IF NOT EXISTS catalog(field_id INTEGER, name VARCHAR, ui_name VARCHAR, field_type INTEGER, "
+                + "protocol_id INTEGER, table_name VARCHAR, description VARCHAR);"
+                + "CREATE TABLE IF NOT EXISTS protocols(protocol_id INTEGER, name VARCHAR, ui_name VARCHAR);";
             ddl.ExecuteNonQuery();
         }
+
+        _WriteProtocols(protocols);
+    }
+
+    #endregion
+
+    #region Settings
+
+    /// <summary>
+    /// Builds the <c>SET</c> statements for the optional DuckDB resource settings. A value of <c>0</c> emits nothing for
+    /// that setting so DuckDB's own default applies; both <c>0</c> yields an empty string.
+    /// </summary>
+    /// <param name="memoryLimitBytes">DuckDB <c>memory_limit</c> in bytes, or <c>0</c> for DuckDB's default.</param>
+    /// <param name="threads">DuckDB <c>threads</c>, or <c>0</c> for DuckDB's default.</param>
+    /// <returns>The SQL to execute, or <see cref="string.Empty"/> when no setting is requested.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">A value is negative.</exception>
+    internal static string BuildSettingsSql(long memoryLimitBytes, int threads)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(memoryLimitBytes);
+        ArgumentOutOfRangeException.ThrowIfNegative(threads);
+
+        // Both values are validated non-negative integers formatted with the invariant culture, never user strings,
+        // so interpolating them into SQL is injection-safe.
+        StringBuilder sql = new();
+        if (memoryLimitBytes > 0)
+        {
+            sql.Append(CultureInfo.InvariantCulture, $"SET memory_limit = '{memoryLimitBytes}B';");
+        }
+        if (threads > 0)
+        {
+            sql.Append(CultureInfo.InvariantCulture, $"SET threads = {threads};");
+        }
+        return sql.ToString();
     }
 
     #endregion
@@ -299,15 +368,41 @@ internal sealed class DuckDbBulkWriter : IColumnarBatchSink, IDisposable
         using DuckDBAppender appender = _Connection.CreateAppender("catalog");
         foreach (FieldCatalogEntry entry in _Catalog.Values)
         {
-            appender.CreateRow()
+            IDuckDBAppenderRow row = appender.CreateRow()
                 .AppendValue(entry.FieldIdValue)
                 .AppendValue(entry.Name)
                 .AppendValue(entry.UiName)
                 .AppendValue((int)entry.FieldType)
                 .AppendValue(entry.ProtocolIdValue)
-                .AppendValue(entry.TableName)
-                .EndRow();
+                .AppendValue(entry.TableName);
+            _AppendNullableString(row, entry.Description).EndRow();
         }
+    }
+
+    /// <summary>
+    /// Appends one <c>protocols</c> row per registered protocol in its own transaction. Runs once at construction.
+    /// </summary>
+    /// <param name="protocols">Protocols of the parsing stack.</param>
+    private void _WriteProtocols(IReadOnlyList<ProtocolCatalogEntry> protocols)
+    {
+        if (protocols.Count == 0)
+        {
+            return;
+        }
+
+        using DuckDBTransaction transaction = _Connection.BeginTransaction();
+        using (DuckDBAppender appender = _Connection.CreateAppender("protocols"))
+        {
+            foreach (ProtocolCatalogEntry entry in protocols)
+            {
+                appender.CreateRow()
+                    .AppendValue(entry.ProtocolIdValue)
+                    .AppendValue(entry.Name)
+                    .AppendValue(entry.UiName)
+                    .EndRow();
+            }
+        }
+        transaction.Commit();
     }
 
     /// <summary>

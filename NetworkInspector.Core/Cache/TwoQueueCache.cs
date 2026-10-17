@@ -103,7 +103,7 @@ public static class TwoQueueCache
 /// <para>
 /// When <c>A1InMaxWeight</c> is configured, eviction uses a two-phase algorithm: phase 1 trims
 /// A1in to its own limit (moving evicted keys to ghost), phase 2 trims total weight by preferring
-/// Am eviction. This matches the original 2Q paper and the Rust implementation.
+/// Am eviction. This matches the original 2Q paper.
 /// </para>
 /// <para>
 /// <b>Promotion semantics:</b> A re-inserted key that is found in the ghost set is promoted to
@@ -139,6 +139,12 @@ public sealed class TwoQueueCache<TKey, TValue> where TKey : notnull
     private int _A1InWeight;
     private int _AmWeight;
 
+    /// <summary>
+    /// Initial capacity of each queue map. The weight budget is not an entry count (a byte weigher makes it millions),
+    /// so the maps start small and grow on demand.
+    /// </summary>
+    private const int _InitialMapCapacity = 16;
+
     #endregion
 
     #region Constructors
@@ -153,9 +159,8 @@ public sealed class TwoQueueCache<TKey, TValue> where TKey : notnull
         _MaxWeight = maxWeight;
         _A1InMaxWeight = a1InMaxWeight;
         _Weigher = weigher ?? (IWeigher<TKey, TValue>)UnitWeigher<TKey, TValue>.Instance;
-        int capacity = Math.Max(1, maxWeight ?? 16);
-        _A1In = new LinkedMap<TKey, (TValue, int)>(capacity / 2);
-        _Am = new LinkedMap<TKey, (TValue, int)>(capacity / 2);
+        _A1In = new LinkedMap<TKey, (TValue, int)>(_InitialMapCapacity);
+        _Am = new LinkedMap<TKey, (TValue, int)>(_InitialMapCapacity);
         _Ghost = new GhostSet<TKey>(ghostMaxWeight);
     }
 

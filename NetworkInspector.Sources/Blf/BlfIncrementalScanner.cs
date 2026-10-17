@@ -35,7 +35,15 @@ internal sealed class BlfIncrementalScanner
     private readonly BlfDataBackend _Backend;
     private readonly BlfFileInfo _FileInfo;
     private readonly BlfFrameIndex _Index;
+    /// <summary>Channel names under construction; written by the scanning thread only.</summary>
     private readonly Dictionary<(byte BusType, byte Channel), string> _ChannelNames = new();
+
+    /// <summary>
+    /// Immutable copy of <see cref="_ChannelNames"/>, replaced after every AppText addition (rare: one per channel).
+    /// Random-access readers on other threads only ever see a complete snapshot.
+    /// </summary>
+    private volatile IReadOnlyDictionary<(byte BusType, byte Channel), string> _ChannelNamesSnapshot =
+        new Dictionary<(byte BusType, byte Channel), string>();
     private readonly long _MaxUncompressedContainerSize;
 
     // Outer loop state
@@ -84,6 +92,22 @@ internal sealed class BlfIncrementalScanner
     /// </summary>
     private long _TruncatedObjectCount;
 
+    /// <summary>Frame-producing objects whose header or channel field could not be read (raw or inner). Polled by BlfSource.</summary>
+    private long _UnparsableObjectCount;
+
+    /// <summary>Non-padding bytes skipped inside a container to resynchronise on the next <c>LOBJ</c>. Polled by BlfSource.</summary>
+    private long _CorruptedInnerObjectCount;
+
+    /// <summary>File-level objects whose declared length runs past the end of the file. Polled by BlfSource.</summary>
+    private long _TruncatedFileObjectCount;
+
+    /// <summary>
+    /// Receives every container the scanner decoded: file offset of the LOG_CONTAINER and its decompressed bytes
+    /// (without a carry prefix). Set by <see cref="BlfSource"/> so the sequential path reuses the blob instead of
+    /// inflating it a second time. Invoked on the scanning thread.
+    /// </summary>
+    internal Action<long, byte[]>? OnContainerDecoded;
+
     #endregion
 
     #region Constructors
@@ -118,8 +142,11 @@ internal sealed class BlfIncrementalScanner
     /// <summary>Whether the scanner has processed all data.</summary>
     internal bool IsExhausted => _Exhausted;
 
-    /// <summary>Discovered channel names (bus type + channel → name).</summary>
-    internal IReadOnlyDictionary<(byte BusType, byte Channel), string> ChannelNames => _ChannelNames;
+    /// <summary>
+    /// Discovered channel names (bus type + channel → name): an immutable snapshot, safe to read from any thread while
+    /// the scan continues. A later AppText replaces the snapshot, never mutates it.
+    /// </summary>
+    internal IReadOnlyDictionary<(byte BusType, byte Channel), string> ChannelNames => _ChannelNamesSnapshot;
 
     /// <summary>
     /// Number of containers that failed to decompress.
@@ -141,6 +168,40 @@ internal sealed class BlfIncrementalScanner
     /// through the error tolerance mechanism.
     /// </summary>
     internal long TruncatedObjectCount => _TruncatedObjectCount;
+
+    /// <summary>Frame-producing objects whose header or channel could not be read; reported as <c>MalformedHeader</c>.</summary>
+    internal long UnparsableObjectCount => _UnparsableObjectCount;
+
+    /// <summary>Corrupt bytes skipped inside containers; reported as <c>CorruptedBlock</c>.</summary>
+    internal long CorruptedInnerObjectCount => _CorruptedInnerObjectCount;
+
+    /// <summary>Objects cut by the end of the file; reported as <c>TruncatedStream</c>.</summary>
+    internal long TruncatedFileObjectCount => _TruncatedFileObjectCount;
+
+    /// <summary>All failure counters at this moment, for owners that report them after the scanner is released.</summary>
+    internal BlfScanDiagnostics Diagnostics => new(
+        _DecompressionFailures,
+        _CorruptedContainerCount,
+        _TruncatedObjectCount,
+        _UnparsableObjectCount,
+        _CorruptedInnerObjectCount,
+        _TruncatedFileObjectCount);
+
+    /// <summary>
+    /// When true (full scans), every counted failure also appends a <see cref="BlfScanDiagnosticsMark"/> to
+    /// <see cref="Marks"/> with the number of frames indexed at that moment, so the owner can report each failure in
+    /// file order after the scan. Lazy scans poll <see cref="Diagnostics"/> instead and leave this off.
+    /// </summary>
+    internal bool RecordMarks
+    {
+        get; init;
+    }
+
+    /// <summary>Failure marks in file order; null unless <see cref="RecordMarks"/> is set and a failure was counted.</summary>
+    internal List<BlfScanDiagnosticsMark>? Marks
+    {
+        get; private set;
+    }
 
     #endregion
 
@@ -240,9 +301,12 @@ internal sealed class BlfIncrementalScanner
 
             int skipDistance = (int)skipDistanceLong;
 
-            // Validate we have enough data for the full object
+            // Validate we have enough data for the full object. The header is intact but the body is cut by EOF
+            // (a capture tool that crashed while writing): report it once, then stop.
             if (_FileOffset + skipDistance > _Backend.FileSize)
             {
+                _TruncatedFileObjectCount++;
+                _RecordMark();
                 _Exhausted = true;
                 return false;
             }
@@ -283,20 +347,18 @@ internal sealed class BlfIncrementalScanner
         return false;
     }
 
-    /// <summary>
-    /// Scans all remaining data to exhaustion, populating the index.
-    /// </summary>
-    internal void ScanToEnd(CancellationToken cancellationToken = default)
-    {
-        while (ScanNext(cancellationToken))
-        {
-            // Keep scanning
-        }
-    }
-
     #endregion
 
     #region Private Helpers
+
+    /// <summary>Appends a mark for the failure just counted (full scans only, see <see cref="RecordMarks"/>).</summary>
+    private void _RecordMark()
+    {
+        if (RecordMarks)
+        {
+            (Marks ??= []).Add(new BlfScanDiagnosticsMark(_Index.Count, Diagnostics));
+        }
+    }
 
     /// <summary>
     /// Decompresses a container and sets up the pending container for inner iteration.
@@ -319,6 +381,7 @@ internal sealed class BlfIncrementalScanner
         {
             _DropCarryAsTruncated();
             _CorruptedContainerCount++;
+            _RecordMark();
             return;
         }
 
@@ -347,6 +410,9 @@ internal sealed class BlfIncrementalScanner
         {
             byte[] decoded = BlfContainer.Decompress(payloadData, compressionMethod, uncompressedSize,
                 _MaxUncompressedContainerSize);
+
+            // Hand the blob to the owner before stitching: the cache key is the container's own bytes.
+            OnContainerDecoded?.Invoke(fileOffset, decoded);
             _PendingContainer = _PrependCarry(decoded);
             _ContainerOffset = 0;
             _ContainerFileOffset = fileOffset;
@@ -362,6 +428,7 @@ internal sealed class BlfIncrementalScanner
             _DropCarryAsTruncated();
             _PendingContainer = null;
             _DecompressionFailures++;
+            _RecordMark();
         }
     }
 
@@ -377,19 +444,14 @@ internal sealed class BlfIncrementalScanner
             return decoded;
         }
 
-        long total = (long)_CarryOver.Length + decoded.Length;
-        if (total > int.MaxValue
-            || (_MaxUncompressedContainerSize > 0 && total > _MaxUncompressedContainerSize))
+        int prefix = _CarryOver.Length;
+        if (!BlfContainerCarry.TryStitch(_CarryOver, decoded, _MaxUncompressedContainerSize, out byte[] stitched))
         {
             _DropCarryAsTruncated();
             _CarryPrefixLength = 0;
             return decoded;
         }
 
-        int prefix = _CarryOver.Length;
-        byte[] stitched = new byte[(int)total];
-        Buffer.BlockCopy(_CarryOver, 0, stitched, 0, prefix);
-        Buffer.BlockCopy(decoded, 0, stitched, prefix, decoded.Length);
         _CarryOver = null;
         _CarryPrefixLength = prefix;
         return stitched;
@@ -424,6 +486,14 @@ internal sealed class BlfIncrementalScanner
                     _FinishContainer(containerSpan);
                     return foundFrame;
                 }
+
+                // Skipping padding is normal; skipping data is a corrupt object (same rule as the stream reader).
+                if (!BlfContainerCarry.IsAllZeros(containerSpan.Slice(_ContainerOffset, 1 + nextMagic)))
+                {
+                    _CorruptedInnerObjectCount++;
+                    _RecordMark();
+                }
+
                 _ContainerOffset += 1 + nextMagic;
                 continue;
             }
@@ -438,14 +508,23 @@ internal sealed class BlfIncrementalScanner
                 continue;
             }
 
-            // Index frame-producing objects from channel fields only — do not reconstruct FrameData.
-            if (BlfConstants.IsFrameProducingType(objInfo.ObjectType)
-                && BlfFrameDispatcher.TryGetChannel(objInfo.ObjectType, objInfo.Payload, out ushort ch))
+            if (!BlfConstants.IsFrameProducingType(objInfo.ObjectType))
             {
-                BlfFrameEntry entry = _MakeContainerEntry(objectStart, skipDistance, in objInfo, ch);
-                _Index.Push(in entry);
-                foundFrame = true;
+                continue;
             }
+
+            // Index frame-producing objects from channel fields only — do not reconstruct FrameData.
+            // A frame object whose channel field is cut off is a lost frame and is counted, not dropped silently.
+            if (!BlfFrameDispatcher.TryGetChannel(objInfo.ObjectType, objInfo.Payload, out ushort ch))
+            {
+                _UnparsableObjectCount++;
+                _RecordMark();
+                continue;
+            }
+
+            BlfFrameEntry entry = _MakeContainerEntry(objectStart, skipDistance, in objInfo, ch);
+            _Index.Push(in entry);
+            foundFrame = true;
         }
 
         _FinishContainer(containerSpan);
@@ -478,46 +557,38 @@ internal sealed class BlfIncrementalScanner
             ObjectLength = skipDistance,
             ObjectType = objInfo.ObjectType,
             Channel = channel,
-            HeaderSize = 0, // Not needed for container objects
-            TimestampNanos = _FileInfo.StartOffsetNanos + objInfo.TimestampNanos,
+            TimestampNanos = BlfTimestamp.ToAbsolute(_FileInfo.StartOffsetNanos, objInfo.TimestampNanos),
         };
     }
 
     /// <summary>
-    /// Saves a partial LOBJ tail as carry-over, discards padding, or counts a truncated object.
+    /// Saves a partial LOBJ tail as carry-over, discards padding, or counts a truncated object
+    /// (rules in <see cref="BlfContainerCarry.ClassifyTail"/>).
     /// </summary>
     private void _FinishContainer(ReadOnlySpan<byte> containerSpan)
     {
-        if (_ContainerOffset < containerSpan.Length)
+        ReadOnlySpan<byte> tail = _ContainerOffset < containerSpan.Length ? containerSpan[_ContainerOffset..] : [];
+        switch (BlfContainerCarry.ClassifyTail(tail))
         {
-            ReadOnlySpan<byte> tail = containerSpan[_ContainerOffset..];
-            if (_LooksLikePartialLobj(tail) && !_DeclaredObjectLengthExceedsCap(tail))
-            {
-                if (_ContainerOffset < _CarryPrefixLength)
+            case BlfContainerTailKind.PartialObject:
+                _CarryOver = tail.ToArray();
+
+                // A tail that still begins in the previous container keeps that source identity.
+                if (_ContainerOffset >= _CarryPrefixLength)
                 {
-                    // Still begins in the previous container — keep that source identity.
-                    _CarryOver = tail.ToArray();
-                }
-                else
-                {
-                    _CarryOver = tail.ToArray();
                     _CarrySourceFileOffset = _ContainerFileOffset;
                     _CarrySourceInnerOffset = _ContainerOffset - _CarryPrefixLength;
                 }
-            }
-            else if (!_IsAllZeros(tail))
-            {
+
+                break;
+            case BlfContainerTailKind.Garbage:
                 _TruncatedObjectCount++;
+                _RecordMark();
                 _CarryOver = null;
-            }
-            else
-            {
+                break;
+            default:
                 _CarryOver = null;
-            }
-        }
-        else
-        {
-            _CarryOver = null;
+                break;
         }
 
         _PendingContainer = null;
@@ -531,6 +602,7 @@ internal sealed class BlfIncrementalScanner
         if (_CarryOver is { Length: > 0 })
         {
             _TruncatedObjectCount++;
+            _RecordMark();
         }
 
         _CarryOver = null;
@@ -538,91 +610,17 @@ internal sealed class BlfIncrementalScanner
     }
 
     /// <summary>
-    /// True when <paramref name="tail"/> is padding zeros, optionally followed by a
-    /// <c>LOBJ</c> magic or a truncated prefix of that magic (a split object).
-    /// </summary>
-    private static bool _LooksLikePartialLobj(ReadOnlySpan<byte> tail)
-    {
-        if (tail.IsEmpty)
-        {
-            return false;
-        }
-
-        int i = 0;
-        while (i < tail.Length && tail[i] == 0)
-        {
-            i++;
-        }
-
-        if (i == tail.Length)
-        {
-            return false;
-        }
-
-        ReadOnlySpan<byte> candidate = tail[i..];
-        int n = Math.Min(candidate.Length, BlfConstants.ObjectMagicBytes.Length);
-        return candidate[..n].SequenceEqual(BlfConstants.ObjectMagicBytes[..n]);
-    }
-
-    /// <summary>
-    /// True when <paramref name="tail"/> begins with a parseable <c>LOBJ</c> header whose
-    /// skip distance exceeds <see cref="BlfConstants.MaxBlockReadSize"/>. Those tails are
-    /// corrupt, not split objects, and must not be carried into the next container.
-    /// </summary>
-    private static bool _DeclaredObjectLengthExceedsCap(ReadOnlySpan<byte> tail)
-    {
-        int i = 0;
-        while (i < tail.Length && tail[i] == 0)
-        {
-            i++;
-        }
-
-        ReadOnlySpan<byte> candidate = tail[i..];
-        if (candidate.Length < BlfConstants.BlockHeaderSize)
-        {
-            return false;
-        }
-
-        if (!BlfBlockHeader.TryParse(candidate, out BlfBlockHeader header, out _)
-            || header.Signature.Value != BlfConstants.ObjectMagic)
-        {
-            return false;
-        }
-
-        long skip = Math.Max(
-            Math.Max((long)BlfConstants.BlockHeaderSize, header.ObjectLength.Value),
-            header.HeaderSize.Value);
-        return skip > BlfConstants.MaxBlockReadSize;
-    }
-
-    /// <summary>True when every byte is zero (alignment padding).</summary>
-    private static bool _IsAllZeros(ReadOnlySpan<byte> data)
-    {
-        for (int i = 0; i < data.Length; i++)
-        {
-            if (data[i] != 0)
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    /// <summary>
-    /// Processes a raw (non-container) frame-producing object from the file.
+    /// Processes a raw (non-container) frame-producing object from the file. An object whose header or channel field
+    /// cannot be read is counted (<see cref="UnparsableObjectCount"/>), not dropped silently.
     /// </summary>
     private void _ProcessRawObject(ReadOnlySpan<byte> objectData, long fileOffset)
     {
         if (!BlfObjectHeaderParser.TryParse(objectData, fileOffset,
-                out BlfObjectInfo objInfo, out int skipDistance))
-        {
-            return;
-        }
-
-        if (!BlfConstants.IsFrameProducingType(objInfo.ObjectType)
+                out BlfObjectInfo objInfo, out int skipDistance)
             || !BlfFrameDispatcher.TryGetChannel(objInfo.ObjectType, objInfo.Payload, out ushort channel))
         {
+            _UnparsableObjectCount++;
+            _RecordMark();
             return;
         }
 
@@ -633,8 +631,7 @@ internal sealed class BlfIncrementalScanner
             ObjectLength = skipDistance,
             ObjectType = objInfo.ObjectType,
             Channel = channel,
-            HeaderSize = 0,
-            TimestampNanos = _FileInfo.StartOffsetNanos + objInfo.TimestampNanos,
+            TimestampNanos = BlfTimestamp.ToAbsolute(_FileInfo.StartOffsetNanos, objInfo.TimestampNanos),
         };
 
         _Index.Push(in entry);
@@ -655,7 +652,8 @@ internal sealed class BlfIncrementalScanner
     }
 
     /// <summary>
-    /// Extracts channel name from AppText payload and stores it.
+    /// Extracts channel name from AppText payload, stores it, and publishes a new immutable snapshot for readers on
+    /// other threads. AppText records are rare (one per channel), so the copy costs nothing measurable.
     /// </summary>
     private void _ProcessAppTextPayload(ReadOnlySpan<byte> payload)
     {
@@ -663,6 +661,7 @@ internal sealed class BlfIncrementalScanner
                 payload, out byte channelNumber, out byte busType, out string? name))
         {
             _ChannelNames[(busType, channelNumber)] = name!;
+            _ChannelNamesSnapshot = new Dictionary<(byte BusType, byte Channel), string>(_ChannelNames);
         }
     }
 

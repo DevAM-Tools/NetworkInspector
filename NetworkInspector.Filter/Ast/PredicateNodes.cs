@@ -107,6 +107,7 @@ internal sealed class StringPredicateNode(
     OperandNode left,
     StringOp op,
     string pattern,
+    Regex? regex,
     int position,
     int length)
     : FilterNode(position, length)
@@ -119,6 +120,13 @@ internal sealed class StringPredicateNode(
 
     /// <summary>The substring or regular-expression pattern.</summary>
     public string Pattern { get; } = pattern;
+
+    /// <summary>
+    /// The pattern compiled once by the parser for <see cref="StringOp.Matches"/>; <see langword="null"/> for
+    /// <see cref="StringOp.Contains"/>. Both back ends and every derived filter share this instance, which is safe
+    /// because <see cref="System.Text.RegularExpressions.Regex"/> is immutable and thread-safe for matching.
+    /// </summary>
+    public Regex? Regex { get; } = regex;
 }
 
 #endregion

@@ -29,4 +29,13 @@
   <ItemGroup>
     <Compile Include="..\NetworkInspector.Protocols\FlexRayLinkTypeFrame.cs" Link="Shared\FlexRay\FlexRayLinkTypeFrame.cs" />
   </ItemGroup>
+
+  <!--
+    SlabAllocator<T> is Core's internal bump allocator (Packet field storage). It is link-compiled here so the
+    frame slabs of the sequential readers (FrameSlabAllocator) use the same allocator without making the Core type
+    public. Same per-assembly internal copy pattern as FlexRayLinkTypeFrame above.
+  -->
+  <ItemGroup>
+    <Compile Include="..\NetworkInspector.Core\Fields\SlabAllocator.cs" Link="Shared\Core\SlabAllocator.cs" />
+  </ItemGroup>
 </Project>

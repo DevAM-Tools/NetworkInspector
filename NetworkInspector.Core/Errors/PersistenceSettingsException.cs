@@ -23,6 +23,10 @@ public sealed class PersistenceSettingsException : SettingsException
     internal static PersistenceSettingsException ForIo(IOException innerException) =>
         new($"I/O error: {innerException.Message}", innerException);
 
+    /// <summary>Creates an exception for a file-system access denial during persistence.</summary>
+    internal static PersistenceSettingsException ForAccessDenied(UnauthorizedAccessException innerException) =>
+        new($"Access denied: {innerException.Message}", innerException);
+
     /// <summary>Creates an exception for a JSON parsing or serialization failure.</summary>
     internal static PersistenceSettingsException ForJson(JsonException innerException) =>
         new($"JSON error: {innerException.Message}", innerException);
