@@ -3,7 +3,7 @@
 namespace NetworkInspector.Filter.Analysis;
 
 /// <summary>
-/// Binding steps shared by the field-tree code generator (<see cref="ExpressionTreeCodegen"/>) and the
+/// Binding steps shared by the field-tree code generator (<see cref="EvalTreeCodegen"/>) and the
 /// tree-free observer compiler (<see cref="FilterObserverCompiler"/>).
 /// <para>
 /// Both back ends must turn the same AST node into the same accessor, regular expression and flank

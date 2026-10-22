@@ -29,9 +29,9 @@ internal sealed class BlfLazyScanTests
     [Test]
     public async Task LazyMode_EstimatedFrameCount_NullBeforeFullConsumption()
     {
-        byte[] eth = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0xAA]);
+        byte[] eth = TestFrames.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0xAA]);
 
-        byte[] blfData = new BlfTestGenerator()
+        byte[] blfData = new BlfCaptureBuilder()
             .AddEthernetFrame(1, eth, 1_000_000)
             .AddEthernetFrame(1, eth, 2_000_000)
             .Build();
@@ -48,9 +48,9 @@ internal sealed class BlfLazyScanTests
     [Test]
     public async Task FullMode_EstimatedFrameCount_AvailableImmediately()
     {
-        byte[] eth = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0xAA]);
+        byte[] eth = TestFrames.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0xAA]);
 
-        byte[] blfData = new BlfTestGenerator()
+        byte[] blfData = new BlfCaptureBuilder()
             .AddEthernetFrame(1, eth, 1_000_000)
             .AddEthernetFrame(1, eth, 2_000_000)
             .AddEthernetFrame(1, eth, 3_000_000)
@@ -69,9 +69,9 @@ internal sealed class BlfLazyScanTests
     [Test]
     public async Task LazyMode_NextFrame_ReadsAllFrames()
     {
-        byte[] eth = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0xBB]);
+        byte[] eth = TestFrames.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0xBB]);
 
-        byte[] blfData = new BlfTestGenerator()
+        byte[] blfData = new BlfCaptureBuilder()
             .AddEthernetFrame(1, eth, 1_000_000)
             .AddEthernetFrame(1, eth, 2_000_000)
             .AddEthernetFrame(1, eth, 3_000_000)
@@ -99,9 +99,9 @@ internal sealed class BlfLazyScanTests
     [Test]
     public async Task LazyAndFull_ProduceSameFrameCount()
     {
-        byte[] eth = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0xCC]);
+        byte[] eth = TestFrames.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0xCC]);
 
-        byte[] blfData = new BlfTestGenerator()
+        byte[] blfData = new BlfCaptureBuilder()
             .AddEthernetFrame(1, eth, 1_000_000)
             .AddEthernetFrame(1, eth, 2_000_000)
             .AddEthernetFrame(1, eth, 3_000_000)
@@ -136,11 +136,11 @@ internal sealed class BlfLazyScanTests
     [Test]
     public async Task LazyMode_FrameById_WorksAfterSequentialRead()
     {
-        byte[] eth1 = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0x01]);
-        byte[] eth2 = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0x02]);
-        byte[] eth3 = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0x03]);
+        byte[] eth1 = TestFrames.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0x01]);
+        byte[] eth2 = TestFrames.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0x02]);
+        byte[] eth3 = TestFrames.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0x03]);
 
-        byte[] blfData = new BlfTestGenerator()
+        byte[] blfData = new BlfCaptureBuilder()
             .AddEthernetFrame(1, eth1, 1_000_000)
             .AddEthernetFrame(1, eth2, 2_000_000)
             .AddEthernetFrame(1, eth3, 3_000_000)
@@ -176,9 +176,9 @@ internal sealed class BlfLazyScanTests
     [Test]
     public async Task LazyMode_FrameById_OutOfRange_ReturnsNull()
     {
-        byte[] eth = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0xDD]);
+        byte[] eth = TestFrames.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0xDD]);
 
-        byte[] blfData = new BlfTestGenerator()
+        byte[] blfData = new BlfCaptureBuilder()
             .AddEthernetFrame(1, eth, 1_000_000)
             .Build();
 
@@ -198,7 +198,7 @@ internal sealed class BlfLazyScanTests
     public async Task LazyMode_EmptyFile_NoFrames()
     {
         // Build BLF with just a file header, no object data
-        byte[] blfData = new BlfTestGenerator().Build();
+        byte[] blfData = new BlfCaptureBuilder().Build();
 
         using BlfSource source = _CreateLazySource(blfData);
         SourceTestFixture.InitializeAndStartSource(source);

@@ -1039,7 +1039,7 @@ public sealed class PcapngStreamSource : IFrameSource, IErrorTolerantFrameSource
         // Enforce maximum frame count — FrameId is array-index-based
         ArrayIndexIdRange.ThrowIfInvalidNextIndex(_FrameIndex, "frame");
 
-        if (!_Interfaces.TryGet(sectionIndex, interfaceId, out PcapInterfaceEntry iface))
+        if (!_Interfaces.TryGet(sectionIndex, interfaceId, out PcapInterfaceEntry? iface))
         {
             int skipId = _FrameIndex++;
             _HandleSkip(new FrameReadErrorEventArgs

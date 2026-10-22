@@ -45,7 +45,7 @@ internal sealed class PacketReparseReadUdpSrcPortScenario : IProfilingScenario
     public void Setup()
     {
         _Stack = StackHelper.CreateStack();
-        _Frames = FrameHelper.CreateSharedFrames(_PacketCount, _Stack);
+        _Frames = SampleFrames.CreateSharedFrames(_PacketCount, _Stack);
         FieldId? portId = _Stack.GetFieldId("udp.srcport")
             ?? throw new InvalidOperationException("Profiling stack is missing field 'udp.srcport'.");
         _PortId = portId.Value;

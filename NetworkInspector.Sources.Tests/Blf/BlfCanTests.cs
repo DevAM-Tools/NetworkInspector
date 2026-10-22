@@ -21,9 +21,9 @@ internal sealed class BlfCanTests
     [Test]
     public async Task CanClassicSingleFrame_ParsedCorrectly()
     {
-        byte[] can = FrameBuilders.BuildSocketCanClassic(0x123, [1, 2, 3, 4, 5, 6, 7, 8]);
+        byte[] can = TestFrames.BuildSocketCanClassic(0x123, [1, 2, 3, 4, 5, 6, 7, 8]);
 
-        byte[] blfData = new BlfTestGenerator()
+        byte[] blfData = new BlfCaptureBuilder()
             .AddCanFrame(1, can, 1_000_000)
             .Build();
 
@@ -47,9 +47,9 @@ internal sealed class BlfCanTests
     [Test]
     public async Task CanClassicExtendedId_EffFlagSet()
     {
-        byte[] can = FrameBuilders.BuildSocketCanClassic(0x1234_5678, [0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA], extended: true);
+        byte[] can = TestFrames.BuildSocketCanClassic(0x1234_5678, [0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA], extended: true);
 
-        byte[] blfData = new BlfTestGenerator()
+        byte[] blfData = new BlfCaptureBuilder()
             .AddCanFrame(1, can, 1_000_000)
             .Build();
 
@@ -80,8 +80,8 @@ internal sealed class BlfCanTests
 
         foreach ((uint canId, byte[] canData) in tests)
         {
-            byte[] can = FrameBuilders.BuildSocketCanClassic(canId, canData);
-            byte[] blfData = new BlfTestGenerator()
+            byte[] can = TestFrames.BuildSocketCanClassic(canId, canData);
+            byte[] blfData = new BlfCaptureBuilder()
                 .AddCanFrame(1, can, 1_000_000)
                 .Build();
 
@@ -107,9 +107,9 @@ internal sealed class BlfCanTests
     [Test]
     public async Task CanFdSingleFrame_ParsedCorrectly()
     {
-        byte[] canFd = FrameBuilders.BuildSocketCanFd(0x200, Enumerable.Repeat((byte)0xBB, 32).ToArray(), brs: true);
+        byte[] canFd = TestFrames.BuildSocketCanFd(0x200, Enumerable.Repeat((byte)0xBB, 32).ToArray(), brs: true);
 
-        byte[] blfData = new BlfTestGenerator()
+        byte[] blfData = new BlfCaptureBuilder()
             .AddCanFdFrame(1, canFd, 1_000_000)
             .Build();
 
@@ -139,7 +139,7 @@ internal sealed class BlfCanTests
         payload[42] = 0xCC;
         payload[43] = 0xDD;
 
-        byte[] blfData = new BlfTestGenerator()
+        byte[] blfData = new BlfCaptureBuilder()
             .AddRawObject(BlfConstants.ObjTypeCanFdMessage64, 1_000_000, payload)
             .Build();
 
@@ -162,11 +162,11 @@ internal sealed class BlfCanTests
     [Test]
     public async Task CanClassicAndFdMixed_AllFramesParsed()
     {
-        byte[] classic1 = FrameBuilders.BuildSocketCanClassic(0x100, [1, 2, 3, 4]);
-        byte[] fd = FrameBuilders.BuildSocketCanFd(0x200, Enumerable.Repeat((byte)0xAA, 24).ToArray(), brs: true);
-        byte[] classic2 = FrameBuilders.BuildSocketCanClassic(0x300, [5, 6, 7, 8]);
+        byte[] classic1 = TestFrames.BuildSocketCanClassic(0x100, [1, 2, 3, 4]);
+        byte[] fd = TestFrames.BuildSocketCanFd(0x200, Enumerable.Repeat((byte)0xAA, 24).ToArray(), brs: true);
+        byte[] classic2 = TestFrames.BuildSocketCanClassic(0x300, [5, 6, 7, 8]);
 
-        byte[] blfData = new BlfTestGenerator()
+        byte[] blfData = new BlfCaptureBuilder()
             .AddCanFrame(1, classic1, 1_000_000)
             .AddCanFdFrame(1, fd, 2_000_000)
             .AddCanFrame(1, classic2, 3_000_000)
@@ -196,10 +196,10 @@ internal sealed class BlfCanTests
     [Test]
     public async Task CanDifferentChannels_DifferentInterfaceIds()
     {
-        byte[] can1 = FrameBuilders.BuildSocketCanClassic(0x100, [1, 2, 3, 4]);
-        byte[] can2 = FrameBuilders.BuildSocketCanClassic(0x200, [5, 6, 7, 8]);
+        byte[] can1 = TestFrames.BuildSocketCanClassic(0x100, [1, 2, 3, 4]);
+        byte[] can2 = TestFrames.BuildSocketCanClassic(0x200, [5, 6, 7, 8]);
 
-        byte[] blfData = new BlfTestGenerator()
+        byte[] blfData = new BlfCaptureBuilder()
             .AddCanFrame(1, can1, 1_000_000)
             .AddCanFrame(2, can2, 2_000_000)
             .Build();
@@ -229,7 +229,7 @@ internal sealed class BlfCanTests
         BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(4), 0x8000_0123u);
         payload.AsSpan(8).Fill(0xAA);
 
-        byte[] blfData = new BlfTestGenerator()
+        byte[] blfData = new BlfCaptureBuilder()
             .AddRawObject(BlfConstants.ObjTypeCanMessage, 1_000_000, payload)
             .Build();
 
@@ -247,10 +247,10 @@ internal sealed class BlfCanTests
     [Test]
     public async Task CanXlChannelFrame_ParsedAsSocketCanXl()
     {
-        byte[] xl = FrameBuilders.BuildSocketCanXl(
+        byte[] xl = TestFrames.BuildSocketCanXl(
             0x01, [0xAA, 0xBB, 0xCC, 0xDD], vcid: 0x1A, sdt: 0x05, acceptanceField: 0x11, sec: true);
 
-        byte[] blfData = new BlfTestGenerator()
+        byte[] blfData = new BlfCaptureBuilder()
             .AddCanXlChannelFrame(2, xl, 1_000_000)
             .Build();
 
@@ -267,7 +267,7 @@ internal sealed class BlfCanTests
     public async Task CanXlErrorFrameType140_SkippedWithoutAbort()
     {
         byte[] payload = new byte[104];
-        byte[] blfData = new BlfTestGenerator()
+        byte[] blfData = new BlfCaptureBuilder()
             .AddRawObject(BlfConstants.ObjTypeCanXlChannelErrorFrame, 1_000_000, payload)
             .Build();
 

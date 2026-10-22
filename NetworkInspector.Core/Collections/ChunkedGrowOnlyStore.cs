@@ -64,6 +64,12 @@ internal sealed class ChunkedSlotStore<T>
     {
         internal readonly ChunkedOuterArray<T[]> Outer = new(chunkShift);
         internal volatile int Count;
+
+        // Writer-only cache of the chunk the last append wrote into (single writer by contract); readers never read
+        // these two fields. The outer array returns the same chunk for an index for the whole generation, so a cached
+        // chunk can never go stale; a new generation starts without a cache.
+        internal T[]? Tail;
+        internal int TailChunkIndex = -1;
     }
 
     #endregion
@@ -155,6 +161,30 @@ internal sealed class ChunkedSlotStore<T>
         finally
         {
             _AppendGate = 0;
+        }
+    }
+
+    /// <summary>
+    /// <see cref="Append"/> without the misuse gate. The caller guarantees that every <see cref="Append"/>,
+    /// <see cref="AppendOwned"/>, <see cref="AppendRange"/>, and <see cref="Clear"/> of this store is serialized by
+    /// the caller (the value-cache series holds its series gate around them). Readers stay lock-free: the slot is
+    /// written before the count is published with a release store, exactly as in <see cref="Append"/>.
+    /// </summary>
+    internal void AppendOwned(in T item)
+    {
+        while (true)
+        {
+            Generation generation = _Current;
+            int index = generation.Count;
+            Ids.ArrayIndexIdRange.ThrowIfInvalidNextIndex(index, "entry");
+            _WriteLiveSlot(generation, index, item);
+
+            // Release: readers that see the count see the slot. Re-check as in Append for a Clear that raced.
+            generation.Count = index + 1;
+            if (ReferenceEquals(_Current, generation))
+            {
+                return;
+            }
         }
     }
 
@@ -436,12 +466,19 @@ internal sealed class ChunkedSlotStore<T>
 
     private void _WriteLiveSlot(Generation generation, int index, T value)
     {
-        // The generation is the only allocator of its outer array and never clears it, so the returned chunk stays
-        // the live chunk of its index (single-allocator contract of ChunkedOuterArray); no re-check is needed.
-        ChunkedOuterArray<T[]> outer = generation.Outer;
-        (int chunkIdx, int slotIdx) = outer.DecomposeIndex(index);
-        T[] chunk = outer.GetOrAllocateChunk(chunkIdx, _ChunkFactory);
-        _WriteSlot(ref chunk[slotIdx], value);
+        // The generation is the only allocator of its outer array and never clears it, so a chunk it returned stays
+        // the live chunk of its index (single-allocator contract of ChunkedOuterArray); no re-check is needed. The
+        // tail cache skips the outer-array lookup for every append but the first of a chunk.
+        int chunkIndex = index >> _ChunkShift;
+        T[]? chunk = generation.Tail;
+        if (chunk is null || generation.TailChunkIndex != chunkIndex)
+        {
+            chunk = generation.Outer.GetOrAllocateChunk(chunkIndex, _ChunkFactory);
+            generation.Tail = chunk;
+            generation.TailChunkIndex = chunkIndex;
+        }
+
+        _WriteSlot(ref chunk[index & (_ChunkSize - 1)], value);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -658,6 +695,16 @@ public sealed class ChunkedGrowOnlyStore<T>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void Append(in T item) =>
         _Store.Append(in item);
+
+    /// <summary>
+    /// <see cref="Append"/> without the concurrent-writer check. The caller guarantees that every append and
+    /// <see cref="Clear"/> of this store is serialized by the caller; <c>ValueCacheSeries</c> calls it while holding
+    /// its series gate. Readers stay lock-free.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">The store reached <see cref="Ids.ArrayIndexIdRange.MaxValue"/>.</exception>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal void AppendOwned(in T item) =>
+        _Store.AppendOwned(in item);
 
     /// <summary>Appends <paramref name="values"/> as one publish. Empty span is a no-op.</summary>
     /// <exception cref="InvalidOperationException">

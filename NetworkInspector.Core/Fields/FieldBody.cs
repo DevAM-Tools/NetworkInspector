@@ -60,6 +60,26 @@ internal struct FieldBody
         _LazyIndex = 0;
     }
 
+    /// <summary>
+    /// Creates a detached child node for the shared insert path: value, optional custom text (default = none), and
+    /// parent; all sibling and child links <see cref="NullIndex"/>, child count 0, not lazy. Plain stores: the node is
+    /// published to other threads only through the packet's field-count release store.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal FieldBody(FieldId fieldId, FieldValue value, LazyString customText, ushort parentIndex)
+    {
+        _Value = value;
+        _CustomText = customText;
+        FieldId = fieldId;
+        _ParentIndex = parentIndex;
+        _FirstChildIndex = NullIndex;
+        _LastChildIndex = NullIndex;
+        _NextIndex = NullIndex;
+        _PrevIndex = NullIndex;
+        _ChildCount = 0;
+        _LazyIndex = 0;
+    }
+
     /// <summary>Creates a field body node with no value (container).</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal FieldBody(FieldId fieldId)

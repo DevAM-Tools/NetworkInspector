@@ -103,6 +103,17 @@ internal interface IProfilingScenario
     string WorkUnitName => "items";
 
     /// <summary>
+    /// Retained managed bytes per work unit measured by the scenario (for example an opened, fully scanned capture with
+    /// the source alive), or <see cref="double.NaN"/> when the scenario does not measure retained memory (default).
+    /// </summary>
+    /// <remarks>
+    /// The runner reads this once after the timed phase and before <see cref="Cleanup"/>; the value of the last
+    /// <see cref="Run"/> is reported. It feeds the console output, the A/B CSV, and the retained-memory table of the
+    /// report.
+    /// </remarks>
+    double RetainedBytesPerUnit => double.NaN;
+
+    /// <summary>
     /// Called once after warm-up completes and before the timed phase begins.
     /// Override to reset cursors or switch to a dedicated timed-phase workload.
     /// </summary>

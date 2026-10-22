@@ -157,4 +157,68 @@ internal sealed class AscEthernetParserTests
 
         await Assert.That(ok).IsFalse();
     }
+
+    [Test]
+    [Arguments("", null)]
+    [Arguments(" \t\r", null)]
+    [Arguments("aabb2233 4455", false)]
+    [Arguments("00112233", false)]
+    [Arguments("00112233 4455", true)]
+    [Arguments("  aabb\tCCDD", false)]
+    [Arguments("0.600000 1 123 Rx d 1 01", true)]
+    [Arguments("// comment", true)]
+    [Arguments("End TriggerBlock", true)]
+    [Arguments("ab cd zz", true)]
+    [Arguments("00112233\r", true)]
+    public async Task EndsPacketFollowsTheHexScan(string line, bool? expected)
+    {
+        // "00112233 4455": a leading all-digit token followed by more text looks like a timestamp, so the hex scan
+        // treats the line as a new logging event; EndsPacket must say the same.
+        // Arrange
+        byte[] bytes = Encoding.Latin1.GetBytes(line);
+
+        // Act
+        bool? ends = AscEthernetParser.EndsPacket(bytes);
+
+        // Assert
+        await Assert.That(ends).IsEqualTo(expected);
+    }
+
+    [Test]
+    [Arguments("0.500000 ETH 1 Rx e:001122334455", 16, true)]
+    [Arguments("0.500000 AFDX 1 Rx 2 3 4 e:0011", 16, true)]
+    [Arguments("0.500000 ETH 1 Rx e:", 16, true)]
+    [Arguments("0.500000 ETH 1 Rx", 16, false)]
+    [Arguments("0.500000 AFDX 1 Rx 2 3", 16, false)]
+    [Arguments("0.500000 ETH 1 STAT x:0", 16, false)]
+    [Arguments("0.500000 ETH 1 Rx 1518:00", 10, true)]
+    [Arguments("0.500000 ETH 1 Rx 1519:00", 10, false)]
+    public async Task HeaderFitsLineOnlyWhenTheColonIsOnTheLine(string line, int numericBase, bool expected)
+    {
+        // Arrange
+        byte[] bytes = Encoding.Latin1.GetBytes(line);
+
+        // Act
+        bool fits = AscEthernetParser.HeaderFitsLine(bytes, numericBase);
+
+        // Assert
+        await Assert.That(fits).IsEqualTo(expected);
+    }
+
+    [Test]
+    public async Task HeaderSplitByALineBreakStillParsesFromTheFullRecord()
+    {
+        // Arrange: the third AFDX field swallows the line break ("4\n5" has no blank), so the header does not fit the
+        // first line, yet the full record parses. This is why such a packet keeps the full read window.
+        byte[] record = Encoding.Latin1.GetBytes("0.500000 AFDX 1 Rx 2 3 4\n5 2:AABB\n");
+
+        // Act
+        bool fits = AscEthernetParser.HeaderFitsLine(record.AsSpan(0, record.AsSpan().IndexOf((byte)'\n')), 16);
+        bool parsed = AscEthernetParser.TryParse(record, 16, out _, out _, out byte[] frame);
+
+        // Assert
+        await Assert.That(fits).IsFalse();
+        await Assert.That(parsed).IsTrue();
+        await Assert.That(frame).IsEquivalentTo(new byte[] { 0xAA, 0xBB });
+    }
 }

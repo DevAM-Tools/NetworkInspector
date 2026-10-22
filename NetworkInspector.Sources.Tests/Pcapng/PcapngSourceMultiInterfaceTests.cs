@@ -24,12 +24,12 @@ internal sealed class PcapngSourceMultiInterfaceTests
     [Test]
     public async Task TwoEthernetInterfaces_FramesAssignedCorrectly()
     {
-        using PcapNgTestWriter writer = new();
+        using PcapngCaptureBuilder writer = new();
         uint iface0 = writer.AddInterface(LinkType.Ethernet, nanosecondResolution: true);
         uint iface1 = writer.AddInterface(LinkType.Ethernet, nanosecondResolution: true);
 
-        byte[] eth0 = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0xAA]);
-        byte[] eth1 = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0xBB]);
+        byte[] eth0 = TestFrames.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0xAA]);
+        byte[] eth1 = TestFrames.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0xBB]);
 
         writer.WriteFrame(iface0, 1_000_000_000, eth0);
         writer.WriteFrame(iface1, 2_000_000_000, eth1);
@@ -62,7 +62,7 @@ internal sealed class PcapngSourceMultiInterfaceTests
     [Test]
     public async Task InterleavedFrames_AllReadCorrectly()
     {
-        using PcapNgTestWriter writer = new();
+        using PcapngCaptureBuilder writer = new();
         uint iface0 = writer.AddInterface(LinkType.Ethernet, nanosecondResolution: true);
         uint iface1 = writer.AddInterface(LinkType.Ethernet, nanosecondResolution: true);
 
@@ -71,7 +71,7 @@ internal sealed class PcapngSourceMultiInterfaceTests
         {
             uint iface = (i % 2 == 0) ? iface0 : iface1;
             byte[] payload = [(byte)i];
-            byte[] eth = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, payload);
+            byte[] eth = TestFrames.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, payload);
             writer.WriteFrame(iface, (i + 1) * 1_000_000_000L, eth);
         }
 
@@ -98,7 +98,7 @@ internal sealed class PcapngSourceMultiInterfaceTests
     [Test]
     public async Task MultiInterface_RandomAccess_CorrectData()
     {
-        using PcapNgTestWriter writer = new();
+        using PcapngCaptureBuilder writer = new();
         writer.AddInterface(LinkType.Ethernet, nanosecondResolution: true);
         writer.AddInterface(LinkType.Ethernet, nanosecondResolution: true);
 
@@ -107,7 +107,7 @@ internal sealed class PcapngSourceMultiInterfaceTests
         {
             uint iface = (uint)(i % 2);
             byte[] payload = Enumerable.Repeat((byte)i, 10).ToArray();
-            byte[] eth = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, payload);
+            byte[] eth = TestFrames.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, payload);
             expected.Add(eth);
             writer.WriteFrame(iface, (i + 1) * 1_000_000_000L, eth);
         }

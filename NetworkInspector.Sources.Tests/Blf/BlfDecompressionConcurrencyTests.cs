@@ -37,7 +37,7 @@ internal sealed class BlfDecompressionConcurrencyTests
 {
     #region Helpers
 
-    private static readonly byte[] _CanFrame = FrameBuilders.BuildSocketCanClassic(0x123, [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]);
+    private static readonly byte[] _CanFrame = TestFrames.BuildSocketCanClassic(0x123, [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]);
 
     /// <summary>
     /// Builds a BLF file containing <paramref name="containerCount"/> compressed containers,
@@ -49,10 +49,10 @@ internal sealed class BlfDecompressionConcurrencyTests
         int framesPerContainer,
         ushort compressionMethod = 1 /* LZ4 */)
     {
-        BlfTestGenerator outer = new();
+        BlfCaptureBuilder outer = new();
         for (int c = 0; c < containerCount; c++)
         {
-            BlfTestGenerator inner = new();
+            BlfCaptureBuilder inner = new();
             for (int f = 0; f < framesPerContainer; f++)
             {
                 // Unique timestamp per frame to make payloads distinguishable.
@@ -206,7 +206,7 @@ internal sealed class BlfDecompressionConcurrencyTests
         const int framesPerContainer = 4; // 4 raw frames after the container so the index is non-empty
         byte[] rawCorruptPayload = new byte[16]; // too short to be a valid compressed stream
 
-        BlfTestGenerator gen = new();
+        BlfCaptureBuilder gen = new();
         gen.AddCorruptLogContainer(
             compressionMethod: 2 /* zlib */,
             claimedUncompressedSize: claimedSize,

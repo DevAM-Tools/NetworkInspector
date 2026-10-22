@@ -19,10 +19,10 @@ behavior, and the single source of truth for it. It was promoted here from the d
 ```mermaid
 flowchart TD
   S[Filter expression + IStack]
-  C[Compile: lex parse bind IDs JIT]
+  C[Compile: lex parse bind IDs build eval tree]
   P[Optional TryParse / GetCompletions for editors]
   I[PacketIndex presence prune]
-  E[JIT eval per packet using IDs only]
+  E[Eval per packet using IDs only]
   M[Match cache on filter]
   D[TryDerive new stack]
   S --> C --> I --> E --> M
@@ -33,9 +33,9 @@ flowchart TD
 
 | Idea | Meaning |
 |------|---------|
-| Stack at compile | **Public** `Compile(expr, stack)` binds names and JIT in one step. No separate `Resolve` |
+| Stack at compile | **Public** `Compile(expr, stack)` binds names and builds the evaluation tree in one step. No separate `Resolve` |
 | Unknown name = error | Field/protocol/alias unknown on that stack → **compile error** (not a silent non-match) |
-| IDs in the hot path | Successful compile → JIT/eval uses `FieldId` / `ProtocolId` / `IndexGroupId` / `FieldAliasGroupId` only |
+| IDs in the hot path | Successful compile → evaluation uses `FieldId` / `ProtocolId` / `IndexGroupId` / `FieldAliasGroupId` only |
 | TryParse (optional) | Syntax/UI spans **without** a stack — does **not** produce a matchable filter |
 | Empty filter | Valid; `AlwaysMatch`; stack optional/ignored |
 | Index first | Presence bitmaps avoid FieldTree work when possible |
@@ -44,8 +44,8 @@ flowchart TD
 | `flank` | Stateful edge detect: pairwise arrival/departure/`changed`/`by:`, plus **armed** `from:`+`to:`/`by:` (oldest in-window Arm + Next); O(1) two-slot state |
 | Field names in scope | Always **qualified** (`udp.port`); no relative short names; search limited to current subtree |
 | Cache | After first ascending eval of packet *N*, later queries for *N* are O(1) |
-| Poison | Eval context error (e.g. regex timeout) → sticky fail until `ResetState` / `TryDerive`; unexpected JIT throws poison only when stateful |
-| Derive | New stack → new filter from same `Expression` (re-bind + re-JIT; skip re-lex when AST retained) |
+| Poison | Eval context error (e.g. regex timeout) → sticky fail until `ResetState` / `TryDerive`; unexpected evaluation exceptions poison only when stateful |
+| Derive | New stack → new filter from same `Expression` (re-bind + rebuild the evaluation tree; skip re-lex when AST retained) |
 
 ### 1.1 Public API: one compile step (no public Resolve)
 
@@ -88,7 +88,7 @@ Filter.TryParse("tcp.por == ", new FilterCompileOptions { OnFieldNameSpan = ... 
 
 **CLI / Session:** build (or reuse) the session stack, then `Compile(expr, stack)`. Empty/`AlwaysMatch` needs no field binding. CLI command implementations: `NetworkInspector.CLI.Core`.
 
-**Internal note:** lex → bind → JIT may still be separate phases inside `Compile`; they are **not** separate public steps.
+**Internal note:** lex → bind → evaluation-tree build may still be separate phases inside `Compile`; they are **not** separate public steps.
 
 ---
 
@@ -215,7 +215,7 @@ Aliases are **metadata on the stack**, not nodes in the parse tree. Example: `et
 | Compare `alias == X` | **Any-member, any-occurrence**: match if any member field’s any tree occurrence equals `X` |
 | Presence `eth.addr` | True if any member is present (index: union of members’ groups when prunable) |
 | Unknown alias | Compile error (same as unknown field) |
-| JIT | Closed over `FieldAliasGroupId` + member `FieldId[]` from the stack at compile time |
+| Compiled evaluation | Closed over `FieldAliasGroupId` + member `FieldId[]` from the stack at compile time |
 
 ```text
 eth.addr == aa:bb:cc:dd:ee:ff
@@ -1066,7 +1066,7 @@ Filter.TryParse("tcp.por == ", options);
 
 ### 8.2 Match cache (evaluated + result)
 
-After the first successful eval of packet id `N`, a later `TryIsMatch` for `N` must **not** re-run the JIT body.
+After the first successful eval of packet id `N`, a later `TryIsMatch` for `N` must **not** re-run the compiled body.
 
 `FilterCompileOptions.EnableMatchCache` defaults to `true`. Set it to `false` when a long-lived filter will touch unbounded packet ids and you cannot afford the per-id bitmaps (for example a streaming convert that never re-queries). Derive copies the flag from the source filter. The flag is **ignored for stateful filters** (any `flank(…)`): they always keep the cache, because re-querying a packet without it would feed its sample to the tracker a second time.
 
@@ -1074,7 +1074,7 @@ Important: cache must distinguish:
 
 | State | Meaning |
 |-------|---------|
-| Not yet evaluated | Must run JIT (first time in ascending pass) |
+| Not yet evaluated | Must run the compiled body (first time in ascending pass) |
 | Evaluated, matched | Return true |
 | Evaluated, not matched | Return false **without** re-eval |
 
@@ -1102,7 +1102,7 @@ filter.TryDerive(newStack, out Filter? fresh, out _); // new instance, not poiso
 |-------|---------------------|------------------|
 | `FilterErrorKind.NoFieldTree` (skip packet) | Not poisoned | Not poisoned |
 | `context.Error` (regex timeout, …) | Sticky poison | Sticky poison |
-| Unexpected exception from JIT root | Propagates (no poison); eval context unbound | Sticky poison |
+| Unexpected exception from the compiled root | Propagates (no poison); eval context unbound | Sticky poison |
 | Out-of-order packet id | N/A | Sticky poison |
 
 Sticky poison keeps Sessions/CLI fail-closed: once a filter cannot decide, later packets must not silently pass or drop.
@@ -1113,7 +1113,7 @@ Sticky poison keeps Sessions/CLI fail-closed: once a filter cannot decide, later
 // Session.Restart replaced the protocol stack
 if (!oldFilter.TryDerive(newStack, out Filter? rebound, out FilterError? err))
 {
-    // fail closed — do not keep old FieldId JIT
+    // fail closed — do not keep the old FieldId evaluation tree
 }
 // rebound.Expression == oldFilter.Expression
 // rebound has fresh cache, flank state, IsPoisoned == false
@@ -1122,7 +1122,7 @@ if (!oldFilter.TryDerive(newStack, out Filter? rebound, out FilterError? err))
 
 `AlwaysMatch.TryDerive` → `AlwaysMatch`.
 
-Internally Derive re-binds symbols and re-JITs from the retained AST (no lex/parse). The match-cache policy and the compiled `matches` patterns, with their `RegexTimeout`, carry over. There is **no** public in-place rebind.
+Internally Derive re-binds symbols and rebuilds the evaluation tree from the retained AST (no lex/parse). The match-cache policy and the compiled `matches` patterns, with their `RegexTimeout`, carry over. There is **no** public in-place rebind.
 
 Through the interface, `IFilter.TryDerive(stack, out IFilter? derived, out FilterError? failure)` returns an `IFilter`; `Filter` additionally offers the concrete `TryDerive(stack, out Filter? derived, out FilterError? failure)` used above.
 
@@ -1212,7 +1212,7 @@ Commands live in **`NetworkInspector.CLI.Core`**; the `ni` executable (`NetworkI
 ni convert in.pcap -o out.pcapng
 ni convert in.pcap -o out.pcapng --filter ""
 
-# Non-empty → build stack, parse, JIT filter, emit matches only
+# Non-empty → build stack, parse, compile filter, emit matches only
 ni convert in.pcap -o out.pcapng --filter "udp.dstport == 53"
 ni export in.pcap -o out.json --filter "tcp && tcp.port == 443"
 ```
@@ -1307,9 +1307,9 @@ MCP filter tools: **later**.
 
 ---
 
-## 12. Profiling scenario names (JIT only)
+## 12. Profiling scenario names
 
-Every scenario has a `-nomatch` twin that measures the miss path on the same traffic.
+The evaluation scenarios have a `-nomatch` twin that measures the miss path on the same traffic.
 
 | Name | Intent |
 |------|--------|
@@ -1320,6 +1320,10 @@ Every scenario has a `-nomatch` twin that measures the miss path on the same tra
 | `filter-flank` | Stateful `from: < 100, to: >= 200` within 50 packets |
 | `filter-flank-prune` | `tcp && flank(…)` on UDP-only traffic — no candidate bitmap for stateful programs |
 | `filter-*-nomatch` | Same expressions (or a TCP twin) where nothing matches |
+| `filter-multi-nomatch` | Four distinct fields, no index, no match — every term reads the whole packet |
+| `filter-compile` | Compile throughput of four expressions (compound, scoped, flank, set) |
+| `parse-combo-filter-observer-flank` | Skip parse with a tree-free observer that holds a flank |
+| `session-read-matching` | Listener matching read where every packet matches (`-pruned`: the index rejects all; `-sparse`: 2 % match) |
 
 ---
 
@@ -1350,7 +1354,7 @@ Every scenario has a `-nomatch` twin that measures the miss path on the same tra
 
 | Dev | v1 main |
 |-----|---------|
-| VM + optional JIT projects | Single project, JIT only |
+| VM + optional JIT projects | Single project, compiled evaluation tree only (expression trees until 0.18) |
 | `seq` / `stream` / `window` | Removed |
 | `let` / `where` | Removed |
 | Value-cache prune | Removed (presence index only) |

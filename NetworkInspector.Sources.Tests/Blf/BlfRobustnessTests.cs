@@ -27,11 +27,11 @@ internal sealed class BlfRobustnessTests
             BlfConstants.ObjTypeEthernetErrorEx,
             BlfConstants.ObjTypeEthernetErrorForwarded,
         ];
-        BlfTestGenerator gen = new();
+        BlfCaptureBuilder gen = new();
         List<byte[]> expected = [];
         for (int i = 0; i < types.Length; i++)
         {
-            byte[] eth = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [(byte)i, 0x42]);
+            byte[] eth = TestFrames.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [(byte)i, 0x42]);
             expected.Add(eth);
             _ = gen.AddEthernetFrameEx(types[i], 2, eth, (i + 1) * 1_000_000L);
         }
@@ -97,8 +97,8 @@ internal sealed class BlfRobustnessTests
     [Test]
     public async Task ObjectCutByTheEndOfTheFileIsReported()
     {
-        byte[] can = FrameBuilders.BuildSocketCanClassic(0x100, [1, 2, 3, 4]);
-        byte[] full = new BlfTestGenerator()
+        byte[] can = TestFrames.BuildSocketCanClassic(0x100, [1, 2, 3, 4]);
+        byte[] full = new BlfCaptureBuilder()
             .AddCanFrame(1, can, 1_000_000)
             .AddCanFrame(1, can, 2_000_000)
             .Build();
@@ -120,8 +120,8 @@ internal sealed class BlfRobustnessTests
     public async Task ShortRawCanObjectIsReportedAndReadingContinues()
     {
         // A CAN message object whose payload is too short to hold the id and data must raise a skip event, not vanish.
-        byte[] can = FrameBuilders.BuildSocketCanClassic(0x200, [9]);
-        byte[] data = new BlfTestGenerator()
+        byte[] can = TestFrames.BuildSocketCanClassic(0x200, [9]);
+        byte[] data = new BlfCaptureBuilder()
             .AddRawObject(BlfConstants.ObjTypeCanMessage, 1_000_000, [1, 0, 0, 8])
             .AddCanFrame(1, can, 2_000_000)
             .Build();
@@ -144,11 +144,11 @@ internal sealed class BlfRobustnessTests
     public async Task StrictModeYieldsTheFramesBeforeTheFirstError(ScanMode scanMode)
     {
         // The full scan finds the bad object at open; strict mode must still stop at it in file order, like the lazy scan.
-        byte[] data = new BlfTestGenerator()
-            .AddCanFrame(1, FrameBuilders.BuildSocketCanClassic(0x101, [1]), 1_000_000)
-            .AddCanFrame(1, FrameBuilders.BuildSocketCanClassic(0x102, [2]), 2_000_000)
+        byte[] data = new BlfCaptureBuilder()
+            .AddCanFrame(1, TestFrames.BuildSocketCanClassic(0x101, [1]), 1_000_000)
+            .AddCanFrame(1, TestFrames.BuildSocketCanClassic(0x102, [2]), 2_000_000)
             .AddRawObject(BlfConstants.ObjTypeCanMessage, 3_000_000, [1, 0, 0, 8])
-            .AddCanFrame(1, FrameBuilders.BuildSocketCanClassic(0x104, [4]), 4_000_000)
+            .AddCanFrame(1, TestFrames.BuildSocketCanClassic(0x104, [4]), 4_000_000)
             .Build();
 
         using BlfSource source = BlfSource.FromData(
@@ -167,12 +167,12 @@ internal sealed class BlfRobustnessTests
     {
         // One container indexes all its frames in one scan step; the failure in the middle must still be reported
         // after the two frames in front of it, not before the container's first frame.
-        BlfTestGenerator inner = new BlfTestGenerator()
-            .AddCanFrame(1, FrameBuilders.BuildSocketCanClassic(0x101, [1]), 1_000_000)
-            .AddCanFrame(1, FrameBuilders.BuildSocketCanClassic(0x102, [2]), 2_000_000)
+        BlfCaptureBuilder inner = new BlfCaptureBuilder()
+            .AddCanFrame(1, TestFrames.BuildSocketCanClassic(0x101, [1]), 1_000_000)
+            .AddCanFrame(1, TestFrames.BuildSocketCanClassic(0x102, [2]), 2_000_000)
             .AddRawObject(BlfConstants.ObjTypeCanMessage, 3_000_000, [1])
-            .AddCanFrame(1, FrameBuilders.BuildSocketCanClassic(0x104, [4]), 4_000_000);
-        byte[] data = new BlfTestGenerator().AddLogContainer(BlfConstants.CompressionNone, inner).Build();
+            .AddCanFrame(1, TestFrames.BuildSocketCanClassic(0x104, [4]), 4_000_000);
+        byte[] data = new BlfCaptureBuilder().AddLogContainer(BlfConstants.CompressionNone, inner).Build();
 
         using BlfSource strict = BlfSource.FromData(
             data, "strict.blf", new BlfSourceOptions { ScanMode = scanMode, ErrorTolerance = ErrorToleranceMode.Strict });
@@ -220,13 +220,13 @@ internal sealed class BlfRobustnessTests
     public async Task SequentialReadReusesTheScannerContainer(ScanMode scanMode)
     {
         const int frameCount = 40;
-        BlfTestGenerator inner = new();
+        BlfCaptureBuilder inner = new();
         for (int i = 0; i < frameCount; i++)
         {
-            _ = inner.AddCanFrame(1, FrameBuilders.BuildSocketCanClassic(0x300u + (uint)i, [(byte)i]), (i + 1) * 1_000L);
+            _ = inner.AddCanFrame(1, TestFrames.BuildSocketCanClassic(0x300u + (uint)i, [(byte)i]), (i + 1) * 1_000L);
         }
 
-        byte[] data = new BlfTestGenerator().AddLogContainer(BlfConstants.CompressionLz4, inner).Build();
+        byte[] data = new BlfCaptureBuilder().AddLogContainer(BlfConstants.CompressionLz4, inner).Build();
         using BlfSource source = BlfSource.FromData(data, "lz4.blf", new BlfSourceOptions { ScanMode = scanMode });
 
         List<Frame> frames = _Drain(source, out _);
@@ -247,8 +247,8 @@ internal sealed class BlfRobustnessTests
     [Test]
     public async Task FromStreamAppliesTheOptions()
     {
-        byte[] can = FrameBuilders.BuildSocketCanClassic(0x100, [1]);
-        byte[] data = new BlfTestGenerator()
+        byte[] can = TestFrames.BuildSocketCanClassic(0x100, [1]);
+        byte[] data = new BlfCaptureBuilder()
             .AddRawObject(BlfConstants.ObjTypeCanMessage, 1_000_000, [1, 0, 0, 8])
             .AddCanFrame(1, can, 2_000_000)
             .Build();
@@ -266,10 +266,10 @@ internal sealed class BlfRobustnessTests
     public async Task UnbufferedStreamIsReadInLargeChunks()
     {
         const int frameCount = 200;
-        BlfTestGenerator gen = new();
+        BlfCaptureBuilder gen = new();
         for (int i = 0; i < frameCount; i++)
         {
-            _ = gen.AddCanFrame(1, FrameBuilders.BuildSocketCanClassic(0x100u + (uint)i, [(byte)i]), (i + 1) * 1_000L);
+            _ = gen.AddCanFrame(1, TestFrames.BuildSocketCanClassic(0x100u + (uint)i, [(byte)i]), (i + 1) * 1_000L);
         }
 
         byte[] data = gen.Build();

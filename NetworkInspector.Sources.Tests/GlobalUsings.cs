@@ -15,6 +15,7 @@ global using System.Runtime.InteropServices;
 global using System.Text;
 global using System.Threading;
 global using System.Threading.Tasks;
+global using static System.FormattableString;
 #endregion
 
 #region NetworkInspector.Core
@@ -41,6 +42,7 @@ global using NetworkInspector.Sources.Blf.Format;
 global using NetworkInspector.Sources.Blf.Format.Headers;
 global using NetworkInspector.Sources.Blf.Format.Objects;
 global using NetworkInspector.Sources.Cached;
+global using NetworkInspector.Sources.Collections;
 global using NetworkInspector.Sources.Pcapng;
 global using NetworkInspector.Sources.Pcapng.Format;
 global using NetworkInspector.Sources.Pcapng.Format.Blocks;
@@ -57,4 +59,5 @@ global using ZeroAlloc;
 global using TUnit.Assertions;
 global using TUnit.Assertions.Extensions;
 global using TUnit.Core;
+global using TUnit.Core.Enums;
 #endregion

@@ -21,16 +21,16 @@ internal sealed class BlfCompressionTests
 {
     #region Helpers
 
-    private static readonly byte[] _CanFrame = FrameBuilders.BuildSocketCanClassic(0x123, [0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88]);
+    private static readonly byte[] _CanFrame = TestFrames.BuildSocketCanClassic(0x123, [0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88]);
 
     /// <summary>
     /// Builds an inner generator with <paramref name="count"/> identical CAN frames.
     /// Ten frames (480 bytes of repetitive LOBJ structure) is sufficient for LZ4 to
     /// achieve a compressed output smaller than the input.
     /// </summary>
-    private static BlfTestGenerator _InnerCanFrames(int count = 10)
+    private static BlfCaptureBuilder _InnerCanFrames(int count = 10)
     {
-        BlfTestGenerator gen = new();
+        BlfCaptureBuilder gen = new();
         for (int i = 0; i < count; i++)
         {
             gen.AddCanFrame(1, _CanFrame, (i + 1) * 1_000_000L);
@@ -254,7 +254,7 @@ internal sealed class BlfCompressionTests
     [Test]
     public async Task BlfSource_LogContainer_None_AllFramesParsed()
     {
-        byte[] blfData = new BlfTestGenerator()
+        byte[] blfData = new BlfCaptureBuilder()
             .AddLogContainer(BlfConstants.CompressionNone, _InnerCanFrames(5))
             .Build();
 
@@ -274,7 +274,7 @@ internal sealed class BlfCompressionTests
     [Test]
     public async Task BlfSource_LogContainer_Lz4_AllFramesParsed()
     {
-        byte[] blfData = new BlfTestGenerator()
+        byte[] blfData = new BlfCaptureBuilder()
             .AddLogContainer(BlfConstants.CompressionLz4, _InnerCanFrames(10))
             .Build();
 
@@ -295,7 +295,7 @@ internal sealed class BlfCompressionTests
     [Test]
     public async Task BlfSource_LogContainer_Zlib_AllFramesParsed()
     {
-        byte[] blfData = new BlfTestGenerator()
+        byte[] blfData = new BlfCaptureBuilder()
             .AddLogContainer(BlfConstants.CompressionZlib, _InnerCanFrames(10))
             .Build();
 
@@ -316,7 +316,7 @@ internal sealed class BlfCompressionTests
     [Test]
     public async Task BlfSource_MultipleContainersMixedCompression_AllFramesParsed()
     {
-        byte[] blfData = new BlfTestGenerator()
+        byte[] blfData = new BlfCaptureBuilder()
             .AddLogContainer(BlfConstants.CompressionNone, _InnerCanFrames(4))
             .AddLogContainer(BlfConstants.CompressionLz4, _InnerCanFrames(10))
             .AddLogContainer(BlfConstants.CompressionZlib, _InnerCanFrames(6))
@@ -336,7 +336,7 @@ internal sealed class BlfCompressionTests
     [Test]
     public async Task BlfSource_CorruptLogContainer_Lazy_SkippedAndContinues()
     {
-        byte[] blfData = new BlfTestGenerator()
+        byte[] blfData = new BlfCaptureBuilder()
             // Corrupt container: claims 200 uncompressed bytes but payload is 4 garbage bytes.
             .AddCorruptLogContainer(BlfConstants.CompressionLz4, 200, [0xDE, 0xAD, 0xBE, 0xEF])
             // Valid container follows: must still be parsed.
@@ -364,7 +364,7 @@ internal sealed class BlfCompressionTests
     [Test]
     public async Task BlfSource_LogContainer_WrongUncompressedSize_Lazy_SkippedAndContinues()
     {
-        byte[] blfData = new BlfTestGenerator()
+        byte[] blfData = new BlfCaptureBuilder()
             // LZ4-compressed with correct compressed data but wrong declared output size.
             .AddLogContainerWithWrongSize(BlfConstants.CompressionLz4, _InnerCanFrames(5), wrongUncompressedSize: 9999)
             .AddLogContainer(BlfConstants.CompressionNone, _InnerCanFrames(2))
@@ -390,7 +390,7 @@ internal sealed class BlfCompressionTests
     [Test]
     public async Task BlfStreamSource_LogContainer_None_AllFramesParsed()
     {
-        byte[] blfData = new BlfTestGenerator()
+        byte[] blfData = new BlfCaptureBuilder()
             .AddLogContainer(BlfConstants.CompressionNone, _InnerCanFrames(5))
             .Build();
 
@@ -410,7 +410,7 @@ internal sealed class BlfCompressionTests
     [Test]
     public async Task BlfStreamSource_LogContainer_Lz4_AllFramesParsed()
     {
-        byte[] blfData = new BlfTestGenerator()
+        byte[] blfData = new BlfCaptureBuilder()
             .AddLogContainer(BlfConstants.CompressionLz4, _InnerCanFrames(10))
             .Build();
 
@@ -430,7 +430,7 @@ internal sealed class BlfCompressionTests
     [Test]
     public async Task BlfStreamSource_LogContainer_Zlib_AllFramesParsed()
     {
-        byte[] blfData = new BlfTestGenerator()
+        byte[] blfData = new BlfCaptureBuilder()
             .AddLogContainer(BlfConstants.CompressionZlib, _InnerCanFrames(10))
             .Build();
 
@@ -452,7 +452,7 @@ internal sealed class BlfCompressionTests
     [Test]
     public async Task BlfStreamSource_CorruptLogContainer_SkippedAndContinues()
     {
-        byte[] blfData = new BlfTestGenerator()
+        byte[] blfData = new BlfCaptureBuilder()
             // Corrupt Zlib payload: invalid stream header causes InvalidDataException,
             // which must be wrapped as BlfException (regression guard for the fix in BlfContainer).
             .AddCorruptLogContainer(BlfConstants.CompressionZlib, 200, [0xDE, 0xAD, 0xBE, 0xEF])
@@ -476,7 +476,7 @@ internal sealed class BlfCompressionTests
     [Test]
     public async Task BlfStreamSource_UnsupportedCompressionMethod_SkippedAndContinues()
     {
-        byte[] blfData = new BlfTestGenerator()
+        byte[] blfData = new BlfCaptureBuilder()
             .AddCorruptLogContainer(99, 100, [0x01, 0x02, 0x03, 0x04])
             .AddLogContainer(BlfConstants.CompressionNone, _InnerCanFrames(2))
             .Build();
@@ -592,7 +592,7 @@ internal sealed class BlfCompressionTests
     public async Task BlfSource_Lazy_LimitExceeded_Throws()
     {
         // Build a valid LZ4 container whose uncompressed payload exceeds 10 bytes.
-        byte[] blfData = new BlfTestGenerator()
+        byte[] blfData = new BlfCaptureBuilder()
             .AddLogContainer(BlfConstants.CompressionLz4, _InnerCanFrames(5))
             .Build();
 
@@ -615,7 +615,7 @@ internal sealed class BlfCompressionTests
     [Test]
     public async Task BlfSource_FullScan_LimitExceeded_Throws()
     {
-        byte[] blfData = new BlfTestGenerator()
+        byte[] blfData = new BlfCaptureBuilder()
             .AddLogContainer(BlfConstants.CompressionLz4, _InnerCanFrames(5))
             .Build();
 
@@ -644,7 +644,7 @@ internal sealed class BlfCompressionTests
     [Test]
     public async Task BlfSource_FrameById_LimitEnforcedViaFullScan_Throws()
     {
-        byte[] blfData = new BlfTestGenerator()
+        byte[] blfData = new BlfCaptureBuilder()
             .AddLogContainer(BlfConstants.CompressionLz4, _InnerCanFrames(5))
             .Build();
 
@@ -670,7 +670,7 @@ internal sealed class BlfCompressionTests
     [Test]
     public async Task BlfSource_LimitSufficient_AllFramesParsed()
     {
-        byte[] blfData = new BlfTestGenerator()
+        byte[] blfData = new BlfCaptureBuilder()
             .AddLogContainer(BlfConstants.CompressionLz4, _InnerCanFrames(5))
             .Build();
 
@@ -695,7 +695,7 @@ internal sealed class BlfCompressionTests
     [Test]
     public async Task BlfStreamSource_LimitExceeded_Throws()
     {
-        byte[] blfData = new BlfTestGenerator()
+        byte[] blfData = new BlfCaptureBuilder()
             .AddLogContainer(BlfConstants.CompressionLz4, _InnerCanFrames(5))
             .Build();
 
@@ -714,7 +714,7 @@ internal sealed class BlfCompressionTests
     [Test]
     public async Task BlfStreamSource_LimitSufficient_AllFramesParsed()
     {
-        byte[] blfData = new BlfTestGenerator()
+        byte[] blfData = new BlfCaptureBuilder()
             .AddLogContainer(BlfConstants.CompressionLz4, _InnerCanFrames(5))
             .Build();
 
@@ -826,7 +826,7 @@ internal sealed class BlfCompressionTests
     {
         for (int count = 10; count <= 40; count++)
         {
-            byte[] blf = new BlfTestGenerator()
+            byte[] blf = new BlfCaptureBuilder()
                 .AddLogContainer(compressionMethod, _InnerCanFrames(count))
                 .Build();
             uint objectLength = BinaryPrimitives.ReadUInt32LittleEndian(blf.AsSpan(144 + 8));

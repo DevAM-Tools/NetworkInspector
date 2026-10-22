@@ -15,7 +15,7 @@ internal sealed class PcapngStreamSourceParityTests
     [Test]
     public async Task IfTsOffsetSeconds_ShiftsTimestampByWholeSeconds()
     {
-        using PcapNgTestWriter writer = new();
+        using PcapngCaptureBuilder writer = new();
         writer.AddInterface(LinkType.Ethernet, nanosecondResolution: false, timestampOffsetSeconds: 1);
         writer.WriteFrame(0, 0, [0xDE, 0xAD, 0xBE, 0xEF]);
 
@@ -31,7 +31,7 @@ internal sealed class PcapngStreamSourceParityTests
     public async Task OrigLenOnDisk_IsIgnored_FrameUsesCapturedBytes()
     {
         byte[] captured = [0x01, 0x02, 0x03, 0x04];
-        using PcapNgTestWriter writer = new();
+        using PcapngCaptureBuilder writer = new();
         writer.AddInterface(LinkType.Ethernet, nanosecondResolution: true);
         writer.WriteFrame(0, 1_000_000_000, captured, originalLength: 512);
 
@@ -48,7 +48,7 @@ internal sealed class PcapngStreamSourceParityTests
     public async Task UnknownDltPassesThroughWithItsNumberAndBytes()
     {
         byte[] payload = [0xAA, 0xBB, 0xCC, 0xDD];
-        using PcapNgTestWriter writer = new();
+        using PcapngCaptureBuilder writer = new();
         writer.AddInterface(LinkType.Ethernet, nanosecondResolution: true, rawLinkType: _UnknownDlt);
         writer.WriteFrame(0, 1_000_000_000, payload);
 
@@ -70,7 +70,7 @@ internal sealed class PcapngStreamSourceParityTests
     [Test]
     public async Task FirstShb_Length29_RoundedReadDoesNotFit_ReturnsNull()
     {
-        byte[] data = PcapNgBlockFactory.TruncatedShbHeader(29);
+        byte[] data = PcapngBlocks.TruncatedShbHeader(29);
         using PcapngStreamSource source = _CreateSource(data);
         SourceTestFixture.InitializeAndStartSource(source);
 
@@ -82,9 +82,9 @@ internal sealed class PcapngStreamSourceParityTests
     [Test]
     public async Task Epb_BlockLength33_RaisesCorruptedBlockAndExhausts()
     {
-        byte[] data = PcapNgBlockFactory.Append(
-            PcapNgBlockFactory.ShbAndEthernetIdb(),
-            PcapNgBlockFactory.EpbLengthHeader(33));
+        byte[] data = PcapngBlocks.Append(
+            PcapngBlocks.ShbAndEthernetIdb(),
+            PcapngBlocks.EpbLengthHeader(33));
 
         using PcapngStreamSource source = _CreateSource(data);
         source.ErrorTolerance = ErrorToleranceMode.Tolerant;
@@ -105,8 +105,8 @@ internal sealed class PcapngStreamSourceParityTests
     public async Task Epb_TrailingLengthMismatch_RaisesCorruptedBlockAndExhausts()
     {
         byte[] payload = [0x01, 0x02, 0x03, 0x04];
-        byte[] epb = PcapNgBlockFactory.EnhancedPacket(0, payload, trailingLength: 32);
-        byte[] data = PcapNgBlockFactory.Append(PcapNgBlockFactory.ShbAndEthernetIdb(), epb);
+        byte[] epb = PcapngBlocks.EnhancedPacket(0, payload, trailingLength: 32);
+        byte[] data = PcapngBlocks.Append(PcapngBlocks.ShbAndEthernetIdb(), epb);
 
         using PcapngStreamSource source = _CreateSource(data);
         source.ErrorTolerance = ErrorToleranceMode.Tolerant;
@@ -128,10 +128,10 @@ internal sealed class PcapngStreamSourceParityTests
     public async Task EpbTrailingLengthRoundsUpToLeadingYieldsPacket(int shortfall)
     {
         byte[] payload = [0x01, 0x02, 0x03, 0x04];
-        byte[] sized = PcapNgBlockFactory.EnhancedPacket(0, payload);
+        byte[] sized = PcapngBlocks.EnhancedPacket(0, payload);
         uint leading = BinaryPrimitives.ReadUInt32LittleEndian(sized.AsSpan(4));
-        byte[] epb = PcapNgBlockFactory.EnhancedPacket(0, payload, trailingLength: leading - (uint)shortfall);
-        byte[] data = PcapNgBlockFactory.Append(PcapNgBlockFactory.ShbAndEthernetIdb(), epb);
+        byte[] epb = PcapngBlocks.EnhancedPacket(0, payload, trailingLength: leading - (uint)shortfall);
+        byte[] data = PcapngBlocks.Append(PcapngBlocks.ShbAndEthernetIdb(), epb);
 
         using PcapngStreamSource source = _CreateSource(data);
         SourceTestFixture.InitializeAndStartSource(source);
@@ -146,10 +146,10 @@ internal sealed class PcapngStreamSourceParityTests
     public async Task EpbTrailingLengthAboveLeadingExhausts()
     {
         byte[] payload = [0x01, 0x02, 0x03, 0x04];
-        byte[] sized = PcapNgBlockFactory.EnhancedPacket(0, payload);
+        byte[] sized = PcapngBlocks.EnhancedPacket(0, payload);
         uint leading = BinaryPrimitives.ReadUInt32LittleEndian(sized.AsSpan(4));
-        byte[] epb = PcapNgBlockFactory.EnhancedPacket(0, payload, trailingLength: leading + 4);
-        byte[] data = PcapNgBlockFactory.Append(PcapNgBlockFactory.ShbAndEthernetIdb(), epb);
+        byte[] epb = PcapngBlocks.EnhancedPacket(0, payload, trailingLength: leading + 4);
+        byte[] data = PcapngBlocks.Append(PcapngBlocks.ShbAndEthernetIdb(), epb);
 
         using PcapngStreamSource source = _CreateSource(data);
         source.ErrorTolerance = ErrorToleranceMode.Tolerant;
@@ -167,8 +167,8 @@ internal sealed class PcapngStreamSourceParityTests
     [Test]
     public async Task Epb_UnknownInterface_RaisesFrameSkipped()
     {
-        byte[] epb = PcapNgBlockFactory.EnhancedPacket(5, [0x01, 0x02, 0x03, 0x04]);
-        byte[] data = PcapNgBlockFactory.Append(PcapNgBlockFactory.ShbAndEthernetIdb(), epb);
+        byte[] epb = PcapngBlocks.EnhancedPacket(5, [0x01, 0x02, 0x03, 0x04]);
+        byte[] data = PcapngBlocks.Append(PcapngBlocks.ShbAndEthernetIdb(), epb);
 
         using PcapngStreamSource source = _CreateSource(data);
         source.ErrorTolerance = ErrorToleranceMode.Tolerant;
@@ -187,8 +187,8 @@ internal sealed class PcapngStreamSourceParityTests
     public async Task Epb_CapLenDoesNotFitWithPad_Skips()
     {
         byte[] payload = new byte[61];
-        byte[] epb = PcapNgBlockFactory.EnhancedPacket(0, payload, capturedLength: 65);
-        byte[] data = PcapNgBlockFactory.Append(PcapNgBlockFactory.ShbAndEthernetIdb(), epb);
+        byte[] epb = PcapngBlocks.EnhancedPacket(0, payload, capturedLength: 65);
+        byte[] data = PcapngBlocks.Append(PcapngBlocks.ShbAndEthernetIdb(), epb);
 
         using PcapngStreamSource source = _CreateSource(data);
         source.ErrorTolerance = ErrorToleranceMode.Tolerant;
@@ -208,9 +208,9 @@ internal sealed class PcapngStreamSourceParityTests
     {
         byte[] payload = new byte[61];
         payload[60] = 0xEE;
-        byte[] options = PcapNgBlockFactory.CommentOptionAndEnd("abcd");
-        byte[] epb = PcapNgBlockFactory.EnhancedPacket(0, payload, options: options);
-        byte[] data = PcapNgBlockFactory.Append(PcapNgBlockFactory.ShbAndEthernetIdb(), epb);
+        byte[] options = PcapngBlocks.CommentOptionAndEnd("abcd");
+        byte[] epb = PcapngBlocks.EnhancedPacket(0, payload, options: options);
+        byte[] data = PcapngBlocks.Append(PcapngBlocks.ShbAndEthernetIdb(), epb);
 
         using PcapngStreamSource source = _CreateSource(data);
         SourceTestFixture.InitializeAndStartSource(source);
@@ -225,14 +225,14 @@ internal sealed class PcapngStreamSourceParityTests
     public async Task EpbLeadingLength33_WithPaddedBytes_ReturnsPacketAndTheNextBlock()
     {
         byte[] payload = [0x01, 0x02, 0x03, 0x04];
-        byte[] first = PcapNgBlockFactory.EnhancedPacket(0, payload);
+        byte[] first = PcapngBlocks.EnhancedPacket(0, payload);
         uint shortLength = (uint)first.Length - 3u;
         BinaryPrimitives.WriteUInt32LittleEndian(first.AsSpan(4), shortLength);
         BinaryPrimitives.WriteUInt32LittleEndian(first.AsSpan(first.Length - 4), shortLength);
         byte[] secondPayload = [0xAA];
-        byte[] second = PcapNgBlockFactory.EnhancedPacket(0, secondPayload);
-        byte[] data = PcapNgBlockFactory.Append(
-            PcapNgBlockFactory.Append(PcapNgBlockFactory.ShbAndEthernetIdb(), first),
+        byte[] second = PcapngBlocks.EnhancedPacket(0, secondPayload);
+        byte[] data = PcapngBlocks.Append(
+            PcapngBlocks.Append(PcapngBlocks.ShbAndEthernetIdb(), first),
             second);
 
         using PcapngStreamSource source = _CreateSource(data);
@@ -249,7 +249,7 @@ internal sealed class PcapngStreamSourceParityTests
     [Test]
     public async Task InterfaceName_IfName_BecomesRegistryUiName()
     {
-        using PcapNgTestWriter writer = new();
+        using PcapngCaptureBuilder writer = new();
         writer.AddInterface(LinkType.Ethernet, nanosecondResolution: true, name: "eth0");
         writer.WriteFrame(0, 1_000_000_000, [0x00, 0x11, 0x22, 0x33]);
 

@@ -22,7 +22,7 @@ namespace NetworkInspector.Sources.Blf;
 /// </summary>
 /// <remarks>
 /// <b>Thread-safety:</b> <see cref="GetSpan"/> may be called from any thread; for the mapped backend the caller
-/// must keep the span inside the <c>BlfSource</c> lifetime read lock (or be the scanning thread), so a concurrent
+/// must keep the span inside a <c>BlfSource</c> reader-gate section (or be the scanning thread), so a concurrent
 /// dispose cannot unmap it. Both the in-memory array and the mapped view are read-only once created.
 /// </remarks>
 internal sealed class BlfDataBackend : IDisposable
@@ -102,22 +102,22 @@ internal sealed class BlfDataBackend : IDisposable
     /// </returns>
     /// <remarks>
     /// <b>Span lifetime:</b> the returned span is valid only while the caller
-    /// holds the <see cref="BlfSource"/>._LifetimeLock read lock (random access) or a lease of
+    /// is inside a <see cref="BlfSource"/> reader-gate section (random access) or holds a lease of
     /// <see cref="TryAcquireScanLease"/> (the sequential thread), or, for in-memory
     /// backends, until the backing array is garbage-collected. Callers must never escape
     /// the span beyond the lock scope or store it in a field. For mmap backends the
     /// pointer is borrowed from the OS-mapped view; the pinned pointer is released as
     /// part of <see cref="MmapPool.GetPrimarySpan"/>'s internal accounting, and the
     /// backing pages remain valid until <see cref="Dispose"/> is called, which the
-    /// write lock in <see cref="BlfSource.Dispose"/> ensures cannot happen concurrently
-    /// with any caller still inside the read lock.
+    /// closed gate in <see cref="BlfSource.Dispose"/> ensures cannot happen concurrently
+    /// with any caller still inside a section.
     /// </remarks>
     internal ReadOnlySpan<byte> GetSpan(long offset, int length)
     {
         // Guard against reading after dispose. Between a disposed-check in the
         // caller and this entry point a racing Dispose() could have released the mmap
         // pointer. The Volatile read gives the correct observed value without the full
-        // overhead of the _LifetimeLock read lock that FrameById acquires externally.
+        // overhead of the reader-gate section that FrameById enters externally.
         if (_Disposed != 0)
         {
             return ReadOnlySpan<byte>.Empty;
@@ -172,7 +172,7 @@ internal sealed class BlfDataBackend : IDisposable
 
         // Do not swallow exceptions silently. MmapPool.Dispose() is expected
         // to succeed under normal operation (no callers hold the view open after the
-        // LifetimeLock write lock is acquired). Let any unexpected OS-level exception
+        // reader gate is closed). Let any unexpected OS-level exception
         // propagate so the caller is aware of the failure.
         _MmapPool?.Dispose();
     }

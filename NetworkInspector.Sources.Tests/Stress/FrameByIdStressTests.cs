@@ -12,17 +12,136 @@ internal sealed class FrameByIdStressTests
     private static readonly byte[] _DstMac = [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
 
     [Test]
+    [Arguments("pcapng")]
+    [Arguments("blf")]
+    public async Task FramesByIdFourThreadsDuringALazyScanNeverSeeAWrongFrame(string format)
+    {
+        // Arrange: a memory-mapped lazy PCAPNG of 50 000 IMIX-sized frames or a lazy BLF of 50 000 CAN frames; the test
+        // thread drains NextFrame while four threads read batches of 64 ids below the current count.
+        const int count = 50_000;
+        byte[] bytes = format == "pcapng" ? _BuildPcapngBytes(count) : _BuildBlfBytes(count);
+        using TempCaptureFile file = new(bytes, format == "pcapng" ? ".pcapng" : ".blf");
+        using IRandomAccessFrameSource source = format == "pcapng"
+            ? PcapngSource.Open(file.Path, new PcapngSourceOptions { PreloadBudget = null, ScanMode = ScanMode.Lazy })
+            : BlfSource.Open(file.Path, new BlfSourceOptions { PreloadBudget = null, ScanMode = ScanMode.Lazy });
+        _ = SourceTestFixture.InitializeAndStartSource(source);
+
+        Frame[] expected = new Frame[count];
+        int published = 0;
+        int done = 0;
+        int failures = 0;
+        int successes = 0;
+        Thread[] readers = new Thread[4];
+        for (int r = 0; r < readers.Length; r++)
+        {
+            int seed = r;
+            readers[r] = new Thread(() =>
+            {
+                System.Random random = new(seed);
+                Frame?[] buffer = new Frame?[64];
+                while (Volatile.Read(ref done) == 0)
+                {
+                    int limit = Volatile.Read(ref published);
+                    if (limit == 0)
+                    {
+                        continue;
+                    }
+
+                    // A range of up to 64 ids that ends below the published count: the scan returned every one of them, so
+                    // every entry must come back.
+                    int length = Math.Min(64, limit);
+                    int first = random.Next(limit - length + 1);
+                    Span<Frame?> frames = buffer.AsSpan(0, length);
+                    _ = source.FramesById(new FrameId(first), frames);
+                    for (int i = 0; i < length; i++)
+                    {
+                        if (frames[i] is not { } frame || !RandomAccessEquivalence.SameFrame(expected[first + i], frame))
+                        {
+                            _ = Interlocked.Increment(ref failures);
+                        }
+                        else
+                        {
+                            _ = Interlocked.Increment(ref successes);
+                        }
+                    }
+                }
+            })
+            { Name = Invariant($"FramesById reader {r}"), IsBackground = true };
+            readers[r].Start();
+        }
+
+        // Act
+        int read = 0;
+        while (source.NextFrame() is { } next)
+        {
+            expected[next.Id.Value] = next;
+            Volatile.Write(ref published, next.Id.Value + 1);
+            read++;
+        }
+
+        Volatile.Write(ref done, 1);
+        foreach (Thread reader in readers)
+        {
+            reader.Join();
+        }
+
+        // Assert: no wrong or missing frame during the scan; afterwards every id resolves through a batch.
+        Frame?[] afterScan = new Frame?[count];
+        int found = source.FramesById(new FrameId(0), afterScan);
+        await Assert.That(read).IsEqualTo(count);
+        await Assert.That(failures).IsEqualTo(0);
+        await Assert.That(successes).IsGreaterThan(0);
+        await Assert.That(found).IsEqualTo(count);
+    }
+
+    private static byte[] _BuildPcapngBytes(int count)
+    {
+        int[] sizes = [64, 64, 594, 64, 64, 594, 64, 1518, 64, 594, 64, 594];
+        using PcapngCaptureBuilder writer = new();
+        _ = writer.AddInterface(LinkType.Ethernet, nanosecondResolution: true);
+        for (int i = 0; i < count; i++)
+        {
+            byte[] payload = new byte[sizes[i % sizes.Length] - 14];
+            BinaryPrimitives.WriteInt32LittleEndian(payload, i);
+            writer.WriteFrame(0, 1_700_000_000_000_000_000L + (i * 731_000L), TestFrames.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, payload));
+        }
+
+        return writer.Build();
+    }
+
+    private static byte[] _BuildBlfBytes(int count)
+    {
+        // CAN frames in zlib containers of 500, the shape of the single-read concurrency test.
+        BlfCaptureBuilder outer = new();
+        int index = 0;
+        for (int container = 0; container < count / 500; container++)
+        {
+            BlfCaptureBuilder inner = new();
+            for (int k = 0; k < 500; k++)
+            {
+                byte[] can = TestFrames.BuildSocketCanClassic(0x100u + (uint)(index & 0x3FF), [(byte)index, (byte)(index >> 8)]);
+                _ = inner.AddCanFrame(1, can, (index + 1) * 1_000L);
+                index++;
+            }
+
+            _ = outer.AddLogContainer(BlfConstants.CompressionZlib, inner);
+        }
+
+        return outer.Build();
+    }
+
+    [Test]
     public async Task Pcap_FrameById_ConcurrentReadsMatchSequentialBaseline()
     {
         const int count = 128;
-        using PcapNgTestWriter writer = new();
+        using PcapngCaptureBuilder writer = new();
         writer.AddInterface(LinkType.Ethernet, nanosecondResolution: true);
 
         byte[][] payloads = new byte[count][];
         for (int i = 0; i < count; i++)
         {
             payloads[i] = [(byte)i, (byte)(i >> 8)];
-            byte[] eth = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, payloads[i]);
+            byte[] eth = TestFrames.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, payloads[i]);
             writer.WriteFrame(0, (long)(i + 1) * 1_000_000L, eth);
         }
 
@@ -57,9 +176,9 @@ internal sealed class FrameByIdStressTests
     public async Task Blf_FrameById_ConcurrentReadsMatchSequentialBaseline()
     {
         const int count = 96;
-        byte[] can = FrameBuilders.BuildSocketCanClassic(0x123, [1, 2, 3, 4, 5, 6, 7, 8]);
+        byte[] can = TestFrames.BuildSocketCanClassic(0x123, [1, 2, 3, 4, 5, 6, 7, 8]);
 
-        BlfTestGenerator gen = new();
+        BlfCaptureBuilder gen = new();
         for (int i = 0; i < count; i++)
         {
             _ = gen.AddCanFrame(1, can, (long)(i + 1) * 1_000_000L);
@@ -99,12 +218,12 @@ internal sealed class FrameByIdStressTests
     public async Task PcapngLazyScanServesIndexedFramesWhileScanning()
     {
         const int count = 256;
-        using PcapNgTestWriter writer = new();
+        using PcapngCaptureBuilder writer = new();
         _ = writer.AddInterface(LinkType.Ethernet, nanosecondResolution: true);
         byte[][] expected = new byte[count][];
         for (int i = 0; i < count; i++)
         {
-            expected[i] = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [(byte)i, (byte)(i >> 8)]);
+            expected[i] = TestFrames.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [(byte)i, (byte)(i >> 8)]);
             writer.WriteFrame(0, (long)(i + 1) * 1_000L, expected[i]);
         }
 
@@ -118,12 +237,12 @@ internal sealed class FrameByIdStressTests
     public async Task BlfLazyScanServesIndexedFramesWhileScanning()
     {
         const int count = 256;
-        BlfTestGenerator gen = new();
+        BlfCaptureBuilder gen = new();
         byte[][] expected = new byte[count][];
         for (int i = 0; i < count; i++)
         {
             // Eight data bytes: the builder pads to 16 bytes, which is also the captured length the reader returns for DLC 8.
-            expected[i] = FrameBuilders.BuildSocketCanClassic(0x100u + (uint)(i & 0xFF), [(byte)i, (byte)(i >> 8), 0, 0, 0, 0, 0, 0]);
+            expected[i] = TestFrames.BuildSocketCanClassic(0x100u + (uint)(i & 0xFF), [(byte)i, (byte)(i >> 8), 0, 0, 0, 0, 0, 0]);
             _ = gen.AddCanFrame(1, expected[i], (long)(i + 1) * 1_000L);
         }
 

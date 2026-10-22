@@ -128,7 +128,6 @@ NetworkInspector.Sources/
 | Options | `XxxSourceOptions` | `PcapngSourceOptions`, `BlfSourceOptions` |
 | Frame index | `XxxFrameIndex` or `FrameIndex` | `BlfFrameIndex`, `FrameIndex` |
 | Scanner | `XxxIncrementalScanner` | `BlfIncrementalScanner`, `IncrementalScanner` |
-| Frame entry struct | `XxxFrameEntry` or `FrameOffset` | `BlfFrameEntry`, `FrameOffset` |
 | Display name property | `UiName` | — |
 | Factory: file | `Open(path, options?)` | — |
 | Factory: bytes | `FromData(byte[], uiName, options?)` | — |
@@ -315,16 +314,68 @@ public Frame? FrameById(FrameId id)
     // Guard: disposal check
     ObjectDisposedException.ThrowIf(Volatile.Read(ref _Disposed), this);
 
-    // Guard: ID in range
-    if (id.Value < 0 || id.Value >= _Index.Count)
+    // Guard: ID indexed (false for negative ids and ids the scan has not reached)
+    if (!_Index.TryGetBlockOffset(id.Value, out long blockOffset))
         return null;
 
-    // Read from index + backend (thread-safe)
+    // Re-read the record at the indexed position with the scanner's own parser (§11.6); any mismatch → null
     // ...
+
+    // A change found by a sequential check fails closed (§8.5); the latch is a volatile read, no system call
+    if (_Guard is not null && _Guard.ChangeDetected)
+        return null;
 
     return frame;
 }
 ```
+
+A source whose `Dispose` releases memory that `FrameById` reads (a memory-mapped view, a container cache) guards the
+read with a `ReaderGate` (§13.4). Nothing may run between a successful `TryEnter` and the `try`:
+
+```csharp
+if (!_Gate.TryEnter(out ReaderGateToken token))
+{
+    return null;                     // or ObjectDisposedException, as the source documents
+}
+
+try
+{
+    // … parse the record in place and copy the frame bytes out …
+}
+finally
+{
+    _Gate.Exit(in token);
+}
+```
+
+**`FramesById(FrameId first, Span<Frame?> frames)`** reads the range `first … first + frames.Length − 1`. The default
+implementation calls `FrameById` per id. Override it when the source can read forward: walk the index once for the
+range, request the bytes of the next records early, and reuse per-call state (a row cursor, the current container).
+Read in chunks of 64 ids with one gate section per chunk, so a concurrent `Dispose` waits for at most one chunk; check
+the disposed flag and the cancellation token before each chunk. Ids past the valid id range are `null` entries: form
+`first + i` in `long`.
+
+### 8.5 File Guard (File-Backed Sources)
+
+Random access re-reads the file, so an unchanged file is a correctness precondition. Every `Open` creates a
+`CaptureFileGuard` before the backend and keeps it until `Dispose` (after the backend):
+
+- It holds a read handle with `FileShare.Read`. Windows enforces it (writers fail); Linux and macOS get an advisory
+  lock only.
+- `IsUnchanged()` compares length and last write time on Linux and macOS (a change latches) and returns `true`
+  without a system call on Windows.
+- `FrameById` reads only the latch (`ChangeDetected`) before returning a frame and never makes a system call. The
+  sequential path calls `IsUnchanged()` every 4 096 frames and once at the end and reads the latch in between; a change raises
+  `FrameReadErrorKind.SourceFileChanged` once and stops reading in every tolerance mode. A full scan at `Open` that
+  sees a change throws `IOException`.
+- On Linux and macOS the guard also starts a background monitor: a `Timer` runs `IsUnchanged()` every
+  `CaptureFileGuard.MonitorInterval` (1 s), so a change made while only `FrameById` runs is noticed within that
+  interval. The timer holds the guard through a weak reference (an undisposed source stays collectable) and stops
+  after a change or on `Dispose`. Windows runs no monitor. `ChangeSignal` completes on detection, so tests await it
+  instead of sleeping.
+- Preloaded files read their bytes through the guard (`ReadAll`), so they stay locked as well. `FromData` /
+  `FromText` have no guard. A preloaded source copies the file at `Open`; after the open-time check it keeps serving
+  its copy and runs no monitor (`CaptureFileGuard.StopMonitoring`, called once the copy is verified unchanged).
 
 ---
 
@@ -432,13 +483,20 @@ flowchart TD
   set and the file fits both the budget and `Array.MaxLength`. A larger file uses the mapped/disk backend even with
   `PreloadBudget = long.MaxValue`, instead of failing in `File.ReadAllBytes`.
 - **Mapped backend (PCAPNG, BLF):** one `MemoryMappedViewAccessor` over the whole file. Sequential scans and concurrent
-  `FrameById` calls read the same view; each random read holds the view's `SafeHandle` with
-  `DangerousAddRef`/`DangerousRelease` instead of a lock, and every `NextFrame` call holds one such reference for the whole
-  call (`TryAcquireScanLease` / `ReleaseScanLease`), so a concurrent `Dispose` cannot unmap memory under a running copy.
-  This matters in practice: a session shutdown with a timeout disposes sources whose read loop may still run. There is no
-  accessor pool.
-- **Disk backend (ASC):** the index stores byte offsets per line; `FrameById` seeks and reads one line into a rented buffer
-  and parses it in place. Memory grows with the line count, not the file size.
+  `FrameById` calls read the same view. Every `NextFrame` call holds one reference on the view's `SafeHandle` for the
+  whole call (`TryAcquireScanLease` / `ReleaseScanLease`), so a dispose from its own error handler unmaps only when the
+  call ends. Random access (`FrameById`, `FramesById`) runs inside a reader-gate section instead (§13.4): a reader writes
+  only its own thread's slot, and `Dispose` closes the gate, which waits for the sections of other threads, before it
+  unmaps. Either way a concurrent `Dispose` cannot unmap memory under a running copy. This matters in practice: a session
+  shutdown with a timeout disposes sources whose read loop may still run. There is no accessor pool.
+- **Disk backend (ASC):** the index stores byte offsets per frame line (both backends, §11.6) and, per group of 64
+  frames, one byte with the shift of a power-of-two read window. The open-time scan sizes that window to cover every
+  record of the group: the line through its LF, and for Ethernet the continuation lines plus the whole line that ends the
+  packet (the parser reads that line to decide that the packet ended). `NextFrame` and `FrameById` read exactly that
+  window with one positional read through the guarded handle and parse it in place; a thread that walks the ids in order
+  (forward or backward) is served from a per-thread 64 KiB read-ahead window (`AscReadAhead`, at most four sources per
+  thread), so a sequential read costs one read per window, not one per frame. Random access never fills a read-ahead
+  window. Memory grows with the frame count (well under 2 B per frame), not the file size.
 
 ### 11.2 Buffer Sizes
 
@@ -547,6 +605,86 @@ For mmap backends `GetScanSpan` / `GetSpan` both use pointer + `long` arithmetic
 The only practical upper bound is available virtual address space for the mmap primary view.
 On 64-bit processes this is effectively unlimited for capture files.
 
+### 11.6 Compact Frame Index
+
+The frame index is the only per-frame memory a file source keeps. It stores **where an accepted frame starts** and
+nothing else:
+
+| Source | Value per frame | Extra tables |
+| --- | --- | --- |
+| PCAPNG / PCAP (`FrameIndex`) | block (record header) start offset | sections (single writer, any reader) |
+| BLF (`BlfFrameIndex`) | virtual position = container row start + inner offset; raw objects `RawFlag \| fileOffset` | container rows; lengths of objects split across containers |
+| ASC (`AscFrameIndex`) | byte offset of the frame line | relative clock in nanoseconds; rare clock overrides; disk backend: one read-window shift per 64 frames (§11.1) |
+
+**Rules.**
+
+1. Index only records the scanner **accepted** as frames. `FrameById` and the index-driven sequential path
+   re-read the record with the **same pure parser** the scanner ran (`PcapngPacketBlocks.TryRead*`,
+   `PcapPacketHeader.TryParse`, `BlfBlockHeader.TryGetSkipDistance` + `BlfObjectHeaderParser.TryParse` +
+   `BlfFrameDispatcher.TryGetChannel`, `AscLineClassifier.Classify` + `AscTimestamp.TryFold`). Acceptance is never
+   decided again, so frame ids cannot shift.
+2. Any parse failure on the re-read returns `null` (random access) or raises `FrameSkipped` (sequential): the source
+   never guesses.
+3. Values that cannot be re-derived from the record (the relative ASC clock, which non-frame lines also move; the
+   length of a BLF object whose header is split across containers) are stored next to the positions.
+4. A re-read must present the parser everything the scan-time parse could see. Where a record has no length field
+   (ASC lines), the scan records how far the record reaches, including any line the parser reads to find its end, and
+   the re-read reads at least that far. A window that is too short changes the result; one that is longer does not.
+
+**Encoding (`PackedLongSequence`).** Values are stored in groups of 64. A sealed group keeps `value[0]`, the
+smallest signed step of the group (`minDelta`), and the residuals `step − minDelta` shifted right by their common
+trailing zero bits, **bit-sliced** into `width` planes (plane `b` holds bit `b` of every lane). One info word per
+group holds `(wordOffset << 13) | (shift << 7) | width`. A lookup is
+
+```text
+value[j] = base + j·minDelta + (Σ_b 2^b · PopCount(plane_b & mask(j))) << shift        (mod 2^64)
+```
+
+— `width` hardware population counts, independent of `j`. Worked example: values 100, 192, 284, 908, 1000 → steps
+92, 92, 624, 92 → `minDelta` 92 → residuals 0, 0, 0, 532, 0 → common trailing zeros 2 → stored 0, 0, 0, 133, 0 →
+width 8. Lookup of `j = 4`: 100 + 4·92 + (133 << 2) = 1000.
+
+Memory: 0.375 B + width/8 B per value. Constant steps (64-byte PCAPNG frames, CAN objects, fixed-length ASC lines)
+give width 0; three block sizes (IMIX) give width 9 (≈ 1.5 B); random 64-bit values give width 64 (8.4 B, the
+worst case). All arithmetic is unchecked modulo 2^64, so every `long` sequence reads back exactly.
+
+**Publish protocol (single writer, any number of readers).** The open last group lives in a 64-slot staging array:
+slot (volatile write) → count (volatile write). Sealing writes the words, appends the group info, then publishes
+the sealed group count with one volatile write. A reader that reads a staging slot re-reads the sealed count
+afterwards and decodes the sealed group when it changed meanwhile, so no torn value is ever returned. The scanner
+calls `Complete()` when it is exhausted to seal the last partial group.
+
+**In-order reads (`TryGetCached`).** Sessions, exporters, and UIs walk frame ids in order, often on several threads.
+Per-frame lookups with varying steps (`FrameIndex.TryGetBlockOffset`, ASC line offsets and clocks, the session's
+`PacketFrameMap`) therefore read through `DecodedGroupCache`, a `[ThreadStatic]` cache of 4 fully decoded sealed
+groups (2 KiB per reading thread). The first
+touch of a group decodes one lane and remembers the group; the second consecutive touch decodes all 64 lanes
+(`BitPlanes.ExtractAll` plus a running sum); later reads of that group are one array load. Random access never
+triggers a full decode. Sealed groups are immutable and entries are keyed by a process-unique sequence id, so cached
+values are always exact and the cache keeps no sequence alive. Binary searches (BLF rows, spanning objects) keep
+using `TryGet`, which leaves the cache alone. BLF positions also use `TryGet`: CAN objects of one size give width-0
+groups whose direct decode is already a few instructions, and the cache measured 15–21 % slower there. The cache checks
+the way of its previous hit first; owner and group are both compared, so another sequence never matches.
+
+**Value and next value (`TryGetCachedWithNext`).** PCAPNG `FrameById` reads the block offset of its frame and of the
+next indexed frame in one call (`FrameIndex.TryGetBlockSpan`): a decoded group yields both from the cache, a first touch
+decodes both lanes in one pass (`BitPlanes.PrefixSumPair`). The next offset bounds the block; the newest frame has no
+next value and is bounded by the file end.
+
+**Block prefetch.** Before the parser reads a block, `DataBackend.PrefetchBlock` requests all its cache lines at once
+(`CachePrefetch.Range`): `PREFETCHT0` per 64-byte line on x86/x64, one plain load per line elsewhere (.NET has no
+prefetch instruction for ARM64; independent loads still overlap). The range ends at the next block, the file end, or
+4 KiB (`CachePrefetch.MaxBytes`, a constant), whichever is first, so a hostile far offset costs at most 64 lines and no
+load leaves the file. The prefetch is a hint and never changes what is read. A two-level search over the group first
+values was tried for the BLF row lookup and dropped: with fewer than 64 container rows it costs more than the plain
+binary search.
+
+**BLF container memo.** `BlfSource.FrameById` remembers per reading thread the last container it used (source id,
+container offset, decompressed bytes). Ids read one after another mostly fall into one container and then need neither
+the row search nor the container cache lock, which four reading threads otherwise queue on for every frame. The bytes of
+a decompressed container are never changed, so holding them is safe. Cost: one container per reading thread until its
+next lookup of another container; with `CacheBudget` 0 no memo is kept.
+
 ---
 
 ## 12. Error Tolerance
@@ -624,7 +762,8 @@ Capacity: allocating a frame ID beyond `ArrayIndexIdRange.MaxValue` throws `Inva
 |--------|-----------|-----------------|
 | `Start()` | Single caller | None needed |
 | `NextFrame()` | Single-threaded | None needed (sequential iteration) |
-| `FrameById()` | **Multi-threaded** | Required (see 13.2) |
+| `FrameById()` | **Multi-threaded** | Required (see 13.2); reader gate when `Dispose` releases what it reads (13.4) |
+| `FramesById()` | **Multi-threaded** | As `FrameById`; one gate section per chunk of 64 ids |
 | `Dispose()` | Single caller | Idempotent via `_Disposed` flag |
 | `IsRunning` | Any thread | `Volatile.Read` |
 | Statistics | Any thread | `Volatile.Read` / `Interlocked` |
@@ -670,6 +809,27 @@ return Frame.Create(..., _Registry);
 ```csharp
 public bool IsRunning => _Started && _Disposed == 0;
 ```
+
+### 13.4 Reader Gate
+
+`ReaderGate` lets any number of threads read a resource that `Dispose` releases, without a counter or lock that all
+readers write. A per-call reference count or a reader lock writes one cache line shared by every reader; four reader
+threads were then no faster than one.
+
+- **Reader:** `TryEnter` publishes the gate in the calling thread's `ReaderSlot` with `Interlocked.Exchange` (a full
+  fence) and then reads the gate's closed flag; closed → it clears the slot and fails. `Exit` clears the slot with a
+  volatile write.
+- **Closer:** `Close` sets the closed flag with `Interlocked.Exchange` (a full fence), then waits until no other thread's
+  slot names the gate. One of the two always sees the other (Dekker), so after `Close` returns no thread reads the
+  resource. The caller then releases it.
+- **Nesting:** a slot holds one gate; a second section on the same thread uses the gate's shared overflow counter and a
+  thread-static list, so `Close` still recognises its own thread. A thread inside a section that closes the same gate
+  gets `InvalidOperationException` instead of waiting for itself.
+- **Scope rule:** no user code inside a section (no events, no callbacks). `NextFrame` raises `FrameSkipped`, whose
+  handler may dispose the source, so `NextFrame` keeps the `SafeHandle` lease (§11.1) and never enters the gate.
+- **Memory:** a gate is two `int` fields (8 B per source). A slot is 40 B on 64-bit (object header 16 B plus the gate,
+  the owning thread, and the next slot, 8 B each), one per thread that ever read by id, in a process-wide list. A new
+  thread's registration unlinks the slots of finished threads, so the list does not grow with thread churn.
 
 ---
 
@@ -727,6 +887,9 @@ public void Dispose()
 
     Volatile.Write(ref _Disposed, true);
 
+    // Random reads on other threads finish first (§13.4); none starts afterwards
+    _Gate?.Close();
+
     // Release unmanaged resources
     _MmapPool?.Dispose();
     _FileStream?.Dispose();
@@ -773,6 +936,8 @@ ObjectDisposedException.ThrowIf(Volatile.Read(ref _Disposed), this);
 - [ ] `Start()` registers interfaces, sets `_SourceId`, `_Registry`, `Volatile.Write(ref _Started, true)`
 - [ ] `NextFrame()` checks `_Disposed`, `_Started`, `_Aborted` with `Volatile.Read`
 - [ ] `FrameById()` is thread-safe (pre-registered interfaces, locked backend access)
+- [ ] The index stores only positions of accepted records; `FrameById()` re-reads them with the scanner's parser (§11.6)
+- [ ] `Open()` holds a `CaptureFileGuard` for the source's lifetime and checks it as in §8.5
 - [ ] `HandleSkip()` follows standard pattern (Interlocked counters, Volatile abort flag)
 - [ ] `Dispose()` is idempotent via `Volatile.Write(ref _Disposed, true)`
 - [ ] Counters use `Interlocked.Increment`, getters use `Volatile.Read`
@@ -971,7 +1136,8 @@ public sealed class XxxSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
         if (id.Value < 0 || id.Value >= _Index.Count)
             return null;
 
-        // Thread-safe read from backend
+        // Thread-safe re-read of the record at the indexed position with the scanner's parser (§11.6),
+        // then the file guard check (§8.5)
         // ...
 
         return frame;

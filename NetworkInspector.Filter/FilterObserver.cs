@@ -259,6 +259,59 @@ public sealed class FilterObserver : IFieldObserver
 
     #endregion
 
+    #region Internal API
+
+    /// <summary>
+    /// The watch a parse without field tree needs so that this observer sees every value the field-tree filter of the
+    /// same expression sees: the observed fields plus every field of their owning protocols.
+    /// <para>
+    /// A field-tree lookup that misses materializes every pending lazy container of the target field's protocol
+    /// (<c>Packet.TryGetNextField</c> with <c>materialize: true</c>). Without a tree, a lazy container expands during the
+    /// parse only when the watch accepts the container or a field of its index group. Accepting all fields of the owning
+    /// protocols makes the parse expand exactly those protocols' containers, so a container outside an index group cannot
+    /// hide a field from this observer. Extra fields reach <see cref="OnField"/> and are ignored there.
+    /// </para>
+    /// </summary>
+    /// <returns><see cref="FieldWatch.None"/> for an observer that watches nothing.</returns>
+    internal FieldWatch CreateOwnerExpandingWatch()
+    {
+        IStack? stack = Stack;
+        if (stack is null || IsAlwaysMatch)
+        {
+            return FieldWatch.None;
+        }
+
+        // Owning protocols of every observed field.
+        ReadOnlySpan<FieldInfo> fields = stack.Fields.Span;
+        HashSet<ProtocolId> owners = [];
+        for (int raw = 0; raw < _SlotByFieldId.Length && raw < fields.Length; raw++)
+        {
+            if (_SlotByFieldId[raw] >= 0)
+            {
+                _ = owners.Add(fields[raw].ProtocolId);
+            }
+        }
+
+        if (owners.Count == 0)
+        {
+            return FieldWatch.None;
+        }
+
+        // Every field those protocols registered, containers included.
+        List<FieldId> ids = [];
+        for (int raw = 0; raw < fields.Length; raw++)
+        {
+            if (owners.Contains(fields[raw].ProtocolId))
+            {
+                ids.Add(fields[raw].Id);
+            }
+        }
+
+        return FieldWatch.Only(stack, [.. ids]);
+    }
+
+    #endregion
+
     #region Helpers
 
     private void _ClearFrame()

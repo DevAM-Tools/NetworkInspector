@@ -16,7 +16,7 @@ namespace NetworkInspector.Sources.Tests.Generators;
 /// <see cref="AddLogContainerWithWrongSize"/> and <see cref="AddCorruptLogContainer"/>
 /// produce intentionally malformed containers for negative testing.
 /// </summary>
-internal sealed class BlfTestGenerator
+internal sealed class BlfCaptureBuilder
 {
     // ========================================================================
     // Constants
@@ -71,7 +71,7 @@ internal sealed class BlfTestGenerator
     /// <summary>
     /// Creates a new generator with the default start time (2024-01-01 00:00:00 UTC).
     /// </summary>
-    internal BlfTestGenerator()
+    internal BlfCaptureBuilder()
     {
         // 2024-01-01T00:00:00Z → 19723 days since epoch × 86400 s/day × 1e9 ns/s
         _StartNanos = 1_704_067_200_000_000_000L;
@@ -80,7 +80,7 @@ internal sealed class BlfTestGenerator
     /// <summary>
     /// Creates a new generator with a custom start timestamp.
     /// </summary>
-    internal BlfTestGenerator(long startNanos)
+    internal BlfCaptureBuilder(long startNanos)
     {
         _StartNanos = startNanos;
     }
@@ -98,7 +98,7 @@ internal sealed class BlfTestGenerator
     /// <param name="objectType">BLF object type constant.</param>
     /// <param name="offsetNanos">Timestamp offset from start (nanoseconds).</param>
     /// <param name="payload">Raw object payload bytes.</param>
-    internal BlfTestGenerator AddRawObject(uint objectType, long offsetNanos, byte[] payload)
+    internal BlfCaptureBuilder AddRawObject(uint objectType, long offsetNanos, byte[] payload)
     {
         _Objects.Add(new PendingObject(objectType, offsetNanos, payload));
         return this;
@@ -110,7 +110,7 @@ internal sealed class BlfTestGenerator
     /// </summary>
     /// <param name="compressionMethod">BLF compression constant (0/1/2).</param>
     /// <param name="inner">Generator whose queued objects become the container payload.</param>
-    internal BlfTestGenerator AddLogContainer(ushort compressionMethod, BlfTestGenerator inner)
+    internal BlfCaptureBuilder AddLogContainer(ushort compressionMethod, BlfCaptureBuilder inner)
     {
         byte[] uncompressedContent = inner._BuildInnerObjectBytes();
         byte[] compressedContent = _CompressForContainer(compressionMethod, uncompressedContent);
@@ -122,8 +122,8 @@ internal sealed class BlfTestGenerator
     /// <paramref name="wrongUncompressedSize"/> into the container header instead of the
     /// actual decompressed byte count. For negative tests verifying size-mismatch detection.
     /// </summary>
-    internal BlfTestGenerator AddLogContainerWithWrongSize(
-        ushort compressionMethod, BlfTestGenerator inner, uint wrongUncompressedSize)
+    internal BlfCaptureBuilder AddLogContainerWithWrongSize(
+        ushort compressionMethod, BlfCaptureBuilder inner, uint wrongUncompressedSize)
     {
         byte[] uncompressedContent = inner._BuildInnerObjectBytes();
         byte[] compressedContent = _CompressForContainer(compressionMethod, uncompressedContent);
@@ -136,7 +136,7 @@ internal sealed class BlfTestGenerator
     /// <paramref name="claimedUncompressedSize"/> bytes. For negative tests verifying
     /// corrupt decompression handling.
     /// </summary>
-    internal BlfTestGenerator AddCorruptLogContainer(
+    internal BlfCaptureBuilder AddCorruptLogContainer(
         ushort compressionMethod, uint claimedUncompressedSize, byte[] corruptPayload) =>
         _AddLogContainerRaw(compressionMethod, claimedUncompressedSize, corruptPayload);
 
@@ -226,7 +226,7 @@ internal sealed class BlfTestGenerator
     /// after the object so the next LOBJ is 4-aligned. Compressed payload slices exclude
     /// those zeros.
     /// </summary>
-    private BlfTestGenerator _AddLogContainerRaw(
+    private BlfCaptureBuilder _AddLogContainerRaw(
         ushort compressionMethod, uint uncompressedSize, byte[] compressedContent)
     {
         byte[] payload = new byte[_ContainerHeaderSize + compressedContent.Length];
@@ -246,7 +246,7 @@ internal sealed class BlfTestGenerator
     /// <param name="channel">BLF channel number (1-based).</param>
     /// <param name="ethernetFrame">Complete raw Ethernet frame (dst+src+ethtype+payload).</param>
     /// <param name="offsetNanos">Timestamp offset from start (nanoseconds).</param>
-    internal BlfTestGenerator AddEthernetFrame(ushort channel, ReadOnlySpan<byte> ethernetFrame, long offsetNanos)
+    internal BlfCaptureBuilder AddEthernetFrame(ushort channel, ReadOnlySpan<byte> ethernetFrame, long offsetNanos)
     {
         // Type 71 decomposed layout:
         // [0..6]  source MAC (src from Ethernet frame)
@@ -317,7 +317,7 @@ internal sealed class BlfTestGenerator
     /// <param name="channel">BLF channel number (1-based).</param>
     /// <param name="ethernetFrame">Complete raw Ethernet frame.</param>
     /// <param name="offsetNanos">Timestamp offset from start (nanoseconds).</param>
-    internal BlfTestGenerator AddEthernetFrameEx(uint objectType, ushort channel, ReadOnlySpan<byte> ethernetFrame, long offsetNanos)
+    internal BlfCaptureBuilder AddEthernetFrameEx(uint objectType, ushort channel, ReadOnlySpan<byte> ethernetFrame, long offsetNanos)
     {
         byte[] payload = new byte[32 + ethernetFrame.Length];
         BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(4), channel);
@@ -333,7 +333,7 @@ internal sealed class BlfTestGenerator
     /// <param name="channel">BLF channel number (1-based).</param>
     /// <param name="socketCanFrame">SocketCAN frame: id(4BE)+dlc(1)+flags(1)+reserved(2)+data.</param>
     /// <param name="offsetNanos">Timestamp offset from start (nanoseconds).</param>
-    internal BlfTestGenerator AddCanFrame(ushort channel, ReadOnlySpan<byte> socketCanFrame, long offsetNanos)
+    internal BlfCaptureBuilder AddCanFrame(ushort channel, ReadOnlySpan<byte> socketCanFrame, long offsetNanos)
     {
         if (socketCanFrame.Length < 8)
         {
@@ -374,7 +374,7 @@ internal sealed class BlfTestGenerator
     /// Adds a CAN XL channel frame (Type 139) from a SocketCAN XL frame
     /// (104-byte header, payload at offset 104).
     /// </summary>
-    internal BlfTestGenerator AddCanXlChannelFrame(byte channel, ReadOnlySpan<byte> socketCanXlFrame, long offsetNanos)
+    internal BlfCaptureBuilder AddCanXlChannelFrame(byte channel, ReadOnlySpan<byte> socketCanXlFrame, long offsetNanos)
     {
         const int SocketCanXlHeaderSize = 12;
         if (socketCanXlFrame.Length < SocketCanXlHeaderSize)
@@ -425,7 +425,7 @@ internal sealed class BlfTestGenerator
     /// Adds a CAN FD message (Type 100) from a SocketCAN FD frame using the
     /// <c>blf_canfdmessage_t</c> layout (20-byte header, data at offset 20).
     /// </summary>
-    internal BlfTestGenerator AddCanFdFrame(ushort channel, ReadOnlySpan<byte> socketCanFrame, long offsetNanos)
+    internal BlfCaptureBuilder AddCanFdFrame(ushort channel, ReadOnlySpan<byte> socketCanFrame, long offsetNanos)
     {
         // Type 100 layout (blf_canfdmessage_t):
         // [0..2)  channel (u16 LE)
@@ -503,7 +503,7 @@ internal sealed class BlfTestGenerator
     /// <summary>
     /// Adds a FlexRay RcvMessage (Type 50).
     /// </summary>
-    internal BlfTestGenerator AddFlexRayFrame(
+    internal BlfCaptureBuilder AddFlexRayFrame(
         ushort channel, ushort frameId, byte cycle, ushort headerCrc,
         ReadOnlySpan<byte> data, long offsetNanos)
     {
@@ -543,7 +543,7 @@ internal sealed class BlfTestGenerator
     /// <summary>
     /// Adds a LIN Message (Type 11).
     /// </summary>
-    internal BlfTestGenerator AddLinFrame(ushort channel, byte frameId, ReadOnlySpan<byte> data, long offsetNanos)
+    internal BlfCaptureBuilder AddLinFrame(ushort channel, byte frameId, ReadOnlySpan<byte> data, long offsetNanos)
     {
         // Type 11 layout: [0..2] channel(u16 LE) | [2] id | [3] dlc | [4..12] data (8B zero-padded)
         byte dlc = (byte)Math.Min(data.Length, 8);
@@ -558,7 +558,7 @@ internal sealed class BlfTestGenerator
     /// <summary>
     /// Adds a LIN Message2 (Type 57).
     /// </summary>
-    internal BlfTestGenerator AddLinMessage2(
+    internal BlfCaptureBuilder AddLinMessage2(
         ushort channel, byte frameId, ReadOnlySpan<byte> data, byte checksum, long offsetNanos)
     {
         // Vector blf_linmessage2_t (132 bytes packed).
@@ -587,7 +587,7 @@ internal sealed class BlfTestGenerator
     /// (<c>source</c>, <c>reservedAppText1</c>, <c>textLength</c>, <c>reservedAppText2</c>)
     /// and text <c>db;{name}</c> so token index 1 is the interface name.
     /// </summary>
-    internal BlfTestGenerator AddAppTextChannel(ushort channel, byte busType, string name, long offsetNanos)
+    internal BlfCaptureBuilder AddAppTextChannel(ushort channel, byte busType, string name, long offsetNanos)
     {
         byte[] textBytes = Encoding.UTF8.GetBytes("db;" + name + "\0");
         byte[] payload = new byte[16 + textBytes.Length];

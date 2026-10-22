@@ -16,7 +16,7 @@ internal sealed class PcapngSourceParityTests
     [Test]
     public async Task IfTsOffsetSeconds_ShiftsTimestampByWholeSeconds()
     {
-        using PcapNgTestWriter writer = new();
+        using PcapngCaptureBuilder writer = new();
         writer.AddInterface(LinkType.Ethernet, nanosecondResolution: false, timestampOffsetSeconds: 1);
         writer.WriteFrame(0, 0, [0xDE, 0xAD, 0xBE, 0xEF]);
 
@@ -42,7 +42,7 @@ internal sealed class PcapngSourceParityTests
     public async Task OrigLenOnDisk_IsIgnored_FrameUsesCapturedBytes()
     {
         byte[] captured = [0x01, 0x02, 0x03, 0x04];
-        using PcapNgTestWriter writer = new();
+        using PcapngCaptureBuilder writer = new();
         writer.AddInterface(LinkType.Ethernet, nanosecondResolution: true);
         writer.WriteFrame(0, 1_000_000_000, captured, originalLength: 512);
 
@@ -59,7 +59,7 @@ internal sealed class PcapngSourceParityTests
     public async Task InterfaceName_IfName_BecomesRegistryUiName()
     {
         byte[] payload = [0x00, 0x11, 0x22, 0x33];
-        using PcapNgTestWriter writer = new();
+        using PcapngCaptureBuilder writer = new();
         writer.AddInterface(LinkType.Ethernet, nanosecondResolution: true, name: "eth0");
         writer.WriteFrame(0, 1_000_000_000, payload);
 
@@ -77,7 +77,7 @@ internal sealed class PcapngSourceParityTests
     public async Task UnknownDltPassesThroughWithItsNumberAndBytes()
     {
         byte[] payload = [0xAA, 0xBB, 0xCC, 0xDD];
-        using PcapNgTestWriter writer = new();
+        using PcapngCaptureBuilder writer = new();
         writer.AddInterface(LinkType.Ethernet, nanosecondResolution: true, rawLinkType: _UnknownDlt);
         writer.WriteFrame(0, 1_000_000_000, payload);
 
@@ -102,7 +102,7 @@ internal sealed class PcapngSourceParityTests
     [Test]
     public async Task FirstShb_Length29_ThrowsPcapException()
     {
-        byte[] data = PcapNgBlockFactory.TruncatedShbHeader(29);
+        byte[] data = PcapngBlocks.TruncatedShbHeader(29);
 
         await Assert.That(() => PcapngSource.FromData(data, "bad-shb.pcapng")).Throws<PcapException>();
     }
@@ -110,9 +110,9 @@ internal sealed class PcapngSourceParityTests
     [Test]
     public async Task Epb_BlockLength33_RaisesCorruptedBlockAndExhausts()
     {
-        byte[] data = PcapNgBlockFactory.Append(
-            PcapNgBlockFactory.ShbAndEthernetIdb(),
-            PcapNgBlockFactory.EpbLengthHeader(33));
+        byte[] data = PcapngBlocks.Append(
+            PcapngBlocks.ShbAndEthernetIdb(),
+            PcapngBlocks.EpbLengthHeader(33));
 
         using PcapngSource source = _CreateSource(data);
         source.ErrorTolerance = ErrorToleranceMode.Tolerant;
@@ -132,8 +132,8 @@ internal sealed class PcapngSourceParityTests
     public async Task Epb_TrailingLengthMismatch_RaisesCorruptedBlockAndExhausts()
     {
         byte[] payload = [0x01, 0x02, 0x03, 0x04];
-        byte[] epb = PcapNgBlockFactory.EnhancedPacket(0, payload, trailingLength: 32);
-        byte[] data = PcapNgBlockFactory.Append(PcapNgBlockFactory.ShbAndEthernetIdb(), epb);
+        byte[] epb = PcapngBlocks.EnhancedPacket(0, payload, trailingLength: 32);
+        byte[] data = PcapngBlocks.Append(PcapngBlocks.ShbAndEthernetIdb(), epb);
 
         using PcapngSource source = _CreateSource(data);
         source.ErrorTolerance = ErrorToleranceMode.Tolerant;
@@ -155,10 +155,10 @@ internal sealed class PcapngSourceParityTests
     public async Task EpbTrailingLengthRoundsUpToLeadingYieldsPacket(int shortfall)
     {
         byte[] payload = [0x01, 0x02, 0x03, 0x04];
-        byte[] sized = PcapNgBlockFactory.EnhancedPacket(0, payload);
+        byte[] sized = PcapngBlocks.EnhancedPacket(0, payload);
         uint leading = BinaryPrimitives.ReadUInt32LittleEndian(sized.AsSpan(4));
-        byte[] epb = PcapNgBlockFactory.EnhancedPacket(0, payload, trailingLength: leading - (uint)shortfall);
-        byte[] data = PcapNgBlockFactory.Append(PcapNgBlockFactory.ShbAndEthernetIdb(), epb);
+        byte[] epb = PcapngBlocks.EnhancedPacket(0, payload, trailingLength: leading - (uint)shortfall);
+        byte[] data = PcapngBlocks.Append(PcapngBlocks.ShbAndEthernetIdb(), epb);
 
         using PcapngSource source = _CreateSource(data);
         SourceTestFixture.InitializeAndStartSource(source);
@@ -173,10 +173,10 @@ internal sealed class PcapngSourceParityTests
     public async Task EpbTrailingLengthAboveLeadingExhausts()
     {
         byte[] payload = [0x01, 0x02, 0x03, 0x04];
-        byte[] sized = PcapNgBlockFactory.EnhancedPacket(0, payload);
+        byte[] sized = PcapngBlocks.EnhancedPacket(0, payload);
         uint leading = BinaryPrimitives.ReadUInt32LittleEndian(sized.AsSpan(4));
-        byte[] epb = PcapNgBlockFactory.EnhancedPacket(0, payload, trailingLength: leading + 4);
-        byte[] data = PcapNgBlockFactory.Append(PcapNgBlockFactory.ShbAndEthernetIdb(), epb);
+        byte[] epb = PcapngBlocks.EnhancedPacket(0, payload, trailingLength: leading + 4);
+        byte[] data = PcapngBlocks.Append(PcapngBlocks.ShbAndEthernetIdb(), epb);
 
         using PcapngSource source = _CreateSource(data);
         source.ErrorTolerance = ErrorToleranceMode.Tolerant;
@@ -194,8 +194,8 @@ internal sealed class PcapngSourceParityTests
     [Test]
     public async Task Epb_UnknownInterface_RaisesFrameSkipped()
     {
-        byte[] epb = PcapNgBlockFactory.EnhancedPacket(5, [0x01, 0x02, 0x03, 0x04]);
-        byte[] data = PcapNgBlockFactory.Append(PcapNgBlockFactory.ShbAndEthernetIdb(), epb);
+        byte[] epb = PcapngBlocks.EnhancedPacket(5, [0x01, 0x02, 0x03, 0x04]);
+        byte[] data = PcapngBlocks.Append(PcapngBlocks.ShbAndEthernetIdb(), epb);
 
         using PcapngSource source = _CreateSource(data);
         source.ErrorTolerance = ErrorToleranceMode.Tolerant;
@@ -214,8 +214,8 @@ internal sealed class PcapngSourceParityTests
     [Test]
     public async Task Epb_UnknownInterface_Strict_StopsAfterSkip()
     {
-        byte[] epb = PcapNgBlockFactory.EnhancedPacket(5, [0x01, 0x02, 0x03, 0x04]);
-        byte[] data = PcapNgBlockFactory.Append(PcapNgBlockFactory.ShbAndEthernetIdb(), epb);
+        byte[] epb = PcapngBlocks.EnhancedPacket(5, [0x01, 0x02, 0x03, 0x04]);
+        byte[] data = PcapngBlocks.Append(PcapngBlocks.ShbAndEthernetIdb(), epb);
 
         using PcapngSource source = _CreateSource(data);
         source.ErrorTolerance = ErrorToleranceMode.Strict;
@@ -233,10 +233,10 @@ internal sealed class PcapngSourceParityTests
     public async Task UnknownNonPacketBlock_DoesNotRaiseFrameSkipped()
     {
         byte[] payload = [0x01, 0x02, 0x03, 0x04];
-        byte[] withDsb = PcapNgBlockFactory.Append(
-            PcapNgBlockFactory.ShbAndEthernetIdb(),
-            PcapNgBlockFactory.EmptyDsb());
-        byte[] data = PcapNgBlockFactory.Append(withDsb, PcapNgBlockFactory.EnhancedPacket(0, payload));
+        byte[] withDsb = PcapngBlocks.Append(
+            PcapngBlocks.ShbAndEthernetIdb(),
+            PcapngBlocks.EmptyDsb());
+        byte[] data = PcapngBlocks.Append(withDsb, PcapngBlocks.EnhancedPacket(0, payload));
 
         using PcapngSource source = _CreateSource(data);
         List<FrameReadErrorEventArgs> errors = [];
@@ -255,7 +255,7 @@ internal sealed class PcapngSourceParityTests
     {
         byte[] payload = new byte[61];
         payload[0] = 0xAB;
-        using PcapNgTestWriter writer = new();
+        using PcapngCaptureBuilder writer = new();
         writer.AddInterface(LinkType.Ethernet, nanosecondResolution: true);
         writer.WriteFrame(0, 1_000_000_000, payload);
 
@@ -272,8 +272,8 @@ internal sealed class PcapngSourceParityTests
     public async Task Epb_CapLenDoesNotFitWithPad_Skips()
     {
         byte[] payload = new byte[61];
-        byte[] epb = PcapNgBlockFactory.EnhancedPacket(0, payload, capturedLength: 65);
-        byte[] data = PcapNgBlockFactory.Append(PcapNgBlockFactory.ShbAndEthernetIdb(), epb);
+        byte[] epb = PcapngBlocks.EnhancedPacket(0, payload, capturedLength: 65);
+        byte[] data = PcapngBlocks.Append(PcapngBlocks.ShbAndEthernetIdb(), epb);
 
         using PcapngSource source = _CreateSource(data);
         source.ErrorTolerance = ErrorToleranceMode.Tolerant;
@@ -293,9 +293,9 @@ internal sealed class PcapngSourceParityTests
     {
         byte[] payload = new byte[61];
         payload[60] = 0xEE;
-        byte[] options = PcapNgBlockFactory.CommentOptionAndEnd("abcd");
-        byte[] epb = PcapNgBlockFactory.EnhancedPacket(0, payload, options: options);
-        byte[] data = PcapNgBlockFactory.Append(PcapNgBlockFactory.ShbAndEthernetIdb(), epb);
+        byte[] options = PcapngBlocks.CommentOptionAndEnd("abcd");
+        byte[] epb = PcapngBlocks.EnhancedPacket(0, payload, options: options);
+        byte[] data = PcapngBlocks.Append(PcapngBlocks.ShbAndEthernetIdb(), epb);
 
         using PcapngSource source = _CreateSource(data);
         SourceTestFixture.InitializeAndStartSource(source);
@@ -310,12 +310,12 @@ internal sealed class PcapngSourceParityTests
     [Test]
     public async Task SubsequentShb_StartOffset_IsFilePosition()
     {
-        using PcapNgTestWriter writer = new();
+        using PcapngCaptureBuilder writer = new();
         writer.AddInterface(LinkType.Ethernet, nanosecondResolution: true);
         writer.WriteFrame(0, 1_000_000_000, [0x01, 0x02, 0x03, 0x04]);
         byte[] firstSection = writer.Build();
         byte[] secondShb = firstSection.AsSpan(0, 28).ToArray();
-        byte[] combined = PcapNgBlockFactory.Append(firstSection, secondShb);
+        byte[] combined = PcapngBlocks.Append(firstSection, secondShb);
 
         using DataBackend backend = DataBackend.FromMemory(combined);
         IncrementalScanner scanner = new(backend, combined.Length);
@@ -333,15 +333,15 @@ internal sealed class PcapngSourceParityTests
         }
 
         PcapNgFormat format = (PcapNgFormat)scanner.Format;
-        await Assert.That(format.Sections.Count).IsEqualTo(2);
-        await Assert.That(format.Sections[0].StartOffset).IsEqualTo(0L);
-        await Assert.That(format.Sections[1].StartOffset).IsEqualTo((long)firstSection.Length);
+        await Assert.That(format.SectionCount).IsEqualTo(2);
+        await Assert.That(format.TryGetSection(0, out SectionInfo? first) ? first.StartOffset : -1L).IsEqualTo(0L);
+        await Assert.That(format.TryGetSection(1, out SectionInfo? second) ? second.StartOffset : -1L).IsEqualTo((long)firstSection.Length);
     }
 
     [Test]
     public async Task EnhancedPacketBlock_TryParse_ReadsCapLen()
     {
-        using PcapNgTestWriter writer = new();
+        using PcapngCaptureBuilder writer = new();
         writer.AddInterface(LinkType.Ethernet, nanosecondResolution: true);
         writer.WriteFrame(0, 1_000_000_000, [0x01, 0x02, 0x03, 0x04]);
         byte[] file = writer.Build();
@@ -371,7 +371,7 @@ internal sealed class PcapngSourceParityTests
     public async Task TryReadEpb_FullBlockAndBodyOmitHeader_YieldSamePayload()
     {
         byte[] payload = [0x01, 0x02, 0x03, 0x04];
-        using PcapNgTestWriter writer = new();
+        using PcapngCaptureBuilder writer = new();
         writer.AddInterface(LinkType.Ethernet, nanosecondResolution: true);
         writer.WriteFrame(0, 1_000_000_000, payload);
         byte[] file = writer.Build();
@@ -443,7 +443,7 @@ internal sealed class PcapngSourceParityTests
     [Test]
     public async Task DecimalExponent20_SkipsPacket()
     {
-        using PcapNgTestWriter writer = new();
+        using PcapngCaptureBuilder writer = new();
         writer.AddInterface(LinkType.Ethernet, rawTimestampResolution: 20);
         writer.WriteFrame(0, 0, [0x01, 0x02, 0x03, 0x04]);
 
@@ -464,14 +464,14 @@ internal sealed class PcapngSourceParityTests
     public async Task EpbLeadingLength33_WithPaddedBytes_ReturnsPacketAndTheNextBlock()
     {
         byte[] payload = [0x01, 0x02, 0x03, 0x04];
-        byte[] first = PcapNgBlockFactory.EnhancedPacket(0, payload);
+        byte[] first = PcapngBlocks.EnhancedPacket(0, payload);
         uint shortLength = (uint)first.Length - 3u;
         BinaryPrimitives.WriteUInt32LittleEndian(first.AsSpan(4), shortLength);
         BinaryPrimitives.WriteUInt32LittleEndian(first.AsSpan(first.Length - 4), shortLength);
         byte[] secondPayload = [0xAA];
-        byte[] second = PcapNgBlockFactory.EnhancedPacket(0, secondPayload);
-        byte[] data = PcapNgBlockFactory.Append(
-            PcapNgBlockFactory.Append(PcapNgBlockFactory.ShbAndEthernetIdb(), first),
+        byte[] second = PcapngBlocks.EnhancedPacket(0, secondPayload);
+        byte[] data = PcapngBlocks.Append(
+            PcapngBlocks.Append(PcapngBlocks.ShbAndEthernetIdb(), first),
             second);
 
         using PcapngSource source = _CreateSource(data);
@@ -491,12 +491,12 @@ internal sealed class PcapngSourceParityTests
         uint maxBlockSize = PcapConstants.MaxBlockSize;
         await Assert.That(maxBlockSize).IsEqualTo(134_348_832u);
 
-        byte[] prefix = PcapNgBlockFactory.ShbAndEthernetIdb();
+        byte[] prefix = PcapngBlocks.ShbAndEthernetIdb();
         const int blockLength = (16 * 1024 * 1024) + 8;
         byte[] file = new byte[prefix.Length + blockLength];
         prefix.CopyTo(file, 0);
         byte[] expected = [0x11, 0x22, 0x33, 0x44];
-        BinaryPrimitives.WriteUInt32LittleEndian(file.AsSpan(prefix.Length), PcapNgBlockFactory.EpbType);
+        BinaryPrimitives.WriteUInt32LittleEndian(file.AsSpan(prefix.Length), PcapngBlocks.EpbType);
         BinaryPrimitives.WriteUInt32LittleEndian(file.AsSpan(prefix.Length + 4), (uint)blockLength);
         BinaryPrimitives.WriteUInt32LittleEndian(file.AsSpan(prefix.Length + 20), 4);
         BinaryPrimitives.WriteUInt32LittleEndian(file.AsSpan(prefix.Length + 24), 4);

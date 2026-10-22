@@ -22,6 +22,9 @@ ni export capture.pcapng -o packets.duckdb      # every packet, every field, que
   WebSocket *and* CAN, CAN FD, CAN XL, LIN, FlexRay, SOME/IP, and JSON-configured signal decoding.
 - **Capture formats both worlds use.** PCAP, PCAPNG, Vector BLF, and Vector ASC in and out, with round trips that
   keep interface metadata and bus details (CAN DLC 9–15, LIN protected id).
+- **Huge captures without huge RAM.** Open, browse, and analyse captures with hundreds of millions of frames:
+  random access costs well under 2 bytes of RAM per frame (see
+  [Large Captures With Bounded Memory](#large-captures-with-bounded-memory)).
 - **Fast.** Millions of frames per second from memory-mapped files and streams, allocation-aware parsing with
   packet recycling, skip-parse modes, and Roaring-bitmap presence indexes for filtering huge captures.
 - **Analytics built in.** Export to JSON, CSV, Text, PBF, Parquet, or a single DuckDB file with a field catalog
@@ -33,6 +36,32 @@ ni export capture.pcapng -o packets.duckdb      # every packet, every field, que
 - **Verified against Wireshark.** More than 5,000 tests; dissectors, readers, writers, and the frame builder are
   cross-validated against `tshark` 4.6.
 - **Modular.** Take only what you need: values, parser, readers, writers, filters, sessions, or the CLI.
+
+## Large Captures With Bounded Memory
+
+NetworkInspector reads, parses, and analyses capture files far larger than RAM. Memory-mapped file sources keep
+only a compact frame index, and a session keeps only a packed packet → frame map; no frame bytes and no parsed
+packets stay on the heap. A capture with a billion CAN frames needs about 0.7 GB for random access instead of
+38 GB, and a session over it stays browsable.
+
+The index remembers only where each frame starts, packed in groups of 64 with bit-sliced deltas. Everything else is
+re-read from the file by the same parser that read it the first time, so `FrameById` returns exactly the frame the
+sequential read returned — or no frame, never a different one. While a source reads a file, Windows denies other
+writers and Linux/macOS detect changes.
+
+Retained managed memory per frame after a full scan, memory-mapped (measured A/B with `NetworkInspector.Profiling`,
+scenarios `footprint-*`):
+
+| Capture | Before | Now |
+| --- | --- | --- |
+| PCAPNG, 1 M × 64-byte frames | 24.1 B | 0.40 B |
+| PCAPNG, 500 k IMIX frames | 24.2 B | 1.58 B |
+| BLF, 1 M CAN frames | 38.2 B | 0.67 B |
+| ASC, 1 M CAN lines (absolute / relative time) | 32.0 B | 0.40 B / 1.71 B |
+| Session over one PCAPNG source, per packet | 32.3 B | 1.87 B |
+
+Details: [Sources README](NetworkInspector.Sources/README.md#open-very-large-captures),
+[source guide §11.6](NetworkInspector.Sources/SOURCE_GUIDE.md#116-compact-frame-index).
 
 ## Quick Start
 
@@ -209,7 +238,13 @@ Measured with the `NetworkInspector.Profiling` scenarios on 50 000 PCAPNG frames
 
 The parser recycles packets, decodes lazily, and can skip the field tree entirely when only values, indexes, or
 filter verdicts are needed. Run `NetworkInspector.Profiling` to measure parse, filter, export, and session
-throughput on your hardware.
+throughput on your hardware. To compare two builds, run the newer build with
+`--ab <baselineExe> --repeat 5 --set <scenario,…> --out <csv>` (interleaved child processes, one CSV row per run) and
+turn the CSV into a Markdown table with a gate verdict through `--report <csv> --out <md>`. Add
+`--affinity 0x<mask>` to pin every child to a processor set (for example the performance cores of a hybrid CPU), and
+`--warmup <s>` / `--duration <s>` to shorten the phases of a series. `--write-filter-verdicts <dir> --out <file>` and
+`--write-session-digest <dir> --out <file>` write byte-comparable correctness oracles for filter and session changes
+over the captures in `<dir>` (for example the ones `--write-golden-inputs <dir>` writes).
 
 ## Quality
 
@@ -225,7 +260,8 @@ throughput on your hardware.
   re-parses may run concurrently.
 - Exporters and filters are single-threaded per instance. `Session` is thread-safe. Package READMEs state the rules
   for each type.
-- Dispose stacks, sources, exporters, and sessions to release memory maps and files promptly.
+- Dispose stacks, sources, exporters, and sessions to release memory maps and files promptly. An open file source
+  keeps its capture locked against writers (Windows) or checks it for changes (Linux/macOS).
 - No live capture from network interfaces; inputs are capture files, streams, and in-memory frames.
 - NativeAOT and trimming are not supported.
 

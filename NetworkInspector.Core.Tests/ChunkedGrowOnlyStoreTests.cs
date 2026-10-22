@@ -1211,4 +1211,119 @@ internal sealed class ChunkedGrowOnlyStoreTests
     {
         internal volatile int Value;
     }
+
+    #region Tail chunk and owned appends
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task TailChunkAppendAcrossChunkEdgesAndAfterClear(bool owned)
+    {
+        // 16 slots per chunk: 100 entries span six full chunks and one with four entries.
+        ChunkedGrowOnlyStore<int> store = new(chunkShift: 4);
+        for (int i = 0; i < 100; i++)
+        {
+            if (owned)
+            {
+                store.AppendOwned(i);
+            }
+            else
+            {
+                store.Append(i);
+            }
+        }
+
+        bool allMatch = true;
+        for (int i = 0; i < 100; i++)
+        {
+            allMatch &= store.Get(i) == i;
+        }
+
+        List<int> spans = [];
+        for (int chunk = 0; store.TryGetPublishedChunk(chunk, store.Count, out ReadOnlySpan<int> span); chunk++)
+        {
+            spans.Add(span.Length);
+        }
+
+        // Clear starts a new generation: the tail cache must not write into the old one.
+        store.Clear();
+        for (int i = 0; i <= 20; i++)
+        {
+            if (owned)
+            {
+                store.AppendOwned(1_000 + i);
+            }
+            else
+            {
+                store.Append(1_000 + i);
+            }
+        }
+
+        bool refilled = true;
+        for (int i = 0; i <= 20; i++)
+        {
+            refilled &= store.Get(i) == 1_000 + i;
+        }
+
+        await Assert.That(allMatch).IsTrue();
+        int[] expectedSpans = [16, 16, 16, 16, 16, 16, 4];
+        await Assert.That(spans.SequenceEqual(expectedSpans)).IsTrue();
+        await Assert.That(store.Count).IsEqualTo(21);
+        await Assert.That(refilled).IsTrue();
+        await Assert.That(store.TryGet(21, out _)).IsFalse();
+    }
+
+    [Test]
+    public async Task OwnedAppendsWithConcurrentReadersSeeOnlyPublishedRows()
+    {
+        const int total = 300_000;
+        ChunkedGrowOnlyStore<long> store = new(chunkShift: 6);
+        using CancellationTokenSource timeout = new(TimeSpan.FromSeconds(30));
+        using Barrier start = new(4);
+        int done = 0;
+        int wrong = 0;
+
+        Task owner = Task.Run(() =>
+        {
+            start.SignalAndWait(timeout.Token);
+            for (int i = 0; i < total; i++)
+            {
+                store.AppendOwned(i);
+            }
+
+            Volatile.Write(ref done, 1);
+        });
+
+        Task[] readers = new Task[3];
+        for (int r = 0; r < readers.Length; r++)
+        {
+            readers[r] = Task.Run(() =>
+            {
+                start.SignalAndWait(timeout.Token);
+                int checkedUpTo = 0;
+                while (Volatile.Read(ref done) == 0 && !timeout.IsCancellationRequested)
+                {
+                    // Every index below a published count must hold its value, never the unset default.
+                    int count = store.Count;
+                    for (int i = checkedUpTo; i < count; i++)
+                    {
+                        if (store.Get(i) != i)
+                        {
+                            _ = Interlocked.Increment(ref wrong);
+                        }
+                    }
+
+                    checkedUpTo = count;
+                }
+            });
+        }
+
+        await owner.WaitAsync(timeout.Token);
+        await Task.WhenAll(readers).WaitAsync(timeout.Token);
+        await Assert.That(Volatile.Read(ref wrong)).IsEqualTo(0);
+        await Assert.That(store.Count).IsEqualTo(total);
+        await Assert.That(store.Get(total - 1)).IsEqualTo(total - 1);
+    }
+
+    #endregion
 }

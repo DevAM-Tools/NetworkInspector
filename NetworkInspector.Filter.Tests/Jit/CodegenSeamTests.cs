@@ -99,11 +99,11 @@ internal sealed class CodegenSeamTests
     #region Default backend
 
     [Test]
-    public async Task ExpressionTreeCodegen_UnknownNode_ReportsCompilerError()
+    public async Task EvalTreeCodegenUnknownNodeReportsCompilerError()
     {
         using Stack stack = FilterTestHelper.BuildStack();
         FilterProgram program = new("<synthetic>", new UnknownNode(), FilterFeature.Classic);
-        ExpressionTreeCodegen codegen = new();
+        EvalTreeCodegen codegen = new();
 
         FilterResult<CompiledFilterProgram> result = codegen.Compile(program, new SymbolResolver(stack), null);
 
@@ -113,7 +113,7 @@ internal sealed class CodegenSeamTests
     }
 
     [Test]
-    public async Task ExpressionTreeCodegen_ProtocolScopeWithoutContainer_UsesOwnerMatching()
+    public async Task EvalTreeCodegenProtocolScopeWithoutContainerUsesOwnerMatching()
     {
         using Stack stack = FilterTestHelper.BuildStackWithContainerlessProtocol();
         Filter filter = FilterTestHelper.CompileOrThrow("$noctr { noctr.value == 1 }", stack);
@@ -123,7 +123,7 @@ internal sealed class CodegenSeamTests
     }
 
     [Test]
-    public async Task ExpressionTreeCodegen_ProtocolWithoutContainer_FallsBackToOwnerScan()
+    public async Task EvalTreeCodegenProtocolWithoutContainerFallsBackToOwnerScan()
     {
         using Stack stack = FilterTestHelper.BuildStackWithContainerlessProtocol();
         Filter filter = FilterTestHelper.CompileOrThrow("noctr", stack);

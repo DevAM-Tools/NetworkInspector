@@ -33,7 +33,6 @@ internal sealed class BlfIncrementalScanner
     #region Fields
 
     private readonly BlfDataBackend _Backend;
-    private readonly BlfFileInfo _FileInfo;
     private readonly BlfFrameIndex _Index;
     /// <summary>Channel names under construction; written by the scanning thread only.</summary>
     private readonly Dictionary<(byte BusType, byte Channel), string> _ChannelNames = new();
@@ -70,8 +69,11 @@ internal sealed class BlfIncrementalScanner
     /// </summary>
     private int _CarryPrefixLength;
 
-    /// <summary>File offset of the container that owns the current carry-over bytes.</summary>
-    private long _CarrySourceFileOffset;
+    /// <summary>Index row of the container that owns the current carry-over bytes (<see cref="BlfFrameIndex.AddContainer"/>).</summary>
+    private int _CarrySourceRow;
+
+    /// <summary>Index row of the container being drained (its own bytes, after any carry prefix).</summary>
+    private int _CurrentRow;
 
     /// <summary>
     /// Offset of the carry-over start inside the source container's own decompressed bytes
@@ -129,7 +131,6 @@ internal sealed class BlfIncrementalScanner
         long maxUncompressedContainerSize = 0)
     {
         _Backend = backend;
-        _FileInfo = fileInfo;
         _Index = index;
         _MaxUncompressedContainerSize = maxUncompressedContainerSize;
         _FileOffset = fileInfo.HeaderSize; // Objects start after file header
@@ -236,70 +237,20 @@ internal sealed class BlfIncrementalScanner
             int headerFetchSize = (int)Math.Min(BlfConstants.BlockHeaderSize, _Backend.FileSize - _FileOffset);
             ReadOnlySpan<byte> blockData = _Backend.GetSpan(_FileOffset, headerFetchSize);
 
-            // Try to read block header
-            if (!BlfBlockHeader.TryParse(blockData, out BlfBlockHeader blockHeader, out _))
+            // Block header, LOBJ signature, and skip distance (the same rules random access uses for raw objects). Any
+            // violation — a bad signature, a header shorter than 16 bytes, object_length 0 (an endless loop at one
+            // offset), or a skip beyond MaxBlockReadSize — triggers corruption recovery: scan for the next LOBJ magic.
+            if (!BlfBlockHeader.TryGetSkipDistance(blockData, out BlfBlockHeader blockHeader, out int skipDistance))
             {
-                // Try scanning forward for LOBJ magic (corruption recovery)
                 if (!_ScanForMagic())
                 {
-                    _Exhausted = true;
-                }
-                continue;
-            }
-
-            // Validate LOBJ signature
-            if (blockHeader.Signature.Value != BlfConstants.ObjectMagic)
-            {
-                // Not a valid block — scan forward byte by byte for "LOBJ"
-                if (!_ScanForMagic())
-                {
-                    _Exhausted = true;
+                    _MarkExhausted();
                 }
                 continue;
             }
 
             ushort headerSz = blockHeader.HeaderSize.Value;
-            uint objectLength = blockHeader.ObjectLength.Value;
             uint objectType = blockHeader.ObjectType.Value;
-
-            // Explicit validation of block header fields before skip-distance
-            // computation. Each check guards a distinct corruption or attack scenario:
-            //   - headerSz < BlockHeaderSize: the block header itself claims to be shorter
-            //     than the minimum 16-byte layout, which is structurally invalid.
-            //   - objectLength == 0: would produce a skip of 0, causing an infinite loop
-            //     at the same file offset.
-            //   - skipDistance > MaxBlockReadSize: untrusted object_length must not force
-            //     an unbounded GetSpan.
-            // On any violation, attempt corruption-recovery by scanning for the next LOBJ magic.
-            if (headerSz < BlfConstants.BlockHeaderSize)
-            {
-                if (!_ScanForMagic())
-                {
-                    _Exhausted = true;
-                }
-                continue;
-            }
-
-            if (objectLength == 0)
-            {
-                if (!_ScanForMagic())
-                {
-                    _Exhausted = true;
-                }
-                continue;
-            }
-
-            long skipDistanceLong = Math.Max(Math.Max((long)headerSz, BlfConstants.BlockHeaderSize), objectLength);
-            if (skipDistanceLong > BlfConstants.MaxBlockReadSize)
-            {
-                if (!_ScanForMagic())
-                {
-                    _Exhausted = true;
-                }
-                continue;
-            }
-
-            int skipDistance = (int)skipDistanceLong;
 
             // Validate we have enough data for the full object. The header is intact but the body is cut by EOF
             // (a capture tool that crashed while writing): report it once, then stop.
@@ -307,7 +258,7 @@ internal sealed class BlfIncrementalScanner
             {
                 _TruncatedFileObjectCount++;
                 _RecordMark();
-                _Exhausted = true;
+                _MarkExhausted();
                 return false;
             }
 
@@ -343,13 +294,20 @@ internal sealed class BlfIncrementalScanner
             }
         }
 
-        _Exhausted = true;
+        _MarkExhausted();
         return false;
     }
 
     #endregion
 
     #region Private Helpers
+
+    /// <summary>Ends the scan: no further object is read, and the index seals its last partial groups.</summary>
+    private void _MarkExhausted()
+    {
+        _Exhausted = true;
+        _Index.Complete();
+    }
 
     /// <summary>Appends a mark for the failure just counted (full scans only, see <see cref="RecordMarks"/>).</summary>
     private void _RecordMark()
@@ -410,6 +368,9 @@ internal sealed class BlfIncrementalScanner
         {
             byte[] decoded = BlfContainer.Decompress(payloadData, compressionMethod, uncompressedSize,
                 _MaxUncompressedContainerSize);
+
+            // Register the row before any object of this container is indexed: its virtual start resolves positions.
+            _CurrentRow = _Index.AddContainer(fileOffset, decoded.Length);
 
             // Hand the blob to the owner before stitching: the cache key is the container's own bytes.
             OnContainerDecoded?.Invoke(fileOffset, decoded);
@@ -522,43 +483,23 @@ internal sealed class BlfIncrementalScanner
                 continue;
             }
 
-            BlfFrameEntry entry = _MakeContainerEntry(objectStart, skipDistance, in objInfo, ch);
-            _Index.Push(in entry);
+            // Only where the object starts: type, channel, length, and timestamp are re-read from its header.
+            if (objectStart < _CarryPrefixLength)
+            {
+                // Starts in the previous container's tail and continues here: the only case whose header may be split,
+                // so the length is kept. The row and inner offset refer to the container where the object starts.
+                _Index.PushSpanningObject(_CarrySourceRow, _CarrySourceInnerOffset + objectStart, skipDistance);
+            }
+            else
+            {
+                _Index.PushContainerObject(_CurrentRow, objectStart - _CarryPrefixLength);
+            }
+
             foundFrame = true;
         }
 
         _FinishContainer(containerSpan);
         return foundFrame;
-    }
-
-    /// <summary>
-    /// Builds an index entry whose container offset and inner offset refer to the container
-    /// where the object starts (the previous blob when the object still sits in the carry prefix).
-    /// </summary>
-    private BlfFrameEntry _MakeContainerEntry(int objectStart, int skipDistance, in BlfObjectInfo objInfo, ushort channel)
-    {
-        long containerOffset;
-        int innerOffset;
-        if (objectStart < _CarryPrefixLength)
-        {
-            containerOffset = _CarrySourceFileOffset;
-            innerOffset = _CarrySourceInnerOffset + objectStart;
-        }
-        else
-        {
-            containerOffset = _ContainerFileOffset;
-            innerOffset = objectStart - _CarryPrefixLength;
-        }
-
-        return new BlfFrameEntry
-        {
-            ContainerOffset = containerOffset,
-            ObjectOffset = innerOffset,
-            ObjectLength = skipDistance,
-            ObjectType = objInfo.ObjectType,
-            Channel = channel,
-            TimestampNanos = BlfTimestamp.ToAbsolute(_FileInfo.StartOffsetNanos, objInfo.TimestampNanos),
-        };
     }
 
     /// <summary>
@@ -576,7 +517,7 @@ internal sealed class BlfIncrementalScanner
                 // A tail that still begins in the previous container keeps that source identity.
                 if (_ContainerOffset >= _CarryPrefixLength)
                 {
-                    _CarrySourceFileOffset = _ContainerFileOffset;
+                    _CarrySourceRow = _CurrentRow;
                     _CarrySourceInnerOffset = _ContainerOffset - _CarryPrefixLength;
                 }
 
@@ -624,17 +565,8 @@ internal sealed class BlfIncrementalScanner
             return;
         }
 
-        BlfFrameEntry entry = new()
-        {
-            ContainerOffset = fileOffset, // For raw objects, container offset = file offset
-            ObjectOffset = -1, // Sentinel: raw object (not inside a decompressed container)
-            ObjectLength = skipDistance,
-            ObjectType = objInfo.ObjectType,
-            Channel = channel,
-            TimestampNanos = BlfTimestamp.ToAbsolute(_FileInfo.StartOffsetNanos, objInfo.TimestampNanos),
-        };
-
-        _Index.Push(in entry);
+        // Only the file offset: the header is re-read with the same skip-distance rules for random access.
+        _Index.PushRawObject(fileOffset);
     }
 
     /// <summary>

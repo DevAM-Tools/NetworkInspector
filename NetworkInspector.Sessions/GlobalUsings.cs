@@ -7,6 +7,7 @@ global using System.Collections.Generic;
 global using System.Diagnostics;
 global using System.Diagnostics.CodeAnalysis;
 global using System.Globalization;
+global using System.Numerics;
 global using System.Runtime.CompilerServices;
 global using System.Runtime.InteropServices;
 global using System.Threading;
@@ -41,4 +42,5 @@ global using NetworkInspector.Sessions.ValueCaches;
 
 #region NetworkInspector.Sources
 global using NetworkInspector.Sources.Cached;
+global using NetworkInspector.Sources.Collections;
 #endregion

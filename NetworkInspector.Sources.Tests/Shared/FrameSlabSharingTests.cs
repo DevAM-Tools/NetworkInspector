@@ -96,10 +96,10 @@ internal sealed class FrameSlabSharingTests
     {
         // Type 120 frames alias the in-memory file without slabs. With slabs they are copied, so a held frame pins
         // one slab instead of the whole file buffer.
-        BlfTestGenerator gen = new();
+        BlfCaptureBuilder gen = new();
         for (int i = 0; i < _FrameCount; i++)
         {
-            byte[] eth = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [(byte)i, 0xEE]);
+            byte[] eth = TestFrames.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [(byte)i, 0xEE]);
             _ = gen.AddEthernetFrameEx(BlfConstants.ObjTypeEthernetFrameEx, 1, eth, (i + 1) * 1_000_000L);
         }
 
@@ -173,11 +173,11 @@ internal sealed class FrameSlabSharingTests
 
     private static byte[] _BuildPcapng()
     {
-        using PcapNgTestWriter writer = new();
+        using PcapngCaptureBuilder writer = new();
         _ = writer.AddInterface(LinkType.Ethernet, nanosecondResolution: true);
         for (int i = 0; i < _FrameCount; i++)
         {
-            byte[] eth = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [(byte)i, 0xAB, 0xCD]);
+            byte[] eth = TestFrames.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [(byte)i, 0xAB, 0xCD]);
             writer.WriteFrame(0, (i + 1) * 1_000_000L, eth);
         }
 
@@ -186,10 +186,10 @@ internal sealed class FrameSlabSharingTests
 
     private static byte[] _BuildBlfCan()
     {
-        BlfTestGenerator gen = new();
+        BlfCaptureBuilder gen = new();
         for (int i = 0; i < _FrameCount; i++)
         {
-            byte[] can = FrameBuilders.BuildSocketCanClassic(0x100u + (uint)i, [(byte)i, 2, 3, 4]);
+            byte[] can = TestFrames.BuildSocketCanClassic(0x100u + (uint)i, [(byte)i, 2, 3, 4]);
             _ = gen.AddCanFrame(1, can, (i + 1) * 1_000_000L);
         }
 

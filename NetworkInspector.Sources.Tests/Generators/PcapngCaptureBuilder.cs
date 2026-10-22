@@ -6,7 +6,7 @@ namespace NetworkInspector.Sources.Tests.Generators;
 /// Builds synthetic PcapNG files in memory for testing.
 /// Writes the binary PcapNG format: SHB → IDB(s) → EPB(s).
 /// </summary>
-internal sealed class PcapNgTestWriter : IDisposable
+internal sealed class PcapngCaptureBuilder : IDisposable
 {
     // ========================================================================
     // Constants
@@ -27,7 +27,7 @@ internal sealed class PcapNgTestWriter : IDisposable
     /// <summary>
     /// Creates a new PcapNG writer — immediately writes the Section Header Block.
     /// </summary>
-    internal PcapNgTestWriter()
+    internal PcapngCaptureBuilder()
     {
         _WriteSectionHeaderBlock();
     }

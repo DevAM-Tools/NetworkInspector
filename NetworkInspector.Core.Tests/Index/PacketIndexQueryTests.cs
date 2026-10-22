@@ -1419,4 +1419,84 @@ internal sealed class PacketIndexQueryTests
         public string UiName => uiName;
         public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context) => 0;
     }
+
+    [Test]
+    public async Task TryBeginPacketMaxIdShortcutNewReplayRollbackAndNested()
+    {
+        (Stack stack, _, _, IndexGroupId g1, _, _, _) = _BuildIndexTestStack();
+        using (stack)
+        {
+            PacketIndex index = new(stack);
+
+            // First parses 0..9: every begin above the highest committed id opens a session.
+            bool allNew = true;
+            for (int id = 0; id < 10; id++)
+            {
+                allNew &= index.TryBeginPacket(id);
+                index.RecordGroupPresence(g1);
+                index.EndPacket();
+            }
+
+            // Replays at or below the highest committed id still consult the bitmap.
+            bool replayFive = index.TryBeginPacket(5);
+            bool replayNine = index.TryBeginPacket(9);
+            bool replayZero = index.TryBeginPacket(0);
+
+            // Id 10: presence rolled back, the id itself is still marked indexed by EndPacket.
+            bool tenNew = index.TryBeginPacket(10);
+            index.RecordGroupPresence(g1);
+            index.RollbackCurrentPacket();
+            index.EndPacket();
+            bool tenReplay = index.TryBeginPacket(10);
+
+            // 11 is new; a nested new begin while 11 is open throws; a replay during the session does not.
+            bool elevenNew = index.TryBeginPacket(11);
+            bool replayDuringSession = index.TryBeginPacket(3);
+            bool nestedThrew = false;
+            try
+            {
+                _ = index.TryBeginPacket(12);
+            }
+            catch (InvalidOperationException)
+            {
+                nestedThrew = true;
+            }
+
+            index.EndPacket();
+
+            await Assert.That(allNew).IsTrue();
+            await Assert.That(replayFive).IsFalse();
+            await Assert.That(replayNine).IsFalse();
+            await Assert.That(replayZero).IsFalse();
+            await Assert.That(tenNew).IsTrue();
+            await Assert.That(tenReplay).IsFalse();
+            await Assert.That(index.GroupCardinality(g1)).IsEqualTo(10L);
+            await Assert.That(elevenNew).IsTrue();
+            await Assert.That(replayDuringSession).IsFalse();
+            await Assert.That(nestedThrew).IsTrue();
+            await Assert.That(index.TryBeginPacket(12)).IsTrue();
+            index.EndPacket();
+        }
+    }
+
+    [Test]
+    public async Task TryBeginPacketNonMonotonicIdsBelowTheMaxStillCheckTheBitmap()
+    {
+        (Stack stack, _, _, _, _, _, _) = _BuildIndexTestStack();
+        using (stack)
+        {
+            PacketIndex index = new(stack);
+            bool hundred = index.TryBeginPacket(100);
+            index.EndPacket();
+
+            // 50 lies below the highest committed id but was never indexed: it must still open a session.
+            bool fifty = index.TryBeginPacket(50);
+            index.EndPacket();
+
+            await Assert.That(hundred).IsTrue();
+            await Assert.That(fifty).IsTrue();
+            await Assert.That(index.TryBeginPacket(50)).IsFalse();
+            await Assert.That(index.TryBeginPacket(100)).IsFalse();
+        }
+    }
 }

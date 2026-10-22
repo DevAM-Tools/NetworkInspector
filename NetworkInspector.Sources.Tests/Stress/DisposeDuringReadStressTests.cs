@@ -127,12 +127,12 @@ internal sealed class DisposeDuringReadStressTests
     /// <summary>Ten good frames, an EPB on an undeclared interface, then many good frames.</summary>
     private static byte[] _BuildPcapngWithBadBlock()
     {
-        using PcapNgTestWriter writer = new();
+        using PcapngCaptureBuilder writer = new();
         _ = writer.AddInterface(LinkType.Ethernet, nanosecondResolution: true);
         for (int i = 0; i < _FrameCount; i++)
         {
             uint interfaceId = i == 10 ? 7u : 0u;
-            writer.WriteFrame(interfaceId, (i + 1) * 1_000L, FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [(byte)i]));
+            writer.WriteFrame(interfaceId, (i + 1) * 1_000L, TestFrames.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [(byte)i]));
         }
 
         return writer.Build();
@@ -141,7 +141,7 @@ internal sealed class DisposeDuringReadStressTests
     /// <summary>Ten good CAN objects, one CAN object too short to parse, then many good ones (all top level).</summary>
     private static byte[] _BuildBlfWithBadObject()
     {
-        BlfTestGenerator gen = new();
+        BlfCaptureBuilder gen = new();
         for (int i = 0; i < _FrameCount; i++)
         {
             if (i == 10)
@@ -150,7 +150,7 @@ internal sealed class DisposeDuringReadStressTests
                 continue;
             }
 
-            _ = gen.AddCanFrame(1, FrameBuilders.BuildSocketCanClassic(0x100u + (uint)(i & 0xFF), [(byte)i]), (i + 1) * 1_000L);
+            _ = gen.AddCanFrame(1, TestFrames.BuildSocketCanClassic(0x100u + (uint)(i & 0xFF), [(byte)i]), (i + 1) * 1_000L);
         }
 
         return gen.Build();
@@ -198,11 +198,11 @@ internal sealed class DisposeDuringReadStressTests
 
     private static byte[] _BuildPcapng()
     {
-        using PcapNgTestWriter writer = new();
+        using PcapngCaptureBuilder writer = new();
         _ = writer.AddInterface(LinkType.Ethernet, nanosecondResolution: true);
         for (int i = 0; i < _FrameCount; i++)
         {
-            writer.WriteFrame(0, (i + 1) * 1_000L, FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [(byte)i, (byte)(i >> 8)]));
+            writer.WriteFrame(0, (i + 1) * 1_000L, TestFrames.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [(byte)i, (byte)(i >> 8)]));
         }
 
         return writer.Build();
@@ -210,18 +210,18 @@ internal sealed class DisposeDuringReadStressTests
 
     private static byte[] _BuildBlf()
     {
-        BlfTestGenerator inner = new();
+        BlfCaptureBuilder inner = new();
         for (int i = 0; i < _FrameCount; i++)
         {
-            _ = inner.AddCanFrame(1, FrameBuilders.BuildSocketCanClassic(0x100u + (uint)(i & 0xFF), [(byte)i]), (i + 1) * 1_000L);
+            _ = inner.AddCanFrame(1, TestFrames.BuildSocketCanClassic(0x100u + (uint)(i & 0xFF), [(byte)i]), (i + 1) * 1_000L);
         }
 
         // Raw objects on top level plus one compressed container: both sequential read paths touch the mapping.
-        BlfTestGenerator outer = new();
+        BlfCaptureBuilder outer = new();
         _ = outer.AddLogContainer(BlfConstants.CompressionLz4, inner);
         for (int i = 0; i < _FrameCount; i++)
         {
-            _ = outer.AddCanFrame(2, FrameBuilders.BuildSocketCanClassic(0x200u + (uint)(i & 0xFF), [(byte)i]), (_FrameCount + i + 1) * 1_000L);
+            _ = outer.AddCanFrame(2, TestFrames.BuildSocketCanClassic(0x200u + (uint)(i & 0xFF), [(byte)i]), (_FrameCount + i + 1) * 1_000L);
         }
 
         return outer.Build();

@@ -24,9 +24,9 @@ internal sealed class PcapngSourceBasicTests
     [Test]
     public async Task SingleFrame_ParsedCorrectly()
     {
-        byte[] eth = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0xDE, 0xAD]);
+        byte[] eth = TestFrames.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0xDE, 0xAD]);
 
-        using PcapNgTestWriter writer = new();
+        using PcapngCaptureBuilder writer = new();
         writer.AddInterface(LinkType.Ethernet, nanosecondResolution: true);
         writer.WriteFrame(0, 1_000_000_000, eth);
         byte[] pcapData = writer.Build();
@@ -52,14 +52,14 @@ internal sealed class PcapngSourceBasicTests
     [Test]
     public async Task MultipleFrames_AllReadInOrder()
     {
-        using PcapNgTestWriter writer = new();
+        using PcapngCaptureBuilder writer = new();
         writer.AddInterface(LinkType.Ethernet, nanosecondResolution: true);
 
         List<byte[]> expected = [];
         for (int i = 0; i < 5; i++)
         {
             byte[] payload = [(byte)i, (byte)(i + 1), (byte)(i + 2)];
-            byte[] eth = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, payload);
+            byte[] eth = TestFrames.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, payload);
             expected.Add(eth);
             writer.WriteFrame(0, (i + 1) * 1_000_000_000L, eth);
         }
@@ -86,9 +86,9 @@ internal sealed class PcapngSourceBasicTests
     [Test]
     public async Task Timestamps_StrictlyIncreasing()
     {
-        byte[] eth = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0x00]);
+        byte[] eth = TestFrames.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0x00]);
 
-        using PcapNgTestWriter writer = new();
+        using PcapngCaptureBuilder writer = new();
         writer.AddInterface(LinkType.Ethernet, nanosecondResolution: true);
 
         long[] timestamps = [1_000_000_000, 2_000_000_000, 3_000_000_000, 4_000_000_000, 5_000_000_000];
@@ -120,9 +120,9 @@ internal sealed class PcapngSourceBasicTests
     [Test]
     public async Task MicrosecondResolution_TimestampConvertedCorrectly()
     {
-        byte[] eth = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0x00]);
+        byte[] eth = TestFrames.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0x00]);
 
-        using PcapNgTestWriter writer = new();
+        using PcapngCaptureBuilder writer = new();
         writer.AddInterface(LinkType.Ethernet, nanosecondResolution: false);
         // 1.5 seconds = 1_500_000_000 ns = 1_500_000 µs
         writer.WriteFrame(0, 1_500_000_000, eth);
@@ -146,14 +146,14 @@ internal sealed class PcapngSourceBasicTests
     [Test]
     public async Task RandomAccess_RetrieveFrameById()
     {
-        using PcapNgTestWriter writer = new();
+        using PcapngCaptureBuilder writer = new();
         writer.AddInterface(LinkType.Ethernet, nanosecondResolution: true);
 
         List<byte[]> expected = [];
         for (int i = 0; i < 10; i++)
         {
             byte[] payload = Enumerable.Repeat((byte)i, 20).ToArray();
-            byte[] eth = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, payload);
+            byte[] eth = TestFrames.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, payload);
             expected.Add(eth);
             writer.WriteFrame(0, (i + 1) * 1_000_000_000L, eth);
         }
@@ -180,9 +180,9 @@ internal sealed class PcapngSourceBasicTests
     [Test]
     public async Task UiName_MatchesProvided()
     {
-        using PcapNgTestWriter writer = new();
+        using PcapngCaptureBuilder writer = new();
         writer.AddInterface(LinkType.Ethernet);
-        byte[] eth = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0x00]);
+        byte[] eth = TestFrames.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0x00]);
         writer.WriteFrame(0, 1_000_000_000, eth);
 
         using PcapngSource source = PcapngSource.FromData(writer.Build(), "my_capture.pcapng");
@@ -196,7 +196,7 @@ internal sealed class PcapngSourceBasicTests
     [Test]
     public async Task EmptyPcapNg_NoFrames()
     {
-        using PcapNgTestWriter writer = new();
+        using PcapngCaptureBuilder writer = new();
         writer.AddInterface(LinkType.Ethernet);
         // No frames written
 
@@ -214,7 +214,7 @@ internal sealed class PcapngSourceBasicTests
     [Test]
     public async Task Start_NullRegistry_ThrowsArgumentNullException()
     {
-        using PcapNgTestWriter writer = new();
+        using PcapngCaptureBuilder writer = new();
         byte[] pcapData = writer.Build();
         using PcapngSource source = _CreateSource(pcapData);
         FrameInterfaceRegistry registry = new();

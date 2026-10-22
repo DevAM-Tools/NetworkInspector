@@ -16,6 +16,30 @@ namespace NetworkInspector.Profiling;
 ///   profiling.exe --list                  — list all available scenarios and exit
 /// </code>
 ///
+/// <para><b>A/B measurement (interleaved child processes, CSV, report):</b></para>
+/// <code>
+///   profiling.exe --ab &lt;baselineExe&gt; --repeat &lt;n&gt; (--all | --set a,b,…) --out &lt;csv&gt;
+///                 [--affinity 0x&lt;mask&gt;] [--warmup &lt;s&gt;] [--duration &lt;s&gt;]
+///                                         — this executable is variant B, the baseline is variant A;
+///                                           odd runs A then B, even runs B then A; one CSV row per run;
+///                                           --affinity pins every child to the processor mask (Windows,
+///                                           Linux); --warmup/--duration replace the phase lengths of
+///                                           every child (both variants alike)
+///   profiling.exe --report &lt;csv&gt; --out &lt;md&gt; [--noise &lt;aaCsv&gt;] [--set a,b,…] [--title &lt;text&gt;]
+///                 [--min-improvement &lt;fraction&gt;] [--floor &lt;fraction&gt;]
+///                                         — medians, Δ, noise limits, geomean, GC pause, retained memory,
+///                                           gate verdict (exit 0 PASS, 3 FAIL, 1 invalid input);
+///                                           defaults: --min-improvement 0.03, --floor 0.02
+///   profiling.exe --run-once &lt;name&gt; --result &lt;csv&gt; --variant &lt;A|B&gt; --run &lt;n&gt;
+///                                         — one child run (used by --ab)
+///   profiling.exe --write-golden-inputs &lt;dir&gt;
+///                                         — deterministic reference captures for export comparisons
+///   profiling.exe --write-filter-verdicts &lt;dir&gt; --out &lt;file&gt;
+///                                         — filter verdict oracle over the captures in &lt;dir&gt;
+///   profiling.exe --write-session-digest &lt;dir&gt; --out &lt;file&gt;
+///                                         — session result oracle over the captures in &lt;dir&gt;
+/// </code>
+///
 /// <para><b>Profiling with dotnet-trace:</b></para>
 /// <code>
 ///   profiling.exe parse-random-frames     — start scenario, auto-begin after warm-up
@@ -46,40 +70,107 @@ internal static class Program
         // can run on separate cores.
         _ElevateProcessPriority();
 
-        string? filter = null;
-        bool manualStart = false;
-        bool listOnly = false;
-
-        // Simple argument parsing: first non-flag argument is the scenario filter.
-        foreach (string arg in args)
+        // Parse options. Values follow their option; a missing value is an error (exit 1), never a silent default.
+        if (!ProfilingArguments.TryParse(args, out ProfilingArguments parsed, out string parseError))
         {
-            if (arg.Equals("--manual", StringComparison.OrdinalIgnoreCase))
-            {
-                manualStart = true;
-            }
-            else if (arg.Equals("--auto", StringComparison.OrdinalIgnoreCase))
-            {
-                manualStart = false;
-            }
-            else if (arg.Equals("--list", StringComparison.OrdinalIgnoreCase))
-            {
-                listOnly = true;
-            }
-            else if (!arg.StartsWith('-'))
-            {
-                filter = arg;
-            }
+            Console.Error.WriteLine(parseError);
+            return 1;
         }
+
+        // ── Modes that do not need the scenario list ─────────────────────────────
+        if (parsed.ReportCsv is not null)
+        {
+            return AbReport.Run(
+                parsed.ReportCsv,
+                parsed.NoiseCsv,
+                parsed.Set,
+                parsed.OutPath!,
+                parsed.Title ?? "A/B comparison",
+                parsed.MinImprovement,
+                parsed.Floor);
+        }
+
+        if (parsed.GoldenDirectory is not null)
+        {
+            return GoldenInputWriter.Run(parsed.GoldenDirectory);
+        }
+
+        if (parsed.VerdictInputs is not null)
+        {
+            return FilterVerdictWriter.Run(parsed.VerdictInputs, parsed.OutPath!);
+        }
+
+        if (parsed.DigestInputs is not null)
+        {
+            return SessionDigestWriter.Run(parsed.DigestInputs, parsed.OutPath!);
+        }
+
+        PhaseOverrides phases = new(parsed.WarmupSeconds, parsed.DurationSeconds);
 
         // ── Scenario registry ────────────────────────────────────────────────────
         // Scenarios with parameterless constructors are auto-discovered via reflection
         // (ScenarioDiscovery.Discover). Scenarios that require constructor arguments are
-        // registered here manually and prepended to the discovered list.
+        // registered in _ManualScenarios and prepended to the discovered list.
         //
         // To add a new auto-discovered scenario: create a class that implements
         // IProfilingScenario with a parameterless (public or internal) constructor.
         // No change to Program.cs is required.
-        IProfilingScenario[] manual =
+        IProfilingScenario[] discovered = ScenarioDiscovery.Discover();
+        IProfilingScenario[] scenarios = _MergeScenarios(_ManualScenarios(), discovered);
+
+        try
+        {
+            // ── --run-once: one measured child run that appends a CSV row ────────────
+            if (parsed.RunOnce is not null)
+            {
+                return _RunOnce(scenarios, parsed.RunOnce, parsed.ResultCsv!, parsed.Variant, parsed.Run, phases);
+            }
+
+            // ── --ab: interleaved A/B orchestration of child runs ────────────────────
+            if (parsed.AbBaseline is not null)
+            {
+                if (!_TryResolveNames(scenarios, parsed.All, parsed.Set, out List<string> names, out string nameError))
+                {
+                    Console.Error.WriteLine(nameError);
+                    return 1;
+                }
+
+                return AbRunner.Run(parsed.AbBaseline, names, parsed.Repeat, parsed.OutPath!, parsed.AffinityMask, phases);
+            }
+
+            // ── --list: print all scenarios and exit ─────────────────────────────────
+            if (parsed.ListOnly)
+            {
+                _PrintScenarioList(scenarios);
+                return 0;
+            }
+
+            // ── No filter: interactive numbered menu ─────────────────────────────────
+            if (parsed.Filter is null)
+            {
+                return _RunInteractiveMenu(scenarios, parsed.ManualStart, phases);
+            }
+
+            // ── Filter mode: run matching scenarios (for dotnet-trace or scripted use)
+            return _RunFilteredScenarios(scenarios, parsed.Filter, parsed.ManualStart, phases);
+        }
+        finally
+        {
+            // Dispose all IDisposable scenarios regardless of which code path was taken.
+            foreach (IProfilingScenario s in discovered)
+            {
+                if (s is IDisposable d)
+                {
+                    d.Dispose();
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Scenarios that need constructor arguments and therefore cannot be auto-discovered.
+    /// </summary>
+    private static IProfilingScenario[] _ManualScenarios() =>
         [
             // ── Parsing ──────────────────────────────────────────────────────────
             // These require a bool constructor argument and cannot be auto-discovered.
@@ -104,6 +195,7 @@ internal static class Program
             new ParseComboScenario(ParseComboKind.TcpSkipSeqRaw),
             new ParseComboScenario(ParseComboKind.FilterBuild),
             new ParseComboScenario(ParseComboKind.FilterObserver),
+            new ParseComboScenario(ParseComboKind.FilterObserverFlank),
 
             // ── Ingest / Redissect ───────────────────────────────────────────────
             new ParseIngestUdpScenario(),
@@ -117,6 +209,9 @@ internal static class Program
             new SessionConcurrentRedissectScenario(listenerCount: 8),
             new SessionListenerScenario(materialize: false),
             new SessionListenerScenario(materialize: true),
+            new SessionReadMatchingScenario(MatchingReadKind.Match),
+            new SessionReadMatchingScenario(MatchingReadKind.Pruned),
+            new SessionReadMatchingScenario(MatchingReadKind.Sparse),
             new RandomSourceParseScenario(materialize: false),
             new RandomSourceParseScenario(materialize: true),
 
@@ -129,40 +224,142 @@ internal static class Program
             new ReadPcapngCopyScenario(PcapngCopyBackend.Stream, frameSlabSize: 64 * 1024, holdFrames: false),
             new ReadPcapngCopyScenario(PcapngCopyBackend.Stream, frameSlabSize: 0, holdFrames: true),
             new ReadPcapngCopyScenario(PcapngCopyBackend.Stream, frameSlabSize: 64 * 1024, holdFrames: true),
+
+            // ── Index recording during parse ─────────────────────────────────────
+            new ParseComboScenario(ParseComboKind.BuildIndex),
+            new ParseComboScenario(ParseComboKind.SkipIndex),
+
+            // ── Frame index: retained memory per frame / packet (footprint) ──────
+            new FootprintSourceScenario(CaptureWorkload.PcapngUniform, count: 1_000_000),
+            new FootprintSourceScenario(CaptureWorkload.PcapngImix, count: 500_000),
+            new FootprintSourceScenario(CaptureWorkload.BlfCan, count: 1_000_000),
+            new FootprintSourceScenario(CaptureWorkload.AscAbsolute, count: 1_000_000),
+            new FootprintSourceScenario(CaptureWorkload.AscRelative, count: 1_000_000),
+            new FootprintSessionScenario(interleaved: false),
+            new FootprintSessionScenario(interleaved: true),
+
+            // ── Frame index: FrameById throughput (access) ───────────────────────
+            new AccessScenario(CaptureWorkload.PcapngImix, AccessOrder.Random),
+            new AccessScenario(CaptureWorkload.PcapngImix, AccessOrder.Sequential),
+            new AccessScenario(CaptureWorkload.PcapngImix, AccessOrder.Reverse),
+            new AccessScenario(CaptureWorkload.BlfCan, AccessOrder.Random),
+            new AccessScenario(CaptureWorkload.BlfCan, AccessOrder.Sequential),
+            new AccessScenario(CaptureWorkload.AscAbsolute, AccessOrder.Random),
+            new AccessScenario(CaptureWorkload.AscAbsolute, AccessOrder.Sequential),
+            new AccessScenario(CaptureWorkload.PcapngImix, AccessOrder.Sequential, threads: 4),
+            new AccessScenario(CaptureWorkload.PcapngImix, AccessOrder.Reverse, threads: 4),
+            new AccessScenario(CaptureWorkload.PcapngImix, AccessOrder.Random, threads: 4),
+            new AccessScenario(CaptureWorkload.BlfCan, AccessOrder.Sequential, threads: 4),
+            new AccessScenario(CaptureWorkload.AscAbsolute, AccessOrder.Sequential, threads: 4),
+            new AccessScenario(CaptureWorkload.AscAbsolute, AccessOrder.Reverse),
+            new AccessScenario(CaptureWorkload.AscEthernet, AccessOrder.Random, count: 50_000),
+            new AccessScenario(CaptureWorkload.AscEthernet, AccessOrder.Sequential, count: 50_000),
+            new AccessScenario(CaptureWorkload.AscEthernet, AccessOrder.Reverse, count: 50_000),
+            new AccessScenario(CaptureWorkload.AscMixed, AccessOrder.Random),
+            new AccessScenario(CaptureWorkload.AscMixed, AccessOrder.Sequential),
+            new AccessScenario(CaptureWorkload.AscMixed, AccessOrder.Sequential, threads: 4),
+            new SessionAccessScenario(AccessOrder.Sequential),
+            new SessionAccessScenario(AccessOrder.Reverse),
+            new SessionAccessScenario(AccessOrder.Random),
+            new SessionAccessScenario(AccessOrder.Sequential, threads: 4),
+
+            // ── Frame access speed: realistic large capture (5 000 000 IMIX frames ≈ 2 GB temp file), session pages ──
+            new AccessScenario(CaptureWorkload.PcapngImix, AccessOrder.Random, count: 5_000_000, sizeLabel: "large"),
+            new AccessScenario(CaptureWorkload.PcapngImix, AccessOrder.Sequential, count: 5_000_000, sizeLabel: "large"),
+            new SessionReadPacketsScenario(interleaved: false),
+            new SessionReadPacketsScenario(interleaved: true),
+
+            // ── Frame access speed: range read (current build only; compare with access-pcapng-random/-sequential) ──
+            new BatchAccessScenario(AccessOrder.Random),
+            new BatchAccessScenario(AccessOrder.Sequential),
+
+            // ── Frame index: sequential read without preload ─────────────────────
+            new ReadWorkloadScenario(CaptureWorkload.Pcapng512, "read-pcapng-full"),
+            new ReadWorkloadScenario(CaptureWorkload.AscAbsolute, "read-asc"),
+            new ReadWorkloadScenario(CaptureWorkload.AscEthernet, "read-asc-eth"),
+            new ReadWorkloadScenario(CaptureWorkload.AscMixed, "read-asc-mixed"),
+
+            // ── Field storage: CAN parsing, recycling with large frames, memory per stored packet ──
+            new ParseCanScenario(ParseCanKind.Build),
+            new ParseCanScenario(ParseCanKind.Materialized),
+            new ParseCanScenario(ParseCanKind.FdBuild),
+            new ParseCanScenario(ParseCanKind.Recycled),
+            new ParseMixedRecycledScenario(),
+            new StoreScenario(StoreKind.Can),
+            new StoreScenario(StoreKind.CanMaterialized),
+            new StoreScenario(StoreKind.CanFd),
+            new StoreScenario(StoreKind.Udp),
+            new StoreScenario(StoreKind.UdpMaterialized),
+            new StoreScenario(StoreKind.Mixed),
+            new StoreScenario(StoreKind.Sparse),
         ];
 
-        IProfilingScenario[] discovered = ScenarioDiscovery.Discover();
-        IProfilingScenario[] scenarios = _MergeScenarios(manual, discovered);
-
-        try
+    /// <summary>
+    /// Runs exactly one scenario (ordinal name match) and appends its measurement to <paramref name="resultCsv"/>.
+    /// Driven by <see cref="AbRunner"/> with names already resolved, so no substring matching here.
+    /// </summary>
+    private static int _RunOnce(
+        IProfilingScenario[] scenarios,
+        string name,
+        string resultCsv,
+        char variant,
+        int run,
+        PhaseOverrides phases)
+    {
+        foreach (IProfilingScenario scenario in scenarios)
         {
-            // ── --list: print all scenarios and exit ─────────────────────────────────
-            if (listOnly)
+            if (scenario.Name.Equals(name, StringComparison.Ordinal))
             {
-                _PrintScenarioList(scenarios);
+                ScenarioMeasurement measurement = _RunScenario(scenario, manualStart: false, phases);
+                MeasurementCsv.Append(resultCsv, variant, run, in measurement);
                 return 0;
             }
-
-            // ── No filter: interactive numbered menu ─────────────────────────────────
-            if (filter is null)
-            {
-                return _RunInteractiveMenu(scenarios, manualStart);
-            }
-
-            // ── Filter mode: run matching scenarios (for dotnet-trace or scripted use)
-            return _RunFilteredScenarios(scenarios, filter, manualStart);
         }
-        finally
+
+        Console.Error.WriteLine(Invariant($"Unknown scenario '{name}'."));
+        return 1;
+    }
+
+    /// <summary>
+    /// Resolves the scenario names of an A/B run: every scenario in list order for <c>--all</c>, else the exact names
+    /// of <c>--set</c> in the given order. Unknown names fail with a message that lists them.
+    /// </summary>
+    private static bool _TryResolveNames(
+        IProfilingScenario[] scenarios,
+        bool all,
+        IReadOnlyList<string>? set,
+        out List<string> names,
+        out string error)
+    {
+        names = [];
+        HashSet<string> known = new(StringComparer.Ordinal);
+        foreach (IProfilingScenario scenario in scenarios)
         {
-            // Dispose all IDisposable scenarios regardless of which code path was taken.
-            foreach (IProfilingScenario s in discovered)
+            known.Add(scenario.Name);
+            if (all)
             {
-                if (s is IDisposable d)
-                {
-                    d.Dispose();
-                }
+                names.Add(scenario.Name);
             }
         }
+
+        // --set keeps the caller's order; every name must exist exactly.
+        List<string> unknown = [];
+        foreach (string name in all ? [] : set ?? [])
+        {
+            if (known.Contains(name))
+            {
+                names.Add(name);
+            }
+            else
+            {
+                unknown.Add(name);
+            }
+        }
+
+        error = unknown.Count == 0
+            ? string.Empty
+            : Invariant($"Unknown scenario names in --set: {string.Join(", ", unknown)}");
+        return unknown.Count == 0;
     }
 
     /// <summary>Prints a numbered list of all available scenarios.</summary>
@@ -184,7 +381,7 @@ internal static class Program
     /// Presents an interactive numbered menu, lets the user pick a scenario,
     /// and runs it with a profiler-attach pause.
     /// </summary>
-    private static int _RunInteractiveMenu(IProfilingScenario[] scenarios, bool manualStart)
+    private static int _RunInteractiveMenu(IProfilingScenario[] scenarios, bool manualStart, PhaseOverrides phases)
     {
         while (true)
         {
@@ -217,7 +414,7 @@ internal static class Program
                 continue;
             }
 
-            _RunScenario(scenarios[selection - 1], manualStart);
+            _ = _RunScenario(scenarios[selection - 1], manualStart, phases);
 
             Console.WriteLine();
             Console.Write("Press Enter to return to the menu...");
@@ -230,7 +427,11 @@ internal static class Program
     /// When the filter exactly matches a scenario name, only that scenario runs.
     /// Otherwise the filter is used as a substring match.
     /// </summary>
-    private static int _RunFilteredScenarios(IProfilingScenario[] scenarios, string? filter, bool manualStart)
+    private static int _RunFilteredScenarios(
+        IProfilingScenario[] scenarios,
+        string? filter,
+        bool manualStart,
+        PhaseOverrides phases)
     {
         bool anyRan = false;
 
@@ -262,7 +463,7 @@ internal static class Program
                 }
             }
 
-            _RunScenario(scenario, manualStart);
+            _ = _RunScenario(scenario, manualStart, phases);
             anyRan = true;
         }
 
@@ -278,14 +479,17 @@ internal static class Program
     }
 
     /// <summary>
-    /// Runs a single scenario: setup → warm-up → [optional pause] → timed run → cleanup.
+    /// Runs a single scenario: setup → warm-up → [optional pause] → timed run → cleanup, prints the results, and
+    /// returns them for the CSV of an A/B run.
     /// Both warm-up and timed phases are duration-based: the runner calls
     /// <see cref="IProfilingScenario.Run"/> in a tight loop until the configured
     /// time has elapsed. This ensures every scenario runs for a predictable
     /// amount of time regardless of how fast a single iteration is.
     /// </summary>
-    private static void _RunScenario(IProfilingScenario scenario, bool manualStart)
+    private static ScenarioMeasurement _RunScenario(IProfilingScenario scenario, bool manualStart, PhaseOverrides phases)
     {
+        TimeSpan warmupDuration = phases.Warmup(scenario);
+        TimeSpan timedDuration = phases.Duration(scenario);
         Console.WriteLine();
         _WriteColored($"=== Scenario: {scenario.Name} ===", ConsoleColor.Cyan);
         Console.WriteLine($"    {scenario.Description}");
@@ -300,11 +504,11 @@ internal static class Program
         GC.WaitForPendingFinalizers();
 
         // Warm-up: optional PrepareIteration (hoisted) then Run.
-        (long warmupIterations, _, _) = _RunForDuration(scenario, scenario.WarmupDuration);
+        (long warmupIterations, _, _) = _RunForDuration(scenario, warmupDuration);
         Console.ForegroundColor = ConsoleColor.DarkGray;
         Console.WriteLine(
             FormattableString.Invariant(
-                $"Warm-up: {warmupIterations} iterations in {scenario.WarmupDuration.TotalSeconds:F1} s."));
+                $"Warm-up: {warmupIterations} iterations in {warmupDuration.TotalSeconds:F1} s."));
         Console.ResetColor();
 
         // Flush the heap again so GC activity does not skew the timed measurements.
@@ -324,11 +528,15 @@ internal static class Program
         int gen1Before = GC.CollectionCount(1);
         int gen2Before = GC.CollectionCount(2);
 
+        // Process-wide count of Monitor waits on a lock another thread held: separates real lock contention from
+        // time a sampling profiler attributes to the lock slow path.
+        long contentionBefore = Monitor.LockContentionCount;
+
         // Timed profiling phase: call Run() until the configured duration has elapsed.
         Console.WriteLine(
-            FormattableString.Invariant($"Running for {scenario.Duration.TotalSeconds:F1} s..."));
+            FormattableString.Invariant($"Running for {timedDuration.TotalSeconds:F1} s..."));
         Stopwatch sw = Stopwatch.StartNew();
-        (long timedIterations, long runTicks, long runAlloc) = _RunForDuration(scenario, scenario.Duration);
+        (long timedIterations, long runTicks, long runAlloc) = _RunForDuration(scenario, timedDuration);
         sw.Stop();
 
         // Capture GC counters after the timed phase.
@@ -337,6 +545,7 @@ internal static class Program
         int gen0After = GC.CollectionCount(0);
         int gen1After = GC.CollectionCount(1);
         int gen2After = GC.CollectionCount(2);
+        long contentionAfter = Monitor.LockContentionCount;
         GCMemoryInfo gcInfo = GC.GetGCMemoryInfo();
 
         double wallSeconds = sw.Elapsed.TotalSeconds;
@@ -386,6 +595,8 @@ internal static class Program
         Console.WriteLine(
             FormattableString.Invariant(
                 $"  GC Heap: {gcInfo.HeapSizeBytes / 1024.0 / 1024:F1} MB, Pause: {gcInfo.PauseTimePercentage:F1}%"));
+        Console.WriteLine(
+            FormattableString.Invariant($"  Lock contentions (timed phase): {contentionAfter - contentionBefore:N0}"));
         if (totalWorkUnits > 0)
         {
             double allocPerWorkUnit = runAlloc / (double)totalWorkUnits;
@@ -394,9 +605,37 @@ internal static class Program
         }
         Console.ResetColor();
 
+        // Scenarios without work units report iterations, so every row has a positive rate to compare.
+        bool hasUnits = totalWorkUnits > 0;
+
+        // Read the footprint before Cleanup releases what the scenario measured.
+        double retained = scenario.RetainedBytesPerUnit;
+        if (double.IsFinite(retained))
+        {
+            _WriteColored(
+                FormattableString.Invariant($"Retained: {retained:F3} bytes/{(hasUnits ? scenario.WorkUnitName : "iteration")}"),
+                ConsoleColor.Yellow);
+        }
+
         Console.WriteLine();
 
         scenario.Cleanup();
+
+        long units = hasUnits ? totalWorkUnits : timedIterations;
+        double allocPerUnit = units > 0 ? runAlloc / (double)units : 0;
+        return new ScenarioMeasurement(
+            scenario.Name,
+            hasUnits ? scenario.WorkUnitName : "iterations",
+            timedIterations,
+            units,
+            netSeconds,
+            units / netSeconds,
+            allocPerUnit,
+            gen0After - gen0Before,
+            gen1After - gen1Before,
+            gen2After - gen2Before,
+            gcInfo.PauseTimePercentage,
+            retained);
     }
 
     /// <summary>

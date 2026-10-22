@@ -255,4 +255,80 @@ internal sealed class FilterLifecycleTests
     }
 
     #endregion
+
+    #region Pre-check support
+
+    [Test]
+    [Arguments("udp.srcport == 53", true)]
+    [Arguments("udp && udp.dstport in 1024..2048", true)]
+    [Arguments("!(eth.type == 2048) || eth.src == 66:77:88:99:aa:bb", true)]
+    [Arguments("flank(ip.ttl, changed, within: 1s)", false)]
+    [Arguments("udp && flank(udp.srcport, changed, within: 4packets)", false)]
+    [Arguments("$udp { udp.srcport == 53 }", false)]
+    [Arguments("dns.qry.name matches \"^a\"", false)]
+    [Arguments("udp && !(dns.qry.name matches \"^a\")", false)]
+    public async Task CreatePrecheckObserverOnlyForStatelessUnscopedFiltersWithoutRegex(string expression, bool eligible)
+    {
+        using Stack stack = FilterTestHelper.BuildStack();
+        Filter filter = FilterTestHelper.CompileOrThrow(expression, stack);
+
+        FilterObserver? observer = filter.CreatePrecheckObserver();
+
+        await Assert.That(observer is not null).IsEqualTo(eligible);
+    }
+
+    [Test]
+    public async Task CreatePrecheckObserverAlwaysMatchReturnsNull()
+    {
+        await Assert.That(Filter.AlwaysMatch.CreatePrecheckObserver()).IsNull();
+    }
+
+    [Test]
+    public async Task RecordVerdictIsServedByTheCacheLikeAnEvaluatedVerdict()
+    {
+        using Stack stack = FilterTestHelper.BuildStack();
+        Filter filter = FilterTestHelper.CompileOrThrow("udp.srcport == 53", stack);
+        bool knownBefore = filter.TryGetCachedVerdict(new PacketId(0), out _);
+
+        filter.RecordVerdict(new PacketId(0), matched: false);
+        filter.RecordVerdict(new PacketId(1), matched: true);
+        bool knownZero = filter.TryGetCachedVerdict(new PacketId(0), out bool zero);
+        bool knownOne = filter.TryGetCachedVerdict(new PacketId(1), out bool one);
+
+        // A recorded non-match is authoritative for a later TryIsMatch of the same id, as a stored verdict is.
+        Packet matching = FilterTestHelper.Parse(stack, FilterTestHelper.BuildUdpFrame(53, 1024), 0);
+        bool evaluated = filter.TryIsMatch(matching, out bool matched, out _);
+
+        await Assert.That(knownBefore).IsFalse();
+        await Assert.That(knownZero).IsTrue();
+        await Assert.That(zero).IsFalse();
+        await Assert.That(knownOne).IsTrue();
+        await Assert.That(one).IsTrue();
+        await Assert.That(evaluated).IsTrue();
+        await Assert.That(matched).IsFalse();
+        await Assert.That(filter.EvaluatedCount).IsEqualTo(2L);
+    }
+
+    [Test]
+    public async Task TryGetCachedVerdictWithoutMatchCacheKnowsNothing()
+    {
+        using Stack stack = FilterTestHelper.BuildStack();
+        Filter filter = Filter.Compile("udp.srcport == 53", stack, new FilterCompileOptions { EnableMatchCache = false }).Value;
+
+        filter.RecordVerdict(new PacketId(0), matched: false);
+
+        await Assert.That(filter.TryGetCachedVerdict(new PacketId(0), out _)).IsFalse();
+    }
+
+    [Test]
+    public async Task RecordVerdictOnStatefulOrAlwaysMatchThrows()
+    {
+        using Stack stack = FilterTestHelper.BuildStack();
+        Filter stateful = FilterTestHelper.CompileOrThrow("flank(ip.ttl, changed, within: 1s)", stack);
+
+        await Assert.That(() => stateful.RecordVerdict(new PacketId(0), matched: false)).Throws<InvalidOperationException>();
+        await Assert.That(() => Filter.AlwaysMatch.RecordVerdict(new PacketId(0), matched: false)).Throws<InvalidOperationException>();
+    }
+
+    #endregion
 }

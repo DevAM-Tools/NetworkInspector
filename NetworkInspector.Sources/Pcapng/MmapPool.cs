@@ -15,15 +15,19 @@ namespace NetworkInspector.Sources.Pcapng;
 /// session shutdown with a timeout disposes sources whose read loop may still run — never unmaps under a running copy.
 /// </para>
 /// <para>
-/// Random access (<see cref="ReadInto"/>) is lock-free. The mapping is read-only, so concurrent readers need no
-/// mutual exclusion; the only hazard is a concurrent <see cref="Dispose"/> unmapping the pages mid-copy. Each copy
-/// takes a reference on the view's <see cref="SafeHandle"/> (<see cref="SafeHandle.DangerousAddRef"/>): the add
-/// fails once the handle is closed, and an unmap requested while copies run is deferred until the last
-/// <see cref="SafeHandle.DangerousRelease"/>. One view instead of a pool of views keeps the reserved address space
-/// at one file size, independent of the core count.
+/// Random access does not take a lease: the owning source runs each random read inside a section of its
+/// <see cref="ReaderGate"/>, and its <see cref="Dispose"/> closes the gate (waiting for running sections on other
+/// threads) before it disposes this pool. A lease is a reference on the view's <see cref="SafeHandle"/>
+/// (<see cref="SafeHandle.DangerousAddRef"/>): the add fails once the handle is closed, and an unmap requested while
+/// leases are held is deferred until the last <see cref="SafeHandle.DangerousRelease"/>; the sequential thread keeps
+/// using it because an error handler inside its call may dispose the source. The mapping is read-only, so concurrent
+/// readers need no mutual exclusion. One view instead of a pool of views keeps the reserved address space at one file
+/// size, independent of the core count.
 /// </para>
-/// <para><b>Thread-safety:</b> <see cref="ReadInto"/> and <see cref="ReadAt"/> are safe from any thread, also
-/// concurrently with <see cref="Dispose"/>. <see cref="GetPrimarySpan"/> is for the single scanning thread.</para>
+/// <para><b>Thread-safety:</b> <see cref="TryAcquireScanLease"/> and <see cref="ReleaseScanLease"/> are safe from any
+/// thread, also concurrently with <see cref="Dispose"/>. <see cref="GetPrimarySpan"/> and <see cref="PrefetchRange"/>
+/// are for a thread that holds a lease (the scanning thread per step) or is inside the owner's reader-gate section
+/// (a random-access reader). Leases are reference counts and do not exclude each other.</para>
 /// </remarks>
 internal sealed class MmapPool : IDisposable
 {
@@ -80,7 +84,8 @@ internal sealed class MmapPool : IDisposable
         _ViewHandle = _Primary.SafeMemoryMappedViewHandle;
 
         // Acquire the pointer once and hold it for the mapping's lifetime (released in Dispose). The constructor's
-        // reference keeps the view mapped; ReadInto adds its own reference per copy on top of it.
+        // reference keeps the view mapped; every scan lease (TryAcquireScanLease) adds its own reference on top of it.
+        // A reader inside the owner's ReaderGate section needs no lease: Dispose waits for the gate first.
         byte* ptr = null;
         _ViewHandle.AcquirePointer(ref ptr);
         _PrimaryPtr = ptr + _Primary.PointerOffset;
@@ -89,62 +94,6 @@ internal sealed class MmapPool : IDisposable
     #endregion
 
     #region Public API
-
-    /// <summary>Reads <paramref name="length"/> bytes at <paramref name="offset"/> into a new array (zero-filled past EOF).</summary>
-    /// <exception cref="ObjectDisposedException">The mapping was disposed before the copy started.</exception>
-    internal byte[] ReadAt(long offset, int length)
-    {
-        if (length == 0)
-        {
-            return [];
-        }
-
-        // Every byte is written by ReadInto (file bytes, then zeros past EOF), so the array needs no zeroing pass.
-        byte[] buffer = GC.AllocateUninitializedArray<byte>(length);
-        ReadInto(offset, buffer);
-        return buffer;
-    }
-
-    /// <summary>
-    /// Copies file bytes into <paramref name="destination"/>. Bytes past EOF are zero-filled so the result matches
-    /// <c>new byte[length]</c> for a partial read. Lock-free: see the type remarks.
-    /// </summary>
-    /// <exception cref="ObjectDisposedException">The mapping was disposed before the copy started.</exception>
-    internal unsafe void ReadInto(long offset, Span<byte> destination)
-    {
-        if (destination.IsEmpty)
-        {
-            return;
-        }
-
-        bool added = false;
-        try
-        {
-            // The added reference keeps the pages mapped until DangerousRelease, even when Dispose runs meanwhile.
-            // DangerousAddRef throws ObjectDisposedException itself once the handle is closed; the latch covers the
-            // window between Dispose starting and the handle closing.
-            _ViewHandle.DangerousAddRef(ref added);
-            ObjectDisposedException.ThrowIf(!added || _Disposed != 0, this);
-
-            int readable = (int)Math.Min(destination.Length, Math.Max(0, _FileSize - offset));
-            if (readable > 0)
-            {
-                new ReadOnlySpan<byte>(_PrimaryPtr + offset, readable).CopyTo(destination);
-            }
-
-            if (readable < destination.Length)
-            {
-                destination[readable..].Clear();
-            }
-        }
-        finally
-        {
-            if (added)
-            {
-                _ViewHandle.DangerousRelease();
-            }
-        }
-    }
 
     /// <summary>
     /// Takes a reference on the view for the reads of one sequential step (<see cref="GetPrimarySpan"/> on the scanning
@@ -185,18 +134,28 @@ internal sealed class MmapPool : IDisposable
     /// released only in <see cref="Dispose"/>, so no per-call <c>AcquirePointer</c>/<c>ReleasePointer</c> is needed.
     /// Callers must not use the span across a concurrent <see cref="Dispose"/> (the sources serialise that).
     /// </remarks>
-    /// <param name="offset">File offset of the first byte.</param>
+    /// <param name="offset">File offset of the first byte; a negative or past-end offset yields an empty span.</param>
     /// <param name="length">Number of bytes to expose; clipped at EOF.</param>
     /// <returns>A span over the requested file region.</returns>
     internal unsafe ReadOnlySpan<byte> GetPrimarySpan(long offset, int length)
     {
+        // One unsigned compare rejects negative and past-end offsets alike, so no pointer arithmetic lands before the view.
+        // The in-memory backend (DataBackend.GetScanSpan) returns an empty span for the same offsets.
+        if ((ulong)offset >= (ulong)_FileSize)
+        {
+            return ReadOnlySpan<byte>.Empty;
+        }
+
         if (offset + length > _FileSize)
         {
-            length = (int)Math.Max(0, _FileSize - offset);
+            length = (int)(_FileSize - offset);
         }
 
         return new ReadOnlySpan<byte>(_PrimaryPtr + offset, length);
     }
+
+    /// <summary>Requests the lines of a range of the view. Caller holds a lease or a gate section, and the range lies inside the file.</summary>
+    internal unsafe void PrefetchRange(long offset, int length) => CachePrefetch.Range(_PrimaryPtr + offset, length);
 
     #endregion
 
@@ -211,8 +170,8 @@ internal sealed class MmapPool : IDisposable
             return;
         }
 
-        // ReleasePointer drops the constructor's reference; the view is unmapped when the last concurrent
-        // ReadInto releases its own reference. Each step runs even when an earlier one fails, and one
+        // ReleasePointer drops the constructor's reference; the view is unmapped when the last outstanding scan lease
+        // is released. Each step runs even when an earlier one fails, and one
         // aggregate exception reports all failures afterwards.
         List<Exception> failures = [];
         try

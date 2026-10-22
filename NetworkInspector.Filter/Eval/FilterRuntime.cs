@@ -3,67 +3,15 @@
 namespace NetworkInspector.Filter.Eval;
 
 /// <summary>
-/// The intrinsics an emitted filter delegate calls.
-/// <para>
-/// Code generation only ever produces boolean composition (<c>&amp;&amp;</c>, <c>||</c>, <c>!</c>)
-/// plus calls into this class, which keeps the expression trees small and moves all packet
-/// knowledge into ordinary, debuggable, testable methods. Every operand is a compile-time
-/// constant closed over by the tree.
-/// </para>
+/// The shared runtime helpers of the evaluation nodes: regular expressions (with timeout handling), flank trackers,
+/// and scopes. Presence and value tests are evaluated by their nodes directly against
+/// <see cref="FilterEvalContext"/>.
 /// </summary>
 internal static class FilterRuntime
 {
-    #region Presence
-
-    /// <summary>Protocol presence test.</summary>
-    public static bool HasProtocol(FilterEvalContext context, ProtocolId protocolId, FieldId containerField) =>
-        context.HasProtocol(protocolId, containerField);
-
-    /// <summary>Field or alias-group presence test.</summary>
-    public static bool HasField(FilterEvalContext context, FieldId[] fields) =>
-        context.HasAnyField(fields);
-
-    #endregion
-
     #region Value predicates
 
-    /// <summary>Comparison against a literal.</summary>
-    public static bool Compare(
-        FilterEvalContext context,
-        ValueAccessor accessor,
-        CompareOp op,
-        FieldValueData literal)
-    {
-        ComparePredicate predicate = new(op, literal);
-        return context.AnyValueMatches(accessor, ref predicate);
-    }
-
-    /// <summary>Set membership.</summary>
-    public static bool InSet(FilterEvalContext context, ValueAccessor accessor, FieldValueData[] values)
-    {
-        SetPredicate predicate = new(values);
-        return context.AnyValueMatches(accessor, ref predicate);
-    }
-
-    /// <summary>Inclusive range membership.</summary>
-    public static bool InRange(
-        FilterEvalContext context,
-        ValueAccessor accessor,
-        FieldValueData low,
-        FieldValueData high)
-    {
-        RangePredicate predicate = new(low, high);
-        return context.AnyValueMatches(accessor, ref predicate);
-    }
-
-    /// <summary>Ordinal substring test.</summary>
-    public static bool Contains(FilterEvalContext context, ValueAccessor accessor, string needle)
-    {
-        ContainsPredicate predicate = new(needle);
-        return context.AnyValueMatches(accessor, ref predicate);
-    }
-
-    /// <summary>Regular-expression test.</summary>
+    /// <summary>Regular-expression test; a timeout is recorded on the context and yields false.</summary>
     public static bool Matches(FilterEvalContext context, ValueAccessor accessor, Regex regex)
     {
         MatchesPredicate predicate = new(regex);

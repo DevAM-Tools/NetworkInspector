@@ -36,6 +36,7 @@ global using PacketFilter = NetworkInspector.Filter.Filter;
 
 #region NetworkInspector.Sources
 global using NetworkInspector.Sources.Cached;
+global using NetworkInspector.Sources.Pcapng;
 #endregion
 
 #region NetworkInspector.Sessions

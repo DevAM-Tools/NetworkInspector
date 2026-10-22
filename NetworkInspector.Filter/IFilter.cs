@@ -16,7 +16,7 @@ namespace NetworkInspector.Filter;
 /// are reported by <see cref="Filter.Compile(string, IStack, FilterCompileOptions?)"/>; runtime
 /// faults recorded in the eval context (for example regex timeouts) surface through
 /// <see cref="TryIsMatch"/> and sticky-poison the instance for classic and flank filters alike.
-/// Unexpected exceptions from the JIT root are caught only when <see cref="IsStateful"/> is
+/// Unexpected exceptions from the compiled evaluation root are caught only when <see cref="IsStateful"/> is
 /// <see langword="true"/>, so flank state cannot continue dirty; on a classic filter they
 /// propagate after the eval context is unbound.
 /// </para>

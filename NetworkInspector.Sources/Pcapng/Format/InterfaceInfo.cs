@@ -6,9 +6,29 @@ namespace NetworkInspector.Sources.Pcapng.Format;
 /// Metadata about a single capture interface within a PCAPNG section.
 /// Built from an Interface Description Block (IDB) and its options.
 /// </summary>
+/// <remarks>
+/// <b>Thread-safety:</b> configured by the scanner (<see cref="SectionInfo.ParseIdbOptions"/>) before it is added to
+/// its section, and never changed afterwards; readers on any thread see a fully built instance through the section's
+/// lock-free publish.
+/// </remarks>
 internal sealed class InterfaceInfo
 {
+    #region Fields
+
+    /// <summary>
+    /// Registry entry of this interface, set by the owning <see cref="PcapngSource"/> when it registers the interface;
+    /// null before. Written on the registering thread before the scanner indexes any packet of the interface (lazy:
+    /// scanner callback; full scan: <c>Start</c>, before which <c>FrameById</c> returns no frame); read by
+    /// <c>FrameById</c> on any thread.
+    /// </summary>
+    private volatile PcapInterfaceEntry? _Registered;
+
+    #endregion
+
     #region Properties
+
+    /// <summary>The registry entry, or null while the interface is not registered. Any thread.</summary>
+    internal PcapInterfaceEntry? Registered => _Registered;
 
     /// <summary>
     /// Link type of the interface: <see cref="RawLinkType"/> as a <see cref="Core.LinkType"/>.
@@ -99,6 +119,9 @@ internal sealed class InterfaceInfo
     #endregion
 
     #region Internal API
+
+    /// <summary>Publishes the registry entry. Registering thread only; the first registration wins.</summary>
+    internal void SetRegistered(PcapInterfaceEntry entry) => _ = Interlocked.CompareExchange(ref _Registered, entry, null);
 
     /// <summary>
     /// Sets the timestamp resolution from a raw if_tsresol option byte.

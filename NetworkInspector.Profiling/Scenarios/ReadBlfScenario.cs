@@ -22,7 +22,7 @@ internal sealed class ReadBlfScenario : ReadScenarioBase
 
     /// <inheritdoc/>
     protected override string CreateSampleFile(Frame[] frames)
-        => SampleFileHelper.CreateBlfFile(frames);
+        => SampleCaptureFiles.CreateBlfFile(frames);
 
     /// <inheritdoc/>
     public override string Name => "read-blf";

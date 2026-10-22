@@ -126,6 +126,9 @@ public sealed class ValueCacheSeries<T> : ValueCacheSeries, IReadOnlyValueCacheS
     /// Appends one occurrence or skips it (FirstOccurrence same consecutive packet id).
     /// Contended callers wait on the series gate so the three column appends stay atomic as a row.
     /// AllOccurrences is bounded by the packet field cap (<c>ushort.MaxValue - 1</c>), not by a series counter.
+    /// The gate is also what lets the three column stores skip their own single-writer compare-exchange: the row is
+    /// appended with <c>AppendOwned</c>, whose precondition is that every append and clear of the store is serialized by
+    /// the caller. Never call <c>AppendOwned</c> without this gate.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void Record(int packetId, long timestampNanos, T value)
@@ -139,7 +142,7 @@ public sealed class ValueCacheSeries<T> : ValueCacheSeries, IReadOnlyValueCacheS
             }
 
             AppendKeys(packetId, timestampNanos);
-            _Values.Append(in value);
+            _Values.AppendOwned(in value);
             PublishCount();
         }
         finally

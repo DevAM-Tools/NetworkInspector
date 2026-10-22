@@ -658,6 +658,216 @@ internal sealed class SessionFilterTests
 
     #endregion
 
+    #region Matching pre-check
+
+    /// <summary>2 000 mixed frames: every fourth TCP (alternating ports 80/443), the rest UDP with patterned ports and TTLs.</summary>
+    private static byte[][] _PrecheckFrames(int count)
+    {
+        byte[][] frames = new byte[count][];
+        for (int i = 0; i < count; i++)
+        {
+            frames[i] = i % 4 == 0
+                ? TestHarness.BuildTcpFrame(i % 8 == 0 ? (ushort)80 : (ushort)443)
+                : TestHarness.BuildUdpFrame(i % 9 == 0 ? (ushort)53 : (ushort)(1_000 + (i % 400)), (byte)(20 + (i % 50)));
+        }
+
+        return frames;
+    }
+
+    /// <summary>Pages a matching read through the whole capture in buffers of <paramref name="bufferLength"/>.</summary>
+    private static List<int> _ReadAllMatching(Session session, ListenerId listenerId, int bufferLength)
+    {
+        PacketRef[] buffer = new PacketRef[bufferLength];
+        List<int> returned = [];
+        int start = 0;
+        int limit = session.PacketCount;
+        while (start < limit)
+        {
+            if (!session.TryReadPackets(listenerId, start, buffer, PacketReadMode.Matching, out int count, out _, out _, out _))
+            {
+                throw new InvalidOperationException("The matching read failed.");
+            }
+
+            for (int i = 0; i < count; i++)
+            {
+                returned.Add(buffer[i].Id.Value);
+            }
+
+            start = count == bufferLength ? buffer[count - 1].Id.Value + 1 : limit;
+        }
+
+        return returned;
+    }
+
+    /// <summary>Ids for which an independent filter instance evaluates true on standalone parses.</summary>
+    private static List<int> _ReferenceMatches(Stack stack, byte[][] frames, string expression)
+    {
+        PacketFilter reference = SessionFixture.CompileOrThrow(stack, expression);
+        List<int> expected = [];
+        for (int i = 0; i < frames.Length; i++)
+        {
+            _ = reference.TryIsMatch(TestHarness.ParseStandalone(stack, frames[i], i), out bool matched, out _);
+            if (matched)
+            {
+                expected.Add(i);
+            }
+        }
+
+        return expected;
+    }
+
+    [Test]
+    [Arguments("udp.dstport >= 1200")]
+    [Arguments("udp.port in {53, 1024}")]
+    [Arguments("tcp.dstport == 443 || udp.dstport == 1007")]
+    [Arguments("ip.ttl < 40 && !tcp")]
+    [Arguments("udp.dstport != 53")]
+    [Arguments("!(udp.dstport == 53)")]
+    [Arguments("!(tcp.dstport == 443 || udp.dstport == 53)")]
+    [Arguments("tcp.dstport != 80 && udp.dstport != 53")]
+    [Arguments("!(udp.dstport == 53) && ip.ttl > 30")]
+    public async Task PrecheckedMatchingReadEqualsTheFieldTreeFilter(string expression)
+    {
+        const int frameCount = 2_000;
+        byte[][] frames = _PrecheckFrames(frameCount);
+        using Stack stack = TestHarness.CreateStack();
+        using TestFrameSource source = new(frames);
+        using Session session = new(stack, new SessionOptions { IndexPackets = true });
+        PacketFilter listenerFilter = SessionFixture.CompileOrThrow(stack, expression);
+        session.TryAddFrameSource(source, out _, out _);
+        session.TryAddListener(new TestSessionListener(), listenerFilter, out ListenerInfo? info, out _);
+        session.TryStart(out _);
+        session.WaitForCompletion();
+
+        List<int> returned = _ReadAllMatching(session, info!.Id, 64);
+        List<int> expected = _ReferenceMatches(stack, frames, expression);
+
+        // A third instance evaluates every id the presence index does not prune, so its cache is the full bookkeeping.
+        PacketFilter direct = SessionFixture.CompileOrThrow(stack, expression);
+        PacketIndexReaderView index = session.PacketIndex!.Value;
+        for (int i = 0; i < frameCount; i++)
+        {
+            if (direct.TryIsPresenceCandidate(index, (uint)i, out bool candidate) && !candidate)
+            {
+                continue;
+            }
+
+            _ = direct.TryIsMatch(TestHarness.ParseStandalone(stack, frames[i], i), out _, out _);
+        }
+
+        // The slot filter is the instance the session evaluates (the caller's, or a re-bound copy of it).
+        PacketFilter slotFilter = _ListenerSlots(session).Single().Filter!;
+        long evaluated = slotFilter.EvaluatedCount;
+        long matchedCount = slotFilter.MatchedPackets.Cardinality;
+        session.Shutdown();
+
+        await Assert.That(returned).IsEquivalentTo(expected);
+        await Assert.That(evaluated).IsEqualTo(direct.EvaluatedCount);
+        await Assert.That(matchedCount).IsEqualTo(direct.MatchedPackets.Cardinality);
+    }
+
+    [Test]
+    public async Task MatchAllFilterOverManyPacketsReturnsEveryId()
+    {
+        // "udp" matches every packet: the adaptive switch turns the pre-check off, verdicts must not change.
+        const int frameCount = 10_000;
+        using Stack stack = TestHarness.CreateStack();
+        using TestFrameSource source = TestFrameSource.WithUdpFrames(frameCount);
+        using Session session = new(stack, new SessionOptions { IndexPackets = true });
+        session.TryAddFrameSource(source, out _, out _);
+        session.TryAddListener(new TestSessionListener(), SessionFixture.CompileOrThrow(stack, "udp.dstport != 1"), out ListenerInfo? info, out _);
+        session.TryStart(out _);
+        session.WaitForCompletion();
+
+        List<int> returned = _ReadAllMatching(session, info!.Id, 1_000);
+        session.Shutdown();
+
+        await Assert.That(returned.Count).IsEqualTo(frameCount);
+        await Assert.That(returned.SequenceEqual(Enumerable.Range(0, frameCount))).IsTrue();
+    }
+
+    [Test]
+    public async Task PrecheckFollowsTheDerivedFilterAfterRestart()
+    {
+        const int frameCount = 500;
+        const string expression = "udp.dstport >= 1200";
+        byte[][] frames = _PrecheckFrames(frameCount);
+        using TestFrameSource source = new(frames);
+        using Stack stack = TestHarness.CreateStack();
+        using Session session = new(stack, new SessionOptions { IndexPackets = true });
+        session.TryAddFrameSource(source, out _, out _);
+        session.TryAddListener(new TestSessionListener(), SessionFixture.CompileOrThrow(stack, expression), out ListenerInfo? info, out _);
+        session.TryStart(out _);
+        session.WaitForCompletion();
+
+        List<int> before = _ReadAllMatching(session, info!.Id, 64);
+        ListenerSlot slot = _ListenerSlots(session).Single();
+        PacketFilter? ownerBefore = slot.PrecheckOwner;
+        session.Restart(registry => TestHarness.CreateStack(registry));
+        List<int> after = _ReadAllMatching(session, info.Id, 64);
+        PacketFilter? ownerAfter = slot.PrecheckOwner;
+        PacketFilter? filterAfter = slot.Filter;
+        bool hasPrecheck = slot.Precheck is not null;
+        session.Shutdown();
+
+        await Assert.That(before).IsEquivalentTo(_ReferenceMatches(stack, frames, expression));
+        await Assert.That(after).IsEquivalentTo(before);
+        await Assert.That(ownerBefore).IsNotNull();
+        await Assert.That(ReferenceEquals(ownerAfter, filterAfter)).IsTrue();
+        await Assert.That(ReferenceEquals(ownerAfter, ownerBefore)).IsFalse();
+        await Assert.That(hasPrecheck).IsTrue();
+    }
+
+    [Test]
+    public async Task SecondMatchingReadRereadsOnlyTheMatches()
+    {
+        const int frameCount = 400;
+        byte[][] frames = _PrecheckFrames(frameCount);
+        using CountingRandomAccessSource source = new(new TestFrameSource(frames));
+        using Stack stack = TestHarness.CreateStack();
+        using Session session = new(stack, new SessionOptions { IndexPackets = false });
+        session.TryAddFrameSource(source, out _, out _);
+        session.TryAddListener(new TestSessionListener(), SessionFixture.CompileOrThrow(stack, "udp.dstport == 53"), out ListenerInfo? info, out _);
+        session.TryStart(out _);
+        session.WaitForCompletion();
+
+        List<int> first = _ReadAllMatching(session, info!.Id, frameCount);
+        int afterFirst = source.FrameByIdCalls;
+        List<int> second = _ReadAllMatching(session, info.Id, frameCount);
+        int secondReads = source.FrameByIdCalls - afterFirst;
+        session.Shutdown();
+
+        // Cached non-matches need no re-read; cached matches are re-parsed once each to be returned.
+        await Assert.That(second).IsEquivalentTo(first);
+        await Assert.That(first.Count).IsGreaterThan(0);
+        await Assert.That(secondReads).IsEqualTo(first.Count);
+    }
+
+    [Test]
+    public async Task MatchingReadReadsEachFrameOnce()
+    {
+        const int frameCount = 400;
+        byte[][] frames = _PrecheckFrames(frameCount);
+        using CountingRandomAccessSource source = new(new TestFrameSource(frames));
+        using Stack stack = TestHarness.CreateStack();
+        using Session session = new(stack, new SessionOptions { IndexPackets = false });
+        session.TryAddFrameSource(source, out _, out _);
+        session.TryAddListener(new TestSessionListener(), SessionFixture.CompileOrThrow(stack, "udp.dstport == 53"), out ListenerInfo? info, out _);
+        session.TryStart(out _);
+        session.WaitForCompletion();
+
+        int before = source.FrameByIdCalls;
+        List<int> matches = _ReadAllMatching(session, info!.Id, frameCount);
+        int reads = source.FrameByIdCalls - before;
+        session.Shutdown();
+
+        // One source read per id: a pre-check survivor is re-parsed from the frame the pre-check already read.
+        await Assert.That(matches.Count).IsGreaterThan(0);
+        await Assert.That(reads).IsEqualTo(frameCount);
+    }
+
+    #endregion
+
     #region Helpers
 
     /// <summary>
@@ -695,6 +905,15 @@ internal sealed class SessionFilterTests
         }
 
         return filters;
+    }
+
+    /// <summary>The registered listener slots (private session state; the pre-check owner is not observable otherwise).</summary>
+    private static ListenerSlot[] _ListenerSlots(Session session)
+    {
+        System.Reflection.FieldInfo field = typeof(Session)
+            .GetField("_ListenerSlots", BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("Session no longer has a _ListenerSlots field.");
+        return ((SnapshotList<ListenerSlot>)field.GetValue(session)!).CurrentSnapshot;
     }
 
     #endregion

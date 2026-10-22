@@ -6,10 +6,10 @@ namespace NetworkInspector.Filter.Jit;
 /// Turns a bound <see cref="FilterProgram"/> into an executable
 /// <see cref="CompiledFilterProgram"/>.
 /// <para>
-/// The seam exists so the back end can be swapped — for example for an interpreting fallback on
-/// platforms where expression-tree compilation is unavailable, or for a future emitter — without
-/// touching the front end, the analyzer or the public API.
-/// <see cref="ExpressionTreeCodegen"/> is the default and only implementation shipped in v1.
+/// The seam exists so the back end can be swapped — for example for a future emitter or a test
+/// double — without touching the front end, the analyzer or the public API.
+/// <see cref="EvalTreeCodegen"/> (a tree of typed evaluation nodes, no runtime code generation) is
+/// the default and only implementation shipped.
 /// </para>
 /// <para>
 /// Implementations perform name binding and therefore report

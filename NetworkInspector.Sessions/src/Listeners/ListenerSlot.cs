@@ -119,6 +119,18 @@ internal sealed class ListenerSlot : IDisposable
     /// </summary>
     internal FilterError? FilterFault => _FilterFault;
 
+    /// <summary>
+    /// The filter instance <see cref="Precheck"/> was built for. Read and written only under <see cref="FilterGate"/>;
+    /// a mismatch with <see cref="Filter"/> means the pre-check must be rebuilt.
+    /// </summary>
+    internal PacketFilter? PrecheckOwner { get; set; }
+
+    /// <summary>
+    /// The skip-parse pre-check of matching reads for <see cref="PrecheckOwner"/>, or <see langword="null"/> when that
+    /// filter is not eligible. Read and written only under <see cref="FilterGate"/>.
+    /// </summary>
+    internal MatchingPrecheck? Precheck { get; set; }
+
     /// <summary>Installs the filter for this listener and clears any previous re-bind failure.</summary>
     /// <param name="filter">The filter, already bound to the session stack; <see langword="null"/> means no filter.</param>
     internal void SetFilter(PacketFilter? filter)
@@ -127,6 +139,8 @@ internal sealed class ListenerSlot : IDisposable
         {
             _Filter = filter;
             _FilterFault = null;
+            PrecheckOwner = null;
+            Precheck = null;
         }
     }
 
@@ -141,6 +155,8 @@ internal sealed class ListenerSlot : IDisposable
         {
             _Filter = null;
             _FilterFault = failure;
+            PrecheckOwner = null;
+            Precheck = null;
         }
     }
 

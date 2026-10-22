@@ -55,6 +55,26 @@ internal sealed class CachedFrameSourceTests
     }
 
     [Test]
+    public async Task FramesByIdDefaultImplementationEqualsPerIdReads()
+    {
+        using CachedFrameSource source = _CreateCached(300);
+        List<Frame> frames = RandomAccessEquivalence.StartAndReadAll(source);
+        List<string> mismatches = [];
+
+        foreach ((string name, FrameId first, int length) in RandomAccessEquivalence.BatchRanges(frames.Count))
+        {
+            string? mismatch = RandomAccessEquivalence.FindBatchMismatch(source, first, length, name);
+            if (mismatch is not null)
+            {
+                mismatches.Add(mismatch);
+            }
+        }
+
+        await Assert.That(frames.Count).IsEqualTo(300);
+        await Assert.That(mismatches).IsEmpty();
+    }
+
+    [Test]
     public async Task FrameById_InvalidId_ReturnsNull()
     {
         using CachedFrameSource source = _CreateCached(1);
@@ -126,7 +146,7 @@ internal sealed class CachedFrameSourceTests
     public async Task Constructor_RejectsRandomAccessSource()
     {
         byte[] pcapData;
-        using (Tests.Generators.PcapNgTestWriter writer = new())
+        using (Tests.Generators.PcapngCaptureBuilder writer = new())
         {
             pcapData = writer.Build();
         }

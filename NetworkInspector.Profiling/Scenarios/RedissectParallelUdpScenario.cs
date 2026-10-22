@@ -66,7 +66,7 @@ internal sealed class RedissectParallelUdpScenario : IProfilingScenario, IDispos
     public void Setup()
     {
         _Stack = StackHelper.CreateStack();
-        _Frames = FrameHelper.CreateSharedFrames(_BatchSize, _Stack);
+        _Frames = SampleFrames.CreateSharedFrames(_BatchSize, _Stack);
         _RecyclePackets = new Packet[_ThreadCount];
         _Stop = 0;
         _Fault = null;

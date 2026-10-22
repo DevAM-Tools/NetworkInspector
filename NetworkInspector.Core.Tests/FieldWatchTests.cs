@@ -674,7 +674,7 @@ internal sealed class FieldWatchTests
     /// <summary>Per-thread allocation counter. Not parallel.</summary>
     [Test]
     [NotInParallel]
-    public async Task RecycledBuild_AllocatesNoChunkTable()
+    public async Task RecycledBuildReusesFieldChunks()
     {
         using Stack stack = _Standard();
         ParseOptions build = new(FieldTreeMode.Build);
@@ -691,14 +691,12 @@ internal sealed class FieldWatchTests
             Packet.TryParse(skipPacket!, new PacketId(i + 1), stack, frame, in skip, out _);
         }
 
-        object? tableBefore = typeof(Packet).GetField("_ChunkTable", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .GetValue(buildPacket);
+        (object? firstBefore, object? tableBefore) = _FieldChunks(buildPacket!);
         Frame measure = _Udp(stack, warmup + 1);
         long beforeBuild = GC.GetAllocatedBytesForCurrentThread();
         Packet.TryParse(buildPacket!, new PacketId(warmup + 1), stack, measure, in build, out _);
         long buildBytes = GC.GetAllocatedBytesForCurrentThread() - beforeBuild;
-        object? tableAfter = typeof(Packet).GetField("_ChunkTable", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .GetValue(buildPacket);
+        (object? firstAfter, object? tableAfter) = _FieldChunks(buildPacket!);
         long beforeSecond = GC.GetAllocatedBytesForCurrentThread();
         Packet.TryParse(buildPacket!, new PacketId(warmup + 2), stack, measure, in build, out _);
         long secondBytes = GC.GetAllocatedBytesForCurrentThread() - beforeSecond;
@@ -706,11 +704,26 @@ internal sealed class FieldWatchTests
         Packet.TryParse(skipPacket!, new PacketId(warmup + 1), stack, measure, in skip, out _);
         long skipBytes = GC.GetAllocatedBytesForCurrentThread() - beforeSkip;
 
-        // The descriptor table object is reused. Protocol display text still allocates on a
-        // build parse; that cost is steady and is not a new descriptor table per frame.
+        // The first chunk and the follow-up descriptor table are reused. Protocol display text still allocates on a
+        // build parse; that cost is steady and is not new field storage per frame.
+        await Assert.That(firstAfter).IsNotNull();
+        await Assert.That(firstAfter).IsSameReferenceAs(firstBefore);
+        await Assert.That(tableAfter).IsNotNull();
         await Assert.That(tableAfter).IsSameReferenceAs(tableBefore);
         await Assert.That(secondBytes).IsEqualTo(buildBytes);
         await Assert.That(skipBytes).IsLessThanOrEqualTo(buildBytes);
+    }
+
+    /// <summary>
+    /// The first-chunk array and the follow-up descriptor table of a packet's embedded field storage (read through
+    /// reflection).
+    /// </summary>
+    private static (object? First, object? Table) _FieldChunks(Packet packet)
+    {
+        object storage = typeof(Packet).GetField("_Fields", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(packet)!;
+        object? first = storage.GetType().GetField("_First", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(storage);
+        object? table = storage.GetType().GetField("_Chunks", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(storage);
+        return (first, table);
     }
 
     #endregion

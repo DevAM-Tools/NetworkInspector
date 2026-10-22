@@ -90,7 +90,7 @@ public sealed class FilterCompileOptions
 
     /// <summary>
     /// Optional code-generation backend. Leaving this unset uses
-    /// <see cref="ExpressionTreeCodegen"/>. The property is internal because
+    /// <see cref="EvalTreeCodegen"/>. The property is internal because
     /// <see cref="IFilterCodegen"/> is an implementation seam rather than public API.
     /// </summary>
     internal IFilterCodegen? Codegen

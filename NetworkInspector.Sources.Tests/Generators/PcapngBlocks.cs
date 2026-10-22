@@ -3,7 +3,7 @@
 namespace NetworkInspector.Sources.Tests.Generators;
 
 /// <summary>Builds SHB/IDB prefixes and hostile EPB tails for PCAPNG reader tests.</summary>
-internal static class PcapNgBlockFactory
+internal static class PcapngBlocks
 {
     internal const uint ShbType = 0x0A0D_0D0A;
     internal const uint EpbType = 0x0000_0006;
@@ -13,7 +13,7 @@ internal static class PcapNgBlockFactory
     /// <summary>SHB plus one Ethernet IDB, no packets.</summary>
     internal static byte[] ShbAndEthernetIdb(bool nanosecondResolution = true)
     {
-        using PcapNgTestWriter writer = new();
+        using PcapngCaptureBuilder writer = new();
         writer.AddInterface(LinkType.Ethernet, nanosecondResolution);
         return writer.Build();
     }

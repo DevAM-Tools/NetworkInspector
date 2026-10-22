@@ -20,10 +20,11 @@ namespace NetworkInspector.Core.Index;
 /// <see cref="Clone"/>, cardinality and rank/select while a single writer is appending.
 /// A seqlock retries the reader when it overlaps an in-flight mutation, so a held
 /// <see cref="ReadOnlyRoaringBitmap"/> view of an index bitmap stays valid as the index grows.
-/// The writer moves the sequence with <see cref="Interlocked.Increment(ref int)"/> (a full fence, so its data
-/// writes cannot become visible before the odd value), and every reader issues
-/// <see cref="Interlocked.MemoryBarrier"/> before it validates (so its data loads complete before the second
-/// sequence load). Both edges are required on weakly ordered CPUs such as ARM64. A read section that throws while
+/// The single writer makes the sequence odd with <see cref="Interlocked.Increment(ref int)"/> (a full fence, so its
+/// data writes cannot become visible before the odd value) and even again with a release store (so its data writes
+/// cannot become visible after the even value). Every reader issues <see cref="Interlocked.MemoryBarrier"/> before it
+/// validates (so its data loads complete before the second sequence load). The fences at both ends of the writer
+/// and the reader fence are required on weakly ordered CPUs such as ARM64. A read section that throws while
 /// a writer changes the arrays under it (a half-grown array read with the new count) is a torn read and retries; an
 /// exception in a section whose sequence did not move propagates.
 /// Set operations that allocate a new bitmap (<see cref="And"/>, <see cref="Or"/>, …) copy
@@ -41,7 +42,8 @@ public sealed class RoaringBitmap
     private long _Cardinality;
 
     // Even = stable; odd = writer in Add / in-place set op. Readers retry while odd or changed.
-    // Written only with Interlocked.Increment, read with Volatile.Read (see _BeginWrite / _ReadStillValid).
+    // Single writer: made odd with Interlocked.Increment (full fence), made even with a release store; readers use
+    // Volatile.Read plus a full fence before validation (see _BeginWrite / _EndWrite / _ReadStillValid).
     private int _SeqLock;
 
     #endregion
@@ -1069,9 +1071,14 @@ public sealed class RoaringBitmap
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void _BeginWrite() => _ = Interlocked.Increment(ref _SeqLock);
 
-    /// <summary>Makes the sequence even again after the data writes; full fence on both sides.</summary>
+    /// <summary>
+    /// Makes the sequence even again after the data writes. A release store is enough here: it keeps every earlier
+    /// data write before the even value, and a reader validates with a full fence before its second sequence load
+    /// (<see cref="_ReadStillValid"/>). The plain read of the current value is safe because this single writer is the
+    /// only thread that changes the sequence.
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void _EndWrite() => _ = Interlocked.Increment(ref _SeqLock);
+    private void _EndWrite() => Volatile.Write(ref _SeqLock, _SeqLock + 1);
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void _AddUnsynchronized(uint value)
@@ -1079,7 +1086,12 @@ public sealed class RoaringBitmap
         ushort high = (ushort)(value >> 16);
         ushort low = (ushort)(value & 0xFFFF);
 
-        int idx = _FindChunk(high);
+        // Packet ids are indexed in ascending order, so an add almost always targets the container of the previous add.
+        // Check the last key first and skip the binary search; any other value takes the search below and stays correct.
+        int last = _Count - 1;
+        int idx = last >= 0 && _Keys[last] == high
+            ? last
+            : _FindChunk(high);
         if (idx >= 0)
         {
             IContainer oldContainer = _Containers[idx];

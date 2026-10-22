@@ -3,107 +3,74 @@
 namespace NetworkInspector.Sources.Pcapng;
 
 /// <summary>
-/// Compact metadata for a single frame's location within the capture file.
-/// </summary>
-internal struct FrameOffset
-{
-    /// <summary>File offset where the packet DATA starts (past the block header).</summary>
-    internal long FileOffset;
-
-    /// <summary>Zero-based section index in which this frame was found.</summary>
-    internal ushort SectionIndex;
-
-    /// <summary>Zero-based interface ID within the section.</summary>
-    internal ushort InterfaceId;
-
-    /// <summary>Number of octets captured and stored.</summary>
-    internal int CapturedLength;
-}
-
-/// <summary>
-/// One indexed PCAPNG frame: location plus timestamp.
-/// Stored in a chunked grow-only table so appending does not copy earlier frames.
-/// </summary>
-internal struct PcapFrameEntry
-{
-    /// <summary>File offset where the packet DATA starts (past the block header).</summary>
-    internal long FileOffset;
-
-    /// <summary>Zero-based section index in which this frame was found.</summary>
-    internal ushort SectionIndex;
-
-    /// <summary>Zero-based interface ID within the section.</summary>
-    internal ushort InterfaceId;
-
-    /// <summary>Number of octets captured and stored.</summary>
-    internal int CapturedLength;
-
-    /// <summary>Timestamp in nanoseconds since the Unix epoch.</summary>
-    internal long TimestampNanos;
-}
-
-/// <summary>
-/// Index mapping frame IDs to their file positions and timestamps.
-/// Entries live in a <see cref="ChunkedGrowOnlyStore{T}"/> (4096 entries per chunk)
-/// so growth allocates a new chunk and leaves earlier chunks in place.
+/// Frame id → start offset of the accepted block (PCAPNG) or record header (legacy PCAP). Nothing else is stored:
+/// interface, captured length, and timestamp are re-read from the block by the scanner's own parser.
 /// </summary>
 /// <remarks>
-/// <b>Thread-safety:</b> A single writer (the scanner) calls <see cref="Push"/>; concurrent
-/// readers may call <see cref="Count"/>, <see cref="GetOffset"/>, and
-/// <see cref="GetTimestamp"/> at any time. The store publishes
-/// <see cref="ChunkedGrowOnlyStore{T}.Count"/> after the slot is written, so any
-/// index <c>i &lt; Count</c> observed by a reader is a fully initialised entry.
+/// <para>
+/// The index only ever holds blocks the scanner accepted as frames, so frame ids cannot shift when a block is read
+/// again: acceptance is never decided a second time. Offsets of 4-aligned blocks with few distinct sizes compress to
+/// well under 2 B per frame (<see cref="PackedLongSequence"/>).
+/// </para>
+/// <para><b>Thread-safety:</b> single writer (the scanner); any number of readers (see <see cref="PackedLongSequence"/>).</para>
 /// </remarks>
 internal sealed class FrameIndex
 {
     #region Fields
 
-    /// <summary>Chunk shift 12 → 4096 entries per chunk. Same shape as the BLF frame index.</summary>
-    private readonly ChunkedGrowOnlyStore<PcapFrameEntry> _Entries = new(chunkShift: 12);
+    private readonly PackedLongSequence _BlockOffsets = new();
 
     #endregion
 
     #region Properties
 
-    /// <summary>Gets the number of frames in the index. Safe to call from any thread.</summary>
-    internal int Count => _Entries.Count;
+    /// <summary>Number of indexed frames. Any thread.</summary>
+    internal int Count => _BlockOffsets.Count;
+
+    /// <summary>Bytes the index uses. Writer thread (tests, diagnostics).</summary>
+    internal long UsedBytes => _BlockOffsets.UsedBytes;
 
     #endregion
 
     #region Public API
 
+    /// <summary>Adds the block offset of the next accepted frame and returns its frame index. Single writer.</summary>
+    /// <exception cref="InvalidOperationException">The next frame index would exceed <see cref="ArrayIndexIdRange.MaxValue"/>.</exception>
+    internal int Push(long blockOffset)
+    {
+        int index = _BlockOffsets.Count;
+        ArrayIndexIdRange.ThrowIfInvalidNextIndex(index, "frame");
+        _BlockOffsets.Append(blockOffset);
+        return index;
+    }
+
+    /// <summary>Seals the last partial group once the scan ended. Idempotent. Single writer.</summary>
+    internal void Complete() => _BlockOffsets.Complete();
+
+    /// <summary>Start offset of the block of frame <paramref name="index"/>. Any thread; false for an id not indexed yet.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal bool TryGetBlockOffset(int index, out long blockOffset) => _BlockOffsets.TryGetCached(index, out blockOffset);
+
     /// <summary>
-    /// Adds a frame to the index. Returns the zero-based frame index.
-    /// Single-writer only.
+    /// Start offset of the block of frame <paramref name="index"/>, and the start of the next indexed block as an upper
+    /// bound of its end (−1 when <paramref name="index"/> is the newest indexed frame; the caller then bounds by the file
+    /// end). Non-packet blocks between two frames only make the bound larger. Any thread; false for an id not indexed
+    /// yet.
     /// </summary>
-    /// <exception cref="InvalidOperationException">
-    /// The next frame index would exceed <see cref="ArrayIndexIdRange.MaxValue"/>.
-    /// </exception>
-    internal int Push(in PcapFrameEntry entry)
-    {
-        int count = _Entries.Count;
-        ArrayIndexIdRange.ThrowIfInvalidNextIndex(count, "frame");
-        _Entries.Append(in entry);
-        return count;
-    }
-
-    /// <summary>Gets the frame offset at the given index. Safe for concurrent readers.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal FrameOffset GetOffset(int index)
+    internal bool TryGetBlockSpan(int index, out long blockOffset, out long nextBlockOffset)
     {
-        PcapFrameEntry entry = _Entries.Get(index);
-        return new FrameOffset
+        if (!_BlockOffsets.TryGetCachedWithNext(index, out blockOffset, out long next, out bool hasNext))
         {
-            FileOffset = entry.FileOffset,
-            SectionIndex = entry.SectionIndex,
-            InterfaceId = entry.InterfaceId,
-            CapturedLength = entry.CapturedLength,
-        };
-    }
+            nextBlockOffset = -1;
+            return false;
+        }
 
-    /// <summary>Gets the timestamp (nanoseconds) at the given index. Safe for concurrent readers.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal long GetTimestamp(int index) => _Entries.Get(index).TimestampNanos;
+        nextBlockOffset = hasNext
+            ? next
+            : -1;
+        return true;
+    }
 
     #endregion
 }

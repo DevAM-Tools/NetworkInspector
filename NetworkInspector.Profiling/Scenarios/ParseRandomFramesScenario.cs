@@ -74,7 +74,7 @@ internal sealed class ParseRandomFramesScenario : IProfilingScenario
     public void Setup()
     {
         _Stack = StackHelper.CreateStack();
-        _Frames = FrameHelper.CreateSharedFrames(_BatchSize, _Stack);
+        _Frames = SampleFrames.CreateSharedFrames(_BatchSize, _Stack);
         _PacketCounter = 0;
     }
 

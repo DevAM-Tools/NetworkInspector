@@ -73,7 +73,7 @@ internal sealed class BlfPackedObjectTests
     [Test]
     public async Task SplitEthernetType120AcrossUncompressedContainers_YieldsOneFrame()
     {
-        byte[] ethernet = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0xAA]);
+        byte[] ethernet = TestFrames.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0xAA]);
         byte[] innerObject = _BuildType120Object(ethernet, channel: 1);
         int splitAt = 40;
         await Assert.That(innerObject.Length).IsGreaterThan(splitAt);
@@ -184,7 +184,7 @@ internal sealed class BlfPackedObjectTests
         return dest;
     }
 
-    private static byte[] _FileHeader() => new BlfTestGenerator().Build();
+    private static byte[] _FileHeader() => new BlfCaptureBuilder().Build();
 
     private static byte[] _Concatenate(params byte[][] parts)
     {

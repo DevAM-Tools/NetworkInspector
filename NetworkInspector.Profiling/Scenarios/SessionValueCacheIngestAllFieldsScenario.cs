@@ -50,7 +50,7 @@ internal sealed class SessionValueCacheIngestAllFieldsScenario : IProfilingScena
     {
         _Stack?.Dispose();
         _Stack = StackHelper.CreateStack();
-        _Frames = FrameHelper.CreateSharedFrames(_FrameCount, _Stack);
+        _Frames = SampleFrames.CreateSharedFrames(_FrameCount, _Stack);
         // RedissectOnly turns the packet index off, so the timed phase measures value-cache ingest without index upkeep.
         _Session = SessionValueCacheHarness.StartIngest(
             _Stack,

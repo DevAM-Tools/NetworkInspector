@@ -6,6 +6,12 @@ namespace NetworkInspector.Sources.Pcapng.Format;
 /// Metadata about a PCAPNG section (started by a Section Header Block).
 /// A file may contain multiple sections, each with its own byte order and interfaces.
 /// </summary>
+/// <remarks>
+/// <b>Thread-safety:</b> the SHB fields are set before the section is published (<see cref="PcapNgFormat.AddSection"/>)
+/// and never change afterwards. The interface list has a single writer (the scanner, <see cref="AddInterface"/>);
+/// <see cref="Interface"/> and <see cref="InterfaceCount"/> are lock-free on any thread. An
+/// <see cref="InterfaceInfo"/> is fully configured before it is added and immutable afterwards.
+/// </remarks>
 internal sealed class SectionInfo
 {
     #region Constants
@@ -23,8 +29,11 @@ internal sealed class SectionInfo
         get;
     }
 
-    /// <summary>Interfaces declared in this section, indexed by their IDB order.</summary>
-    private readonly List<InterfaceInfo> _Interfaces = [];
+    /// <summary>
+    /// Interfaces declared in this section, indexed by their IDB order. Single writer (scanner); reference slots are
+    /// published lock-free, so <c>FrameById</c> may read them during a lazy scan.
+    /// </summary>
+    private readonly ChunkedGrowOnlyStore<InterfaceInfo> _Interfaces = new(chunkShift: 4);
 
     /// <summary>Section length in bytes from the SHB, or -1 if unspecified.</summary>
     internal long SectionLength
@@ -89,21 +98,13 @@ internal sealed class SectionInfo
         }
 
         int index = _Interfaces.Count;
-        _Interfaces.Add(info);
+        _Interfaces.Append(info);
         return index;
     }
 
-    /// <summary>Retrieves the interface at the given index, or null if out of range.</summary>
+    /// <summary>Retrieves the interface at the given index, or null if out of range or not published yet. Any thread.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal InterfaceInfo? Interface(int id)
-    {
-        if ((uint)id >= (uint)_Interfaces.Count)
-        {
-            return null;
-        }
-
-        return _Interfaces[id];
-    }
+    internal InterfaceInfo? Interface(int id) => _Interfaces.Get(id);
 
     /// <summary>
     /// Parses the options area of a Section Header Block and applies recognized options.

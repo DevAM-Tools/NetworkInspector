@@ -51,12 +51,12 @@ internal sealed class BlfCorruptTests
     [Test]
     public async Task TruncatedFile_DoesNotCrash()
     {
-        byte[] eth = FrameBuilders.BuildEthernetFrame(
+        byte[] eth = TestFrames.BuildEthernetFrame(
             [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF],
             [0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
             0x0800, [0xDE, 0xAD]);
 
-        byte[] fullData = new BlfTestGenerator()
+        byte[] fullData = new BlfCaptureBuilder()
             .AddEthernetFrame(1, eth, 1_000_000)
             .Build();
 
@@ -116,12 +116,12 @@ internal sealed class BlfCorruptTests
     [Test]
     public async Task ValidHeaderCorruptObjects_DoesNotCrash()
     {
-        byte[] eth = FrameBuilders.BuildEthernetFrame(
+        byte[] eth = TestFrames.BuildEthernetFrame(
             [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF],
             [0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
             0x0800, [0xAA]);
 
-        byte[] blfData = new BlfTestGenerator()
+        byte[] blfData = new BlfCaptureBuilder()
             .AddEthernetFrame(1, eth, 1_000_000)
             .Build();
 
@@ -154,8 +154,8 @@ internal sealed class BlfCorruptTests
     [Test]
     public async Task ObjectLengthAboveMaxBlockReadSize_SkipsAndFindsTheNextObject()
     {
-        byte[] can = FrameBuilders.BuildSocketCanClassic(0x123, [1, 2, 3, 4]);
-        byte[] good = new BlfTestGenerator().AddCanFrame(1, can, 1_000_000).Build();
+        byte[] can = TestFrames.BuildSocketCanClassic(0x123, [1, 2, 3, 4]);
+        byte[] good = new BlfCaptureBuilder().AddCanFrame(1, can, 1_000_000).Build();
 
         byte[] data = new byte[good.Length + 16];
         good.AsSpan(0, 144).CopyTo(data);

@@ -6,14 +6,19 @@ namespace NetworkInspector.Sources.Asc;
 /// Random-access frame source for Vector ASC (ASCII trace) files.
 /// Implements <see cref="IRandomAccessFrameSource"/> and <see cref="IErrorTolerantFrameSource"/>.
 /// <para>
-/// On open, the file is either fully loaded into memory (if the file size is within
-/// <see cref="AscSourceOptions.PreloadBudget"/>) or kept on disk using a buffered
-/// disk-backend. In both cases the entire file is scanned once to build a frame index.
+/// On open, the file is either loaded into memory (if its size is within <see cref="AscSourceOptions.PreloadBudget"/>)
+/// or read from disk through the guarded file handle. In both cases the file is scanned once. The index
+/// (<see cref="AscFrameIndex"/>) keeps only the byte offset of every frame line, the relative clock where the line cannot
+/// reproduce it, and, for the disk backend, one read-window size per group of 64 frames. A frame is re-read from its offset
+/// and parsed again, so the index needs well under 2 B per frame. The window size is fixed at scan time so that one
+/// positional read always holds everything the parser looks at (the line and, for Ethernet, the continuation lines and
+/// the line that ends the packet); a thread that reads ids in order is served from a per-thread 64 KiB window
+/// (<see cref="AscReadAhead"/>). Details: SOURCE_GUIDE §11.1 and §11.6.
 /// </para>
 /// <para>
-/// All frame interfaces discovered during scanning are pre-registered in
-/// <see cref="Start"/>, so <see cref="FrameById"/> requires no locking and is safe
-/// to call from multiple threads concurrently.
+/// All frame interfaces discovered during scanning are pre-registered in <see cref="Start"/>, so <see cref="FrameById"/>
+/// normally registers nothing; an interface the scan missed is registered lazily under a lock. <see cref="FrameById"/> is
+/// safe to call from multiple threads concurrently.
 /// </para>
 /// </summary>
 public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSource
@@ -21,32 +26,34 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
     #region Fields
 
     /// <summary>
-    /// In-memory backend: all lines stored as zero-copy slices into the single backing buffer.
-    /// Each <see cref="ReadOnlyMemory{T}"/> points directly into the buffer from
-    /// <see cref="File.ReadAllBytes"/> / <see cref="Encoding.Latin1"/>,
-    /// so no per-line copy is needed. Null when using the disk backend.
+    /// In-memory backend: the whole file (one buffer, no per-line slices); frame lines are found by byte offset.
+    /// Empty for the disk backend.
     /// </summary>
-    private readonly ReadOnlyMemory<byte>[]? _InMemoryLines;
+    private readonly ReadOnlyMemory<byte> _InMemoryData;
+
+    /// <summary>True for the in-memory backend, false for the disk backend.</summary>
+    private readonly bool _IsInMemory;
 
     /// <summary>
-    /// Disk backend: path of the ASC file for re-reading individual lines.
-    /// Null when using the in-memory backend.
+    /// Disk backend (and preloaded files): keeps the ASC file open with <see cref="FileShare.Read"/> for the source's
+    /// lifetime — writers denied on Windows, changes detected on Linux/macOS — and serves the disk re-reads through
+    /// <see cref="RandomAccess.Read(SafeFileHandle, Span{byte}, long)"/>, which is thread-safe and stateless. A preloaded
+    /// file keeps the lock but its change detection stops after Open, since it is served from its copy. Null for
+    /// <see cref="FromText"/> / <see cref="FromData"/>.
     /// </summary>
-    private readonly string? _DiskPath;
-    /// <summary>
-    /// Long-lived <see cref="SafeFileHandle"/> for the disk backend. Opened once at
-    /// construction and reused across <see cref="FrameById"/> / <see cref="NextFrame"/>
-    /// calls, since <see cref="RandomAccess.Read(SafeFileHandle, Span{byte}, long)"/> is
-    /// thread-safe and stateless. Replaces the previous open-per-call <see cref="FileStream"/>
-    /// which incurred a 4 KiB-buffered open + close on every random-access call.
-    /// </summary>
-    private readonly SafeFileHandle? _DiskHandle;
+    private readonly CaptureFileGuard? _Guard;
 
     /// <summary>Parsed ASC file header.</summary>
     private readonly AscHeader _Header;
 
-    /// <summary>Index of frame-producing lines and their metadata.</summary>
-    private readonly AscFrameIndexEntry[] _FrameIndex;
+    /// <summary>Byte offset of every frame-producing line plus the clocks that cannot be re-derived from the line.</summary>
+    private readonly AscFrameIndex _FrameIndex;
+
+    /// <summary>
+    /// Owner id of this source in the per-thread <see cref="AscReadAhead"/> windows (disk backend). Process-unique, so a
+    /// later source never reads an earlier source's window.
+    /// </summary>
+    private readonly long _ReadAheadOwner = AscReadAhead.NewOwner();
 
     /// <summary>User-friendly display name.</summary>
     /// <inheritdoc />
@@ -54,7 +61,10 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
 
     // ── Interface registration (pre-populated in Start(), read-only afterwards) ──
     private FrameSourceId _SourceId;
-    private FrameInterfaceRegistry? _Registry;
+
+    // Cleared by Dispose from any thread. _BuildFrame snapshots it once per call, so every helper of one frame sees the same
+    // registry or none (a null snapshot means a concurrent Dispose).
+    private volatile FrameInterfaceRegistry? _Registry;
 
     /// <summary>
     /// Maps (busType, channel) → FrameInterfaceId. Pre-populated in <see cref="Start"/>
@@ -105,22 +115,19 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
     #region Construction
 
     private AscSource(
-        ReadOnlyMemory<byte>[]? inMemoryLines,
-        string? diskPath,
+        ReadOnlyMemory<byte> inMemoryData,
+        bool isInMemory,
+        CaptureFileGuard? guard,
         AscHeader header,
-        AscFrameIndexEntry[] frameIndex,
+        AscFrameIndex frameIndex,
         HashSet<(AscBusType, int, LinkType)> discoveredInterfaces,
         ErrorToleranceMode errorTolerance,
         int frameSlabSize,
         string uiName)
     {
-        _InMemoryLines = inMemoryLines;
-        _DiskPath = diskPath;
-        if (diskPath is not null)
-        {
-            _DiskHandle = File.OpenHandle(diskPath, FileMode.Open, FileAccess.Read, FileShare.Read,
-                FileOptions.RandomAccess);
-        }
+        _InMemoryData = inMemoryData;
+        _IsInMemory = isInMemory;
+        _Guard = guard;
         _Header = header;
         _FrameIndex = frameIndex;
         _DiscoveredInterfaces = discoveredInterfaces;
@@ -133,11 +140,14 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
 
     #region Properties
 
+    /// <summary>The file guard (lock and change detection) of a file-backed source; <see langword="null"/> in memory. Tests, diagnostics.</summary>
+    internal CaptureFileGuard? FileGuard => _Guard;
+
     /// <inheritdoc/>
     public string? Description => null;
 
     /// <inheritdoc/>
-    public int? EstimatedFrameCount => _FrameIndex.Length;
+    public int? EstimatedFrameCount => _FrameIndex.Count;
 
     /// <inheritdoc/>
     public bool IsRunning => _Started && _Disposed == 0;
@@ -172,38 +182,61 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
     /// <summary>
     /// Opens an ASC file from disk and builds the frame index.
     /// Files within <see cref="AscSourceOptions.PreloadBudget"/> are fully loaded into memory;
-    /// larger files use a disk-based backend with a buffered re-read per frame access.
+    /// larger files use a disk-based backend that re-reads each frame's record with one positional read sized by the
+    /// index (in-order reads are served from a per-thread 64 KiB read-ahead window).
     /// </summary>
     /// <param name="path">Path to the ASC file.</param>
     /// <param name="options">Source configuration options. If null, defaults are used.</param>
     /// <returns>A new AscSource ready to be started.</returns>
     /// <exception cref="FileNotFoundException">The file does not exist.</exception>
+    /// <exception cref="IOException">
+    /// The file could not be read, another process holds it open for writing (Windows), or it changed during the
+    /// open-time scan (Linux/macOS).
+    /// </exception>
+    /// <remarks>
+    /// The source keeps the file open with <see cref="FileShare.Read"/> until it is disposed: on Windows no other
+    /// process can write to it meanwhile; on Linux and macOS a change is detected and reported as
+    /// <see cref="FrameReadErrorKind.SourceFileChanged"/>. A preloaded file is served from its copy, so no change is
+    /// detected after <c>Open</c> returns.
+    /// </remarks>
     public static AscSource Open(string path, AscSourceOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(path);
         options ??= new();
         string uiName = options.UiName ?? Path.GetFileName(path);
 
-        FileInfo fileInfo = new(path);
-        if (!fileInfo.Exists)
+        if (!File.Exists(path))
         {
             throw new FileNotFoundException("ASC file not found.", path);
         }
 
-        long fileSize = fileInfo.Length;
+        // The guard denies writers (Windows) and detects changes (Linux/macOS) for the whole lifetime of the source.
+        CaptureFileGuard guard = CaptureFileGuard.Open(path);
+        try
+        {
+            // Small file: one buffer for zero-seek random access. Large file: scan once, re-read lines on demand.
+            AscSource source = PreloadDecision.ShouldPreload(guard.Length, options.PreloadBudget)
+                ? _BuildFromInMemory(guard.ReadAll(), options, uiName, guard)
+                : _BuildFromDisk(guard, options, uiName);
 
-        bool useInMemory = PreloadDecision.ShouldPreload(fileSize, options.PreloadBudget);
-        if (useInMemory)
-        {
-            // Small file: load all content into memory; split into zero-copy slices for zero-seek random access
-            byte[] fileBytes = File.ReadAllBytes(path);
-            ReadOnlyMemory<byte>[] lines = _SplitIntoLines(fileBytes);
-            return _BuildFromInMemoryLines(lines, options, uiName);
+            // An index built from bytes that changed meanwhile could point at the wrong lines: refuse it.
+            if (!guard.IsUnchanged())
+            {
+                throw new IOException("Capture file changed while it was being scanned.");
+            }
+
+            // The in-memory index and frames come from the copy made at open: the monitor can stop for the lifetime.
+            if (source._IsInMemory)
+            {
+                guard.StopMonitoring();
+            }
+
+            return source;
         }
-        else
+        catch
         {
-            // Large file: scan once to build index (storing byte offsets), re-read on demand
-            return _BuildFromDisk(path, options, uiName);
+            guard.Dispose();
+            throw;
         }
     }
 
@@ -220,8 +253,7 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
         options ??= new();
         uiName ??= options.UiName ?? "ASC Data";
         byte[] bytes = Encoding.Latin1.GetBytes(data);
-        ReadOnlyMemory<byte>[] lines = _SplitIntoLines(bytes);
-        return _BuildFromInMemoryLines(lines, options, uiName);
+        return _BuildFromInMemory(bytes, options, uiName, guard: null);
     }
 
     /// <summary>
@@ -235,11 +267,9 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
     {
         options ??= new();
         uiName ??= options.UiName ?? "ASC Data";
-        // data.ToArray() allocates a copy so the backing array lifetime is owned here;
-        // the resulting slices keep it alive via ReadOnlyMemory<byte> references.
+        // data.ToArray() allocates a copy so the buffer lifetime and contents are owned here.
         byte[] backing = data.ToArray();
-        ReadOnlyMemory<byte>[] lines = _SplitIntoLines(backing);
-        return _BuildFromInMemoryLines(lines, options, uiName);
+        return _BuildFromInMemory(backing, options, uiName, guard: null);
     }
 
     #endregion
@@ -283,23 +313,70 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
         }
 
         // Loop to skip over errored frames in tolerant mode
-        while (_NextFrameIndex < _FrameIndex.Length)
+        while (_NextFrameIndex < _FrameIndex.Count)
         {
             cancellationToken.ThrowIfCancellationRequested();
             int frameIndex = _NextFrameIndex++;
+            if (!_CheckFileUnchanged(frameIndex))
+            {
+                return null;
+            }
+
             Frame? frame = _BuildFrame(frameIndex, reportErrors: true);
             if (frame.HasValue)
             {
                 return frame.Value;
             }
 
+            // A null from a source that a concurrent Dispose has closed is not a frame error: report the disposal.
+            ObjectDisposedException.ThrowIf(_Disposed != 0, this);
             if (_Aborted)
             {
                 return null;
             }
         }
 
+        // End of the frames: one last change check, so a file changed after the last check is still reported.
+        _ = _CheckFileUnchanged(0);
         return null;
+    }
+
+    /// <summary>
+    /// Sequential change check (see <see cref="CaptureFileGuard.HasChangedAt"/> for when the file is asked and when only
+    /// the latch is read). <see cref="FrameById"/> reads only that latch. A change raises
+    /// <see cref="FrameReadErrorKind.SourceFileChanged"/> once and stops sequential reading in every tolerance mode.
+    /// Returns false when reading must stop.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private bool _CheckFileUnchanged(int frameIndex)
+    {
+        if (_Guard is null || !_Guard.HasChangedAt(frameIndex))
+        {
+            return true;
+        }
+
+        _ReportFileChanged(frameIndex);
+        return false;
+    }
+
+    /// <summary>Raises <see cref="FrameReadErrorKind.SourceFileChanged"/> once and stops sequential reading regardless of the tolerance mode.</summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private void _ReportFileChanged(int frameIndex)
+    {
+        if (_Aborted)
+        {
+            return;
+        }
+
+        _Aborted = true;
+        _ErrorCount.Increment();
+        FrameSkipped?.Invoke(this, new FrameReadErrorEventArgs
+        {
+            FrameIndex = frameIndex,
+            FileOffset = -1,
+            Kind = FrameReadErrorKind.SourceFileChanged,
+            Message = "The capture file changed while it was being read.",
+        });
     }
 
     #endregion
@@ -326,12 +403,17 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
         cancellationToken.ThrowIfCancellationRequested();
 
         int index = id.Value;
-        if (index < 0 || index >= _FrameIndex.Length)
+        if (index < 0 || index >= _FrameIndex.Count)
         {
             return null;
         }
 
-        return _BuildFrame(index, reportErrors: false);
+        Frame? frame = _BuildFrame(index, reportErrors: false);
+
+        // A change found by a sequential check fails closed; the latch is one volatile read, no system call.
+        return _Guard is not null && _Guard.ChangeDetected
+            ? null
+            : frame;
     }
 
     #endregion
@@ -340,11 +422,12 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
 
     /// <inheritdoc/>
     /// <remarks>
-    /// Idempotent. Releases the registry reference and then the disk handle of the disk backend. A failure to close
-    /// the handle is an OS error, not a frame error: it propagates after the source's own state is released (the same
-    /// rule as <see cref="Pcapng.PcapngSource"/> and <see cref="Blf.BlfSource"/>).
+    /// Idempotent. Releases the registry reference and then the file guard (the handle the disk backend reads through,
+    /// which also keeps writers out). A failure to close the handle is an OS error, not a frame error: it propagates
+    /// after the source's own state is released (the same rule as <see cref="Pcapng.PcapngSource"/> and
+    /// <see cref="Blf.BlfSource"/>).
     /// </remarks>
-    /// <exception cref="IOException">Closing the disk handle failed.</exception>
+    /// <exception cref="IOException">Closing the file handle failed.</exception>
     public void Dispose()
     {
         if (Interlocked.Exchange(ref _Disposed, 1) != 0)
@@ -354,9 +437,9 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
 
         _Registry = null;
         // GC.SuppressFinalize is called before the handle disposal so it executes
-        // even if _DiskHandle.Dispose() throws, preserving finalizer suppression.
+        // even if the guard's handle disposal throws, preserving finalizer suppression.
         GC.SuppressFinalize(this);
-        _DiskHandle?.Dispose();
+        _Guard?.Dispose();
     }
 
     #endregion
@@ -364,49 +447,92 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
     #region Index Building — In-Memory Backend
 
     /// <summary>
-    /// Builds the source from a pre-loaded slice array.
-    /// Each element is a zero-copy window into the original backing buffer.
+    /// Builds the source from the whole file in one buffer. Lines are walked with the split rule of the disk backend
+    /// (cut at LF, drop one trailing CR); the index keeps the byte offset of every frame line, not a slice per line.
     /// </summary>
-    private static AscSource _BuildFromInMemoryLines(ReadOnlyMemory<byte>[] lines, AscSourceOptions options, string uiName)
+    private static AscSource _BuildFromInMemory(
+        ReadOnlyMemory<byte> data, AscSourceOptions options, string uiName, CaptureFileGuard? guard)
     {
         AscHeader header = new()
         {
             TimestampTimeZone = options.TimestampTimeZone
         };
-        int dataStartLine = 0;
+        ReadOnlySpan<byte> bytes = data.Span;
+        AscLineReader reader = new(bytes);
 
-        // Phase 1: parse header
-        for (int i = 0; i < lines.Length; i++)
+        // Phase 1: parse header. The first line that is not a header line starts the data.
+        int start = 0;
+        int length = 0;
+        bool hasDataLine = false;
+        while (reader.TryNext(out start, out length))
         {
-            ReadOnlySpan<byte> trimmed = AscTokenizerBytes.TrimAscii(lines[i].Span);
-            if (!header.TryParseLine(trimmed))
+            if (!header.TryParseLine(AscTokenizerBytes.TrimAscii(bytes.Slice(start, length))))
             {
-                dataStartLine = i;
+                hasDataLine = true;
                 break;
             }
-
-            dataStartLine = i + 1;
         }
 
         // Phase 2: classify and index frame-producing lines.
         // The clock is folded here, in file order, so later random access does not re-walk the file.
-        List<AscFrameIndexEntry> entries = [];
+        bool relativeClock = header.TimestampFormat == "relative";
+        AscFrameIndex index = new(relativeClock);
         HashSet<(AscBusType, int, LinkType)> discovered = [];
         AscTimestamp runningClock = _InitialClock(header);
-        bool relativeClock = header.TimestampFormat == "relative";
 
-        for (int i = dataStartLine; i < lines.Length; i++)
+        while (hasDataLine)
         {
-            ReadOnlySpan<byte> trimmed = AscTokenizerBytes.TrimAscii(lines[i].Span);
-            if (trimmed.IsEmpty)
+            ReadOnlySpan<byte> trimmed = AscTokenizerBytes.TrimAscii(bytes.Slice(start, length));
+            if (!trimmed.IsEmpty)
             {
-                continue;
+                _ = _IndexFrameLine(trimmed, start, ref runningClock, relativeClock, index, discovered, out _);
             }
 
-            _IndexFrameLine(trimmed, i, ref runningClock, relativeClock, entries, discovered);
+            hasDataLine = reader.TryNext(out start, out length);
         }
 
-        return new AscSource(lines, null, header, [.. entries], discovered, options.ErrorTolerance, options.FrameSlabSize, uiName);
+        index.Complete();
+        return new AscSource(data, isInMemory: true, guard, header, index, discovered, options.ErrorTolerance, options.FrameSlabSize, uiName);
+    }
+
+    /// <summary>
+    /// Walks the lines of an in-memory ASC buffer with the split rule of both backends: a line ends at LF, one trailing
+    /// CR is dropped, and a last line without LF is included.
+    /// </summary>
+    private ref struct AscLineReader
+    {
+        private readonly ReadOnlySpan<byte> _Data;
+        private int _Position;
+
+        /// <summary>Creates a reader at the start of <paramref name="data"/>.</summary>
+        internal AscLineReader(ReadOnlySpan<byte> data)
+        {
+            _Data = data;
+            _Position = 0;
+        }
+
+        /// <summary>Returns the next line as start offset and length (without line terminator); false at the end.</summary>
+        internal bool TryNext(out int start, out int length)
+        {
+            start = _Position;
+            length = 0;
+            if (_Position >= _Data.Length)
+            {
+                return false;
+            }
+
+            int newline = _Data[_Position..].IndexOf((byte)'\n');
+            int end = newline >= 0 ? _Position + newline : _Data.Length;
+            _Position = newline >= 0 ? end + 1 : _Data.Length;
+            length = LineLength(_Data, start, end);
+            return true;
+        }
+
+        /// <summary>Length of the line <c>[start, end)</c> after dropping one trailing CR.</summary>
+        internal static int LineLength(ReadOnlySpan<byte> data, int start, int end) =>
+            end > start && data[end - 1] == (byte)'\r'
+                ? end - start - 1
+                : end - start;
     }
 
     #endregion
@@ -418,14 +544,16 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
     /// to build an index of line byte offsets, without keeping all lines in memory.
     /// The byte offset of each frame-producing line is stored so it can be re-read on demand.
     /// </summary>
-    private static AscSource _BuildFromDisk(string path, AscSourceOptions options, string uiName)
+    private static AscSource _BuildFromDisk(CaptureFileGuard guard, AscSourceOptions options, string uiName)
     {
         AscHeader header = new()
         {
             TimestampTimeZone = options.TimestampTimeZone
         };
         bool headerDone = false;
-        List<AscFrameIndexEntry> entries = [];
+
+        // Created when the header ends: the clock mode decides whether relative clocks are stored.
+        AscFrameIndex? index = null;
         HashSet<(AscBusType, int, LinkType)> discovered = [];
         AscTimestamp runningClock = default;
         bool relativeClock = false;
@@ -440,24 +568,37 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
         int carryLen = 0;               // valid bytes in carryBuffer
         bool carryTooLong = false;      // line in carry exceeded MaxLineLength — skip once complete
 
-        using FileStream fs = new(path, FileMode.Open, FileAccess.Read, FileShare.Read,
-            bufferSize: AscSourceOptions.DiskReadBufferSize, useAsync: false);
+        // Positional reads through the guarded handle: no second handle, and the handle keeps no file position.
+        SafeFileHandle handle = guard.Handle;
 
         long chunkStartOffset = 0;      // file offset of buffer[0] in the current read
         long lineStartOffset = 0;       // file offset of the first byte of the current line
 
+        // Ethernet packet whose read window is still open: its hex may continue on the following lines.
+        PendingRecord pending = new(-1, 0);
+
         while (true)
         {
-            int bytesRead = fs.Read(buffer, 0, buffer.Length);
+            int bytesRead = RandomAccess.Read(handle, buffer, chunkStartOffset);
             if (bytesRead == 0)
             {
                 // EOF: flush any remaining carry-over bytes as the last (unterminated) line
                 if (carryLen > 0 && !carryTooLong)
                 {
+                    ReadOnlySpan<byte> lastLine = carryBuffer.AsSpan(0, carryLen);
                     _ProcessDiskLine(
-                        AscTokenizerBytes.TrimAscii(carryBuffer.AsSpan(0, carryLen)),
+                        lastLine,
+                        AscTokenizerBytes.TrimAscii(lastLine),
                         lineStartOffset,
-                        ref header, ref headerDone, ref runningClock, ref relativeClock, entries, discovered);
+                        lineEnd: chunkStartOffset,
+                        ref pending,
+                        ref header, ref headerDone, ref runningClock, ref relativeClock, ref index, discovered);
+                }
+
+                // A packet still open at the end of the file reads up to the end of the file.
+                if (pending.Frame >= 0)
+                {
+                    index!.RequireReadBytes(pending.Frame, chunkStartOffset - pending.Start);
                 }
 
                 break;
@@ -508,6 +649,9 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
 
                 if (!rawLine.IsEmpty)
                 {
+                    // The Ethernet record tracking needs the line as the parser sees it, CR included.
+                    ReadOnlySpan<byte> physicalLine = rawLine;
+
                     // Strip trailing \r (CRLF files)
                     if (rawLine[rawLine.Length - 1] == (byte)'\r')
                     {
@@ -515,9 +659,12 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
                     }
 
                     _ProcessDiskLine(
+                        physicalLine,
                         AscTokenizerBytes.TrimAscii(rawLine),
                         lineStartOffset,
-                        ref header, ref headerDone, ref runningClock, ref relativeClock, entries, discovered);
+                        lineEnd: chunkStartOffset + i + 1,
+                        ref pending,
+                        ref header, ref headerDone, ref runningClock, ref relativeClock, ref index, discovered);
                 }
 
                 // Reset carry and advance line pointers
@@ -549,18 +696,37 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
             chunkStartOffset += bytesRead;
         }
 
-        return new AscSource(null, path, header, [.. entries], discovered, options.ErrorTolerance, options.FrameSlabSize, uiName);
+        // A file of header lines only never reached the data: the clock mode still comes from the header.
+        index ??= new AscFrameIndex(header.TimestampFormat == "relative", trackReadWindows: true);
+        index.Complete();
+        return new AscSource(
+            ReadOnlyMemory<byte>.Empty, isInMemory: false, guard, header, index, discovered, options.ErrorTolerance, options.FrameSlabSize, uiName);
     }
 
+    /// <summary>An Ethernet frame of the disk scan whose record may still continue: its index and line start offset.</summary>
+    private record struct PendingRecord(int Frame, long Start);
+
     /// <summary>
-    /// Processes a single trimmed line (as raw bytes) from the disk scan pass.
-    /// Updates the header state, or adds an index entry when the line produces a frame.
+    /// Processes a single line from the disk scan pass. Updates the header state, or adds an index entry when the line
+    /// produces a frame, and records the span the frame's read window must cover (<see cref="AscFrameIndex.RequireReadBytes"/>).
     /// </summary>
+    /// <param name="physicalLine">The line without its LF, CR and blanks kept (what the Ethernet hex scan sees).</param>
+    /// <param name="trimmed">The line without line terminator and surrounding blanks.</param>
+    /// <param name="lineByteOffset">File offset of the line start.</param>
+    /// <param name="lineEnd">File offset after the line's LF (the end of the file for a last line without LF).</param>
+    /// <param name="pending">The Ethernet frame whose record is still open, or frame −1.</param>
+    /// <param name="header">Header state.</param>
+    /// <param name="headerDone">Whether the header ended.</param>
+    /// <param name="runningClock">Running clock of the scan.</param>
+    /// <param name="relativeClock">Whether the header says <c>timestamps relative</c>.</param>
+    /// <param name="index">The index, created when the header ends.</param>
+    /// <param name="discovered">Interfaces seen so far.</param>
     private static void _ProcessDiskLine(
-        ReadOnlySpan<byte> trimmed, long lineByteOffset,
+        ReadOnlySpan<byte> physicalLine, ReadOnlySpan<byte> trimmed, long lineByteOffset, long lineEnd,
+        ref PendingRecord pending,
         ref AscHeader header, ref bool headerDone,
         ref AscTimestamp runningClock, ref bool relativeClock,
-        List<AscFrameIndexEntry> entries,
+        ref AscFrameIndex? index,
         HashSet<(AscBusType, int, LinkType)> discovered)
     {
         if (!headerDone)
@@ -570,6 +736,7 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
                 headerDone = true;
                 relativeClock = header.TimestampFormat == "relative";
                 runningClock = _InitialClock(header);
+                index = new AscFrameIndex(relativeClock, trackReadWindows: true);
                 // Fall through: the first data line may produce a frame
             }
             else
@@ -578,32 +745,62 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
             }
         }
 
+        // An open Ethernet record runs over blank and hex continuation lines. The first other line ends it, and the
+        // window must hold that whole line, because the parser reads all of it to decide that the packet ended.
+        if (pending.Frame >= 0 && AscEthernetParser.EndsPacket(physicalLine) == true)
+        {
+            index!.RequireReadBytes(pending.Frame, lineEnd - pending.Start);
+            pending = new(-1, 0);
+        }
+
         if (trimmed.IsEmpty)
         {
             return;
         }
 
-        _IndexFrameLine(trimmed, lineByteOffset, ref runningClock, relativeClock, entries, discovered);
+        int frame = index!.Count;
+        if (!_IndexFrameLine(trimmed, lineByteOffset, ref runningClock, relativeClock, index, discovered, out AscLineType lineType))
+        {
+            return;
+        }
+
+        // Read window of the new frame: its line through the LF. An Ethernet packet stays open for continuation lines;
+        // one whose header does not parse from its own line gets the parser's full window, as before.
+        index.RequireReadBytes(frame, lineEnd - lineByteOffset);
+        if (lineType == AscLineType.EthernetPacket)
+        {
+            if (AscEthernetParser.HeaderFitsLine(trimmed, header.NumericBase))
+            {
+                pending = new(frame, lineByteOffset);
+            }
+            else
+            {
+                index.RequireReadBytes(frame, AscEthernetParser.MaxRecordBytes);
+            }
+        }
     }
 
     /// <summary>
     /// Indexes one frame-producing line and folds its timestamp into <paramref name="runningClock"/>.
-    /// Non-frame lines return without moving the clock. Continuation hex is not a logging event, so it is not indexed.
+    /// Non-frame lines return false; a timestamped one still moves the clock. Continuation hex is not a logging
+    /// event, so it is not indexed.
     /// </summary>
-    private static void _IndexFrameLine(
+    /// <returns>True when the line was added to <paramref name="index"/>.</returns>
+    private static bool _IndexFrameLine(
         ReadOnlySpan<byte> trimmed,
         long location,
         ref AscTimestamp runningClock,
         bool relativeClock,
-        List<AscFrameIndexEntry> entries,
-        HashSet<(AscBusType, int, LinkType)> discovered)
+        AscFrameIndex index,
+        HashSet<(AscBusType, int, LinkType)> discovered,
+        out AscLineType lineType)
     {
-        AscLineType lineType = AscLineClassifier.Classify(trimmed);
+        lineType = AscLineClassifier.Classify(trimmed);
         // Every timestamped event moves a relative clock, including statistics and status lines.
         bool folded = AscTimestamp.TryFold(ref runningClock, relativeClock, trimmed, out AscTimestamp clock);
         if (!_IsFrameProducingType(lineType))
         {
-            return;
+            return false;
         }
 
         // A line that is not a timestamp still gets an entry so the skip is visible at parse time.
@@ -619,8 +816,9 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
             discovered.Add((busType, channel, linkType));
         }
 
-        ArrayIndexIdRange.ThrowIfInvalidNextIndex(entries.Count, "frame");
-        entries.Add(new AscFrameIndexEntry(location, lineType, clock));
+        // Only the line offset (and a clock the line cannot reproduce); the type is re-classified from the line.
+        index.Add(location, clock, folded);
+        return true;
     }
 
     #endregion
@@ -628,9 +826,9 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
     #region Frame Building
 
     /// <summary>
-    /// Builds a frame from the indexed entry at <paramref name="frameIndex"/>.
-    /// For the in-memory backend the line string is taken directly from <c>_InMemoryLines</c>.
-    /// For the disk backend the line is re-read from disk using the stored byte offset.
+    /// Builds a frame from the indexed line at <paramref name="frameIndex"/>.
+    /// The line is re-derived at its stored byte offset — from the in-memory buffer or re-read from disk — with the
+    /// scan's split rule, classified again, and parsed; the clock comes from <see cref="AscFrameIndex.TryGetClock"/>.
     /// Thread-safe: uses only read-only state after <see cref="Start"/> has returned.
     /// </summary>
     /// <param name="frameIndex">Index into <c>_FrameIndex</c>.</param>
@@ -640,97 +838,179 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
     /// path) and the caller observes them only via the <c>null</c> return.</param>
     private Frame? _BuildFrame(int frameIndex, bool reportErrors)
     {
-        AscFrameIndexEntry entry = _FrameIndex[frameIndex];
-
-        if (_InMemoryLines is not null)
+        // One read: a concurrent Dispose nulls the field, and every helper below must see the same registry or none.
+        FrameInterfaceRegistry? registry = _Registry;
+        if (registry is null || !_FrameIndex.TryGetLineOffset(frameIndex, out long lineOffset))
         {
+            return null;
+        }
+
+        if (_IsInMemory)
+        {
+            // Re-derive the line exactly as the scan saw it (cut at LF, drop CR, trim), then classify it again.
+            ReadOnlySpan<byte> data = _InMemoryData.Span;
+            ReadOnlySpan<byte> trimmed = AscTokenizerBytes.TrimAscii(_InMemoryLine(data, lineOffset));
+            AscLineType lineType = AscLineClassifier.Classify(trimmed);
+
             // Ethernet may continue on the next physical lines, so the window includes the bytes after this line.
-            ReadOnlySpan<byte> span = entry.LineType == AscLineType.EthernetPacket
-                ? _InMemoryWindow((int)entry.Location)
-                : AscTokenizerBytes.TrimAscii(_InMemoryLines[(int)entry.Location].Span);
-            return _ParseAndBuildFrame(span, entry, frameIndex, reportErrors);
+            ReadOnlySpan<byte> span = lineType == AscLineType.EthernetPacket
+                ? _InMemoryWindow(data, lineOffset)
+                : trimmed;
+            return _ParseIndexedLine(registry, span, trimmed, lineType, lineOffset, frameIndex, reportErrors);
         }
-        else if (entry.LineType == AscLineType.EthernetPacket)
-        {
-            byte[] rented = ArrayPool<byte>.Shared.Rent(AscEthernetParser.MaxRecordBytes);
-            try
-            {
-                int read = _ReadWindowFromDisk(entry.Location, rented.AsSpan(0, AscEthernetParser.MaxRecordBytes));
-                return _ParseAndBuildFrame(rented.AsSpan(0, read), entry, frameIndex, reportErrors);
-            }
-            finally
-            {
-                ArrayPool<byte>.Shared.Return(rented);
-            }
-        }
-        else
-        {
-            // Disk path: read one line window at the stored byte offset and parse it in place from the rental; the
-            // parsers copy the frame bytes out, so no per-line array is needed.
-            byte[] rented = ArrayPool<byte>.Shared.Rent(AscSourceOptions.MaxLineLength);
-            try
-            {
-                int read = _ReadWindowFromDisk(entry.Location, rented.AsSpan(0, AscSourceOptions.MaxLineLength));
-                if (read == 0)
-                {
-                    if (reportErrors)
-                    {
-                        _HandleSkip(new FrameReadErrorEventArgs
-                        {
-                            FrameIndex = frameIndex,
-                            FileOffset = entry.Location,
-                            Kind = FrameReadErrorKind.TruncatedStream,
-                            Message = $"Could not read line at offset {entry.Location} for frame {frameIndex}.",
-                        });
-                    }
-                    return null;
-                }
 
-                // One line: cut at the first LF and drop a trailing CR.
-                ReadOnlySpan<byte> window = rented.AsSpan(0, read);
-                int newline = window.IndexOf((byte)'\n');
-                ReadOnlySpan<byte> line = newline >= 0 ? window[..newline] : window;
-                if (!line.IsEmpty && line[^1] == (byte)'\r')
-                {
-                    line = line[..^1];
-                }
-
-                return _ParseAndBuildFrame(AscTokenizerBytes.TrimAscii(line), entry, frameIndex, reportErrors);
-            }
-            finally
-            {
-                ArrayPool<byte>.Shared.Return(rented);
-            }
+        // Disk path: one positional read of the frame's read window, which the index sized at scan time to hold the
+        // whole record (the line, and for Ethernet its continuation lines plus the line that ends the packet). While
+        // this thread walks the ids in order, the window comes from its read-ahead buffer instead of its own read.
+        int window = _FrameIndex.ReadWindow(frameIndex);
+        CaptureFileGuard guard = _Guard!;
+        if (AscReadAhead.TryRead(_ReadAheadOwner, frameIndex, lineOffset, window, guard, out ReadOnlySpan<byte> buffered))
+        {
+            return _BuildFromDiskRecord(registry, buffered, window, lineOffset, frameIndex, reportErrors);
         }
+
+        // Random access: exactly the window, parsed in place from a rental; the parsers copy the frame bytes out.
+        byte[] rented = ArrayPool<byte>.Shared.Rent(window);
+        try
+        {
+            int read = ReadAt(guard, lineOffset, rented.AsSpan(0, window));
+            return _BuildFromDiskRecord(registry, rented.AsSpan(0, read), window, lineOffset, frameIndex, reportErrors);
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(rented);
+        }
+    }
+
+    /// <summary>
+    /// Parses the frame whose record starts <paramref name="data"/>: the first <paramref name="window"/> bytes at the
+    /// line offset, fewer only at the end of the file. The line is cut at its LF and classified again; an Ethernet
+    /// packet gets the data from the line start, capped at <see cref="AscEthernetParser.MaxRecordBytes"/> like the
+    /// in-memory backend, because its hex may continue on the following lines.
+    /// </summary>
+    private Frame? _BuildFromDiskRecord(
+        FrameInterfaceRegistry registry, ReadOnlySpan<byte> data, int window, long lineOffset, int frameIndex, bool reportErrors)
+    {
+        // Nothing at the offset: the file ended before the indexed line (it cannot shrink while the guard holds it).
+        if (data.IsEmpty)
+        {
+            if (reportErrors)
+            {
+                _HandleSkip(new FrameReadErrorEventArgs
+                {
+                    FrameIndex = frameIndex,
+                    FileOffset = lineOffset,
+                    Kind = FrameReadErrorKind.TruncatedStream,
+                    Message = Invariant($"Could not read line at offset {lineOffset} for frame {frameIndex}."),
+                });
+            }
+
+            return null;
+        }
+
+        // The window holds the LF of every indexed line. A full window without one means the bytes changed after the
+        // scan (only possible on Linux/macOS before the change check latches): read the longest line, as before.
+        int newline = data.IndexOf((byte)'\n');
+        if (newline < 0 && data.Length == window && window < AscSourceOptions.MaxLineLength)
+        {
+            return _BuildFromLongWindow(registry, lineOffset, frameIndex, reportErrors);
+        }
+
+        int end = newline >= 0 ? newline : data.Length;
+        ReadOnlySpan<byte> trimmed = AscTokenizerBytes.TrimAscii(data[..AscLineReader.LineLength(data, 0, end)]);
+        AscLineType lineType = AscLineClassifier.Classify(trimmed);
+        if (lineType != AscLineType.EthernetPacket)
+        {
+            return _ParseIndexedLine(registry, trimmed, trimmed, lineType, lineOffset, frameIndex, reportErrors);
+        }
+
+        // Ethernet continues on the next physical lines. The clock comes from the first line only, which the data starts with.
+        ReadOnlySpan<byte> record = data.Length > AscEthernetParser.MaxRecordBytes
+            ? data[..AscEthernetParser.MaxRecordBytes]
+            : data;
+        return _ParseIndexedLine(registry, record, trimmed, lineType, lineOffset, frameIndex, reportErrors);
+    }
+
+    /// <summary>Cold path of <see cref="_BuildFromDiskRecord"/>: re-reads the record with a <see cref="AscSourceOptions.MaxLineLength"/> window.</summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private Frame? _BuildFromLongWindow(FrameInterfaceRegistry registry, long lineOffset, int frameIndex, bool reportErrors)
+    {
+        byte[] rented = ArrayPool<byte>.Shared.Rent(AscSourceOptions.MaxLineLength);
+        try
+        {
+            int read = ReadAt(_Guard!, lineOffset, rented.AsSpan(0, AscSourceOptions.MaxLineLength));
+            return _BuildFromDiskRecord(
+                registry, rented.AsSpan(0, read), AscSourceOptions.MaxLineLength, lineOffset, frameIndex, reportErrors);
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(rented);
+        }
+    }
+
+    /// <summary>
+    /// Resolves the clock of an indexed line and parses it. A line that is no longer a frame line, or whose clock can
+    /// no longer be derived, fails like any parse failure (reported in the sequential path, null for random access).
+    /// </summary>
+    private Frame? _ParseIndexedLine(
+        FrameInterfaceRegistry registry, ReadOnlySpan<byte> span, ReadOnlySpan<byte> trimmedLine, AscLineType lineType,
+        long location, int frameIndex, bool reportErrors)
+    {
+        if (!_IsFrameProducingType(lineType) || !_FrameIndex.TryGetClock(frameIndex, trimmedLine, out AscTimestamp clock))
+        {
+            if (reportErrors)
+            {
+                _HandleSkip(new FrameReadErrorEventArgs
+                {
+                    FrameIndex = frameIndex,
+                    FileOffset = location,
+                    Kind = FrameReadErrorKind.Other,
+                    Message = Invariant($"Indexed line at offset {location} is no longer a frame line (frame {frameIndex})."),
+                });
+            }
+
+            return null;
+        }
+
+        return _ParseAndBuildFrame(registry, span, lineType, clock, location, frameIndex, reportErrors);
+    }
+
+    /// <summary>The in-memory line at <paramref name="offset"/>: up to the next LF, without one trailing CR.</summary>
+    private static ReadOnlySpan<byte> _InMemoryLine(ReadOnlySpan<byte> data, long offset)
+    {
+        int start = (int)offset;
+        if ((uint)start > (uint)data.Length)
+        {
+            return [];
+        }
+
+        int newline = data[start..].IndexOf((byte)'\n');
+        int end = newline >= 0 ? start + newline : data.Length;
+        return data.Slice(start, AscLineReader.LineLength(data, start, end));
     }
 
     /// <summary>
     /// Bytes from the start of an in-memory line through the following file bytes, capped so a wrapped
     /// Ethernet packet fits. The slice includes newlines, which the Ethernet parser treats as continuation.
     /// </summary>
-    private ReadOnlySpan<byte> _InMemoryWindow(int lineIndex)
+    private static ReadOnlySpan<byte> _InMemoryWindow(ReadOnlySpan<byte> data, long offset)
     {
-        ReadOnlyMemory<byte> line = _InMemoryLines![lineIndex];
-        if (MemoryMarshal.TryGetArray(line, out ArraySegment<byte> segment) && segment.Array is not null)
-        {
-            int available = segment.Array.Length - segment.Offset;
-            int take = available < AscEthernetParser.MaxRecordBytes
-                ? available
-                : AscEthernetParser.MaxRecordBytes;
-            return segment.Array.AsSpan(segment.Offset, take);
-        }
-
-        return line.Span;
+        int start = (int)offset;
+        int available = data.Length - start;
+        int take = available < AscEthernetParser.MaxRecordBytes
+            ? available
+            : AscEthernetParser.MaxRecordBytes;
+        return data.Slice(start, take);
     }
 
     /// <summary>
-    /// Reads up to <paramref name="destination"/> bytes starting at <paramref name="byteOffset"/>.
-    /// Returns the number of bytes placed in the span. Zero at or past EOF.
+    /// Reads up to <paramref name="destination"/> bytes of the guarded file starting at <paramref name="byteOffset"/>.
+    /// Returns the number of bytes placed in the span. Zero at or past EOF. The length at open bounds the read: the
+    /// guard keeps the file unchanged (Windows) or reports any change (Linux/macOS). Thread-safe (positional reads).
     /// </summary>
-    private int _ReadWindowFromDisk(long byteOffset, Span<byte> destination)
+    internal static int ReadAt(CaptureFileGuard guard, long byteOffset, Span<byte> destination)
     {
-        SafeFileHandle handle = _DiskHandle!;
-        long fileLength = RandomAccess.GetLength(handle);
+        long fileLength = guard.Length;
         if (byteOffset >= fileLength || destination.IsEmpty)
         {
             return 0;
@@ -738,21 +1018,40 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
 
         long available = fileLength - byteOffset;
         int toRead = available < destination.Length ? (int)available : destination.Length;
-        return RandomAccess.Read(handle, destination[..toRead], byteOffset);
+
+        // RandomAccess.Read may return fewer bytes than asked; read until the window is full or the file ends.
+        int total = 0;
+        while (total < toRead)
+        {
+            int read = RandomAccess.Read(guard.Handle, destination[total..toRead], byteOffset + total);
+            if (read == 0)
+            {
+                break;
+            }
+
+            total += read;
+        }
+
+        return total;
     }
 
     /// <summary>
     /// Parses a classified ASC line from UTF-8 bytes and constructs a <see cref="Frame"/>.
     /// Used by the disk-backed path and for in-memory lines (zero-copy byte span).
     /// </summary>
-    /// <param name="span">Trimmed UTF-8 bytes for the line to parse.</param>
-    /// <param name="entry">Frame index entry that describes the line type and location.</param>
+    /// <param name="registry">The registry snapshot of this call (see <see cref="_BuildFrame"/>); never null.</param>
+    /// <param name="span">Trimmed UTF-8 bytes for the line to parse (a multi-line window for Ethernet).</param>
+    /// <param name="lineType">The line type, classified from the line exactly as the scan classified it.</param>
+    /// <param name="clock">The frame clock (absolute line time or accumulated relative time).</param>
+    /// <param name="location">Byte offset of the line (error reporting).</param>
     /// <param name="frameIndex">Zero-based index of the frame within the file index (used for error reporting).</param>
     /// <param name="reportErrors">
     /// When <c>true</c>, parse failures route through <see cref="_HandleSkip"/>; when
     /// <c>false</c>, failures yield a silent <c>null</c> (random-access path).
     /// </param>
-    private Frame? _ParseAndBuildFrame(ReadOnlySpan<byte> span, AscFrameIndexEntry entry, int frameIndex, bool reportErrors)
+    private Frame? _ParseAndBuildFrame(
+        FrameInterfaceRegistry registry, ReadOnlySpan<byte> span, AscLineType lineType, AscTimestamp clock,
+        long location, int frameIndex, bool reportErrors)
     {
         bool parsed;
         int channel;
@@ -764,7 +1063,7 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
         // arrays. CAN XL and FlexRay always get their own array.
         FrameSlabAllocator? slabs = reportErrors ? _Slabs : null;
 
-        switch (entry.LineType)
+        switch (lineType)
         {
             case AscLineType.CanMessage:
                 parsed = AscCanParser.TryParse(span, _Header.NumericBase, slabs,
@@ -821,16 +1120,16 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
         }
 
         if (!parsed
-            || !AscTimestamp.TryToUnixNanos(_Header.StartUnixNanos, entry.ClockOffset, out long absoluteNanos))
+            || !AscTimestamp.TryToUnixNanos(_Header.StartUnixNanos, clock, out long absoluteNanos))
         {
             if (reportErrors)
             {
                 _HandleSkip(new FrameReadErrorEventArgs
                 {
                     FrameIndex = frameIndex,
-                    FileOffset = entry.Location,
+                    FileOffset = location,
                     Kind = FrameReadErrorKind.Other,
-                    Message = $"Failed to parse {entry.LineType} (frame {frameIndex}).",
+                    Message = Invariant($"Failed to parse {lineType} (frame {frameIndex})."),
                 });
             }
             return null;
@@ -840,7 +1139,7 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
         // returns the existing ID without registering a duplicate. A bare _InterfaceMap
         // read here would race with concurrent FrameById writers (Dictionary is not safe
         // for a reader during a writer's resize).
-        FrameInterfaceId interfaceId = _RegisterInterface(_Registry!, busType, channel, linkType);
+        FrameInterfaceId interfaceId = _RegisterInterface(registry, busType, channel, linkType);
 
         ParseResult<Frame> result = Frame.Create(
             new FrameId(frameIndex),
@@ -848,7 +1147,7 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
             frameData,
             linkType,
             interfaceId,
-            _Registry!);
+            registry);
 
         if (result.IsSuccess)
         {
@@ -864,9 +1163,9 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
             _HandleSkip(new FrameReadErrorEventArgs
             {
                 FrameIndex = frameIndex,
-                FileOffset = entry.Location,
+                FileOffset = location,
                 Kind = FrameReadErrorKind.Other,
-                Message = $"Frame creation failed for {entry.LineType} (frame {frameIndex}).",
+                Message = Invariant($"Frame creation failed for {lineType} (frame {frameIndex})."),
             });
         }
 
@@ -1105,57 +1404,6 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
         }
 
         return default;
-    }
-
-    /// <summary>
-    /// Splits a raw ASCII/UTF-8 byte array into individual lines.
-    /// Handles both LF and CRLF line endings. Each element is a copy of the line bytes
-    /// without line terminators.
-    /// </summary>
-    /// <summary>
-    /// Splits a raw ASCII/UTF-8 byte array into zero-copy <see cref="ReadOnlyMemory{T}"/> slices.
-    /// Each slice is a window into <paramref name="data"/> — no per-line copy is made.
-    /// The caller must keep <paramref name="data"/> alive as long as the returned array is used;
-    /// since <see cref="ReadOnlyMemory{T}"/> holds a reference to the backing object this
-    /// happens automatically via normal GC reachability.
-    /// Handles both LF and CRLF line endings.
-    /// </summary>
-    private static ReadOnlyMemory<byte>[] _SplitIntoLines(byte[] data)
-    {
-        List<ReadOnlyMemory<byte>> lines = [];
-        int start = 0;
-        for (int i = 0; i < data.Length; i++)
-        {
-            if (data[i] != (byte)'\n')
-            {
-                continue;
-            }
-
-            int end = i;
-            // Strip trailing \r for CRLF files
-            if (end > start && data[end - 1] == (byte)'\r')
-            {
-                end--;
-            }
-
-            // Zero-copy slice: points directly into data, no allocation
-            lines.Add(new ReadOnlyMemory<byte>(data, start, end - start));
-            start = i + 1;
-        }
-
-        // Last line (no trailing newline)
-        if (start < data.Length)
-        {
-            int end = data.Length;
-            if (end > start && data[end - 1] == (byte)'\r')
-            {
-                end--;
-            }
-
-            lines.Add(new ReadOnlyMemory<byte>(data, start, end - start));
-        }
-
-        return [.. lines];
     }
 
     #endregion

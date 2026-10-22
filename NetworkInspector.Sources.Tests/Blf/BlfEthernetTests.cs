@@ -27,9 +27,9 @@ internal sealed class BlfEthernetTests
     [Test]
     public async Task SingleEthernetFrame_ParsedCorrectly()
     {
-        byte[] eth = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0xDE, 0xAD, 0xBE, 0xEF]);
+        byte[] eth = TestFrames.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0xDE, 0xAD, 0xBE, 0xEF]);
 
-        byte[] blfData = new BlfTestGenerator()
+        byte[] blfData = new BlfCaptureBuilder()
             .AddEthernetFrame(1, eth, 1_000_000)
             .Build();
 
@@ -56,13 +56,13 @@ internal sealed class BlfEthernetTests
     public async Task MultipleEthernetFrames_AllParsedInOrder()
     {
         byte[] dstMac = [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF];
-        BlfTestGenerator gen = new();
+        BlfCaptureBuilder gen = new();
         List<byte[]> expected = [];
 
         for (int i = 0; i < 10; i++)
         {
             byte[] payload = Enumerable.Range(0, 20).Select(j => (byte)((i + j) & 0xFF)).ToArray();
-            byte[] eth = FrameBuilders.BuildEthernetFrame(dstMac, _SrcMac, 0x0800, payload);
+            byte[] eth = TestFrames.BuildEthernetFrame(dstMac, _SrcMac, 0x0800, payload);
             expected.Add(eth);
             gen.AddEthernetFrame(1, eth, (i + 1) * 1_000_000L);
         }
@@ -90,10 +90,10 @@ internal sealed class BlfEthernetTests
     [Test]
     public async Task EthernetFrames_TimestampsStrictlyIncreasing()
     {
-        byte[] eth = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0x00]);
+        byte[] eth = TestFrames.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0x00]);
 
         long[] offsets = [1_000_000, 5_000_000, 10_000_000, 50_000_000, 100_000_000];
-        BlfTestGenerator gen = new();
+        BlfCaptureBuilder gen = new();
         foreach (long offset in offsets)
         {
             gen.AddEthernetFrame(1, eth, offset);
@@ -133,12 +133,12 @@ internal sealed class BlfEthernetTests
 
         foreach (byte[] payload in payloads)
         {
-            byte[] eth = FrameBuilders.BuildEthernetFrame(
+            byte[] eth = TestFrames.BuildEthernetFrame(
                 [0x01, 0x02, 0x03, 0x04, 0x05, 0x06],
                 [0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F],
                 0x0800, payload);
 
-            byte[] blfData = new BlfTestGenerator()
+            byte[] blfData = new BlfCaptureBuilder()
                 .AddEthernetFrame(1, eth, 1_000_000)
                 .Build();
 
@@ -158,10 +158,10 @@ internal sealed class BlfEthernetTests
     [Test]
     public async Task EthernetVlanTagged_ParsedWithVlanHeader()
     {
-        byte[] vlanFrame = FrameBuilders.BuildVlanEthernetFrame(
+        byte[] vlanFrame = TestFrames.BuildVlanEthernetFrame(
             _DstMac, _SrcMac, 100, 0x0800, [0xDE, 0xAD, 0xBE, 0xEF]);
 
-        byte[] blfData = new BlfTestGenerator()
+        byte[] blfData = new BlfCaptureBuilder()
             .AddEthernetFrame(1, vlanFrame, 1_000_000)
             .Build();
 
@@ -186,8 +186,8 @@ internal sealed class BlfEthernetTests
     [Test]
     public async Task BlfSource_UiNameMatchesProvided()
     {
-        byte[] eth = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0x00]);
-        byte[] blfData = new BlfTestGenerator().AddEthernetFrame(1, eth, 1_000_000).Build();
+        byte[] eth = TestFrames.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0x00]);
+        byte[] blfData = new BlfCaptureBuilder().AddEthernetFrame(1, eth, 1_000_000).Build();
 
         using BlfSource source = BlfSource.FromData(blfData, "my_trace.blf");
         await Assert.That(source.UiName).IsEqualTo("my_trace.blf");

@@ -49,7 +49,7 @@ internal sealed class ReadPcapngCopyScenario : ReadScenarioBase
 
     /// <inheritdoc/>
     protected override string CreateSampleFile(Frame[] frames)
-        => SampleFileHelper.CreatePcapngFile(frames);
+        => SampleCaptureFiles.CreatePcapngFile(frames);
 
     /// <inheritdoc/>
     public override string Name => FormattableString.Invariant(

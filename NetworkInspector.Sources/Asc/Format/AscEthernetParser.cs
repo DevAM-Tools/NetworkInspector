@@ -71,9 +71,102 @@ internal static class AscEthernetParser
         out int channel,
         out ReadOnlyMemory<byte> frame)
     {
+        frame = default;
+        if (!_TryParseHeader(record, numericBase, out timestamp, out channel, out ReadOnlySpan<byte> hexText, out int dataLen))
+        {
+            return false;
+        }
+
+        if (dataLen == 0)
+        {
+            return !_HasExtraHex(hexText);
+        }
+
+        Memory<byte> buffer = FrameSlabAllocator.RentZeroed(slabs, dataLen);
+        if (!_TryCopyHex(hexText, buffer.Span))
+        {
+            return false;
+        }
+
+        frame = buffer;
+        return true;
+    }
+
+    /// <summary>
+    /// True when the packet header — time, bus, channel, direction (AFDX: three more tokens), and <c>DataLen:</c> —
+    /// parses from <paramref name="line"/> alone. Then the header tokens of the full record are the same tokens and
+    /// the hex scan starts on this line, so the record ends at the first line for which <see cref="EndsPacket"/> is
+    /// true. When it is false, a malformed header might take a token across a line break, and a reader must present
+    /// the full <see cref="MaxRecordBytes"/> window to see what the parser sees.
+    /// </summary>
+    /// <param name="line">The packet's first physical line without its line terminator.</param>
+    /// <param name="numericBase">16 when the header says <c>base hex</c>, 10 when it says <c>base dec</c>.</param>
+    internal static bool HeaderFitsLine(ReadOnlySpan<byte> line, int numericBase) =>
+        _TryParseHeader(line, numericBase, out _, out _, out _, out _);
+
+    /// <summary>
+    /// Whether the hex scan of a packet stops at <paramref name="physicalLine"/> (a following line, without its LF):
+    /// null for a blank line (spaces, tabs, CR only), which the scan skips; true for a logging event or any line that
+    /// is not a hex continuation; false for a hex continuation line. The same rule <c>_MoveToHexDigit</c> applies.
+    /// </summary>
+    internal static bool? EndsPacket(ReadOnlySpan<byte> physicalLine)
+    {
+        // The scan skips spaces, tabs, and CR before it looks at a line, and then checks the rest up to the LF.
+        int start = physicalLine.IndexOfAnyExcept((byte)' ', (byte)'\t', (byte)'\r');
+        if (start < 0)
+        {
+            return null;
+        }
+
+        ReadOnlySpan<byte> line = physicalLine[start..];
+        return IsNewLoggingEvent(line) || !IsHexContinuation(line);
+    }
+
+    /// <summary>
+    /// A continuation line has no timestamp-plus-token prefix. Logging events stop the hex join.
+    /// </summary>
+    internal static bool IsNewLoggingEvent(ReadOnlySpan<byte> line)
+    {
+        ReadOnlySpan<byte> trimmed = AscTokenizerBytes.TrimAscii(line);
+        if (trimmed.IsEmpty)
+        {
+            return false;
+        }
+
+        int space = _IndexOfSpaceOrTab(trimmed);
+        if (space <= 0)
+        {
+            return false;
+        }
+
+        if (!AscLineClassifier.LooksLikeTimestamp(trimmed[..space]))
+        {
+            return false;
+        }
+
+        return !AscTokenizerBytes.TrimStartAscii(trimmed[(space + 1)..]).IsEmpty;
+    }
+
+    #endregion
+
+    #region Hex scan
+
+    /// <summary>
+    /// Parses the packet header of <paramref name="record"/>: time, bus (<c>ETH</c> or <c>AFDX</c>), channel 1..255, a
+    /// packet direction, the three AFDX fields, and <c>DataLen:</c>. <paramref name="hexText"/> is the text after the colon.
+    /// </summary>
+    private static bool _TryParseHeader(
+        ReadOnlySpan<byte> record,
+        int numericBase,
+        out AscTimestamp timestamp,
+        out int channel,
+        out ReadOnlySpan<byte> hexText,
+        out int dataLen)
+    {
         timestamp = default;
         channel = 0;
-        frame = default;
+        hexText = default;
+        dataLen = 0;
 
         AscTokenizerBytes tokenizer = new(record);
         if (!tokenizer.TryNextToken(out ReadOnlySpan<byte> timeToken)
@@ -124,54 +217,14 @@ internal static class AscEthernetParser
         }
 
         ReadOnlySpan<byte> rest = tokenizer.Remaining;
-        if (!_TryParseDataLength(rest, numericBase, out int dataLen, out int hexStart))
+        if (!_TryParseDataLength(rest, numericBase, out dataLen, out int hexStart))
         {
             return false;
         }
 
-        if (dataLen == 0)
-        {
-            return !_HasExtraHex(rest[hexStart..]);
-        }
-
-        Memory<byte> buffer = FrameSlabAllocator.RentZeroed(slabs, dataLen);
-        if (!_TryCopyHex(rest[hexStart..], buffer.Span))
-        {
-            return false;
-        }
-
-        frame = buffer;
+        hexText = rest[hexStart..];
         return true;
     }
-
-    /// <summary>
-    /// A continuation line has no timestamp-plus-token prefix. Logging events stop the hex join.
-    /// </summary>
-    internal static bool IsNewLoggingEvent(ReadOnlySpan<byte> line)
-    {
-        ReadOnlySpan<byte> trimmed = AscTokenizerBytes.TrimAscii(line);
-        if (trimmed.IsEmpty)
-        {
-            return false;
-        }
-
-        int space = _IndexOfSpaceOrTab(trimmed);
-        if (space <= 0)
-        {
-            return false;
-        }
-
-        if (!AscLineClassifier.LooksLikeTimestamp(trimmed[..space]))
-        {
-            return false;
-        }
-
-        return !AscTokenizerBytes.TrimStartAscii(trimmed[(space + 1)..]).IsEmpty;
-    }
-
-    #endregion
-
-    #region Hex scan
 
     private static bool _TryParseDataLength(
         ReadOnlySpan<byte> rest,

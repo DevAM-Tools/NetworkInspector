@@ -4,14 +4,12 @@ namespace NetworkInspector.Core;
 
 /// <summary>
 /// Represents a parsed packet with a flat field tree.
-/// Fields are stored in chunk-based <see cref="FieldBody"/> storage with <see cref="ushort"/> linked-list indices.
-/// Each chunk holds <see cref="_FieldBodyChunkSize"/> (16) slots. Chunk descriptors are slab-backed
-/// via <see cref="SlabAllocator{T}"/> — initially <see cref="_InitialChunkDescriptors"/> (4)
-/// descriptors (64 fields), doubled on demand.
-/// Only 1 FieldBody chunk is allocated upfront; additional chunks are allocated on demand.
-/// This means packets that are never materialized consume only 16 slab slots.
+/// Fields are stored in an embedded <see cref="FieldStorage"/> with <see cref="ushort"/> linked-list indices:
+/// a first chunk of <see cref="FieldStorage.FirstChunkSize"/> <see cref="FieldBody"/> slots owned by the packet, then
+/// follow-up chunks of <see cref="FieldStorage.ChunkSize"/> slots for larger trees. A recycle keeps the chunks within
+/// the retention policy of <see cref="FieldStorage.ResetForReuse"/>, so recycled packets stop allocating field storage.
 /// <para>
-/// All per-packet arrays (FieldBody slots, chunk descriptors, lazy populator delegates) are
+/// All per-packet arrays (FieldBody chunks, lazy populator delegates) are
 /// allocated from thread-local <see cref="SlabAllocator{T}"/> instances — a generic slab
 /// allocator. Multiple packets share the same backing array; when a slab is full, a new
 /// one is created and the old slab stays alive as long as any packet references its buffer.
@@ -69,24 +67,6 @@ public sealed class Packet
     /// </summary>
     private const int _RegularFieldLimit = _MaxFieldCount - 1;
 
-    /// <summary>Number of <see cref="FieldBody"/> slots per chunk (must be power of 2).</summary>
-    private const int _FieldBodyChunkSize = 16;
-
-    /// <summary>Log₂ of <see cref="_FieldBodyChunkSize"/> for bitwise division: index >> ChunkShift = chunkIdx.</summary>
-    private const int _FieldBodyChunkShift = 4;
-
-    /// <summary>Bitmask for modulo <see cref="_FieldBodyChunkSize"/>: index &amp; ChunkMask = slotIdx.</summary>
-    private const int _FieldBodyChunkMask = _FieldBodyChunkSize - 1;
-
-    /// <summary>Default slab capacity for <see cref="FieldBody"/> storage: 1024 slots × ~64 B ≈ 64 KB (below LOH).</summary>
-    private const int _FieldBodySlabCapacity = 1024;
-
-    /// <summary>Number of chunk descriptors allocated per packet initially (4 × 16 = 64 fields).</summary>
-    private const int _InitialChunkDescriptors = 4;
-
-    /// <summary>Default slab capacity for chunk descriptors: 256 × 12 B ≈ 3 KB.</summary>
-    private const int _ChunkDescriptorSlabCapacity = 256;
-
     /// <summary>Number of lazy populator slots per initial allocation (covers typical protocol stacks).</summary>
     private const int _LazyPopulatorChunkSize = 8;
 
@@ -95,29 +75,19 @@ public sealed class Packet
 
     // Id, Timestamp, Frame and FrameSourceId use private set to support PrepareForReuse().
     // Stack is get-only: recycling requires the same stack (validated in PrepareForReuse).
-    // Per-thread bump allocators: multiple packets share a single backing array per type.
+    // Per-thread bump allocator: multiple packets share a single backing array.
     // When a slab is full, a new one is created; the old stays alive via consumer references.
     [ThreadStatic]
-    private static SlabAllocator<FieldBody>? _FieldBodySlab;
-    [ThreadStatic]
     private static SlabAllocator<LazyPopulator>? _LazyPopulatorSlab;
-    [ThreadStatic]
-    private static SlabAllocator<FieldBodyChunk>? _ChunkDescriptorSlab;
 
-    // Slab-backed chunk descriptor table. Each entry is a (FieldBody[], int offset)
-    // pair pointing into a FieldBody slab. Initially 4 slots (64 fields); grown by
-    // doubling from the chunk descriptor slab when capacity is exceeded.
-    // Published as one object so concurrent readers cannot tear (array, offset) on growth.
-    private volatile ChunkTable _ChunkTable = null!;
-
-    // Number of allocated FieldBody chunks. Post-Seal concurrent materializers may grow this.
-    // Volatile: waiters acquire on this count after the allocating thread's release store.
-    private volatile int _ChunkCount;
+    // Field slots: embedded struct, so a field access needs no extra object hop. Build mode only; a Skip-only
+    // packet never initializes it.
+    private FieldStorage _Fields;
 
     // Not volatile: parse of a given instance is single-threaded. Skip mode omits the FieldBody slab.
     private bool _HasFieldTree = true;
 
-    // Synthetic root when Skip omits the first chunk. Unused on Build.
+    // Synthetic root when Skip omits the field storage. Unused on Build.
     private FieldBody _SkipRootBody;
 
     // Scratch stack for skip-tree lazy populators that must read container.Value. Recycled in place.
@@ -191,15 +161,13 @@ public sealed class Packet
         _HasFieldTree = fieldTree == FieldTreeMode.Build;
         if (_HasFieldTree)
         {
-            _AllocateFirstChunk();
-            ref FieldBodyChunk firstChunk = ref _GetChunk(0);
-            firstChunk.Buffer[firstChunk.Offset] = new FieldBody(stack.RootFieldId);
+            _Fields.Initialize();
+            _Fields.Slot(0) = new FieldBody(stack.RootFieldId);
         }
         else
         {
+            // _Fields stays uninitialized: Skip GetFieldRef / skip append must not read it.
             _SkipRootBody = new FieldBody(stack.RootFieldId);
-            _ChunkCount = 0;
-            // _ChunkTable stays null! Skip GetFieldRef / skip append must not read it.
         }
 
         _AllocatedFieldCount = 1;
@@ -211,9 +179,9 @@ public sealed class Packet
     /// <summary>
     /// Validates preconditions and resets this packet for reuse with a new frame,
     /// eliminating the heap allocation of <c>new Packet(...)</c> on the hot path.
-    /// Existing slab-backed storage (FieldBody chunks and lazy populator slots) is
-    /// cleared and reused in place; only if the new parse requires more chunks than the
-    /// previous parse will additional slab allocations occur.
+    /// Existing slab-backed storage (FieldBody chunks and lazy populator slots) is cleared and reused in
+    /// place within the retention policy of <see cref="FieldStorage.ResetForReuse"/>, so a recycled packet
+    /// that keeps parsing similar frames stops allocating field storage.
     /// <para>
     /// Returns a <see cref="RecycleError"/> code instead of throwing so that the internal
     /// path stays free of exception construction overhead. Callers are responsible for
@@ -277,29 +245,14 @@ public sealed class Packet
 
         // FieldTreeMode is validated by TryParse before this method; constructor still throws.
 
-        // ── 1. Clear GC-visible references in every active FieldBody chunk ──────────
-        // Skip packets that never built a tree have _ChunkCount == 0 and _ChunkTable null.
-        if (_ChunkCount > 0)
+        // ── 1. Clear used slots; FieldStorage keeps chunks within its retention policy ──
+        // Array.Clear zeroes entire FieldBody structs (FieldValue and LazyString references included) so the GC does
+        // not retain stale references, and only the used slots are touched. Skip packets that never built a tree have
+        // no storage. After a Skip parse _AllocatedFieldCount is 1: the Build slots were cleared by the recycle that
+        // switched to Skip.
+        if (_Fields.IsInitialized)
         {
-            // Array.Clear zeroes entire FieldBody structs (including FieldValue and LazyString
-            // reference fields) so the GC does not retain stale references after reuse.
-            // All chunks before the last are always completely full (_FieldBodyChunkSize slots).
-            // The last chunk is only partially used: its slot count equals (_AllocatedFieldCount % _FieldBodyChunkSize),
-            // or _FieldBodyChunkSize when the chunk was exactly filled. Clearing only used slots
-            // avoids zeroing unused tail slots — typically saves ~25% of Array.Clear work when
-            // the last chunk holds ~12 out of 16 used slots (common for IPv6/UDP packets).
-            int usedInLastChunk = _AllocatedFieldCount & _FieldBodyChunkMask;
-            if (usedInLastChunk == 0)
-            {
-                usedInLastChunk = _FieldBodyChunkSize; // chunk was exactly filled
-            }
-
-            for (int i = 0; i < _ChunkCount; i++)
-            {
-                ref FieldBodyChunk chunk = ref _GetChunk(i);
-                int clearCount = i < _ChunkCount - 1 ? _FieldBodyChunkSize : usedInLastChunk;
-                Array.Clear(chunk.Buffer, chunk.Offset, clearCount);
-            }
+            _Fields.ResetForReuse(_AllocatedFieldCount);
         }
 
         // ── 2. Clear lazy populator references ───────────────────────────────────────
@@ -328,25 +281,17 @@ public sealed class Packet
         _SkipRootBody = default;
         if (_HasFieldTree)
         {
-            if (_ChunkCount == 0)
+            if (!_Fields.IsInitialized)
             {
-                _AllocateFirstChunk();
-            }
-            else
-            {
-                // Keep the grown descriptor capacity. Shrinking back to the initial four slots
-                // would publish a new table on the next frame that needs a fifth chunk.
-                _ChunkTable.ResetForReuse(_ChunkTable.Capacity);
-                _ChunkCount = 1;
+                _Fields.Initialize();
             }
 
-            ref FieldBodyChunk firstChunk = ref _GetChunk(0);
-            firstChunk.Buffer[firstChunk.Offset] = new FieldBody(Stack.RootFieldId);
+            _Fields.Slot(0) = new FieldBody(Stack.RootFieldId);
         }
         else
         {
+            // Leave _Fields as it is (uninitialized on never-Build; allocated-but-unused on Build→Skip).
             _SkipRootBody = new FieldBody(Stack.RootFieldId);
-            // Leave _ChunkTable and _ChunkCount unchanged (null/0 on never-Build; allocated-but-unused on Build→Skip).
         }
 
         _AllocatedFieldCount = 1;
@@ -447,51 +392,42 @@ public sealed class Packet
     }
 
     /// <summary>
-    /// Returns a reference to the chunk descriptor at the given chunk index.
-    /// All chunk descriptors are stored in the slab-backed <see cref="_ChunkTable"/>.
-    /// Loads the table reference once so a concurrent growth cannot tear array vs offset.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private ref FieldBodyChunk _GetChunk(int chunkIndex)
-    {
-        ChunkTable table = _ChunkTable;
-        return ref table.Buffer[table.BaseOffset + chunkIndex];
-    }
-
-    /// <summary>
-    /// Returns a mutable reference to the field body at the given logical index.
-    /// The logical index is decomposed into chunk index and slot index via bit shifts:
-    /// <c>chunkIdx = logicalIndex >> ChunkShift</c>, <c>slotIdx = logicalIndex &amp; ChunkMask</c>.
-    /// All stored <see cref="ushort"/> indices in <see cref="FieldBody"/> are logical indices.
+    /// Returns a mutable reference to the field body at the given storage index. Build mode reads
+    /// <see cref="FieldStorage.Slot"/> (first or follow-up chunk); Skip mode routes the root and the
+    /// skip index to <see cref="_GetSkipBody"/>. All stored <see cref="ushort"/> indices in <see cref="FieldBody"/>
+    /// are storage indices.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal ref FieldBody GetFieldRef(int index)
     {
         if (!_HasFieldTree)
         {
-            if (index == FieldBody.SkipStorageIndex)
-            {
-                if (_SkipScratchDepth > 0)
-                {
-                    FieldBody[] scratch = _SkipScratchStack!;
-                    return ref scratch[_SkipScratchDepth - 1];
-                }
+            return ref _GetSkipBody(index);
+        }
 
-                ThrowHelpers.ThrowSkipFieldTreeValue();
-            }
+        return ref _Fields.Slot(index);
+    }
 
-            if (index == 0)
-            {
-                return ref _SkipRootBody;
-            }
+    /// <summary>
+    /// Skip-mode slot: index 0 is the synthetic root, <see cref="FieldBody.SkipStorageIndex"/> the top of the lazy
+    /// scratch stack; any other index (or the skip index without scratch) throws. Kept out of line so the Build path
+    /// of <see cref="GetFieldRef"/> stays small.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private ref FieldBody _GetSkipBody(int index)
+    {
+        if (index == FieldBody.SkipStorageIndex && _SkipScratchDepth > 0)
+        {
+            FieldBody[] scratch = _SkipScratchStack!;
+            return ref scratch[_SkipScratchDepth - 1];
+        }
 
+        if (index != 0)
+        {
             ThrowHelpers.ThrowSkipFieldTreeValue();
         }
 
-        int chunkIdx = index >> _FieldBodyChunkShift;
-        int slotIdx = index & _FieldBodyChunkMask;
-        ref FieldBodyChunk chunk = ref _GetChunk(chunkIdx);
-        return ref chunk.Buffer[chunk.Offset + slotIdx];
+        return ref _SkipRootBody;
     }
 
     /// <summary>
@@ -935,7 +871,7 @@ public sealed class Packet
                     continue;
                 }
 
-                _AllocateFromSlab(
+                AllocateFromSlab(
                     ref _LazyPopulatorSlab, _LazyPopulatorSlabCapacity,
                     _LazyPopulatorChunkSize, out LazyPopulator[] buffer, out int offset);
 
@@ -1287,13 +1223,18 @@ public sealed class Packet
     /// <summary>Prepends to the packet info/summary string.</summary>
     internal void PrependToInfo(LazyString prefix) => InfoLazy = prefix.Append(InfoLazy);
 
-    // Cold parse-only fields (after hot chunk/count state to reduce false sharing in AppendChild).
+    // Cold parse-only fields (after hot storage/count state to reduce false sharing in AppendChild).
     private ushort _InfoFieldIndex = FieldBody.NullIndex;
     private ValueCache? _ActiveValueCache;
 
     // Observer memory is the caller's array. Cleared before TryParse returns, including on failure.
     private ReadOnlyMemory<ParseObserver> _Observers;
     private bool _ObserverFailed;
+
+    // True while a value cache or an observer may be active for this parse (set and cleared only by _ParseAndSeal,
+    // the only writer of _ActiveValueCache and _Observers besides RecordCaughtError's temporary cache swap). False for
+    // most parses, so inserts skip both hook checks with one test. Parse-thread only, like the hooks themselves.
+    private bool _HasParseHooks;
 
     /// <summary>
     /// Whether custom display text should be built for <paramref name="fieldId"/>.
@@ -1553,10 +1494,12 @@ public sealed class Packet
     /// parent/sibling pointers, then publish via <see cref="_PublishFieldCount"/>. Throws
     /// <c>FieldAppendException</c> once <paramref name="limit"/> slots are allocated.
     /// </summary>
+    /// <param name="limit">Slot limit of this append.</param>
+    /// <param name="postSeal">The caller's single read of <see cref="_Finalized"/> for this insert.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private int _ReserveFieldSlot(int limit = _RegularFieldLimit)
+    private int _ReserveFieldSlot(int limit, bool postSeal)
     {
-        if (_Finalized != 0)
+        if (postSeal)
         {
             int current = _AllocatedFieldCount;
             while (true)
@@ -1585,83 +1528,18 @@ public sealed class Packet
     }
 
     /// <summary>
-    /// Ensures the FieldBody chunk that holds <paramref name="reservedIndex"/> exists.
-    /// Pre-Seal allocates immediately (single-threaded). Post-Seal: the thread that reserved
-    /// the first slot of a new chunk allocates it; other threads spin until
-    /// <see cref="_ChunkCount"/> includes that chunk.
-    /// </summary>
-    private void _EnsureChunkForReservedIndex(int reservedIndex)
-    {
-        SpinWait waiter = default;
-        while (true)
-        {
-            int chunkIdx = reservedIndex >> _FieldBodyChunkShift;
-            if (chunkIdx < _ChunkCount)
-            {
-                return;
-            }
-
-            if (_Finalized == 0)
-            {
-                _AllocateNewChunk();
-                return;
-            }
-
-            int firstIndexOfChunk = chunkIdx << _FieldBodyChunkShift;
-            if (reservedIndex == firstIndexOfChunk)
-            {
-                SpinWait spin = default;
-                while (_ChunkCount < chunkIdx)
-                {
-                    spin.SpinOnce();
-                }
-
-                // The previous allocator's volatile _ChunkCount store publishes the new chunk
-                // buffer; this thread allocates the next chunk only.
-                _AllocateNewChunk();
-                return;
-            }
-
-            waiter.SpinOnce();
-        }
-    }
-
-    /// <summary>
-    /// Writes a new <see cref="FieldBody"/> into the reserved slot of the chunk-based
-    /// storage. When the current chunk is full, allocates a new chunk from the thread-local
-    /// slab (no copy — previous chunks remain untouched).
-    /// <para>
-    /// <b>Thread-safety:</b> Does <b>not</b> publish <see cref="_FieldCount"/>. A post-
-    /// <see cref="Seal"/> caller still has to fix up parent / sibling linked-list pointers
-    /// <b>after</b> this call. Publishing the new count too early would let a concurrent
-    /// reader observe the incremented count (and therefore the new slot) while the parent's
-    /// <c>FirstChildIndex</c> / <c>LastChildIndex</c> / <c>NextIndex</c> / <c>PrevIndex</c>
-    /// still point to stale neighbours. Callers MUST invoke <see cref="_PublishFieldCount"/>
-    /// after every parent / sibling write that belongs to the same logical insertion.
-    /// </para>
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void _AddFieldBody(in FieldBody field, int reservedIndex)
-    {
-        int chunkIdx = reservedIndex >> _FieldBodyChunkShift;
-        int slotIdx = reservedIndex & _FieldBodyChunkMask;
-        _EnsureChunkForReservedIndex(reservedIndex);
-
-        ref FieldBodyChunk chunk = ref _GetChunk(chunkIdx);
-        chunk.Buffer[chunk.Offset + slotIdx] = field;
-    }
-
-    /// <summary>
     /// Publishes <paramref name="newCount"/> as the reader-visible <see cref="_FieldCount"/>
     /// after the field body and all parent / sibling linked-list stores. Post-Seal publication
     /// is in-order: this thread waits until the previous reserved index has been published so
     /// readers never observe a hole. Pre-Seal stores directly; <see cref="Seal"/> is the
     /// bulk publication fence for the parse.
     /// </summary>
+    /// <param name="newCount">Reserved index + 1.</param>
+    /// <param name="postSeal">The caller's single read of <see cref="_Finalized"/> for this insert.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void _PublishFieldCount(int newCount)
+    private void _PublishFieldCount(int newCount, bool postSeal)
     {
-        if (_Finalized == 0)
+        if (!postSeal)
         {
             _FieldCount = newCount;
             return;
@@ -1680,64 +1558,181 @@ public sealed class Packet
     /// Publishes a reserved slot as an unlinked tombstone so <see cref="_PublishFieldCount"/>
     /// cannot hang after a throw between reserve and the happy-path publish.
     /// Parent/sibling links are not written: tree walkers skip the hole; flat readers see a dead slot.
+    /// Cold path: reads <see cref="_Finalized"/> itself (Seal cannot change while the insert that failed runs).
     /// </summary>
     [MethodImpl(MethodImplOptions.NoInlining)]
     private void _PublishReservedOrTombstone(int reservedIndex, FieldId fieldId)
     {
+        bool postSeal = _Finalized != 0;
         FieldId tombstoneId = Stack.PacketErrorFieldId.IsValid ? Stack.PacketErrorFieldId : fieldId;
-        _AddFieldBody(new FieldBody(tombstoneId, FieldValue.None), reservedIndex);
-        _PublishFieldCount(reservedIndex + 1);
+        _Fields.EnsureSlot(reservedIndex, postSeal);
+        _Fields.Slot(reservedIndex) = new FieldBody(tombstoneId, FieldValue.None);
+        _PublishFieldCount(reservedIndex + 1, postSeal);
+    }
+
+    /// <summary>Where <see cref="_InsertField"/> links the new field relative to its anchor.</summary>
+    private enum InsertKind : byte
+    {
+        /// <summary>Last child of the anchor.</summary>
+        Append,
+
+        /// <summary>First child of the anchor.</summary>
+        Prepend,
+
+        /// <summary>Next sibling of the anchor (same parent).</summary>
+        After,
     }
 
     /// <summary>
-    /// Appends a child field to the given parent. Performs all parent / sibling linked-list
-    /// updates <b>before</b> publishing the new field count, so that a concurrent reader
-    /// post-Seal cannot observe the incremented count while parent pointers are still stale.
-    /// <paramref name="limit"/> is the field limit for this append; only <see cref="RecordCaughtError"/>
-    /// passes <see cref="_MaxFieldCount"/>.
+    /// Appends a child field to the given parent. <paramref name="limit"/> is the field limit for this append; only
+    /// <see cref="RecordCaughtError"/> passes <see cref="_MaxFieldCount"/>.
     /// </summary>
-    internal ushort AppendChild(ushort parentIndex, FieldId fieldId, FieldValue value, int limit = _RegularFieldLimit)
+    internal ushort AppendChild(ushort parentIndex, FieldId fieldId, in FieldValue value, int limit = _RegularFieldLimit)
+        => _InsertField(InsertKind.Append, parentIndex, fieldId, in value, default, limit);
+
+    /// <summary>Appends a child field with custom display text (attached before the field is published).</summary>
+    internal ushort AppendChildWithCustomText(ushort parentIndex, FieldId fieldId, in FieldValue value, LazyString customText)
+        => _InsertField(InsertKind.Append, parentIndex, fieldId, in value, customText, _RegularFieldLimit);
+
+    /// <summary>Prepends a child field with custom display text (attached before the field is published).</summary>
+    internal ushort PrependChildWithCustomText(ushort parentIndex, FieldId fieldId, in FieldValue value, LazyString customText)
+        => _InsertField(InsertKind.Prepend, parentIndex, fieldId, in value, customText, _RegularFieldLimit);
+
+    /// <summary>Prepends a child field (inserts before all existing children).</summary>
+    internal ushort PrependChild(ushort parentIndex, FieldId fieldId, in FieldValue value)
+        => _InsertField(InsertKind.Prepend, parentIndex, fieldId, in value, default, _RegularFieldLimit);
+
+    /// <summary>
+    /// Inserts a field after the given sibling with custom display text. The root has no siblings: inserting after
+    /// it throws in Build and in Skip mode.
+    /// </summary>
+    internal ushort InsertAfterWithCustomText(ushort siblingIndex, FieldId fieldId, in FieldValue value, LazyString customText)
     {
+        _ThrowIfInsertAfterRoot(siblingIndex);
+        return _InsertField(InsertKind.After, siblingIndex, fieldId, in value, customText, _RegularFieldLimit);
+    }
+
+    /// <summary>
+    /// Inserts a field after the given sibling. The root has no siblings: inserting after it throws in Build and in
+    /// Skip mode.
+    /// </summary>
+    internal ushort InsertAfter(ushort siblingIndex, FieldId fieldId, in FieldValue value)
+    {
+        _ThrowIfInsertAfterRoot(siblingIndex);
+        return _InsertField(InsertKind.After, siblingIndex, fieldId, in value, default, _RegularFieldLimit);
+    }
+
+    /// <summary>
+    /// Shared insert of every append, prepend, and insert-after variant. A default <paramref name="customText"/>
+    /// means "no custom text": the slot starts with default text and the value cache ignores a null text, which is
+    /// what the former plain variants did. All parent / sibling linked-list stores happen <b>before</b> the field
+    /// count is published, so a concurrent reader after Seal never sees the new count with stale links. A throw
+    /// between reserve and publish publishes a tombstone instead.
+    /// </summary>
+    private ushort _InsertField(InsertKind kind, ushort anchorIndex, FieldId fieldId, in FieldValue value, LazyString customText, int limit)
+    {
+        // Skip mode stores nothing; hooks still see the value (and the flag keeps the common no-hook parse cheap).
         if (!_HasFieldTree)
         {
-            _RecordValueCacheNoText(fieldId, in value);
-            _ObserveProducedField(fieldId, in value, FieldBody.SkipStorageIndex, hasField: false);
+            if (_HasParseHooks)
+            {
+                _RecordValueCache(fieldId, in value, customText);
+                _ObserveProducedField(fieldId, in value, FieldBody.SkipStorageIndex, hasField: false);
+            }
+
             return FieldBody.SkipStorageIndex;
         }
 
-        int reservedIndex = _ReserveFieldSlot(limit);
+        // Parent: the anchor itself, or the sibling's parent for insert-after (validated before any reservation).
+        ushort parentIndex = kind == InsertKind.After ? _ParentForInsertAfter(anchorIndex) : anchorIndex;
+
+        // Seal cannot change during this call: pre-Seal only the parse thread inserts and seals afterwards;
+        // post-Seal stays post-Seal until an exclusive recycle. So one read serves reserve, ensure, and publish.
+        bool postSeal = _Finalized != 0;
+        int reservedIndex = _ReserveFieldSlot(limit, postSeal);
         ushort newIndex = (ushort)reservedIndex;
         bool published = false;
         try
         {
-            FieldBody newField = new(fieldId, value)
+            _Fields.EnsureSlot(reservedIndex, postSeal);
+            ref FieldBody created = ref _Fields.Slot(reservedIndex);
+            created = new FieldBody(fieldId, value, customText, parentIndex);
+            ref FieldBody parent = ref _Fields.Slot(parentIndex);
+            switch (kind)
             {
-                ParentIndex = parentIndex
-            };
-            _AddFieldBody(in newField, reservedIndex);
+                case InsertKind.Append:
+                {
+                    // New last child. The previous last child points forward to it, it points back; an empty parent gets
+                    // both ends. The child is linked in before the count is published (see the method summary).
+                    ushort last = parent.LastChildIndex;
+                    if (last == FieldBody.NullIndex)
+                    {
+                        parent.FirstChildIndex = newIndex;
+                    }
+                    else
+                    {
+                        _Fields.Slot(last).NextIndex = newIndex;
+                        created.PrevIndex = last;
+                    }
 
-            ref FieldBody parent = ref GetFieldRef(parentIndex);
-            if (parent.LastChildIndex == FieldBody.NullIndex)
-            {
-                parent.FirstChildIndex = newIndex;
-                parent.LastChildIndex = newIndex;
+                    parent.LastChildIndex = newIndex;
+                    break;
+                }
+                case InsertKind.Prepend:
+                {
+                    // New first child: mirror image of Append. An empty parent gets both ends, so FirstChildIndex and
+                    // LastChildIndex are never out of step with ChildCount.
+                    ushort first = parent.FirstChildIndex;
+                    if (first == FieldBody.NullIndex)
+                    {
+                        parent.LastChildIndex = newIndex;
+                    }
+                    else
+                    {
+                        _Fields.Slot(first).PrevIndex = newIndex;
+                        created.NextIndex = first;
+                    }
+
+                    parent.FirstChildIndex = newIndex;
+                    break;
+                }
+                default:
+                {
+                    // Insert after a sibling: splice between it and its old next sibling; the new field becomes the
+                    // parent's last child when the sibling was the last one.
+                    ref FieldBody sibling = ref _Fields.Slot(anchorIndex);
+                    ushort next = sibling.NextIndex;
+                    sibling.NextIndex = newIndex;
+                    created.PrevIndex = anchorIndex;
+                    created.NextIndex = next;
+                    if (next != FieldBody.NullIndex)
+                    {
+                        _Fields.Slot(next).PrevIndex = newIndex;
+                    }
+                    else
+                    {
+                        parent.LastChildIndex = newIndex;
+                    }
+
+                    break;
+                }
             }
-            else
-            {
-                ushort lastChild = parent.LastChildIndex;
-                GetFieldRef(lastChild).NextIndex = newIndex;
-                GetFieldRef(newIndex).PrevIndex = lastChild;
-                parent.LastChildIndex = newIndex;
-            }
+
             parent.IncrementChildCount();
 
-            _RecordValueCacheNoText(fieldId, in value);
+            // Cache before publish, observers after publish (they may read the published field).
+            if (_HasParseHooks)
+            {
+                _RecordValueCache(fieldId, in value, customText);
+            }
 
-            // Publish AFTER parent / sibling fix-ups so a concurrent reader that observes
-            // the incremented _FieldCount also sees the consistent linked-list state.
-            _PublishFieldCount(reservedIndex + 1);
+            _PublishFieldCount(reservedIndex + 1, postSeal);
             published = true;
-            _ObserveProducedField(fieldId, in value, newIndex, hasField: true);
+            if (_HasParseHooks)
+            {
+                _ObserveProducedField(fieldId, in value, newIndex, hasField: true);
+            }
+
             return newIndex;
         }
         finally
@@ -1749,313 +1744,25 @@ public sealed class Packet
         }
     }
 
-    /// <summary>
-    /// Appends a child field with custom display text. The display text is attached
-    /// before the field count is published so concurrent readers that see the new
-    /// count also see the populated <c>CustomText</c> slot.
-    /// </summary>
-    internal ushort AppendChildWithCustomText(
-        ushort parentIndex, FieldId fieldId, FieldValue value, LazyString customText)
-    {
-        if (!_HasFieldTree)
-        {
-            _RecordValueCache(fieldId, in value, customText);
-            _ObserveProducedField(fieldId, in value, FieldBody.SkipStorageIndex, hasField: false);
-            return FieldBody.SkipStorageIndex;
-        }
-
-        int reservedIndex = _ReserveFieldSlot();
-        ushort newIndex = (ushort)reservedIndex;
-        bool published = false;
-        try
-        {
-            FieldBody newField = new(fieldId, value)
-            {
-                ParentIndex = parentIndex
-            };
-            _AddFieldBody(in newField, reservedIndex);
-
-            ref FieldBody parent = ref GetFieldRef(parentIndex);
-            if (parent.LastChildIndex == FieldBody.NullIndex)
-            {
-                parent.FirstChildIndex = newIndex;
-                parent.LastChildIndex = newIndex;
-            }
-            else
-            {
-                ushort lastChild = parent.LastChildIndex;
-                GetFieldRef(lastChild).NextIndex = newIndex;
-                GetFieldRef(newIndex).PrevIndex = lastChild;
-                parent.LastChildIndex = newIndex;
-            }
-            parent.IncrementChildCount();
-            GetFieldRef(newIndex).SetCustomText(customText);
-
-            _RecordValueCache(fieldId, in value, customText);
-
-            _PublishFieldCount(reservedIndex + 1);
-            published = true;
-            _ObserveProducedField(fieldId, in value, newIndex, hasField: true);
-            return newIndex;
-        }
-        finally
-        {
-            if (!published)
-            {
-                _PublishReservedOrTombstone(reservedIndex, fieldId);
-            }
-        }
-    }
-
-    /// <summary>
-    /// Prepends a child field with custom display text. The display text is attached
-    /// before the field count is published so concurrent readers that see the new
-    /// count also see the populated <c>CustomText</c> slot.
-    /// </summary>
-    internal ushort PrependChildWithCustomText(
-        ushort parentIndex, FieldId fieldId, FieldValue value, LazyString customText)
-    {
-        if (!_HasFieldTree)
-        {
-            _RecordValueCache(fieldId, in value, customText);
-            _ObserveProducedField(fieldId, in value, FieldBody.SkipStorageIndex, hasField: false);
-            return FieldBody.SkipStorageIndex;
-        }
-
-        int reservedIndex = _ReserveFieldSlot();
-        ushort newIndex = (ushort)reservedIndex;
-        bool published = false;
-        try
-        {
-            FieldBody newField = new(fieldId, value)
-            {
-                ParentIndex = parentIndex
-            };
-            _AddFieldBody(in newField, reservedIndex);
-
-            ref FieldBody parent = ref GetFieldRef(parentIndex);
-            if (parent.FirstChildIndex == FieldBody.NullIndex)
-            {
-                parent.FirstChildIndex = newIndex;
-                parent.LastChildIndex = newIndex;
-            }
-            else
-            {
-                ushort firstChild = parent.FirstChildIndex;
-                GetFieldRef(firstChild).PrevIndex = newIndex;
-                GetFieldRef(newIndex).NextIndex = firstChild;
-                parent.FirstChildIndex = newIndex;
-            }
-            parent.IncrementChildCount();
-            GetFieldRef(newIndex).SetCustomText(customText);
-
-            _RecordValueCache(fieldId, in value, customText);
-
-            _PublishFieldCount(reservedIndex + 1);
-            published = true;
-            _ObserveProducedField(fieldId, in value, newIndex, hasField: true);
-            return newIndex;
-        }
-        finally
-        {
-            if (!published)
-            {
-                _PublishReservedOrTombstone(reservedIndex, fieldId);
-            }
-        }
-    }
-
-    /// <summary>
-    /// Prepends a child field (inserts before all existing children). Performs all
-    /// parent / sibling linked-list updates <b>before</b> publishing the new field
-    /// count, so that a concurrent reader post-Seal cannot observe the incremented
-    /// count while parent pointers are still stale.
-    /// </summary>
-    internal ushort PrependChild(ushort parentIndex, FieldId fieldId, FieldValue value)
-    {
-        if (!_HasFieldTree)
-        {
-            _RecordValueCacheNoText(fieldId, in value);
-            _ObserveProducedField(fieldId, in value, FieldBody.SkipStorageIndex, hasField: false);
-            return FieldBody.SkipStorageIndex;
-        }
-
-        int reservedIndex = _ReserveFieldSlot();
-        ushort newIndex = (ushort)reservedIndex;
-        bool published = false;
-        try
-        {
-            FieldBody newField = new(fieldId, value)
-            {
-                ParentIndex = parentIndex
-            };
-            _AddFieldBody(in newField, reservedIndex);
-
-            ref FieldBody parent = ref GetFieldRef(parentIndex);
-            if (parent.FirstChildIndex == FieldBody.NullIndex)
-            {
-                parent.FirstChildIndex = newIndex;
-                parent.LastChildIndex = newIndex;
-            }
-            else
-            {
-                ushort firstChild = parent.FirstChildIndex;
-                GetFieldRef(firstChild).PrevIndex = newIndex;
-                GetFieldRef(newIndex).NextIndex = firstChild;
-                parent.FirstChildIndex = newIndex;
-            }
-            parent.IncrementChildCount();
-
-            _RecordValueCacheNoText(fieldId, in value);
-
-            _PublishFieldCount(reservedIndex + 1);
-            published = true;
-            _ObserveProducedField(fieldId, in value, newIndex, hasField: true);
-            return newIndex;
-        }
-        finally
-        {
-            if (!published)
-            {
-                _PublishReservedOrTombstone(reservedIndex, fieldId);
-            }
-        }
-    }
-
-    /// <summary>
-    /// Inserts a field after the given sibling with custom display text. The display text
-    /// is attached before the field count is published so concurrent readers that see the
-    /// new count also see the populated <c>CustomText</c> slot.
-    /// </summary>
-    internal ushort InsertAfterWithCustomText(
-        ushort siblingIndex, FieldId fieldId, FieldValue value, LazyString customText)
+    /// <summary>The root has no siblings; checked before the skip-mode branch, as every insert-after variant did.</summary>
+    private static void _ThrowIfInsertAfterRoot(ushort siblingIndex)
     {
         if (siblingIndex == 0)
         {
             ThrowHelpers.ThrowFieldAppend(ParseError.Custom("packet", "Cannot insert after root"));
         }
-
-        if (!_HasFieldTree)
-        {
-            _RecordValueCache(fieldId, in value, customText);
-            _ObserveProducedField(fieldId, in value, FieldBody.SkipStorageIndex, hasField: false);
-            return FieldBody.SkipStorageIndex;
-        }
-
-        ushort parentIndex = GetFieldRef(siblingIndex).ParentIndex;
-        if (parentIndex == FieldBody.NullIndex)
-        {
-            ThrowHelpers.ThrowFieldAppend(ParseError.Custom("packet", "Cannot insert after root"));
-        }
-
-        int reservedIndex = _ReserveFieldSlot();
-        ushort newIndex = (ushort)reservedIndex;
-        bool published = false;
-        try
-        {
-            FieldBody newField = new(fieldId, value)
-            {
-                ParentIndex = parentIndex
-            };
-            _AddFieldBody(in newField, reservedIndex);
-
-            ushort nextSibling = GetFieldRef(siblingIndex).NextIndex;
-            GetFieldRef(siblingIndex).NextIndex = newIndex;
-            GetFieldRef(newIndex).PrevIndex = siblingIndex;
-            GetFieldRef(newIndex).NextIndex = nextSibling;
-
-            if (nextSibling != FieldBody.NullIndex)
-            {
-                GetFieldRef(nextSibling).PrevIndex = newIndex;
-            }
-            else
-            {
-                GetFieldRef(parentIndex).LastChildIndex = newIndex;
-            }
-            GetFieldRef(parentIndex).IncrementChildCount();
-            GetFieldRef(newIndex).SetCustomText(customText);
-
-            _RecordValueCache(fieldId, in value, customText);
-
-            _PublishFieldCount(reservedIndex + 1);
-            published = true;
-            _ObserveProducedField(fieldId, in value, newIndex, hasField: true);
-            return newIndex;
-        }
-        finally
-        {
-            if (!published)
-            {
-                _PublishReservedOrTombstone(reservedIndex, fieldId);
-            }
-        }
     }
 
-    /// <summary>
-    /// Inserts a field after the given sibling. Performs all parent / sibling linked-list
-    /// updates <b>before</b> publishing the new field count, so that a concurrent reader
-    /// post-Seal cannot observe the incremented count while sibling pointers are still stale.
-    /// </summary>
-    internal ushort InsertAfter(ushort siblingIndex, FieldId fieldId, FieldValue value)
+    /// <summary>Parent of <paramref name="siblingIndex"/>; a field without a parent cannot get a sibling.</summary>
+    private ushort _ParentForInsertAfter(ushort siblingIndex)
     {
-        if (siblingIndex == 0)
-        {
-            ThrowHelpers.ThrowFieldAppend(ParseError.Custom("packet", "Cannot insert after root"));
-        }
-
-        if (!_HasFieldTree)
-        {
-            _RecordValueCacheNoText(fieldId, in value);
-            _ObserveProducedField(fieldId, in value, FieldBody.SkipStorageIndex, hasField: false);
-            return FieldBody.SkipStorageIndex;
-        }
-
-        ushort parentIndex = GetFieldRef(siblingIndex).ParentIndex;
+        ushort parentIndex = _Fields.Slot(siblingIndex).ParentIndex;
         if (parentIndex == FieldBody.NullIndex)
         {
             ThrowHelpers.ThrowFieldAppend(ParseError.Custom("packet", "Cannot insert after root"));
         }
 
-        int reservedIndex = _ReserveFieldSlot();
-        ushort newIndex = (ushort)reservedIndex;
-        bool published = false;
-        try
-        {
-            FieldBody newField = new(fieldId, value)
-            {
-                ParentIndex = parentIndex
-            };
-            _AddFieldBody(in newField, reservedIndex);
-
-            ushort nextSibling = GetFieldRef(siblingIndex).NextIndex;
-            GetFieldRef(siblingIndex).NextIndex = newIndex;
-            GetFieldRef(newIndex).PrevIndex = siblingIndex;
-            GetFieldRef(newIndex).NextIndex = nextSibling;
-
-            if (nextSibling != FieldBody.NullIndex)
-            {
-                GetFieldRef(nextSibling).PrevIndex = newIndex;
-            }
-            else
-            {
-                GetFieldRef(parentIndex).LastChildIndex = newIndex;
-            }
-            GetFieldRef(parentIndex).IncrementChildCount();
-
-            _RecordValueCacheNoText(fieldId, in value);
-
-            _PublishFieldCount(reservedIndex + 1);
-            published = true;
-            _ObserveProducedField(fieldId, in value, newIndex, hasField: true);
-            return newIndex;
-        }
-        finally
-        {
-            if (!published)
-            {
-                _PublishReservedOrTombstone(reservedIndex, fieldId);
-            }
-        }
+        return parentIndex;
     }
 
     /// <summary>
@@ -2188,18 +1895,6 @@ public sealed class Packet
             _ObserverFailed = true;
             RecordCaughtError(0, BuildCaughtExceptionText(ex, Stack.IncludeExceptionStackTrace));
         }
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void _RecordValueCacheNoText(FieldId fieldId, in FieldValue value)
-    {
-        ValueCache? cache = _ActiveValueCache;
-        if (cache is null)
-        {
-            return;
-        }
-
-        _RecordValueCacheSlow(this, cache, fieldId, in value, default);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -2341,81 +2036,18 @@ public sealed class Packet
 
     #region Private Helpers
     /// <summary>
-    /// Allocates the initial chunk descriptor region and the first FieldBody chunk.
-    /// <see cref="_InitialChunkDescriptors"/> (4) descriptor slots are reserved
-    /// from the thread-local chunk descriptor slab, covering up to 64 fields. Only the first
-    /// FieldBody chunk (16 slots) is allocated upfront — subsequent chunks are allocated
-    /// on demand by <see cref="_AddFieldBody"/> when slots fill up.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void _AllocateFirstChunk()
-    {
-        // Reserve chunk descriptor slots from the chunk descriptor slab
-        _AllocateFromSlab(
-            ref _ChunkDescriptorSlab, _ChunkDescriptorSlabCapacity,
-            _InitialChunkDescriptors, out FieldBodyChunk[] chunks, out int baseOffset);
-        _ChunkTable = new ChunkTable(chunks, baseOffset, _InitialChunkDescriptors);
-
-        // Allocate the first FieldBody chunk (16 slots) from the FieldBody slab
-        ref FieldBodyChunk first = ref chunks[baseOffset];
-        _AllocateFromSlab(
-            ref _FieldBodySlab, _FieldBodySlabCapacity,
-            _FieldBodyChunkSize, out first.Buffer, out first.Offset);
-        _ChunkCount = 1;
-    }
-
-    /// <summary>
-    /// Allocates a single chunk of <see cref="_FieldBodyChunkSize"/> slots from the
-    /// thread-local FieldBody slab. Creates a new slab if the current one is full.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static void _AllocateFieldBodyChunk(out FieldBody[] buffer, out int offset) =>
-        _AllocateFromSlab(
-            ref _FieldBodySlab, _FieldBodySlabCapacity,
-            _FieldBodyChunkSize, out buffer, out offset);
-
-    /// <summary>
-    /// Allocates an additional FieldBody chunk on demand.
-    /// If the chunk descriptor array is full, doubles it by allocating a new region
-    /// from the chunk descriptor slab and copying existing descriptors (small: count × 12 bytes).
-    /// </summary>
-    private void _AllocateNewChunk()
-    {
-        ChunkTable table = _ChunkTable;
-        int chunkCount = _ChunkCount;
-
-        // Grow chunk descriptor array if capacity is exhausted. Publish a new table
-        // object so concurrent _GetChunk cannot tear (array, offset).
-        if (chunkCount >= table.Capacity)
-        {
-            int newCapacity = table.Capacity * 2;
-            _AllocateFromSlab(
-                ref _ChunkDescriptorSlab, _ChunkDescriptorSlabCapacity,
-                newCapacity, out FieldBodyChunk[] newChunks, out int newOffset);
-            table.Buffer.AsSpan(table.BaseOffset, chunkCount)
-                   .CopyTo(newChunks.AsSpan(newOffset));
-            table = new ChunkTable(newChunks, newOffset, newCapacity);
-            _ChunkTable = table;
-        }
-
-        // Allocate FieldBody slots for the new chunk from the FieldBody slab
-        ref FieldBodyChunk newChunk = ref table.Buffer[table.BaseOffset + chunkCount];
-        _AllocateFieldBodyChunk(out newChunk.Buffer, out newChunk.Offset);
-        _ChunkCount = chunkCount + 1;
-    }
-
-    /// <summary>
     /// Generic slab allocation helper. Tries to allocate <paramref name="count"/> slots from
     /// the thread-local <see cref="SlabAllocator{T}"/>. If the current slab is full or null,
     /// creates a new slab with <paramref name="slabCapacity"/> and retries.
     /// <para>
-    /// This single method replaces all type-specific <c>AllocateFrom*Slab</c> helpers.
-    /// The JIT specializes it per <typeparamref name="T"/>, so there is no boxing or
+    /// Shared by the lazy-populator table and <see cref="FieldStorage"/>. It lives here and not on
+    /// <see cref="SlabAllocator{T}"/> because that file is link-compiled into <c>NetworkInspector.Sources</c>, which
+    /// has no <see cref="ParseError"/>. The JIT specializes it per <typeparamref name="T"/>, so there is no boxing or
     /// virtual dispatch overhead.
     /// </para>
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static void _AllocateFromSlab<T>(
+    internal static void AllocateFromSlab<T>(
         ref SlabAllocator<T>? slab, int slabCapacity,
         int count, out T[] buffer, out int offset)
     {
@@ -2486,9 +2118,8 @@ public sealed class Packet
     /// Seals the packet, publishing all parsing results for concurrent readers.
     /// After this call, the packet is safe for concurrent reads from multiple threads.
     /// <para>
-    /// With chunk-based storage, there is no large unused capacity to trim.
-    /// Each chunk holds exactly <see cref="_FieldBodyChunkSize"/> (16) slots, and
-    /// at most 15 slots in the last chunk may be unused — negligible overhead.
+    /// There is no unused capacity to trim: the chunks are slab slices that a recycle reuses
+    /// (<see cref="FieldStorage.ResetForReuse"/>).
     /// </para>
     /// </summary>
     internal void Seal()
@@ -2602,6 +2233,9 @@ public sealed class Packet
                 packet._ActiveValueCache = cache;
             }
 
+            // One flag for both hooks: false for most parses, so inserts skip the span conversion and the cache load.
+            packet._HasParseHooks = recording || !observers.IsEmpty;
+
             ParseContext context = indexing
                 ? new ParseContext(index!, packet.Stack, skipFieldTree: !packet.HasFieldTree)
                 : new ParseContext(packet.Stack, skipFieldTree: !packet.HasFieldTree);
@@ -2645,6 +2279,7 @@ public sealed class Packet
         {
             packet._Observers = default;
             packet._ObserverFailed = false;
+            packet._HasParseHooks = false;
             packet.Seal();
         }
     }
@@ -2845,42 +2480,6 @@ public sealed class Packet
     #endregion
 
     #region Nested Types
-    /// <summary>
-    /// Snapshot of the chunk-descriptor array plus its slab base offset and capacity.
-    /// Published as a single reference so <see cref="_GetChunk"/> cannot observe a torn
-    /// (array, offset) pair while descriptors grow. Capacity is reset in place during an
-    /// exclusive recycle so a Build parse does not allocate a new table per frame.
-    /// </summary>
-    private sealed class ChunkTable
-    {
-        /// <summary>Slab-backed chunk descriptor array.</summary>
-        internal readonly FieldBodyChunk[] Buffer;
-
-        /// <summary>Index of this packet's first descriptor in <see cref="Buffer"/>.</summary>
-        internal readonly int BaseOffset;
-
-        /// <summary>Number of descriptor slots reserved for this packet in <see cref="Buffer"/>.</summary>
-        internal int Capacity;
-
-        /// <summary>Creates a published chunk-descriptor table snapshot.</summary>
-        internal ChunkTable(FieldBodyChunk[] buffer, int baseOffset, int capacity)
-        {
-            Buffer = buffer;
-            BaseOffset = baseOffset;
-            Capacity = capacity;
-        }
-
-        /// <summary>
-        /// Shrinks the visible descriptor capacity for the next parse.
-        /// Call only from <see cref="PrepareForReuse"/> while the recycle gate is held and the
-        /// packet is not readable. Growth after <see cref="Seal"/> still publishes a new table.
-        /// </summary>
-        internal void ResetForReuse(int capacity)
-        {
-            Capacity = capacity;
-        }
-    }
-
     /// <summary>
     /// Immutable snapshot of the lazy-populator array plus its slab offset and capacity.
     /// Published as a single reference so nested post-Seal <see cref="RegisterLazyPopulator"/>

@@ -400,7 +400,12 @@ While a restart runs, `QueriesEnabled` is false and reads are refused: show a bu
 - **Columns from value caches**, details from `TryGetPacket`: field trees only for what the user looks at.
 - `SessionOptions.RedissectOnly` turns the packet index off when nobody needs presence pruning; filtered pulls
   then evaluate every packet.
-- A `Matching` pull prunes with the packet index first and re-parses only candidates.
+- A `Matching` pull prunes with the packet index first and re-parses only candidates. Ids whose verdict the
+  listener filter already cached as a non-match are skipped without a parse. For a stateless filter without scopes
+  and without `matches`, an unknown id is first parsed without a field tree, with an equivalent observer that only
+  rules packets out; that parse opens the lazy containers of the watched fields' protocols, as a field-tree lookup
+  would, and the field-tree filter still decides every returned packet. When most packets match, this
+  pre-check switches itself off for a while, so match-all filters do not pay for it.
 - Memory: stream sources are cached (`CachedFrameSource` holds every frame for the session's lifetime). For
   long live captures plan for that growth, or use a random-access source.
 

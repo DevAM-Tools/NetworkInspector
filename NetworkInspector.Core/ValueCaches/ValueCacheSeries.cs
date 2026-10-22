@@ -175,8 +175,8 @@ public abstract class ValueCacheSeries : IReadOnlyValueCacheSeries
             }
         }
 
-        _PacketIds.Append(packetId);
-        _Timestamps.Append(timestampNanos);
+        _PacketIds.AppendOwned(packetId);
+        _Timestamps.AppendOwned(timestampNanos);
         _LastPacketId = packetId;
         _LastTimestampNanos = timestampNanos;
     }

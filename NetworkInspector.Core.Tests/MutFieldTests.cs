@@ -1046,4 +1046,360 @@ internal sealed class MutFieldTests
 
         public bool Test(ReadOnlyMemory<byte> data) => data.Length > 0 && data.Span[0] == 0xFE;
     }
+
+    #region Shared insert core
+
+    /// <summary>Script run by <see cref="InsertScriptProtocol"/> under its container field.</summary>
+    private delegate void InsertScript(in MutField container);
+
+    /// <summary>Appends one container under the parse parent and runs a script on it.</summary>
+    private sealed class InsertScriptProtocol : IProtocol
+    {
+        public FieldId Container { get; private set; }
+
+        public FieldId Item { get; private set; }
+
+        public InsertScript? Script { get; set; }
+
+        public string Name => "insert.script";
+
+        public string UiName => "Insert Script";
+
+        public void RegisterFields(StackBuilder builder, ProtocolId protocolId)
+        {
+            Container = builder.RegisterField(protocolId, "insert.script.container", "Container", FieldType.None);
+            Item = builder.RegisterField(protocolId, "insert.script.item", "Item", FieldType.U64);
+        }
+
+        public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
+        {
+            MutField container = parentField.Append(Container, FieldValue.None);
+            Script?.Invoke(in container);
+            return data.Length;
+        }
+    }
+
+    private static (Stack Stack, InsertScriptProtocol Protocol, ProtocolId Id) _BuildInsertStack()
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        InsertScriptProtocol protocol = new();
+        ProtocolId id = builder.RegisterProtocol(protocol);
+        protocol.RegisterFields(builder, id);
+        return (builder.Build(), protocol, id);
+    }
+
+    private static Frame _InsertFrame(Stack stack, int id) => Frame.Create(
+        new FrameId(id), Timestamp.FromSecs(id), new byte[] { 0x01 }, LinkType.Ethernet,
+        FrameInterfaceId.Invalid, stack.FrameInterfaceRegistry).Value;
+
+    private static Packet _ParseScript(Stack stack, ProtocolId id, int packetId, in ParseOptions options)
+    {
+        if (!Packet.TryParse(new PacketId(packetId), stack, _InsertFrame(stack, packetId), in options, out Packet? packet, out ParseFailure failure))
+        {
+            throw new InvalidOperationException(failure.ToString());
+        }
+
+        return packet!;
+    }
+
+    private static Field _Container(Packet packet, FieldId container)
+    {
+        FieldLookupCookie cookie = default;
+        return packet.TryGetNextField(container, ref cookie, out Field field, materialize: false)
+            ? field
+            : throw new InvalidOperationException("container missing");
+    }
+
+    private static ulong _U64Of(Field field) =>
+        field.Value.Data.TryGetAsU64(out ulong value)
+            ? value
+            : ulong.MaxValue;
+
+    [Test]
+    [Arguments(0)]
+    [Arguments(1)]
+    [Arguments(2)]
+    [Arguments(3)]
+    [Arguments(4)]
+    [Arguments(5)]
+    public async Task EveryInsertKindBuildsTheSameTreeAndCacheRows(int variant)
+    {
+        (Stack stack, InsertScriptProtocol protocol, ProtocolId id) = _BuildInsertStack();
+        using (stack)
+        {
+            FieldId item = protocol.Item;
+            bool withText = variant % 2 == 1;
+            LazyString Text(int value) => new("t" + value.ToString(CultureInfo.InvariantCulture));
+
+            // Each variant fills an empty parent, a one-child parent, and a two-child parent; the final order is 1, 2, 3.
+            protocol.Script = (in MutField c) =>
+            {
+                switch (variant / 2)
+                {
+                    case 0:
+                        foreach (int v in new[] { 1, 2, 3 })
+                        {
+                            _ = withText ? c.AppendWithCustomText(item, FieldValue.NewU64((ulong)v), Text(v)) : c.Append(item, FieldValue.NewU64((ulong)v));
+                        }
+
+                        break;
+                    case 1:
+                        foreach (int v in new[] { 3, 2, 1 })
+                        {
+                            _ = withText ? c.PrependWithCustomText(item, FieldValue.NewU64((ulong)v), Text(v)) : c.Prepend(item, FieldValue.NewU64((ulong)v));
+                        }
+
+                        break;
+                    default:
+                        MutField first = withText ? c.AppendWithCustomText(item, FieldValue.NewU64(1), Text(1)) : c.Append(item, FieldValue.NewU64(1));
+                        _ = withText ? first.InsertAfterWithCustomText(item, FieldValue.NewU64(3), Text(3)) : first.InsertAfter(item, FieldValue.NewU64(3));
+                        _ = withText ? first.InsertAfterWithCustomText(item, FieldValue.NewU64(2), Text(2)) : first.InsertAfter(item, FieldValue.NewU64(2));
+                        break;
+                }
+            };
+
+            ValueCache cache = new(stack, [new ValueCacheFieldConfig(item, ValueCaptureMode.AllOccurrences, RecordCustomText: true)]);
+            ParseOptions options = new(FieldTreeMode.Build, cache, firstProtocol: id);
+            Packet packet = _ParseScript(stack, id, 0, in options);
+            Field container = _Container(packet, protocol.Container);
+
+            // Order, neighbor links, and text.
+            List<ulong> order = [];
+            bool linksOk = true;
+            bool textOk = true;
+            int index = 0;
+            foreach (Field child in container.Children(materialize: false))
+            {
+                order.Add(_U64Of(child));
+                linksOk &= child.TryGetPrev(out Field prev) == (index > 0) && (index == 0 || _U64Of(prev) == (ulong)index);
+                linksOk &= child.TryGetNext(out Field next) == (index < 2) && (index == 2 || _U64Of(next) == (ulong)(index + 2));
+                linksOk &= child.TryGetParent(out Field parent) && parent.Equals(container);
+                bool hasText = child.TryGetCustomText(out LazyString text);
+                textOk &= hasText && (withText
+                    ? text.AsString == "t" + (index + 1).ToString(CultureInfo.InvariantCulture)
+                    : text.IsNull);
+                index++;
+            }
+
+            // Cache rows follow the insertion order of each variant.
+            ulong[] expectedRows = (variant / 2) switch
+            {
+                0 => [1, 2, 3],
+                1 => [3, 2, 1],
+                _ => [1, 3, 2],
+            };
+            ValueCacheSeries<ulong> values = cache.GetSeries<ulong>(item);
+            List<ulong> rows = [.. Enumerable.Range(0, values.Count).Select(values.GetValue)];
+            bool hasTextSeries = cache.TryGetCustomTextSeries(item, out ValueCacheSeries<string>? texts);
+            int textRows = texts?.Count ?? 0;
+
+            await Assert.That(order.SequenceEqual(new ulong[] { 1, 2, 3 })).IsTrue();
+            await Assert.That(linksOk).IsTrue();
+            await Assert.That(textOk).IsTrue();
+            await Assert.That((int)container.ChildCount(materialize: false)).IsEqualTo(3);
+            await Assert.That(rows.SequenceEqual(expectedRows)).IsTrue();
+            await Assert.That(hasTextSeries).IsTrue();
+            await Assert.That(textRows).IsEqualTo(withText ? 3 : 0);
+            if (withText)
+            {
+                List<string> textValues = [.. Enumerable.Range(0, texts!.Count).Select(texts.GetValue)];
+                await Assert.That(textValues.SequenceEqual(expectedRows.Select(static v => "t" + v.ToString(CultureInfo.InvariantCulture)))).IsTrue();
+            }
+        }
+    }
+
+    [Test]
+    public async Task InsertAfterRootErrorsKeepTheirOrderAgainstSkipMode()
+    {
+        (Stack stack, InsertScriptProtocol protocol, ProtocolId id) = _BuildInsertStack();
+        using (stack)
+        {
+            Packet build = new(new PacketId(0), stack, _InsertFrame(stack, 0), FieldTreeMode.Build);
+            Packet skip = new(new PacketId(1), stack, _InsertFrame(stack, 1), FieldTreeMode.Skip);
+            string? buildRoot = null;
+            string? skipRoot = null;
+            ushort skipSibling;
+            try
+            {
+                _ = build.InsertAfter(0, protocol.Item, FieldValue.NewU64(1));
+            }
+            catch (FieldAppendException ex)
+            {
+                buildRoot = ex.ParseError.Message;
+            }
+
+            // The root check runs before the skip-mode branch.
+            try
+            {
+                _ = skip.InsertAfter(0, protocol.Item, FieldValue.NewU64(1));
+            }
+            catch (FieldAppendException ex)
+            {
+                skipRoot = ex.ParseError.Message;
+            }
+
+            // Skip mode: a non-root sibling (the skip index) returns the skip index, no throw.
+            skipSibling = skip.InsertAfter(FieldBody.SkipStorageIndex, protocol.Item, FieldValue.NewU64(2));
+
+            await Assert.That(buildRoot).IsEqualTo("Cannot insert after root");
+            await Assert.That(skipRoot).IsEqualTo("Cannot insert after root");
+            await Assert.That(skipSibling).IsEqualTo(FieldBody.SkipStorageIndex);
+            await Assert.That(build.FieldCount(materialize: false)).IsEqualTo(1);
+        }
+    }
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task ThrowingValueCacheLeavesATombstoneAndPublishingContinues(bool viaLazyPopulator)
+    {
+        (Stack stack, InsertScriptProtocol protocol, ProtocolId id) = _BuildInsertStack();
+        using (stack)
+        {
+            FieldId item = protocol.Item;
+            ValueCache cache = new(stack, [], options: new ValueCacheBuildOptions { RecordAllFields = true });
+
+            // Two recorded children, then the cache is evicted: the third Record throws between reserve and publish.
+            void Fill(in MutField parent)
+            {
+                _ = parent.Append(item, FieldValue.NewU64(1));
+                _ = parent.Append(item, FieldValue.NewU64(2));
+                cache.Abandon();
+                _ = parent.Append(item, FieldValue.NewU64(3));
+            }
+
+            protocol.Script = viaLazyPopulator
+                ? (in MutField c) => _ = c.AppendLazy(item, FieldValue.NewU64(0), (in MutField lazy) =>
+                {
+                    Fill(in lazy);
+                    return 0;
+                })
+                : (in MutField c) => Fill(in c);
+            ParseOptions options = new(FieldTreeMode.Build, cache, firstProtocol: id);
+            Packet packet = _ParseScript(stack, id, 0, in options);
+            if (viaLazyPopulator)
+            {
+                packet.MaterializeAll();
+            }
+
+            // Find the tombstone: packet.error id, no value, no parent link.
+            int allocated = packet.FieldCount(materialize: false);
+            int flat = 0;
+            int tombstones = 0;
+            int values = 0;
+            foreach (Field field in packet.IterFieldsFlat(materialize: false))
+            {
+                flat++;
+                if (field.FieldId == item)
+                {
+                    values++;
+                }
+
+                if (field.FieldId == stack.PacketErrorFieldId && field.Value.Data.Type == FieldType.None && !field.TryGetParent(out _))
+                {
+                    tombstones++;
+                }
+            }
+
+            bool hasError = packet.TryGetFieldValue(stack.PacketErrorFieldId, out _, materialize: false);
+
+            await Assert.That(packet.IsFinalized).IsTrue();
+            await Assert.That(flat).IsEqualTo(allocated);
+            await Assert.That(tombstones).IsGreaterThanOrEqualTo(1);
+            await Assert.That(values).IsEqualTo(viaLazyPopulator ? 3 : 2);
+            await Assert.That(hasError).IsTrue();
+        }
+    }
+
+    /// <summary>Records what an observer saw while the field was reported.</summary>
+    private sealed class OrderObserver(ValueCache? cache, FieldId item) : IFieldObserver
+    {
+        public List<(ulong Value, int FieldCount, int CacheRows)> Seen { get; } = [];
+
+        public bool ThrowOnSecond { get; init; }
+
+        public void BeginPacket(PacketId id, Timestamp timestamp)
+        {
+        }
+
+        public void OnField(in FieldVisit visit)
+        {
+            if (visit.FieldId != item)
+            {
+                return;
+            }
+
+            int rows = cache is not null && cache.TryGetSeries<ulong>(item, out ValueCacheSeries<ulong>? series) ? series!.Count : -1;
+            int count = visit.HasField ? visit.Field.Packet.FieldCount(materialize: false) : -1;
+            ulong value = visit.Value.Data.TryGetAsU64(out ulong v) ? v : ulong.MaxValue;
+            Seen.Add((value, count, rows));
+            if (ThrowOnSecond && Seen.Count == 2)
+            {
+                throw new InvalidOperationException("observer failed");
+            }
+        }
+    }
+
+    [Test]
+    public async Task CacheRecordsBeforePublishAndObserversSeeThePublishedField()
+    {
+        (Stack stack, InsertScriptProtocol protocol, ProtocolId id) = _BuildInsertStack();
+        using (stack)
+        {
+            FieldId item = protocol.Item;
+            protocol.Script = (in MutField c) =>
+            {
+                for (int v = 1; v <= 3; v++)
+                {
+                    _ = c.Append(item, FieldValue.NewU64((ulong)v));
+                }
+            };
+
+            // With cache and observer: count includes the field, the cache row exists, both before the callback.
+            ValueCache cache = new(stack, [new ValueCacheFieldConfig(item, ValueCaptureMode.AllOccurrences)]);
+            OrderObserver observer = new(cache, item);
+            ParseObserver[] hookedObservers = [new() { Observer = observer, Watch = FieldWatch.All }];
+            ParseOptions hooked = new(FieldTreeMode.Build, cache, observers: hookedObservers, firstProtocol: id);
+            Packet withHooks = _ParseScript(stack, id, 0, in hooked);
+
+            // Without hooks: same tree.
+            ParseOptions plain = new(FieldTreeMode.Build, firstProtocol: id);
+            Packet withoutHooks = _ParseScript(stack, id, 1, in plain);
+
+            // A throwing observer stops later reports of the same packet.
+            OrderObserver failing = new(null, item) { ThrowOnSecond = true };
+            ParseObserver[] failingObservers = [new() { Observer = failing, Watch = FieldWatch.All }];
+            ParseOptions failingOptions = new(FieldTreeMode.Build, observers: failingObservers, firstProtocol: id);
+            Packet failed = _ParseScript(stack, id, 2, in failingOptions);
+
+            List<(int, ulong)> hookedTree =
+            [
+                .. withHooks.IterFieldsDfs(materialize: false)
+                    .Where(f => f.FieldId != stack.PacketErrorFieldId)
+                    .Select(f => (f.FieldId.Value, _U64Of(f))),
+            ];
+            List<(int, ulong)> plainTree =
+            [
+                .. withoutHooks.IterFieldsDfs(materialize: false).Select(f => (f.FieldId.Value, _U64Of(f))),
+            ];
+            int containerSlot = _Container(withHooks, protocol.Container).StorageIndex;
+
+            await Assert.That(observer.Seen.Count).IsEqualTo(3);
+            for (int i = 0; i < 3; i++)
+            {
+                await Assert.That(observer.Seen[i].Value).IsEqualTo((ulong)(i + 1));
+                await Assert.That(observer.Seen[i].FieldCount).IsEqualTo(containerSlot + 2 + i);
+                await Assert.That(observer.Seen[i].CacheRows).IsEqualTo(i + 1);
+            }
+
+            // The All watch expands deferred containers, so compare the script items only: same values, same order.
+            await Assert.That(hookedTree.Where(e => e.Item1 == item.Value).Select(static e => e.Item2).SequenceEqual(new ulong[] { 1, 2, 3 })).IsTrue();
+            await Assert.That(plainTree.Where(e => e.Item1 == item.Value).Select(static e => e.Item2).SequenceEqual(new ulong[] { 1, 2, 3 })).IsTrue();
+            await Assert.That(failing.Seen.Count).IsEqualTo(2);
+            await Assert.That(failed.TryGetFieldValue(stack.PacketErrorFieldId, out _, materialize: false)).IsTrue();
+        }
+    }
+
+    #endregion
 }

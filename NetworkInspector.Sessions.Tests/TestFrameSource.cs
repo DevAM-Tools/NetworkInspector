@@ -286,3 +286,65 @@ internal sealed class StubbornFrameSource : IRandomAccessFrameSource
     {
     }
 }
+
+/// <summary>
+/// Random-access source that overrides <see cref="IRandomAccessFrameSource.FramesById"/> and records every call (the ids
+/// it received, in order) in a shared log, so a test can prove that the session reads its frames through batch calls.
+/// <see cref="IRandomAccessFrameSource.FrameById"/> calls are counted separately.
+/// </summary>
+internal sealed class BatchCountingRandomAccessSource : IRandomAccessFrameSource
+{
+    private readonly TestFrameSource _Inner;
+    private readonly List<(string Source, int[] Ids)> _Log;
+    private readonly string _Name;
+    private int _FrameByIdCalls;
+
+    internal BatchCountingRandomAccessSource(TestFrameSource inner, string name, List<(string Source, int[] Ids)> log)
+    {
+        _Inner = inner;
+        _Name = name;
+        _Log = log;
+    }
+
+    /// <summary>Number of <see cref="FrameById"/> calls so far.</summary>
+    internal int FrameByIdCalls => Volatile.Read(ref _FrameByIdCalls);
+
+    public string UiName => _Inner.UiName;
+
+    public string? Description => _Inner.Description;
+
+    public int? EstimatedFrameCount => _Inner.EstimatedFrameCount;
+
+    public bool IsRunning => _Inner.IsRunning;
+
+    public void Start(FrameSourceId sourceId, FrameInterfaceRegistry registry) => _Inner.Start(sourceId, registry);
+
+    public Frame? NextFrame(CancellationToken cancellationToken = default) => _Inner.NextFrame(cancellationToken);
+
+    public Frame? FrameById(FrameId id, CancellationToken cancellationToken = default)
+    {
+        Interlocked.Increment(ref _FrameByIdCalls);
+        return _Inner.FrameById(id, cancellationToken);
+    }
+
+    public int FramesById(FrameId first, Span<Frame?> frames, CancellationToken cancellationToken = default)
+    {
+        int[] copy = new int[frames.Length];
+        int found = 0;
+        for (int i = 0; i < frames.Length; i++)
+        {
+            copy[i] = first.Value + i;
+            frames[i] = _Inner.FrameById(new FrameId(first.Value + i), cancellationToken);
+            found += frames[i] is null ? 0 : 1;
+        }
+
+        lock (_Log)
+        {
+            _Log.Add((_Name, copy));
+        }
+
+        return found;
+    }
+
+    public void Dispose() => _Inner.Dispose();
+}

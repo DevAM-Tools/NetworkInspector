@@ -45,7 +45,7 @@ internal sealed class CachedFramesHoldReferenceScenario : IProfilingScenario, ID
     public void Setup()
     {
         _Stack = StackHelper.CreateStack();
-        _Frames = FrameHelper.CreateSharedFrames(_FrameCount, _Stack);
+        _Frames = SampleFrames.CreateSharedFrames(_FrameCount, _Stack);
     }
 
     /// <inheritdoc/>

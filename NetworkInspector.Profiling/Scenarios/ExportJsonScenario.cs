@@ -25,7 +25,7 @@ internal sealed class ExportJsonScenario : ExportScenarioBase<Packet>
 
     /// <inheritdoc/>
     protected override Packet[] CreateItems(Stack stack, Frame[] frames)
-        => FrameHelper.ParseAndMaterialize(frames, stack);
+        => SampleFrames.ParseAndMaterialize(frames, stack);
 
     /// <inheritdoc/>
     public override string Name => "export-json";

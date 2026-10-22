@@ -2,20 +2,25 @@
 
 namespace NetworkInspector.Sources.Pcapng;
 
-/// <summary>Registered identity of one PCAPNG / PCAP interface.</summary>
+/// <summary>
+/// Registered identity of one PCAPNG / PCAP interface. Immutable; shared by the table and the interface's
+/// <see cref="Format.InterfaceInfo"/>. A reference type on purpose: <see cref="Format.InterfaceInfo.SetRegistered"/>
+/// publishes it with one compare-exchange into a <c>volatile</c> field that <c>FrameById</c> reads on any thread, which a
+/// two-field struct could not do without tearing. One allocation per interface; interfaces are few.
+/// </summary>
 /// <param name="Id">Registry id of the interface.</param>
 /// <param name="LinkType">Link type of the interface (open enum; undefined DLTs keep their number).</param>
-internal readonly record struct PcapInterfaceEntry(FrameInterfaceId Id, LinkType LinkType);
+internal sealed record PcapInterfaceEntry(FrameInterfaceId Id, LinkType LinkType);
 
 /// <summary>
 /// Maps <c>(section index, interface index)</c> to the registered interface of <see cref="PcapngSource"/>.
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>Why:</b> random access must resolve the interface of any frame the index already holds, also while the lazy scan
-/// is still adding sections and interfaces on the <c>NextFrame</c> thread. The section list and the interface lists of
-/// the format state are plain <see cref="List{T}"/>s mutated by the scanner, so <c>FrameById</c> must not read them.
-/// This table is the only lookup <c>FrameById</c> needs besides the frame index entry.
+/// <b>Why:</b> random access must resolve the registered interface (registry id and link type) of any frame the index
+/// already holds, also while the lazy scan is still adding sections and interfaces on the <c>NextFrame</c> thread. The
+/// format state (sections and their <see cref="InterfaceInfo"/>s) tells <c>FrameById</c> how to parse a block; this
+/// table maps the parsed section and interface index to the registry entry.
 /// </para>
 /// <para>
 /// <b>Thread-safety:</b> single writer (the thread that runs the scan or <c>Start</c>), any number of concurrent
@@ -73,16 +78,17 @@ internal sealed class PcapInterfaceTable
 
     /// <summary>Resolves an interface. Safe from any thread, concurrently with <see cref="TryAdd"/>.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal bool TryGet(ushort sectionIndex, ushort interfaceIndex, out PcapInterfaceEntry entry)
+    internal bool TryGet(ushort sectionIndex, ushort interfaceIndex, [NotNullWhen(true)] out PcapInterfaceEntry? entry)
     {
         if (_Sections.TryGet(sectionIndex, out ChunkedGrowOnlyStore<PcapInterfaceEntry> interfaces)
             && interfaces is not null
-            && interfaces.TryGet(interfaceIndex, out entry))
+            && interfaces.TryGet(interfaceIndex, out entry)
+            && entry is not null)
         {
             return true;
         }
 
-        entry = default;
+        entry = null;
         return false;
     }
 

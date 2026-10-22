@@ -52,6 +52,15 @@ internal enum ParseComboKind
 
     /// <summary>Skip plus the tree-free filter observer.</summary>
     FilterObserver,
+
+    /// <summary>Skip plus a tree-free filter observer that holds a flank (verdict read per frame).</summary>
+    FilterObserverFlank,
+
+    /// <summary>Build tree and record a <see cref="PacketIndex"/> for every first parse.</summary>
+    BuildIndex,
+
+    /// <summary>Skip tree and record a <see cref="PacketIndex"/> for every first parse.</summary>
+    SkipIndex,
 }
 
 /// <summary>
@@ -97,6 +106,9 @@ internal sealed class ParseComboScenario : IProfilingScenario
         ParseComboKind.TcpSkipSeqRaw => "parse-combo-tcp-skip-seqraw",
         ParseComboKind.FilterBuild => "parse-combo-filter-build",
         ParseComboKind.FilterObserver => "parse-combo-filter-observer",
+        ParseComboKind.FilterObserverFlank => "parse-combo-filter-observer-flank",
+        ParseComboKind.BuildIndex => "parse-combo-build-index",
+        ParseComboKind.SkipIndex => "parse-combo-skip-index",
         _ => "parse-combo-unknown",
     };
 
@@ -115,7 +127,7 @@ internal sealed class ParseComboScenario : IProfilingScenario
     {
         _Stack = StackHelper.CreateStack();
         bool tcp = _Kind is ParseComboKind.TcpSkipSeq or ParseComboKind.TcpSkipSeqRaw;
-        _Frames = tcp ? _TcpFrames(_Stack) : FrameHelper.CreateSharedFrames(_BatchSize, _Stack);
+        _Frames = tcp ? _TcpFrames(_Stack) : SampleFrames.CreateSharedFrames(_BatchSize, _Stack);
         _Counter = 0;
 
         FieldId src = _Stack.GetFieldId("udp.srcport")!.Value;
@@ -126,7 +138,9 @@ internal sealed class ParseComboScenario : IProfilingScenario
         FieldTreeMode tree = _Tree();
         ValueCache? cache = _Cache(src);
         ParseObserver[]? observers = _Observers(src, dst, tcpSrc, seq, seqRaw);
-        _Options = new(tree, cache, observers: observers ?? default);
+        // Index kinds record every packet once: ids grow monotonically across iterations, so each parse is a first parse.
+        PacketIndex? index = _Kind is ParseComboKind.BuildIndex or ParseComboKind.SkipIndex ? new PacketIndex(_Stack) : null;
+        _Options = new(tree, cache, index: index, observers: observers ?? default);
 
         if (_Kind == ParseComboKind.FilterBuild)
         {
@@ -139,11 +153,14 @@ internal sealed class ParseComboScenario : IProfilingScenario
             _Filter = filter;
         }
 
-        if (_Kind == ParseComboKind.FilterObserver)
+        if (_Kind is ParseComboKind.FilterObserver or ParseComboKind.FilterObserverFlank)
         {
             FilterObserverOptions observerOptions = FilterObserverOptions.Default;
+            string expression = _Kind == ParseComboKind.FilterObserver
+                ? "udp.srcport == 12345"
+                : "udp.dstport != 1 && flank(udp.srcport, changed, within: 10packets)";
             FilterResult<FilterObserver> compiled = PacketFilter.Compile(
-                "udp.srcport == 12345",
+                expression,
                 _Stack,
                 in observerOptions);
             if (!compiled.TryGetValue(out FilterObserver? observer))
@@ -191,9 +208,16 @@ internal sealed class ParseComboScenario : IProfilingScenario
                 }
             }
 
-            if (_Observer is not null && _Observer.IsMatch)
+            if (_Observer is not null)
             {
-                sink++;
+                // Flank observers commit their sample on TryReadMatch; IsMatch is undefined for them.
+                bool observed = _Observer.HasFlank
+                    ? _Observer.TryReadMatch(out bool flankMatched, out _) && flankMatched
+                    : _Observer.IsMatch;
+                if (observed)
+                {
+                    sink++;
+                }
             }
         }
 
@@ -215,6 +239,7 @@ internal sealed class ParseComboScenario : IProfilingScenario
         {
             ParseComboKind.Build or ParseComboKind.BuildCachePort or ParseComboKind.BuildCacheAll
                 or ParseComboKind.BuildPort or ParseComboKind.BuildAll or ParseComboKind.FilterBuild
+                or ParseComboKind.BuildIndex
                 => FieldTreeMode.Build,
             _ => FieldTreeMode.Skip,
         };

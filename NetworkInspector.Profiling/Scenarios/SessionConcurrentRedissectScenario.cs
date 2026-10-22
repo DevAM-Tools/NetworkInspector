@@ -55,7 +55,7 @@ internal sealed class SessionConcurrentRedissectScenario : IProfilingScenario, I
     public void Setup()
     {
         _Stack = StackHelper.CreateStack();
-        _Frames = FrameHelper.CreateSharedFrames(FrameCount, _Stack);
+        _Frames = SampleFrames.CreateSharedFrames(FrameCount, _Stack);
     }
 
     /// <inheritdoc/>

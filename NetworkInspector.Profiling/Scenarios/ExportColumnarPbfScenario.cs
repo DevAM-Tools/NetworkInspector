@@ -25,7 +25,7 @@ internal sealed class ExportColumnarPbfScenario : ExportScenarioBase<Packet>
 
     /// <inheritdoc/>
     protected override Packet[] CreateItems(Stack stack, Frame[] frames)
-        => FrameHelper.ParseAndMaterialize(frames, stack);
+        => SampleFrames.ParseAndMaterialize(frames, stack);
 
     /// <inheritdoc/>
     public override string Name => "export-columnar-pbf";

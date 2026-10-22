@@ -30,5 +30,12 @@ public enum FrameReadErrorKind
     /// <summary>The stream was truncated mid-block or mid-frame.</summary>
     TruncatedStream,
 
+    /// <summary>
+    /// The capture file changed (length or modification time) while the source was reading it. The source stops: no
+    /// further frames are returned and <c>FrameById</c> returns <c>null</c>. Detected on Linux and macOS; Windows
+    /// denies writers while the source is open. To read the new content, dispose the source and open the file again.
+    /// </summary>
+    SourceFileChanged,
+
     #endregion
 }

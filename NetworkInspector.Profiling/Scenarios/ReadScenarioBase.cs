@@ -56,7 +56,7 @@ internal abstract class ReadScenarioBase : IProfilingScenario
     {
         // Mixed capture formats may need protocols outside the fair eth/IP/UDP/TCP cone.
         _Stack = StackHelper.CreateFullStack();
-        Frame[] frames = FrameHelper.CreateSharedFrames(FrameCount, _Stack);
+        Frame[] frames = SampleFrames.CreateSharedFrames(FrameCount, _Stack);
         _FilePath = CreateSampleFile(frames);
     }
 
@@ -66,7 +66,7 @@ internal abstract class ReadScenarioBase : IProfilingScenario
     /// <inheritdoc/>
     public void Cleanup()
     {
-        SampleFileHelper.Cleanup();
+        SampleCaptureFiles.Cleanup();
         _Stack?.Dispose();
         _Stack = null;
         _FilePath = null;

@@ -63,9 +63,10 @@ internal sealed class DataBackend : IDisposable
     #region Public API
 
     /// <summary>
-    /// Gets a span over the backing data for scanning.
+    /// Gets a span over the backing data for scanning and for re-reading an indexed block.
     /// For in-memory: returns a slice of the byte array.
-    /// For mmap: returns a span over the primary mmap view (only valid during scan).
+    /// For mmap: returns a span over the primary mmap view, valid while the caller holds a lease of
+    /// <see cref="TryAcquireScanLease"/> (the sequential thread per step, <c>FrameById</c> per call).
     /// </summary>
     internal ReadOnlySpan<byte> GetScanSpan(long offset, int length)
     {
@@ -89,9 +90,10 @@ internal sealed class DataBackend : IDisposable
     }
 
     /// <summary>
-    /// Starts one sequential step that reads through <see cref="GetScanSpan"/> or <see cref="CopyFrameDataSequential"/>:
-    /// the mapped backend takes a reference on its view so a concurrent <see cref="Dispose"/> cannot unmap it mid-copy.
-    /// In-memory data needs no lease (always true). False means the backend is being disposed: read nothing.
+    /// Starts one step that reads through <see cref="GetScanSpan"/> or <see cref="CopyFrameDataSequential"/> (a
+    /// sequential step, or one random-access re-read of an indexed block): the mapped backend takes a reference on its
+    /// view so a concurrent <see cref="Dispose"/> cannot unmap it mid-read. Safe from any thread; leases do not exclude
+    /// each other. In-memory data needs no lease (always true). False means the backend is being disposed: read nothing.
     /// Every true result needs exactly one <see cref="ReleaseScanLease"/>.
     /// </summary>
     internal bool TryAcquireScanLease() => _MmapPool is null || _MmapPool.TryAcquireScanLease();
@@ -100,16 +102,68 @@ internal sealed class DataBackend : IDisposable
     internal void ReleaseScanLease() => _MmapPool?.ReleaseScanLease();
 
     /// <summary>
-    /// Reads the bytes of one frame for random access. Thread-safe, also concurrently with <see cref="Dispose"/>.
+    /// Reads the bytes of one frame for random access while the caller holds a lease of
+    /// <see cref="TryAcquireScanLease"/> or is inside the source's reader-gate section, so the view stays mapped without
+    /// a second reference count.
     /// For in-memory: returns a memory slice (zero-copy; the frame aliases the loaded file).
-    /// For mmap: copies the bytes out of the mapping into a new array (reference-counted against unmap).
+    /// For mmap: copies the bytes out of the mapping into a new exact-size array.
     /// </summary>
     /// <param name="fileOffset">File offset of the first frame byte.</param>
-    /// <param name="capturedLength">Number of frame bytes.</param>
-    internal ReadOnlyMemory<byte> ReadFrameData(long fileOffset, int capturedLength) =>
-        _InMemoryData != null
-            ? new ReadOnlyMemory<byte>(_InMemoryData, (int)fileOffset, capturedLength)
-            : _MmapPool!.ReadAt(fileOffset, capturedLength);
+    /// <param name="capturedLength">Number of frame bytes; the caller validated that they lie inside the file.</param>
+    internal ReadOnlyMemory<byte> ReadFrameDataLeased(long fileOffset, int capturedLength)
+    {
+        if (_InMemoryData != null)
+        {
+            return new ReadOnlyMemory<byte>(_InMemoryData, (int)fileOffset, capturedLength);
+        }
+
+        // Every byte is overwritten by the copy, so the array needs no zeroing pass.
+        byte[] copy = GC.AllocateUninitializedArray<byte>(capturedLength);
+        _MmapPool!.GetPrimarySpan(fileOffset, capturedLength).CopyTo(copy);
+        return copy;
+    }
+
+    /// <summary>
+    /// Bytes a block prefetch at <paramref name="fileOffset"/> requests: up to <paramref name="endBound"/> (exclusive),
+    /// the file end, and <see cref="CachePrefetch.MaxBytes"/>; 0 when the range is empty or the offset is outside the
+    /// file.
+    /// </summary>
+    internal static long PrefetchLength(long fileOffset, long endBound, long fileSize)
+    {
+        if (fileOffset < 0 || fileOffset >= fileSize)
+        {
+            return 0;
+        }
+
+        // fileOffset + MaxBytes cannot overflow: fileOffset < fileSize ≤ long.MaxValue − MaxBytes for any real file.
+        long end = Math.Min(Math.Min(endBound, fileSize), fileOffset + CachePrefetch.MaxBytes);
+        return Math.Max(0, end - fileOffset);
+    }
+
+    /// <summary>
+    /// Requests the lines of one block before it is parsed (see <see cref="CachePrefetch"/>). A hint: it never changes
+    /// what is read. Mapped: the caller is inside the source's view gate. In-memory: any thread.
+    /// </summary>
+    internal unsafe void PrefetchBlock(long fileOffset, long endBound)
+    {
+        int length = (int)PrefetchLength(fileOffset, endBound, FileSize);
+        if (length == 0)
+        {
+            return;
+        }
+
+        if (_InMemoryData is not null)
+        {
+            fixed (byte* start = &_InMemoryData[(int)fileOffset])
+            {
+                CachePrefetch.Range(start, length);
+            }
+
+            return;
+        }
+
+        _MmapPool!.PrefetchRange(fileOffset, length);
+    }
 
     /// <summary>
     /// Reads the bytes of one frame on the sequential (scanning) thread.

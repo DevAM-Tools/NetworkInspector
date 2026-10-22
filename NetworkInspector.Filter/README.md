@@ -15,7 +15,7 @@ compile error with a "did you mean" hint, not a silent non-match.
 
 - **Familiar syntax.** Protocol presence, comparisons, `and` / `or` / `not`, sets, ranges, `contains`, `matches`,
   byte slices, `len()`, IPv4/IPv6/MAC literals, field aliases (`eth.addr`).
-- **Compiled.** Expressions become .NET expression trees compiled by the JIT; evaluation short-circuits.
+- **Compiled.** Expressions become a tree of typed evaluation nodes, built once per compile without runtime code generation; evaluation short-circuits left to right.
 - **Fast over large captures.** With a `PacketIndex`, a filter prunes the candidate packets with presence bitmaps
   before it evaluates a single packet.
 - **Beyond Wireshark.** Subtree scopes (`$udp { udp.dstport == 53 }`) bind conditions to one protocol instance;

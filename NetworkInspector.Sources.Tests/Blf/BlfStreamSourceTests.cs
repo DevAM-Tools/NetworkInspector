@@ -25,9 +25,9 @@ internal sealed class BlfStreamSourceTests
     [Test]
     public async Task SingleEthernetFrame_Parsed()
     {
-        byte[] eth = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0xDE, 0xAD, 0xBE, 0xEF]);
+        byte[] eth = TestFrames.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0xDE, 0xAD, 0xBE, 0xEF]);
 
-        byte[] blfData = new BlfTestGenerator()
+        byte[] blfData = new BlfCaptureBuilder()
             .AddEthernetFrame(1, eth, 1_000_000)
             .Build();
 
@@ -52,13 +52,13 @@ internal sealed class BlfStreamSourceTests
     [Test]
     public async Task MultipleFrames_AllRead()
     {
-        BlfTestGenerator gen = new();
+        BlfCaptureBuilder gen = new();
 
         List<byte[]> expected = [];
         for (int i = 0; i < 5; i++)
         {
             byte[] payload = [(byte)i, (byte)(i + 1), (byte)(i + 2)];
-            byte[] eth = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, payload);
+            byte[] eth = TestFrames.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, payload);
             expected.Add(eth);
             gen.AddEthernetFrame(1, eth, (i + 1) * 1_000_000L);
         }
@@ -85,9 +85,9 @@ internal sealed class BlfStreamSourceTests
     [Test]
     public async Task CanClassicSingle_Parsed()
     {
-        byte[] socketCanFrame = FrameBuilders.BuildSocketCanClassic(0x123, [0xDE, 0xAD, 0xBE, 0xEF]);
+        byte[] socketCanFrame = TestFrames.BuildSocketCanClassic(0x123, [0xDE, 0xAD, 0xBE, 0xEF]);
 
-        byte[] blfData = new BlfTestGenerator()
+        byte[] blfData = new BlfCaptureBuilder()
             .AddCanFrame(1, socketCanFrame, 500_000)
             .Build();
 
@@ -104,9 +104,9 @@ internal sealed class BlfStreamSourceTests
     [Test]
     public async Task CanXlSingle_Parsed()
     {
-        byte[] xl = FrameBuilders.BuildSocketCanXl(0x123, [0xDE, 0xAD]);
+        byte[] xl = TestFrames.BuildSocketCanXl(0x123, [0xDE, 0xAD]);
 
-        byte[] blfData = new BlfTestGenerator()
+        byte[] blfData = new BlfCaptureBuilder()
             .AddCanXlChannelFrame(1, xl, 500_000)
             .Build();
 
@@ -128,11 +128,11 @@ internal sealed class BlfStreamSourceTests
     [Test]
     public async Task CanFdSingle_Parsed()
     {
-        byte[] socketCanFdFrame = FrameBuilders.BuildSocketCanFd(
+        byte[] socketCanFdFrame = TestFrames.BuildSocketCanFd(
             0x456, [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
                     0x09, 0x0A, 0x0B, 0x0C]);
 
-        byte[] blfData = new BlfTestGenerator()
+        byte[] blfData = new BlfCaptureBuilder()
             .AddCanFdFrame(1, socketCanFdFrame, 750_000)
             .Build();
 
@@ -196,7 +196,7 @@ internal sealed class BlfStreamSourceTests
     [Test]
     public async Task UiName_MatchesProvided()
     {
-        byte[] blfData = new BlfTestGenerator().Build();
+        byte[] blfData = new BlfCaptureBuilder().Build();
 
         using BlfStreamSource source = _CreateSource(blfData, uiName: "MyBlf");
         await Assert.That(source.UiName).IsEqualTo("MyBlf");
@@ -209,7 +209,7 @@ internal sealed class BlfStreamSourceTests
     [Test]
     public async Task StreamDisposedWhenNotLeaveOpen()
     {
-        byte[] blfData = new BlfTestGenerator().Build();
+        byte[] blfData = new BlfCaptureBuilder().Build();
 
         MemoryStream stream = new(blfData);
         BlfStreamSource source = BlfStreamSource.FromStream(stream, leaveOpen: false);
@@ -231,7 +231,7 @@ internal sealed class BlfStreamSourceTests
     [Test]
     public async Task StreamNotDisposedWhenLeaveOpen()
     {
-        byte[] blfData = new BlfTestGenerator().Build();
+        byte[] blfData = new BlfCaptureBuilder().Build();
 
         using MemoryStream stream = new(blfData);
         BlfStreamSource source = BlfStreamSource.FromStream(stream, leaveOpen: true);
@@ -249,7 +249,7 @@ internal sealed class BlfStreamSourceTests
     [Test]
     public async Task Dispose_CalledTwice_DoesNotThrow()
     {
-        byte[] blfData = new BlfTestGenerator().Build();
+        byte[] blfData = new BlfCaptureBuilder().Build();
         BlfStreamSource source = _CreateSource(blfData);
         SourceTestFixture.InitializeAndStartSource(source);
 
@@ -266,7 +266,7 @@ internal sealed class BlfStreamSourceTests
     [Test]
     public async Task NextFrame_BeforeStart_ThrowsInvalidOperationException()
     {
-        byte[] blfData = new BlfTestGenerator().Build();
+        byte[] blfData = new BlfCaptureBuilder().Build();
         using BlfStreamSource source = _CreateSource(blfData);
         // Calling NextFrame() without Start() must throw — not silently return null.
         await Assert.That(() => source.NextFrame()).Throws<InvalidOperationException>();
@@ -275,7 +275,7 @@ internal sealed class BlfStreamSourceTests
     [Test]
     public async Task NextFrame_AfterDispose_ThrowsObjectDisposedException()
     {
-        byte[] blfData = new BlfTestGenerator().Build();
+        byte[] blfData = new BlfCaptureBuilder().Build();
         BlfStreamSource source = _CreateSource(blfData);
         SourceTestFixture.InitializeAndStartSource(source);
         source.Dispose();
@@ -286,7 +286,7 @@ internal sealed class BlfStreamSourceTests
     [Test]
     public async Task IsRunning_FalseBeforeStart()
     {
-        byte[] blfData = new BlfTestGenerator().Build();
+        byte[] blfData = new BlfCaptureBuilder().Build();
         using BlfStreamSource source = _CreateSource(blfData);
         await Assert.That(source.IsRunning).IsFalse();
     }
@@ -294,7 +294,7 @@ internal sealed class BlfStreamSourceTests
     [Test]
     public async Task IsRunning_TrueAfterStart_FalseAfterDispose()
     {
-        byte[] blfData = new BlfTestGenerator().Build();
+        byte[] blfData = new BlfCaptureBuilder().Build();
         BlfStreamSource source = _CreateSource(blfData);
         SourceTestFixture.InitializeAndStartSource(source);
 
@@ -312,7 +312,7 @@ internal sealed class BlfStreamSourceTests
     [Test]
     public async Task Start_NullRegistry_ThrowsArgumentNullException()
     {
-        byte[] blfData = new BlfTestGenerator().Build();
+        byte[] blfData = new BlfCaptureBuilder().Build();
         using BlfStreamSource source = _CreateSource(blfData);
         FrameInterfaceRegistry registry = new();
         FrameSourceId sourceId = registry.RegisterSource(source);

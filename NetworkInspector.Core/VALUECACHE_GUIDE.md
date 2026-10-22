@@ -155,9 +155,9 @@ They exist so a helper can take a keys-only handle or size SIMD loops from the h
 
 ## 8. Writer gate
 
-`_AppendGate` is a cheap CAS (not `Monitor`). Uncontended `Record` takes it in one `CompareExchange`. Contended callers **wait** in a `while` + `SpinWait` loop until the gate is free, then run. That serializes the three column `Append`s and `Count` publish so rows stay untorn. It is not taken on the read path.
+`_AppendGate` is a cheap CAS (not `Monitor`). Uncontended `Record` takes it in one `CompareExchange`. Contended callers **wait** in a `while` + `SpinWait` loop until the gate is free, then run. That serializes the three column appends and the `Count` publish so rows stay untorn. It is not taken on the read path.
 
-The `while` inside `ChunkedGrowOnlyStore.Append` is a different retry (Count CAS vs `Clear`). Store `Append` still rejects a second overlapping `Append` with an exception; the series gate is what keeps two `Record`s from hitting that.
+Because the series gate is the single writer, `Record` appends to the columns with the internal `AppendOwned`: no second compare-exchange per column and no overlap check. The public `ChunkedGrowOnlyStore.Append` keeps its own gate and still rejects a second overlapping `Append` with an exception. `ClearRows` takes the same series gate and replaces the columns' generation with one volatile write; a reader that already holds the old generation finishes on it, and `Count` of the series is what readers trust.
 
 `AllOccurrences` has no extra per-packet counter: a packet cannot exceed `ushort.MaxValue - 1` fields (`Packet` storage indexes are `ushort`, `NullIndex` is `ushort.MaxValue`).
 

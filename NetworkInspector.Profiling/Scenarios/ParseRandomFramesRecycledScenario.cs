@@ -82,7 +82,7 @@ internal sealed class ParseRandomFramesRecycledScenario : IProfilingScenario
     public void Setup()
     {
         _Stack = StackHelper.CreateStack();
-        _Frames = FrameHelper.CreateSharedFrames(_BatchSize, _Stack);
+        _Frames = SampleFrames.CreateSharedFrames(_BatchSize, _Stack);
         _PacketCounter = 0;
 
         // Create the initial seed packet that will be recycled throughout all iterations.

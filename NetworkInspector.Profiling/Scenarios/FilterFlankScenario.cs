@@ -32,5 +32,5 @@ internal sealed class FilterFlankScenario : FilterScenarioBase
 
     /// <inheritdoc/>
     protected override Frame[] CreateFrames(int count, Stack stack) =>
-        FrameHelper.CreateFlankUdpFrames(count, stack, SpikePeriod, enableSpikes: true);
+        SampleFrames.CreateFlankUdpFrames(count, stack, SpikePeriod, enableSpikes: true);
 }

@@ -20,10 +20,10 @@ namespace NetworkInspector.Filter.Analysis;
 ///     child makes the whole union unresolvable: an unknown disjunct may match anything.</description></item>
 /// </list>
 /// <para>
-/// <see cref="TryBuild{TIndex}"/> copies bitmaps and is for a stable index.
-/// <see cref="TryIsCandidate{TIndex}"/> uses live <see cref="ReadOnlyRoaringBitmap.Contains"/> and
-/// does not copy — that is the path for a growing <see cref="PacketIndex"/>.
-/// Both are generic so a <see cref="PacketIndexReaderView"/> is not boxed.
+/// <see cref="TryBuild{TIndex}"/> copies bitmaps and is for a stable index. It is generic so a
+/// <see cref="PacketIndexReaderView"/> is not boxed. The live per-packet path for a growing
+/// <see cref="PacketIndex"/> is <see cref="PrunePlan"/>, which applies the same combination rules once per index and
+/// then tests each packet with <see cref="ReadOnlyRoaringBitmap.Contains"/> without copying.
 /// </para>
 /// </summary>
 internal static class CandidateBitmapBuilder
@@ -42,20 +42,6 @@ internal static class CandidateBitmapBuilder
         where TIndex : IPacketIndexReader
     {
         return _TryBuild(node, index, out candidates);
-    }
-
-    /// <summary>
-    /// Tests whether <paramref name="packetId"/> can possibly match, using live
-    /// <see cref="ReadOnlyRoaringBitmap.Contains"/> on index bitmaps. No bitmap is copied.
-    /// </summary>
-    /// <returns>
-    /// <see langword="true"/> when pruning applied; <paramref name="isCandidate"/> is then the verdict.
-    /// <see langword="false"/> when the tree cannot prune (caller must evaluate the packet).
-    /// </returns>
-    public static bool TryIsCandidate<TIndex>(DependencyNode node, TIndex index, uint packetId, out bool isCandidate)
-        where TIndex : IPacketIndexReader
-    {
-        return _TryIsCandidate(node, index, packetId, out isCandidate);
     }
 
     #endregion
@@ -188,141 +174,6 @@ internal static class CandidateBitmapBuilder
 
         candidates = accumulated;
         return accumulated is not null;
-    }
-
-    private static bool _TryIsCandidate<TIndex>(
-        DependencyNode node,
-        TIndex index,
-        uint packetId,
-        out bool isCandidate)
-        where TIndex : IPacketIndexReader
-    {
-        switch (node)
-        {
-            case DependencyLeaf leaf:
-                return _TryIsLeafCandidate(leaf.Symbol, index, packetId, out isCandidate);
-
-            case DependencyAll all:
-                return _TryIsAllCandidate(all.Children, index, packetId, out isCandidate);
-
-            case DependencyAny any:
-                return _TryIsAnyCandidate(any.Children, index, packetId, out isCandidate);
-
-            default:
-                isCandidate = true;
-                return false;
-        }
-    }
-
-    private static bool _TryIsAllCandidate<TIndex>(
-        DependencyNode[] children,
-        TIndex index,
-        uint packetId,
-        out bool isCandidate)
-        where TIndex : IPacketIndexReader
-    {
-        bool anyResolved = false;
-        isCandidate = true;
-        foreach (DependencyNode child in children)
-        {
-            if (!_TryIsCandidate(child, index, packetId, out bool childCandidate))
-            {
-                continue;
-            }
-
-            anyResolved = true;
-            if (!childCandidate)
-            {
-                isCandidate = false;
-                return true;
-            }
-        }
-
-        if (!anyResolved)
-        {
-            isCandidate = true;
-            return false;
-        }
-
-        return true;
-    }
-
-    private static bool _TryIsAnyCandidate<TIndex>(
-        DependencyNode[] children,
-        TIndex index,
-        uint packetId,
-        out bool isCandidate)
-        where TIndex : IPacketIndexReader
-    {
-        isCandidate = false;
-        foreach (DependencyNode child in children)
-        {
-            if (!_TryIsCandidate(child, index, packetId, out bool childCandidate))
-            {
-                isCandidate = true;
-                return false;
-            }
-
-            if (childCandidate)
-            {
-                isCandidate = true;
-            }
-        }
-
-        return true;
-    }
-
-    private static bool _TryIsLeafCandidate<TIndex>(
-        FilterSymbol symbol,
-        TIndex index,
-        uint packetId,
-        out bool isCandidate)
-        where TIndex : IPacketIndexReader
-    {
-        if (symbol.Kind == FilterSymbolKind.Protocol)
-        {
-            if (index.TryGetProtocolBitmap(symbol.ProtocolId, out ReadOnlyRoaringBitmap protocolBitmap))
-            {
-                isCandidate = protocolBitmap.Contains(packetId);
-                return true;
-            }
-
-            isCandidate = true;
-            return false;
-        }
-
-        if (symbol.Kind == FilterSymbolKind.Field
-            && symbol.IndexGroup.IsValid
-            && index.TryGetGroupBitmap(symbol.IndexGroup, out ReadOnlyRoaringBitmap groupBitmap))
-        {
-            isCandidate = groupBitmap.Contains(packetId);
-            return true;
-        }
-
-        bool anyField = false;
-        isCandidate = false;
-        foreach (FieldId fieldId in symbol.Fields)
-        {
-            if (!index.TryGetFieldBitmap(fieldId, out ReadOnlyRoaringBitmap fieldBitmap))
-            {
-                isCandidate = true;
-                return false;
-            }
-
-            anyField = true;
-            if (fieldBitmap.Contains(packetId))
-            {
-                isCandidate = true;
-            }
-        }
-
-        if (!anyField)
-        {
-            isCandidate = true;
-            return false;
-        }
-
-        return true;
     }
 
     #endregion

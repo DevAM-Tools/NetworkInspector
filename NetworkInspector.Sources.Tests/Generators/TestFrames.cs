@@ -6,7 +6,7 @@ namespace NetworkInspector.Sources.Tests.Generators;
 /// Utility methods for building raw network frame data for tests.
 /// Produces standard Ethernet, CAN (SocketCAN), FlexRay, and LIN frame bytes.
 /// </summary>
-internal static class FrameBuilders
+internal static class TestFrames
 {
     // ========================================================================
     // Ethernet

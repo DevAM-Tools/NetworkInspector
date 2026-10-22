@@ -110,4 +110,84 @@ internal sealed class FilterLazyMaterializeTests
     }
 
     #endregion
+
+    #region Pre-check observer
+
+    /// <summary>
+    /// The session's matching-read pre-check rules a packet out when the observer of
+    /// <see cref="Filter.CreatePrecheckObserver"/> reports no match after a parse without field tree. For a field inside
+    /// a lazy container that verdict must equal the field-tree filter's, on a first parse and on a replay.
+    /// </summary>
+    [Test]
+    [Arguments("lazy.value == 53", 53UL, true)]
+    [Arguments("lazy.value == 53", 54UL, false)]
+    [Arguments("!(lazy.value == 53)", 53UL, false)]
+    [Arguments("!(lazy.value == 53)", 54UL, true)]
+    [Arguments("lazy.value != 53", 53UL, false)]
+    [Arguments("lazy.value != 53", 54UL, true)]
+    public async Task PrecheckObserverLazyFieldAgreesWithTheFieldTreeFilter(string expression, ulong value, bool expected)
+    {
+        (Stack stack, LazyValueProtocol protocol, ProtocolId id) = _Build();
+        using (stack)
+        {
+            protocol.Value = value;
+            Filter filter = FilterTestHelper.CompileOrThrow(expression, stack);
+            FilterObserver? observer = filter.CreatePrecheckObserver();
+            bool treeMatched = FilterTestHelper.MatchOrThrow(filter, _Parse(stack, id, 0));
+
+            // Id 0 is first-parsed above, so this skip parse is a replay; id 1 is a first parse in skip mode.
+            FieldWatch watch = observer!.CreateOwnerExpandingWatch();
+            bool replayRead = _Observe(stack, id, 0, observer, watch, out bool replayMatched);
+            bool firstRead = _Observe(stack, id, 1, observer, watch, out bool firstMatched);
+
+            await Assert.That(treeMatched).IsEqualTo(expected);
+            await Assert.That(replayRead).IsTrue();
+            await Assert.That(replayMatched).IsEqualTo(expected);
+            await Assert.That(firstRead).IsTrue();
+            await Assert.That(firstMatched).IsEqualTo(expected);
+        }
+    }
+
+    /// <summary>
+    /// Why the pre-check needs the owner-expanding watch: with only the observer's own watch, a lazy container outside an
+    /// index group stays closed in a parse without field tree, so the observer never sees the matching value.
+    /// </summary>
+    [Test]
+    public async Task PrecheckObserverOwnWatchAloneMissesTheLazyField()
+    {
+        (Stack stack, LazyValueProtocol _, ProtocolId id) = _Build();
+        using (stack)
+        {
+            Filter filter = FilterTestHelper.CompileOrThrow("lazy.value == 53", stack);
+            FilterObserver observer = filter.CreatePrecheckObserver()!;
+
+            bool read = _Observe(stack, id, 0, observer, observer.Watch, out bool matched);
+
+            await Assert.That(read).IsTrue();
+            await Assert.That(matched).IsFalse();
+            await Assert.That(observer.CreateOwnerExpandingWatch() == observer.Watch).IsFalse();
+        }
+    }
+
+    private static bool _Observe(
+        Stack stack, ProtocolId firstProtocol, int packetId, FilterObserver observer, FieldWatch watch, out bool matched)
+    {
+        Frame frame = Frame.Create(
+            new FrameId(packetId),
+            Timestamp.FromNanos(packetId),
+            new byte[4],
+            LinkType.Ethernet,
+            FrameInterfaceId.Invalid,
+            stack.FrameInterfaceRegistry).Value;
+        ParseObserver[] observers = [new() { Observer = observer, Watch = watch }];
+        ParseOptions options = new(FieldTreeMode.Skip, firstProtocol: firstProtocol, observers: observers);
+        if (!Packet.TryParse(new PacketId(packetId), stack, frame, in options, out _, out ParseFailure failure))
+        {
+            throw new InvalidOperationException(failure.ToString());
+        }
+
+        return observer.TryReadMatch(out matched, out _);
+    }
+
+    #endregion
 }

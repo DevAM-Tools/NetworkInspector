@@ -24,7 +24,7 @@ internal sealed class BlfLinFlexRayTests
     {
         byte[] linData = [0x01, 0x02, 0x03, 0x04];
 
-        byte[] blfData = new BlfTestGenerator()
+        byte[] blfData = new BlfCaptureBuilder()
             .AddLinFrame(1, 0x3A, linData, 1_000_000)
             .Build();
 
@@ -46,7 +46,7 @@ internal sealed class BlfLinFlexRayTests
     public async Task LinMessageV1_ParsesThroughProtocolStack()
     {
         byte[] linData = [0x01, 0x02, 0x03, 0x04];
-        byte[] blfData = new BlfTestGenerator()
+        byte[] blfData = new BlfCaptureBuilder()
             .AddLinFrame(1, 0x10, linData, 1_000_000)
             .Build();
 
@@ -88,7 +88,7 @@ internal sealed class BlfLinFlexRayTests
     [Test]
     public async Task LinMessageV1_MultipleFrames_AllParsed()
     {
-        byte[] blfData = new BlfTestGenerator()
+        byte[] blfData = new BlfCaptureBuilder()
             .AddLinFrame(1, 0x10, [0xAA, 0xBB], 1_000_000)
             .AddLinFrame(2, 0x20, [0xCC, 0xDD, 0xEE], 2_000_000)
             .AddLinFrame(1, 0x30, [0xFF], 3_000_000)
@@ -116,7 +116,7 @@ internal sealed class BlfLinFlexRayTests
     {
         byte[] linData = [0xDE, 0xAD, 0xBE, 0xEF];
 
-        byte[] blfData = new BlfTestGenerator()
+        byte[] blfData = new BlfCaptureBuilder()
             .AddLinMessage2(1, 0x15, linData, 0xAB, 1_000_000)
             .Build();
 
@@ -137,7 +137,7 @@ internal sealed class BlfLinFlexRayTests
     {
         byte[] linData = [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08];
 
-        byte[] blfData = new BlfTestGenerator()
+        byte[] blfData = new BlfCaptureBuilder()
             .AddLinMessage2(2, 0x3F, linData, 0xCC, 1_000_000)
             .Build();
 
@@ -160,7 +160,7 @@ internal sealed class BlfLinFlexRayTests
     {
         byte[] frData = [0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88];
 
-        byte[] blfData = new BlfTestGenerator()
+        byte[] blfData = new BlfCaptureBuilder()
             .AddFlexRayFrame(1, 42, 7, 0x1234, frData, 1_000_000)
             .Build();
 
@@ -186,7 +186,7 @@ internal sealed class BlfLinFlexRayTests
     {
         byte[] frData = [0x11, 0x22, 0x33, 0x44];
 
-        byte[] blfData = new BlfTestGenerator()
+        byte[] blfData = new BlfCaptureBuilder()
             .AddFlexRayFrame(1, frameId: 42, cycle: 7, headerCrc: 0x1234, frData, 1_000_000)
             .Build();
 
@@ -241,7 +241,7 @@ internal sealed class BlfLinFlexRayTests
     [Test]
     public async Task FlexRay_MultipleFrames_AllParsed()
     {
-        byte[] blfData = new BlfTestGenerator()
+        byte[] blfData = new BlfCaptureBuilder()
             .AddFlexRayFrame(1, 10, 0, 0xAAAA, [0x01, 0x02], 1_000_000)
             .AddFlexRayFrame(2, 20, 1, 0xBBBB, [0x03, 0x04, 0x05], 2_000_000)
             .AddFlexRayFrame(1, 30, 2, 0xCCCC, [0x06], 3_000_000)
@@ -267,12 +267,12 @@ internal sealed class BlfLinFlexRayTests
     [Test]
     public async Task MixedProtocols_AllFramesParsed()
     {
-        byte[] ethFrame = FrameBuilders.BuildEthernetFrame(
+        byte[] ethFrame = TestFrames.BuildEthernetFrame(
             [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF],
             [0x00, 0x11, 0x22, 0x33, 0x44, 0x55],
             0x0800, [0xAA, 0xBB]);
 
-        byte[] blfData = new BlfTestGenerator()
+        byte[] blfData = new BlfCaptureBuilder()
             .AddEthernetFrame(1, ethFrame, 1_000_000)
             .AddLinFrame(1, 0x10, [0x01, 0x02], 2_000_000)
             .AddFlexRayFrame(1, 5, 0, 0x1111, [0x03, 0x04], 3_000_000)
@@ -313,7 +313,7 @@ internal sealed class BlfLinFlexRayTests
     [Test]
     public async Task LinMessageV1_EmptyData_Parsed()
     {
-        byte[] blfData = new BlfTestGenerator()
+        byte[] blfData = new BlfCaptureBuilder()
             .AddLinFrame(1, 0x00, [], 1_000_000)
             .Build();
 
@@ -333,7 +333,7 @@ internal sealed class BlfLinFlexRayTests
     [Test]
     public async Task FlexRay_EmptyPayload_Parsed()
     {
-        byte[] blfData = new BlfTestGenerator()
+        byte[] blfData = new BlfCaptureBuilder()
             .AddFlexRayFrame(1, 99, 0, 0x0000, [], 1_000_000)
             .Build();
 
@@ -353,12 +353,12 @@ internal sealed class BlfLinFlexRayTests
     [Test]
     public async Task AppText_ChannelName_AssignedToInterface()
     {
-        byte[] ethFrame = FrameBuilders.BuildEthernetFrame(
+        byte[] ethFrame = TestFrames.BuildEthernetFrame(
             [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF],
             [0x00, 0x11, 0x22, 0x33, 0x44, 0x55],
             0x0800, [0xAA]);
 
-        byte[] blfData = new BlfTestGenerator()
+        byte[] blfData = new BlfCaptureBuilder()
             // Channel name before any frame on that channel
             .AddAppTextChannel(1, BlfConstants.BusTypeEthernet, "ETH-Port1", 500_000)
             .AddEthernetFrame(1, ethFrame, 1_000_000)

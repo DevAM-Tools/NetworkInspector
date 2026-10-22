@@ -16,7 +16,9 @@ view, an exporter) pull exactly the packets they need, while the capture is stil
 - **Built for UIs and services.** Every source and every listener runs on its own thread. Listeners are woken
   with coalesced notifications and pull by packet id; nothing is pushed or copied per listener.
 - **Small memory footprint.** The session keeps only a packet-id → frame map, never parsed packets. A read
-  re-parses the frame and can recycle a caller-owned packet.
+  re-parses the frame and can recycle a caller-owned packet. The map is packed per 64 packets: about 0.25 B per
+  packet for one source and 0.5 B for two interleaved sources (8 B before). With a memory-mapped PCAPNG source a
+  session over 500 000 packets retains 1.9 B per packet including the source's index, down from 32.3 B.
 - **Per-listener filters.** Each listener can have its own filter expression; filtered reads prune candidates
   with the presence index before any packet is evaluated.
 - **Value caches.** Record selected field values into RAM columns during the first parse, or add a cache later
@@ -207,6 +209,11 @@ session installs that copy and leaves your instance untouched. A filter that can
 
 ## Reading Packets
 
+A packet is read by looking up its frame (packet id → frame id and source, about 0.25–0.5 B per packet in a packed
+map), fetching the frame with `FrameById`, and parsing it again. Very large captures therefore stay cheap to browse:
+pair the session with memory-mapped file sources (`PreloadBudget = null`), whose frame index needs well under 2 B per
+frame (see the [Sources README](../NetworkInspector.Sources/README.md#open-very-large-captures)).
+
 `ISessionReader` offers three read shapes. All fill a caller-owned buffer; reads allocate only for empty slots,
 so reuse the buffer to recycle packets:
 
@@ -222,6 +229,12 @@ int readRefs = reader.ReadPackets(startId, refs, out PacketIdLayout layout);
 bool ok = reader.TryReadPackets(listenerId, startId, refs, PacketReadMode.Matching,
     out int count, out PacketIdLayout matchLayout, out FilterError? filterError, out SessionFailure? readFailure);
 ```
+
+`ReadPackets` and `Restart` read frames 64 packets at a time: the session maps the packets of a chunk, and for every
+source reads each run of consecutive frame ids with one range call (`IRandomAccessFrameSource.FramesById`), so the
+source reads its frames forward. Single-packet reads (`TryGetPacket`, `TryGetFrame`) keep `FrameById`. Measured against
+the build before range reads with the `NetworkInspector.Profiling` A/B harness: `ReadPackets` +5 % (the re-parse
+dominates a range read), `TryGetFrame` random +14 %, in order +10 %, four threads +197 %.
 
 `Matching` scans from `startId` to the current `PacketCount` and keeps only what the filter accepts, so the layout
 becomes `Gapped` as soon as an id is skipped. A listener without a filter, or with the always-match filter, takes

@@ -83,19 +83,74 @@ internal abstract class ScannerFormat
 }
 
 /// <summary>PCAPNG format state — tracks sections and their interfaces.</summary>
+/// <remarks>
+/// <b>Thread-safety:</b> the scanner is the single writer (<see cref="AddSection"/>); readers on any thread use
+/// <see cref="SectionCount"/>, <see cref="TryGetSection"/>, and <see cref="TryFindSection"/>. A section is fully built
+/// (SHB options parsed) before it is added, and afterwards only its interface list grows (see <see cref="SectionInfo"/>).
+/// Sections are published before any block they contain is indexed, so <c>FrameById</c> resolves the section of every
+/// indexed block also during a lazy scan.
+/// </remarks>
 internal sealed class PcapNgFormat : ScannerFormat
 {
-    /// <summary>All sections discovered so far.</summary>
-    internal readonly List<SectionInfo> Sections = [];
+    /// <summary>All sections discovered so far, in file order (ascending start offsets). Reference slots publish lock-free.</summary>
+    private readonly ChunkedGrowOnlyStore<SectionInfo> _Sections = new(chunkShift: 4);
 
     /// <inheritdoc />
     internal override FileFormat Format => FileFormat.PcapNg;
 
-    /// <summary>Gets the current (last) section.</summary>
-    internal SectionInfo CurrentSection => Sections[^1];
+    /// <summary>Number of sections published so far. Any thread.</summary>
+    internal int SectionCount => _Sections.Count;
 
-    /// <summary>Gets the current section index.</summary>
-    internal ushort CurrentSectionIndex => (ushort)(Sections.Count - 1);
+    /// <summary>Gets the current (last) section. Scanner thread.</summary>
+    internal SectionInfo CurrentSection => _Sections.Get(_Sections.Count - 1)!;
+
+    /// <summary>Gets the current section index. Scanner thread.</summary>
+    internal ushort CurrentSectionIndex => (ushort)(_Sections.Count - 1);
+
+    /// <summary>Publishes a fully built section. Single writer (scanner).</summary>
+    internal void AddSection(SectionInfo section) => _Sections.Append(section);
+
+    /// <summary>Section at <paramref name="index"/>. Any thread; false for an index not published yet.</summary>
+    internal bool TryGetSection(int index, [NotNullWhen(true)] out SectionInfo? section) =>
+        _Sections.TryGet(index, out section) && section is not null;
+
+    /// <summary>
+    /// Section whose start offset is the greatest one ≤ <paramref name="blockOffset"/>: the section that was current when
+    /// the scanner read the block at that offset. Any thread. False before the first section.
+    /// </summary>
+    internal bool TryFindSection(long blockOffset, out ushort sectionIndex, [NotNullWhen(true)] out SectionInfo? section)
+    {
+        // Almost every capture has one section starting at 0: answer without a search.
+        int count = _Sections.Count;
+        if (count == 1 && blockOffset >= 0)
+        {
+            sectionIndex = 0;
+            section = _Sections.Get(0);
+            return section is not null;
+        }
+
+        // Sections are appended in file order, so start offsets ascend: binary search over the published prefix.
+        int low = 0;
+        int high = count - 1;
+        int found = -1;
+        while (low <= high)
+        {
+            int middle = low + ((high - low) >> 1);
+            if (_Sections.Get(middle)!.StartOffset <= blockOffset)
+            {
+                found = middle;
+                low = middle + 1;
+            }
+            else
+            {
+                high = middle - 1;
+            }
+        }
+
+        sectionIndex = (ushort)Math.Max(found, 0);
+        section = found >= 0 ? _Sections.Get(found) : null;
+        return section is not null;
+    }
 }
 
 /// <summary>Legacy PCAP format state.</summary>
@@ -299,13 +354,13 @@ internal sealed class IncrementalScanner
         }
 
         PcapNgFormat format = new();
-        format.Sections.Add(section);
+        format.AddSection(section);
 
         // Advance past the SHB (4-byte aligned)
         _Offset = PcapPadding.PaddedLength((int)blockLength);
         if (_Offset >= fileSize)
         {
-            _Exhausted = true;
+            _MarkExhausted();
         }
 
         return format;
@@ -386,7 +441,7 @@ internal sealed class IncrementalScanner
             // so always attempt to read 12 bytes; a short read at EOF is safe.
             if (_Offset + 8 > fileSize)
             {
-                _Exhausted = true;
+                _MarkExhausted();
                 frame = default;
                 return false;
             }
@@ -396,7 +451,7 @@ internal sealed class IncrementalScanner
 
             if (headerPeek.Length < 8)
             {
-                _Exhausted = true;
+                _MarkExhausted();
                 frame = default;
                 return false;
             }
@@ -413,7 +468,7 @@ internal sealed class IncrementalScanner
                 // SHB: determine byte order from the byte-order magic at offset +8
                 if (headerPeek.Length < 12)
                 {
-                    _Exhausted = true;
+                    _MarkExhausted();
                     frame = default;
                     return false;
                 }
@@ -570,7 +625,7 @@ internal sealed class IncrementalScanner
         // Need at least 16 bytes for the packet record header
         if (_Offset + PcapConstants.PcapPacketHeaderSize > fileSize)
         {
-            _Exhausted = true;
+            _MarkExhausted();
             frame = default;
             return false;
         }
@@ -579,7 +634,7 @@ internal sealed class IncrementalScanner
         ReadOnlySpan<byte> packetHeader = _Backend.GetScanSpan(_Offset, PcapConstants.PcapPacketHeaderSize);
         if (packetHeader.Length < PcapConstants.PcapPacketHeaderSize)
         {
-            _Exhausted = true;
+            _MarkExhausted();
             frame = default;
             return false;
         }
@@ -588,7 +643,7 @@ internal sealed class IncrementalScanner
 
         if (!PcapPacketHeader.TryParse(packetHeader, out PcapPacketHeader rec, out _))
         {
-            _Exhausted = true;
+            _MarkExhausted();
             frame = default;
             return false;
         }
@@ -620,15 +675,8 @@ internal sealed class IncrementalScanner
         // Validated above: inclLen <= MaxBlockSize < int.MaxValue.
         int capturedLength = (int)inclLen;
 
-        // Build the frame index entry
-        int frameIndex = _Index.Push(new PcapFrameEntry
-        {
-            FileOffset = dataOffset,
-            SectionIndex = 0,
-            InterfaceId = 0,
-            CapturedLength = capturedLength,
-            TimestampNanos = timestampNanos,
-        });
+        // Only the record header start: the header is re-read with the same rules for random access.
+        int frameIndex = _Index.Push(_Offset);
 
         // Fetch the packet data via the backend.
         // For in-memory backends this is a zero-copy slice of the byte array;
@@ -662,7 +710,7 @@ internal sealed class IncrementalScanner
         // CurrentSectionIndex is a ushort (0–65535); adding another section when
         // there are already 65536 sections would silently wrap the section index to 0,
         // aliasing new interfaces onto the first section. Hard-fail instead.
-        if (format.Sections.Count >= ushort.MaxValue)
+        if (format.SectionCount >= ushort.MaxValue)
         {
             return false;
         }
@@ -683,7 +731,7 @@ internal sealed class IncrementalScanner
             section.ParseShbOptions(optionData);
         }
 
-        format.Sections.Add(section);
+        format.AddSection(section);
         return true;
     }
 
@@ -806,14 +854,8 @@ internal sealed class IncrementalScanner
         long dataFileOffset = _Offset + bytesBeforePacketData;
         ushort interfaceId = (ushort)fields.InterfaceId;
 
-        int frameIndex = _Index.Push(new PcapFrameEntry
-        {
-            FileOffset = dataFileOffset,
-            SectionIndex = format.CurrentSectionIndex,
-            InterfaceId = interfaceId,
-            CapturedLength = fields.CapturedLength,
-            TimestampNanos = fields.TimestampNanos,
-        });
+        // Only the block start: section, interface, length, and timestamp are re-read from the block by the same parser.
+        int frameIndex = _Index.Push(_Offset);
 
         frame = new ScannedFrame
         {
@@ -827,6 +869,13 @@ internal sealed class IncrementalScanner
         };
 
         return ScanPacketResult.Frame;
+    }
+
+    /// <summary>Ends the scan: no further block is read, and the index seals its last partial group.</summary>
+    private void _MarkExhausted()
+    {
+        _Exhausted = true;
+        _Index.Complete();
     }
 
     /// <summary>Reports a packet-block skip through <see cref="OnSkip"/> without exhausting the file.</summary>
@@ -853,7 +902,7 @@ internal sealed class IncrementalScanner
             Kind = kind,
             Message = message,
         });
-        _Exhausted = true;
+        _MarkExhausted();
         frame = default;
         return false;
     }

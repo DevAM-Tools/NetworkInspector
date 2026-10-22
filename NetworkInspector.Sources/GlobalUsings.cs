@@ -10,11 +10,15 @@ global using System.Globalization;
 global using System.IO;
 global using System.IO.Compression;
 global using System.IO.MemoryMappedFiles;
+global using System.Numerics;
 global using System.Runtime.CompilerServices;
 global using System.Runtime.InteropServices;
 global using System.Runtime.Intrinsics;
+global using System.Runtime.Intrinsics.X86;
 global using System.Text;
 global using System.Threading;
+global using System.Threading.Tasks;
+global using static System.FormattableString;
 global using Microsoft.Win32.SafeHandles;
 #endregion
 
@@ -36,6 +40,7 @@ global using NetworkInspector.Protocols;
 
 #region NetworkInspector.Sources
 global using NetworkInspector.Sources.Asc.Format;
+global using NetworkInspector.Sources.Collections;
 global using NetworkInspector.Sources.Blf.Format;
 global using NetworkInspector.Sources.Blf.Format.Headers;
 global using NetworkInspector.Sources.Blf.Format.Objects;

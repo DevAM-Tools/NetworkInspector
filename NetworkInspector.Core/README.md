@@ -12,8 +12,9 @@ way, and query across packets. Pair it with `NetworkInspector.Protocols` for the
 
 ## Highlights
 
-- **Allocation-aware parsing.** Packets store a flat field tree in pooled slabs; `TryParse` can recycle a packet,
-  and lazy protocol subtrees are only expanded when you look at them.
+- **Allocation-aware parsing.** Packets store a flat field tree in small chunks from a thread-local slab;
+  `TryParse` can recycle a packet without allocating field storage again, and lazy protocol subtrees are only
+  expanded when you look at them.
 - **Parse only what you need.** `FieldTreeMode.Skip` decodes without building a tree, for value caches, indexes,
   and field watches that do not need the whole packet.
 - **Typed values.** Every field carries a typed `FieldValue` (integers, addresses, timestamps, strings, bytes), a

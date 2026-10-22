@@ -141,11 +141,10 @@ public sealed class Session : ISession, ISessionReader
 
     // -- Shared stores --
 
-    // PacketId → packed (FrameId, FrameSourceId). Dense sequential appends; miss = index >= Count.
-    // 8192 longs = 64 KB, under the ~85 KB large-object threshold.
-    // Shift 16 would be 512 KB and would be collected with generation 2.
-    private const int _PacketToFrameChunkShift = 13;
-    private readonly ChunkedGrowOnlyStore<long> _PacketToFrame = new(_PacketToFrameChunkShift);
+    // PacketId → (FrameId, FrameSourceId), packed per 64 packets (≈ 0.25–0.5 B per packet for typical sessions, 8 B at
+    // worst). Dense sequential appends under the parse mutex; miss = index >= Count. 64 KiB chunks stay below the
+    // large-object threshold.
+    private readonly PacketFrameMap _PacketFrames = new();
 
     // Roaring Bitmap index populated during parsing (protocol presence, field groups).
     // Created by _StartInternal(), set to null by Restart().
@@ -166,7 +165,7 @@ public sealed class Session : ISession, ISessionReader
     // Random-access capable sources keyed by FrameSourceId for GetPacket().
     // Copy-on-write: written only during _AddFrameSourceInternal (rare), read during TryGetPacket (hot).
     // Volatile reference swap replaces the previous lock(object) pattern for lock-free reads.
-    private volatile Dictionary<FrameSourceId, IRandomAccessFrameSource> _RandomAccessSources = [];
+    private volatile RandomAccessSourceTable _RandomAccessSources = RandomAccessSourceTable.Empty;
 
     // -- Listener registry --
 
@@ -532,7 +531,7 @@ public sealed class Session : ISession, ISessionReader
     /// <para>
     /// <b>Frame ordering guarantee:</b>
     /// All previously parsed frames are re-parsed in ascending PacketId order
-    /// (0 … N-1) via <see cref="_PacketToFrame"/>. A mapping miss, a source
+    /// (0 … N-1) via <see cref="_PacketFrames"/>. A mapping miss, a source
     /// that is not random-access, or a null <c>FrameById</c> throws
     /// <see cref="SessionException"/> with <see cref="SessionErrorCode.FrameUnavailable"/>.
     /// Queries stay disabled after that throw; listeners do not receive
@@ -694,7 +693,7 @@ public sealed class Session : ISession, ISessionReader
     /// <summary>
     /// Re-parses frames for PacketIds 0 … <paramref name="count"/>-1 using the
     /// current <see cref="_Stack"/>. Reads frame data from random-access sources
-    /// via <see cref="_PacketToFrame"/> (stream sources are wrapped at add time).
+    /// via <see cref="_PacketFrames"/> (stream sources are wrapped at add time).
     /// A mapping miss, non-random-access source, or null <c>FrameById</c> throws
     /// <see cref="SessionException"/> with <see cref="SessionErrorCode.FrameUnavailable"/>.
     ///
@@ -706,49 +705,51 @@ public sealed class Session : ISession, ISessionReader
     /// </summary>
     private void _ReparseAllFrames(int count)
     {
-        // Snapshot the random-access sources once.
-        Dictionary<FrameSourceId, IRandomAccessFrameSource> raSources = _RandomAccessSources;
-
-        for (int i = 0; i < count; i++)
+        // Snapshot the random-access sources once; frames are read 64 packets at a time, one batch call per source.
+        RandomAccessLookup sources = new(_RandomAccessSources);
+        FrameBatch frames = default;
+        Span<FrameBatchMiss> misses = stackalloc FrameBatchMiss[_FrameBatchSize];
+        for (int start = 0; start < count; start += _FrameBatchSize)
         {
-            PacketId originalId = new(i);
+            int length = Math.Min(_FrameBatchSize, count - start);
+            Span<Frame?> chunk = frames;
+            chunk = chunk[..length];
+            _ReadFrameBatch(ref sources, start, chunk, misses[..length]);
 
-            // Look up which frame and source this PacketId mapped to.
-            if (!_TryGetPacketFrame(originalId, out FrameId frameId, out FrameSourceId sourceId))
+            for (int lane = 0; lane < length; lane++)
             {
-                throw new SessionException(
-                    SessionErrorCode.FrameUnavailable,
-                    FormattableString.Invariant(
-                        $"Restart cannot re-parse PacketId {originalId.Value.ToString(CultureInfo.InvariantCulture)}: mapping slot is missing."));
+                PacketId originalId = new(start + lane);
+                if (chunk[lane] is not Frame frame)
+                {
+                    throw _RestartFrameError(originalId, misses[lane]);
+                }
+
+                // Keep the original PacketId so mapping, index, and TryGetPacket stay aligned.
+                _ = _ParseFrameUnderLock(frame, packetId: originalId);
+
+                // Update counters.
+                Interlocked.Increment(ref _PacketCount);
+                Interlocked.Increment(ref _FrameCount);
             }
-
-            if (!raSources.TryGetValue(sourceId, out IRandomAccessFrameSource? raSource))
-            {
-                throw new SessionException(
-                    SessionErrorCode.FrameUnavailable,
-                    FormattableString.Invariant(
-                        $"Restart cannot re-parse PacketId {originalId.Value.ToString(CultureInfo.InvariantCulture)}: source is not random-access."));
-            }
-
-            Frame? frame = raSource.FrameById(frameId);
-            if (frame is null)
-            {
-                throw new SessionException(
-                    SessionErrorCode.FrameUnavailable,
-                    FormattableString.Invariant(
-                        $"Restart cannot re-parse PacketId {originalId.Value.ToString(CultureInfo.InvariantCulture)}: FrameById returned null."));
-            }
-
-            // Keep the original PacketId so mapping, index, and TryGetPacket stay aligned.
-            _ = _ParseFrameUnderLock(frame.Value, packetId: originalId);
-
-            // Update counters.
-            Interlocked.Increment(ref _PacketCount);
-            Interlocked.Increment(ref _FrameCount);
         }
 
         // Parses used original ids, so _AllocateNextPacketId never advanced. Resume new ingest at count.
         Interlocked.Exchange(ref _NextPacketId, count);
+    }
+
+    /// <summary>The error <see cref="_ReparseAllFrames"/> raised per cause before batching (same codes and texts).</summary>
+    private static SessionException _RestartFrameError(PacketId id, FrameBatchMiss miss)
+    {
+        string reason = miss switch
+        {
+            FrameBatchMiss.Unmapped => "mapping slot is missing",
+            FrameBatchMiss.NotRandomAccess => "source is not random-access",
+            _ => "FrameById returned null",
+        };
+        return new SessionException(
+            SessionErrorCode.FrameUnavailable,
+            FormattableString.Invariant(
+                $"Restart cannot re-parse PacketId {id.Value.ToString(CultureInfo.InvariantCulture)}: {reason}."));
     }
 
     /// <summary>
@@ -1120,16 +1121,12 @@ public sealed class Session : ISession, ISessionReader
         info.RegisterStopCallback(() => TryUnsubscribe(entryJobInfo, out _));
 
         // Register random-access capable sources for GetPacket().
-        // Copy-on-write: create a new dictionary with the added entry and publish atomically.
+        // Copy-on-write: create a new table with the added entry and publish atomically.
         // _AddFrameSourceInternal is only called during Idle or Restart (single-threaded),
         // so no CAS retry loop is needed.
         if (source is IRandomAccessFrameSource raSource)
         {
-            Dictionary<FrameSourceId, IRandomAccessFrameSource> next = new(_RandomAccessSources)
-            {
-                [sourceId] = raSource,
-            };
-            _RandomAccessSources = next;
+            _RandomAccessSources = _RandomAccessSources.With(sourceId, raSource);
         }
 
         // Notify existing listeners about the new source.
@@ -1657,12 +1654,7 @@ public sealed class Session : ISession, ISessionReader
             ThrowMappingRecordFailed(packetId);
         }
 
-        if (packetId.Value != _PacketToFrame.Count)
-        {
-            throw new InvalidOperationException("Packet-to-frame mapping requires dense sequential PacketId appends.");
-        }
-
-        _PacketToFrame.Append(PackFrameMapping(frameId, sourceId));
+        _PacketFrames.Record(packetId.Value, frameId, sourceId);
     }
 
     /// <summary>
@@ -1687,18 +1679,8 @@ public sealed class Session : ISession, ISessionReader
     /// Caller must pass a valid id.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private bool _TryGetPacketFrame(PacketId packetId, out FrameId frameId, out FrameSourceId sourceId)
-    {
-        if (!_PacketToFrame.TryGet(packetId.Value, out long packed))
-        {
-            frameId = FrameId.Invalid;
-            sourceId = FrameSourceId.Invalid;
-            return false;
-        }
-
-        UnpackFrameMapping(packed, out frameId, out sourceId);
-        return true;
-    }
+    private bool _TryGetPacketFrame(PacketId packetId, out FrameId frameId, out FrameSourceId sourceId) =>
+        _PacketFrames.TryGet(packetId.Value, out frameId, out sourceId);
 
     /// <summary>
     /// Allocates the next sequential <see cref="PacketId"/> under <see cref="_ParseMutex"/>.
@@ -2317,7 +2299,7 @@ public sealed class Session : ISession, ISessionReader
             return false;
         }
 
-        _RandomAccessSources.TryGetValue(sourceId, out IRandomAccessFrameSource? raSource);
+        _ = _RandomAccessSources.TryGet(sourceId, out IRandomAccessFrameSource? raSource);
 
         if (raSource is not null)
         {
@@ -2343,30 +2325,22 @@ public sealed class Session : ISession, ISessionReader
             return 0;
         }
 
-        int filled = 0;
+        // Ids fromIndex … fromIndex + total − 1 exist; a start outside the recorded range reads nothing.
         int limit = _PacketCount;
-        RandomAccessLookup sources = new(_RandomAccessSources);
-        for (int i = 0; i < buffer.Length; i++)
+        if (fromIndex < 0 || fromIndex >= limit)
         {
-            int id = fromIndex + i;
-            if (id < 0 || id >= limit)
-            {
-                break;
-            }
-
-            Packet? recycle = buffer[i];
-            if (!_TryGetPacketCore(ref sources, new PacketId(id), recycle, out Packet? packet, out _))
-            {
-                buffer[i] = null;
-                filled++;
-                continue;
-            }
-
-            buffer[i] = packet;
-            filled++;
+            return 0;
         }
 
-        return filled;
+        int total = Math.Min(buffer.Length, limit - fromIndex);
+        RandomAccessLookup sources = new(_RandomAccessSources);
+        for (int done = 0; done < total; done += _FrameBatchSize)
+        {
+            int length = Math.Min(_FrameBatchSize, total - done);
+            _ReadPacketChunk(ref sources, fromIndex + done, buffer.Slice(done, length));
+        }
+
+        return total;
     }
 
     /// <inheritdoc/>
@@ -2378,25 +2352,176 @@ public sealed class Session : ISession, ISessionReader
             return 0;
         }
 
-        int filled = 0;
         int limit = _PacketCount;
-        RandomAccessLookup sources = new(_RandomAccessSources);
-        for (int i = 0; i < destination.Length; i++)
+        if (startId < 0 || startId >= limit)
         {
-            int id = startId + i;
-            if (id < 0 || id >= limit)
-            {
-                break;
-            }
-
-            PacketId packetId = new(id);
-            Packet? recycle = destination[i].Packet;
-            _ = _TryGetPacketCore(ref sources, packetId, recycle, out Packet? packet, out _);
-            destination[i] = new PacketRef(packetId, packet);
-            filled++;
+            return 0;
         }
 
-        return filled;
+        int total = Math.Min(destination.Length, limit - startId);
+        RandomAccessLookup sources = new(_RandomAccessSources);
+        PacketBatch batch = default;
+        for (int done = 0; done < total; done += _FrameBatchSize)
+        {
+            int length = Math.Min(_FrameBatchSize, total - done);
+            Span<Packet?> chunk = batch;
+            chunk = chunk[..length];
+
+            // Recycle the packets the caller's slots carry, read the chunk, and hand the results back with their ids.
+            for (int i = 0; i < length; i++)
+            {
+                chunk[i] = destination[done + i].Packet;
+            }
+
+            _ReadPacketChunk(ref sources, startId + done, chunk);
+            for (int i = 0; i < length; i++)
+            {
+                destination[done + i] = new PacketRef(new PacketId(startId + done + i), chunk[i]);
+            }
+        }
+
+        return total;
+    }
+
+    /// <summary>Packets per batched frame read: one map group, and the chunk size of the sources' batch reads.</summary>
+    private const int _FrameBatchSize = 64;
+
+    /// <summary>Frames of up to 64 packets on the stack (no allocation per chunk).</summary>
+    [InlineArray(_FrameBatchSize)]
+    private struct FrameBatch
+    {
+        private Frame? _Element0;
+    }
+
+    /// <summary>Packets of up to 64 slots on the stack, for the <see cref="PacketRef"/> overload.</summary>
+    [InlineArray(_FrameBatchSize)]
+    private struct PacketBatch
+    {
+        private Packet? _Element0;
+    }
+
+    /// <summary>Why a packet of a batch has no frame.</summary>
+    private enum FrameBatchMiss : byte
+    {
+        None,
+        Unmapped,
+        NotRandomAccess,
+        Unreadable,
+    }
+
+    /// <summary>
+    /// Resolves packets <paramref name="startId"/> … <paramref name="startId"/> + <paramref name="frames"/>.Length − 1
+    /// (at most 64, all below the packet count) to their frames. Maps every packet, groups the lanes per source, reads
+    /// each run of consecutive frame ids of a source with one range call (<see cref="IRandomAccessFrameSource.FramesById"/>,
+    /// usually one call per source and chunk), and scatters the frames back. <paramref name="misses"/> tells why an entry is
+    /// null.
+    /// </summary>
+    private void _ReadFrameBatch(ref RandomAccessLookup sources, int startId, Span<Frame?> frames, Span<FrameBatchMiss> misses)
+    {
+        int length = frames.Length;
+        Span<FrameId> frameIds = stackalloc FrameId[_FrameBatchSize];
+        Span<int> sourceIds = stackalloc int[_FrameBatchSize];
+        ulong pending = 0;
+
+        // Map: a packet without a mapping is a miss now; the others wait for their source's call.
+        for (int lane = 0; lane < length; lane++)
+        {
+            frames[lane] = null;
+            if (_TryGetPacketFrame(new PacketId(startId + lane), out FrameId frameId, out FrameSourceId sourceId))
+            {
+                frameIds[lane] = frameId;
+                sourceIds[lane] = sourceId.Value;
+                misses[lane] = FrameBatchMiss.None;
+                pending |= 1UL << lane;
+            }
+            else
+            {
+                misses[lane] = FrameBatchMiss.Unmapped;
+            }
+        }
+
+        // One FramesById per source: gather its lanes in packet order, read, scatter.
+        Span<FrameId> runIds = stackalloc FrameId[_FrameBatchSize];
+        Span<int> runLanes = stackalloc int[_FrameBatchSize];
+        FrameBatch runFrames = default;
+        while (pending != 0)
+        {
+            int source = sourceIds[BitOperations.TrailingZeroCount(pending)];
+            int count = 0;
+            for (ulong rest = pending; rest != 0; rest &= rest - 1)
+            {
+                int lane = BitOperations.TrailingZeroCount(rest);
+                if (sourceIds[lane] == source)
+                {
+                    runLanes[count] = lane;
+                    runIds[count] = frameIds[lane];
+                    count++;
+                    pending &= ~(1UL << lane);
+                }
+            }
+
+            if (!sources.TryGet(new FrameSourceId(source), out IRandomAccessFrameSource? raSource))
+            {
+                for (int k = 0; k < count; k++)
+                {
+                    misses[runLanes[k]] = FrameBatchMiss.NotRandomAccess;
+                }
+
+                continue;
+            }
+
+            // A source's packets carry ascending frame ids; every stretch of consecutive ids is one range read, so the
+            // source walks its frames forward. Gaps (frames the source skipped) start a new range.
+            Span<Frame?> got = runFrames;
+            got = got[..count];
+            for (int runStart = 0; runStart < count;)
+            {
+                int runEnd = runStart + 1;
+                while (runEnd < count && runIds[runEnd].Value == runIds[runEnd - 1].Value + 1)
+                {
+                    runEnd++;
+                }
+
+                _ = raSource.FramesById(runIds[runStart], got[runStart..runEnd]);
+                runStart = runEnd;
+            }
+
+            for (int k = 0; k < count; k++)
+            {
+                int lane = runLanes[k];
+                frames[lane] = got[k];
+                misses[lane] = got[k] is null
+                    ? FrameBatchMiss.Unreadable
+                    : FrameBatchMiss.None;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Re-parses packets <paramref name="startId"/> … into <paramref name="packets"/> (≤ 64 slots; a non-null slot is
+    /// that slot's recycle packet, a failed slot becomes null). The queries-disabled check stays per packet, as in
+    /// <see cref="_TryGetPacketCore"/>.
+    /// </summary>
+    private void _ReadPacketChunk(ref RandomAccessLookup sources, int startId, Span<Packet?> packets)
+    {
+        FrameBatch frames = default;
+        Span<Frame?> chunk = frames;
+        chunk = chunk[..packets.Length];
+        Span<FrameBatchMiss> misses = stackalloc FrameBatchMiss[_FrameBatchSize];
+        _ReadFrameBatch(ref sources, startId, chunk, misses[..packets.Length]);
+
+        for (int i = 0; i < packets.Length; i++)
+        {
+            if (_QueriesDisabled || chunk[i] is not Frame frame)
+            {
+                packets[i] = null;
+                continue;
+            }
+
+            packets[i] = _TryReparseFrame(frame, new PacketId(startId + i), packets[i], out Packet? packet)
+                ? packet
+                : null;
+        }
     }
 
     /// <inheritdoc/>
@@ -2456,7 +2581,7 @@ public sealed class Session : ISession, ISessionReader
                 return true;
             }
 
-            return _TryReadMatching(filter, startId, destination, out count, out idLayout, out failure);
+            return _TryReadMatching(slot, filter, startId, destination, out count, out idLayout, out failure);
         }
     }
 
@@ -2470,8 +2595,16 @@ public sealed class Session : ISession, ISessionReader
     /// can keep growing without cloning bitmaps. Packets outside the prune set are skipped
     /// without touching the field tree. Survivors reach <see cref="PacketFilter.TryIsMatch"/>.
     /// </para>
+    /// <para>
+    /// Two cheaper stages run before the build re-parse: an id whose verdict the filter already cached as a non-match
+    /// is skipped, and for an eligible filter (<see cref="MatchingPrecheck"/>) an unknown id is first re-parsed in skip
+    /// mode with an equivalent observer, which may rule it out and records that verdict in the filter. The field-tree
+    /// filter stays the authority for every returned packet: both stages only rule packets out.
+    /// </para>
+    /// <para>Caller holds <c>slot.FilterGate</c>.</para>
     /// </summary>
     private bool _TryReadMatching(
+        ListenerSlot slot,
         PacketFilter filter,
         int startId,
         Span<PacketRef> destination,
@@ -2495,6 +2628,7 @@ public sealed class Session : ISession, ISessionReader
         bool skipped = false;
         int filled = 0;
         RandomAccessLookup sources = new(_RandomAccessSources);
+        MatchingPrecheck? precheck = _GetPrecheck(slot, filter);
 
         for (int id = first; id < limit && filled < destination.Length; id++)
         {
@@ -2507,8 +2641,63 @@ public sealed class Session : ISession, ISessionReader
             }
 
             PacketId packetId = new(id);
+
+            // Known verdicts first: a cached non-match needs no re-parse (TryIsMatch would return the same cached false).
+            bool cachedMatch = false;
+            if (filter.TryGetCachedVerdict(packetId, out bool cached))
+            {
+                if (!cached)
+                {
+                    skipped = true;
+                    continue;
+                }
+
+                cachedMatch = true;
+            }
+
+            // Frame of this id when the pre-check read it; the authority re-parse reuses it instead of a second read.
+            Frame? prechecked = null;
+
+            // Unknown ids of an eligible filter: a skip-mode parse with the equivalent observer may rule the id out.
+            if (precheck is not null && !cachedMatch)
+            {
+                if (precheck.IsActive)
+                {
+                    if (!_TryPrecheck(ref sources, precheck, packetId, out bool maybeMatch, out Frame read))
+                    {
+                        // Frame unavailable or queries disabled: exactly the outcome of the re-parse miss below.
+                        skipped = true;
+                        continue;
+                    }
+
+                    precheck.Record(maybeMatch);
+                    if (!maybeMatch)
+                    {
+                        filter.RecordVerdict(packetId, matched: false);
+                        skipped = true;
+                        continue;
+                    }
+
+                    prechecked = read;
+                }
+                else
+                {
+                    precheck.OnSkippedId();
+                }
+            }
+
+            // Authority: build re-parse and field-tree evaluation, unchanged. A frame the pre-check read is parsed as is.
             Packet? recycle = destination[filled].Packet;
-            if (!_TryGetPacketCore(ref sources, packetId, recycle, out Packet? packet, out _))
+            Packet? packet;
+            if (prechecked is Frame ready)
+            {
+                if (!_TryReparsePacketCore(ready, packetId, recycle, out packet))
+                {
+                    skipped = true;
+                    continue;
+                }
+            }
+            else if (!_TryGetPacketCore(ref sources, packetId, recycle, out packet, out _))
             {
                 skipped = true;
                 continue;
@@ -2534,6 +2723,81 @@ public sealed class Session : ISession, ISessionReader
         count = filled;
         idLayout = skipped ? PacketIdLayout.Gapped : PacketIdLayout.Contiguous;
         return true;
+    }
+
+    /// <summary>
+    /// Returns the slot's pre-check for <paramref name="filter"/>, creating it once per filter instance.
+    /// Caller holds <c>slot.FilterGate</c>.
+    /// </summary>
+    private static MatchingPrecheck? _GetPrecheck(ListenerSlot slot, PacketFilter filter)
+    {
+        if (!ReferenceEquals(slot.PrecheckOwner, filter))
+        {
+            FilterObserver? observer = filter.CreatePrecheckObserver();
+            slot.Precheck = observer is null ? null : new MatchingPrecheck(filter, observer);
+            slot.PrecheckOwner = filter;
+        }
+
+        return slot.Precheck;
+    }
+
+    /// <summary>
+    /// Skip-mode re-parse of <paramref name="id"/> with the pre-check observer. False when the frame cannot be read
+    /// (the same per-id guards as the build path). <paramref name="maybeMatch"/> is true whenever the observer cannot
+    /// rule the packet out, including a rejected parse, so the authority path decides. <paramref name="frame"/> is the
+    /// frame that was read, so the caller re-parses it without a second source read.
+    /// </summary>
+    /// <remarks>
+    /// <paramref name="sources"/> is the snapshot the matching read takes once per call, as in <see cref="_TryGetPacketCore"/>.
+    /// </remarks>
+    private bool _TryPrecheck(
+        ref RandomAccessLookup sources, MatchingPrecheck precheck, PacketId id, out bool maybeMatch, out Frame frame)
+    {
+        maybeMatch = true;
+        frame = default;
+
+        // Same per-id guards as TryGetFrame and the build path: a miss here is the outcome of the re-parse miss.
+        if (_QueriesDisabled
+            || !id.IsValid
+            || !_TryGetPacketFrame(id, out FrameId frameId, out FrameSourceId sourceId)
+            || !sources.TryGet(sourceId, out IRandomAccessFrameSource? raSource)
+            || raSource.FrameById(frameId) is not Frame read)
+        {
+            return false;
+        }
+
+        frame = read;
+
+        // Stack read per id: the same restart guard as the build re-parse.
+        Stack stack = _Stack;
+        Packet? recycle = precheck.Recycle;
+        if (recycle is null || !Packet.TryParse(recycle, id, stack, frame, in precheck.Options, out _))
+        {
+            if (!Packet.TryParse(id, stack, frame, in precheck.Options, out Packet? created, out _))
+            {
+                return true;
+            }
+
+            precheck.Recycle = created;
+        }
+
+        maybeMatch = !precheck.Observer.TryReadMatch(out bool matched, out _) || matched;
+        return true;
+    }
+
+    /// <summary>
+    /// The tail of <see cref="_TryGetPacketCore"/> for a frame the caller already holds: the queries-disabled guard and
+    /// the build re-parse. Shared so a pre-checked id is not read from its source twice.
+    /// </summary>
+    private bool _TryReparsePacketCore(Frame frame, PacketId id, Packet? recycle, [NotNullWhen(true)] out Packet? packet)
+    {
+        if (_QueriesDisabled)
+        {
+            packet = null;
+            return false;
+        }
+
+        return _TryReparseFrame(frame, id, recycle, out packet);
     }
 
     /// <summary>
@@ -2746,15 +3010,7 @@ public sealed class Session : ISession, ISessionReader
     /// </summary>
     private void _RemoveRandomAccessSource(FrameSourceId sourceId)
     {
-        Dictionary<FrameSourceId, IRandomAccessFrameSource> current = _RandomAccessSources;
-        if (!current.ContainsKey(sourceId))
-        {
-            return;
-        }
-
-        Dictionary<FrameSourceId, IRandomAccessFrameSource> next = new(current);
-        next.Remove(sourceId);
-        _RandomAccessSources = next;
+        _RandomAccessSources = _RandomAccessSources.Without(sourceId);
     }
 
     private bool _TryUnsubscribeSource(FrameSourceEntry entry)
@@ -2848,16 +3104,16 @@ public sealed class Session : ISession, ISessionReader
     #region Nested types
 
     /// <summary>
-    /// Snapshot of the random-access source map for one read call, plus a one-entry cache of the last hit.
-    /// A read loop over packets of one source then does one dictionary lookup instead of one per id.
+    /// Snapshot of the random-access source table for one read call, plus a one-entry cache of the last hit.
+    /// A read loop over packets of one source then does one table lookup instead of one per id.
     /// <para>
     /// Thread-safety: a mutable value that lives on the calling thread's stack for one call and is passed
-    /// by <see langword="ref"/>; it is never shared. The dictionary itself is an immutable copy-on-write snapshot.
+    /// by <see langword="ref"/>; it is never shared. The table itself is an immutable copy-on-write snapshot.
     /// </para>
     /// </summary>
-    private struct RandomAccessLookup(Dictionary<FrameSourceId, IRandomAccessFrameSource> sources)
+    private struct RandomAccessLookup(RandomAccessSourceTable sources)
     {
-        private readonly Dictionary<FrameSourceId, IRandomAccessFrameSource> _Sources = sources;
+        private readonly RandomAccessSourceTable _Sources = sources;
         private FrameSourceId _LastId = FrameSourceId.Invalid;
         private IRandomAccessFrameSource? _LastSource;
 
@@ -2870,7 +3126,7 @@ public sealed class Session : ISession, ISessionReader
                 return true;
             }
 
-            if (!_Sources.TryGetValue(sourceId, out source))
+            if (!_Sources.TryGet(sourceId, out source))
             {
                 return false;
             }

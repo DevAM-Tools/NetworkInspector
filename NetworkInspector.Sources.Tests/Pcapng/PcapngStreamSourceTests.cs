@@ -24,9 +24,9 @@ internal sealed class PcapngStreamSourceTests
     [Test]
     public async Task SingleFrame_ParsedCorrectly()
     {
-        byte[] eth = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0xDE, 0xAD]);
+        byte[] eth = TestFrames.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0xDE, 0xAD]);
 
-        using PcapNgTestWriter writer = new();
+        using PcapngCaptureBuilder writer = new();
         writer.AddInterface(LinkType.Ethernet, nanosecondResolution: true);
         writer.WriteFrame(0, 1_000_000_000, eth);
         byte[] pcapData = writer.Build();
@@ -53,14 +53,14 @@ internal sealed class PcapngStreamSourceTests
     [Test]
     public async Task MultipleFrames_AllReadInOrder()
     {
-        using PcapNgTestWriter writer = new();
+        using PcapngCaptureBuilder writer = new();
         writer.AddInterface(LinkType.Ethernet, nanosecondResolution: true);
 
         List<byte[]> expected = [];
         for (int i = 0; i < 5; i++)
         {
             byte[] payload = [(byte)i, (byte)(i + 1), (byte)(i + 2)];
-            byte[] eth = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, payload);
+            byte[] eth = TestFrames.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, payload);
             expected.Add(eth);
             writer.WriteFrame(0, (i + 1) * 1_000_000_000L, eth);
         }
@@ -86,9 +86,9 @@ internal sealed class PcapngStreamSourceTests
     [Test]
     public async Task Timestamps_StrictlyIncreasing()
     {
-        byte[] eth = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0x00]);
+        byte[] eth = TestFrames.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0x00]);
 
-        using PcapNgTestWriter writer = new();
+        using PcapngCaptureBuilder writer = new();
         writer.AddInterface(LinkType.Ethernet, nanosecondResolution: true);
 
         long[] timestamps = [1_000_000_000, 2_000_000_000, 3_000_000_000, 4_000_000_000, 5_000_000_000];
@@ -120,9 +120,9 @@ internal sealed class PcapngStreamSourceTests
     [Test]
     public async Task MicrosecondResolution_TimestampConvertedCorrectly()
     {
-        byte[] eth = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0x00]);
+        byte[] eth = TestFrames.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0x00]);
 
-        using PcapNgTestWriter writer = new();
+        using PcapngCaptureBuilder writer = new();
         writer.AddInterface(LinkType.Ethernet, nanosecondResolution: false);
         writer.WriteFrame(0, 1_500_000_000, eth);
 
@@ -144,12 +144,12 @@ internal sealed class PcapngStreamSourceTests
     [Test]
     public async Task TwoInterfaces_FramesDistinguished()
     {
-        using PcapNgTestWriter writer = new();
+        using PcapngCaptureBuilder writer = new();
         writer.AddInterface(LinkType.Ethernet, nanosecondResolution: true);
         writer.AddInterface(LinkType.Ethernet, nanosecondResolution: true);
 
-        byte[] eth0 = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0x00]);
-        byte[] eth1 = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0806, [0x01]);
+        byte[] eth0 = TestFrames.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0x00]);
+        byte[] eth1 = TestFrames.BuildEthernetFrame(_DstMac, _SrcMac, 0x0806, [0x01]);
 
         writer.WriteFrame(0, 1_000_000_000, eth0);
         writer.WriteFrame(1, 2_000_000_000, eth1);
@@ -182,7 +182,7 @@ internal sealed class PcapngStreamSourceTests
     [Test]
     public async Task EmptyFile_NoFrames()
     {
-        using PcapNgTestWriter writer = new();
+        using PcapngCaptureBuilder writer = new();
         writer.AddInterface(LinkType.Ethernet);
         byte[] pcapData = writer.Build();
 
@@ -199,7 +199,7 @@ internal sealed class PcapngStreamSourceTests
     [Test]
     public async Task UiName_MatchesProvided()
     {
-        using PcapNgTestWriter writer = new();
+        using PcapngCaptureBuilder writer = new();
         writer.AddInterface(LinkType.Ethernet);
         byte[] pcapData = writer.Build();
 
@@ -214,7 +214,7 @@ internal sealed class PcapngStreamSourceTests
     [Test]
     public async Task StreamDisposedWhenNotLeaveOpen()
     {
-        using PcapNgTestWriter writer = new();
+        using PcapngCaptureBuilder writer = new();
         writer.AddInterface(LinkType.Ethernet);
         byte[] pcapData = writer.Build();
 
@@ -239,7 +239,7 @@ internal sealed class PcapngStreamSourceTests
     [Test]
     public async Task StreamNotDisposedWhenLeaveOpen()
     {
-        using PcapNgTestWriter writer = new();
+        using PcapngCaptureBuilder writer = new();
         writer.AddInterface(LinkType.Ethernet);
         byte[] pcapData = writer.Build();
 
@@ -260,7 +260,7 @@ internal sealed class PcapngStreamSourceTests
     [Test]
     public async Task Dispose_CalledTwice_DoesNotThrow()
     {
-        using PcapNgTestWriter writer = new();
+        using PcapngCaptureBuilder writer = new();
         writer.AddInterface(LinkType.Ethernet);
         byte[] pcapData = writer.Build();
 
@@ -280,7 +280,7 @@ internal sealed class PcapngStreamSourceTests
     [Test]
     public async Task NextFrame_BeforeStart_ThrowsInvalidOperationException()
     {
-        using PcapNgTestWriter writer = new();
+        using PcapngCaptureBuilder writer = new();
         writer.AddInterface(LinkType.Ethernet);
         byte[] pcapData = writer.Build();
 
@@ -292,7 +292,7 @@ internal sealed class PcapngStreamSourceTests
     [Test]
     public async Task NextFrame_AfterDispose_ThrowsObjectDisposedException()
     {
-        using PcapNgTestWriter writer = new();
+        using PcapngCaptureBuilder writer = new();
         writer.AddInterface(LinkType.Ethernet);
         byte[] pcapData = writer.Build();
 
@@ -306,7 +306,7 @@ internal sealed class PcapngStreamSourceTests
     [Test]
     public async Task IsRunning_FalseBeforeStart()
     {
-        using PcapNgTestWriter writer = new();
+        using PcapngCaptureBuilder writer = new();
         writer.AddInterface(LinkType.Ethernet);
         byte[] pcapData = writer.Build();
 
@@ -317,7 +317,7 @@ internal sealed class PcapngStreamSourceTests
     [Test]
     public async Task IsRunning_TrueAfterStart_FalseAfterDispose()
     {
-        using PcapNgTestWriter writer = new();
+        using PcapngCaptureBuilder writer = new();
         writer.AddInterface(LinkType.Ethernet);
         byte[] pcapData = writer.Build();
 
@@ -372,7 +372,7 @@ internal sealed class PcapngStreamSourceTests
     /// </summary>
     private static byte[] _BuildPcapNgWithOversizedEpb(uint epbBlockLength)
     {
-        using PcapNgTestWriter writer = new();
+        using PcapngCaptureBuilder writer = new();
         writer.AddInterface(LinkType.Ethernet, nanosecondResolution: true);
         byte[] validPart = writer.Build(); // valid SHB + IDB
 
@@ -516,7 +516,7 @@ internal sealed class PcapngStreamSourceTests
     [Test]
     public async Task LegacyPcap_SingleFrame_ParsedCorrectly()
     {
-        byte[] eth = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0xDE, 0xAD]);
+        byte[] eth = TestFrames.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0xDE, 0xAD]);
         byte[] data = _BuildLegacyPcap(eth);
 
         using PcapngStreamSource source = _CreateSource(data, "test.pcap");
@@ -596,7 +596,7 @@ internal sealed class PcapngStreamSourceTests
     [Test]
     public async Task Start_NullRegistry_ThrowsArgumentNullException()
     {
-        using PcapNgTestWriter writer = new();
+        using PcapngCaptureBuilder writer = new();
         writer.AddInterface(LinkType.Ethernet, nanosecondResolution: true);
         byte[] pcapData = writer.Build();
         using PcapngStreamSource source = _CreateSource(pcapData);

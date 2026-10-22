@@ -71,11 +71,25 @@ internal sealed class ArrayContainer : IContainer
 
     public IContainer Add(ushort value)
     {
-        int idx = Array.BinarySearch(_Values, 0, Cardinality, value);
-        if (idx >= 0)
+        // Append shortcut: ids arrive in ascending order, so the value is usually above the current maximum. That needs
+        // neither a search nor a shift. Any smaller value takes the binary search and the insert below, so unordered adds
+        // stay correct.
+        int count = Cardinality;
+        int insertAt;
+        if (count == 0 || value > _Values[count - 1])
         {
-            return this;
-        } // already present
+            insertAt = count;
+        }
+        else
+        {
+            int idx = Array.BinarySearch(_Values, 0, count, value);
+            if (idx >= 0)
+            {
+                return this;
+            } // already present
+
+            insertAt = ~idx;
+        }
 
         // Promote to bitmap at threshold
         if (Cardinality >= MaxCapacity)
@@ -88,8 +102,6 @@ internal sealed class ArrayContainer : IContainer
             bitmap.Add(value);
             return bitmap;
         }
-
-        int insertAt = ~idx;
 
         // Grow if needed. A zero-length backing array (Clone of an empty container) grows to the default capacity 4,
         // because doubling 0 would stay 0 and the store below would run past the array.

@@ -43,7 +43,7 @@ internal sealed class ValueCacheReadUdpSrcPortScenario : IProfilingScenario
     public void Setup()
     {
         _Stack = StackHelper.CreateStack();
-        Frame[] frames = FrameHelper.CreateSharedFrames(_PacketCount, _Stack);
+        Frame[] frames = SampleFrames.CreateSharedFrames(_PacketCount, _Stack);
         FieldId portId = _RequireUdpSrcPort(_Stack);
         _Cache = new ValueCache(_Stack, [new ValueCacheFieldConfig(portId)]);
 

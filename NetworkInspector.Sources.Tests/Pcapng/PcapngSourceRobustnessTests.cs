@@ -89,7 +89,7 @@ internal sealed class PcapngSourceRobustnessTests
     [Test]
     public async Task LegacyInclLenAboveSnapLenIsAMalformedHeader()
     {
-        byte[] ok = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [1, 2]);
+        byte[] ok = TestFrames.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [1, 2]);
         byte[] tooLong = new byte[100];
         byte[] data = _BuildLegacyPcap(snapLen: 64, ok, tooLong);
 
@@ -104,7 +104,7 @@ internal sealed class PcapngSourceRobustnessTests
     [Test]
     public async Task LegacyRecordCutByTheEndOfTheFileIsReportedAsTruncated()
     {
-        byte[] ok = FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [1, 2]);
+        byte[] ok = TestFrames.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [1, 2]);
         byte[] full = _BuildLegacyPcap(snapLen: 65535, ok, new byte[50]);
         byte[] cut = full.AsSpan(0, full.Length - 40).ToArray();
 
@@ -148,11 +148,11 @@ internal sealed class PcapngSourceRobustnessTests
     public async Task UnbufferedStreamIsReadInLargeChunks()
     {
         const int frameCount = 200;
-        using PcapNgTestWriter writer = new();
+        using PcapngCaptureBuilder writer = new();
         _ = writer.AddInterface(LinkType.Ethernet, nanosecondResolution: true);
         for (int i = 0; i < frameCount; i++)
         {
-            writer.WriteFrame(0, (i + 1) * 1_000L, FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [(byte)i]));
+            writer.WriteFrame(0, (i + 1) * 1_000L, TestFrames.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [(byte)i]));
         }
 
         byte[] data = writer.Build();
@@ -173,12 +173,12 @@ internal sealed class PcapngSourceRobustnessTests
     /// <summary>Frames 0 and 1 on interface 0, one EPB on undeclared interface 7, then frame 2 on interface 0.</summary>
     private static byte[] _BuildCaptureWithUndeclaredInterface()
     {
-        using PcapNgTestWriter writer = new();
+        using PcapngCaptureBuilder writer = new();
         _ = writer.AddInterface(LinkType.Ethernet, nanosecondResolution: true);
-        writer.WriteFrame(0, 1_000, FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0]));
-        writer.WriteFrame(0, 2_000, FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [1]));
-        writer.WriteFrame(7, 3_000, FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0xBA, 0xD0]));
-        writer.WriteFrame(0, 4_000, FrameBuilders.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [2]));
+        writer.WriteFrame(0, 1_000, TestFrames.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0]));
+        writer.WriteFrame(0, 2_000, TestFrames.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [1]));
+        writer.WriteFrame(7, 3_000, TestFrames.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [0xBA, 0xD0]));
+        writer.WriteFrame(0, 4_000, TestFrames.BuildEthernetFrame(_DstMac, _SrcMac, 0x0800, [2]));
         return writer.Build();
     }
 

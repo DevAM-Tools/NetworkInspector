@@ -36,6 +36,12 @@ internal readonly ref struct EpbFields
     {
         get; init;
     }
+
+    /// <summary>The section's interface the packet names (resolved by the parser); null only for a non-frame result.</summary>
+    internal InterfaceInfo? Interface
+    {
+        get; init;
+    }
 }
 
 /// <summary>
@@ -112,33 +118,16 @@ internal static class PcapngPacketBlocks
             return ScanPacketResult.SkipMalformed;
         }
 
+        // The fixed fields start after the 8-byte type/length prefix (or at 0 when the caller already consumed it). The
+        // length check above guarantees all 20 bytes, so direct reads replace a generic struct parse on this hot path
+        // (every scanned packet and every FrameById).
         EndianReader reader = new(swap);
-        uint interfaceId;
-        uint tsHigh;
-        uint tsLow;
-        uint capturedLength;
-        uint originalLength;
-        if (bodyOmits8ByteHeader)
-        {
-            interfaceId = reader.ReadU32(blockOrBody);
-            tsHigh = reader.ReadU32(blockOrBody[4..]);
-            tsLow = reader.ReadU32(blockOrBody[8..]);
-            capturedLength = reader.ReadU32(blockOrBody[12..]);
-            originalLength = reader.ReadU32(blockOrBody[16..]);
-        }
-        else
-        {
-            if (!EnhancedPacketBlock.TryParse(blockOrBody, out EnhancedPacketBlock epb, out _))
-            {
-                return ScanPacketResult.SkipMalformed;
-            }
-
-            interfaceId = reader.Swap(epb.InterfaceId.Value);
-            tsHigh = reader.Swap(epb.TimestampHigh.Value);
-            tsLow = reader.Swap(epb.TimestampLow.Value);
-            capturedLength = reader.Swap(epb.CapturedLength.Value);
-            originalLength = reader.Swap(epb.OriginalLength.Value);
-        }
+        ReadOnlySpan<byte> fixedFields = blockOrBody[(bodyOmits8ByteHeader ? 0 : 8)..];
+        uint interfaceId = reader.ReadU32(fixedFields);
+        uint tsHigh = reader.ReadU32(fixedFields[4..]);
+        uint tsLow = reader.ReadU32(fixedFields[8..]);
+        uint capturedLength = reader.ReadU32(fixedFields[12..]);
+        uint originalLength = reader.ReadU32(fixedFields[16..]);
 
         ulong rawTimestamp = ((ulong)tsHigh << 32) | tsLow;
         return _FinishPacket(
@@ -225,6 +214,7 @@ internal static class PcapngPacketBlocks
             CapturedLength = captured,
             TimestampNanos = 0,
             PacketData = packetData,
+            Interface = iface,
         };
         return ScanPacketResult.Frame;
     }
@@ -459,6 +449,7 @@ internal static class PcapngPacketBlocks
             CapturedLength = captured,
             TimestampNanos = timestampNanos,
             PacketData = packetData,
+            Interface = iface,
         };
         return ScanPacketResult.Frame;
     }

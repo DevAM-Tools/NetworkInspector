@@ -24,10 +24,10 @@ internal sealed class BlfRandomAccessTests
     [Test]
     public async Task RandomAccess_OutOfOrderRetrieval()
     {
-        byte[] eth = FrameBuilders.BuildEthernetFrame(_BroadcastMac, _SrcMac, 0x0800, [0xDE, 0xAD]);
-        byte[] can = FrameBuilders.BuildSocketCanClassic(0x123, [1, 2, 3, 4, 5, 6, 7, 8]);
+        byte[] eth = TestFrames.BuildEthernetFrame(_BroadcastMac, _SrcMac, 0x0800, [0xDE, 0xAD]);
+        byte[] can = TestFrames.BuildSocketCanClassic(0x123, [1, 2, 3, 4, 5, 6, 7, 8]);
 
-        byte[] blfData = new BlfTestGenerator()
+        byte[] blfData = new BlfCaptureBuilder()
             .AddEthernetFrame(1, eth, 1_000_000)
             .AddCanFrame(2, can, 2_000_000)
             .Build();
@@ -56,8 +56,8 @@ internal sealed class BlfRandomAccessTests
     [Test]
     public async Task RandomAccess_OutOfBoundsReturnsNull()
     {
-        byte[] eth = FrameBuilders.BuildEthernetFrame(_BroadcastMac, _SrcMac, 0x0800, [0x00]);
-        byte[] blfData = new BlfTestGenerator()
+        byte[] eth = TestFrames.BuildEthernetFrame(_BroadcastMac, _SrcMac, 0x0800, [0x00]);
+        byte[] blfData = new BlfCaptureBuilder()
             .AddEthernetFrame(1, eth, 1_000_000)
             .Build();
 
@@ -80,13 +80,13 @@ internal sealed class BlfRandomAccessTests
     public async Task RandomAccess_ManyFrames_RandomOrder()
     {
         int frameCount = 50;
-        BlfTestGenerator gen = new();
+        BlfCaptureBuilder gen = new();
         List<byte[]> expectedFrames = [];
 
         for (int i = 0; i < frameCount; i++)
         {
             byte[] payload = Enumerable.Repeat((byte)i, 10).ToArray();
-            byte[] eth = FrameBuilders.BuildEthernetFrame(_BroadcastMac, _SrcMac, 0x0800, payload);
+            byte[] eth = TestFrames.BuildEthernetFrame(_BroadcastMac, _SrcMac, 0x0800, payload);
             expectedFrames.Add(eth);
             gen.AddEthernetFrame(1, eth, (i + 1) * 1_000_000L);
         }
@@ -108,8 +108,8 @@ internal sealed class BlfRandomAccessTests
     [Test]
     public async Task RandomAccess_SameFrameTwice_ReturnsIdenticalData()
     {
-        byte[] eth = FrameBuilders.BuildEthernetFrame(_BroadcastMac, _SrcMac, 0x0800, [0xAA, 0xBB]);
-        byte[] blfData = new BlfTestGenerator()
+        byte[] eth = TestFrames.BuildEthernetFrame(_BroadcastMac, _SrcMac, 0x0800, [0xAA, 0xBB]);
+        byte[] blfData = new BlfCaptureBuilder()
             .AddEthernetFrame(1, eth, 1_000_000)
             .Build();
 
@@ -132,7 +132,7 @@ internal sealed class BlfRandomAccessTests
     [Test]
     public async Task EmptyBlfFile_ReturnsZeroFrames()
     {
-        byte[] blfData = new BlfTestGenerator().Build();
+        byte[] blfData = new BlfCaptureBuilder().Build();
 
         using BlfSource source = _CreateSource(blfData);
         await Assert.That(source.EstimatedFrameCount).IsEqualTo(0);
@@ -144,7 +144,7 @@ internal sealed class BlfRandomAccessTests
     [Test]
     public async Task EmptyBlfFile_RandomAccessReturnsNull()
     {
-        byte[] blfData = new BlfTestGenerator().Build();
+        byte[] blfData = new BlfCaptureBuilder().Build();
 
         using BlfSource source = _CreateSource(blfData);
         SourceTestFixture.InitializeAndStartSource(source);
@@ -159,8 +159,8 @@ internal sealed class BlfRandomAccessTests
     [Test]
     public async Task FrameById_BeforeStart_ThrowsInvalidOperationException()
     {
-        byte[] eth = FrameBuilders.BuildEthernetFrame(_BroadcastMac, _SrcMac, 0x0800, [0xAA]);
-        byte[] blfData = new BlfTestGenerator()
+        byte[] eth = TestFrames.BuildEthernetFrame(_BroadcastMac, _SrcMac, 0x0800, [0xAA]);
+        byte[] blfData = new BlfCaptureBuilder()
             .AddEthernetFrame(1, eth, 1_000_000)
             .Build();
 
@@ -172,7 +172,7 @@ internal sealed class BlfRandomAccessTests
     [Test]
     public async Task NextFrame_BeforeStart_ThrowsInvalidOperationException()
     {
-        byte[] blfData = new BlfTestGenerator().Build();
+        byte[] blfData = new BlfCaptureBuilder().Build();
         using BlfSource source = _CreateSource(blfData);
         await Assert.That(() => source.NextFrame()).Throws<InvalidOperationException>();
     }
@@ -198,7 +198,7 @@ internal sealed class BlfRandomAccessTests
         const int Parallelism = 16;
         const int TotalAccesses = 500;
 
-        BlfTestGenerator gen = new();
+        BlfCaptureBuilder gen = new();
         List<byte[]> expectedFrames = [];
 
         for (int i = 0; i < FrameCount; i++)
@@ -206,7 +206,7 @@ internal sealed class BlfRandomAccessTests
             // Each frame has a unique last byte so data corruption is detectable.
             byte[] payload = new byte[12];
             payload[^1] = (byte)(i & 0xFF);
-            byte[] eth = FrameBuilders.BuildEthernetFrame(_BroadcastMac, _SrcMac, 0x0800, payload);
+            byte[] eth = TestFrames.BuildEthernetFrame(_BroadcastMac, _SrcMac, 0x0800, payload);
             expectedFrames.Add(eth);
             gen.AddEthernetFrame(1, eth, (i + 1) * 1_000_000L);
         }
@@ -272,10 +272,10 @@ internal sealed class BlfRandomAccessTests
         const int Parallelism = 8;
         const int TotalAccesses = 200;
 
-        BlfTestGenerator gen = new();
+        BlfCaptureBuilder gen = new();
         for (int i = 0; i < FrameCount; i++)
         {
-            byte[] eth = FrameBuilders.BuildEthernetFrame(_BroadcastMac, _SrcMac, 0x0800, [(byte)i]);
+            byte[] eth = TestFrames.BuildEthernetFrame(_BroadcastMac, _SrcMac, 0x0800, [(byte)i]);
             gen.AddEthernetFrame(1, eth, (i + 1) * 1_000_000L);
         }
 
@@ -320,7 +320,7 @@ internal sealed class BlfRandomAccessTests
     [Test]
     public async Task Start_NullRegistry_ThrowsArgumentNullException()
     {
-        byte[] blfData = new BlfTestGenerator().Build();
+        byte[] blfData = new BlfCaptureBuilder().Build();
         using BlfSource source = _CreateSource(blfData);
         FrameInterfaceRegistry registry = new();
         FrameSourceId sourceId = registry.RegisterSource(source);
@@ -331,9 +331,9 @@ internal sealed class BlfRandomAccessTests
     [Test]
     public async Task MmapOpenPreloadBudgetZeroFrameByIdReadsThroughMapping()
     {
-        byte[] eth = FrameBuilders.BuildEthernetFrame(_BroadcastMac, _SrcMac, 0x0800, [0xDE, 0xAD]);
-        byte[] can = FrameBuilders.BuildSocketCanClassic(0x123, [1, 2, 3, 4, 5, 6, 7, 8]);
-        BlfTestGenerator gen = new();
+        byte[] eth = TestFrames.BuildEthernetFrame(_BroadcastMac, _SrcMac, 0x0800, [0xDE, 0xAD]);
+        byte[] can = TestFrames.BuildSocketCanClassic(0x123, [1, 2, 3, 4, 5, 6, 7, 8]);
+        BlfCaptureBuilder gen = new();
         for (int i = 0; i < 8; i++)
         {
             if ((i & 1) == 0)

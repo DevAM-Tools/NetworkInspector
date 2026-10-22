@@ -7,6 +7,170 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.18.0] — Very large captures, faster filters and matching reads, and faster Core internals
+
+Delta since 0.17.0. Version is `0.18.0` in `Directory.Build.props`.
+
+Random access to file captures now needs well under 2 bytes of RAM per frame instead of 24–38 bytes, and a session
+needs about 0.25–0.5 bytes per packet for its packet → frame map instead of 8. `FrameById` still returns exactly the
+frame the first sequential read returned. Filter compilation is about 1 750 times faster, presence pruning and
+matching reads skip most rejected packets, and the Core hot paths (field storage, value caches, packet index) are
+rewritten behind the same API. The public API only gains members: `IRandomAccessFrameSource.FramesById` (with a
+default implementation, so existing sources compile unchanged) and `FrameReadErrorKind.SourceFileChanged`. Text and
+JSON exports are byte-identical to 0.17.0 on the golden inputs; filter verdicts, session results, and filtered exports
+are byte-identical to the build before the filter changes on the reference corpus.
+
+### Added
+
+- **`FrameReadErrorKind.SourceFileChanged`** — raised once by `PcapngSource`, `BlfSource`, and `AscSource` when the
+  capture file changed (length or modification time) while it was read; sequential reading then stops and
+  `FrameById` returns `null`. Detected on Linux and macOS for file-backed reads; a preloaded source serves its
+  in-memory copy and never raises it. Windows denies writers instead.
+- **`IRandomAccessFrameSource.FramesById(FrameId first, Span<Frame?> frames, CancellationToken)`** — reads the range
+  `first … first + frames.Length − 1` in one call and returns how many frames it found; ids that are not indexed or lie
+  past the valid id range give `null` entries. A default implementation calls `FrameById` per id, so existing sources
+  support it unchanged; `PcapngSource` and `BlfSource` read the range forward (index cursor, block prefetch, shared
+  container bytes). Ranges of 64 ids in random order: 19.1 M frames/s against 5.9 M frames/s with one `FrameById` per
+  id (memory-mapped PCAPNG, IMIX).
+- **Profiling A/B harness** — `NetworkInspector.Profiling --ab <baselineExe> --repeat N [--set a,b] --out <csv>` runs
+  baseline and candidate as interleaved child processes and writes one CSV row per run;
+  `--report <csv> [--noise <aa.csv>] [--set …] --out <md>` turns it into a Markdown table with a gate verdict
+  (exit 0 pass, 3 fail). `--min-improvement <fraction>` and `--floor <fraction>` are accepted with `--report` only.
+  `--affinity <mask>` pins A/B children, `--warmup` and `--duration` override the phase lengths, and
+  `--write-golden-inputs <dir>` writes deterministic PCAPNG inputs for export comparisons. `--write-filter-verdicts`
+  and `--write-session-digest` write the oracles of the filter and session changes; a timed phase also reports its
+  lock-contention count.
+- **Retained-memory measurement** — `IProfilingScenario.RetainedBytesPerUnit`, CSV column `retained_bytes_per_unit`,
+  a retained-memory table and a GC pause column in `--report`. CSV files without the retained column still read.
+- **Profiling scenarios** — `footprint-*` (retained bytes per frame or packet), `access-*` (`FrameById` in random,
+  sequential, and reverse order, also on four threads), `access-session-*` (`Session.TryGetFrame`),
+  `access-pcapng-large-random` and `access-pcapng-large-sequential` (5 000 000 IMIX frames, about 2 GB),
+  `access-session-readpackets` and `access-session-readpackets-interleaved`, `access-pcapng-batch-random` and
+  `access-pcapng-batch-sequential` (ranges of 64 ids), `read-pcapng-full`, `read-asc`, `parse-combo-build-index`,
+  `parse-combo-skip-index`, `filter-multi-nomatch`, `filter-compile`, `session-read-matching`,
+  `session-read-matching-pruned`, `session-read-matching-sparse`, and `parse-combo-filter-observer-flank`. Filter
+  scenarios repeat their timed workload over a reused batch so a timed phase measures seconds, not milliseconds.
+
+### Changed
+
+- **Filter evaluation backend.** `EvalTreeCodegen` replaces `ExpressionTreeCodegen`: logic, presence, value,
+  `contains`/`matches`, flank, and scope nodes evaluate directly; no `System.Linq.Expressions` or `DynamicMethod`
+  remains in `NetworkInspector.Filter`. `Filter.Compile` builds a tree of typed evaluation nodes instead of generating
+  code at run time: 594 → 1 040 238 compiles per second, 13.3 → 5.3 KB allocated per compile. Evaluation throughput
+  is unchanged.
+- **Presence pruning.** `PrunePlan` resolves the dependency tree against the packet index once per index and
+  evaluates it with the same short-circuit order as before; the per-packet walk of `CandidateBitmapBuilder` is gone.
+  It stops at the first decisive child (filter-complex-nomatch +25 %, filter-indexed-nomatch +14 %, filter-complex
+  +13 %, filter-scoped +10 %).
+- **Matching reads.** `Session.TryReadPackets(…, PacketReadMode.Matching, …)` consults the filter's match cache first
+  and runs an adaptive skip-parse pre-check with an equivalent `FilterObserver` that only rules packets out. The
+  pre-check parse opens the same lazy containers the field-tree lookup would materialize (every container of the
+  watched fields' protocols); the field-tree filter still decides every returned packet. A packet that survives the
+  pre-check is re-parsed from the frame the pre-check already read, so it costs one source read instead of two. For
+  stateless filters without scopes and without `matches`, most rejected packets are ruled out with a parse without
+  field tree (session-read-matching-sparse +40 %, 950 → 192 bytes allocated per packet). The pre-check switches itself
+  off with a doubling backoff while most packets match (match-all reads within noise).
+- **Filter and session A/B.** Measured against the build before the filter changes, with the profiling scenarios
+  pinned to the performance cores; every other Filter and Session scenario stays within its noise.
+- **Compact frame index (PCAPNG/PCAP, BLF, ASC).** The index keeps only where each accepted frame starts, packed in
+  groups of 64 with bit-sliced deltas; interface, length, timestamp, and bytes are re-read from the file with the
+  scanner's own parser. Retained memory per frame after a full scan (memory-mapped / disk-backed):
+
+  | Capture | Before | After |
+  | --- | --- | --- |
+  | PCAPNG, 1 M × 64 B | 24.1 B | 0.40 B |
+  | PCAPNG, 500 k IMIX | 24.2 B | 1.58 B |
+  | BLF, 1 M CAN | 38.2 B | 0.67 B |
+  | ASC, 1 M CAN, absolute | 32.0 B | 0.40 B |
+  | ASC, 1 M CAN, relative | 32.0 B | 1.71 B |
+  | Session over 500 k IMIX packets | 32.3 B/packet | 1.87 B/packet |
+
+- **Session packet → frame map** packed per 64 packets (0.25 B per packet for one source, 0.5 B for two
+  interleaved sources, 8 B before; exact for any input).
+- **Field storage** — a packet keeps its field slots in a first chunk of 16 slots that it owns for its whole life,
+  plus 16-slot follow-up chunks from a thread-local slab; a recycle clears only the used slots, keeps up to 64
+  follow-up slots, and hands the surplus to a per-thread pool of at most 1 024 slots (64 KiB), so a recycled packet
+  that keeps parsing similar frames allocates no field storage (1 553 → 528 B per packet). A classic CAN packet fits
+  in the first chunk alone. Own A/B step: +6.1 %, four-thread re-dissection +16.6 %.
+- **Field insert path** — append, prepend, and insert-after share one insert core that reads the seal state once and
+  skips value-cache and observer work with one flag when neither is active. Own A/B step: +15.5 %, tree-building
+  parses +20 … +27 %, skip-mode parses +5.6 … +7.8 %.
+- **Value-cache appends** — the series gate already serializes appends, so the column stores append without their
+  own compare-exchange and keep a tail-chunk cache. Own A/B step: +5.6 %, all-field caches +6 … +17 %.
+- **Packet index** — roaring-bitmap adds take an append fast path for ascending ids, the seqlock end is a release
+  store, and `TryBeginPacket` skips the bitmap for ids above the highest indexed one. Own A/B step: +8.4 %, index
+  recording +14.5 % (tree-building) and +23.6 % (skip mode).
+- **File sources keep the capture locked for their lifetime.** `Open` holds the file with `FileShare.Read` until
+  `Dispose`, now also for preloaded files: on Windows other processes cannot write it meanwhile, and `Open` fails
+  while another process writes it. Linux and macOS get an advisory lock plus change detection at `Open`, every
+  4 096 sequential frames, at the end of a read, and by a background check once per second that sets an atomic
+  flag; `FrameById` makes no system call and only reads that flag. Windows runs no background check.
+- **ASC in-memory backend** keeps one buffer instead of a slice per line (16 B less per line).
+- **ASC disk backend** reads each frame with one positional read sized by the index: the open-time scan stores, per
+  group of 64 frames, the power-of-two window that covers every record of the group (the line, and for Ethernet its
+  continuation lines plus the line that ends the packet), at 1/64 B per frame. Reading ids in order (`NextFrame`, or
+  `FrameById` forward or backward) is served from a per-thread 64 KiB read-ahead window. Before, a line took a 512-byte
+  read, a 64 KiB read when the line was longer, and a 16 KiB read for Ethernet. Best of ten runs against the earlier
+  compact-index build: `NextFrame` +297 % (CAN), +82 % (Ethernet); `FrameById` in order +526 % (CAN), +140 %
+  (Ethernet), +3 534 % on four threads (CAN); random `FrameById` +1 % (CAN), +97 % (Ethernet).
+- **BLF** resolves frame interfaces from an immutable snapshot without a lock (the lock is taken only to register a
+  new interface), and the sequential path keeps its current container row, so neither random nor sequential access
+  pays for the smaller index.
+- **PCAPNG** packet blocks are read with direct field access instead of a generic struct parse (scan and random
+  access), and `FrameById` on a memory-mapped file copies the packet while it holds the view lease.
+- **In-order `FrameById` and session reads** decode each group of 64 index entries once per thread through a
+  lock-free per-thread cache (2 KiB per reading thread): +11 % for PCAPNG and +12 % for `Session.TryGetFrame` in id
+  order, measured against the same build without the cache.
+- **Speed trade-off:** `NextFrame` is as fast or faster everywhere (PCAPNG up to +23 %, ASC +75 %); `FrameById` is
+  faster for BLF (+18 % random) and ASC (+183 % random), but slower for PCAPNG (−36 % random, −19 % in order on one
+  thread, −4 % on four threads), because the block header is re-parsed instead of cached; that re-parse is what lets
+  a changed or corrupt block return `null` instead of a wrong frame.
+- **`Dispose` of a memory-mapped `PcapngSource` and of a `BlfSource` waits for `FrameById`/`FramesById` calls running
+  on other threads** (at most one frame, or one chunk of 64 ids). Calls that start after `Dispose` throw
+  `ObjectDisposedException`, as before; a PCAPNG call already running when disposal began returns `null` for the frames
+  it could no longer read. `NextFrame` keeps its view lease, so a dispose from a `FrameSkipped` handler never waits for
+  its own thread.
+- **Reads by id share no written cache line between threads** (a per-thread reader slot replaces the per-call
+  reference count of PCAPNG and the read lock of BLF), **a PCAPNG re-read requests the cache lines of its block at once**
+  (at most 4 KiB), the interface of a re-read packet is resolved with one field read, and **BLF keeps the last container
+  per reading thread**.
+- **Session:** `ReadPackets` and `Restart` read frames 64 packets at a time, one range call per run of consecutive frame
+  ids of a source; the random-access sources are kept in a sorted table instead of a dictionary.
+- **Performance** (median of five interleaved runs against the build with the compact index;
+  `GATE: PASS`, geomean +22 %, retained memory unchanged):
+
+  | Scenario | Change |
+  | --- | --- |
+  | PCAPNG `FrameById` random / in order / reverse | +10.6 % / +10.5 % / +14.6 % |
+  | PCAPNG `FrameById` 4 threads in order / reverse / random | +209 % / +162 % / +36 % |
+  | BLF `FrameById` random / in order / 4 threads | +18.7 % / +30 % / +288 % |
+  | Session `TryGetFrame` random / in order / 4 threads | +13.7 % / +9.6 % / +197 % |
+  | Session `ReadPackets` (one source / two sources) | +4.9 % / +5.2 % |
+  | 2 GB capture, `FrameById` random / in order | +6.8 % / +3.9 % |
+
+### Fixed
+
+- **ASC:** `Dispose` racing a `FrameById` could dereference a registry that `Dispose` had just cleared
+  (`NullReferenceException`). A read now takes one snapshot of the registry and returns `null` when it is gone, so the
+  documented outcomes are `null` or `ObjectDisposedException`.
+- **BLF:** a sequential read after a full scan with `CacheBudget = 0` decompressed the container again for every
+  frame; it now decompresses each container once. After a full scan the source no longer keeps the last
+  decompressed container alive.
+- **BLF:** concurrent `FrameById` calls that waited for the same container returned `null` when the container cache
+  could not keep the result (`CacheBudget = 0` or a container larger than the budget); the waiting calls now get the
+  decompressed bytes.
+- **BLF lazy scan:** when every frame indexed so far failed to build, `NextFrame` ended the stream although the scan
+  had not reached the end of the file; it now scans on, so lazy and full scans return the same frames.
+
+### Breaking
+
+- **Open file sources hold their capture for their whole lifetime, preloaded files included.** Code that opens a
+  capture and then overwrites, renames, or deletes the same path while the source is still open now fails (Windows) or
+  sees `FrameReadErrorKind.SourceFileChanged` (Linux and macOS). Dispose the source first.
+- The public API otherwise only gains members (see Added).
+
+---
+
 ## [0.17.0] — FrameBuilder hardening and package READMEs that compile
 
 Delta since 0.16.0. Version is `0.17.0` in `Directory.Build.props`.

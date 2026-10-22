@@ -15,4 +15,16 @@
     <ProjectReference Include="..\NetworkInspector.Filter\NetworkInspector.Filter.csproj" />
     <ProjectReference Include="..\NetworkInspector.Sources\NetworkInspector.Sources.csproj" />
   </ItemGroup>
+
+  <!--
+    BitPlanes, PackedWordStore, and DecodedGroupCache are Sources' internal bit-sliced storage primitives. They are
+    link-compiled here (same per-assembly internal copy pattern as SlabAllocator in Sources) so the session's
+    packet → frame map uses the same tested code without making any of them public. The linked DecodedGroupCache has
+    its own per-thread instance in this assembly.
+  -->
+  <ItemGroup>
+    <Compile Include="..\NetworkInspector.Sources\Collections\BitPlanes.cs" Link="Shared\Sources\BitPlanes.cs" />
+    <Compile Include="..\NetworkInspector.Sources\Collections\PackedWordStore.cs" Link="Shared\Sources\PackedWordStore.cs" />
+    <Compile Include="..\NetworkInspector.Sources\Collections\DecodedGroupCache.cs" Link="Shared\Sources\DecodedGroupCache.cs" />
+  </ItemGroup>
 </Project>

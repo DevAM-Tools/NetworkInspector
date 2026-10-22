@@ -57,6 +57,15 @@ public sealed class PacketIndex : IPacketIndexReader
     private readonly RoaringBitmap _IndexedPackets = new();
 
     /// <summary>
+    /// Highest packet id that <see cref="EndPacket"/> committed, or -1. An id above it cannot be in
+    /// <see cref="_IndexedPackets"/>, so <see cref="TryBeginPacket"/> skips the seqlock read for every first parse of
+    /// a monotonic ingest. Written only by the single writer, read by any thread that replays a packet: volatile.
+    /// <see cref="EndPacket"/> stores it before <see cref="RoaringBitmap.Add"/>, so a reader that sees an old value
+    /// sees a moment at which the id was not yet in the bitmap either — the same answer the bitmap would give.
+    /// </summary>
+    private volatile int _MaxIndexedPacketId = -1;
+
+    /// <summary>
     /// First 65 536-id chunk (high 16 bits of the packet id) not yet run-optimized. Packets are indexed mostly in
     /// order, so once a packet of a higher chunk commits, every lower chunk is complete and its containers are
     /// converted to run containers where that is smaller (<see cref="RoaringBitmap.RunOptimizeKeys"/>). Written and
@@ -152,7 +161,8 @@ public sealed class PacketIndex : IPacketIndexReader
     {
         ArrayIndexIdRange.ValidateIndexOrThrow(packetId, nameof(packetId));
 
-        if (_IndexedPackets.Contains((uint)packetId))
+        // Ids above the highest committed id cannot be indexed yet; only ids at or below it need the bitmap.
+        if (packetId <= _MaxIndexedPacketId && _IndexedPackets.Contains((uint)packetId))
         {
             return false;
         }
@@ -189,6 +199,13 @@ public sealed class PacketIndex : IPacketIndexReader
         {
             _CommitDedupToBitmaps(_GroupDedup, _GroupBitmaps);
             _CommitDedupToBitmaps(_ProtocolDedup, _ProtocolBitmaps);
+
+            // Raise the shortcut bound before the bitmap add (see _MaxIndexedPacketId).
+            if (_CurrentPacketId > _MaxIndexedPacketId)
+            {
+                _MaxIndexedPacketId = _CurrentPacketId;
+            }
+
             _IndexedPackets.Add((uint)_CurrentPacketId);
             _ClearDedup(_GroupDedup);
             _ClearDedup(_ProtocolDedup);

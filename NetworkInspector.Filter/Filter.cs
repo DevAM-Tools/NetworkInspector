@@ -18,7 +18,7 @@ namespace NetworkInspector.Filter;
 /// <b>Poisoning.</b> A runtime fault recorded in the eval context (for example a regex timeout)
 /// marks the instance poisoned for both stateful and classic filters, so callers see one sticky
 /// failure mode until <see cref="ResetState"/> or <see cref="TryDerive"/>. Unexpected exceptions
-/// from the JIT root are caught only when the filter is stateful (flank state may be dirty);
+/// from the compiled evaluation root are caught only when the filter is stateful (flank state may be dirty);
 /// on a classic filter they propagate after the eval context is unbound.
 /// </para>
 /// <para>
@@ -43,6 +43,10 @@ public sealed class Filter : IFilter
     private readonly CompiledFilterProgram? _Compiled;
     private readonly FilterEvalContext? _Context;
     private readonly DependencyNode? _Dependencies;
+
+    /// <summary>Presence program for live pruning; null for always-match, stateful, or never-prunable programs.</summary>
+    private readonly PrunePlan? _Prune;
+
     /// <summary>Null on <see cref="AlwaysMatch"/> — that singleton must stay immutable.</summary>
     private readonly MatchCache? _Cache;
     private readonly bool _EnableMatchCache;
@@ -50,6 +54,9 @@ public sealed class Filter : IFilter
     /// <inheritdoc />
     public FilterError? PoisonError { get; private set; }
     private int _HighestEvaluatedId = -1;
+
+    /// <summary>Whether the program contains a <c>matches</c> predicate (computed once in the constructor).</summary>
+    private readonly bool _UsesRegex;
 
     #endregion
 
@@ -78,9 +85,13 @@ public sealed class Filter : IFilter
         _Program = program;
         _Compiled = compiled;
         _Dependencies = dependencies;
+
+        // Stateful programs must observe every packet in order, so they never get a prune program.
+        _Prune = compiled.IsStateful ? null : PrunePlan.Create(dependencies);
         _Context = new FilterEvalContext(fieldOwners);
         _EnableMatchCache = enableMatchCache;
         _Cache = new();
+        _UsesRegex = _ContainsMatches(program.Root);
     }
 
     #endregion
@@ -469,19 +480,71 @@ public sealed class Filter : IFilter
     {
         _ThrowIfNullReader(index);
 
-        if (IsAlwaysMatch || _Dependencies is null || IsStateful)
+        // Always-match keeps no plan; stateful and never-prunable programs have none either.
+        if (_Prune is null || !ReferenceEquals(index.Stack, Stack))
         {
             isCandidate = true;
             return false;
         }
 
-        if (!ReferenceEquals(index.Stack, Stack))
+        return _Prune.TryIsCandidate(index, packetId, out isCandidate);
+    }
+
+    /// <summary>
+    /// The cached verdict of <paramref name="packetId"/>, for read paths that want to skip work for known packets.
+    /// False when this filter is always-match, poisoned, keeps no cache, or has not evaluated the id.
+    /// </summary>
+    internal bool TryGetCachedVerdict(PacketId packetId, out bool matched)
+    {
+        if (IsAlwaysMatch || PoisonError is not null || !_EnableMatchCache)
         {
-            isCandidate = true;
+            matched = false;
             return false;
         }
 
-        return CandidateBitmapBuilder.TryIsCandidate(_Dependencies, index, packetId, out isCandidate);
+        return _Cache!.TryGet(packetId, out matched);
+    }
+
+    /// <summary>
+    /// Records a verdict decided by an equivalent evaluator (the session's skip-parse pre-check), with the bookkeeping
+    /// of a successful <see cref="TryIsMatch{TIndex}"/>: match cache and highest evaluated id.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">On a stateful or always-match filter (caller bug).</exception>
+    internal void RecordVerdict(PacketId packetId, bool matched)
+    {
+        if (IsAlwaysMatch || IsStateful)
+        {
+            throw new InvalidOperationException("External verdicts are only valid for stateless compiled filters.");
+        }
+
+        if (_EnableMatchCache)
+        {
+            _Cache!.Store(packetId, matched);
+        }
+
+        if (packetId.Value > _HighestEvaluatedId)
+        {
+            _HighestEvaluatedId = packetId.Value;
+        }
+    }
+
+    /// <summary>
+    /// A tree-free observer with this filter's verdicts, compiled from the retained program (no re-parse), or null when
+    /// equivalence does not hold by construction: always-match, stateful, scoped, <c>matches</c> (a regex can time out
+    /// on a term the field-tree filter short-circuits), or an observer compile refusal (for example a protocol without
+    /// a container field).
+    /// </summary>
+    internal FilterObserver? CreatePrecheckObserver()
+    {
+        if (IsAlwaysMatch || IsStateful || _UsesRegex || (_Program!.Features & FilterFeature.Scope) != 0)
+        {
+            return null;
+        }
+
+        FilterResult<FilterObserver> compiled = FilterObserverCompiler.Compile(Expression, _Program, Stack!);
+        return compiled.TryGetValue(out FilterObserver? observer)
+            ? observer
+            : null;
     }
 
     #endregion
@@ -596,7 +659,7 @@ public sealed class Filter : IFilter
         FilterCompileOptions? options)
     {
         SymbolResolver resolver = new(stack);
-        IFilterCodegen codegen = options?.Codegen ?? new ExpressionTreeCodegen();
+        IFilterCodegen codegen = options?.Codegen ?? new EvalTreeCodegen();
 
         FilterResult<CompiledFilterProgram> compiled = codegen.Compile(program, resolver, options);
         if (!compiled.TryGetValue(out CompiledFilterProgram? compiledProgram))
@@ -619,6 +682,16 @@ public sealed class Filter : IFilter
             resolver.FieldOwners,
             enableMatchCache);
     }
+
+    private static bool _ContainsMatches(FilterNode node) => node switch
+    {
+        StringPredicateNode text => text.Op == StringOp.Matches,
+        NotNode not => _ContainsMatches(not.Operand),
+        LogicalNode logical => _ContainsMatches(logical.Left) || _ContainsMatches(logical.Right),
+        FlankNode { When: FilterNode gate } => _ContainsMatches(gate),
+        ScopeNode scope => _ContainsMatches(scope.Body),
+        _ => false,
+    };
 
     private bool _Poison(FilterError reason, out bool matched, out FilterError? failure)
     {
