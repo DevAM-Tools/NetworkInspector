@@ -1,0 +1,28 @@
+<!-- Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information. -->
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <PackageReference Include="ZeroAlloc" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\NetworkInspector.Plugins\NetworkInspector.Plugins.csproj" />
+    <ProjectReference Include="..\NetworkInspector.Plugins.Loader\NetworkInspector.Plugins.Loader.csproj" />
+    <ProjectReference Include="..\NetworkInspector.BuiltInPlugins\NetworkInspector.BuiltInPlugins.csproj" />
+    <ProjectReference Include="..\NetworkInspector.Protocols\NetworkInspector.Protocols.csproj" />
+    <ProjectReference Include="..\samples\Sample.Protocol\Sample.Protocol.csproj" />
+    <ProjectReference Include="..\NetworkInspector.Plugins.Tests.TestPlugins\NetworkInspector.Plugins.Tests.TestPlugins.csproj"
+                      ReferenceOutputAssembly="false" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Plugin assemblies copied next to the tests (outside the TPA list); tests copy them again into per-test folders. -->
+    <TestPluginProject Include="..\samples\Sample.Protocol\Sample.Protocol.csproj" />
+    <TestPluginProject Include="..\NetworkInspector.Plugins.Tests.TestPlugins\NetworkInspector.Plugins.Tests.TestPlugins.csproj" />
+  </ItemGroup>
+  <Target Name="_CopyTestPlugins" AfterTargets="Build">
+    <MSBuild Projects="@(TestPluginProject)" Targets="GetTargetPath" Properties="Configuration=$(Configuration)">
+      <Output TaskParameter="TargetOutputs" ItemName="_TestPluginAssembly" />
+    </MSBuild>
+    <Copy SourceFiles="@(_TestPluginAssembly)" DestinationFolder="$(OutDir)TestPlugins\%(_TestPluginAssembly.Filename)\"
+          SkipUnchangedFiles="true" />
+  </Target>
+</Project>

@@ -491,7 +491,7 @@ internal sealed class SettingTests
             [("Low", 0UL), ("High", 1UL)]);
         ValidationSettingsException ex = Assert.Throws<ValidationSettingsException>(
             () => s.SetPendingValue(SettingValue.Enum("Low", 99UL)));
-        await Assert.That(ex.Message).Contains("not an allowed enum value");
+        await Assert.That(ex.Message).Contains("allowed: Low, High");
     }
 
     [Test]
@@ -499,22 +499,18 @@ internal sealed class SettingTests
     {
         Setting setting = SettingsTestHelpers.CreateSettingForManagerValidationTests(
             "test.enum", "Enum", "test", SettingType.Enum, SettingValue.Enum("Low", 0), enumMetadata: null);
-        MethodInfo? validateEnum = typeof(Setting).GetMethod(
-            "_ValidateEnum", BindingFlags.NonPublic | BindingFlags.Instance);
-        await Assert.That(validateEnum).IsNotNull();
-        string? result = (string?)validateEnum!.Invoke(setting, [SettingValue.Enum("Low", 0)]);
+        SettingProblem? result = SettingValidation.ValidateEnum(setting, SettingValue.Enum("Low", 0));
         await Assert.That(result).IsNull();
     }
 
     [Test]
-    public async Task ValidateEnum_InvalidEnumValue_ReturnsErrorMessage()
+    public async Task ValidateEnum_InvalidEnumValue_ReturnsUnknownEnumProblem()
     {
         Setting setting = Setting.Enum("test.mode", "Mode", "test", 0UL, [("Low", 0UL)]);
-        MethodInfo? validateEnum = typeof(Setting).GetMethod(
-            "_ValidateEnum", BindingFlags.NonPublic | BindingFlags.Instance);
-        await Assert.That(validateEnum).IsNotNull();
-        string? result = (string?)validateEnum!.Invoke(setting, [SettingValue.U64(1UL)]);
-        await Assert.That(result).IsEqualTo("Invalid enum value");
+        SettingProblem? result = SettingValidation.ValidateEnum(setting, SettingValue.U64(1UL));
+        await Assert.That(result).IsNotNull();
+        await Assert.That(result.Kind).IsEqualTo(SettingProblemKind.UnknownEnum);
+        await Assert.That(result.Message).IsEqualTo("allowed: Low");
     }
 
     [Test]

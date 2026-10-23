@@ -49,11 +49,14 @@ findings are still `⬜` or `⚠️` unless they are deferred.
   (Error, Cosmetic, Refactoring, Performance), or every remaining finding is explicitly
   deferred with user approval documented in the review Summary. A deferred row stays `⬜`.
 - **Success (errors only):** When the user says `errors only` / `nur Errors` — latest
-  iteration has zero open **Error** findings. Other buckets may remain. `/review` Ready
-  stays zero Errors (`workflow-review.md`); this loop’s default is stricter.
-- **Block:** Same Error root cause persists after two remediation attempts in the same
-  iteration scope — stop and report blocker ID.
-- **Cap:** Stop after 10 review iterations; report remaining open findings as blocker.
+  iteration has zero open **Error** findings and zero open High **Performance** findings.
+  Other buckets may remain. That is the `/review` Ready bar (`workflow-review.md`); this
+  loop’s default is stricter.
+- **Block:** Same Error root cause persists after two remediation attempts, in the same
+  iteration or across iterations — stop and report a blocker per `copilot-instructions.md`
+  Section 4.16 (what blocks, evidence, impact, scope, to unblock).
+- **Cap:** Stop after 10 review iterations; report every remaining open finding as a
+  blocker per Section 4.16.
 
 ## Stage 4 — Resume
 
@@ -68,7 +71,7 @@ findings are still `⬜` or `⚠️` unless they are deferred.
 - Run full build and all tests in optimized/Release. Commands from the loaded tech skill.
 - State release verdict from the latest review Summary.
 - List deferred findings with deferral reason when user approved deferral.
-- Chat: artifact paths; do not recap finding bodies.
+- Chat: artifact paths plus the Open-Items Report (`workflow-implement.md` Stage 6). Run it on every exit, including block and cap. Do not recap finding bodies.
 
 ### Review Iteration Table
 

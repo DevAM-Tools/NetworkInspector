@@ -6,16 +6,21 @@ Load when Rust tests are in scope (`#[cfg(test)]`, `tests/`). Content and case d
 
 - Unit tests: `#[cfg(test)]` next to the code under test.
 - Integration tests: `tests/`.
-- Names: `tech-test.md` (`method_scenario_expected_result`).
+- Names: `tech-test.md` (`unit_scenario_expected`).
 
 ## Commands
 
-When the full crate suite is not required, pass the test name (`tech-test.md`).
+When the full crate suite is not required, pass a test filter (`tech-test.md`).
 
 ```bash
-cargo test --release parse_empty_input_returns_none -- --exact
+# Exact match needs the full module path:
+cargo test --release parser::tests::parse_empty_input_returns_none -- --exact
+# Substring match (may run several tests):
+cargo test --release parse_empty_input
 cargo test --release
 ```
+
+❗ A filtered run that prints `running 0 tests` for every target is a failed `Verify`, even though cargo exits 0. Fix the filter; do not report green.
 
 `cargo fmt` / `clippy`: `tech-rust.md`. Debug and collision: `tech-test.md`.
 

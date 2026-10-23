@@ -26,7 +26,7 @@ internal sealed class FilterOptionTests
     {
         using Stack stack = _BuildStack();
 
-        bool compiled = CliFilter.TryCompile("udp", stack, out IFilter? filter);
+        bool compiled = CliFilter.TryCompile("udp", stack, TextWriter.Null, out IFilter? filter);
 
         await Assert.That(compiled).IsTrue();
         await Assert.That(filter!.Expression).IsEqualTo("udp");
@@ -37,10 +37,13 @@ internal sealed class FilterOptionTests
     {
         using Stack stack = _BuildStack();
 
-        bool compiled = CliFilter.TryCompile("nosuch.field == 1", stack, out IFilter? filter);
+        StringWriter error = new();
+
+        bool compiled = CliFilter.TryCompile("nosuch.field == 1", stack, error, out IFilter? filter);
 
         await Assert.That(compiled).IsFalse();
         await Assert.That(filter).IsNull();
+        await Assert.That(error.ToString()).StartsWith("Error: invalid --filter expression:");
     }
 
     [Test]
@@ -49,9 +52,9 @@ internal sealed class FilterOptionTests
         using Stack stack = _BuildStack();
         PacketIndex index = new(stack);
         Packet packet = _ParseOneIndexedFrame(stack, index, packetId: 0);
-        _ = CliFilter.TryCompile("udp", stack, out IFilter? filter);
+        _ = CliFilter.TryCompile("udp", stack, TextWriter.Null, out IFilter? filter);
 
-        bool decided = CliFilter.TryMatch(filter!, packet, index, out bool matched);
+        bool decided = CliFilter.TryMatch(filter!, packet, index, TextWriter.Null, out bool matched);
 
         await Assert.That(decided).IsTrue();
         await Assert.That(matched).IsTrue();
@@ -62,15 +65,17 @@ internal sealed class FilterOptionTests
     {
         using Stack stack = _BuildStack();
         PacketIndex index = new(stack);
-        _ = CliFilter.TryCompile("flank(ip.ttl, changed, within: 1s)", stack, out IFilter? filter);
+        _ = CliFilter.TryCompile("flank(ip.ttl, changed, within: 1s)", stack, TextWriter.Null, out IFilter? filter);
 
         // Dense first parses (0 then 1); evaluating 1 then 0 poisons a stateful filter.
         _ = _ParseOneIndexedFrame(stack, index, packetId: 0);
         _ = filter!.TryIsMatch(_ParseOneIndexedFrame(stack, index, packetId: 1), index, out _, out _);
-        bool decided = CliFilter.TryMatch(filter, _ParseOneIndexedFrame(stack, index, packetId: 0), index, out bool matched);
+        StringWriter error = new();
+        bool decided = CliFilter.TryMatch(filter, _ParseOneIndexedFrame(stack, index, packetId: 0), index, error, out bool matched);
 
         await Assert.That(decided).IsFalse();
         await Assert.That(matched).IsFalse();
+        await Assert.That(error.ToString()).Contains("filter evaluation failed");
     }
 
     #endregion
@@ -83,7 +88,7 @@ internal sealed class FilterOptionTests
         string path = _TempPath("pcapng");
         try
         {
-            int code = ConvertCommand.Run([
+            int code = await CliRun.ConvertAsync([
                 "random:count=5,mode=udp4",
                 "-o", path,
                 "--filter", "udp",
@@ -104,7 +109,7 @@ internal sealed class FilterOptionTests
         string path = _TempPath("pcapng");
         try
         {
-            int code = ConvertCommand.Run([
+            int code = await CliRun.ConvertAsync([
                 "random:count=5,mode=udp4",
                 "-o", path,
                 "--filter", "tcp",
@@ -125,7 +130,7 @@ internal sealed class FilterOptionTests
         string path = _TempPath("pcapng");
         try
         {
-            int code = ConvertCommand.Run([
+            int code = await CliRun.ConvertAsync([
                 "random:count=5,mode=udp4",
                 "-o", path,
                 "--filter", "   ",
@@ -146,7 +151,7 @@ internal sealed class FilterOptionTests
         string path = _TempPath("pcapng");
         try
         {
-            int code = ConvertCommand.Run([
+            int code = await CliRun.ConvertAsync([
                 "random:count=5,mode=udp4",
                 "-o", path,
                 "--filter", "nosuch.field == 1",
@@ -164,7 +169,7 @@ internal sealed class FilterOptionTests
     [Test]
     public async Task Convert_MissingFilterValue_ReturnsArgumentError()
     {
-        int code = ConvertCommand.Run(["random:count=1,mode=udp4", "-o", "out.pcapng", "--filter"]);
+        int code = await CliRun.ConvertAsync(["random:count=1,mode=udp4", "-o", "out.pcapng", "--filter"]);
 
         await Assert.That(code).IsEqualTo((int)ExitCode.ArgumentError);
     }
@@ -179,7 +184,7 @@ internal sealed class FilterOptionTests
         string path = _TempPath("json");
         try
         {
-            int code = ExportCommand.Run([
+            int code = await CliRun.ExportAsync([
                 "random:count=5,mode=udp4",
                 "-f", "json:style=compact",
                 "-o", path,
@@ -201,7 +206,7 @@ internal sealed class FilterOptionTests
         string path = _TempPath("json");
         try
         {
-            int code = ExportCommand.Run([
+            int code = await CliRun.ExportAsync([
                 "random:count=5,mode=udp4",
                 "-f", "json:style=compact",
                 "-o", path,
@@ -223,7 +228,7 @@ internal sealed class FilterOptionTests
         string path = _TempPath("json");
         try
         {
-            int code = ExportCommand.Run([
+            int code = await CliRun.ExportAsync([
                 "random:count=5,mode=udp4",
                 "-f", "json:style=compact",
                 "-o", path,
@@ -242,7 +247,7 @@ internal sealed class FilterOptionTests
     [Test]
     public async Task Export_MissingFilterValue_ReturnsArgumentError()
     {
-        int code = ExportCommand.Run([
+        int code = await CliRun.ExportAsync([
             "random:count=1,mode=udp4",
             "-f", "json",
             "-o", "out.json",

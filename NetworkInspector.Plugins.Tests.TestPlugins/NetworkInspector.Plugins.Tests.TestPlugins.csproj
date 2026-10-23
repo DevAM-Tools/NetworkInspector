@@ -1,0 +1,11 @@
+<!-- Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information. -->
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <Description>Entry types that the plugin loader tests load by path: one healthy plugin and one misdeclared or failing plugin per failure kind.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- The contract and Core come from the application at run time; Private=false keeps them out of the output folder. -->
+    <ProjectReference Include="..\NetworkInspector.Plugins\NetworkInspector.Plugins.csproj" Private="false" />
+  </ItemGroup>
+</Project>

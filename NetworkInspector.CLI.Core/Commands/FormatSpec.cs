@@ -1,0 +1,85 @@
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+
+namespace NetworkInspector.CLI.Commands;
+
+/// <summary>
+/// Shared parts of the export format specs <c>format[:key=value,flag,…]</c> of <see cref="PacketFormatConfig"/> and
+/// <see cref="FrameFormatConfig"/>: splitting a spec and creating the listener from a registration with the option texts.
+/// Stateless; thread-safe.
+/// </summary>
+internal static class FormatSpec
+{
+    #region Public API
+
+    /// <summary>
+    /// Splits a spec into the format name and its option pairs. A bare flag without <c>=</c> (for example <c>compressed</c>)
+    /// is the same as <c>flag=true</c>.
+    /// </summary>
+    /// <param name="spec">The spec as typed.</param>
+    /// <param name="format">The format name in front of the first colon.</param>
+    /// <param name="pairs">The option pairs in the order given.</param>
+    /// <exception cref="ArgumentException">The spec is blank.</exception>
+    internal static void Split(string spec, out string format, out List<KeyValuePair<string, string>> pairs)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(spec);
+
+        int colon = spec.IndexOf(':', StringComparison.Ordinal);
+        format = colon > 0
+            ? spec[..colon]
+            : spec;
+        pairs = [];
+        string parameters = colon > 0
+            ? spec[(colon + 1)..]
+            : string.Empty;
+        if (string.IsNullOrWhiteSpace(parameters))
+        {
+            return;
+        }
+
+        foreach (string part in parameters.Split(','))
+        {
+            int equals = part.IndexOf('=', StringComparison.Ordinal);
+            if (equals > 0)
+            {
+                pairs.Add(new KeyValuePair<string, string>(part[..equals].Trim(), part[(equals + 1)..].Trim()));
+                continue;
+            }
+
+            string flag = part.Trim();
+            if (flag.Length > 0)
+            {
+                pairs.Add(new KeyValuePair<string, string>(flag, "true"));
+            }
+        }
+    }
+
+    /// <summary>
+    /// Creates the listener of a registration: the options at their defaults, the option texts applied with the Core codec,
+    /// then the registration's factory. The option manager is disposed afterwards; the exporter copied what it needs.
+    /// </summary>
+    /// <typeparam name="TListener">The Core listener type.</typeparam>
+    /// <param name="registration">The export format.</param>
+    /// <param name="optionTexts">The option texts of the spec.</param>
+    /// <param name="fullPath">The prepared output path (see <c>ExportTargets.TryPrepare</c>).</param>
+    /// <param name="stack">The stack that parsed the packets.</param>
+    /// <param name="cancellationToken">Cancels the export.</param>
+    /// <param name="listener">The created listener; <see langword="null"/> on failure.</param>
+    /// <param name="error">Why no listener was created; <see langword="null"/> on success.</param>
+    /// <returns><see langword="true"/> when <paramref name="listener"/> is set.</returns>
+    internal static bool TryCreate<TListener>(ExporterRegistration<TListener> registration,
+        IReadOnlyList<KeyValuePair<string, string>> optionTexts, string fullPath, IStack stack, CancellationToken cancellationToken,
+        [NotNullWhen(true)] out TListener? listener, [NotNullWhen(false)] out PluginError? error)
+        where TListener : class
+    {
+        using SettingsManager options = RegistrationOptions.CreateDefaults(registration.RegisterOptions);
+        if (!RegistrationOptions.TryApplyTexts(options, optionTexts, out error))
+        {
+            listener = null;
+            return false;
+        }
+
+        return registration.Create(new ExportRequest(fullPath, options.ReadOnly, stack, 0, cancellationToken), out listener, out error);
+    }
+
+    #endregion
+}

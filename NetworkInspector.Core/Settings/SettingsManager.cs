@@ -27,7 +27,7 @@ namespace NetworkInspector.Core.Settings;
 /// constructor and never change; readers do not take the instance reader-writer lock for those fields.
 /// </para>
 /// </summary>
-public sealed class SettingsManager : IDisposable
+public sealed partial class SettingsManager : IDisposable
 {
     /// <summary>
     /// Default maximum size in bytes for persisted settings JSON and referenced protocol config files (1 GiB).
@@ -62,6 +62,14 @@ public sealed class SettingsManager : IDisposable
     // Values loaded from persistence before settings are registered are stored here
     // and automatically applied when the setting is later registered.
     private readonly Dictionary<string, Dictionary<string, JsonNode>> _OrphanedValues = [];
+
+    // Group files this manager saw at Load or wrote itself, and whether Load ran. Save deletes only known files as stale: a
+    // file that another manager or process created after Load is not this manager's to delete; a manager that never loaded
+    // has seen nothing and replaces everything it owns (all manifest files).
+    // Lock-free by design (copy on write): the snapshot is immutable and replaced with Interlocked.CompareExchange. It changes
+    // once per Load, Save, or SaveChanged and is read once per Save, so a new small set per change costs nothing that matters,
+    // and no caller ever waits for another.
+    private KnownGroupFiles _KnownGroupFiles = KnownGroupFiles.Empty;
 
     // Pre-loaded typed values keyed by setting name. Populated via PreloadValue
     // before the corresponding setting is registered. Consumed in RegisterSetting and
@@ -380,7 +388,7 @@ public sealed class SettingsManager : IDisposable
         }
 
         (SettingValue? value, SettingLoadResult parseResult, _) =
-            _JsonToSettingValue(jsonNode, setting.Type, setting.EnumMetadata, setting.GroupName, setting.Name);
+            SettingValueJson.FromNode(jsonNode, setting.Type, setting.EnumMetadata, setting.GroupName, setting.Name);
         if (value is null)
         {
             // Return the specific parse failure reason (TypeMismatch or DeserializationError).
@@ -720,7 +728,7 @@ public sealed class SettingsManager : IDisposable
     #region Change Notification
 
     /// <summary>
-    /// Fired after <see cref="ApplyChanges"/> has applied at least one pending change.
+    /// Fired after <see cref="ApplyChanges()"/> has applied at least one pending change.
     /// Carries the names of all settings that changed.
     /// </summary>
     public event EventHandler<SettingsAppliedEventArgs>? SettingsApplied;
@@ -760,38 +768,50 @@ public sealed class SettingsManager : IDisposable
         return changed;
     }
 
-    /// <summary>Resets all pending changes to current values.</summary>
+    /// <summary>Resets all pending changes to current values and raises <see cref="PendingChanged"/> for each changed setting.</summary>
     public void ResetChanges()
     {
+        List<string> changed = [];
         _Lock.EnterWriteLock();
         try
         {
             foreach (Setting setting in _SettingsList)
             {
-                setting.Reset();
+                if (setting.ResetWithoutEvent())
+                {
+                    changed.Add(setting.Name);
+                }
             }
         }
         finally
         {
             _Lock.ExitWriteLock();
         }
+
+        _RaisePendingChanged(changed);
     }
 
-    /// <summary>Resets all settings to their default values.</summary>
+    /// <summary>Resets all settings to their default values and raises <see cref="PendingChanged"/> for each setting whose pending value changed.</summary>
     public void ResetAllToDefaults()
     {
+        List<string> changed = [];
         _Lock.EnterWriteLock();
         try
         {
             foreach (Setting setting in _SettingsList)
             {
-                setting.ResetToDefault();
+                if (setting.ResetToDefaultWithoutEvent())
+                {
+                    changed.Add(setting.Name);
+                }
             }
         }
         finally
         {
             _Lock.ExitWriteLock();
         }
+
+        _RaisePendingChanged(changed);
     }
 
     #endregion
@@ -869,6 +889,10 @@ public sealed class SettingsManager : IDisposable
         {
             throw PersistenceSettingsException.ForNoStoragePath();
         }
+
+        // From here on the manager has seen the folder (also an empty or missing one): files that appear later are not its own.
+        _RecordKnownGroupFiles(loaded: true, [], []);
+
         if (!Directory.Exists(StoragePath))
         {
             return [];
@@ -879,11 +903,13 @@ public sealed class SettingsManager : IDisposable
         {
             throw new InvalidOperationException("SettingsManager.Load() is already in progress.");
         }
+        List<string> seen = [];
         try
         {
             foreach (string filePath in Directory.EnumerateFiles(StoragePath, "*.json"))
             {
                 _LoadGroupFile(filePath, warnings);
+                seen.Add(Path.GetFileName(filePath));
             }
         }
         catch (IOException ex)
@@ -896,6 +922,8 @@ public sealed class SettingsManager : IDisposable
         }
         finally
         {
+            // Also after an error: the files read before it were seen.
+            _RecordKnownGroupFiles(loaded: true, seen, []);
             _ = Interlocked.Exchange(ref _IsLoading, 0);
         }
         return warnings;
@@ -1006,7 +1034,7 @@ public sealed class SettingsManager : IDisposable
                     if (_SettingsByName.TryGetValue(prop.Key, out Setting? setting))
                     {
                         (SettingValue? value, SettingLoadResult parseResult, SettingsLoadWarning? parseWarning) =
-                            _JsonToSettingValue(prop.Value, setting.Type, setting.EnumMetadata, groupName, prop.Key);
+                            SettingValueJson.FromNode(prop.Value, setting.Type, setting.EnumMetadata, groupName, prop.Key);
                         if (parseWarning is not null)
                         {
                             warnings.Add(parseWarning.Value);
@@ -1105,12 +1133,29 @@ public sealed class SettingsManager : IDisposable
                 $"Settings file '{fileLabel}' exceeds {MaxConfigFileBytes} bytes. The file is skipped."));
 
     /// <summary>
-    /// Saves all settings to JSON files in the storage path.
-    /// One file per group, pretty-printed.
-    /// Stale cleanup deletes only group files listed in the previous save manifest,
-    /// never unrelated JSON in <see cref="StoragePath"/>.
+    /// Saves the settings to JSON files in the storage path: one pretty-printed file per group.
+    /// <para>
+    /// <b>Sparse:</b> only values that differ from their default are written, so a later change of a default reaches every
+    /// folder that never changed the value. Values that were loaded for settings that are not registered in this run
+    /// (<see cref="Orphans"/>, for example the settings of a plugin that is not loaded) are written back unchanged, so saving
+    /// never loses them. A group without content has no file; an owned group file that no longer has content is deleted.
+    /// </para>
+    /// <para>
+    /// <b>Last writer wins:</b> <c>Save</c> writes the whole state of this manager. For every registered setting the key is set,
+    /// or removed at its default, so a value that another process stored for a registered setting since <see cref="Load"/> is
+    /// replaced. Use <see cref="SaveChanged"/> to change single keys without touching the rest.
+    /// </para>
+    /// <para>
+    /// Stale cleanup deletes only group files that are listed in the previous save manifest <i>and</i> that this manager saw at
+    /// <see cref="Load"/> or wrote itself, never unrelated JSON in <see cref="StoragePath"/> and never a group file that another
+    /// manager or process created after <see cref="Load"/> (a manager that never called <see cref="Load"/> has seen nothing and
+    /// treats every listed file as its own). The save runs under the cross-process lock file <c>.ni-settings.lock</c> of the folder, the
+    /// same lock <see cref="SaveChanged"/> uses; other processes that save at the same time wait for it (see
+    /// <see cref="SaveChanged"/>). Each file is replaced atomically (temporary file, then move).
+    /// </para>
     /// </summary>
-    /// <exception cref="PersistenceSettingsException">Thrown when no storage path is configured or on I/O, access, or JSON errors.</exception>
+    /// <exception cref="PersistenceSettingsException">Thrown when no storage path is configured, when the folder lock is not
+    /// available within two seconds, or on I/O, access, or JSON errors.</exception>
     public void Save()
     {
         if (StoragePath is null)
@@ -1121,8 +1166,9 @@ public sealed class SettingsManager : IDisposable
         try
         {
             Directory.CreateDirectory(StoragePath);
+            using FolderLock folderLock = FolderLock.Acquire(StoragePath);
 
-            // Group settings by group name
+            // Group the content by file name: non-default values and orphans only.
             Dictionary<string, JsonObject> groups = [];
 
             _Lock.EnterReadLock();
@@ -1130,15 +1176,23 @@ public sealed class SettingsManager : IDisposable
             {
                 foreach (Setting setting in _SettingsList)
                 {
-                    string groupName = setting.GroupName.Length == 0 ? "default" : setting.GroupName;
-
-                    if (!groups.TryGetValue(groupName, out JsonObject? obj))
+                    // Sparse: a default is not stored, so a later change of the default reaches this folder.
+                    if (setting.Value == setting.DefaultValue)
                     {
-                        obj = [];
-                        groups[groupName] = obj;
+                        continue;
                     }
 
-                    obj[setting.Name] = _SettingValueToJson(setting.Value);
+                    _GroupObject(groups, setting.GroupName)[setting.Name] = SettingValueJson.ToNode(setting.Value);
+                }
+
+                // Orphans are written back; their group files therefore stay "current" and are not deleted.
+                foreach (KeyValuePair<string, Dictionary<string, JsonNode>> orphanGroup in _OrphanedValues)
+                {
+                    JsonObject obj = _GroupObject(groups, orphanGroup.Key);
+                    foreach (KeyValuePair<string, JsonNode> orphan in orphanGroup.Value)
+                    {
+                        obj[orphan.Key] = orphan.Value.DeepClone();
+                    }
                 }
             }
             finally
@@ -1159,19 +1213,27 @@ public sealed class SettingsManager : IDisposable
                 File.Move(tempPath, filePath, overwrite: true);
             }
 
-            // Remove stale group files this manager previously wrote, never unrelated JSON.
+            // Remove stale group files this manager knows, never unrelated JSON and never what another process created since Load.
             string manifestPath = Path.Combine(StoragePath, SettingsFileAccess.OwnedGroupManifestFileName);
             HashSet<string> previouslyOwned = _ReadOwnedGroupFiles(manifestPath);
+            KnownGroupFiles known = Volatile.Read(ref _KnownGroupFiles);
+            HashSet<string> deleted = new(StringComparer.OrdinalIgnoreCase);
             foreach (string existingPath in Directory.EnumerateFiles(StoragePath, "*.json"))
             {
                 string existingFileName = Path.GetFileName(existingPath);
-                if (previouslyOwned.Contains(existingFileName) && !currentGroupFiles.Contains(existingFileName))
+                if (previouslyOwned.Contains(existingFileName) && (!known.HasLoaded || known.Files.Contains(existingFileName))
+                    && !currentGroupFiles.Contains(existingFileName))
                 {
                     File.Delete(existingPath);
+                    deleted.Add(existingFileName);
                 }
             }
 
-            _WriteOwnedGroupFiles(manifestPath, currentGroupFiles);
+            // Keep the manifest entries of files that other managers own; add what this save wrote, drop what it deleted.
+            previouslyOwned.UnionWith(currentGroupFiles);
+            previouslyOwned.ExceptWith(deleted);
+            _WriteOwnedGroupFiles(manifestPath, previouslyOwned);
+            _RecordKnownGroupFiles(loaded: false, currentGroupFiles, deleted);
 
             // Clean up leftover temp files from interrupted saves
             foreach (string tempFile in Directory.EnumerateFiles(StoragePath, "*.json.tmp"))
@@ -1267,499 +1329,6 @@ public sealed class SettingsManager : IDisposable
         {
             writer.WriteLine(fileName);
         }
-    }
-
-    #endregion
-
-    #region JSON Conversion
-
-    /// <summary>
-    /// Converts a JSON node to a setting value based on the setting type.
-    /// Returns a tuple of the parsed value (or null) and a <see cref="SettingLoadResult"/> discriminant.
-    /// <list type="bullet">
-    ///   <item><see cref="SettingLoadResult.Success"/> — value parsed successfully.</item>
-    ///   <item><see cref="SettingLoadResult.TypeMismatch"/> — JSON node's structural type does not match the setting type.</item>
-    ///   <item><see cref="SettingLoadResult.DeserializationError"/> — JSON node type matches but content cannot be decoded (e.g. invalid base64).</item>
-    /// </list>
-    /// </summary>
-    private static (SettingValue? Value, SettingLoadResult Result, SettingsLoadWarning? Warning) _JsonToSettingValue(
-        JsonNode node, SettingType type, EnumSettingMetadata? enumMetadata, string groupName, string settingName)
-    {
-        try
-        {
-            if (type == SettingType.Bytes)
-            {
-                // Bytes parsing is handled separately because the FormatException from
-                // invalid base64 is a DeserializationError, not a TypeMismatch.
-                (SettingValue? bytesValue, SettingLoadResult bytesResult) = _TryParseBytesWithResult(node);
-                return (bytesValue, bytesResult, null);
-            }
-
-            if (type == SettingType.Enum)
-            {
-                return _TryParseEnumWithMetadata(node, enumMetadata, groupName, settingName);
-            }
-
-            if (type is SettingType.BoolArray or SettingType.StringArray or SettingType.F64Array
-                or SettingType.U64Array or SettingType.I64Array)
-            {
-                SettingValue? arrayValue = type switch
-                {
-                    SettingType.BoolArray => _TryParseBoolArray(node),
-                    SettingType.StringArray => _TryParseStringArray(node),
-                    SettingType.F64Array => _TryParseF64Array(node),
-                    SettingType.U64Array => _TryParseU64Array(node),
-                    SettingType.I64Array => _TryParseI64Array(node),
-                    _ => null,
-                };
-                return (arrayValue, arrayValue is not null ? SettingLoadResult.Success : SettingLoadResult.TypeMismatch, null);
-            }
-
-            SettingValue? value = type switch
-            {
-                SettingType.Bool => (SettingValue?)SettingValue.Bool(node.GetValue<bool>()),
-                SettingType.String => node.GetValue<string>() is not null
-                    ? (SettingValue?)SettingValue.String(node.GetValue<string>()!)
-                    : null,
-                SettingType.F64 => _TryParseFiniteF64(node),
-                SettingType.U64 => _TryParseU64(node),
-                SettingType.I64 => _TryParseI64(node),
-                _ => null,
-            };
-            return (value, value is not null ? SettingLoadResult.Success : SettingLoadResult.TypeMismatch, null);
-        }
-        catch (InvalidOperationException)
-        {
-            // JSON node structural type doesn't match expected setting type (e.g., got array for bool).
-            return (null, SettingLoadResult.TypeMismatch, null);
-        }
-        catch (FormatException)
-        {
-            // JSON value cannot be converted to the target number/string format.
-            return (null, SettingLoadResult.DeserializationError, null);
-        }
-        catch (ArgumentException)
-        {
-            // An enum object repeats a property name: malformed content, not an exception for Load or registration.
-            return (null, SettingLoadResult.DeserializationError, null);
-        }
-    }
-
-    /// <summary>Tries to parse a finite <see cref="SettingType.F64"/> from a JSON node. Returns null for NaN or Infinity.</summary>
-    private static SettingValue? _TryParseFiniteF64(JsonNode node)
-    {
-        if (node is JsonValue val && val.TryGetValue(out double d) && double.IsFinite(d))
-        {
-            return SettingValue.F64(d);
-        }
-        return null;
-    }
-
-    /// <summary>Tries to parse a <see cref="SettingType.U64"/> from a JSON node.</summary>
-    private static SettingValue? _TryParseU64(JsonNode node)
-    {
-        // Try direct numeric first, then string parsing
-        if (node is JsonValue val)
-        {
-            if (val.TryGetValue(out ulong u))
-            {
-                return SettingValue.U64(u);
-            }
-            if (val.TryGetValue(out long l) && l >= 0)
-            {
-                return SettingValue.U64((ulong)l);
-            }
-            if (val.TryGetValue(out string? s)
-                && ulong.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out ulong parsed))
-            {
-                return SettingValue.U64(parsed);
-            }
-        }
-        return null;
-    }
-
-    /// <summary>Tries to parse a <see cref="SettingType.I64"/> from a JSON node.</summary>
-    private static SettingValue? _TryParseI64(JsonNode node)
-    {
-        if (node is JsonValue val)
-        {
-            if (val.TryGetValue(out long l))
-            {
-                return SettingValue.I64(l);
-            }
-            if (val.TryGetValue(out string? s)
-                && long.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out long parsed))
-            {
-                return SettingValue.I64(parsed);
-            }
-        }
-        return null;
-    }
-
-    /// <summary>Tries to parse a <see cref="SettingType.BoolArray"/> from a JSON array of booleans.</summary>
-    private static SettingValue? _TryParseBoolArray(JsonNode node)
-    {
-        if (node is not JsonArray arr)
-        {
-            return null;
-        }
-
-        bool[] values = new bool[arr.Count];
-        for (int i = 0; i < arr.Count; i++)
-        {
-            JsonNode? el = arr[i];
-            if (el is null)
-            {
-                return null;
-            }
-
-            values[i] = el.GetValue<bool>();
-        }
-
-        return SettingValue.BoolArray(values);
-    }
-
-    /// <summary>Tries to parse a <see cref="SettingType.StringArray"/> from a JSON array of strings.</summary>
-    private static SettingValue? _TryParseStringArray(JsonNode node)
-    {
-        if (node is not JsonArray arr)
-        {
-            return null;
-        }
-
-        string[] values = new string[arr.Count];
-        for (int i = 0; i < arr.Count; i++)
-        {
-            JsonNode? el = arr[i];
-            if (el is not JsonValue val || !val.TryGetValue(out string? s) || s is null)
-            {
-                return null;
-            }
-
-            values[i] = s;
-        }
-
-        return SettingValue.StringArray(values);
-    }
-
-    /// <summary>Tries to parse a <see cref="SettingType.F64Array"/> from a JSON array of finite numbers.</summary>
-    private static SettingValue? _TryParseF64Array(JsonNode node)
-    {
-        if (node is not JsonArray arr)
-        {
-            return null;
-        }
-
-        double[] values = new double[arr.Count];
-        for (int i = 0; i < arr.Count; i++)
-        {
-            JsonNode? el = arr[i];
-            if (el is null)
-            {
-                return null;
-            }
-
-            SettingValue? parsed = _TryParseFiniteF64(el);
-            if (parsed is null || !parsed.Value.TryGetAsF64(out double d))
-            {
-                return null;
-            }
-
-            values[i] = d;
-        }
-
-        return SettingValue.F64Array(values);
-    }
-
-    /// <summary>Tries to parse a <see cref="SettingType.U64Array"/> from a JSON array of unsigned integers.</summary>
-    private static SettingValue? _TryParseU64Array(JsonNode node)
-    {
-        if (node is not JsonArray arr)
-        {
-            return null;
-        }
-
-        ulong[] values = new ulong[arr.Count];
-        for (int i = 0; i < arr.Count; i++)
-        {
-            JsonNode? el = arr[i];
-            if (el is null)
-            {
-                return null;
-            }
-
-            SettingValue? parsed = _TryParseU64(el);
-            if (parsed is null || !parsed.Value.TryGetAsU64(out ulong u))
-            {
-                return null;
-            }
-
-            values[i] = u;
-        }
-
-        return SettingValue.U64Array(values);
-    }
-
-    /// <summary>Tries to parse a <see cref="SettingType.I64Array"/> from a JSON array of signed integers.</summary>
-    private static SettingValue? _TryParseI64Array(JsonNode node)
-    {
-        if (node is not JsonArray arr)
-        {
-            return null;
-        }
-
-        long[] values = new long[arr.Count];
-        for (int i = 0; i < arr.Count; i++)
-        {
-            JsonNode? el = arr[i];
-            if (el is null)
-            {
-                return null;
-            }
-
-            SettingValue? parsed = _TryParseI64(el);
-            if (parsed is null || !parsed.Value.TryGetAsI64(out long l))
-            {
-                return null;
-            }
-
-            values[i] = l;
-        }
-
-        return SettingValue.I64Array(values);
-    }
-
-    /// <summary>Tries to parse a <see cref="SettingType.Bytes"/> from a base64-encoded JSON string.
-    /// Distinguishes <see cref="SettingLoadResult.TypeMismatch"/> (node is not a JSON string)
-    /// from <see cref="SettingLoadResult.DeserializationError"/> (string is not valid base64).</summary>
-    private static (SettingValue? Value, SettingLoadResult Result) _TryParseBytesWithResult(JsonNode node)
-    {
-        if (node is not JsonValue val || !val.TryGetValue(out string? s))
-        {
-            // Node is not a JSON string — structurally wrong type.
-            return (null, SettingLoadResult.TypeMismatch);
-        }
-
-        try
-        {
-            byte[] bytes = Convert.FromBase64String(s);
-            return (SettingValue.Bytes(bytes), SettingLoadResult.Success);
-        }
-        catch (FormatException)
-        {
-            // String is not valid base64 — content error, correct structural type.
-            return (null, SettingLoadResult.DeserializationError);
-        }
-    }
-
-    /// <summary>
-    /// Tries to parse a <see cref="SettingType.Enum"/> from a JSON object with name/value properties.
-    /// After numeric validation, canonicalizes the name via <paramref name="enumMetadata"/>.
-    /// </summary>
-    private static (SettingValue? Value, SettingLoadResult Result, SettingsLoadWarning? Warning) _TryParseEnumWithMetadata(
-        JsonNode node, EnumSettingMetadata? enumMetadata, string groupName, string settingName)
-    {
-        // Expect object with "name" and "value" properties
-        if (node is not JsonObject obj)
-        {
-            return (null, SettingLoadResult.TypeMismatch, null);
-        }
-        if (obj["name"] is not JsonValue nameVal)
-        {
-            return (null, SettingLoadResult.TypeMismatch, null);
-        }
-        if (obj["value"] is not JsonValue valueVal)
-        {
-            return (null, SettingLoadResult.TypeMismatch, null);
-        }
-
-        if (!nameVal.TryGetValue(out string? persistedName))
-        {
-            return (null, SettingLoadResult.TypeMismatch, null);
-        }
-
-        ulong? numericValue = _TryGetEnumNumericValue(valueVal);
-        if (numericValue is null)
-        {
-            return (null, SettingLoadResult.TypeMismatch, null);
-        }
-
-        if (enumMetadata is null)
-        {
-            return (SettingValue.Enum(persistedName, numericValue.Value), SettingLoadResult.Success, null);
-        }
-
-        EnumSettingValue? canonical = enumMetadata.GetByNumeric(numericValue.Value);
-        if (canonical is null)
-        {
-            return (null, SettingLoadResult.TypeMismatch, null);
-        }
-
-        string canonicalName = canonical.Value.Name;
-        SettingValue value = SettingValue.Enum(canonicalName, numericValue.Value);
-        SettingsLoadWarning? warning = null;
-        if (!string.Equals(persistedName, canonicalName, StringComparison.OrdinalIgnoreCase))
-        {
-            warning = new SettingsLoadWarning(
-                SettingsLoadWarningKind.EnumNameMismatch,
-                groupName,
-                settingName,
-                $"Persisted enum name '{persistedName}' for '{settingName}' does not match the canonical name " +
-                $"'{canonicalName}' for numeric value {numericValue.Value}. The canonical name is applied.");
-        }
-
-        return (value, SettingLoadResult.Success, warning);
-    }
-
-    /// <summary>Extracts the numeric component from an enum JSON value node.</summary>
-    private static ulong? _TryGetEnumNumericValue(JsonValue valueVal)
-    {
-        if (valueVal.TryGetValue(out ulong numVal))
-        {
-            return numVal;
-        }
-
-        if (valueVal.TryGetValue(out long longVal) && longVal >= 0)
-        {
-            return (ulong)longVal;
-        }
-
-        if (valueVal.TryGetValue(out string? strVal)
-            && ulong.TryParse(strVal, NumberStyles.Integer, CultureInfo.InvariantCulture, out ulong parsed))
-        {
-            return parsed;
-        }
-
-        return null;
-    }
-
-    /// <summary>Converts a setting value to a JSON node.</summary>
-    private static JsonNode? _SettingValueToJson(SettingValue value)
-    {
-        switch (value.Type)
-        {
-            case SettingType.Bool:
-                value.TryGetAsBool(out bool boolVal);
-                return JsonValue.Create(boolVal);
-            case SettingType.String:
-                value.TryGetAsString(out string strVal);
-                return JsonValue.Create(strVal);
-            case SettingType.F64:
-                return _SettingF64ToJson(value);
-            case SettingType.U64:
-                value.TryGetAsU64(out ulong u64Val);
-                return JsonValue.Create(u64Val);
-            case SettingType.I64:
-                value.TryGetAsI64(out long i64Val);
-                return JsonValue.Create(i64Val);
-            case SettingType.Bytes:
-                value.TryGetAsBytes(out byte[] bytesVal);
-                return JsonValue.Create(Convert.ToBase64String(bytesVal));
-            case SettingType.Enum:
-                return _CreateEnumJson(value);
-            case SettingType.BoolArray:
-                return _BoolArrayToJson(value);
-            case SettingType.StringArray:
-                return _StringArrayToJson(value);
-            case SettingType.F64Array:
-                return _F64ArrayToJson(value);
-            case SettingType.U64Array:
-                return _U64ArrayToJson(value);
-            case SettingType.I64Array:
-                return _I64ArrayToJson(value);
-            default:
-                return null;
-        }
-    }
-
-    /// <summary>Converts an F64 setting to a JSON value. F64 settings are always finite (enforced at registration and mutation).</summary>
-    private static JsonValue _SettingF64ToJson(SettingValue value)
-    {
-        value.TryGetAsF64(out double f64);
-        // F64 settings are guaranteed finite by Setting.F64() and Setting.ValidateF64().
-        // Guard against invariant violations that would produce invalid JSON.
-        if (!double.IsFinite(f64))
-        {
-            ThrowHelpers.ThrowNonFiniteF64(f64);
-        }
-        return JsonValue.Create(f64);
-    }
-
-    private static JsonArray _BoolArrayToJson(SettingValue value)
-    {
-        value.TryGetAsBoolArray(out bool[] items);
-        JsonArray json = [];
-        for (int i = 0; i < items.Length; i++)
-        {
-            json.Add(JsonValue.Create(items[i]));
-        }
-
-        return json;
-    }
-
-    private static JsonArray _StringArrayToJson(SettingValue value)
-    {
-        value.TryGetAsStringArray(out string[] items);
-        JsonArray json = [];
-        for (int i = 0; i < items.Length; i++)
-        {
-            json.Add(JsonValue.Create(items[i]));
-        }
-
-        return json;
-    }
-
-    private static JsonArray _F64ArrayToJson(SettingValue value)
-    {
-        value.TryGetAsF64Array(out double[] items);
-        JsonArray json = [];
-        for (int i = 0; i < items.Length; i++)
-        {
-            double d = items[i];
-            if (!double.IsFinite(d))
-            {
-                ThrowHelpers.ThrowNonFiniteF64(d);
-            }
-
-            json.Add(JsonValue.Create(d));
-        }
-
-        return json;
-    }
-
-    private static JsonArray _U64ArrayToJson(SettingValue value)
-    {
-        value.TryGetAsU64Array(out ulong[] items);
-        JsonArray json = [];
-        for (int i = 0; i < items.Length; i++)
-        {
-            json.Add(JsonValue.Create(items[i]));
-        }
-
-        return json;
-    }
-
-    private static JsonArray _I64ArrayToJson(SettingValue value)
-    {
-        value.TryGetAsI64Array(out long[] items);
-        JsonArray json = [];
-        for (int i = 0; i < items.Length; i++)
-        {
-            json.Add(JsonValue.Create(items[i]));
-        }
-
-        return json;
-    }
-
-    /// <summary>Creates a JSON object for an enum setting value.</summary>
-    private static JsonObject _CreateEnumJson(SettingValue value)
-    {
-        value.TryGetAsEnum(out (string name, ulong numericValue) e);
-        return new JsonObject
-        {
-            ["name"] = JsonValue.Create(e.name),
-            ["value"] = JsonValue.Create(e.numericValue),
-        };
     }
 
     #endregion

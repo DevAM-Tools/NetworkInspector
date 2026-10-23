@@ -2,7 +2,7 @@
 
 Load on `/port-dotnet-rust-loop`, or from `workflow-port-dotnet-rust.md` Phase 2. Requires `port/MANIFEST.md` with status **Approved**. Without it, stop and run Phase 0 and Phase 1 of `workflow-port-dotnet-rust.md`.
 
-Also load: `workflow-port-dotnet-rust.md`, `workflow-port-dotnet-rust-books.md`, `tech-dotnet-rust.md`, `tech-csharp.md`, `tech-rust.md`, `tech-test.md`, `tech-rust-test.md`.
+Also load: `workflow-port-dotnet-rust.md` and every skill on its “Always also load” list (single source; includes `tech-tunit.md` when the source tests use TUnit).
 
 **Purpose:** Port one unit per iteration, completely, and keep the books balanced. Run without human input until a stop condition holds.
 
@@ -37,7 +37,7 @@ flowchart TD
 
 ## Stage 1 — Resume
 
-- State lives in files, never only in chat. After a context reset, read in this order: `port/STATUS.md`, the unit record named in its **Cursor**, `port/BLOCKERS.md` (answered records only), then `port/MANIFEST.md` sections the unit needs.
+- State lives in files, never only in chat. After a context reset, read in this order: `port/STATUS.md`, the unit record named in its **Position**, `port/BLOCKERS.md` (answered records only), then `port/MANIFEST.md` sections the unit needs.
 - Read `port/MANIFEST.md` in full once per session.
 - Answered blocker (`BL-*` with **Answer** filled and **Applied** empty): apply the answer first. Re-open its rows as `open`, put the unit back in the queue, and fill **Applied**. An answer that adds an `IM-*`, `PA-*`, `EX-*`, or crate goes into `MANIFEST.md` as an amendment with the `BL-*` reference.
 - A unit left in `wip` is resumed at its first row that is not done. Rows already `ported` are re-verified by running their tests, not by trust.
@@ -66,7 +66,7 @@ Before any Rust code:
    - **Behavior items:** the source walk below. Status `wip`.
    - **Test rows:** every test case from the inventory that targets the unit. Status `wip`.
    - **Design:** Rust form, ownership model (`tech-dotnet-rust.md` memory ladder) with the rejected C#-shaped form, `IM-*` rules applied, source optimizations and how each is mapped.
-4. Set the unit to `wip` in STATUS **Cursor**.
+4. Set the unit to `wip` in STATUS **Position**.
 
 ### Source walk (behavior items)
 
@@ -103,7 +103,7 @@ Private helpers have no rows. Their behavior shows up as outcomes of the public 
 
 ## Stage 6 — Verify and hunt
 
-Run in this order. Each failure goes back to Stage 5. After two failed fixes for the same root cause, apply Section 4.14 backoff of `copilot-instructions.md` once; if it still fails, book `BL-*` (technical), set the affected rows `blocked`, and continue with Stage 7.
+Run in this order. Each failure goes back to Stage 5. After two failed fixes for the same root cause, apply the Section 4.14 retry rule of `copilot-instructions.md` once (environmental collision); if it still fails, book `BL-*` (technical), set the affected rows `blocked`, and continue with Stage 7.
 
 1. `cargo fmt --check`
 2. `cargo clippy -p <crate> --all-targets --all-features -- -D warnings`
@@ -112,7 +112,7 @@ Run in this order. Each failure goes back to Stage 5. After two failed fixes for
 5. **Hunt** (equivalence audit). Re-open the .NET source **from disk**, not from memory:
    - Walk every behavior item; point to the Rust line that implements it and the test that proves it. Missing pointer = gap.
    - Compare counts: public members vs API rows; `throw` sites vs error items; enum members vs Rust variants or constants; constants and defaults vs Rust values; overloads vs Rust items.
-   - `Grep` the unit’s Rust files for `todo!`, `unimplemented!`, `unreachable!`, `TODO`, `FIXME`, `simplif`, `minimal`, `for now`, `not yet`, `stub`, `placeholder`, `subset`, `unsupported`, `ignored`, `only supports`. Each hit is removed or belongs to a row that is not done.
+   - Search the unit’s Rust files for `todo!`, `unimplemented!`, `unreachable!`, `TODO`, `FIXME`, `simplif`, `minimal`, `for now`, `not yet`, `stub`, `placeholder`, `subset`, `unsupported`, `ignored`, `only supports`. Each hit is removed or belongs to a row that is not done.
    - Check every `clone`, `Box`, `Rc`, `Arc`, `RefCell`, `Mutex`, `RwLock`, `unsafe` against the Design and the approved `unsafe` sites.
    - Check every `deviated` row: its `DV-*` lists **all** observable differences and names a pinning test that passes.
 6. Balance check for the assembly (`workflow-port-dotnet-rust.md` Section 7).
@@ -124,7 +124,7 @@ In the same change as the code:
 - Set every row to its final status. A unit is done only when all its rows are done.
 - Write or update `DV-*`, `BL-*`, `SB-*` records.
 - Fill the unit record **Verification** with the commands just run and their result.
-- Update `STATUS.md`: balance numbers, **Cursor** (next unit), **Waits on**, last completed unit.
+- Update `STATUS.md`: balance numbers, **Position** (next unit), **Waits on**, last completed unit.
 - Chat (one short paragraph, user language): unit, counts per status, new `DV-*` / `BL-*` / `SB-*`, balance ok or not. No recap of the code.
 
 ## Stage 8 — Milestone (assembly complete)

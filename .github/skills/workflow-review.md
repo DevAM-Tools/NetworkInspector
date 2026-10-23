@@ -4,7 +4,7 @@ Load on `/review`. Apply `copilot-instructions.md` Sections 2–4.
 
 Findings are for **human acceptance** of the defect and the proposed fix, and for a **weaker executing agent**. Locked `How` plus Problem/Fix is the handoff — the same bar as plan step `How`. Write each finding so a weaker agent has **no interpretation room** on the fix, and so a person can accept or reject the defect and the fix without reconstructing the argument. Fenced **Problem** (current) and **Fix** (after) code is the most useful part of a finding; do not replace it with a prose description of the edit. Extra illustrative snippets (failing call site, a test that would catch it, bad vs good usage) are welcome in the review output. Do not compress finding `How`, Evaluate, or Summary. Exam is not a `/review` substitute.
 
-The review **must** answer: is this **scope** ready for public release? Write that as Summary **Release**. `Ready for public release` only when every hunt ran and zero Errors are open. Otherwise `Blocked by {IDs}`. Do not hedge. Do not answer for files outside scope.
+The review **must** answer: is this **scope** ready for public release? Write that as Summary **Release**. `Ready for public release` only when every hunt ran and zero Errors and zero High Performance findings are open. Otherwise `Blocked by {IDs}`, and describe every blocker per `copilot-instructions.md` Section 4.16 (what blocks, evidence, impact, scope, to unblock). Do not hedge. Do not answer for files outside scope.
 
 Do not read existing `reviews/review_*.md` unless the user names one. Do not copy findings, verdicts, or style from them. A prior Ready is not evidence.
 
@@ -18,7 +18,7 @@ Enter as a skeptical auditor **new to this project**. A single defect can cause 
 
 Default **full review**. Enter **static review** only on an explicit reduced-scope request (`static review`, `code only`, `code-only`, `reduced scope`, `without running tests`, `ohne Testausführung`, `nur Code-Analyse`). Record the mode in **Scope**. Do not review before scope and mode are confirmed.
 
-**Full:** Read sources, tests, docs, call sites. Judge test **content**. Run the in-scope build and the tests that cover the change, in optimized/Release. .NET: `dotnet test`. Widen to the paired project or solution only when a filter cannot name the affected tests (`tech-test.md`). Run the Playwright journeys that cover the change. The editor’s integrated browser is available for the changed product UI and using it is recommended (`tech-playwright.md`). Record commands in **Test Execution**. Red build or test → **Error** with output in `Context`. Do not explore the product outside those commands.
+**Full:** Read sources, tests, docs, call sites. Judge test **content**. Run the in-scope build and the tests that cover the change, in optimized/Release. .NET: `dotnet test`. Widen to the paired project or solution only when a filter cannot name the affected tests (`tech-test.md`). Run the Playwright journeys that cover the change. Use the integrated browser on the changed product UI (Section 4.8). Record commands in **Test Execution**. Red build or test → **Error** with output in `Context`. Do not explore the product outside those commands.
 
 **Static:** Read sources, tests, docs. Judge tests from source. Write **Test Execution:** `Not run — static review`. Do not run build, tests, Playwright, debugger, or the product.
 
@@ -75,11 +75,11 @@ Cite source path and the broken rule in `Context`. Miss = Error. A trigger that 
 
 Reminder of Section 4. Still walk the leading sources in full. Record finding IDs or `none` on the matching Summary **Checks** row.
 
-- **Security:** OWASP Top 10; never trust caller parameters, URLs, bindings, payloads; injection; no secrets, credentials, tokens, or PII in logs; STRIDE mitigations for external input.
+- **Security:** OWASP Top 10; never trust caller parameters, URLs, bindings, payloads; injection; no secrets, credentials, tokens, or PII in logs; STRIDE mitigations for external input; trust-boundary limits per §4.2 (agreed, tied to a threat, posture labeled with why, host-dependent values configurable with a validated range, end-user settings explained, a hit limit is a named error, no silent truncation); every security decision commented where the code enforces it.
 - **Races:** no unsynchronized shared mutable state; race, TOCTOU, async interleaving, lock inversion, partial-state; document lock/atomic; concurrent tests for thread-safety claims.
 - **Docs:** English non-temp docs; why-comments; public API docs; comments, XML/docs, README, guides in sync with code.
 - **Orphans:** unused types, objects, APIs, files; dead code; stale docs; deprecated patterns in active paths; internals leaked; least visibility.
-- **Correctness:** warnings as errors; no silent failure; validate trust-boundary input and parameters; agreed limits (constant vs configurable); no invalid state after errors; check returns; no tracking IDs in code; off-by-one; overflow; result/try APIs on expected and hot-path failures.
+- **Correctness:** warnings as errors; no silent failure; validate trust-boundary input and parameters; no invalid state after errors; check returns; no tracking IDs in code; off-by-one; overflow; result/try APIs on expected and hot-path failures.
 - **API:** invalid states unrepresentable; try/result at public expected-failure boundaries; misuse/abuse analysis; public snippet matches the plan.
 - **Repo:** Windows/Linux/macOS on x64/ARM64; UTF-8 console once at process start; Debug = Release; line length 160; copyright; mandatory lint; no unapproved dependency or script; MIT / Apache-2.0 / BSD-like only.
 - **UI:** product web UI: `aria-*`; phone-first responsive (320px, locked
@@ -106,13 +106,13 @@ When a plan is in scope: walk every requirement ID that has Done-when from the *
 
 ### Design decisions
 
-Hunt encoded choices without a why: algorithm, data layout, lock/atomic, error policy, trust-boundary limit, fallback, compatibility shim, omitted validation. Section 4.6 (also 4.1, 4.3) requires comments/docs for those. Undocumented choice = Error. "Obvious" is not documentation.
+Hunt encoded choices without a why: algorithm, data layout, lock/atomic, error policy, trust-boundary limit, security trade-off (threat, mitigation, rejected alternative, residual risk), fallback, compatibility shim, omitted validation. Section 4.6 (also 4.1, 4.2, 4.3) requires comments/docs for those. Undocumented choice = Error. "Obvious" is not documentation.
 
 ### Performance
 
 Required pass. Walk Section 4.4 and every performance **property** in the loaded tech skill. Performance is a feature. Evaluate interface-at-boundary vs concrete hot-path work.
 
-Inspect named hot paths **intensively**. Inspect cold/setup paths only for dominant waste (unbounded buffer, slurped file, accidental N²).
+Inspect named hot paths **intensively** (any allocation there is a finding). Inspect cold and setup paths for avoidable allocations and dominant waste (unbounded buffer, slurped file, accidental N², needless copies, LINQ chains, boxing).
 
 For **each** named hot path, check and record on the Summary **Checks** rows (finding IDs or `none` per axis):
 
@@ -132,9 +132,9 @@ Source-visible cost is enough. Do not require a profiler unless the user asked o
 - Missing misuse/abuse analysis for new public APIs, public API drift from the plan snippet, or a dependency/script added without user approval → Error.
 - Product web UI: markup/CSS follow `tech-web.md` (phone-first, locked
   breakpoints) unless the user waived responsiveness. **Full review:** run planned
-  Playwright journeys; failures = Error. The editor’s integrated browser is
-  available and recommended (`tech-playwright.md`). **Static review:** specs must exist and
-  look able to fail; do not launch the browser.
+  Playwright journeys; failures = Error. Use the integrated browser (Section
+  4.8). **Static review:** specs must exist and look able to fail; do not
+  launch the browser.
 - Illustrations: do not load or apply `tech-web.md`. Do not require responsive
   layout. Asserts in `workflow-illustrate.md` only.
 
@@ -142,7 +142,7 @@ Source-visible cost is enough. Do not require a profiler unless the user asked o
 
 This is the required stance, not a soft overlay. Assume the in-scope solution cannot work. Do not stop after the first flaw. Cite `Skeptic` in `Context`.
 
-- **Parts:** every in-scope unit — wrong default, off-by-one, silent swallow, copy-paste, tests that cannot fail, missing guard. Dumbest caller/operator error AND worst abuse + STRIDE at trust boundaries.
+- **Parts:** every in-scope unit — wrong default, off-by-one, silent swallow, copy-paste, tests that cannot fail, missing guard, a limit too tight for a capable host or too loose for its exposure. Dumbest caller/operator error AND worst abuse + STRIDE at trust boundaries.
 - **Whole:** composition — call-graph, shared state, ordering, contracts vs callers, tests that pass but do not prove the claim, requirements that hold per file but fail end-to-end, defects that exist only in the interplay of otherwise-correct pieces.
 - Hair in the soup counts. Isolated nits that violate §4 or become fatal in combination = Error. `none` only after both hunts ran and found nothing (say so in Sweep).
 
@@ -183,7 +183,7 @@ both. A later review file starts every Status at `⬜` again.
 
 ```markdown
 ## {ID} - {Title}
-Status: ⬜ {Initial} · {Depends on / Severity}
+Status: ⬜ · Severity: {High | Medium | Low} · Depends on: {IDs or —}
 ### What
 ### Why
 {what is wrong; why it matters; what follows if it stays}
@@ -198,12 +198,81 @@ Fenced **Problem** (current) / **Fix** (after) — required. Extra illustration 
 ### Verify
 ```
 
+`Severity` is required for Error and Performance findings and omitted for
+Cosmetic and Refactoring.
+
+#### Worked example
+
+Copy the depth, not the content. Every field is concrete enough that a person
+can accept the defect and the fix, and a weaker agent can apply the fix without
+a choice.
+
+````markdown
+## E1 - Export accepts a duplicate name
+Status: ⬜ · Severity: High · Depends on: —
+### What
+`Export.Create` adds a second export when the name already exists. The store
+check `Contains` exists but is never called on this path.
+### Why
+Wrong: two rows titled Report exist after the second submit. It matters
+because REQ-EXPORT-NO-DUPLICATE forbids it and later lookups by name return
+the first row only. If it stays, the second export is unreachable and users
+believe their newer report was saved.
+### Evaluate
+Look at: [`src/Export.cs`](../src/Export.cs) `Create`
+Accept when: a second `Create("Report")` returns `ExportError.DuplicateName`
+and the store still holds one row.
+Must not change: the first `Create("Report")` succeeds and returns its id.
+### How
+Problem ([`src/Export.cs`](../src/Export.cs) ~L20):
+```csharp
+public static Result<ExportId> Create(string name)
+{
+    return _Store.Add(name);
+}
+```
+Fix:
+```csharp
+public static Result<ExportId> Create(string name)
+{
+    // Names are unique per store; reject before the add so no partial row exists.
+    if (_Store.Contains(name))
+    {
+        return Result<ExportId>.Fail(ExportError.DuplicateName);
+    }
+
+    return _Store.Add(name);
+}
+```
+Test that must fail before the fix:
+```csharp
+[Test]
+public async Task CreateTwiceWithSameNameReturnsDuplicateName()
+{
+    Export.Create("Report");
+
+    Result<ExportId> second = Export.Create("Report");
+
+    await Assert.That(second.Error).IsEqualTo(ExportError.DuplicateName);
+}
+```
+### Context
+Skeptic (parts). REQ-EXPORT-NO-DUPLICATE in
+[`requirements/req_export.md`](../requirements/req_export.md).
+### Where
+[`src/Export.cs`](../src/Export.cs) ~L20 `Export.Create` (primary)
+### Verify
+`dotnet test src/Export.Tests/Export.Tests.csproj -c Release -- --treenode-filter "/*/*/ExportTests/*"` → all pass, including `CreateTwiceWithSameNameReturnsDuplicateName`.
+````
+
 ### Findings Overview Table
+
+❗ Link every finding ID in the Overview, Summary **Findings**, and **Priority** to its block (`#` + the GitHub slug of the block heading: lowercase, punctuation other than `-` dropped, spaces → `-`; `## E1 - Export accepts a duplicate name` → `#e1---export-accepts-a-duplicate-name`).
 
 ```markdown
 | ID | Bucket | Title | Summary |
 |----|--------|-------|---------|
-| E1 | E | {title} | {one sentence with location} |
+| [E1](#e1---export-accepts-a-duplicate-name) | E | {title} | {one sentence with location} |
 ```
 
 ```markdown
@@ -221,7 +290,9 @@ verdict, every finding in one table, and every hunt in one table. The release
 verdict lives here. Do not add a second closer. Do not replace the tables
 with paragraphs.
 
-- **Release** and **Execution** are single lines.
+- **Release** is one line when Ready. When Blocked, the line lists the linked IDs
+  and one short block per blocker follows it (Section 4.16: what blocks,
+  evidence, impact, scope, to unblock). **Execution** is one line.
 - **Counts** is one line. A bucket with zero findings shows `0`.
 - **Findings** has one row per finding. **Status** uses the Section 5 legend
   and starts `⬜`. Keep the row when the finding is later fixed; change
@@ -234,12 +305,18 @@ with paragraphs.
   is finding IDs or `none`. `none` means the hunt ran and found nothing. A
   hunt that does not apply says `n/a` and why (`n/a — no product UI`). A
   missing row is an incomplete Summary.
-- **Priority** lists findings in fix order, one line each: the ID and what the fix changes. Write `none` when Findings has no defect rows.
+- **Priority** lists findings in fix order, one line each: the linked ID and what the fix changes. Write `none` when Findings has no defect rows.
 
 ```markdown
 ## Summary
 
 **Release:** Ready for public release | Blocked by {IDs}
+
+{When blocked, per ID:}
+- **{ID} blocks:** {concrete defect, link}. **Evidence:** {command/output or
+  file/symbol}. **Impact:** {what fails, for whom, what ships wrong}.
+  **Scope:** {what is blocked; what can continue}. **To unblock:** {fix,
+  decision, or fact; options; who acts}.
 
 **Execution:** {build / test outcome, or `Not run — static review`}
 
@@ -251,8 +328,9 @@ with paragraphs.
 
 | ID | Status | Bucket | Result |
 |----|--------|--------|--------|
-| E1 | ⬜ | Error · High | {defect and where, one sentence} |
-| R1 | ⬜ | Refactoring | {defect and where, one sentence} |
+| [E1](#e1---export-accepts-a-duplicate-name) | ⬜ | Error · High | {defect and where, one sentence} |
+| [P1](#p1---{title-slug}) | ⬜ | Performance · Medium | {defect and where, one sentence} |
+| [R1](#r1---{title-slug}) | ⬜ | Refactoring | {defect and where, one sentence} |
 
 ### Checks
 
@@ -285,12 +363,12 @@ with paragraphs.
 
 ### Priority
 
-1. {ID} — {what the fix changes}
+1. [E1](#e1---export-accepts-a-duplicate-name) — {what the fix changes}
 ```
 
 When nothing was found, Findings is one row: `| — | — | — | none |`, and Priority is `none`.
 
-Patch Output before Completion if any Checks row is missing, a finding is absent from Findings, or a Findings row has no Status.
+Patch Output before Completion if any Checks row is missing, a finding is absent from Findings, a Findings row has no Status, or a finding link does not match a block heading.
 
 ### Output Modes
 
@@ -321,11 +399,16 @@ Priority Action List in chat. Do not write `reviews/review_*.md`.
 ## Category Rules
 
 Assign exactly one bucket: Error · Cosmetic · Refactoring Opportunity · Performance.
+IDs: `E{n}` Error · `S{n}` Cosmetic (style) · `R{n}` Refactoring · `P{n}` Performance.
+Never use `C{n}`; it names recorded choices (Section 5.1).
 
 - **Error:** Severity (High/Medium/Low) in the status line; Problem/Fix in `How`; OWASP category for security; missing boundary/guard for validation gaps; skill/instruction property miss; undocumented design decision; test-content gap that leaves behavior unproven; race/TOCTOU; unused type or dead code in scope.
 - **Cosmetic:** exact style rule in `How`; Problem/Fix in `How`.
 - **Refactoring:** unchanged behavior in `Why`; extract/move/split in `How`; Problem/Fix in `How`.
-- **Performance:** Section 4.4 + tech skill in `How`; Problem/Fix in `How`; complexity, frequency, allocation pressure, latency, throughput, memory, CPU, and throw/panic / error-return paths in `Context`.
+- **Performance:** Severity (High/Medium/Low) in the status line. **High** =
+  violates a planned budget or a ❗ Section 4.4 rule on a named hot path; a
+  High Performance finding blocks release like an Error. Section 4.4 + tech
+  skill in `How`; Problem/Fix in `How`; complexity, frequency, allocation pressure, latency, throughput, memory, CPU, and throw/panic / error-return paths in `Context`.
 
 ## Completion
 

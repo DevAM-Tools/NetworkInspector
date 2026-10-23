@@ -6,10 +6,11 @@ description: >-
   Phase 3 closing audit. Full books: every public member, behavior item, and .NET test booked
   with a closed status set. Use on /port-dotnet-rust, when porting .NET or C# to Rust, or when
   port/** is in scope.
+argument-hint: Name the solution or assemblies to port, or "resume"
 ---
 
 Execute the .NET → Rust port workflow.
 
-- Read `.github/copilot-instructions.md`.
+- Read `.github/copilot-instructions.md` unless it is already in context.
 - Read `.github/skills/workflow-port-dotnet-rust.md` and every skill it lists under "Always also load".
 - Apply rules exactly; do not restate them here.

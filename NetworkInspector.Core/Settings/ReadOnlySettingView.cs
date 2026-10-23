@@ -64,6 +64,9 @@ public readonly struct ReadOnlySettingView : IReadOnlySetting
     /// <inheritdoc/>
     public EnumSettingMetadata? EnumMetadata => _Owner.EnumMetadata;
 
+    /// <inheritdoc/>
+    public SettingActivation Activation => _Owner.Activation;
+
     #endregion
 
     #region Current Value

@@ -31,6 +31,28 @@ internal sealed class PacketExitPointTests
         return builder.Build();
     }
 
+    /// <summary>How long a gated test waits for the other side before it gives up; only a failing test ever waits this long.</summary>
+    private static readonly TimeSpan _GateTimeout = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// Runs <paramref name="body"/> on a thread of its own. The gated tests park their threads (barrier, populator gate), so they
+    /// must not depend on the thread pool: when the pool is busy with other tests it injects a new thread only about once per
+    /// second, and a task queued behind a parked one would miss the wait that the test makes for it.
+    /// </summary>
+    private static Task<T> _RunOnOwnThread<T>(Func<T> body) =>
+        Task.Factory.StartNew(body, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+
+    /// <summary>Waits at the barrier until both racers are there, then materializes the lazy field.</summary>
+    private static bool _MaterializeAfterBarrier(Barrier start, Packet packet, ushort lazyIndex)
+    {
+        if (!start.SignalAndWait(_GateTimeout))
+        {
+            throw new TimeoutException("The second racer did not arrive at the barrier.");
+        }
+
+        return packet.MaterializeLazyField(lazyIndex);
+    }
+
     private static Frame _MakeFrame(Stack stack, byte[] data, int frameId = 1) =>
         _MakeFrame(stack, data, frameId, FrameInterfaceId.Invalid);
 
@@ -320,22 +342,13 @@ internal sealed class PacketExitPointTests
         ushort lazyIndex = proto.LazyContainerIndex;
 
         using Barrier start = new(2);
-        bool[] results = [false, false];
+        Task<bool> first = _RunOnOwnThread(() => _MaterializeAfterBarrier(start, packet, lazyIndex));
+        Task<bool> second = _RunOnOwnThread(() => _MaterializeAfterBarrier(start, packet, lazyIndex));
 
-        Task first = Task.Run(() =>
-        {
-            start.SignalAndWait();
-            results[0] = packet.MaterializeLazyField(lazyIndex);
-        });
-        Task second = Task.Run(() =>
-        {
-            start.SignalAndWait();
-            results[1] = packet.MaterializeLazyField(lazyIndex);
-        });
-
-        bool entered = populatorEntered.WaitHandle.WaitOne(TimeSpan.FromSeconds(5));
+        // The winner parks in the populator until the gate opens; the loser has no populator to run and returns false.
+        bool entered = populatorEntered.WaitHandle.WaitOne(_GateTimeout);
         releasePopulator.Set();
-        await Task.WhenAll(first, second);
+        bool[] results = await Task.WhenAll(first, second);
 
         await Assert.That(entered).IsTrue();
         await Assert.That((results[0] ? 1 : 0) + (results[1] ? 1 : 0)).IsEqualTo(1);
@@ -380,22 +393,13 @@ internal sealed class PacketExitPointTests
         ushort lazyIndex = proto.LazyContainerIndex;
 
         using Barrier start = new(2);
-        bool[] results = [false, false];
+        Task<bool> first = _RunOnOwnThread(() => _MaterializeAfterBarrier(start, packet, lazyIndex));
+        Task<bool> second = _RunOnOwnThread(() => _MaterializeAfterBarrier(start, packet, lazyIndex));
 
-        Task first = Task.Run(() =>
-        {
-            start.SignalAndWait();
-            results[0] = packet.MaterializeLazyField(lazyIndex);
-        });
-        Task second = Task.Run(() =>
-        {
-            start.SignalAndWait();
-            results[1] = packet.MaterializeLazyField(lazyIndex);
-        });
-
-        bool entered = populatorEntered.WaitHandle.WaitOne(TimeSpan.FromSeconds(5));
+        // The winner parks in the populator until the gate opens; the loser has no populator to run and returns false.
+        bool entered = populatorEntered.WaitHandle.WaitOne(_GateTimeout);
         releasePopulator.Set();
-        await Task.WhenAll(first, second);
+        bool[] results = await Task.WhenAll(first, second);
 
         await Assert.That(entered).IsTrue();
         await Assert.That((results[0] ? 1 : 0) + (results[1] ? 1 : 0)).IsEqualTo(1);
@@ -435,14 +439,38 @@ internal sealed class PacketExitPointTests
         }
         ushort lazyIndex = proto.LazyContainerIndex;
 
-        Task<bool> owner = Task.Run(() => packet.MaterializeLazyField(lazyIndex));
-        bool entered = populatorEntered.WaitHandle.WaitOne(TimeSpan.FromSeconds(5));
-        bool waiter = packet.MaterializeLazyField(lazyIndex);
+        Task<bool> owner = _RunOnOwnThread(() => packet.MaterializeLazyField(lazyIndex));
+        bool entered = populatorEntered.WaitHandle.WaitOne(_GateTimeout);
+        if (!entered)
+        {
+            // The owner never started: opening the gate lets it finish and the test fails below without calling the waiter,
+            // which would claim the field itself and wait for a gate that nobody opens.
+            releasePopulator.Set();
+            await owner;
+            await Assert.That(entered).IsTrue();
+            return;
+        }
+
+        // The waiter runs on a thread of its own: it must spin while the owner is parked in the populator, so it cannot be the
+        // thread that opens the gate afterwards (that was a deadlock that ended only at the 30 second gate timeout).
+        using ManualResetEventSlim waiterStarted = new(false);
+        Task<bool> waiter = _RunOnOwnThread(() =>
+        {
+            waiterStarted.Set();
+            return packet.MaterializeLazyField(lazyIndex);
+        });
+        bool started = waiterStarted.WaitHandle.WaitOne(_GateTimeout);
+
+        // While the gate is closed the waiter cannot be done: it spins until the lazy index clears.
+        await Task.Delay(200);
+        bool waiterDoneWhileGated = waiter.IsCompleted;
         releasePopulator.Set();
+        bool waiterResult = await waiter;
         bool ownerResult = await owner;
 
-        await Assert.That(entered).IsTrue();
-        await Assert.That(waiter).IsFalse();
+        await Assert.That(started).IsTrue();
+        await Assert.That(waiterDoneWhileGated).IsFalse();
+        await Assert.That(waiterResult).IsFalse();
         await Assert.That(ownerResult).IsTrue();
         await Assert.That(packet.HasUnpopulatedLazyFields).IsFalse();
     }

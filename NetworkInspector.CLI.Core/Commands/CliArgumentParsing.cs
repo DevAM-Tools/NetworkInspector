@@ -9,21 +9,56 @@ internal static class CliArgumentParsing
 {
     #region Public API
 
-    /// <summary>
-    /// Runs a command body and maps <see cref="ArgumentException"/> to
-    /// <see cref="ExitCode.ArgumentError"/> with a stderr message.
-    /// </summary>
-    internal static int RunWithArgumentGuard(Func<int> body)
+    /// <summary>Runs a command body and maps <see cref="ArgumentException"/> to <see cref="ExitCode.ArgumentError"/> with a message on <paramref name="error"/>.</summary>
+    /// <param name="body">The command body.</param>
+    /// <param name="error">The error writer of the command.</param>
+    /// <returns>The exit code of the body, or <see cref="ExitCode.ArgumentError"/>.</returns>
+    internal static int RunWithArgumentGuard(Func<int> body, TextWriter error)
     {
+        ArgumentNullException.ThrowIfNull(body);
+        ArgumentNullException.ThrowIfNull(error);
         try
         {
             return body();
         }
         catch (ArgumentException ex)
         {
-            Console.Error.WriteLine($"Error: {ex.Message}");
+            error.WriteLine($"Error: {ex.Message}");
             return (int)ExitCode.ArgumentError;
         }
+    }
+
+    /// <summary>
+    /// Runs an asynchronous command body and maps <see cref="ArgumentException"/> and <see cref="CliUsageException"/> to
+    /// <see cref="ExitCode.ArgumentError"/> with a message on <paramref name="error"/>.
+    /// </summary>
+    /// <param name="body">The command body.</param>
+    /// <param name="error">The error writer of the command.</param>
+    /// <returns>The exit code of the body, or <see cref="ExitCode.ArgumentError"/>.</returns>
+    internal static async Task<int> RunWithArgumentGuardAsync(Func<Task<int>> body, TextWriter error)
+    {
+        ArgumentNullException.ThrowIfNull(body);
+        ArgumentNullException.ThrowIfNull(error);
+        try
+        {
+            return await body().ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is ArgumentException or CliUsageException)
+        {
+            error.WriteLine($"Error: {ex.Message}");
+            return (int)ExitCode.ArgumentError;
+        }
+    }
+
+    /// <summary>Consumes a settings option (<c>--profile</c>, <c>--settings-path</c>, …) at the current argument, if it is one.</summary>
+    /// <param name="args">All arguments of the command.</param>
+    /// <param name="index">Position of the current argument; advanced past the consumed value.</param>
+    /// <param name="settings">Collects the settings options.</param>
+    /// <returns><see langword="true"/> when the argument was a settings option.</returns>
+    internal static bool ParseSettingsOption(string[] args, ref int index, CliSettingsOptionsBuilder settings)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        return settings.TryConsume(args, ref index);
     }
 
     /// <summary>Checks whether a string is a help flag.</summary>

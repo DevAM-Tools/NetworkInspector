@@ -14,7 +14,7 @@ If `custom_instructions.md` exists at the repository root, read and apply it (Se
 
 ## Tool mapping
 
-- Section 4.14 forbids subagents for council, advisors, peer review, and Exam: do not use the `Agent` tool for those.
+- “File-read tool” (Section 3) is `Read`. “Subagent or delegation tool” (Section 4.14) is `Agent`: do not use it for council, advisors, peer review, or Exam.
 - Section 4.11 (Git read-only) applies to every Bash and PowerShell call.
-- The editor browser in Sections 4.8 and 4.15 is the Claude desktop app browser pane in Claude Code.
+- Integrated browser (Sections 4.8 and 4.15): the desktop app browser pane; in the CLI and the VS Code extension, the Claude in Chrome tools when connected. Without either, say so once and use headed Playwright or a trace (`tech-playwright.md`).
 - Section 4.7 forbids ad-hoc scripts. Use the native toolchain commands from the loaded tech skill.

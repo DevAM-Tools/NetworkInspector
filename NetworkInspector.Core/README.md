@@ -117,6 +117,8 @@ an id again is a re-parse and gives the same result.
 | `PacketIndex` | Cross-packet protocol and field presence (Roaring bitmaps) |
 | `ValueCache` | Columnar RAM series of selected field values |
 | `SettingsManager` | Typed, persisted protocol settings with size and depth limits |
+| `SettingsRegistrar` | Registers groups and settings into a `SettingsManager`; the public constructor lets plugins register the option settings of their own short-lived managers |
+| `SettingScope` | The one scope enumeration: `Application`, `Profile`, `Session` |
 
 Namespaces: `NetworkInspector.Core` (stack, frame, packet, options), `.Fields`, `.Ids`, `.Infos`, `.Settings`,
 `.Index`, `.ValueCaches`, `.Protocols` (dissector interfaces); value types are in `NetworkInspector.Values`.
@@ -171,6 +173,54 @@ column-wise with SIMD. Usage: [`VALUECACHE_GUIDE.md`](VALUECACHE_GUIDE.md).
 Read frames with [`NetworkInspector.Sources`](../NetworkInspector.Sources/README.md) (PCAP, PCAPNG, BLF, ASC) and
 write packets with [`NetworkInspector.Exporters`](../NetworkInspector.Exporters/README.md) (JSON, CSV, Text, PBF,
 Parquet, DuckDB). Packet exporters need a field tree.
+
+### Read And Change Settings
+
+`SettingsManager` holds typed `Setting` objects. A value has a text form for people and a JSON form for files; both
+validate against the type, range, and enumeration of the setting and never throw for a wrong value:
+
+```csharp
+using NetworkInspector.Core.Settings;
+
+using SettingsManager manager = new(folder);
+manager.RegisterSetting(Setting.I64("net.retries", "Retries", "net", 3, min: 0, max: 10, activation: SettingActivation.SessionReset));
+
+Setting retries = manager.GetSetting("net.retries")!;   // registered above
+if (!SettingValueText.TryParse(retries, "25", out SettingValue value, out SettingProblem? problem)
+    || !retries.TrySetPendingValue(value, out problem))
+{
+    Console.Error.WriteLine(problem);   // one line: the setting name and the allowed range
+    return;
+}
+
+manager.ApplyChanges(["net.retries"]);   // pending → current for this key only
+manager.SaveChanged(["net.retries"]);    // merges this key into its group file
+```
+
+- **Two forms.** `SettingValueText` (`TryParse`, `Format`) is the form of command lines and UIs; `SettingValueJson`
+  (`TryRead`, `Write`) is the form of the files. Wrong input gives a `SettingProblem` with a `SettingProblemKind`
+  (`WrongType`, `BelowMinimum`, `AboveMaximum`, `NotFinite`, `UnknownEnum`, `InvalidPath`, `UnknownSetting`) and one
+  message that names the setting and the accepted values. `Setting.TryValidate` and `Setting.TrySetPendingValue` are the
+  non-throwing counterparts of `SetPendingValue`.
+- **Lookup.** `TryGetSetting` finds a setting by name; `FindSimilar` returns the closest names for a "did you mean".
+- **Activation.** `SettingActivation` (`Immediate`, `SessionReset`, `Restart`) says when a host should use a changed value.
+  Core applies every change at once; the host decides about restarts.
+- **Per-key apply.** `ApplyChanges(names)` and `ResetChanges(names)` work on the given keys only; `PendingChanged` is
+  raised for every key whose pending value changes, `SettingsApplied` for the applied ones.
+- **Sparse files.** `Save` writes only values that differ from their default, one file per group, and writes the values
+  of settings that are not registered in this run (`Orphans`, for example a plugin that is not loaded) back unchanged.
+  `Save` writes the whole state of the manager: the key of every registered setting is set, or removed at its default, so a
+  value that another process stored for a registered setting since `Load` is replaced (last writer wins). It deletes only
+  group files that the manager saw at `Load` or wrote itself, never a file another process created after `Load`.
+  `SaveChanged(names)` merges single keys into the files and keeps all other keys, also those another process wrote
+  (names of several groups are written group by group; an error stops at that group and the groups before it stay written);
+  `Unset(name)` removes a stored value so that the default applies again. Writers of several processes are serialized by
+  the lock file `.ni-settings.lock` in the folder; a writer that waits more than two seconds gets a
+  `PersistenceSettingsException` ("in use by another process; try again").
+- **Profiles.** `SettingsProfiles` (`List`, `Exists`, `TryCreate`, `TryRename`, `TryDelete`) manages profile folders under a
+  settings base; `ProfileNames` validates a name and `StorageNames` maps it to a folder name (names up to 120 characters
+  are used as they are, longer ones become a shortened name with a hash and a `.name` file that keeps the full name).
+  `SettingsManagerFactory.ResolvePath(base, profile)` gives the folder of a profile.
 
 ### Write A Custom Dissector
 

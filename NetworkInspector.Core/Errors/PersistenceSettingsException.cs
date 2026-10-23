@@ -35,5 +35,12 @@ public sealed class PersistenceSettingsException : SettingsException
     internal static PersistenceSettingsException ForNoStoragePath() =>
         new("No storage path configured");
 
+    /// <summary>
+    /// Creates an exception indicating that another process (or another manager) holds the folder lock and did not release it
+    /// within the retry budget.
+    /// </summary>
+    internal static PersistenceSettingsException ForLocked(string storagePath) =>
+        new($"The settings folder '{storagePath}' is in use by another process; try again.");
+
     #endregion
 }

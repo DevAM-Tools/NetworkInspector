@@ -1,6 +1,6 @@
 # Solution and Build Configuration
 
-Load when `Directory.Build.props`, `Directory.Build.targets`, `Directory.Packages.props`, `GlobalUsings.cs`, or `*.csproj` / `*.props` / `*.targets` are in scope. Extends Section 4.7 in `copilot-instructions.md`. SSOT for MSBuild properties, CPM, CSharpStyleChecker, and New Dependency Protocol steps.
+Load when `Directory.Build.props`, `Directory.Build.targets`, `Directory.Packages.props`, `GlobalUsings.cs`, or `*.csproj` / `*.props` / `*.targets` are in scope. Extends Section 4.7 in `copilot-instructions.md`. SSOT for MSBuild properties, CPM, CSharpStyleChecker, and the .NET mechanics of the New Dependency Protocol (Section 4.7).
 
 ## File Layout
 
@@ -57,7 +57,17 @@ Generator projects only:
 | `WarningsAsErrors` | optional; specific warning codes only |
 | `WarningsNotAsErrors` | user approval only — same template |
 
-When a warning is hidden in MSBuild, use the **global** suppression template in `tech-csharp.md` (Diagnostics). One XML comment **per id**: id, why the warning is inapplicable, **why global** (not method/file/pragma), user approved.
+Library projects (no host, consumed by other code) enable CA2007 (`ConfigureAwait`), which is off by default. Put a `.editorconfig` in the library project folder; enabling a rule is not a suppression and needs no approval:
+
+```ini
+# src/MyLibrary/.editorconfig — library code configures every await (tech-csharp.md Async)
+[*.cs]
+dotnet_diagnostic.CA2007.severity = error
+```
+
+CA1848 and CA2254 (logging through `[LoggerMessage]` with constant templates) are already errors under `10-recommended` with `TreatWarningsAsErrors`.
+
+When a warning is hidden in MSBuild, use the **global** suppression template in `tech-csharp.md` (Lints and suppressions). One XML comment **per id**: id, why the warning is inapplicable, **why global** (not method/file/pragma), user approved.
 
 ```xml
 <!-- Id: CS1591. Why: {why this warning is inapplicable}. Why global: {why not method/file/pragma}. User approved. -->
@@ -133,13 +143,11 @@ When publishing or packaging is in scope, ask user for: `VersionSuffix`, `Compan
 - Violations = compiler errors (CSC*). Rebuild after add.
 - Set `ApplyCSharpStyleChecker=false` only to opt out.
 
-## New Dependency Protocol
+## Dependencies (.NET mechanics)
 
-Intent: Section 4.7. Never add a dependency without user approval.
+New Dependency Protocol: Section 4.7 (approval, what to present). .NET mechanics:
 
-- Never add `PackageReference`, `PackageVersion`, or `ProjectReference` without user approval.
-- Ask in Grill-Me when plan may need new dependencies.
-- Present: package id, **what it does**, **why it is needed**, license (`MIT` / `Apache-2.0` / BSD-like), alternatives.
+- Never add `PackageReference`, `PackageVersion`, or `ProjectReference` before approval.
 - After approval: add `PackageVersion` first, then `PackageReference` without `Version`.
 
 ```xml
@@ -152,16 +160,20 @@ Intent: Section 4.7. Never add a dependency without user approval.
 ## Commands
 
 ```bash
-dotnet build CopilotAIWorkflow.slnx -c Release
-dotnet test CopilotAIWorkflow.slnx -c Release --no-build
-dotnet pack path/Proj.csproj -c Release
+dotnet build path/App.slnx -c Release
+dotnet test path/App.slnx -c Release --no-build
+dotnet pack path/Proj/Proj.csproj -c Release
 ```
 
-`dotnet test` on the solution is the full run. A scoped project run uses `tech-tunit.md`. Do not add a wrapper script without approval. File-in-use during build: concurrent agent (Section 4.14).
+`dotnet test` on the solution is the full run. A scoped project run uses `tech-tunit.md`. File-in-use during build: concurrent agent (Section 4.14).
 
 ## Source File Copyright Header
 
+Exact text from `COPYRIGHT`, in the file type’s native comment.
+
 | File type | Value |
 |-----------|-------|
-| `.cs`, `.razor.cs`, `.css` | `// {copyright}` — exact text from `COPYRIGHT` |
-| `.md`, `.html`, `.razor` | `<!-- {copyright} -->` — exact text from `COPYRIGHT` |
+| `.cs`, `.razor.cs` | `// {copyright}` |
+| `.css`, `.razor.css` | `/* {copyright} */` |
+| `.razor` | `@* {copyright} *@` (a Razor comment is not rendered into the HTML) |
+| `.md`, `.html` | `<!-- {copyright} -->` |

@@ -13,6 +13,11 @@ Load when generator code or `IIncrementalGenerator` is in scope. Extends Section
 // Right: SyntaxProvider / ForAttributeWithMetadataName on IIncrementalGenerator
 ```
 
+## Target framework
+
+- Generators target `netstandard2.0` (`tech-solution.md`); `tech-csharp.md` applies with this carve-out: APIs newer than `netstandard2.0` are unavailable in the generator project — no `FrozenDictionary`, `SearchValues`, `Vector128` / `Vector256`, `ArgumentNullException.ThrowIfNull` and the other guard helpers, `System.Threading.Lock`, or `required` members without polyfills. Use the `netstandard2.0` equivalents (`Dictionary` built once, explicit `if (x is null) throw new ArgumentNullException(nameof(x));`, `lock` on a private `object`).
+- Generated code targets the **consumer’s** framework and may use its APIs only when the generator checks the consumer’s language version or available types first.
+
 ## Generated Code
 
 - Emit code that compiles with zero warnings under the consumer’s build settings.

@@ -4,16 +4,48 @@ namespace NetworkInspector.CLI.Commands;
 
 /// <summary>
 /// Parse and export command.
-/// Reads frames from sources, parses them into packets with the full protocol stack,
-/// and exports to an analysis format (JSON, PBF, text, Parquet, or DuckDB).
+/// Reads frames from sources, parses them into packets with the full protocol stack, and exports to an analysis format
+/// (CSV, JSON, PBF, text, Parquet, DuckDB, or a plugin's format). Sources and formats come from the plugin registry.
 /// </summary>
 internal static class ExportCommand
 {
+    #region Types
+
+    /// <summary>The parsed arguments of one run.</summary>
+    private sealed record ExportArguments(
+        List<string> SourceSpecs,
+        string OutputPath,
+        string? FormatSpec,
+        string? FilterExpression,
+        CliSettingsOptions Settings,
+        int MaxPackets,
+        long SplitSizeBytes,
+        int SplitCount,
+        int ProgressInterval,
+        int BlfCacheBudgetBytes,
+        bool Tolerant,
+        bool Overwrite);
+
+    #endregion
+
     #region Public API
 
-    /// <summary>Runs the export command.</summary>
-    internal static int Run(string[] args) =>
-        CliArgumentParsing.RunWithArgumentGuard(() => _RunCore(args));
+    /// <summary>Runs the export command on the console.</summary>
+    /// <param name="args">The arguments after the command name.</param>
+    /// <returns>The exit code.</returns>
+    internal static Task<int> RunAsync(string[] args) => RunAsync(args, CliIo.FromConsole(), CancellationToken.None);
+
+    /// <summary>Runs the export command with injected writers.</summary>
+    /// <param name="args">The arguments after the command name.</param>
+    /// <param name="io">Output and error writers.</param>
+    /// <param name="cancellationToken">Cancels the run.</param>
+    /// <returns>The exit code.</returns>
+    internal static Task<int> RunAsync(string[] args, CliIo io, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(args);
+        ArgumentNullException.ThrowIfNull(io);
+        return CliArgumentParsing.RunWithArgumentGuardAsync(() => _RunCoreAsync(args, io, cancellationToken), io.Error);
+    }
 
     /// <summary>
     /// Drives the frame-read → parse → export loop across all active sources,
@@ -32,11 +64,15 @@ internal static class ExportCommand
     /// <param name="maxPackets">Stop after this many packets (0 = unlimited).</param>
     /// <param name="progressInterval">Print progress every N packets to stderr (0 = silent).</param>
     /// <param name="tolerant">When <see langword="true"/>, log and skip frames that throw.</param>
+    /// <param name="error">Receives progress lines and warnings (the error writer of the command).</param>
     /// <param name="packetIdCounter">
     /// Monotonic packet-id allocator. Pass 0 for a fresh loop; each frame consumes the current
     /// value and then increments, so first-parse ids are dense <c>0, 1, 2, …</c>.
     /// </param>
-    /// <param name="cancellationToken">Cooperative cancellation.</param>
+    /// <param name="cancellationToken">
+    /// Cooperative cancellation. A cancelled loop stops, discards the output that was still open (it is not finished, so it must
+    /// not stay behind), and returns the packets written to the outputs that were completed before.
+    /// </param>
     /// <param name="outputsWritten">Number of output files or dataset directories finalized.</param>
     /// <returns>Number of packets exported successfully.</returns>
     internal static int RunExportLoop(
@@ -48,6 +84,7 @@ internal static class ExportCommand
         int maxPackets,
         int progressInterval,
         bool tolerant,
+        TextWriter error,
         ref int packetIdCounter,
         CancellationToken cancellationToken,
         out int outputsWritten)
@@ -57,6 +94,7 @@ internal static class ExportCommand
         outputsWritten = 0;
         Packet? recyclePacket = null;
         IPacketListener? exporter = null;
+        string? currentPath = null;
         IExportByteProgress? byteProgress = null;
         PacketIndex? filterIndex = filter is not null ? new PacketIndex(stack) : null;
 
@@ -78,7 +116,7 @@ internal static class ExportCommand
                 {
                     if (tolerant)
                     {
-                        Console.Error.WriteLine(
+                        error.WriteLine(
                             $"Warning: Skipping frame from {source.UiName}: {ex.Message}");
                         iterator.Advance();
                         continue;
@@ -119,7 +157,7 @@ internal static class ExportCommand
                 // empty file or dataset directory behind.
                 if (filter is not null)
                 {
-                    if (!CliFilter.TryMatch(filter, packet, filterIndex, out bool matched))
+                    if (!CliFilter.TryMatch(filter, packet, filterIndex, error, out bool matched))
                     {
                         throw new InvalidOperationException(
                             "Filter evaluation failed; the export was aborted to avoid writing a partially filtered output.");
@@ -142,10 +180,15 @@ internal static class ExportCommand
                         exporter.OnFinish();
                         (exporter as IDisposable)?.Dispose();
                         outputsWritten++;
+
+                        // Finished: from here on nothing of it is cleaned up, even when the next output cannot be opened.
+                        exporter = null;
+                        currentPath = null;
                     }
 
-                    string currentPath = splitManager.NextPath();
-                    exporter = createExporter(currentPath);
+                    string nextPath = splitManager.NextPath();
+                    exporter = createExporter(nextPath);
+                    currentPath = nextPath;
                     byteProgress = exporter as IExportByteProgress;
                     if (splitManager.IsSizeSplitting && byteProgress is null)
                     {
@@ -163,7 +206,7 @@ internal static class ExportCommand
 
                 if (progressInterval > 0 && packetCount % progressInterval == 0)
                 {
-                    Console.Error.WriteLine($"Progress: {packetCount} packets exported");
+                    error.WriteLine($"Progress: {packetCount} packets exported");
                 }
 
                 iterator.Advance();
@@ -179,22 +222,29 @@ internal static class ExportCommand
                 }
             }
 
+            // A cancelled export is unfinished: the open output goes away instead of looking like a complete result.
+            if (cancellationToken.IsCancellationRequested && exporter is not null)
+            {
+                CliCommandSupport.DiscardUnfinished(ref exporter, ref currentPath, splitManager.IsDirectoryOutput, error);
+                return packetCount;
+            }
+
             if (exporter is not null)
             {
                 exporter.OnFinish();
                 (exporter as IDisposable)?.Dispose();
                 outputsWritten++;
                 exporter = null;
+                currentPath = null;
             }
 
             return packetCount;
         }
-        finally
+        catch
         {
-            if (exporter is not null)
-            {
-                (exporter as IDisposable)?.Dispose();
-            }
+            // An error ends the export without OnFinish: dispose the listener, then delete what it left behind.
+            CliCommandSupport.DiscardUnfinished(ref exporter, ref currentPath, splitManager.IsDirectoryOutput, error);
+            throw;
         }
     }
 
@@ -203,11 +253,11 @@ internal static class ExportCommand
     #region Private Helpers
 
     /// <summary>Parses arguments and executes export; throws <see cref="ArgumentException"/> on bad args.</summary>
-    private static int _RunCore(string[] args)
+    private static async Task<int> _RunCoreAsync(string[] args, CliIo io, CancellationToken cancellationToken)
     {
         if (args.Length == 0 || CliArgumentParsing.IsHelpFlag(args[0]))
         {
-            _PrintUsage();
+            _PrintUsage(io.Error);
             if (args.Length > 0 && CliArgumentParsing.IsHelpFlag(args[0]))
             {
                 return (int)ExitCode.Success;
@@ -220,19 +270,22 @@ internal static class ExportCommand
         string? outputPath = null;
         string? formatSpec = null;
         string? filterExpression = null;
-        string? profileName = null;
-        string? settingsPath = null;
-        long maxConfigFileBytes = SettingsManager.DefaultMaxConfigFileBytes;
-        int maxJsonDepth = SettingsManager.DefaultMaxJsonDepth;
+        CliSettingsOptionsBuilder settings = new();
         int maxPackets = 0;
         long splitSize = 0;          // MiB
         int splitCount = 0;         // packets
         int progressInterval = 0;
         long blfCacheSize = 0;  // MiB
         bool tolerant = false;
+        bool overwrite = false;
 
         for (int i = 0; i < args.Length; i++)
         {
+            if (CliArgumentParsing.ParseSettingsOption(args, ref i, settings))
+            {
+                continue;
+            }
+
             switch (args[i].ToUpperInvariant())
             {
                 case "-O" or "--OUTPUT":
@@ -263,22 +316,11 @@ internal static class ExportCommand
                 case "--TOLERANT":
                     tolerant = true;
                     break;
+                case "--OVERWRITE":
+                    overwrite = true;
+                    break;
                 case "--FILTER":
                     filterExpression = CliArgumentParsing.GetNextArg(args, ref i, "--filter");
-                    break;
-                case "--PROFILE":
-                    profileName = CliArgumentParsing.GetNextArg(args, ref i, "--profile");
-                    break;
-                case "--SETTINGS-PATH":
-                    settingsPath = CliArgumentParsing.GetNextArg(args, ref i, "--settings-path");
-                    break;
-                case "--SETTINGS-MAX-CONFIG-FILE-BYTES":
-                    maxConfigFileBytes = CliArgumentParsing.ParseInt64(
-                        CliArgumentParsing.GetNextArg(args, ref i, "--settings-max-config-file-bytes"));
-                    break;
-                case "--SETTINGS-MAX-JSON-DEPTH":
-                    maxJsonDepth = CliArgumentParsing.ParseInt32(
-                        CliArgumentParsing.GetNextArg(args, ref i, "--settings-max-json-depth"));
                     break;
                 case "--BLF-CACHE-SIZE":
                     blfCacheSize = CliArgumentParsing.ParseNonNegativeLong(
@@ -292,13 +334,13 @@ internal static class ExportCommand
 
         if (sourceSpecs.Count == 0)
         {
-            Console.Error.WriteLine("Error: No source files specified.");
+            io.Error.WriteLine("Error: No source files specified.");
             return (int)ExitCode.ArgumentError;
         }
 
         if (string.IsNullOrEmpty(outputPath) || outputPath == "-")
         {
-            Console.Error.WriteLine(
+            io.Error.WriteLine(
                 "Error: Output file path required (-o / --output). Stdout ('-') is not supported.");
             return (int)ExitCode.ArgumentError;
         }
@@ -312,250 +354,286 @@ internal static class ExportCommand
 
         long splitSizeBytes = CliArgumentParsing.MiBToSplitSizeBytes(splitSize, "--split-size");
 
-        return _Execute(
-            sourceSpecs,
-            outputPath,
-            formatSpec,
-            filterExpression,
-            profileName,
-            settingsPath,
-            maxConfigFileBytes,
-            maxJsonDepth,
-            maxPackets,
-            splitSizeBytes,
-            splitCount,
-            progressInterval,
-            blfCacheBudgetBytes,
-            tolerant);
+        return await _ExecuteAsync(
+            new ExportArguments(sourceSpecs, outputPath, formatSpec, filterExpression, settings.Build(), maxPackets,
+                splitSizeBytes, splitCount, progressInterval, blfCacheBudgetBytes, tolerant, overwrite),
+            io,
+            cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>Executes the export pipeline.</summary>
-    private static int _Execute(
-        List<string> sourceSpecs,
-        string outputPath,
-        string? formatSpec,
-        string? filterExpression,
-        string? profileName,
-        string? settingsPath,
-        long maxConfigFileBytes,
-        int maxJsonDepth,
-        int maxPackets,
-        long splitSizeBytes,
-        int splitCount,
-        int progressInterval,
-        int blfCacheBudgetBytes,   // bytes; 0 = default
-        bool tolerant)
-    {
-        ExportFormatConfig formatConfig;
-        try
+    /// <summary>Executes the export pipeline inside a plugin session.</summary>
+    private static Task<int> _ExecuteAsync(ExportArguments arguments, CliIo io, CancellationToken cancellationToken) =>
+        CliCommandSupport.RunCancellableAsync(io, async token =>
         {
-            formatConfig = !string.IsNullOrEmpty(formatSpec)
-                ? ExportFormatConfig.Parse(formatSpec)
-                : ExportFormatConfig.FromExtension(Path.GetExtension(outputPath));
-        }
-        catch (ArgumentException ex)
-        {
-            Console.Error.WriteLine($"Error: {ex.Message}");
-            return (int)ExitCode.ArgumentError;
-        }
+            (CliPluginSession? opened, int openExit) = await CliPluginSession.OpenAsync(arguments.Settings, io, token)
+                .ConfigureAwait(false);
+            if (opened is null)
+            {
+                return openExit;
+            }
 
+            await using (opened.ConfigureAwait(false))
+            {
+                return _Run(opened, arguments, io, token);
+            }
+        }, cancellationToken);
+
+    /// <summary>Resolves the specs, builds the stack, opens the sources, and runs the loop.</summary>
+    private static int _Run(CliPluginSession session, ExportArguments arguments, CliIo io, CancellationToken token)
+    {
+        // Specs resolve through the registry, so plugin kinds and formats work exactly like built-in ones.
+        PacketFormatConfig format;
         List<SourceConfig> configs;
         try
         {
-            configs = sourceSpecs.ConvertAll(spec =>
-            {
-                SourceConfig config = SourceConfig.Parse(spec);
-                if (config is BlfSourceConfig blfConfig && blfCacheBudgetBytes > 0)
-                {
-                    return new BlfSourceConfig(blfConfig.Path)
-                    {
-                        CacheBudget = blfCacheBudgetBytes,
-                    };
-                }
-
-                return config;
-            });
+            format = arguments.FormatSpec is { Length: > 0 } formatSpec
+                ? PacketFormatConfig.Parse(formatSpec, session.Registry)
+                : PacketFormatConfig.FromExtension(Path.GetExtension(arguments.OutputPath), session.Registry);
+            configs = arguments.SourceSpecs.ConvertAll(spec => CliCommandSupport.WithBlfCache(SourceConfig.Parse(spec, session.Registry),
+                arguments.BlfCacheBudgetBytes));
         }
         catch (ArgumentException ex)
         {
-            Console.Error.WriteLine($"Error: {ex.Message}");
+            io.Error.WriteLine("Error: " + ex.Message);
             return (int)ExitCode.ArgumentError;
         }
 
-        SettingsManager? settingsManager = null;
-        Stack? stack = null;
+        // Unknown or mistyped option texts are refused before any work; the registration judges the rest when it opens.
+        if (!_OptionTextsAreValid(format, io))
+        {
+            return (int)ExitCode.ArgumentError;
+        }
+
+        // An existing output is refused (or accepted with --overwrite) before a long run starts; nothing is deleted yet.
+        SplitOutputManager firstPathManager = new(arguments.OutputPath, arguments.SplitSizeBytes, arguments.SplitCount,
+            format.IsDirectoryOutput);
+        if (!ExportTargets.TryCheck(firstPathManager.NextPath(), format.IsDirectoryOutput, arguments.Overwrite, out _,
+            out PluginError? targetError))
+        {
+            io.Error.WriteLine("Error: " + CliCommandSupport.TargetText(targetError, arguments.OutputPath));
+            return (int)ExitCode.ArgumentError;
+        }
+
+        FrameInterfaceRegistry frames = new();
+        if (!session.TryBuildStack(frames, out Stack? stack, out int stackExit))
+        {
+            return stackExit;
+        }
+
         List<IFrameSource> sources = [];
-
-        using CancellationTokenSource cts = new();
-        ConsoleCancelEventHandler cancelHandler = (_, e) =>
-        {
-            e.Cancel = true;
-            cts.Cancel();
-            Console.Error.WriteLine("Cancellation requested...");
-        };
-        Console.CancelKeyPress += cancelHandler;
-
-        try
+        using (stack)
         {
             try
             {
-                settingsManager = SettingsManagerFactory.Create(
-                    settingsPath,
-                    profileName,
-                    maxConfigFileBytes,
-                    maxJsonDepth);
-            }
-            catch (ArgumentException ex)
-            {
-                Console.Error.WriteLine($"Error: {ex.Message}");
-                return (int)ExitCode.ArgumentError;
-            }
+                IFilter? filter = null;
+                if (CliFilter.IsActive(arguments.FilterExpression)
+                    && !CliFilter.TryCompile(arguments.FilterExpression, stack, io.Error, out filter))
+                {
+                    return (int)ExitCode.ArgumentError;
+                }
 
-            FrameInterfaceRegistry registry = new();
-            try
-            {
-                StackBuilder stackBuilder = new(settingsManager, registry);
-                stackBuilder.RegisterStandardProtocols();
-                stack = stackBuilder.Build();
-                settingsManager = null; // ownership transferred to stack
+                int sourceExit = CliCommandSupport.OpenSources(configs, stack, frames, sources, io);
+                if (sourceExit != (int)ExitCode.Success)
+                {
+                    return sourceExit;
+                }
+
+                return _RunLoop(arguments, format, sources, stack, filter, io, token);
             }
             finally
             {
-                settingsManager?.Dispose();
+                CliSourceLifetime.DisposeSources(sources, io.Error);
             }
-
-            IFilter? filter = null;
-            if (CliFilter.IsActive(filterExpression) && !CliFilter.TryCompile(filterExpression, stack!, out filter))
-            {
-                return (int)ExitCode.ArgumentError;
-            }
-
-            try
-            {
-                foreach (SourceConfig config in configs)
-                {
-                    config.ValidateBeforeStart();
-                    IFrameSource source = config.CreateSource(stack!.Settings);
-                    FrameSourceId sourceId = registry.RegisterSource(source);
-                    source.Start(sourceId, registry);
-                    sources.Add(source);
-                }
-            }
-            catch (Exception ex)
-            {
-                Console.Error.WriteLine($"Error opening source: {ex.Message}");
-                return (int)ExitCode.SourceOpenError;
-            }
-
-            try
-            {
-                SplitOutputManager splitManager = new(
-                    outputPath,
-                    splitSizeBytes,
-                    splitCount,
-                    formatConfig.IsDirectoryOutput);
-                CancellationToken token = cts.Token;
-                int packetIdCounter = 0;
-                int packetCount = RunExportLoop(
-                    sources,
-                    path => formatConfig.CreateExporter(path, token),
-                    splitManager,
-                    stack!,
-                    filter,
-                    maxPackets,
-                    progressInterval,
-                    tolerant,
-                    ref packetIdCounter,
-                    token,
-                    out int outputsWritten);
-
-                string outputUnit = formatConfig.IsDirectoryOutput ? "dataset(s)" : "file(s)";
-                Console.Error.WriteLine(
-                    $"Export complete: {packetCount} packets written to {outputsWritten} {outputUnit}.");
-
-                return (int)ExitCode.Success;
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                Console.Error.WriteLine($"Error during export: {ex.Message}");
-                return (int)ExitCode.RuntimeError;
-            }
-        }
-        finally
-        {
-            Console.CancelKeyPress -= cancelHandler;
-            CliSourceLifetime.DisposeSources(sources);
-            stack?.Dispose();
         }
     }
 
-    /// <summary>Prints usage information for the export command.</summary>
-    private static void _PrintUsage()
+    /// <summary>Runs the export loop and prints the summary.</summary>
+    private static int _RunLoop(ExportArguments arguments, PacketFormatConfig format, List<IFrameSource> sources, Stack stack, IFilter? filter,
+        CliIo io, CancellationToken token)
     {
-        Console.Error.WriteLine("Usage: ni export <sources...> -o <output> [options]");
-        Console.Error.WriteLine();
-        Console.Error.WriteLine("Parse and export packets to analysis formats.");
-        Console.Error.WriteLine();
-        Console.Error.WriteLine("Arguments:");
-        Console.Error.WriteLine("  <sources...>          One or more source files or specs");
-        Console.Error.WriteLine();
-        Console.Error.WriteLine("Options:");
-        Console.Error.WriteLine("  -o, --output          Output file path (required)");
-        Console.Error.WriteLine("  -f, --format          Export format spec (see below; overrides extension)");
-        Console.Error.WriteLine("  -n, --max-packets     Maximum number of packets to export");
-        Console.Error.WriteLine("  --split-size <MB>     Split when exporter EstimatedOutputBytes reaches this size (MiB; live, no FS probe)");
-        Console.Error.WriteLine("  --split-count <N>     Split output every N packets (files, or sibling Parquet directories)");
-        CliFilter.PrintUsageLines();
-        Console.Error.WriteLine("  --profile <name>      Settings profile name");
-        Console.Error.WriteLine("  --settings-path <dir> Base directory for settings storage");
-        Console.Error.WriteLine("  --settings-max-config-file-bytes <bytes>");
-        Console.Error.WriteLine("                        Max settings/referenced config JSON size in bytes (default 1073741824). <=0 disables.");
-        Console.Error.WriteLine("  --settings-max-json-depth <n>");
-        Console.Error.WriteLine("                        Max JSON nesting depth for settings/referenced config (default 1024). <=0 disables.");
-        Console.Error.WriteLine("  --blf-cache-size <MB> Container cache budget for BLF sources (MiB)");
-        Console.Error.WriteLine("  --progress <N>        Report progress every N packets");
-        Console.Error.WriteLine("  --tolerant            Skip malformed frames instead of aborting");
-        Console.Error.WriteLine("  -h, --help            Show this help message");
-        Console.Error.WriteLine();
-        Console.Error.WriteLine("Source specifications:");
-        Console.Error.WriteLine("  capture.pcap[ng]      Auto-detected PCAP/PCAPNG file");
-        Console.Error.WriteLine("  data.blf              Auto-detected BLF file");
-        Console.Error.WriteLine("  log.asc               Auto-detected CANalyzer ASC file");
-        Console.Error.WriteLine("  pcap:path=<file>      Explicit PCAP/PCAPNG spec");
-        Console.Error.WriteLine("  blf:path=<file>       Explicit BLF spec");
-        Console.Error.WriteLine("  asc:path=<file>       Explicit ASC spec");
-        Console.Error.WriteLine("  random:count=N,seed=S,mode=udp4|udp6|random  Synthetic frames");
-        Console.Error.WriteLine();
-        Console.Error.WriteLine("Format specifications:");
-        Console.Error.WriteLine("  json                  Compact JSON (default for .json)");
-        Console.Error.WriteLine("  json:style=compact    Compact JSON");
-        Console.Error.WriteLine("  json:style=pretty     Pretty-printed JSON");
-        Console.Error.WriteLine("  json:style=array      JSON array format");
-        Console.Error.WriteLine("  pbf                   Standard PBF");
-        Console.Error.WriteLine("  pbf:format=standard   Standard (row-oriented) PBF");
-        Console.Error.WriteLine("  pbf:format=columnar   Columnar PBF");
-        Console.Error.WriteLine("  pbf:format=columnar,compressed  Columnar PBF with LZ4");
-        Console.Error.WriteLine("  text                  Human-readable protocol tree (default for .txt)");
-        Console.Error.WriteLine("  text:level=summary    Protocol containers only (no field values)");
-        Console.Error.WriteLine("  text:level=standard   All fields except raw bytes (default)");
-        Console.Error.WriteLine("  text:level=full       All fields including raw bytes");
-        Console.Error.WriteLine("  text:truncate=N       Truncate values at N characters (0 = unlimited, default: 256)");
-        Console.Error.WriteLine("  text:level=full,truncate=0  Full detail without any truncation");
-        Console.Error.WriteLine("  parquet               Columnar Parquet directory (requires -o <dir>)");
-        Console.Error.WriteLine("  duckdb                DuckDB database file (requires -o <file>.duckdb)");
-        Console.Error.WriteLine();
-        Console.Error.WriteLine("Examples:");
-        Console.Error.WriteLine("  ni export capture.pcap -o output.json -f json:style=pretty");
-        Console.Error.WriteLine("  ni export input.pcap -o data.pbf -f pbf:format=columnar,compressed");
-        Console.Error.WriteLine("  ni export input.pcap -o output.json -n 100 --progress 10");
-        Console.Error.WriteLine("  ni export random:count=1000,mode=udp4 -o out.json -f json");
-        Console.Error.WriteLine("  ni export capture.pcap -o out.txt -f text");
-        Console.Error.WriteLine("  ni export capture.pcap -o split.json --split-count 10000");
-        Console.Error.WriteLine("  ni export capture.pcap -o out_parquet -f parquet");
-        Console.Error.WriteLine("  ni export capture.pcap -o out_parquet -f parquet --split-count 50000");
-        Console.Error.WriteLine("  ni export capture.pcap -o out.duckdb -f duckdb");
-        Console.Error.WriteLine("  ni export capture.pcap -o out.duckdb -f duckdb --split-count 50000");
-        Console.Error.WriteLine("  ni export capture.pcap -o dns.json --filter \"udp.dstport == 53\"");
+        // Old outputs that --overwrite moved aside; they are settled in the finally block below, whatever the run did.
+        List<TargetReplacement> replacements = [];
+        try
+        {
+            SplitOutputManager splitManager = new(arguments.OutputPath, arguments.SplitSizeBytes, arguments.SplitCount,
+                format.IsDirectoryOutput);
+            int packetIdCounter = 0;
+            int packetCount = RunExportLoop(
+                sources,
+                path => _CreateListener(format, path, stack, arguments.Overwrite, replacements, token),
+                splitManager,
+                stack,
+                filter,
+                arguments.MaxPackets,
+                arguments.ProgressInterval,
+                arguments.Tolerant,
+                io.Error,
+                ref packetIdCounter,
+                token,
+                out int outputsWritten);
+
+            if (token.IsCancellationRequested)
+            {
+                io.Error.WriteLine("Export cancelled.");
+                return (int)ExitCode.Success;
+            }
+
+            string outputUnit = format.IsDirectoryOutput ? "dataset(s)" : "file(s)";
+            io.Error.WriteLine($"Export complete: {packetCount} packets written to {outputsWritten} {outputUnit}.");
+            return (int)ExitCode.Success;
+        }
+        catch (OperationCanceledException)
+        {
+            io.Error.WriteLine("Export cancelled.");
+            return (int)ExitCode.Success;
+        }
+        catch (CliUsageException ex)
+        {
+            io.Error.WriteLine("Error: " + ex.Message);
+            return (int)ExitCode.ArgumentError;
+        }
+        catch (Exception ex)
+        {
+            io.Error.WriteLine($"Error during export: {ex.Message}");
+            return (int)ExitCode.RuntimeError;
+        }
+        finally
+        {
+            // A new output that survived the run replaced the old one for good; a missing one (cancelled, failed, never
+            // opened) gets the old one back.
+            CliCommandSupport.SettleReplacements(replacements, io.Error);
+        }
+    }
+
+    /// <summary>Checks the option texts of the format against its option settings, without creating anything.</summary>
+    private static bool _OptionTextsAreValid(PacketFormatConfig format, CliIo io)
+    {
+        using SettingsManager options = RegistrationOptions.CreateDefaults(format.Registration.RegisterOptions);
+        if (RegistrationOptions.TryApplyTexts(options, format.OptionTexts, out PluginError? error))
+        {
+            return true;
+        }
+
+        io.Error.WriteLine("Error: " + error.Value.Message);
+        return false;
+    }
+
+    /// <summary>
+    /// Prepares the target (an existing output is replaced only with <c>--overwrite</c>: it is moved aside and added to
+    /// <paramref name="replacements"/>) and creates the listener. Problems of the user's input become a
+    /// <see cref="CliUsageException"/>; the rest are errors of the run. A listener that cannot be created gives the old output
+    /// back before the error is reported.
+    /// </summary>
+    private static IPacketListener _CreateListener(PacketFormatConfig format, string path, Stack stack, bool overwrite,
+        List<TargetReplacement> replacements, CancellationToken token)
+    {
+        if (!ExportTargets.TryPrepare(path, format.IsDirectoryOutput, overwrite, out string? fullPath, out TargetReplacement? replacement,
+            out PluginError? targetError))
+        {
+            throw new InvalidOperationException(CliCommandSupport.TargetText(targetError, path));
+        }
+
+        if (replacement is not null)
+        {
+            replacements.Add(replacement);
+        }
+
+        if (!format.TryCreate(fullPath, stack, token, out IPacketListener? listener, out PluginError? error))
+        {
+            // Nothing was written: the leftover is removed, and the settling after the run gives the old output back.
+            string message = CliCommandSupport.AbandonTarget(fullPath, format.IsDirectoryOutput, error.Value.Message);
+            throw error.Value.Code == PluginErrorCode.InvalidOption
+                ? new CliUsageException(message)
+                : new InvalidOperationException(message);
+        }
+
+        // A dataset folder is marked, so that a later --overwrite may replace it and nothing else.
+        if (format.IsDirectoryOutput)
+        {
+            string? markProblem = ExportTargets.MarkDataset(fullPath);
+            if (markProblem is not null)
+            {
+                (listener as IDisposable)?.Dispose();
+                throw new InvalidOperationException(CliCommandSupport.AbandonTarget(fullPath, isDirectory: true, markProblem));
+            }
+        }
+
+        return listener;
+    }
+
+    /// <summary>Prints usage information for the export command.</summary>
+    private static void _PrintUsage(TextWriter error)
+    {
+        error.WriteLine("Usage: ni export <sources...> -o <output> [options]");
+        error.WriteLine();
+        error.WriteLine("Parse and export packets to analysis formats.");
+        error.WriteLine();
+        error.WriteLine("Arguments:");
+        error.WriteLine("  <sources...>          One or more source files or specs");
+        error.WriteLine();
+        error.WriteLine("Options:");
+        error.WriteLine("  -o, --output          Output file path (required)");
+        error.WriteLine("  -f, --format          Export format spec (see below; overrides extension)");
+        error.WriteLine("  --overwrite           Replace an existing output (otherwise an existing output is an error)");
+        error.WriteLine("  -n, --max-packets     Maximum number of packets to export");
+        error.WriteLine("  --split-size <MB>     Split when exporter EstimatedOutputBytes reaches this size (MiB; live, no FS probe)");
+        error.WriteLine("  --split-count <N>     Split output every N packets (files, or sibling Parquet directories)");
+        CliFilter.PrintUsageLines(error);
+        error.WriteLine("  --profile <name>      Settings profile (must exist; 'default' is created on first use)");
+        error.WriteLine("  --settings-path <dir> Base directory for settings storage");
+        error.WriteLine("  --settings-max-config-file-bytes <bytes>");
+        error.WriteLine("                        Max settings/referenced config JSON size in bytes (default 1073741824). <=0 disables.");
+        error.WriteLine("  --settings-max-json-depth <n>");
+        error.WriteLine("                        Max JSON nesting depth for settings/referenced config (default 1024). <=0 disables.");
+        error.WriteLine("  --blf-cache-size <MB> Container cache budget for BLF sources (MiB)");
+        error.WriteLine("  --progress <N>        Report progress every N packets");
+        error.WriteLine("  --tolerant            Skip malformed frames instead of aborting");
+        error.WriteLine("  -h, --help            Show this help message");
+        error.WriteLine();
+        error.WriteLine("Source specifications (plugins add more kinds; see 'ni plugins list'):");
+        error.WriteLine("  capture.pcap[ng]      Auto-detected PCAP/PCAPNG file");
+        error.WriteLine("  data.blf              Auto-detected BLF file");
+        error.WriteLine("  log.asc               Auto-detected CANalyzer ASC file");
+        error.WriteLine("  pcap:path=<file>      Explicit PCAP spec; pcapng:path=<file>, blf:path=<file>, asc:path=<file>");
+        error.WriteLine("  random:count=N,seed=S,mode=udp4|udp6|tcp4|tcp6|tcpstream4|tcpstream6|ethernet|ipv4|ipv6|can|canfd|fullrandom");
+        error.WriteLine("                        Synthetic frames");
+        error.WriteLine("  <kind>:key=value,...  Any source kind; options are Core settings (see the documentation of the kind)");
+        error.WriteLine();
+        error.WriteLine("Format specifications (plugins add more formats; see 'ni plugins list'):");
+        error.WriteLine("  csv                   Comma-separated values (default for .csv); No., Time, Info, Length");
+        error.WriteLine("  csv:columns=ip.src;udp.dstport,delimiter=;,header=false,bom=false");
+        error.WriteLine("                        Field columns, delimiter, header row, and byte order mark");
+        error.WriteLine("  json                  Compact JSON (default for .json)");
+        error.WriteLine("  json:style=compact    Compact JSON");
+        error.WriteLine("  json:style=pretty     Pretty-printed JSON");
+        error.WriteLine("  json:style=array      JSON array format");
+        error.WriteLine("  pbf                   Standard PBF");
+        error.WriteLine("  pbf:format=standard   Standard (row-oriented) PBF");
+        error.WriteLine("  pbf:format=columnar   Columnar PBF");
+        error.WriteLine("  pbf:format=columnar,compressed  Columnar PBF with LZ4");
+        error.WriteLine("  text                  Human-readable protocol tree (default for .txt)");
+        error.WriteLine("  text:level=summary    Protocol containers only (no field values)");
+        error.WriteLine("  text:level=standard   All fields except raw bytes (default)");
+        error.WriteLine("  text:level=full       All fields including raw bytes");
+        error.WriteLine("  text:truncate=N       Truncate values at N characters (0 = unlimited, default: 256)");
+        error.WriteLine("  text:level=full,truncate=0  Full detail without any truncation");
+        error.WriteLine("  parquet               Columnar Parquet directory (requires -o <dir>)");
+        error.WriteLine("  duckdb                DuckDB database file (requires -o <file>.duckdb)");
+        error.WriteLine();
+        error.WriteLine("Examples:");
+        error.WriteLine("  ni export capture.pcap -o output.json -f json:style=pretty");
+        error.WriteLine("  ni export input.pcap -o data.pbf -f pbf:format=columnar,compressed");
+        error.WriteLine("  ni export input.pcap -o output.json -n 100 --progress 10");
+        error.WriteLine("  ni export random:count=1000,mode=udp4 -o out.json -f json");
+        error.WriteLine("  ni export capture.pcap -o out.txt -f text");
+        error.WriteLine("  ni export capture.pcap -o out.csv -f csv:columns=ip.src;udp.dstport");
+        error.WriteLine("  ni export capture.pcap -o split.json --split-count 10000");
+        error.WriteLine("  ni export capture.pcap -o out_parquet -f parquet");
+        error.WriteLine("  ni export capture.pcap -o out_parquet -f parquet --split-count 50000");
+        error.WriteLine("  ni export capture.pcap -o out.duckdb -f duckdb");
+        error.WriteLine("  ni export capture.pcap -o out.duckdb -f duckdb --split-count 50000");
+        error.WriteLine("  ni export capture.pcap -o dns.json --filter \"udp.dstport == 53\"");
+        error.WriteLine("  ni export capture.pcap -o out.json --overwrite");
     }
 
     #endregion

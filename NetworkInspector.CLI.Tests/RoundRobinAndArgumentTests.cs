@@ -121,10 +121,12 @@ internal sealed class RoundRobinAndArgumentTests
     [Test]
     public async Task CliArgumentParsing_RunWithArgumentGuard_MapsArgumentExceptionToExit1()
     {
+        StringWriter error = new();
         int code = CliArgumentParsing.RunWithArgumentGuard(
-            () => throw new ArgumentException("bad"));
+            () => throw new ArgumentException("bad"), error);
 
         await Assert.That(code).IsEqualTo(1);
+        await Assert.That(error.ToString().TrimEnd()).IsEqualTo("Error: bad");
     }
 
     [Test]

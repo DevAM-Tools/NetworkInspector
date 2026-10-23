@@ -147,6 +147,7 @@ listeners ([Sessions](NetworkInspector.Sessions/README.md)).
 | [NetworkInspector.Sessions](NetworkInspector.Sessions/README.md) | [![v][sess-v]][sess] | [![d][sess-d]][sess] | Multi-threaded capture sessions |
 | [NetworkInspector.FrameBuilder](NetworkInspector.FrameBuilder/README.md) | [![v][fb-v]][fb] | [![d][fb-d]][fb] | Build wire frames from typed layers |
 | [NetworkInspector.Values](NetworkInspector.Values/README.md) | [![v][val-v]][val] | [![d][val-d]][val] | MAC, IP, EUI-64, UUID, timestamp values |
+| [NetworkInspector.Plugins](NetworkInspector.Plugins/README.md) | [![v][plug-v]][plug] | [![d][plug-d]][plug] | Plugin contract for sources, exporters, protocols |
 | [NetworkInspector.CLI](NetworkInspector.CLI/README.md) | [![v][cli-v]][cli] | [![d][cli-d]][cli] | `ni` command-line tool |
 
 [core]: https://www.nuget.org/packages/NetworkInspector.Core
@@ -176,6 +177,9 @@ listeners ([Sessions](NetworkInspector.Sessions/README.md)).
 [val]: https://www.nuget.org/packages/NetworkInspector.Values
 [val-v]: https://img.shields.io/nuget/v/NetworkInspector.Values?label=
 [val-d]: https://img.shields.io/nuget/dt/NetworkInspector.Values?label=
+[plug]: https://www.nuget.org/packages/NetworkInspector.Plugins
+[plug-v]: https://img.shields.io/nuget/v/NetworkInspector.Plugins?label=
+[plug-d]: https://img.shields.io/nuget/dt/NetworkInspector.Plugins?label=
 [cli]: https://www.nuget.org/packages/NetworkInspector.CLI
 [cli-v]: https://img.shields.io/nuget/v/NetworkInspector.CLI?label=
 [cli-d]: https://img.shields.io/nuget/dt/NetworkInspector.CLI?label=
@@ -197,6 +201,7 @@ Core brings Values.
 | Generate test traffic | FrameBuilder (+ Exporters to save it) |
 | Typed addresses and timestamps only | Values |
 | Write your own dissector | Core + Protocols ([Protocol guide](NetworkInspector.Protocols/PROTOCOL_GUIDE.md)) |
+| Write a plugin (protocol, source, exporter, setting) | Plugins ([Plugin guide](docs/plugins/guide.md), [Sample plugin](samples/Sample.Protocol/README.md)) |
 
 ## Capabilities
 

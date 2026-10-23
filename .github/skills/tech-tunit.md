@@ -1,6 +1,6 @@
 # TUnit Testing Rules
 
-Load when `*Tests.cs`, `{Project}.Tests` projects, `{App}.UiTest`, or C# Playwright UI tests are in scope. Content and case design: `tech-test.md`. Browser journeys: `tech-playwright.md`.
+Load when `*Tests.cs`, `{Project}.Tests` projects, `{App}.UiTest`, C# Playwright UI tests, or `global.json` are in scope. Content and case design: `tech-test.md`. Browser journeys: `tech-playwright.md`.
 
 ## Scope
 
@@ -33,8 +33,15 @@ Common agent mistakes — **do not** port xUnit/NUnit habits:
 
 **`global.json` (repo root):**
 
-- SDK `10.0.100`
+- SDK `10.0.100` with `"rollForward": "latestFeature"` (an exact pin fails on machines that only have a later feature band)
 - `"test": { "runner": "Microsoft.Testing.Platform" }`
+
+```json
+{
+  "sdk": { "version": "10.0.100", "rollForward": "latestFeature" },
+  "test": { "runner": "Microsoft.Testing.Platform" }
+}
+```
 
 ## Structure
 
@@ -86,9 +93,17 @@ await Assert.That(async () => await sut.PairAsync(path)).Throws<IOException>();
 
 Run tests with `dotnet test`. When the full project is not required, pass a treenode filter for the class or test that covers the change. Run the project with no filter when the change can break tests you cannot name (`tech-test.md`).
 
+The tree path is `/Assembly/Namespace/Class/Test`. A filter must address every level; `*` matches within one level only.
+
 ```bash
-dotnet test path/Proj.Tests.csproj -c Release -- --treenode-filter "/*ClassName/*"
+# One class
+dotnet test path/Proj.Tests.csproj -c Release -- --treenode-filter "/*/*/ClassName/*"
+# One test
+dotnet test path/Proj.Tests.csproj -c Release -- --treenode-filter "/*/*/ClassName/TestName"
+# Whole project
 dotnet test path/Proj.Tests.csproj -c Release
 ```
 
-MTP is the runner (`global.json`). Do not pass xUnit-style `--filter FullyName`. Do not add a wrapper script without approval.
+❗ Exit code 8 means zero tests ran: the filter is wrong. That is a failed `Verify`, not a pass.
+
+MTP is the runner (`global.json`). Do not pass VSTest-style `--filter FullyQualifiedName~…`.

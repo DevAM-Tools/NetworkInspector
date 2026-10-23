@@ -1,10 +1,11 @@
 ---
 name: workflow-implement
 description: Execute approved plan or accepted review findings step-by-step. Use on /implement after plan approval.
+argument-hint: Reference approved plan artifact or accepted review findings
 ---
 
 Execute `/implement` workflow.
 
-- Read `.github/copilot-instructions.md`.
+- Read `.github/copilot-instructions.md` unless it is already in context.
 - Read `.github/skills/workflow-implement.md`.
 - Apply rules exactly; do not restate them here.

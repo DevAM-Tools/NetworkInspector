@@ -3,23 +3,43 @@
 namespace NetworkInspector.Core.Settings;
 
 /// <summary>
-/// A <see langword="ref struct"/> facade for registering settings during protocol setup.
+/// A <see langword="ref struct"/> facade for registering settings during protocol setup and for the option settings of
+/// plugin sources and exporters.
 /// <para>
 /// Because this is a <see langword="ref struct"/>, it cannot be stored as a field,
 /// preventing protocols from keeping a reference to the underlying
 /// <see cref="SettingsManager"/>. Obtain an instance via
-/// <see cref="IStackBuilder.SettingsRegistrar"/>.
+/// <see cref="IStackBuilder.SettingsRegistrar"/>, or create one over a manager you own with the public constructor
+/// (plugins do this for the short-lived option managers of their requests).
+/// </para>
+/// <para>
+/// Thread safety: as safe as the wrapped manager (all <see cref="SettingsManager"/> members are thread-safe).
 /// </para>
 /// </summary>
 public readonly ref struct SettingsRegistrar
 {
-    private readonly SettingsManager _Manager;
+    private readonly SettingsManager? _Wrapped;
 
-    /// <summary>Creates a new registrar wrapping the given settings manager.</summary>
-    internal SettingsRegistrar(SettingsManager manager)
+    /// <summary>
+    /// Creates a registrar that registers groups and settings into <paramref name="manager"/>. The registrar is a
+    /// <see langword="ref struct"/>, so it cannot be stored and nobody keeps a reference to the manager through it.
+    /// </summary>
+    /// <param name="manager">The manager that receives the registered groups and settings.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="manager"/> is <see langword="null"/>.</exception>
+    public SettingsRegistrar(SettingsManager manager)
     {
-        _Manager = manager;
+        ArgumentNullException.ThrowIfNull(manager);
+        _Wrapped = manager;
     }
+
+    /// <summary>
+    /// The wrapped manager. A <see langword="ref struct"/> cannot forbid <c>default(SettingsRegistrar)</c>, so every
+    /// member reads the manager through this guard and fails with a clear message instead of a null reference.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">The registrar is <c>default</c> and was not created with a manager.</exception>
+    private SettingsManager _Manager =>
+        _Wrapped
+        ?? throw new InvalidOperationException("The registrar was not created with a settings manager.");
 
     #region Group Registration
 

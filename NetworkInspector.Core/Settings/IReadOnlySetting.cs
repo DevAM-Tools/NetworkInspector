@@ -70,6 +70,12 @@ public interface IReadOnlySetting
         get;
     }
 
+    /// <summary>How a change of the setting takes effect; informational for hosts and apps.</summary>
+    SettingActivation Activation
+    {
+        get;
+    }
+
     #endregion
 
     #region Current Value

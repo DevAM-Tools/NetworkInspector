@@ -10,11 +10,11 @@ internal static class CliSourceLifetime
     #region Public API
 
     /// <summary>
-    /// Disposes all sources, writing a warning to stderr for each failure.
+    /// Disposes all sources, writing a warning to <paramref name="error"/> for each failure.
     /// If every disposal fails the aggregate is re-thrown so callers are not
     /// silently left with unreleased resources.
     /// </summary>
-    internal static void DisposeSources(List<IFrameSource> sources)
+    internal static void DisposeSources(List<IFrameSource> sources, TextWriter error)
     {
         List<Exception>? errors = null;
         foreach (IFrameSource source in sources)
@@ -25,7 +25,7 @@ internal static class CliSourceLifetime
             }
             catch (Exception ex)
             {
-                Console.Error.WriteLine(
+                error.WriteLine(
                     $"Warning: failed to dispose source '{source.GetType().Name}': {ex.Message}");
                 errors ??= [];
                 errors.Add(ex);

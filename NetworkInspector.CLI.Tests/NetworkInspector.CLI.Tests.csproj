@@ -5,5 +5,21 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\NetworkInspector.CLI.Core\NetworkInspector.CLI.Core.csproj" />
+    <!-- Plugin projects the CLI tests load by path; their assemblies are copied next to the tests, not referenced. -->
+    <ProjectReference Include="..\samples\Sample.Protocol\Sample.Protocol.csproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="..\NetworkInspector.Plugins.Tests.TestPlugins\NetworkInspector.Plugins.Tests.TestPlugins.csproj"
+                      ReferenceOutputAssembly="false" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- Plugin assemblies copied next to the tests (outside the TPA list); tests copy them again into per-test folders. -->
+    <TestPluginProject Include="..\samples\Sample.Protocol\Sample.Protocol.csproj" />
+    <TestPluginProject Include="..\NetworkInspector.Plugins.Tests.TestPlugins\NetworkInspector.Plugins.Tests.TestPlugins.csproj" />
+  </ItemGroup>
+  <Target Name="_CopyTestPlugins" AfterTargets="Build">
+    <MSBuild Projects="@(TestPluginProject)" Targets="GetTargetPath" Properties="Configuration=$(Configuration)">
+      <Output TaskParameter="TargetOutputs" ItemName="_TestPluginAssembly" />
+    </MSBuild>
+    <Copy SourceFiles="@(_TestPluginAssembly)" DestinationFolder="$(OutDir)TestPlugins\%(_TestPluginAssembly.Filename)\"
+          SkipUnchangedFiles="true" />
+  </Target>
 </Project>

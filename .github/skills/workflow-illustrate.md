@@ -105,13 +105,20 @@ yes.
 |-----|---------|---------|-----|
 | Pico CSS 2.0.6 | MIT | `vendor/pico.min.css` | `https://cdn.jsdelivr.net/npm/@picocss/pico@2.0.6/css/pico.min.css` |
 | Mermaid 11.4.1 | MIT | `vendor/mermaid.min.js` | `https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.min.js` |
-| three.js 0.170.0 | MIT | `vendor/three.module.js` | `https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js` |
-| three OrbitControls 0.170.0 | MIT | `vendor/OrbitControls.js` | `https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/controls/OrbitControls.js` |
+| three.js 0.170.0 (server-only) | MIT | `vendor/three.module.js` | `https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js` |
+| three OrbitControls 0.170.0 (server-only) | MIT | `vendor/OrbitControls.js` | `https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/controls/OrbitControls.js` |
 | Babylon.js 7.54.0 | Apache-2.0 | `vendor/babylon.js` | `https://cdn.jsdelivr.net/npm/babylonjs@7.54.0/babylon.js` |
 
 When any `vendor/` file exists, use a folder (`illustrations/<slug>/index.html` plus
-`vendor/`), not a single HTML file. three.js + OrbitControls: import map
-`"three"` → `./vendor/three.module.js`.
+`vendor/`), not a single HTML file.
+
+**3D and `file://`:** Chromium-based browsers block ES module scripts loaded
+from `file://` (origin `null`). three.js ≥ r160 ships modules only, so a
+three.js illustration does not open by double-click. Default 3D engine:
+Babylon.js through a classic `<script src="./vendor/babylon.js">`, which works
+from `file://`. Offer three.js only when the user accepts “open through a local
+static server”; then say so in the Stage 3 question and in Completion. three.js
++ OrbitControls: import map `"three"` → `./vendor/three.module.js`.
 
 ## Stage 4 — Build
 
@@ -120,9 +127,10 @@ When any `vendor/` file exists, use a folder (`illustrations/<slug>/index.html` 
 - Include the graphic and, when the relationship changes over time or in
   steps, the animation chosen in Stage 2. Do not leave the relationship as
   prose alone when a picture or a short motion can show it.
-- 3D: only when Stage 3 was **Yes** for three.js or Babylon.js. Relative
-  `./vendor/…` only: ES modules + import map for three.js, or a script tag for
-  Babylon.js. Keep the camera and one explanatory object; do not ship a game.
+- 3D: only when Stage 3 was **Yes** for Babylon.js (default, classic
+  `<script>` tag, works from `file://`) or for three.js (server-only, ES
+  modules + import map; see **3D and `file://`**). Relative `./vendor/…` only.
+  Keep the camera and one explanatory object; do not ship a game.
 - Inline SVG for diagrams that must ship offline. Mermaid only when Stage 3 was
   **Yes** for Mermaid (`./vendor/mermaid.min.js`).
 - Copyright header on `.html` / `.svg` per `tech-solution.md` when that skill is
@@ -154,23 +162,30 @@ shipped HTML, `vendor/` files, and zip must not mention Playwright, Node, or a
 test runner.
 
 - Playwright is a repo tool, not an illustration library. If the repo has no
-  approved Playwright runner, New Dependency Protocol (`tech-playwright.md`
-  Permission) before adding one. Do not `npm init`, do not add `package.json`
-  to the illustration folder, and do not use `npx`.
-- One-off `file://` (or static server) screenshot / headed check. Do not add
-  `*.spec.ts` to the illustration folder or zip. Keep-tests, if the user asks,
-  live elsewhere in the repo.
+  approved Playwright runner, run the New Dependency Protocol
+  (`copilot-instructions.md` Section 4.7) before adding one. Do not `npm init`,
+  do not add `package.json` to the illustration folder, and do not use `npx`.
+- Quick look: a screenshot (`playwright screenshot … file:///…`) or the
+  integrated browser (Section 4.8) needs no spec file.
+- Asserted check: put the spec at `tests/illustrations/<slug>.spec.ts`, outside
+  the illustration folder. Delete it after the run unless the user keeps it.
+  Never put a spec in the illustration folder or zip.
 - Assert: page loads; for slides, overview count, next/prev, position text;
   for 3D, canvas (or WebGL) is visible and not empty.
 - Zip test: copy the folder or file away from the repo; open `file://`;
-  **no network**. Relative `./vendor/…` paths must resolve.
+  **no network**. Relative `./vendor/…` paths must resolve. The zip test runs on
+  `file://` only. A static server is allowed for debugging, never as the zip
+  test — except for a three.js illustration the user accepted as server-only.
 
 Run the Node (or other stack) commands in `tech-playwright.md` for this OS —
 Unix env prefix or PowerShell `$env:NAME = "value"`. Equivalent:
-`npm exec playwright test` when the repo uses npm. Do not treat a single
-`pnpm` line as the only command. Do not add a `.ps1` wrapper.
+`npm exec playwright test tests/illustrations/<slug>.spec.ts` when the repo
+uses npm. Do not treat a single `pnpm` line as the only command. Do not add a
+`.ps1` wrapper.
 
 ## Completion
 
-Status table, path, how to open (`file://`, no network), risks ≤5. Chat: path
-only.
+Chat: a short status table, the path, how to open (`file://`, no network; or
+the local server for an accepted three.js illustration), and every risk ordered
+by impact; do not cap or drop risks. The illustration has no separate report
+file, so these items belong in chat.

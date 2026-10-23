@@ -1,6 +1,6 @@
 # Pytest Rules
 
-Load when `test_*.py`, `*_test.py`, or pytest is in scope. Content and case design: `tech-test.md`. Typing: `tech-python.md`.
+Load when `test_*.py`, `*_test.py`, or pytest is in scope. Content and case design: `tech-test.md`. Typing and the ruff baseline: `tech-python.md` (tests may use `assert`, skip docstrings, and use literal numbers; they stay fully typed).
 
 ## Framework
 
@@ -41,7 +41,7 @@ def test_count_collection_size_matches(size: int, expected: int) -> None:
 ```
 
 - Fixtures: typed, narrow, no shared mutable module globals.
-- Write files on disk with `tmp_path`. Do not write outside the workspace.
+- Tests write files only under `tmp_path`. Never write into the repository tree.
 
 ## Markers
 

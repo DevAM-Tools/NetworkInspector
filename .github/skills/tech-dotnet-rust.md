@@ -170,7 +170,69 @@ Never introduce `Arc<Mutex<_>>` to imitate GC aliasing. When the source needs al
 
 ## 5) Strings and `Text`
 
-`Text` is the port’s owned string type: a 16-byte handle with absent, inline (≤ 15 bytes), static, shared (one ref-counted block), and lazy forms. Reference implementation: `ni_values::Text` ([`rust/ni-values/src/text.rs`](../../rust/ni-values/src/text.rs)), originally from packet-inspector `pi_values`. Another solution names its `Text` crate in the MANIFEST.
+`Text` is the port’s owned string type: a 16-byte handle with absent, inline (≤ 15 bytes), static, shared (one ref-counted block), and lazy forms. The MANIFEST names the crate and path of the implementation. When the solution has none, the first unit that needs `Text` builds it to the specification below (an approved `unsafe` site, Section 7).
+
+### Rebuild specification
+
+Every point below is part of the contract. A `Text` that drops one is a deviation.
+
+**Layout (64-bit targets: x64, ARM64)**
+
+- `size_of::<Text>() == 16`, `align_of::<Text>() == 8`.
+- `size_of::<Option<Text>>() == 16`. The compiler only finds a niche in a type it knows has invalid values, so the tag byte is a `#[repr(u8)]` enum, not a raw `u8`: 16 inline-length variants (0–15) plus absent, static, shared, and lazy leave the other byte values free for `None`.
+- That tag byte selects the form; for the inline form its variant also encodes the length.
+- A 32-bit target needs a different layout and is a MANIFEST decision.
+
+**Forms**
+
+| Form | Storage | Allocates | Clone |
+|------|---------|-----------|-------|
+| absent | tag only | no | copy |
+| inline | up to 15 UTF-8 bytes in the handle | no | copy |
+| static | `&'static str` pointer + length | no | copy |
+| shared | pointer to one heap block: header (atomic refcount, length) followed by the bytes | once at creation | one atomic increment |
+| lazy | pointer to a ref-counted node: recipe (function pointer + captured arguments) and a once-initialized baked `Text` | once at creation | one atomic increment |
+
+- Shared is a **single** allocation (header and bytes together). Not `Arc<String>` or `Arc<str>` behind a box: one indirection, one cache line for short texts.
+- Creating from `String` copies into the shared block; the `String` buffer cannot be reused because the header precedes the bytes.
+
+**Construction**
+
+- `Text::new(&str)`: inline when ≤ 15 bytes, else shared, sized exactly.
+- `Text::from_static(&'static str)` is a `const fn`.
+- `Text::format(fmt::Arguments)`: format into a 15-byte stack buffer first; on overflow, measure and allocate the shared block once at the exact size. No intermediate `String`.
+- `Text::lazy(recipe)`: stores the recipe; nothing is formatted until first read.
+- `Text::absent()`: distinct from `Text::new("")` (empty is inline with length 0).
+- `From<&str>` and `From<String>` copy (inline or shared). Static text uses `from_static` explicitly; a `From` impl cannot tell a `'static` borrow apart.
+
+**Access**
+
+- `as_str(&self) -> &str` and `Deref<Target = str>`. For lazy, the first access bakes the recipe exactly once (once-cell semantics), concurrently safe; later accesses return the baked text.
+- `is_absent()`, `len()`, `is_empty()`. `len()` is in UTF-8 bytes; the C# UTF-16 length is a separate, explicit method when a unit needs it.
+- Inline holds the complete text or nothing. Text is never truncated to fit; 16 bytes or more go to shared.
+
+**Equality, hash, ordering**
+
+- Inline, static, and shared compare and hash **by content** (byte-wise, C# ordinal). Equal content in different forms is equal and hashes equal.
+- Lazy compares and hashes by **recipe identity** (node pointer) and is never equal to a concrete form.
+- Because lazy breaks content equality, `Text` does **not** implement `Borrow<str>`. Map keys that need lookup by `&str` use a concrete-only key type (`TextKey`, never lazy) that implements `Borrow<str>` with a hash identical to `str`.
+- `Text` does not implement `Ord`. Ordinal ordering is the explicit `cmp_content`; sorted collections use `TextKey`.
+
+**Memory and threads**
+
+- `Text: Send + Sync`. Refcount increment uses `Relaxed`; decrement uses `Release`, and the last owner issues an `Acquire` fence before freeing (the `Arc` protocol).
+- `Drop` frees the shared block or lazy node at refcount zero; absent, inline, and static do nothing.
+- No interior mutation after construction except the one-time lazy bake.
+- `Debug` prints the form and the content (lazy: `lazy(unbaked)` until baked); `Display` prints the content and bakes lazy.
+
+**Required tests**
+
+- Compile-time size and niche assertions (`const _: () = assert!(size_of::<Text>() == 16);`, same for `Option<Text>`).
+- Inline / shared boundary at 15 and 16 bytes, including texts whose last character is multi-byte; empty vs absent.
+- Cross-form equality and hash equality (inline, static, shared with the same content); lazy never equal to concrete.
+- Clone and drop counts: no leak and no double free (allocation-counting test allocator).
+- Concurrent clone and drop from several threads; lazy baked exactly once under contention.
+- Miri run over the `unsafe` module when the MANIFEST lists Miri.
 
 ### Which Rust type for which C# use
 
@@ -254,6 +316,6 @@ Every unit records how each source optimization was handled: **mapped** (same id
 
 ## 7) `unsafe`
 
-- Port crates start with `#![forbid(unsafe_code)]`. A crate with approved sites uses `#![deny(unsafe_code)]` and `#[allow(unsafe_code)]` only on the approved module, with the `tech-rust.md` suppression template.
+- Port crates start with `#![forbid(unsafe_code)]`. A crate with approved sites uses `#![deny(unsafe_code)]` and `#[expect(unsafe_code, reason = "…")]` only on the approved module, per the `tech-rust.md` suppression template.
 - Approved sites are listed in the MANIFEST (`Text`, SIMD kernels, OS calls such as the console code page). A new site is a `BL-*`.
 - Every `unsafe` block has `// SAFETY:` with aliasing, lifetime, validity, and `Send`/`Sync` arguments, and a test that exercises it (Miri when the site is pure Rust and the MANIFEST lists a Miri run).

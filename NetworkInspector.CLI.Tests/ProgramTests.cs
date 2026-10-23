@@ -1,9 +1,9 @@
-﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.CLI.Tests;
 
 /// <summary>
-/// Unit tests for <see cref="CliEntry.Run"/>.
+/// Unit tests for <see cref="CliEntry.RunAsync(string[], CliIo, CancellationToken)"/>.
 /// <para>
 /// Only short-circuit paths that return immediately (no I/O or network activity) are tested
 /// here. Paths that require open files or running sources are left to integration testing.
@@ -38,14 +38,31 @@ internal sealed class ProgramTests
         yield return () => (["export", "--help"], 0, "export --help prints usage");
         yield return () => (["convert"], 1, "convert with no source is a usage error");
         yield return () => (["export"], 1, "export with no source is a usage error");
+        yield return () => (["plugins", "--help"], 0, "plugins --help prints usage");
+        yield return () => (["settings", "--help"], 0, "settings --help prints usage");
+        yield return () => (["profile", "--help"], 0, "profile --help prints usage");
+        yield return () => (["plugins"], 1, "plugins without a sub-command is a usage error");
+        yield return () => (["settings", "frob"], 1, "an unknown settings sub-command is a usage error");
+        yield return () => (["profile"], 1, "profile without a sub-command is a usage error");
     }
 
     [Test]
     [MethodDataSource(nameof(Main_ExitCode_Data))]
     public async Task Main_ExitCode_MatchesExpected(string[] args, int expected, string because)
     {
-        int exitCode = CliEntry.Run(args);
+        CliResult result = await CliSandbox.RunWithoutBaseAsync(args, CancellationToken.None);
 
-        await Assert.That(exitCode).IsEqualTo(expected).Because(because);
+        await Assert.That(result.Exit).IsEqualTo(expected).Because(because);
+    }
+
+    [Test]
+    public async Task UsageListsAllFiveCommands()
+    {
+        CliResult result = await CliSandbox.RunWithoutBaseAsync(["--help"], CancellationToken.None);
+
+        foreach (string command in new[] { "convert", "export", "plugins", "settings", "profile" })
+        {
+            await Assert.That(result.Error).Contains("  " + command + " ");
+        }
     }
 }

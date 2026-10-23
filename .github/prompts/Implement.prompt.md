@@ -7,6 +7,6 @@ agent: agent
 
 Execute `/implement` workflow.
 
-- Read `../copilot-instructions.md`.
+- Read `../copilot-instructions.md` unless it is already in context.
 - Read `../skills/workflow-implement.md`.
 - Apply rules exactly; do not restate them here.

@@ -25,4 +25,12 @@
   <Project Path="NetworkInspector.Sources.Tests/NetworkInspector.Sources.Tests.csproj" />
   <Project Path="NetworkInspector.Sessions.Tests/NetworkInspector.Sessions.Tests.csproj" />
   <Project Path="NetworkInspector.Exporters.Tests/NetworkInspector.Exporters.Tests.csproj" />
+  <Project Path="NetworkInspector.Plugins/NetworkInspector.Plugins.csproj" />
+  <Project Path="NetworkInspector.Plugins.Tests/NetworkInspector.Plugins.Tests.csproj" />
+  <Project Path="samples/Sample.Protocol/Sample.Protocol.csproj" />
+  <Project Path="NetworkInspector.Plugins.Loader/NetworkInspector.Plugins.Loader.csproj" />
+  <Project Path="NetworkInspector.BuiltInPlugins/NetworkInspector.BuiltInPlugins.csproj" />
+  <Project Path="NetworkInspector.Plugins.Tests.TestPlugins/NetworkInspector.Plugins.Tests.TestPlugins.csproj" />
+  <Project Path="NetworkInspector.Testing.Traces/NetworkInspector.Testing.Traces.csproj" />
+  <Project Path="NetworkInspector.Testing.Traces.Tests/NetworkInspector.Testing.Traces.Tests.csproj" />
 </Solution>

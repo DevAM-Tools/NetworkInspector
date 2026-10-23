@@ -7,6 +7,96 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **`NetworkInspector.Plugins`** — the core-tier plugin contract: `IPlugin` (entry point found by the pre-scan through its
+  own interface list), `IPluginBuilder`, `IPluginContext`, `IPluginLog`, `PluginInfo`, `PluginDependency`,
+  `SourceRegistration`/`SourceCreate`/`SourceRequest` for Core `IFrameSource` sources,
+  `ExporterRegistration<TListener>`/`ExporterCreate<TListener>`/`ExportRequest` for Core `IFrameListener` and
+  `IPacketListener` exporters, and `PluginError`/`PluginErrorCode` for expected failures. Options and settings are Core
+  settings; the contract adds registrations and lifecycle only.
+- **`samples/Sample.Protocol`** — the tier 1 sample plugin: a protocol on UDP 40000 (`sample.counter`, `sample.gear`,
+  `sample.speed`), a `NIS1` heuristic parser on the TCP heuristic table, a post-parser, the `SampleGen` source, the
+  `SampleText` exporter, and the application setting `sample.greeting`.
+- **`SettingsRegistrar`** has a public, validated constructor, so plugins can register settings into managers they own;
+  `default(SettingsRegistrar)` now fails with an `InvalidOperationException` that names the missing manager.
+- **`SettingScope`** (`Application`, `Profile`, `Session`) — the one scope enumeration of Core settings.
+- **`NetworkInspector.Plugins.Loader`** (not packed) — the plugin loader shared by the CLI, the host, and the app:
+  a metadata-only pre-scan (`System.Reflection.Metadata`; no assembly is loaded to look at it) that finds entry types by the
+  plugin interfaces they list, a per-file scan cache keyed by path, length, and last write time, one collectible load
+  context per plugin assembly, `PluginRegistry` (stack contributions, plugin settings, source kinds, and export formats with
+  one consistent snapshot for readers), `PluginLifecycle` (start in load order and stop in reverse order, each bounded by the
+  application settings `plugins.startTimeoutSeconds` and `plugins.stopTimeoutSeconds`), `PluginContext`, and the settings
+  helpers `PluginPathsSetting`, `PluginTimeoutSettings`, and `RegistrationOptions`. Every failure of a plugin is a `Failed`
+  record with a reason; plugins of a higher tier than the application are `Skipped` and their assemblies are not loaded.
+  `ExportTargets` adds the target rules every export runner applies: `TryPrepare` (full path, parent folder, refused overwrite,
+  folder-versus-file mix-ups), `TryCheck` (the same rules without deleting anything, for a check before a long run), and
+  `DeletePartial` (cleanup of an export that ended without `OnFinish`).
+- **`NetworkInspector.BuiltInPlugins`** (not packed) — the functionality of the application as four core-tier plugins on the
+  same contract as external ones, created by `NetworkInspectorBuiltIns.CreateAll()`: `NetworkInspector.StandardProtocols`,
+  `NetworkInspector.FileSources` (BLF, PCAPNG, legacy PCAP, ASC), `NetworkInspector.RandomSource`, and
+  `NetworkInspector.Exporters` (frames as BLF, PCAPNG, ASC; packets as CSV, JSON, Text, PBF, Parquet, DuckDB). Every
+  registration returns the Core source or exporter itself and takes its options as Core settings (for example `scanMode`,
+  `errorTolerance`, `preloadBudgetBytes`, `frameSlabBytes`, `timestampTimeZone`, `delimiter`, `columns`, `style`), with the
+  defaults of the command line.
+- **Core settings: one text form, one JSON form, and problems instead of exceptions.** `SettingValueText.TryParse`/`Format`
+  and `SettingValueJson.TryRead`/`Write` convert values for command lines and files; a wrong value is a `SettingProblem`
+  (`SettingProblemKind`: `WrongType`, `BelowMinimum`, `AboveMaximum`, `NotFinite`, `UnknownEnum`, `InvalidPath`,
+  `UnknownSetting`) with one message that names the setting and the accepted values. `Setting.TryValidate` and
+  `Setting.TrySetPendingValue` do not throw for wrong values. `SettingActivation` (`Immediate`, `SessionReset`, `Restart`)
+  and `Setting.Activation` say when a host should use a changed value.
+- **Core settings: lookup, per-key apply, and merge saves.** `SettingsManager.TryGetSetting` and `FindSimilar`; the per-key
+  `ApplyChanges(names)` and `ResetChanges(names)` with the `PendingChanged` event; `SaveChanged(names)` merges single
+  keys into the group files under the cross-process folder lock `.ni-settings.lock` (waits up to two seconds, then
+  `PersistenceSettingsException`); `Unset(name)`; `Orphans` and `TrySetOrphanValue` for stored values whose plugin is not
+  loaded.
+- **Core settings: profiles.** `SettingsProfiles` (`List`, `Exists`, `TryCreate`, `TryRename`, `TryDelete`), `ProfileNames`,
+  and `StorageNames`: profile names of up to 256 characters (letters, digits, spaces, dots, dashes, underscores); names
+  longer than 120 characters get a shortened folder name with a hash and a `.name` file.
+- **CLI: `ni plugins list`, `ni settings list|get|set|reset`, `ni profile list|create|rename|delete`.** Plugins are loaded
+  from the application setting `plugins.paths`; the commands print one precise line per mistake, with a suggestion for a
+  misspelled name or key. Plugin log lines go to `logs/ni.log` (10 MiB, 5 files) in the settings base.
+- **CLI: CSV export** (`-f csv:delimiter=;,header=false,bom=false,columns=ip.src;udp.dstport`), plugin source kinds
+  (`SampleGen:count=10`) and plugin formats, and `--overwrite` for `convert` and `export`.
+- **`NetworkInspector.Testing.Traces`** (test support, not packed) — deterministic capture files for tests, built once per
+  cache folder and shared by parallel tests and processes: `TraceKit` (`GetAsync(recipe)`), `TraceRecipe`, and the recipes
+  `MixedEthernetRecipe`, `CanSignalsRecipe` (with `CanSignalTrace` and `SignalConfigFixture`), `JumboFramesRecipe`,
+  `OutOfOrderRecipe`, `RepeatedFailureRecipe`, `SampleProtocolRecipe`, and `LargeRandomRecipe`.
+- **Plugin documentation** — [`docs/plugins/guide.md`](docs/plugins/guide.md) (project setup to distribution),
+  [`docs/plugins/protocols.md`](docs/plugins/protocols.md) (protocol, fields, port registration, heuristic parser,
+  post-parser), and [`docs/plugins/reference.md`](docs/plugins/reference.md) (one entry per contract type), checked by tests
+  against the contract; four design documents imported into [`docs/`](docs/) with import notes.
+
+### Changed
+
+- **CLI: profiles are applied.** `--profile` selects a settings profile for every command; a profile that does not exist is
+  an error. The default profile moved from the settings base to `<base>/default` (application settings live in
+  `<base>/application`). Files in the old location were never applied by the CLI.
+- **CLI: an existing output is refused** (exit code 1, or 3 for a split file left over from an earlier run) unless
+  `--overwrite` is given. A run that is cancelled or fails deletes the output that was still open and keeps the finished
+  split files; before, Ctrl+C finalized a partial output.
+- **CLI: `convert` always builds the protocol stack of the profile** (an exporter request carries it); frames are still
+  parsed only with `--filter`. Source and format options go through the registered options of plugins, so an unknown key
+  is refused with the closest valid one.
+- **Core: `SettingsManager.Save` is sparse.** Only values that differ from their default are written, values of settings that
+  are not registered are written back unchanged, and the save runs under the folder lock. A later change of a default
+  reaches every folder that never chose a value.
+- **Core: the exception texts of `Setting.SetPendingValue`** are the texts of the `SettingProblem` of the same mistake.
+- **Core: `SettingsManagerFactory.ResolvePath`** accepts spaces and dots in profile names and refuses names that break
+  `ProfileNames` (path separators, traversal, device names, leading or trailing space or dot).
+- **Core: the `Setting` factory methods** take an optional `activation` parameter, and `IReadOnlySetting` has the member
+  `Activation`; code that implements `IReadOnlySetting` must add it.
+
+### Fixed
+
+- **CLI: `--profile` was ignored** by `convert --filter` and `export`; the protocol settings of the profile now apply.
+- **Core: `SettingsManager.Save` dropped stored values** of settings that were not registered in the saving process (for
+  example the settings of a plugin that was not loaded).
+
+---
+
 ## [0.18.0] — Very large captures, faster filters and matching reads, and faster Core internals
 
 Delta since 0.17.0. Version is `0.18.0` in `Directory.Build.props`.

@@ -2,6 +2,7 @@
 
 #region System
 global using System;
+global using System.Threading.Tasks;
 #endregion
 
 #region NetworkInspector.CLI

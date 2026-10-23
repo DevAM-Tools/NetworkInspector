@@ -58,7 +58,7 @@ Cover every topic before finalizing scope:
 - performance and allocations (hot paths, budgets) — performance is a feature
 - edge cases and error handling
 - security boundaries and STRIDE
-- trust-boundary limits: proposed defaults; constant vs configurable (where, who, unset default)
+- trust-boundary limits per Section 4.2: threat; proposed default or range; constant vs configurable (where, who: code / operator / end user); posture (secure or open by default) and why; end-user help text
 - concurrency, TOCTOU, async interleaving
 - compatibility, migration, breaking change
 - new dependencies: id, what it does, why needed, license, alternatives
@@ -95,7 +95,8 @@ Grill Me ↔ Council per `workflow-council.md` until no blocking fork. Lite defa
 - English (Section 4.6).
 - Slug: lowercase, punctuation/whitespace → `-`, collapse `-`, trim, fallback `task`.
 - Step Overview at top. Status starts `⬜`.
-- Next: Requirements — **link only**. Real Markdown link to the Stage 0 file. Do not paste the requirement list.
+- Next: **Expected Experience** (see section below), before Requirements and Test cases.
+- Then Requirements — **link only**. Real Markdown link to the Stage 0 file. Do not paste the requirement list.
 - Map every requirement ID that has Done-when in Target Solution (design completeness). Unmapped = incomplete. Extra design with no matching requirement ID: justify or cut. Do not restate full requirement text here. **Do not** cite requirement IDs inside step `How`.
 - Test cases are first-class **content** (index + `TEST-<AREA>-<TOPIC>` cards). Cover everything **important** in the plan. Extra tests at implement time are allowed. An executing agent must be able to prove each card without inventing the scenario.
 - End with Requirements fit, then its Step `{n}R`.
@@ -110,13 +111,43 @@ Grill Me ↔ Council per `workflow-council.md` until no blocking fork. Lite defa
 
 Narrow table. Experience lives in the step block, not as an extra column.
 
+❗ Link every Step cell to its step block (`#` + the GitHub slug of the block heading: lowercase, punctuation other than `-` dropped, spaces → `-`; `## Step 1 - Create export` → `#step-1---create-export`). Link `Step {n}R` to the block of Step `{n}`.
+
 ```markdown
 | Step | Status | Delivers |
 |------|--------|----------|
-| Step 1 — {title} | ⬜ | {one sentence} |
-| Step 1R — Review Step 1 | ⬜ | Zero Error findings; iterate until clean |
-| Step {N} — Requirements fit | ⬜ | Every requirement with Done-when Met |
-| Step {N}R — Review Step {N} | ⬜ | Zero Error findings; iterate until clean |
+| [Step 1 — Create export](#step-1---create-export) | ⬜ | {one sentence} |
+| [Step 1R — Review Step 1](#step-1---create-export) | ⬜ | Zero Error findings; iterate until clean |
+| [Step 2 — Requirements fit](#step-2---requirements-fit) | ⬜ | Every requirement with Done-when Met |
+| [Step 2R — Review Step 2](#step-2---requirements-fit) | ⬜ | Zero Error findings; iterate until clean |
+```
+
+### Expected Experience
+
+Second section, directly after Step Overview. The reader sees what they get
+before they read how. It aggregates step `Experience`; it adds no new claim.
+
+- No phases: one block `### Result` for the whole plan.
+- Phases (use when >10 steps or multiple areas): one `### Phase {P} — {title}`
+  block per phase, in step order. Each step belongs to exactly one phase.
+- Fields per block: `Steps` (links as in Step Overview) · `After this phase a
+  person can` · `They should see` · `How to try` · `Not yet`.
+- Describe the cumulative state after the phase. Mark what is new since the
+  previous phase with `New:`.
+- Trace every claim to a step `Experience` in the phase. `How to try` is a
+  runnable command, Playwright spec, or usage snippet.
+- Cover each `Not yet` of a phase by a later phase or by Out. The last block's
+  `Not yet` is `nothing` or Out.
+
+```markdown
+## Expected Experience
+
+### Phase 1 — Create and list exports
+Steps: [Step 1](#step-1---create-export) · [Step 2](#step-2---list-exports)
+After this phase a person can: create an export and see it listed.
+They should see: one row per export; a duplicate name shows an error.
+How to try: `dotnet run --project src/App -c Release -- export create Report`
+Not yet: deleting an export.
 ```
 
 ### Shared Block (plan steps)
@@ -141,7 +172,7 @@ Test code in `How` or on a `TEST-<AREA>-<TOPIC>` card is allowed and welcome. It
 
 `Where`: clickable relative Markdown link (Section 4.6), approximate lines, symbol. Mark `primary` (create/rewrite) or `call-site` or `additive` (append-only).
 `Verify`: exact command in optimized/Release per loaded tech skill, plus expected result.
-`Experience`: what a person can try after this step, what they should see, how to try it, and what is **not yet** true.
+`Experience`: what a person can try after this step, what they should see, how to try it, and what is **not yet** true. Expected Experience aggregates these per phase.
 
 ```markdown
 ## {ID} - {Title}
@@ -175,20 +206,20 @@ Collision: other agents locking build/test?
 
 ## Plan Structure
 
-1. Step Overview
-2. Requirements — Markdown link to the requirements file (no copied table)
-3. Test cases (index + content cards)
-4. Summary / Context Anchor (include Coverage table)
-5. Target Solution (Vision)
-6. Phases (optional; >10 steps or multiple areas)
+1. Step Overview (linked rows)
+2. Expected Experience (`Result`, or one block per phase)
+3. Requirements — Markdown link to the requirements file (no copied table)
+4. Test cases (index + content cards)
+5. Summary / Context Anchor (include Coverage table)
+6. Target Solution (Vision)
 7. Slices
 8. API and interfaces — schematic snippets, immediately before the steps
 9. Steps (Shared Block; last = Requirements fit + `{n}R`)
 10. Edge Cases and Risks
 11. Decisions & Trade-offs (`C{n}`; omit when none)
-12. Open Questions
+12. Open Questions (each one that blocks a step is a blocker per `copilot-instructions.md` Section 4.16: what blocks, evidence, impact, scope, to unblock)
 13. Closing Summary
-14. Task Checklist (Step N, tests that are their own steps, Step `{n}R`; include Requirements fit)
+14. Task Checklist (linked rows; Step N, tests that are their own steps, Step `{n}R`; include Requirements fit)
 
 ## Requirements
 
@@ -232,8 +263,10 @@ Index (narrow). Details live in the cards, not extra columns.
 
 | ID | Case | Step | Status |
 |----|------|------|--------|
-| TEST-EXPORT-NO-DUPLICATE | Duplicate name rejected | Step 2 | ⬜ |
+| [TEST-EXPORT-NO-DUPLICATE](#test-export-no-duplicate) | Duplicate name rejected | [Step 2](#step-2---list-exports) | ⬜ |
 ```
+
+Link each ID to its card and each Step to its block.
 
 Every test ID needs a card. **Content** is required. **Class** and **Layer**
 may be named. Test code or a short fenced example of setup / expected
@@ -270,9 +303,16 @@ fast. An applicable class with no test ID and no Out = gap.
 
 - Concrete end-state: types, files, APIs, data flow, invariants, algorithms. Show that shape in snippets, not only in prose. Not a slogan.
 - Map every requirement ID that has Done-when to a design element here (completeness). Do not paste Done-when from the requirements file. Steps then apply this shape.
-- SSOT for final file shape. A primary-file `After` that differs from this section is an incomplete plan.
+- SSOT for final file layout, data flow, invariants, and algorithms. **API and interfaces** is the SSOT for public signatures and contract types; do not paste a second shape here, link to it. A primary-file `After` that differs from either section is an incomplete plan.
+- Trust-boundary limits (Section 4.2): one table row per limit. A limit without threat or posture is incomplete. Each limit gets the limit cases in `tech-test.md` as test cards.
+
+```markdown
+| Limit | Default · range | Kind · who | Posture · why |
+|-------|-----------------|------------|---------------|
+| Import size (memory exhaustion) | 1 GB · 1 MB–host RAM | config · end user | secure: files from strangers |
+```
+
 - Do not use step order here.
-- Public signatures and contract types are written once, in **API and interfaces**. Do not paste a second shape here.
 
 ## Slices
 
@@ -360,8 +400,13 @@ Still required:
 
 Run after the plan file is written. **Walk the plan twice.** Patch until both walks are clean. Do not enter Completion with gaps.
 
-1. **Requirements walk** — Re-read the **linked** requirements file **in full**. Do not treat anything in the plan as a copy of that list. Every requirement ID that has Done-when, and every test ID, must land in Target Solution and in a step `How` / `Tests` / `Acceptance`. A test ID without **Content** = gap. An applicable `tech-test.md` class with no test ID and no Out = gap. Unmapped = gap. Cite each test ID as written. Do not renumber a supplied plan.
+1. **Requirements walk** — Re-read the **linked** requirements file **in full**. Do not treat anything in the plan as a copy of that list. Every requirement ID that has Done-when lands in Target Solution **and** in a step `Acceptance`. Every test ID lands in a step `Tests` field **and** has a card with **Content**. IDs never land in a step `How`. A test ID without **Content** = gap. An applicable `tech-test.md` class with no test ID and no Out = gap. Unmapped = gap. Cite each test ID as written. Do not renumber a supplied plan.
 2. **Conversation walk** — Re-read the conversation, Grill Me Q/A, Sweep, council, and attached docs **in full**, then the **entire** written plan. Every relevant user ask, constraint, non-goal, named type/path/command, accepted proposal, rejected option with leftover constraint, and named edge / constellation / contradiction / gap must land somewhere (a requirement ID, a test ID **Content**, Out, `C{n}`, or out of scope). Unmapped = gap. “Implied” without a citation = gap.
+
+Then run two cheap checks:
+
+- **Link check:** every `#` link (Step Overview, Task Checklist, Test cases index, Expected Experience) matches a heading slug in the plan. Patch the link or the heading.
+- **Experience check:** every Expected Experience claim traces to a step `Experience`. Every `Not yet` is covered by a later block or Out.
 
 Include every requirement ID with Done-when, every test ID, and every Grill Me answer as a row. Record dropped items with reason. Write both tables into Context Anchor. Re-run this stage after any patch.
 
@@ -394,7 +439,7 @@ A green build can still miss the user outcome.
 - For each requirement ID with Done-when: run Done-when. Cite evidence (command, UI, API, file, output). Tick Met in the requirements file.
 - For each test ID: confirm the Content exists as a test that can fail (extra tests beyond the planned IDs are fine).
 - Mark Met / Status ✅ only when the check holds with no caveats.
-- Any ❌ or leftover ⬜ = blocker.
+- Any ❌ or leftover ⬜ = blocker. Write it per `copilot-instructions.md` Section 4.16 (what blocks, evidence, impact, scope, to unblock).
 - Skip Before/After unless a gap needs a code fix; then stop and file the gap.
 ### Experience
 A person can execute every Done-when without reading the source.
@@ -409,7 +454,7 @@ Re-run the failing Done-when in isolation. Check agent collision before redesign
 
 ## Checklist Rules
 
-- Flat ordered list: Step N, any dedicated test steps, Step `{n}R`. Include Requirements fit.
+- Flat ordered list: Step N, any dedicated test steps, Step `{n}R`. Include Requirements fit. Link each entry as in Step Overview.
 - Tick Status on every transition on **all three** surfaces: Step Overview, Shared Block, Task Checklist.
 - Zero Error findings at each review gate before the next step.
 

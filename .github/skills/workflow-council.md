@@ -4,7 +4,7 @@ Load on `/council`. Apply `copilot-instructions.md` Sections 2–4. Do not imple
 
 Five named views, not job titles. Same agent writes every view, then chairs. Rule Priority §4.13.
 
-❗ **Never spawn subagents or `Task` workers** for advisors, peer review, or Exam. Sequential in this session. Write **Skeptic first**, before other views exist in the artifact, so later views cannot unsay a kill shot. Chairman records clashes.
+❗ **Never use a subagent or delegation tool** for advisors, peer review, or Exam. Sequential in this session. Write **Skeptic first**, before other views exist in the artifact, so later views cannot unsay a kill shot. Chairman records clashes.
 
 ## When
 
@@ -31,13 +31,13 @@ Skip none. Use these names only.
 
 | View | Ask | Do |
 |------|-----|-----|
-| Skeptic | What kills this? | Assume it cannot work. Find the fatal flaw. Dig if it looks solid. Dumbest user/operator error AND worst abuse + STRIDE at trust boundaries. Do not trust tests, docs, or a green path. |
+| Skeptic | What kills this? | Assume it cannot work. Find the fatal flaw. Dig if it looks solid. Dumbest user/operator error AND worst abuse + STRIDE at trust boundaries. A limit that cripples a capable host or lets abuse through (§4.2). Do not trust tests, docs, or a green path. |
 | Problem-First | Right problem? | Strip the proposed solution. Rebuild the problem. Say when the question is wrong. |
-| Upside | What extra value sits in scope? | Hunt in-scope gain only. No new product, dependency, or scope. New packages still need New Dependency Protocol. |
+| Upside | What extra value sits in scope? | Hunt in-scope gain only. No new product, dependency, or scope. New packages still need the New Dependency Protocol (Section 4.7). |
 | Outsider | Would a first-time user get this? | Drop insider context. Flag jargon, opaque names, missing first-caller steps. Unknown term → treat as unknown. |
 | Builder | What is the first concrete step? | Prove it can ship. Name the first command, plan step, or `Verify`. No first step → say so. |
 
-**Constraint Block** (all except Outsider): §4.13. Loaded test stack (cite skill). New Dependency Protocol (cite loaded skill). MIT/Apache-2.0/BSD-like. No scope expand. No edits. Cite path/symbol for code claims.
+**Constraint Block** (all except Outsider): §4.13. Loaded test stack (cite skill). New Dependency Protocol (Section 4.7). MIT/Apache-2.0/BSD-like. No scope expand. No edits. Cite path/symbol for code claims.
 
 Outsider gets the framed question only — no Constraint Block, no tech-skill dump.
 
@@ -71,7 +71,9 @@ Other views keep 150–250 words (Lite: 2–5 bullets each). Exam Ask:
 
 **Chairman:** **Holds** · **Does not hold**. Kill shots and §4 violations → Does not hold. Isolated nits that are not fatal and do not violate §4 → risks; still Holds. No "it depends" without Grill Me. Do not emit plan `C{n}`.
 
-Loop status: `done` (Holds) · `exam-fail` (Does not hold) · `grill-me` · `re-council`. Parent implement remediates `exam-fail`, then re-runs Exam as `_<n>`. Cap 2 reruns on the same root cause → blocker.
+Loop status: `done` (Holds) · `exam-fail` (Does not hold) · `grill-me` · `re-council`. Parent implement remediates `exam-fail`, then re-runs Exam as `_<n>`. Cap 2 reruns on the same root cause → blocker per `copilot-instructions.md` Section 4.16.
+
+Every kill shot behind **Does not hold** is written like a blocker (Section 4.16): what fails, evidence (path/symbol, command output), impact if shipped, scope, and what must change.
 
 ## Sweep
 
@@ -132,7 +134,7 @@ Do not council a how-to after the choice. Do not Grill Me a rubber-stamp.
 
 ## Lite / Full / Exam stages
 
-Same agent throughout. No `Task`. No parallel advisors.
+Same agent throughout. No subagent or delegation tool. No parallel advisors.
 
 1. **Context** — User text, attachments, plan/review/ADR, in-scope code. Read attached docs **in full**. Tech Load when code is in scope; pass **constraints**, not full skill text. Reuse prior `councils/council_<slug>*` on the same fork unless new evidence. Outsider context stays thin. Exam: built files, tests, `Verify`, plan requirement IDs and test IDs, latest reviews, briefing.
 2. **Frame** — One neutral prompt: decision, user context, repo constraints/paths, stakes, Constraint Block (omit for Outsider). No steering. Save in artifact. Exam: use the Holds question in **Exam**.
@@ -146,6 +148,40 @@ Same agent throughout. No `Task`. No parallel advisors.
 
 This is structured self-critique, not an independent jury. Compensate by writing Skeptic first and by citing path/symbol for every code claim.
 
+### Worked chairman verdicts
+
+Copy the depth, not the content.
+
+Lite decision (plan Decision Loop):
+
+```markdown
+## Chairman
+**Agrees:** Skeptic, Problem-First, and Builder reject an in-memory cache: the
+export list is read once per request (`src/ExportPage.cs` `OnGetAsync`).
+**Clashes:** Upside wants a shared cache for later search; Skeptic shows a
+stale-read risk after `Export.Create` (`src/Export.cs` `Create`). Not smoothed.
+**Blind spots:** none of the five checked the 10 000-row limit agreed in Q3.
+**Recommendation:** read through the store per request; no cache.
+**One thing to do first:** add the 10 000-row case to TEST-EXPORT-LIST-LIMIT.
+**Grill Me follow-ups:** none.
+**C{n} mapping:** C2 — no cache; per-request read.
+```
+
+Exam (after `/implement`):
+
+```markdown
+## Chairman
+**Verdict:** Does not hold.
+**Kill shot 1:** REQ-EXPORT-NO-DUPLICATE fails under concurrent submits.
+`Export.Create` checks `Contains` and then calls `Add` without a lock
+(`src/Export.cs` ~L22–L28). Evidence: two parallel `Create("Report")` calls in
+TEST-EXPORT-NO-DUPLICATE-CONCURRENT both succeed. Impact: duplicate rows ship;
+lookups by name return the older row. Scope: export creation only; listing is
+unaffected. To unblock: make check-and-add atomic in `IExportStore.TryAdd`.
+**Risks (not fatal):** the duplicate-name message is not localized.
+**Loop status:** `exam-fail`.
+```
+
 ## Completion
 
-Status table: mode, path, loop status, `C{n}` (omit `C{n}` on Exam). Goal verdict = Recommendation one-liner (Exam: Holds / Does not hold). Risks ≤5 from Skeptic + clashes. Do not start `/implement` from a decision verdict. Exam `exam-fail` continues the current implement run.
+Status table: mode, path, loop status, `C{n}` (omit `C{n}` on Exam). Goal verdict = Recommendation one-liner (Exam: Holds / Does not hold). Every risk from Skeptic and the clashes, ordered by impact; do not cap or drop risks. The status table and the full risk list live in the artifact. Chat: verdict sections, risks, and the artifact path. Do not start `/implement` from a decision verdict. Exam `exam-fail` continues the current implement run.

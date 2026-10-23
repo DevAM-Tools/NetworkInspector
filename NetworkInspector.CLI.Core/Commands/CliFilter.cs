@@ -4,7 +4,7 @@ namespace NetworkInspector.CLI.Commands;
 
 /// <summary>
 /// Shared <c>--filter</c> handling for the CLI commands: compiling an expression against the
-/// protocol stack and evaluating it per packet, reporting failures on stderr instead of throwing.
+/// protocol stack and evaluating it per packet, reporting failures on the error writer instead of throwing.
 /// </summary>
 internal static class CliFilter
 {
@@ -19,19 +19,19 @@ internal static class CliFilter
         !string.IsNullOrWhiteSpace(expression);
 
     /// <summary>
-    /// Compiles <paramref name="expression"/> against <paramref name="stack"/>. On failure the
-    /// compile error is written to stderr and <see langword="false"/> is returned, so the caller
-    /// can exit with <see cref="ExitCode.ArgumentError"/>.
+    /// Compiles <paramref name="expression"/> against <paramref name="stack"/>. On failure the compile error is written as one line to
+    /// <paramref name="error"/> and <see langword="false"/> is returned, so the caller can exit with <see cref="ExitCode.ArgumentError"/>.
     /// </summary>
     internal static bool TryCompile(
         string expression,
         Stack stack,
+        TextWriter error,
         [NotNullWhen(true)] out IFilter? filter)
     {
         FilterResult<PacketFilter> compiled = PacketFilter.Compile(expression, stack);
         if (!compiled.TryGetValue(out PacketFilter? compiledFilter))
         {
-            Console.Error.WriteLine($"Error: invalid --filter expression: {compiled.Error.Message}");
+            error.WriteLine($"Error: invalid --filter expression: {compiled.Error.Message}");
             filter = null;
             return false;
         }
@@ -47,7 +47,7 @@ internal static class CliFilter
     /// presence stays O(1). Pass <see cref="PacketIndex"/> or <see cref="PacketIndexReaderView"/>
     /// as <typeparamref name="TIndex"/> — do not cast a view to <see cref="IPacketIndexReader"/>
     /// (that boxes).
-    /// On an evaluation failure the reason is written to stderr and <see langword="false"/> is
+    /// On an evaluation failure the reason is written to <paramref name="error"/> and <see langword="false"/> is
     /// returned; the caller must abort, because a filter that cannot decide would otherwise
     /// silently drop or keep data.
     /// </summary>
@@ -55,6 +55,7 @@ internal static class CliFilter
         IFilter filter,
         Packet packet,
         TIndex? index,
+        TextWriter error,
         out bool matched)
         where TIndex : IPacketIndexReader
     {
@@ -63,15 +64,15 @@ internal static class CliFilter
             return true;
         }
 
-        Console.Error.WriteLine($"Error: filter evaluation failed: {failure.Message}");
+        error.WriteLine($"Error: filter evaluation failed: {failure.Message}");
         matched = false;
         return false;
     }
 
-    /// <summary>Usage lines describing <c>--filter</c>, shared by both commands.</summary>
-    internal static void PrintUsageLines()
+    /// <summary>Prints the usage line of the filter option to <paramref name="error"/>.</summary>
+    internal static void PrintUsageLines(TextWriter error)
     {
-        Console.Error.WriteLine("  --filter <expr>       Only keep packets matching this filter expression");
+        error.WriteLine("  --filter <expr>       Only keep packets matching this filter expression");
     }
 
     #endregion

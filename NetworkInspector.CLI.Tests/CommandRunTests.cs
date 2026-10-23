@@ -10,7 +10,7 @@ internal sealed class CommandRunTests
     [Test]
     public async Task Convert_InvalidProfileName_ReturnsArgumentError()
     {
-        int code = ConvertCommand.Run([
+        int code = await CliRun.ConvertAsync([
             "random:count=1,mode=udp4",
             "-o", "out.pcapng",
             "--profile", "../evil",
@@ -24,10 +24,12 @@ internal sealed class CommandRunTests
     {
         string dir = Path.Combine(Path.GetTempPath(), $"ni-prof-{Guid.NewGuid():N}");
         Directory.CreateDirectory(dir);
+        // An explicitly named profile must exist; the command line does not invent one.
+        SettingsProfiles.TryCreate(dir, "TestProfile", null, out _);
         string path = Path.Combine(dir, "out.pcapng");
         try
         {
-            int code = ConvertCommand.Run([
+            int code = await CliRun.ConvertAsync([
                 "random:count=2,mode=udp4",
                 "-o", path,
                 "-n", "2",
@@ -55,7 +57,7 @@ internal sealed class CommandRunTests
         string path = Path.Combine(dir, "out.pcapng");
         try
         {
-            int code = ConvertCommand.Run([
+            int code = await CliRun.ConvertAsync([
                 "random:count=2,mode=udp4",
                 "-o", path,
                 "-n", "2",
@@ -83,7 +85,7 @@ internal sealed class CommandRunTests
         string path = Path.Combine(dir, "out.pcapng");
         try
         {
-            int code = ConvertCommand.Run([
+            int code = await CliRun.ConvertAsync([
                 "random:count=2,mode=udp4",
                 "-o", path,
                 "-n", "2",
@@ -106,7 +108,7 @@ internal sealed class CommandRunTests
     [Test]
     public async Task Convert_SettingsMaxConfigFileBytesMissingValue_ReturnsArgumentError()
     {
-        int code = ConvertCommand.Run([
+        int code = await CliRun.ConvertAsync([
             "random:count=1,mode=udp4",
             "-o", "out.pcapng",
             "--settings-max-config-file-bytes",
@@ -123,7 +125,7 @@ internal sealed class CommandRunTests
         string path = Path.Combine(dir, "out.pcapng");
         try
         {
-            int code = ConvertCommand.Run([
+            int code = await CliRun.ConvertAsync([
                 "random:count=2,mode=udp4",
                 "-o", path,
                 "-n", "2",
@@ -146,7 +148,7 @@ internal sealed class CommandRunTests
     [Test]
     public async Task Convert_SettingsMaxJsonDepthMissingValue_ReturnsArgumentError()
     {
-        int code = ConvertCommand.Run([
+        int code = await CliRun.ConvertAsync([
             "random:count=1,mode=udp4",
             "-o", "out.pcapng",
             "--settings-max-json-depth",
@@ -161,7 +163,7 @@ internal sealed class CommandRunTests
         string path = Path.Combine(Path.GetTempPath(), $"ni-export-zero-{Guid.NewGuid():N}.json");
         try
         {
-            int code = ExportCommand.Run([
+            int code = await CliRun.ExportAsync([
                 "random:count=2,mode=udp4",
                 "-f", "json:style=compact",
                 "-o", path,
@@ -187,7 +189,7 @@ internal sealed class CommandRunTests
         string path = Path.Combine(Path.GetTempPath(), $"ni-export-cap-{Guid.NewGuid():N}.json");
         try
         {
-            int code = ExportCommand.Run([
+            int code = await CliRun.ExportAsync([
                 "random:count=2,mode=udp4",
                 "-f", "json:style=compact",
                 "-o", path,
@@ -211,7 +213,7 @@ internal sealed class CommandRunTests
     [Test]
     public async Task Export_InvalidMaxPackets_ReturnsArgumentError()
     {
-        int code = ExportCommand.Run(["random:count=1,mode=udp4", "-n", "abc"]);
+        int code = await CliRun.ExportAsync(["random:count=1,mode=udp4", "-n", "abc"]);
 
         await Assert.That(code).IsEqualTo((int)ExitCode.ArgumentError);
     }
@@ -219,7 +221,7 @@ internal sealed class CommandRunTests
     [Test]
     public async Task Export_MissingFormatValue_ReturnsArgumentError()
     {
-        int code = ExportCommand.Run(["random:count=1,mode=udp4", "-f"]);
+        int code = await CliRun.ExportAsync(["random:count=1,mode=udp4", "-f"]);
 
         await Assert.That(code).IsEqualTo((int)ExitCode.ArgumentError);
     }
@@ -227,7 +229,7 @@ internal sealed class CommandRunTests
     [Test]
     public async Task Convert_MissingOutputValue_ReturnsArgumentError()
     {
-        int code = ConvertCommand.Run(["random:count=1,mode=udp4", "-o"]);
+        int code = await CliRun.ConvertAsync(["random:count=1,mode=udp4", "-o"]);
 
         await Assert.That(code).IsEqualTo((int)ExitCode.ArgumentError);
     }
@@ -235,7 +237,7 @@ internal sealed class CommandRunTests
     [Test]
     public async Task Convert_MissingOutputOption_ReturnsArgumentError()
     {
-        int code = ConvertCommand.Run(["random:count=1,mode=udp4"]);
+        int code = await CliRun.ConvertAsync(["random:count=1,mode=udp4"]);
 
         await Assert.That(code).IsEqualTo((int)ExitCode.ArgumentError);
     }
@@ -243,7 +245,7 @@ internal sealed class CommandRunTests
     [Test]
     public async Task Export_BlfCacheTooLarge_ReturnsArgumentError()
     {
-        int code = ExportCommand.Run([
+        int code = await CliRun.ExportAsync([
             "random:count=1,mode=udp4",
             "-f", "json",
             "-o", Path.Combine(Path.GetTempPath(), $"ni-blf-cache-{Guid.NewGuid():N}.json"),
@@ -256,7 +258,7 @@ internal sealed class CommandRunTests
     [Test]
     public async Task Export_MissingOutput_ReturnsArgumentError()
     {
-        int code = ExportCommand.Run([
+        int code = await CliRun.ExportAsync([
             "random:count=1,mode=udp4",
             "-f", "json",
         ]);
@@ -267,7 +269,7 @@ internal sealed class CommandRunTests
     [Test]
     public async Task Export_StdoutDash_ReturnsArgumentError()
     {
-        int code = ExportCommand.Run([
+        int code = await CliRun.ExportAsync([
             "random:count=1,mode=udp4",
             "-f", "json",
             "-o", "-",
@@ -279,7 +281,7 @@ internal sealed class CommandRunTests
     [Test]
     public async Task Convert_StdoutDash_ReturnsArgumentError()
     {
-        int code = ConvertCommand.Run([
+        int code = await CliRun.ConvertAsync([
             "random:count=1,mode=udp4",
             "-o", "-",
         ]);
@@ -293,7 +295,7 @@ internal sealed class CommandRunTests
         string path = Path.Combine(Path.GetTempPath(), $"ni-export-{Guid.NewGuid():N}.json");
         try
         {
-            int code = ExportCommand.Run([
+            int code = await CliRun.ExportAsync([
                 "random:count=3,mode=udp4",
                 "-f", "json:style=compact",
                 "-o", path,
@@ -320,7 +322,7 @@ internal sealed class CommandRunTests
         string basePath = Path.Combine(dir, "part.json");
         try
         {
-            int code = ExportCommand.Run([
+            int code = await CliRun.ExportAsync([
                 "random:count=6,mode=udp4",
                 "-f", "json:style=compact",
                 "-o", basePath,
@@ -349,7 +351,7 @@ internal sealed class CommandRunTests
         string basePath = Path.Combine(dir, "dataset");
         try
         {
-            int code = ExportCommand.Run([
+            int code = await CliRun.ExportAsync([
                 "random:count=6,mode=udp4",
                 "-f", "parquet",
                 "-o", basePath,
@@ -381,7 +383,7 @@ internal sealed class CommandRunTests
         string basePath = Path.Combine(dir, "part.duckdb");
         try
         {
-            int code = ExportCommand.Run([
+            int code = await CliRun.ExportAsync([
                 "random:count=6,mode=udp4",
                 "-f", "duckdb",
                 "-o", basePath,
@@ -410,7 +412,7 @@ internal sealed class CommandRunTests
         string basePath = Path.Combine(dir, "out_parquet");
         try
         {
-            int code = ExportCommand.Run([
+            int code = await CliRun.ExportAsync([
                 "random:count=3,mode=udp4",
                 "-f", "parquet",
                 "-o", basePath,
@@ -436,7 +438,7 @@ internal sealed class CommandRunTests
         string path = Path.Combine(Path.GetTempPath(), $"ni-convert-{Guid.NewGuid():N}.pcapng");
         try
         {
-            int code = ConvertCommand.Run([
+            int code = await CliRun.ConvertAsync([
                 "random:count=5,mode=udp4",
                 "-o", path,
                 "-n", "5",
@@ -462,7 +464,7 @@ internal sealed class CommandRunTests
         string basePath = Path.Combine(dir, "part.pcapng");
         try
         {
-            int code = ConvertCommand.Run([
+            int code = await CliRun.ConvertAsync([
                 "random:count=6,mode=udp4",
                 "-o", basePath,
                 "--split-count", "2",
@@ -485,7 +487,7 @@ internal sealed class CommandRunTests
     [Test]
     public async Task Convert_SplitSizeOverflow_ReturnsArgumentError()
     {
-        int code = ConvertCommand.Run([
+        int code = await CliRun.ConvertAsync([
             "random:count=1,mode=udp4",
             "-o", "out.pcapng",
             "--split-size", "999999999999999999",
@@ -497,7 +499,7 @@ internal sealed class CommandRunTests
     [Test]
     public async Task Export_MissingSourceFile_ReturnsSourceOpenError()
     {
-        int code = ExportCommand.Run([
+        int code = await CliRun.ExportAsync([
             "definitely-missing-xyz.pcapng",
             "-f", "json",
             "-o", Path.Combine(Path.GetTempPath(), $"ni-missing-{Guid.NewGuid():N}.json"),
@@ -509,7 +511,8 @@ internal sealed class CommandRunTests
     [Test]
     public async Task CliEntry_ExportInvalidNumeric_ReturnsArgumentError()
     {
-        int code = CliEntry.Run(["export", "random:count=1,mode=udp4", "-n", "nope"]);
+        CliResult result = await CliSandbox.RunWithoutBaseAsync(["export", "random:count=1,mode=udp4", "-n", "nope"], CancellationToken.None);
+        int code = result.Exit;
 
         await Assert.That(code).IsEqualTo((int)ExitCode.ArgumentError);
     }

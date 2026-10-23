@@ -38,8 +38,8 @@ public EventCallback<string> TitleChanged { get; set; }
 - Cancel a `CancellationTokenSource` in `Dispose` / `DisposeAsync` when async work outlives one lifecycle method.
 
 ```csharp
-await _http.GetAsync(url, _cts.Token);
-await Task.Delay(TimeSpan.FromSeconds(5), _cts.Token);
+await _Http.GetAsync(url, _Cts.Token);
+await Task.Delay(TimeSpan.FromSeconds(5), _Cts.Token);
 ```
 
 - Call `await InvokeAsync(StateHasChanged)` for external notifications.
@@ -54,7 +54,14 @@ await Task.Delay(TimeSpan.FromSeconds(5), _cts.Token);
 
 - Add `@key` in `@foreach` repeats.
 - Extract a child component instead of deep nesting.
-- Bind with explicit `@bind-Value` plus the event.
+- Bind with `@bind-Value` and run follow-up work in `@bind-Value:after`. Do not pair `@bind-Value` with a hand-written `ValueChanged` handler; the two conflict.
+
+```razor
+@* Wrong: manual event plus binding *@
+<InputText Value="@Model.Name" ValueChanged="OnNameChanged" ValueExpression="() => Model.Name" />
+@* Right: binding plus an after-hook *@
+<InputText @bind-Value="Model.Name" @bind-Value:after="OnNameChangedAsync" />
+```
 - Wrap risky subtrees in `<ErrorBoundary>` with recovery UI.
 - Keep per-user state in scoped services. Keep shared app state in singletons. Never store user state in static fields.
 - Apply `[Authorize]` / `<AuthorizeRouteView>` where required.
@@ -72,7 +79,7 @@ Shared look, locked breakpoints, CSS layers, JS vs CSS: `tech-web.md`.
 
 - Component logic: bUnit (render states, parameters, user events, auth visibility, error boundaries).
 - Code-behind, view-models, services: TUnit (`tech-tunit.md`).
-- Page journeys and UI debug: `tech-playwright.md` (`TUnit.Playwright` in `{App}.UiTest`). The editor’s integrated browser is available and recommended.
+- Page journeys and UI debug: `tech-playwright.md` (`TUnit.Playwright` in `{App}.UiTest`). Integrated browser: Section 4.8.
 - Case design: `tech-test.md`.
 
 ## Commands

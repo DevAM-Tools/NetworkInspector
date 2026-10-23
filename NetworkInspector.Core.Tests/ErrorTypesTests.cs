@@ -194,7 +194,7 @@ internal sealed class ErrorTypesTests
     [Test]
     public async Task ThrowHelpers_ThrowNonFiniteF64_SettingsJson_ThrowsInvalidOperationException()
     {
-        MethodInfo? method = typeof(SettingsManager).GetMethod(
+        MethodInfo? method = typeof(SettingValueJson).GetMethod(
             "_SettingF64ToJson",
             BindingFlags.NonPublic | BindingFlags.Static);
         await Assert.That(method).IsNotNull();
@@ -209,7 +209,7 @@ internal sealed class ErrorTypesTests
     [Test]
     public async Task ThrowHelpers_ThrowNonFiniteF64_UsesInvariantCulture()
     {
-        MethodInfo? method = typeof(SettingsManager).GetMethod(
+        MethodInfo? method = typeof(SettingValueJson).GetMethod(
             "_SettingF64ToJson",
             BindingFlags.NonPublic | BindingFlags.Static);
         await Assert.That(method).IsNotNull();

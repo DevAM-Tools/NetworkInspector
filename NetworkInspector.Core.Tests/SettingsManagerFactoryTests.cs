@@ -150,13 +150,12 @@ internal sealed class SettingsManagerFactoryTests
     }
 
     [Test]
-    public async Task ResolvePath_ProfileContainsDotDotSegment_ThrowsArgumentException()
+    public async Task ResolvePath_ProfileWithInnerDots_IsAnOrdinaryFolderName()
     {
-        // Act / Assert
-        ArgumentException ex = Assert.Throws<ArgumentException>(
-            () => SettingsManagerFactory.ResolvePath(Path.GetTempPath(), "x..y"));
+        // "x..y" is not a path traversal: only a whole ".." component is, and the leading dot is refused by the profile rule.
+        string result = SettingsManagerFactory.ResolvePath(Path.GetTempPath(), "x..y");
 
-        await Assert.That(ex.ParamName).IsEqualTo("profileName");
+        await Assert.That(result).IsEqualTo(Path.Combine(Path.GetTempPath(), "x..y"));
     }
 
     [Test]
@@ -178,7 +177,7 @@ internal sealed class SettingsManagerFactoryTests
 
     /// <summary>
     /// Documents the current accepted character set for profileName:
-    /// alphanumeric, hyphens, and underscores.
+    /// ASCII letters, digits, spaces, dots, hyphens, and underscores (see ProfileNames).
     /// This test acts as a living contract that fails if the implementation
     /// silently accepts or rejects inputs differently than documented.
     /// </summary>
@@ -188,6 +187,8 @@ internal sealed class SettingsManagerFactoryTests
     [Arguments("mixed123")]
     [Arguments("with-hyphen")]
     [Arguments("with_underscore")]
+    [Arguments("foo bar")]
+    [Arguments("v1.2.3")]
     public async Task ResolvePath_AcceptedProfileNames_DoNotThrow(string profile)
     {
         // Act / Assert — should not throw
@@ -196,9 +197,9 @@ internal sealed class SettingsManagerFactoryTests
     }
 
     [Test]
-    [Arguments("foo bar")]
     [Arguments("foo@bar")]
-    [Arguments("v1.2.3")]
+    [Arguments("foo:bar")]
+    [Arguments("tab	here")]
     public async Task ResolvePath_ProfileWithDisallowedCharacters_ThrowsArgumentException(string profile)
     {
         ArgumentException ex = Assert.Throws<ArgumentException>(

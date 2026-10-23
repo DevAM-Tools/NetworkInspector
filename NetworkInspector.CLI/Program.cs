@@ -9,5 +9,5 @@ namespace NetworkInspector.CLI;
 internal static class Program
 {
     /// <summary>Application entry point.</summary>
-    internal static int Main(string[] args) => CliEntry.Run(args);
+    internal static Task<int> Main(string[] args) => CliEntry.RunAsync(args);
 }

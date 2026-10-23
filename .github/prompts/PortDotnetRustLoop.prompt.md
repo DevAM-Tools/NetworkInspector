@@ -10,6 +10,6 @@ agent: agent
 
 Execute the .NET → Rust port loop.
 
-- Read `../copilot-instructions.md`.
+- Read `../copilot-instructions.md` unless it is already in context.
 - Read `../skills/workflow-port-dotnet-rust-loop.md` and every skill it lists under "Also load".
 - Apply rules exactly; do not restate them here.

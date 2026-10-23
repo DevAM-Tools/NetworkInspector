@@ -101,7 +101,10 @@ Before adding a rule, choose the highest file that still stays correct: **app** 
 .card { --accent: #7dd; }
 @media (min-width: 900px) { .card { grid-template-columns: 1fr 1fr; } }
 
-/* Right — tokens in app.css; this card follows its container */
+/* Right — tokens in app.css; this card follows its container.
+   The slot that hosts the card must declare itself a container,
+   or the @container rule never matches. */
+.card-slot { container-type: inline-size; }
 .card { display: grid; gap: 1rem; }
 @container (min-width: 768px) {
   .card { grid-template-columns: 1fr 1fr; }
@@ -137,6 +140,20 @@ syncChartSize(desktop);
 - Pair every input with a visible label. Show errors next to the field.
 - Make the UI keyboard-usable: sensible tab order, visible focus, `Enter` / `Escape` where expected.
 
+## Limit settings
+
+An end-user setting for a trust-boundary limit (Section 4.2) explains itself where the user changes it.
+
+- Label with the unit. Help text next to the field: what it limits, why it exists, the default, the allowed range, and the risk of raising or lowering it.
+- Mark an **open by default** limit visibly. Offer a way back to the default.
+- Set `min` / `max` / `step` on the input and validate again on the server. An out-of-range value shows the range next to the field.
+
+```text
+Wrong: "Max size: [____]"
+Right: "Max import size (MB): [1024]  1–65536 · default 1024.
+        Stops one file from filling memory. Higher values need more RAM."
+```
+
 ## Markup and behavior
 
 - Use semantic HTML (`header`, `nav`, `main`, `button`). Do not use `div` + click as a button.
@@ -152,4 +169,4 @@ syncChartSize(desktop);
 
 ## Testing
 
-Journeys, viewports, and debug: `tech-playwright.md`. The editor’s integrated browser is available there and recommended. Case design and suite size: `tech-test.md`.
+Journeys, viewports, and debug: `tech-playwright.md`. Integrated browser: Section 4.8. Case design and suite size: `tech-test.md`.

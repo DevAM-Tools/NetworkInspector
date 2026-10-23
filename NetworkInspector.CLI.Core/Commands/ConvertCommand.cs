@@ -5,15 +5,47 @@ namespace NetworkInspector.CLI.Commands;
 /// <summary>
 /// Frame-level format conversion command.
 /// Reads frames from one or more sources and writes them to a target format
-/// (PCAPNG, BLF, or ASC) without protocol parsing.
+/// (PCAPNG, BLF, ASC, or a plugin's frame format) without protocol parsing. Sources and formats come from the plugin registry.
 /// </summary>
 internal static class ConvertCommand
 {
+    #region Types
+
+    /// <summary>The parsed arguments of one run.</summary>
+    private sealed record ConvertArguments(
+        List<string> SourceSpecs,
+        string OutputPath,
+        string? OutputFormatSpec,
+        string? FilterExpression,
+        CliSettingsOptions Settings,
+        int MaxFrames,
+        long SplitSizeBytes,
+        int SplitCount,
+        int ProgressInterval,
+        int BlfCacheBudgetBytes,
+        bool Tolerant,
+        bool Overwrite);
+
+    #endregion
+
     #region Public API
 
-    /// <summary>Runs the convert command.</summary>
-    internal static int Run(string[] args) =>
-        CliArgumentParsing.RunWithArgumentGuard(() => _RunCore(args));
+    /// <summary>Runs the convert command on the console.</summary>
+    /// <param name="args">The arguments after the command name.</param>
+    /// <returns>The exit code.</returns>
+    internal static Task<int> RunAsync(string[] args) => RunAsync(args, CliIo.FromConsole(), CancellationToken.None);
+
+    /// <summary>Runs the convert command with injected writers.</summary>
+    /// <param name="args">The arguments after the command name.</param>
+    /// <param name="io">Output and error writers.</param>
+    /// <param name="cancellationToken">Cancels the run.</param>
+    /// <returns>The exit code.</returns>
+    internal static Task<int> RunAsync(string[] args, CliIo io, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(args);
+        ArgumentNullException.ThrowIfNull(io);
+        return CliArgumentParsing.RunWithArgumentGuardAsync(() => _RunCoreAsync(args, io, cancellationToken), io.Error);
+    }
 
     /// <summary>
     /// Reads frames round-robin from <paramref name="sources"/> and hands the accepted ones to
@@ -25,7 +57,9 @@ internal static class ConvertCommand
     /// empty file behind. When <paramref name="filter"/> is <see langword="null"/> the loop stays
     /// frame-level and never parses; <paramref name="stack"/> is then unused and may be
     /// <see langword="null"/>. A filter that cannot produce a verdict aborts the loop rather than
-    /// writing an output whose contents silently depend on where filtering stopped.
+    /// writing an output whose contents silently depend on where filtering stopped. A cancelled or failed
+    /// conversion ends without <c>OnFinish</c>: the listener is disposed and its output is deleted, so no partial file looks
+    /// like a result.
     /// </remarks>
     internal static int RunConvertLoop(
         List<IFrameSource> sources,
@@ -36,6 +70,7 @@ internal static class ConvertCommand
         int maxFrames,
         int progressInterval,
         bool tolerant,
+        TextWriter error,
         CancellationToken cancellationToken,
         out int filesWritten)
     {
@@ -44,6 +79,7 @@ internal static class ConvertCommand
         int filterPacketId = 0;
         filesWritten = 0;
         IFrameListener? exporter = null;
+        string? currentPath = null;
         IExportByteProgress? byteProgress = null;
         PacketIndex? filterIndex = filter is not null && stack is not null ? new PacketIndex(stack) : null;
 
@@ -63,7 +99,7 @@ internal static class ConvertCommand
                 {
                     if (tolerant)
                     {
-                        Console.Error.WriteLine(
+                        error.WriteLine(
                             $"Warning: Skipping frame from {source.UiName}: {ex.Message}");
                         iterator.Advance();
                         continue;
@@ -94,7 +130,7 @@ internal static class ConvertCommand
                     {
                         throw new InvalidOperationException(filterFailure.ToString());
                     }
-                    if (!CliFilter.TryMatch(filter, packet!, filterIndex, out bool matched))
+                    if (!CliFilter.TryMatch(filter, packet!, filterIndex, error, out bool matched))
                     {
                         throw new InvalidOperationException(
                             "Filter evaluation failed; the conversion was aborted to avoid writing a partially filtered output.");
@@ -117,10 +153,15 @@ internal static class ConvertCommand
                         exporter.OnFinish();
                         (exporter as IDisposable)?.Dispose();
                         filesWritten++;
+
+                        // Finished: from here on nothing of it is cleaned up, even when the next output cannot be opened.
+                        exporter = null;
+                        currentPath = null;
                     }
 
-                    string currentPath = splitManager.NextPath();
-                    exporter = createExporter(currentPath);
+                    string nextPath = splitManager.NextPath();
+                    exporter = createExporter(nextPath);
+                    currentPath = nextPath;
                     byteProgress = exporter as IExportByteProgress;
                     if (splitManager.IsSizeSplitting && byteProgress is null)
                     {
@@ -138,7 +179,7 @@ internal static class ConvertCommand
 
                 if (progressInterval > 0 && totalFrames % progressInterval == 0)
                 {
-                    Console.Error.WriteLine($"Progress: {totalFrames} frames written");
+                    error.WriteLine($"Progress: {totalFrames} frames written");
                 }
 
                 if (maxFrames > 0 && totalFrames >= maxFrames)
@@ -152,29 +193,19 @@ internal static class ConvertCommand
             if (exporter is not null)
             {
                 exporter.OnFinish();
+                (exporter as IDisposable)?.Dispose();
                 filesWritten++;
+                exporter = null;
+                currentPath = null;
             }
 
             return totalFrames;
         }
-        catch (OperationCanceledException)
+        catch
         {
-            // Finalize what has been produced so far so the partial output stays readable.
-            try
-            {
-                exporter?.OnFinish();
-            }
-            catch (Exception finalizeEx)
-            {
-                Console.Error.WriteLine(
-                    $"Warning: finalize failed during cancellation: {finalizeEx.Message}");
-            }
-
+            // Cancelled or failed: the output was not finished, so it is disposed and deleted instead of finalized.
+            CliCommandSupport.DiscardUnfinished(ref exporter, ref currentPath, splitManager.IsDirectoryOutput, error);
             throw;
-        }
-        finally
-        {
-            (exporter as IDisposable)?.Dispose();
         }
     }
 
@@ -183,11 +214,11 @@ internal static class ConvertCommand
     #region Private Helpers
 
     /// <summary>Parses arguments and executes conversion; throws <see cref="ArgumentException"/> on bad args.</summary>
-    private static int _RunCore(string[] args)
+    private static async Task<int> _RunCoreAsync(string[] args, CliIo io, CancellationToken cancellationToken)
     {
         if (args.Length == 0 || CliArgumentParsing.IsHelpFlag(args[0]))
         {
-            _PrintUsage();
+            _PrintUsage(io.Error);
             if (args.Length > 0 && CliArgumentParsing.IsHelpFlag(args[0]))
             {
                 return (int)ExitCode.Success;
@@ -200,19 +231,22 @@ internal static class ConvertCommand
         string? outputPath = null;
         string? outputFormatSpec = null;
         string? filterExpression = null;
-        string? profileName = null;
-        string? settingsPath = null;
-        long maxConfigFileBytes = SettingsManager.DefaultMaxConfigFileBytes;
-        int maxJsonDepth = SettingsManager.DefaultMaxJsonDepth;
+        CliSettingsOptionsBuilder settings = new();
         int maxFrames = 0;
         long splitSize = 0;          // MiB; converted to bytes before use
         int splitCount = 0;          // frames
         int progressInterval = 0;
         long blfCacheSize = 0;        // MiB; for BLF sources
         bool tolerant = false;
+        bool overwrite = false;
 
         for (int i = 0; i < args.Length; i++)
         {
+            if (CliArgumentParsing.ParseSettingsOption(args, ref i, settings))
+            {
+                continue;
+            }
+
             switch (args[i].ToUpperInvariant())
             {
                 case "-O" or "--OUTPUT":
@@ -223,20 +257,6 @@ internal static class ConvertCommand
                     break;
                 case "--FILTER":
                     filterExpression = CliArgumentParsing.GetNextArg(args, ref i, "--filter");
-                    break;
-                case "--PROFILE":
-                    profileName = CliArgumentParsing.GetNextArg(args, ref i, "--profile");
-                    break;
-                case "--SETTINGS-PATH":
-                    settingsPath = CliArgumentParsing.GetNextArg(args, ref i, "--settings-path");
-                    break;
-                case "--SETTINGS-MAX-CONFIG-FILE-BYTES":
-                    maxConfigFileBytes = CliArgumentParsing.ParseInt64(
-                        CliArgumentParsing.GetNextArg(args, ref i, "--settings-max-config-file-bytes"));
-                    break;
-                case "--SETTINGS-MAX-JSON-DEPTH":
-                    maxJsonDepth = CliArgumentParsing.ParseInt32(
-                        CliArgumentParsing.GetNextArg(args, ref i, "--settings-max-json-depth"));
                     break;
                 case "-N" or "--MAX-FRAMES":
                     maxFrames = CliArgumentParsing.ParseNonNegativeInt(
@@ -260,6 +280,9 @@ internal static class ConvertCommand
                 case "--TOLERANT":
                     tolerant = true;
                     break;
+                case "--OVERWRITE":
+                    overwrite = true;
+                    break;
                 case "--BLF-CACHE-SIZE":
                     blfCacheSize = CliArgumentParsing.ParseNonNegativeLong(
                         CliArgumentParsing.GetNextArg(args, ref i, "--blf-cache-size"));
@@ -272,13 +295,13 @@ internal static class ConvertCommand
 
         if (sourceSpecs.Count == 0)
         {
-            Console.Error.WriteLine("Error: No source files specified.");
+            io.Error.WriteLine("Error: No source files specified.");
             return (int)ExitCode.ArgumentError;
         }
 
         if (string.IsNullOrEmpty(outputPath) || outputPath == "-")
         {
-            Console.Error.WriteLine(
+            io.Error.WriteLine(
                 "Error: Output file path required (-o / --output). Stdout ('-') is not supported.");
             return (int)ExitCode.ArgumentError;
         }
@@ -292,251 +315,242 @@ internal static class ConvertCommand
 
         long splitSizeBytes = CliArgumentParsing.MiBToSplitSizeBytes(splitSize, "--split-size");
 
-        return _Execute(
-            sourceSpecs,
-            outputPath,
-            outputFormatSpec,
-            filterExpression,
-            profileName,
-            settingsPath,
-            maxConfigFileBytes,
-            maxJsonDepth,
-            maxFrames,
-            splitSizeBytes,
-            splitCount,
-            progressInterval,
-            blfCacheBudgetBytes,
-            tolerant);
+        return await _ExecuteAsync(
+            new ConvertArguments(sourceSpecs, outputPath, outputFormatSpec, filterExpression, settings.Build(), maxFrames,
+                splitSizeBytes, splitCount, progressInterval, blfCacheBudgetBytes, tolerant, overwrite),
+            io,
+            cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>Executes the conversion pipeline.</summary>
-    private static int _Execute(
-        List<string> sourceSpecs,
-        string outputPath,
-        string? outputFormatSpec,
-        string? filterExpression,
-        string? profileName,
-        string? settingsPath,
-        long maxConfigFileBytes,
-        int maxJsonDepth,
-        int maxFrames,
-        long splitSizeBytes,  // bytes; 0 = no limit
-        int splitCount,      // frames
-        int progressInterval,
-        int blfCacheBudgetBytes,    // bytes; 0 = default
-        bool tolerant)
-    {
-        ConvertOutputConfig outputConfig;
-        try
+    /// <summary>Executes the conversion pipeline inside a plugin session.</summary>
+    private static Task<int> _ExecuteAsync(ConvertArguments arguments, CliIo io, CancellationToken cancellationToken) =>
+        CliCommandSupport.RunCancellableAsync(io, async token =>
         {
-            outputConfig = !string.IsNullOrEmpty(outputFormatSpec)
-                ? ConvertOutputConfig.Parse(outputFormatSpec)
-                : ConvertOutputConfig.FromExtension(Path.GetExtension(outputPath));
-        }
-        catch (ArgumentException ex)
-        {
-            Console.Error.WriteLine($"Error: {ex.Message}");
-            return (int)ExitCode.ArgumentError;
-        }
+            (CliPluginSession? opened, int openExit) = await CliPluginSession.OpenAsync(arguments.Settings, io, token)
+                .ConfigureAwait(false);
+            if (opened is null)
+            {
+                return openExit;
+            }
 
+            await using (opened.ConfigureAwait(false))
+            {
+                return _Run(opened, arguments, io, token);
+            }
+        }, cancellationToken);
+
+    /// <summary>Resolves the specs, builds the stack, opens the sources, and runs the loop.</summary>
+    private static int _Run(CliPluginSession session, ConvertArguments arguments, CliIo io, CancellationToken token)
+    {
+        FrameFormatConfig format;
         List<SourceConfig> configs;
         try
         {
-            configs = sourceSpecs.ConvertAll(spec =>
-            {
-                SourceConfig config = SourceConfig.Parse(spec);
-                if (config is BlfSourceConfig blfConfig && blfCacheBudgetBytes > 0)
-                {
-                    return new BlfSourceConfig(blfConfig.Path)
-                    {
-                        CacheBudget = blfCacheBudgetBytes,
-                    };
-                }
-
-                return config;
-            });
+            format = arguments.OutputFormatSpec is { Length: > 0 } formatSpec
+                ? FrameFormatConfig.Parse(formatSpec, session.Registry)
+                : FrameFormatConfig.FromExtension(Path.GetExtension(arguments.OutputPath), session.Registry);
+            configs = arguments.SourceSpecs.ConvertAll(spec => CliCommandSupport.WithBlfCache(SourceConfig.Parse(spec, session.Registry),
+                arguments.BlfCacheBudgetBytes));
         }
         catch (ArgumentException ex)
         {
-            Console.Error.WriteLine($"Error: {ex.Message}");
+            io.Error.WriteLine("Error: " + ex.Message);
             return (int)ExitCode.ArgumentError;
         }
 
-        SettingsManager? settingsManager = null;
-        try
+        // Unknown or mistyped option texts are refused before any work; the registration judges the rest when it opens.
+        using (SettingsManager options = RegistrationOptions.CreateDefaults(format.Registration.RegisterOptions))
         {
-            settingsManager = SettingsManagerFactory.Create(
-                settingsPath,
-                profileName,
-                maxConfigFileBytes,
-                maxJsonDepth);
-        }
-        catch (ArgumentException ex)
-        {
-            Console.Error.WriteLine($"Error: {ex.Message}");
-            return (int)ExitCode.ArgumentError;
-        }
-
-        FrameInterfaceRegistry registry = new();
-
-        // Conversion is frame-level and needs no protocol stack. A filter changes that: every
-        // frame has to be parsed before it can be judged, so the stack is built only in that case
-        // and then takes ownership of the settings manager.
-        Stack? stack = null;
-        IFilter? filter = null;
-        if (CliFilter.IsActive(filterExpression))
-        {
-            try
+            if (!RegistrationOptions.TryApplyTexts(options, format.OptionTexts, out PluginError? optionError))
             {
-                StackBuilder stackBuilder = new(settingsManager, registry);
-                stackBuilder.RegisterStandardProtocols();
-                stack = stackBuilder.Build();
-                settingsManager = null; // ownership transferred to the stack
-            }
-            finally
-            {
-                settingsManager?.Dispose();
-            }
-
-            if (!CliFilter.TryCompile(filterExpression, stack, out filter))
-            {
-                stack.Dispose();
+                io.Error.WriteLine("Error: " + optionError.Value.Message);
                 return (int)ExitCode.ArgumentError;
             }
         }
 
-        ReadOnlySettingsManagerView settings = stack?.Settings ?? settingsManager!.ReadOnly;
+        // An existing output is refused (or accepted with --overwrite) before a long run starts; nothing is deleted yet.
+        SplitOutputManager firstPathManager = new(arguments.OutputPath, arguments.SplitSizeBytes, arguments.SplitCount);
+        if (!ExportTargets.TryCheck(firstPathManager.NextPath(), isDirectory: false, arguments.Overwrite, out _, out PluginError? targetError))
+        {
+            io.Error.WriteLine("Error: " + CliCommandSupport.TargetText(targetError, arguments.OutputPath));
+            return (int)ExitCode.ArgumentError;
+        }
+
+        // An exporter request carries the stack, so conversion always builds one (a few milliseconds); frames are parsed only
+        // when a filter is set.
+        FrameInterfaceRegistry frames = new();
+        if (!session.TryBuildStack(frames, out Stack? stack, out int stackExit))
+        {
+            return stackExit;
+        }
 
         List<IFrameSource> sources = [];
-        try
+        using (stack)
         {
-            foreach (SourceConfig config in configs)
+            try
             {
-                config.ValidateBeforeStart();
-                IFrameSource source = config.CreateSource(settings);
-                FrameSourceId sourceId = registry.RegisterSource(source);
-                source.Start(sourceId, registry);
-                sources.Add(source);
+                IFilter? filter = null;
+                if (CliFilter.IsActive(arguments.FilterExpression)
+                    && !CliFilter.TryCompile(arguments.FilterExpression, stack, io.Error, out filter))
+                {
+                    return (int)ExitCode.ArgumentError;
+                }
+
+                int sourceExit = CliCommandSupport.OpenSources(configs, stack, frames, sources, io);
+                if (sourceExit != (int)ExitCode.Success)
+                {
+                    return sourceExit;
+                }
+
+                return _RunLoop(arguments, format, sources, stack, filter, io, token);
+            }
+            finally
+            {
+                CliSourceLifetime.DisposeSources(sources, io.Error);
             }
         }
-        catch (Exception ex)
-        {
-            Console.Error.WriteLine($"Error opening source: {ex.Message}");
-            CliSourceLifetime.DisposeSources(sources);
-            settingsManager?.Dispose();
-            stack?.Dispose();
-            return (int)ExitCode.SourceOpenError;
-        }
+    }
 
-        SplitOutputManager splitManager = new(outputPath, splitSizeBytes, splitCount);
-
-        using CancellationTokenSource cts = new();
-        ConsoleCancelEventHandler cancelHandler = (_, e) =>
-        {
-            e.Cancel = true;
-            cts.Cancel();
-            Console.Error.WriteLine("Cancellation requested...");
-        };
-        Console.CancelKeyPress += cancelHandler;
-
+    /// <summary>Runs the convert loop and prints the summary.</summary>
+    private static int _RunLoop(ConvertArguments arguments, FrameFormatConfig format, List<IFrameSource> sources, Stack stack,
+        IFilter? filter, CliIo io, CancellationToken token)
+    {
+        // Old outputs that --overwrite moved aside; they are settled in the finally block below, whatever the run did.
+        List<TargetReplacement> replacements = [];
         try
         {
+            SplitOutputManager splitManager = new(arguments.OutputPath, arguments.SplitSizeBytes, arguments.SplitCount);
             int totalFrames = RunConvertLoop(
                 sources,
-                path => outputConfig.CreateExporter(path, settings),
+                path => _CreateListener(format, path, stack, arguments.Overwrite, replacements, token),
                 splitManager,
                 stack,
                 filter,
-                maxFrames,
-                progressInterval,
-                tolerant,
-                cts.Token,
+                arguments.MaxFrames,
+                arguments.ProgressInterval,
+                arguments.Tolerant,
+                io.Error,
+                token,
                 out int filesWritten);
 
-            Console.Error.WriteLine(
-                $"Conversion complete: {totalFrames} frames written to {filesWritten} file(s).");
-
+            io.Error.WriteLine($"Conversion complete: {totalFrames} frames written to {filesWritten} file(s).");
             return (int)ExitCode.Success;
         }
         catch (OperationCanceledException)
         {
-            Console.Error.WriteLine("Conversion cancelled.");
+            io.Error.WriteLine("Conversion cancelled.");
             return (int)ExitCode.Success;
+        }
+        catch (CliUsageException ex)
+        {
+            io.Error.WriteLine("Error: " + ex.Message);
+            return (int)ExitCode.ArgumentError;
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"Error during conversion: {ex.Message}");
+            io.Error.WriteLine($"Error during conversion: {ex.Message}");
             return (int)ExitCode.RuntimeError;
         }
         finally
         {
-            Console.CancelKeyPress -= cancelHandler;
-            CliSourceLifetime.DisposeSources(sources);
-            settingsManager?.Dispose();
-            stack?.Dispose();
+            // A new output that survived the run replaced the old one for good; a missing one (cancelled, failed, never
+            // opened) gets the old one back.
+            CliCommandSupport.SettleReplacements(replacements, io.Error);
         }
     }
 
-    /// <summary>Prints usage information for the convert command.</summary>
-    private static void _PrintUsage()
+    /// <summary>
+    /// Prepares the target (an existing output is replaced only with <c>--overwrite</c>: it is moved aside and added to
+    /// <paramref name="replacements"/>) and creates the listener. Problems of the user's input become a
+    /// <see cref="CliUsageException"/>; the rest are errors of the run. A listener that cannot be created gives the old output
+    /// back after the run.
+    /// </summary>
+    private static IFrameListener _CreateListener(FrameFormatConfig format, string path, Stack stack, bool overwrite,
+        List<TargetReplacement> replacements, CancellationToken token)
     {
-        Console.Error.WriteLine("Usage: ni convert <sources...> -o <output> [options]");
-        Console.Error.WriteLine();
-        Console.Error.WriteLine("Convert capture files between formats (frame-level, no protocol parsing).");
-        Console.Error.WriteLine();
-        Console.Error.WriteLine("Arguments:");
-        Console.Error.WriteLine("  <sources...>          One or more source files or specs");
-        Console.Error.WriteLine();
-        Console.Error.WriteLine("Options:");
-        Console.Error.WriteLine("  -o, --output          Output file path (required)");
-        Console.Error.WriteLine("  --output-format, -f   Output format spec (see below; overrides extension)");
-        Console.Error.WriteLine("  -n, --max-frames      Maximum number of frames to convert");
-        Console.Error.WriteLine("  --split-size <MB>     Split when exporter EstimatedOutputBytes reaches this size (MiB; live, no FS probe)");
-        Console.Error.WriteLine("  --split-count <N>     Split output every N frames");
-        CliFilter.PrintUsageLines();
-        Console.Error.WriteLine("                        (frames are parsed only when a filter is set)");
-        Console.Error.WriteLine("  --profile <name>      Settings profile (available to sources/exporters)");
-        Console.Error.WriteLine("  --settings-path <dir> Base directory for settings storage");
-        Console.Error.WriteLine("  --settings-max-config-file-bytes <bytes>");
-        Console.Error.WriteLine("                        Max settings/referenced config JSON size in bytes (default 1073741824). <=0 disables.");
-        Console.Error.WriteLine("  --settings-max-json-depth <n>");
-        Console.Error.WriteLine("                        Max JSON nesting depth for settings/referenced config (default 1024). <=0 disables.");
-        Console.Error.WriteLine("  --blf-cache-size <MB> Container cache budget for BLF sources (MiB)");
-        Console.Error.WriteLine("  --progress <N>        Report progress every N frames");
-        Console.Error.WriteLine("  --tolerant            Skip malformed frames instead of aborting");
-        Console.Error.WriteLine("  -h, --help            Show this help message");
-        Console.Error.WriteLine();
-        Console.Error.WriteLine("Output format is auto-detected from the output extension:");
-        Console.Error.WriteLine("  .pcapng / other       PCAPNG (default)");
-        Console.Error.WriteLine("  .blf                  BLF with default compression");
-        Console.Error.WriteLine("  .asc                  CANalyzer ASCII log (CAN, CAN FD, CAN XL, LIN, FlexRay, Ethernet)");
-        Console.Error.WriteLine("                        AFDX data frames are read. AFDX status, AFDX bus statistics, ETH STAT, and ETH RxEr are not read.");
-        Console.Error.WriteLine();
-        Console.Error.WriteLine("Output format specifications (--output-format):");
-        Console.Error.WriteLine("  pcapng                PCAPNG format");
-        Console.Error.WriteLine("  blf                   BLF, default compression");
-        Console.Error.WriteLine("  blf:compression=off   BLF, no compression");
-        Console.Error.WriteLine("  blf:compression=fast  BLF, fast compression");
-        Console.Error.WriteLine("  blf:compression=best  BLF, best compression ratio");
-        Console.Error.WriteLine("  asc                   CANalyzer ASCII log (CAN, CAN FD, CAN XL, LIN, FlexRay, Ethernet)");
-        Console.Error.WriteLine("                        AFDX data frames are read. AFDX status, AFDX bus statistics, ETH STAT, and ETH RxEr are not read.");
-        Console.Error.WriteLine();
-        Console.Error.WriteLine("Source specifications:");
-        Console.Error.WriteLine("  capture.pcap[ng]      Auto-detected PCAP/PCAPNG");
-        Console.Error.WriteLine("  data.blf              Auto-detected BLF");
-        Console.Error.WriteLine("  log.asc               Auto-detected CANalyzer ASC");
-        Console.Error.WriteLine("  pcap:path=<file>      Explicit PCAP/PCAPNG spec");
-        Console.Error.WriteLine("  blf:path=<file>       Explicit BLF spec");
-        Console.Error.WriteLine("  asc:path=<file>       Explicit ASC spec");
-        Console.Error.WriteLine("  random:count=N,seed=S,mode=udp4|udp6|random  Synthetic frames");
-        Console.Error.WriteLine();
-        Console.Error.WriteLine("Examples:");
-        Console.Error.WriteLine("  ni convert capture.pcap -o output.pcapng");
-        Console.Error.WriteLine("  ni convert input.blf -o output.pcapng --progress 1000");
-        Console.Error.WriteLine("  ni convert input.pcap -o output.blf --output-format blf:compression=best");
-        Console.Error.WriteLine("  ni convert big.pcapng -o split.pcapng --split-count 10000");
-        Console.Error.WriteLine("  ni convert big.blf -o out.pcapng --blf-cache-size 256 --split-size 512");
-        Console.Error.WriteLine("  ni convert input.pcap -o filtered.pcapng --filter \"udp.dstport == 53\"");
+        if (!ExportTargets.TryPrepare(path, isDirectory: false, overwrite, out string? fullPath, out TargetReplacement? replacement,
+            out PluginError? targetError))
+        {
+            throw new InvalidOperationException(CliCommandSupport.TargetText(targetError, path));
+        }
+
+        if (replacement is not null)
+        {
+            replacements.Add(replacement);
+        }
+
+        if (!format.TryCreate(fullPath, stack, token, out IFrameListener? listener, out PluginError? error))
+        {
+            // Nothing was written: the leftover is removed, and the settling after the run gives the old output back.
+            string message = CliCommandSupport.AbandonTarget(fullPath, isDirectory: false, error.Value.Message);
+            throw error.Value.Code == PluginErrorCode.InvalidOption
+                ? new CliUsageException(message)
+                : new InvalidOperationException(message);
+        }
+
+        return listener;
+    }
+
+    /// <summary>Prints usage information for the convert command.</summary>
+    private static void _PrintUsage(TextWriter error)
+    {
+        error.WriteLine("Usage: ni convert <sources...> -o <output> [options]");
+        error.WriteLine();
+        error.WriteLine("Convert capture files between formats (frame-level, no protocol parsing).");
+        error.WriteLine();
+        error.WriteLine("Arguments:");
+        error.WriteLine("  <sources...>          One or more source files or specs");
+        error.WriteLine();
+        error.WriteLine("Options:");
+        error.WriteLine("  -o, --output          Output file path (required)");
+        error.WriteLine("  --output-format, -f   Output format spec (see below; overrides extension)");
+        error.WriteLine("  --overwrite           Replace an existing output (otherwise an existing output is an error)");
+        error.WriteLine("  -n, --max-frames      Maximum number of frames to convert");
+        error.WriteLine("  --split-size <MB>     Split when exporter EstimatedOutputBytes reaches this size (MiB; live, no FS probe)");
+        error.WriteLine("  --split-count <N>     Split output every N frames");
+        CliFilter.PrintUsageLines(error);
+        error.WriteLine("                        (frames are parsed only when a filter is set)");
+        error.WriteLine("  --profile <name>      Settings profile (must exist; 'default' is created on first use)");
+        error.WriteLine("  --settings-path <dir> Base directory for settings storage");
+        error.WriteLine("  --settings-max-config-file-bytes <bytes>");
+        error.WriteLine("                        Max settings/referenced config JSON size in bytes (default 1073741824). <=0 disables.");
+        error.WriteLine("  --settings-max-json-depth <n>");
+        error.WriteLine("                        Max JSON nesting depth for settings/referenced config (default 1024). <=0 disables.");
+        error.WriteLine("  --blf-cache-size <MB> Container cache budget for BLF sources (MiB)");
+        error.WriteLine("  --progress <N>        Report progress every N frames");
+        error.WriteLine("  --tolerant            Skip malformed frames instead of aborting");
+        error.WriteLine("  -h, --help            Show this help message");
+        error.WriteLine();
+        error.WriteLine("Output format is auto-detected from the output extension (plugins add more; see 'ni plugins list'):");
+        error.WriteLine("  .pcapng / other       PCAPNG (default)");
+        error.WriteLine("  .blf                  BLF with default compression");
+        error.WriteLine("  .asc                  CANalyzer ASCII log (CAN, CAN FD, CAN XL, LIN, FlexRay, Ethernet)");
+        error.WriteLine("                        AFDX data frames are read. AFDX status, AFDX bus statistics, ETH STAT, and ETH RxEr are not read.");
+        error.WriteLine();
+        error.WriteLine("Output format specifications (--output-format):");
+        error.WriteLine("  pcapng                PCAPNG format");
+        error.WriteLine("  blf                   BLF, default compression");
+        error.WriteLine("  blf:compression=off   BLF, no compression");
+        error.WriteLine("  blf:compression=fast  BLF, fast compression");
+        error.WriteLine("  blf:compression=best  BLF, best compression ratio");
+        error.WriteLine("  asc                   CANalyzer ASCII log (CAN, CAN FD, CAN XL, LIN, FlexRay, Ethernet)");
+        error.WriteLine("                        AFDX data frames are read. AFDX status, AFDX bus statistics, ETH STAT, and ETH RxEr are not read.");
+        error.WriteLine();
+        error.WriteLine("Source specifications (plugins add more kinds; see 'ni plugins list'):");
+        error.WriteLine("  capture.pcap[ng]      Auto-detected PCAP/PCAPNG");
+        error.WriteLine("  data.blf              Auto-detected BLF");
+        error.WriteLine("  log.asc               Auto-detected CANalyzer ASC");
+        error.WriteLine("  pcap:path=<file>      Explicit PCAP spec; pcapng:path=<file>, blf:path=<file>, asc:path=<file>");
+        error.WriteLine("  random:count=N,seed=S,mode=udp4|udp6|random  Synthetic frames");
+        error.WriteLine();
+        error.WriteLine("Examples:");
+        error.WriteLine("  ni convert capture.pcap -o output.pcapng");
+        error.WriteLine("  ni convert input.blf -o output.pcapng --progress 1000");
+        error.WriteLine("  ni convert input.pcap -o output.blf --output-format blf:compression=best");
+        error.WriteLine("  ni convert big.pcapng -o split.pcapng --split-count 10000");
+        error.WriteLine("  ni convert big.blf -o out.pcapng --blf-cache-size 256 --split-size 512");
+        error.WriteLine("  ni convert input.pcap -o filtered.pcapng --filter \"udp.dstport == 53\"");
+        error.WriteLine("  ni convert input.pcap -o output.pcapng --overwrite");
     }
 
     #endregion

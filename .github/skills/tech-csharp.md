@@ -1,33 +1,33 @@
 # C# Standards
 
-Load when `*.cs` files are in scope. C# mechanisms for Section 4 in `copilot-instructions.md`.
+Load when `*.cs` is in scope. C# mechanisms for Section 4. Section order matches `tech-rust.md` and `tech-python.md`.
 
 ## Language
-- Target .NET 10 (`net10.0`), C# 14. Modern idiomatic C#.
-- Apply build settings from `tech-solution.md` when build files in scope.
-- ❗ Require **CSharpStyleChecker** NuGet `1.*` on every SDK-style C# consumer per `tech-solution.md`.
+
+- Target `net10.0`, C# 14. Source generators: `netstandard2.0` (`tech-sourcegen.md`).
+- Apply `tech-solution.md` build settings (nullable, analyzers, warnings as errors).
+- ❗ Reference CSharpStyleChecker `1.*` in every SDK-style project (`tech-solution.md`).
+- Line length 160 (`.cs`, `.razor`, `.razor.cs`, `.css`); 4 spaces, no tabs.
 
 ## Naming
-- ❗Never `var`. Use `new()` / `[]` instead of repeating the type.
-- ❗`_PascalCase` for private fields, properties, methods, statics on the outer type; exempt inside private nested types, explicit interface implementations, local functions, and **test methods** (`tech-tunit.md`: PascalCase).
 
-## Files & Usings
+- ❗ No `var`. Use target-typed `new()` / `[]`.
+- ❗ `_PascalCase` for private fields, properties, methods, and statics of the outer type. Exempt: private nested types, explicit interface implementations, local functions, test methods (PascalCase, `tech-tunit.md`).
+- Name `CancellationToken` parameters `cancellationToken`. Suffix awaitable methods with `Async`.
+
+## Files and usings
+
 - File-scoped namespaces.
-- Put global usings in `GlobalUsings.cs` only; group by category with comment headers (`tech-solution.md`). File-local type aliases (`using Alias = ...`) are allowed in source files.
-- Sort: `System.*` → `Microsoft.*` → third-party → internal.
-
-## Copyright
-- `.cs` and `.razor.cs`: `// {copyright}` — exact text from `COPYRIGHT`. Other file types: `tech-solution.md` when that skill is loaded.
+- ❗ Global usings only in `GlobalUsings.cs`, grouped under comment headers. File-local aliases are allowed.
+- Sort `System.*` → `Microsoft.*` → third-party → internal.
+- ❗ Structure each file with `#region` blocks: fields, lifecycle, public API, private helpers.
 
 ## Style
-- ❗Always pass `CultureInfo.InvariantCulture` as parameter when strings are built or parsed unless another locale is required.
-- Prefer invariant interpolated strings via `FormattableString.Invariant`. Put `global using static System.FormattableString;` in `GlobalUsings.cs`, then call `Invariant($"…")`. Still pass `CultureInfo.InvariantCulture` on `ToString` / `Parse` / `TryParse` / `string.Format` / `StringBuilder.AppendFormat` when those APIs are used. Fine for typical code; on hot paths prefer `string.Create(CultureInfo.InvariantCulture, $"…")` or `StringBuilder.Append(CultureInfo.InvariantCulture, $"…")` (fewer allocations than `FormattableString.Invariant`).
+
+- ❗ Pass `CultureInfo.InvariantCulture` to every parse and format call unless another locale is required.
+- Interpolate with `Invariant($"…")` (`global using static System.FormattableString;`). On hot paths use `string.Create(CultureInfo.InvariantCulture, $"…")` or `StringBuilder.Append(CultureInfo.InvariantCulture, $"…")`.
 
 ```csharp
-// GlobalUsings.cs
-global using static System.FormattableString;
-
-// usage
 string message = Invariant($"Gap rate: {rate:P1}, count={count}");
 string text = value.ToString(CultureInfo.InvariantCulture);
 if (!int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out int parsed))
@@ -36,109 +36,147 @@ if (!int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out i
 }
 ```
 
-- Always brace control-flow blocks.
-- At most one callable exit point per source line; `?:`, switch expressions, `??`, and `??=` are allowed when each arm is on its own line.
-- ❗Structure each file with `#region` blocks by content (fields, lifecycle, public API, private helpers).
-- Use expression-bodied members for simple single expressions.
-- Use `get; init;` on interface read-only properties.
-- Never `.Result` or `.Wait()` — `async`/`await` only.
-- Do not throw for expected failures. Use `Try*` APIs, result types, or error codes — especially on hot paths.
-- Put `Try*` on public boundaries for expected failure. On `false`, give the caller a **code**, **message**, or **error type** — prefer an `out` parameter. Thread-local last-error is allowed only when the signature cannot take `out`; then XML must name the accessor, when it is set and cleared, and that it is per-thread.
+- Brace every control-flow block.
+- ❗ One callable exit per line. `?:`, switch expressions, `??`, `??=` only with each arm on its own line.
+
+```csharp
+// Wrong
+return TryRead(out Item item) ? item : Fallback();
+// Right
+return TryRead(out Item item)
+    ? item
+    : Fallback();
+```
+
+- Use expression bodies for single expressions and `using` declarations for method-scoped disposables.
+- Seal classes not designed for inheritance. Mark non-mutating fields `readonly`.
+- Split complex methods into focused helpers.
+
+## Types and API design
+
+- Prefer auto-properties; use a field only when it must be `volatile`.
+- Choose the least visibility and the least setter: `get` → `init` → `private set` → `set`.
+- Model data as `record`. Use `readonly record struct` for small fixed values, `record` class for large or polymorphic payloads.
+- Take `ReadOnlySpan<T>` for data the callee must not store.
+
+```csharp
+public readonly record struct GapCount(int Value);
+public record ProjectReport(string Path, IReadOnlyList<string> Gaps);
+private volatile int _Generation;
+public int CountGaps(ReadOnlySpan<char> path) { /* do not store `path` */ }
+```
+
+- ❗ Keep read-only interface properties read-only in every implementation:
+  - Interface `{ get; }`: implement with `{ get; }` assigned in the constructor, or `init`. Adding `set`, `private set`, or `protected set` is an Error; the compiler does not catch it. A non-readonly positional `record struct` generates `set` and is an Error here.
+  - Declare `{ get; init; }` in the interface only when every implementation must accept object initializers. The compiler then rejects `set` (CS8854). Validate in the `init` body.
+
+```csharp
+public interface IExportInfo
+{
+    string Name { get; }
+}
+
+// Right
+public sealed class ExportInfo(string name) : IExportInfo
+{
+    public string Name { get; } = name;
+}
+
+// Right: the generated init runs only during construction
+public sealed record ExportSnapshot(string Name) : IExportInfo;
+
+// Wrong: invented setter
+public sealed class MutableExportInfo : IExportInfo
+{
+    public string Name { get; set; } = "";
+}
+```
+
+- ❗ Validate parameters at entry with the built-in guards: `ArgumentNullException.ThrowIfNull`, `ArgumentException.ThrowIfNullOrEmpty` / `ThrowIfNullOrWhiteSpace`, `ArgumentOutOfRangeException.ThrowIfNegative` / `ThrowIfNegativeOrZero` / `ThrowIfGreaterThan` / `ThrowIfLessThan`, `ObjectDisposedException.ThrowIf`.
+- ❗ Nullable is on. Use `!` only with a same-line comment that names the invariant.
+- Annotate `Try*` outputs with `[NotNullWhen(true)]`.
+
+```csharp
+public ExportId Create(string name, int maxRows)
+{
+    ArgumentException.ThrowIfNullOrWhiteSpace(name);
+    ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxRows);
+    // …
+}
+```
+
+- ❗ Return expected failures through `Try*`, result types, or error codes — never exceptions. On `false`, give a code, message, or error type, preferably as `out`. Use thread-local last-error only when `out` is impossible; document the accessor, when it is set and cleared, and that it is per-thread.
 
 ```csharp
 public bool TryPair(string productionPath, out int index, out PairError error);
 
 public readonly record struct PairError(PairErrorCode Code, string Message);
 public enum PairErrorCode { None, PathEmpty, NotFound }
-
-// TLS last-error: only when `out` cannot be added. Document on TryPair and on LastError.
-public bool TryPair(string productionPath, out int index);
-[ThreadStatic]
-private static PairError _LastError;
-/// <summary>Per-thread last error. Set when TryPair returns false; cleared at the start of the next TryPair on this thread. Do not read from another thread.</summary>
-public static PairError LastError => _LastError;
 ```
 
-- Return `ValueTask` when the API is often synchronous.
-- Use `using` declarations for method-scoped disposables.
-- Seal non-inheritable classes.
-- Mark fields and properties `readonly` when they do not mutate.
+## Errors and logging
 
-## Data types
-
-- Prefer auto-properties. Use an explicit field only when it must be `volatile` (`volatile` is not valid on a property).
-- Choose the least visibility and the least setter the use case needs: `get` → `init` → `private set` → `set`.
-- Model pure data (DTOs, snapshots, query rows) as `record` or `record struct`.
-- Use `readonly record struct` when the shape is small, fixed, and value-like (no inheritance, no reference identity).
-- Use `record` (class) when the payload is large, polymorphic, or a shared graph.
-- Pass stack-only views as `ref struct` parameters (`Span` / `ReadOnlySpan`) when the data must not be stored (fields, collections, `async`, boxing). Not a default type — see Performance for hot-path use.
+- Throw only for bugs, broken invariants, and failures the caller cannot handle locally (I/O, configuration, external services).
+- ❗ Rethrow with `throw;`. Wrap with the original as `innerException`.
+- ❗ No empty `catch`. Catch `Exception` only at a top-level boundary (`Main`, request pipeline, worker loop), then log and rethrow or convert. Elsewhere catch specific types and narrow with `when`.
+- Let `OperationCanceledException` propagate; do not log it as an error.
+- Make custom exceptions `sealed`, derive from the closest framework type, end the name in `Exception`, keep secrets out of messages.
+- Inject `ILogger<T>`. Never configure providers or levels in libraries.
+- ❗ Log only through `[LoggerMessage]` methods with constant templates and a stable `EventId` (CA1848, CA2254).
+- ❗ Never log secrets, tokens, connection strings, or PII.
+- Never use `Console` or `Trace` for library errors.
 
 ```csharp
-public readonly record struct GapCount(int Value);
-public record ProjectReport(string Path, IReadOnlyList<string> Gaps);
-public int Count { get; init; }
-internal string Path { get; private set; }
-private volatile int _generation;
-public int CountGaps(ReadOnlySpan<char> path) { /* do not store `path` */ }
+internal static partial class ExportLog
+{
+    [LoggerMessage(EventId = 1001, Level = LogLevel.Warning, Message = "Export {ExportName} rejected: {Reason}")]
+    public static partial void ExportRejected(ILogger logger, string exportName, string reason);
+}
+
+// Wrong: formats and allocates even when Warning is off
+_Logger.LogWarning($"Export {name} rejected: {reason}");
+// Right
+ExportLog.ExportRejected(_Logger, name, reason);
 ```
 
-## Diagnostics
+## Lints and suppressions
 
-- ❗Never suppress warnings (`#pragma warning disable`, `SuppressMessage`, `NoWarn`, `WarningsNotAsErrors`) without user approval.
-- Prefer a code fix. Prefer a local `#pragma` / `SuppressMessage` over `NoWarn`.
-- When approved: use the matching template below. A suppression without those fields is incomplete.
-
-Every suppressed **id** must name:
-
-1. **Id** — the compiler / analyzer code (`CS1591`, `CA1859`, …). One comment per id. Do not lump several ids into one reason.
-2. **Why** — why this warning is wrong or inapplicable here.
-3. **Scope** — the smallest place that is still correct (method, type, file, project, repo). Restore after a `#pragma` scope.
-4. **Why global** — **required for `NoWarn` / `WarningsNotAsErrors` / EditorConfig `dotnet_diagnostic.*.severity = none`.** Why a local suppress cannot work.
-
-### Local
+- CSharpStyleChecker makes these compiler errors: line length (CSC001), `var` (CSC002), `_PascalCase` (CSC003), sync-over-async (CSC004), usings outside `GlobalUsings.cs` (CSC005), one exit per line (CSC006), `volatile` read-modify-write (CSC007), target-typed `new()` / `[]` (CSC008), invariant interpolation (CSC009). Review enforces the rest.
+- CA1848 and CA2254 are errors under `10-recommended`. Library projects enable CA2007 (`tech-solution.md`).
+- ❗ Suppress nothing (`#pragma warning disable`, `SuppressMessage`, `NoWarn`, `WarningsNotAsErrors`) without user approval. Prefer a fix; prefer local over global.
+- Name per suppressed id, one comment each: **Id**, **Why** it is inapplicable, **Scope** (smallest that works; restore after `#pragma`), **Why global** (required for `NoWarn`, `WarningsNotAsErrors`, EditorConfig `severity = none`).
 
 ```csharp
 #pragma warning disable CA1859 // Id: CA1859. Why: {why}. Scope: this method. User approved.
 #pragma warning restore CA1859
-```
 
-```csharp
 [SuppressMessage("Performance", "CA1859:...", Justification = "Id: CA1859. Why: {why}. User approved.")]
 ```
 
-### Global (`Directory.Build.props` or `.csproj`)
-
-MSBuild property details: `tech-solution.md`. Put the comments immediately above the property. Append `$(NoWarn);` so earlier ids stay.
-
 ```xml
-<!-- Id: CS1591. Why: {why this warning is inapplicable}. Why global: {why not method/file/pragma}. User approved. -->
-<!-- Id: CA1707. Why: {why this warning is inapplicable}. Why global: {why not method/file/pragma}. User approved. -->
-<NoWarn>$(NoWarn);CS1591;CA1707</NoWarn>
+<!-- Id: CS1591. Why: {why}. Why global: {why not method/file/pragma}. User approved. -->
+<NoWarn>$(NoWarn);CS1591</NoWarn>
 ```
 
-### IDE naming (`IDE1006`)
+- `IDE1006`: never `NoWarn`; configure the root `.editorconfig` (`tech-solution.md`).
 
-Do not use `NoWarn`. Root `.editorconfig`: `tech-solution.md` (IDE / code-style).
+## Comments and docs
 
-## Comments and XML docs
-- Comment purpose, motivation, caveats, and design choice before non-trivial logic. State why; never restate obvious syntax.
-- Split non-trivial method bodies into semantic blocks. Separate blocks with one blank line (two allowed). Lead each block with intent and what to watch for.
-- Document physical units in comments, not variable names.
-- Add XML doc on all members.
-- Document omitted parameter validation in XML doc with reason and caller guarantees.
-- Document thread-safety in XML `<summary>` for non-exempt types.
-- Exempt from thread-safety summary: immutable records, readonly structs, plain DTOs, enums.
+- Comments and semantic blocks: Section 4.6.
+- Put units in comments, not in names.
+- Write XML docs on all members. Add `<exception cref="…">` for thrown exceptions and document omitted validation.
+- State thread safety in `<summary>` except for immutable records, readonly structs, DTOs, and enums.
 
 ```csharp
 public int Pair(string productionPath)
 {
     // Immutable after Build. Ordinal-ignore-case keys match MSBuild paths.
-    TestProjectIndex index = TestProjectIndex.Build(_root);
+    TestProjectIndex index = TestProjectIndex.Build(_Root);
 
     // --test-project wins. Do not consult the index on that branch.
-    if (_overridePath is not null)
+    if (_OverridePath is not null)
     {
-        return RunOne(_overridePath);
+        return RunOne(_OverridePath);
     }
 
     return index.TryGet(productionPath);
@@ -146,121 +184,187 @@ public int Pair(string productionPath)
 ```
 
 ## Integer arithmetic
-- ❗Assess every integer op for overflow/underflow; use `checked`, widen, or validate when wrap-around would be wrong.
-- Document proven-safe ranges; use `unchecked` in hot paths only then.
-- Prove bounds at boundaries; no redundant overflow checks in inner loops.
+
+- ❗ Check every integer operation for overflow. Use `checked`, widen, or validate where wrap-around is wrong.
+- Use `unchecked` only on hot paths with documented safe ranges. Prove bounds at boundaries, not in inner loops.
+- Narrow with `checked((int)value)` or `int.CreateChecked(value)`, never a bare cast.
+
+## Security
+
+- **SQL:** bind parameters (`command.Parameters`, Dapper parameter objects, EF Core LINQ or `FromSqlInterpolated`). Never build SQL from strings.
+- **Processes:** `UseShellExecute = false` and one `ArgumentList.Add` per argument. Never `cmd /c` or `sh -c` with input.
+- **Deserialization:** `System.Text.Json` into concrete types. No type names from input except a closed `[JsonDerivedType]` set. Newtonsoft: `TypeNameHandling.None`.
+- **XML:** `DtdProcessing.Prohibit` and `XmlResolver = null` for untrusted input.
+- **Regex on input:** set a match timeout or use `RegexOptions.NonBacktracking`, e.g. `[GeneratedRegex(pattern, RegexOptions.None, matchTimeoutMilliseconds: 100)]`.
+- **Paths:** resolve, then confirm the result stays under the root.
+
+```csharp
+public static bool TryResolveInside(string root, string relative, [NotNullWhen(true)] out string? fullPath)
+{
+    // GetFullPath normalizes "..". Windows paths are case-insensitive.
+    string baseDirectory = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root)) + Path.DirectorySeparatorChar;
+    string candidate = Path.GetFullPath(Path.Join(baseDirectory, relative));
+    StringComparison comparison = OperatingSystem.IsWindows()
+        ? StringComparison.OrdinalIgnoreCase
+        : StringComparison.Ordinal;
+    fullPath = candidate.StartsWith(baseDirectory, comparison)
+        ? candidate
+        : null;
+    return fullPath is not null;
+}
+```
+
+- **Secrets:** read from configuration (user secrets, environment, vault); never commit them. Generate tokens with `RandomNumberGenerator`; compare with `CryptographicOperations.FixedTimeEquals`.
+- **Web input:** validate on the server (`tech-blazor.md`, `tech-web.md`).
+- **Limits** (Section 4.2): one `sealed record` per boundary with documented defaults and ranges. Validate in a `Try` factory (libraries) or `IValidateOptions<T>` with `ValidateOnStart()` (hosted apps). Host-derived defaults: `GC.GetGCMemoryInfo().TotalAvailableMemoryBytes`, `Environment.ProcessorCount`. Format and protocol facts are `const`. Comment the security decision at the definition:
+
+```csharp
+// Threat: one hostile file exhausts memory. Secure by default: imports come from untrusted senders.
+// End user may set 1 MB to available RAM in Settings. Rejected: a fixed constant (cripples large hosts).
+// Residual risk: a value near RAM size can still stall the app; the setting warns about it.
+public long MaxImportBytes { get; init; } = 1L << 30;
+```
+
+## Async
+
+- ❗ Never `.Result`, `.Wait()`, or `.GetAwaiter().GetResult()`.
+- ❗ No `async void` except UI event handlers.
+- Put `CancellationToken cancellationToken` last on every cancellable method (`= default` only on public APIs). Pass it to every cancellable call.
+- ❗ Await with `ConfigureAwait(false)` in library code, including async dispose: `await using (resource.ConfigureAwait(false)) { … }`. Omit it in application code (ASP.NET Core, Blazor components).
+- Return `ValueTask` when the result is often synchronous. ❗ Await a `ValueTask` exactly once; call `.AsTask()` to await it more than once.
+- Bound external waits with `WaitAsync(timeout, cancellationToken)` or `CancelAfter`.
+- Do not wrap synchronous work in `Task.Run` inside libraries.
+- Use `SemaphoreSlim.WaitAsync` with `try`/`finally` for exclusion across `await`.
+
+```csharp
+public async ValueTask<Export> LoadAsync(string path, CancellationToken cancellationToken = default)
+{
+    ArgumentException.ThrowIfNullOrEmpty(path);
+
+    // Library code: the async dispose is configured too (CA2007).
+    FileStream stream = File.OpenRead(path);
+    await using (stream.ConfigureAwait(false))
+    {
+        Export? export = await JsonSerializer.DeserializeAsync<Export>(stream, cancellationToken: cancellationToken).ConfigureAwait(false);
+        return export
+            ?? throw new InvalidDataException(Invariant($"Empty export file: {path}"));
+    }
+}
+```
 
 ## Thread safety
-- ❗ Cross-thread shared fields must be declared with the `volatile` keyword.
-- ❗ Plain volatile read and write are allowed; increment, decrement, and compound assignment on `volatile` fields are Error-class — use `Interlocked` for atomic read-modify-write.
-- Use `Interlocked` when atomic read-modify-write or compare-exchange is required; `Volatile.Read` / `Volatile.Write` remain valid when explicit APIs are preferred.
-- Use `Interlocked` instead of `lock` when a single word is enough.
 
-## Performance
-Performance is a feature. Hot path = per-item / per-byte work after setup (build, compile, one-time init). Setup may allocate; the loop must not. Guidance below is for measured hot paths, not CLI, tests, or one-shot setup.
+- ❗ Make a field that several threads access **without a lock** `volatile`, or access it only through `Volatile` / `Interlocked`. Lock-protected fields need neither.
+- ❗ Use `Interlocked` for read-modify-write on shared fields; `++`, `--`, `+=` on `volatile` are errors.
+- ❗ Pick the cheapest correct primitive (Section 4.3): no sharing → `Interlocked` / `Volatile` → `Lazy<T>` / `LazyInitializer` → `System.Threading.Lock` with a short section (no I/O, `await`, or callbacks inside) → `SemaphoreSlim` / `Channel<T>` only where waiting is the design. `ReaderWriterLockSlim` only for long, read-dominated sections.
+- Name threads; set `CultureInfo.InvariantCulture` as thread culture.
+
+```csharp
+// Wrong
+_Count++;
+// Right
+Interlocked.Increment(ref _Count);
+```
+
+## Performance and allocation
+
+❗ Every allocation is garbage: the GC must trace and reclaim it, and any allocation can trigger a collection that pauses all threads. Avoid allocations on **every** path. On hot paths (per item, per byte after setup) allocate nothing.
 
 ### Allocation
-- ❗ Minimize allocations. Reduce GC runs to a minimum.
-- Plan allocation order: `Span` / `stackalloc` → reuse (in-place recycle, `ArrayPool`, `[ThreadStatic]`) → bump/slab shared backing → heap.
-- `ref struct` is a **special-case** tool (stack-only; cannot box, await, or store on the heap). Use it when a measured hot path needs a stack enumerator, reader, or builder — not as a default for types, APIs, or every loop.
-- Compare `[ThreadStatic]` vs pooling: affinity, contention, lifetime, reuse safety. `[ThreadStatic]` for single-thread parse/format scratch; never across `await`. Pool for cross-thread or large/variable buffers.
-- Return `ArrayPool<T>` rentals in `finally`. Grow a reusable writer; do not `new T[]` per call.
-- Keep hot-path arrays below the LOH threshold (~85 KB) unless one large buffer is required; then pool it.
-- Recycle hot objects in place instead of allocating per item.
-- Use bump/slab slices `(buffer, offset)` when many values share a lifetime. Do not allocate a heap object per element.
-- `GC.AllocateUninitializedArray` only when every element is overwritten before read.
+
+- Allocate in this order: stack (`Span<T>`, `stackalloc`) → reuse (recycled objects, `ArrayPool<T>`, `[ThreadStatic]` scratch) → one shared slab → heap.
+- Avoid on all paths: LINQ chains, capturing lambdas (use `static` lambdas), boxing (value types as `object` or interface, non-generic collections), `params` arrays, string concatenation in loops, `ToList()` / `ToArray()` copies, temporary collections, `Enum.ToString()`, `string.Split` when a span slice works.
+- ❗ On hot paths: no LINQ, no closures, no `IEnumerable` enumerators, no `async` state machines when a synchronous path exists.
+- Pre-size collections and builders (`new List<T>(count)`, `new StringBuilder(capacity)`).
+- Compute immutable lookups once (`static readonly`, `FrozenDictionary`, `SearchValues<T>`).
+- Return `ArrayPool<T>` rentals in `finally`. Use `[ThreadStatic]` for single-thread scratch (never across `await`); pool cross-thread or variable-size buffers.
+- Keep arrays below the LOH threshold (~85 KB) or pool them.
+- Use `ref struct` only for a hot-path stack reader, builder, or enumerator.
+- Use `GC.AllocateUninitializedArray` only when every element is written before read.
+
+```csharp
+// Wrong: allocates an array per call and a LINQ iterator
+int[] lengths = names.Select(name => name.Length).ToArray();
+// Right: rent, fill with a loop, return
+int[] lengths = ArrayPool<int>.Shared.Rent(names.Count);
+try
+{
+    for (int index = 0; index < names.Count; index++)
+    {
+        lengths[index] = names[index].Length;
+    }
+
+    Process(lengths.AsSpan(0, names.Count));
+}
+finally
+{
+    ArrayPool<int>.Shared.Return(lengths);
+}
+```
 
 ### GC generations
 
-The GC is generational. Cost rises sharply as objects live longer.
+| Generation | Holds | Cost |
+|------------|-------|------|
+| 0 | New objects | Cheapest; frequent short pauses |
+| 1 | Survivors of one gen-0 collection | Much more expensive than gen 0 |
+| 2 | Long-lived objects | Full collection; can pause the process |
+| LOH | Objects ≳ 85 KB | Collected with gen 2 |
 
-| Generation | What lives there | Cost |
-|------------|------------------|------|
-| **0** | New objects; most die here | Cheapest. Frequent, short pauses. |
-| **1** | Survived one gen-0 collection | **Substantially more expensive than gen 0.** Treat survival into gen 1 as a smell on a hot path. |
-| **2** | Long-lived / promoted again | Most expensive. Full GC; can pause the process. |
-| **LOH** | Objects ≳ 85 KB | Collected with gen 2. Do not allocate large arrays per item. |
+- Let short-lived objects die in gen 0. Do not cache or capture per-item objects “for later” — that promotes them.
 
-- Design so hot-path objects **die in gen 0**. A gen-0 alloc that never survives is cheap; the same alloc that is still reachable at the next collection becomes gen-1 memory and hurts more.
-- Do not cache or capture per-item objects “for later” on a hot path — that is how gen 0 becomes gen 1.
-- Use `Span` / stackalloc / pooled or recycled buffers so per-item work has nothing to promote. Use `ref struct` only in the special case above.
+### Representation and I/O
+
+- Use `readonly struct` IDs and values; no class identities or string keys on hot paths.
+- Store mixed values as tagged unions (inline payload + discriminant), not boxed objects or class hierarchies.
+- Link trees by index into chunked arrays; grow chunked stores without copying (single writer, `Volatile` readers).
+- Mark presence with bitsets; chain set operations as alias → one clone → in-place mutation.
+- Expand nested structure lazily; record presence without materializing children.
+- Pass `ReadOnlySpan<T>` / `ReadOnlyMemory<T>`; slice instead of copying.
+- Format into caller buffers (`ISpanFormattable`, `IUtf8SpanFormattable`, `u8` literals). Precompute display tables; concatenate only when the text is read.
+- ❗ Stream files (`FileStream`, `StreamReader`, `PipeReader`); never `File.ReadAllText` / `ReadAllBytes` on unbounded files. Use `MemoryMappedFile` views for large random access.
+
+### Dispatch, concurrency, compute
+
+- Precompute dispatch (dense arrays, small tables); no per-item dictionary lookup or interface call on the common path.
+- Keep `virtual` and interfaces at boundaries; bind concrete delegates or generic struct pipelines inside loops.
+- `[MethodImpl(AggressiveInlining)]` on tiny measured hot helpers; `[MethodImpl(NoInlining)]` on throw helpers.
+- Source-generate tables and parsers; no reflection on hot paths.
+- Hot-path sharing: single writer, `Volatile` publish, `Interlocked` RMW, copy-on-write for rare writes; no `Concurrent*`, `Channel`, or `lock` per item. Publish related arrays as one object; store the value before its flag. Coalesce wakeups. `SpinLock` only for very short sections, never across `await`.
+- SIMD (`Vector128` / `Vector256`) with a scalar fallback and the same tests, after profiling shows the loop is hot. `BinaryPrimitives` for endianness.
 
 ### Profiling
 
-Profile only when the user asks or the step is hot-path optimization. Always **Release**. Do not profile Debug.
+Load `tech-csharp-profiling.md` when a measurement is needed (Section 3). Never use a profiler that needs admin rights (Section 4.15).
 
-Use `dotnet-trace`. If it is missing, ask before `dotnet tool install -g dotnet-trace`. No wrapper script.
+## Console and files
 
-```bash
-dotnet build path/App.csproj -c Release
-dotnet-trace collect --profile cpu-sampling --format speedscope --output hotpath.nettrace -- dotnet run -c Release --no-build --project path/App.csproj -- <app args>
-dotnet-trace collect -p <pid> --profile gc-verbose --duration 00:00:30 -o hotpath.nettrace
-dotnet-trace convert hotpath.nettrace --format speedscope
-```
-
-- `cpu-sampling`: where time goes. Open the speedscope file (or the `.nettrace` in Visual Studio).
-- `gc-verbose`: allocations and GC. Then inspect gen-0 / gen-1 / gen-2 / LOH in the trace. `GC.CollectionCount(1)` / `CollectionCount(2)` only in a bench for that session — not in production.
-
-### Representation
-- Use `readonly struct` IDs and values. Do not use class identities or string keys on hot paths. Resolve names once at build into frozen maps (`FrozenDictionary`).
-- Store mixed values as compact tagged unions (inline payload + discriminant), not boxed objects or class hierarchies.
-- Link trees by index into chunked arrays. Do not pointer-chase object graphs on hot paths.
-- Grow-only chunked stores for dense integer keys (single writer, `volatile` / `Volatile` readers). Never compact/copy the whole store on growth.
-- Index presence with compact bitsets/bitmaps. Chain set ops as alias → one clone → in-place mutate; do not scan records for membership.
-
-### Zero-copy and I/O
-- Pass `ReadOnlySpan<T>` / `ReadOnlyMemory<T>`; slice, do not copy. Copy only when ownership or lifetime requires it.
-- Format into caller buffers (`ISpanFormattable`, `IUtf8SpanFormattable`, UTF-8 spans / `u8` literals). Precompute display lookup tables; defer string concat until observed.
-- Match I/O to access: sequential `MemoryMappedFile` / `Span` views, pooled/striped views for random access, stream when the consumer is forward-only. Buffer large sequential writes.
-- Stream files with `FileStream` / `StreamReader` / `PipeReader` (Section 4.4). Do not `File.ReadAllText` / `ReadAllBytes` on unbounded files.
-
-```csharp
-await using FileStream stream = File.OpenRead(path);
-```
-
-### Dispatch and inlining
-- ❗ No LINQ, no heap-capturing closures, no `IEnumerable` enumerators on hot paths. `foreach` over arrays/spans; static lambdas. A `ref struct` enumerator only when a heap enumerator is actually on the measured hot path.
-- Precompute dispatch at start: dense array for small domains, linear scan of tiny sparse tables. No per-item dictionary or interface vtable on the common path.
-- Bind concrete delegates or generic struct pipelines so the JIT can inline. Keep `virtual` / interface at boundaries only.
-- `[MethodImpl(MethodImplOptions.AggressiveInlining)]` on tiny measured hot helpers. `[MethodImpl(MethodImplOptions.NoInlining)]` on throw helpers and rare growth/error paths.
-- Source-generate IDs, tables, and parsers. No reflection on hot paths.
-- Lazy-expand nested structure; record presence without materializing children.
-
-### Concurrency on the hot path
-- Use single-writer / multi-reader on hot paths: `volatile` / `Volatile` publish, `Interlocked` RMW, copy-on-write CAS for rare writes. Do not default to `Concurrent*`, `Channel`, or `lock` on per-item paths.
-- Coalesce wakeups (atomic flags + wait handle) instead of per-signal queues.
-- Short `SpinLock` only for brief exclusive mutation; kernel wait when the pause can be long. Never `await` while held; always `try`/`finally`.
-- Publish related arrays as one object. Store value, then flag (release), for optional fields.
-
-### Compute
-- SIMD (`Vector256` / `Vector128`) plus scalar fallback for bulk bitwise, checksum, fill, and scan/escape work.
-- `SearchValues<T>` for multi-value scans in parsers.
-- Endian via `BinaryPrimitives` / span readers; no temporary reverse buffers.
-
-## Formatting
-- Limit line length to 160 in `.cs`, `.razor`, `.razor.cs`, `.css`.
-- 4-space indent; no tabs.
-- Follow `IDisposable` / `IAsyncDisposable` patterns.
-- Decompose complex methods into focused helpers.
-- ❗ Executables with console I/O: set UTF-8 **once** at process start (Section 4.7). Required on Windows.
+- ❗ Set UTF-8 once at process start in executables with console I/O (Section 4.7).
 
 ```csharp
 Console.OutputEncoding = Encoding.UTF8;
 Console.InputEncoding = Encoding.UTF8;
 ```
-- Name threads; `CultureInfo.InvariantCulture` for thread culture.
-- No console/trace for library error handling.
 
 ## Tests
-`tech-test.md` + `tech-tunit.md`. Test methods: PascalCase without underscores (`ParseEmptyInputReturnsNone`).
-- C# browser journeys: TUnit + `TUnit.Playwright` in `{App}.UiTest` (`tech-playwright.md`). Not NUnit, xUnit, or MSTest.
+
+`tech-test.md` + `tech-tunit.md`. Test methods: PascalCase without underscores. Browser journeys: TUnit + `TUnit.Playwright` in `{App}.UiTest` (`tech-playwright.md`).
+
+## Dependencies
+
+New Dependency Protocol: Section 4.7; mechanics: `tech-solution.md`. Check vulnerabilities with `dotnet list package --vulnerable --include-transitive`.
+
+## Copyright
+
+`.cs`, `.razor.cs`: `// {copyright}` from `COPYRIGHT`. Other types: `tech-solution.md`.
 
 ## Commands
 
 ```bash
-dotnet build path/Proj.csproj -c Release
-dotnet test path/Proj.Tests.csproj -c Release --no-build
-dotnet build CopilotAIWorkflow.slnx -c Release
+dotnet build path/Proj.Tests/Proj.Tests.csproj -c Release
+dotnet test path/Proj.Tests/Proj.Tests.csproj -c Release --no-build
+dotnet build path/App.slnx -c Release
+dotnet list path/App.slnx package --vulnerable --include-transitive
 ```
 
-Run tests with `dotnet test`. When the full project is not required, filter to the tests that cover the change (`tech-tunit.md`, `tech-test.md`). Use Release/optimized for Verify. PDB / file-in-use errors: concurrent agent (Section 4.14), not a logic bug. Do not add a wrapper script without approval.
+Filter tests to the change (`tech-tunit.md`). Verify in Release. PDB or file-in-use errors: concurrent agent (Section 4.14).

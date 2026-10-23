@@ -7,6 +7,6 @@ agent: agent
 
 Execute `/review` workflow.
 
-- Read `../copilot-instructions.md`.
+- Read `../copilot-instructions.md` unless it is already in context.
 - Read `../skills/workflow-review.md`.
 - Apply rules exactly; do not restate them here.

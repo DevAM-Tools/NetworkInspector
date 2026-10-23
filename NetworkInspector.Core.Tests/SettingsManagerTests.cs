@@ -850,14 +850,23 @@ internal sealed class SettingsManagerTests
             Directory.CreateDirectory(dir);
             using (SettingsManager mgr = new(dir))
             {
-                mgr.RegisterSetting(Setting.Bool("s.bool", "Bool", string.Empty, true));
-                mgr.RegisterSetting(Setting.String("s.str", "Str", string.Empty, "text"));
-                mgr.RegisterSetting(Setting.F64("s.f64", "F64", string.Empty, 2.5));
-                mgr.RegisterSetting(Setting.U64("s.u64", "U64", string.Empty, 100));
-                mgr.RegisterSetting(Setting.I64("s.i64", "I64", string.Empty, -5));
-                mgr.RegisterSetting(Setting.Bytes("s.bytes", "Bytes", string.Empty, [1, 2]));
-                mgr.RegisterSetting(Setting.Enum("s.enum", "Enum", string.Empty, 1UL,
+                // Save writes only values that differ from their defaults, so the defaults differ from the values under test.
+                mgr.RegisterSetting(Setting.Bool("s.bool", "Bool", string.Empty, false));
+                mgr.RegisterSetting(Setting.String("s.str", "Str", string.Empty, string.Empty));
+                mgr.RegisterSetting(Setting.F64("s.f64", "F64", string.Empty, 0));
+                mgr.RegisterSetting(Setting.U64("s.u64", "U64", string.Empty, 0));
+                mgr.RegisterSetting(Setting.I64("s.i64", "I64", string.Empty, 0));
+                mgr.RegisterSetting(Setting.Bytes("s.bytes", "Bytes", string.Empty, []));
+                mgr.RegisterSetting(Setting.Enum("s.enum", "Enum", string.Empty, 0UL,
                     [("Low", 0UL), ("High", 1UL)]));
+                mgr.GetSetting("s.bool")?.SetPendingValue(SettingValue.Bool(true));
+                mgr.GetSetting("s.str")?.SetPendingValue(SettingValue.String("text"));
+                mgr.GetSetting("s.f64")?.SetPendingValue(SettingValue.F64(2.5));
+                mgr.GetSetting("s.u64")?.SetPendingValue(SettingValue.U64(100));
+                mgr.GetSetting("s.i64")?.SetPendingValue(SettingValue.I64(-5));
+                mgr.GetSetting("s.bytes")?.SetPendingValue(SettingValue.Bytes([1, 2]));
+                mgr.GetSetting("s.enum")?.SetPendingValue(SettingValue.Enum("High", 1UL));
+                mgr.ApplyChanges();
                 mgr.Save();
             }
 
@@ -915,11 +924,18 @@ internal sealed class SettingsManagerTests
             Directory.CreateDirectory(dir);
             using (SettingsManager mgr = new(dir))
             {
-                mgr.RegisterSetting(Setting.BoolArray("s.bools", "Bools", string.Empty, [true, false]));
-                mgr.RegisterSetting(Setting.StringArray("s.strs", "Strs", string.Empty, ["a", "b"]));
-                mgr.RegisterSetting(Setting.F64Array("s.f64s", "F64s", string.Empty, [1.5, 2.5]));
-                mgr.RegisterSetting(Setting.U64Array("s.u64s", "U64s", string.Empty, [1UL, 2UL]));
-                mgr.RegisterSetting(Setting.I64Array("s.i64s", "I64s", string.Empty, [-1L, 3L]));
+                // Save writes only values that differ from their defaults, so the defaults differ from the values under test.
+                mgr.RegisterSetting(Setting.BoolArray("s.bools", "Bools", string.Empty, []));
+                mgr.RegisterSetting(Setting.StringArray("s.strs", "Strs", string.Empty, []));
+                mgr.RegisterSetting(Setting.F64Array("s.f64s", "F64s", string.Empty, []));
+                mgr.RegisterSetting(Setting.U64Array("s.u64s", "U64s", string.Empty, []));
+                mgr.RegisterSetting(Setting.I64Array("s.i64s", "I64s", string.Empty, []));
+                mgr.GetSetting("s.bools")?.SetPendingValue(SettingValue.BoolArray([true, false]));
+                mgr.GetSetting("s.strs")?.SetPendingValue(SettingValue.StringArray(["a", "b"]));
+                mgr.GetSetting("s.f64s")?.SetPendingValue(SettingValue.F64Array([1.5, 2.5]));
+                mgr.GetSetting("s.u64s")?.SetPendingValue(SettingValue.U64Array([1UL, 2UL]));
+                mgr.GetSetting("s.i64s")?.SetPendingValue(SettingValue.I64Array([-1L, 3L]));
+                mgr.ApplyChanges();
                 mgr.Save();
             }
 
@@ -971,7 +987,10 @@ internal sealed class SettingsManagerTests
             Directory.CreateDirectory(dir);
             using (SettingsManager mgr = new(dir))
             {
-                mgr.RegisterSetting(Setting.U64Array("s.empty", "Empty", string.Empty, []));
+                // The default is not empty, so the empty array is a stored value.
+                mgr.RegisterSetting(Setting.U64Array("s.empty", "Empty", string.Empty, [9UL]));
+                mgr.GetSetting("s.empty")?.SetPendingValue(SettingValue.U64Array([]));
+                mgr.ApplyChanges();
                 mgr.Save();
             }
 
@@ -1567,11 +1586,11 @@ internal sealed class SettingsManagerTests
     [Test]
     public async Task PrivateParsers_LongCoercionBranches_AreExercised()
     {
-        System.Reflection.MethodInfo? parseU64 = typeof(SettingsManager).GetMethod(
+        System.Reflection.MethodInfo? parseU64 = typeof(SettingValueJson).GetMethod(
             "_TryParseU64", BindingFlags.NonPublic | BindingFlags.Static);
-        System.Reflection.MethodInfo? parseEnumNumeric = typeof(SettingsManager).GetMethod(
+        System.Reflection.MethodInfo? parseEnumNumeric = typeof(SettingValueJson).GetMethod(
             "_TryGetEnumNumericValue", BindingFlags.NonPublic | BindingFlags.Static);
-        System.Reflection.MethodInfo? parseEnum = typeof(SettingsManager).GetMethod(
+        System.Reflection.MethodInfo? parseEnum = typeof(SettingValueJson).GetMethod(
             "_TryParseEnumWithMetadata", BindingFlags.NonPublic | BindingFlags.Static);
         await Assert.That(parseU64).IsNotNull();
         await Assert.That(parseEnumNumeric).IsNotNull();
@@ -1798,9 +1817,9 @@ internal sealed class SettingsManagerTests
     [Test]
     public async Task PrivateParsers_EnumWithMetadata_BranchCoverage()
     {
-        MethodInfo? parseEnum = typeof(SettingsManager).GetMethod(
+        MethodInfo? parseEnum = typeof(SettingValueJson).GetMethod(
             "_TryParseEnumWithMetadata", BindingFlags.NonPublic | BindingFlags.Static);
-        MethodInfo? parseNumeric = typeof(SettingsManager).GetMethod(
+        MethodInfo? parseNumeric = typeof(SettingValueJson).GetMethod(
             "_TryGetEnumNumericValue", BindingFlags.NonPublic | BindingFlags.Static);
         await Assert.That(parseEnum).IsNotNull();
         await Assert.That(parseNumeric).IsNotNull();
@@ -1862,7 +1881,7 @@ internal sealed class SettingsManagerTests
     [Test]
     public async Task PrivateParsers_SettingValueToJson_NonFiniteF64_Throws()
     {
-        MethodInfo? toJson = typeof(SettingsManager).GetMethod(
+        MethodInfo? toJson = typeof(SettingValueJson).GetMethod(
             "_SettingValueToJson", BindingFlags.NonPublic | BindingFlags.Static);
         await Assert.That(toJson).IsNotNull();
 
@@ -1876,7 +1895,7 @@ internal sealed class SettingsManagerTests
     [Test]
     public async Task PrivateParsers_TryParseI64_InvalidNode_ReturnsNull()
     {
-        MethodInfo? parseI64 = typeof(SettingsManager).GetMethod(
+        MethodInfo? parseI64 = typeof(SettingValueJson).GetMethod(
             "_TryParseI64", BindingFlags.NonPublic | BindingFlags.Static);
         await Assert.That(parseI64).IsNotNull();
 
@@ -1888,7 +1907,7 @@ internal sealed class SettingsManagerTests
     [Test]
     public async Task PrivateParsers_TryParseEnumWithMetadata_InvalidName_ReturnsTypeMismatch()
     {
-        MethodInfo? parseEnum = typeof(SettingsManager).GetMethod(
+        MethodInfo? parseEnum = typeof(SettingValueJson).GetMethod(
             "_TryParseEnumWithMetadata", BindingFlags.NonPublic | BindingFlags.Static);
         await Assert.That(parseEnum).IsNotNull();
 
@@ -1901,7 +1920,7 @@ internal sealed class SettingsManagerTests
     [Test]
     public async Task PrivateParsers_TryParseEnumWithMetadata_UnknownNumeric_ReturnsTypeMismatch()
     {
-        MethodInfo? parseEnum = typeof(SettingsManager).GetMethod(
+        MethodInfo? parseEnum = typeof(SettingValueJson).GetMethod(
             "_TryParseEnumWithMetadata", BindingFlags.NonPublic | BindingFlags.Static);
         await Assert.That(parseEnum).IsNotNull();
 
@@ -1914,7 +1933,7 @@ internal sealed class SettingsManagerTests
     [Test]
     public async Task PrivateParsers_SettingValueToJson_Bool_ReturnsJsonValue()
     {
-        MethodInfo? toJson = typeof(SettingsManager).GetMethod(
+        MethodInfo? toJson = typeof(SettingValueJson).GetMethod(
             "_SettingValueToJson", BindingFlags.NonPublic | BindingFlags.Static);
         await Assert.That(toJson).IsNotNull();
 
@@ -1926,7 +1945,7 @@ internal sealed class SettingsManagerTests
     [Test]
     public async Task PrivateParsers_SettingValueToJson_UnknownType_ReturnsNull()
     {
-        MethodInfo? toJson = typeof(SettingsManager).GetMethod(
+        MethodInfo? toJson = typeof(SettingValueJson).GetMethod(
             "_SettingValueToJson", BindingFlags.NonPublic | BindingFlags.Static);
         await Assert.That(toJson).IsNotNull();
 
@@ -1939,7 +1958,7 @@ internal sealed class SettingsManagerTests
     [Test]
     public async Task PrivateParsers_TryParseEnumWithMetadata_UnknownCanonicalNumeric_ReturnsTypeMismatch()
     {
-        MethodInfo? parseEnum = typeof(SettingsManager).GetMethod(
+        MethodInfo? parseEnum = typeof(SettingValueJson).GetMethod(
             "_TryParseEnumWithMetadata", BindingFlags.NonPublic | BindingFlags.Static);
         await Assert.That(parseEnum).IsNotNull();
 
@@ -2045,6 +2064,8 @@ internal sealed class SettingsManagerTests
             using (SettingsManager first = new(dir))
             {
                 first.RegisterSetting(Setting.Bool("test.flag", "Flag", "test", true));
+                first.GetSetting("test.flag")?.SetPendingValue(SettingValue.Bool(false));
+                first.ApplyChanges();
                 first.Save();
             }
 
@@ -2054,6 +2075,8 @@ internal sealed class SettingsManagerTests
             using (SettingsManager second = new(dir))
             {
                 second.RegisterSetting(Setting.Bool("other.flag", "Other", string.Empty, false));
+                second.GetSetting("other.flag")?.SetPendingValue(SettingValue.Bool(true));
+                second.ApplyChanges();
                 second.Save();
             }
 

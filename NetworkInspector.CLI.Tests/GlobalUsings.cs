@@ -5,18 +5,26 @@ global using System;
 global using System.Collections.Generic;
 global using System.Globalization;
 global using System.IO;
+global using System.Linq;
+global using System.Text;
+global using System.Text.Json;
+global using System.Text.Json.Nodes;
 global using System.Threading;
 global using System.Threading.Tasks;
+global using static System.FormattableString;
 #endregion
 
 #region TUnit
 global using TUnit.Assertions;
+global using TUnit.Assertions.Enums;
 global using TUnit.Assertions.Extensions;
 global using TUnit.Core;
 #endregion
 
 #region NetworkInspector
+global using NetworkInspector.BuiltInPlugins;
 global using NetworkInspector.Core;
+global using NetworkInspector.Core.Errors;
 global using NetworkInspector.Core.Ids;
 global using NetworkInspector.Core.Index;
 global using NetworkInspector.Core.Interfaces;
@@ -27,7 +35,10 @@ global using NetworkInspector.Filter.Errors;
 global using NetworkInspector.Exporters.Json;
 global using NetworkInspector.Exporters.Pbf;
 global using NetworkInspector.Exporters.Text;
+global using NetworkInspector.Plugins;
+global using NetworkInspector.Plugins.Loader;
 global using NetworkInspector.Protocols;
+global using NetworkInspector.Values;
 global using NetworkInspector.Sources.Random;
 // The namespace NetworkInspector.Filter shadows its own Filter type, so the concrete filter
 // needs an unambiguous alias.

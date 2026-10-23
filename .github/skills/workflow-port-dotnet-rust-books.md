@@ -70,7 +70,7 @@ Defaults: `tech-dotnet-rust.md` Section 2, all adopted unless listed.
 
 ## Limits
 
-- {limit}: {value} · constant | configurable ({where, default})
+- {limit}: {value or range} · {threat} · constant | configurable ({where, who, default}) · secure | open by default ({why}). Same as the source unless approved here.
 
 ## Priority targets
 
@@ -90,7 +90,7 @@ Short by design; read first on resume. Lists, not wide tables.
 ```markdown
 # Port Status
 
-**Cursor:** `{Assembly}/{Unit}` ({status}) · **Next:** `{Unit}`, `{Unit}`
+**Position:** `{Assembly}/{Unit}` ({status}) · **Next:** `{Unit}`, `{Unit}`
 **Waits on:** `{Unit}` ← `BL-nnn`
 **Last completed:** `{Unit}`
 **Balance:** ok | broken ({what})
@@ -172,7 +172,9 @@ Short by design; read first on resume. Lists, not wide tables.
 ### BL-nnn — {question as one sentence}
 
 - **Rows:** {IDs} · **Holds units:** {list}
-- **Context:** {source location, what the agent found}
+- **Context:** {source location as a link, what the agent found}
+- **Evidence:** {quoted source, command and output, or failing test}
+- **Impact:** {what stays unported or wrong while open; what ships wrong if guessed}
 - **Options:** A {…, consequence} · B {…, consequence}
 - **Agent recommendation:** {A/B and why}
 - **Answer:** {filled by the human}

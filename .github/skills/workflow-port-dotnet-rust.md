@@ -93,7 +93,7 @@ The human approves:
 - **Hard-spot decisions:** one answer per hard spot.
 - **Oracle:** how outputs are compared (ported tests, golden fixtures from the .NET oracle harness, differential runs).
 - **Performance:** hot paths, benchmark scenarios, target (for example “not slower than .NET on scenario X”).
-- **Trust-boundary limits** per Section 4.1 of `copilot-instructions.md`.
+- **Trust-boundary limits** per Section 4.2 of `copilot-instructions.md`.
 - **Priority targets** (optional): units to port first. Priority changes **order only**, never completeness.
 
 MANIFEST status **Approved** = plan approval for Section 6 of `copilot-instructions.md`. From here on the agent does not wait for chat answers.
@@ -156,7 +156,7 @@ All files are under `port/`. Templates and a full example: `workflow-port-dotnet
 | File | Role |
 |------|------|
 | `MANIFEST.md` | Approved alignment: scope, crate map, Idiom Map, pre-approvals, hard spots, limits, performance |
-| `STATUS.md` | Balance sheet, cursor (current unit, next units), open blockers. Small; read first on resume |
+| `STATUS.md` | Balance sheet, position (current unit, next units), open blockers. Small; read first on resume |
 | `units/<Assembly>/<Unit>.md` | Unit record: API rows, behavior items, test rows, design notes, verification |
 | `DEVIATIONS.md` | `DV-*` records |
 | `BLOCKERS.md` | `BL-*` questions; `SB-*` suspected source bugs |

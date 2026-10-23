@@ -1,0 +1,3 @@
+# NetworkInspector.Plugins/.editorconfig — library code configures every await (tech-csharp.md Async)
+[*.cs]
+dotnet_diagnostic.CA2007.severity = error

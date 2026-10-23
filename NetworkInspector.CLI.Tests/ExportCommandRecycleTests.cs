@@ -63,6 +63,7 @@ internal sealed class ExportCommandRecycleTests
             maxPackets,
             progressInterval,
             tolerant,
+            TextWriter.Null,
             ref counter,
             cancellationToken,
             out _);
@@ -87,6 +88,7 @@ internal sealed class ExportCommandRecycleTests
             maxPackets: 0,
             progressInterval: 0,
             tolerant: false,
+            TextWriter.Null,
             ref counter,
             CancellationToken.None,
             out outputsWritten);
@@ -339,6 +341,7 @@ internal sealed class ExportCommandRecycleTests
                 maxPackets: 0,
                 progressInterval: 0,
                 tolerant: false,
+                TextWriter.Null,
                 ref counter,
                 CancellationToken.None,
                 out _);

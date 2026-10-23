@@ -134,6 +134,8 @@ internal sealed class SettingsManagerRobustnessTests
             Directory.CreateDirectory(Path.Combine(directory, "blocked.json"));
             using SettingsManager manager = new(directory);
             manager.RegisterSetting(Setting.Bool("blocked.flag", "Flag", "blocked", true));
+            manager.GetSetting("blocked.flag")?.SetPendingValue(SettingValue.Bool(false));
+            manager.ApplyChanges();
 
             await Assert.That(manager.Save).Throws<PersistenceSettingsException>();
         }

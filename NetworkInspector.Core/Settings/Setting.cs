@@ -55,7 +55,8 @@ public sealed class Setting : IReadOnlySetting
         SettingValue defaultValue,
         SettingValue? minValue,
         SettingValue? maxValue,
-        EnumSettingMetadata? enumMetadata)
+        EnumSettingMetadata? enumMetadata,
+        SettingActivation activation)
     {
         if (!NameValidation.IsValidName(name))
         {
@@ -78,6 +79,7 @@ public sealed class Setting : IReadOnlySetting
         MinValue = minValue;
         MaxValue = maxValue;
         EnumMetadata = enumMetadata;
+        Activation = activation;
         _Snapshot = new SettingSnapshot(defaultValue, defaultValue);
     }
 
@@ -109,6 +111,12 @@ public sealed class Setting : IReadOnlySetting
 
     /// <summary>Enum metadata, if this is an enum setting.</summary>
     public EnumSettingMetadata? EnumMetadata { get; }
+
+    /// <summary>
+    /// How a change of this setting takes effect (factory parameter, default <see cref="SettingActivation.Immediate"/>).
+    /// Informational: Core applies every change at once and the host or app decides about session resets and restarts.
+    /// </summary>
+    public SettingActivation Activation { get; }
 
     #endregion
 
@@ -206,14 +214,10 @@ public sealed class Setting : IReadOnlySetting
     {
         lock (_WriteLock)
         {
-            (ValidationErrorKind kind, string? error) = _Validate(value);
-            if (kind == ValidationErrorKind.TypeMismatch)
+            SettingProblem? problem = _Validate(value);
+            if (problem is not null)
             {
-                throw TypeMismatchSettingsException.For(Type, value.Type);
-            }
-            if (kind == ValidationErrorKind.ValidationFailed)
-            {
-                throw ValidationSettingsException.For(error!);
+                throw _ToException(problem, value);
             }
 
             _Snapshot = new SettingSnapshot(value, value);
@@ -250,20 +254,73 @@ public sealed class Setting : IReadOnlySetting
                 return false;
             }
 
-            // Validate before storing — throws on failure
-            (ValidationErrorKind kind, string? error) = _Validate(value);
-            if (kind == ValidationErrorKind.TypeMismatch)
+            // Validate before storing — throws on failure. The exception texts are the problem messages, so the throwing
+            // and the non-throwing members never disagree about a value.
+            SettingProblem? problem = _Validate(value);
+            if (problem is not null)
             {
-                throw TypeMismatchSettingsException.For(Type, value.Type);
-            }
-            if (kind == ValidationErrorKind.ValidationFailed)
-            {
-                throw ValidationSettingsException.For(error!);
+                throw _ToException(problem, value);
             }
 
             _Snapshot = new SettingSnapshot(snapshot.CurrentValue, value);
-            return true;
         }
+
+        // Outside the lock: a handler may read the manager or this setting.
+        _Owner?.OnPendingChanged(Name);
+        return true;
+    }
+
+    /// <summary>
+    /// Checks <paramref name="value"/> against the type, the bounds, the allowed enumeration values, and finiteness without
+    /// storing it. Never throws for a bad value.
+    /// </summary>
+    /// <param name="value">The value to check.</param>
+    /// <param name="problem">Why the value is refused; <see langword="null"/> when it is valid.</param>
+    /// <returns><see langword="true"/> when the value is valid for this setting.</returns>
+    public bool TryValidate(SettingValue value, [NotNullWhen(false)] out SettingProblem? problem)
+    {
+        problem = _Validate(value);
+        return problem is null;
+    }
+
+    /// <summary>
+    /// Stores a valid value as the pending value; returns <see langword="false"/> with the problem otherwise (the pending
+    /// value stays as it was). Raises <see cref="SettingsManager.PendingChanged"/> when the pending value changed, after the
+    /// setting lock is released.
+    /// </summary>
+    /// <param name="value">The value to store.</param>
+    /// <param name="problem">Why the value is refused; <see langword="null"/> when it was stored.</param>
+    /// <returns><see langword="true"/> when the value is valid (also when it equals the pending value already).</returns>
+    /// <exception cref="InvalidOperationException"><see cref="SettingsManager.Load"/> is in progress (a usage error, not an
+    /// expected failure).</exception>
+    public bool TrySetPendingValue(SettingValue value, [NotNullWhen(false)] out SettingProblem? problem)
+    {
+        bool changed;
+        lock (_WriteLock)
+        {
+            _ThrowIfManagerIsLoading();
+
+            problem = _Validate(value);
+            if (problem is not null)
+            {
+                return false;
+            }
+
+            SettingSnapshot snapshot = _Snapshot;
+            changed = snapshot.PendingValue != value;
+            if (changed)
+            {
+                _Snapshot = new SettingSnapshot(snapshot.CurrentValue, value);
+            }
+        }
+
+        // Outside the lock: a handler may read the manager or this setting.
+        if (changed)
+        {
+            _Owner?.OnPendingChanged(Name);
+        }
+
+        return true;
     }
 
     /// <summary>
@@ -291,12 +348,9 @@ public sealed class Setting : IReadOnlySetting
     /// <exception cref="InvalidOperationException">Thrown when <see cref="SettingsManager.Load"/> is in progress.</exception>
     public void Reset()
     {
-        lock (_WriteLock)
+        if (ResetWithoutEvent())
         {
-            _ThrowIfManagerIsLoading();
-
-            SettingSnapshot snapshot = _Snapshot;
-            _Snapshot = new SettingSnapshot(snapshot.CurrentValue, snapshot.CurrentValue);
+            _Owner?.OnPendingChanged(Name);
         }
     }
 
@@ -304,11 +358,44 @@ public sealed class Setting : IReadOnlySetting
     /// <exception cref="InvalidOperationException">Thrown when <see cref="SettingsManager.Load"/> is in progress.</exception>
     public void ResetToDefault()
     {
+        if (ResetToDefaultWithoutEvent())
+        {
+            _Owner?.OnPendingChanged(Name);
+        }
+    }
+
+    /// <summary>
+    /// Resets the pending value to the current value without raising <see cref="SettingsManager.PendingChanged"/>, so that
+    /// the manager can reset many settings under its lock and raise the events afterwards.
+    /// </summary>
+    /// <returns><see langword="true"/> when the pending value changed.</returns>
+    internal bool ResetWithoutEvent()
+    {
         lock (_WriteLock)
         {
             _ThrowIfManagerIsLoading();
 
+            SettingSnapshot snapshot = _Snapshot;
+            bool changed = snapshot.PendingValue != snapshot.CurrentValue;
+            _Snapshot = new SettingSnapshot(snapshot.CurrentValue, snapshot.CurrentValue);
+            return changed;
+        }
+    }
+
+    /// <summary>
+    /// Resets current and pending values to the default without raising <see cref="SettingsManager.PendingChanged"/>.
+    /// </summary>
+    /// <returns><see langword="true"/> when the pending value changed.</returns>
+    internal bool ResetToDefaultWithoutEvent()
+    {
+        lock (_WriteLock)
+        {
+            _ThrowIfManagerIsLoading();
+
+            SettingSnapshot snapshot = _Snapshot;
+            bool changed = snapshot.PendingValue != DefaultValue;
             _Snapshot = new SettingSnapshot(DefaultValue, DefaultValue);
+            return changed;
         }
     }
 
@@ -317,142 +404,23 @@ public sealed class Setting : IReadOnlySetting
     #region Validation
 
     /// <summary>
-    /// Validates a value against the setting's constraints.
-    /// Returns <see cref="ValidationErrorKind.None"/> if valid.
+    /// Validates a value against the setting's constraints and describes the first problem. One validation
+    /// (<see cref="SettingValidation"/>) serves the throwing and the non-throwing members and both codecs, so every caller
+    /// sees the same wording.
     /// </summary>
-    private (ValidationErrorKind Kind, string? Message) _Validate(SettingValue value)
+    /// <param name="value">The value to check.</param>
+    /// <returns>The problem, or <see langword="null"/> when the value is valid.</returns>
+    private SettingProblem? _Validate(SettingValue value) => SettingValidation.Validate(this, value);
+
+    /// <summary>Maps a problem to the exception type the throwing members always used.</summary>
+    private SettingsException _ToException(SettingProblem problem, SettingValue value)
     {
-        return (Type, value.Type) switch
+        if (problem.Kind == SettingProblemKind.WrongType)
         {
-            (SettingType.Bool, SettingType.Bool) => (ValidationErrorKind.None, null),
-            (SettingType.String, SettingType.String) => (ValidationErrorKind.None, null),
-            (SettingType.Bytes, SettingType.Bytes) => (ValidationErrorKind.None, null),
-            (SettingType.F64, SettingType.F64) when value.TryGetAsF64(out double f64v) => _WrapValidation(_ValidateF64(f64v)),
-            (SettingType.U64, SettingType.U64) when value.TryGetAsU64(out ulong u64v) => _WrapValidation(_ValidateU64(u64v)),
-            (SettingType.I64, SettingType.I64) when value.TryGetAsI64(out long i64v) => _WrapValidation(_ValidateI64(i64v)),
-            (SettingType.Enum, SettingType.Enum) => _WrapValidation(_ValidateEnum(value)),
-            (SettingType.BoolArray, SettingType.BoolArray) => (ValidationErrorKind.None, null),
-            (SettingType.StringArray, SettingType.StringArray) => (ValidationErrorKind.None, null),
-            (SettingType.F64Array, SettingType.F64Array) when value.TryGetAsF64Array(out double[] f64a) =>
-                _WrapValidation(_ValidateF64Array(f64a)),
-            (SettingType.U64Array, SettingType.U64Array) when value.TryGetAsU64Array(out ulong[] u64a) =>
-                _WrapValidation(_ValidateU64Array(u64a)),
-            (SettingType.I64Array, SettingType.I64Array) when value.TryGetAsI64Array(out long[] i64a) =>
-                _WrapValidation(_ValidateI64Array(i64a)),
-            _ => (ValidationErrorKind.TypeMismatch, null),
-        };
-    }
-
-    /// <summary>Wraps a nullable string validation message into a typed result.</summary>
-    private static (ValidationErrorKind Kind, string? Message) _WrapValidation(string? error)
-    {
-        if (error is null)
-        {
-            return (ValidationErrorKind.None, null);
-        }
-        return (ValidationErrorKind.ValidationFailed, error);
-    }
-
-    private string? _ValidateF64(double v)
-    {
-        if (!double.IsFinite(v))
-        {
-            return string.Create(CultureInfo.InvariantCulture, $"F64 setting value must be finite, got {v}");
-        }
-        if (MinValue is not null && MinValue.Value.TryGetAsF64(out double minF64) && v < minF64)
-        {
-            return string.Create(CultureInfo.InvariantCulture, $"Value {v} is below minimum {minF64}");
-        }
-        if (MaxValue is not null && MaxValue.Value.TryGetAsF64(out double maxF64) && v > maxF64)
-        {
-            return string.Create(CultureInfo.InvariantCulture, $"Value {v} is above maximum {maxF64}");
-        }
-        return null;
-    }
-
-    private string? _ValidateU64(ulong v)
-    {
-        if (MinValue is not null && MinValue.Value.TryGetAsU64(out ulong minU64) && v < minU64)
-        {
-            return string.Create(CultureInfo.InvariantCulture, $"Value {v} is below minimum {minU64}");
-        }
-        if (MaxValue is not null && MaxValue.Value.TryGetAsU64(out ulong maxU64) && v > maxU64)
-        {
-            return string.Create(CultureInfo.InvariantCulture, $"Value {v} is above maximum {maxU64}");
-        }
-        return null;
-    }
-
-    private string? _ValidateI64(long v)
-    {
-        if (MinValue is not null && MinValue.Value.TryGetAsI64(out long minI64) && v < minI64)
-        {
-            return string.Create(CultureInfo.InvariantCulture, $"Value {v} is below minimum {minI64}");
-        }
-        if (MaxValue is not null && MaxValue.Value.TryGetAsI64(out long maxI64) && v > maxI64)
-        {
-            return string.Create(CultureInfo.InvariantCulture, $"Value {v} is above maximum {maxI64}");
-        }
-        return null;
-    }
-
-    private string? _ValidateEnum(SettingValue value)
-    {
-        if (EnumMetadata is null)
-        {
-            return null;
-        }
-        if (!value.TryGetAsEnum(out (string _, ulong numericValue) e))
-        {
-            return "Invalid enum value";
-        }
-        if (!EnumMetadata.IsAllowedNumeric(e.numericValue))
-        {
-            return string.Create(CultureInfo.InvariantCulture, $"Value {e.numericValue} is not an allowed enum value");
-        }
-        return null;
-    }
-
-    private string? _ValidateF64Array(double[] values)
-    {
-        for (int i = 0; i < values.Length; i++)
-        {
-            string? error = _ValidateF64(values[i]);
-            if (error is not null)
-            {
-                return error;
-            }
+            return TypeMismatchSettingsException.For(Type, value.Type);
         }
 
-        return null;
-    }
-
-    private string? _ValidateU64Array(ulong[] values)
-    {
-        for (int i = 0; i < values.Length; i++)
-        {
-            string? error = _ValidateU64(values[i]);
-            if (error is not null)
-            {
-                return error;
-            }
-        }
-
-        return null;
-    }
-
-    private string? _ValidateI64Array(long[] values)
-    {
-        for (int i = 0; i < values.Length; i++)
-        {
-            string? error = _ValidateI64(values[i]);
-            if (error is not null)
-            {
-                return error;
-            }
-        }
-
-        return null;
+        return ValidationSettingsException.For(problem.Message);
     }
 
     #endregion
@@ -465,11 +433,12 @@ public sealed class Setting : IReadOnlySetting
     /// <exception cref="InvalidUiNameRegistrationException">Thrown when <paramref name="uiName"/> is empty or contains control characters.</exception>
     public static Setting Bool(
         string name, string uiName, string groupName,
-        bool defaultValue, string? description = null)
+        bool defaultValue, string? description = null,
+        SettingActivation activation = SettingActivation.Immediate)
     {
         SettingValue def = SettingValue.Bool(defaultValue);
         return new Setting(name, uiName, description, groupName,
-            SettingType.Bool, def, null, null, null);
+            SettingType.Bool, def, null, null, null, activation);
     }
 
     /// <summary>Creates a new string setting.</summary>
@@ -478,11 +447,12 @@ public sealed class Setting : IReadOnlySetting
     /// <exception cref="InvalidUiNameRegistrationException">Thrown when <paramref name="uiName"/> is empty or contains control characters.</exception>
     public static Setting String(
         string name, string uiName, string groupName,
-        string defaultValue, string? description = null)
+        string defaultValue, string? description = null,
+        SettingActivation activation = SettingActivation.Immediate)
     {
         SettingValue def = SettingValue.String(defaultValue);
         return new Setting(name, uiName, description, groupName,
-            SettingType.String, def, null, null, null);
+            SettingType.String, def, null, null, null, activation);
     }
 
     /// <summary>Creates a new f64 setting with optional min/max constraints.</summary>
@@ -493,7 +463,8 @@ public sealed class Setting : IReadOnlySetting
     public static Setting F64(
         string name, string uiName, string groupName,
         double defaultValue, double? min = null, double? max = null,
-        string? description = null)
+        string? description = null,
+        SettingActivation activation = SettingActivation.Immediate)
     {
         if (!double.IsFinite(defaultValue))
         {
@@ -524,7 +495,7 @@ public sealed class Setting : IReadOnlySetting
         SettingValue? minVal = min.HasValue ? (SettingValue?)SettingValue.F64(min.Value) : null;
         SettingValue? maxVal = max.HasValue ? (SettingValue?)SettingValue.F64(max.Value) : null;
         return new Setting(name, uiName, description, groupName,
-            SettingType.F64, def, minVal, maxVal, null);
+            SettingType.F64, def, minVal, maxVal, null, activation);
     }
 
     /// <summary>Creates a new u64 setting with optional min/max constraints.</summary>
@@ -535,7 +506,8 @@ public sealed class Setting : IReadOnlySetting
     public static Setting U64(
         string name, string uiName, string groupName,
         ulong defaultValue, ulong? min = null, ulong? max = null,
-        string? description = null)
+        string? description = null,
+        SettingActivation activation = SettingActivation.Immediate)
     {
         if (min.HasValue && max.HasValue && min.Value > max.Value)
         {
@@ -554,7 +526,7 @@ public sealed class Setting : IReadOnlySetting
         SettingValue? minVal = min.HasValue ? (SettingValue?)SettingValue.U64(min.Value) : null;
         SettingValue? maxVal = max.HasValue ? (SettingValue?)SettingValue.U64(max.Value) : null;
         return new Setting(name, uiName, description, groupName,
-            SettingType.U64, def, minVal, maxVal, null);
+            SettingType.U64, def, minVal, maxVal, null, activation);
     }
 
     /// <summary>Creates a new i64 setting with optional min/max constraints.</summary>
@@ -565,7 +537,8 @@ public sealed class Setting : IReadOnlySetting
     public static Setting I64(
         string name, string uiName, string groupName,
         long defaultValue, long? min = null, long? max = null,
-        string? description = null)
+        string? description = null,
+        SettingActivation activation = SettingActivation.Immediate)
     {
         if (min.HasValue && max.HasValue && min.Value > max.Value)
         {
@@ -584,7 +557,7 @@ public sealed class Setting : IReadOnlySetting
         SettingValue? minVal = min.HasValue ? (SettingValue?)SettingValue.I64(min.Value) : null;
         SettingValue? maxVal = max.HasValue ? (SettingValue?)SettingValue.I64(max.Value) : null;
         return new Setting(name, uiName, description, groupName,
-            SettingType.I64, def, minVal, maxVal, null);
+            SettingType.I64, def, minVal, maxVal, null, activation);
     }
 
     /// <summary>Creates a new byte array setting.</summary>
@@ -593,11 +566,12 @@ public sealed class Setting : IReadOnlySetting
     /// <exception cref="InvalidUiNameRegistrationException">Thrown when <paramref name="uiName"/> is empty or contains control characters.</exception>
     public static Setting Bytes(
         string name, string uiName, string groupName,
-        byte[] defaultValue, string? description = null)
+        byte[] defaultValue, string? description = null,
+        SettingActivation activation = SettingActivation.Immediate)
     {
         SettingValue def = SettingValue.Bytes(defaultValue);
         return new Setting(name, uiName, description, groupName,
-            SettingType.Bytes, def, null, null, null);
+            SettingType.Bytes, def, null, null, null, activation);
     }
 
     /// <summary>Creates a new boolean array setting.</summary>
@@ -606,11 +580,12 @@ public sealed class Setting : IReadOnlySetting
     /// <exception cref="InvalidUiNameRegistrationException">Thrown when <paramref name="uiName"/> is empty or contains control characters.</exception>
     public static Setting BoolArray(
         string name, string uiName, string groupName,
-        bool[] defaultValue, string? description = null)
+        bool[] defaultValue, string? description = null,
+        SettingActivation activation = SettingActivation.Immediate)
     {
         SettingValue def = SettingValue.BoolArray(defaultValue);
         return new Setting(name, uiName, description, groupName,
-            SettingType.BoolArray, def, null, null, null);
+            SettingType.BoolArray, def, null, null, null, activation);
     }
 
     /// <summary>Creates a new string array setting.</summary>
@@ -619,11 +594,12 @@ public sealed class Setting : IReadOnlySetting
     /// <exception cref="InvalidUiNameRegistrationException">Thrown when <paramref name="uiName"/> is empty or contains control characters.</exception>
     public static Setting StringArray(
         string name, string uiName, string groupName,
-        string[] defaultValue, string? description = null)
+        string[] defaultValue, string? description = null,
+        SettingActivation activation = SettingActivation.Immediate)
     {
         SettingValue def = SettingValue.StringArray(defaultValue);
         return new Setting(name, uiName, description, groupName,
-            SettingType.StringArray, def, null, null, null);
+            SettingType.StringArray, def, null, null, null, activation);
     }
 
     /// <summary>Creates a new F64 array setting with optional per-element min/max constraints.</summary>
@@ -634,7 +610,8 @@ public sealed class Setting : IReadOnlySetting
     public static Setting F64Array(
         string name, string uiName, string groupName,
         double[] defaultValue, double? min = null, double? max = null,
-        string? description = null)
+        string? description = null,
+        SettingActivation activation = SettingActivation.Immediate)
     {
         ArgumentNullException.ThrowIfNull(defaultValue);
         if (min.HasValue && !double.IsFinite(min.Value))
@@ -671,7 +648,7 @@ public sealed class Setting : IReadOnlySetting
         SettingValue? minVal = min.HasValue ? (SettingValue?)SettingValue.F64(min.Value) : null;
         SettingValue? maxVal = max.HasValue ? (SettingValue?)SettingValue.F64(max.Value) : null;
         return new Setting(name, uiName, description, groupName,
-            SettingType.F64Array, def, minVal, maxVal, null);
+            SettingType.F64Array, def, minVal, maxVal, null, activation);
     }
 
     /// <summary>Creates a new U64 array setting with optional per-element min/max constraints.</summary>
@@ -682,7 +659,8 @@ public sealed class Setting : IReadOnlySetting
     public static Setting U64Array(
         string name, string uiName, string groupName,
         ulong[] defaultValue, ulong? min = null, ulong? max = null,
-        string? description = null)
+        string? description = null,
+        SettingActivation activation = SettingActivation.Immediate)
     {
         ArgumentNullException.ThrowIfNull(defaultValue);
         if (min.HasValue && max.HasValue && min.Value > max.Value)
@@ -707,7 +685,7 @@ public sealed class Setting : IReadOnlySetting
         SettingValue? minVal = min.HasValue ? (SettingValue?)SettingValue.U64(min.Value) : null;
         SettingValue? maxVal = max.HasValue ? (SettingValue?)SettingValue.U64(max.Value) : null;
         return new Setting(name, uiName, description, groupName,
-            SettingType.U64Array, def, minVal, maxVal, null);
+            SettingType.U64Array, def, minVal, maxVal, null, activation);
     }
 
     /// <summary>Creates a new I64 array setting with optional per-element min/max constraints.</summary>
@@ -718,7 +696,8 @@ public sealed class Setting : IReadOnlySetting
     public static Setting I64Array(
         string name, string uiName, string groupName,
         long[] defaultValue, long? min = null, long? max = null,
-        string? description = null)
+        string? description = null,
+        SettingActivation activation = SettingActivation.Immediate)
     {
         ArgumentNullException.ThrowIfNull(defaultValue);
         if (min.HasValue && max.HasValue && min.Value > max.Value)
@@ -743,7 +722,7 @@ public sealed class Setting : IReadOnlySetting
         SettingValue? minVal = min.HasValue ? (SettingValue?)SettingValue.I64(min.Value) : null;
         SettingValue? maxVal = max.HasValue ? (SettingValue?)SettingValue.I64(max.Value) : null;
         return new Setting(name, uiName, description, groupName,
-            SettingType.I64Array, def, minVal, maxVal, null);
+            SettingType.I64Array, def, minVal, maxVal, null, activation);
     }
 
     /// <summary>Creates a new enum setting from allowed value pairs.</summary>
@@ -754,10 +733,11 @@ public sealed class Setting : IReadOnlySetting
     public static Setting Enum(
         string name, string uiName, string groupName,
         ulong defaultValue, IEnumerable<(string Name, ulong Value)> allowedValues,
-        string? description = null)
+        string? description = null,
+        SettingActivation activation = SettingActivation.Immediate)
     {
         EnumSettingMetadata metadata = EnumSettingMetadata.FromPairs(allowedValues);
-        return EnumWithMetadata(name, uiName, groupName, defaultValue, metadata, description);
+        return EnumWithMetadata(name, uiName, groupName, defaultValue, metadata, description, activation);
     }
 
     /// <summary>Creates a new enum setting with pre-built metadata.</summary>
@@ -768,7 +748,8 @@ public sealed class Setting : IReadOnlySetting
     public static Setting EnumWithMetadata(
         string name, string uiName, string groupName,
         ulong defaultValue, EnumSettingMetadata metadata,
-        string? description = null)
+        string? description = null,
+        SettingActivation activation = SettingActivation.Immediate)
     {
         if (metadata.AllowedValues.Count == 0)
         {
@@ -781,21 +762,11 @@ public sealed class Setting : IReadOnlySetting
 
         SettingValue def = SettingValue.Enum(defaultEntry.Value.Name, defaultValue);
         return new Setting(name, uiName, description, groupName,
-            SettingType.Enum, def, null, null, metadata);
+            SettingType.Enum, def, null, null, metadata, activation);
     }
 
     /// <inheritdoc/>
     public override string ToString() => $"{Name} ({Type}: {Value})";
 
-    /// <summary>Discriminates between validation error types.</summary>
-    private enum ValidationErrorKind
-    {
-        /// <summary>Value is valid.</summary>
-        None,
-        /// <summary>Value type does not match the setting type.</summary>
-        TypeMismatch,
-        /// <summary>Value failed a range or constraint check.</summary>
-        ValidationFailed,
-    }
     #endregion
 }

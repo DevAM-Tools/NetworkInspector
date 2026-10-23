@@ -17,40 +17,188 @@ tests: `tech-blazor.md`. C# runner: `tech-tunit.md`.
 
 ## Permission
 
-Treat Playwright as a **permanent** repo tool: New Dependency Protocol. Do not `npm init` or add a stack silently. Do not wrap it in a new script without approval.
+Treat Playwright as a **permanent** repo tool. Add it through the New Dependency Protocol (`copilot-instructions.md` Section 4.7). Do not `npm init` or add a stack silently.
 
 ## Runner (stack-native; no `npx`)
 
-❗ Do **not** use `npx`. Install Playwright per New Dependency Protocol, then run that stack’s CLI.
+❗ Do **not** use `npx`. Install Playwright per the New Dependency Protocol, then run that stack’s CLI.
 
 | Stack | Install (after approval) | Run tests | Extra browser install |
 |-------|--------------------------|-----------|------------------------|
-| **.NET / Blazor** | `TUnit` + `TUnit.Playwright` in a dedicated `{App}.UiTest` project — not the unit `.Tests` sibling, not `Microsoft.Playwright.NUnit` / `.MSTest` / `.Xunit` | `dotnet test path/App.UiTest.csproj -c Release` | **Default:** installed system browser via `Channel` — no download. **Optional bundled Chromium:** after `dotnet build`, `pwsh bin/<Config>/netX/playwright.ps1 install` when `PLAYWRIGHT_BROWSER_CHANNEL=bundled` |
-| **Python** | `playwright`, `pytest-playwright` | `pytest tests/e2e/` | **Default:** system browser via `channel` in launch options. **Optional bundled:** `playwright install chromium` when channel is `bundled` / unset in bundled mode |
-| **Node / TypeScript** (`*.spec.ts`) | `@playwright/test` as a **devDependency** in an approved `package.json` | `pnpm exec playwright test` · `npm exec playwright test` · or an approved `package.json` script | **Default:** system browser via `launchOptions.channel` in config. **Optional bundled:** `pnpm exec playwright install` when using Playwright-managed browsers |
+| **.NET / Blazor** | `TUnit` + `TUnit.Playwright` in a dedicated `{App}.UiTest` project — not the unit `.Tests` sibling, not `Microsoft.Playwright.NUnit` / `.MSTest` / `.Xunit` | `dotnet test path/App.UiTest/App.UiTest.csproj -c Release` | **Default:** installed system browser — no download. **Bundled only:** see Commands |
+| **Python** | `playwright`, `pytest-playwright` | `uv run pytest tests/e2e/` | **Default:** system browser via the `conftest.py` below. **Bundled only:** `uv run playwright install chromium` |
+| **Node / TypeScript** (`*.spec.ts`) | `@playwright/test` as a **devDependency** in an approved `package.json` | `pnpm exec playwright test` · `npm exec playwright test` · or an approved `package.json` script | **Default:** system browser via `playwright.config.ts` below. **Bundled only:** `pnpm exec playwright install chromium` |
 | **Rust** | No first-class Microsoft runner | Approved sidecar: Python `pytest-playwright` or Node `@playwright/test`. `playwright-rust` only if the user accepts it in the dependency protocol | That sidecar’s browser rule |
 
 **.NET default:** C# UI tests are TUnit. Inherit a project `JourneyTest` base (or `PageTest` with shared launch options). Do not add a Node Playwright suite for a .NET UI unless the user asks. Node `@playwright/test` is for Node apps, create-time illustration verify, and approved sidecars.
 
 Do not mix unit tests and browser journeys in the same project.
 
-## Browser (default: system; switchable)
+## Browser selection
 
-❗ **Default:** use the **installed system browser** through Playwright `Channel` — not Playwright-downloaded Chromium. No `playwright install` / `playwright.ps1 install` on a normal dev machine with Chrome or Edge.
+These skills serve many repositories. Every project that adopts them uses the
+same two environment variables and the same order, so a developer configures a
+machine once.
 
-Switch with **`PLAYWRIGHT_BROWSER_CHANNEL`** (same name across stacks when possible):
+❗ **Default:** the **installed system browser** through a Playwright channel —
+no Playwright-downloaded Chromium on a normal dev machine with Edge or Chrome.
 
-| Value | Behavior |
-|-------|----------|
-| *(unset)* or `system` | Branded system browser: `msedge` on Windows, `chrome` on Linux/macOS |
-| `chrome`, `msedge`, `chrome-beta`, `msedge-beta`, … | Explicit Playwright channel (see Playwright .NET docs) |
-| `bundled` or `chromium` | Playwright-managed Chromium — requires that stack’s install command |
+| Variable | Value | Behavior |
+|----------|-------|----------|
+| `PLAYWRIGHT_BROWSER_EXECUTABLE` | path to a browser executable | Wins over the channel. An installed Chromium-based browser that the organization permits for test automation. No download |
+| `PLAYWRIGHT_BROWSER_CHANNEL` | *(unset)* or `system` | `msedge` on Windows, `chrome` on Linux x64 and macOS, bundled Chromium on Linux ARM64 (no branded Chrome exists there) |
+| | `msedge`, `chrome`, `msedge-beta`, `chrome-beta`, … | That Playwright channel |
+| | `bundled` or `chromium` | Playwright-managed Chromium — requires the stack’s install command once |
+| `PLAYWRIGHT_BROWSERS_PATH` | shared folder, for example `%LOCALAPPDATA%\ms-playwright` or `~/.cache/ms-playwright` | Playwright’s own variable. Set it once per machine (user environment) so every project reuses one bundled download |
 
-Keep `BrowserName` / engine as **`chromium`** when using branded channels. Set `Channel` on launch options only.
+Keep the engine `chromium` when using branded channels. Set `Channel` (or
+`ExecutablePath`) on launch options only. A launch that fails is reported with
+the browser’s error; the helpers below never fall back silently (Section 4.1).
 
-**.NET:** shared helper + base class in `{App}.UiTest` (see Commands). **Node:** `launchOptions.channel` in `playwright.config.ts` reading the env var. **Python:** `browser_channel` fixture or launch `channel=` from the env var.
+### Managed (enterprise) browsers
 
-CI without a branded browser: set `PLAYWRIGHT_BROWSER_CHANNEL=bundled` and run the stack install step once on the agent image.
+An organization can block automation of its managed Edge or Chrome through
+Group Policy or MDM — for example `RemoteDebuggingAllowed` disabled, forced
+extensions, or blocked command-line switches. Symptoms: the launch fails, the
+browser closes at once, or the launch times out. `edge://policy` or
+`chrome://policy` lists the active policies.
+
+❗ Do not work around browser policy. No launcher or batch files, switches,
+registry or profile edits, or portable copies meant to escape it. The policy is
+the organization’s security control. Use the next option instead, in order:
+
+1. **Another installed channel** that the policy does not restrict
+   (`PLAYWRIGHT_BROWSER_CHANNEL=chrome` when only Edge is managed).
+2. **An approved executable:** `PLAYWRIGHT_BROWSER_EXECUTABLE` pointing at an
+   installed Chromium-based browser that IT permits for test automation.
+3. **Bundled Chromium with a shared cache:** `PLAYWRIGHT_BROWSER_CHANNEL=bundled`
+   plus `PLAYWRIGHT_BROWSERS_PATH`, so the download happens once per machine.
+   Headless-only runs (CI) may install the smaller headless shell with
+   `install --only-shell` (Playwright ≥ 1.49).
+4. **Ask IT** for a test-automation exception for the system browser.
+
+Record the chosen option in the project’s UI-test README section so the next
+developer does not rediscover it.
+
+### Launch options per stack
+
+**.NET** (`{App}.UiTest/PlaywrightBrowserSettings.cs`):
+
+```csharp
+using System.Runtime.InteropServices;
+using Microsoft.Playwright;
+
+/// <summary>
+/// Builds Playwright launch options from PLAYWRIGHT_BROWSER_EXECUTABLE and
+/// PLAYWRIGHT_BROWSER_CHANNEL. Thread safety: stateless; safe from parallel tests.
+/// </summary>
+internal static class PlaywrightBrowserSettings
+{
+    private const string _ExecutableVariable = "PLAYWRIGHT_BROWSER_EXECUTABLE";
+    private const string _ChannelVariable = "PLAYWRIGHT_BROWSER_CHANNEL";
+
+    public static BrowserTypeLaunchOptions CreateLaunchOptions()
+    {
+        // An approved executable wins: no channel lookup, no download.
+        string? executable = Environment.GetEnvironmentVariable(_ExecutableVariable);
+        if (!string.IsNullOrWhiteSpace(executable))
+        {
+            return new BrowserTypeLaunchOptions { ExecutablePath = executable };
+        }
+
+        // Unset means the branded system browser of this OS.
+        string requested = Environment.GetEnvironmentVariable(_ChannelVariable) ?? "system";
+        string? channel = requested switch
+        {
+            "bundled" or "chromium" => null,
+            "system" => _SystemChannel(),
+            _ => requested,
+        };
+
+        return new BrowserTypeLaunchOptions { Channel = channel };
+    }
+
+    private static string? _SystemChannel()
+    {
+        // Linux ARM64 has no branded Chrome build; bundled Chromium is the only option.
+        if (OperatingSystem.IsLinux() && RuntimeInformation.OSArchitecture == Architecture.Arm64)
+        {
+            return null;
+        }
+
+        return OperatingSystem.IsWindows()
+            ? "msedge"
+            : "chrome";
+    }
+}
+```
+
+**Node** (`playwright.config.ts`):
+
+```ts
+import { defineConfig } from "@playwright/test";
+
+// Same variables and order as the .NET and Python helpers.
+const executablePath = process.env.PLAYWRIGHT_BROWSER_EXECUTABLE || undefined;
+const requested = process.env.PLAYWRIGHT_BROWSER_CHANNEL ?? "system";
+
+function systemChannel(): string | undefined {
+  if (process.platform === "win32") {
+    return "msedge";
+  }
+  // Linux ARM64 has no branded Chrome build.
+  if (process.platform === "linux" && process.arch === "arm64") {
+    return undefined;
+  }
+  return "chrome";
+}
+
+function resolveChannel(): string | undefined {
+  if (executablePath || requested === "bundled" || requested === "chromium") {
+    return undefined;
+  }
+  return requested === "system" ? systemChannel() : requested;
+}
+
+export default defineConfig({
+  use: { launchOptions: { executablePath, channel: resolveChannel() } },
+});
+```
+
+**Python** (`tests/e2e/conftest.py`; overrides the pytest-playwright fixture so
+the variables work without CLI flags):
+
+```python
+import os
+import platform
+import sys
+
+import pytest
+
+
+@pytest.fixture(scope="session")
+def browser_type_launch_args(browser_type_launch_args: dict[str, object]) -> dict[str, object]:
+    # An approved executable wins: no channel lookup, no download.
+    executable = os.environ.get("PLAYWRIGHT_BROWSER_EXECUTABLE")
+    if executable:
+        return {**browser_type_launch_args, "executable_path": executable}
+
+    # An explicit --browser-channel on the command line wins over the default.
+    if "channel" in browser_type_launch_args and "PLAYWRIGHT_BROWSER_CHANNEL" not in os.environ:
+        return browser_type_launch_args
+
+    requested = os.environ.get("PLAYWRIGHT_BROWSER_CHANNEL", "system")
+    if requested in ("bundled", "chromium"):
+        return browser_type_launch_args
+    if requested != "system":
+        return {**browser_type_launch_args, "channel": requested}
+
+    # Linux ARM64 has no branded Chrome build.
+    if sys.platform == "linux" and platform.machine() in ("aarch64", "arm64"):
+        return browser_type_launch_args
+    channel = "msedge" if sys.platform == "win32" else "chrome"
+    return {**browser_type_launch_args, "channel": channel}
+```
 
 ## VS Code / Cursor integration
 
@@ -59,65 +207,76 @@ Use **Playwright Test for VS Code** (`ms-playwright.playwright`) for headed debu
 .NET UI tests (`{App}.UiTest`): Unix `PWDEBUG=1`, PowerShell `$env:PWDEBUG = "1"`,
 the IDE test runner, or .NET trace files. Do not use that extension.
 
-## Editor browser
+## Integrated browser
 
-The editor’s integrated browser is available for a running web UI. The agent can open the page, navigate, click, type, and read what rendered. Using it is recommended while implementing or debugging a UI. It does not replace a Playwright journey.
+❗ Use the integrated browser on the running UI while implementing, verifying,
+and debugging it (Section 4.8): open the page, navigate, click, type, read what
+rendered, check the console. It does not replace a Playwright journey.
 
-- **Cursor:** integrated Browser. Navigate, click, type, fill, read the page, screenshot, console, and network. No separate browser install.
-- **VS Code:** Integrated Browser (browser tools, on by default via `workbench.browser.enableChatTools`): page content, screenshots, and console output.
+| Tool | Browser |
+|------|---------|
+| Cursor | Agent Browser: navigate, click, type, fill, read, screenshot, console, network |
+| VS Code (Copilot) | Integrated Browser (chat tools on by default via `workbench.browser.enableChatTools`) |
+| Claude Code desktop app | Browser pane |
+| Claude Code CLI / VS Code extension | Claude in Chrome browser tools when connected |
 
-If that browser is unavailable, headed Playwright or a trace still works (Commands).
+No browser tool in this session: say so once, then use headed Playwright or a
+trace (Commands).
 
 ## Commands
 
-Run the journey that covers the change. A full UI-project run is for a cross-cutting UI change or final verification (`tech-test.md`). .NET UI tests use `dotnet test`.
+Run the journey that covers the change. A full UI-project run is for a cross-cutting UI change or final verification (`tech-test.md`). Paths start at the repository root.
 
 ### .NET UI tests (TUnit)
 
+Tree filter levels: `/Assembly/Namespace/Class/Test` (`tech-tunit.md`). Exit code 8 = zero tests ran = wrong filter.
+
 ```bash
-dotnet build path/App.UiTest.csproj -c Release
-dotnet test path/App.UiTest.csproj -c Release -- --treenode-filter "/*HomePageLoads/*"
-dotnet test path/App.UiTest.csproj -c Release
+dotnet build path/App.UiTest/App.UiTest.csproj -c Release
+dotnet test path/App.UiTest/App.UiTest.csproj -c Release -- --treenode-filter "/*/*/HomePageLoads/*"
+dotnet test path/App.UiTest/App.UiTest.csproj -c Release
 ```
 
-Headed debug env (Unix, then Windows PowerShell):
+Headed debug (Unix, then Windows PowerShell):
 
 ```bash
-PWDEBUG=1 dotnet test path/App.UiTest.csproj -c Release -- --treenode-filter "/*HomePageLoads/*"
+PWDEBUG=1 dotnet test path/App.UiTest/App.UiTest.csproj -c Release -- --treenode-filter "/*/*/HomePageLoads/*"
 ```
 
 ```powershell
 $env:PWDEBUG = "1"
-dotnet test path/App.UiTest.csproj -c Release -- --treenode-filter "/*HomePageLoads/*"
+dotnet test path/App.UiTest/App.UiTest.csproj -c Release -- --treenode-filter "/*/*/HomePageLoads/*"
 ```
 
-Bundled Chromium only (CI or pinned revision). Unix, then Windows PowerShell.
-`pwsh playwright.ps1` is the .NET install step on every OS.
+Switch browser (Unix, then Windows PowerShell):
 
 ```bash
-PLAYWRIGHT_BROWSER_CHANNEL=bundled pwsh bin/Release/net10.0/playwright.ps1 install chromium
-PLAYWRIGHT_BROWSER_CHANNEL=bundled dotnet test path/App.UiTest.csproj -c Release
-```
-
-```powershell
-$env:PLAYWRIGHT_BROWSER_CHANNEL = "bundled"
-dotnet build path/App.UiTest.csproj -c Release
-pwsh bin/Release/net10.0/playwright.ps1 install chromium
-dotnet test path/App.UiTest.csproj -c Release
-```
-
-Switch system browser. Unix, then Windows PowerShell:
-
-```bash
-PLAYWRIGHT_BROWSER_CHANNEL=chrome dotnet test path/App.UiTest.csproj -c Release
-PLAYWRIGHT_BROWSER_CHANNEL=msedge dotnet test path/App.UiTest.csproj -c Release
+PLAYWRIGHT_BROWSER_CHANNEL=chrome dotnet test path/App.UiTest/App.UiTest.csproj -c Release
+PLAYWRIGHT_BROWSER_EXECUTABLE=/opt/approved-browser/browser dotnet test path/App.UiTest/App.UiTest.csproj -c Release
 ```
 
 ```powershell
 $env:PLAYWRIGHT_BROWSER_CHANNEL = "chrome"
-dotnet test path/App.UiTest.csproj -c Release
-$env:PLAYWRIGHT_BROWSER_CHANNEL = "msedge"
-dotnet test path/App.UiTest.csproj -c Release
+dotnet test path/App.UiTest/App.UiTest.csproj -c Release
+```
+
+Bundled Chromium only (Section 4.7 exemption: `playwright.ps1` is Playwright’s
+vendor-shipped install tool, not a repo script; it needs PowerShell 7 `pwsh`,
+also on Linux and macOS). Build first; the tool is generated into the build
+output.
+
+```bash
+dotnet build path/App.UiTest/App.UiTest.csproj -c Release
+PLAYWRIGHT_BROWSERS_PATH="$HOME/.cache/ms-playwright" pwsh path/App.UiTest/bin/Release/net10.0/playwright.ps1 install chromium
+PLAYWRIGHT_BROWSER_CHANNEL=bundled dotnet test path/App.UiTest/App.UiTest.csproj -c Release
+```
+
+```powershell
+dotnet build path/App.UiTest/App.UiTest.csproj -c Release
+$env:PLAYWRIGHT_BROWSERS_PATH = "$env:LOCALAPPDATA\ms-playwright"
+pwsh path/App.UiTest/bin/Release/net10.0/playwright.ps1 install chromium
+$env:PLAYWRIGHT_BROWSER_CHANNEL = "bundled"
+dotnet test path/App.UiTest/App.UiTest.csproj -c Release
 ```
 
 ```csharp
@@ -140,25 +299,29 @@ public sealed class HomePageLoads : JourneyTest
 }
 ```
 
-MTP filter: `tech-tunit.md`. Do not pass `--filter FullyName`.
+MTP filter: `tech-tunit.md`. Do not pass VSTest-style `--filter FullyQualifiedName~…`.
 
 ### Python
 
+The `conftest.py` above reads the variables. `--browser-channel` on the command line also works.
+
 ```bash
-pytest tests/e2e/test_export.py -v
-pytest tests/e2e/test_export.py --headed --slowmo=500
-PLAYWRIGHT_BROWSER_CHANNEL=chrome pytest tests/e2e/test_export.py -v
-PLAYWRIGHT_BROWSER_CHANNEL=bundled playwright install chromium
-PLAYWRIGHT_BROWSER_CHANNEL=bundled pytest tests/e2e/test_export.py -v
+uv run pytest tests/e2e/test_export.py -v
+uv run pytest tests/e2e/test_export.py --headed --slowmo=500
+PLAYWRIGHT_BROWSER_CHANNEL=chrome uv run pytest tests/e2e/test_export.py -v
+PLAYWRIGHT_BROWSER_CHANNEL=bundled uv run playwright install chromium
+PLAYWRIGHT_BROWSER_CHANNEL=bundled uv run pytest tests/e2e/test_export.py -v
 ```
 
 ```powershell
 $env:PLAYWRIGHT_BROWSER_CHANNEL = "chrome"
-pytest tests/e2e/test_export.py -v
+uv run pytest tests/e2e/test_export.py -v
 $env:PLAYWRIGHT_BROWSER_CHANNEL = "bundled"
-playwright install chromium
-pytest tests/e2e/test_export.py -v
+uv run playwright install chromium
+uv run pytest tests/e2e/test_export.py -v
 ```
+
+No `uv`: use the project’s declared runner (`tech-python.md`).
 
 ### Node / TypeScript (local dependency — not `npx`)
 
@@ -183,7 +346,7 @@ PowerShell `$env:NAME = "value"` — not a `.ps1` wrapper.
 
 Run headed debug with `--debug` or `--headed`. Trace on failure; do not sleep.
 
-Fix common misses: wrong cwd; `PLAYWRIGHT_BROWSER_CHANNEL=bundled` without that stack’s install command; branded browser missing on CI (use `bundled` there); targeting Debug instead of the running app URL.
+Fix common misses: wrong cwd; `PLAYWRIGHT_BROWSER_CHANNEL=bundled` without that stack’s install command; branded browser missing on CI (use `bundled` there); a managed browser blocked by policy (Managed browsers above); targeting Debug instead of the running app URL.
 
 ## Specs
 

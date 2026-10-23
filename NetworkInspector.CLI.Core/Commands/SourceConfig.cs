@@ -3,60 +3,145 @@
 namespace NetworkInspector.CLI.Commands;
 
 /// <summary>
-/// Parses source specifications into concrete <see cref="IFrameSource"/> instances.
-/// Supports bare file paths (auto-detected by extension) and typed specs (<c>type:key=value</c>).
+/// A parsed source spec: the registration that creates the source, the file (for file kinds), and the raw option texts. A spec
+/// is <c>file.ext</c> (the kind comes from the extension) or <c>kind:key=value,…</c> (the kind comes from its name), and kinds
+/// come from the plugin registry, so a plugin's source works exactly like a built-in one. The option texts go through the Core
+/// text codec when the source is created, so the command line accepts the same forms as MCP and the UI. Immutable.
 /// </summary>
-internal abstract class SourceConfig
+internal sealed class SourceConfig
 {
+    #region Constants
+
+    /// <summary>Characters that could cause harm if a spec were ever forwarded to a shell; the trust-boundary check refuses them.</summary>
+    private static readonly char[] _Forbidden = ['|', '&', '>', '<', ';', '`', '(', ')', '{', '}'];
+
+    /// <summary>
+    /// Spellings of the Random source's <c>mode</c> that earlier versions accepted, mapped to the names of the option. Applied
+    /// when the kind is Random so existing scripts keep working.
+    /// </summary>
+    private static readonly FrozenDictionary<string, string> _LegacyRandomModes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+    {
+        ["random"] = "fullrandom",
+        ["full"] = "fullrandom",
+        ["eth"] = "ethernet",
+        ["ip4"] = "ipv4",
+        ["ip6"] = "ipv6",
+        ["udpipv4"] = "udp4",
+        ["udpipv6"] = "udp6",
+        ["can20"] = "can",
+        ["fd"] = "canfd",
+    }.ToFrozenDictionary(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Name of the Random kind, whose <c>mode</c> texts have legacy spellings.</summary>
+    private const string _RandomKind = "Random";
+
+    #endregion
+
+    #region Lifecycle
+
+    private SourceConfig(SourceRegistration registration, string? path, IReadOnlyList<KeyValuePair<string, string>> optionTexts)
+    {
+        Registration = registration;
+        Path = path;
+        OptionTexts = optionTexts;
+    }
+
+    #endregion
+
+    #region Properties
+
+    /// <summary>The registration that creates the source.</summary>
+    internal SourceRegistration Registration { get; }
+
+    /// <summary>The file of a file kind; <see langword="null"/> for kinds without files.</summary>
+    internal string? Path { get; }
+
+    /// <summary>The option texts in the order given.</summary>
+    internal IReadOnlyList<KeyValuePair<string, string>> OptionTexts { get; }
+
+    #endregion
+
     #region Public API
 
-    /// <summary>
-    /// Creates the <see cref="IFrameSource"/> described by this config.
-    /// </summary>
-    /// <param name="settings">
-    /// Read-only view of the active CLI profile settings. Available for sources that
-    /// need profile-backed configuration; ignored by sources that do not use settings yet.
-    /// </param>
-    internal abstract IFrameSource CreateSource(ReadOnlySettingsManagerView settings);
-
-    /// <summary>
-    /// Validates that the source is accessible before attempting to open it.
-    /// File-based subclasses check that the file exists and is readable.
-    /// The default implementation performs no checks (e.g., synthetic sources).
-    /// </summary>
-    /// <exception cref="ArgumentException">Thrown when validation fails.</exception>
-    internal virtual void ValidateBeforeStart() { }
-
-    /// <summary>
-    /// Parses a source specification string.
-    /// </summary>
-    /// <remarks>
-    /// Supported formats:
-    /// <list type="bullet">
-    ///   <item>Bare file path: <c>capture.pcapng</c> or <c>C:\Data\file.blf</c></item>
-    ///   <item>Typed spec: <c>pcap:path=file.pcap</c>, <c>blf:path=file.blf</c></item>
-    /// </list>
-    /// Auto-detection rules for bare paths:
-    /// <list type="bullet">
-    ///   <item><c>.pcap</c> / <c>.pcapng</c> → <see cref="PcapngSourceConfig"/></item>
-    ///   <item><c>.blf</c> → <see cref="BlfSourceConfig"/></item>
-    /// </list>
-    /// </remarks>
-    internal static SourceConfig Parse(string spec)
+    /// <summary>Parses <c>file.ext</c> (kind by extension) or <c>kind:key=value,…</c> (kind by name).</summary>
+    /// <param name="spec">The spec as typed.</param>
+    /// <param name="registry">The registry that supplies the kinds.</param>
+    /// <returns>The parsed spec.</returns>
+    /// <exception cref="ArgumentException">Shell metacharacters, an unknown kind or extension, or a missing path for a file kind.</exception>
+    internal static SourceConfig Parse(string spec, PluginRegistry registry)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(spec);
+        ArgumentNullException.ThrowIfNull(registry);
         _ValidateSourceSpec(spec);
 
-        // Check for typed spec (type:key=value)
-        // Must not start with a drive letter pattern (e.g., "C:\...")
+        // A colon that is not a drive letter separates the kind from its options; everything else is a bare path.
         int colonIndex = spec.IndexOf(':', StringComparison.Ordinal);
         if (colonIndex > 0 && !_IsDriveLetter(spec, colonIndex))
         {
-            return _ParseTypedSpec(spec, colonIndex);
+            return _ParseTyped(spec[..colonIndex], spec[(colonIndex + 1)..], registry);
         }
 
-        // Bare file path — auto-detect by extension
-        return _ParseBarePath(spec);
+        return _ParseBare(spec, registry);
+    }
+
+    /// <summary>Returns a copy with one more option text unless the spec already sets that option.</summary>
+    /// <param name="key">Option name.</param>
+    /// <param name="value">Option text.</param>
+    /// <returns>The copy, or this instance when the option is already set.</returns>
+    internal SourceConfig WithDefaultOption(string key, string value)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+        ArgumentNullException.ThrowIfNull(value);
+        foreach (KeyValuePair<string, string> pair in OptionTexts)
+        {
+            if (string.Equals(pair.Key, key, StringComparison.Ordinal))
+            {
+                return this;
+            }
+        }
+
+        return new SourceConfig(Registration, Path, [.. OptionTexts, new KeyValuePair<string, string>(key, value)]);
+    }
+
+    /// <summary>
+    /// Creates the source: the options of the registration at their defaults, the option texts applied with the Core codec,
+    /// then the registration's factory with the file (if any). The option manager is disposed afterwards; the source copied
+    /// what it needs.
+    /// </summary>
+    /// <param name="sessionSettings">The settings of the profile (the session settings of the request).</param>
+    /// <param name="source">The created, not yet started source; <see langword="null"/> on failure.</param>
+    /// <param name="error">Why no source was created; <see langword="null"/> on success.</param>
+    /// <returns><see langword="true"/> when <paramref name="source"/> is set.</returns>
+    internal bool TryCreateSource(ReadOnlySettingsManagerView sessionSettings, [NotNullWhen(true)] out IFrameSource? source,
+        [NotNullWhen(false)] out PluginError? error)
+    {
+        using SettingsManager options = RegistrationOptions.CreateDefaults(Registration.RegisterOptions);
+        if (!RegistrationOptions.TryApplyTexts(options, OptionTexts, out error))
+        {
+            source = null;
+            return false;
+        }
+
+        string[] paths = Path is null
+            ? []
+            : [Path];
+        return Registration.Create(new SourceRequest(paths, options.ReadOnly, sessionSettings), out source, out error);
+    }
+
+    /// <summary>
+    /// The option texts as a dictionary of JSON strings (the last text of a repeated key wins), the form of the MCP source
+    /// parameters; the Core codec parses each text.
+    /// </summary>
+    /// <returns>The dictionary, keys compared ordinally.</returns>
+    internal IReadOnlyDictionary<string, JsonElement> OptionsAsJson()
+    {
+        Dictionary<string, JsonElement> options = new(OptionTexts.Count, StringComparer.Ordinal);
+        foreach (KeyValuePair<string, string> pair in OptionTexts)
+        {
+            options[pair.Key] = JsonSerializer.SerializeToElement(pair.Value);
+        }
+
+        return options;
     }
 
     #endregion
@@ -64,15 +149,12 @@ internal abstract class SourceConfig
     #region Private Helpers
 
     /// <summary>
-    /// Validates that <paramref name="spec"/> does not contain shell metacharacters
-    /// that could cause injection if the path were ever forwarded to a shell process.
-    /// Defence-in-depth check at the CLI trust boundary (OWASP A06 / CWE-78).
+    /// Refuses shell metacharacters. Defence in depth at the command-line trust boundary: a spec is never forwarded to a
+    /// shell, but a path that could be is better refused where it enters.
     /// </summary>
-    /// <exception cref="ArgumentException">Thrown when a forbidden character is detected.</exception>
     private static void _ValidateSourceSpec(string spec)
     {
-        ReadOnlySpan<char> forbidden = ['|', '&', '>', '<', ';', '`', '(', ')', '{', '}'];
-        foreach (char ch in forbidden)
+        foreach (char ch in _Forbidden)
         {
             if (spec.Contains(ch, StringComparison.Ordinal))
             {
@@ -83,282 +165,87 @@ internal abstract class SourceConfig
         }
     }
 
-    /// <summary>
-    /// Returns <c>true</c> when the colon at <paramref name="colonIndex"/> is a
-    /// Windows drive letter separator (e.g., <c>C:\</c>).
-    /// </summary>
-    private static bool _IsDriveLetter(string spec, int colonIndex)
+    /// <summary>Whether the colon at <paramref name="colonIndex"/> is the separator of a Windows drive letter (<c>C:\</c>).</summary>
+    private static bool _IsDriveLetter(string spec, int colonIndex) =>
+        colonIndex == 1
+        && char.IsAsciiLetter(spec[0])
+        && spec.Length > 2
+        && (spec[2] == '\\' || spec[2] == '/');
+
+    /// <summary>Parses a bare path and finds the kind by the extension.</summary>
+    private static SourceConfig _ParseBare(string path, PluginRegistry registry)
     {
-        // Drive letter: single alpha char before colon, followed by '\' or '/'
-        return colonIndex == 1
-            && char.IsAsciiLetter(spec[0])
-            && spec.Length > 2
-            && (spec[2] == '\\' || spec[2] == '/');
-    }
-
-    /// <summary>Parses a bare file path, auto-detecting the source type by extension.</summary>
-    private static SourceConfig _ParseBarePath(string path)
-    {
-        if (path.EndsWith(".pcap", StringComparison.OrdinalIgnoreCase)
-            || path.EndsWith(".pcapng", StringComparison.OrdinalIgnoreCase))
+        string extension = System.IO.Path.GetExtension(path);
+        foreach (SourceRegistration registration in registry.Sources)
         {
-            return new PcapngSourceConfig(path);
+            if (registration.FileExtensions.Any(candidate => string.Equals(candidate, extension, StringComparison.OrdinalIgnoreCase)))
+            {
+                return new SourceConfig(registration, path, []);
+            }
         }
 
-        if (path.EndsWith(".blf", StringComparison.OrdinalIgnoreCase))
-        {
-            return new BlfSourceConfig(path);
-        }
-
-        if (path.EndsWith(".asc", StringComparison.OrdinalIgnoreCase))
-        {
-            return new AscSourceConfig(path);
-        }
-
+        string known = string.Join(", ", registry.Sources.SelectMany(static r => r.FileExtensions).Distinct(StringComparer.OrdinalIgnoreCase));
         throw new ArgumentException(
             $"Cannot auto-detect source type for '{path}'. " +
-            "Use an explicit type prefix (e.g., 'pcap:path=file') or a known extension (.pcap, .pcapng, .blf, .asc).");
+            $"Use an explicit type prefix (e.g., 'pcap:path=file') or a known extension ({known}).");
     }
 
-    /// <summary>Parses a typed specification like <c>pcap:path=file.pcap</c>.</summary>
-    private static SourceConfig _ParseTypedSpec(string spec, int colonIndex)
+    /// <summary>Parses <c>kind:key=value,…</c>.</summary>
+    private static SourceConfig _ParseTyped(string type, string parameters, PluginRegistry registry)
     {
-        string type = spec[..colonIndex];
-        string paramString = spec[(colonIndex + 1)..];
-        Dictionary<string, string> parameters = _ParseParameters(paramString);
-
-        return type.ToUpperInvariant() switch
+        if (!registry.TryGetSource(type, out SourceRegistration? registration, out string? problem))
         {
-            "PCAP" or "PCAPNG" => _CreatePcapConfig(parameters),
-            "BLF" => _CreateBlfConfig(parameters),
-            "ASC" => _CreateAscConfig(parameters),
-            "RANDOM" => _CreateRandomConfig(parameters),
-            _ => throw new ArgumentException($"Unknown source type: '{type}'."),
-        };
+            throw new ArgumentException(problem);
+        }
+
+        List<KeyValuePair<string, string>> pairs = _ParsePairs(parameters);
+        bool isRandom = string.Equals(registration.Kind, _RandomKind, StringComparison.OrdinalIgnoreCase);
+        if (isRandom)
+        {
+            pairs = [.. pairs.Select(static pair => string.Equals(pair.Key, "mode", StringComparison.Ordinal)
+                && _LegacyRandomModes.TryGetValue(pair.Value, out string? current)
+                    ? new KeyValuePair<string, string>(pair.Key, current)
+                    : pair)];
+        }
+
+        // A file kind takes its file from the "path" pair, which is not an option of the source.
+        if (registration.FileExtensions.Count == 0)
+        {
+            return new SourceConfig(registration, null, pairs);
+        }
+
+        int pathIndex = pairs.FindIndex(static pair => string.Equals(pair.Key, "path", StringComparison.OrdinalIgnoreCase));
+        if (pathIndex < 0 || string.IsNullOrWhiteSpace(pairs[pathIndex].Value))
+        {
+            string example = registration.Kind.ToLowerInvariant() + ":path=file" + registration.FileExtensions[0];
+            throw new ArgumentException($"{registration.Kind} source requires 'path' parameter (e.g., {example}).");
+        }
+
+        string path = pairs[pathIndex].Value;
+        pairs.RemoveAt(pathIndex);
+        return new SourceConfig(registration, path, pairs);
     }
 
-    /// <summary>Parses comma-separated key=value parameters.</summary>
-    private static Dictionary<string, string> _ParseParameters(string paramString)
+    /// <summary>Splits <c>key=value,key=value</c>; the first <c>=</c> of a pair separates key and value, a pair without it is dropped.</summary>
+    private static List<KeyValuePair<string, string>> _ParsePairs(string parameters)
     {
-        Dictionary<string, string> result = new(StringComparer.OrdinalIgnoreCase);
-        if (string.IsNullOrWhiteSpace(paramString))
+        List<KeyValuePair<string, string>> result = [];
+        if (string.IsNullOrWhiteSpace(parameters))
         {
             return result;
         }
 
-        foreach (string pair in paramString.Split(','))
+        foreach (string pair in parameters.Split(','))
         {
-            int eqIndex = pair.IndexOf('=', StringComparison.Ordinal);
-            if (eqIndex > 0)
+            int equals = pair.IndexOf('=', StringComparison.Ordinal);
+            if (equals > 0)
             {
-                string key = pair[..eqIndex].Trim();
-                string value = pair[(eqIndex + 1)..].Trim();
-                result[key] = value;
+                result.Add(new KeyValuePair<string, string>(pair[..equals].Trim(), pair[(equals + 1)..].Trim()));
             }
         }
 
         return result;
     }
 
-    /// <summary>Creates a <see cref="PcapngSourceConfig"/> from typed parameters.</summary>
-    private static PcapngSourceConfig _CreatePcapConfig(Dictionary<string, string> parameters)
-    {
-        if (!parameters.TryGetValue("path", out string? path) || string.IsNullOrWhiteSpace(path))
-        {
-            throw new ArgumentException("PCAP source requires 'path' parameter (e.g., pcap:path=file.pcap).");
-        }
-
-        return new PcapngSourceConfig(path);
-    }
-
-    /// <summary>Creates a <see cref="BlfSourceConfig"/> from typed parameters.</summary>
-    private static BlfSourceConfig _CreateBlfConfig(Dictionary<string, string> parameters)
-    {
-        if (!parameters.TryGetValue("path", out string? path) || string.IsNullOrWhiteSpace(path))
-        {
-            throw new ArgumentException("BLF source requires 'path' parameter (e.g., blf:path=file.blf).");
-        }
-
-        return new BlfSourceConfig(path);
-    }
-
-    /// <summary>Creates an <see cref="AscSourceConfig"/> from typed parameters.</summary>
-    private static AscSourceConfig _CreateAscConfig(Dictionary<string, string> parameters)
-    {
-        if (!parameters.TryGetValue("path", out string? path) || string.IsNullOrWhiteSpace(path))
-        {
-            throw new ArgumentException("ASC source requires 'path' parameter (e.g., asc:path=file.asc).");
-        }
-
-        return new AscSourceConfig(path);
-    }
-
-    /// <summary>Creates a <see cref="RandomSourceConfig"/> from typed parameters.</summary>
-    /// <remarks>
-    /// Supported parameters:
-    /// <list type="bullet">
-    ///   <item><c>count=N</c> — total frames to generate (0 = unlimited, default 1000)</item>
-    ///   <item><c>seed=S</c> — PRNG seed for reproducibility (default 42)</item>
-    ///   <item>
-    ///     <c>mode=fullrandom|ethernet|ipv4|ipv6|udp4|udp6|can|canfd</c> — frame type (default udp4).
-    ///     <c>random</c> is accepted as an alias for <c>fullrandom</c> for backward compatibility.
-    ///   </item>
-    /// </list>
-    /// </remarks>
-    private static RandomSourceConfig _CreateRandomConfig(Dictionary<string, string> parameters)
-    {
-        int count = 1000;
-        ulong seed = 42;
-        RandomFrameMode mode = RandomFrameMode.UdpIPv4;
-
-        if (parameters.TryGetValue("count", out string? countStr))
-        {
-            if (!int.TryParse(countStr, NumberStyles.Integer, CultureInfo.InvariantCulture, out count) || count < 0)
-            {
-                throw new ArgumentException($"Invalid random source count: '{countStr}'.");
-            }
-        }
-
-        if (parameters.TryGetValue("seed", out string? seedStr))
-        {
-            if (!ulong.TryParse(seedStr, NumberStyles.Integer, CultureInfo.InvariantCulture, out seed))
-            {
-                throw new ArgumentException($"Invalid random source seed: '{seedStr}'.");
-            }
-        }
-
-        if (parameters.TryGetValue("mode", out string? modeStr))
-        {
-            mode = modeStr.ToUpperInvariant() switch
-            {
-                "FULLRANDOM" or "FULL" or "RANDOM" => RandomFrameMode.FullRandom,  // RANDOM is a backward-compat alias
-                "ETHERNET" or "ETH" => RandomFrameMode.Ethernet,
-                "IPV4" or "IP4" => RandomFrameMode.IPv4,
-                "IPV6" or "IP6" => RandomFrameMode.IPv6,
-                "UDP4" or "UDPIPV4" => RandomFrameMode.UdpIPv4,
-                "UDP6" or "UDPIPV6" => RandomFrameMode.UdpIPv6,
-                "CAN" or "CAN20" => RandomFrameMode.Can,
-                "CANFD" or "FD" => RandomFrameMode.CanFd,
-                _ => throw new ArgumentException(
-                    $"Unknown random frame mode: '{modeStr}'. Supported: fullrandom, ethernet, ipv4, ipv6, udp4, udp6, can, canfd."),
-            };
-        }
-
-        return new RandomSourceConfig(count, seed, mode);
-    }
-
     #endregion
-}
-
-/// <summary>Source config for PCAP/PCAPNG files.</summary>
-internal sealed class PcapngSourceConfig(string path) : SourceConfig
-{
-    /// <summary>Path to the PCAP/PCAPNG file.</summary>
-    internal string Path { get; } = path;
-
-    /// <inheritdoc/>
-    internal override void ValidateBeforeStart()
-    {
-        if (!File.Exists(Path))
-        {
-            throw new ArgumentException($"PCAP source file not found: '{Path}'.");
-        }
-    }
-
-    /// <inheritdoc/>
-    internal override IFrameSource CreateSource(ReadOnlySettingsManagerView settings)
-    {
-        // Settings reserved for future PcapngSource options that read profile values.
-        _ = settings;
-        return PcapngSource.Open(Path);
-    }
-}
-
-/// <summary>Source config for BLF files.</summary>
-internal sealed class BlfSourceConfig : SourceConfig
-{
-    /// <summary>Path to the BLF file.</summary>
-    internal string Path
-    {
-        get;
-    }
-
-    /// <summary>
-    /// Maximum byte budget for the BLF container cache (0 = default).
-    /// </summary>
-    internal int CacheBudget
-    {
-        get; init;
-    }  // bytes
-
-    /// <summary>Creates a BLF source config.</summary>
-    internal BlfSourceConfig(string path)
-    {
-        Path = path;
-    }
-
-    /// <inheritdoc/>
-    internal override void ValidateBeforeStart()
-    {
-        if (!File.Exists(Path))
-        {
-            throw new ArgumentException($"BLF source file not found: '{Path}'.");
-        }
-    }
-
-    /// <inheritdoc/>
-    internal override IFrameSource CreateSource(ReadOnlySettingsManagerView settings)
-    {
-        _ = settings;
-        BlfSourceOptions? options = CacheBudget > 0
-            ? new BlfSourceOptions { CacheBudget = CacheBudget }
-            : null;
-        return BlfSource.Open(Path, options);
-    }
-}
-
-/// <summary>Source config for synthetic random frame generation.</summary>
-internal sealed class RandomSourceConfig(
-    int count,
-    ulong seed,
-    RandomFrameMode mode) : SourceConfig
-{
-    /// <summary>Total number of frames to generate (0 = unlimited).</summary>
-    internal int Count { get; } = count;  // frames
-
-    /// <summary>PRNG seed for reproducibility.</summary>
-    internal ulong Seed { get; } = seed;
-
-    /// <summary>The type of synthetic frames to generate.</summary>
-    internal RandomFrameMode Mode { get; } = mode;
-
-    /// <inheritdoc/>
-    internal override IFrameSource CreateSource(ReadOnlySettingsManagerView settings)
-    {
-        _ = settings;
-        return new RandomFrameSource(Count, Seed, Mode);
-    }
-}
-
-/// <summary>Source config for CANalyzer ASCII log files (.asc).</summary>
-internal sealed class AscSourceConfig(string path) : SourceConfig
-{
-    /// <summary>Path to the ASC file.</summary>
-    internal string Path { get; } = path;
-
-    /// <inheritdoc/>
-    internal override void ValidateBeforeStart()
-    {
-        if (!File.Exists(Path))
-        {
-            throw new ArgumentException($"ASC source file not found: '{Path}'.");
-        }
-    }
-
-    /// <inheritdoc/>
-    internal override IFrameSource CreateSource(ReadOnlySettingsManagerView settings)
-    {
-        _ = settings;
-        return AscSource.Open(Path);
-    }
 }

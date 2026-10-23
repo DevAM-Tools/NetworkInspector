@@ -38,7 +38,12 @@
          uses blank-line multi-paragraph summaries and does not adopt that markup. Why global:
          it fires on any multi-paragraph XML comment; a pragma per comment is not viable.
          User approved. See .editorconfig for the IDE severity. -->
-    <NoWarn>$(NoWarn);CA1711;CA1720;IDE1006;RCS1226</NoWarn>
+    <!-- Id: CA1716. Why: the rule flags public members named after reserved Visual Basic keywords; the plugin contract
+         fixes IPluginLog.Error (next to Info and Warning), and host-tier and app-tier contracts name members the same
+         way (for example events and error results). No VB consumer exists for these contracts. Why global: it fires on
+         every contract assembly of the plugin system, present and future; a pragma per member is not viable and renaming
+         would diverge from the agreed contract. User approved. -->
+    <NoWarn>$(NoWarn);CA1711;CA1716;CA1720;IDE1006;RCS1226</NoWarn>
 
     <!-- Build -->
     <Deterministic>true</Deterministic>

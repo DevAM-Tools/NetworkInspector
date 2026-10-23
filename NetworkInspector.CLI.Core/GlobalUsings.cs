@@ -3,19 +3,25 @@
 #region System
 global using System;
 global using System.Buffers.Binary;
+global using System.Collections.Frozen;
 global using System.Collections.Generic;
 global using System.Diagnostics;
 global using System.Diagnostics.CodeAnalysis;
 global using System.Globalization;
 global using System.IO;
+global using System.Linq;
 global using System.Runtime.CompilerServices;
 global using System.Text;
+global using System.Text.Json;
+global using System.Text.Json.Nodes;
 global using System.Threading;
 global using System.Threading.Tasks;
+global using static System.FormattableString;
 #endregion
 
 #region NetworkInspector.Core
 global using NetworkInspector.Core;
+global using NetworkInspector.Core.Errors;
 global using NetworkInspector.Core.Fields;
 global using NetworkInspector.Core.Ids;
 global using NetworkInspector.Core.Index;
@@ -54,6 +60,12 @@ global using NetworkInspector.Sources.Blf;
 global using NetworkInspector.Sources.Cached;
 global using NetworkInspector.Sources.Pcapng;
 global using NetworkInspector.Sources.Random;
+#endregion
+
+#region NetworkInspector.Plugins
+global using NetworkInspector.BuiltInPlugins;
+global using NetworkInspector.Plugins;
+global using NetworkInspector.Plugins.Loader;
 #endregion
 
 #region NetworkInspector.CLI

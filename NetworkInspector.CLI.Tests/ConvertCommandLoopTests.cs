@@ -63,6 +63,7 @@ internal sealed class ConvertCommandLoopTests
             maxFrames: 0,
             progressInterval: 0,
             tolerant: false,
+            TextWriter.Null,
             CancellationToken.None,
             out filesWritten);
     }
@@ -197,6 +198,7 @@ internal sealed class ConvertCommandLoopTests
                 maxFrames: 0,
                 progressInterval: 0,
                 tolerant: false,
+                TextWriter.Null,
                 CancellationToken.None,
                 out _);
         }

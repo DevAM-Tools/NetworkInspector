@@ -76,13 +76,14 @@ public static class SettingsManagerFactory
     /// Explicit base directory. Pass <see langword="null"/> to use the platform default.
     /// </param>
     /// <param name="profileName">
-    /// Optional profile name that becomes a sub-directory of the base directory.
-    /// Must contain only alphanumeric characters, hyphens, and underscores.
+    /// Optional profile name that becomes a sub-directory of the base directory (its storage name, see <see cref="StorageNames"/>).
+    /// The syntax rules of <see cref="ProfileNames.TryValidateSyntax"/> apply: 1 to 256 ASCII letters, digits, spaces, dots,
+    /// dashes, and underscores, no leading or trailing space or dot, and no device name.
     /// </param>
     /// <returns>The resolved absolute storage path.</returns>
     /// <exception cref="ArgumentException">
-    /// Thrown when <paramref name="profileName"/> contains path separators,
-    /// traversal sequences, or characters other than ASCII letters, digits, hyphens, and underscores.
+    /// Thrown when <paramref name="profileName"/> breaks the syntax rules of <see cref="ProfileNames.TryValidateSyntax"/>
+    /// (path separators, traversal sequences, and every other character outside the allowed set included).
     /// </exception>
     public static string ResolvePath(string? settingsPath = null, string? profileName = null)
     {
@@ -97,29 +98,15 @@ public static class SettingsManagerFactory
             return basePath;
         }
 
-        // Guard against path traversal: reject names with separators or ".."
-        if (profileName.AsSpan().ContainsAny('/', '\\')
-            || profileName.Contains("..", StringComparison.Ordinal))
+        // One rule for every caller; reserved names stay allowed here because the hosts open "application" through
+        // this method. User-given names are checked with ProfileNames.TryValidate before they get here. The folder is the
+        // storage name, so long names stay valid folder names.
+        if (!ProfileNames.TryValidateSyntax(profileName, out string? error))
         {
-            throw new ArgumentException(
-                "Profile name must not contain path separators or '..' sequences.",
-                nameof(profileName));
+            throw new ArgumentException(string.Create(CultureInfo.InvariantCulture, $"Profile name '{profileName}': {error}."), nameof(profileName));
         }
 
-        for (int i = 0; i < profileName.Length; i++)
-        {
-            char c = profileName[i];
-            bool allowed = char.IsAsciiLetterOrDigit(c) || c is '-' or '_';
-            if (!allowed)
-            {
-                throw new ArgumentException(
-                    "Profile name must contain only alphanumeric characters, hyphens, and underscores.",
-                    nameof(profileName));
-            }
-        }
-
-        // Apply the optional profile as a sub-directory of the base path.
-        return Path.Combine(basePath, profileName);
+        return Path.Combine(basePath, StorageNames.ToStorageName(profileName));
     }
 
     #endregion

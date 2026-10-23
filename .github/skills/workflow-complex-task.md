@@ -38,17 +38,18 @@ Load on `/complex-task`. Orchestrates requirements (if needed), plan, implement,
 
 ## Stage 5 — Stop Conditions
 
-- Preview success: latest review iteration has zero Error findings per step, every scoped step and test ID `✅`.
+- Loop success (pre-Exam): latest review iteration has zero Error and zero High Performance findings per step, every scoped step and test ID `✅`.
 - Require full-scope `reviews/briefing_<slug>.md`. Rewrite if missing or step-only. Legacy `reviews/brief_<slug>.md` may be read; new writes use `briefing_`.
 - Then run one **Exam** (`workflow-council.md` Exam mode) on the full built scope. Same agent; no subagents.
 - Exam **Holds** → Success.
-- Exam `exam-fail` → return to Stage 4 for those kill shots; then re-Exam `_<n>`.
-- Defer Cosmetic, Refactoring, and Performance findings. This is intentional: `/complex-task`
-  is a planned delivery loop. Step `{n}R` gates on `/review` Ready (zero Errors). Nits stay
+- Exam **Does not hold** (`exam-fail`) → return to Stage 4 for those kill shots; then re-Exam `_<n>`.
+- Defer Cosmetic, Refactoring, and non-High Performance findings. This is intentional: `/complex-task`
+  is a planned delivery loop. Step `{n}R` gates on `/review` Ready (zero Errors, zero High
+  Performance). High Performance findings are fixed like Errors (Section 4.4). Nits stay
   deferred so the plan can finish and Exam can run. They are not this workflow’s job.
   `/review-loop` is the full-clean loop (zero findings in all buckets unless deferred).
   Do not copy that default here.
-- Block when same Error root cause persists after two remediation attempts in same step scope, or the same Exam root fails twice.
+- Block when same Error root cause persists after two remediation attempts in same step scope, or the same Exam root fails twice. Report the blocker per `copilot-instructions.md` Section 4.16 (what blocks, evidence, impact, scope, to unblock).
 
 ## Stage 6 — Resume
 
@@ -63,4 +64,4 @@ Load on `/complex-task`. Orchestrates requirements (if needed), plan, implement,
 - Cite the briefing and the Exam artifact. Goal verdict requires Exam **Holds**.
 - List deferred Cosmetic, Refactoring, Performance findings.
 - State goal-achievement verdict vs every requirement ID with Done-when, every test ID, and plan done criteria.
-- Chat: artifact paths; do not recap bodies.
+- Chat: artifact paths plus the Open-Items Report (`workflow-implement.md` Stage 6). Run it on every exit after Stage 4 starts, including block and `exam-fail`. Do not recap bodies.

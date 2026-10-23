@@ -4,7 +4,7 @@ namespace NetworkInspector.CLI;
 
 /// <summary>
 /// Entry point for the Network Inspector CLI tool.
-/// Routes to sub-commands: convert, export.
+/// Routes to sub-commands: convert, export, plugins, settings, profile.
 /// </summary>
 /// <remarks>
 /// Exit codes:
@@ -16,25 +16,38 @@ namespace NetworkInspector.CLI;
 ///   <item><term>3</term><description>Runtime failure during processing (IO, serialisation, etc.).</description></item>
 /// </list>
 /// Lives in <c>NetworkInspector.CLI.Core</c> so ExitPointGaps can gate coverage; the <c>ni</c>
-/// executable forwards to <see cref="Run"/>.
+/// executable forwards to <see cref="RunAsync(string[])"/>.
 /// </remarks>
 internal static class CliEntry
 {
     #region Public API
 
-    /// <summary>Application entry point used by the <c>ni</c> host and tests.</summary>
-    internal static int Run(string[] args)
+    /// <summary>Application entry point used by the <c>ni</c> host; the writers are the console.</summary>
+    /// <param name="args">The command line arguments.</param>
+    /// <returns>The exit code.</returns>
+    internal static Task<int> RunAsync(string[] args) => RunAsync(args, CliIo.FromConsole(), CancellationToken.None);
+
+    /// <summary>Entry point used by tests: the writers are injected, so parallel tests do not share the console.</summary>
+    /// <param name="args">The command line arguments.</param>
+    /// <param name="io">Output and error writers.</param>
+    /// <param name="cancellationToken">Cancels the run.</param>
+    /// <returns>The exit code.</returns>
+    internal static async Task<int> RunAsync(string[] args, CliIo io, CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(args);
+        ArgumentNullException.ThrowIfNull(io);
+
+        // UTF-8 once per process start (a legacy Windows code page would mangle names in the output).
         Console.OutputEncoding = Encoding.UTF8;
-        // Use invariant culture for all parsing/formatting on the CLI thread so that
-        // command-line numbers and timestamps are interpreted identically regardless of
-        // the host machine's regional settings.
+
+        // Use invariant culture for all parsing/formatting on the CLI thread so that command-line numbers and timestamps are
+        // interpreted identically regardless of the host machine's regional settings.
         Thread.CurrentThread.CurrentCulture = CultureInfo.InvariantCulture;
         Thread.CurrentThread.CurrentUICulture = CultureInfo.InvariantCulture;
 
         if (args.Length == 0)
         {
-            _PrintUsage();
+            _PrintUsage(io.Error);
             return (int)ExitCode.ArgumentError;
         }
 
@@ -42,16 +55,19 @@ internal static class CliEntry
         {
             return args[0].ToUpperInvariant() switch
             {
-                "CONVERT" => ConvertCommand.Run(args[1..]),
-                "EXPORT" => ExportCommand.Run(args[1..]),
-                "--HELP" or "-H" => _PrintUsageAndReturn((int)ExitCode.Success),
-                _ => _PrintUnknownCommand(args[0]),
+                "CONVERT" => await ConvertCommand.RunAsync(args[1..], io, cancellationToken).ConfigureAwait(false),
+                "EXPORT" => await ExportCommand.RunAsync(args[1..], io, cancellationToken).ConfigureAwait(false),
+                "PLUGINS" => await PluginsCommand.RunAsync(args[1..], io, cancellationToken).ConfigureAwait(false),
+                "SETTINGS" => await SettingsCommand.RunAsync(args[1..], io, cancellationToken).ConfigureAwait(false),
+                "PROFILE" => ProfileCommand.Run(args[1..], io),
+                "--HELP" or "-H" => _PrintUsageAndReturn(io.Error, (int)ExitCode.Success),
+                _ => _PrintUnknownCommand(io.Error, args[0]),
             };
         }
         catch (OperationCanceledException)
         {
             // User pressed Ctrl+C before a command's own catch could observe it.
-            Console.Error.WriteLine("Operation cancelled.");
+            io.Error.WriteLine("Operation cancelled.");
             return (int)ExitCode.Success;
         }
         catch (Exception ex)
@@ -59,11 +75,11 @@ internal static class CliEntry
             // Top-level safety net: surface the unhandled error rather than crashing
             // with an opaque .NET stack trace. Per README §Exit Codes, 3 indicates
             // a runtime failure that aborted the run.
-            Console.Error.WriteLine($"Fatal ({ex.GetType().Name}): {ex.Message}");
+            io.Error.WriteLine($"Fatal ({ex.GetType().Name}): {ex.Message}");
             Exception? inner = ex.InnerException;
             while (inner is not null)
             {
-                Console.Error.WriteLine($"  Caused by ({inner.GetType().Name}): {inner.Message}");
+                io.Error.WriteLine($"  Caused by ({inner.GetType().Name}): {inner.Message}");
                 inner = inner.InnerException;
             }
 
@@ -75,33 +91,36 @@ internal static class CliEntry
 
     #region Private Helpers
 
-    /// <summary>Prints usage information to stderr.</summary>
-    private static void _PrintUsage()
+    /// <summary>Prints usage information to the error writer.</summary>
+    private static void _PrintUsage(TextWriter error)
     {
-        Console.Error.WriteLine("Network Inspector CLI");
-        Console.Error.WriteLine();
-        Console.Error.WriteLine("Usage: ni <command> [options]");
-        Console.Error.WriteLine();
-        Console.Error.WriteLine("Commands:");
-        Console.Error.WriteLine("  convert   Convert capture files between formats (frame-level)");
-        Console.Error.WriteLine("  export    Parse and export packets to analysis formats");
-        Console.Error.WriteLine();
-        Console.Error.WriteLine("Use 'ni <command> --help' for more information about a command.");
+        error.WriteLine("Network Inspector CLI");
+        error.WriteLine();
+        error.WriteLine("Usage: ni <command> [options]");
+        error.WriteLine();
+        error.WriteLine("Commands:");
+        error.WriteLine("  convert   Convert capture files between formats (frame-level)");
+        error.WriteLine("  export    Parse and export packets to analysis formats");
+        error.WriteLine("  plugins   List the plugins of this run");
+        error.WriteLine("  settings  List, read, change, and reset application and profile settings");
+        error.WriteLine("  profile   List, create, rename, and delete settings profiles");
+        error.WriteLine();
+        error.WriteLine("Use 'ni <command> --help' for more information about a command.");
     }
 
     /// <summary>Prints usage and returns the given exit code.</summary>
-    private static int _PrintUsageAndReturn(int exitCode)
+    private static int _PrintUsageAndReturn(TextWriter error, int exitCode)
     {
-        _PrintUsage();
+        _PrintUsage(error);
         return exitCode;
     }
 
     /// <summary>Prints an error message for an unknown command.</summary>
-    private static int _PrintUnknownCommand(string command)
+    private static int _PrintUnknownCommand(TextWriter error, string command)
     {
-        Console.Error.WriteLine($"Unknown command: '{command}'");
-        Console.Error.WriteLine();
-        _PrintUsage();
+        error.WriteLine($"Unknown command: '{command}'");
+        error.WriteLine();
+        _PrintUsage(error);
         return (int)ExitCode.ArgumentError;
     }
 

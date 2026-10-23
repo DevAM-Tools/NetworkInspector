@@ -172,12 +172,14 @@ Acceptance.
 ```text
 Reject: Export works · API is robust · performant · add ExportService
         · summary.json projects.length==2 · use a Dictionary cache
-Accept: The system shall let an operator create an export named Report
-        and show one row titled Report
-Accept: The system shall not add a second row when Report is submitted again;
-        a duplicate-name message is visible
-Accept: The system shall exhibit wall time ≤ 30s for the agreed typical
-        workload on the agreed machine class
+        · The system shall let an operator create an export (a shall-sentence, not a check)
+Accept: The operator submits the name Report and sees one row titled Report.
+Accept: The operator submits Report again, still sees one row, and sees the
+        duplicate-name message.
+Accept: The agreed typical workload on the agreed machine class finishes in
+        ≤ 30s, measured from submit to the result row.
+Accept: The user raises the import limit in Settings from 1 GB to 4 GB, sees
+        why the limit exists and its allowed range, and imports a 3 GB file.
 ```
 
 Ban slogans. Ban “it builds” / “tests exist” / “docs updated” (Section 4).
@@ -191,7 +193,8 @@ new ambiguity; cite the prior answer.
 Cover if still open: groups and differing expectations; context; boundary;
 inputs/outputs; in/out of scope; shall / shall-not / properties until
 Done-when is an example, not an adjective; conflicts between draft
-requirements; limits (value, constant vs configurable in user terms); hard
+requirements; limits per Section 4.2 in user terms (value or range, what it
+protects, who may change it, secure or open by default and why); hard
 constraints (legal, platform, offline, data that must not leave the machine).
 
 Do not Grill Me: API signatures, `TEST-<AREA>-<TOPIC>` content, Playwright journeys, file
@@ -221,8 +224,9 @@ in the requirement list.
 - Requirement entries use the bullet shape below. An obligation with no ID is
   incomplete. A heading or note with an ID is incomplete.
 
-Required sections: opening picture, Boundary, In scope, Out of scope,
-Requirements. Coverage is required and is filled in Stage 6.
+Required sections: opening picture, User groups, Boundary (holds context of
+use and inputs / outputs), In scope, Out of scope, Requirements. Coverage is
+required and is filled in Stage 6.
 
 Include User stories when a group interacts. Omit Notes when empty. When
 Grill Me recorded no properties, say that in Out of scope prose. Do not mint
@@ -233,10 +237,16 @@ an ID for “none”.
 
 {Who asked, the job, why now, what this is, who it serves, where it sits.}
 
+## User groups
+
+- {group} — {what they expect; how that differs from the other groups}
+
 ## Boundary
 
-{Where and when it runs. Inside vs outside. Neighbors. What crosses the
-boundary, and how a group recognizes the result.}
+{Context of use: where and when it runs (desk, CI, inside another app,
+unattended, on/offline). Inside vs outside. Neighbors at the edge.
+Inputs / outputs at the system boundary: what a group provides, what it
+receives, and how it recognizes the result.}
 
 ## In scope
 
@@ -304,5 +314,7 @@ no requirement ID. Re-run this stage after any patch.
 
 ## Completion
 
-Return the artifact path. Status table, goal verdict, risks ≤5. Chat: path
-only. Do not recap tables.
+The status table lives in the artifact. Chat: the artifact path, a one-line
+goal verdict, and every risk ordered by impact; do not cap or drop risks. Do
+not recap other tables. A blocking open question is reported per
+`copilot-instructions.md` Section 4.16.
